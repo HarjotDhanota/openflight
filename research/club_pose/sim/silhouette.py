@@ -5,10 +5,15 @@ import cv2
 import numpy as np
 
 
-def render_silhouette(mesh, pose, camera) -> np.ndarray:
+def render_silhouette(mesh, pose, camera, scale: float = 1.0) -> np.ndarray:
     world = mesh.transformed(pose)
     pix, in_front = camera.project(world)
-    h, w = camera.intrinsics.height, camera.intrinsics.width
+    if scale != 1.0:
+        pix = pix * scale
+        h = int(round(camera.intrinsics.height * scale))
+        w = int(round(camera.intrinsics.width * scale))
+    else:
+        h, w = camera.intrinsics.height, camera.intrinsics.width
     mask = np.zeros((h, w), dtype=np.uint8)
     pix_i = np.round(pix).astype(np.int32)
     for tri in mesh.faces:
