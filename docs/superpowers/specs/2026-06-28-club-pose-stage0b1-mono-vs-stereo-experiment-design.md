@@ -1,13 +1,13 @@
 # Stage 0B-1 — Mono-vs-Stereo Pose-Recovery Experiment (silhouette analysis-by-synthesis) — design spec
 
-- **Date:** 2026-06-28 (rev. 2 — fixes camera framing, metric-propagation gate, mesh-bias, dep placement per review)
+- **Date:** 2026-06-28 (rev. 3 — ungated impact-aware face/loft, camera-range error naming, dep-table wording, generalized pose sampling)
 - **Status:** Draft for review
 - **Branch:** `feat/camera-club-data`
-- **Related:** [Stage 0A spec](2026-06-28-club-pose-geometry-core-design.md) (see its **§11** correction + `research/club_pose/sensitivity.py`); [v2 research guide](../../Personal%20Research/markerless-club-data-guide-v2-research-corrected.md) §1B, §2.4, §6B. This is **Stage 0B-1** of the full Stage 0B pipeline (0B-2 BlenderProc renderer, 0B-3 BiRefNet segmentation, 0B-4 pose estimators on real-ish frames, 0B-5 integration — separate later specs, GPU/Linux-server targets).
+- **Related:** [Stage 0A spec](2026-06-28-club-pose-geometry-core-design.md) and **`research/club_pose/sensitivity.py`** (the canonical ungated-projection / error-budget reference); [v2 research guide](../../Personal%20Research/markerless-club-data-guide-v2-research-corrected.md) §1B, §2.4, §6B. This is **Stage 0B-1** of the full Stage 0B pipeline (0B-2 BlenderProc renderer, 0B-3 BiRefNet segmentation, 0B-4 pose estimators on real-ish frames, 0B-5 integration — separate later specs, GPU/Linux-server targets).
 
 ## 1. Purpose & context
 
-The open question that gates hardware spend is **single camera vs stereo** for the club metrics (face angle, dynamic loft, impact location). Stage 0A produced *metric-error-per-pose-error coefficients* but cannot supply the **pose-error magnitudes** mono vs stereo — that needs a camera projection model (Stage 0A spec §11 / `sensitivity.py`).
+The open question that gates hardware spend is **single camera vs stereo** for the club metrics (face angle, dynamic loft, impact location). Stage 0A produced *metric-error-per-pose-error coefficients* but cannot supply the **pose-error magnitudes** mono vs stereo — that needs a camera projection model (see `research/club_pose/sensitivity.py`).
 
 0B-1 supplies them **geometrically**: render a generic clubhead **silhouette** at known poses from a behind-ball camera (mono and stereo), apply **modeled degradations**, recover pose by **silhouette analysis-by-synthesis**, and propagate the recovered-pose error through the 0A budget into face/loft/impact error — the **mono-vs-stereo verdict**. Pure Python (numpy/scipy/opencv); runs in the Windows/Codex dev flow.
 
@@ -22,9 +22,9 @@ The open question that gates hardware spend is **single camera vs stereo** for t
 ## 3. Location, dependencies, standards
 
 - **Location:** `research/club_pose/sim/` (new subpackage) — reuses 0A `types`, `template`, `metrics`, `sensitivity` directly.
-- **Dependency placement (review #4):** `opencv-python` is needed **only** by `sim`. Do **not** add it to base/production deps — `pyproject.toml` deliberately keeps camera/OpenCV out of base. Add a dedicated group:
+- **Dependency placement:** `opencv-python` is needed **only** by `sim`. Do **not** add it to base/production deps — `pyproject.toml` deliberately keeps camera/OpenCV out of base. `pyproject.toml` already has a `[dependency-groups]` table (with `dev`); add a `research` entry **under that existing table** (do not add a second `[dependency-groups]` header — invalid TOML):
   ```toml
-  [dependency-groups]
+  # under the existing [dependency-groups] table in pyproject.toml
   research = ["opencv-python>=4.8"]
   ```
   and run tests with **`uv run --group research pytest research/club_pose/tests/ -v`**. (Quick alternative without editing pyproject: `uv run --with opencv-python pytest ...`.) numpy/scipy/pytest already present.
@@ -79,19 +79,21 @@ Projection of world point `p`: `p_cam = R_wc @ (p − C)`; `u = fx·(p_cam_x/p_c
 - `prior_pose`: a coarse seed = true pose perturbed by a configurable amount (stand-in for the radar velocity / ball-at-tee prior).
 
 ### 5.6 `experiment.py`
-- `sample_poses(n, category, rng) -> list[ClubheadPose]`: realistic impact-zone positions + face-angle / dynamic-loft / lie / path ranges (via 0A `groundtruth` + realistic spans).
-- **Metric-error propagation (review #2): use the UNGATED raw path, NOT `compute_metrics`.** `compute_metrics`'s contact gate returns `None` when a perturbed/recovered pose makes the fixed ball a non-contact (the same reason `sensitivity.py` uses the raw projection). So:
-  - face angle / dynamic loft: `metrics.face_angle` / `metrics.dynamic_loft` (ungated) on true vs recovered pose.
-  - impact location: `template.point_to_face_uv` (raw projection of the fixed true ball center under true vs recovered pose) → Δoffset, Δheight (mm).
-  - `compute_metrics` (gated) is reserved for real-shot outputs, never for experiment error.
-- `run_experiment(n, category, severity, baseline_mm, rng) -> results`: per pose → render clean silhouette(s) → degrade → `fit_pose_mono` + `fit_pose_stereo` → pose error (rotation °, translation mm split **depth (+X)** vs **in-plane**) → ungated metric error (above). Aggregate distributions mono vs stereo; sweep `severity`.
+- **`pose_for_delivered(template, face_angle_deg, dynamic_loft_deg, head_center) -> ClubheadPose`** (generalizes 0A's zero-loft `pose_for_face_angle_loft` to a template with nonzero static loft): the template's center normal already sits at elevation = `static_loft_deg`, so build `R = r_face(face_angle) · r_loft(dynamic_loft − template.static_loft_deg)`, reusing 0A's exact `r_face`/`r_loft` constructions (`r_face(a)=Rotation.from_rotvec(radians(−a)·[0,0,1])`, `r_loft(θ)=Rotation.from_rotvec(radians(−θ)·[0,1,0])`). By construction `face_angle(pose, template)=face_angle_deg` and `dynamic_loft(pose, template)=dynamic_loft_deg` (asserted in tests). Reduces to the 0A helper when `static_loft_deg=0`.
+- `sample_poses(n, category, rng) -> list[ClubheadPose]`: for the selected template, sample realistic **delivered** face-angle / dynamic-loft / club-path ranges, build each pose via `pose_for_delivered` at a realistic impact-zone `head_center`, and (for impact) place the ball via `groundtruth.ball_for_impact` at a sampled face `(u, v)`.
+- **Metric-error propagation — an explicit UNGATED, IMPACT-AWARE helper, NOT `compute_metrics`** (whose contact gate returns `None` for perturbed poses — same reason `sensitivity.py` uses raw projection). Define `raw_metrics(pose, template, ball_center_world) -> (offset_mm, height_mm, face_angle_deg, dynamic_loft_deg)`:
+  1. `proj = template.point_to_face_uv(pose.world_to_body(ball_center_world))` (raw, no contact gate).
+  2. impact: `offset_mm = proj.u`, `height_mm = proj.v`.
+  3. **face/loft use the IMPACT-POINT normal, not the center normal:** `face_angle(pose, template, normal_body=proj.normal_body)` and `dynamic_loft(pose, template, normal_body=proj.normal_body)`. Passing `proj.normal_body` is **required** — omitting it falls back to the center normal and measures the wrong quantity on a curved face.
+  Compute `raw_metrics` for the **true** pose and the **recovered** pose (same fixed world ball center) and difference them. `compute_metrics` (gated) is reserved for real-shot outputs.
+- `run_experiment(n, category, severity, baseline_mm, rng) -> results`: per pose → render clean silhouette(s) → degrade → `fit_pose_mono` + `fit_pose_stereo` → pose error: rotation (°), and translation split into **`camera_range_error_mm`** (component along the camera optical axis `forward = normalize(T − C)` — the depth ambiguity stereo resolves; under the look-at rig this is tilted, NOT world +X) and **`inplane_error_mm`** (perpendicular component) → `raw_metrics` error (above). Aggregate distributions mono vs stereo; sweep `severity`.
 - `verdict(results) -> dict`: does **mono** meet the single-camera tier (face/loft **±3–5°**, impact **~5–15 mm**)? does **stereo** meet the stretch tier (**±2°**, **±3–5 mm**)? With the geometric-bound caveat.
 
 ## 6. Data flow
 ```
 GT pose ─► render silhouette(s) [look-at camera] ─► degrade ─► fit_pose (mono | stereo) ─► recovered pose
                                                                                               │
-  UNGATED metric error: face_angle/dynamic_loft + point_to_face_uv,  true vs recovered ◄──────┘
+  UNGATED impact-aware raw_metrics (proj.normal_body), true vs recovered ◄──────────────────┘
                                                   │
                           aggregate over poses × severities ─► verdict
 ```
@@ -104,7 +106,8 @@ GT pose ─► render silhouette(s) [look-at camera] ─► degrade ─► fit_p
 - **Machinery validation (review #3) — guards optimizer/rasterizer bugs:** with **no degradation**, recovery returns the true pose to **≤0.5° / ≤1 mm** **using the `distinctive_test_mesh` and/or STEREO**. This proves the renderer + optimizer are correct *independent of mono ambiguity*.
 - **Realistic-mesh mono clean-recovery is a RESULT, not a gate:** run mono clean recovery on the frozen realistic mesh and **record** the error. If it's large, that is a finding (mono is geometrically ambiguous for a realistic clubhead) — **do not change the mesh to make it pass** (only fix a clear optimizer/rasterizer bug, which the machinery-validation test would also catch).
 - **degrade:** deterministic given seed; severity monotonic (more blur → lower IoU vs clean).
-- **posefit:** on a deliberately depth-ambiguous pose, **stereo translation error ≤ mono** (stereo resolves +X depth).
+- **posefit:** on a deliberately depth-ambiguous pose, **stereo translation error ≤ mono** (stereo resolves the camera-range depth along the optical axis).
+- **pose_for_delivered:** for a driver/iron template, `face_angle`/`dynamic_loft` of the built pose equal the requested delivered values (guards the nonzero-static-loft generalization).
 - **experiment:** produces distributions + a `verdict` dict; zero-degradation stereo → near-zero metric error.
 - All green under `uv run --group research pytest research/club_pose/tests/`.
 
