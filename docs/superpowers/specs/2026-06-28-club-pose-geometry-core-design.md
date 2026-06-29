@@ -1,6 +1,6 @@
 # Stage 0A — Clubhead Pose → Golf Metrics Geometry Core (design spec)
 
-- **Date:** 2026-06-28 (rev. 3 — pins down the math per 2nd review)
+- **Date:** 2026-06-28 (rev. 4 — fixes loft-rotation sign, bulge/roll convexity, face-patch bound per 3rd review)
 - **Status:** Draft for review
 - **Branch:** `feat/camera-club-data`
 - **Related:** [v2 research guide](../../Personal%20Research/markerless-club-data-guide-v2-research-corrected.md) (esp. §2.3, §4, §4.3, §4.4, §6A, §6B). This is **Stage 0A**; **Stage 0B** (BlenderProc renderer + pose estimators) is a separate later spec.
@@ -36,11 +36,12 @@ This spec covers **Stage 0A: the pure geometry/metrics core** — no rendering, 
 
 ### 4.3 Face frame (defined by the template, in body coords)
 - **Face center** at `face_center_offset` (body coords).
-- **Canonical face axes (before loft):** `û` = heel→toe = body **+Y** (`+u` = toe); `v̂` = low→high = body **+Z** (`+v` = high); `ŵ` = outward normal = body **+X** = `û × v̂`.
-- **Loft:** rotate `{v̂, ŵ}` about `û` by `static_loft_deg` (normal tilts from +X toward +Z = up). **Lie is NOT applied** to the Stage-0A face normal (review finding 3): delivered lie lives in the recovered body pose; static lie would only enter via a shaft-referenced frame, deferred. `lie_deg` is not used in 0A math.
+- **Canonical face axes (zero loft):** `û` = heel→toe = body **+Y** (`+u` = toe); `v̂` = low→high = body **+Z** (`+v` = high); `ŵ` = outward normal = body **+X** = `û × v̂`.
+- **Loft (sign-correct):** define `R_loft(θ)` = rotation about `û` by **`−θ`**. The negative is required because, with `û = +Y`, a *positive* right-handed rotation about `+û` sends `+X → (cosθ,0,−sinθ)` — toward **−Z (down)**; `−θ` tilts +X toward **+Z (up)**, which is loft. The face axes at loft `L` are `R_loft(L)` applied to the canonical zero-loft axes; static template loft uses `L = static_loft_deg`.
+- **Lie is NOT applied** to the Stage-0A face normal (review finding): delivered lie lives in the recovered body pose; static lie would only enter via a shaft-referenced frame, deferred. `lie_deg` is not used in 0A math.
 
-### 4.4 Exact metric formulas (sign-explicit — review finding 4)
-Let `nw` = world-space outward face normal at the evaluation point = `R · n_body`. Let `vel` = world head-center velocity = `(t_b − t_a)/dt`. Angles in degrees.
+### 4.4 Exact metric formulas (sign-explicit)
+Let `nw` = world outward face normal at the evaluation point = `R · n_body`. Let `vel` = world head-center velocity = `(t_b − t_a)/dt`. Angles in degrees.
 - **Face angle** = `−atan2(nw_y, nw_x)` → open/right positive.
 - **Dynamic loft** = `atan2(nw_z, hypot(nw_x, nw_y))` → up positive.
 - **Club path** = `−atan2(vel_y, vel_x)` → in-to-out/right positive.
@@ -50,33 +51,34 @@ Let `nw` = world-space outward face normal at the evaluation point = `R · n_bod
 ## 5. Components
 
 ### 5.1 `types.py`
-- `ClubheadPose`: `rotation` (scipy `Rotation`), `translation` (3-vec mm, = head center in world). Prefer quaternion/`Rotation` construction; a raw-matrix path **explicitly validates** finite, 3×3, `RᵀR ≈ I` (tol), `det(R) ≈ +1` before wrapping (scipy silently orthonormalizes — finding 6).
+- `ClubheadPose`: `rotation` (scipy `Rotation`), `translation` (3-vec mm, = head center in world). Prefer quaternion/`Rotation` construction; a raw-matrix path **explicitly validates** finite, 3×3, `RᵀR ≈ I` (tol), `det(R) ≈ +1` before wrapping (scipy silently orthonormalizes).
 - `ClubTemplate`: category; `static_loft_deg`, `face_width_mm`, `face_height_mm`, `bulge_radius_mm` (None=flat), `roll_radius_mm` (None=flat), `face_center_offset` (body coords). (`lie_deg` may be stored as metadata but is unused in 0A math.) `with_loft_override(loft_deg)`.
 - `Measurement(value: float|None, confidence: float, source: str)`; `ClubMetrics` = six `Measurement`s.
 
 ### 5.2 `frames.py`
 Pure functions over `scipy` rotations: world frame; nominal camera extrinsic (behind ball, looking +X) for the sensitivity depth axis; body↔world transforms; and the angle decompositions of §4.4. No state.
 
-### 5.3 `template.py` — exact face geometry (review finding 2)
-In the face frame (origin = face center; axes `û,v̂,ŵ`), a face point at lateral coords `(u,v)`:
+### 5.3 `template.py` — exact face geometry
+In the face frame (origin = face center; axes `û,v̂,ŵ` at the template's loft), a face point at lateral coords `(u,v)`:
 ```
-h(u,v) = u²/(2·R_b) + v²/(2·R_v)          # outward sag; term = 0 when radius is None (flat)
+h(u,v) = −u²/(2·R_b) − v²/(2·R_v)         # convex/outward: center most forward (h=0), edges recede (h<0); term=0 when radius None (flat)
 P(u,v) = u·û + v·v̂ + h(u,v)·ŵ            # surface point, face coords
-n(u,v) ∝ (−u/R_b)·û + (−v/R_v)·v̂ + 1·ŵ   # outward normal, normalized
+n(u,v) ∝ (+u/R_b)·û + (+v/R_v)·v̂ + 1·ŵ   # outward normal = (−∂h/∂u, −∂h/∂v, 1), normalized
 ```
-- `R_b` = bulge (horizontal), `R_v` = roll (vertical), **positive = convex/outward**. **Valid range:** each radius `>` face half-dimension in that axis and `> 5×` ball radius, so the cap is single-valued and the closest surface point to a near-axis ball is unique. This is a **small-curvature paraboloid approximation** of true bulge/roll (sub-mm vs a sphere across a clubface).
-- `point_to_face_uv(p_face)` → `(u*, v*)` = `argmin‖P(u,v) − p_face‖` (Newton, seeded at `(p_u, p_v)`), returning also the surface normal at `(u*,v*)` and the **signed distance** `d` (positive = ball on outward side). For a flat face this is exact orthogonal projection.
-- `with_loft_override(L)`: rotate the face axes `{û,v̂,ŵ}` about `û` **through the face center** by `(L − static_loft_deg)`; preserves face center, dimensions, and radii. Returns a new template.
+- `R_b` = bulge (horizontal), `R_v` = roll (vertical), **positive = convex/outward**. **Valid range:** each radius `>` the face half-dimension in that axis and `> 5×` ball radius, so the cap is single-valued and the closest surface point to a near-axis ball is unique. Small-curvature **paraboloid approximation** of true bulge/roll (sub-mm vs a sphere across a clubface).
+- **Face patch domain:** `|u| ≤ face_width/2`, `|v| ≤ face_height/2`.
+- `point_to_face_uv(p_face)` → `(u*, v*)` = `argmin‖P(u,v) − p_face‖` (Newton, seeded at `(p_u, p_v)`), returning the surface normal at `(u*,v*)` and the **signed distance** `d` (positive = ball on outward side). For a flat face this is exact orthogonal projection. A result with `(u*,v*)` outside the face patch (beyond an optional edge tolerance) is **off-face** → `invalid_contact` (§9).
+- `with_loft_override(L)`: returns a new template whose face axes = `R_loft(L)` applied to the canonical zero-loft axes (per §4.3), preserving face center, dimensions, and radii.
 
-### 5.4 `metrics.py` — one pipeline (review findings 2 & 5)
+### 5.4 `metrics.py` — one pipeline
 **`compute_metrics(pose, template, ball_center_world=None, prev_pose=None, dt=None) -> ClubMetrics`:**
-1. `impact_location` (if `ball_center_world` given): transform ball center world→body→face; `point_to_face_uv` → `(u*,v*)`, signed distance `d`. Contact validity (§9) decides confidence/None.
+1. `impact_location` (if `ball_center_world` given): transform ball center world→body→face; `point_to_face_uv` → `(u*,v*)`, signed distance `d`. Contact state (§9) decides confidence/None.
 2. `face_angle` / `dynamic_loft`: normal source per the contact-state table (§9) — impact-point normal on valid contact, else face-center normal; rotate to world `nw`; apply §4.4.
 3. `club_path` / `attack_angle`: only if `prev_pose` + `dt` given; `vel` from head-center translations; apply §4.4.
 Thin wrappers `impact_location(...)`, `face_angle(pose, template, impact_point=None)`, `dynamic_loft(...)`, `club_path(pose_a, pose_b, dt)`, `attack_angle(...)` exist for unit testing.
 
 ### 5.5 `groundtruth.py`
-Build `(pose, template, ball)` from a *specified* face-angle/dynamic-loft, a known impact `(u0,v0)` (ball center = `P(u0,v0) + r·n(u0,v0)` in world, so recovery must return `(u0,v0)`, `d=r`), or a known head-center velocity.
+Build `(pose, template, ball)` from a *specified* face-angle/dynamic-loft, a known impact `(u0,v0)` (ball center = `P(u0,v0) + r·n̂(u0,v0)` in world, so recovery must return `(u0,v0)`, `d=r`), or a known head-center velocity.
 
 ### 5.6 `sensitivity.py`
 Sweep perturbations, record output error: impact vs head-translation error (depth axis vs in-plane, via the nominal camera); impact/face/loft vs body-rotation error; face/loft vs template-loft error (≈1:1 check); impact vs flat-vs-curved mismodel. Output tables + the **error budget** (§8).
@@ -92,10 +94,11 @@ sensitivity: perturb → compute_metrics vs truth → error tables → budget
 ## 7. Validation strategy (TDD)
 Failing test first per unit.
 - **Round-trip (perfect inputs):** each metric matches analytic truth to **≤0.01° / ≤0.01 mm**.
-- **Loft-override live:** Δ° override → ≈Δ° dynamic-loft change (would have caught finding 1).
+- **Loft sign + override:** `static_loft_deg = L > 0` on a flat face at identity pose yields **dynamic loft = +L** (up); changing the override by Δ° changes dynamic loft by ≈Δ° (guards the rev-4 sign fix).
+- **Convex face:** `h` at the face edges is **negative** (edges recede); off-center impact normal tilts toward that edge (guards the rev-4 convexity fix).
 - **Impact-aware face/loft:** off-center impact on a curved face differs from center per `n(u*,v*)`.
 - **Sign tests:** toe/heel(+/−u), high/low(+/−v), open/closed, in/out, up/down each verified against §4.4.
-- **Contact states:** ball at exactly `r` off surface → valid; far/behind → None/conf 0; no ball → center-normal.
+- **Contact states:** ball at exactly `r` off the surface → valid; ball past the toe/heel (outside the face patch) → `invalid_contact`/None; far or behind → `invalid_contact`/None; no ball → center-normal.
 - **Degenerate:** square face → 0° face angle; pure loft → dynamic loft = static loft; ball at center → (0,0); flat==curved at center.
 - **Invariances:** global translation leaves angles unchanged.
 - **Sensitivity sanity:** zero perturbation → zero error; monotone.
@@ -103,20 +106,20 @@ Failing test first per unit.
 
 ## 8. Success criteria (Stage-0A gate)
 1. All metric math validated to numerical precision against analytic ground truth.
-2. Loft-override + impact-aware face/loft proven by test.
-3. Sensitivity error budget produced for **two** target tiers (review finding 6):
+2. Loft sign/override + convex-face + impact-aware face/loft proven by test.
+3. Sensitivity error budget produced for **two** target tiers:
    - **Single-camera realistic:** face/loft **±3–5°**, impact **~5–15 mm**.
    - **Stereo / stretch:** face/loft **±2°**, impact **±3–5 mm** (flagged as needing stereo, not the default).
    Each tier states the body-pose translation/rotation accuracy required — the input to the single-vs-stereo and resolution/calibration decisions.
 
 ## 9. Error handling & contact states
 
-**Contact-state behavior (review finding 5):** `BALL_RADIUS_MM = 21.35` (from `ballistics.py`); `CONTACT_TOL_MM` configurable.
+`BALL_RADIUS_MM = 21.35` (from `ballistics.py`); `CONTACT_TOL_MM`, `EDGE_TOL_MM` configurable. "In-patch" = `|u*| ≤ face_width/2 + EDGE_TOL_MM` and `|v*| ≤ face_height/2 + EDGE_TOL_MM`.
 | Case | Condition | `impact_*` | face/loft normal source | confidence |
 |---|---|---|---|---|
 | `no_ball` | `ball_center_world is None` | `None`, conf 0 | **face center** | nominal; source `"center"` |
-| `valid_contact` | on outward side AND `|d − r| ≤ tol` | `(u*, v*)` | **impact point** | scaled by `|d − r|`; source `"impact"` |
-| `invalid_contact` | behind face, off-face, or `|d − r| > tol` | `None`, conf 0 | **face center** | reduced; source `"center_fallback"` |
+| `valid_contact` | outward side AND `|d − r| ≤ CONTACT_TOL_MM` AND in-patch | `(u*, v*)` | **impact point** | scaled by `|d − r|`; source `"impact"` |
+| `invalid_contact` | behind face, OR out-of-patch, OR `|d − r| > CONTACT_TOL_MM` | `None`, conf 0 | **face center** | reduced; source `"center_fallback"` |
 
 **Other:** invalid template params (non-positive dims; radius outside valid range) → `ValueError`. Raw rotation matrix → explicit validation (above), do not rely on scipy. Two-pose metrics with `dt ≤ 0` or identical poses → `ValueError` / conf 0.
 
@@ -124,4 +127,4 @@ Failing test first per unit.
 - **Face surface = paraboloid approximation** of bulge/roll (sub-mm vs sphere over a clubface). Exact toroidal/spherical form is a future option if the sensitivity study shows it matters.
 - **Contact model = closest-surface-point.** Real contact is along the ball's approach direction; revisit once two-pose velocity is wired in.
 - **Lie deferred:** delivered lie is in the recovered pose; static-lie modeling needs a shaft-referenced body frame (out of 0A scope).
-- (Resolved in rev. 2–3: body/face-frame tangle, impact-aware signatures, path/attack origin, canonical body axes, exact face/loft math, sign formulas, contact states, success-tier split.)
+- (Resolved across revs: body/face-frame tangle, impact-aware signatures, path/attack origin, canonical body axes, exact face/loft math, sign formulas, contact states, success-tier split, **loft-rotation sign, bulge/roll convexity, face-patch bound**.)
