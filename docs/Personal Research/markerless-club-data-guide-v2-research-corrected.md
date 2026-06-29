@@ -65,6 +65,26 @@ The maintainer is replacing the angle-measurement radar. The two **K-LD7 FMCW ra
 
 ---
 
+## 1B. Who does what — radar vs camera across the systems
+
+The recurring lesson in one table. The split is **kinematics** (speed/path/attack — radar's strength) vs **face geometry + spin** (orientation/contact/rotation — needs optics, or a capable radar + ball-flight physics).
+
+| Capability | Trackman 4 | Mevo Gen2 | OpenFlight (target) |
+|---|---|---|---|
+| Ball speed | Radar | Radar (3D Doppler) | Radar (OPS) |
+| Club speed | Radar | Radar | Radar (OPS) |
+| Club path / attack angle | Radar (≥3 receivers, 3D) | Radar (3D Doppler) | Radar (OPS + new coherent multi-receiver) |
+| Spin rate | Radar (full flight); marked ball indoors | Radar + RCT/marked ball | **Camera + marked ball** (OPS radar spin is dead, r≈0.19) |
+| Spin axis | Radar (≥3 receivers) / trajectory | Radar (3D) | **Camera (stereo)** |
+| Face angle / dynamic loft | Radar D-plane + camera model | Radar D-plane | **Camera (stereo) + club template** |
+| Impact location | Camera (OERT, optical, markerless) | Camera (FIL add-on, optical) | **Camera (stereo)** |
+| **Depth / 3D resolver** | Dual multi-receiver radar | 3D Doppler radar | **Stereo cameras** |
+| Camera's role | Impact location + silhouette enhance | 2D accuracy enhance + impact location | **Primary for face/loft/impact/spin** |
+
+**The pattern:** the pros resolve depth/3D with a **capable multi-receiver radar** and use **one camera** mainly for impact location. OpenFlight's OPS can't be that radar (single-beam Doppler — no range, no angle, no spin), so **stereo cameras are OpenFlight's depth resolver** and carry face angle, dynamic loft, impact location, and spin. The maintainer's new coherent receiver upgrades the **kinematics** row (path/attack) but does **not** touch the face-geometry/spin rows — radar and camera are complementary, not substitutes. [Synthesis of §1A, §6A, §6B + competitive research]
+
+---
+
 ## 2. The core problem: markerless 6-DOF clubhead pose from behind
 
 You never see the face. You recover the clubhead's rigid-body **orientation**, then read the face plane off a **club-type template**. v1's pipeline framing stands; the corrections are *how the pros actually do the pose step*:
@@ -217,6 +237,24 @@ Why the pros' radar spin works and yours can't: X-band (~10 GHz) + ≥3 receiver
 - **Cheap interim radar boost** (optional): a metallic dot / Titleist RCT ball strengthens the *radar* modulation (what Mevo+/Garmin RCT rely on) — improves rate, no axis. Stopgap only.
 
 **Possible code bug to verify if radar spin is ever revisited:** `processor.py` assumes `seam = 1× spin` (`spin_rpm = peak_freq · 60`). FlightScope's patent states a great-circle **seam modulates at 2× spin** (a localized marker gives 1×). Academic today (the line is absent), but a factor-of-2 to check later. **[INFERRED from patent]**
+
+---
+
+### 6A.1 Capture geometry: behind-ball is a poor vantage for ball spin [CONFIRMED]
+
+The key constraint the research surfaced: the behind-ball position (chosen for *club* imaging) is actively *unfavorable* for *ball spin*.
+- The ball **flies away** from a behind camera → it shrinks ~6–22%/ms (the two strobe frames are at different scales) and stays in sharp focus only ~1 ms (~70 mm of travel) at the tight framing spin needs.
+- From directly behind, **backspin — the largest component — is seen edge-on**, the worst geometry for measuring it; spin *axis* sits in the camera's degenerate line-of-sight direction.
+- **The market confirms it:** every dedicated camera-spin system uses a **side** (GCQuad, SkyTrak, Garmin R50) or **overhead** (Uneekor) vantage; every behind-ball monitor uses **radar** for spin — *except* Rapsodo MLM2PRO, the lone behind-ball camera-spin product, which needs a proprietary **RPT marked ball** + trained recognizer, sits 6.5–8.5 ft back, and shoots the ball in the first instants. **PiTrac deliberately offsets its spin camera to a side/quartering view** to dodge the receding ball.
+
+**Optics at OpenFlight's distance (~3–5 ft / ~1–1.5 m behind the tee, per `docs/raspberry-pi-setup.md`):** a marked ball needs ~150–250 px across it → a ~12–25 mm lens → a tight **~150–300 mm FOV**, which the ball exits in ~1 ms. Strobe: two IR pulses **~1 ms apart, ~15 µs each** freezes 2,000–12,000 rpm with no aliasing. A cheap mono GS + IR strobe *can* freeze it — indoors; outdoors the strobe-vs-sun problem of §3.2 returns.
+
+**One rig can't do both framings.** The club wants a **wide** behind view (~250–400 mm FOV, to see the head silhouette); spin wants a **tight** view (~150–300 mm) with the *most* pixels — and you can't zoom a fixed lens. So:
+- **Club pose / impact / face / loft:** behind-ball stereo (the main rig).
+- **Spin rate:** achievable from the behind cameras with a **marked ball** (rate is forgiving) — realistically ±100–300 rpm.
+- **Spin axis:** the hardest metric of all. Behind-ball single-view gives ~2× sidespin error (PiTrac). It realistically wants a **side/quartering camera + stereo + an asymmetric multi-dot marked ball**, and even then expect **several degrees**, not the <1° of GCQuad/Trackman. Treat as a stretch; if pursued, add/offset a dedicated spin camera rather than relying on the pure-behind pair.
+
+**Net:** spin *rate* is a reasonable add-on to the camera rig (marked ball); spin *axis* is genuinely hard from behind, and it's the one metric where the optimal camera vantage (side/quartering) conflicts with the club's (behind) — so it argues for a dedicated/offset spin view, not the behind-ball stereo pair.
 
 ---
 
