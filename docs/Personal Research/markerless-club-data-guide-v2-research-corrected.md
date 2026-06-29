@@ -122,7 +122,7 @@ This is the section most changed by the indoor+outdoor requirement.
 ## 4. Deriving the metrics + the club-loft/template question
 
 Given pose `(R, t)` at the radar impact-time and the template:
-- **Impact location:** express ball-contact and the template **face plane** in a common frame; read contact in face-local (heel-toe, low-high) axes → toe/heel + high/low offsets. Present as a zone/heatmap. **Apply bulge-and-roll** at the strike point (Rapsodo does this). **[CONFIRMED approach]**
+- **Impact location (precise mm — see §4.4):** intersect the ball with the template's **curved face surface** (bulge & roll), express the contact point in face-local axes → **Impact Offset** (toe/heel, mm) and **Impact Height** (high/low, mm) from the **geometric face center** — matching Trackman's two-scalar format. Continuous mm, not a zone. **[CONFIRMED format]**
 - **Face angle:** template face-normal rotated by `R`, projected to horizontal, vs target line.
 - **Dynamic loft:** vertical (elevation) angle of the rotated face-normal at impact.
 - **Club path / attack angle:** differentiate `t` across bracket frames for the head velocity vector; cross-check with the K-LD7s.
@@ -151,6 +151,28 @@ Two independent routes to the same number is how commercial systems get robustne
 
 ---
 
+### 4.4 Impact location — precise mm (the Trackman spec) and the path there
+
+**What Trackman actually outputs [CONFIRMED]:** two continuous scalars per shot, **not a zone**:
+- **Impact Offset** — horizontal (toe/heel), in **mm**, from the **geometric center of the clubface**.
+- **Impact Height** — vertical (high/low), in **mm**, from face center.
+
+Measured **markerlessly via the optical OERT path** (not radar; needs adequate lighting). UI: a clubface graphic with one dot per shot, a **session dispersion heatmap** ("hot spots"), and numeric mm tiles; impact location feeds smash factor and gear-effect curve. Sign conventions are undisclosed — we define and document our own. FlightScope's "Face Impact Location" is the same idea (lateral + vertical impact, optical) and notably lets the **user enter clubhead width/height** to scale the face — a pattern worth copying.
+
+**Honest precision reality [CONFIRMED physics + commercial precedent]:** even the gold-standard camera systems (GCQuad, Uneekor) reach ~1–3 mm only by imaging the face directly **with required fiducial stickers**. From behind the ball you never see the face, so precision is bounded by how well you recover **head pose** (+ ball position). Dominant error sources, ranked: **(1) depth / camera-axis translation** — a single behind-ball view infers depth from a scale prior, and depth error scales the whole face mapping; **(2) head rotation** — ~1° of face-angle error ≈ **0.7 mm** at a ~40 mm lever; **(3) face curvature** — modeling a driver face as flat is wrong by several mm near the edges (bulge & roll); **(4) ball-center localization** — usually sub-mm. **Net: a single markerless behind-ball camera realistically gives ~5–15 mm (coarse), not Trackman-class.**
+
+**The realistic plan to reach precise (±3–5 mm) impact location:**
+1. **Stereo** (two synced global-shutter cameras) — *measures* depth, removing the dominant error. Effectively required for mm precision; it's the same upgrade that buys spin axis + face/loft (§6B).
+2. **Per-club 3-D face model with bulge & roll curvature** (woods curved, irons ~planar) — not a flat plane.
+3. **User enters clubhead width/height / selects club** (FlightScope-style) to fix the face-center origin and scale.
+4. **Strobed global-shutter capture** to freeze the head sharply at the impact frame (motion blur corrupts pose → corrupts the contact point).
+5. **Full intrinsic + stereo-extrinsic calibration** and a fixed, known camera-to-hitting-zone geometry.
+6. **~150–250 px across the clubface** + sub-pixel feature localization (~0.1 px) so 1 px ≲ ~0.5–1 mm.
+
+Output `impact_offset_mm` + `impact_height_mm` from the geometric center (continuous, with a confidence); render as a per-shot clubface dot + session heatmap. **Stage 0 proves the error budget:** the sim quantifies how many mm of impact error result from a given depth/rotation error, converting directly into the stereo baseline / resolution / calibration spec — so you buy hardware to a number, not a guess.
+
+---
+
 ## 5. Integration with OpenFlight (codebase-grounded) [CONFIRMED in repo]
 
 - **Reuse the existing `src/openflight/camera/` module** — it already implements a pre/post-trigger **ring buffer** (`CaptureConfig`), a **`MockCameraCapture`** (your Stage-0 software-first harness), **`BallDetector` HoughCircles**, and `CameraCalibration`/`LaunchAngleCalculator`. It targets the **rolling-shutter HQ camera** and is **disabled in prod** (deps commented in `pyproject.toml`). The new GS club path is a **new capture backend alongside it**, reusing the buffer/mock/detector scaffolding.
@@ -173,7 +195,7 @@ No vendor publishes per-metric club tolerances; the camera-based GCQuad is the d
 | Club path | **±2–4°** | Easier than face from behind; corroborate with K-LD7 |
 | **Face angle** | **±3–5°** (±2° likely needs stereo) | Hardest single-view metric |
 | **Dynamic loft** | **±3–5°** | Sensitive to template loft + depth |
-| Impact location | **Zone (toe/heel/high/low)**, not mm | Precise mm needs better view/stereo |
+| Impact location | **±3–5 mm (stereo)** / ~5–15 mm (single-view) | Output is continuous mm — Impact Offset + Impact Height from face center (§4.4); stereo effectively required for Trackman-class precision |
 
 The v1 ±2° face/loft figure is an aspirational *stretch* that **probably requires the 2nd camera**; lead with the ±3–5° single-view bar.
 
@@ -223,7 +245,7 @@ Verified anchor prices: InnoMaker IMX296 **mono** w/ trigger **$47**; Arducam OV
 - **Stage 1 — Capture + illumination (hardware, the new learning).** Mono IMX296 + Pico XTR trigger + **940nm IR strobe + bandpass filter**; wire OPS243-A impact → Pico; confirm strobe-frozen, timestamped frames bracketing impact. **Gate:** sharp (≤1–2px effective blur) frames on a high fraction of swings **indoors**, then characterize **outdoor** pickup in shade vs direct sun.
 - **Stage 2 — Segmentation on real frames** (your strength). Confirm sim-trained models transfer. **Gate:** mask IoU ≥0.9 vs hand-labels across lighting/clubs.
 - **Stage 3 — 6-DOF pose on real shots.** Silhouette fit and/or keypoints+PnP; interpolate pose to radar impact-time; check multi-frame kinematic consistency.
-- **Stage 4 — Impact location** (priority #1). Zone heatmap; validate toe/heel/high/low + center vs a reference.
+- **Stage 4 — Impact location** (priority #1). Continuous **Impact Offset + Impact Height (mm)** from face center (§4.4); per-shot clubface dot + session heatmap UI. Validate mm error vs a reference; expect ~5–15 mm single-view, ±3–5 mm with stereo.
 - **Stage 5 — Face angle / dynamic loft.** **Gate:** ±3–5° single-camera; **decide here whether to add the 2nd camera** for ±2°.
 - **Stage 6 — Integration.** Merge fields into `Shot`/UI; check GSPro/E6 passthrough feasibility.
 
