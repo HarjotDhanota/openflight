@@ -33,8 +33,20 @@ def _boundary(mask: np.ndarray) -> np.ndarray:
     return (m - eroded).astype(bool)
 
 
+def _foreground_crop(a: np.ndarray, b: np.ndarray, margin: int = 8) -> tuple[np.ndarray, np.ndarray]:
+    ys, xs = np.nonzero(np.logical_or(a, b))
+    if len(xs) == 0:
+        return a, b
+    y0 = max(0, int(ys.min()) - margin)
+    y1 = min(a.shape[0], int(ys.max()) + margin + 1)
+    x0 = max(0, int(xs.min()) - margin)
+    x1 = min(a.shape[1], int(xs.max()) + margin + 1)
+    return a[y0:y1, x0:x1], b[y0:y1, x0:x1]
+
+
 def chamfer(a: np.ndarray, b: np.ndarray) -> float:
     diag = float(np.hypot(*a.shape))
+    a, b = _foreground_crop(a.astype(bool), b.astype(bool))
     ba, bb = _boundary(a), _boundary(b)
     if ba.sum() == 0 and bb.sum() == 0:
         return 0.0
