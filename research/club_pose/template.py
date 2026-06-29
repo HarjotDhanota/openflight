@@ -53,3 +53,28 @@ class ClubTemplate:
         from dataclasses import replace
 
         return replace(self, static_loft_deg=loft_deg)
+
+    def surface_height_face(self, u: float, v: float) -> float:
+        h = 0.0
+        if self.bulge_radius_mm is not None:
+            h -= (u * u) / (2.0 * self.bulge_radius_mm)
+        if self.roll_radius_mm is not None:
+            h -= (v * v) / (2.0 * self.roll_radius_mm)
+        return h
+
+    def surface_normal_face(self, u: float, v: float) -> np.ndarray:
+        nu = u / self.bulge_radius_mm if self.bulge_radius_mm is not None else 0.0
+        nv = v / self.roll_radius_mm if self.roll_radius_mm is not None else 0.0
+        n = np.array([nu, nv, 1.0])
+        return n / np.linalg.norm(n)
+
+    def _face_basis(self) -> np.ndarray:
+        u, v, w = self.face_axes()
+        return np.column_stack([u, v, w])  # columns = face axes in body coords
+
+    def face_to_body_vec(self, vec_face) -> np.ndarray:
+        return self._face_basis() @ np.asarray(vec_face, dtype=float)
+
+    def to_face_coords(self, p_body) -> np.ndarray:
+        q = np.asarray(p_body, dtype=float) - self.face_center_offset
+        return self._face_basis().T @ q  # orthonormal basis: inverse = transpose
