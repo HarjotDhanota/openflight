@@ -120,9 +120,6 @@ def _fit_fast(observed_masks, mesh, cameras, prior_pose) -> FitResult:
     x0 = _x_from_pose(prior_pose)
     features = [_observed_features(m) for m in observed_masks]
     starts = [x0]
-    rng = np.random.default_rng(0)
-    for _ in range(3):  # small multi-start to dodge local minima
-        starts.append(x0 + rng.normal(0, [0.05, 0.05, 0.05, 5.0, 5.0, 5.0]))
     fast_best, fast_cost, n_evals = None, np.inf, 0
     for s in starts:
         res = minimize(
@@ -130,26 +127,13 @@ def _fit_fast(observed_masks, mesh, cameras, prior_pose) -> FitResult:
             s,
             args=(features, mesh, cameras),
             method="Powell",
-            options={"xtol": 1e-3, "ftol": 1e-5, "maxiter": 350},
+            options={"xtol": 2e-3, "ftol": 1e-4, "maxiter": 80},
         )
         n_evals += int(res.nfev)
         if res.fun < fast_cost:
             fast_best, fast_cost = res.x, float(res.fun)
 
-    refine_starts = [fast_best, x0]
-    best, best_cost = None, np.inf
-    for s in refine_starts:
-        res = minimize(
-            _cost,
-            s,
-            args=(observed_masks, mesh, cameras),
-            method="Powell",
-            options={"xtol": 1e-3, "ftol": 1e-4, "maxiter": 100},
-        )
-        n_evals += int(res.nfev)
-        if res.fun < best_cost:
-            best, best_cost = res.x, float(res.fun)
-    pose = _pose_from_x(best)
+    pose = _pose_from_x(fast_best)
     final_iou = float(
         np.mean([iou(render_silhouette(mesh, pose, c), o) for o, c in zip(observed_masks, cameras)])
     )
