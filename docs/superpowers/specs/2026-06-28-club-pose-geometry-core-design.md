@@ -128,3 +128,10 @@ Failing test first per unit.
 - **Contact model = closest-surface-point.** Real contact is along the ball's approach direction; revisit once two-pose velocity is wired in.
 - **Lie deferred:** delivered lie is in the recovered pose; static-lie modeling needs a shaft-referenced body frame (out of 0A scope).
 - (Resolved across revs: body/face-frame tangle, impact-aware signatures, path/attack origin, canonical body axes, exact face/loft math, sign formulas, contact states, success-tier split, **loft-rotation sign, bulge/roll convexity, face-patch bound**.)
+
+## 11. Correction (post-implementation — Stage-0A sensitivity scope)
+
+Running the implemented harness corrected two things:
+- **Stage 0A yields sensitivity *coefficients*, not an absolute depth→impact mm budget.** The perspective/scale amplification of a depth error needs the **camera projection model** and is a **Stage 0B** sweep — not derivable from pure pose→metrics geometry. The old `depth_error_to_impact_mm` (routed through the contact gate) returned `nan` for any depth error > `CONTACT_TOL_MM` and was untested at nonzero perturbation; it was replaced by `translation_error_to_impact_mm` / `rotation_error_to_impact_mm` that use the raw face projection (no contact gate).
+- **In pure 3-D geometry, a depth (camera-axis) translation error couples to impact HEIGHT via `sin(2·loft)`** — ~0.33 for a driver, **~0.93 for a 34° iron**, up to 1.0 near 45° loft. So depth/translation accuracy matters strongly for impact on lofted clubs even before perspective. (This corrected an earlier wrong intuition that depth error only shifts the contact distance.)
+- `error_budget` now returns coefficients: `deg_face_per_deg_yaw` (~1), `deg_loft_per_deg_template_loft` (~1), `mm_offset_per_mm_inplane_translation` (~1; curvature foreshortens the driver to ~0.92), `mm_impact_per_mm_depth_translation_pure3d` (= sin(2·loft)), `mm_offset_per_deg_yaw_at_20mm_toe` (lever ~0.5–1.1). The single-vs-stereo decision multiplies these by the pose-error magnitudes Stage 0B supplies.
