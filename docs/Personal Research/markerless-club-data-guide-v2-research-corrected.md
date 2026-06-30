@@ -85,6 +85,50 @@ The recurring lesson in one table. The split is **kinematics** (speed/path/attac
 
 ---
 
+## 1C. UPDATE (2026-06-29) — face/loft from a behind-ball camera is NOT achievable; the path is the radar D-plane fused with camera spin
+
+**From the Stage-0B-1 sim + a ~10-agent literature verification pass (adversarially checked against established CV).** Supersedes the parts of §2.2, §4, §5, §6 that assumed a behind-ball silhouette/keypoint estimator would yield face angle / dynamic loft.
+
+**Finding (CONFIRMED, textbook):** recovering **face angle / dynamic loft** markerlessly from a **behind-the-ball camera** to ≤2–3° is **not achievable by any current optical method** — the limiter is the **vantage, not the algorithm**:
+- Behind the ball, the **face normal points ~along the camera axis**, so face angle (yaw) and dynamic loft (pitch) change the image only through **second-order foreshortening** (5° → ~0.4% projected change; the sim measured 5° face → 1.7% silhouette IoU). Out-of-plane "toward/away" rotation is the intrinsically hardest DOF from one view, and the face is **self-occluded** by the crown/topline from behind. (Golf coaching independently calls the down-the-line view "near impossible to see exact clubface.")
+- **Silhouettes** are information-poor for rotation; interior edges cut rotation error 43–58%, but the vantage still caps it. (Corrects §2.2's earlier claim that silhouette-fit conditions rotation well.)
+- **Every optical method falls short from behind, cheaply:** keypoints (~2–10° on easy objects, **15–40° on small/textureless/symmetric/occluded/blurred** ones — the clubhead's class; single-view ≤2–3° is "not benchmark-supported"); textured render-and-compare (FoundationPose/MegaPose — best accuracy but **RGB-D-dependent, ~3.7° even *with* depth**, GPU-bound, not Pi); NeRF/3DGS/diffusion (GPU + per-object training + good init; diffusion coarse 15–30°); photometric/specular (lab-only; fails on a flat glossy face in sun + motion blur). **No neural method runs real-time on a Pi**, and impact (~0.5 ms) needs 2,000+ fps no render-and-compare matches live.
+- **Commercial confirmation:** every camera system measuring face/loft images the club from **overhead (Uneekor) or the side (GCQuad, Garmin R50) with face markers** — **never from behind, never markerless.** Behind-ball units (Trackman, FlightScope) get face/loft from **radar**.
+
+**The real path — the radar D-plane, fused with camera spin (CONFIRMED commercial method):** Trackman/FlightScope never image the face; they **back out** face angle + dynamic loft from a collision model fed by measured **club path + ball launch direction + spin (rate + axis)** (launch direction ≈85% face/15% path; spin axis = f(face-to-path); dynamic loft drives launch angle + spin loft). For OpenFlight this maps onto the hardware:
+- **Club path / launch direction** ← the new **OPS-coherent multi-receiver angle PCB** (§1A).
+- **Spin rate + axis** ← the **behind-ball camera with a marked/dimpled ball** (multi-frame/strobe; SpinDOE 2.4° axis / <1% rate; PiTrac DIY ~0.5° backspin / ~2.7° side-spin). **Spin axis is the make-or-break** (side-spin has large relative error).
+- Plausible result with a good spin chain: **face ~2–3°, dynamic loft ~2–4°** — useful, below tour-grade.
+
+**Revised camera-subsystem scope (final):**
+| Metric | Source |
+|---|---|
+| **Impact location** | Behind-ball **stereo camera** — but **NOT from a silhouette** (see §1D); needs interior edges/keypoints |
+| **Spin rate / axis** | Behind-ball camera + **marked/dimpled ball**, multi-frame (axis ~2–3°) |
+| **Club path / attack / launch** | **Radar** (OPS + new coherent receiver) |
+| **Face angle / dynamic loft** | **Radar D-plane** fused with camera spin + radar path — NOT behind-ball optics |
+| **Ball / club speed** | Radar |
+
+**Decision:** the behind-ball camera is for **impact location + spin**, not face/loft. **Drop the behind-ball keypoint sim** for face/loft (vantage-limited; won't reach ≤2–3°). Face/loft becomes a **fusion of camera spin axis + radar club path** through the D-plane (the commercial architecture). If face/loft must be *optical*, it requires a **second camera at a different vantage (overhead/side) + markers** — a larger build off the behind-ball line.
+
+---
+
+## 1D. UPDATE (2026-06-29) — the behind-ball SILHOUETTE is insufficient for precise impact location too (measured), not just face/loft
+
+**Stage-0B-2 measurement** (`research/club_pose/sim`, `run_experiment` n=15, procedural driver, stereo + mono). The silhouette analysis-by-synthesis approach — the assumed core method for impact location — does **not** reach the precise-mm bar once realistic segmentation noise is included:
+
+| Cue / condition | Stereo impact-location median | Stereo rotation median |
+|---|---|---|
+| Clean (no degradation), single pose | ~3.5 mm | ~5° |
+| **Light** degrade (3 px blur + 1.5 px boundary ≈ 1% of a 300 px head) | **12.7 mm** | 13° |
+| **Realistic** degrade (8 px blur + 3 px boundary + shaft occlusion) | **22.1 mm** | 18° |
+
+(Mono is far worse: 26–28 mm.) The bar is **±3–5 mm** (§4.4). **Clean, the silhouette is borderline-OK (~3.5 mm); mild realistic noise destroys it (12–22 mm).** Why: the silhouette is both **information-poor** (flat cost landscape → 13–18° rotation wander, which the curved-face projection turns into mm of impact error) **and fragile** (its only cue, the boundary, is exactly what segmentation noise corrupts). **Critically, IoU-success is not a proxy for pose accuracy** — every fit "succeeded" (IoU ≥ 0.9) while 13–18° / 12–22 mm wrong (this also invalidates a failure-rate gate built on IoU-success). *Caveat:* the lean fitter leaves some IoU on the table (a heavier search improves the clean case), but it cannot manufacture rotation signal a degraded silhouette doesn't contain — the clean ceiling (5° even at the IoU optimum) and the literature both say a **richer cue is required regardless**.
+
+**Conclusion:** the silhouette is the **wrong primitive for *all* precise metrics** (face/loft *and* impact location) — matching the literature (silhouettes are info-poor; interior edges cut rotation error 43–58%; keypoints/texture pin pose). The cheap silhouette sim did its job: it killed the silhouette path with evidence **before** building a photorealistic renderer + segmentation pipeline. **Fork:** **(A)** test the research-recommended fix in sim — render **interior edges** (crown/face/leading-edge lines) + **keypoints → PnP** — and measure whether a feature-rich cue rescues impact location to ≤3–5 mm; or **(B)** re-scope the behind-ball camera to **spin (marked ball) + coarse impact *zones* only**, with precise impact location / face / loft requiring a **face marker and/or a side/overhead vantage** (the GCQuad/Uneekor reality).
+
+---
+
 ## 2. The core problem: markerless 6-DOF clubhead pose from behind
 
 You never see the face. You recover the clubhead's rigid-body **orientation**, then read the face plane off a **club-type template**. v1's pipeline framing stands; the corrections are *how the pros actually do the pose step*:
