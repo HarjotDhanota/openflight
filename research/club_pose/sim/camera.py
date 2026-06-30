@@ -17,6 +17,18 @@ class CameraIntrinsics:
 
 
 IMX296 = CameraIntrinsics(fx=4638.0, fy=4638.0, cx=728.0, cy=544.0, width=1456, height=1088)
+OV9281 = CameraIntrinsics(fx=5333.0, fy=5333.0, cx=640.0, cy=400.0, width=1280, height=800)
+
+
+def scaled_intrinsics(factor: float) -> CameraIntrinsics:
+    """Vary angular resolution at a fixed FOV (px/mm scales with `factor`) for the resolution sweep."""
+    return CameraIntrinsics(
+        fx=IMX296.fx * factor, fy=IMX296.fy * factor,
+        cx=IMX296.cx * factor, cy=IMX296.cy * factor,
+        width=int(round(IMX296.width * factor)), height=int(round(IMX296.height * factor)),
+    )
+
+
 IMPACT_TARGET = np.array([0.0, 0.0, 0.0])  # impact-zone center the cameras aim at
 
 
@@ -53,12 +65,12 @@ class Camera:
         return np.column_stack([u, v]), in_front
 
 
-def mono_rig() -> Camera:
-    return Camera.look_at(IMX296, center=(-1200.0, 0.0, 300.0), target=IMPACT_TARGET)
+def mono_rig(intrinsics: CameraIntrinsics = IMX296) -> Camera:
+    return Camera.look_at(intrinsics, center=(-1200.0, 0.0, 300.0), target=IMPACT_TARGET)
 
 
-def stereo_rig(baseline_mm: float = 150.0):
+def stereo_rig(baseline_mm: float = 150.0, intrinsics: CameraIntrinsics = IMX296):
     b = baseline_mm / 2.0
-    left = Camera.look_at(IMX296, center=(-1200.0, b, 300.0), target=IMPACT_TARGET)
-    right = Camera.look_at(IMX296, center=(-1200.0, -b, 300.0), target=IMPACT_TARGET)
+    left = Camera.look_at(intrinsics, center=(-1200.0, b, 300.0), target=IMPACT_TARGET)
+    right = Camera.look_at(intrinsics, center=(-1200.0, -b, 300.0), target=IMPACT_TARGET)
     return left, right
