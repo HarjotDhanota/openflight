@@ -1,7 +1,12 @@
+import os
+
 import numpy as np
+import pytest
 
 from club_pose.sim.camera import mono_rig
 from club_pose.sim.driverhead import driver_keypoints, structured_driver
+
+_ASSETS = os.path.join(os.path.dirname(__file__), "..", "sim", "assets")
 
 
 def test_face_center_lies_on_template_face():
@@ -34,3 +39,15 @@ def test_mesh_renders_driverish_silhouette():
     head = structured_driver()
     mask = render_silhouette(head.mesh, ClubheadPose(Rotation.identity(), np.zeros(3)), mono_rig())
     assert mask.sum() > 5000  # non-empty, head-sized
+
+
+@pytest.mark.skipif(not os.path.exists(os.path.join(_ASSETS, "driver.obj")),
+                    reason="real driver OBJ asset not present")
+def test_real_obj_loads_with_keypoints():
+    from club_pose.sim.driverhead import structured_driver_from_obj
+
+    head = structured_driver_from_obj(
+        os.path.join(_ASSETS, "driver.obj"), os.path.join(_ASSETS, "driver_keypoints.json")
+    )
+    assert len(head.mesh.faces) > 50
+    assert "face_center" in head.keypoints and "crown_apex" in head.keypoints

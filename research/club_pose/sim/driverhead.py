@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+import os
 
 import numpy as np
 from scipy.spatial import ConvexHull
@@ -61,3 +63,16 @@ def structured_driver() -> StructuredHead:
     verts = np.asarray(pts, dtype=float).view(_ArrayWithPtp)
     mesh = HeadMesh(verts, hull.simplices.astype(np.int64), "driver_structured")
     return StructuredHead(mesh=mesh, keypoints=kps, template=template)
+
+
+def structured_driver_from_obj(obj_path, kp_path) -> StructuredHead:
+    from .headmesh import load_obj
+
+    mesh = load_obj(obj_path)
+    with open(kp_path, "r", encoding="utf-8") as fh:
+        raw = json.load(fh)
+    kps = {}
+    for name, rec in raw.items():
+        nv = np.asarray(rec["normal"], dtype=float)
+        kps[name] = Keypoint(name, np.asarray(rec["xyz"], dtype=float), nv / np.linalg.norm(nv))
+    return StructuredHead(mesh=mesh, keypoints=kps, template=default_template("driver"))
