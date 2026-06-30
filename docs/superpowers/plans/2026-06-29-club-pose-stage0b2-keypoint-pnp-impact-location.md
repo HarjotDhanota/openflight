@@ -14,7 +14,8 @@
 - **Reuse `default_template("driver")` exactly** for the face geometry and impact projection (face center body (50,0,0), 10.5° loft, bulge/roll 254 mm).
 - **Strict normal-based visibility:** a keypoint is available to the solver **iff** `normal_world · (camera.center_world − point_world) > 0` and it projects in-front + in-frame. Occluded (face/leading-edge from behind) points are unavailable. **Pure silhouette-tangent extrema are excluded** (only camera-facing surface patches are keypoints).
 - **Honesty gates:** degenerate/failed solves are recorded (`ok=False`), never silently dropped; a requirement boundary is valid only at **`ok_rate ≥ 0.9`**; keypoint detectability is **swept (σ_px), never assumed perfect**; the silhouette baseline is **reported, not asserted** to a fixed mm.
-- **`uv` full path** on this box: `C:\Users\harjo\AppData\Local\Microsoft\WinGet\Packages\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe\uv.exe` (tests run with `PYTHONPATH` already handled by the pytest rootdir).
+- **`uv` full path** on this box (not on PATH): `C:\Users\harjo\AppData\Local\Microsoft\WinGet\Packages\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe\uv.exe`. Substitute it for `uv` in every command below. Tests resolve `club_pose` via the pytest rootdir; the runtime sweep resolves it via a `sys.path` insert in the committed script — **no `PYTHONPATH=...` prefix and no shell heredoc** (those are not PowerShell-safe).
+- **`git commit` messages** in the steps below are illustrative one-liners; on the Windows shell, pass them with a normal quoted `-m` (or a here-string), not a Bash heredoc.
 - TDD, frequent commits. DRY, YAGNI.
 
 ---
@@ -294,10 +295,12 @@ class Detection:
     uv: np.ndarray
 
 
-def detect(head, pose, camera, sigma_px, rng, dropout=0.0):
+def detect(head, pose, camera, sigma_px, rng, dropout=0.0, keypoint_names=None):
     dets = []
     w, h = camera.intrinsics.width, camera.intrinsics.height
-    for kp in head.keypoints.values():
+    items = (head.keypoints.values() if keypoint_names is None
+             else [head.keypoints[n] for n in keypoint_names if n in head.keypoints])
+    for kp in items:
         p_world = pose.body_to_world(kp.xyz)
         n_world = pose.direction_to_world(kp.normal)
         if float(n_world @ (camera.center_world - p_world)) <= 0.0:  # back-facing
@@ -387,6 +390,17 @@ def test_too_few_points_returns_not_ok():
     dets = detect(head, true, cam, 0.0, np.random.default_rng(0))[:2]
     fit = fit_pose_pnp(dets, cam, _pose([0, 0, 0], [0, 0, 0]))
     assert not fit.ok
+
+
+def test_three_noncollinear_stereo_points_ok():
+    # Guards the degeneracy bug: 3 non-collinear points are coplanar but VALID for Kabsch.
+    head, cams = structured_driver(), stereo_rig()
+    true = _pose([0.0, 0.0, 0.0], [0.0, 0.0, 0.0])
+    names = ["crown_apex", "crown_toe", "crown_heel"]
+    dL = detect(head, true, cams[0], 0.0, np.random.default_rng(0), keypoint_names=names)
+    dR = detect(head, true, cams[1], 0.0, np.random.default_rng(1), keypoint_names=names)
+    fit = fit_pose_kp_stereo(dL, dR, cams, _pose([0, 0, 0], [0, 0, 0]))
+    assert fit.ok and fit.n_used == 3
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -433,9 +447,12 @@ def _from_object_camera(R_oc, t_oc, camera):
 
 
 def _degenerate(pts, tol=1e-3):
-    c = np.asarray(pts, dtype=float) - np.asarray(pts, dtype=float).mean(0)
+    # Degenerate == COLLINEAR (rank < 2), NOT coplanar. Both PnP (>=4) and Kabsch (>=3) accept
+    # coplanar/3-point sets; only a collinear set is unsolvable. So gate on the 2nd singular value.
+    c = np.asarray(pts, dtype=float)
+    c = c - c.mean(0)
     s = np.linalg.svd(c, compute_uv=False)
-    return s[-1] < tol * max(s[0], 1e-9)
+    return len(s) < 2 or s[1] < tol * max(s[0], 1e-9)
 
 
 def fit_pose_pnp(detections, camera, prior) -> KPFit:
@@ -507,12 +524,46 @@ git commit -m "feat(club_pose.sim): mono PnP + stereo Kabsch keypoint solvers w/
 ### Task 5: Find-the-requirement experiment + verdict (`experiment_kp.py`)
 
 **Files:**
+- Modify: `research/club_pose/sim/camera.py` (parametrize the rigs with `intrinsics`; add `OV9281` + `scaled_intrinsics`)
 - Create: `research/club_pose/sim/experiment_kp.py`
 - Test: `research/club_pose/tests/test_sim_experiment_kp.py`
 
 **Interfaces:**
-- Consumes: `structured_driver` (Task 2); `detect` (Task 3); `fit_pose_pnp`/`fit_pose_kp_stereo` (Task 4); `pose_for_delivered`, `raw_metrics` from `experiment.py`; `ball_for_impact` from `..groundtruth`; `mono_rig`/`stereo_rig`.
-- Produces: `run_kp_experiment(n, sigma_px, baseline_mm, mode, dropout, seed) -> dict` (with `rows`, `n_attempted`, `n_ok`); `kp_verdict(grid) -> dict` (per-cell `ok_rate` + `impact_mm_median`, the gated `requirement` boundary).
+- Consumes: `structured_driver`/`StructuredHead` (Task 2); `detect` (Task 3, now with `keypoint_names`); `fit_pose_pnp`/`fit_pose_kp_stereo` (Task 4); `pose_for_delivered`, `raw_metrics` from `experiment.py`; `ball_for_impact` from `..groundtruth`; `mono_rig`/`stereo_rig`/`IMX296`/`scaled_intrinsics` from `camera.py`; `render_silhouette`/`degrade`/`PRESETS`/`fit_pose_stereo` for the baseline.
+- Produces: `run_kp_experiment(n, sigma_px, baseline_mm, mode, dropout, seed, head, intrinsics, keypoint_names) -> dict` (`rows`, `n_attempted`, `n_ok`, `px_per_mm`, `n_kp_avail`); `silhouette_baseline(head, n, severity, baseline_mm, seed) -> dict` (apples-to-apples on the same mesh); `kp_verdict(grid) -> dict` (per-cell `ok_rate`/`impact_mm_median`/`px_per_mm`/`n_kp_avail`, the gated `requirement`).
+
+- [ ] **Step 0: Parametrize the camera rigs + add intrinsics presets**
+
+The sweep must vary sensor resolution and baseline, so the rigs must accept `intrinsics`. Edit `research/club_pose/sim/camera.py` — add after `IMX296`:
+
+```python
+OV9281 = CameraIntrinsics(fx=5333.0, fy=5333.0, cx=640.0, cy=400.0, width=1280, height=800)
+
+
+def scaled_intrinsics(factor: float) -> CameraIntrinsics:
+    """Vary angular resolution at a fixed FOV (px/mm scales with `factor`) for the resolution sweep."""
+    return CameraIntrinsics(
+        fx=IMX296.fx * factor, fy=IMX296.fy * factor,
+        cx=IMX296.cx * factor, cy=IMX296.cy * factor,
+        width=int(round(IMX296.width * factor)), height=int(round(IMX296.height * factor)),
+    )
+```
+
+and change the two rig factories to take `intrinsics` (additive default — existing `mono_rig()`/`stereo_rig(b)` call sites stay valid):
+
+```python
+def mono_rig(intrinsics: CameraIntrinsics = IMX296) -> Camera:
+    return Camera.look_at(intrinsics, center=(-1200.0, 0.0, 300.0), target=IMPACT_TARGET)
+
+
+def stereo_rig(baseline_mm: float = 150.0, intrinsics: CameraIntrinsics = IMX296):
+    b = baseline_mm / 2.0
+    left = Camera.look_at(intrinsics, center=(-1200.0, b, 300.0), target=IMPACT_TARGET)
+    right = Camera.look_at(intrinsics, center=(-1200.0, -b, 300.0), target=IMPACT_TARGET)
+    return left, right
+```
+
+Run the existing sim tests to confirm no regression: `uv run --group research pytest research/club_pose/tests/test_sim_silhouette.py research/club_pose/tests/test_sim_driverhead.py -q` → green.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -521,7 +572,8 @@ git commit -m "feat(club_pose.sim): mono PnP + stereo Kabsch keypoint solvers w/
 ```python
 import numpy as np
 
-from club_pose.sim.experiment_kp import kp_verdict, run_kp_experiment
+from club_pose.sim.camera import scaled_intrinsics
+from club_pose.sim.experiment_kp import kp_verdict, run_kp_experiment, silhouette_baseline
 
 
 def test_clean_stereo_has_high_ok_rate():
@@ -531,24 +583,34 @@ def test_clean_stereo_has_high_ok_rate():
 
 
 def test_impact_mm_increases_with_noise():
-    lo = run_kp_experiment(n=12, sigma_px=0.5, baseline_mm=150.0, mode="stereo", seed=1)
-    hi = run_kp_experiment(n=12, sigma_px=5.0, baseline_mm=150.0, mode="stereo", seed=1)
+    lo = run_kp_experiment(n=12, sigma_px=0.5, mode="stereo", seed=1)
+    hi = run_kp_experiment(n=12, sigma_px=5.0, mode="stereo", seed=1)
 
     def med(res):
-        vals = [r["impact_mm"] for r in res["rows"] if r["ok"]]
-        return float(np.median(vals))
+        return float(np.median([r["impact_mm"] for r in res["rows"] if r["ok"]]))
 
     assert med(hi) > med(lo)
 
 
 def test_verdict_gates_on_ok_rate():
-    grid = [run_kp_experiment(n=10, sigma_px=s, baseline_mm=150.0, mode="stereo", seed=2)
-            for s in (0.5, 1.0, 2.0)]
+    grid = [run_kp_experiment(n=10, sigma_px=s, mode="stereo", seed=2) for s in (0.5, 1.0, 2.0)]
     v = kp_verdict(grid)
     for cell in v["cells"]:
-        assert "ok_rate" in cell and "impact_mm_median" in cell
+        assert "ok_rate" in cell and "impact_mm_median" in cell and "px_per_mm" in cell
         if cell["ok_rate"] < 0.9:
             assert cell["meets_bar"] is False
+
+
+def test_accepts_intrinsics_and_keypoint_subset():
+    res = run_kp_experiment(n=6, sigma_px=1.0, mode="mono", seed=3,
+                            intrinsics=scaled_intrinsics(2.0),
+                            keypoint_names=["crown_apex", "crown_back", "crown_toe", "crown_heel"])
+    assert res["n_attempted"] == 6 and res["n_kp_avail"] == 4
+
+
+def test_silhouette_baseline_runs_on_structured_mesh():
+    base = silhouette_baseline(n=2, severity="light", seed=0)  # slow (silhouette fits); keep n small
+    assert base["n"] == 2 and "impact_mm_median" in base
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -559,7 +621,8 @@ Expected: FAIL — `ModuleNotFoundError: club_pose.sim.experiment_kp`.
 - [ ] **Step 3: Implement `experiment_kp.py`**
 
 ```python
-"""Find-the-requirement sweep: keypoint pose -> impact location, gated on ok_rate."""
+"""Find-the-requirement sweep: keypoint pose -> impact location, gated on ok_rate, plus the
+silhouette apples-to-apples baseline on the SAME structured mesh."""
 from __future__ import annotations
 
 import numpy as np
@@ -567,40 +630,48 @@ from scipy.spatial.transform import Rotation
 
 from ..groundtruth import ball_for_impact
 from ..types import ClubheadPose
-from .camera import mono_rig, stereo_rig
+from .camera import IMX296, mono_rig, stereo_rig
 from .driverhead import structured_driver
 from .experiment import pose_for_delivered, raw_metrics
 from .keypoints import detect
 from .posefit_kp import fit_pose_kp_stereo, fit_pose_pnp
 
 _BAR_MM = 5.0
+_STANDOFF_MM = 1237.0  # |(-1200,0,300) - origin|, for px/mm reporting
 
 
-def run_kp_experiment(n=20, sigma_px=1.0, baseline_mm=150.0, mode="stereo", dropout=0.0, seed=0):
+def _sample(rng, template):
+    fa = float(rng.uniform(-5, 5))
+    dl = float(template.static_loft_deg + rng.uniform(-3, 8))
+    head_center = np.array([rng.uniform(-10, 10), rng.uniform(-10, 10), rng.uniform(0, 40)])
+    true = pose_for_delivered(template, fa, dl, head_center)
+    u0, v0 = float(rng.uniform(-15, 15)), float(rng.uniform(-12, 12))
+    ball = ball_for_impact(true, template, u0, v0)
+    prior = ClubheadPose(
+        true.rotation * Rotation.from_rotvec(rng.normal(0, 0.05, 3)),
+        true.translation + rng.normal(0, 8, 3),
+    )
+    return true, ball, prior
+
+
+def run_kp_experiment(n=20, sigma_px=1.0, baseline_mm=150.0, mode="stereo", dropout=0.0,
+                      seed=0, head=None, intrinsics=None, keypoint_names=None):
     rng = np.random.default_rng(seed)
-    head = structured_driver()
+    head = head if head is not None else structured_driver()
     template = head.template
-    mono = mono_rig()
-    cams = stereo_rig(baseline_mm)
+    intr = intrinsics if intrinsics is not None else IMX296
+    mono = mono_rig(intr)
+    cams = stereo_rig(baseline_mm, intr)
     rows = []
     n_ok = 0
     for _ in range(n):
-        fa = float(rng.uniform(-5, 5))
-        dl = float(template.static_loft_deg + rng.uniform(-3, 8))
-        head_center = np.array([rng.uniform(-10, 10), rng.uniform(-10, 10), rng.uniform(0, 40)])
-        true = pose_for_delivered(template, fa, dl, head_center)
-        u0, v0 = float(rng.uniform(-15, 15)), float(rng.uniform(-12, 12))
-        ball = ball_for_impact(true, template, u0, v0)
+        true, ball, prior = _sample(rng, template)
         t_true = raw_metrics(true, template, ball)
-        prior = ClubheadPose(
-            true.rotation * Rotation.from_rotvec(rng.normal(0, 0.05, 3)),
-            true.translation + rng.normal(0, 8, 3),
-        )
         if mode == "mono":
-            fit = fit_pose_pnp(detect(head, true, mono, sigma_px, rng, dropout), mono, prior)
+            fit = fit_pose_pnp(detect(head, true, mono, sigma_px, rng, dropout, keypoint_names), mono, prior)
         else:
-            dL = detect(head, true, cams[0], sigma_px, rng, dropout)
-            dR = detect(head, true, cams[1], sigma_px, rng, dropout)
+            dL = detect(head, true, cams[0], sigma_px, rng, dropout, keypoint_names)
+            dR = detect(head, true, cams[1], sigma_px, rng, dropout, keypoint_names)
             fit = fit_pose_kp_stereo(dL, dR, cams, prior)
         row = {"ok": bool(fit.ok), "n_used": fit.n_used}
         if fit.ok:
@@ -609,8 +680,35 @@ def run_kp_experiment(n=20, sigma_px=1.0, baseline_mm=150.0, mode="stereo", drop
             row["rot_err_deg"] = float(np.degrees((true.rotation.inv() * fit.pose.rotation).magnitude()))
             n_ok += 1
         rows.append(row)
-    return {"rows": rows, "n_attempted": n, "n_ok": n_ok,
-            "sigma_px": sigma_px, "mode": mode, "baseline_mm": baseline_mm}
+    n_kp = len(keypoint_names) if keypoint_names is not None else len(head.keypoints)
+    return {"rows": rows, "n_attempted": n, "n_ok": n_ok, "sigma_px": sigma_px, "mode": mode,
+            "baseline_mm": baseline_mm, "px_per_mm": intr.fx / _STANDOFF_MM, "n_kp_avail": n_kp}
+
+
+def silhouette_baseline(head=None, n=15, severity="light", baseline_mm=150.0, seed=0):
+    """Apples-to-apples: the 0B-1 silhouette fitter on the SAME structured mesh + pose/noise grid."""
+    from .degrade import PRESETS, degrade
+    from .posefit import fit_pose_stereo
+    from .silhouette import render_silhouette
+
+    rng = np.random.default_rng(seed)
+    head = head if head is not None else structured_driver()
+    template = head.template
+    cams = stereo_rig(baseline_mm)
+    params = PRESETS[severity]
+    impacts = []
+    n_ok = 0
+    for _ in range(n):
+        true, ball, prior = _sample(rng, template)
+        t_true = raw_metrics(true, template, ball)
+        obs = [degrade(render_silhouette(head.mesh, true, c), params, rng) for c in cams]
+        rs = fit_pose_stereo(obs, head.mesh, cams, prior)
+        if rs.success:
+            t_rec = raw_metrics(rs.pose, template, ball)
+            impacts.append(float(np.hypot(t_rec[0] - t_true[0], t_rec[1] - t_true[1])))
+            n_ok += 1
+    return {"impact_mm_median": float(np.median(impacts)) if impacts else float("nan"),
+            "n_ok": n_ok, "n": n, "severity": severity}
 
 
 def kp_verdict(grid, bar_mm=_BAR_MM):
@@ -621,6 +719,7 @@ def kp_verdict(grid, bar_mm=_BAR_MM):
         median = float(np.median(oks)) if oks else float("nan")
         cells.append({
             "sigma_px": res["sigma_px"], "mode": res["mode"], "baseline_mm": res["baseline_mm"],
+            "px_per_mm": res.get("px_per_mm"), "n_kp_avail": res.get("n_kp_avail"),
             "ok_rate": ok_rate, "impact_mm_median": median,
             "meets_bar": bool(ok_rate >= 0.9 and oks and median <= bar_mm),
         })
@@ -633,13 +732,13 @@ def kp_verdict(grid, bar_mm=_BAR_MM):
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run --group research pytest research/club_pose/tests/test_sim_experiment_kp.py -v`
-Expected: 3 passed. (These use small `n`; the full sweep is Task 8.)
+Expected: 5 passed. (Keypoint cells are fast — no rendering; only `silhouette_baseline` is slow, hence `n=2` in its test.)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add research/club_pose/sim/experiment_kp.py research/club_pose/tests/test_sim_experiment_kp.py
-git commit -m "feat(club_pose.sim): find-the-requirement keypoint experiment + ok_rate-gated verdict (0B-2)"
+git add research/club_pose/sim/camera.py research/club_pose/sim/experiment_kp.py research/club_pose/tests/test_sim_experiment_kp.py
+git commit -m "feat(club_pose.sim): keypoint sweep (intrinsics/baseline/subset) + silhouette baseline + ok_rate verdict (0B-2)"
 ```
 
 ---
@@ -719,53 +818,108 @@ git commit -m "feat(club_pose.sim): real-OBJ realism-check loader for the keypoi
 
 ---
 
-### Task 7: Full suite green + run the sweep, capture the verdict artifact, write the decision
+### Task 7: Full suite green + run the sweep (procedural + OBJ + silhouette baseline), write the decision
 
 **Files:**
+- Create: `research/club_pose/sim/run_sweep_0b2.py` (committed runner — shell-agnostic, no heredoc)
 - Create: `research/club_pose/sim/RESULTS_0B2.md` (the verdict artifact + decision)
+- Modify: `docs/Personal Research/markerless-club-data-guide-v2-research-corrected.md` (fold the outcome)
 
 **Interfaces:**
-- Consumes: everything above.
-- Produces: the written cue-vs-vantage decision feeding the v2 guide.
+- Consumes: `run_kp_experiment`/`silhouette_baseline`/`kp_verdict` (Task 5); `scaled_intrinsics` (Task 5 Step 0); `structured_driver`/`structured_driver_from_obj` (Tasks 2/6).
+- Produces: the cue-vs-vantage decision feeding the v2 guide.
 
 - [ ] **Step 1: Run the whole sim test suite**
 
 Run: `uv run --group research pytest research/club_pose/tests/ -v`
 Expected: all green (0B-1 baseline + the 4 new test modules).
 
-- [ ] **Step 2: Run the requirement sweep (artifact, not a test)**
+- [ ] **Step 2: Write the committed runner script**
 
-Run this once and capture stdout (it is an artifact; a few minutes is fine):
+`research/club_pose/sim/run_sweep_0b2.py` (runs on any shell — no heredoc / no `PYTHONPATH` env needed):
 
-```bash
-PYTHONPATH=research uv run --group research python - <<'PY'
+```python
+"""Stage 0B-2 sweep artifact: keypoint impact-location requirement (procedural + real OBJ),
+swept over sigma x mode x baseline x resolution x keypoint-subset, plus the silhouette
+apples-to-apples baseline on the SAME structured mesh.
+Run: uv run --group research python research/club_pose/sim/run_sweep_0b2.py
+"""
 import json
-from club_pose.sim.experiment_kp import kp_verdict, run_kp_experiment
-grid = []
-for mode in ("mono", "stereo"):
-    for s in (0.5, 1.0, 2.0, 3.0, 5.0):
-        grid.append(run_kp_experiment(n=30, sigma_px=s, baseline_mm=150.0, mode=mode, seed=0))
-v = kp_verdict(grid)
-print(json.dumps({"requirement": v["requirement"], "cells": v["cells"]}, indent=2))
-PY
+import os
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))  # research/
+
+from club_pose.sim.camera import scaled_intrinsics  # noqa: E402
+from club_pose.sim.driverhead import structured_driver, structured_driver_from_obj  # noqa: E402
+from club_pose.sim.experiment_kp import kp_verdict, run_kp_experiment, silhouette_baseline  # noqa: E402
+
+N = 30
+SIGMAS = (0.5, 1.0, 2.0, 3.0, 5.0)
+BASELINES = (100.0, 150.0, 200.0)
+RES_FACTORS = (0.5, 1.0, 2.0)
+SUBSETS = {"all7": None, "crown4": ["crown_apex", "crown_back", "crown_toe", "crown_heel"]}
+
+
+def sweep(head):
+    grid = []
+    for mode in ("mono", "stereo"):           # sigma x mode at the default rig
+        for s in SIGMAS:
+            grid.append(run_kp_experiment(n=N, sigma_px=s, mode=mode, seed=0, head=head))
+    for b in BASELINES:                        # baseline (stereo, sigma=1)
+        grid.append(run_kp_experiment(n=N, sigma_px=1.0, mode="stereo", baseline_mm=b, seed=0, head=head))
+    for f in RES_FACTORS:                       # resolution (stereo, sigma=1)
+        grid.append(run_kp_experiment(n=N, sigma_px=1.0, mode="stereo", seed=0, head=head,
+                                      intrinsics=scaled_intrinsics(f)))
+    for subset in SUBSETS.values():             # keypoint-subset ablation (stereo, sigma=1)
+        grid.append(run_kp_experiment(n=N, sigma_px=1.0, mode="stereo", seed=0, head=head,
+                                      keypoint_names=subset))
+    v = kp_verdict(grid)
+    return {"requirement": v["requirement"], "cells": v["cells"]}
+
+
+def main():
+    out = {"procedural": sweep(structured_driver())}
+    out["silhouette_baseline"] = {
+        sev: silhouette_baseline(n=12, severity=sev, seed=0) for sev in ("light", "realistic")
+    }
+    assets = os.path.join(os.path.dirname(__file__), "assets")
+    obj, kp = os.path.join(assets, "driver.obj"), os.path.join(assets, "driver_keypoints.json")
+    if os.path.exists(obj) and os.path.exists(kp):
+        out["real_obj"] = sweep(structured_driver_from_obj(obj, kp))
+    else:
+        out["real_obj"] = {"skipped": "no assets/driver.obj — procedural is the primary result"}
+    print(json.dumps(out, indent=2))
+
+
+if __name__ == "__main__":
+    main()
 ```
 
-- [ ] **Step 3: Write `RESULTS_0B2.md`**
+- [ ] **Step 3: Run the sweep (artifact, not a test)**
 
-Record: the `impact_mm`-vs-σ table per mode, each cell's `ok_rate`, the gated requirement boundary (or "unreachable"), the silhouette baseline on the structured mesh, and the **decision**:
-- If a realistic σ (≤ ~1–2 px) reaches ≤3–5 mm at `ok_rate ≥ 0.9` → **CUE problem; build the keypoint path** (next: real detector feasibility).
-- If even σ=0.5 px / stereo cannot reach the bar → **VANTAGE problem; re-scope** the behind-ball camera to spin (marked ball) + coarse impact zones (path B), and record that face/loft + precise impact need a marker and/or side/overhead vantage.
+Run (keypoint cells are fast — no rendering; the silhouette baseline is the slow part, a few minutes):
 
-- [ ] **Step 4: Commit**
+`uv run --group research python research/club_pose/sim/run_sweep_0b2.py > research/club_pose/sim/sweep_0b2.json`
+
+Confirm `sweep_0b2.json` has `procedural`, `silhouette_baseline` (both severities), and `real_obj` (results or the skip note).
+
+- [ ] **Step 4: Write `RESULTS_0B2.md`**
+
+From `sweep_0b2.json`, record: the `impact_mm`-vs-σ table per mode; the baseline / resolution / keypoint-subset effects; each cell's `ok_rate`; the **gated** requirement boundary (or "unreachable"); the **silhouette baseline** on the same structured mesh; the **real-OBJ** repeat (or the skip note); and the **decision**:
+- A realistic σ (≤ ~1–2 px) reaches ≤3–5 mm at `ok_rate ≥ 0.9` → **CUE problem; build the keypoint path** (next: real markerless-detector feasibility).
+- Even σ=0.5 px / stereo / best resolution cannot reach the bar → **VANTAGE problem; re-scope** the behind-ball camera to spin (marked ball) + coarse impact **zones**, and record that precise impact + face/loft need a marker and/or a side/overhead vantage.
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add research/club_pose/sim/RESULTS_0B2.md
-git commit -m "docs(club_pose.sim): Stage 0B-2 verdict — keypoint impact-location requirement + cue-vs-vantage decision"
+git add research/club_pose/sim/run_sweep_0b2.py research/club_pose/sim/sweep_0b2.json research/club_pose/sim/RESULTS_0B2.md
+git commit -m "docs(club_pose.sim): Stage 0B-2 sweep artifact + verdict (cue-vs-vantage decision)"
 ```
 
-- [ ] **Step 5: Fold the decision into the v2 guide (§1D follow-up)**
+- [ ] **Step 6: Fold the decision into the v2 guide (§1D follow-up)**
 
-Update `docs/Personal Research/markerless-club-data-guide-v2-research-corrected.md` with the 0B-2 outcome (one short subsection: the requirement found, and which fork it selected). Commit:
+Update `docs/Personal Research/markerless-club-data-guide-v2-research-corrected.md` with the 0B-2 outcome (one short subsection: the requirement found + which fork it selected). Commit:
 
 ```bash
 git add "docs/Personal Research/markerless-club-data-guide-v2-research-corrected.md"
@@ -780,6 +934,7 @@ git commit -m "docs(research): fold Stage 0B-2 keypoint verdict into the v2 guid
 - **Placeholder scan:** every code step contains the full implementation; the only deferred concrete is the sourced `driver.obj` binary (Task 6), explicitly handled by a `skipif` so the suite stays green if it is absent.
 - **Type consistency:** `Keypoint(name,xyz,normal)`, `StructuredHead(mesh,keypoints,template)`, `Detection(name,xyz_body,uv)`, `KPFit(pose,n_used,ok)` are defined once and used with the same fields throughout. `fit_pose_pnp`/`fit_pose_kp_stereo` signatures match their call sites in `experiment_kp.py`. Frame conversion helpers are the single source of truth for body↔object-camera.
 - **Honesty gates present:** ok_rate gate (Task 5), degenerate→`ok=False` (Task 4), σ-sweep not perfect keypoints (Task 5), baseline reported not asserted (Task 1/7), real-OBJ corroboration (Task 6).
+- **Audit fixes (rev 2, addressing the Codex review) confirmed present:** (1) the real OBJ feeds the same `sweep()` in `run_sweep_0b2.py`, not just a load test (Task 6→7); (2) `silhouette_baseline()` is implemented and run on the structured mesh in the artifact (Task 5 + Task 7 Step 2/3); (3) the sweep varies σ × mode × **baseline × resolution × keypoint-subset** (Task 5 API + Task 7 runner); (4) `_degenerate` gates on **collinearity** (2nd singular value), so valid 3-point Kabsch passes — locked by `test_three_noncollinear_stereo_points_ok` (Task 4); (5) PnP is **ITERATIVE-only over all detections** (spec amended — no RANSAC, which would mask the measured noise); (6) the sweep runs via a committed `sys.path`-self-locating script, not a Bash heredoc (Task 7).
 
 ## Execution Handoff
 
