@@ -55,6 +55,8 @@ def run_kp_experiment(n=20, sigma_px=1.0, baseline_mm=150.0, mode="stereo", drop
             t_rec = raw_metrics(fit.pose, template, ball)
             row["impact_mm"] = float(np.hypot(t_rec[0] - t_true[0], t_rec[1] - t_true[1]))
             row["rot_err_deg"] = float(np.degrees((true.rotation.inv() * fit.pose.rotation).magnitude()))
+            row["face_err_deg"] = float(abs(t_rec[2] - t_true[2]))  # raw_metrics -> (u, v, face_angle, dyn_loft)
+            row["loft_err_deg"] = float(abs(t_rec[3] - t_true[3]))
             n_ok += 1
         rows.append(row)
     n_kp = len(keypoint_names) if keypoint_names is not None else len(head.keypoints)
@@ -91,13 +93,18 @@ def silhouette_baseline(head=None, n=15, severity="light", baseline_mm=150.0, se
 def kp_verdict(grid, bar_mm=_BAR_MM):
     cells = []
     for res in grid:
-        oks = [r["impact_mm"] for r in res["rows"] if r["ok"]]
+        ok_rows = [r for r in res["rows"] if r["ok"]]
+        oks = [r["impact_mm"] for r in ok_rows]
+        faces = [r["face_err_deg"] for r in ok_rows]
+        lofts = [r["loft_err_deg"] for r in ok_rows]
         ok_rate = res["n_ok"] / max(1, res["n_attempted"])
         median = float(np.median(oks)) if oks else float("nan")
         cells.append({
             "sigma_px": res["sigma_px"], "mode": res["mode"], "baseline_mm": res["baseline_mm"],
             "px_per_mm": res.get("px_per_mm"), "n_kp_avail": res.get("n_kp_avail"),
             "ok_rate": ok_rate, "impact_mm_median": median,
+            "face_err_deg_median": float(np.median(faces)) if faces else float("nan"),
+            "loft_err_deg_median": float(np.median(lofts)) if lofts else float("nan"),
             "meets_bar": bool(ok_rate >= 0.9 and oks and median <= bar_mm),
         })
     meeting = [c for c in cells if c["meets_bar"]]

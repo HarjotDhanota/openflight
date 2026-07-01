@@ -29,6 +29,17 @@ Gated requirement boundary from `kp_verdict`:
 | stereo | 3.0 | 150.0 | 3.749 | 1.00 | 10.491 | no |
 | stereo | 5.0 | 150.0 | 3.749 | 1.00 | 17.774 | no |
 
+### Face angle / dynamic loft recovery (mono, committed via `experiment_kp.py` `face_err_deg`/`loft_err_deg`)
+
+The same keypoint fit recovers face angle and dynamic loft — both well inside the ±2–3° bar — which is why 0B-2's conclusion is "detection-limited, not vantage-limited." Reproduce with `run_kp_experiment(mode="mono", sigma_px=s)` + `kp_verdict`:
+
+| sigma_px | median impact_mm | median face_err_deg | median loft_err_deg | ok_rate |
+|---:|---:|---:|---:|---:|
+| 0.5 | 0.49 | 0.05 | 0.13 | 1.00 |
+| 1.0 | 0.97 | 0.10 | 0.25 | 1.00 |
+| 2.0 | 1.94 | 0.21 | 0.52 | 1.00 |
+| 3.0 | 2.92 | 0.31 | 0.79 | 1.00 |
+
 Baseline, resolution, and subset effects at `sigma_px=1.0`, stereo:
 
 | factor | value | ok_rate | median impact_mm | meets 5 mm bar |
