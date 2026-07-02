@@ -137,3 +137,20 @@ def test_run_budget_0d_script_is_self_locating_and_emits_full_grid():
     }
     assert "sigma_rate" not in {c["axis"] for c in cells}
     assert "camera" in data["verdict"]["requirement_boundaries"]
+
+
+def test_results_0d_contains_four_headline_numbers():
+    root = Path(__file__).resolve().parents[3]
+    text = (root / "research" / "club_pose" / "sim" / "RESULTS_0D.md").read_text(
+        encoding="utf-8"
+    )
+
+    for phrase in (
+        "Receiver launch-direction requirement",
+        "Camera spin-axis requirement",
+        "Gear-correction benefit",
+        "Frame-bias / leveling requirement",
+        "Driver",
+        "Iron",
+    ):
+        assert phrase in text
