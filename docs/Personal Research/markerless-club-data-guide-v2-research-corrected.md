@@ -234,6 +234,22 @@ Not doing: more markerless pose sims, photoreal Blender, radar-spin DSP, hardwar
 
 ---
 
+## 1I. Stage 0E verdict — the ball-spin error budget (implemented by Codex 2026-07-02, independently verified) — THE SIM PHASE IS COMPLETE
+
+`research/ball_spin/` + `RESULTS_0E.md`. Verified: machinery exact (0.000 %/0.000°); the anti-0C center test real (σ_center alone → 1.6/3.2/6.9° axis at 0.5/1/2 px — the solver consumes the estimated limb fit); the two pinned wrap regimes behave exactly (wedge 10 k@4.2 ms disambiguates, iron 7.5 k@4.2 ms flags ambiguous); failure decomposition: **driver@240 fps fails 100 % by FOV loss** (rising ball exits the tight 100 px lens frame), iron ~half wrap-ambiguity / half FOV.
+
+**Findings:**
+1. **240 fps (MLM2PRO-shaped) is NOT sufficient in this geometry** — driver ok_rate 0.29 (FOV), iron 0.21 (wrap+FOV); only the wedge works (1.00). **The capture requirement is an inter-frame gap of ≈ 2 ms (≈ 500 fps-equivalent), which fixes BOTH failure modes at once** (frames stay in FOV *and* iron wrap resolves). With it: **driver rate 2.28 %/axis 1.92°, iron 0.73 %/0.84°, wedge 0.29 %/0.75°** — all inside the 3 % rate bar, the 2–3° display tier (driver marginal at 2°, clear at 3°), and the 5° driver-face gate with big margin.
+2. **How to get 2 ms gaps on cheap hardware is now THE capture question:** full-frame GS cameras don't do 500 fps; the options are **ROI-cropped high-fps** (a vertical strip along the flight corridor), **staggered dual-camera triggers** (the stereo pair fired 2 ms apart), or **indoor strobe multi-pulse** (any gap, but indoor-only per §1F(b)). Note the FOV loss is partly an *aim* artifact (camera aimed at the tee; the ball climbs out) — aiming into the flight corridor or a wider lens recovers frames at some px cost.
+3. **Ball image size buys real margin:** 60 px is too thin (driver 2.4°); 100 px is the working baseline; **150–250 px → 0.3–0.8° axis** across regimes. Dots: ≥ 20 (12 collapses); 27 (RPT-like) is comfortable.
+4. **The detector-quality gate for the bench test:** limb-center fit **≤ 1 px** (2 px roughly doubles-to-quadruples errors — the dominant detector requirement), dot centroids ≤ 1 px tolerable, **misID ≤ 5 % is contained by the pinned outlier loop**.
+5. **Vantage verdict: straight-behind stands.** Quartering is neutral-to-harmful (quarter-40 kills driver FOV) — **the quartering camera is not needed**, simplifying the build. **Stereo nearly halves axis error** (driver 1.48→0.82°, wedge 0.80→0.55°) but doesn't fix ok_rate — useful margin, secondary to the frame gap.
+6. **Read against the 0D targets: the spin route CLEARS its gates in sim** — axis ≤ 2–3° display (iron/wedge comfortably, driver at 3° with 100 px or 2° with 150 px) and ≤ 5° driver-face with margin; rate ≤ 3 % everywhere.
+
+**The sim phase (0A→0E) is complete.** The quantified chain: **receiver** σ_launch ≤ 1° + leveling ≤ 1° → **D-plane face ~0.6°** (gear-corrected by camera impact); **camera spin** rate 0.3–2.3 % / axis 0.8–1.9° at gap ≈ 2 ms; **marked-club "pro mode"** impact 3.6 mm / face 0.67° / iron loft 1.04° (vs the D-plane's 2.1° model floor) under sync ≤ 100 µs + glare < 2 px + cal 0.5 mm. Remaining gates are **hardware-facing**: the ≈2 ms capture architecture decision, the camera/lens purchase spec, the 1-day real-photo markerless test, and the outdoor bench test.
+
+---
+
 ## 2. The core problem: markerless 6-DOF clubhead pose from behind
 
 You never see the face. You recover the clubhead's rigid-body **orientation**, then read the face plane off a **club-type template**. v1's pipeline framing stands; the corrections are *how the pros actually do the pose step*:
