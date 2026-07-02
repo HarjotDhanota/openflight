@@ -183,6 +183,43 @@ Before writing the D-plane-budget and spin specs, three independent checkers wer
 
 ---
 
+## 1G. Stage 0C verdict, the marked-vs-markerless numbers, calibration UX, and the roadmap (2026-07-01/02)
+
+### (a) Stage 0C verdict — the marked-pose accuracy budget (implemented by Codex, independently verified honest)
+`research/club_pose/sim/{markers,budget}.py` + `RESULTS_0C.md`. All four error sources modeled; verification confirmed the **truth≠fitter calibration split is real** (σ_cal-only, zero pixel noise → non-zero, linearly-scaling face/loft error — the anti-0B-2 test), **correlated bias hurts ~3× more than independent noise** (loft 2.27° vs 0.68° at 1 px), and timing scales physically. Realistic-baseline medians:
+
+| Config | Face | Loft | Impact vector | Verdict |
+|---|---|---|---|---|
+| Driver stereo | 0.67° | 0.67° | **3.60 mm** | clears the bars |
+| Iron stereo | 0.91° | 1.04° | 3.72 mm | clears |
+| Driver mono | 0.52° | 1.25° | 6.16 mm (height 5.5) | **fails impact height** |
+| Iron mono | 1.81° | 4.71° | 15.9 mm | fails badly |
+
+**Hardware requirements read off the dominant sources:** **stereo required** (mono fails impact height via the loft×depth coupling); **camera↔impact-instant sync ≤ ~100 µs** (300 µs → 7.6 mm alone); **correlated glare bias < ~2 px** (retro + IR's job); **per-club calibration ~0.5 mm**. Known conservatisms: stereo doesn't yet shrink the modeled ball-depth σ (understates stereo), and the bias→pose coefficient makes "<2 px" order-of-magnitude.
+
+### (b) Marked vs markerless, quantified (same 0C framework, driver stereo, same sync/ball)
+| Config | Face | Loft | Impact |
+|---|---|---|---|
+| **Marked** (retro+IR, per-club cal 0.5 mm) | 0.76° | 1.41° | 4.6 mm |
+| **Markerless** (glare δ=3 px, generic template 3 mm) | 2.42° | **6.79°** | **14.7 mm** |
+| — isolate glare only (δ=3 px) | 1.12° | 3.00° | 9.2 mm |
+| — isolate generic template only (3 mm) | 0.71° | 1.72° | 4.0 mm |
+
+The **correlated glare bias on the smooth specular head is the killer** (markers+IR exist to remove exactly it); the generic template alone is borderline-tolerable. **Honesty caveat: the markerless input magnitudes are ASSUMED, not measured** — no sim has measured real markerless detection error. The cheap measurement is the **1-day real-photo test** (≈20 real behind-ball photos, two annotators; inter-annotator scatter = the empirical σ/δ incl. correlation; Canny/Harris on the same frames), which beats weeks of photoreal rendering and has no sim-to-real gap.
+
+### (c) Calibration UX — why Trackman/Mevo don't have this problem, and the product fork
+Trackman/Mevo avoid per-club calibration by **not doing camera clubhead pose at all** — D-plane face/loft is club-agnostic physics ("select your club" is all they ask). **Calibration is intrinsic to the marker/camera-pose approach** (GCQuad users sticker clubs; that's the cost of direct optical measurement). Softeners, not cures: stickering + calibration is **once per club** (not per session); a **stencil + generic type-template** (skip precise calibration) still yields ~1.7° loft / 4.0 mm — a legitimate low-UX middle tier. The product fork on the record: **radar D-plane = plug-and-play but soft/unvalidated (Mevo-tier)**; **camera markers + calibration = validated ~0.8°/4.6 mm at a one-time UX cost**. "Do both" (§1E) keeps the choice per-user — and §1F(a) shows the marked path's impact-location also *corrects* the D-plane's gear-effect failure mode.
+
+### (d) The roadmap (decided 2026-07-02, survives the §1F verification)
+1. **Stage 0D — D-plane error budget** (days, pure math): Monte-Carlo the inversion with the club-dependent coefficient, gear effect w/wo impact correction, and the launch≫path≫axis flow-down → outputs the **spin-axis target** + the **receiver requirement** (ball launch direction is its #1 job).
+2. **Spin stage** (the linchpin — needed by every path): dot-ball multi-frame sim per §1F(c), gated on 0D's axis target → outputs achievable rate/axis + the camera/strobe/fps/vantage spec.
+3. **1-day real-photo test** (parallel): measures the real markerless σ/δ → real markerless verdict via the 0C machinery.
+4. **Camera hardware purchase only after 1–2 fix the spec** (one GS cam + strobe for spin bench first, second cam for stereo later).
+5. **Markers/0C "pro mode"**: validated, shelved pending the spin results + the outdoor bench test; the eventual fork is "how much is precise impact location worth in UX."
+Not doing: more markerless pose sims, photoreal Blender, radar-spin DSP, hardware before specs.
+
+---
+
 ## 2. The core problem: markerless 6-DOF clubhead pose from behind
 
 You never see the face. You recover the clubhead's rigid-body **orientation**, then read the face plane off a **club-type template**. v1's pipeline framing stands; the corrections are *how the pros actually do the pose step*:
