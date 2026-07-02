@@ -220,6 +220,20 @@ Not doing: more markerless pose sims, photoreal Blender, radar-spin DSP, hardwar
 
 ---
 
+## 1H. Stage 0D verdict — the D-plane error budget (implemented by Codex 2026-07-02, independently verified)
+
+`research/club_pose/dplane.py` + `sim/budget_dplane.py` + `RESULTS_0D.md`. Verification: machinery exact; the MC reproduces the analytic slopes to 3 decimals (0.413 vs 0.414 predicted for σ_launch=0.5°); frame-bias 1:1/cancellation confirmed at runtime (face err 1.000°, FTP err 0.0000 at b=1°); coefficient-honesty non-zero; headline cells reproduced on an independent seed. **Trustworthy.**
+
+**The four findings:**
+1. **The launch route carries face — and it's better than expected.** At baseline (σ_launch 0.5°, σ_path 1°, gear=camera): **driver face 0.63°, iron face 0.60°**. Requirement flow-down: **receiver σ_launch ≤ 1.0° for face ≤ 1.5°** (≤ 2.0° for face ≤ 2.5°); **path is barely constraining** (σ_path up to 3° still holds — consistent with the 0.227 slope); **frame/boresight bias ≤ 1.0°** (passes 1:1 into face-to-target, cancels in face-to-path → an installation/leveling spec). *The receiver's #1 job is confirmed quantitatively: ball launch direction.*
+2. **The axis route is a driver-only cross-check.** Driver: forgiving (σ_axis 5° still gives face ≤ 1.5°). **Iron: the axis route needs σ_axis ≤ 1° — impractical** — because FTP = tan(θ)·(DL−AoA)/cos(DL) amplifies axis error by the big iron spin loft (~0.74°/° iron vs ~0.21°/° driver). For irons the launch route carries face alone. **The binding spin-axis requirement therefore comes from shot-shape display (~2–3°, 1:1), not from face recovery** — this is the number the 0E boundary table gets read against.
+3. **Iron dynamic loft is MODEL-limited at ~2.1°.** The coefficient envelope *alone* (all sensors perfect) produces 2.13° iron loft error, and the combined cells sit at 2.08–2.16 across ALL gear modes — i.e. **no sensor improvement helps; the collision-model uncertainty is the floor.** Driver loft is fine (0.55–0.63°). The marked-camera route (0C: iron stereo loft **1.04°**) beats the D-plane for iron loft — a concrete, quantified reason the "pro mode" earns its keep beyond impact location.
+4. **Gear correction (the "do both" synergy) buys ~0.5–0.9° on driver face** (none→camera at σ_impact=3 mm; perfect adds ~0.2–0.3° more) and **~nothing on irons** (small gear constants). The synergy is real but driver-specific.
+
+**Net:** the D-plane route, fed by a receiver hitting σ_launch ≤ 1° + camera impact correction, delivers **~0.6° face / ~0.6° driver loft / ~2.1° iron loft** — Mevo-exceeding on face *if* the receiver delivers (unproven hardware). Camera spin axis needs only ~5° for driver-face purposes; ~2–3° for display quality. Iron loft and impact location remain the marked-camera route's unique value.
+
+---
+
 ## 2. The core problem: markerless 6-DOF clubhead pose from behind
 
 You never see the face. You recover the clubhead's rigid-body **orientation**, then read the face plane off a **club-type template**. v1's pipeline framing stands; the corrections are *how the pros actually do the pose step*:
