@@ -30,6 +30,10 @@ class FrameDetections:
     true_depth_mm: float
     visible_true_ids: list[int]
     usable: bool
+    spin_axis_world: np.ndarray
+    rate_rpm: float
+    axis_tilt_deg: float
+    launch_vector_mm_s: np.ndarray
 
 
 def _in_fov(camera, uv: np.ndarray, in_front: np.ndarray) -> np.ndarray:
@@ -118,4 +122,8 @@ def detect_frame(
         true_depth_mm=true_depth_mm,
         visible_true_ids=np.flatnonzero(visible).astype(int).tolist(),
         usable=len(detections) >= 5 and bool(center_front[0]),
+        spin_axis_world=state.spin_axis_world,
+        rate_rpm=state.rate_rpm,
+        axis_tilt_deg=state.axis_tilt_deg,
+        launch_vector_mm_s=state.launch_vector_mm_s,
     )
