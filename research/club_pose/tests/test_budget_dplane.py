@@ -1,4 +1,8 @@
 import math
+import json
+import subprocess
+import sys
+from pathlib import Path
 
 import numpy as np
 
@@ -102,3 +106,34 @@ def test_dplane_verdict_counts_attempts_and_reports_boundaries_by_gear():
     assert verdict["requirement_boundaries"]["camera"]["face_1p5"]["sigma_launch"] is not None
     assert verdict["requirement_boundaries"]["none"]["face_2p5"]["sigma_axis"] is not None
     assert all(c["ok_rate"] == 1.0 for c in verdict["cells"])
+
+
+def test_run_budget_0d_script_is_self_locating_and_emits_full_grid():
+    root = Path(__file__).resolve().parents[3]
+    script = root / "research" / "club_pose" / "sim" / "run_budget_0d.py"
+
+    proc = subprocess.run(
+        [sys.executable, str(script), "--n", "3", "--seed", "0", "--compact"],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    data = json.loads(proc.stdout)
+    cells = data["verdict"]["cells"]
+
+    assert {(c["club"], c["gear_mode"]) for c in cells} >= {
+        ("driver", "none"),
+        ("driver", "camera"),
+        ("driver", "perfect"),
+        ("iron", "none"),
+        ("iron", "camera"),
+        ("iron", "perfect"),
+    }
+    assert {"sigma_launch", "sigma_path", "sigma_axis", "b_frame", "coeff_width"} <= {
+        c["axis"] for c in cells
+    }
+    assert "sigma_rate" not in {c["axis"] for c in cells}
+    assert "camera" in data["verdict"]["requirement_boundaries"]
