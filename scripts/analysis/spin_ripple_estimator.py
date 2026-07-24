@@ -86,11 +86,27 @@ def extract_ripple_track(
     q_data = np.asarray(q_samples, dtype=np.float64)
     hann = np.hanning(WINDOW_SIZE)
 
+    # Guard against invalid or out-of-range ball speeds.
+    if ball_speed_mph <= 0:
+        return RippleTrack(
+            times_ms=np.array([]),
+            freq_hz=np.array([]),
+            magnitude=np.array([]),
+        )
+
     bin_hz = SAMPLE_RATE / FFT_SIZE
     center_hz = _mph_to_hz(ball_speed_mph)
     tol_hz = _mph_to_hz(TOLERANCE_MPH)
     lo_bin = max(1, int(np.floor((center_hz - tol_hz) / bin_hz)))
     hi_bin = min(FFT_SIZE // 2 - 2, int(np.ceil((center_hz + tol_hz) / bin_hz)))
+
+    # Guard against out-of-range ball speeds that result in empty search band.
+    if hi_bin < lo_bin:
+        return RippleTrack(
+            times_ms=np.array([]),
+            freq_hz=np.array([]),
+            magnitude=np.array([]),
+        )
 
     times, freqs, mags = [], [], []
     for start in range(0, len(i_data) - WINDOW_SIZE + 1, hop):

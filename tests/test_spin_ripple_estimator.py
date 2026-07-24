@@ -47,3 +47,13 @@ class TestExtractRippleTrack:
         track = ripple.extract_ripple_track(i_samples, q_samples, BALL_MPH, hop=32)
         active = track.times_ms > 12.0
         assert np.all(track.magnitude[active] > 0)
+
+    def test_extreme_high_ball_speed_returns_empty_track(self):
+        i_samples, q_samples = synth_capture(rpm=3000, ball_speed_mph=BALL_MPH)
+        track = ripple.extract_ripple_track(i_samples, q_samples, 230.0, hop=32)
+        assert track.n_windows == 0
+
+    def test_negative_ball_speed_returns_empty_track(self):
+        i_samples, q_samples = synth_capture(rpm=3000, ball_speed_mph=BALL_MPH)
+        track = ripple.extract_ripple_track(i_samples, q_samples, -5.0, hop=32)
+        assert track.n_windows == 0
