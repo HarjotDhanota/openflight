@@ -55,6 +55,15 @@ PRIOR_MIN_RELATIVE_MAG = 0.40
 PRIOR_MAX_RELATIVE_ERROR = 0.55
 PRIOR_STRONGEST_FAR_ERROR = 0.45
 
+# Harmonic-pair selection. TrackMan-verified field spectra show a tone
+# pair at ~spin/2 and ~1x spin, with the subharmonic usually dominant.
+# A companion counts as a pair member when its magnitude is at least
+# this fraction of the dominant peak and its frequency sits within
+# max(one natural resolution, PAIR_FREQ_TOLERANCE_FRACTION x target)
+# of exactly double / half the dominant frequency.
+PAIR_MIN_RELATIVE_MAG = 0.10
+PAIR_FREQ_TOLERANCE_FRACTION = 0.04
+
 
 def _mph_to_hz(mph: float) -> float:
     return 2 * (mph / MPS_TO_MPH) / WAVELENGTH_M
@@ -191,6 +200,8 @@ class RippleSpinResult:
     at_lower_rail: bool = False
     at_upper_rail: bool = False
     rejection_reason: Optional[str] = None
+    pair_detected: bool = False
+    pair_partner_freq_hz: Optional[float] = None
 
     @property
     def detected(self) -> bool:
@@ -261,11 +272,47 @@ def _peak_is_persistent(
     return True
 
 
+def _find_pair_partner(
+    valid_mag: np.ndarray,
+    valid_freqs: np.ndarray,
+    dominant_idx: int,
+    natural_res_hz: float,
+) -> Optional[int]:
+    """Index of a harmonic-pair companion of the dominant peak, or None.
+
+    Looks for a local maximum near exactly double or half the dominant
+    frequency, at >= PAIR_MIN_RELATIVE_MAG of the dominant's magnitude.
+    When both exist, the stronger companion wins.
+    """
+    dominant_freq = float(valid_freqs[dominant_idx])
+    dominant_mag = float(valid_mag[dominant_idx])
+    if dominant_mag <= 0:
+        return None
+
+    interior = (valid_mag[1:-1] > valid_mag[:-2]) & (valid_mag[1:-1] > valid_mag[2:])
+    candidates = np.where(interior)[0] + 1
+
+    best = None
+    for target in (2.0 * dominant_freq, dominant_freq / 2.0):
+        tolerance = max(natural_res_hz, PAIR_FREQ_TOLERANCE_FRACTION * target)
+        for idx in candidates:
+            if idx == dominant_idx:
+                continue
+            if abs(float(valid_freqs[idx]) - target) > tolerance:
+                continue
+            if float(valid_mag[idx]) < PAIR_MIN_RELATIVE_MAG * dominant_mag:
+                continue
+            if best is None or valid_mag[idx] > valid_mag[best]:
+                best = int(idx)
+    return best
+
+
 def detect_ripple_spin(
     values: np.ndarray,
     track_rate_hz: float,
     *,
     expected_spin_rpm: Optional[float] = None,
+    pair_aware: bool = False,
 ) -> RippleSpinResult:
     """Recover the seam tone from one ripple track (frequency or magnitude).
 
@@ -273,6 +320,12 @@ def detect_ripple_spin(
     the zero-padded FFT of the residual is searched inside the seam band with
     production-mirrored gates: SNR floor, minimum seam cycles, rail guards,
     and split-half persistence.
+
+    With pair_aware=True, a harmonic companion at double/half the dominant
+    tone re-labels which member the reported RPM comes from (nearest to the
+    prior when one is supplied, else the upper member — the TrackMan-verified
+    1x tone in field data). Evidence gates (SNR, cycles, persistence) always
+    evaluate on the dominant member; rail flags on the reported one.
     """
     values = np.asarray(values, dtype=np.float64)
     n = len(values)
@@ -296,30 +349,61 @@ def detect_ripple_spin(
     if valid_mag.size < 3:
         return _reject("No seam band in track spectrum", n_windows=n)
 
-    peak_idx = _select_peak(valid_mag, valid_freqs, expected_spin_rpm)
-    peak_freq = float(valid_freqs[peak_idx])
-    peak_mag = float(valid_mag[peak_idx])
+    dominant_idx = _select_peak(valid_mag, valid_freqs, expected_spin_rpm)
+    dominant_freq = float(valid_freqs[dominant_idx])
+    dominant_mag = float(valid_mag[dominant_idx])
+
+    # Harmonic-pair re-labeling: the dominant member stays the detection
+    # evidence; only which member's frequency becomes the reported RPM
+    # changes.
+    report_idx = dominant_idx
+    pair_detected = False
+    pair_partner_freq_hz: Optional[float] = None
+    if pair_aware:
+        partner_idx = _find_pair_partner(
+            valid_mag, valid_freqs, dominant_idx, track_rate_hz / n
+        )
+        if partner_idx is not None:
+            pair_detected = True
+            lower_idx, upper_idx = sorted(
+                (dominant_idx, partner_idx), key=lambda i: valid_freqs[i]
+            )
+            if expected_spin_rpm is not None and expected_spin_rpm > 0:
+                report_idx = min(
+                    (lower_idx, upper_idx),
+                    key=lambda i: abs(float(valid_freqs[i]) * 60 - expected_spin_rpm),
+                )
+            else:
+                report_idx = upper_idx
+            partner = partner_idx if report_idx == dominant_idx else dominant_idx
+            pair_partner_freq_hz = float(valid_freqs[partner])
+
+    reported_freq = float(valid_freqs[report_idx])
 
     positive = valid_mag[valid_mag > 0]
     noise_floor = float(np.median(positive)) if positive.size else 0.0
-    snr = peak_mag / noise_floor if noise_floor > 0 else 0.0
+    snr = dominant_mag / noise_floor if noise_floor > 0 else 0.0
 
     # Rail guards: fixed padded-bin margin, production parity with
     # SPIN_UPPER_RAIL_BINS. Short-track skepticism is carried by the SNR,
-    # cycles, and persistence gates instead.
+    # cycles, and persistence gates instead. Rails evaluate on the
+    # reported tone.
     rail_bins = RAIL_GUARD_BINS
-    at_lower_rail = peak_idx < rail_bins
-    at_upper_rail = peak_idx >= len(valid_mag) - rail_bins
+    at_lower_rail = report_idx < rail_bins
+    at_upper_rail = report_idx >= len(valid_mag) - rail_bins
 
-    seam_cycles = peak_freq * (n / track_rate_hz)
-    persistent = _peak_is_persistent(residual, peak_freq, track_rate_hz)
+    # Evidence gates run on the dominant member.
+    seam_cycles = dominant_freq * (n / track_rate_hz)
+    persistent = _peak_is_persistent(residual, dominant_freq, track_rate_hz)
     diagnostics = dict(
-        peak_freq_hz=peak_freq,
+        peak_freq_hz=reported_freq,
         seam_cycles=seam_cycles,
         n_windows=n,
         persistent=persistent,
         at_lower_rail=at_lower_rail,
         at_upper_rail=at_upper_rail,
+        pair_detected=pair_detected,
+        pair_partner_freq_hz=pair_partner_freq_hz,
     )
 
     if seam_cycles < MIN_CYCLES:
@@ -344,13 +428,22 @@ def detect_ripple_spin(
         return result
 
     return RippleSpinResult(
-        spin_rpm=peak_freq * 60.0,
+        spin_rpm=reported_freq * 60.0,
         snr=round(snr, 2),
         **diagnostics,
     )
 
 
-VARIANT_NAMES = ("freq_hop32", "mag_hop32", "freq_hop16", "mag_hop16")
+VARIANT_NAMES = (
+    "freq_hop32",
+    "mag_hop32",
+    "freq_hop16",
+    "mag_hop16",
+    "freq_hop32_pair",
+    "mag_hop32_pair",
+    "freq_hop16_pair",
+    "mag_hop16_pair",
+)
 
 
 def run_ripple_variants(
@@ -368,10 +461,14 @@ def run_ripple_variants(
         track = extract_ripple_track(i_samples, q_samples, ball_speed_mph, hop)
         trimmed = trim_to_ball_window(track, ball_timestamp_ms, hop)
         track_rate_hz = SAMPLE_RATE / hop
-        results[f"freq_hop{hop}"] = detect_ripple_spin(
-            trimmed.freq_hz, track_rate_hz, expected_spin_rpm=expected_spin_rpm
-        )
-        results[f"mag_hop{hop}"] = detect_ripple_spin(
-            trimmed.magnitude, track_rate_hz, expected_spin_rpm=expected_spin_rpm
-        )
+        for name, track_values in (("freq", trimmed.freq_hz), ("mag", trimmed.magnitude)):
+            results[f"{name}_hop{hop}"] = detect_ripple_spin(
+                track_values, track_rate_hz, expected_spin_rpm=expected_spin_rpm
+            )
+            results[f"{name}_hop{hop}_pair"] = detect_ripple_spin(
+                track_values,
+                track_rate_hz,
+                expected_spin_rpm=expected_spin_rpm,
+                pair_aware=True,
+            )
     return results

@@ -257,3 +257,74 @@ class TestRunRippleVariants:
     def test_short_visibility_rejected(self):
         results = self._run(rpm=3000, visible_ms=15.0)
         assert not any(result.detected for result in results.values())
+
+
+def _pair_track(f_low, f_high, amp_low, amp_high, n=110, rate=TRACK_RATE, noise=0.02, seed=11):
+    rng = np.random.default_rng(seed)
+    t = np.arange(n) / rate
+    return (
+        amp_low * np.sin(2 * np.pi * f_low * t)
+        + amp_high * np.sin(2 * np.pi * f_high * t + 0.4)
+        + rng.normal(0, noise, n)
+    )
+
+
+class TestPairAwareSelection:
+    def test_subharmonic_dominant_pair_reports_upper_member(self):
+        # Field signature: dominant tone at spin/2, weaker companion at 1x.
+        track = _pair_track(46.0, 92.0, amp_low=1.0, amp_high=0.35)
+        plain = ripple.detect_ripple_spin(track, TRACK_RATE)
+        paired = ripple.detect_ripple_spin(track, TRACK_RATE, pair_aware=True)
+        assert plain.detected and abs(plain.spin_rpm - 2760.0) < 150.0
+        assert paired.detected and abs(paired.spin_rpm - 5520.0) < 150.0
+        assert paired.pair_detected
+        assert abs(paired.pair_partner_freq_hz - 46.0) < 3.0
+
+    def test_dominant_upper_member_reported_unchanged(self):
+        track = _pair_track(46.0, 92.0, amp_low=0.3, amp_high=1.0)
+        paired = ripple.detect_ripple_spin(track, TRACK_RATE, pair_aware=True)
+        assert paired.detected and abs(paired.spin_rpm - 5520.0) < 150.0
+        assert paired.pair_detected
+
+    def test_single_tone_keeps_plain_behavior(self):
+        result = ripple.detect_ripple_spin(_sine_track(60.0), TRACK_RATE, pair_aware=True)
+        assert result.detected and abs(result.spin_rpm - 3600.0) < 150.0
+        assert not result.pair_detected
+        assert result.pair_partner_freq_hz is None
+
+    def test_companion_below_relative_floor_is_not_a_pair(self):
+        track = _pair_track(46.0, 92.0, amp_low=1.0, amp_high=0.05)
+        paired = ripple.detect_ripple_spin(track, TRACK_RATE, pair_aware=True)
+        assert paired.detected and abs(paired.spin_rpm - 2760.0) < 150.0
+        assert not paired.pair_detected
+
+    def test_prior_selects_nearest_pair_member(self):
+        # A true-1x tone with a natural 2f harmonic must not get doubled
+        # when the prior says the lower member is the plausible spin.
+        track = _pair_track(46.0, 92.0, amp_low=1.0, amp_high=0.35)
+        paired = ripple.detect_ripple_spin(
+            track, TRACK_RATE, pair_aware=True, expected_spin_rpm=2800.0
+        )
+        assert paired.detected and abs(paired.spin_rpm - 2760.0) < 150.0
+        assert paired.pair_detected
+
+    def test_weak_upper_member_survives_evidence_gates(self):
+        # Evidence gates (SNR/persistence/cycles) run on the dominant
+        # member; a 0.15-relative companion must still be reportable.
+        track = _pair_track(46.0, 92.0, amp_low=1.0, amp_high=0.15)
+        paired = ripple.detect_ripple_spin(track, TRACK_RATE, pair_aware=True)
+        assert paired.detected and abs(paired.spin_rpm - 5520.0) < 150.0
+        assert paired.pair_detected
+
+
+class TestPairVariants:
+    def test_variant_names_include_pair_modes(self):
+        assert len(ripple.VARIANT_NAMES) == 8
+        assert "mag_hop32_pair" in ripple.VARIANT_NAMES
+
+    def test_run_ripple_variants_returns_all_eight(self):
+        i_samples, q_samples = synth_capture(rpm=3000, ball_speed_mph=BALL_MPH)
+        results = ripple.run_ripple_variants(
+            i_samples, q_samples, BALL_MPH, ball_timestamp_ms=8.0
+        )
+        assert set(results) == set(ripple.VARIANT_NAMES)

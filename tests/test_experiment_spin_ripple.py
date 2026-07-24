@@ -7,6 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "analysis"))
 
 from experiment_spin_ripple import _pair_shots_with_captures, summarize  # noqa: E402
+from spin_ripple_estimator import VARIANT_NAMES  # noqa: E402
 
 
 def _row(spin_tm, env_rpm, env_detected, variant_rpm, variant_detected):
@@ -16,7 +17,7 @@ def _row(spin_tm, env_rpm, env_detected, variant_rpm, variant_detected):
         "env_rpm": env_rpm,
         "env_detected": env_detected,
     }
-    for name in ("freq_hop32", "mag_hop32", "freq_hop16", "mag_hop16"):
+    for name in VARIANT_NAMES:
         row[f"{name}_rpm"] = variant_rpm
         row[f"{name}_detected"] = variant_detected
     return row
