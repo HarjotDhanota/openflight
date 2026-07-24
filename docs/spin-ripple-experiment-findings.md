@@ -230,10 +230,14 @@ filled for the 7 shots rejected with an explicit `Lower-rail peak at 2417 RPM
 authoritative; the reason column under-reports.
 
 Separately, the recurrence of **exactly 2417 RPM** in all 7 explicit envelope
-rejections, and **exactly 3076 RPM** across 7 detections spanning 5 different
-shots and multiple methods, is a fixed-bin artifact signature. A real seam
-tone would not land on identical values across shots with different spin
-rates. Both values sit in the range production already treats as suspect
+rejections, and **exactly 3076 RPM** across 7 detections, is a fixed-bin
+artifact signature. The 3076 RPM detections span only 3 shots (25, 26 and
+44), and shot 26 alone accounts for 5 of the 7 — one from every method. That
+concentration is the more striking form of the artifact: rather than a value
+recurring loosely across many shots, five independent estimators land on the
+identical spurious bin for a single shot. A real seam tone would not produce
+bit-identical values across methods that share no processing after the STFT.
+Both values sit in the range production already treats as suspect
 (`SPIN_LOW_BAND_SUSPECT_MAX_RPM = 3100`), and the ripple estimator mirrors
 production's rail guard but **not** its low-band-suspect machinery — so it
 admits peaks production would flag.
@@ -263,8 +267,12 @@ shot club     ball  tm_rpm  prior    env    f32     m32     f16     m16
 - **No rescues, and none were close.** The rescue bar is ±500 RPM on a shot
   the envelope missed. Seven shots had a variant fire where the envelope did
   not (24, 27, 28, 30, 31, 33, 40); the closest of those was shot 40 at
-  −1114 RPM (`freq_hop32`, 2376 vs 3490). Under a 2× correction, shots 30,
-  31, 33 and 40 would all become rescues.
+  −1046 RPM (`freq_hop16`, 2444 vs 3490). Under a 2× correction, **five of
+  those seven — shots 24, 28, 30, 31 and 33 — would clear the ±500 bar**,
+  with best-variant errors of +170, −374, +241, −27 and +60 RPM
+  respectively. The two that would not are shot 27 (−1124) and shot 40
+  (+1262), which are also the two shots furthest from the half-rate ratio
+  (0.38–0.41 and 0.68–0.70 against a cluster median of 0.50).
 - **Worst errors:** shot 27 (`mag_hop32`, 2245 vs 5930, −3685 RPM, ratio
   0.38) and shot 27 again on `freq_hop16`/`mag_hop16` (2403, −3527). Shot 27
   is also the shot furthest from a clean 0.5 ratio.
