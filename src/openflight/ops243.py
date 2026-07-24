@@ -122,6 +122,13 @@ class OPS243Radar:
     DEFAULT_BAUD = 57600
     DEFAULT_TIMEOUT = 1.0
 
+    # Bound every serial write. A radar that is mid-dump (e.g. HOST_INT
+    # re-asserted by the ball hitting the net) stops servicing commands;
+    # without a write timeout, serial.write() blocks the capture thread
+    # forever (observed in the field via py-spy: thread wedged in
+    # serialposix write inside read_clock_sync).
+    SERIAL_WRITE_TIMEOUT_S = 2.0
+
     # Re-arm drain budget: a straggling dump finishes in well under this;
     # anything still streaming past it means the radar is continuously
     # sending (immediate re-triggers or streaming-mode fallback) and the
@@ -190,6 +197,7 @@ class OPS243Radar:
                 port=self.port,
                 baudrate=self.baud,
                 timeout=timeout,
+                write_timeout=self.SERIAL_WRITE_TIMEOUT_S,
                 bytesize=serial.EIGHTBITS,
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE,
@@ -313,10 +321,20 @@ class OPS243Radar:
 
         reads: List[dict] = []
 
-        def read_once() -> None:
+        def read_once() -> bool:
             self.serial.reset_input_buffer()
             host_before = time.time()
-            self.serial.write(b"C?")
+            try:
+                self.serial.write(b"C?")
+            except serial.SerialTimeoutException:
+                # Port jammed — radar not servicing commands (likely
+                # mid-dump). Abandon the sync; the caller falls back to
+                # first-byte timing. Retrying writes would only re-block.
+                logger.warning(
+                    "[OPS] Clock sync C? write timed out — port jammed, "
+                    "abandoning clock sync"
+                )
+                return False
             buf = ""
             deadline = time.monotonic() + per_read_timeout
             while time.monotonic() < deadline:
@@ -341,11 +359,13 @@ class OPS243Radar:
                     "raw": buf.strip(),
                 }
             )
+            return True
 
         for idx in range(max(1, samples)):
             if idx:
                 time.sleep(max(0.0, sample_interval_s))
-            read_once()
+            if not read_once():
+                break
 
         valid = [r for r in reads if r["radar_clock_s"] is not None]
         has_fractional_clock = any(
@@ -369,7 +389,8 @@ class OPS243Radar:
             if time.monotonic() >= sync_deadline:
                 break
             time.sleep(max(0.0, sample_interval_s))
-            read_once()
+            if not read_once():
+                break
             valid = [r for r in reads if r["radar_clock_s"] is not None]
             rollover = find_integer_rollover()
 
@@ -1195,21 +1216,32 @@ class OPS243Radar:
                 "[OPS] Re-arm drain: %d bytes in %.1fs", total_drained, time.time() - drain_start
             )
 
-        # Restart sampling
-        self.serial.write(b"PA")
-        self.serial.flush()
-        time.sleep(0.1)
-
-        # Re-send trigger split (may reset after capture dump)
         pre_trigger_segments = max(0, min(32, pre_trigger_segments))
-        self.serial.write(f"S#{pre_trigger_segments}\r".encode())
-        self.serial.flush()
-        time.sleep(0.1)
+        try:
+            # Restart sampling
+            self.serial.write(b"PA")
+            self.serial.flush()
+            time.sleep(0.1)
 
-        # Reactivate after settings change
-        self.serial.write(b"PA")
-        self.serial.flush()
-        time.sleep(0.15)
+            # Re-send trigger split (may reset after capture dump)
+            self.serial.write(f"S#{pre_trigger_segments}\r".encode())
+            self.serial.flush()
+            time.sleep(0.1)
+
+            # Reactivate after settings change
+            self.serial.write(b"PA")
+            self.serial.flush()
+            time.sleep(0.15)
+        except serial.SerialTimeoutException:
+            # Radar not servicing commands (likely mid-dump from an
+            # immediate re-trigger). Don't hang the capture thread — the
+            # next wait cycle reads out whatever the radar is sending and
+            # re-arms again.
+            logger.warning(
+                "[OPS] Re-arm write timed out — radar busy (mid-dump?); "
+                "re-arm will be retried after the next capture cycle"
+            )
+            return
 
         self.serial.reset_input_buffer()
         logger.info("[OPS] Rolling buffer re-armed (S#%d)", pre_trigger_segments)
