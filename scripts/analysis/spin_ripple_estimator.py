@@ -16,6 +16,7 @@ Offline/experimental only — nothing in src/ imports this.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 
@@ -172,3 +173,173 @@ def trim_to_ball_window(
         return RippleTrack(times, freqs, mags)
     end = int(np.argmax(sustained))
     return RippleTrack(times[:end], freqs[:end], mags[:end])
+
+
+@dataclass
+class RippleSpinResult:
+    """Seam-tone detection result from one ripple track."""
+
+    spin_rpm: float
+    snr: float
+    peak_freq_hz: Optional[float] = None
+    seam_cycles: Optional[float] = None
+    n_windows: int = 0
+    persistent: bool = False
+    at_lower_rail: bool = False
+    at_upper_rail: bool = False
+    rejection_reason: Optional[str] = None
+
+    @property
+    def detected(self) -> bool:
+        return self.rejection_reason is None
+
+
+def _reject(reason: str, **kwargs) -> RippleSpinResult:
+    return RippleSpinResult(spin_rpm=0.0, snr=0.0, rejection_reason=reason, **kwargs)
+
+
+def _select_peak(
+    valid_mag: np.ndarray, valid_freqs: np.ndarray, expected_spin_rpm: Optional[float]
+) -> int:
+    """Argmax, unless it is far from a supplied prior and a strong local
+    maximum sits near the prior — production _select_spin_peak, simplified."""
+    strongest = int(np.argmax(valid_mag))
+    if expected_spin_rpm is None or expected_spin_rpm <= 0:
+        return strongest
+    strongest_error = abs(valid_freqs[strongest] * 60 - expected_spin_rpm) / expected_spin_rpm
+    if strongest_error <= PRIOR_STRONGEST_FAR_ERROR:
+        return strongest
+
+    interior = (valid_mag[1:-1] > valid_mag[:-2]) & (valid_mag[1:-1] > valid_mag[2:])
+    candidates = np.where(interior)[0] + 1
+    peak_mag = valid_mag[strongest]
+    best = None
+    for idx in candidates:
+        relative = valid_mag[idx] / peak_mag if peak_mag > 0 else 0.0
+        error = abs(valid_freqs[idx] * 60 - expected_spin_rpm) / expected_spin_rpm
+        if relative >= PRIOR_MIN_RELATIVE_MAG and error <= PRIOR_MAX_RELATIVE_ERROR:
+            if best is None or valid_mag[idx] > valid_mag[best]:
+                best = int(idx)
+    return best if best is not None else strongest
+
+
+def _band_spectrum(values: np.ndarray, track_rate_hz: float):
+    """Hann-windowed zero-padded magnitude spectrum inside the seam band."""
+    windowed = values * np.hanning(len(values))
+    magnitude = np.abs(np.fft.fft(windowed, TRACK_FFT_SIZE))
+    freqs = np.fft.fftfreq(TRACK_FFT_SIZE, d=1 / track_rate_hz)
+    half = TRACK_FFT_SIZE // 2
+    magnitude, freqs = magnitude[1:half], freqs[1:half]
+    band = (freqs >= MIN_SEAM_HZ) & (freqs <= MAX_SEAM_HZ)
+    return magnitude[band], freqs[band]
+
+
+def _peak_is_persistent(
+    values: np.ndarray, peak_freq_hz: float, track_rate_hz: float
+) -> bool:
+    """Production _spin_peak_is_persistent, ported to the track domain: the
+    picked tone must be present and (near-)dominant in both track halves."""
+    half = len(values) // 2
+    if half < 8:
+        return True
+    for segment in (values[:half], values[half:]):
+        seg = segment - np.mean(segment)
+        valid_mag, valid_freqs = _band_spectrum(seg, track_rate_hz)
+        if valid_mag.size == 0 or not np.any(valid_mag > 0):
+            return False
+        floor = float(np.median(valid_mag[valid_mag > 0]))
+        tol_hz = 2.0 * track_rate_hz / len(seg)
+        near = np.abs(valid_freqs - peak_freq_hz) <= tol_hz
+        if not near.any() or floor <= 0:
+            return False
+        near_max = float(valid_mag[near].max())
+        if near_max < 2.5 * floor or near_max < 0.7 * float(valid_mag.max()):
+            return False
+    return True
+
+
+def detect_ripple_spin(
+    values: np.ndarray,
+    track_rate_hz: float,
+    *,
+    expected_spin_rpm: Optional[float] = None,
+) -> RippleSpinResult:
+    """Recover the seam tone from one ripple track (frequency or magnitude).
+
+    Detrend (poly order 3) removes the deceleration chirp / range falloff;
+    the zero-padded FFT of the residual is searched inside the seam band with
+    production-mirrored gates: SNR floor, minimum seam cycles, rail guards,
+    and split-half persistence.
+    """
+    values = np.asarray(values, dtype=np.float64)
+    n = len(values)
+    duration_ms = n / track_rate_hz * 1000
+    if n < 8 or duration_ms < MIN_TRACK_DURATION_MS:
+        return _reject(
+            f"Track too short ({duration_ms:.1f} ms, need {MIN_TRACK_DURATION_MS:.0f})",
+            n_windows=n,
+        )
+
+    centered = values - np.mean(values)
+    if np.std(centered) < 1e-12:
+        return _reject("No ripple variation in track", n_windows=n)
+    x = np.arange(n, dtype=np.float64)
+    trend = np.polyval(np.polyfit(x, centered, DETREND_POLY_ORDER), x)
+    residual = centered - trend
+    if np.std(residual) < 1e-12:
+        return _reject("No ripple variation after detrend", n_windows=n)
+
+    valid_mag, valid_freqs = _band_spectrum(residual, track_rate_hz)
+    if valid_mag.size < 3:
+        return _reject("No seam band in track spectrum", n_windows=n)
+
+    peak_idx = _select_peak(valid_mag, valid_freqs, expected_spin_rpm)
+    peak_freq = float(valid_freqs[peak_idx])
+    peak_mag = float(valid_mag[peak_idx])
+
+    positive = valid_mag[valid_mag > 0]
+    noise_floor = float(np.median(positive)) if positive.size else 0.0
+    snr = peak_mag / noise_floor if noise_floor > 0 else 0.0
+
+    # Rail guards: margin = RAIL_GUARD_NATURAL_BINS natural-resolution bins,
+    # expressed in zero-padded bins (bin width = track_rate / TRACK_FFT_SIZE;
+    # natural resolution = track_rate / n).
+    rail_bins = int(np.ceil(RAIL_GUARD_NATURAL_BINS * TRACK_FFT_SIZE / n))
+    at_lower_rail = peak_idx < rail_bins
+    at_upper_rail = peak_idx >= len(valid_mag) - rail_bins
+
+    seam_cycles = peak_freq * (n / track_rate_hz)
+    persistent = _peak_is_persistent(residual, peak_freq, track_rate_hz)
+    diagnostics = dict(
+        peak_freq_hz=peak_freq,
+        seam_cycles=seam_cycles,
+        n_windows=n,
+        persistent=persistent,
+        at_lower_rail=at_lower_rail,
+        at_upper_rail=at_upper_rail,
+    )
+
+    if seam_cycles < MIN_CYCLES:
+        return _reject(
+            f"Too few seam cycles ({seam_cycles:.1f}, need {MIN_CYCLES:.0f})",
+            **diagnostics,
+        )
+    if snr < SNR_MIN:
+        result = _reject(f"SNR {snr:.2f} below {SNR_MIN}", **diagnostics)
+        result.snr = round(snr, 2)
+        return result
+    if at_lower_rail or at_upper_rail:
+        rail = "lower" if at_lower_rail else "upper"
+        result = _reject(f"Peak at {rail} rail of seam band", **diagnostics)
+        result.snr = round(snr, 2)
+        return result
+    if not persistent:
+        result = _reject("Seam tone not persistent across track halves", **diagnostics)
+        result.snr = round(snr, 2)
+        return result
+
+    return RippleSpinResult(
+        spin_rpm=peak_freq * 60.0,
+        snr=round(snr, 2),
+        **diagnostics,
+    )
