@@ -182,3 +182,24 @@ class TestDetectRippleSpin:
         )
         assert abs(without_prior.spin_rpm - 6600.0) < 200.0
         assert abs(with_prior.spin_rpm - 3300.0) < 200.0
+
+    def test_driver_spin_on_realistic_track_not_rail_rejected(self):
+        # 3000 RPM on a ~64 ms track (a realistic full-capture hop-32
+        # track). The scaled rail-guard formula excluded this frequency
+        # range entirely for short tracks; the fixed padded-bin margin
+        # (production parity with SPIN_UPPER_RAIL_BINS) must not.
+        result = ripple.detect_ripple_spin(_sine_track(50.0, n=60), TRACK_RATE)
+        assert result.detected
+        assert abs(result.spin_rpm - 3000.0) < 150.0
+        assert not result.at_lower_rail
+        assert not result.at_upper_rail
+
+    def test_cycles_rejection_reports_measured_snr(self):
+        # ~1.1 seam cycles on a ~32 ms track: rejected for too few cycles,
+        # but the measured SNR must still be carried on the result so
+        # downstream diagnostics (e.g. the experiment CSV) can show how
+        # close a miss was instead of a misleading snr=0.0.
+        result = ripple.detect_ripple_spin(_sine_track(35.0, n=30), TRACK_RATE)
+        assert not result.detected
+        assert "cycles" in result.rejection_reason
+        assert result.snr > 0

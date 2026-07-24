@@ -38,7 +38,10 @@ DETREND_POLY_ORDER = 3
 SNR_MIN = 2.5
 MIN_CYCLES = 2.0
 MIN_TRACK_DURATION_MS = 20.0  # mirrors SPIN_MIN_SAMPLES (600 samples @ 30 ksps)
-RAIL_GUARD_NATURAL_BINS = 2   # rail margin in natural-resolution bins
+RAIL_GUARD_BINS = 2           # padded bins; production parity with
+                              # SPIN_UPPER_RAIL_BINS — the peak must sit
+                              # essentially at the band edge to be
+                              # rail-flagged
 
 # Ball-signal-loss trim — production constants, expressed in raw samples;
 # converted to track windows by hop at use time.
@@ -301,10 +304,10 @@ def detect_ripple_spin(
     noise_floor = float(np.median(positive)) if positive.size else 0.0
     snr = peak_mag / noise_floor if noise_floor > 0 else 0.0
 
-    # Rail guards: margin = RAIL_GUARD_NATURAL_BINS natural-resolution bins,
-    # expressed in zero-padded bins (bin width = track_rate / TRACK_FFT_SIZE;
-    # natural resolution = track_rate / n).
-    rail_bins = int(np.ceil(RAIL_GUARD_NATURAL_BINS * TRACK_FFT_SIZE / n))
+    # Rail guards: fixed padded-bin margin, production parity with
+    # SPIN_UPPER_RAIL_BINS. Short-track skepticism is carried by the SNR,
+    # cycles, and persistence gates instead.
+    rail_bins = RAIL_GUARD_BINS
     at_lower_rail = peak_idx < rail_bins
     at_upper_rail = peak_idx >= len(valid_mag) - rail_bins
 
@@ -320,10 +323,12 @@ def detect_ripple_spin(
     )
 
     if seam_cycles < MIN_CYCLES:
-        return _reject(
+        result = _reject(
             f"Too few seam cycles ({seam_cycles:.1f}, need {MIN_CYCLES:.0f})",
             **diagnostics,
         )
+        result.snr = round(snr, 2)
+        return result
     if snr < SNR_MIN:
         result = _reject(f"SNR {snr:.2f} below {SNR_MIN}", **diagnostics)
         result.snr = round(snr, 2)
