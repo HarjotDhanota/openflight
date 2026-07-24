@@ -217,15 +217,19 @@ class TestRunRippleVariants:
         assert set(results) == set(ripple.VARIANT_NAMES)
 
     def test_combined_modulation_recovered_across_rpm_grid(self):
+        # Measured: all four variants detect at every grid point (max
+        # observed error ~15 RPM, well inside the 200 RPM tolerance), so
+        # combined AM+FM on clean synthetic data is required to be the
+        # easy case it should physically be — no variant may silently
+        # regress here.
         for rpm in (2500, 3000, 5000, 7000, 9500):
             results = self._run(rpm=rpm, seed=rpm)
-            detected = {
-                name: result
-                for name, result in results.items()
-                if result.detected
-            }
-            assert detected, f"no variant detected spin at {rpm} RPM"
-            for name, result in detected.items():
+            assert set(
+                name for name, result in results.items() if result.detected
+            ) == set(ripple.VARIANT_NAMES), (
+                f"not all variants detected spin at {rpm} RPM: {results}"
+            )
+            for name, result in results.items():
                 assert abs(result.spin_rpm - rpm) < 200.0, (
                     f"{name} at {rpm} RPM read {result.spin_rpm:.0f}"
                 )
