@@ -153,6 +153,51 @@ def _print_summary(summary: list[dict[str, Any]]) -> None:
         )
 
 
+def _pair_shots_with_captures(
+    shots: list[dict], captures: list[dict]
+) -> list[tuple[dict, dict]]:
+    """Join shot_detected entries to their rolling_buffer_capture by shot_number.
+
+    Falls back to positional zip only when no capture carries a shot_number
+    (older log format), since a bare zip silently misaligns pairs the moment
+    a capture is missing or a line is truncated.
+    """
+    captures_by_shot: dict[int, dict] = {}
+    for capture_entry in captures:
+        shot_number = to_int(capture_entry.get("shot_number"))
+        if shot_number is not None:
+            captures_by_shot[shot_number] = capture_entry
+
+    if not captures_by_shot:
+        print(
+            "WARNING: no capture entries carry shot_number; falling back to "
+            "positional pairing (older log format)."
+        )
+        if len(shots) != len(captures):
+            print(
+                f"WARNING: positional pairing with mismatched counts "
+                f"({len(shots)} shots vs {len(captures)} captures); "
+                "trailing entries will be dropped."
+            )
+        return list(zip(shots, captures))
+
+    pairs = []
+    skipped = []
+    for shot_entry in shots:
+        shot_data = shot_entry.get("data", shot_entry)
+        shot_number = to_int(shot_data.get("shot_number"))
+        capture_entry = captures_by_shot.get(shot_number) if shot_number is not None else None
+        if capture_entry is None:
+            skipped.append(shot_number)
+            continue
+        pairs.append((shot_entry, capture_entry))
+
+    if skipped:
+        print(f"WARNING: no matching capture for shot_number(s): {skipped}")
+
+    return pairs
+
+
 def _rows(
     shots: list[dict],
     captures: list[dict],
@@ -160,7 +205,7 @@ def _rows(
 ) -> list[dict[str, Any]]:
     processor = RollingBufferProcessor()
     rows = []
-    for shot_entry, capture_entry in zip(shots, captures):
+    for shot_entry, capture_entry in _pair_shots_with_captures(shots, captures):
         shot_data = shot_entry.get("data", shot_entry)
         shot_number = to_int(shot_data.get("shot_number"))
         trackman = trackman_by_shot.get(shot_number or -1, {})

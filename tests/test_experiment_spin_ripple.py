@@ -6,7 +6,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "analysis"))
 
-from experiment_spin_ripple import summarize  # noqa: E402
+from experiment_spin_ripple import _pair_shots_with_captures, summarize  # noqa: E402
 
 
 def _row(spin_tm, env_rpm, env_detected, variant_rpm, variant_detected):
@@ -47,6 +47,36 @@ def test_summarize_counts_regression_on_no_detect():
                  variant_rpm=None, variant_detected=False)]
     summary = {entry["method"]: entry for entry in summarize(rows)}
     assert summary["freq_hop32"]["regressions"] == 1
+
+
+def test_pairing_joins_by_shot_number():
+    # Shots 1, 2, 3 but only captures for 1 and 3 -> shot 2 is skipped, not
+    # shifted onto capture 3's data via positional zip.
+    shots = [
+        {"shot_number": 1},
+        {"shot_number": 2},
+        {"shot_number": 3},
+    ]
+    captures = [
+        {"shot_number": 1, "marker": "cap1"},
+        {"shot_number": 3, "marker": "cap3"},
+    ]
+    pairs = _pair_shots_with_captures(shots, captures)
+    assert [(shot["shot_number"], capture["marker"]) for shot, capture in pairs] == [
+        (1, "cap1"),
+        (3, "cap3"),
+    ]
+
+
+def test_pairing_falls_back_to_positional():
+    # No capture carries shot_number (older log format) -> positional zip.
+    shots = [{"shot_number": 1}, {"shot_number": 2}]
+    captures = [{"marker": "capA"}, {"marker": "capB"}]
+    pairs = _pair_shots_with_captures(shots, captures)
+    assert [(shot["shot_number"], capture["marker"]) for shot, capture in pairs] == [
+        (1, "capA"),
+        (2, "capB"),
+    ]
 
 
 def test_summarize_accuracy_metrics():
