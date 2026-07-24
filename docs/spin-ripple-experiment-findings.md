@@ -220,6 +220,49 @@ Two clear patterns:
   hop does not improve ripple-FFT resolution, which is set by the ~70 ms
   visibility window. There is no case for hop 16 over hop 32.
 
+### Parity deltas vs production `detect_spin`
+
+The design calls for gates that "mirror production" so the comparison is
+apples-to-apples. Three deltas make that framing an overstatement, and they
+matter for how much weight the half-rate sample can bear:
+
+- **No local noise floor.** Production computes SNR against
+  `max(global median, local shoulder median)` — `_local_noise_floor`
+  (`processor.py:439-474`, used at `:711`) — added specifically because,
+  per its own comment, "without the local floor, toneless red noise reads as
+  high-confidence ~2000-3300 RPM spin." The estimator uses the global median
+  only. The 27 ripple detections span 2094–4106 RPM, i.e. mostly inside that
+  documented red-noise band.
+- **Rail margin is parity in bins, not in Hz.** Production's lower-rail zone
+  is `leakage(1) + 2` bins of a 3.662 Hz-per-bin envelope FFT, covering
+  1980–2639 RPM, and a peak there is rejected *conditionally* — it survives
+  only with modulation depth ≥ 0.012 **and** SNR ≥ 5 (`processor.py:780-784`).
+  The estimator's 2 padded bins of the track FFT span just 0.229 Hz at hop 32
+  (1980–1994 RPM) and 0.458 Hz at hop 16 — 48× and 24× narrower respectively
+  — and its rejection is unconditional. **19 of the 27 detections
+  (2094–2609 RPM) sit inside the zone production would subject to its
+  harshest scrutiny** but outside the estimator's; 25 of 27 are under
+  `SPIN_LOW_BAND_SUSPECT_MAX_RPM`.
+- **Persistence rejects rather than demotes.** Production demotes a
+  non-persistent pick to confidence 0.3 and keeps it (`processor.py:970-976`);
+  the estimator hard-rejects. Meanwhile the CLI's `_envelope_detected` filters
+  only on rails and `spin_rpm > 0`, so those confidence-0.3 envelope picks
+  *are* counted as baseline detections.
+
+Net direction: the first two are **lenient toward ripple** (it admits peaks
+production would scrutinize or reject), the third is **strict against it**
+(it cannot manufacture rescues that production's demote-and-keep would
+have). The no-go conclusion is robust to all three — extra leniency did not
+produce a single rescue, and the strictness only suppresses coverage that was
+already failing on accuracy.
+
+**What is caveated is the half-rate sample.** Some of the 27 detections might
+not survive production-equivalent gating, so the "18 of 27 within ±300 of
+half" statistic rests on a population that a stricter admission rule would
+thin. Re-scoring with a production-equivalent rail zone expressed in **Hz**
+rather than bins, plus the local noise floor, is the first follow-up before
+any of the 2×-corrected numbers are quoted elsewhere.
+
 ### Envelope-baseline reporting gap
 
 28 of the 51 rows have `env_detected = False` with a **null**
@@ -318,6 +361,32 @@ approach. Concretely, in rough priority order:
    and a units slip in the estimator alone is ruled out. Do not hard-code a
    ×2 until the mechanism is understood; a blind factor that happens to fit
    nine shots is how you ship a wrong constant.
+
+   Three code-side candidate mechanisms are worth checking first — these are
+   hypotheses to test, not conclusions:
+
+   - **Selection effect from the parity deltas above.** The missing local
+     noise floor and the 48×-narrow rail zone both admit low-band peaks
+     production would reject, so the half-rate cluster may partly be *which
+     peaks got through* rather than what the ripple contains. Weakened but
+     not eliminated by a counter-observation: the highest-spin shots
+     (TrackMan 6263–7891, whose half-values land mid-band and well clear of
+     every rail) produced **zero** detections, which a pure admission
+     artifact would not predict.
+   - **Discontinuous argmax peak tracking.** The ±8 mph tolerance band is
+     ±575 Hz wide, while the seam sidebands sit at ±(spin/60) Hz — 58–99 Hz
+     for the shots that produced detections. The sidebands are therefore
+     *inside* the search band, and the per-window argmax has no continuity
+     constraint, so it can hop between carrier and sideband from window to
+     window. That switching injects low-frequency energy into both the
+     frequency and the magnitude track. Testing this means adding a
+     continuity constraint (or phase-based tracking) and re-running.
+   - **STFT window low-pass tilt.** The 128-sample (4.27 ms) analysis window
+     acts as a moving average on the track, attenuating ~22.6% at 90 Hz vs
+     ~6.0% at 45 Hz (rectangular-window sinc; Hann differs in magnitude, not
+     direction). That is a mild systematic tilt favoring lower-frequency
+     peaks — too small to explain a factor of two on its own, but it biases
+     every fundamental-vs-subharmonic contest the same way.
 2. **Get more ground truth.** `session_20260527_152443_trackman.jsonl` has
    125 captured shots and no comparison CSV. Generating one would more than
    triple N and is the single highest-value thing available. Everything above
