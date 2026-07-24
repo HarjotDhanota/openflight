@@ -348,3 +348,30 @@ def detect_ripple_spin(
         snr=round(snr, 2),
         **diagnostics,
     )
+
+
+VARIANT_NAMES = ("freq_hop32", "mag_hop32", "freq_hop16", "mag_hop16")
+
+
+def run_ripple_variants(
+    i_samples,
+    q_samples,
+    ball_speed_mph: float,
+    ball_timestamp_ms: float,
+    *,
+    expected_spin_rpm: Optional[float] = None,
+    hops: tuple[int, ...] = (32, 16),
+) -> dict[str, RippleSpinResult]:
+    """Run all hop x track ripple variants for one capture."""
+    results: dict[str, RippleSpinResult] = {}
+    for hop in hops:
+        track = extract_ripple_track(i_samples, q_samples, ball_speed_mph, hop)
+        trimmed = trim_to_ball_window(track, ball_timestamp_ms, hop)
+        track_rate_hz = SAMPLE_RATE / hop
+        results[f"freq_hop{hop}"] = detect_ripple_spin(
+            trimmed.freq_hz, track_rate_hz, expected_spin_rpm=expected_spin_rpm
+        )
+        results[f"mag_hop{hop}"] = detect_ripple_spin(
+            trimmed.magnitude, track_rate_hz, expected_spin_rpm=expected_spin_rpm
+        )
+    return results

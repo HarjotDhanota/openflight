@@ -203,3 +203,53 @@ class TestDetectRippleSpin:
         assert not result.detected
         assert "cycles" in result.rejection_reason
         assert result.snr > 0
+
+
+class TestRunRippleVariants:
+    def _run(self, **synth_kwargs):
+        i_samples, q_samples = synth_capture(ball_speed_mph=BALL_MPH, **synth_kwargs)
+        return ripple.run_ripple_variants(
+            i_samples, q_samples, BALL_MPH, ball_timestamp_ms=8.0
+        )
+
+    def test_returns_all_four_variants(self):
+        results = self._run(rpm=3000)
+        assert set(results) == set(ripple.VARIANT_NAMES)
+
+    def test_combined_modulation_recovered_across_rpm_grid(self):
+        for rpm in (2500, 3000, 5000, 7000, 9500):
+            results = self._run(rpm=rpm, seed=rpm)
+            detected = {
+                name: result
+                for name, result in results.items()
+                if result.detected
+            }
+            assert detected, f"no variant detected spin at {rpm} RPM"
+            for name, result in detected.items():
+                assert abs(result.spin_rpm - rpm) < 200.0, (
+                    f"{name} at {rpm} RPM read {result.spin_rpm:.0f}"
+                )
+
+    def test_fm_only_seen_by_frequency_track(self):
+        results = self._run(rpm=3000, am_depth=0.0, fm_dev_hz=30.0)
+        assert results["freq_hop32"].detected
+        assert abs(results["freq_hop32"].spin_rpm - 3000.0) < 200.0
+
+    def test_am_only_seen_by_magnitude_track(self):
+        results = self._run(rpm=3000, am_depth=0.05, fm_dev_hz=0.0)
+        assert results["mag_hop32"].detected
+        assert abs(results["mag_hop32"].spin_rpm - 3000.0) < 200.0
+
+    def test_no_modulation_yields_no_detection(self):
+        results = self._run(rpm=3000, am_depth=0.0, fm_dev_hz=0.0)
+        assert not any(result.detected for result in results.values())
+
+    def test_decel_chirp_alone_yields_no_detection(self):
+        results = self._run(
+            rpm=3000, am_depth=0.0, fm_dev_hz=0.0, decel_mph_per_s=90.0
+        )
+        assert not any(result.detected for result in results.values())
+
+    def test_short_visibility_rejected(self):
+        results = self._run(rpm=3000, visible_ms=15.0)
+        assert not any(result.detected for result in results.values())
