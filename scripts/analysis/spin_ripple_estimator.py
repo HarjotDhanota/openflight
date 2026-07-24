@@ -133,3 +133,42 @@ def extract_ripple_track(
         freq_hz=np.array(freqs),
         magnitude=np.array(mags),
     )
+
+
+def trim_to_ball_window(
+    track: RippleTrack, ball_timestamp_ms: float, hop: int
+) -> RippleTrack:
+    """Trim the track to [ball onset, ball-signal collapse).
+
+    Mirrors production _ball_signal_end_sample: signal is lost when the
+    smoothed magnitude stays below SIGNAL_LOSS_THRESHOLD x the early-window
+    reference level for a sustained hold period. Returns the full post-onset
+    track when no loss is found (outdoor shots).
+    """
+    mask = track.times_ms >= ball_timestamp_ms
+    times = track.times_ms[mask]
+    freqs = track.freq_hz[mask]
+    mags = track.magnitude[mask]
+    if len(mags) == 0:
+        return RippleTrack(times, freqs, mags)
+
+    smooth_n = max(1, SIGNAL_LOSS_SMOOTH_SAMPLES // hop)
+    ref_n = max(3, SIGNAL_LOSS_REF_SAMPLES // hop)
+    hold_n = max(1, SIGNAL_LOSS_HOLD_SAMPLES // hop)
+
+    if len(mags) < ref_n:
+        return RippleTrack(times, freqs, mags)
+    kernel = np.ones(smooth_n) / smooth_n
+    smoothed = np.convolve(mags, kernel, mode="same")
+    reference = float(np.median(smoothed[:ref_n]))
+    if reference <= 0:
+        return RippleTrack(times, freqs, mags)
+
+    below = smoothed < reference * SIGNAL_LOSS_THRESHOLD
+    if len(below) < hold_n:
+        return RippleTrack(times, freqs, mags)
+    sustained = np.convolve(below.astype(float), np.ones(hold_n), mode="valid") >= hold_n
+    if not sustained.any():
+        return RippleTrack(times, freqs, mags)
+    end = int(np.argmax(sustained))
+    return RippleTrack(times[:end], freqs[:end], mags[:end])
