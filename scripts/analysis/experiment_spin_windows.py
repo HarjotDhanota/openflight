@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import math
 import statistics
 import sys
@@ -32,8 +31,15 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import compare_trackman as ct  # noqa: E402  pylint: disable=wrong-import-position
+from spin_experiment_lib import (  # noqa: E402
+    capture_from_entry,
+    club_enum as _club_enum,
+    load_session_entries as _load_session_entries,
+    load_trackman_by_shot as _load_trackman_by_shot,
+    to_int as _to_int,
+)
 
-from openflight.launch_monitor import SPIN_CONFIDENCE_HIGH, ClubType  # noqa: E402
+from openflight.launch_monitor import SPIN_CONFIDENCE_HIGH  # noqa: E402
 from openflight.rolling_buffer.monitor import get_optimal_spin_for_ball_speed  # noqa: E402
 from openflight.rolling_buffer.processor import RollingBufferProcessor  # noqa: E402
 from openflight.rolling_buffer.types import IQCapture, SpinResult  # noqa: E402
@@ -50,76 +56,6 @@ class WindowSpec:
     @property
     def sample_count(self) -> int:
         return max(0, self.end_sample - self.start_sample)
-
-
-def _club_enum(normalized_club: str) -> ClubType:
-    aliases = {
-        "driver": ClubType.DRIVER,
-        "3-wood": ClubType.WOOD_3,
-        "5-wood": ClubType.WOOD_5,
-        "7-wood": ClubType.WOOD_7,
-        "3-hybrid": ClubType.HYBRID_3,
-        "5-hybrid": ClubType.HYBRID_5,
-        "7-hybrid": ClubType.HYBRID_7,
-        "9-hybrid": ClubType.HYBRID_9,
-        "2-iron": ClubType.IRON_2,
-        "3-iron": ClubType.IRON_3,
-        "4-iron": ClubType.IRON_4,
-        "5-iron": ClubType.IRON_5,
-        "6-iron": ClubType.IRON_6,
-        "7-iron": ClubType.IRON_7,
-        "8-iron": ClubType.IRON_8,
-        "9-iron": ClubType.IRON_9,
-        "pw": ClubType.PW,
-        "gw": ClubType.GW,
-        "sw": ClubType.SW,
-        "lw": ClubType.LW,
-    }
-    return aliases.get(normalized_club, ClubType.UNKNOWN)
-
-
-def _to_float(value: Any) -> Optional[float]:
-    if value in (None, ""):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _to_int(value: Any) -> Optional[int]:
-    number = _to_float(value)
-    return int(number) if number is not None else None
-
-
-def _load_session_entries(path: Path) -> tuple[list[dict], list[dict]]:
-    shots = []
-    captures = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            entry = json.loads(line)
-            if entry.get("type") == "shot_detected":
-                shots.append(entry)
-            elif entry.get("type") == "rolling_buffer_capture":
-                captures.append(entry)
-    return shots, captures
-
-
-def _load_trackman_by_shot(comparison_path: Path) -> dict[int, dict[str, Any]]:
-    by_shot = {}
-    with comparison_path.open("r", encoding="utf-8", newline="") as handle:
-        for row in csv.DictReader(handle):
-            shot_number = _to_int(row.get("shot_number_of"))
-            if shot_number is None:
-                continue
-            by_shot[shot_number] = {
-                "match_quality": row.get("match_quality"),
-                "spin_tm": _to_float(row.get("spin_tm")),
-                "ball_speed_tm": _to_float(row.get("ball_speed_tm")),
-            }
-    return by_shot
 
 
 def _post_onset_envelope(
@@ -409,12 +345,7 @@ def _rows(
 
         normalized_club = ct.normalize_club(shot_data.get("club"))
         club = _club_enum(normalized_club)
-        capture = IQCapture(
-            sample_time=capture_entry.get("sample_time", 0),
-            trigger_time=capture_entry.get("trigger_time", 0),
-            i_samples=capture_entry["i_samples"],
-            q_samples=capture_entry["q_samples"],
-        )
+        capture = capture_from_entry(capture_entry)
         processed = processor.process_capture(
             capture,
             expected_spin_for_ball_speed=lambda ball_speed, club=club: (
