@@ -83,3 +83,28 @@ class TestTrimToBallWindow:
         trimmed = ripple.trim_to_ball_window(track, ball_timestamp_ms=8.0, hop=32)
         kept = track.times_ms >= 8.0
         assert trimmed.n_windows == int(np.sum(kept))
+
+    def test_onset_beyond_capture_returns_empty(self):
+        track = self._track(onset_ms=8.0)
+        trimmed = ripple.trim_to_ball_window(track, ball_timestamp_ms=99999.0, hop=32)
+        assert trimmed.n_windows == 0
+
+    def test_short_track_returned_untrimmed(self):
+        # Build a short track (~5 windows) shorter than ref_n (~15 windows at hop=32)
+        short_track = ripple.RippleTrack(
+            times_ms=np.arange(5.0),
+            freq_hz=np.full(5, 10000.0),
+            magnitude=np.ones(5),
+        )
+        trimmed = ripple.trim_to_ball_window(short_track, ball_timestamp_ms=0.0, hop=32)
+        assert trimmed.n_windows == 5
+
+    def test_zero_reference_returns_full_track(self):
+        # Build a track with all-zero magnitude; zero reference → returned as-is
+        zero_track = ripple.RippleTrack(
+            times_ms=np.arange(30.0),
+            freq_hz=np.full(30, 10000.0),
+            magnitude=np.zeros(30),
+        )
+        trimmed = ripple.trim_to_ball_window(zero_track, ball_timestamp_ms=0.0, hop=32)
+        assert trimmed.n_windows == 30
