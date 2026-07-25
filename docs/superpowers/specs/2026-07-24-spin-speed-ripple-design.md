@@ -127,6 +127,40 @@ TrackMan-paired sessions with raw `rolling_buffer_capture` entries in
 `session_20260605_132943_trackman.jsonl`, with comparison CSVs such as
 `comparison_20260605_132943_trackman.csv`.
 
+## Addendum (2026-07-24): harmonic-pair-aware peak selection
+
+The first scoring round exposed structure the original design missed:
+on TrackMan-verified shots the magnitude-track spectrum contains a tone
+pair at ~0.5x and ~1x the TrackMan spin. The subharmonic usually
+dominates (the "half-rate lock"); on some shots the 1x tone dominates
+instead. Blind argmax picks whichever is taller, splitting detections
+across two populations.
+
+**Change:** add a pair-aware selection mode to the ripple estimator:
+
+- After finding the dominant band peak f1, look for a companion peak
+  near 2 x f1 (tolerance: max(one natural resolution, 4% of 2 x f1))
+  with relative magnitude >= 0.10 of the dominant.
+- If found: when an expected-spin prior is supplied, report the pair
+  member closest to it (a natural f/2f harmonic pair on a true-1x tone
+  must not get doubled); without a prior, report the UPPER member (the
+  TrackMan-verified 1x tone in the field data), regardless of which is
+  taller. Record `pair_detected=True` and the partner frequency.
+- If the dominant peak has a companion near f1/2 instead (dominant IS
+  the upper member), report the dominant unchanged, `pair_detected`
+  still True.
+- If no companion exists, keep today's behavior (report the dominant),
+  `pair_detected=False`. No blind doubling.
+- Evidence gates (SNR, seam cycles, persistence) evaluate on the
+  DOMINANT pair member — it is the detection evidence; the pair rule
+  only relabels which harmonic the reported RPM comes from. Rail flags
+  evaluate on the reported tone.
+
+**Scoring:** the experiment CLI grows a `pair` variant per hop/track
+(same rescue/regression metrics). Success bar unchanged: adds rescues
+without adding regressions vs both the envelope baseline and the
+non-pair ripple variants, judged on the June TrackMan session.
+
 ## Out of scope
 
 - Any change to `src/openflight/` or live spin behavior.
