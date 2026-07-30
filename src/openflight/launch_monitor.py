@@ -337,31 +337,27 @@ class Shot:
     def estimated_carry_yards(self) -> float:
         """Estimated carry distance based on ball speed, club type, and launch angle.
 
-        Corrected for air density when ``air_density_kg_m3`` is set. With no
-        environmental data the correction is exactly 1.0, so this returns what
-        it always has.
+        Deliberately NOT corrected for air density, even though this shot may
+        carry a measured density. This is the model-neutral estimate, and it is
+        what the simulator connectors put on the wire: ``sim/resolver.py`` reads
+        it into ``ResolvedShot.carry_yards``, which the GSPro codec sends as
+        OpenConnect ``CarryDistance``. GSPro and OpenGolfSim re-fly the ball
+        from the launch data using the *virtual course's* altitude and weather,
+        so a carry pre-corrected for the air in the player's garage would be
+        corrected twice, the second time for a venue it has nothing to do with.
+
+        Density-corrected carry is a presentation concern and belongs to the
+        server, which puts it on ``carry_spin_adjusted``.
         """
         base = estimate_carry_distance(self.ball_speed_mph, self.club)
         if self.launch_angle_vertical is not None:
-            base = adjust_carry_for_launch_angle(
+            return adjust_carry_for_launch_angle(
                 base,
                 self.launch_angle_vertical,
                 self.club,
                 self.launch_angle_confidence or 0.2,
             )
-        return base * self._density_factor()
-
-    def _density_factor(self) -> float:
-        """Air-density multiplier for table-estimated carry, 1.0 when unknown.
-
-        Imported lazily: ``ballistics`` imports this module, so a top-level
-        import here would be circular.
-        """
-        if self.air_density_kg_m3 is None:
-            return 1.0
-        from openflight.ballistics import density_carry_factor
-
-        return density_carry_factor(self.air_density_kg_m3)
+        return base
 
     @property
     def estimated_carry_range(self) -> tuple:

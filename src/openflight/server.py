@@ -2066,22 +2066,37 @@ def _apply_environment(shot: Shot) -> None:
     shot.humidity_pct = reading.humidity_pct
 
 
-def _apply_standard_carry(shot: Shot, conditions) -> None:
+def _apply_standard_carry(shot: Shot, conditions=None) -> None:
     """Second carry figure at fixed reference conditions, for comparability.
 
-    Costs another ~50-85 ms RK4 integration on a Pi 5, so it is computed only
-    when the user has asked for it AND today's air actually differs from the
-    reference -- otherwise the two numbers are identical and the extra line is
-    noise.
+    Computed only when the user has asked for it AND today's air actually
+    differs from the reference -- below ~0.5% both figures round to the same
+    yardage, so the extra line would be noise.
+
+    With ``conditions`` the reference carry is a second RK4 integration, which
+    costs ~50-85 ms on a Pi 5. Without them the shot came from the table
+    estimator, which has no physics to re-run: rescaling the corrected carry
+    from today's air to reference air is both exact for that estimator and free.
     """
     config = environment_provider.config
     if not config.show_standard or shot.air_density_kg_m3 is None:
         return
     standard = environment_provider.standard_density()
-    # Under ~0.5% the carry difference rounds to zero yards anyway.
     if abs(shot.air_density_kg_m3 / standard - 1.0) < 0.005:
         return
-    shot.carry_standard_yards = simulate(conditions, air_density=standard).carry_yards
+
+    if conditions is not None:
+        shot.carry_standard_yards = simulate(conditions, air_density=standard).carry_yards
+        return
+
+    if shot.carry_spin_adjusted is None:
+        return
+    # carry_spin_adjusted == base * factor(today), so dividing it out recovers
+    # the uncorrected estimate without recomputing it.
+    today_factor = density_carry_factor(shot.air_density_kg_m3)
+    shot.carry_standard_yards = (
+        shot.carry_spin_adjusted / today_factor * density_carry_factor(standard)
+    )
 
 
 def _weather_settings_payload() -> dict:
@@ -2639,7 +2654,19 @@ def on_shot_detected(shot: Shot):
     _apply_environment(shot)
 
     _MIN_RELIABLE_SPIN_CONF = 0.6
-    if shot.carry_spin_adjusted is None and shot.mode != "mock":
+    if shot.mode == "mock" and shot.carry_spin_adjusted is None:
+        # Mock shots keep the table estimate as their carry -- 0b4d7f1
+        # deliberately excluded them from carry *modelling* ("calculate on real
+        # world data"). But the density correction is presentation, not
+        # modelling, and without it the whole weather feature is invisible in
+        # the one mode people demo and review in: the Conditions badge reads
+        # live while the carry underneath it is silently uncorrected.
+        if shot.air_density_kg_m3 is not None:
+            shot.carry_spin_adjusted = shot.estimated_carry_yards * density_carry_factor(
+                shot.air_density_kg_m3
+            )
+            _apply_standard_carry(shot)
+    elif shot.carry_spin_adjusted is None and shot.mode != "mock":
         conditions = resolve_launch(shot) if ballistics_enabled else None
         if conditions is not None:
             trajectory = simulate(
@@ -2677,6 +2704,7 @@ def on_shot_detected(shot: Shot):
             # applied as a scalar afterwards. Exactly 1.0 when unknown.
             if shot.air_density_kg_m3 is not None:
                 shot.carry_spin_adjusted *= density_carry_factor(shot.air_density_kg_m3)
+            _apply_standard_carry(shot)
             reason = "ballistics disabled" if not ballistics_enabled else "no launch angle"
             logger.info(
                 "[SERVER] Table carry (%s): %.0f yds (spin: %.0f rpm%s)",

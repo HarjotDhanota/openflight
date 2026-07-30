@@ -2998,3 +2998,156 @@ class TestSetWeatherSettings:
 
         assert weather.provider.config.elevation_m == 3048.0
         assert "spin_source" in caplog.text
+
+
+class TestStandardCarryOnTheTablePath:
+    """Shots without a measured launch angle get the density correction, so
+    they must get the comparable reference figure too -- otherwise the second
+    number appears and disappears depending on whether the angle radar
+    happened to see that shot."""
+
+    @pytest.fixture
+    def provider(self, monkeypatch):
+        from openflight.environment.config import WeatherConfig
+        from openflight.environment.provider import EnvironmentProvider
+
+        provider = EnvironmentProvider(WeatherConfig())
+        monkeypatch.setattr(server_module, "environment_provider", provider)
+        return provider
+
+    def test_table_carry_gets_a_standard_figure(self, provider):
+        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now(), club=ClubType.DRIVER)
+        shot.air_density_kg_m3 = 0.97  # Denver
+        shot.carry_spin_adjusted = 260.0
+
+        server_module._apply_standard_carry(shot)
+
+        assert shot.carry_standard_yards is not None
+
+    def test_the_rescale_is_exact_for_the_table_estimator(self, provider):
+        """base * f(today) / f(today) * f(std) == base * f(std), with no second
+        integration and no re-derivation of the base estimate."""
+        from openflight.ballistics import density_carry_factor
+
+        base = 250.0
+        today = 0.97
+        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now(), club=ClubType.DRIVER)
+        shot.air_density_kg_m3 = today
+        shot.carry_spin_adjusted = base * density_carry_factor(today)
+
+        server_module._apply_standard_carry(shot)
+
+        expected = base * density_carry_factor(provider.standard_density())
+        assert shot.carry_standard_yards == pytest.approx(expected)
+
+    def test_thin_air_still_reads_longer_than_the_reference(self, provider):
+        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now(), club=ClubType.DRIVER)
+        shot.air_density_kg_m3 = 0.97
+        shot.carry_spin_adjusted = 270.0
+
+        server_module._apply_standard_carry(shot)
+
+        assert shot.carry_spin_adjusted > shot.carry_standard_yards
+
+    def test_no_second_integration_is_attempted_without_a_carry(self, provider):
+        """Nothing to rescale means nothing to report -- and crucially no crash
+        from passing None into simulate()."""
+        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now(), club=ClubType.DRIVER)
+        shot.air_density_kg_m3 = 0.97
+
+        server_module._apply_standard_carry(shot)
+
+        assert shot.carry_standard_yards is None
+
+    def test_the_threshold_still_applies(self, provider):
+        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now(), club=ClubType.DRIVER)
+        shot.air_density_kg_m3 = provider.standard_density() * 1.002
+        shot.carry_spin_adjusted = 250.0
+
+        server_module._apply_standard_carry(shot)
+
+        assert shot.carry_standard_yards is None
+
+
+class TestMockModeShowsTheCorrection:
+    """Mock is the mode this feature gets demoed and reviewed in.
+
+    0b4d7f1 deliberately kept mock shots out of carry *modelling* ("calculate
+    on real world data"), and that stands -- mock still uses the table estimate
+    rather than being handed to the integrator. But applying the measured air
+    to that estimate is presentation, not modelling. Without it the Conditions
+    badge reads live while the carry beneath it is silently uncorrected, which
+    is worse than showing nothing.
+    """
+
+    @pytest.fixture
+    def harness(self, monkeypatch):
+        from openflight.environment.config import WeatherConfig
+        from openflight.environment.provider import EnvironmentProvider
+
+        provider = EnvironmentProvider(WeatherConfig())
+        monkeypatch.setattr(server_module, "environment_provider", provider)
+        monkeypatch.setattr(server_module, "kld7_vertical", None)
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "camera_tracker", None)
+        monkeypatch.setattr(server_module, "camera_enabled", False)
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *a, **k: None)
+        return provider
+
+    def _mock_shot(self):
+        return Shot(
+            ball_speed_mph=143.0,
+            club_speed_mph=99.0,
+            timestamp=datetime.now(),
+            club=ClubType.DRIVER,
+            launch_angle_vertical=11.0,
+            spin_rpm=2700.0,
+            mode="mock",
+        )
+
+    def test_thin_air_lengthens_a_mock_carry(self, harness):
+        harness.set_cli_override(
+            server_module.EnvironmentReading(0.97, "manual")  # Denver
+        )
+        shot = self._mock_shot()
+
+        on_shot_detected(shot)
+
+        assert shot.carry_spin_adjusted is not None
+        assert shot.carry_spin_adjusted > shot.estimated_carry_yards
+
+    def test_mock_gets_the_standard_figure_too(self, harness):
+        harness.set_cli_override(server_module.EnvironmentReading(0.97, "manual"))
+        shot = self._mock_shot()
+
+        on_shot_detected(shot)
+
+        assert shot.carry_standard_yards is not None
+        assert shot.carry_standard_yards < shot.carry_spin_adjusted
+
+    def test_mock_carry_is_untouched_when_no_weather_is_configured(self, harness):
+        """The regression guarantee holds in mock as well: no config, no change."""
+        shot = self._mock_shot()
+
+        on_shot_detected(shot)
+
+        assert shot.carry_spin_adjusted is None
+        assert shot.carry_standard_yards is None
+
+    def test_mock_is_still_not_handed_to_the_integrator(self, harness, monkeypatch):
+        """The maintainer's decision stands: mock keeps the table estimate and
+        never triggers an RK4 flight."""
+        simulated = []
+        monkeypatch.setattr(
+            server_module,
+            "simulate",
+            lambda *a, **k: simulated.append(a) or (_ for _ in ()).throw(AssertionError()),
+        )
+        harness.set_cli_override(server_module.EnvironmentReading(0.97, "manual"))
+
+        on_shot_detected(self._mock_shot())
+
+        assert not simulated
