@@ -170,6 +170,27 @@ describe('WeatherSettingsView', () => {
     expect(html).toContain('Absolute station pressure');
   });
 
+  it('gives every manual field a stepper, since the kiosk has no keyboard', () => {
+    const html = render({ settings: settings({ mode: 'manual' }) });
+
+    for (const field of ['Temperature', 'Pressure', 'Humidity', 'Elevation']) {
+      expect(html).toContain(`Increase ${field}`);
+      expect(html).toContain(`Decrease ${field}`);
+    }
+  });
+
+  it('labels the steppers for screen readers rather than relying on the glyph', () => {
+    const html = render({ settings: settings({ mode: 'manual' }) });
+
+    expect(html).toContain('aria-label="Increase Humidity (%)"');
+  });
+
+  it('gives the reference temperature a stepper too', () => {
+    const html = render();
+
+    expect(html).toContain('Increase Reference temperature');
+  });
+
   it('explains that only temperature is replaced indoors', () => {
     const html = render({ settings: settings({ indoors: true }) });
 

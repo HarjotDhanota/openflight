@@ -164,6 +164,45 @@
   line-height: 1.35;
 }
 
+/* Stepper + box. The kiosk panel is touch-only and Raspberry Pi OS Chromium
+   ships without an on-screen keyboard, so the buttons are the primary input
+   here, not a convenience. They are sized to the 44px touch target the rest of
+   this screen uses. */
+.weather-field__control {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-xs, 0.25rem);
+}
+
+.weather-field__control input {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+}
+
+.weather-field__step {
+  flex: 0 0 auto;
+  min-width: 52px;
+  min-height: 44px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(245, 240, 230, 0.18);
+  background: rgba(245, 240, 230, 0.06);
+  color: var(--color-cream);
+  font-size: 1.35rem;
+  line-height: 1;
+  font-weight: 600;
+  cursor: pointer;
+  /* A long press on a stepper should repeat, not select the glyph. */
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+.weather-field__step:active {
+  background: rgba(212, 175, 55, 0.18);
+  border-color: rgba(212, 175, 55, 0.35);
+}
+
 .weather-field input {
   min-height: 44px;
   padding: 0 var(--space-sm);
@@ -173,6 +212,19 @@
   color: var(--color-cream);
   font-size: 1rem;
   font-variant-numeric: tabular-nums;
+}
+
+/* The spinner arrows Chromium draws are far too small for a finger and sit
+   where the +/- buttons already are. */
+.weather-field input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.weather-field input[type='number']::-webkit-outer-spin-button,
+.weather-field input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 /* Sensor presence. Distinct from the source badge: the badge says what is

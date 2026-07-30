@@ -14,6 +14,7 @@ import {
   getPressureDigits,
   getPressureUnit,
   getTempUnit,
+  stepInDisplayUnits,
   type UnitSystem,
 } from '../utils/units';
 import type { EnvironmentReading, WeatherSettings as Settings } from '../types/socket';
@@ -203,6 +204,7 @@ export function WeatherSettingsView({
               <UnitField
                 label={`Indoor temperature (${getTempUnit(unitSystem)})`}
                 value={draft.manual_temp_c}
+                fallback={20}
                 toDisplay={(v) => convertTempFromC(v, unitSystem)}
                 fromDisplay={(v) => convertTempToC(v, unitSystem)}
                 onCommit={(v) => update({ manual_temp_c: v })}
@@ -217,6 +219,7 @@ export function WeatherSettingsView({
           <UnitField
             label={`Temperature (${getTempUnit(unitSystem)})`}
             value={draft.manual_temp_c}
+            fallback={20}
             toDisplay={(v) => convertTempFromC(v, unitSystem)}
             fromDisplay={(v) => convertTempToC(v, unitSystem)}
             onCommit={(v) => update({ manual_temp_c: v })}
@@ -226,6 +229,10 @@ export function WeatherSettingsView({
             hint="Absolute station pressure, not the sea-level value a weather app shows"
             value={draft.manual_pressure_hpa}
             digits={getPressureDigits(unitSystem)}
+            // 1 hPa / 0.01 inHg is ~0.1% of density -- finer than any barometer
+            // you would read off, so a step never overshoots.
+            step={unitSystem === 'imperial' ? 0.01 : 1}
+            fallback={1013.25}
             toDisplay={(v) => convertPressureFromHpa(v, unitSystem)}
             fromDisplay={(v) => convertPressureToHpa(v, unitSystem)}
             onCommit={(v) => update({ manual_pressure_hpa: v })}
@@ -234,6 +241,9 @@ export function WeatherSettingsView({
             label="Humidity (%)"
             hint="Smallest term — leave blank for 50%"
             value={draft.manual_humidity_pct}
+            digits={0}
+            step={5}
+            fallback={50}
             toDisplay={(v) => v}
             fromDisplay={(v) => v}
             onCommit={(v) => update({ manual_humidity_pct: v })}
@@ -242,6 +252,8 @@ export function WeatherSettingsView({
             label={`Elevation (${getElevationUnit(unitSystem)})`}
             hint="Used only when no pressure is entered"
             value={draft.elevation_m}
+            digits={0}
+            step={unitSystem === 'imperial' ? 25 : 10}
             toDisplay={(v) => convertElevationFromMeters(v, unitSystem)}
             fromDisplay={(v) => convertElevationToMeters(v, unitSystem)}
             onCommit={(v) => update({ elevation_m: v })}
@@ -273,6 +285,7 @@ export function WeatherSettingsView({
           <UnitField
             label={`Reference temperature (${getTempUnit(unitSystem)})`}
             value={draft.standard_temp_c}
+            fallback={25}
             toDisplay={(v) => convertTempFromC(v, unitSystem)}
             fromDisplay={(v) => convertTempToC(v, unitSystem)}
             onCommit={(v) => update({ standard_temp_c: v ?? 25 })}
@@ -317,6 +330,8 @@ function UnitField({
   hint,
   value,
   digits = 1,
+  step = 1,
+  fallback = 0,
   toDisplay,
   fromDisplay,
   onCommit,
@@ -325,6 +340,10 @@ function UnitField({
   hint?: string;
   value: number | null;
   digits?: number;
+  /** Step size in DISPLAY units, so one press moves one degree/hPa the user sees. */
+  step?: number;
+  /** Where stepping starts when the field is empty, in SI. */
+  fallback?: number;
   toDisplay: (value: number) => number;
   fromDisplay: (value: number) => number;
   onCommit: (value: number | null) => void;
@@ -343,26 +362,52 @@ function UnitField({
     setText(format(value));
   }
 
+  // The panel is touch-only and Raspberry Pi OS Chromium ships without an
+  // on-screen keyboard, so these buttons are the primary way values get
+  // entered here -- typing is the fallback, not the other way round. They
+  // commit immediately: there is no half-typed state to wait for.
+  const stepBy = (delta: number) =>
+    onCommit(stepInDisplayUnits(value, fallback, delta, digits, toDisplay, fromDisplay));
+
   return (
-    <label className="weather-field">
+    <div className="weather-field">
       <span className="weather-field__label">{label}</span>
       {hint && <span className="weather-field__hint">{hint}</span>}
-      <input
-        type="number"
-        inputMode="decimal"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onBlur={() => {
-          const trimmed = text.trim();
-          if (trimmed === '') {
-            onCommit(null);
-            return;
-          }
-          const parsed = Number(trimmed);
-          if (Number.isFinite(parsed)) onCommit(fromDisplay(parsed));
-        }}
-      />
-    </label>
+      <div className="weather-field__control">
+        <button
+          type="button"
+          className="weather-field__step"
+          aria-label={`Decrease ${label}`}
+          onClick={() => stepBy(-step)}
+        >
+          −
+        </button>
+        <input
+          type="number"
+          inputMode="decimal"
+          aria-label={label}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={() => {
+            const trimmed = text.trim();
+            if (trimmed === '') {
+              onCommit(null);
+              return;
+            }
+            const parsed = Number(trimmed);
+            if (Number.isFinite(parsed)) onCommit(fromDisplay(parsed));
+          }}
+        />
+        <button
+          type="button"
+          className="weather-field__step"
+          aria-label={`Increase ${label}`}
+          onClick={() => stepBy(step)}
+        >
+          +
+        </button>
+      </div>
+    </div>
   );
 }
 

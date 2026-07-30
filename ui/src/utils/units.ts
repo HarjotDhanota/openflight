@@ -101,3 +101,32 @@ export function getElevationUnit(unitSystem: UnitSystem): string {
 export function getPressureDigits(unitSystem: UnitSystem): number {
   return unitSystem === 'imperial' ? 2 : 0;
 }
+
+/**
+ * Move a stored SI value by one step of the unit the user is looking at.
+ *
+ * The kiosk is touch-only with no on-screen keyboard, so +/- buttons are the
+ * primary way conditions get entered on the panel. Stepping happens in display
+ * units and converts back, so "one step" is a round number to the user — a
+ * degree Fahrenheit — rather than a round number in Celsius that shows up as
+ * 71.6 °F. Rounding to the field's own precision each time stops repeated
+ * steps accumulating float drift.
+ *
+ * @param currentSi Current stored value, or null when the field is empty.
+ * @param fallbackSi Where to start stepping from when the field is empty.
+ *   Never 0 for pressure — 0 hPa is not a pressure any atmosphere has.
+ * @param deltaDisplay Step size, in the unit being displayed.
+ * @param digits Decimal places the field displays.
+ */
+export function stepInDisplayUnits(
+  currentSi: number | null,
+  fallbackSi: number,
+  deltaDisplay: number,
+  digits: number,
+  toDisplay: (value: number) => number,
+  fromDisplay: (value: number) => number
+): number {
+  const start = currentSi ?? fallbackSi;
+  const stepped = Number((toDisplay(start) + deltaDisplay).toFixed(digits));
+  return fromDisplay(stepped);
+}
