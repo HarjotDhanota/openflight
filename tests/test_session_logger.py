@@ -607,3 +607,56 @@ class TestSessionIdentity:
         first = self._start_entry(tmp_path / "a")
         second = self._start_entry(tmp_path / "b")
         assert first["session_uuid"] != second["session_uuid"]
+
+
+class TestLogShotEnvironment:
+    """Air-density conditions on the shot record.
+
+    Post-session analysis is the whole reason to log these: without them a
+    carry number cannot be re-derived, and two sessions cannot be compared.
+    Written as an optional block so users with no weather configured get a
+    JSONL file byte-identical to what they got before this existed.
+    """
+
+    def _log(self, tmp_path, **kwargs):
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+        logger.log_shot(
+            ball_speed_mph=165.0,
+            club_speed_mph=113.0,
+            smash_factor=1.46,
+            estimated_carry_yards=262.0,
+            club="driver",
+            peak_magnitude=None,
+            readings_count=0,
+            **kwargs,
+        )
+        return json.loads(logger.session_path.read_text().strip().split("\n")[-1])
+
+    def test_conditions_are_recorded(self, tmp_path):
+        entry = self._log(
+            tmp_path,
+            environment={
+                "air_density_kg_m3": 1.1316,
+                "source": "open-meteo",
+                "temp_c": 36.1,
+                "pressure_hpa": 1010.2,
+                "humidity_pct": 25.0,
+                "carry_standard_yards": 256.9,
+            },
+        )
+
+        assert entry["environment"]["air_density_kg_m3"] == 1.1316
+        assert entry["environment"]["source"] == "open-meteo"
+
+    def test_the_source_is_recorded_so_a_carry_can_be_trusted_or_not(self, tmp_path):
+        """A carry corrected from a sensor and one corrected from a grid-cell
+        average are not equally trustworthy; the log has to say which."""
+        entry = self._log(tmp_path, environment={"air_density_kg_m3": 1.19, "source": "bme280"})
+
+        assert entry["environment"]["source"] == "bme280"
+
+    def test_the_key_is_absent_when_no_weather_is_configured(self, tmp_path):
+        entry = self._log(tmp_path)
+
+        assert "environment" not in entry

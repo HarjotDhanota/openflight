@@ -5,12 +5,14 @@ from datetime import datetime
 import pytest
 
 from openflight.ballistics import (
+    AIR_DENSITY_STD,
     CLUB_TYPICAL_SPIN_RPM,
     LaunchConditions,
+    density_carry_factor,
     resolve_launch,
     simulate,
 )
-from openflight.launch_monitor import ClubType, Shot
+from openflight.launch_monitor import _OPTIMAL_LAUNCH, ClubType, Shot
 
 
 def _shot(**kwargs) -> Shot:
@@ -168,3 +170,163 @@ class TestSimulate:
     def test_total_distance_includes_rollout(self):
         traj = simulate(_driver())
         assert traj.total_yards > traj.carry_yards
+
+
+# Representative ball speeds by club, used to exercise density_carry_factor
+# across the whole bag rather than just a driver. Paired with the repo's own
+# optimal launch angles and typical spin rates, so the cases are the ones the
+# table path actually sees.
+_REPRESENTATIVE_BALL_SPEED_MPH = {
+    ClubType.DRIVER: 165.0,
+    ClubType.WOOD_3: 152.0,
+    ClubType.WOOD_5: 145.0,
+    ClubType.WOOD_7: 140.0,
+    ClubType.HYBRID_3: 143.0,
+    ClubType.HYBRID_5: 138.0,
+    ClubType.HYBRID_7: 133.0,
+    ClubType.HYBRID_9: 128.0,
+    ClubType.IRON_2: 140.0,
+    ClubType.IRON_3: 135.0,
+    ClubType.IRON_4: 130.0,
+    ClubType.IRON_5: 125.0,
+    ClubType.IRON_6: 118.0,
+    ClubType.IRON_7: 112.0,
+    ClubType.IRON_8: 105.0,
+    ClubType.IRON_9: 97.0,
+    ClubType.PW: 90.0,
+    ClubType.GW: 82.0,
+    ClubType.SW: 74.0,
+    ClubType.LW: 65.0,
+    ClubType.UNKNOWN: 120.0,
+}
+
+
+def _conditions_for(club: ClubType) -> LaunchConditions:
+    return LaunchConditions(
+        ball_speed_mph=_REPRESENTATIVE_BALL_SPEED_MPH[club],
+        launch_angle_v=_OPTIMAL_LAUNCH[club],
+        launch_angle_h=0.0,
+        spin_rpm=CLUB_TYPICAL_SPIN_RPM[club],
+        spin_axis_deg=0.0,
+        spin_source="club_typical",
+    )
+
+
+class TestDensityCarryFactor:
+    """The density correction for the TABLE carry path.
+
+    `simulate` takes air_density directly and models drag and Magnus properly.
+    This factor exists only for the degraded path -- ballistics disabled, or no
+    launch angle measured -- and must never be applied on top of a simulation.
+    """
+
+    def test_standard_density_is_exactly_neutral(self):
+        """Not approximately 1.0. Anyone who never touches the settings screen
+        must get byte-identical carry numbers to before this existed."""
+        assert density_carry_factor(AIR_DENSITY_STD) == 1.0
+
+    def test_thin_air_carries_further(self):
+        assert density_carry_factor(0.97) > 1.0  # Denver
+
+    def test_dense_air_carries_shorter(self):
+        assert density_carry_factor(1.30) < 1.0  # cold morning
+
+    def test_monotonic_in_density(self):
+        factors = [density_carry_factor(rho) for rho in (0.95, 1.05, 1.15, 1.225, 1.30)]
+        assert factors == sorted(factors, reverse=True)
+
+    @pytest.mark.parametrize("bad", [0.0, -1.0, -0.001])
+    def test_non_positive_density_is_refused(self, bad):
+        """Zero would divide by zero downstream; a negative density is a bug
+        upstream that must surface here rather than produce a plausible number."""
+        with pytest.raises(ValueError):
+            density_carry_factor(bad)
+
+    def test_denver_correction_is_about_seven_percent(self):
+        # 0.97 kg/m3 is ~21% thinner than ISA; ^-0.30 gives ~1.07.
+        assert density_carry_factor(0.97) == pytest.approx(1.072, abs=0.005)
+
+    @pytest.mark.parametrize("club", list(ClubType))
+    def test_residual_against_the_integrator_stays_under_one_percent(self, club):
+        """The guard on the whole single-exponent approximation.
+
+        A per-club exponent was rejected deliberately (driver ~0.28, wedge
+        ~0.39) because the table path is already a +/-10-15% estimate. This
+        test is what makes that safe: if anyone retunes the Cd/Cl coefficients
+        above, the fitted 0.30 goes stale and this fails loudly instead of
+        quietly skewing every table-estimated carry.
+
+        The bound is a percentage, not an absolute yardage, because the error
+        scales with carry -- the driver's 2.1 yd and the sand wedge's 0.2 yd
+        are the same 0.9% and 0.2% miss. An absolute bound tight enough to be
+        meaningful for a wedge would be unmeetable for a driver.
+        """
+        conditions = _conditions_for(club)
+        baseline = simulate(conditions).carry_yards
+
+        worst_pct = 0.0
+        for scale in (0.90, 0.95, 1.0, 1.05, 1.10):
+            density = AIR_DENSITY_STD * scale
+            integrated = simulate(conditions, air_density=density).carry_yards
+            approximated = baseline * density_carry_factor(density)
+            worst_pct = max(worst_pct, 100.0 * abs(integrated - approximated) / baseline)
+
+        assert worst_pct < 1.0, (
+            f"{club.value}: worst residual {worst_pct:.2f}% of a {baseline:.0f} yd carry "
+            f"across +/-10% density"
+        )
+
+    def test_worst_case_absolute_residual_is_on_the_driver(self):
+        """Pins the number quoted in the CARRY_DENSITY_EXPONENT comment, so the
+        comment cannot drift from the code the way its predecessor did."""
+        conditions = _conditions_for(ClubType.DRIVER)
+        baseline = simulate(conditions).carry_yards
+
+        thin = AIR_DENSITY_STD * 0.90
+        residual = abs(
+            simulate(conditions, air_density=thin).carry_yards
+            - baseline * density_carry_factor(thin)
+        )
+
+        assert residual == pytest.approx(2.1, abs=0.3)
+
+
+class TestSimulateRespectsDensity:
+    def test_thinner_air_produces_a_longer_carry(self):
+        conditions = _conditions_for(ClubType.DRIVER)
+
+        sea_level = simulate(conditions, air_density=1.225).carry_yards
+        denver = simulate(conditions, air_density=0.97).carry_yards
+
+        assert denver > sea_level
+
+    def test_the_sacramento_case_from_the_design_doc(self):
+        """97 F at a sea-level venue -- pure temperature error, the case that
+        motivated the whole change. 5.6 yd on a driver, previously invisible.
+
+        Uses the design doc's stated launch (165 mph / 12.5 deg / 2600 rpm)
+        rather than the club table, so these are the numbers quoted in the PR.
+        """
+        conditions = LaunchConditions(165.0, 12.5, 0.0, 2600.0, 0.0, "measured")
+
+        sea_level = simulate(conditions, air_density=1.2250).carry_yards
+        hot_day = simulate(conditions, air_density=1.1316).carry_yards
+
+        assert sea_level == pytest.approx(256.5, abs=0.5)
+        assert hot_day == pytest.approx(262.1, abs=0.5)
+        assert hot_day - sea_level == pytest.approx(5.6, abs=0.3)
+
+    def test_the_denver_case_from_the_design_doc(self):
+        conditions = LaunchConditions(165.0, 12.5, 0.0, 2600.0, 0.0, "measured")
+
+        denver = simulate(conditions, air_density=0.9700).carry_yards
+
+        assert denver == pytest.approx(270.9, abs=0.5)
+
+    def test_default_density_is_isa_sea_level(self):
+        """The default argument is what preserves pre-weather behaviour."""
+        conditions = _conditions_for(ClubType.DRIVER)
+
+        assert simulate(conditions).carry_yards == pytest.approx(
+            simulate(conditions, air_density=AIR_DENSITY_STD).carry_yards
+        )

@@ -291,6 +291,18 @@ class Shot:
     club_angle_deg: Optional[float] = None  # Club angle of attack from K-LD7 (vertical)
     club_path_deg: Optional[float] = None  # Club path: IWR6843, or K-LD7 (deprecated, horizontal)
     spin_axis_deg: Optional[float] = None  # Spin axis tilt: 0=backspin, +right(fade), -left(draw)
+    # Environmental conditions at the moment of the shot. None means no
+    # environmental data was available and carry assumes ISA sea level, which
+    # was the only behaviour before the weather subsystem existed.
+    air_temp_c: Optional[float] = None
+    air_pressure_hpa: Optional[float] = None  # ABSOLUTE station pressure, not sea-level-adjusted
+    humidity_pct: Optional[float] = None
+    air_density_kg_m3: Optional[float] = None
+    # "bme280", "manual", "open-meteo", "elevation", or "default"
+    air_density_source: Optional[str] = None
+    # Carry adjusted to fixed reference conditions so sessions on different
+    # days compare. None when the feature is off or there is nothing to adjust.
+    carry_standard_yards: Optional[float] = None
 
     @property
     def ball_speed_ms(self) -> float:
@@ -323,16 +335,33 @@ class Shot:
 
     @property
     def estimated_carry_yards(self) -> float:
-        """Estimated carry distance based on ball speed, club type, and launch angle."""
+        """Estimated carry distance based on ball speed, club type, and launch angle.
+
+        Corrected for air density when ``air_density_kg_m3`` is set. With no
+        environmental data the correction is exactly 1.0, so this returns what
+        it always has.
+        """
         base = estimate_carry_distance(self.ball_speed_mph, self.club)
         if self.launch_angle_vertical is not None:
-            return adjust_carry_for_launch_angle(
+            base = adjust_carry_for_launch_angle(
                 base,
                 self.launch_angle_vertical,
                 self.club,
                 self.launch_angle_confidence or 0.2,
             )
-        return base
+        return base * self._density_factor()
+
+    def _density_factor(self) -> float:
+        """Air-density multiplier for table-estimated carry, 1.0 when unknown.
+
+        Imported lazily: ``ballistics`` imports this module, so a top-level
+        import here would be circular.
+        """
+        if self.air_density_kg_m3 is None:
+            return 1.0
+        from openflight.ballistics import density_carry_factor
+
+        return density_carry_factor(self.air_density_kg_m3)
 
     @property
     def estimated_carry_range(self) -> tuple:
