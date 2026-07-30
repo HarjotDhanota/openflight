@@ -37,4 +37,25 @@ describe('ShotDisplay', () => {
     expect(html).toContain('experimental');
     expect(html).not.toContain('metric-card__confidence-dots');
   });
+
+  it('shows the standard-conditions carry when the server sent one', () => {
+    // The server only sends this when the user asked for it AND today's air
+    // actually differs, so its presence is the whole condition.
+    const html = renderToString(<ShotDisplay shot={{ ...experimentalShot, carry_standard_yards: 128 }} />);
+
+    expect(html).toContain('std 128 yds');
+  });
+
+  it('omits the standard note when the server sent none', () => {
+    const html = renderToString(<ShotDisplay shot={{ ...experimentalShot, carry_standard_yards: null }} />);
+
+    expect(html).not.toContain('std ');
+  });
+
+  it('omits the standard note on a shot from before the field existed', () => {
+    // Replayed sessions and older clients have no such key at all.
+    const html = renderToString(<ShotDisplay shot={experimentalShot} />);
+
+    expect(html).not.toContain('std ');
+  });
 });

@@ -25,6 +25,9 @@ export interface Shot {
   spin_method?: string | null;
   spin_multipath_fade_hz?: number | null;
   carry_spin_adjusted: number | null;
+  // Same carry re-run against fixed reference air, so sessions on different
+  // days compare. Null when disabled or when today's air is within 0.5% of it.
+  carry_standard_yards?: number | null;
 }
 
 export interface SessionStats {

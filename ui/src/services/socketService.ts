@@ -3,8 +3,17 @@ import { useSystemStore } from '../stores/useSystemStore';
 import { useShotStore } from '../stores/useShotStore';
 import { useCameraStore, type CameraStatus } from '../stores/useCameraStore';
 import { useDebugStore } from '../stores/useDebugStore';
+import { useEnvironmentStore } from '../stores/useEnvironmentStore';
 import type { Shot, SessionStats, SessionState, TriggerDiagnostic, TriggerStatus } from '../types/shot';
-import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimStatus } from '../types/socket';
+import type {
+  DebugReading,
+  RadarConfig,
+  DebugShotLog,
+  SimShotInfo,
+  SimStatus,
+  EnvironmentReading,
+  WeatherSettings,
+} from '../types/socket';
 import { getServerOrigin } from '../utils/serverOrigin';
 
 const SOCKET_URL = getServerOrigin();
@@ -37,6 +46,20 @@ class SocketService {
       useSystemStore.getState().setConnected(true);
       this.socket?.emit('get_session');
       this.socket?.emit('get_trigger_status');
+      this.socket?.emit('get_weather');
+    });
+
+    this.socket.on('environment', (data: EnvironmentReading) => {
+      useEnvironmentStore.getState().setReading(data);
+      useEnvironmentStore.getState().setRefreshing(false);
+    });
+
+    this.socket.on('weather_settings', (data: WeatherSettings) => {
+      useEnvironmentStore.getState().setSettings(data);
+    });
+
+    this.socket.on('weather_error', (data: { reason: string }) => {
+      useEnvironmentStore.getState().setError(data.reason);
     });
 
     this.socket.on('disconnect', () => {
@@ -177,6 +200,18 @@ class SocketService {
 
   toggleCameraStream() {
     this.socket?.emit('toggle_camera_stream');
+  }
+
+  setWeatherSettings(settings: WeatherSettings) {
+    this.socket?.emit('set_weather_settings', settings);
+  }
+
+  /**
+   * Ask the server to look up the location and fetch current conditions.
+   * Only ever on user action -- there is no polling.
+   */
+  refreshWeather() {
+    this.socket?.emit('refresh_weather');
   }
 }
 

@@ -50,3 +50,37 @@ export interface DebugShotLog {
   } | null;
   club: string;
 }
+
+/** Resolved air-density conditions currently applied to carry. */
+export interface EnvironmentReading {
+  air_density_kg_m3: number;
+  /** 'bme280' | 'manual' | 'open-meteo' | 'elevation' | 'default' */
+  source: string;
+  temp_c: number | null;
+  pressure_hpa: number | null;
+  humidity_pct: number | null;
+  /** Age of the underlying data in seconds; null for manual entry. */
+  age_s: number | null;
+  /** Percent difference from ISA sea level. Negative means thinner air, longer carry. */
+  deviation_pct: number;
+}
+
+/** Persisted weather settings, edited from the settings screen. */
+export interface WeatherSettings {
+  mode: 'auto' | 'manual' | 'off';
+  latitude: number | null;
+  longitude: number | null;
+  location_label: string | null;
+  elevation_m: number | null;
+  location_consent: boolean;
+  manual_temp_c: number | null;
+  manual_pressure_hpa: number | null;
+  manual_humidity_pct: number | null;
+  indoors: boolean;
+  /** Second carry figure at fixed reference conditions, shown under the main one. */
+  show_standard: boolean;
+  standard_temp_c: number;
+  standard_elevation_m: number;
+  /** True when a sensor is fitted; the UI hides manual entry as the primary path. */
+  sensor_present: boolean;
+}

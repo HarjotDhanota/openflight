@@ -1,0 +1,10 @@
+/* Setup / settings screen. Sections stack and scroll on the 7" kiosk panel. */
+.settings-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--space-md);
+  -webkit-overflow-scrolling: touch;
+}

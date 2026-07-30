@@ -44,3 +44,60 @@ export function formatCarryRange(carryRange: [number, number], unitSystem: UnitS
   const max = formatDistance(carryRange[1], unitSystem, 0);
   return `${min}-${max} ${getDistanceUnit(unitSystem)}`;
 }
+
+/* --- Environmental units ---------------------------------------------------
+ * Weather values are held in SI internally (Celsius, hectopascals, metres)
+ * because that is what the density model consumes and what the BME280 reports.
+ * These convert for display and back again for entry, so the wire format never
+ * depends on what the user happens to be looking at.
+ */
+
+const IMPERIAL_TEMP_UNIT = '°F';
+const METRIC_TEMP_UNIT = '°C';
+const IMPERIAL_PRESSURE_UNIT = 'inHg';
+const METRIC_PRESSURE_UNIT = 'hPa';
+const IMPERIAL_ELEVATION_UNIT = 'ft';
+const METRIC_ELEVATION_UNIT = 'm';
+const HPA_TO_INHG = 0.02952998;
+const METERS_TO_FEET = 3.28084;
+
+export function convertTempFromC(tempC: number, unitSystem: UnitSystem): number {
+  return unitSystem === 'imperial' ? (tempC * 9) / 5 + 32 : tempC;
+}
+
+export function convertTempToC(value: number, unitSystem: UnitSystem): number {
+  return unitSystem === 'imperial' ? ((value - 32) * 5) / 9 : value;
+}
+
+export function convertPressureFromHpa(pressureHpa: number, unitSystem: UnitSystem): number {
+  return unitSystem === 'imperial' ? pressureHpa * HPA_TO_INHG : pressureHpa;
+}
+
+export function convertPressureToHpa(value: number, unitSystem: UnitSystem): number {
+  return unitSystem === 'imperial' ? value / HPA_TO_INHG : value;
+}
+
+export function convertElevationFromMeters(elevationM: number, unitSystem: UnitSystem): number {
+  return unitSystem === 'imperial' ? elevationM * METERS_TO_FEET : elevationM;
+}
+
+export function convertElevationToMeters(value: number, unitSystem: UnitSystem): number {
+  return unitSystem === 'imperial' ? value / METERS_TO_FEET : value;
+}
+
+export function getTempUnit(unitSystem: UnitSystem): string {
+  return unitSystem === 'imperial' ? IMPERIAL_TEMP_UNIT : METRIC_TEMP_UNIT;
+}
+
+export function getPressureUnit(unitSystem: UnitSystem): string {
+  return unitSystem === 'imperial' ? IMPERIAL_PRESSURE_UNIT : METRIC_PRESSURE_UNIT;
+}
+
+export function getElevationUnit(unitSystem: UnitSystem): string {
+  return unitSystem === 'imperial' ? IMPERIAL_ELEVATION_UNIT : METRIC_ELEVATION_UNIT;
+}
+
+/** Decimal places that make sense per unit. inHg needs 2, hPa needs 0. */
+export function getPressureDigits(unitSystem: UnitSystem): number {
+  return unitSystem === 'imperial' ? 2 : 0;
+}

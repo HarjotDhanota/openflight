@@ -1,0 +1,216 @@
+/* Air density settings */
+.weather-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  background: var(--color-bg-card);
+  border: 1px solid rgba(245, 240, 230, 0.06);
+  border-radius: var(--radius-lg);
+  padding: var(--space-md);
+  color: var(--color-cream);
+}
+
+.weather-settings--loading {
+  opacity: 0.6;
+}
+
+.weather-settings__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.weather-settings__header h2 {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.weather-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+}
+
+.weather-badge--ok {
+  background: rgba(90, 190, 120, 0.15);
+  color: #7fd89a;
+}
+
+/* Uncorrected carry is a real accuracy problem, not a neutral state. */
+.weather-badge--warn {
+  background: rgba(230, 160, 60, 0.18);
+  color: #f0b866;
+}
+
+.weather-readout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: var(--space-sm);
+}
+
+.weather-value {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.weather-value__label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.55;
+}
+
+.weather-value__number {
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.weather-warning {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: #f0b866;
+  background: rgba(230, 160, 60, 0.08);
+  border-left: 2px solid rgba(230, 160, 60, 0.5);
+  padding: var(--space-sm);
+  border-radius: var(--radius-sm);
+}
+
+.weather-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  opacity: 0.6;
+}
+
+.weather-modes {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+}
+
+.weather-modes legend {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.55;
+  padding: 0;
+  margin-bottom: var(--space-xs);
+}
+
+.weather-modes label,
+.weather-check {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+  /* Touch target for the 7" kiosk screen. */
+  min-height: 44px;
+}
+
+.weather-location,
+.weather-manual {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.weather-location__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.weather-location__row button {
+  min-height: 44px;
+  padding: 0 var(--space-md);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(245, 240, 230, 0.18);
+  background: rgba(245, 240, 230, 0.06);
+  color: var(--color-cream);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.weather-location__row button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.weather-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.weather-field__label {
+  font-size: 0.8rem;
+}
+
+.weather-field__hint {
+  font-size: 0.72rem;
+  opacity: 0.55;
+  line-height: 1.35;
+}
+
+.weather-field input {
+  min-height: 44px;
+  padding: 0 var(--space-sm);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(245, 240, 230, 0.18);
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--color-cream);
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Sensor presence. Distinct from the source badge: the badge says what is
+   being USED, this says what is CONNECTED. Both matter -- a fitted sensor
+   that isn't being used is a misconfiguration worth surfacing. */
+.weather-sensor {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--color-success);
+  background: rgba(74, 222, 128, 0.08);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm);
+}
+
+.weather-sensor__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.18);
+}
+
+.weather-sensor--idle {
+  color: var(--color-cream-muted);
+  background: rgba(245, 240, 230, 0.05);
+}
+
+.weather-sensor--idle .weather-sensor__dot {
+  box-shadow: 0 0 0 3px rgba(245, 240, 230, 0.1);
+}
+
+.weather-standard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  border-top: 1px solid rgba(245, 240, 230, 0.06);
+  padding-top: var(--space-md);
+}
