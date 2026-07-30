@@ -18,6 +18,7 @@ import {
   type UnitSystem,
 } from '../utils/units';
 import type { EnvironmentReading, WeatherSettings as Settings } from '../types/socket';
+import { NumericKeypad } from './NumericKeypad';
 import './WeatherSettings.css';
 
 /**
@@ -349,25 +350,27 @@ function UnitField({
   onCommit: (value: number | null) => void;
 }) {
   const format = (v: number | null) => (v == null ? '' : trimZeros(toDisplay(v).toFixed(digits)));
-  const [text, setText] = useState(() => format(value));
+  const [editing, setEditing] = useState(false);
+  const shown = format(value);
 
-  // Re-sync the box when the stored value changes, or when the unit system
-  // does -- the label carries the unit, so it changes with it. Adjusting state
-  // during render is React's documented pattern here; an effect would show the
-  // old units for a frame and trips react-hooks/set-state-in-effect.
-  const syncKey = `${label}|${value}`;
-  const [syncedKey, setSyncedKey] = useState(syncKey);
-  if (syncedKey !== syncKey) {
-    setSyncedKey(syncKey);
-    setText(format(value));
-  }
-
-  // The panel is touch-only and Raspberry Pi OS Chromium ships without an
-  // on-screen keyboard, so these buttons are the primary way values get
-  // entered here -- typing is the fallback, not the other way round. They
-  // commit immediately: there is no half-typed state to wait for.
+  // Steppers nudge; the keypad enters a number outright. Both exist because
+  // the panel is touch-only and Raspberry Pi OS Chromium ships without an
+  // on-screen keyboard -- a plain <input type="number"> summons nothing there,
+  // so it was decorative on the hardware this is built for. Stepping alone is
+  // far too slow to dial in a pressure.
   const stepBy = (delta: number) =>
     onCommit(stepInDisplayUnits(value, fallback, delta, digits, toDisplay, fromDisplay));
+
+  const commitText = (text: string) => {
+    setEditing(false);
+    const trimmed = text.trim();
+    if (trimmed === '' || trimmed === '-') {
+      onCommit(null);
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (Number.isFinite(parsed)) onCommit(fromDisplay(parsed));
+  };
 
   return (
     <div className="weather-field">
@@ -382,22 +385,14 @@ function UnitField({
         >
           −
         </button>
-        <input
-          type="number"
-          inputMode="decimal"
+        <button
+          type="button"
+          className={`weather-field__value ${shown === '' ? 'weather-field__value--empty' : ''}`}
           aria-label={label}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onBlur={() => {
-            const trimmed = text.trim();
-            if (trimmed === '') {
-              onCommit(null);
-              return;
-            }
-            const parsed = Number(trimmed);
-            if (Number.isFinite(parsed)) onCommit(fromDisplay(parsed));
-          }}
-        />
+          onClick={() => setEditing(true)}
+        >
+          {shown === '' ? 'not set' : shown}
+        </button>
         <button
           type="button"
           className="weather-field__step"
@@ -407,6 +402,9 @@ function UnitField({
           +
         </button>
       </div>
+      {editing && (
+        <NumericKeypad label={label} initial={shown} onCommit={commitText} onCancel={() => setEditing(false)} />
+      )}
     </div>
   );
 }

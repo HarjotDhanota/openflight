@@ -174,10 +174,34 @@
   gap: var(--space-xs, 0.25rem);
 }
 
-.weather-field__control input {
+/* The value is a button, not an input: tapping it opens the in-app keypad.
+   A real <input type="number"> is dead weight on this hardware -- Raspberry Pi
+   OS Chromium has no on-screen keyboard to summon. */
+.weather-field__value {
   flex: 1;
   min-width: 0;
+  min-height: 44px;
+  padding: 0 var(--space-sm);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(245, 240, 230, 0.18);
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--color-cream);
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
   text-align: center;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.weather-field__value:active {
+  border-color: rgba(212, 175, 55, 0.45);
+  background: rgba(212, 175, 55, 0.1);
+}
+
+.weather-field__value--empty {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  opacity: 0.7;
 }
 
 .weather-field__step {

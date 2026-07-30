@@ -191,6 +191,30 @@ describe('WeatherSettingsView', () => {
     expect(html).toContain('Increase Reference temperature');
   });
 
+  it('uses a tappable value rather than a text box that cannot be typed into', () => {
+    // A <input type="number"> summons no keyboard on the kiosk, so the value
+    // opens the in-app keypad instead.
+    const html = render({ settings: settings({ mode: 'manual' }) });
+
+    expect(html).toContain('weather-field__value');
+    expect(html).not.toContain('type="number"');
+  });
+
+  it('shows manual values in display units on the field itself', () => {
+    const html = render({
+      settings: settings({ mode: 'manual', manual_temp_c: 20, manual_pressure_hpa: 1013.25 }),
+    });
+
+    expect(html).toContain('>68<'); // 20 C rendered as 68 F
+  });
+
+  it('marks an unset field rather than showing a bare zero', () => {
+    const html = render({ settings: settings({ mode: 'manual', manual_pressure_hpa: null }) });
+
+    expect(html).toContain('weather-field__value--empty');
+    expect(html).toContain('not set');
+  });
+
   it('explains that only temperature is replaced indoors', () => {
     const html = render({ settings: settings({ indoors: true }) });
 
