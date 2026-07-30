@@ -198,6 +198,47 @@ The K-LD7 modules are positioned near the OPS243-A, one mounted vertically (laun
 These are applied automatically — the one-time flash configuration is handled
 by the setup script.
 
+### Air Density (Conditions)
+
+Carry scales with air density. Before this existed every OpenFlight number
+assumed ISA sea level — 15 °C, 1013.25 hPa, dry — which is worth about 5.6 yd
+on a driver on a 97 °F afternoon at a **sea-level** venue, and roughly 14 yd in
+Denver. Open **Settings → Conditions** and pick a source:
+
+| Source          | How it is obtained                     | Notes                                                    |
+| --------------- | -------------------------------------- | -------------------------------------------------------- |
+| Sensor (BME280) | Fitted to the unit, polled locally     | Best. Measures the air the ball actually flies through    |
+| Manual          | You type temperature/pressure/humidity | Enter **absolute station pressure**, not the sea-level value a weather app shows |
+| Local weather   | Open-Meteo, fetched when you tap        | Outdoor grid-cell average; no polling, no background I/O  |
+| No correction   | ISA sea level                          | Exactly the pre-2026 behaviour                            |
+
+A fitted sensor always outranks fetched weather: an API reports outdoor
+conditions, and in a 22 °C garage on a 36 °C day that "correction" is worse
+than none. Playing indoors keeps the fetched **pressure** (buildings are not
+pressure vessels) and replaces only the **temperature**.
+
+**With nothing configured, every carry number is unchanged.**
+
+Optionally, a second *standard conditions* carry is shown under the main one —
+the same shot re-flown in fixed reference air (25 °C, sea level by default), so
+sessions on different days are comparable. It corrects for density only. Wind
+is never measured by either radar, which is why this is called "standard"
+rather than "normalized".
+
+There is deliberately **no carry-calibration multiplier**. If your distances
+look wrong, the cause is almost always estimated rather than measured spin —
+check `spin_source` on the shot. Faking an elevation to make numbers match (a
+common habit with other units) corrupts every subsequent carry figure, so
+entering an implausibly high elevation warns rather than silently complying.
+
+For headless or bench use, the same values can be forced for one session
+without touching saved settings:
+
+```bash
+scripts/start-kiosk.sh --weather-temp-c 36 --weather-elevation-m 9 --weather-humidity 25
+scripts/start-kiosk.sh --weather-density 1.05     # or set density directly
+```
+
 ### Python API
 
 ```python
@@ -310,4 +351,6 @@ GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later) - see LICENS
 ## Acknowledgments
 
 - [OmniPreSense](https://omnipresense.com/) for the OPS243-A radar and documentation
+- Weather data by [Open-Meteo](https://open-meteo.com/), licensed
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
 - The golf hacker community for inspiration

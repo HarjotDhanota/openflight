@@ -297,6 +297,26 @@ while [[ $# -gt 0 ]]; do
             PORT="$2"
             shift 2
             ;;
+        --weather-temp-c)
+            WEATHER_TEMP_C="$2"
+            shift 2
+            ;;
+        --weather-pressure-hpa)
+            WEATHER_PRESSURE_HPA="$2"
+            shift 2
+            ;;
+        --weather-elevation-m)
+            WEATHER_ELEVATION_M="$2"
+            shift 2
+            ;;
+        --weather-humidity)
+            WEATHER_HUMIDITY="$2"
+            shift 2
+            ;;
+        --weather-density)
+            WEATHER_DENSITY="$2"
+            shift 2
+            ;;
         *)
             shift
             ;;
@@ -412,6 +432,14 @@ fi
 if [ "$MOCK_MODE" = true ]; then
     SERVER_CMD="$SERVER_CMD --mock"
 fi
+
+# Session-only air-density overrides for headless and bench use. The settings
+# screen is the interface people actually use; these never touch weather.json.
+[ -n "$WEATHER_TEMP_C" ] && SERVER_CMD="$SERVER_CMD --weather-temp-c $WEATHER_TEMP_C"
+[ -n "$WEATHER_PRESSURE_HPA" ] && SERVER_CMD="$SERVER_CMD --weather-pressure-hpa $WEATHER_PRESSURE_HPA"
+[ -n "$WEATHER_ELEVATION_M" ] && SERVER_CMD="$SERVER_CMD --weather-elevation-m $WEATHER_ELEVATION_M"
+[ -n "$WEATHER_HUMIDITY" ] && SERVER_CMD="$SERVER_CMD --weather-humidity $WEATHER_HUMIDITY"
+[ -n "$WEATHER_DENSITY" ] && SERVER_CMD="$SERVER_CMD --weather-density $WEATHER_DENSITY"
 
 if [ "$RADAR_LOG" = true ]; then
     SERVER_CMD="$SERVER_CMD --radar-log"
