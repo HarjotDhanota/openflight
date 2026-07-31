@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { Shot, SpinQuality } from '../types/shot';
+import { displayCarryYards, type Shot, type SpinQuality } from '../types/shot';
 import { useUnitPreference } from '../state/useUnitPreference';
 import { formatCarryRange, formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../utils/units';
 import './ShotDisplay.css';
@@ -139,7 +139,7 @@ export function ShotDisplay({ shot, animate = false }: ShotDisplayProps) {
     return formatCarryRange(shot.carry_range, unitSystem);
   }, [shot, unitSystem]);
 
-  const displayCarry = shot?.carry_spin_adjusted ?? shot?.estimated_carry_yards ?? 0;
+  const displayCarry = shot ? displayCarryYards(shot) : 0;
   const carrySubtext = shot?.carry_spin_adjusted ? 'spin-adjusted' : carryRange || undefined;
   // Second carry at fixed reference conditions. The server only sends it when
   // the user wants it AND today's air actually differs, so its presence is the

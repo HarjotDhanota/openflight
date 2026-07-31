@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { CameraStatus } from '../stores/useCameraStore';
-import type { Shot } from '../types/shot';
+import { displayCarryYards, type Shot } from '../types/shot';
 import { useUnitPreference } from '../state/useUnitPreference';
 import { formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../utils/units';
 import { getServerOrigin } from '../utils/serverOrigin';
@@ -54,7 +54,7 @@ function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric'): Dis
     ];
   }
 
-  const carryYards = shot.carry_spin_adjusted ?? shot.estimated_carry_yards;
+  const carryYards = displayCarryYards(shot);
 
   return [
     {
@@ -183,8 +183,7 @@ export function DisplayMode({ connected, cameraStatus, latestShot, shots }: Disp
                 {formatSpeed(shot.ball_speed_mph, unitSystem, 0)} {getSpeedUnit(unitSystem)}
               </span>
               <span className="display-shot-chip__stat">
-                {formatDistance(shot.carry_spin_adjusted ?? shot.estimated_carry_yards, unitSystem, 0)}{' '}
-                {getDistanceUnit(unitSystem)}
+                {formatDistance(displayCarryYards(shot), unitSystem, 0)} {getDistanceUnit(unitSystem)}
               </span>
             </div>
           ))
