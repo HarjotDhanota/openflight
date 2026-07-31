@@ -11,6 +11,53 @@
   margin-top: var(--space-sm);
 }
 
+/* Wider than the numeric keypad's panel: ten keys need the room. */
+.text-keyboard__panel {
+  width: min(34rem, 100%);
+}
+
+.text-keyboard__entry {
+  display: flex;
+  align-items: center;
+  min-height: 2.2rem;
+  font-size: 1.5rem;
+  color: var(--color-cream);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Shows the box is live and where the next character lands. Without it a
+   touch keyboard with no focus ring feels unresponsive. */
+.text-keyboard__caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.4rem;
+  margin-left: 2px;
+  background: var(--color-gold);
+  animation: text-keyboard-blink 1.06s step-end infinite;
+}
+
+@keyframes text-keyboard-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .text-keyboard__caret {
+    animation: none;
+  }
+}
+
+/* Results live above the keys inside the fixed panel, and the area holds its
+   height whether or not there are any -- so arriving matches never shove the
+   keyboard down mid-type. */
+.text-keyboard__results {
+  min-height: 6.5rem;
+  max-height: 6.5rem;
+  overflow-y: auto;
+}
+
 .text-keyboard__row {
   display: flex;
   gap: 0.3rem;
@@ -101,13 +148,29 @@
   padding: var(--space-xs, 0.35rem) 0;
 }
 
+/* The panel is 480px tall. Everything shrinks rather than letting Done fall
+   off the bottom, which would trap the user in the keyboard. */
 @media (max-height: 560px) {
   .text-keyboard__key {
-    min-height: 38px;
-    font-size: 0.95rem;
+    min-height: 34px;
+    font-size: 0.9rem;
+  }
+
+  .text-keyboard__entry {
+    min-height: 1.8rem;
+    font-size: 1.2rem;
+  }
+
+  .text-keyboard__caret {
+    height: 1.1rem;
+  }
+
+  .text-keyboard__results {
+    min-height: 4.5rem;
+    max-height: 4.5rem;
   }
 
   .location-search__result {
-    min-height: 38px;
+    min-height: 36px;
   }
 }

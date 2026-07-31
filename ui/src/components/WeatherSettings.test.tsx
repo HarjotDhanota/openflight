@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EnvironmentReading, LocationResult, WeatherSettings as Settings } from '../types/socket';
 import type { UnitSystem } from '../utils/units';
-import { WeatherSettingsView } from './WeatherSettings';
+import { LocationSearch, WeatherSettingsView } from './WeatherSettings';
 
 const reading = (overrides: Partial<EnvironmentReading> = {}): EnvironmentReading => ({
   air_density_kg_m3: 1.1316,
@@ -12,6 +12,7 @@ const reading = (overrides: Partial<EnvironmentReading> = {}): EnvironmentReadin
   humidity_pct: 25,
   age_s: 120,
   deviation_pct: -7.6,
+  density_altitude_ft: 2685,
   ...overrides,
 });
 
@@ -164,11 +165,19 @@ describe('WeatherSettingsView', () => {
     expect(html).toContain('cannot change local weather');
   });
 
-  it('offers the venue elevation in local-weather mode, where it steers the fetch', () => {
+  it('shows the venue elevation on the location line, where it steers the fetch', () => {
+    // It is auto-filled by the search, so it reads as information about the
+    // place rather than a standing input asking to be filled in.
     const html = render();
 
-    expect(html).toContain('Your elevation');
-    expect(html).toContain('Increase Your elevation');
+    expect(html).toContain('weather-location__elevation');
+    expect(html).toContain('aria-label="Elevation (ft)"');
+  });
+
+  it('offers to set the elevation when the search did not supply one', () => {
+    const html = render({ settings: settings({ elevation_m: null }) });
+
+    expect(html).toContain('set elevation');
   });
 
   it('gives the indoor override its own temperature', () => {
@@ -195,7 +204,7 @@ describe('WeatherSettingsView', () => {
     });
 
     expect(html).toContain('disabled');
-    expect(html).toContain('Look up my location');
+    expect(html).toContain('Let OpenFlight look up');
   });
 
   it('credits Open-Meteo and GeoNames where the fetch is offered', () => {
@@ -213,41 +222,71 @@ describe('WeatherSettingsView', () => {
     expect(html).toContain('VPN');
   });
 
-  it('offers a location search alongside detection', () => {
+  it('offers search, re-detect and refresh as three distinct actions', () => {
+    // Refresh re-fetches the place already set; "use my location" replaces it.
+    // With only one button there was no way back to where you actually are.
     const html = render();
 
-    expect(html).toContain('Search for a place or postal code');
+    expect(html).toContain('>Search<');
+    expect(html).toContain('Use my location');
+    expect(html).toContain('>Refresh<');
   });
 
-  it('lists search results with the region that tells them apart', () => {
-    // The postal code 95814 matches Sacramento CA and Argenteuil FR, so a
-    // bare city name is not enough to choose between them.
-    const html = render({
-      locationResults: [
-        { label: 'Sacramento, California, US', latitude: 38.58, longitude: -121.49, elevation_m: 9 },
-        { label: 'Sacramento, Kentucky, US', latitude: 37.41, longitude: -87.26, elevation_m: 150 },
-      ],
-    });
+  it('puts consent above the actions it gates', () => {
+    const html = render();
 
-    expect(html).toContain('Sacramento, California, US');
-    expect(html).toContain('Sacramento, Kentucky, US');
+    expect(html.indexOf('Let OpenFlight look up')).toBeLessThan(html.indexOf('weather-location__actions'));
   });
 
-  it('shows each result its elevation, in the user unit', () => {
-    const html = render({
-      locationResults: [{ label: 'Sacramento, California, US', latitude: 38.58, longitude: -121.49, elevation_m: 9 }],
-    });
+  it('shows the elevation as a fact about the place, not another empty box', () => {
+    const html = render();
 
-    expect(html).toContain('30 ft'); // 9 m
+    expect(html).toContain('weather-location__elevation');
+    expect(html).toContain('>30 ft<'); // 9 m, filled in by the search
   });
 
-  it('omits the elevation when the search did not know it', () => {
-    const html = render({
-      locationResults: [{ label: 'Somewhere', latitude: 1, longitude: 1, elevation_m: null }],
-    });
+  it('leads with density altitude rather than a percentage', () => {
+    const html = render();
 
-    expect(html).toContain('Somewhere');
-    expect(html).not.toContain('location-search__elevation');
+    expect(html).toContain('Plays like');
+    expect(html).toContain('2,700 ft');
+    expect(html).toContain('the ball flies further');
+  });
+
+  it('still shows the raw density and its deviation underneath', () => {
+    const html = render();
+
+    expect(html).toContain('1.132 kg/m³');
+    expect(html).toContain('Air vs standard');
+  });
+
+  it('hides the standard-carry option when no correction is applied', () => {
+    // With nothing corrected, today's carry and the reference carry are the
+    // same number, so the checkbox offers a comparison that cannot exist.
+    const html = render({ settings: settings({ mode: 'off' }) });
+
+    expect(html).not.toContain('Show standard-conditions carry');
+  });
+
+  it('offers standard carry in every mode that does correct', () => {
+    expect(render()).toContain('Show standard-conditions carry');
+    expect(render({ settings: settings({ mode: 'manual' }) })).toContain('Show standard-conditions carry');
+  });
+
+  it('hides the manual elevation while a pressure is entered', () => {
+    // Elevation only estimates pressure, so it does nothing here. A visible
+    // field that silently does nothing is what invites bad experimenting.
+    const html = render({ settings: settings({ mode: 'manual', manual_pressure_hpa: 1010.2 }) });
+
+    expect(html).toContain('not used while a pressure is entered');
+    expect(html).not.toContain('Increase Elevation');
+  });
+
+  it('offers the manual elevation once pressure is cleared', () => {
+    const html = render({ settings: settings({ mode: 'manual', manual_pressure_hpa: null }) });
+
+    expect(html).toContain('Increase Elevation');
+    expect(html).toContain('Estimates pressure, since none is entered');
   });
 
   it('offers manual entry fields in manual mode', () => {
@@ -324,5 +363,61 @@ describe('WeatherSettingsView', () => {
     const html = render({ error: 'Could not reach the weather service.' });
 
     expect(html).toContain('Could not reach the weather service.');
+  });
+});
+
+describe('LocationSearch', () => {
+  const search = (results: LocationResult[]) =>
+    renderToString(
+      <LocationSearch
+        query=""
+        results={results}
+        unitSystem="imperial"
+        onQueryChange={() => {}}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />
+    );
+
+  it('lists results with the region that tells them apart', () => {
+    // The postal code 95814 matches Sacramento CA and Argenteuil FR, so a
+    // bare city name is not enough to choose between them.
+    const html = search([
+      { label: 'Sacramento, California, US', latitude: 38.58, longitude: -121.49, elevation_m: 9 },
+      { label: 'Sacramento, Kentucky, US', latitude: 37.41, longitude: -87.26, elevation_m: 150 },
+    ]);
+
+    expect(html).toContain('Sacramento, California, US');
+    expect(html).toContain('Sacramento, Kentucky, US');
+  });
+
+  it('shows each result its elevation, in the user unit', () => {
+    const html = search([{ label: 'Sacramento, California, US', latitude: 38.58, longitude: -121.49, elevation_m: 9 }]);
+
+    expect(html).toContain('30 ft'); // 9 m
+  });
+
+  it('omits the elevation when the search did not know it', () => {
+    const html = search([{ label: 'Somewhere', latitude: 1, longitude: 1, elevation_m: null }]);
+
+    expect(html).toContain('Somewhere');
+    expect(html).not.toContain('location-search__elevation');
+  });
+
+  it('keeps the keys in a fixed panel so arriving results cannot move them', () => {
+    // Results used to render beneath the field and shove the keyboard down the
+    // screen mid-type, moving the target out from under a finger.
+    const html = search([{ label: 'Sacramento', latitude: 1, longitude: 1, elevation_m: 9 }]);
+
+    expect(html).toContain('text-keyboard__results');
+    expect(html).toContain('text-keyboard__panel');
+  });
+
+  it('shows a caret so the box reads as live', () => {
+    expect(search([])).toContain('text-keyboard__caret');
+  });
+
+  it('says what to do before a query is long enough', () => {
+    expect(search([])).toContain('at least three characters');
   });
 });

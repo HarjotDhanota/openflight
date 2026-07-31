@@ -14,6 +14,7 @@ from openflight.environment.density import (
     R_DRY_AIR,
     R_WATER_VAPOUR,
     air_density,
+    density_altitude_ft,
     pressure_from_elevation_pa,
     saturation_vapour_pressure_pa,
 )
@@ -189,3 +190,36 @@ class TestPurity:
         assert density.math is math
         assert not hasattr(density, "smbus2")
         assert not hasattr(density, "logging")
+
+
+class TestDensityAltitude:
+    """The density figure in a unit people actually reason in.
+
+    "Plays like 2,700 ft" is checkable against experience; "-7.6%" is not.
+    Standard aviation formula, computed from the density already resolved, so
+    it introduces no new inputs and cannot disagree with the carry correction.
+    """
+
+    def test_isa_sea_level_is_zero(self):
+        assert density_altitude_ft(1.225) == pytest.approx(0.0, abs=1.0)
+
+    def test_thin_air_reads_high(self):
+        # Denver on a warm day: well above its 5,280 ft of real elevation.
+        assert density_altitude_ft(0.97) == pytest.approx(7760, abs=100)
+
+    def test_a_hot_day_at_sea_level_still_reads_thousands_of_feet(self):
+        """Sacramento at 97 F. The whole point of the readout: a sea-level
+        venue can play like it is most of a mile up."""
+        assert density_altitude_ft(1.1316) == pytest.approx(2685, abs=100)
+
+    def test_dense_air_reads_below_sea_level(self):
+        assert density_altitude_ft(1.30) < 0
+
+    def test_monotonic_in_density(self):
+        altitudes = [density_altitude_ft(rho) for rho in (0.95, 1.05, 1.15, 1.225, 1.30)]
+        assert altitudes == sorted(altitudes, reverse=True)
+
+    @pytest.mark.parametrize("bad", [0.0, -1.0])
+    def test_non_positive_density_is_refused(self, bad):
+        with pytest.raises(ValueError):
+            density_altitude_ft(bad)

@@ -61,6 +61,10 @@ export function WeatherSettings() {
         useEnvironmentStore.getState().setRefreshing(true);
         socketService.refreshWeather();
       }}
+      onDetectLocation={() => {
+        useEnvironmentStore.getState().setRefreshing(true);
+        socketService.detectLocation();
+      }}
       onSearchLocations={(query) => socketService.searchLocations(query)}
       onSelectLocation={(result) => {
         useEnvironmentStore.getState().setRefreshing(true);
@@ -80,6 +84,7 @@ interface WeatherSettingsViewProps {
   locationResults?: LocationResult[];
   onChange: (settings: Settings) => void;
   onRefresh: () => void;
+  onDetectLocation?: () => void;
   onSearchLocations?: (query: string) => void;
   onSelectLocation?: (result: LocationResult) => void;
 }
@@ -102,6 +107,7 @@ export function WeatherSettingsView({
   locationResults = [],
   onChange,
   onRefresh,
+  onDetectLocation = () => {},
   onSearchLocations = () => {},
   onSelectLocation = () => {},
 }: WeatherSettingsViewProps) {
@@ -111,6 +117,8 @@ export function WeatherSettingsView({
   // is why react-hooks flags setState-in-effect.
   const [draft, setDraft] = useState<Settings | null>(settings);
   const [syncedSettings, setSyncedSettings] = useState<Settings | null>(settings);
+  const [searching, setSearching] = useState(false);
+  const [editingElevation, setEditingElevation] = useState(false);
   if (syncedSettings !== settings) {
     setSyncedSettings(settings);
     setDraft(settings);
@@ -124,6 +132,29 @@ export function WeatherSettingsView({
     const next = { ...draft, ...patch };
     setDraft(next);
     onChange(next);
+  };
+
+  /**
+   * Switch source, seeding manual entry from whatever is on screen.
+   *
+   * Seeding, not sharing: the numbers are copied once, when manual is empty,
+   * and diverge from there. Local weather keeps its own values, so going back
+   * still shows the fetch rather than anything typed here. Sharing the fields
+   * is what corrupted the fetch before.
+   *
+   * Starting from today's real conditions is also the only sensible place to
+   * start -- nobody wants to type four numbers from nothing to nudge one.
+   */
+  const selectMode = (mode: Settings['mode']) => {
+    const seed =
+      mode === 'manual' && draft.manual_temp_c == null && reading.temp_c != null
+        ? {
+            manual_temp_c: reading.temp_c,
+            manual_pressure_hpa: reading.pressure_hpa,
+            manual_humidity_pct: reading.humidity_pct,
+          }
+        : {};
+    update({ mode, ...seed });
   };
 
   const uncorrected = isUncorrected(reading.source);
@@ -156,10 +187,21 @@ export function WeatherSettingsView({
         </div>
       )}
 
+      {/* Density altitude leads: "plays like 2,700 ft" can be checked against
+          experience, where a percentage cannot. The raw density and the
+          deviation stay for anyone who wants them. */}
+      <div className="weather-plays-like">
+        <span className="weather-plays-like__label">Plays like</span>
+        <span className="weather-plays-like__value">
+          {reading.density_altitude_ft != null ? formatDensityAltitude(reading.density_altitude_ft, unitSystem) : '—'}
+        </span>
+        <span className="weather-plays-like__hint">{describeDensityAltitude(reading.density_altitude_ft)}</span>
+      </div>
+
       <div className="weather-readout">
         <Value label="Density" value={`${reading.air_density_kg_m3.toFixed(3)} kg/m³`} />
         <Value
-          label="vs sea level"
+          label="Air vs standard"
           value={`${reading.deviation_pct > 0 ? '+' : ''}${reading.deviation_pct.toFixed(1)}%`}
         />
         <Value label="Temp" value={formatTemp(reading.temp_c, unitSystem)} />
@@ -177,7 +219,7 @@ export function WeatherSettingsView({
         <legend>Source</legend>
         {(['auto', 'manual', 'off'] as const).map((mode) => (
           <label key={mode}>
-            <input type="radio" name="weather-mode" checked={draft.mode === mode} onChange={() => update({ mode })} />
+            <input type="radio" name="weather-mode" checked={draft.mode === mode} onChange={() => selectMode(mode)} />
             <span>
               {mode === 'auto' && (draft.sensor_present ? 'Sensor' : 'Local weather')}
               {mode === 'manual' && 'Enter manually'}
@@ -189,33 +231,89 @@ export function WeatherSettingsView({
 
       {draft.mode === 'auto' && !draft.sensor_present && (
         <section className="weather-location">
-          <div className="weather-location__row">
-            <span>{draft.location_label ?? 'Location not set'}</span>
-            <button type="button" onClick={onRefresh} disabled={refreshing || !draft.location_consent}>
-              {refreshing ? 'Fetching…' : draft.location_label ? 'Refresh' : 'Detect location'}
-            </button>
-          </div>
+          {/* Consent gates both actions, so it comes first. It used to sit
+              under the buttons it controls, which read as unrelated. */}
           <label className="weather-check">
             <input
               type="checkbox"
               checked={draft.location_consent}
               onChange={(e) => update({ location_consent: e.target.checked })}
             />
-            <span>Look up my location and fetch local weather</span>
+            <span>Let OpenFlight look up locations and fetch weather</span>
           </label>
+
+          <div className="weather-location__place">
+            <span className="weather-location__name">{draft.location_label ?? 'Location not set'}</span>
+            {draft.location_label && (
+              <button
+                type="button"
+                className="weather-location__elevation"
+                aria-label={`Elevation (${getElevationUnit(unitSystem)})`}
+                onClick={() => setEditingElevation(true)}
+              >
+                {draft.elevation_m == null
+                  ? 'set elevation'
+                  : `${Math.round(convertElevationFromMeters(draft.elevation_m, unitSystem))} ${getElevationUnit(unitSystem)}`}
+              </button>
+            )}
+          </div>
+
+          {/* The three things you can do with a location, side by side. */}
+          <div className="weather-location__actions">
+            <button type="button" onClick={() => setSearching(true)} disabled={!draft.location_consent}>
+              Search
+            </button>
+            <button type="button" onClick={onDetectLocation} disabled={refreshing || !draft.location_consent}>
+              {refreshing ? 'Fetching…' : 'Use my location'}
+            </button>
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={refreshing || !draft.location_consent || !draft.location_label}
+            >
+              Refresh
+            </button>
+          </div>
+
           <p className="weather-hint">
-            Detection guesses from your public IP, so a VPN will place you at its exit node — search instead if the
-            result looks wrong. Nothing is fetched until you ask, and never during a shot. Weather and place data by
-            Open-Meteo (CC BY 4.0) and GeoNames.
+            <strong>Search</strong> for a place or postal code, or <strong>use my location</strong> to guess from your
+            public IP — a VPN will place you at its exit node, so search if that looks wrong. <strong>Refresh</strong>{' '}
+            re-fetches weather for the place already set. Nothing is fetched until you ask, and never during a shot.
+            Weather and place data by Open-Meteo (CC BY 4.0) and GeoNames.
           </p>
 
-          <LocationSearch
-            query={locationQuery}
-            results={locationResults}
-            unitSystem={unitSystem}
-            onQueryChange={onSearchLocations}
-            onSelect={onSelectLocation}
-          />
+          {editingElevation && (
+            <NumericKeypad
+              label={`Elevation (${getElevationUnit(unitSystem)})`}
+              initial={
+                draft.elevation_m == null
+                  ? ''
+                  : String(Math.round(convertElevationFromMeters(draft.elevation_m, unitSystem)))
+              }
+              onCommit={(text) => {
+                setEditingElevation(false);
+                const parsed = Number(text.trim());
+                update({
+                  elevation_m:
+                    text.trim() === '' || !Number.isFinite(parsed)
+                      ? null
+                      : convertElevationToMeters(parsed, unitSystem),
+                });
+              }}
+              onCancel={() => setEditingElevation(false)}
+            />
+          )}
+
+          {searching && (
+            <LocationSearch
+              query={locationQuery}
+              results={locationResults}
+              unitSystem={unitSystem}
+              onQueryChange={onSearchLocations}
+              onSelect={onSelectLocation}
+              onClose={() => setSearching(false)}
+            />
+          )}
           {reading.age_s != null && reading.age_s > 3600 && (
             <p className="weather-hint">
               Last updated {Math.round(reading.age_s / 3600)} h ago. Tap refresh if conditions have changed.
@@ -238,16 +336,6 @@ export function WeatherSettingsView({
               />
             </>
           )}
-          <UnitField
-            label={`Your elevation (${getElevationUnit(unitSystem)})`}
-            hint="Open-Meteo reports pressure at its own terrain height unless told yours. 100 m out is about a yard on a driver."
-            value={draft.elevation_m}
-            digits={0}
-            step={unitSystem === 'imperial' ? 25 : 10}
-            toDisplay={(v) => convertElevationFromMeters(v, unitSystem)}
-            fromDisplay={(v) => convertElevationToMeters(v, unitSystem)}
-            onCommit={(v) => update({ elevation_m: v })}
-          />
         </section>
       )}
 
@@ -285,16 +373,27 @@ export function WeatherSettingsView({
             fromDisplay={(v) => v}
             onCommit={(v) => update({ manual_humidity_pct: v })}
           />
-          <UnitField
-            label={`Elevation (${getElevationUnit(unitSystem)})`}
-            hint="Used only when no pressure is entered above. Separate from your location's elevation, so experimenting here cannot change local weather."
-            value={draft.manual_elevation_m}
-            digits={0}
-            step={unitSystem === 'imperial' ? 25 : 10}
-            toDisplay={(v) => convertElevationFromMeters(v, unitSystem)}
-            fromDisplay={(v) => convertElevationToMeters(v, unitSystem)}
-            onCommit={(v) => update({ manual_elevation_m: v })}
-          />
+          {/* Elevation only estimates pressure, so it is dead weight while a
+              real pressure is entered. Hidden rather than merely captioned:
+              a visible field that silently does nothing invites exactly the
+              kind of experimenting that broke local weather. */}
+          {draft.manual_pressure_hpa == null ? (
+            <UnitField
+              label={`Elevation (${getElevationUnit(unitSystem)})`}
+              hint="Estimates pressure, since none is entered above. Separate from your location's elevation, so experimenting here cannot change local weather."
+              value={draft.manual_elevation_m}
+              digits={0}
+              step={unitSystem === 'imperial' ? 25 : 10}
+              toDisplay={(v) => convertElevationFromMeters(v, unitSystem)}
+              fromDisplay={(v) => convertElevationToMeters(v, unitSystem)}
+              onCommit={(v) => update({ manual_elevation_m: v })}
+            />
+          ) : (
+            <p className="weather-hint">
+              Elevation is not used while a pressure is entered — clear the pressure above to estimate from elevation
+              instead.
+            </p>
+          )}
           {elevationSuspect && (
             <p className="weather-warning">
               That elevation is higher than almost any golf course. If you are raising it to make distances match what
@@ -305,34 +404,60 @@ export function WeatherSettingsView({
         </section>
       )}
 
-      <section className="weather-standard">
-        <label className="weather-check">
-          <input
-            type="checkbox"
-            checked={draft.show_standard}
-            onChange={(e) => update({ show_standard: e.target.checked })}
-          />
-          <span>Show standard-conditions carry</span>
-        </label>
-        <p className="weather-hint">
-          A second carry figure under the main one, adjusted to {formatTemp(draft.standard_temp_c, unitSystem)} at sea
-          level, so sessions on different days compare. Adjusts for air density only — wind is never measured.
-        </p>
-        {draft.show_standard && (
-          <UnitField
-            label={`Reference temperature (${getTempUnit(unitSystem)})`}
-            value={draft.standard_temp_c}
-            fallback={25}
-            toDisplay={(v) => convertTempFromC(v, unitSystem)}
-            fromDisplay={(v) => convertTempToC(v, unitSystem)}
-            onCommit={(v) => update({ standard_temp_c: v ?? 25 })}
-          />
-        )}
-      </section>
+      {/* Nothing to compare against with no correction applied: today's carry
+          and the reference carry would be the same number. */}
+      {draft.mode !== 'off' && (
+        <section className="weather-standard">
+          <label className="weather-check">
+            <input
+              type="checkbox"
+              checked={draft.show_standard}
+              onChange={(e) => update({ show_standard: e.target.checked })}
+            />
+            <span>Show standard-conditions carry</span>
+          </label>
+          <p className="weather-hint">
+            A second carry figure under the main one, adjusted to {formatTemp(draft.standard_temp_c, unitSystem)} at sea
+            level, so sessions on different days compare. Adjusts for air density only — wind is never measured.
+          </p>
+          {draft.show_standard && (
+            <UnitField
+              label={`Reference temperature (${getTempUnit(unitSystem)})`}
+              value={draft.standard_temp_c}
+              fallback={25}
+              toDisplay={(v) => convertTempFromC(v, unitSystem)}
+              fromDisplay={(v) => convertTempToC(v, unitSystem)}
+              onCommit={(v) => update({ standard_temp_c: v ?? 25 })}
+            />
+          )}
+        </section>
+      )}
 
       {error && <p className="weather-warning">{error}</p>}
     </div>
   );
+}
+
+/** "2,700 ft" / "820 m", rounded to something a person would say out loud. */
+function formatDensityAltitude(feet: number, unitSystem: UnitSystem): string {
+  if (unitSystem === 'metric') {
+    const metres = Math.round((feet * 0.3048) / 10) * 10;
+    return `${metres.toLocaleString('en-US')} m`;
+  }
+  return `${(Math.round(feet / 50) * 50).toLocaleString('en-US')} ft`;
+}
+
+/**
+ * One line saying what the density altitude means for the shot.
+ *
+ * The number alone still asks the reader to know which direction is which;
+ * this closes that gap without a paragraph.
+ */
+function describeDensityAltitude(feet: number | null | undefined): string {
+  if (feet == null) return '';
+  if (feet > 500) return 'thinner air than standard — the ball flies further';
+  if (feet < -500) return 'denser air than standard — the ball flies shorter';
+  return 'close to standard sea-level air';
 }
 
 function formatTemp(tempC: number | null, unitSystem: UnitSystem): string {
@@ -455,79 +580,53 @@ function UnitField({
  * The on-screen keyboard is only mounted once the field is open, so it does
  * not eat the panel when nobody is searching.
  */
-function LocationSearch({
+export function LocationSearch({
   query,
   results,
   unitSystem,
   onQueryChange,
   onSelect,
+  onClose,
 }: {
   query: string;
   results: LocationResult[];
   unitSystem: UnitSystem;
   onQueryChange: (query: string) => void;
   onSelect: (result: LocationResult) => void;
+  onClose: () => void;
 }) {
-  const [opened, setOpened] = useState(false);
   const [text, setText] = useState(query);
-
-  // Derived rather than stored: if the server has sent matches, the list is
-  // shown whether or not this client is the one that asked. Closing is the
-  // only thing that needs remembering.
-  const [dismissed, setDismissed] = useState(false);
-  const open = (opened || results.length > 0) && !dismissed;
 
   const change = (next: string) => {
     setText(next);
-    setDismissed(false);
     onQueryChange(next);
   };
 
-  const setOpen = (next: boolean) => {
-    setOpened(next);
-    setDismissed(!next);
-  };
-
-  if (!open) {
-    return (
-      <button type="button" className="weather-field__value" onClick={() => setOpen(true)}>
-        Search for a place or postal code
-      </button>
-    );
-  }
-
   return (
-    <div className="location-search">
-      <button type="button" className="weather-field__value" aria-label="Location search">
-        {text === '' ? 'Type a place or postal code' : text}
-      </button>
-
-      <div className="location-search__results">
-        {results.map((result) => (
-          <button
-            type="button"
-            className="location-search__result"
-            key={`${result.latitude},${result.longitude}`}
-            onClick={() => {
-              onSelect(result);
-              setOpen(false);
-            }}
-          >
-            <span>{result.label}</span>
-            {result.elevation_m != null && (
-              <span className="location-search__elevation">
-                {`${Math.round(convertElevationFromMeters(result.elevation_m, unitSystem))} ${getElevationUnit(unitSystem)}`}
-              </span>
-            )}
-          </button>
-        ))}
-        {text.trim().length >= 3 && results.length === 0 && (
-          <p className="location-search__empty">No matches. Try a postal code.</p>
-        )}
-      </div>
-
-      <TextKeyboard value={text} onChange={change} onDone={() => setOpen(false)} />
-    </div>
+    <TextKeyboard label="Search for a place or postal code" value={text} onChange={change} onDone={onClose}>
+      {results.map((result) => (
+        <button
+          type="button"
+          className="location-search__result"
+          key={`${result.latitude},${result.longitude}`}
+          onClick={() => {
+            onSelect(result);
+            onClose();
+          }}
+        >
+          <span>{result.label}</span>
+          {result.elevation_m != null && (
+            <span className="location-search__elevation">
+              {`${Math.round(convertElevationFromMeters(result.elevation_m, unitSystem))} ${getElevationUnit(unitSystem)}`}
+            </span>
+          )}
+        </button>
+      ))}
+      {text.trim().length >= 3 && results.length === 0 && (
+        <p className="location-search__empty">No matches. Try a postal code.</p>
+      )}
+      {text.trim().length < 3 && <p className="location-search__empty">Type at least three characters.</p>}
+    </TextKeyboard>
   );
 }
 

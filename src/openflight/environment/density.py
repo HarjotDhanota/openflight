@@ -103,6 +103,32 @@ def air_density(temp_c: float, pressure_pa: float, humidity_pct: float = 0.0) ->
     return dry_pa / (R_DRY_AIR * temp_k) + vapour_pa / (R_WATER_VAPOUR * temp_k)
 
 
+def density_altitude_ft(air_density: float) -> float:
+    """Altitude at which standard air has this density.
+
+    The same information as a density percentage, in the unit people actually
+    reason in: "plays like 2,700 ft" can be checked against experience, while
+    "-7.6%" cannot. Golfers and pilots both think natively in density altitude,
+    and it is the readout that makes a hot day at a sea-level venue legible --
+    such a day can genuinely play like most of a mile up.
+
+    Standard aviation formula, derived from the density already resolved, so it
+    can never disagree with the correction actually applied to carry.
+
+    Args:
+        air_density: Air density in kg/m³.
+
+    Returns:
+        Density altitude in feet. Negative in air denser than ISA sea level.
+
+    Raises:
+        ValueError: If ``air_density`` is not positive.
+    """
+    if air_density <= 0:
+        raise ValueError(f"air_density={air_density} must be positive")
+    return 145442.16 * (1.0 - (air_density / 1.225) ** 0.234969)
+
+
 def pressure_from_elevation_pa(elevation_m: float) -> float:
     """Estimate station pressure from elevation using the ISA atmosphere.
 

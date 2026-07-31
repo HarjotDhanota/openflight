@@ -3279,3 +3279,92 @@ class TestLocationSearch:
 
         assert "weather_error" in [event for event, *_ in weather.emitted]
         assert weather.provider.config.latitude is None
+
+
+class TestDetectCurrentLocation:
+    """Re-detecting is a different action from refreshing.
+
+    Refresh re-fetches weather for the location already chosen. Once someone
+    has searched for a city there was otherwise no way back to "where am I
+    now" short of editing the config by hand -- which matters for a unit that
+    moves between a home bay and a range.
+    """
+
+    @pytest.fixture
+    def weather(self, monkeypatch):
+        from openflight.environment.config import WeatherConfig
+        from openflight.environment.provider import EnvironmentProvider
+
+        emitted = []
+        provider = EnvironmentProvider(WeatherConfig(location_consent=True))
+        provider.config.latitude = 51.5
+        provider.config.longitude = -0.12
+        provider.config.location_label = "London, England, GB"
+        provider.config.elevation_m = 11.0
+        monkeypatch.setattr(server_module, "environment_provider", provider)
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+        monkeypatch.setattr(server_module, "save_weather_config", lambda cfg: None)
+        return SimpleNamespace(provider=provider, emitted=emitted)
+
+    def test_it_replaces_a_chosen_city(self, weather, monkeypatch):
+        from openflight.environment.openmeteo import FetchedWeather, Location
+
+        monkeypatch.setattr(
+            server_module, "lookup_location", lambda **k: Location(38.58, -121.49, "Sacramento")
+        )
+        monkeypatch.setattr(
+            server_module,
+            "fetch_current_weather",
+            lambda *a, **k: FetchedWeather(36.1, 1010.2, 25.0),
+        )
+
+        server_module.detect_location_now()
+
+        assert weather.provider.config.location_label == "Sacramento"
+        assert weather.provider.config.latitude == pytest.approx(38.58)
+
+    def test_it_drops_the_old_venue_elevation(self, weather, monkeypatch):
+        """Keeping London's 11 m while detecting Denver would apply the wrong
+        terrain to the new place, and nothing on screen would say so."""
+        from openflight.environment.openmeteo import Location
+
+        monkeypatch.setattr(
+            server_module, "lookup_location", lambda **k: Location(39.74, -104.98, "Denver")
+        )
+        monkeypatch.setattr(server_module, "fetch_current_weather", lambda *a, **k: None)
+
+        server_module.detect_location_now()
+
+        assert weather.provider.config.elevation_m is None
+
+    def test_it_still_needs_consent(self, weather, monkeypatch):
+        called = []
+        weather.provider.config.location_consent = False
+        monkeypatch.setattr(
+            server_module, "lookup_location", lambda **k: called.append(True) or None
+        )
+
+        server_module.detect_location_now()
+
+        assert not called
+        assert "weather_error" in [event for event, *_ in weather.emitted]
+
+    def test_refresh_leaves_the_chosen_city_alone(self, weather, monkeypatch):
+        """The distinction being drawn: refresh must NOT re-detect."""
+        from openflight.environment.openmeteo import FetchedWeather
+
+        monkeypatch.setattr(
+            server_module, "lookup_location", lambda **k: pytest.fail("must not re-detect")
+        )
+        monkeypatch.setattr(
+            server_module,
+            "fetch_current_weather",
+            lambda *a, **k: FetchedWeather(12.0, 1005.0, 70.0),
+        )
+
+        server_module.refresh_weather_now()
+
+        assert weather.provider.config.location_label == "London, England, GB"
+        assert weather.provider.config.elevation_m == 11.0

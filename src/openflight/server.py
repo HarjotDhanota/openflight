@@ -2275,6 +2275,36 @@ def handle_refresh_weather():
     socketio.start_background_task(refresh_weather_now)
 
 
+def detect_location_now() -> None:
+    """Re-detect from the public IP, discarding whatever location is set.
+
+    Distinct from refresh, which re-fetches weather for the location already
+    chosen. Once someone has searched for a city there is otherwise no way back
+    to "where am I now" without clearing the config by hand -- which matters
+    for a unit that travels between a home bay and a range.
+    """
+    config = environment_provider.config
+    if not config.location_consent:
+        socketio.emit(
+            "weather_error",
+            {"reason": "Looking up your location needs your permission."},
+        )
+        return
+    config.latitude = None
+    config.longitude = None
+    config.location_label = None
+    # The detected city's elevation is unknown, and keeping the previous one
+    # would silently apply the old venue's terrain to the new place.
+    config.elevation_m = None
+    refresh_weather_now()
+
+
+@socketio.on("detect_location")
+def handle_detect_location():
+    """Find the current location again, replacing whatever was chosen."""
+    socketio.start_background_task(detect_location_now)
+
+
 def search_locations_now(query: str) -> None:
     """Look up places matching a typed query and send them to the UI."""
     try:

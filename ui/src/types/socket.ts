@@ -63,6 +63,8 @@ export interface EnvironmentReading {
   age_s: number | null;
   /** Percent difference from ISA sea level. Negative means thinner air, longer carry. */
   deviation_pct: number;
+  /** Same density as an altitude: 'plays like 2,700 ft'. */
+  density_altitude_ft: number | null;
 }
 
 /** Persisted weather settings, edited from the settings screen. */

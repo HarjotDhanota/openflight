@@ -164,6 +164,105 @@
   line-height: 1.35;
 }
 
+/* Density altitude, the headline figure. "Plays like 2,700 ft" is checkable
+   against experience in a way "-7.6%" is not, so it gets the size and the
+   raw numbers below get the small print. */
+.weather-plays-like {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: var(--space-sm) 0;
+  border-radius: var(--radius-md);
+  background: rgba(212, 175, 55, 0.06);
+  border: 1px solid rgba(212, 175, 55, 0.18);
+}
+
+.weather-plays-like__label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+}
+
+.weather-plays-like__value {
+  font-family: var(--font-display);
+  font-size: 2rem;
+  line-height: 1.1;
+  color: var(--color-gold);
+  font-variant-numeric: tabular-nums;
+}
+
+.weather-plays-like__hint {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  opacity: 0.85;
+  text-align: center;
+}
+
+/* Location: the place, then the three things you can do with it. */
+.weather-location__place {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  min-height: 40px;
+}
+
+.weather-location__name {
+  font-size: 0.95rem;
+  color: var(--color-cream);
+}
+
+/* Elevation reads as a fact about the place, not another box to fill in --
+   the search fills it in. Tapping still corrects it. */
+.weather-location__elevation {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 0 var(--space-sm);
+  border-radius: var(--radius-sm);
+  border: 1px dashed rgba(245, 240, 230, 0.25);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.weather-location__elevation:active {
+  border-color: rgba(212, 175, 55, 0.5);
+  color: var(--color-gold);
+}
+
+.weather-location__actions {
+  display: flex;
+  gap: var(--space-xs, 0.35rem);
+}
+
+.weather-location__actions button {
+  flex: 1;
+  min-height: 44px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(245, 240, 230, 0.18);
+  background: rgba(245, 240, 230, 0.06);
+  color: var(--color-cream);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.weather-location__actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.weather-location__actions button:active:not(:disabled) {
+  background: rgba(212, 175, 55, 0.16);
+  border-color: rgba(212, 175, 55, 0.4);
+}
+
 /* Stepper + box. The kiosk panel is touch-only and Raspberry Pi OS Chromium
    ships without an on-screen keyboard, so the buttons are the primary input
    here, not a convenience. They are sized to the 44px touch target the rest of

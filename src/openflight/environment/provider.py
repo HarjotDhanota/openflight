@@ -32,7 +32,11 @@ from openflight.environment.config import (
     STANDARD_HUMIDITY_PCT,
     WeatherConfig,
 )
-from openflight.environment.density import air_density, pressure_from_elevation_pa
+from openflight.environment.density import (
+    air_density,
+    density_altitude_ft,
+    pressure_from_elevation_pa,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +68,9 @@ class EnvironmentReading:
             "humidity_pct": round(self.humidity_pct) if self.humidity_pct is not None else None,
             "age_s": round(self.age_s) if self.age_s is not None else None,
             "deviation_pct": round(100.0 * (self.air_density_kg_m3 / ISA_DENSITY - 1.0), 1),
+            # The headline figure on the panel: the same density in the unit
+            # people can sanity-check against experience.
+            "density_altitude_ft": round(density_altitude_ft(self.air_density_kg_m3)),
         }
 
 

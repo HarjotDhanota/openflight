@@ -219,6 +219,14 @@ class SocketService {
     this.socket?.emit('refresh_weather');
   }
 
+  /**
+   * Re-detect from the public IP, replacing whatever location is set.
+   * Distinct from refreshWeather, which re-fetches the location already chosen.
+   */
+  detectLocation() {
+    this.socket?.emit('detect_location');
+  }
+
   /** Search for a location by name or postal code. */
   searchLocations(query: string) {
     this.socket?.emit('search_locations', { query });
