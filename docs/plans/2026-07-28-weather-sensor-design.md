@@ -108,6 +108,44 @@ Provenance is a first-class field, following the existing `spin_source` / `angle
 
 First run detects, shows what it found, and saves to `~/.config/openflight/location.json` — the same pattern as `cloud/config.py`. Location leaves the device, so this is **opt-in with a visible toggle**; the project already takes this seriously (`cloud/filtering.py:29-37` is an allowlist, not a blocklist).
 
+**Detection is not enough on its own — added 2026-07-30.** IP lookup returns the VPN's exit node, not the venue. A user on a VPN gets weather for another country and no indication anything is wrong, because the failure produces a perfectly plausible-looking reading. Detection must therefore be a *suggestion*, with an explicit search as the primary path. See "Location search" below.
+
+### Location search — CONFIRMED 2026-07-30
+
+Open-Meteo publishes a **Geocoding API** on the same terms as the forecast API, so this costs no new dependency and no key:
+
+```
+GET https://geocoding-api.open-meteo.com/v1/search?name=<query>&count=10&language=en&format=json
+```
+
+Three properties make it the right fit, all CONFIRMED from the published docs:
+
+1. **It accepts postal codes**, not just place names. That matters more here than anywhere else: a US ZIP is five digits, so it can be entered with the numeric keypad the Conditions screen already has. No on-screen alphabetic keyboard is needed for the common case — which is the difference between shipping this and building a whole QWERTY for a 7" panel.
+2. **Each result carries `elevation`.** This is the field that steers `surface_pressure` in the forecast call and the one users are worst placed to know. Picking a search result should fill it in automatically rather than asking for it — a 100 m error is ~1.2% density, about 0.9 yd on a driver.
+3. Results also carry `name`, `country`, `country_code`, `admin1`–`admin4`, `timezone`, `population` and a `postcodes` array — enough to disambiguate the several Springfields without another round trip.
+
+No API key for non-commercial use; commercial use needs one and a `customer-` URL prefix. **Attribution to GeoNames is required** on top of the existing Open-Meteo CC BY 4.0 credit.
+
+### Prior art: how other launch monitors handle this — researched 2026-07-30
+
+Worth knowing what the category has converged on, and where it has not.
+
+| Product | Sources offered | Notes |
+|---|---|---|
+| **TrackMan** (TPS) | Normalization to user-set altitude + temperature | Defaults **77 °F, sea level** — the same reference this design picked independently. Normalizes away wind *and* density because it tracked the real flight. CONFIRMED |
+| **Garmin R10** | Course Location / Your Location / Custom | Three-way source choice, closely mirroring auto / sensor / manual here. "Your Location" needs phone GPS permission. CONFIRMED |
+| **Foresight GCQuad, GC3** | Onboard barometric sensor, automatic | Hardware barometer adjusts ball flight for altitude with no user input. FSX additionally offers real-time weather for a simulated course, or custom values. CONFIRMED |
+
+Three things this confirms about the design already chosen here:
+
+- **Sensor-first is the category norm, not an eccentricity.** Foresight puts a barometer in the unit and uses it automatically. This design's precedence (`bme280 > manual > open-meteo`) matches, and for the same reason.
+- **77 °F / sea level is the de facto standard reference.** Matching TrackMan's defaults means a standard-conditions figure here is directly comparable to a TrackMan number, which is worth more than any locally-optimal choice.
+- **Every one of them lets the user type conditions in.** The manual path is not a fallback for broken hardware, it is a first-class mode everywhere in the category.
+
+And one thing it flags as a real risk. Garmin's own documentation warns that if the configured conditions "do not match the conditions at your normal course locations, the carry distances may seem inaccurate" — which is the exact invitation that produces the documented R10-in-E6 habit of entering 10,000 ft until the numbers look right. The warning tells users the settings control how far the ball goes, without telling them that mis-setting them corrupts everything downstream. **This is the failure mode "Do not build a fudge knob" below exists to prevent**, and it is worth noting the largest vendor in the category walked straight into it.
+
+**UI gap nobody fills — INFERRED.** TrackMan switches *between* actual and normalized (Range Ball vs Premium Ball); it does not show both at once. Nothing found shows today's carry and a reference carry side by side. Showing both simultaneously, as this design does, appears to be genuinely novel rather than merely different — and it is the arrangement that actually answers "am I hitting it further, or is it just hot?", which a toggle cannot: a toggle makes you remember the other number.
+
 ### Indoor play
 
 Do not solve this with a "disable location" switch — falling back to 15 °C ISA is worse than a slightly wrong correction.
