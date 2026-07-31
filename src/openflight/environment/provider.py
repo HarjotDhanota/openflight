@@ -142,8 +142,8 @@ class EnvironmentProvider:
         if self.config.manual_pressure_hpa is not None:
             pressure_hpa = self.config.manual_pressure_hpa
             source = "manual"
-        elif self.config.elevation_m is not None:
-            pressure_hpa = pressure_from_elevation_pa(self.config.elevation_m) / 100.0
+        elif self.config.manual_elevation_m is not None:
+            pressure_hpa = pressure_from_elevation_pa(self.config.manual_elevation_m) / 100.0
             source = "elevation"
         else:
             pressure_hpa = 1013.25
@@ -164,9 +164,13 @@ class EnvironmentProvider:
         # vessels, so outdoor pressure is right indoors -- but take the
         # temperature from the user, because indoor and outdoor air differ by
         # far more than the pressure does.
-        if self.config.indoors and self.config.manual_temp_c is not None:
-            values["temp_c"] = self.config.manual_temp_c
-            values["humidity_pct"] = self.config.manual_humidity_pct
+        #
+        # Reads indoor_temp_c, never manual_temp_c: manual entry is a separate
+        # set-up, and borrowing from it meant a value typed there silently
+        # changed what local weather reported.
+        if self.config.indoors and self.config.indoor_temp_c is not None:
+            values["temp_c"] = self.config.indoor_temp_c
+            values["humidity_pct"] = self.config.indoor_humidity_pct
         fetched_at = cached.get("fetched_at")
         age = time.time() - fetched_at if fetched_at else None
         return self._build(values, "open-meteo", age_s=age)

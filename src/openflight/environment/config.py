@@ -41,22 +41,38 @@ IMPLAUSIBLE_ELEVATION_M = 2500.0
 class WeatherConfig:
     """Weather settings persisted between sessions."""
 
+    # Manual entry and local weather are two independent set-ups. Nothing
+    # under `manual_*` is ever read in auto mode, and nothing in the location
+    # block is ever read in manual mode. Someone can switch to manual, type
+    # whatever they like to see what it does, and switch back to find local
+    # exactly as they left it.
     mode: str = MODE_AUTO
-    # Location, only used when no sensor is fitted. None means not yet set up.
+
+    # --- local weather: the location and what was fetched for it -------------
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     location_label: Optional[str] = None  # "Sacramento, CA", for display
+    # The venue's real elevation. Sent to Open-Meteo so its `surface_pressure`
+    # is for this terrain rather than its grid cell's, which at ~12 Pa/m is
+    # worth ~0.9 yd on a driver per 100 m of mismatch.
     elevation_m: Optional[float] = None
     location_consent: bool = False  # user agreed to look up their location
-    # Manual values. Used wholesale in MODE_MANUAL, and indoors the
-    # temperature overrides a fetched reading while pressure is kept.
+    # Indoors: keep fetched pressure (buildings are not pressure vessels) but
+    # take temperature from the user, since indoor and outdoor air differ by
+    # far more than the pressure does. These belong to the local-weather set-up
+    # rather than to manual entry -- an indoor temperature is a correction to a
+    # fetched reading, not a replacement for one.
+    indoors: bool = False
+    indoor_temp_c: Optional[float] = None
+    indoor_humidity_pct: Optional[float] = None
+
+    # --- manual entry: used only in MODE_MANUAL ------------------------------
     manual_temp_c: Optional[float] = None
     manual_pressure_hpa: Optional[float] = None
     manual_humidity_pct: Optional[float] = None
-    # Indoors: keep fetched pressure (buildings are not pressure vessels) but
-    # take temperature from the user, since indoor and outdoor air differ by
-    # far more than the pressure does.
-    indoors: bool = False
+    # Estimates station pressure when none is typed. Separate from the location
+    # elevation above so experimenting here cannot rewrite the fetch.
+    manual_elevation_m: Optional[float] = None
     # Second carry figure adjusted to fixed reference conditions, so sessions
     # on different days are comparable. Air density only -- we never observed
     # the wind, so unlike TrackMan's normalization this cannot remove it.
@@ -76,8 +92,15 @@ class WeatherConfig:
         return self.latitude is not None or bool(self.cached)
 
     def elevation_looks_like_a_fudge(self) -> bool:
-        """True when the entered elevation is too high to be a real course."""
-        return self.elevation_m is not None and self.elevation_m > IMPLAUSIBLE_ELEVATION_M
+        """True when an entered elevation is too high to be a real course.
+
+        Checks both: the fudge is just as damaging typed into manual entry as
+        into the location, and the person doing it does not care which box.
+        """
+        return any(
+            elevation is not None and elevation > IMPLAUSIBLE_ELEVATION_M
+            for elevation in (self.elevation_m, self.manual_elevation_m)
+        )
 
 
 def load_config(path: Path = CONFIG_PATH) -> WeatherConfig:
@@ -106,6 +129,12 @@ def load_config(path: Path = CONFIG_PATH) -> WeatherConfig:
         manual_temp_c=data.get("manual_temp_c"),
         manual_pressure_hpa=data.get("manual_pressure_hpa"),
         manual_humidity_pct=data.get("manual_humidity_pct"),
+        # Configs written before manual entry and local weather were separated
+        # kept one elevation and reused the manual temperature indoors. Carry
+        # those across so an upgrade does not silently change anyone's density.
+        manual_elevation_m=data.get("manual_elevation_m", data.get("elevation_m")),
+        indoor_temp_c=data.get("indoor_temp_c", data.get("manual_temp_c")),
+        indoor_humidity_pct=data.get("indoor_humidity_pct", data.get("manual_humidity_pct")),
         indoors=bool(data.get("indoors", False)),
         show_standard=bool(data.get("show_standard", True)),
         standard_temp_c=data.get("standard_temp_c", STANDARD_TEMP_C),

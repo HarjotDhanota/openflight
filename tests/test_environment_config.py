@@ -156,3 +156,65 @@ class TestImplausibleElevation:
         config = cfg.WeatherConfig(elevation_m=elevation_m)
 
         assert config.elevation_looks_like_a_fudge() is expected
+
+
+class TestUpgradeFromTheSharedFields:
+    """Configs written before manual entry and local weather were separated
+    kept one elevation and reused the manual temperature for the indoor
+    override. An upgrade must not silently change anyone's density."""
+
+    def test_an_old_elevation_carries_into_manual_entry(self, path):
+        path.write_text(json.dumps({"mode": "manual", "elevation_m": 1609.0}), encoding="utf-8")
+
+        loaded = cfg.load_config(path)
+
+        assert loaded.manual_elevation_m == 1609.0
+        assert loaded.elevation_m == 1609.0
+
+    def test_an_old_manual_temperature_carries_into_the_indoor_override(self, path):
+        path.write_text(
+            json.dumps({"indoors": True, "manual_temp_c": 21.0, "manual_humidity_pct": 45.0}),
+            encoding="utf-8",
+        )
+
+        loaded = cfg.load_config(path)
+
+        assert loaded.indoor_temp_c == 21.0
+        assert loaded.indoor_humidity_pct == 45.0
+
+    def test_new_fields_win_when_both_are_present(self, path):
+        path.write_text(
+            json.dumps(
+                {
+                    "elevation_m": 9.0,
+                    "manual_elevation_m": 1609.0,
+                    "manual_temp_c": 5.0,
+                    "indoor_temp_c": 21.0,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        loaded = cfg.load_config(path)
+
+        assert loaded.elevation_m == 9.0
+        assert loaded.manual_elevation_m == 1609.0
+        assert loaded.indoor_temp_c == 21.0
+
+    def test_a_fresh_config_has_neither_set(self, path):
+        loaded = cfg.load_config(path)
+
+        assert loaded.manual_elevation_m is None
+        assert loaded.indoor_temp_c is None
+
+    def test_the_fudge_guard_covers_the_manual_elevation_too(self):
+        assert cfg.WeatherConfig(manual_elevation_m=3048.0).elevation_looks_like_a_fudge() is True
+        assert cfg.WeatherConfig(manual_elevation_m=1609.0).elevation_looks_like_a_fudge() is False
+
+    def test_both_elevations_round_trip_independently(self, path):
+        cfg.save_config(cfg.WeatherConfig(elevation_m=9.0, manual_elevation_m=1609.0), path)
+
+        loaded = cfg.load_config(path)
+
+        assert loaded.elevation_m == 9.0
+        assert loaded.manual_elevation_m == 1609.0

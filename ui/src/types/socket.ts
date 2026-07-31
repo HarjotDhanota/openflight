@@ -73,10 +73,15 @@ export interface WeatherSettings {
   location_label: string | null;
   elevation_m: number | null;
   location_consent: boolean;
+  /** Manual entry. Never read in auto mode — it is a separate set-up. */
   manual_temp_c: number | null;
   manual_pressure_hpa: number | null;
   manual_humidity_pct: number | null;
+  manual_elevation_m: number | null;
   indoors: boolean;
+  /** The indoors override belongs to local weather, not to manual entry. */
+  indoor_temp_c: number | null;
+  indoor_humidity_pct: number | null;
   /** Second carry figure at fixed reference conditions, shown under the main one. */
   show_standard: boolean;
   standard_temp_c: number;

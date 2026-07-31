@@ -113,7 +113,7 @@ export function WeatherSettingsView({
   // Above this an entered elevation is far more likely to be a fudge than a
   // fact -- R10 users set 10,000 ft to make numbers look right, which silently
   // corrupts every carry figure.
-  const elevationSuspect = (draft.elevation_m ?? 0) > 2500;
+  const elevationSuspect = Math.max(draft.elevation_m ?? 0, draft.manual_elevation_m ?? 0) > 2500;
 
   return (
     <div className="weather-settings">
@@ -204,14 +204,24 @@ export function WeatherSettingsView({
               <p className="weather-hint">Outdoor pressure is correct indoors, so only the temperature is replaced.</p>
               <UnitField
                 label={`Indoor temperature (${getTempUnit(unitSystem)})`}
-                value={draft.manual_temp_c}
+                value={draft.indoor_temp_c}
                 fallback={20}
                 toDisplay={(v) => convertTempFromC(v, unitSystem)}
                 fromDisplay={(v) => convertTempToC(v, unitSystem)}
-                onCommit={(v) => update({ manual_temp_c: v })}
+                onCommit={(v) => update({ indoor_temp_c: v })}
               />
             </>
           )}
+          <UnitField
+            label={`Your elevation (${getElevationUnit(unitSystem)})`}
+            hint="Open-Meteo reports pressure at its own terrain height unless told yours. 100 m out is about a yard on a driver."
+            value={draft.elevation_m}
+            digits={0}
+            step={unitSystem === 'imperial' ? 25 : 10}
+            toDisplay={(v) => convertElevationFromMeters(v, unitSystem)}
+            fromDisplay={(v) => convertElevationToMeters(v, unitSystem)}
+            onCommit={(v) => update({ elevation_m: v })}
+          />
         </section>
       )}
 
@@ -251,13 +261,13 @@ export function WeatherSettingsView({
           />
           <UnitField
             label={`Elevation (${getElevationUnit(unitSystem)})`}
-            hint="Used only when no pressure is entered"
-            value={draft.elevation_m}
+            hint="Used only when no pressure is entered above. Separate from your location's elevation, so experimenting here cannot change local weather."
+            value={draft.manual_elevation_m}
             digits={0}
             step={unitSystem === 'imperial' ? 25 : 10}
             toDisplay={(v) => convertElevationFromMeters(v, unitSystem)}
             fromDisplay={(v) => convertElevationToMeters(v, unitSystem)}
-            onCommit={(v) => update({ elevation_m: v })}
+            onCommit={(v) => update({ manual_elevation_m: v })}
           />
           {elevationSuspect && (
             <p className="weather-warning">

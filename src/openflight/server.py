@@ -2112,7 +2112,10 @@ def _weather_settings_payload() -> dict:
         "manual_temp_c": config.manual_temp_c,
         "manual_pressure_hpa": config.manual_pressure_hpa,
         "manual_humidity_pct": config.manual_humidity_pct,
+        "manual_elevation_m": config.manual_elevation_m,
         "indoors": config.indoors,
+        "indoor_temp_c": config.indoor_temp_c,
+        "indoor_humidity_pct": config.indoor_humidity_pct,
         "show_standard": config.show_standard,
         "standard_temp_c": config.standard_temp_c,
         "standard_elevation_m": config.standard_elevation_m,
@@ -2152,6 +2155,9 @@ def handle_set_weather_settings(data):
         "manual_temp_c",
         "manual_pressure_hpa",
         "manual_humidity_pct",
+        "manual_elevation_m",
+        "indoor_temp_c",
+        "indoor_humidity_pct",
     ):
         if key in data:
             setattr(config, key, data[key])

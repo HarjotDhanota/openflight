@@ -25,7 +25,10 @@ const settings = (overrides: Partial<Settings> = {}): Settings => ({
   manual_temp_c: null,
   manual_pressure_hpa: null,
   manual_humidity_pct: null,
+  manual_elevation_m: null,
   indoors: false,
+  indoor_temp_c: null,
+  indoor_humidity_pct: null,
   show_standard: true,
   standard_temp_c: 25,
   standard_elevation_m: 0,
@@ -134,7 +137,7 @@ describe('WeatherSettingsView', () => {
   it('warns about an elevation too high to be a real course', () => {
     // The R10-in-E6 habit: entering 10,000 ft to make distances look right.
     const html = render({
-      settings: settings({ mode: 'manual', elevation_m: 3048 }),
+      settings: settings({ mode: 'manual', manual_elevation_m: 3048 }),
     });
 
     expect(html).toContain('higher than almost any golf course');
@@ -143,10 +146,45 @@ describe('WeatherSettingsView', () => {
 
   it('does not warn about a genuinely high but plausible elevation', () => {
     const html = render({
-      settings: settings({ mode: 'manual', elevation_m: 1609 }), // Denver
+      settings: settings({ mode: 'manual', manual_elevation_m: 1609 }), // Denver
     });
 
     expect(html).not.toContain('higher than almost any golf course');
+  });
+
+  it('keeps manual entry and local weather on separate fields', () => {
+    // Switching to manual, typing junk, and switching back must leave local
+    // exactly as it was -- so the two elevations are different settings.
+    const html = render({
+      settings: settings({ mode: 'manual', elevation_m: 9, manual_elevation_m: 1609 }),
+    });
+
+    expect(html).toContain('cannot change local weather');
+  });
+
+  it('offers the venue elevation in local-weather mode, where it steers the fetch', () => {
+    const html = render();
+
+    expect(html).toContain('Your elevation');
+    expect(html).toContain('Increase Your elevation');
+  });
+
+  it('gives the indoor override its own temperature', () => {
+    const html = render({ settings: settings({ indoors: true, indoor_temp_c: 21 }) });
+
+    expect(html).toContain('Indoor temperature');
+    expect(html).toContain('>69.8<'); // 21 C as F, from indoor_temp_c not manual_temp_c
+  });
+
+  it('does not borrow the manual temperature for the indoor override', () => {
+    // The leak that broke local weather: a value typed in manual mode became
+    // the indoor temperature and silently rewrote what the fetch reported.
+    const html = render({
+      settings: settings({ indoors: true, indoor_temp_c: 21, manual_temp_c: -40 }),
+    });
+
+    expect(html).toContain('>69.8<');
+    expect(html).not.toContain('-40');
   });
 
   it('requires consent before the location button can be used', () => {

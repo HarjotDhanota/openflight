@@ -105,7 +105,7 @@ class TestPrecedence:
         assert reading.temp_c == pytest.approx(36.1)
 
     def test_elevation_estimate_when_no_pressure_was_entered(self, clock):
-        provider = make_provider(mode=MODE_MANUAL, manual_temp_c=25.0, elevation_m=1609.0)
+        provider = make_provider(mode=MODE_MANUAL, manual_temp_c=25.0, manual_elevation_m=1609.0)
 
         reading = provider.current()
 
@@ -210,7 +210,7 @@ class TestModeOff:
 class TestIndoors:
     def test_indoor_temperature_replaces_the_fetched_one(self, clock):
         provider = make_provider(
-            mode=MODE_AUTO, indoors=True, manual_temp_c=21.0, cached=dict(CACHED)
+            mode=MODE_AUTO, indoors=True, indoor_temp_c=21.0, cached=dict(CACHED)
         )
 
         reading = provider.current()
@@ -221,7 +221,7 @@ class TestIndoors:
         """Buildings are not pressure vessels: outdoor pressure is correct
         indoors, while indoor and outdoor temperature differ by a lot."""
         provider = make_provider(
-            mode=MODE_AUTO, indoors=True, manual_temp_c=21.0, cached=dict(CACHED)
+            mode=MODE_AUTO, indoors=True, indoor_temp_c=21.0, cached=dict(CACHED)
         )
 
         assert provider.current().pressure_hpa == pytest.approx(1010.2)
@@ -233,7 +233,7 @@ class TestIndoors:
 
     def test_indoors_does_not_alter_the_source_label(self, clock):
         provider = make_provider(
-            mode=MODE_AUTO, indoors=True, manual_temp_c=21.0, cached=dict(CACHED)
+            mode=MODE_AUTO, indoors=True, indoor_temp_c=21.0, cached=dict(CACHED)
         )
 
         assert provider.current().source == "open-meteo"
@@ -350,3 +350,111 @@ class TestSetFetchedWeather:
         provider.set_fetched_weather(10.0, 1013.25, 60.0)
 
         assert provider.current().temp_c == pytest.approx(10.0)
+
+
+class TestManualAndLocalAreSeparate:
+    """Manual entry and local weather are two independent set-ups.
+
+    Someone switches to manual, types values to see what happens, and switches
+    back -- local must be exactly as they left it. Nothing typed under manual
+    may reach the auto path, and nothing the fetch owns may be overwritten by
+    manual entry. The one deliberate crossover is the indoor temperature, and
+    that has its own field rather than borrowing the manual one.
+    """
+
+    def test_manual_elevation_does_not_steer_the_fetch(self, clock):
+        """The fetch asks Open-Meteo for pressure at the venue's elevation. A
+        number typed while experimenting in manual mode must not change which
+        terrain height that is -- it silently rewrites the fetched pressure."""
+        provider = make_provider(
+            mode=MODE_AUTO,
+            elevation_m=9.0,
+            manual_elevation_m=3000.0,
+            cached=dict(CACHED),
+        )
+
+        assert provider.config.elevation_m == 9.0
+
+    def test_manual_pressure_estimate_uses_the_manual_elevation(self, clock):
+        provider = make_provider(
+            mode=MODE_MANUAL,
+            manual_temp_c=25.0,
+            manual_elevation_m=1609.0,
+            elevation_m=9.0,
+        )
+
+        reading = provider.current()
+
+        assert reading.source == "elevation"
+        assert reading.pressure_hpa == pytest.approx(835.0, abs=5.0)
+
+    def test_manual_values_never_reach_auto(self, clock):
+        provider = make_provider(
+            mode=MODE_AUTO,
+            manual_temp_c=-40.0,
+            manual_pressure_hpa=500.0,
+            manual_humidity_pct=99.0,
+            cached=dict(CACHED),
+        )
+
+        reading = provider.current()
+
+        assert reading.temp_c == pytest.approx(36.1)
+        assert reading.pressure_hpa == pytest.approx(1010.2)
+
+    def test_switching_to_manual_and_back_leaves_local_untouched(self, clock):
+        """The exact sequence that broke: local, then manual with junk in it,
+        then back to local."""
+        config = WeatherConfig(mode=MODE_AUTO, elevation_m=9.0, cached=dict(CACHED))
+        provider = EnvironmentProvider(config)
+        before = provider.current()
+
+        config.mode = MODE_MANUAL
+        config.manual_temp_c = -40.0
+        config.manual_pressure_hpa = 500.0
+        config.manual_humidity_pct = 99.0
+        config.manual_elevation_m = 3000.0
+        config.mode = MODE_AUTO
+
+        after = provider.current()
+
+        assert after.air_density_kg_m3 == pytest.approx(before.air_density_kg_m3)
+        assert after.temp_c == pytest.approx(before.temp_c)
+        assert after.pressure_hpa == pytest.approx(before.pressure_hpa)
+
+    def test_indoors_uses_its_own_temperature_not_the_manual_one(self, clock):
+        provider = make_provider(
+            mode=MODE_AUTO,
+            indoors=True,
+            indoor_temp_c=21.0,
+            manual_temp_c=-40.0,
+            cached=dict(CACHED),
+        )
+
+        assert provider.current().temp_c == pytest.approx(21.0)
+
+    def test_indoors_uses_its_own_humidity(self, clock):
+        provider = make_provider(
+            mode=MODE_AUTO,
+            indoors=True,
+            indoor_temp_c=21.0,
+            indoor_humidity_pct=45.0,
+            manual_humidity_pct=99.0,
+            cached=dict(CACHED),
+        )
+
+        assert provider.current().humidity_pct == pytest.approx(45.0)
+
+    def test_indoors_still_keeps_the_fetched_pressure(self, clock):
+        provider = make_provider(
+            mode=MODE_AUTO, indoors=True, indoor_temp_c=21.0, cached=dict(CACHED)
+        )
+
+        assert provider.current().pressure_hpa == pytest.approx(1010.2)
+
+    def test_indoors_without_its_own_temperature_leaves_the_fetch_alone(self, clock):
+        provider = make_provider(
+            mode=MODE_AUTO, indoors=True, manual_temp_c=-40.0, cached=dict(CACHED)
+        )
+
+        assert provider.current().temp_c == pytest.approx(36.1)
