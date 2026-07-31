@@ -31,6 +31,7 @@ from .environment.config import (
 from .environment.openmeteo import (
     fetch_current as fetch_current_weather,
     lookup_location,
+    search_locations,
 )
 from .environment.provider import EnvironmentProvider, EnvironmentReading
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, ClubType, Shot
@@ -2272,6 +2273,77 @@ def refresh_weather_now() -> None:
 def handle_refresh_weather():
     """Fetch current conditions, on user request only -- there is no polling."""
     socketio.start_background_task(refresh_weather_now)
+
+
+def search_locations_now(query: str) -> None:
+    """Look up places matching a typed query and send them to the UI."""
+    try:
+        results = search_locations(query)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("[WEATHER] Location search failed: %s", exc)
+        results = []
+    socketio.emit(
+        "location_results",
+        {
+            "query": query,
+            "results": [
+                {
+                    "label": result.label,
+                    "latitude": result.latitude,
+                    "longitude": result.longitude,
+                    "elevation_m": result.elevation_m,
+                }
+                for result in results
+            ],
+        },
+    )
+
+
+@socketio.on("search_locations")
+def handle_search_locations(data):
+    """Search for a location by name or postal code, on each user edit.
+
+    Typed search is the primary way a location gets set. IP detection is only
+    a suggestion: behind a VPN it returns the exit node, and the weather that
+    follows is wrong in a way that looks completely plausible.
+    """
+    query = (data or {}).get("query", "")
+    if not isinstance(query, str):
+        return
+    socketio.start_background_task(search_locations_now, query)
+
+
+def select_location_now(latitude: float, longitude: float, label, elevation_m) -> None:
+    """Adopt a searched location and immediately fetch its conditions."""
+    config = environment_provider.config
+    config.latitude = latitude
+    config.longitude = longitude
+    if label:
+        config.location_label = label
+    # The search already knows the elevation, and it is the term the user is
+    # least able to supply. Taking it here is the difference between a fetch
+    # whose pressure is for the right ground and one that is quietly ~1% out.
+    if elevation_m is not None:
+        config.elevation_m = elevation_m
+    refresh_weather_now()
+
+
+@socketio.on("select_location")
+def handle_select_location(data):
+    """Adopt one of the searched locations."""
+    data = data or {}
+    latitude = data.get("latitude")
+    longitude = data.get("longitude")
+    if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
+        socketio.emit("weather_error", {"reason": "That location was missing coordinates."})
+        return
+    socketio.start_background_task(
+        select_location_now,
+        float(latitude),
+        float(longitude),
+        data.get("label"),
+        data.get("elevation_m"),
+    )
 
 
 def _resolve_cli_environment(args) -> None:

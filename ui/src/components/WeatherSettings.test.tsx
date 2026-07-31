@@ -1,6 +1,6 @@
-import { renderToString } from 'react-dom/server';
+﻿import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { EnvironmentReading, WeatherSettings as Settings } from '../types/socket';
+import type { EnvironmentReading, LocationResult, WeatherSettings as Settings } from '../types/socket';
 import type { UnitSystem } from '../utils/units';
 import { WeatherSettingsView } from './WeatherSettings';
 
@@ -42,6 +42,7 @@ function render(
     settings?: Settings | null;
     unitSystem?: UnitSystem;
     error?: string | null;
+    locationResults?: LocationResult[];
   } = {}
 ) {
   return renderToString(
@@ -51,6 +52,7 @@ function render(
       refreshing={false}
       error={state.error ?? null}
       unitSystem={state.unitSystem ?? 'imperial'}
+      locationResults={state.locationResults ?? []}
       onChange={() => {}}
       onRefresh={() => {}}
     />
@@ -196,10 +198,56 @@ describe('WeatherSettingsView', () => {
     expect(html).toContain('Look up my location');
   });
 
-  it('credits Open-Meteo where the fetch is offered', () => {
+  it('credits Open-Meteo and GeoNames where the fetch is offered', () => {
     const html = render();
 
     expect(html).toContain('Open-Meteo');
+    expect(html).toContain('GeoNames');
+  });
+
+  it('warns that IP detection follows a VPN rather than the player', () => {
+    // The failure this closes: on a VPN the detected location is the exit
+    // node, and the weather that follows looks entirely plausible.
+    const html = render();
+
+    expect(html).toContain('VPN');
+  });
+
+  it('offers a location search alongside detection', () => {
+    const html = render();
+
+    expect(html).toContain('Search for a place or postal code');
+  });
+
+  it('lists search results with the region that tells them apart', () => {
+    // The postal code 95814 matches Sacramento CA and Argenteuil FR, so a
+    // bare city name is not enough to choose between them.
+    const html = render({
+      locationResults: [
+        { label: 'Sacramento, California, US', latitude: 38.58, longitude: -121.49, elevation_m: 9 },
+        { label: 'Sacramento, Kentucky, US', latitude: 37.41, longitude: -87.26, elevation_m: 150 },
+      ],
+    });
+
+    expect(html).toContain('Sacramento, California, US');
+    expect(html).toContain('Sacramento, Kentucky, US');
+  });
+
+  it('shows each result its elevation, in the user unit', () => {
+    const html = render({
+      locationResults: [{ label: 'Sacramento, California, US', latitude: 38.58, longitude: -121.49, elevation_m: 9 }],
+    });
+
+    expect(html).toContain('30 ft'); // 9 m
+  });
+
+  it('omits the elevation when the search did not know it', () => {
+    const html = render({
+      locationResults: [{ label: 'Somewhere', latitude: 1, longitude: 1, elevation_m: null }],
+    });
+
+    expect(html).toContain('Somewhere');
+    expect(html).not.toContain('location-search__elevation');
   });
 
   it('offers manual entry fields in manual mode', () => {

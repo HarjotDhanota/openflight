@@ -17,8 +17,9 @@ import {
   stepInDisplayUnits,
   type UnitSystem,
 } from '../utils/units';
-import type { EnvironmentReading, WeatherSettings as Settings } from '../types/socket';
+import type { EnvironmentReading, LocationResult, WeatherSettings as Settings } from '../types/socket';
 import { NumericKeypad } from './NumericKeypad';
+import { TextKeyboard } from './TextKeyboard';
 import './WeatherSettings.css';
 
 /**
@@ -34,12 +35,14 @@ import './WeatherSettings.css';
  * reason carry looks wrong is estimated spin, not air.
  */
 export function WeatherSettings() {
-  const { reading, settings, refreshing, error } = useEnvironmentStore(
+  const { reading, settings, refreshing, error, locationQuery, locationResults } = useEnvironmentStore(
     useShallow((s) => ({
       reading: s.reading,
       settings: s.settings,
       refreshing: s.refreshing,
       error: s.error,
+      locationQuery: s.locationQuery,
+      locationResults: s.locationResults,
     }))
   );
   const { unitSystem } = useUnitPreference();
@@ -51,10 +54,17 @@ export function WeatherSettings() {
       refreshing={refreshing}
       error={error}
       unitSystem={unitSystem}
+      locationQuery={locationQuery}
+      locationResults={locationResults}
       onChange={(next) => socketService.setWeatherSettings(next)}
       onRefresh={() => {
         useEnvironmentStore.getState().setRefreshing(true);
         socketService.refreshWeather();
+      }}
+      onSearchLocations={(query) => socketService.searchLocations(query)}
+      onSelectLocation={(result) => {
+        useEnvironmentStore.getState().setRefreshing(true);
+        socketService.selectLocation(result);
       }}
     />
   );
@@ -66,8 +76,12 @@ interface WeatherSettingsViewProps {
   refreshing: boolean;
   error: string | null;
   unitSystem: UnitSystem;
+  locationQuery?: string;
+  locationResults?: LocationResult[];
   onChange: (settings: Settings) => void;
   onRefresh: () => void;
+  onSearchLocations?: (query: string) => void;
+  onSelectLocation?: (result: LocationResult) => void;
 }
 
 /**
@@ -84,8 +98,12 @@ export function WeatherSettingsView({
   refreshing,
   error,
   unitSystem,
+  locationQuery = '',
+  locationResults = [],
   onChange,
   onRefresh,
+  onSearchLocations = () => {},
+  onSelectLocation = () => {},
 }: WeatherSettingsViewProps) {
   // Optimistic local copy, so a tap applies instantly instead of waiting for
   // the server to echo the change back. Re-synced during render rather than in
@@ -186,10 +204,18 @@ export function WeatherSettingsView({
             <span>Look up my location and fetch local weather</span>
           </label>
           <p className="weather-hint">
-            Uses your public IP to guess the city — accurate enough for temperature and pressure, and always editable.
-            Nothing is fetched until you tap the button, and never during a shot. Weather data by Open-Meteo (CC BY
-            4.0).
+            Detection guesses from your public IP, so a VPN will place you at its exit node — search instead if the
+            result looks wrong. Nothing is fetched until you ask, and never during a shot. Weather and place data by
+            Open-Meteo (CC BY 4.0) and GeoNames.
           </p>
+
+          <LocationSearch
+            query={locationQuery}
+            results={locationResults}
+            unitSystem={unitSystem}
+            onQueryChange={onSearchLocations}
+            onSelect={onSelectLocation}
+          />
           {reading.age_s != null && reading.age_s > 3600 && (
             <p className="weather-hint">
               Last updated {Math.round(reading.age_s / 3600)} h ago. Tap refresh if conditions have changed.
@@ -415,6 +441,92 @@ function UnitField({
       {editing && (
         <NumericKeypad label={label} initial={shown} onCommit={commitText} onCancel={() => setEditing(false)} />
       )}
+    </div>
+  );
+}
+
+/**
+ * Search for a location by name or postal code.
+ *
+ * The primary way a location gets set. IP detection stays as a suggestion,
+ * but it cannot be the only path: behind a VPN it returns the exit node, and
+ * the weather that follows is wrong in a way that looks entirely plausible.
+ *
+ * The on-screen keyboard is only mounted once the field is open, so it does
+ * not eat the panel when nobody is searching.
+ */
+function LocationSearch({
+  query,
+  results,
+  unitSystem,
+  onQueryChange,
+  onSelect,
+}: {
+  query: string;
+  results: LocationResult[];
+  unitSystem: UnitSystem;
+  onQueryChange: (query: string) => void;
+  onSelect: (result: LocationResult) => void;
+}) {
+  const [opened, setOpened] = useState(false);
+  const [text, setText] = useState(query);
+
+  // Derived rather than stored: if the server has sent matches, the list is
+  // shown whether or not this client is the one that asked. Closing is the
+  // only thing that needs remembering.
+  const [dismissed, setDismissed] = useState(false);
+  const open = (opened || results.length > 0) && !dismissed;
+
+  const change = (next: string) => {
+    setText(next);
+    setDismissed(false);
+    onQueryChange(next);
+  };
+
+  const setOpen = (next: boolean) => {
+    setOpened(next);
+    setDismissed(!next);
+  };
+
+  if (!open) {
+    return (
+      <button type="button" className="weather-field__value" onClick={() => setOpen(true)}>
+        Search for a place or postal code
+      </button>
+    );
+  }
+
+  return (
+    <div className="location-search">
+      <button type="button" className="weather-field__value" aria-label="Location search">
+        {text === '' ? 'Type a place or postal code' : text}
+      </button>
+
+      <div className="location-search__results">
+        {results.map((result) => (
+          <button
+            type="button"
+            className="location-search__result"
+            key={`${result.latitude},${result.longitude}`}
+            onClick={() => {
+              onSelect(result);
+              setOpen(false);
+            }}
+          >
+            <span>{result.label}</span>
+            {result.elevation_m != null && (
+              <span className="location-search__elevation">
+                {`${Math.round(convertElevationFromMeters(result.elevation_m, unitSystem))} ${getElevationUnit(unitSystem)}`}
+              </span>
+            )}
+          </button>
+        ))}
+        {text.trim().length >= 3 && results.length === 0 && (
+          <p className="location-search__empty">No matches. Try a postal code.</p>
+        )}
+      </div>
+
+      <TextKeyboard value={text} onChange={change} onDone={() => setOpen(false)} />
     </div>
   );
 }

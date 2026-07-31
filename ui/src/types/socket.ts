@@ -66,6 +66,16 @@ export interface EnvironmentReading {
 }
 
 /** Persisted weather settings, edited from the settings screen. */
+/** One candidate from a location search. */
+export interface LocationResult {
+  /** "Sacramento, California, US" — the country matters: postal codes collide. */
+  label: string;
+  latitude: number;
+  longitude: number;
+  /** Steers the fetched pressure. Null when the search did not know it. */
+  elevation_m: number | null;
+}
+
 export interface WeatherSettings {
   mode: 'auto' | 'manual' | 'off';
   latitude: number | null;

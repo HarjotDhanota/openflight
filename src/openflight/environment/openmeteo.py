@@ -31,6 +31,10 @@ from openflight.environment.density import air_density
 logger = logging.getLogger(__name__)
 
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+# Same terms as the forecast API, no key for non-commercial use. Accepts place
+# names and postal codes alike, and every result carries the elevation that
+# steers surface_pressure -- the field users are least able to answer.
+GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 # IP geolocation for the initial guess only. Opt-in, and whatever it returns
 # stays editable -- navigator.geolocation is unreliable on Raspberry Pi OS
 # Chromium, which ships without Google API keys.
@@ -84,6 +88,34 @@ class Location:
     latitude: float
     longitude: float
     label: Optional[str] = None
+
+
+# Shortest query worth a request. One or two characters match half the planet
+# and would fire a request per keystroke for nothing.
+MIN_QUERY_LENGTH = 3
+MAX_RESULTS = 8
+
+
+@dataclass
+class LocationResult:
+    """One candidate from a location search."""
+
+    name: str
+    latitude: float
+    longitude: float
+    elevation_m: Optional[float] = None
+    country_code: Optional[str] = None
+    admin1: Optional[str] = None  # state or region
+
+    @property
+    def label(self) -> str:
+        """Enough to tell apart places that share a name.
+
+        The postal code 95814 matches both Sacramento, California and
+        Argenteuil in France, so the country is not optional decoration.
+        """
+        parts = [self.name, self.admin1, self.country_code]
+        return ", ".join(part for part in parts if part)
 
 
 def urllib_get(url: str, timeout: int = DEFAULT_TIMEOUT_S) -> bytes:
@@ -181,6 +213,67 @@ def fetch_current(
         )
 
     return weather
+
+
+def search_locations(
+    query: str,
+    *,
+    count: int = MAX_RESULTS,
+    timeout: int = DEFAULT_TIMEOUT_S,
+    request_fn: RequestFn = urllib_get,
+) -> list:
+    """Find places matching a typed query.
+
+    The primary way a location gets set. IP lookup is only ever a suggestion:
+    behind a VPN it returns the exit node, and the resulting weather is wrong
+    in a way that looks entirely plausible, which is the worst kind of wrong.
+
+    Accepts place names and postal codes alike -- the latter matters because
+    the kiosk panel has no keyboard beyond the numeric keypad.
+
+    Returns:
+        Matching places, best first. Empty on a short query, no matches, or any
+        failure at all. Never raises.
+    """
+    query = query.strip()
+    if len(query) < MIN_QUERY_LENGTH:
+        return []
+
+    params = {
+        "name": query,
+        "count": max(1, min(count, 10)),
+        "language": "en",
+        "format": "json",
+    }
+    payload = _get_json(f"{GEOCODING_URL}?{urllib.parse.urlencode(params)}", timeout, request_fn)
+    if payload is None:
+        return []
+
+    results = []
+    # Open-Meteo omits `results` entirely rather than returning an empty list.
+    for entry in payload.get("results") or []:
+        if not isinstance(entry, dict):
+            continue
+        latitude = _as_float(entry.get("latitude"))
+        longitude = _as_float(entry.get("longitude"))
+        name = entry.get("name")
+        if latitude is None or longitude is None or not name:
+            continue
+        if not _coordinates_are_sane(latitude, longitude):
+            continue
+        results.append(
+            LocationResult(
+                name=name,
+                latitude=latitude,
+                longitude=longitude,
+                # None, not 0.0: sea level is a real place to be, and claiming
+                # it when we do not know would quietly skew the fetch.
+                elevation_m=_as_float(entry.get("elevation")),
+                country_code=entry.get("country_code"),
+                admin1=entry.get("admin1"),
+            )
+        )
+    return results
 
 
 def lookup_location(

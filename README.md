@@ -217,6 +217,16 @@ conditions, and in a 22 °C garage on a 36 °C day that "correction" is worse
 than none. Playing indoors keeps the fetched **pressure** (buildings are not
 pressure vessels) and replaces only the **temperature**.
 
+Set your location by **searching for a place name or postal code**. Detection
+from your public IP is offered too, but it follows a VPN to its exit node
+rather than following you, so search is the reliable path. Picking a search
+result also fills in your elevation, which is what tells Open-Meteo to report
+pressure for your ground rather than its model's — 100 m out is about a yard on
+a driver.
+
+Manual entry and local weather are **independent set-ups**. Switch to manual,
+type whatever you like, and switching back leaves local exactly as it was.
+
 **With nothing configured, every carry number is unchanged.**
 
 Optionally, a second *standard conditions* carry is shown under the main one —
@@ -353,4 +363,6 @@ GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later) - see LICENS
 - [OmniPreSense](https://omnipresense.com/) for the OPS243-A radar and documentation
 - Weather data by [Open-Meteo](https://open-meteo.com/), licensed
   [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+- Place-name and postal-code search via Open-Meteo's Geocoding API, which is
+  built on data from [GeoNames](https://www.geonames.org/)
 - The golf hacker community for inspiration

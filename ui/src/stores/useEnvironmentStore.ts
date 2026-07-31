@@ -1,7 +1,11 @@
 import { create } from 'zustand';
-import type { EnvironmentReading, WeatherSettings } from '../types/socket';
+import type { EnvironmentReading, LocationResult, WeatherSettings } from '../types/socket';
 
 interface EnvironmentState {
+  /** Matches for the current search, and the query they answer. */
+  locationQuery: string;
+  locationResults: LocationResult[];
+  setLocationResults: (query: string, results: LocationResult[]) => void;
   /** Resolved conditions currently being applied to carry, null until the server replies. */
   reading: EnvironmentReading | null;
   /** Persisted settings as the server has them. */
@@ -21,6 +25,9 @@ export const useEnvironmentStore = create<EnvironmentState>((set) => ({
   settings: null,
   refreshing: false,
   error: null,
+  locationQuery: '',
+  locationResults: [],
+  setLocationResults: (query, results) => set({ locationQuery: query, locationResults: results }),
   setReading: (reading) => set({ reading }),
   setSettings: (settings) => set({ settings }),
   setRefreshing: (refreshing) => set({ refreshing }),

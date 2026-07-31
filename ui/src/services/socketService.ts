@@ -12,6 +12,7 @@ import type {
   SimShotInfo,
   SimStatus,
   EnvironmentReading,
+  LocationResult,
   WeatherSettings,
 } from '../types/socket';
 import { getServerOrigin } from '../utils/serverOrigin';
@@ -60,6 +61,10 @@ class SocketService {
 
     this.socket.on('weather_error', (data: { reason: string }) => {
       useEnvironmentStore.getState().setError(data.reason);
+    });
+
+    this.socket.on('location_results', (data: { query: string; results: LocationResult[] }) => {
+      useEnvironmentStore.getState().setLocationResults(data.query, data.results);
     });
 
     this.socket.on('disconnect', () => {
@@ -212,6 +217,16 @@ class SocketService {
    */
   refreshWeather() {
     this.socket?.emit('refresh_weather');
+  }
+
+  /** Search for a location by name or postal code. */
+  searchLocations(query: string) {
+    this.socket?.emit('search_locations', { query });
+  }
+
+  /** Adopt a searched location, which also fetches its current conditions. */
+  selectLocation(result: LocationResult) {
+    this.socket?.emit('select_location', result);
   }
 }
 

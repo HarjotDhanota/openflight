@@ -3151,3 +3151,131 @@ class TestMockModeShowsTheCorrection:
         on_shot_detected(self._mock_shot())
 
         assert not simulated
+
+
+class TestLocationSearch:
+    """Typed search is the primary way a location gets set.
+
+    IP detection stays as a suggestion, but it cannot be the only path: behind
+    a VPN it returns the exit node, and the weather that follows is wrong in a
+    way that looks entirely plausible.
+    """
+
+    @pytest.fixture
+    def weather(self, monkeypatch):
+        from openflight.environment.config import WeatherConfig
+        from openflight.environment.provider import EnvironmentProvider
+
+        emitted = []
+        provider = EnvironmentProvider(WeatherConfig())
+        monkeypatch.setattr(server_module, "environment_provider", provider)
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+        monkeypatch.setattr(server_module, "save_weather_config", lambda cfg: None)
+        return SimpleNamespace(provider=provider, emitted=emitted)
+
+    def _payload(self, weather, name):
+        return next(payload for event, payload in weather.emitted if event == name)
+
+    def test_matches_are_sent_to_the_ui(self, weather, monkeypatch):
+        from openflight.environment.openmeteo import LocationResult
+
+        monkeypatch.setattr(
+            server_module,
+            "search_locations",
+            lambda q, **k: [LocationResult("Sacramento", 38.58, -121.49, 9.0, "US", "California")],
+        )
+
+        server_module.search_locations_now("Sacram")
+
+        payload = self._payload(weather, "location_results")
+        assert payload["results"][0]["label"] == "Sacramento, California, US"
+        assert payload["results"][0]["elevation_m"] == 9.0
+
+    def test_the_query_comes_back_with_the_results(self, weather, monkeypatch):
+        """Typing is faster than the network, so a late reply must be
+        attributable to the query that asked for it."""
+        monkeypatch.setattr(server_module, "search_locations", lambda q, **k: [])
+
+        server_module.search_locations_now("Sacram")
+
+        assert self._payload(weather, "location_results")["query"] == "Sacram"
+
+    def test_no_matches_sends_an_empty_list_not_an_error(self, weather, monkeypatch):
+        monkeypatch.setattr(server_module, "search_locations", lambda q, **k: [])
+
+        server_module.search_locations_now("zzzzzz")
+
+        assert self._payload(weather, "location_results")["results"] == []
+
+    def test_a_search_that_blows_up_still_answers(self, weather, monkeypatch):
+        """Otherwise the UI spins forever on a stuck request."""
+
+        def boom(*a, **k):
+            raise RuntimeError("nobody predicted this")
+
+        monkeypatch.setattr(server_module, "search_locations", boom)
+
+        server_module.search_locations_now("Sacram")
+
+        assert self._payload(weather, "location_results")["results"] == []
+
+    def test_choosing_a_result_adopts_its_coordinates(self, weather, monkeypatch):
+        monkeypatch.setattr(server_module, "fetch_current_weather", lambda *a, **k: None)
+
+        server_module.select_location_now(38.58, -121.49, "Sacramento, California, US", 9.0)
+
+        assert weather.provider.config.latitude == pytest.approx(38.58)
+        assert weather.provider.config.location_label == "Sacramento, California, US"
+
+    def test_choosing_a_result_takes_its_elevation(self, weather, monkeypatch):
+        """The search already knows it, and it is the term the user is least
+        able to supply -- 100 m out is about 0.9 yd on a driver."""
+        monkeypatch.setattr(server_module, "fetch_current_weather", lambda *a, **k: None)
+
+        server_module.select_location_now(38.58, -121.49, "Sacramento", 9.0)
+
+        assert weather.provider.config.elevation_m == 9.0
+
+    def test_an_unknown_elevation_does_not_overwrite_a_known_one(self, weather, monkeypatch):
+        weather.provider.config.elevation_m = 30.0
+        monkeypatch.setattr(server_module, "fetch_current_weather", lambda *a, **k: None)
+
+        server_module.select_location_now(38.58, -121.49, "Somewhere", None)
+
+        assert weather.provider.config.elevation_m == 30.0
+
+    def test_choosing_a_result_fetches_its_weather_immediately(self, weather, monkeypatch):
+        from openflight.environment.openmeteo import FetchedWeather
+
+        monkeypatch.setattr(
+            server_module,
+            "fetch_current_weather",
+            lambda *a, **k: FetchedWeather(36.1, 1010.2, 25.0),
+        )
+
+        server_module.select_location_now(38.58, -121.49, "Sacramento", 9.0)
+
+        assert weather.provider.current().source == "open-meteo"
+
+    def test_the_chosen_elevation_is_sent_to_the_forecast(self, weather, monkeypatch):
+        from openflight.environment.openmeteo import FetchedWeather
+
+        seen = {}
+
+        def spy(latitude, longitude, elevation_m=None, **kwargs):
+            seen["elevation_m"] = elevation_m
+            return FetchedWeather(36.1, 1010.2, 25.0)
+
+        monkeypatch.setattr(server_module, "fetch_current_weather", spy)
+
+        server_module.select_location_now(38.58, -121.49, "Sacramento", 9.0)
+
+        assert seen["elevation_m"] == 9.0
+
+    def test_a_result_without_coordinates_is_refused(self, weather):
+        server_module.handle_select_location({"label": "nowhere"})
+
+        assert "weather_error" in [event for event, *_ in weather.emitted]
+        assert weather.provider.config.latitude is None

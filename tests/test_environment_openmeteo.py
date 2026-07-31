@@ -210,3 +210,140 @@ class TestLookupLocation:
     def test_out_of_range_coordinates_returns_none(self):
         transport = FakeTransport([{"latitude": 999.0, "longitude": -121.49}])
         assert om.lookup_location(request_fn=transport) is None
+
+
+def geocoding_body(*results):
+    """Open-Meteo returns no `results` key at all when nothing matches."""
+    return {"results": list(results)} if results else {}
+
+
+def place(
+    name="Sacramento",
+    admin1="California",
+    country="United States",
+    country_code="US",
+    latitude=38.58157,
+    longitude=-121.4944,
+    elevation=9.0,
+):
+    return {
+        "id": 5389489,
+        "name": name,
+        "latitude": latitude,
+        "longitude": longitude,
+        "elevation": elevation,
+        "country": country,
+        "country_code": country_code,
+        "admin1": admin1,
+        "timezone": "America/Los_Angeles",
+        "population": 490712,
+    }
+
+
+class TestSearchLocations:
+    """Typed search, so a VPN cannot silently place the user in another country.
+
+    Verified against the live API on 2026-07-30: "Sacram" returns Sacramento CA
+    at 9.0 m, and the postal code 95814 also matches Argenteuil in France --
+    which is why results carry their country and region.
+    """
+
+    def test_finds_a_place_by_prefix(self):
+        transport = FakeTransport([geocoding_body(place())])
+
+        results = om.search_locations("Sacram", request_fn=transport)
+
+        assert results[0].name == "Sacramento"
+        assert results[0].latitude == pytest.approx(38.58157)
+
+    def test_reports_the_elevation_so_it_need_not_be_typed(self):
+        """This is the field that steers surface_pressure and the one users are
+        least able to answer. 100 m out is about 0.9 yd on a driver."""
+        transport = FakeTransport([geocoding_body(place(elevation=9.0))])
+
+        assert om.search_locations("Sacram", request_fn=transport)[0].elevation_m == 9.0
+
+    def test_label_disambiguates_places_that_share_a_name(self):
+        transport = FakeTransport(
+            [
+                geocoding_body(
+                    place(),
+                    place(admin1="Kentucky", elevation=150.0),
+                )
+            ]
+        )
+
+        labels = [r.label for r in om.search_locations("Sacramento", request_fn=transport)]
+
+        assert labels == ["Sacramento, California, US", "Sacramento, Kentucky, US"]
+
+    def test_label_copes_with_a_missing_region(self):
+        transport = FakeTransport([geocoding_body(place(admin1=None))])
+
+        assert om.search_locations("Sacram", request_fn=transport)[0].label == "Sacramento, US"
+
+    def test_a_postal_code_is_just_another_query(self):
+        # Which is what makes this usable from the numeric keypad on the panel.
+        transport = FakeTransport([geocoding_body(place())])
+
+        om.search_locations("95814", request_fn=transport)
+
+        assert transport.query()["name"] == ["95814"]
+
+    def test_asks_for_a_short_list(self):
+        transport = FakeTransport([geocoding_body(place())])
+
+        om.search_locations("Sacram", request_fn=transport)
+
+        assert int(transport.query()["count"][0]) <= 10
+
+    def test_no_matches_is_an_empty_list_not_an_error(self):
+        transport = FakeTransport([geocoding_body()])
+
+        assert om.search_locations("zzzzzzzz", request_fn=transport) == []
+
+    def test_a_short_query_makes_no_request_at_all(self):
+        """Typing one character must not fire a request per keystroke."""
+        transport = FakeTransport([geocoding_body(place())])
+
+        assert om.search_locations("S", request_fn=transport) == []
+        assert transport.urls == []
+
+    def test_a_blank_query_makes_no_request(self):
+        transport = FakeTransport([geocoding_body(place())])
+
+        assert om.search_locations("   ", request_fn=transport) == []
+        assert transport.urls == []
+
+    def test_network_failure_is_an_empty_list(self):
+        transport = FakeTransport([OSError("offline")])
+
+        assert om.search_locations("Sacram", request_fn=transport) == []
+
+    def test_malformed_response_is_an_empty_list(self):
+        def bad(url, timeout=None):
+            return b"<html>502</html>"
+
+        assert om.search_locations("Sacram", request_fn=bad) == []
+
+    def test_results_without_coordinates_are_dropped(self):
+        broken = place()
+        del broken["latitude"]
+        transport = FakeTransport([geocoding_body(broken, place())])
+
+        results = om.search_locations("Sacram", request_fn=transport)
+
+        assert len(results) == 1
+
+    def test_results_with_impossible_coordinates_are_dropped(self):
+        transport = FakeTransport([geocoding_body(place(latitude=999.0))])
+
+        assert om.search_locations("Sacram", request_fn=transport) == []
+
+    def test_a_missing_elevation_is_none_rather_than_zero(self):
+        """Zero would be a claim of sea level, which is a real place to be."""
+        broken = place()
+        del broken["elevation"]
+        transport = FakeTransport([geocoding_body(broken)])
+
+        assert om.search_locations("Sacram", request_fn=transport)[0].elevation_m is None
