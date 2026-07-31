@@ -33,6 +33,7 @@ const settings = (overrides: Partial<Settings> = {}): Settings => ({
   show_standard: true,
   standard_temp_c: 25,
   standard_elevation_m: 0,
+  auto_refresh_minutes: 30,
   ...overrides,
 });
 
@@ -74,6 +75,25 @@ describe('WeatherSettingsView', () => {
 
     expect(html).not.toContain('assuming standard sea-level air');
     expect(html).toContain('weather-badge--ok');
+  });
+
+  it('offers the auto-refresh intervals, marking the active one', () => {
+    const html = render({ settings: settings({ auto_refresh_minutes: 30 }) });
+
+    expect(html).toContain('Off');
+    expect(html).toContain('15 min');
+    expect(html).toContain('30 min');
+    expect(html).toContain('60 min');
+    expect(html).toContain('aria-pressed="true"');
+  });
+
+  it('offers nothing faster than 15 minutes', () => {
+    // Open-Meteo's models update hourly; a faster poll re-fetches identical
+    // numbers and is just traffic on someone else's range Wi-Fi.
+    const html = render();
+
+    expect(html).not.toContain('>5 min<');
+    expect(html).not.toContain('>10 min<');
   });
 
   it('does not advertise a sensor, since no driver exists yet', () => {

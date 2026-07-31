@@ -218,3 +218,75 @@ class TestUpgradeFromTheSharedFields:
 
         assert loaded.elevation_m == 9.0
         assert loaded.manual_elevation_m == 1609.0
+
+
+class TestAutoRefreshDue:
+    """When the background refresh should fire.
+
+    A pure predicate so the schedule is testable without threads or a clock.
+
+    The design doc argued for no polling at all -- "weather does not move fast
+    enough to matter within a session". That holds for a quick bucket of balls
+    and not for a long one: an evening session can drop 5 C over two hours,
+    which is ~1.75% density, about 1.3 yd on a driver. That is the same order
+    as the error this whole subsystem exists to remove.
+    """
+
+    def _config(self, **kw):
+        base = dict(
+            mode=cfg.MODE_AUTO,
+            latitude=38.58,
+            longitude=-121.49,
+            location_consent=True,
+            auto_refresh_minutes=30,
+            cached={"temp_c": 20.0, "pressure_hpa": 1013.0, "fetched_at": 1000.0},
+        )
+        base.update(kw)
+        return cfg.WeatherConfig(**base)
+
+    def test_due_once_the_interval_has_passed(self):
+        assert self._config().is_auto_refresh_due(now=1000.0 + 30 * 60) is True
+
+    def test_not_due_before_the_interval(self):
+        assert self._config().is_auto_refresh_due(now=1000.0 + 29 * 60) is False
+
+    def test_never_fetched_means_never_due(self):
+        """Auto-refresh switches itself on only after a first fetch the user
+        asked for, so a fresh install makes no unprompted network request."""
+        assert self._config(cached={}).is_auto_refresh_due(now=1e9) is False
+
+    def test_off_is_off(self):
+        assert self._config(auto_refresh_minutes=0).is_auto_refresh_due(now=1e9) is False
+
+    def test_needs_consent(self):
+        assert self._config(location_consent=False).is_auto_refresh_due(now=1e9) is False
+
+    def test_needs_a_location(self):
+        assert self._config(latitude=None).is_auto_refresh_due(now=1e9) is False
+
+    def test_only_in_local_weather_mode(self):
+        """Manual entry and "no correction" have nothing to fetch."""
+        assert self._config(mode=cfg.MODE_MANUAL).is_auto_refresh_due(now=1e9) is False
+        assert self._config(mode=cfg.MODE_OFF).is_auto_refresh_due(now=1e9) is False
+
+    @pytest.mark.parametrize("minutes", [15, 30, 60])
+    def test_each_offered_interval_is_honoured(self, minutes):
+        config = self._config(auto_refresh_minutes=minutes)
+
+        assert config.is_auto_refresh_due(now=1000.0 + minutes * 60 - 1) is False
+        assert config.is_auto_refresh_due(now=1000.0 + minutes * 60) is True
+
+    def test_a_clock_that_jumped_backwards_does_not_fire(self):
+        """An NTP correction after boot can put `now` behind the stored stamp;
+        that must read as 'not due', not as a negative interval."""
+        assert self._config().is_auto_refresh_due(now=500.0) is False
+
+    def test_interval_survives_the_round_trip(self, path):
+        cfg.save_config(cfg.WeatherConfig(auto_refresh_minutes=60), path)
+
+        assert cfg.load_config(path).auto_refresh_minutes == 60
+
+    def test_an_unknown_interval_falls_back_to_the_default(self, path):
+        path.write_text(json.dumps({"auto_refresh_minutes": 7}), encoding="utf-8")
+
+        assert cfg.load_config(path).auto_refresh_minutes == cfg.DEFAULT_AUTO_REFRESH_MINUTES

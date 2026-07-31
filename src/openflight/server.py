@@ -24,6 +24,7 @@ from flask_socketio import SocketIO
 from .ballistics import AIR_DENSITY_STD, density_carry_factor, resolve_launch, simulate
 from .environment import air_density, pressure_from_elevation_pa
 from .environment.config import (
+    AUTO_REFRESH_CHOICES_MINUTES,
     VALID_MODES,
     load_config as load_weather_config,
     save_config as save_weather_config,
@@ -2120,6 +2121,7 @@ def _weather_settings_payload() -> dict:
         "show_standard": config.show_standard,
         "standard_temp_c": config.standard_temp_c,
         "standard_elevation_m": config.standard_elevation_m,
+        "auto_refresh_minutes": config.auto_refresh_minutes,
     }
 
 
@@ -2167,6 +2169,10 @@ def handle_set_weather_settings(data):
         if data.get(key) is not None:
             setattr(config, key, data[key])
     config.location_consent = bool(data.get("location_consent", config.location_consent))
+    # Only intervals we offer. Anything else is a malformed client, and an
+    # unbounded value here would become a poll rate against someone else's API.
+    if data.get("auto_refresh_minutes") in AUTO_REFRESH_CHOICES_MINUTES:
+        config.auto_refresh_minutes = data["auto_refresh_minutes"]
 
     if config.elevation_looks_like_a_fudge():
         # Not blocked -- someone might genuinely be in Leadville -- but this
@@ -2199,34 +2205,39 @@ def handle_set_weather_settings(data):
     _emit_weather()
 
 
-def refresh_weather_now() -> None:
+def refresh_weather_now(announce_errors: bool = True) -> None:
     """Look up the location if needed, fetch conditions, persist, broadcast.
 
     Runs on a worker thread: the fetch has a hard timeout but is still network
     I/O, and blocking the socket loop would freeze the whole UI. Never raises
     -- every failure becomes a ``weather_error`` the settings screen shows, so
     a dead network can never interrupt someone hitting balls.
+
+    Args:
+        announce_errors: False for the background refresh. A scheduled fetch
+            failing is not news -- the cached reading and its age are still on
+            screen -- and popping an error nobody asked for, every interval,
+            for as long as the Wi-Fi is down, would be worse than silence.
     """
     config = environment_provider.config
+
+    def fail(reason: str) -> None:
+        if announce_errors:
+            socketio.emit("weather_error", {"reason": reason})
+        else:
+            logger.info("[WEATHER] Background refresh failed: %s", reason)
+
     try:
         if config.latitude is None or config.longitude is None:
             if not config.location_consent:
-                socketio.emit(
-                    "weather_error",
-                    {
-                        "reason": (
-                            "Looking up your location needs your permission. Turn it on, "
-                            "or enter the conditions manually."
-                        )
-                    },
+                fail(
+                    "Looking up your location needs your permission. Turn it on, "
+                    "or enter the conditions manually."
                 )
                 return
             location = lookup_location()
             if location is None:
-                socketio.emit(
-                    "weather_error",
-                    {"reason": "Could not work out where you are. Enter the conditions manually."},
-                )
+                fail("Could not work out where you are. Enter the conditions manually.")
                 return
             config.latitude = location.latitude
             config.longitude = location.longitude
@@ -2239,10 +2250,7 @@ def refresh_weather_now() -> None:
             elevation_m=config.elevation_m,
         )
         if weather is None:
-            socketio.emit(
-                "weather_error",
-                {"reason": "Could not reach the weather service. Try again, or enter values."},
-            )
+            fail("Could not reach the weather service. Try again, or enter values.")
             return
 
         environment_provider.set_fetched_weather(
@@ -2265,13 +2273,59 @@ def refresh_weather_now() -> None:
     except Exception as exc:  # pylint: disable=broad-except
         # A weather lookup is never worth taking the launch monitor down for.
         logger.exception("[WEATHER] Refresh failed unexpectedly: %s", exc)
-        socketio.emit("weather_error", {"reason": "Weather lookup failed. Enter values manually."})
+        fail("Weather lookup failed. Enter values manually.")
 
 
 @socketio.on("refresh_weather")
 def handle_refresh_weather():
-    """Fetch current conditions, on user request only -- there is no polling."""
+    """Fetch current conditions on user request."""
     socketio.start_background_task(refresh_weather_now)
+
+
+# How often the loop wakes to ask whether a refresh is due. Not the refresh
+# interval -- that is the user's setting, and is checked against the stored
+# fetch timestamp, so restarting the server does not restart the clock.
+_AUTO_REFRESH_TICK_S = 60.0
+
+# Set on shutdown so the loop exits promptly instead of sleeping out a tick.
+auto_refresh_stop = threading.Event()
+
+
+def _auto_refresh_loop(
+    stop_event: threading.Event,
+    tick_s: float = _AUTO_REFRESH_TICK_S,
+    now=time.time,
+) -> None:
+    """Re-fetch local weather on the user's chosen interval.
+
+    Off unless the user turns it on AND has already fetched once themselves,
+    so a fresh install never reaches out unprompted -- see
+    ``WeatherConfig.is_auto_refresh_due``.
+
+    Runs on its own daemon thread. Nothing here touches the shot path: the
+    provider is written by this thread and read by the shot path, and a stale
+    read there is simply the previous conditions, which is what the shot would
+    have used a second earlier anyway.
+
+    Args:
+        tick_s: How often to ask whether a refresh is due. Not the refresh
+            interval -- that is the user's setting, checked against the stored
+            fetch timestamp so a restart does not restart the clock.
+        now: Wall clock, injected so tests can drive the schedule without
+            patching the global ``time`` module, which threading itself uses.
+    """
+    while not stop_event.wait(tick_s):
+        try:
+            if environment_provider.config.is_auto_refresh_due(now()):
+                logger.info(
+                    "[WEATHER] Auto-refresh due (every %d min)",
+                    environment_provider.config.auto_refresh_minutes,
+                )
+                refresh_weather_now(announce_errors=False)
+        except Exception as exc:  # pylint: disable=broad-except
+            # This thread outlives every individual failure. A refresh that
+            # throws must not silently end scheduled refreshes for the session.
+            logger.exception("[WEATHER] Auto-refresh tick failed: %s", exc)
 
 
 def detect_location_now() -> None:
@@ -3802,6 +3856,14 @@ def main():
     calculated_spin_enabled = args.calculated_spin
     ballistics_enabled = args.ballistics
     _resolve_cli_environment(args)
+    # Daemon so it never holds up shutdown; the event lets tests stop it
+    # deterministically rather than waiting out a tick.
+    threading.Thread(
+        target=_auto_refresh_loop,
+        args=(auto_refresh_stop,),
+        daemon=True,
+        name="weather-auto-refresh",
+    ).start()
     kld7_radc_tuning_kwargs = _kld7_radc_tuning_kwargs(args)
     active_kld7_radc_tuning = dict(kld7_radc_tuning_kwargs)
 

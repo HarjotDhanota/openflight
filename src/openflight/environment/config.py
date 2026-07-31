@@ -24,6 +24,20 @@ VALID_MODES = (MODE_AUTO, MODE_MANUAL, MODE_OFF)
 
 DEFAULT_HUMIDITY_PCT = 50.0
 
+# How often local weather may re-fetch itself, in minutes. 0 is off.
+#
+# The design doc originally argued for no polling at all -- "weather does not
+# move fast enough to matter within a session". True of a quick bucket of
+# balls, not of a long one: an evening session can drop 5 C over two hours,
+# which is ~1.75% density and about 1.3 yd on a driver -- the same order as the
+# error this subsystem exists to remove.
+#
+# Nothing below 15 minutes is offered. Open-Meteo's models update hourly, so a
+# faster poll re-fetches identical numbers and is just traffic on someone
+# else's range Wi-Fi.
+AUTO_REFRESH_CHOICES_MINUTES = (0, 15, 30, 60)
+DEFAULT_AUTO_REFRESH_MINUTES = 30
+
 # Reference conditions for the "standard" carry figure. Matches TrackMan's
 # normalization defaults (77 F, sea level) so numbers are comparable to a
 # TrackMan session. Both user-editable.
@@ -65,6 +79,10 @@ class WeatherConfig:
     indoors: bool = False
     indoor_temp_c: Optional[float] = None
     indoor_humidity_pct: Optional[float] = None
+    # Minutes between background re-fetches; 0 is off. It only ever applies
+    # once a fetch the user asked for has succeeded, so a fresh install makes
+    # no unprompted network request -- see is_auto_refresh_due().
+    auto_refresh_minutes: int = DEFAULT_AUTO_REFRESH_MINUTES
 
     # --- manual entry: used only in MODE_MANUAL ------------------------------
     manual_temp_c: Optional[float] = None
@@ -90,6 +108,34 @@ class WeatherConfig:
         if self.mode == MODE_MANUAL:
             return self.manual_temp_c is not None
         return self.latitude is not None or bool(self.cached)
+
+    def is_auto_refresh_due(self, now: float) -> bool:
+        """True when local weather should re-fetch itself unprompted.
+
+        Deliberately conservative about when it fires at all:
+
+        - Only in local-weather mode. Manual entry and "no correction" have
+          nothing to fetch.
+        - Only with consent and a location, same as any other fetch.
+        - **Only once a fetch the user asked for has already succeeded.** That
+          is what `cached["fetched_at"]` records, so no extra flag is needed
+          and a fresh install never reaches out on its own.
+
+        Args:
+            now: Wall-clock seconds, compared against the cached fetch stamp.
+        """
+        if self.mode != MODE_AUTO or not self.location_consent:
+            return False
+        if self.latitude is None or self.longitude is None:
+            return False
+        if not self.auto_refresh_minutes:
+            return False
+        fetched_at = (self.cached or {}).get("fetched_at")
+        if not fetched_at:
+            return False
+        # An NTP correction after boot can put `now` behind the stored stamp.
+        # That is "not due", not a negative interval.
+        return (now - fetched_at) >= self.auto_refresh_minutes * 60
 
     def elevation_looks_like_a_fudge(self) -> bool:
         """True when an entered elevation is too high to be a real course.
@@ -135,6 +181,13 @@ def load_config(path: Path = CONFIG_PATH) -> WeatherConfig:
         manual_elevation_m=data.get("manual_elevation_m", data.get("elevation_m")),
         indoor_temp_c=data.get("indoor_temp_c", data.get("manual_temp_c")),
         indoor_humidity_pct=data.get("indoor_humidity_pct", data.get("manual_humidity_pct")),
+        # An interval we do not offer is a hand-edited or future-version file;
+        # take the default rather than honouring a 1-minute poll.
+        auto_refresh_minutes=(
+            data["auto_refresh_minutes"]
+            if data.get("auto_refresh_minutes") in AUTO_REFRESH_CHOICES_MINUTES
+            else DEFAULT_AUTO_REFRESH_MINUTES
+        ),
         indoors=bool(data.get("indoors", False)),
         show_standard=bool(data.get("show_standard", True)),
         standard_temp_c=data.get("standard_temp_c", STANDARD_TEMP_C),

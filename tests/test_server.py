@@ -2,6 +2,8 @@
 
 import json
 import sys
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -3369,3 +3371,121 @@ class TestDetectCurrentLocation:
 
         assert weather.provider.config.location_label == "London, England, GB"
         assert weather.provider.config.elevation_m == 11.0
+
+
+class TestAutoRefreshLoop:
+    """The background re-fetch.
+
+    The design doc argued for no polling; this is a deliberate, opt-in
+    reversal, so the guards around it matter more than the loop itself.
+    """
+
+    @pytest.fixture
+    def weather(self, monkeypatch):
+        from openflight.environment.config import WeatherConfig
+        from openflight.environment.provider import EnvironmentProvider
+
+        provider = EnvironmentProvider(
+            WeatherConfig(
+                latitude=38.58,
+                longitude=-121.49,
+                location_consent=True,
+                auto_refresh_minutes=30,
+                cached={"temp_c": 20.0, "pressure_hpa": 1013.0, "fetched_at": 1000.0},
+            )
+        )
+        monkeypatch.setattr(server_module, "environment_provider", provider)
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *a, **k: None)
+        monkeypatch.setattr(server_module, "save_weather_config", lambda cfg: None)
+        return SimpleNamespace(provider=provider)
+
+    def test_a_background_failure_is_not_announced(self, weather, monkeypatch):
+        """A scheduled fetch failing is not news: the cached reading and its
+        age are still on screen. Popping an error nobody asked for, every
+        interval, for as long as the Wi-Fi is down, would be worse."""
+        emitted = []
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+        monkeypatch.setattr(server_module, "fetch_current_weather", lambda *a, **k: None)
+
+        server_module.refresh_weather_now(announce_errors=False)
+
+        assert "weather_error" not in [event for event, *_ in emitted]
+
+    def test_a_user_requested_failure_is_announced(self, weather, monkeypatch):
+        emitted = []
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+        monkeypatch.setattr(server_module, "fetch_current_weather", lambda *a, **k: None)
+
+        server_module.refresh_weather_now()
+
+        assert "weather_error" in [event for event, *_ in emitted]
+
+    def _run_loop(self, now_value, seconds=0.1):
+        """Drive the loop with an injected tick and clock.
+
+        Never patches the global `time` module: threading itself waits on it,
+        so patching it hangs the very thread under test. Daemon plus a finally
+        so a failing assertion cannot strand a live thread and wedge the run.
+        """
+        stop = threading.Event()
+        thread = threading.Thread(
+            target=server_module._auto_refresh_loop,
+            args=(stop, 0.01, lambda: now_value),
+            daemon=True,
+        )
+        thread.start()
+        try:
+            time.sleep(seconds)
+        finally:
+            stop.set()
+            thread.join(timeout=2)
+        assert not thread.is_alive(), "the loop should stop promptly when asked"
+
+    def test_the_tick_refreshes_when_due(self, weather, monkeypatch):
+        calls = []
+        monkeypatch.setattr(server_module, "refresh_weather_now", lambda **k: calls.append(k))
+
+        self._run_loop(1000.0 + 31 * 60)
+
+        assert calls, "a due refresh should have fired"
+        assert calls[0] == {"announce_errors": False}
+
+    def test_the_tick_does_nothing_when_not_due(self, weather, monkeypatch):
+        calls = []
+        monkeypatch.setattr(server_module, "refresh_weather_now", lambda **k: calls.append(k))
+
+        self._run_loop(1000.0 + 60)
+
+        assert calls == []
+
+    def test_the_loop_survives_a_refresh_that_throws(self, weather, monkeypatch):
+        """This thread outlives every individual failure -- one exception must
+        not silently end scheduled refreshes for the rest of the session."""
+        calls = []
+
+        def boom(**kwargs):
+            calls.append(kwargs)
+            raise RuntimeError("nobody predicted this")
+
+        monkeypatch.setattr(server_module, "refresh_weather_now", boom)
+
+        self._run_loop(1000.0 + 31 * 60, seconds=0.15)
+
+        assert len(calls) > 1, "the loop should have kept ticking after the failure"
+
+    def test_the_interval_is_only_accepted_from_the_offered_set(self, weather):
+        """An unbounded value here becomes a poll rate against someone else's
+        API, so a malformed client cannot set one."""
+        server_module.handle_set_weather_settings({"auto_refresh_minutes": 1})
+
+        assert weather.provider.config.auto_refresh_minutes == 30
+
+    @pytest.mark.parametrize("minutes", [0, 15, 30, 60])
+    def test_every_offered_interval_is_accepted(self, weather, minutes):
+        server_module.handle_set_weather_settings({"auto_refresh_minutes": minutes})
+
+        assert weather.provider.config.auto_refresh_minutes == minutes

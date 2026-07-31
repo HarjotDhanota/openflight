@@ -219,6 +219,12 @@ that does not exist yet.
 Playing indoors keeps the fetched **pressure** (buildings are not pressure
 vessels) and replaces only the **temperature**.
 
+Local weather can keep itself up to date — **Off / 15 / 30 / 60 minutes**. It
+only ever runs once you have fetched at least once yourself, so a fresh install
+makes no unprompted network request, and it only applies in Local weather mode.
+Worth turning on for a long session: an evening can drop 5 °C over two hours,
+which is about 1.3 yd on a driver.
+
 Set your location by **searching for a place name or postal code**. Detection
 from your public IP is offered too, but it follows a VPN to its exit node
 rather than following you, so search is the reliable path. Picking a search

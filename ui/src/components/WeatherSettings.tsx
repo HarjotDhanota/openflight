@@ -23,6 +23,16 @@ import { TextKeyboard } from './TextKeyboard';
 import './WeatherSettings.css';
 
 /**
+ * How often local weather may re-fetch itself. Mirrors
+ * AUTO_REFRESH_CHOICES_MINUTES in environment/config.py, which is also the
+ * server-side allowlist -- an interval outside this set is refused there.
+ *
+ * Nothing under 15 minutes: Open-Meteo's models update hourly, so a faster
+ * poll re-fetches identical numbers.
+ */
+const AUTO_REFRESH_CHOICES = [0, 15, 30, 60] as const;
+
+/**
  * Air density settings.
  *
  * Carry scales with air density, and before this existed every number assumed
@@ -302,6 +312,27 @@ export function WeatherSettingsView({
               onClose={() => setSearching(false)}
             />
           )}
+          {/* Auto-refresh. Only ever fires once a fetch you asked for has
+              succeeded, so it cannot start reaching out on a fresh install. */}
+          <div className="weather-refresh">
+            <span className="weather-refresh__label">Keep it up to date</span>
+            <div className="weather-refresh__choices">
+              {AUTO_REFRESH_CHOICES.map((minutes) => (
+                <button
+                  key={minutes}
+                  type="button"
+                  className={`weather-refresh__choice ${
+                    draft.auto_refresh_minutes === minutes ? 'weather-refresh__choice--on' : ''
+                  }`}
+                  aria-pressed={draft.auto_refresh_minutes === minutes}
+                  onClick={() => update({ auto_refresh_minutes: minutes })}
+                >
+                  {minutes === 0 ? 'Off' : `${minutes} min`}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {reading.age_s != null && reading.age_s > 3600 && (
             <p className="weather-hint">
               Last updated {Math.round(reading.age_s / 3600)} h ago. Tap refresh if conditions have changed.

@@ -357,3 +357,41 @@
   border-top: 1px solid rgba(245, 240, 230, 0.06);
   padding-top: var(--space-md);
 }
+
+/* Auto-refresh interval. A segmented row rather than a dropdown: four coarse
+   choices, and a native <select> on the kiosk opens a list nobody can dismiss
+   without a keyboard. */
+.weather-refresh {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.weather-refresh__label {
+  font-size: 0.8rem;
+}
+
+.weather-refresh__choices {
+  display: flex;
+  gap: var(--space-xs, 0.35rem);
+}
+
+.weather-refresh__choice {
+  flex: 1;
+  min-height: 44px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(245, 240, 230, 0.18);
+  background: rgba(245, 240, 230, 0.04);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.weather-refresh__choice--on {
+  background: rgba(212, 175, 55, 0.16);
+  border-color: rgba(212, 175, 55, 0.45);
+  color: var(--color-gold);
+  font-weight: 600;
+}

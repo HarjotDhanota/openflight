@@ -98,4 +98,6 @@ export interface WeatherSettings {
   show_standard: boolean;
   standard_temp_c: number;
   standard_elevation_m: number;
+  /** Minutes between background re-fetches; 0 is off. */
+  auto_refresh_minutes: number;
 }
