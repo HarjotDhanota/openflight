@@ -6,15 +6,15 @@ asks it rather than reimplementing the precedence.
 
 Source order, best first:
 
-  1. bme280     a fitted sensor, measuring the air the ball flies through
-  2. manual     the user typed the numbers
-  3. open-meteo fetched for the configured location, cached until refreshed
-  4. elevation  temperature plus an ISA pressure estimate, no barometer
-  5. default    ISA sea level -- the only behaviour before this subsystem
+  1. manual     the user typed the numbers
+  2. open-meteo fetched for the configured location, cached until refreshed
+  3. elevation  temperature plus an ISA pressure estimate, no barometer
+  4. default    ISA sea level -- the only behaviour before this subsystem
 
-The sensor outranks fetched weather deliberately. An API returns a grid-cell
-average of OUTDOOR conditions; in a 22 C garage on a 36 C day that correction
-is actively wrong, worse than none. The sensor cannot have that failure.
+A fitted BME280 will sit above all of these when the driver lands, because an
+API returns a grid-cell average of OUTDOOR conditions and in a 22 C garage on
+a 36 C day that correction is actively wrong -- worse than none. That is a
+separate change; nothing here pretends to support a sensor that has no driver.
 
 Nothing here performs network or bus I/O. Values are pushed in by their
 owners; ``current()`` is a pure read so it is safe from the shot path.
@@ -41,10 +41,6 @@ from openflight.environment.density import (
 logger = logging.getLogger(__name__)
 
 ISA_DENSITY = 1.225
-
-# A sensor reading older than this means the poll thread has died or the bus
-# has gone quiet; fall through rather than trust it.
-SENSOR_STALE_S = 60.0
 
 
 @dataclass
@@ -79,18 +75,7 @@ class EnvironmentProvider:
 
     def __init__(self, config: WeatherConfig):
         self.config = config
-        self._sensor: Optional[dict] = None
-        self._sensor_at: float = 0.0
         self._override: Optional[EnvironmentReading] = None
-
-    def set_sensor_reading(self, temp_c: float, pressure_hpa: float, humidity_pct: float) -> None:
-        """Called by the BME280 poll thread. Cheap; safe to call often."""
-        self._sensor = {
-            "temp_c": temp_c,
-            "pressure_hpa": pressure_hpa,
-            "humidity_pct": humidity_pct,
-        }
-        self._sensor_at = time.monotonic()
 
     def set_fetched_weather(self, temp_c: float, pressure_hpa: float, humidity_pct: float) -> None:
         """Called after a successful Open-Meteo fetch. Persisted by the caller."""
@@ -104,17 +89,6 @@ class EnvironmentProvider:
     def set_cli_override(self, reading: Optional[EnvironmentReading]) -> None:
         """Session-only override from CLI flags. Outranks everything, never saved."""
         self._override = reading
-
-    def sensor_present(self) -> bool:
-        """True when a sensor has reported recently.
-
-        Deliberately separate from whether the sensor is the ACTIVE source --
-        a fitted sensor sitting unused because the mode is manual or off is a
-        misconfiguration the UI should be able to point out.
-        """
-        if self._sensor is None:
-            return False
-        return (time.monotonic() - self._sensor_at) <= SENSOR_STALE_S
 
     def standard_density(self) -> float:
         """Air density at the user's fixed reference conditions.
@@ -132,16 +106,8 @@ class EnvironmentProvider:
         if self.config.mode == MODE_OFF:
             return EnvironmentReading(ISA_DENSITY, "default")
 
-        reading = self._from_sensor() or self._from_manual() or self._from_cache()
+        reading = self._from_manual() or self._from_cache()
         return reading or EnvironmentReading(ISA_DENSITY, "default")
-
-    def _from_sensor(self) -> Optional[EnvironmentReading]:
-        if self._sensor is None:
-            return None
-        age = time.monotonic() - self._sensor_at
-        if age > SENSOR_STALE_S:
-            return None
-        return self._build(self._sensor, "bme280", age_s=age)
 
     def _from_manual(self) -> Optional[EnvironmentReading]:
         if self.config.mode != MODE_MANUAL or self.config.manual_temp_c is None:

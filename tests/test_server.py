@@ -2981,12 +2981,13 @@ class TestSetWeatherSettings:
         assert weather.provider.config.manual_temp_c == 36.0
         assert "weather_error" in [event for event, *_ in weather.emitted]
 
-    def test_settings_payload_reports_sensor_presence(self, weather):
-        weather.provider.set_sensor_reading(22.0, 1005.0, 40.0)
-
+    def test_settings_payload_carries_both_namespaces(self, weather):
+        """Manual entry and local weather are separate set-ups, so the payload
+        has to carry both rather than one shared field per value."""
         payload = server_module._weather_settings_payload()
 
-        assert payload["sensor_present"] is True
+        for key in ("elevation_m", "manual_elevation_m", "indoor_temp_c", "manual_temp_c"):
+            assert key in payload
 
     def test_an_implausible_elevation_is_stored_but_warned_about(self, weather, caplog):
         """Someone might genuinely be in Leadville, so it is never silently

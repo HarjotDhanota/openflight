@@ -205,17 +205,19 @@ assumed ISA sea level — 15 °C, 1013.25 hPa, dry — which is worth about 5.6 
 on a driver on a 97 °F afternoon at a **sea-level** venue, and roughly 14 yd in
 Denver. Open **Settings → Conditions** and pick a source:
 
-| Source          | How it is obtained                     | Notes                                                    |
-| --------------- | -------------------------------------- | -------------------------------------------------------- |
-| Sensor (BME280) | Fitted to the unit, polled locally     | Best. Measures the air the ball actually flies through    |
-| Manual          | You type temperature/pressure/humidity | Enter **absolute station pressure**, not the sea-level value a weather app shows |
-| Local weather   | Open-Meteo, fetched when you tap        | Outdoor grid-cell average; no polling, no background I/O  |
-| No correction   | ISA sea level                          | Exactly the pre-2026 behaviour                            |
+| Source        | How it is obtained                     | Notes                                                     |
+| ------------- | -------------------------------------- | --------------------------------------------------------- |
+| Manual        | You type temperature/pressure/humidity | Enter **absolute station pressure**, not the sea-level value a weather app shows |
+| Local weather | Open-Meteo, fetched when you tap       | Outdoor grid-cell average; no polling, no background I/O  |
+| No correction | ISA sea level                          | Exactly the pre-2026 behaviour                            |
 
-A fitted sensor always outranks fetched weather: an API reports outdoor
-conditions, and in a 22 °C garage on a 36 °C day that "correction" is worse
-than none. Playing indoors keeps the fetched **pressure** (buildings are not
-pressure vessels) and replaces only the **temperature**.
+An on-unit BME280 will outrank both when its driver lands — an API reports
+outdoor conditions, and in a 22 °C garage on a 36 °C day that "correction" is
+worse than none. That is a separate change; nothing here claims sensor support
+that does not exist yet.
+
+Playing indoors keeps the fetched **pressure** (buildings are not pressure
+vessels) and replaces only the **temperature**.
 
 Set your location by **searching for a place name or postal code**. Detection
 from your public IP is offered too, but it follows a VPN to its exit node

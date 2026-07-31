@@ -158,7 +158,6 @@ export function WeatherSettingsView({
   };
 
   const uncorrected = isUncorrected(reading.source);
-  const sensorInUse = reading.source === 'bme280';
   // Above this an entered elevation is far more likely to be a fudge than a
   // fact -- R10 users set 10,000 ft to make numbers look right, which silently
   // corrupts every carry figure.
@@ -175,17 +174,6 @@ export function WeatherSettingsView({
           {SOURCE_LABELS[reading.source] ?? reading.source}
         </span>
       </header>
-
-      {draft.sensor_present && (
-        <div className={`weather-sensor ${sensorInUse ? '' : 'weather-sensor--idle'}`}>
-          <span className="weather-sensor__dot" aria-hidden="true" />
-          <span>
-            {sensorInUse
-              ? 'BME280 connected — measuring the air at the unit'
-              : 'BME280 connected but not in use with this source'}
-          </span>
-        </div>
-      )}
 
       {/* Density altitude leads: "plays like 2,700 ft" can be checked against
           experience, where a percentage cannot. The raw density and the
@@ -221,7 +209,7 @@ export function WeatherSettingsView({
           <label key={mode}>
             <input type="radio" name="weather-mode" checked={draft.mode === mode} onChange={() => selectMode(mode)} />
             <span>
-              {mode === 'auto' && (draft.sensor_present ? 'Sensor' : 'Local weather')}
+              {mode === 'auto' && 'Local weather'}
               {mode === 'manual' && 'Enter manually'}
               {mode === 'off' && 'No correction'}
             </span>
@@ -229,7 +217,7 @@ export function WeatherSettingsView({
         ))}
       </fieldset>
 
-      {draft.mode === 'auto' && !draft.sensor_present && (
+      {draft.mode === 'auto' && (
         <section className="weather-location">
           {/* Consent gates both actions, so it comes first. It used to sit
               under the buttons it controls, which read as unrelated. */}

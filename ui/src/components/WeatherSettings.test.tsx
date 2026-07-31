@@ -1,4 +1,4 @@
-﻿import { renderToString } from 'react-dom/server';
+import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { EnvironmentReading, LocationResult, WeatherSettings as Settings } from '../types/socket';
 import type { UnitSystem } from '../utils/units';
@@ -33,7 +33,6 @@ const settings = (overrides: Partial<Settings> = {}): Settings => ({
   show_standard: true,
   standard_temp_c: 25,
   standard_elevation_m: 0,
-  sensor_present: false,
   ...overrides,
 });
 
@@ -77,26 +76,13 @@ describe('WeatherSettingsView', () => {
     expect(html).toContain('weather-badge--ok');
   });
 
-  it('shows the sensor row when a BME280 is fitted', () => {
-    const html = render({ settings: settings({ sensor_present: true }) });
-
-    expect(html).toContain('BME280 connected');
-  });
-
-  it('hides the sensor row when none is fitted', () => {
+  it('does not advertise a sensor, since no driver exists yet', () => {
+    // The provider hook, the precedence entry and this row were all removed
+    // rather than shipped unreachable. They return with the BME280 driver.
     const html = render();
 
-    expect(html).not.toContain('BME280 connected');
-  });
-
-  it('says the sensor is idle when something else is the active source', () => {
-    // A fitted sensor sitting unused is a misconfiguration worth surfacing.
-    const html = render({
-      settings: settings({ sensor_present: true }),
-      reading: reading({ source: 'manual' }),
-    });
-
-    expect(html).toContain('not in use with this source');
+    expect(html).not.toContain('BME280');
+    expect(html).not.toContain('Sensor');
   });
 
   it('renders temperature in Fahrenheit for imperial users', () => {

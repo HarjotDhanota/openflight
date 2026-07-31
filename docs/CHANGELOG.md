@@ -14,10 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **5.6 yd on a driver in Sacramento at 97 °F** (a sea-level venue, so pure
   temperature error) and **14 yd in Denver**; the same swing appears within one
   day at one venue, and both readings were reported as identical. Conditions
-  now come from a fitted BME280, from values you type, or from an Open-Meteo
-  lookup you trigger, in that order — the sensor outranks fetched weather
-  because an API returns an outdoor grid-cell average, which in a 22 °C garage
-  on a 36 °C day is a correction that is actively wrong. Physics-simulated
+  now come from values you type or from an Open-Meteo lookup you trigger, set
+  by searching for a place or postal code. An on-unit BME280 will outrank both
+  when its driver lands, because an API returns an outdoor grid-cell average,
+  which in a 22 °C garage on a 36 °C day is a correction that is actively
+  wrong. Physics-simulated
   carry passes density into the integrator; the table estimator gets a scalar
   correction whose worst-case error against the integrator is under 1% of carry
   across the whole bag. **With nothing configured, every number is unchanged.**

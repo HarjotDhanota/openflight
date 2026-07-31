@@ -2,7 +2,10 @@
 
 The precedence chain is the whole contract of this subsystem:
 
-    CLI override > bme280 > manual > open-meteo cache > elevation > ISA default
+    CLI override > manual > open-meteo cache > elevation > ISA default
+
+(A fitted BME280 will sit above all of these when its driver lands; it is a
+separate change, and nothing here pretends to support it yet.)
 
 Everything below pins one link of it. The two properties that matter most are
 that ``current()`` never raises (it is called from the shot path) and that an
@@ -43,7 +46,6 @@ def make_provider(**config_kwargs):
     return EnvironmentProvider(WeatherConfig(**config_kwargs))
 
 
-SENSOR = {"temp_c": 22.0, "pressure_hpa": 1005.0, "humidity_pct": 40.0}
 CACHED = {"temp_c": 36.1, "pressure_hpa": 1010.2, "humidity_pct": 25.0, "fetched_at": 1000.0}
 
 
@@ -64,27 +66,11 @@ class TestDefault:
 
 
 class TestPrecedence:
-    def test_cli_override_beats_a_live_sensor(self, clock):
-        provider = make_provider()
-        provider.set_sensor_reading(**SENSOR)
+    def test_cli_override_beats_everything(self, clock):
+        provider = make_provider(mode=MODE_MANUAL, manual_temp_c=5.0, cached=dict(CACHED))
         provider.set_cli_override(EnvironmentReading(0.99, "manual"))
 
         assert provider.current().air_density_kg_m3 == pytest.approx(0.99)
-
-    def test_sensor_beats_fetched_weather(self, clock):
-        """An API returns a grid-cell average of OUTDOOR air. In a 22 C garage
-        on a 36 C day that correction is worse than none; the sensor is
-        measuring the air the ball actually flies through."""
-        provider = make_provider(cached=dict(CACHED))
-        provider.set_sensor_reading(**SENSOR)
-
-        assert provider.current().source == "bme280"
-
-    def test_sensor_beats_manual_entry(self, clock):
-        provider = make_provider(mode=MODE_MANUAL, manual_temp_c=5.0)
-        provider.set_sensor_reading(**SENSOR)
-
-        assert provider.current().source == "bme280"
 
     def test_manual_beats_the_fetch_cache(self, clock):
         provider = make_provider(
@@ -121,80 +107,18 @@ class TestPrecedence:
         assert provider.current().source == "default"
 
 
-class TestStaleSensor:
-    def test_fresh_sensor_is_used(self, clock):
-        provider = make_provider()
-        provider.set_sensor_reading(**SENSOR)
-        clock.advance(59.0)
-
-        assert provider.current().source == "bme280"
-
-    def test_stale_sensor_falls_through_to_the_next_source(self, clock):
-        """A sensor older than a minute means the poll thread died or the bus
-        went quiet. Stale air is not the air the ball is flying through."""
-        provider = make_provider(cached=dict(CACHED))
-        provider.set_sensor_reading(**SENSOR)
-        clock.advance(61.0)
-
-        assert provider.current().source == "open-meteo"
-
-    def test_stale_sensor_with_nothing_behind_it_gives_isa(self, clock):
-        provider = make_provider()
-        provider.set_sensor_reading(**SENSOR)
-        clock.advance(61.0)
-
-        assert provider.current().source == "default"
-
-    def test_reading_reports_its_own_age(self, clock):
-        provider = make_provider()
-        provider.set_sensor_reading(**SENSOR)
-        clock.advance(12.0)
-
-        assert provider.current().age_s == pytest.approx(12.0)
-
-
-class TestSensorPresence:
-    def test_sensor_present_is_independent_of_the_active_source(self, clock):
-        """A fitted sensor sitting unused -- here because a CLI flag overrides
-        it -- is a misconfiguration the settings screen should be able to point
-        out, so presence is reported separately from what is actually in use."""
-        provider = make_provider(mode=MODE_MANUAL, manual_temp_c=20.0)
-        provider.set_sensor_reading(**SENSOR)
-        provider.set_cli_override(EnvironmentReading(0.99, "manual"))
-
-        assert provider.current().source == "manual"
-        assert provider.sensor_present() is True
-
-    def test_no_sensor_reported(self):
-        assert make_provider().sensor_present() is False
-
-    def test_stale_sensor_is_not_present(self, clock):
-        provider = make_provider()
-        provider.set_sensor_reading(**SENSOR)
-        clock.advance(61.0)
-
-        assert provider.sensor_present() is False
-
-    def test_present_even_when_mode_is_off(self, clock):
-        provider = make_provider(mode=MODE_OFF)
-        provider.set_sensor_reading(**SENSOR)
-
-        assert provider.sensor_present() is True
-
-
 class TestModeOff:
-    def test_off_returns_isa_despite_a_live_sensor(self, clock):
+    def test_off_returns_isa_despite_cached_weather(self, clock):
         """ "No correction" has to mean it, or the setting is a lie."""
-        provider = make_provider(mode=MODE_OFF)
-        provider.set_sensor_reading(**SENSOR)
+        provider = make_provider(mode=MODE_OFF, cached=dict(CACHED))
 
         reading = provider.current()
 
         assert reading.source == "default"
         assert reading.air_density_kg_m3 == ISA_DENSITY
 
-    def test_off_returns_isa_despite_cached_weather(self, clock):
-        provider = make_provider(mode=MODE_OFF, cached=dict(CACHED))
+    def test_off_returns_isa_despite_manual_entry(self, clock):
+        provider = make_provider(mode=MODE_OFF, manual_temp_c=36.0, manual_pressure_hpa=1010.0)
 
         assert provider.current().air_density_kg_m3 == ISA_DENSITY
 
@@ -244,7 +168,7 @@ class TestBadValuesDegrade:
     runs on the shot path, and a failed conversion there loses the shot."""
 
     @pytest.mark.parametrize(
-        "bad_sensor",
+        "bad_values",
         [
             {"temp_c": -300.0, "pressure_hpa": 1005.0, "humidity_pct": 40.0},
             {"temp_c": 22.0, "pressure_hpa": 0.0, "humidity_pct": 40.0},
@@ -252,20 +176,28 @@ class TestBadValuesDegrade:
             {"temp_c": 900.0, "pressure_hpa": 1005.0, "humidity_pct": 40.0},
         ],
     )
-    def test_impossible_sensor_values_fall_through_to_default(self, clock, bad_sensor):
-        provider = make_provider()
-        provider.set_sensor_reading(**bad_sensor)
+    def test_impossible_cached_values_fall_through_to_default(self, clock, bad_values):
+        """A garbled fetch, or a hand-edited config, must not become a density
+        that quietly skews every carry number for the session."""
+        provider = make_provider(cached=dict(bad_values, fetched_at=1000.0))
 
         reading = provider.current()
 
         assert reading.source == "default"
         assert reading.air_density_kg_m3 == ISA_DENSITY
 
-    def test_impossible_sensor_values_do_not_mask_a_good_cache(self, clock):
-        provider = make_provider(cached=dict(CACHED))
-        provider.set_sensor_reading(temp_c=-300.0, pressure_hpa=1005.0, humidity_pct=40.0)
+    @pytest.mark.parametrize(
+        "bad_manual",
+        [
+            {"manual_temp_c": -300.0, "manual_pressure_hpa": 1005.0},
+            {"manual_temp_c": 22.0, "manual_pressure_hpa": 0.0},
+            {"manual_temp_c": 900.0, "manual_pressure_hpa": 1005.0},
+        ],
+    )
+    def test_impossible_manual_values_fall_through_to_default(self, clock, bad_manual):
+        provider = make_provider(mode=MODE_MANUAL, **bad_manual)
 
-        assert provider.current().source == "open-meteo"
+        assert provider.current().source == "default"
 
     def test_corrupt_cache_entry_falls_through(self, clock):
         provider = make_provider(cached={"temp_c": None, "pressure_hpa": 1010.2})
@@ -278,8 +210,8 @@ class TestBadValuesDegrade:
         assert provider.current().source == "default"
 
     def test_missing_humidity_defaults_rather_than_failing(self, clock):
-        """Humidity is the smallest term; a sensor that only reports two of
-        three values is still worth using."""
+        """Humidity is the smallest term; a source that only reports two of
+        the three values is still worth using."""
         provider = make_provider(cached={"temp_c": 20.0, "pressure_hpa": 1013.25})
 
         reading = provider.current()
@@ -311,7 +243,7 @@ class TestStandardDensity:
         or sessions on different days stop being comparable."""
         provider = make_provider()
         baseline = provider.standard_density()
-        provider.set_sensor_reading(temp_c=40.0, pressure_hpa=980.0, humidity_pct=80.0)
+        provider.set_fetched_weather(40.0, 980.0, 80.0)
 
         assert provider.standard_density() == pytest.approx(baseline)
 

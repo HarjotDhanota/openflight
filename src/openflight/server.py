@@ -2101,7 +2101,7 @@ def _apply_standard_carry(shot: Shot, conditions=None) -> None:
 
 
 def _weather_settings_payload() -> dict:
-    """Settings as the UI needs them, including whether a sensor is fitted."""
+    """Settings as the UI needs them."""
     config = environment_provider.config
     return {
         "mode": config.mode,
@@ -2120,7 +2120,6 @@ def _weather_settings_payload() -> dict:
         "show_standard": config.show_standard,
         "standard_temp_c": config.standard_temp_c,
         "standard_elevation_m": config.standard_elevation_m,
-        "sensor_present": environment_provider.sensor_present(),
     }
 
 

@@ -350,38 +350,6 @@
   margin: 0;
 }
 
-/* Sensor presence. Distinct from the source badge: the badge says what is
-   being USED, this says what is CONNECTED. Both matter -- a fitted sensor
-   that isn't being used is a misconfiguration worth surfacing. */
-.weather-sensor {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.82rem;
-  color: var(--color-success);
-  background: rgba(74, 222, 128, 0.08);
-  border-radius: var(--radius-sm);
-  padding: var(--space-sm);
-}
-
-.weather-sensor__dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-  flex: 0 0 auto;
-  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.18);
-}
-
-.weather-sensor--idle {
-  color: var(--color-cream-muted);
-  background: rgba(245, 240, 230, 0.05);
-}
-
-.weather-sensor--idle .weather-sensor__dot {
-  box-shadow: 0 0 0 3px rgba(245, 240, 230, 0.1);
-}
-
 .weather-standard {
   display: flex;
   flex-direction: column;

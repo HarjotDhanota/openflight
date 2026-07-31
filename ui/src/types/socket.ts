@@ -54,7 +54,7 @@ export interface DebugShotLog {
 /** Resolved air-density conditions currently applied to carry. */
 export interface EnvironmentReading {
   air_density_kg_m3: number;
-  /** 'bme280' | 'manual' | 'open-meteo' | 'elevation' | 'default' */
+  /** 'manual' | 'open-meteo' | 'elevation' | 'default' */
   source: string;
   temp_c: number | null;
   pressure_hpa: number | null;
@@ -98,6 +98,4 @@ export interface WeatherSettings {
   show_standard: boolean;
   standard_temp_c: number;
   standard_elevation_m: number;
-  /** True when a sensor is fitted; the UI hides manual entry as the primary path. */
-  sensor_present: boolean;
 }
