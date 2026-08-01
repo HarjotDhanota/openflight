@@ -223,3 +223,36 @@ class TestDensityAltitude:
     def test_non_positive_density_is_refused(self, bad):
         with pytest.raises(ValueError):
             density_altitude_ft(bad)
+
+
+class TestNonFiniteHumidityIsRejected:
+    """Clamping alone laundered nonsense into a plausible answer: NaN survives
+    min/max untouched and poisons the density silently."""
+
+    @pytest.mark.parametrize("humidity", [float("nan"), float("inf"), float("-inf")])
+    def test_rejected(self, humidity):
+        with pytest.raises(ValueError):
+            air_density(20.0, 101325.0, humidity)
+
+    def test_the_provider_degrades_rather_than_serving_a_nan_density(self):
+        from openflight.environment.config import WeatherConfig
+        from openflight.environment.provider import EnvironmentProvider
+
+        provider = EnvironmentProvider(
+            WeatherConfig(
+                cached={
+                    "temp_c": 20.0,
+                    "pressure_hpa": 1013.0,
+                    "humidity_pct": float("nan"),
+                    "fetched_at": 1.0,
+                }
+            )
+        )
+
+        assert provider.current().source == "default"
+
+    @pytest.mark.parametrize("humidity", [0.0, 50.0, 100.0, -5.0, 120.0, 1e308])
+    def test_finite_values_including_absurd_ones_still_clamp(self, humidity):
+        """1e308 is out of range the same way 120 is, and the clamp is
+        documented behaviour for those -- only non-finite input is rejected."""
+        assert 1.0 < air_density(20.0, 101325.0, humidity) < 1.3

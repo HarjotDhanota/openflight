@@ -207,8 +207,13 @@ class SocketService {
     this.socket?.emit('toggle_camera_stream');
   }
 
-  setWeatherSettings(settings: WeatherSettings) {
-    this.socket?.emit('set_weather_settings', settings);
+  /**
+   * Send only the fields the user just changed. The server merges them, so a
+   * partial payload cannot clobber a value that arrived while the user was
+   * editing -- coordinates from an in-flight location fetch, most of all.
+   */
+  setWeatherSettings(patch: Partial<WeatherSettings>) {
+    this.socket?.emit('set_weather_settings', patch);
   }
 
   /**

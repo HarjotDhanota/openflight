@@ -290,3 +290,54 @@ class TestAutoRefreshDue:
         path.write_text(json.dumps({"auto_refresh_minutes": 7}), encoding="utf-8")
 
         assert cfg.load_config(path).auto_refresh_minutes == cfg.DEFAULT_AUTO_REFRESH_MINUTES
+
+
+class TestMalformedInputCannotCrashTheServer:
+    """Every one of these was reproduced before being fixed.
+
+    The common thread: these values come from a JSON file a user can edit or
+    from a socket payload, and all of them reached arithmetic or string
+    formatting that assumed a number.
+    """
+
+    @pytest.mark.parametrize("payload", ["[]", "null", '"bad"', "1", "true"])
+    def test_valid_json_of_the_wrong_shape_still_gives_defaults(self, path, payload):
+        """`[]` parses fine and then raises on .get(). load_config runs while
+        the server builds its global provider, so this stopped it booting."""
+        path.write_text(payload, encoding="utf-8")
+
+        assert cfg.load_config(path) == cfg.WeatherConfig()
+
+    @pytest.mark.parametrize(
+        "field, value",
+        [
+            ("manual_temp_c", "hot"),
+            ("manual_temp_c", []),
+            ("manual_pressure_hpa", {}),
+            ("manual_humidity_pct", "wet"),
+        ],
+    )
+    def test_non_numeric_values_degrade_rather_than_raise(self, field, value):
+        """This runs on the shot path, outside the caller's exception guard --
+        raising here loses the shot, not just the correction."""
+        from openflight.environment.provider import EnvironmentProvider
+
+        config = cfg.WeatherConfig(mode=cfg.MODE_MANUAL, manual_temp_c=20.0)
+        setattr(config, field, value)
+        provider = EnvironmentProvider(config)
+
+        reading = provider.current()
+
+        assert reading.source == "default"
+        assert reading.air_density_kg_m3 == pytest.approx(1.225)
+
+    def test_a_non_numeric_value_does_not_break_its_own_error_log(self):
+        """The rejection log used %.1f, which raises on a string -- inside the
+        handler meant to swallow exactly that."""
+        from openflight.environment.provider import EnvironmentProvider
+
+        provider = EnvironmentProvider(
+            cfg.WeatherConfig(mode=cfg.MODE_MANUAL, manual_temp_c="hot", manual_pressure_hpa=1010.0)
+        )
+
+        assert provider.current().source == "default"

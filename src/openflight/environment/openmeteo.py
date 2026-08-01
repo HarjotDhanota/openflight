@@ -256,8 +256,12 @@ def search_locations(
             continue
         latitude = _as_float(entry.get("latitude"))
         longitude = _as_float(entry.get("longitude"))
+        # Must be a string, not merely truthy: a numeric or object `name`
+        # builds a LocationResult whose `label` then raises when the caller
+        # formats it -- outside this function's guard, so the UI would sit
+        # waiting for results that never arrive.
         name = entry.get("name")
-        if latitude is None or longitude is None or not name:
+        if latitude is None or longitude is None or not isinstance(name, str) or not name:
             continue
         if not _coordinates_are_sane(latitude, longitude):
             continue
@@ -299,9 +303,10 @@ def lookup_location(
         logger.warning("[WEATHER] Location lookup returned %.4f, %.4f", latitude, longitude)
         return None
 
-    city = payload.get("city")
-    region = payload.get("region")
-    label = ", ".join(part for part in (city, region) if part) or None
+    # Same reason as search_locations: a non-string city or region would raise
+    # in the join rather than simply being absent from the label.
+    parts = [payload.get("city"), payload.get("region")]
+    label = ", ".join(part for part in parts if isinstance(part, str) and part) or None
     return Location(latitude=latitude, longitude=longitude, label=label)
 
 

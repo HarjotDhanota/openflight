@@ -160,11 +160,20 @@ class EnvironmentProvider:
             return None
         try:
             density = air_density(temp_c, pressure_hpa * 100.0, humidity)
-        except ValueError:
+        except (ValueError, TypeError):
+            # TypeError as well as ValueError: these values come from a JSON
+            # file a user can edit and from socket payloads, so a string or a
+            # list reaches the arithmetic. This runs on the shot path, outside
+            # the caller's exception guard -- anything raising here loses the
+            # shot, not just the correction.
             # Out-of-range values mean a faulty sensor or a bad manual entry.
             # Loud in the log, but the shot still gets a number.
+            #
+            # %r, not %.1f: the values may not be numbers, and a formatting
+            # error inside the handler would raise the very exception this is
+            # here to swallow.
             logger.warning(
-                "[WEATHER] Rejecting %s reading: %.1f C, %.1f hPa, %.0f%% RH",
+                "[WEATHER] Rejecting %s reading: %r C, %r hPa, %r%% RH",
                 source,
                 temp_c,
                 pressure_hpa,

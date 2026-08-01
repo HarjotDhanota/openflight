@@ -2149,6 +2149,11 @@ def handle_get_weather():
 @socketio.on("set_weather_settings")
 def handle_set_weather_settings(data):
     """Persist settings edited in the UI, then broadcast the new resolution."""
+    # A malformed client sends null, a list or a bare string; .get() would
+    # raise rather than the payload simply being ignored.
+    if not isinstance(data, dict):
+        logger.warning("[WEATHER] Ignoring malformed settings payload: %r", data)
+        return
     config = environment_provider.config
     mode = data.get("mode")
     if mode in VALID_MODES:
@@ -2351,8 +2356,11 @@ def detect_location_now() -> None:
     config.longitude = None
     config.location_label = None
     # The detected city's elevation is unknown, and keeping the previous one
-    # would silently apply the old venue's terrain to the new place.
+    # would silently apply the old venue's terrain to the new place. Same for
+    # its cached weather, which would otherwise keep being served under the
+    # new location if this fetch fails.
     config.elevation_m = None
+    config.cached = {}
     refresh_weather_now()
 
 
@@ -2401,17 +2409,24 @@ def handle_search_locations(data):
 
 
 def select_location_now(latitude: float, longitude: float, label, elevation_m) -> None:
-    """Adopt a searched location and immediately fetch its conditions."""
+    """Adopt a searched location and immediately fetch its conditions.
+
+    Everything tied to the old place is dropped together. Keeping any of it
+    produces a reading that looks authoritative and is silently wrong: the
+    previous venue's elevation would set the terrain the new location's
+    pressure is computed at, and the previous venue's cached weather would go
+    on being applied under the new label if this fetch fails.
+    """
     config = environment_provider.config
     config.latitude = latitude
     config.longitude = longitude
-    if label:
-        config.location_label = label
-    # The search already knows the elevation, and it is the term the user is
-    # least able to supply. Taking it here is the difference between a fetch
-    # whose pressure is for the right ground and one that is quietly ~1% out.
-    if elevation_m is not None:
-        config.elevation_m = elevation_m
+    config.location_label = label or None
+    # The search usually knows the elevation, and it is the term the user is
+    # least able to supply. When it does not, None means "unknown" -- which
+    # makes Open-Meteo report pressure at its own terrain -- rather than
+    # silently inheriting the elevation of a city you have left.
+    config.elevation_m = elevation_m
+    config.cached = {}
     refresh_weather_now()
 
 

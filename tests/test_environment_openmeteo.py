@@ -347,3 +347,45 @@ class TestSearchLocations:
         transport = FakeTransport([geocoding_body(broken)])
 
         assert om.search_locations("Sacram", request_fn=transport)[0].elevation_m is None
+
+
+class TestAResultWithANonStringNameIsDropped:
+    """A LocationResult whose `name` is not a string builds fine and then
+    raises inside `label`, in the caller -- outside this function's guard. The
+    UI would sit spinning for results that never arrive."""
+
+    @pytest.mark.parametrize("name", [123, None, {}, [], ""])
+    def test_dropped(self, name):
+        transport = FakeTransport([geocoding_body(place(name=name))])
+
+        assert om.search_locations("Sacram", request_fn=transport) == []
+
+    def test_a_good_result_alongside_a_bad_one_still_comes_back(self):
+        transport = FakeTransport([geocoding_body(place(name=123), place())])
+
+        results = om.search_locations("Sacram", request_fn=transport)
+
+        assert [r.label for r in results] == ["Sacramento, California, US"]
+
+
+class TestLookupLocationCopesWithANonStringLabel:
+    """Same failure, different endpoint: ipapi is a third-party service whose
+    shape we do not control, and the join raises on a non-string part."""
+
+    @pytest.mark.parametrize("city, region", [(123, "California"), (None, {}), ([], [])])
+    def test_a_non_string_part_is_omitted_rather_than_raising(self, city, region):
+        transport = FakeTransport(
+            [{"latitude": 38.58, "longitude": -121.49, "city": city, "region": region}]
+        )
+
+        location = om.lookup_location(request_fn=transport)
+
+        assert location is not None
+        assert location.latitude == pytest.approx(38.58)
+
+    def test_the_string_part_of_a_mixed_pair_is_kept(self):
+        transport = FakeTransport(
+            [{"latitude": 38.58, "longitude": -121.49, "city": 123, "region": "California"}]
+        )
+
+        assert om.lookup_location(request_fn=transport).label == "California"

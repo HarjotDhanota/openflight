@@ -196,11 +196,24 @@ describe('WeatherSettingsView', () => {
   it('keeps manual entry and local weather on separate fields', () => {
     // Switching to manual, typing junk, and switching back must leave local
     // exactly as it was -- so the two elevations are different settings.
-    const html = render({
-      settings: settings({ mode: 'manual', elevation_m: 9, manual_elevation_m: 1609 }),
-    });
+    //
+    // Asserts the rendered NUMBERS, not just the hint that says so: the hint
+    // was there while the two fields were still one, which is the bug this
+    // test is named for. 1609 m is 5279 ft, 9 m is 30 ft.
+    // The location line only renders in auto mode and the manual elevation
+    // only in manual mode, so the proof is that ONE settings object renders a
+    // different number in each. While the two shared `elevation_m` both read
+    // 5279. 1609 m is 5279 ft; 9 m is 30 ft.
+    const both = settings({ elevation_m: 9, manual_elevation_m: 1609 });
 
-    expect(html).toContain('cannot change local weather');
+    const local = render({ settings: { ...both, mode: 'auto' } });
+    const manual = render({ settings: { ...both, mode: 'manual' } });
+
+    expect(manual).toContain('>5279<');
+    expect(manual).not.toContain('>30<');
+    expect(local).toContain('30 ft');
+    expect(local).not.toContain('5279');
+    expect(manual).toContain('cannot change local weather');
   });
 
   it('shows the venue elevation on the location line, where it steers the fetch', () => {

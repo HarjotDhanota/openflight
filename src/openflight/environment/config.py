@@ -181,7 +181,13 @@ def load_config(path: Path = CONFIG_PATH) -> WeatherConfig:
         return WeatherConfig()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return WeatherConfig()
+    # Valid JSON of the wrong shape is still a corrupt config. `[]`, `null`,
+    # `"bad"` and `1` all parse, and every one of them would raise on .get()
+    # below -- while the module is imported at server start, so the launch
+    # monitor would not boot at all.
+    if not isinstance(data, dict):
         return WeatherConfig()
 
     mode = data.get("mode", MODE_AUTO)

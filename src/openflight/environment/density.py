@@ -95,6 +95,17 @@ def air_density(temp_c: float, pressure_pa: float, humidity_pct: float = 0.0) ->
             "check the sensor is reading absolute pressure in pascals, not hPa"
         )
 
+    # Clamping alone would launder nonsense into a plausible answer: NaN
+    # survives min/max unchanged and poisons the density silently, and inf
+    # clamps to "saturated" as though it were a real reading. Both come
+    # straight off a JSON field, so reject rather than coerce -- the caller
+    # degrades to the previous source, which is the honest outcome.
+    #
+    # Merely huge finite values (1e308) do clamp, and that is right: they are
+    # out of range in the same way -5 or 120 are, and the clamp is documented
+    # behaviour for those.
+    if not math.isfinite(humidity_pct):
+        raise ValueError(f"humidity_pct={humidity_pct!r} is not a finite number")
     humidity = min(100.0, max(0.0, humidity_pct))
     vapour_pa = humidity / 100.0 * saturation_vapour_pressure_pa(temp_c)
     dry_pa = pressure_pa - vapour_pa

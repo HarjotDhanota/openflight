@@ -161,7 +161,11 @@ interface WeatherSettingsViewProps {
   unitSystem: UnitSystem;
   locationQuery?: string;
   locationResults?: LocationResult[];
-  onChange: (settings: Settings) => void;
+  // Only what changed. Sending the whole draft raced with any in-flight
+  // fetch: the draft is a snapshot from before the fetch started, so an edit
+  // made while "Detect location" is still running wrote its stale
+  // coordinates back over the ones that had just arrived.
+  onChange: (patch: Partial<Settings>) => void;
   onRefresh: () => void;
   onDetectLocation?: () => void;
   onSearchLocations?: (query: string) => void;
@@ -208,9 +212,10 @@ export function WeatherSettingsView({
   }
 
   const update = (patch: Partial<Settings>) => {
-    const next = { ...draft, ...patch };
-    setDraft(next);
-    onChange(next);
+    // Local draft still merges, so the panel stays optimistic; only the wire
+    // payload narrows to the patch. The server merges field by field.
+    setDraft({ ...draft, ...patch });
+    onChange(patch);
   };
 
   /**

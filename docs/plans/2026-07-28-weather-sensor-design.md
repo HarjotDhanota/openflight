@@ -275,6 +275,54 @@ A single density fudge corrects one and worsens the other. Whoever set 10,000 ft
 - **Altimeter / "shots gained by altitude" features.** Out of scope.
 - **Correcting historical shots.** Density is recorded per shot going forward; past sessions are not retro-adjusted.
 
+## Hardening: what an external audit found — 2026-07-31
+
+An independent pass over the branch found fourteen issues; thirteen were in
+code this work introduced. The pattern behind almost all of them is one thing:
+
+> Every value in this subsystem arrives from somewhere we do not control — a
+> JSON config a user can hand-edit, a Socket.IO payload from any client on the
+> LAN, or a third-party HTTP response. Nothing else in the repo has that
+> property, so nothing else in the repo needed to be defensive in this way.
+
+The dangerous half is that this subsystem also sits *on the shot path*.
+`EnvironmentProvider.current()` runs inside shot handling, outside the caller's
+exception guard, so anything that raises there loses the shot itself, not just
+the air-density correction. That asymmetry is what makes these worth fixing
+rather than tolerating.
+
+What changed, and why each one was reachable:
+
+| Fix | How it was reached |
+| --- | --- |
+| `load_config` rejects a non-dict JSON root | `[]` is valid JSON; `.get()` then raises while the server builds its global provider, so it never boots |
+| `_build` catches `TypeError` as well as `ValueError` | A string or list in `manual_temp_c` reaches the arithmetic; on the shot path this loses the shot |
+| That handler logs with `%r`, not `%.1f` | `%.1f` on a string raises *inside* the handler meant to swallow exactly that |
+| `air_density` rejects non-finite humidity | NaN survives `min`/`max` untouched and silently poisons the density; `inf` clamps to "saturated" as though real. Merely huge finite values still clamp, which is right — they are out of range the same way `120` is |
+| `search_locations` requires a string `name` | A numeric `name` builds a `LocationResult` whose `label` raises in the *caller*, so the UI waits forever for results that never arrive |
+| `lookup_location` filters non-strings out of its label | Same failure, different endpoint |
+| `handle_set_weather_settings` rejects a non-mapping payload | Socket.IO hands the handler whatever the client emitted; `.get()` on `None` raises in the event loop that every other tab shares |
+| Choosing a location clears the previous venue's cached weather | Otherwise the panel shows the old city's conditions under the new city's name — wrong in a way that looks entirely plausible |
+| An unknown elevation now *clears* the old one | The previous behaviour kept a stale elevation for a new venue. A test had enshrined it, so the test was wrong too and was replaced |
+| The UI sends a patch, not its whole draft | The draft is a snapshot from before an in-flight fetch. Editing anything while "Detect location" was running wrote the pre-fetch coordinates back over the ones that had just landed |
+
+Every one of these has a regression test that was confirmed to fail with the
+fix reverted. Three tests that existed but asserted nothing useful were also
+replaced — one checked that density was `None` without ever computing a carry,
+one asserted a property of the Python `or` operator rather than of the server,
+and one checked hint text rather than the two elevation fields it was named
+for.
+
+### Still open
+
+- **The 0.30 carry exponent** is documented as empirical but has no citation in
+  the repo. Whether to source it, measure it, or restate the claim more
+  narrowly is deferred — it changes what the docs assert, not what the code
+  does.
+- **Settings writes are not atomic.** Two clients editing at once can
+  interleave; a partial payload narrows the window a lot but does not close it.
+- **Refresh requests can pile up.** Nothing coalesces concurrent fetches.
+
 ## Open questions for review
 
 1. Per-`ClubType` k table vs single k = 0.30 vs no fallback-path correction at all (integration point #2).
