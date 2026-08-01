@@ -413,16 +413,37 @@
   gap: var(--space-xs, 0.35rem);
 }
 
+/* Two lines: the name, then every condition it fixes. Tapping a preset resets
+   elevation and humidity too, so naming only the temperature would hide a
+   custom elevation being thrown away. */
 .weather-preset__choice {
   flex: 1;
-  min-height: 44px;
+  min-width: 0;
+  min-height: 52px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 0.3rem 0.4rem;
   border-radius: var(--radius-sm);
   border: 1px solid rgba(245, 240, 230, 0.18);
   background: rgba(245, 240, 230, 0.04);
   color: var(--text-secondary);
-  font-size: 0.85rem;
   cursor: pointer;
   touch-action: manipulation;
+}
+
+.weather-preset__name {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.weather-preset__conditions {
+  font-size: 0.68rem;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .weather-preset__choice--on {

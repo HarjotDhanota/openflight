@@ -57,6 +57,25 @@ function referenceName(settings: Settings): string {
   return match ? match.name : 'Custom';
 }
 
+/**
+ * Every condition a reference fixes, spelled out.
+ *
+ * All three, not just temperature: tapping a preset also resets elevation and
+ * humidity, so a label naming only the temperature hides the fact that a
+ * custom elevation is about to be thrown away.
+ */
+function describeReference(temp_c: number, elevation_m: number, humidity_pct: number, unitSystem: UnitSystem): string {
+  const temp = formatTemp(temp_c, unitSystem);
+  const elevation =
+    elevation_m === 0
+      ? 'sea level'
+      : `${Math.round(convertElevationFromMeters(elevation_m, unitSystem)).toLocaleString('en-US')} ${getElevationUnit(unitSystem)}`;
+  // "dry" rather than "0% RH": it is what ISA actually specifies, and reads as
+  // a deliberate choice instead of a value someone forgot to fill in.
+  const humidity = humidity_pct === 0 ? 'dry' : `${Math.round(humidity_pct)}% RH`;
+  return `${temp} · ${elevation} · ${humidity}`;
+}
+
 function referenceHint(settings: Settings): string {
   switch (referenceName(settings)) {
     case 'ISA':
@@ -489,7 +508,13 @@ export function WeatherSettingsView({
                   reference". */}
               <div className="weather-preset">
                 <span className="weather-preset__label">
-                  Reference: <strong>{referenceName(draft)}</strong>
+                  Reference: <strong>{referenceName(draft)}</strong> —{' '}
+                  {describeReference(
+                    draft.standard_temp_c,
+                    draft.standard_elevation_m,
+                    draft.standard_humidity_pct,
+                    unitSystem
+                  )}
                 </span>
                 <div className="weather-preset__choices">
                   {REFERENCE_PRESETS.map((preset) => (
@@ -508,7 +533,10 @@ export function WeatherSettingsView({
                         })
                       }
                     >
-                      {preset.name} ({formatTemp(preset.temp_c, unitSystem)})
+                      <span className="weather-preset__name">{preset.name}</span>
+                      <span className="weather-preset__conditions">
+                        {describeReference(preset.temp_c, preset.elevation_m, preset.humidity_pct, unitSystem)}
+                      </span>
                     </button>
                   ))}
                 </div>

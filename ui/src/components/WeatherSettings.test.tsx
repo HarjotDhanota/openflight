@@ -296,6 +296,40 @@ describe('WeatherSettingsView', () => {
     expect(html).toContain('TrackMan');
   });
 
+  it('spells out every condition a preset fixes, not just temperature', () => {
+    // Tapping a preset resets elevation and humidity too, so a label naming
+    // only the temperature would hide a custom elevation being discarded.
+    const html = render();
+
+    expect(html).toContain('59.0 °F · sea level · dry'); // ISA
+    expect(html).toContain('77.0 °F · sea level · 50% RH'); // TrackMan
+  });
+
+  it('says "dry" rather than 0% for ISA, which is how ISA is defined', () => {
+    const html = render();
+
+    expect(html).toContain('· dry');
+    expect(html).not.toContain('· 0% RH');
+  });
+
+  it('summarises the reference actually in use, including a custom one', () => {
+    const html = render({
+      settings: settings({
+        standard_temp_c: 18,
+        standard_elevation_m: 1609,
+        standard_humidity_pct: 30,
+      }),
+    });
+
+    expect(html).toContain('64.4 °F · 5,279 ft · 30% RH');
+  });
+
+  it('describes the reference in the user unit system', () => {
+    const html = render({ unitSystem: 'metric' });
+
+    expect(html).toContain('15.0 °C · sea level · dry');
+  });
+
   it('defaults to ISA, so the reference agrees with the rest of the screen', () => {
     // With ISA selected, "plays like 0 ft" means today matches the reference.
     const html = render();
