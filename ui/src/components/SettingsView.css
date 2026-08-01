@@ -33,3 +33,38 @@
   user-select: text;
   -webkit-user-select: text;
 }
+
+/* A permanently visible, finger-wide scrollbar.
+ *
+ * Two reasons it is not the usual thin overlay. It is the affordance that says
+ * there is more below -- on a screen with no window chrome, nothing else does.
+ * And it is a fallback that needs no gesture at all: if drag-to-scroll ever
+ * fails on some panel, the bar can still be dragged directly. */
+.settings-view::-webkit-scrollbar {
+  width: 14px;
+}
+
+.settings-view::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 7px;
+}
+
+.settings-view::-webkit-scrollbar-thumb {
+  background: rgba(212, 175, 55, 0.45);
+  border-radius: 7px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+.settings-view::-webkit-scrollbar-thumb:active {
+  background: rgba(212, 175, 55, 0.75);
+  background-clip: content-box;
+}
+
+/* Firefox has no ::-webkit-scrollbar; this is the equivalent. */
+@supports (scrollbar-color: auto) {
+  .settings-view {
+    scrollbar-width: auto;
+    scrollbar-color: rgba(212, 175, 55, 0.45) rgba(0, 0, 0, 0.25);
+  }
+}
