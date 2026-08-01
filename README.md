@@ -238,10 +238,20 @@ type whatever you like, and switching back leaves local exactly as it was.
 **With nothing configured, every carry number is unchanged.**
 
 Optionally, a second *standard conditions* carry is shown under the main one —
-the same shot re-flown in fixed reference air (25 °C, sea level by default), so
-sessions on different days are comparable. It corrects for density only. Wind
-is never measured by either radar, which is why this is called "standard"
-rather than "normalized".
+the same shot re-flown in fixed reference air, so sessions on different days
+are comparable. It corrects for density only. Wind is never measured by either
+radar, which is why this is called "standard" rather than "normalized".
+
+The reference defaults to **25 °C, sea level, 50% humidity**, matching
+TrackMan's normalization reference so the figure is comparable to a TrackMan
+session. Temperature and elevation are both adjustable — if you always play at
+altitude, setting your own elevation compares you against yourself rather than
+against sea level.
+
+Note this is a *different* reference from the **ISA sea level** figure in the
+readout (15 °C, 1.225 kg/m³). That one is the air OpenFlight assumed before any
+of this existed, and is what "vs ISA sea level" and the density altitude are
+measured against.
 
 There is deliberately **no carry-calibration multiplier**. If your distances
 look wrong, the cause is almost always estimated rather than measured spin —

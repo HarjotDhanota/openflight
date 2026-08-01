@@ -263,7 +263,41 @@ describe('WeatherSettingsView', () => {
     const html = render();
 
     expect(html).toContain('1.132 kg/m³');
-    expect(html).toContain('Air vs standard');
+    expect(html).toContain('vs ISA sea level');
+  });
+
+  it('names the two references distinctly', () => {
+    // Two different references are in play: ISA (15 C, 1.225) for the
+    // deviation and density altitude, and 25 C for the reference carry.
+    // Calling both "standard" made them read as the same number.
+    const html = render();
+
+    expect(html).toContain('vs ISA sea level');
+    expect(html).not.toContain('Air vs standard');
+  });
+
+  it('offers the reference elevation, not just the temperature', () => {
+    // It was settable only by hand-editing weather.json, which matters most
+    // to the people this figure is for -- someone comparing sessions at
+    // altitude wants their own elevation as the reference.
+    const html = render();
+
+    expect(html).toContain('Reference elevation');
+    expect(html).toContain('Increase Reference elevation');
+  });
+
+  it('spells out the whole reference, including humidity', () => {
+    const html = render();
+
+    expect(html).toContain('50% humidity');
+    expect(html).toContain('sea level');
+  });
+
+  it('shows a non-zero reference elevation rather than claiming sea level', () => {
+    const html = render({ settings: settings({ standard_elevation_m: 1609 }) });
+
+    expect(html).toContain('5279 ft');
+    expect(html).not.toContain('77.0 °F at sea level');
   });
 
   it('hides the standard-carry option when no correction is applied', () => {

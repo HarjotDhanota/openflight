@@ -198,8 +198,13 @@ export function WeatherSettingsView({
 
       <div className="weather-readout">
         <Value label="Density" value={`${reading.air_density_kg_m3.toFixed(3)} kg/m³`} />
+        {/* Named for ISA specifically, not "standard". Two different
+            references are in play -- this one (ISA, 15 °C, 1.225, what carry
+            assumed before any of this existed) and the standard-conditions
+            carry below (25 °C, TrackMan's reference). Calling both "standard"
+            made them look like the same number. */}
         <Value
-          label="Air vs standard"
+          label="vs ISA sea level"
           value={`${reading.deviation_pct > 0 ? '+' : ''}${reading.deviation_pct.toFixed(1)}%`}
         />
         <Value label="Temp" value={formatTemp(reading.temp_c, unitSystem)} />
@@ -436,18 +441,39 @@ export function WeatherSettingsView({
             <span>Show standard-conditions carry</span>
           </label>
           <p className="weather-hint">
-            A second carry figure under the main one, adjusted to {formatTemp(draft.standard_temp_c, unitSystem)} at sea
-            level, so sessions on different days compare. Adjusts for air density only — wind is never measured.
+            A second carry figure under the main one, re-flown in fixed reference air —{' '}
+            {formatTemp(draft.standard_temp_c, unitSystem)} at{' '}
+            {draft.standard_elevation_m === 0
+              ? 'sea level'
+              : `${Math.round(convertElevationFromMeters(draft.standard_elevation_m, unitSystem))} ${getElevationUnit(unitSystem)}`}
+            , 50% humidity — so sessions on different days compare. Air density only; wind is never measured. The
+            default matches TrackMan&apos;s reference, so the figure is comparable to a TrackMan session.
           </p>
           {draft.show_standard && (
-            <UnitField
-              label={`Reference temperature (${getTempUnit(unitSystem)})`}
-              value={draft.standard_temp_c}
-              fallback={25}
-              toDisplay={(v) => convertTempFromC(v, unitSystem)}
-              fromDisplay={(v) => convertTempToC(v, unitSystem)}
-              onCommit={(v) => update({ standard_temp_c: v ?? 25 })}
-            />
+            <>
+              <UnitField
+                label={`Reference temperature (${getTempUnit(unitSystem)})`}
+                value={draft.standard_temp_c}
+                fallback={25}
+                toDisplay={(v) => convertTempFromC(v, unitSystem)}
+                fromDisplay={(v) => convertTempToC(v, unitSystem)}
+                onCommit={(v) => update({ standard_temp_c: v ?? 25 })}
+              />
+              {/* Was settable only by hand-editing weather.json. It matters
+                  most to exactly the people this figure is for: someone in
+                  Denver comparing sessions wants their own elevation as the
+                  reference, or every session reads long against sea level. */}
+              <UnitField
+                label={`Reference elevation (${getElevationUnit(unitSystem)})`}
+                hint="Sea level is the convention, and keeps the figure comparable between players. Set your own to compare only against yourself."
+                value={draft.standard_elevation_m}
+                digits={0}
+                step={unitSystem === 'imperial' ? 25 : 10}
+                toDisplay={(v) => convertElevationFromMeters(v, unitSystem)}
+                fromDisplay={(v) => convertElevationToMeters(v, unitSystem)}
+                onCommit={(v) => update({ standard_elevation_m: v ?? 0 })}
+              />
+            </>
           )}
         </section>
       )}
