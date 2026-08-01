@@ -452,3 +452,9 @@
   color: var(--color-gold);
   font-weight: 600;
 }
+
+/* A reading over an hour old is worth noticing, not just reporting. */
+.weather-hint--stale {
+  color: #f0b866;
+  opacity: 0.9;
+}

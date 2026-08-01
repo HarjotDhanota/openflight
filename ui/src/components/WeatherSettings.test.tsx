@@ -78,6 +78,36 @@ describe('WeatherSettingsView', () => {
     expect(html).toContain('weather-badge--ok');
   });
 
+  it('always shows how old the reading is, not only once it is stale', () => {
+    // The only evidence auto-refresh is working: on a 15-minute interval the
+    // reading never gets old enough for a stale-only message to appear.
+    const html = render({ reading: reading({ age_s: 300 }) });
+
+    expect(html).toContain('Updated 5 min ago');
+  });
+
+  it('says "just now" straight after a fetch', () => {
+    const html = render({ reading: reading({ age_s: 12 }) });
+
+    expect(html).toContain('just now');
+  });
+
+  it('switches to hours once minutes stop being useful', () => {
+    expect(render({ reading: reading({ age_s: 3600 }) })).toContain('an hour ago');
+    expect(render({ reading: reading({ age_s: 4 * 3600 }) })).toContain('4 h ago');
+  });
+
+  it('adds the refresh nudge only once the reading is genuinely stale', () => {
+    expect(render({ reading: reading({ age_s: 600 }) })).not.toContain('tap Refresh');
+    expect(render({ reading: reading({ age_s: 5 * 3600 }) })).toContain('tap Refresh');
+  });
+
+  it('shows no age at all for manual entry, which has none', () => {
+    const html = render({ reading: reading({ age_s: null }) });
+
+    expect(html).not.toContain('Updated');
+  });
+
   it('offers the auto-refresh intervals, marking the active one', () => {
     const html = render({ settings: settings({ auto_refresh_minutes: 30 }) });
 

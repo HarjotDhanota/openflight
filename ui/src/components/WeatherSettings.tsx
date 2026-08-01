@@ -76,6 +76,20 @@ function describeReference(temp_c: number, elevation_m: number, humidity_pct: nu
   return `${temp} · ${elevation} · ${humidity}`;
 }
 
+/**
+ * How old a reading is, in words.
+ *
+ * Coarse on purpose. Nobody needs the second a fetch landed, and a figure that
+ * ticks every second on a kiosk draws the eye away from the shot.
+ */
+function formatAge(seconds: number): string {
+  if (seconds < 45) return 'just now';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(seconds / 3600);
+  return hours === 1 ? 'an hour ago' : `${hours} h ago`;
+}
+
 function referenceHint(settings: Settings): string {
   switch (referenceName(settings)) {
     case 'ISA':
@@ -393,9 +407,15 @@ export function WeatherSettingsView({
             </div>
           </div>
 
-          {reading.age_s != null && reading.age_s > 3600 && (
-            <p className="weather-hint">
-              Last updated {Math.round(reading.age_s / 3600)} h ago. Tap refresh if conditions have changed.
+          {/* Always shown, not only when stale. It is the only evidence that
+              auto-refresh is doing anything: with a 15-minute interval the
+              reading never gets old enough for a stale warning to appear, so
+              a threshold-only message made the feature unobservable. */}
+          {reading.age_s != null && (
+            <p className={`weather-hint ${reading.age_s > 3600 ? 'weather-hint--stale' : ''}`}>
+              {`Updated ${formatAge(reading.age_s)}${
+                reading.age_s > 3600 ? ' — tap Refresh if conditions have changed' : ''
+              }`}
             </p>
           )}
           <label className="weather-check">
