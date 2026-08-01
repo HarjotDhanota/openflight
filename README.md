@@ -219,7 +219,7 @@ that does not exist yet.
 Playing indoors keeps the fetched **pressure** (buildings are not pressure
 vessels) and replaces only the **temperature**.
 
-Local weather can keep itself up to date — **Off / 15 / 30 / 60 minutes**. It
+Local weather has an **auto-refresh** interval — **Off / 15 / 30 / 60 minutes**. It
 only ever runs once you have fetched at least once yourself, so a fresh install
 makes no unprompted network request, and it only applies in Local weather mode.
 Worth turning on for a long session: an evening can drop 5 °C over two hours,

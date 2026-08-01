@@ -389,7 +389,7 @@ export function WeatherSettingsView({
           {/* Auto-refresh. Only ever fires once a fetch you asked for has
               succeeded, so it cannot start reaching out on a fresh install. */}
           <div className="weather-refresh">
-            <span className="weather-refresh__label">Keep it up to date</span>
+            <span className="weather-refresh__label">Auto-refresh</span>
             <div className="weather-refresh__choices">
               {AUTO_REFRESH_CHOICES.map((minutes) => (
                 <button

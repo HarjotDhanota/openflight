@@ -111,6 +111,7 @@ describe('WeatherSettingsView', () => {
   it('offers the auto-refresh intervals, marking the active one', () => {
     const html = render({ settings: settings({ auto_refresh_minutes: 30 }) });
 
+    expect(html).toContain('Auto-refresh');
     expect(html).toContain('Off');
     expect(html).toContain('15 min');
     expect(html).toContain('30 min');
