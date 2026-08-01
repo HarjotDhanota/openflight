@@ -1,4 +1,14 @@
-/* Setup / settings screen. Sections stack and scroll on the 7" kiosk panel. */
+/* Setup / settings screen. Sections stack and scroll on the 7" kiosk panel.
+ *
+ * `touch-action: pan-y` and `user-select: none` are what make it scroll with a
+ * finger rather than select text. Chromium resolves a drag that begins on
+ * selectable text as a selection, not a pan, so on a touch-only panel this
+ * screen could not be scrolled at all -- dragging just highlighted everything
+ * and the content below the fold was unreachable.
+ *
+ * This is the first screen in the app long enough to need scrolling, which is
+ * why it surfaces here rather than everywhere.
+ */
 .settings-view {
   display: flex;
   flex-direction: column;
@@ -7,4 +17,19 @@
   overflow-y: auto;
   padding: var(--space-md);
   -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  /* Don't hand the scroll to the page behind once this list hits its end. */
+  overscroll-behavior: contain;
+  user-select: none;
+  -webkit-user-select: none;
+  /* Long-press must not raise the copy/paste callout over a settings row. */
+  -webkit-touch-callout: none;
+}
+
+/* Text entry is the one place selection is still wanted, so a value can be
+   corrected rather than only retyped. */
+.settings-view input,
+.settings-view textarea {
+  user-select: text;
+  -webkit-user-select: text;
 }
