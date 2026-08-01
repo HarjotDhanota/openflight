@@ -66,11 +66,19 @@
 }
 
 /* Layout */
+/* `min-height: 0` on the flex and grid containers below, and on the cards
+   themselves, is load-bearing: without it a flex/grid child refuses to shrink
+   below its content size, so the type scales down but the boxes do not and the
+   view overflows anyway. It used to sit inside the `max-height: 500px` block,
+   which is why removing that block regressed short screens even though the
+   font sizes were right. It applies at every height now, because so does the
+   scaling. */
 .shot-display__layout {
   display: flex;
   gap: clamp(0.25rem, calc(var(--fit) * 0.024), var(--space-md));
   flex: 1;
   align-items: stretch;
+  min-height: 0;
 }
 
 .shot-display__primary {
@@ -85,6 +93,7 @@
   grid-template-columns: 1fr 1fr;
   gap: clamp(0.2rem, calc(var(--fit) * 0.018), var(--space-sm));
   flex: 1.2;
+  min-height: 0;
 }
 
 /* Speed Gauge */
@@ -186,6 +195,7 @@
   border: 1px solid rgba(245, 240, 230, 0.08);
   border-radius: var(--radius-md);
   flex: 1;
+  min-height: 0;
   text-align: center;
   transition: all var(--transition-smooth);
 }
