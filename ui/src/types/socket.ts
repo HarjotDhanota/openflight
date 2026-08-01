@@ -98,6 +98,8 @@ export interface WeatherSettings {
   show_standard: boolean;
   standard_temp_c: number;
   standard_elevation_m: number;
+  /** Dry (0) for ISA, which is how ISA is defined. */
+  standard_humidity_pct: number;
   /** Minutes between background re-fetches; 0 is off. */
   auto_refresh_minutes: number;
 }

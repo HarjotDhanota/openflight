@@ -33,6 +33,42 @@ import './WeatherSettings.css';
 const AUTO_REFRESH_CHOICES = [0, 15, 30, 60] as const;
 
 /**
+ * The two reference conventions, mirroring ISA_REFERENCE and
+ * TRACKMAN_REFERENCE in environment/config.py.
+ *
+ * ISA is dry by definition — at 50% humidity it would sit ~107 ft above zero
+ * density altitude, which is small but defeats the reason for choosing it.
+ * TrackMan does not publish its reference humidity; 50% is our assumption and
+ * is worth under a yard either way.
+ */
+const REFERENCE_PRESETS = [
+  { name: 'ISA', temp_c: 15, elevation_m: 0, humidity_pct: 0 },
+  { name: 'TrackMan', temp_c: 25, elevation_m: 0, humidity_pct: 50 },
+] as const;
+
+/** Which preset the current reference matches, or 'Custom'. */
+function referenceName(settings: Settings): string {
+  const match = REFERENCE_PRESETS.find(
+    (p) =>
+      p.temp_c === settings.standard_temp_c &&
+      p.elevation_m === settings.standard_elevation_m &&
+      p.humidity_pct === settings.standard_humidity_pct
+  );
+  return match ? match.name : 'Custom';
+}
+
+function referenceHint(settings: Settings): string {
+  switch (referenceName(settings)) {
+    case 'ISA':
+      return 'The standard in aviation and physics, and the air the rest of this screen measures against — so "plays like 0 ft" means today matches the reference.';
+    case 'TrackMan':
+      return "TrackMan's normalization reference, so this figure is comparable to a TrackMan session.";
+    default:
+      return 'Your own reference. Comparable to your other sessions, but not to anyone else.';
+  }
+}
+
+/**
  * Air density settings.
  *
  * Carry scales with air density, and before this existed every number assumed
@@ -441,16 +477,44 @@ export function WeatherSettingsView({
             <span>Show standard-conditions carry</span>
           </label>
           <p className="weather-hint">
-            A second carry figure under the main one, re-flown in fixed reference air —{' '}
-            {formatTemp(draft.standard_temp_c, unitSystem)} at{' '}
-            {draft.standard_elevation_m === 0
-              ? 'sea level'
-              : `${Math.round(convertElevationFromMeters(draft.standard_elevation_m, unitSystem))} ${getElevationUnit(unitSystem)}`}
-            , 50% humidity — so sessions on different days compare. Air density only; wind is never measured. The
-            default matches TrackMan&apos;s reference, so the figure is comparable to a TrackMan session.
+            A second carry figure under the main one, re-flown in fixed reference air, so sessions on different days
+            compare. Air density only; wind is never measured.
           </p>
           {draft.show_standard && (
             <>
+              {/* Two conventions exist and they disagree, so both are offered
+                  rather than one being imposed. ISA is the default because the
+                  rest of the panel already measures against it -- with it
+                  selected, "plays like 0 ft" means "today matches the
+                  reference". */}
+              <div className="weather-preset">
+                <span className="weather-preset__label">
+                  Reference: <strong>{referenceName(draft)}</strong>
+                </span>
+                <div className="weather-preset__choices">
+                  {REFERENCE_PRESETS.map((preset) => (
+                    <button
+                      key={preset.name}
+                      type="button"
+                      className={`weather-preset__choice ${
+                        referenceName(draft) === preset.name ? 'weather-preset__choice--on' : ''
+                      }`}
+                      aria-pressed={referenceName(draft) === preset.name}
+                      onClick={() =>
+                        update({
+                          standard_temp_c: preset.temp_c,
+                          standard_elevation_m: preset.elevation_m,
+                          standard_humidity_pct: preset.humidity_pct,
+                        })
+                      }
+                    >
+                      {preset.name} ({formatTemp(preset.temp_c, unitSystem)})
+                    </button>
+                  ))}
+                </div>
+                <span className="weather-field__hint">{referenceHint(draft)}</span>
+              </div>
+
               <UnitField
                 label={`Reference temperature (${getTempUnit(unitSystem)})`}
                 value={draft.standard_temp_c}

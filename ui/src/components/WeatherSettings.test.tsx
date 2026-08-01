@@ -31,8 +31,9 @@ const settings = (overrides: Partial<Settings> = {}): Settings => ({
   indoor_temp_c: null,
   indoor_humidity_pct: null,
   show_standard: true,
-  standard_temp_c: 25,
+  standard_temp_c: 15,
   standard_elevation_m: 0,
+  standard_humidity_pct: 0,
   auto_refresh_minutes: 30,
   ...overrides,
 });
@@ -286,18 +287,41 @@ describe('WeatherSettingsView', () => {
     expect(html).toContain('Increase Reference elevation');
   });
 
-  it('spells out the whole reference, including humidity', () => {
+  it('offers both reference conventions rather than imposing one', () => {
+    // Naming both in the UI is also the shortest answer to "why 77 and not
+    // 59" — the two conventions genuinely disagree.
     const html = render();
 
-    expect(html).toContain('50% humidity');
-    expect(html).toContain('sea level');
+    expect(html).toContain('ISA');
+    expect(html).toContain('TrackMan');
   });
 
-  it('shows a non-zero reference elevation rather than claiming sea level', () => {
-    const html = render({ settings: settings({ standard_elevation_m: 1609 }) });
+  it('defaults to ISA, so the reference agrees with the rest of the screen', () => {
+    // With ISA selected, "plays like 0 ft" means today matches the reference.
+    const html = render();
 
-    expect(html).toContain('5279 ft');
-    expect(html).not.toContain('77.0 °F at sea level');
+    expect(html).toContain('Reference: <strong>ISA</strong>');
+    expect(html).toContain('plays like 0 ft');
+  });
+
+  it('names the TrackMan reference when that one is selected', () => {
+    const html = render({
+      settings: settings({
+        standard_temp_c: 25,
+        standard_elevation_m: 0,
+        standard_humidity_pct: 50,
+      }),
+    });
+
+    expect(html).toContain('Reference: <strong>TrackMan</strong>');
+    expect(html).toContain('comparable to a TrackMan session');
+  });
+
+  it('calls a hand-tuned reference Custom rather than claiming a convention', () => {
+    const html = render({ settings: settings({ standard_temp_c: 18 }) });
+
+    expect(html).toContain('Reference: <strong>Custom</strong>');
+    expect(html).toContain('not to anyone else');
   });
 
   it('hides the standard-carry option when no correction is applied', () => {

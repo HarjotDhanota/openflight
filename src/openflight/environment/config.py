@@ -41,9 +41,25 @@ DEFAULT_AUTO_REFRESH_MINUTES = 30
 # Reference conditions for the "standard" carry figure. Matches TrackMan's
 # normalization defaults (77 F, sea level) so numbers are comparable to a
 # TrackMan session. Both user-editable.
-STANDARD_TEMP_C = 25.0
-STANDARD_ELEVATION_M = 0.0
-STANDARD_HUMIDITY_PCT = 50.0
+# Reference conditions for the standard-conditions carry. Two conventions are
+# in use and they disagree, so both are offered rather than one being imposed.
+#
+#   ISA       15 C, sea level, DRY. The standard in aviation and physics, and
+#             the air this repo already assumes everywhere else -- the "no
+#             correction" source, the deviation percentage and density altitude
+#             are all measured against it (1.225 kg/m3 exactly). Picking it
+#             makes the whole panel agree with itself: "plays like 0 ft" then
+#             means "today matches the reference".
+#   TrackMan  25 C, sea level. TrackMan's normalization reference, so the carry
+#             figure is directly comparable to a TrackMan session. Its humidity
+#             is not published; 50% is this repo's assumption, and is worth
+#             under a yard eitherway.
+#
+# Default is ISA, for the self-consistency above. TrackMan is one tap away.
+ISA_REFERENCE = (15.0, 0.0, 0.0)  # temp_c, elevation_m, humidity_pct
+TRACKMAN_REFERENCE = (25.0, 0.0, 50.0)
+
+STANDARD_TEMP_C, STANDARD_ELEVATION_M, STANDARD_HUMIDITY_PCT = ISA_REFERENCE
 
 # Above this the entered elevation is almost certainly a fudge rather than a
 # fact -- see the design doc on R10 users setting 10,000 ft to make numbers
@@ -97,6 +113,10 @@ class WeatherConfig:
     show_standard: bool = True
     standard_temp_c: float = STANDARD_TEMP_C
     standard_elevation_m: float = STANDARD_ELEVATION_M
+    # Dry for ISA, which is how ISA is defined. At 50% the ISA reference would
+    # sit ~107 ft above zero density altitude, which is small but defeats the
+    # point of choosing it.
+    standard_humidity_pct: float = STANDARD_HUMIDITY_PCT
     # Last successful fetch, so a session can start with a sensible value
     # before the user taps refresh. Weather is only re-fetched on request.
     cached: dict = field(default_factory=dict)
@@ -192,6 +212,7 @@ def load_config(path: Path = CONFIG_PATH) -> WeatherConfig:
         show_standard=bool(data.get("show_standard", True)),
         standard_temp_c=data.get("standard_temp_c", STANDARD_TEMP_C),
         standard_elevation_m=data.get("standard_elevation_m", STANDARD_ELEVATION_M),
+        standard_humidity_pct=data.get("standard_humidity_pct", STANDARD_HUMIDITY_PCT),
         cached=data.get("cached") or {},
     )
 

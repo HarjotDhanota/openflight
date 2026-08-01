@@ -395,3 +395,39 @@
   color: var(--color-gold);
   font-weight: 600;
 }
+
+/* Reference preset. Two conventions exist and disagree; naming both in the UI
+   is also the shortest answer to "why 77 and not 59". */
+.weather-preset {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.weather-preset__label {
+  font-size: 0.8rem;
+}
+
+.weather-preset__choices {
+  display: flex;
+  gap: var(--space-xs, 0.35rem);
+}
+
+.weather-preset__choice {
+  flex: 1;
+  min-height: 44px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(245, 240, 230, 0.18);
+  background: rgba(245, 240, 230, 0.04);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.weather-preset__choice--on {
+  background: rgba(212, 175, 55, 0.16);
+  border-color: rgba(212, 175, 55, 0.45);
+  color: var(--color-gold);
+  font-weight: 600;
+}

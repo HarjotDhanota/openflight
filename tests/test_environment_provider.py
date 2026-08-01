@@ -221,17 +221,50 @@ class TestBadValuesDegrade:
 
 
 class TestStandardDensity:
-    def test_defaults_match_the_documented_reference(self):
-        """25 C at sea level, 50% RH -- TrackMan's normalization reference.
-        Dry air there would be 1.1839; the water vapour accounts for the rest."""
+    def test_the_default_is_isa(self):
+        """15 C, sea level, dry -- and therefore 1.225, the same air the
+        deviation percentage and density altitude are measured against.
+
+        That agreement is the reason ISA is the default: with it selected,
+        "plays like 0 ft" means today matches the reference.
+        """
         provider = make_provider()
 
+        assert provider.standard_density() == pytest.approx(1.225, abs=0.001)
+
+    def test_the_isa_reference_sits_at_zero_density_altitude(self):
+        from openflight.environment.density import density_altitude_ft
+
+        assert density_altitude_ft(make_provider().standard_density()) == pytest.approx(0, abs=5)
+
+    def test_the_trackman_reference_is_the_other_convention(self):
+        """25 C, sea level, 50% RH. Offered because it makes the figure
+        comparable to a TrackMan session; it is ~1,360 ft of density altitude,
+        which is why it cannot also be the thing ISA is measured against."""
+        from openflight.environment.config import TRACKMAN_REFERENCE
+        from openflight.environment.density import density_altitude_ft
+
+        temp_c, elevation_m, humidity = TRACKMAN_REFERENCE
+        provider = make_provider(
+            standard_temp_c=temp_c,
+            standard_elevation_m=elevation_m,
+            standard_humidity_pct=humidity,
+        )
+
         assert provider.standard_density() == pytest.approx(1.1769, abs=0.001)
+        assert density_altitude_ft(provider.standard_density()) == pytest.approx(1360, abs=30)
 
     def test_respects_a_configured_reference_temperature(self):
-        provider = make_provider(standard_temp_c=15.0)
+        colder = make_provider(standard_temp_c=5.0)
 
-        assert provider.standard_density() > make_provider().standard_density()
+        assert colder.standard_density() > make_provider().standard_density()
+
+    def test_respects_a_configured_reference_humidity(self):
+        """Humid air is less dense. Small -- under a yard -- but the reference
+        should honour what it is told rather than assume."""
+        humid = make_provider(standard_humidity_pct=100.0)
+
+        assert humid.standard_density() < make_provider().standard_density()
 
     def test_respects_a_configured_reference_elevation(self):
         provider = make_provider(standard_elevation_m=1609.0)

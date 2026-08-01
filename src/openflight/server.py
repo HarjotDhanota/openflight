@@ -2121,6 +2121,7 @@ def _weather_settings_payload() -> dict:
         "show_standard": config.show_standard,
         "standard_temp_c": config.standard_temp_c,
         "standard_elevation_m": config.standard_elevation_m,
+        "standard_humidity_pct": config.standard_humidity_pct,
         "auto_refresh_minutes": config.auto_refresh_minutes,
     }
 
@@ -2165,7 +2166,7 @@ def handle_set_weather_settings(data):
             setattr(config, key, data[key])
     config.indoors = bool(data.get("indoors", config.indoors))
     config.show_standard = bool(data.get("show_standard", config.show_standard))
-    for key in ("standard_temp_c", "standard_elevation_m"):
+    for key in ("standard_temp_c", "standard_elevation_m", "standard_humidity_pct"):
         if data.get(key) is not None:
             setattr(config, key, data[key])
     config.location_consent = bool(data.get("location_consent", config.location_consent))

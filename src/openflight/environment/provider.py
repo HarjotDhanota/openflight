@@ -29,7 +29,6 @@ from openflight.environment.config import (
     DEFAULT_HUMIDITY_PCT,
     MODE_MANUAL,
     MODE_OFF,
-    STANDARD_HUMIDITY_PCT,
     WeatherConfig,
 )
 from openflight.environment.density import (
@@ -97,7 +96,9 @@ class EnvironmentProvider:
         the weather is doing right now, which is the entire point.
         """
         pressure_pa = pressure_from_elevation_pa(self.config.standard_elevation_m)
-        return air_density(self.config.standard_temp_c, pressure_pa, STANDARD_HUMIDITY_PCT)
+        return air_density(
+            self.config.standard_temp_c, pressure_pa, self.config.standard_humidity_pct
+        )
 
     def current(self) -> EnvironmentReading:
         """Resolve conditions now. Never raises, never blocks."""

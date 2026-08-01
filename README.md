@@ -242,16 +242,20 @@ the same shot re-flown in fixed reference air, so sessions on different days
 are comparable. It corrects for density only. Wind is never measured by either
 radar, which is why this is called "standard" rather than "normalized".
 
-The reference defaults to **25 °C, sea level, 50% humidity**, matching
-TrackMan's normalization reference so the figure is comparable to a TrackMan
-session. Temperature and elevation are both adjustable — if you always play at
-altitude, setting your own elevation compares you against yourself rather than
-against sea level.
+Two conventions exist for what "standard conditions" means, and they disagree,
+so both are offered:
 
-Note this is a *different* reference from the **ISA sea level** figure in the
-readout (15 °C, 1.225 kg/m³). That one is the air OpenFlight assumed before any
-of this existed, and is what "vs ISA sea level" and the density altitude are
-measured against.
+| Reference | Conditions | ρ | Use it when |
+| --------- | ---------- | - | ----------- |
+| **ISA** (default) | 15 °C, sea level, dry | 1.225 | You want one reference throughout — this is the air the "vs ISA sea level" figure and the density altitude are measured against, so "plays like 0 ft" means today matches the reference |
+| **TrackMan** | 25 °C, sea level, 50% RH | 1.1769 | You want the figure comparable to a TrackMan session |
+
+Temperature, elevation and humidity are all adjustable; a reference matching
+neither preset reads as *Custom*. If you always play at altitude, setting your
+own elevation compares you against yourself rather than against sea level.
+
+TrackMan does not publish its reference humidity — 50% is our assumption, and
+is worth under a yard either way.
 
 There is deliberately **no carry-calibration multiplier**. If your distances
 look wrong, the cause is almost always estimated rather than measured spin —
