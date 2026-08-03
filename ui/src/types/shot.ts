@@ -25,6 +25,24 @@ export interface Shot {
   spin_method?: string | null;
   spin_multipath_fade_hz?: number | null;
   carry_spin_adjusted: number | null;
+  // Same carry re-run against fixed reference air, so sessions on different
+  // days compare. Null when disabled or when today's air is within 0.5% of it.
+  carry_standard_yards?: number | null;
+}
+
+/**
+ * The carry to show a human, from the two a shot carries.
+ *
+ * `estimated_carry_yards` is the model-neutral table estimate, deliberately
+ * free of local air density because it is what goes to simulators — they re-fly
+ * the ball using their own virtual course's atmosphere. `carry_spin_adjusted`
+ * is what OpenFlight computed for the air the ball actually flew through.
+ *
+ * Every screen that shows a carry must use this, or the Live tab and the Shots
+ * tab disagree about the shot just hit.
+ */
+export function displayCarryYards(shot: Shot): number {
+  return shot.carry_spin_adjusted ?? shot.estimated_carry_yards;
 }
 
 export interface SessionStats {
@@ -99,7 +117,7 @@ export function computeStats(shots: Shot[]): SessionStats {
   const ballSpeeds = shots.map((s) => s.ball_speed_mph);
   const clubSpeeds = shots.map((s) => s.club_speed_mph).filter((v): v is number => v !== null);
   const smashFactors = shots.map((s) => s.smash_factor).filter((v): v is number => v !== null);
-  const carries = shots.map((s) => s.estimated_carry_yards);
+  const carries = shots.map(displayCarryYards);
 
   const mean = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
   const stdDev = (arr: number[]) => {

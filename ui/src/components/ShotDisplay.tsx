@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { Shot, SpinQuality } from '../types/shot';
+import { displayCarryYards, type Shot, type SpinQuality } from '../types/shot';
 import { useUnitPreference } from '../state/useUnitPreference';
 import { formatCarryRange, formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../utils/units';
 import './ShotDisplay.css';
@@ -83,6 +83,7 @@ function MetricCard({
   unit,
   label,
   subtext,
+  note,
   variant = 'default',
   confidence,
 }: {
@@ -90,6 +91,8 @@ function MetricCard({
   unit?: string;
   label: string;
   subtext?: string;
+  /** Optional second, smaller line under subtext. Used for the standard carry. */
+  note?: string;
   variant?: 'default' | 'primary' | 'secondary' | 'spin';
   confidence?: SpinQuality | null;
 }) {
@@ -101,6 +104,7 @@ function MetricCard({
       </div>
       <span className="metric-card__label">{label}</span>
       {subtext && <span className="metric-card__subtext">{subtext}</span>}
+      {note && <span className="metric-card__note">{note}</span>}
       {confidence && (
         <div className={`metric-card__confidence metric-card__confidence--${confidence}`}>
           {confidence !== 'experimental' && (
@@ -135,8 +139,16 @@ export function ShotDisplay({ shot, animate = false }: ShotDisplayProps) {
     return formatCarryRange(shot.carry_range, unitSystem);
   }, [shot, unitSystem]);
 
-  const displayCarry = shot?.carry_spin_adjusted ?? shot?.estimated_carry_yards ?? 0;
+  const displayCarry = shot ? displayCarryYards(shot) : 0;
   const carrySubtext = shot?.carry_spin_adjusted ? 'spin-adjusted' : carryRange || undefined;
+  // Second carry at fixed reference conditions. The server only sends it when
+  // the user wants it AND today's air actually differs, so its presence is the
+  // whole condition -- no extra flag needed here.
+  const standardCarry = shot?.carry_standard_yards;
+  const carryNote =
+    standardCarry != null
+      ? `std ${formatDistance(standardCarry, unitSystem, 0)} ${getDistanceUnit(unitSystem)}`
+      : undefined;
 
   if (!shot) {
     return (
@@ -178,6 +190,7 @@ export function ShotDisplay({ shot, animate = false }: ShotDisplayProps) {
             unit={getDistanceUnit(unitSystem)}
             label="Est. Carry"
             subtext={carrySubtext}
+            note={carryNote}
             variant="primary"
           />
           <MetricCard

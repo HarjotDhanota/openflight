@@ -243,6 +243,20 @@
   opacity: 0.7;
 }
 
+/* Standard-conditions carry. Subordinate to the 5rem primary value, but it is
+   a number the user is meant to read and compare -- an earlier pass had it at
+   0.5rem and half opacity, which on the 7" panel was effectively invisible.
+   Gold ties it to the carry figure it belongs to. */
+.metric-card__note {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--color-gold);
+  margin-top: 3px;
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
 /* Spin Confidence Indicator */
 .metric-card__confidence {
   display: flex;
@@ -467,6 +481,13 @@
   .metric-card__subtext {
     font-size: 0.5rem;
     margin-top: 1px;
+  }
+
+  /* The 7" kiosk panel is 480px tall and lands here. Still the smallest thing
+     on the card, but legible from where someone actually stands. */
+  .metric-card__note {
+    font-size: 0.75rem;
+    margin-top: 2px;
   }
 
   .metric-card__confidence {

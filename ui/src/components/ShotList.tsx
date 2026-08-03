@@ -1,5 +1,5 @@
 import { useMemo, useState, memo } from 'react';
-import type { Shot } from '../types/shot';
+import { displayCarryYards, type Shot } from '../types/shot';
 import { useUnitPreference } from '../state/useUnitPreference';
 import type { UnitSystem } from '../utils/units';
 import { formatDistance, formatSpeed, getDistanceUnit } from '../utils/units';
@@ -46,7 +46,7 @@ const ShotRow = memo(function ShotRow({ shot, shotNumber, unitSystem, distanceUn
         <span className="shot-row__label">spin</span>
       </span>
       <span className="shot-row__stat shot-row__stat--carry">
-        <span className="shot-row__value">{formatDistance(shot.estimated_carry_yards, unitSystem, 0)}</span>
+        <span className="shot-row__value">{formatDistance(displayCarryYards(shot), unitSystem, 0)}</span>
         <span className="shot-row__label">{distanceUnit}</span>
       </span>
     </div>
