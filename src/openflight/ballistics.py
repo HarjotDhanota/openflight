@@ -33,8 +33,28 @@ M_TO_YD = 1.09361
 # the rules rather than by a guess at the specific ball in play.
 BALL_MASS_KG = 0.04593
 BALL_RADIUS_M = 0.02135
-BALL_AREA_M2 = math.pi * BALL_RADIUS_M ** 2
+BALL_AREA_M2 = math.pi * BALL_RADIUS_M**2
 AIR_DENSITY_STD = 1.225  # kg/m³ at sea level, 15 °C ISA
+
+# Carry scales approximately as (ρ/ρ_std)^-CARRY_DENSITY_EXPONENT. Used ONLY
+# by the table estimator, which has no physics to scale — `simulate` takes
+# air_density directly and needs no approximation.
+#
+# Fitting this module's own integrator gives an exponent that varies by club
+# (driver ≈0.28, wedge ≈0.39: wedges are proportionally more density-sensitive).
+# A single value is used deliberately. The table path only runs when ballistics
+# is disabled or no launch angle was measured — an already-degraded estimate
+# the docstrings put at ±10-15% — so a ~1% approximation on top of it is noise.
+#
+# Measured against the integrator across ±10% density and the whole bag, 0.30
+# holds the residual under 1% of carry: 2.2 yd on a driver, under 1 yd from a
+# 7-iron down. Sweeping the exponent shows 0.30 is the worst-case-% optimum
+# (0.29 is marginally better in absolute yards, 2.11 vs 2.14, and worse in
+# percentage terms). tests/test_ballistics.py pins this; if the Cd/Cl
+# coefficients above are ever retuned, that test fails rather than letting the
+# stale fit quietly skew every table-estimated carry. A per-club table would be
+# curve-fit precision layered on a much coarser estimate.
+CARRY_DENSITY_EXPONENT = 0.30
 
 # Cd = CD_BASE + CD_SPIN_COEFF * Sp
 #   Linear rise with spin parameter Sp = r·ω/v.
@@ -156,9 +176,7 @@ def resolve_launch(shot: Shot) -> Optional[LaunchConditions]:
         spin_rpm = float(shot.spin_rpm)
         source: Literal["measured", "club_typical"] = "measured"
     else:
-        spin_rpm = CLUB_TYPICAL_SPIN_RPM.get(
-            shot.club, CLUB_TYPICAL_SPIN_RPM[ClubType.UNKNOWN]
-        )
+        spin_rpm = CLUB_TYPICAL_SPIN_RPM.get(shot.club, CLUB_TYPICAL_SPIN_RPM[ClubType.UNKNOWN])
         source = "club_typical"
 
     return LaunchConditions(
@@ -244,10 +262,7 @@ def _rk4_step(
     k3 = _derivatives(s3, omega, axis, air_density)
     s4 = tuple(state[i] + dt * k3[i] for i in range(6))
     k4 = _derivatives(s4, omega, axis, air_density)
-    return tuple(
-        state[i] + (dt / 6.0) * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i])
-        for i in range(6)
-    )
+    return tuple(state[i] + (dt / 6.0) * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]) for i in range(6))
 
 
 def simulate(
@@ -311,15 +326,17 @@ def simulate(
             final = tuple(state[i] + frac * (new_state[i] - state[i]) for i in range(6))
             fx, fy, fz, fvx, fvy, fvz = final
             v_final = math.sqrt(fvx * fvx + fvy * fvy + fvz * fvz)
-            landing_angle = math.degrees(
-                math.atan2(-fvz, math.sqrt(fvx * fvx + fvy * fvy))
+            landing_angle = math.degrees(math.atan2(-fvz, math.sqrt(fvx * fvx + fvy * fvy)))
+            points.append(
+                TrajectoryPoint(
+                    t_hit,
+                    fx * M_TO_YD,
+                    fy * M_TO_YD,
+                    max(fz, 0.0) * M_TO_YD,
+                    v_final * MPS_TO_MPH,
+                    omega * 60 / (2 * math.pi),
+                )
             )
-            points.append(TrajectoryPoint(
-                t_hit,
-                fx * M_TO_YD, fy * M_TO_YD, max(fz, 0.0) * M_TO_YD,
-                v_final * MPS_TO_MPH,
-                omega * 60 / (2 * math.pi),
-            ))
             return Trajectory(
                 points=points,
                 carry_yards=fx * M_TO_YD,
@@ -335,12 +352,16 @@ def simulate(
         if t - last_sample_t >= SAMPLE_INTERVAL_S:
             sx_, sy_, sz_, svx, svy, svz = state
             v = math.sqrt(svx * svx + svy * svy + svz * svz)
-            points.append(TrajectoryPoint(
-                t,
-                sx_ * M_TO_YD, sy_ * M_TO_YD, sz_ * M_TO_YD,
-                v * MPS_TO_MPH,
-                omega * 60 / (2 * math.pi),
-            ))
+            points.append(
+                TrajectoryPoint(
+                    t,
+                    sx_ * M_TO_YD,
+                    sy_ * M_TO_YD,
+                    sz_ * M_TO_YD,
+                    v * MPS_TO_MPH,
+                    omega * 60 / (2 * math.pi),
+                )
+            )
             last_sample_t = t
 
     # Flight did not terminate — return current state as best-effort
@@ -356,3 +377,29 @@ def simulate(
         landing_speed_mph=v_final * MPS_TO_MPH,
         landing_angle_deg=landing_angle,
     )
+
+
+def density_carry_factor(air_density: float) -> float:
+    """Multiplier that corrects a table-estimated carry for air density.
+
+    For the TABLE path only. `simulate` accepts ``air_density`` directly and
+    models drag and Magnus properly; nothing here should ever be applied to
+    its output.
+
+    Thinner air means less drag means more carry, so densities below
+    ``AIR_DENSITY_STD`` return a factor above 1.0.
+
+    Args:
+        air_density: Measured or estimated air density in kg/m³.
+
+    Returns:
+        Multiplier to apply to a table-estimated carry in yards. Exactly 1.0
+        at ISA sea level, so existing behaviour is unchanged when no
+        environmental data is available.
+
+    Raises:
+        ValueError: If ``air_density`` is not positive.
+    """
+    if air_density <= 0:
+        raise ValueError(f"air_density={air_density} must be positive")
+    return (air_density / AIR_DENSITY_STD) ** -CARRY_DENSITY_EXPONENT
