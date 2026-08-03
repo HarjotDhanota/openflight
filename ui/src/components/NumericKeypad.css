@@ -1,0 +1,144 @@
+/* Numeric keypad.
+ *
+ * Sized for the 7" 800x480 kiosk panel, where there is no system on-screen
+ * keyboard and a finger is the only pointer. Keys are deliberately large: the
+ * whole point is that entering 1013 takes four taps rather than a hundred
+ * presses of a stepper.
+ */
+.keypad {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.72);
+  padding: var(--space-sm);
+}
+
+.keypad__panel {
+  width: min(22rem, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  border-radius: var(--radius-lg, 12px);
+  border: 1px solid rgba(212, 175, 55, 0.25);
+  background: var(--color-bg-card);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+}
+
+.keypad__header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.keypad__label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.keypad__entry {
+  font-family: var(--font-display);
+  font-size: 2.25rem;
+  line-height: 1.1;
+  color: var(--color-cream);
+  font-variant-numeric: tabular-nums;
+  min-height: 2.4rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.keypad__entry--empty {
+  font-size: 1.25rem;
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+.keypad__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-xs, 0.35rem);
+}
+
+.keypad__key {
+  min-height: 56px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(245, 240, 230, 0.14);
+  background: rgba(245, 240, 230, 0.06);
+  color: var(--color-cream);
+  font-size: 1.5rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+.keypad__key:active {
+  background: rgba(212, 175, 55, 0.2);
+  border-color: rgba(212, 175, 55, 0.4);
+}
+
+.keypad__key--wide {
+  grid-column: span 3;
+  min-height: 48px;
+  font-size: 1.25rem;
+}
+
+.keypad__actions {
+  display: flex;
+  gap: var(--space-xs, 0.35rem);
+}
+
+.keypad__action {
+  flex: 1;
+  min-height: 48px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(245, 240, 230, 0.14);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.keypad__action--primary {
+  background: rgba(212, 175, 55, 0.16);
+  border-color: rgba(212, 175, 55, 0.45);
+  color: var(--color-gold);
+}
+
+/* The panel is 480px tall. Shrink the keys rather than let Done fall off the
+   bottom of the screen, which would trap the user in the keypad. */
+@media (max-height: 560px) {
+  .keypad__panel {
+    width: min(20rem, 100%);
+    padding: var(--space-sm);
+    gap: 0.35rem;
+  }
+
+  .keypad__entry {
+    font-size: 1.6rem;
+    min-height: 1.8rem;
+  }
+
+  .keypad__key {
+    min-height: 44px;
+    font-size: 1.25rem;
+  }
+
+  .keypad__key--wide,
+  .keypad__action {
+    min-height: 38px;
+  }
+}
