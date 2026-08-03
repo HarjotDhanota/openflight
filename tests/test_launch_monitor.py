@@ -1,13 +1,14 @@
 """Tests for launch_monitor module."""
 
-import pytest
 from datetime import datetime
 
+import pytest
+
 from openflight.launch_monitor import (
-    Shot,
     ClubType,
-    estimate_carry_distance,
+    Shot,
     adjust_carry_for_launch_angle,
+    estimate_carry_distance,
 )
 
 
@@ -125,7 +126,8 @@ class TestShot:
         """Shot with launch angle should adjust carry distance."""
         shot_no_angle = Shot(ball_speed_mph=150.0, timestamp=datetime.now())
         shot_low_angle = Shot(
-            ball_speed_mph=150.0, timestamp=datetime.now(),
+            ball_speed_mph=150.0,
+            timestamp=datetime.now(),
             launch_angle_vertical=7.0,  # well below 11 optimal for driver
             launch_angle_confidence=1.0,
         )
@@ -141,11 +143,14 @@ class TestShot:
         """Shot with launch angle should have tighter carry range."""
         shot_no_angle = Shot(ball_speed_mph=150.0, timestamp=datetime.now())
         shot_angle = Shot(
-            ball_speed_mph=150.0, timestamp=datetime.now(),
+            ball_speed_mph=150.0,
+            timestamp=datetime.now(),
             launch_angle_vertical=11.0,
             launch_angle_confidence=0.5,
         )
-        no_angle_spread = shot_no_angle.estimated_carry_range[1] - shot_no_angle.estimated_carry_range[0]
+        no_angle_spread = (
+            shot_no_angle.estimated_carry_range[1] - shot_no_angle.estimated_carry_range[0]
+        )
         angle_spread = shot_angle.estimated_carry_range[1] - shot_angle.estimated_carry_range[0]
         assert angle_spread < no_angle_spread
 
@@ -216,7 +221,7 @@ class TestMultiObjectReporting:
 
         # Verify the method exists and handles single digits
         # Can't test actual command without hardware, but method should not raise
-        assert hasattr(radar, 'set_num_reports')
+        assert hasattr(radar, "set_num_reports")
 
     def test_direction_constants(self):
         """Verify direction enum values."""
@@ -225,3 +230,65 @@ class TestMultiObjectReporting:
         assert Direction.INBOUND.value == "inbound"
         assert Direction.OUTBOUND.value == "outbound"
         assert Direction.UNKNOWN.value == "unknown"
+
+
+class TestCarryIsNotDensityCorrectedForSimulators:
+    """`estimated_carry_yards` must stay free of local air density.
+
+    It is the model-neutral estimate that feeds the simulator connectors
+    (sim/resolver.py -> ResolvedShot.carry_yards -> GSPro OpenConnect
+    `CarryDistance`). GSPro re-flies the ball from the launch data using the
+    VIRTUAL course's altitude and weather; a carry already corrected for the
+    air in the player's garage would be corrected twice, once for a venue that
+    has nothing to do with the one being played.
+
+    Density-corrected carry is the server's business, and lives on
+    `carry_spin_adjusted`.
+    """
+
+    def _shot(self, **kwargs):
+        return Shot(
+            ball_speed_mph=160.0,
+            timestamp=datetime.now(),
+            club=ClubType.DRIVER,
+            launch_angle_vertical=12.0,
+            **kwargs,
+        )
+
+    def test_thin_air_does_not_change_the_estimate(self):
+        baseline = self._shot().estimated_carry_yards
+
+        denver = self._shot()
+        denver.air_density_kg_m3 = 0.97
+
+        assert denver.estimated_carry_yards == pytest.approx(baseline)
+
+    def test_dense_air_does_not_change_the_estimate(self):
+        baseline = self._shot().estimated_carry_yards
+
+        cold = self._shot()
+        cold.air_density_kg_m3 = 1.35
+
+        assert cold.estimated_carry_yards == pytest.approx(baseline)
+
+    def test_the_carry_range_is_equally_unaffected(self):
+        baseline = self._shot().estimated_carry_range
+
+        denver = self._shot()
+        denver.air_density_kg_m3 = 0.97
+
+        assert denver.estimated_carry_range == pytest.approx(baseline)
+
+    def test_stamping_conditions_does_not_disturb_the_estimate(self):
+        """Every shot gets its conditions stamped on it, including ones that
+        will be handed to a simulator. Stamping must be inert here."""
+        baseline = self._shot().estimated_carry_yards
+
+        stamped = self._shot()
+        stamped.air_density_kg_m3 = 1.1316
+        stamped.air_density_source = "open-meteo"
+        stamped.air_temp_c = 36.1
+        stamped.air_pressure_hpa = 1010.2
+        stamped.humidity_pct = 25.0
+
+        assert stamped.estimated_carry_yards == pytest.approx(baseline)
