@@ -26,11 +26,13 @@ import {
 } from './components/LaunchDaddy';
 import { useUnitPreference } from './state/useUnitPreference';
 
+import { SettingsView } from './components/SettingsView';
+
 import Logo from './logo/Logo';
 
 import './App.css';
 
-type View = 'live' | 'stats' | 'shots' | 'camera' | 'debug';
+type View = 'live' | 'stats' | 'shots' | 'camera' | 'settings' | 'debug';
 
 // Navigation icons as inline SVGs for better control
 const Icons = {
@@ -60,6 +62,16 @@ const Icons = {
   debug: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
       <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  settings: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+      <circle cx="12" cy="12" r="3" />
+      <path
+        d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 008 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 8a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   ),
 };
@@ -270,6 +282,13 @@ function AppContent() {
           {cameraStatus.ball_detected && <span className="nav__ball-dot" />}
         </button>
         <button
+          className={`nav__button ${currentView === 'settings' ? 'nav__button--active' : ''}`}
+          onClick={() => setCurrentView('settings')}
+        >
+          {Icons.settings}
+          <span>Setup</span>
+        </button>
+        <button
           className={`nav__button ${currentView === 'debug' ? 'nav__button--active' : ''} ${debugMode ? 'nav__button--recording' : ''}`}
           onClick={() => setCurrentView('debug')}
         >
@@ -294,6 +313,7 @@ function AppContent() {
         )}
         {currentView === 'stats' && <StatsView shots={shots} onClearSession={() => socketService.clearSession()} />}
         {currentView === 'shots' && <ShotList shots={shots} />}
+        {currentView === 'settings' && <SettingsView />}
         {currentView === 'camera' && (
           <CameraFeed
             cameraStatus={cameraStatus}

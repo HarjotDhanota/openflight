@@ -1,0 +1,70 @@
+/* Setup / settings screen. Sections stack and scroll on the 7" kiosk panel.
+ *
+ * `touch-action: pan-y` and `user-select: none` are what make it scroll with a
+ * finger rather than select text. Chromium resolves a drag that begins on
+ * selectable text as a selection, not a pan, so on a touch-only panel this
+ * screen could not be scrolled at all -- dragging just highlighted everything
+ * and the content below the fold was unreachable.
+ *
+ * This is the first screen in the app long enough to need scrolling, which is
+ * why it surfaces here rather than everywhere.
+ */
+.settings-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--space-md);
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  /* Don't hand the scroll to the page behind once this list hits its end. */
+  overscroll-behavior: contain;
+  user-select: none;
+  -webkit-user-select: none;
+  /* Long-press must not raise the copy/paste callout over a settings row. */
+  -webkit-touch-callout: none;
+}
+
+/* Text entry is the one place selection is still wanted, so a value can be
+   corrected rather than only retyped. */
+.settings-view input,
+.settings-view textarea {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* A permanently visible, finger-wide scrollbar.
+ *
+ * Two reasons it is not the usual thin overlay. It is the affordance that says
+ * there is more below -- on a screen with no window chrome, nothing else does.
+ * And it is a fallback that needs no gesture at all: if drag-to-scroll ever
+ * fails on some panel, the bar can still be dragged directly. */
+.settings-view::-webkit-scrollbar {
+  width: 14px;
+}
+
+.settings-view::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 7px;
+}
+
+.settings-view::-webkit-scrollbar-thumb {
+  background: rgba(212, 175, 55, 0.45);
+  border-radius: 7px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+.settings-view::-webkit-scrollbar-thumb:active {
+  background: rgba(212, 175, 55, 0.75);
+  background-clip: content-box;
+}
+
+/* Firefox has no ::-webkit-scrollbar; this is the equivalent. */
+@supports (scrollbar-color: auto) {
+  .settings-view {
+    scrollbar-width: auto;
+    scrollbar-color: rgba(212, 175, 55, 0.45) rgba(0, 0, 0, 0.25);
+  }
+}

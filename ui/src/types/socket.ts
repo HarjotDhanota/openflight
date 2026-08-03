@@ -50,3 +50,56 @@ export interface DebugShotLog {
   } | null;
   club: string;
 }
+
+/** Resolved air-density conditions currently applied to carry. */
+export interface EnvironmentReading {
+  air_density_kg_m3: number;
+  /** 'manual' | 'open-meteo' | 'elevation' | 'default' */
+  source: string;
+  temp_c: number | null;
+  pressure_hpa: number | null;
+  humidity_pct: number | null;
+  /** Age of the underlying data in seconds; null for manual entry. */
+  age_s: number | null;
+  /** Percent difference from ISA sea level. Negative means thinner air, longer carry. */
+  deviation_pct: number;
+  /** Same density as an altitude: 'plays like 2,700 ft'. */
+  density_altitude_ft: number | null;
+}
+
+/** Persisted weather settings, edited from the settings screen. */
+/** One candidate from a location search. */
+export interface LocationResult {
+  /** "Sacramento, California, US" — the country matters: postal codes collide. */
+  label: string;
+  latitude: number;
+  longitude: number;
+  /** Steers the fetched pressure. Null when the search did not know it. */
+  elevation_m: number | null;
+}
+
+export interface WeatherSettings {
+  mode: 'auto' | 'manual' | 'off';
+  latitude: number | null;
+  longitude: number | null;
+  location_label: string | null;
+  elevation_m: number | null;
+  location_consent: boolean;
+  /** Manual entry. Never read in auto mode — it is a separate set-up. */
+  manual_temp_c: number | null;
+  manual_pressure_hpa: number | null;
+  manual_humidity_pct: number | null;
+  manual_elevation_m: number | null;
+  indoors: boolean;
+  /** The indoors override belongs to local weather, not to manual entry. */
+  indoor_temp_c: number | null;
+  indoor_humidity_pct: number | null;
+  /** Second carry figure at fixed reference conditions, shown under the main one. */
+  show_standard: boolean;
+  standard_temp_c: number;
+  standard_elevation_m: number;
+  /** Dry (0) for ISA, which is how ISA is defined. */
+  standard_humidity_pct: number;
+  /** Minutes between background re-fetches; 0 is off. */
+  auto_refresh_minutes: number;
+}
