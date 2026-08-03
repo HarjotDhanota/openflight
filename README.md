@@ -310,4 +310,8 @@ GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later) - see LICENS
 ## Acknowledgments
 
 - [OmniPreSense](https://omnipresense.com/) for the OPS243-A radar and documentation
+- Weather data by [Open-Meteo](https://open-meteo.com/), licensed
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+- Place-name and postal-code search via Open-Meteo's Geocoding API, which is
+  built on data from [GeoNames](https://www.geonames.org/)
 - The golf hacker community for inspiration
