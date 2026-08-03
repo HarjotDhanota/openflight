@@ -21,7 +21,20 @@ from flask import Flask, Response, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
-from .ballistics import resolve_launch, simulate
+from .ballistics import AIR_DENSITY_STD, density_carry_factor, resolve_launch, simulate
+from .environment import air_density, pressure_from_elevation_pa
+from .environment.config import (
+    AUTO_REFRESH_CHOICES_MINUTES,
+    VALID_MODES,
+    load_config as load_weather_config,
+    save_config as save_weather_config,
+)
+from .environment.openmeteo import (
+    fetch_current as fetch_current_weather,
+    lookup_location,
+    search_locations,
+)
+from .environment.provider import EnvironmentProvider, EnvironmentReading
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, ClubType, Shot
 from .ops243 import (
     UART_BAUD_COMMANDS,
@@ -98,6 +111,10 @@ iwr6843_runtime_config: dict = {"enabled": False}
 # (default), all carry computations go through the legacy table estimator.
 # The simulator is opt-in until coefficients are validated against TM.
 ballistics_enabled: bool = False
+# Owns the "what is the air density right now" question. Settings come from
+# the UI and persist to ~/.config/openflight/weather.json; CLI flags are a
+# session-only override for headless and bench use.
+environment_provider = EnvironmentProvider(load_weather_config())
 
 # Simulator connectors (optional). Populated in main() from config/sim.json +
 # CLI flags; shots fan out to every connected connector. Player/club state is
@@ -894,6 +911,18 @@ def shot_to_dict(shot: Shot) -> dict:
         "carry_spin_adjusted": round(shot.carry_spin_adjusted)
         if shot.carry_spin_adjusted
         else None,
+        "air_temp_c": round(shot.air_temp_c, 1) if shot.air_temp_c is not None else None,
+        "air_pressure_hpa": (
+            round(shot.air_pressure_hpa, 1) if shot.air_pressure_hpa is not None else None
+        ),
+        "humidity_pct": round(shot.humidity_pct) if shot.humidity_pct is not None else None,
+        "air_density_kg_m3": (
+            round(shot.air_density_kg_m3, 4) if shot.air_density_kg_m3 is not None else None
+        ),
+        "air_density_source": shot.air_density_source,
+        "carry_standard_yards": (
+            round(shot.carry_standard_yards) if shot.carry_standard_yards else None
+        ),
     }
 
 
@@ -2024,6 +2053,442 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
     return (time.time() - started) * 1000.0
 
 
+def _apply_environment(shot: Shot) -> None:
+    """Stamp the current environmental conditions onto a shot.
+
+    A snapshot of already-resolved values. Never performs I/O, so it is safe
+    from the shot path. When nothing is configured the source is "default",
+    the density is ISA, and every downstream correction is a no-op --
+    preserving pre-weather behaviour exactly.
+    """
+    reading = environment_provider.current()
+    if reading.source == "default":
+        return
+    shot.air_density_kg_m3 = reading.air_density_kg_m3
+    shot.air_density_source = reading.source
+    shot.air_temp_c = reading.temp_c
+    shot.air_pressure_hpa = reading.pressure_hpa
+    shot.humidity_pct = reading.humidity_pct
+
+
+def _apply_standard_carry(shot: Shot, conditions=None) -> None:
+    """Second carry figure at fixed reference conditions, for comparability.
+
+    Computed only when the user has asked for it AND today's air actually
+    differs from the reference -- below ~0.5% both figures round to the same
+    yardage, so the extra line would be noise.
+
+    With ``conditions`` the reference carry is a second RK4 integration, which
+    costs ~50-85 ms on a Pi 5. Without them the shot came from the table
+    estimator, which has no physics to re-run: rescaling the corrected carry
+    from today's air to reference air is both exact for that estimator and free.
+    """
+    config = environment_provider.config
+    if not config.show_standard or shot.air_density_kg_m3 is None:
+        return
+    standard = environment_provider.standard_density()
+    if abs(shot.air_density_kg_m3 / standard - 1.0) < 0.005:
+        return
+
+    if conditions is not None:
+        shot.carry_standard_yards = simulate(conditions, air_density=standard).carry_yards
+        return
+
+    if shot.carry_spin_adjusted is None:
+        return
+    # carry_spin_adjusted == base * factor(today), so dividing it out recovers
+    # the uncorrected estimate without recomputing it.
+    today_factor = density_carry_factor(shot.air_density_kg_m3)
+    shot.carry_standard_yards = (
+        shot.carry_spin_adjusted / today_factor * density_carry_factor(standard)
+    )
+
+
+def _weather_settings_payload() -> dict:
+    """Settings as the UI needs them."""
+    config = environment_provider.config
+    return {
+        "mode": config.mode,
+        "latitude": config.latitude,
+        "longitude": config.longitude,
+        "location_label": config.location_label,
+        "elevation_m": config.elevation_m,
+        "location_consent": config.location_consent,
+        "manual_temp_c": config.manual_temp_c,
+        "manual_pressure_hpa": config.manual_pressure_hpa,
+        "manual_humidity_pct": config.manual_humidity_pct,
+        "manual_elevation_m": config.manual_elevation_m,
+        "indoors": config.indoors,
+        "indoor_temp_c": config.indoor_temp_c,
+        "indoor_humidity_pct": config.indoor_humidity_pct,
+        "show_standard": config.show_standard,
+        "standard_temp_c": config.standard_temp_c,
+        "standard_elevation_m": config.standard_elevation_m,
+        "standard_humidity_pct": config.standard_humidity_pct,
+        "auto_refresh_minutes": config.auto_refresh_minutes,
+    }
+
+
+def _emit_weather() -> None:
+    """Push the resolved reading and the settings to the UI.
+
+    Broadcasts rather than targeting a sid, matching the other status
+    handlers -- a kiosk normally has one client, and a second one seeing the
+    settings change is correct behaviour anyway.
+    """
+    socketio.emit("environment", environment_provider.current().as_dict())
+    socketio.emit("weather_settings", _weather_settings_payload())
+
+
+@socketio.on("get_weather")
+def handle_get_weather():
+    """Send current conditions and settings on client connect."""
+    _emit_weather()
+
+
+@socketio.on("set_weather_settings")
+def handle_set_weather_settings(data):
+    """Persist settings edited in the UI, then broadcast the new resolution."""
+    # A malformed client sends null, a list or a bare string; .get() would
+    # raise rather than the payload simply being ignored.
+    if not isinstance(data, dict):
+        logger.warning("[WEATHER] Ignoring malformed settings payload: %r", data)
+        return
+    config = environment_provider.config
+    mode = data.get("mode")
+    if mode in VALID_MODES:
+        config.mode = mode
+    for key in (
+        "latitude",
+        "longitude",
+        "location_label",
+        "elevation_m",
+        "manual_temp_c",
+        "manual_pressure_hpa",
+        "manual_humidity_pct",
+        "manual_elevation_m",
+        "indoor_temp_c",
+        "indoor_humidity_pct",
+    ):
+        if key in data:
+            setattr(config, key, data[key])
+    config.indoors = bool(data.get("indoors", config.indoors))
+    config.show_standard = bool(data.get("show_standard", config.show_standard))
+    for key in ("standard_temp_c", "standard_elevation_m", "standard_humidity_pct"):
+        if data.get(key) is not None:
+            setattr(config, key, data[key])
+    config.location_consent = bool(data.get("location_consent", config.location_consent))
+    # Only intervals we offer. Anything else is a malformed client, and an
+    # unbounded value here would become a poll rate against someone else's API.
+    if data.get("auto_refresh_minutes") in AUTO_REFRESH_CHOICES_MINUTES:
+        config.auto_refresh_minutes = data["auto_refresh_minutes"]
+
+    if config.elevation_looks_like_a_fudge():
+        # Not blocked -- someone might genuinely be in Leadville -- but this
+        # is far more often a fudge to make distances look right, which
+        # silently corrupts every carry number.
+        logger.warning(
+            "[WEATHER] Elevation set to %.0f m (%.0f ft), higher than almost any golf "
+            "course. If this is to make distances match expectations, check spin_source "
+            "instead: estimated spin, not air density, is the usual cause.",
+            config.elevation_m,
+            config.elevation_m / 0.3048,
+        )
+
+    try:
+        save_weather_config(config)
+    except OSError as exc:
+        # Settings still apply for this session; only persistence failed.
+        logger.warning("[WEATHER] Could not save settings: %s", exc)
+        socketio.emit("weather_error", {"reason": f"Settings not saved: {exc}"})
+
+    reading = environment_provider.current()
+    logger.info(
+        "[WEATHER] Settings updated: mode=%s indoors=%s -> %.4f kg/m3 (%s, %+.1f%% vs ISA)",
+        config.mode,
+        config.indoors,
+        reading.air_density_kg_m3,
+        reading.source,
+        100.0 * (reading.air_density_kg_m3 / AIR_DENSITY_STD - 1.0),
+    )
+    _emit_weather()
+
+
+def refresh_weather_now(announce_errors: bool = True) -> None:
+    """Look up the location if needed, fetch conditions, persist, broadcast.
+
+    Runs on a worker thread: the fetch has a hard timeout but is still network
+    I/O, and blocking the socket loop would freeze the whole UI. Never raises
+    -- every failure becomes a ``weather_error`` the settings screen shows, so
+    a dead network can never interrupt someone hitting balls.
+
+    Args:
+        announce_errors: False for the background refresh. A scheduled fetch
+            failing is not news -- the cached reading and its age are still on
+            screen -- and popping an error nobody asked for, every interval,
+            for as long as the Wi-Fi is down, would be worse than silence.
+    """
+    config = environment_provider.config
+
+    def fail(reason: str) -> None:
+        if announce_errors:
+            socketio.emit("weather_error", {"reason": reason})
+        else:
+            logger.info("[WEATHER] Background refresh failed: %s", reason)
+
+    try:
+        if config.latitude is None or config.longitude is None:
+            if not config.location_consent:
+                fail(
+                    "Looking up your location needs your permission. Turn it on, "
+                    "or enter the conditions manually."
+                )
+                return
+            location = lookup_location()
+            if location is None:
+                fail("Could not work out where you are. Enter the conditions manually.")
+                return
+            config.latitude = location.latitude
+            config.longitude = location.longitude
+            if location.label:
+                config.location_label = location.label
+
+        weather = fetch_current_weather(
+            config.latitude,
+            config.longitude,
+            elevation_m=config.elevation_m,
+        )
+        if weather is None:
+            fail("Could not reach the weather service. Try again, or enter values.")
+            return
+
+        environment_provider.set_fetched_weather(
+            weather.temp_c, weather.pressure_hpa, weather.humidity_pct
+        )
+        try:
+            save_weather_config(config)
+        except OSError as exc:
+            # The reading still applies this session; only persistence failed.
+            logger.warning("[WEATHER] Could not save fetched conditions: %s", exc)
+
+        logger.info(
+            "[WEATHER] Fetched %.1f C, %.1f hPa, %.0f%% RH -> %.4f kg/m3",
+            weather.temp_c,
+            weather.pressure_hpa,
+            weather.humidity_pct,
+            weather.air_density(),
+        )
+        _emit_weather()
+    except Exception as exc:  # pylint: disable=broad-except
+        # A weather lookup is never worth taking the launch monitor down for.
+        logger.exception("[WEATHER] Refresh failed unexpectedly: %s", exc)
+        fail("Weather lookup failed. Enter values manually.")
+
+
+@socketio.on("refresh_weather")
+def handle_refresh_weather():
+    """Fetch current conditions on user request."""
+    socketio.start_background_task(refresh_weather_now)
+
+
+# How often the loop wakes to ask whether a refresh is due. Not the refresh
+# interval -- that is the user's setting, and is checked against the stored
+# fetch timestamp, so restarting the server does not restart the clock.
+_AUTO_REFRESH_TICK_S = 60.0
+
+# Set on shutdown so the loop exits promptly instead of sleeping out a tick.
+auto_refresh_stop = threading.Event()
+
+
+def _auto_refresh_loop(
+    stop_event: threading.Event,
+    tick_s: float = _AUTO_REFRESH_TICK_S,
+    now=time.time,
+) -> None:
+    """Re-fetch local weather on the user's chosen interval.
+
+    Off unless the user turns it on AND has already fetched once themselves,
+    so a fresh install never reaches out unprompted -- see
+    ``WeatherConfig.is_auto_refresh_due``.
+
+    Runs on its own daemon thread. Nothing here touches the shot path: the
+    provider is written by this thread and read by the shot path, and a stale
+    read there is simply the previous conditions, which is what the shot would
+    have used a second earlier anyway.
+
+    Args:
+        tick_s: How often to ask whether a refresh is due. Not the refresh
+            interval -- that is the user's setting, checked against the stored
+            fetch timestamp so a restart does not restart the clock.
+        now: Wall clock, injected so tests can drive the schedule without
+            patching the global ``time`` module, which threading itself uses.
+    """
+    while not stop_event.wait(tick_s):
+        try:
+            if environment_provider.config.is_auto_refresh_due(now()):
+                logger.info(
+                    "[WEATHER] Auto-refresh due (every %d min)",
+                    environment_provider.config.auto_refresh_minutes,
+                )
+                refresh_weather_now(announce_errors=False)
+        except Exception as exc:  # pylint: disable=broad-except
+            # This thread outlives every individual failure. A refresh that
+            # throws must not silently end scheduled refreshes for the session.
+            logger.exception("[WEATHER] Auto-refresh tick failed: %s", exc)
+
+
+def detect_location_now() -> None:
+    """Re-detect from the public IP, discarding whatever location is set.
+
+    Distinct from refresh, which re-fetches weather for the location already
+    chosen. Once someone has searched for a city there is otherwise no way back
+    to "where am I now" without clearing the config by hand -- which matters
+    for a unit that travels between a home bay and a range.
+    """
+    config = environment_provider.config
+    if not config.location_consent:
+        socketio.emit(
+            "weather_error",
+            {"reason": "Looking up your location needs your permission."},
+        )
+        return
+    config.latitude = None
+    config.longitude = None
+    config.location_label = None
+    # The detected city's elevation is unknown, and keeping the previous one
+    # would silently apply the old venue's terrain to the new place. Same for
+    # its cached weather, which would otherwise keep being served under the
+    # new location if this fetch fails.
+    config.elevation_m = None
+    config.cached = {}
+    refresh_weather_now()
+
+
+@socketio.on("detect_location")
+def handle_detect_location():
+    """Find the current location again, replacing whatever was chosen."""
+    socketio.start_background_task(detect_location_now)
+
+
+def search_locations_now(query: str) -> None:
+    """Look up places matching a typed query and send them to the UI."""
+    try:
+        results = search_locations(query)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("[WEATHER] Location search failed: %s", exc)
+        results = []
+    socketio.emit(
+        "location_results",
+        {
+            "query": query,
+            "results": [
+                {
+                    "label": result.label,
+                    "latitude": result.latitude,
+                    "longitude": result.longitude,
+                    "elevation_m": result.elevation_m,
+                }
+                for result in results
+            ],
+        },
+    )
+
+
+@socketio.on("search_locations")
+def handle_search_locations(data):
+    """Search for a location by name or postal code, on each user edit.
+
+    Typed search is the primary way a location gets set. IP detection is only
+    a suggestion: behind a VPN it returns the exit node, and the weather that
+    follows is wrong in a way that looks completely plausible.
+    """
+    query = (data or {}).get("query", "")
+    if not isinstance(query, str):
+        return
+    socketio.start_background_task(search_locations_now, query)
+
+
+def select_location_now(latitude: float, longitude: float, label, elevation_m) -> None:
+    """Adopt a searched location and immediately fetch its conditions.
+
+    Everything tied to the old place is dropped together. Keeping any of it
+    produces a reading that looks authoritative and is silently wrong: the
+    previous venue's elevation would set the terrain the new location's
+    pressure is computed at, and the previous venue's cached weather would go
+    on being applied under the new label if this fetch fails.
+    """
+    config = environment_provider.config
+    config.latitude = latitude
+    config.longitude = longitude
+    config.location_label = label or None
+    # The search usually knows the elevation, and it is the term the user is
+    # least able to supply. When it does not, None means "unknown" -- which
+    # makes Open-Meteo report pressure at its own terrain -- rather than
+    # silently inheriting the elevation of a city you have left.
+    config.elevation_m = elevation_m
+    config.cached = {}
+    refresh_weather_now()
+
+
+@socketio.on("select_location")
+def handle_select_location(data):
+    """Adopt one of the searched locations."""
+    data = data or {}
+    latitude = data.get("latitude")
+    longitude = data.get("longitude")
+    if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
+        socketio.emit("weather_error", {"reason": "That location was missing coordinates."})
+        return
+    socketio.start_background_task(
+        select_location_now,
+        float(latitude),
+        float(longitude),
+        data.get("label"),
+        data.get("elevation_m"),
+    )
+
+
+def _resolve_cli_environment(args) -> None:
+    """Apply CLI weather flags as a session-only override.
+
+    Headless and bench use. Never written to disk, and outranks the saved
+    settings for as long as the process runs. Three ways in, most direct first:
+      --weather-density                           explicit
+      --weather-temp-c + --weather-pressure-hpa   a real barometer reading
+      --weather-temp-c + --weather-elevation-m    no barometer; ISA estimate
+    """
+    if args.weather_density is not None:
+        environment_provider.set_cli_override(EnvironmentReading(args.weather_density, "manual"))
+        logger.info("[WEATHER] Air density %.4f kg/m3 (CLI override)", args.weather_density)
+        return
+
+    if args.weather_temp_c is None:
+        return
+
+    humidity = args.weather_humidity if args.weather_humidity is not None else 50.0
+    if args.weather_pressure_hpa is not None:
+        pressure_pa = args.weather_pressure_hpa * 100.0
+        source = "manual"
+    else:
+        pressure_pa = pressure_from_elevation_pa(args.weather_elevation_m)
+        source = "elevation"
+
+    density = air_density(args.weather_temp_c, pressure_pa, humidity)
+    environment_provider.set_cli_override(
+        EnvironmentReading(density, source, args.weather_temp_c, pressure_pa / 100.0, humidity)
+    )
+    logger.info(
+        "[WEATHER] Air density %.4f kg/m3 from %.1f C, %.1f hPa, %.0f%% RH (CLI %s) "
+        "-- %+.1f%% vs ISA sea level",
+        density,
+        args.weather_temp_c,
+        pressure_pa / 100.0,
+        humidity,
+        source,
+        100.0 * (density / AIR_DENSITY_STD - 1.0),
+    )
+
+
 def on_shot_detected(shot: Shot):
     """Callback when a shot is detected - emit to all clients."""
     global ball_detected, ball_detection_confidence  # pylint: disable=global-statement
@@ -2364,17 +2829,38 @@ def on_shot_detected(shot: Shot):
     # ballistics is enabled and a vertical launch angle is available; fall
     # back to the table estimator otherwise (either ballistics disabled or
     # angle missing → resolve_launch returns None).
+    # Snapshot the environment BEFORE computing carry. Read-only and
+    # non-blocking: never touch the I2C bus from the shot path.
+    _apply_environment(shot)
+
     _MIN_RELIABLE_SPIN_CONF = 0.6
-    if shot.carry_spin_adjusted is None and shot.mode != "mock":
+    if shot.mode == "mock" and shot.carry_spin_adjusted is None:
+        # Mock shots keep the table estimate as their carry -- 0b4d7f1
+        # deliberately excluded them from carry *modelling* ("calculate on real
+        # world data"). But the density correction is presentation, not
+        # modelling, and without it the whole weather feature is invisible in
+        # the one mode people demo and review in: the Conditions badge reads
+        # live while the carry underneath it is silently uncorrected.
+        if shot.air_density_kg_m3 is not None:
+            shot.carry_spin_adjusted = shot.estimated_carry_yards * density_carry_factor(
+                shot.air_density_kg_m3
+            )
+            _apply_standard_carry(shot)
+    elif shot.carry_spin_adjusted is None and shot.mode != "mock":
         conditions = resolve_launch(shot) if ballistics_enabled else None
         if conditions is not None:
-            trajectory = simulate(conditions)
+            trajectory = simulate(
+                conditions,
+                air_density=shot.air_density_kg_m3 or AIR_DENSITY_STD,
+            )
             shot.carry_spin_adjusted = trajectory.carry_yards
+            _apply_standard_carry(shot, conditions)
             logger.info(
-                "[SERVER] Ballistic carry: %.0f yds (spin: %.0f rpm, source: %s)",
+                "[SERVER] Ballistic carry: %.0f yds (spin: %.0f rpm, source: %s, air: %s)",
                 shot.carry_spin_adjusted,
                 conditions.spin_rpm,
                 conditions.spin_source,
+                shot.air_density_source or "default",
             )
         else:
             has_reliable_spin = (
@@ -2394,6 +2880,11 @@ def on_shot_detected(shot: Shot):
                 shot.club,
                 club_speed_mph=shot.club_speed_mph,
             )
+            # The table estimator has no physics to scale, so density is
+            # applied as a scalar afterwards. Exactly 1.0 when unknown.
+            if shot.air_density_kg_m3 is not None:
+                shot.carry_spin_adjusted *= density_carry_factor(shot.air_density_kg_m3)
+            _apply_standard_carry(shot)
             reason = "ballistics disabled" if not ballistics_enabled else "no launch angle"
             logger.info(
                 "[SERVER] Table carry (%s): %.0f yds (spin: %.0f rpm%s)",
@@ -2459,6 +2950,18 @@ def on_shot_detected(shot: Shot):
                     "iwr6843": (round(iwr6843_ms, 1) if iwr6843_ms is not None else None),
                     "kld7": round(kld7_ms, 1) if kld7_ms is not None else None,
                 },
+                environment=(
+                    {
+                        "air_density_kg_m3": shot.air_density_kg_m3,
+                        "source": shot.air_density_source,
+                        "temp_c": shot.air_temp_c,
+                        "pressure_hpa": shot.air_pressure_hpa,
+                        "humidity_pct": shot.humidity_pct,
+                        "carry_standard_yards": shot.carry_standard_yards,
+                    }
+                    if shot.air_density_kg_m3 is not None
+                    else None
+                ),
             )
     except Exception as e:
         logger.warning("[SERVER] Failed to log shot: %s", e, exc_info=True)
@@ -2973,6 +3476,62 @@ def main():
             "Default: disabled (all shots use the table)."
         ),
     )
+    # --- Air density -------------------------------------------------------
+    # Carry has always assumed ISA sea level (15 C, 1013.25 hPa, dry). A hot
+    # afternoon at sea level is already 7-8% off that, which is ~5 yd on a
+    # driver; Denver is 20% and ~14 yd. With none of these flags set the
+    # behaviour is byte-identical to before.
+    parser.add_argument(
+        "--weather-temp-c",
+        type=float,
+        default=None,
+        help=(
+            "Air temperature in Celsius. Combine with --weather-pressure-hpa "
+            "(a real barometer) or --weather-elevation-m (ISA estimate). "
+            "Temperature is the term that moves carry most."
+        ),
+    )
+    parser.add_argument(
+        "--weather-pressure-hpa",
+        type=float,
+        default=None,
+        help=(
+            "ABSOLUTE station pressure in hPa -- what a barometer at the course "
+            "reads. NOT the sea-level-adjusted value a weather app or METAR "
+            "reports; using that over-estimates density and shortens carry, and "
+            "the error grows with your elevation."
+        ),
+    )
+    parser.add_argument(
+        "--weather-elevation-m",
+        type=float,
+        default=0.0,
+        help=(
+            "Elevation above sea level in metres, used to estimate station "
+            "pressure when no barometer reading is given. Ignored if "
+            "--weather-pressure-hpa is set. This is NOT a tuning knob -- enter "
+            "your real elevation. Faking it to make distances look right "
+            "corrupts every carry number (default: 0)."
+        ),
+    )
+    parser.add_argument(
+        "--weather-humidity",
+        type=float,
+        default=None,
+        help=(
+            "Relative humidity 0-100 (default: 50). The smallest of the three "
+            "terms -- worth under 2%% of density even bone-dry to saturated."
+        ),
+    )
+    parser.add_argument(
+        "--weather-density",
+        type=float,
+        default=None,
+        help=(
+            "Air density in kg/m3 directly, overriding all other weather flags. "
+            "Bench and test use; ISA sea level is 1.225."
+        ),
+    )
     parser.add_argument(
         "--trigger",
         choices=["polling", "threshold", "speed", "sound"],
@@ -3264,6 +3823,31 @@ def main():
         parser.error("--iwr6843 already owns BCM GPIO; use the default --trigger sound")
     if args.iwr6843 and (args.iwr6843_tee_m <= 0 or args.iwr6843_net_m <= 0):
         parser.error("--iwr6843-tee-m and --iwr6843-net-m must be positive")
+    # Air density: a partial specification silently does nothing, which is
+    # worse than refusing to start, so require the pieces to add up.
+    if args.weather_pressure_hpa is not None and args.weather_temp_c is None:
+        parser.error("--weather-pressure-hpa needs --weather-temp-c; pressure alone is not density")
+    if args.weather_elevation_m and args.weather_temp_c is None:
+        parser.error("--weather-elevation-m needs --weather-temp-c; elevation alone is not density")
+    if args.weather_humidity is not None and not 0.0 <= args.weather_humidity <= 100.0:
+        parser.error("--weather-humidity must be between 0 and 100")
+    if args.weather_density is not None and not 0.5 <= args.weather_density <= 1.5:
+        parser.error(
+            f"--weather-density {args.weather_density} is implausible; "
+            "ISA sea level is 1.225 and Denver is about 0.97"
+        )
+    # Elevation is a physical fact, not a tuning knob. R10 users are documented
+    # setting 10,000 ft in E6 to make distances look right -- that is air 31%
+    # thinner than sea level, and it silently corrupts every carry number.
+    if args.weather_elevation_m > 2500.0:
+        logger.warning(
+            "[WEATHER] --weather-elevation-m %.0f m (%.0f ft) is higher than almost any "
+            "golf course. If you are inflating this to make distances match what you "
+            "expect, do not -- check spin_source instead: club-typical spin, not air "
+            "density, is the usual reason carry looks wrong.",
+            args.weather_elevation_m,
+            args.weather_elevation_m / 0.3048,
+        )
     # The radar can only be moved to a rate it has an API command for, so an
     # unsupported value is refused by the hardware and leaves the link at
     # whatever answered -- a silent slow link, which presents as an
@@ -3290,6 +3874,15 @@ def main():
     global calculated_spin_enabled
     calculated_spin_enabled = args.calculated_spin
     ballistics_enabled = args.ballistics
+    _resolve_cli_environment(args)
+    # Daemon so it never holds up shutdown; the event lets tests stop it
+    # deterministically rather than waiting out a tick.
+    threading.Thread(
+        target=_auto_refresh_loop,
+        args=(auto_refresh_stop,),
+        daemon=True,
+        name="weather-auto-refresh",
+    ).start()
     kld7_radc_tuning_kwargs = _kld7_radc_tuning_kwargs(args)
     active_kld7_radc_tuning = dict(kld7_radc_tuning_kwargs)
 

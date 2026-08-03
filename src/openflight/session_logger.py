@@ -343,6 +343,7 @@ class SessionLogger:
         spin_axis_deg: Optional[float] = None,
         pipeline_ms: Optional[Dict] = None,
         impact_timestamp: Optional[float] = None,
+        environment: Optional[Dict] = None,
     ):
         """
         Log a detected shot with all metrics.
@@ -436,6 +437,12 @@ class SessionLogger:
             data["spin_axis_deg"] = spin_axis_deg
         if pipeline_ms is not None:
             data["pipeline_ms"] = pipeline_ms
+        # Air density and where it came from. Without these a logged carry
+        # cannot be re-derived, and two sessions cannot be compared. Omitted
+        # entirely when no weather is configured, so those logs stay identical
+        # to what this repo wrote before the subsystem existed.
+        if environment is not None:
+            data["environment"] = environment
 
         self._write_entry("shot_detected", data)
 

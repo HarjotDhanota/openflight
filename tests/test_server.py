@@ -2,6 +2,8 @@
 
 import json
 import sys
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -835,14 +837,14 @@ class TestEstimateLaunchAngle:
         baseline, _ = estimate_launch_angle(ClubType.DRIVER, 143)
         angle, _ = estimate_launch_angle(ClubType.DRIVER, 143, club_speed_mph=110)
         # smash = 143/110 = 1.30, well below optimal 1.48
-        # Adjustment clamped to -3.0 degrees, so angle ≈ 11.0 - 3.0 = 8.0
+        # Adjustment clamped to -3.0 degrees, so angle â‰ˆ 11.0 - 3.0 = 8.0
         assert angle < baseline
         assert 7.0 <= angle <= 9.0
 
     def test_optimal_smash_no_change(self):
         """Optimal smash factor should not shift launch angle."""
         angle, _ = estimate_launch_angle(ClubType.DRIVER, 143, club_speed_mph=96.6)
-        # smash = 143/96.6 ≈ 1.48 (optimal for driver)
+        # smash = 143/96.6 â‰ˆ 1.48 (optimal for driver)
         assert angle == 11.0
 
     def test_smash_raises_confidence(self):
@@ -853,7 +855,7 @@ class TestEstimateLaunchAngle:
     def test_high_smash_raises_launch(self):
         """High smash factor should slightly raise launch angle."""
         baseline, _ = estimate_launch_angle(ClubType.DRIVER, 143)
-        # smash = 143/90 ≈ 1.59, above optimal 1.48
+        # smash = 143/90 â‰ˆ 1.59, above optimal 1.48
         angle, _ = estimate_launch_angle(ClubType.DRIVER, 143, club_speed_mph=90)
         assert angle > baseline
         assert angle <= baseline + 2.0  # capped at +2.0 degrees
@@ -930,7 +932,7 @@ class TestMockLaunchMonitor:
         shot = monitor.simulate_shot(ball_speed=150.0)
 
         assert len(monitor._shots) == 1
-        assert 140.0 <= shot.ball_speed_mph <= 160.0  # ±10 variance
+        assert 140.0 <= shot.ball_speed_mph <= 160.0  # Â±10 variance
         assert shot.club == ClubType.DRIVER
         assert shot.mode == "mock"
         assert shot.spin_rpm is not None and shot.spin_rpm >= 1000
@@ -999,7 +1001,7 @@ class TestMockLaunchMonitor:
         stats = monitor.get_session_stats()
 
         assert stats["shot_count"] == 3
-        # Averages will vary due to ±10 variance, but should be in range
+        # Averages will vary due to Â±10 variance, but should be in range
         assert 140 <= stats["avg_ball_speed"] <= 160
         assert stats["avg_club_speed"] is not None
         assert stats["avg_smash_factor"] is not None
@@ -2166,7 +2168,7 @@ class TestOnShotDetected:
         assert shot.launch_angle_horizontal == pytest.approx(0.0)
 
     def test_implausible_club_aoa_is_rejected(self, monkeypatch):
-        """A +31° club AoA is physically impossible and should be discarded."""
+        """A +31Â° club AoA is physically impossible and should be discarded."""
 
         class StubTracker:
             orientation = "vertical"
@@ -2180,7 +2182,7 @@ class TestOnShotDetected:
                 return KLD7Angle(vertical_deg=15.0, confidence=0.7, num_frames=2)
 
             def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
-                # Radar reports -31° vertical → server negates to +31° AoA
+                # Radar reports -31Â° vertical â†’ server negates to +31Â° AoA
                 return KLD7Angle(vertical_deg=-31.0, confidence=0.7, num_frames=2)
 
             def reset(self):
@@ -2204,7 +2206,7 @@ class TestOnShotDetected:
         on_shot_detected(shot)
 
         assert shot.club_angle_deg is None, (
-            f"AoA of +31° should be rejected, got {shot.club_angle_deg}"
+            f"AoA of +31Â° should be rejected, got {shot.club_angle_deg}"
         )
 
     def test_plausible_kld7_angle_remains_radar_source(self, monkeypatch):
@@ -2272,9 +2274,7 @@ class TestOnShotDetected:
         on_shot_detected(shot)
 
     def test_spin_axis_emitted_when_horizontal_confidence_clears_gate(self, monkeypatch):
-        shot = self._spin_axis_shot(
-            horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE
-        )
+        shot = self._spin_axis_shot(horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE)
 
         self._run_with_no_radar_hardware(monkeypatch, shot)
 
@@ -2370,7 +2370,7 @@ class TestCarryComputation:
 
     def test_carry_skips_ballistic_when_ballistics_disabled(self, monkeypatch):
         """When ballistics_enabled is False, the simulator must not run even
-        if a valid launch angle is present — carry falls through to the
+        if a valid launch angle is present â€” carry falls through to the
         table estimator. This is the default; `--ballistics` opts in."""
         self._patch_environment(monkeypatch)
         monkeypatch.setattr(server_module, "ballistics_enabled", False)
@@ -2491,9 +2491,7 @@ class TestClubPathOwnershipGuard:
     existing --iwr6843/--kld7 (vertical) guard."""
 
     def test_iwr6843_and_kld7_horizontal_cannot_both_own_club_path(self, monkeypatch, capsys):
-        monkeypatch.setattr(
-            sys, "argv", ["openflight-server", "--iwr6843", "--kld7-horizontal"]
-        )
+        monkeypatch.setattr(sys, "argv", ["openflight-server", "--iwr6843", "--kld7-horizontal"])
 
         with pytest.raises(SystemExit) as exc_info:
             server_module.main()
@@ -2554,3 +2552,1057 @@ class TestOpsBaudValidation:
         a stricter check would reject a legitimate fallback to 115200, which the
         flag's own help text tells operators to use."""
         assert good in UART_BAUD_COMMANDS
+
+
+class TestWeatherRefresh:
+    """The "Detect location" button.
+
+    All of it runs off the shot path, on user action only. The contract is
+    that a failed lookup produces an error in the UI and changes nothing --
+    never an exception, and never a half-written config.
+    """
+
+    @pytest.fixture
+    def weather(self, monkeypatch, tmp_path):
+        """Isolate the provider and capture emits. Never touches the real config."""
+        from openflight.environment.config import WeatherConfig
+        from openflight.environment.provider import EnvironmentProvider
+
+        emitted = []
+        provider = EnvironmentProvider(WeatherConfig())
+        monkeypatch.setattr(server_module, "environment_provider", provider)
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+        saved = []
+        monkeypatch.setattr(server_module, "save_weather_config", lambda cfg: saved.append(cfg))
+        return SimpleNamespace(provider=provider, emitted=emitted, saved=saved)
+
+    def _events(self, weather):
+        return [event for event, *_ in weather.emitted]
+
+    def _payload(self, weather, name):
+        return next(payload for event, payload in weather.emitted if event == name)
+
+    def test_fetched_conditions_become_the_active_source(self, weather, monkeypatch):
+        from openflight.environment.openmeteo import FetchedWeather
+
+        weather.provider.config.latitude = 38.58
+        weather.provider.config.longitude = -121.49
+        monkeypatch.setattr(
+            server_module,
+            "fetch_current_weather",
+            lambda *a, **k: FetchedWeather(36.1, 1010.2, 25.0),
+        )
+
+        server_module.refresh_weather_now()
+
+        reading = weather.provider.current()
+        assert reading.source == "open-meteo"
+        assert reading.temp_c == pytest.approx(36.1)
+        # 97 F at a sea-level venue: the Sacramento case from the design doc.
+        assert reading.air_density_kg_m3 == pytest.approx(1.1316, abs=0.001)
+
+    def test_successful_fetch_is_persisted(self, weather, monkeypatch):
+        from openflight.environment.openmeteo import FetchedWeather
+
+        weather.provider.config.latitude = 38.58
+        weather.provider.config.longitude = -121.49
+        monkeypatch.setattr(
+            server_module,
+            "fetch_current_weather",
+            lambda *a, **k: FetchedWeather(36.1, 1010.2, 25.0),
+        )
+
+        server_module.refresh_weather_now()
+
+        assert weather.saved, "a fetch the user waited for must survive a restart"
+        assert "environment" in self._events(weather)
+
+    def test_the_users_elevation_is_sent_to_the_api(self, weather, monkeypatch):
+        """Open-Meteo reports pressure at ITS terrain height unless told the
+        real one; ~12 Pa/m means a 100 m error is ~0.9 yd on a driver."""
+        from openflight.environment.openmeteo import FetchedWeather
+
+        seen = {}
+        weather.provider.config.latitude = 38.58
+        weather.provider.config.longitude = -121.49
+        weather.provider.config.elevation_m = 9.0
+
+        def spy(latitude, longitude, elevation_m=None, **kwargs):
+            seen["elevation_m"] = elevation_m
+            return FetchedWeather(36.1, 1010.2, 25.0)
+
+        monkeypatch.setattr(server_module, "fetch_current_weather", spy)
+
+        server_module.refresh_weather_now()
+
+        assert seen["elevation_m"] == 9.0
+
+    def test_failed_fetch_reports_an_error_and_changes_nothing(self, weather, monkeypatch):
+        weather.provider.config.latitude = 38.58
+        weather.provider.config.longitude = -121.49
+        monkeypatch.setattr(server_module, "fetch_current_weather", lambda *a, **k: None)
+
+        server_module.refresh_weather_now()
+
+        assert "weather_error" in self._events(weather)
+        assert weather.provider.current().source == "default"
+        assert not weather.saved, "a failed fetch must not rewrite the config"
+
+    def test_location_is_looked_up_when_none_is_configured(self, weather, monkeypatch):
+        from openflight.environment.openmeteo import FetchedWeather, Location
+
+        weather.provider.config.location_consent = True
+        monkeypatch.setattr(
+            server_module,
+            "lookup_location",
+            lambda **k: Location(38.58, -121.49, "Sacramento, California"),
+        )
+        monkeypatch.setattr(
+            server_module,
+            "fetch_current_weather",
+            lambda *a, **k: FetchedWeather(36.1, 1010.2, 25.0),
+        )
+
+        server_module.refresh_weather_now()
+
+        assert weather.provider.config.latitude == pytest.approx(38.58)
+        assert weather.provider.config.location_label == "Sacramento, California"
+
+    def test_lookup_requires_consent(self, weather, monkeypatch):
+        """An IP geolocation call is a privacy decision, so it is opt-in."""
+        called = []
+        monkeypatch.setattr(
+            server_module, "lookup_location", lambda **k: called.append(True) or None
+        )
+
+        server_module.refresh_weather_now()
+
+        assert not called
+        assert "weather_error" in self._events(weather)
+
+    def test_failed_location_lookup_reports_an_error(self, weather, monkeypatch):
+        weather.provider.config.location_consent = True
+        monkeypatch.setattr(server_module, "lookup_location", lambda **k: None)
+
+        server_module.refresh_weather_now()
+
+        assert "weather_error" in self._events(weather)
+        assert weather.provider.config.latitude is None
+
+    def test_refresh_never_raises_into_the_caller(self, weather, monkeypatch):
+        """The button lives next to a person hitting balls. Whatever the
+        network does, the server keeps running."""
+        weather.provider.config.latitude = 38.58
+        weather.provider.config.longitude = -121.49
+
+        def boom(*a, **k):
+            raise RuntimeError("something nobody predicted")
+
+        monkeypatch.setattr(server_module, "fetch_current_weather", boom)
+
+        server_module.refresh_weather_now()
+
+        assert "weather_error" in self._events(weather)
+
+
+class TestWeatherRegression:
+    """The guarantee for everyone who never opens the settings screen.
+
+    With no sensor, no config and no flags, every number this repo produced
+    before the weather subsystem existed must come out bit-for-bit the same.
+    That is the whole reason `_apply_environment` returns early on "default"
+    rather than stamping ISA values onto the shot.
+    """
+
+    @pytest.fixture
+    def unconfigured(self, monkeypatch):
+        from openflight.environment.config import WeatherConfig
+        from openflight.environment.provider import EnvironmentProvider
+
+        provider = EnvironmentProvider(WeatherConfig())
+        monkeypatch.setattr(server_module, "environment_provider", provider)
+        return provider
+
+    def test_unconfigured_shot_carries_no_environment_fields(self, unconfigured):
+        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now(), club=ClubType.DRIVER)
+
+        server_module._apply_environment(shot)
+
+        assert shot.air_density_kg_m3 is None
+        assert shot.air_density_source is None
+        assert shot.air_temp_c is None
+        assert shot.air_pressure_hpa is None
+        assert shot.humidity_pct is None
+
+    def test_unconfigured_shot_dict_has_null_environment(self, unconfigured):
+        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now(), club=ClubType.DRIVER)
+        server_module._apply_environment(shot)
+
+        payload = shot_to_dict(shot)
+
+        assert payload["air_density_kg_m3"] is None
+        assert payload["air_density_source"] is None
+        assert payload["carry_standard_yards"] is None
+
+    def test_table_carry_is_identical_to_the_uncorrected_estimate(self, unconfigured, monkeypatch):
+        """Asserts the carry number itself, not just that density is None.
+
+        The previous version of this test only checked `air_density_kg_m3 is
+        None` and never computed a carry, so the table path could have been
+        multiplied by anything and it would still have passed.
+        """
+        from openflight.rolling_buffer.monitor import (
+            estimate_carry_with_spin,
+            get_optimal_spin_for_ball_speed,
+        )
+
+        monkeypatch.setattr(server_module, "kld7_vertical", None)
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "camera_tracker", None)
+        monkeypatch.setattr(server_module, "camera_enabled", False)
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *a, **k: None)
+        monkeypatch.setattr(server_module, "ballistics_enabled", False)
+
+        shot = Shot(
+            ball_speed_mph=150.0,
+            club_speed_mph=103.0,
+            timestamp=datetime.now(),
+            club=ClubType.DRIVER,
+        )
+        expected = estimate_carry_with_spin(
+            150.0,
+            get_optimal_spin_for_ball_speed(150.0, ClubType.DRIVER),
+            ClubType.DRIVER,
+            club_speed_mph=103.0,
+        )
+
+        on_shot_detected(shot)
+
+        assert shot.air_density_kg_m3 is None
+        assert shot.carry_spin_adjusted == pytest.approx(expected)
+
+    def test_the_server_passes_isa_to_simulate_when_density_is_unknown(
+        self, unconfigured, monkeypatch
+    ):
+        """Captures what the SERVER passes, not what a Python expression
+        evaluates to. The previous version asserted `None or AIR_DENSITY_STD`,
+        which is true of the language regardless of the call site."""
+        from openflight.ballistics import AIR_DENSITY_STD
+
+        seen = {}
+        real_simulate = server_module.simulate
+
+        def spy(conditions, air_density=AIR_DENSITY_STD, **kwargs):
+            seen["air_density"] = air_density
+            return real_simulate(conditions, air_density=air_density, **kwargs)
+
+        monkeypatch.setattr(server_module, "simulate", spy)
+        monkeypatch.setattr(server_module, "kld7_vertical", None)
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "camera_tracker", None)
+        monkeypatch.setattr(server_module, "camera_enabled", False)
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *a, **k: None)
+        monkeypatch.setattr(server_module, "ballistics_enabled", True)
+
+        on_shot_detected(
+            Shot(
+                ball_speed_mph=150.0,
+                timestamp=datetime.now(),
+                club=ClubType.DRIVER,
+                launch_angle_vertical=12.0,
+                spin_rpm=2700.0,
+                spin_confidence=0.9,
+            )
+        )
+
+        assert seen["air_density"] == AIR_DENSITY_STD
+
+    def test_standard_carry_is_skipped_without_a_density(self, unconfigured):
+        """No density means no correction to compare against, so the second
+        integration must not run -- it would cost 50-85 ms for nothing."""
+        from openflight.ballistics import LaunchConditions
+
+        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now(), club=ClubType.DRIVER)
+        conditions = LaunchConditions(150.0, 12.0, 0.0, 2700.0, 0.0, "measured")
+
+        server_module._apply_standard_carry(shot, conditions)
+
+        assert shot.carry_standard_yards is None
+
+
+class TestStandardCarryThreshold:
+    """The second integration is lazy: it only runs when it would change the
+    displayed yardage."""
+
+    @pytest.fixture
+    def provider(self, monkeypatch):
+        from openflight.environment.config import WeatherConfig
+        from openflight.environment.provider import EnvironmentProvider
+
+        provider = EnvironmentProvider(WeatherConfig())
+        monkeypatch.setattr(server_module, "environment_provider", provider)
+        return provider
+
+    def _conditions(self):
+        from openflight.ballistics import LaunchConditions
+
+        return LaunchConditions(165.0, 12.5, 0.0, 2600.0, 0.0, "measured")
+
+    def test_disabled_by_the_user_means_no_second_figure(self, provider):
+        provider.config.show_standard = False
+        shot = Shot(ball_speed_mph=165.0, timestamp=datetime.now(), club=ClubType.DRIVER)
+        shot.air_density_kg_m3 = 0.97  # Denver: a huge deviation
+
+        server_module._apply_standard_carry(shot, self._conditions())
+
+        assert shot.carry_standard_yards is None
+
+    def test_below_half_a_percent_deviation_is_skipped(self, provider):
+        """Both figures would round to the same yardage, so the extra RK4 pass
+        and the extra line of UI are pure noise."""
+        shot = Shot(ball_speed_mph=165.0, timestamp=datetime.now(), club=ClubType.DRIVER)
+        shot.air_density_kg_m3 = provider.standard_density() * 1.004
+
+        server_module._apply_standard_carry(shot, self._conditions())
+
+        assert shot.carry_standard_yards is None
+
+    def test_above_half_a_percent_deviation_is_computed(self, provider):
+        shot = Shot(ball_speed_mph=165.0, timestamp=datetime.now(), club=ClubType.DRIVER)
+        shot.air_density_kg_m3 = provider.standard_density() * 1.02
+
+        server_module._apply_standard_carry(shot, self._conditions())
+
+        assert shot.carry_standard_yards is not None
+
+    def test_the_standard_figure_uses_reference_air_not_todays(self, provider):
+        """A hot day must move the main carry and leave this one alone -- that
+        is the entire point of showing it."""
+        from openflight.ballistics import simulate
+
+        shot = Shot(ball_speed_mph=165.0, timestamp=datetime.now(), club=ClubType.DRIVER)
+        shot.air_density_kg_m3 = 1.1316  # Sacramento at 97 F
+
+        server_module._apply_standard_carry(shot, self._conditions())
+
+        expected = simulate(self._conditions(), air_density=provider.standard_density())
+        assert shot.carry_standard_yards == pytest.approx(expected.carry_yards)
+
+    def test_thin_air_reads_longer_than_the_standard_figure(self, provider):
+        """Sanity on the direction: Denver air must make today's carry the
+        bigger of the two numbers, or the labels are backwards in the UI."""
+        from openflight.ballistics import simulate
+
+        shot = Shot(ball_speed_mph=165.0, timestamp=datetime.now(), club=ClubType.DRIVER)
+        shot.air_density_kg_m3 = 0.97
+
+        server_module._apply_standard_carry(shot, self._conditions())
+        today = simulate(self._conditions(), air_density=0.97).carry_yards
+
+        assert today > shot.carry_standard_yards
+
+
+class TestWeatherCliFlags:
+    """Session-only overrides for headless and bench use. Never written to disk."""
+
+    @pytest.fixture
+    def provider(self, monkeypatch):
+        from openflight.environment.config import WeatherConfig
+        from openflight.environment.provider import EnvironmentProvider
+
+        provider = EnvironmentProvider(WeatherConfig())
+        monkeypatch.setattr(server_module, "environment_provider", provider)
+        return provider
+
+    def _args(self, **overrides):
+        defaults = dict(
+            weather_density=None,
+            weather_temp_c=None,
+            weather_pressure_hpa=None,
+            weather_elevation_m=0.0,
+            weather_humidity=None,
+        )
+        defaults.update(overrides)
+        return SimpleNamespace(**defaults)
+
+    def test_no_flags_leaves_the_provider_untouched(self, provider):
+        server_module._resolve_cli_environment(self._args())
+
+        assert provider.current().source == "default"
+
+    def test_explicit_density_is_used_verbatim(self, provider):
+        server_module._resolve_cli_environment(self._args(weather_density=1.0500))
+
+        assert provider.current().air_density_kg_m3 == pytest.approx(1.05)
+
+    def test_temp_and_pressure_resolve_through_the_psychrometric_model(self, provider):
+        server_module._resolve_cli_environment(
+            self._args(weather_temp_c=36.0, weather_pressure_hpa=1010.2, weather_humidity=25.0)
+        )
+
+        from openflight.environment import air_density
+
+        assert provider.current().air_density_kg_m3 == pytest.approx(
+            air_density(36.0, 101020.0, 25.0)
+        )
+
+    def test_temp_and_elevation_estimate_pressure(self, provider):
+        """The bench case: 36 C at 9 m, with humidity defaulting to 50%.
+
+        1.1279, not the 1.1338 an earlier draft of the checklist quoted --
+        that figure is the same conditions at 25% RH. Humidity is the smallest
+        term but it is not nothing: 25 points of it is 0.5% of density.
+        """
+        server_module._resolve_cli_environment(
+            self._args(weather_temp_c=36.0, weather_elevation_m=9.0)
+        )
+
+        assert provider.current().air_density_kg_m3 == pytest.approx(1.1279, abs=0.001)
+
+    def test_the_same_conditions_at_lower_humidity_are_denser(self, provider):
+        server_module._resolve_cli_environment(
+            self._args(weather_temp_c=36.0, weather_elevation_m=9.0, weather_humidity=25.0)
+        )
+
+        assert provider.current().air_density_kg_m3 == pytest.approx(1.1338, abs=0.001)
+
+    def test_humidity_defaults_to_fifty_percent(self, provider):
+        server_module._resolve_cli_environment(
+            self._args(weather_temp_c=36.0, weather_elevation_m=9.0)
+        )
+
+        assert provider.current().humidity_pct == pytest.approx(50.0)
+
+    def test_a_flag_override_outranks_the_saved_config(self, provider):
+        """An operator flag is for this session; the settings file is the
+        user's standing preference. The flag must win."""
+        provider.config.cached = {
+            "temp_c": 5.0,
+            "pressure_hpa": 1030.0,
+            "humidity_pct": 80.0,
+            "fetched_at": 1.0,
+        }
+
+        server_module._resolve_cli_environment(self._args(weather_density=1.0))
+
+        assert provider.current().air_density_kg_m3 == pytest.approx(1.0)
+
+
+class TestSetWeatherSettings:
+    @pytest.fixture
+    def weather(self, monkeypatch):
+        from openflight.environment.config import WeatherConfig
+        from openflight.environment.provider import EnvironmentProvider
+
+        emitted = []
+        saved = []
+        provider = EnvironmentProvider(WeatherConfig())
+        monkeypatch.setattr(server_module, "environment_provider", provider)
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+        monkeypatch.setattr(server_module, "save_weather_config", lambda cfg: saved.append(cfg))
+        return SimpleNamespace(provider=provider, emitted=emitted, saved=saved)
+
+    def test_settings_are_persisted(self, weather):
+        server_module.handle_set_weather_settings({"mode": "manual", "manual_temp_c": 30.0})
+
+        assert weather.saved
+        assert weather.provider.config.mode == "manual"
+
+    def test_the_new_resolution_is_broadcast(self, weather):
+        server_module.handle_set_weather_settings(
+            {"mode": "manual", "manual_temp_c": 36.0, "manual_pressure_hpa": 1010.2}
+        )
+
+        events = [event for event, *_ in weather.emitted]
+        assert "environment" in events
+        assert "weather_settings" in events
+
+    def test_an_unknown_mode_is_ignored_rather_than_stored(self, weather):
+        server_module.handle_set_weather_settings({"mode": "supersonic"})
+
+        assert weather.provider.config.mode == "auto"
+
+    def test_a_partial_payload_leaves_unmentioned_fields_alone(self, weather):
+        """The UI sends only what the user just changed, never the whole form.
+
+        It used to send its entire local draft on every keystroke, which raced
+        with any in-flight fetch: tap a checkbox while "Detect location" is
+        still running and the draft's pre-detection nulls land after the
+        coordinates, wiping them. Sending a patch removes the race outright,
+        but only while this handler keeps merging rather than replacing.
+        """
+        config = weather.provider.config
+        config.latitude = 38.58
+        config.longitude = -121.49
+        config.location_label = "Sacramento, California"
+        config.elevation_m = 9.0
+
+        server_module.handle_set_weather_settings({"show_standard": False})
+
+        assert config.latitude == 38.58
+        assert config.longitude == -121.49
+        assert config.location_label == "Sacramento, California"
+        assert config.elevation_m == 9.0
+        assert config.show_standard is False
+
+    @pytest.mark.parametrize("payload", [None, [], "manual", 42, ["mode", "manual"]])
+    def test_a_payload_that_is_not_a_mapping_is_ignored(self, weather, payload):
+        """Socket.IO hands the handler whatever the client emitted. `.get()` on
+        a list or None raises inside the event loop, so a malformed or hostile
+        client could take down the connection every other tab shares."""
+        from openflight.environment.config import WeatherConfig
+
+        server_module.handle_set_weather_settings(payload)
+
+        assert weather.provider.config == WeatherConfig()
+        assert not weather.saved
+
+    def test_a_failed_save_still_applies_for_this_session(self, weather, monkeypatch):
+        def cannot_write(_config):
+            raise OSError("read-only filesystem")
+
+        monkeypatch.setattr(server_module, "save_weather_config", cannot_write)
+
+        server_module.handle_set_weather_settings({"mode": "manual", "manual_temp_c": 36.0})
+
+        assert weather.provider.config.manual_temp_c == 36.0
+        assert "weather_error" in [event for event, *_ in weather.emitted]
+
+    def test_settings_payload_carries_both_namespaces(self, weather):
+        """Manual entry and local weather are separate set-ups, so the payload
+        has to carry both rather than one shared field per value."""
+        payload = server_module._weather_settings_payload()
+
+        for key in ("elevation_m", "manual_elevation_m", "indoor_temp_c", "manual_temp_c"):
+            assert key in payload
+
+    def test_an_implausible_elevation_is_stored_but_warned_about(self, weather, caplog):
+        """Someone might genuinely be in Leadville, so it is never silently
+        corrected -- but it is far more often the R10-in-E6 fudge."""
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            server_module.handle_set_weather_settings({"elevation_m": 3048.0})
+
+        assert weather.provider.config.elevation_m == 3048.0
+        assert "spin_source" in caplog.text
+
+
+class TestStandardCarryOnTheTablePath:
+    """Shots without a measured launch angle get the density correction, so
+    they must get the comparable reference figure too -- otherwise the second
+    number appears and disappears depending on whether the angle radar
+    happened to see that shot."""
+
+    @pytest.fixture
+    def provider(self, monkeypatch):
+        from openflight.environment.config import WeatherConfig
+        from openflight.environment.provider import EnvironmentProvider
+
+        provider = EnvironmentProvider(WeatherConfig())
+        monkeypatch.setattr(server_module, "environment_provider", provider)
+        return provider
+
+    def test_table_carry_gets_a_standard_figure(self, provider):
+        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now(), club=ClubType.DRIVER)
+        shot.air_density_kg_m3 = 0.97  # Denver
+        shot.carry_spin_adjusted = 260.0
+
+        server_module._apply_standard_carry(shot)
+
+        assert shot.carry_standard_yards is not None
+
+    def test_the_rescale_is_exact_for_the_table_estimator(self, provider):
+        """base * f(today) / f(today) * f(std) == base * f(std), with no second
+        integration and no re-derivation of the base estimate."""
+        from openflight.ballistics import density_carry_factor
+
+        base = 250.0
+        today = 0.97
+        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now(), club=ClubType.DRIVER)
+        shot.air_density_kg_m3 = today
+        shot.carry_spin_adjusted = base * density_carry_factor(today)
+
+        server_module._apply_standard_carry(shot)
+
+        expected = base * density_carry_factor(provider.standard_density())
+        assert shot.carry_standard_yards == pytest.approx(expected)
+
+    def test_thin_air_still_reads_longer_than_the_reference(self, provider):
+        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now(), club=ClubType.DRIVER)
+        shot.air_density_kg_m3 = 0.97
+        shot.carry_spin_adjusted = 270.0
+
+        server_module._apply_standard_carry(shot)
+
+        assert shot.carry_spin_adjusted > shot.carry_standard_yards
+
+    def test_no_second_integration_is_attempted_without_a_carry(self, provider):
+        """Nothing to rescale means nothing to report -- and crucially no crash
+        from passing None into simulate()."""
+        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now(), club=ClubType.DRIVER)
+        shot.air_density_kg_m3 = 0.97
+
+        server_module._apply_standard_carry(shot)
+
+        assert shot.carry_standard_yards is None
+
+    def test_the_threshold_still_applies(self, provider):
+        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now(), club=ClubType.DRIVER)
+        shot.air_density_kg_m3 = provider.standard_density() * 1.002
+        shot.carry_spin_adjusted = 250.0
+
+        server_module._apply_standard_carry(shot)
+
+        assert shot.carry_standard_yards is None
+
+
+class TestMockModeShowsTheCorrection:
+    """Mock is the mode this feature gets demoed and reviewed in.
+
+    0b4d7f1 deliberately kept mock shots out of carry *modelling* ("calculate
+    on real world data"), and that stands -- mock still uses the table estimate
+    rather than being handed to the integrator. But applying the measured air
+    to that estimate is presentation, not modelling. Without it the Conditions
+    badge reads live while the carry beneath it is silently uncorrected, which
+    is worse than showing nothing.
+    """
+
+    @pytest.fixture
+    def harness(self, monkeypatch):
+        from openflight.environment.config import WeatherConfig
+        from openflight.environment.provider import EnvironmentProvider
+
+        provider = EnvironmentProvider(WeatherConfig())
+        monkeypatch.setattr(server_module, "environment_provider", provider)
+        monkeypatch.setattr(server_module, "kld7_vertical", None)
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "camera_tracker", None)
+        monkeypatch.setattr(server_module, "camera_enabled", False)
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *a, **k: None)
+        return provider
+
+    def _mock_shot(self):
+        return Shot(
+            ball_speed_mph=143.0,
+            club_speed_mph=99.0,
+            timestamp=datetime.now(),
+            club=ClubType.DRIVER,
+            launch_angle_vertical=11.0,
+            spin_rpm=2700.0,
+            mode="mock",
+        )
+
+    def test_thin_air_lengthens_a_mock_carry(self, harness):
+        harness.set_cli_override(
+            server_module.EnvironmentReading(0.97, "manual")  # Denver
+        )
+        shot = self._mock_shot()
+
+        on_shot_detected(shot)
+
+        assert shot.carry_spin_adjusted is not None
+        assert shot.carry_spin_adjusted > shot.estimated_carry_yards
+
+    def test_mock_gets_the_standard_figure_too(self, harness):
+        harness.set_cli_override(server_module.EnvironmentReading(0.97, "manual"))
+        shot = self._mock_shot()
+
+        on_shot_detected(shot)
+
+        assert shot.carry_standard_yards is not None
+        assert shot.carry_standard_yards < shot.carry_spin_adjusted
+
+    def test_mock_carry_is_untouched_when_no_weather_is_configured(self, harness):
+        """The regression guarantee holds in mock as well: no config, no change."""
+        shot = self._mock_shot()
+
+        on_shot_detected(shot)
+
+        assert shot.carry_spin_adjusted is None
+        assert shot.carry_standard_yards is None
+
+    def test_mock_is_still_not_handed_to_the_integrator(self, harness, monkeypatch):
+        """The maintainer's decision stands: mock keeps the table estimate and
+        never triggers an RK4 flight."""
+        simulated = []
+        monkeypatch.setattr(
+            server_module,
+            "simulate",
+            lambda *a, **k: simulated.append(a) or (_ for _ in ()).throw(AssertionError()),
+        )
+        harness.set_cli_override(server_module.EnvironmentReading(0.97, "manual"))
+
+        on_shot_detected(self._mock_shot())
+
+        assert not simulated
+
+
+class TestLocationSearch:
+    """Typed search is the primary way a location gets set.
+
+    IP detection stays as a suggestion, but it cannot be the only path: behind
+    a VPN it returns the exit node, and the weather that follows is wrong in a
+    way that looks entirely plausible.
+    """
+
+    @pytest.fixture
+    def weather(self, monkeypatch):
+        from openflight.environment.config import WeatherConfig
+        from openflight.environment.provider import EnvironmentProvider
+
+        emitted = []
+        provider = EnvironmentProvider(WeatherConfig())
+        monkeypatch.setattr(server_module, "environment_provider", provider)
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+        monkeypatch.setattr(server_module, "save_weather_config", lambda cfg: None)
+        return SimpleNamespace(provider=provider, emitted=emitted)
+
+    def _payload(self, weather, name):
+        return next(payload for event, payload in weather.emitted if event == name)
+
+    def test_matches_are_sent_to_the_ui(self, weather, monkeypatch):
+        from openflight.environment.openmeteo import LocationResult
+
+        monkeypatch.setattr(
+            server_module,
+            "search_locations",
+            lambda q, **k: [LocationResult("Sacramento", 38.58, -121.49, 9.0, "US", "California")],
+        )
+
+        server_module.search_locations_now("Sacram")
+
+        payload = self._payload(weather, "location_results")
+        assert payload["results"][0]["label"] == "Sacramento, California, US"
+        assert payload["results"][0]["elevation_m"] == 9.0
+
+    def test_the_query_comes_back_with_the_results(self, weather, monkeypatch):
+        """Typing is faster than the network, so a late reply must be
+        attributable to the query that asked for it."""
+        monkeypatch.setattr(server_module, "search_locations", lambda q, **k: [])
+
+        server_module.search_locations_now("Sacram")
+
+        assert self._payload(weather, "location_results")["query"] == "Sacram"
+
+    def test_no_matches_sends_an_empty_list_not_an_error(self, weather, monkeypatch):
+        monkeypatch.setattr(server_module, "search_locations", lambda q, **k: [])
+
+        server_module.search_locations_now("zzzzzz")
+
+        assert self._payload(weather, "location_results")["results"] == []
+
+    def test_a_search_that_blows_up_still_answers(self, weather, monkeypatch):
+        """Otherwise the UI spins forever on a stuck request."""
+
+        def boom(*a, **k):
+            raise RuntimeError("nobody predicted this")
+
+        monkeypatch.setattr(server_module, "search_locations", boom)
+
+        server_module.search_locations_now("Sacram")
+
+        assert self._payload(weather, "location_results")["results"] == []
+
+    def test_choosing_a_result_adopts_its_coordinates(self, weather, monkeypatch):
+        monkeypatch.setattr(server_module, "fetch_current_weather", lambda *a, **k: None)
+
+        server_module.select_location_now(38.58, -121.49, "Sacramento, California, US", 9.0)
+
+        assert weather.provider.config.latitude == pytest.approx(38.58)
+        assert weather.provider.config.location_label == "Sacramento, California, US"
+
+    def test_choosing_a_result_takes_its_elevation(self, weather, monkeypatch):
+        """The search already knows it, and it is the term the user is least
+        able to supply -- 100 m out is about 0.9 yd on a driver."""
+        monkeypatch.setattr(server_module, "fetch_current_weather", lambda *a, **k: None)
+
+        server_module.select_location_now(38.58, -121.49, "Sacramento", 9.0)
+
+        assert weather.provider.config.elevation_m == 9.0
+
+    def test_an_unknown_elevation_clears_the_previous_venues(self, weather, monkeypatch):
+        """This test previously asserted the opposite, and was wrong.
+
+        Keeping Denver's 1,609 m while moving to a result with no elevation
+        makes Open-Meteo compute the new city's surface pressure at Denver's
+        terrain -- wrong by most of a mile, with nothing on screen to say so.
+        Unknown has to mean unknown.
+        """
+        weather.provider.config.elevation_m = 1609.0
+        monkeypatch.setattr(server_module, "fetch_current_weather", lambda *a, **k: None)
+
+        server_module.select_location_now(38.58, -121.49, "Somewhere", None)
+
+        assert weather.provider.config.elevation_m is None
+
+    def test_choosing_a_location_drops_the_old_ones_cached_weather(self, weather, monkeypatch):
+        """Otherwise a failed fetch leaves the previous city's temperature and
+        pressure being applied to shots under the new location's name."""
+        weather.provider.config.cached = {
+            "temp_c": -10.0,
+            "pressure_hpa": 1030.0,
+            "fetched_at": 1.0,
+        }
+        monkeypatch.setattr(server_module, "fetch_current_weather", lambda *a, **k: None)
+
+        server_module.select_location_now(38.58, -121.49, "Sacramento", 9.0)
+
+        assert weather.provider.config.cached == {}
+        assert weather.provider.current().source == "default"
+
+    def test_choosing_a_result_fetches_its_weather_immediately(self, weather, monkeypatch):
+        from openflight.environment.openmeteo import FetchedWeather
+
+        monkeypatch.setattr(
+            server_module,
+            "fetch_current_weather",
+            lambda *a, **k: FetchedWeather(36.1, 1010.2, 25.0),
+        )
+
+        server_module.select_location_now(38.58, -121.49, "Sacramento", 9.0)
+
+        assert weather.provider.current().source == "open-meteo"
+
+    def test_the_chosen_elevation_is_sent_to_the_forecast(self, weather, monkeypatch):
+        from openflight.environment.openmeteo import FetchedWeather
+
+        seen = {}
+
+        def spy(latitude, longitude, elevation_m=None, **kwargs):
+            seen["elevation_m"] = elevation_m
+            return FetchedWeather(36.1, 1010.2, 25.0)
+
+        monkeypatch.setattr(server_module, "fetch_current_weather", spy)
+
+        server_module.select_location_now(38.58, -121.49, "Sacramento", 9.0)
+
+        assert seen["elevation_m"] == 9.0
+
+    def test_a_result_without_coordinates_is_refused(self, weather):
+        server_module.handle_select_location({"label": "nowhere"})
+
+        assert "weather_error" in [event for event, *_ in weather.emitted]
+        assert weather.provider.config.latitude is None
+
+
+class TestDetectCurrentLocation:
+    """Re-detecting is a different action from refreshing.
+
+    Refresh re-fetches weather for the location already chosen. Once someone
+    has searched for a city there was otherwise no way back to "where am I
+    now" short of editing the config by hand -- which matters for a unit that
+    moves between a home bay and a range.
+    """
+
+    @pytest.fixture
+    def weather(self, monkeypatch):
+        from openflight.environment.config import WeatherConfig
+        from openflight.environment.provider import EnvironmentProvider
+
+        emitted = []
+        provider = EnvironmentProvider(WeatherConfig(location_consent=True))
+        provider.config.latitude = 51.5
+        provider.config.longitude = -0.12
+        provider.config.location_label = "London, England, GB"
+        provider.config.elevation_m = 11.0
+        monkeypatch.setattr(server_module, "environment_provider", provider)
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+        monkeypatch.setattr(server_module, "save_weather_config", lambda cfg: None)
+        return SimpleNamespace(provider=provider, emitted=emitted)
+
+    def test_it_replaces_a_chosen_city(self, weather, monkeypatch):
+        from openflight.environment.openmeteo import FetchedWeather, Location
+
+        monkeypatch.setattr(
+            server_module, "lookup_location", lambda **k: Location(38.58, -121.49, "Sacramento")
+        )
+        monkeypatch.setattr(
+            server_module,
+            "fetch_current_weather",
+            lambda *a, **k: FetchedWeather(36.1, 1010.2, 25.0),
+        )
+
+        server_module.detect_location_now()
+
+        assert weather.provider.config.location_label == "Sacramento"
+        assert weather.provider.config.latitude == pytest.approx(38.58)
+
+    def test_it_drops_the_old_venue_elevation(self, weather, monkeypatch):
+        """Keeping London's 11 m while detecting Denver would apply the wrong
+        terrain to the new place, and nothing on screen would say so."""
+        from openflight.environment.openmeteo import Location
+
+        monkeypatch.setattr(
+            server_module, "lookup_location", lambda **k: Location(39.74, -104.98, "Denver")
+        )
+        monkeypatch.setattr(server_module, "fetch_current_weather", lambda *a, **k: None)
+
+        server_module.detect_location_now()
+
+        assert weather.provider.config.elevation_m is None
+
+    def test_it_still_needs_consent(self, weather, monkeypatch):
+        called = []
+        weather.provider.config.location_consent = False
+        monkeypatch.setattr(
+            server_module, "lookup_location", lambda **k: called.append(True) or None
+        )
+
+        server_module.detect_location_now()
+
+        assert not called
+        assert "weather_error" in [event for event, *_ in weather.emitted]
+
+    def test_refresh_leaves_the_chosen_city_alone(self, weather, monkeypatch):
+        """The distinction being drawn: refresh must NOT re-detect."""
+        from openflight.environment.openmeteo import FetchedWeather
+
+        monkeypatch.setattr(
+            server_module, "lookup_location", lambda **k: pytest.fail("must not re-detect")
+        )
+        monkeypatch.setattr(
+            server_module,
+            "fetch_current_weather",
+            lambda *a, **k: FetchedWeather(12.0, 1005.0, 70.0),
+        )
+
+        server_module.refresh_weather_now()
+
+        assert weather.provider.config.location_label == "London, England, GB"
+        assert weather.provider.config.elevation_m == 11.0
+
+
+class TestAutoRefreshLoop:
+    """The background re-fetch.
+
+    The design doc argued for no polling; this is a deliberate, opt-in
+    reversal, so the guards around it matter more than the loop itself.
+    """
+
+    @pytest.fixture
+    def weather(self, monkeypatch):
+        from openflight.environment.config import WeatherConfig
+        from openflight.environment.provider import EnvironmentProvider
+
+        provider = EnvironmentProvider(
+            WeatherConfig(
+                latitude=38.58,
+                longitude=-121.49,
+                location_consent=True,
+                auto_refresh_minutes=30,
+                cached={"temp_c": 20.0, "pressure_hpa": 1013.0, "fetched_at": 1000.0},
+            )
+        )
+        monkeypatch.setattr(server_module, "environment_provider", provider)
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *a, **k: None)
+        monkeypatch.setattr(server_module, "save_weather_config", lambda cfg: None)
+        return SimpleNamespace(provider=provider)
+
+    def test_a_background_failure_is_not_announced(self, weather, monkeypatch):
+        """A scheduled fetch failing is not news: the cached reading and its
+        age are still on screen. Popping an error nobody asked for, every
+        interval, for as long as the Wi-Fi is down, would be worse."""
+        emitted = []
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+        monkeypatch.setattr(server_module, "fetch_current_weather", lambda *a, **k: None)
+
+        server_module.refresh_weather_now(announce_errors=False)
+
+        assert "weather_error" not in [event for event, *_ in emitted]
+
+    def test_a_user_requested_failure_is_announced(self, weather, monkeypatch):
+        emitted = []
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+        monkeypatch.setattr(server_module, "fetch_current_weather", lambda *a, **k: None)
+
+        server_module.refresh_weather_now()
+
+        assert "weather_error" in [event for event, *_ in emitted]
+
+    def _run_loop(self, now_value, seconds=0.1):
+        """Drive the loop with an injected tick and clock.
+
+        Never patches the global `time` module: threading itself waits on it,
+        so patching it hangs the very thread under test. Daemon plus a finally
+        so a failing assertion cannot strand a live thread and wedge the run.
+        """
+        stop = threading.Event()
+        thread = threading.Thread(
+            target=server_module._auto_refresh_loop,
+            args=(stop, 0.01, lambda: now_value),
+            daemon=True,
+        )
+        thread.start()
+        try:
+            time.sleep(seconds)
+        finally:
+            stop.set()
+            thread.join(timeout=2)
+        assert not thread.is_alive(), "the loop should stop promptly when asked"
+
+    def test_the_tick_refreshes_when_due(self, weather, monkeypatch):
+        calls = []
+        monkeypatch.setattr(server_module, "refresh_weather_now", lambda **k: calls.append(k))
+
+        self._run_loop(1000.0 + 31 * 60)
+
+        assert calls, "a due refresh should have fired"
+        assert calls[0] == {"announce_errors": False}
+
+    def test_the_tick_does_nothing_when_not_due(self, weather, monkeypatch):
+        calls = []
+        monkeypatch.setattr(server_module, "refresh_weather_now", lambda **k: calls.append(k))
+
+        self._run_loop(1000.0 + 60)
+
+        assert calls == []
+
+    def test_the_loop_survives_a_refresh_that_throws(self, weather, monkeypatch):
+        """This thread outlives every individual failure -- one exception must
+        not silently end scheduled refreshes for the rest of the session."""
+        calls = []
+
+        def boom(**kwargs):
+            calls.append(kwargs)
+            raise RuntimeError("nobody predicted this")
+
+        monkeypatch.setattr(server_module, "refresh_weather_now", boom)
+
+        self._run_loop(1000.0 + 31 * 60, seconds=0.15)
+
+        assert len(calls) > 1, "the loop should have kept ticking after the failure"
+
+    def test_the_interval_is_only_accepted_from_the_offered_set(self, weather):
+        """An unbounded value here becomes a poll rate against someone else's
+        API, so a malformed client cannot set one."""
+        server_module.handle_set_weather_settings({"auto_refresh_minutes": 1})
+
+        assert weather.provider.config.auto_refresh_minutes == 30
+
+    @pytest.mark.parametrize("minutes", [0, 15, 30, 60])
+    def test_every_offered_interval_is_accepted(self, weather, minutes):
+        server_module.handle_set_weather_settings({"auto_refresh_minutes": minutes})
+
+        assert weather.provider.config.auto_refresh_minutes == minutes
