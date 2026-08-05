@@ -13,6 +13,7 @@ HOST="localhost"
 RADAR_PORT=""
 OPS_BAUD=""
 MOCK_MODE=false
+MOCK_SWING_SPEED=false
 RADAR_LOG=false
 DEBUG_MODE=false
 NO_CAMERA=true  # Camera disabled by default (K-LD7 radar handles angle)
@@ -61,6 +62,14 @@ EXPERIMENTAL_KLD7_HORIZONTAL_ANGLE_LIMIT=""
 BALLISTICS=false
 SIM=false
 CALCULATED_SPIN=false
+SWING_SPEED=false
+SWING_SPEED_THRESHOLD=""
+SWING_SPEED_MIN_READINGS=""
+SWING_SPEED_SINGLE_PEAK=""
+SWING_SPEED_NUM_REPORTS=""
+SWING_SPEED_END_MS=""
+SWING_SPEED_COOLDOWN_MS=""
+SWING_SPEED_REJECTED_COOLDOWN_MS=""
 
 # Buffer split presets (pre/post trigger segments out of 32 total)
 # At 20ksps: each segment = 6.4ms, total buffer = 204.8ms
@@ -83,6 +92,11 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --mock|-m)
             MOCK_MODE=true
+            shift
+            ;;
+        --mock-swing-speed)
+            MOCK_SWING_SPEED=true
+            SWING_SPEED=true
             shift
             ;;
         --radar-log)
@@ -285,6 +299,42 @@ while [[ $# -gt 0 ]]; do
             CALCULATED_SPIN=true
             shift
             ;;
+        --swing-speed)
+            SWING_SPEED=true
+            shift
+            ;;
+        --swing-speed-threshold)
+            SWING_SPEED_THRESHOLD="$2"
+            shift 2
+            ;;
+        --swing-speed-max)
+            SWING_SPEED_MAX="$2"
+            shift 2
+            ;;
+        --swing-speed-min-readings)
+            SWING_SPEED_MIN_READINGS="$2"
+            shift 2
+            ;;
+        --swing-speed-single-peak)
+            SWING_SPEED_SINGLE_PEAK="$2"
+            shift 2
+            ;;
+        --swing-speed-num-reports)
+            SWING_SPEED_NUM_REPORTS="$2"
+            shift 2
+            ;;
+        --swing-speed-end-ms)
+            SWING_SPEED_END_MS="$2"
+            shift 2
+            ;;
+        --swing-speed-cooldown-ms)
+            SWING_SPEED_COOLDOWN_MS="$2"
+            shift 2
+            ;;
+        --swing-speed-rejected-cooldown-ms)
+            SWING_SPEED_REJECTED_COOLDOWN_MS="$2"
+            shift 2
+            ;;
         --radar-port|--ops-port)
             RADAR_PORT="$2"
             shift 2
@@ -401,6 +451,10 @@ cd "$PROJECT_DIR"
 # Build server command
 SERVER_CMD="openflight-server --web-port $PORT"
 
+if [ "$MOCK_MODE" = true ] && [ "$SWING_SPEED" = true ]; then
+    MOCK_SWING_SPEED=true
+fi
+
 if [ -n "$RADAR_PORT" ]; then
     SERVER_CMD="$SERVER_CMD --port $RADAR_PORT"
 fi
@@ -409,7 +463,9 @@ if [ -n "$OPS_BAUD" ]; then
     SERVER_CMD="$SERVER_CMD --ops-baud $OPS_BAUD"
 fi
 
-if [ "$MOCK_MODE" = true ]; then
+if [ "$MOCK_SWING_SPEED" = true ]; then
+    SERVER_CMD="$SERVER_CMD --mock-swing-speed"
+elif [ "$MOCK_MODE" = true ]; then
     SERVER_CMD="$SERVER_CMD --mock"
 fi
 
@@ -438,11 +494,47 @@ if [ "$CALCULATED_SPIN" = true ]; then
     SERVER_CMD="$SERVER_CMD --calculated-spin"
 fi
 
-if [ -n "$TRIGGER" ]; then
+if [ "$SWING_SPEED" = true ] && [ "$MOCK_SWING_SPEED" != true ]; then
+    SERVER_CMD="$SERVER_CMD --swing-speed"
+fi
+
+if [ -n "$SWING_SPEED_THRESHOLD" ]; then
+    SERVER_CMD="$SERVER_CMD --swing-speed-threshold $SWING_SPEED_THRESHOLD"
+fi
+
+if [ -n "$SWING_SPEED_MAX" ]; then
+    SERVER_CMD="$SERVER_CMD --swing-speed-max $SWING_SPEED_MAX"
+fi
+
+if [ -n "$SWING_SPEED_MIN_READINGS" ]; then
+    SERVER_CMD="$SERVER_CMD --swing-speed-min-readings $SWING_SPEED_MIN_READINGS"
+fi
+
+if [ -n "$SWING_SPEED_SINGLE_PEAK" ]; then
+    SERVER_CMD="$SERVER_CMD --swing-speed-single-peak $SWING_SPEED_SINGLE_PEAK"
+fi
+
+if [ -n "$SWING_SPEED_NUM_REPORTS" ]; then
+    SERVER_CMD="$SERVER_CMD --swing-speed-num-reports $SWING_SPEED_NUM_REPORTS"
+fi
+
+if [ -n "$SWING_SPEED_END_MS" ]; then
+    SERVER_CMD="$SERVER_CMD --swing-speed-end-ms $SWING_SPEED_END_MS"
+fi
+
+if [ -n "$SWING_SPEED_COOLDOWN_MS" ]; then
+    SERVER_CMD="$SERVER_CMD --swing-speed-cooldown-ms $SWING_SPEED_COOLDOWN_MS"
+fi
+
+if [ -n "$SWING_SPEED_REJECTED_COOLDOWN_MS" ]; then
+    SERVER_CMD="$SERVER_CMD --swing-speed-rejected-cooldown-ms $SWING_SPEED_REJECTED_COOLDOWN_MS"
+fi
+
+if [ -n "$TRIGGER" ] && [ "$SWING_SPEED" != true ]; then
     SERVER_CMD="$SERVER_CMD --trigger $TRIGGER"
 fi
 
-if [ -n "$SOUND_PRE_TRIGGER" ]; then
+if [ -n "$SOUND_PRE_TRIGGER" ] && [ "$SWING_SPEED" != true ]; then
     SERVER_CMD="$SERVER_CMD --sound-pre-trigger $SOUND_PRE_TRIGGER"
 fi
 

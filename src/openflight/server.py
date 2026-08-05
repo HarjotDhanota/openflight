@@ -45,6 +45,7 @@ from .sim import (
 )
 from .speed_correction import correct_ball_speed
 from .spin_estimate import calculated_spin_rpm
+from .swing_speed import SwingSpeedEvent
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -80,8 +81,40 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 monitor = None
 mock_mode: bool = False
 debug_mode: bool = False
+mock_swing_speed_mode: bool = False
 debug_log_file = None
 debug_log_path: Optional[Path] = None
+current_player_name: str = "Player 1"
+
+TRAINING_IMPLEMENT_LABELS = {
+    "driver": "Driver",
+    "superspeed-light": "SuperSpeed Light",
+    "superspeed-medium": "SuperSpeed Medium",
+    "superspeed-heavy": "SuperSpeed Heavy",
+    "speed-stick-light": "SuperSpeed Light",
+    "speed-stick-medium": "SuperSpeed Medium",
+    "speed-stick-heavy": "SuperSpeed Heavy",
+    "stack": "Stack",
+    "stack-0g": "Stack 0g",
+    "stack-60g": "Stack 60g",
+    "stack-100g": "Stack 100g",
+    "stack-120g": "Stack 120g",
+    "stack-160g": "Stack 160g",
+    "stack-180g": "Stack 180g",
+    "stack-200g": "Stack 200g",
+    "stack-220g": "Stack 220g",
+    "stack-240g": "Stack 240g",
+    "stack-260g": "Stack 260g",
+    "stack-280g": "Stack 280g",
+    "stack-300g": "Stack 300g",
+    "rypstick": "Rypstick",
+    "rypstick-0w": "Rypstick 0 Weights",
+    "rypstick-1w": "Rypstick 1 Weight",
+    "rypstick-2w": "Rypstick 2 Weights",
+    "rypstick-3w": "Rypstick 3 Weights",
+    "rypstick-3w-cw": "Rypstick 3 Weights + Counterweight",
+    "custom": "Custom",
+}
 
 # K-LD7 angle radars (vertical = launch angle, horizontal = club path)
 kld7_vertical = None
@@ -837,6 +870,7 @@ def shot_to_dict(shot: Shot) -> dict:
             round(shot.estimated_carry_range[1]),
         ],
         "club": shot.club.value,
+        "player_name": shot.player_name,
         "timestamp": shot.timestamp.isoformat(),
         "peak_magnitude": shot.peak_magnitude,
         # Launch angle data
@@ -1435,17 +1469,25 @@ def on_live_reading(reading: SpeedReading):
 def _get_trigger_status() -> dict:
     """Build trigger status payload for the UI."""
     from .rolling_buffer import RollingBufferMonitor  # pylint: disable=import-outside-toplevel
+    from .swing_speed import SwingSpeedMonitor  # pylint: disable=import-outside-toplevel
 
     is_rolling_buffer = isinstance(monitor, RollingBufferMonitor)
+    is_swing_speed = isinstance(monitor, (SwingSpeedMonitor, MockSwingSpeedMonitor))
     session_logger = get_session_logger()
     stats = session_logger.stats if session_logger else {}
 
-    mode = "mock" if mock_mode else "rolling-buffer"
+    if is_swing_speed:
+        mode = "swing-speed"
+    elif mock_mode:
+        mode = "mock"
+    else:
+        mode = "rolling-buffer"
     trigger_type = None
     radar_port = None
 
     if is_rolling_buffer:
         trigger_type = monitor.trigger_type
+    if is_rolling_buffer or is_swing_speed:
         if hasattr(monitor, "radar") and hasattr(monitor.radar, "port"):
             radar_port = monitor.radar.port
 
@@ -1458,6 +1500,44 @@ def _get_trigger_status() -> dict:
         "triggers_accepted": stats.get("triggers_accepted", 0),
         "triggers_rejected": stats.get("triggers_rejected", 0),
     }
+
+
+def _session_shots() -> list[dict]:
+    """Return current session rows in the UI's shot-shaped payload format."""
+    from .swing_speed import SwingSpeedMonitor  # pylint: disable=import-outside-toplevel
+
+    if not monitor:
+        return []
+    if isinstance(monitor, (SwingSpeedMonitor, MockSwingSpeedMonitor)):
+        return [swing_speed_to_shot_dict(event) for event in monitor.get_events()]
+    return [shot_to_dict(shot) for shot in monitor.get_shots()]
+
+
+def _delete_session_row(timestamp: str) -> bool:
+    """Delete one shot or swing-speed rep by UI timestamp."""
+    from .swing_speed import SwingSpeedMonitor  # pylint: disable=import-outside-toplevel
+
+    if not monitor or not timestamp:
+        return False
+
+    if isinstance(monitor, (SwingSpeedMonitor, MockSwingSpeedMonitor)):
+        events = getattr(monitor, "_events", None)
+        if events is None:
+            return False
+        for index, event in enumerate(events):
+            if event.timestamp.isoformat() == timestamp:
+                del events[index]
+                return True
+        return False
+
+    shots = getattr(monitor, "_shots", None)
+    if shots is None:
+        return False
+    for index, shot in enumerate(shots):
+        if shot.timestamp.isoformat() == timestamp:
+            del shots[index]
+            return True
+    return False
 
 
 def _emit_sim_snapshot() -> None:
@@ -1490,18 +1570,18 @@ def handle_connect():
     _emit_sim_snapshot()
     if monitor:
         stats = monitor.get_session_stats()
-        shots = [shot_to_dict(s) for s in monitor.get_shots()]
         socketio.emit(
             "session_state",
             {
                 "stats": stats,
-                "shots": shots,
+                "shots": _session_shots(),
                 "mock_mode": mock_mode,
                 "debug_mode": debug_mode,
                 "camera_available": camera is not None,
                 "camera_enabled": camera_enabled,
                 "camera_streaming": camera_streaming,
                 "ball_detected": ball_detected,
+                "player_name": current_player_name,
             },
         )
         socketio.emit("trigger_status", _get_trigger_status())
@@ -1532,6 +1612,34 @@ def handle_set_club(data):
         pass
 
 
+@socketio.on("set_player")
+def handle_set_player(data):
+    """Handle active player selection changes."""
+    global current_player_name  # pylint: disable=global-statement
+
+    raw_name = data.get("player_name", "Player 1") if isinstance(data, dict) else "Player 1"
+    player_name = str(raw_name).strip()[:40] or "Player 1"
+    current_player_name = player_name
+    socketio.emit("player_changed", {"player_name": current_player_name})
+
+
+@socketio.on("set_training_implement")
+def handle_set_training_implement(data):
+    """Handle swing speed training implement selection."""
+    implement = data.get("implement", "driver") if isinstance(data, dict) else "driver"
+    label = TRAINING_IMPLEMENT_LABELS.get(implement)
+    if not label:
+        socketio.emit("training_implement_error", {"error": "Unknown training implement"})
+        return
+
+    if monitor and hasattr(monitor, "set_training_implement"):
+        monitor.set_training_implement(implement, label)
+    socketio.emit(
+        "training_implement_changed",
+        {"implement": implement, "label": label},
+    )
+
+
 @socketio.on("clear_session")
 def handle_clear_session():
     """Clear all recorded shots."""
@@ -1540,19 +1648,44 @@ def handle_clear_session():
         socketio.emit("session_cleared")
 
 
+@socketio.on("upload_cloud")
+def handle_upload_cloud():
+    """Manually trigger upload of completed session logs."""
+    threading.Thread(target=_run_cloud_push_for_ui, daemon=True).start()
+
+
 @socketio.on("get_session")
 def handle_get_session():
     """Get current session data."""
     if monitor:
         stats = monitor.get_session_stats()
-        shots = [shot_to_dict(s) for s in monitor.get_shots()]
-        socketio.emit("session_state", {"stats": stats, "shots": shots})
+        socketio.emit(
+            "session_state",
+            {"stats": stats, "shots": _session_shots(), "player_name": current_player_name},
+        )
+
+
+@socketio.on("delete_shot")
+def handle_delete_shot(data):
+    """Delete one recorded shot or swing-speed rep from the current session."""
+    timestamp = data.get("timestamp") if isinstance(data, dict) else None
+    deleted = _delete_session_row(timestamp)
+
+    if not deleted:
+        socketio.emit("delete_shot_error", {"error": "Shot not found"})
+        return
+
+    stats = monitor.get_session_stats() if monitor else {}
+    socketio.emit(
+        "session_state",
+        {"stats": stats, "shots": _session_shots(), "player_name": current_player_name},
+    )
 
 
 @socketio.on("simulate_shot")
 def handle_simulate_shot():
     """Simulate a shot (only works in mock mode)."""
-    if monitor and isinstance(monitor, MockLaunchMonitor):
+    if monitor and isinstance(monitor, (MockLaunchMonitor, MockSwingSpeedMonitor)):
         monitor.simulate_shot()
 
 
@@ -1605,7 +1738,7 @@ def handle_set_radar_config(data):
     """Update radar configuration."""
     global radar_config  # pylint: disable=global-statement
 
-    if not monitor or mock_mode:
+    if not monitor or (mock_mode and not mock_swing_speed_mode):
         log_session_error(
             "Radar config update rejected: radar not connected",
             component="server",
@@ -1615,17 +1748,28 @@ def handle_set_radar_config(data):
         return
 
     try:
+        from .swing_speed import SwingSpeedMonitor  # pylint: disable=import-outside-toplevel
+
+        is_swing_speed = isinstance(monitor, (SwingSpeedMonitor, MockSwingSpeedMonitor))
+
         # Update min speed filter
         if "min_speed" in data:
             new_min = int(data["min_speed"])
             monitor.radar.set_min_speed_filter(new_min)
+            if is_swing_speed:
+                monitor.trigger_threshold_mph = float(new_min)
             radar_config["min_speed"] = new_min
             print(f"Set min speed filter: {new_min} mph")
 
-        # Update max speed filter
+        # Update max speed filter. 0 must still be forwarded: AN-010-AD (p10)
+        # defines "R<0 resets to no limit", so it is how the UI clears a
+        # previously-set ceiling. Swallowing it would leave the old ceiling
+        # active on the radar while radar_config claimed no limit.
         if "max_speed" in data:
             new_max = int(data["max_speed"])
             monitor.radar.set_max_speed_filter(new_max)
+            if is_swing_speed:
+                monitor.max_speed_mph = None if new_max <= 0 else float(new_max)
             radar_config["max_speed"] = new_max
             print(f"Set max speed filter: {new_max} mph")
 
@@ -2028,6 +2172,7 @@ def on_shot_detected(shot: Shot):
     """Callback when a shot is detected - emit to all clients."""
     global ball_detected, ball_detection_confidence  # pylint: disable=global-statement
 
+    shot.player_name = current_player_name
     logger.info("[SERVER] Shot callback: %.1f mph", shot.ball_speed_mph)
 
     iwr6843_ms = _process_iwr6843_angle(shot)
@@ -2455,6 +2600,7 @@ def on_shot_detected(shot: Shot):
                 club_path_deg=shot.club_path_deg,
                 spin_axis_deg=shot.spin_axis_deg,
                 impact_timestamp=shot.impact_timestamp,
+                player_name=shot.player_name,
                 pipeline_ms={
                     "iwr6843": (round(iwr6843_ms, 1) if iwr6843_ms is not None else None),
                     "kld7": round(kld7_ms, 1) if kld7_ms is not None else None,
@@ -2523,6 +2669,92 @@ def on_shot_detected(shot: Shot):
             print(f"[WARN] Debug logging error: {e}")
 
 
+def swing_speed_to_dict(event: SwingSpeedEvent) -> dict:
+    """Convert a swing speed training event to a UI payload."""
+    return {
+        "peak_speed_mph": round(event.peak_speed_mph, 1),
+        "timestamp": event.timestamp.isoformat(),
+        "duration_ms": round(event.duration_ms),
+        "reading_count": event.reading_count,
+        "trigger_speed_mph": round(event.trigger_speed_mph, 1),
+        "peak_magnitude": event.peak_magnitude,
+        "training_implement": event.training_implement,
+        "training_implement_label": event.training_implement_label,
+        "player_name": event.player_name,
+        "unit": event.unit,
+        "mode": event.mode,
+    }
+
+
+def swing_speed_to_shot_dict(event: SwingSpeedEvent) -> dict:
+    """Convert a swing speed event to the existing shot UI shape."""
+    peak_speed = round(event.peak_speed_mph, 1)
+    return {
+        "ball_speed_mph": peak_speed,
+        "ball_speed_raw_mph": None,
+        "club_speed_mph": peak_speed,
+        "smash_factor": None,
+        "estimated_carry_yards": 0,
+        "carry_range": [0, 0],
+        "club": event.training_implement_label,
+        "player_name": event.player_name,
+        "timestamp": event.timestamp.isoformat(),
+        "peak_magnitude": event.peak_magnitude,
+        "launch_angle_vertical": None,
+        "launch_angle_horizontal": None,
+        "launch_angle_confidence": None,
+        "launch_angle_vertical_confidence": None,
+        "launch_angle_horizontal_confidence": None,
+        "launch_angle_vertical_source": None,
+        "launch_angle_horizontal_source": None,
+        "angle_source": None,
+        "club_angle_deg": None,
+        "club_path_deg": None,
+        "spin_axis_deg": None,
+        "spin_rpm": None,
+        "spin_rpm_measured": None,
+        "spin_source": None,
+        "spin_confidence": None,
+        "spin_quality": None,
+        "spin_snr": None,
+        "spin_modulation_depth": None,
+        "spin_peak_freq_hz": None,
+        "spin_peak_freq_rpm": None,
+        "spin_seam_cycles": None,
+        "spin_at_lower_rail": None,
+        "spin_at_upper_rail": None,
+        "spin_candidates": None,
+        "spin_phase_method": None,
+        "spin_phase_rpm": None,
+        "spin_phase_snr": None,
+        "spin_phase_agreement_pct": None,
+        "spin_phase_confirmed": None,
+        "spin_rejection_reason": None,
+        "carry_spin_adjusted": None,
+        "mode": event.mode,
+        "swing_speed_duration_ms": round(event.duration_ms),
+        "swing_speed_reading_count": event.reading_count,
+        "swing_speed_trigger_mph": round(event.trigger_speed_mph, 1),
+        "training_implement": event.training_implement,
+        "training_implement_label": event.training_implement_label,
+    }
+
+
+def on_swing_speed_detected(event: SwingSpeedEvent):
+    """Handle swing speed training reps and emit them to connected clients."""
+    event.player_name = current_player_name
+    event_data = swing_speed_to_dict(event)
+    shot_data = swing_speed_to_shot_dict(event)
+    stats = monitor.get_session_stats() if monitor else {}
+    socketio.emit("swing_speed", {"event": event_data, "stats": stats})
+    socketio.emit("shot", {"shot": shot_data, "stats": stats})
+    logger.info(
+        "[SERVER] Swing speed event emitted: peak=%.1f mph, readings=%d",
+        event.peak_speed_mph,
+        event.reading_count,
+    )
+
+
 def start_monitor(
     port: Optional[str] = None,
     mock: bool = False,
@@ -2530,10 +2762,12 @@ def start_monitor(
     debug: bool = False,
     trigger_kwargs: Optional[dict] = None,
     sample_rate_ksps: int = 30,
+    swing_speed_mode: bool = False,
+    swing_speed_kwargs: Optional[dict] = None,
     ops_baud: Optional[int] = None,
 ):
     """
-    Start the launch monitor in rolling buffer mode.
+    Start the monitor in launch monitor or swing speed mode.
 
     Args:
         port: Serial port for radar
@@ -2542,7 +2776,7 @@ def start_monitor(
         debug: Enable verbose debug output
         ops_baud: Target UART baud when the OPS243 is on the GPIO header
     """
-    global monitor, mock_mode  # pylint: disable=global-statement
+    global monitor, mock_mode, mock_swing_speed_mode, radar_config  # pylint: disable=global-statement
 
     # Stop any existing monitor first
     if monitor is not None:
@@ -2550,9 +2784,22 @@ def start_monitor(
         stop_monitor()
 
     mock_mode = mock
-    if mock:
+    mock_swing_speed_mode = mock and swing_speed_mode
+
+    if mock_swing_speed_mode:
+        monitor = MockSwingSpeedMonitor(**(swing_speed_kwargs or {}))
+        print("[MODE] Mock swing speed training mode")
+    elif mock:
         # Mock mode for testing without radar
         monitor = MockLaunchMonitor()
+    elif swing_speed_mode:
+        from .swing_speed import SwingSpeedMonitor
+
+        monitor = SwingSpeedMonitor(
+            port=port,
+            **(swing_speed_kwargs or {}),
+        )
+        print("[MODE] Swing speed training mode")
     else:
         from .rolling_buffer import RollingBufferMonitor
 
@@ -2570,9 +2817,17 @@ def start_monitor(
 
     monitor.connect()
 
+    if swing_speed_mode:
+        swing_config = swing_speed_kwargs or {}
+        radar_config = {
+            **radar_config,
+            "min_speed": int(swing_config.get("trigger_threshold_mph", 30)),
+            "max_speed": int(swing_config.get("max_speed_mph") or 0),
+        }
+
     logger.info(
         "[SERVER] Starting monitor: mode=%s, trigger=%s, sample_rate=%dksps",
-        "mock" if mock else "rolling-buffer",
+        "swing-speed" if swing_speed_mode else ("mock" if mock else "rolling-buffer"),
         trigger_type,
         sample_rate_ksps,
     )
@@ -2587,8 +2842,8 @@ def start_monitor(
             camera_enabled=camera is not None,
             camera_model="hough" if (camera_tracker and camera_tracker.use_hough) else None,
             config=_session_start_config(),
-            mode="mock" if mock else "rolling-buffer",
-            trigger_type=trigger_type if not mock else None,
+            mode="swing-speed" if swing_speed_mode else ("mock" if mock else "rolling-buffer"),
+            trigger_type=None if swing_speed_mode or mock else trigger_type,
         )
         if not mock and radar_info:
             session_logger.log_connection(
@@ -2602,7 +2857,11 @@ def start_monitor(
             # anchor K-LD7 correlation to the OPS trigger_time instead of the
             # USB first-byte arrival time.
             radar = getattr(monitor, "radar", None)
-            if radar is not None and hasattr(radar, "read_clock_sync"):
+            if (
+                not swing_speed_mode
+                and radar is not None
+                and hasattr(radar, "read_clock_sync")
+            ):
                 try:
                     clock_sync = radar.read_clock_sync()
                     session_logger.log_clock_sync(
@@ -2623,7 +2882,12 @@ def start_monitor(
                 trigger_pin_bcm=iwr6843_runtime_config.get("trigger_pin_bcm"),
             )
 
-    if not mock:
+    if swing_speed_mode:
+        monitor.start(
+            event_callback=on_swing_speed_detected,
+            live_callback=on_live_reading,
+        )
+    elif not mock:
 
         def on_trigger_diagnostic(data: dict):
             """Forward trigger diagnostics to connected UI clients."""
@@ -2660,9 +2924,64 @@ def _fire_cloud_push(session_logger):
         pass
 
 
+def _run_cloud_push_for_ui():
+    """Run a manual cloud push and report the result to connected UI clients."""
+    socketio.emit("cloud_upload_status", {"state": "running", "message": "Uploading..."})
+    try:
+        from .cloud import commands
+        from .cloud.client import CloudClient
+        from .cloud.config import CloudConfig, load_config
+
+        config = load_config() or CloudConfig()
+        session_logger = get_session_logger()
+        log_dir = getattr(session_logger, "log_dir", None)
+        if log_dir is None:
+            log_dir = session_logger.DEFAULT_LOG_DIR if session_logger else None
+        if log_dir is None:
+            log_dir = Path.home() / "openflight_sessions"
+
+        messages = []
+        summary = commands.cmd_push(
+            config,
+            Path(log_dir),
+            CloudClient(config.endpoint, token=config.device_token or None),
+            out=messages.append,
+        )
+
+        if summary.get("needs_relink"):
+            state = "error"
+            message = "Cloud token rejected. Re-link this Pi."
+        elif summary.get("skipped") == "inactive":
+            state = "error"
+            message = "Cloud uploader is not linked."
+        elif summary.get("offline"):
+            state = "error"
+            message = "Cloud unreachable."
+        elif summary.get("uploaded", 0) > 0:
+            state = "complete"
+            message = f"Uploaded {summary['uploaded']} session(s)."
+        elif messages:
+            state = "complete"
+            message = messages[-1]
+        else:
+            state = "complete"
+            message = "Nothing to upload."
+
+        socketio.emit(
+            "cloud_upload_status",
+            {"state": state, "message": message, "summary": summary},
+        )
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] Manual cloud upload failed: %s", exc, exc_info=True)
+        socketio.emit(
+            "cloud_upload_status",
+            {"state": "error", "message": str(exc)},
+        )
+
+
 def stop_monitor():
     """Stop the launch monitor."""
-    global monitor  # pylint: disable=global-statement
+    global monitor, mock_swing_speed_mode  # pylint: disable=global-statement
 
     # End session logging
     session_logger = get_session_logger()
@@ -2674,6 +2993,7 @@ def stop_monitor():
         monitor.stop()
         monitor.disconnect()
         monitor = None
+    mock_swing_speed_mode = False
 
 
 class MockLaunchMonitor:
@@ -2871,6 +3191,146 @@ class MockLaunchMonitor:
         self._current_club = club
 
 
+class _MockSwingRadar:
+    """Tiny radar facade so UI tuning can exercise the swing speed controls."""
+
+    port = "mock"
+    baud = 0
+
+    def set_min_speed_filter(self, value):  # pylint: disable=unused-argument
+        """Accept mock lower speed updates."""
+
+    def set_max_speed_filter(self, value):  # pylint: disable=unused-argument
+        """Accept mock upper speed updates."""
+
+    def set_magnitude_filter(self, min_mag=0, max_mag=0):  # pylint: disable=unused-argument
+        """Accept mock magnitude updates."""
+
+    def set_transmit_power(self, level):  # pylint: disable=unused-argument
+        """Accept mock transmit power updates."""
+
+
+class MockSwingSpeedMonitor:
+    """Mock swing speed monitor for UI development without OPS hardware."""
+
+    def __init__(
+        self,
+        trigger_threshold_mph: float = 30.0,
+        max_speed_mph: Optional[float] = 130.0,
+        min_readings: int = 3,
+        single_reading_peak_mph: float = 60.0,
+        **kwargs,  # pylint: disable=unused-argument
+    ):
+        self.trigger_threshold_mph = float(trigger_threshold_mph)
+        self.max_speed_mph = None if max_speed_mph is None else float(max_speed_mph)
+        self.min_readings = int(min_readings)
+        self.single_reading_peak_mph = float(single_reading_peak_mph)
+        self.radar = _MockSwingRadar()
+        self._events: List[SwingSpeedEvent] = []
+        self._running = False
+        self._event_callback = None
+        self.training_implement = "driver"
+        self.training_implement_label = "Driver"
+
+    def connect(self):
+        """Connect to mock radar."""
+        return True
+
+    def disconnect(self):
+        """Disconnect from mock radar."""
+        self.stop()
+
+    def start(self, event_callback=None, live_callback=None):  # pylint: disable=unused-argument
+        """Start mock swing speed monitoring."""
+        self._event_callback = event_callback
+        self._running = True
+        print("Mock swing speed monitor started - simulate swings via WebSocket")
+
+    def stop(self):
+        """Stop mock monitoring."""
+        self._running = False
+
+    def get_radar_info(self):
+        """Return mock radar metadata."""
+        return {"Version": "mock-swing-speed"}
+
+    def simulate_shot(self, peak_speed: float = None):
+        """Simulate a club-only swing speed rep."""
+        lower = max(20.0, float(self.trigger_threshold_mph))
+        upper = float(self.max_speed_mph) if self.max_speed_mph is not None else 130.0
+        upper = max(lower + 1.0, upper)
+
+        if peak_speed is None:
+            center = min(max(lower + 35.0, 95.0), upper - 4.0)
+            peak_speed = random.gauss(center, 6.0)
+
+        peak_speed = max(lower, min(upper, float(peak_speed)))
+        trigger_speed = max(lower, min(peak_speed, peak_speed - random.uniform(12.0, 24.0)))
+        reading_count = random.randint(max(1, self.min_readings), max(self.min_readings + 3, 8))
+
+        event = SwingSpeedEvent(
+            peak_speed_mph=peak_speed,
+            timestamp=datetime.now(),
+            duration_ms=random.uniform(850.0, 1800.0),
+            reading_count=reading_count,
+            trigger_speed_mph=trigger_speed,
+            peak_magnitude=random.uniform(80.0, 450.0),
+            training_implement=self.training_implement,
+            training_implement_label=self.training_implement_label,
+        )
+        self._events.append(event)
+
+        if self._event_callback:
+            self._event_callback(event)
+
+        return event
+
+    def get_shots(self) -> List[Shot]:
+        """Swing speed mode has no ball-flight shots."""
+        return []
+
+    def get_events(self) -> List[SwingSpeedEvent]:
+        """Get all simulated swing speed reps."""
+        return list(self._events)
+
+    def get_session_stats(self) -> dict:
+        """Get swing speed session statistics."""
+        if not self._events:
+            return {
+                "shot_count": 0,
+                "avg_ball_speed": 0,
+                "max_ball_speed": 0,
+                "min_ball_speed": 0,
+                "avg_club_speed": None,
+                "avg_smash_factor": None,
+                "avg_carry_est": 0,
+            }
+
+        speeds = [event.peak_speed_mph for event in self._events]
+        return {
+            "shot_count": len(self._events),
+            "avg_ball_speed": statistics.mean(speeds),
+            "max_ball_speed": max(speeds),
+            "min_ball_speed": min(speeds),
+            "std_dev": statistics.stdev(speeds) if len(speeds) > 1 else 0,
+            "avg_club_speed": statistics.mean(speeds),
+            "avg_smash_factor": None,
+            "avg_carry_est": 0,
+        }
+
+    def clear_session(self):
+        """Clear all simulated swing speed reps."""
+        self._events = []
+
+    def set_club(self, club: ClubType):  # pylint: disable=unused-argument
+        """Accept club changes for API compatibility."""
+
+    def set_training_implement(self, implement: str, label: str):
+        """Set the training implement stamped onto future mock reps."""
+        self.training_implement = implement
+        self.training_implement_label = label
+
+
 def main():
     """Run the server."""
     import argparse  # pylint: disable=import-outside-toplevel
@@ -2889,6 +3349,11 @@ def main():
         ),
     )
     parser.add_argument("--mock", "-m", action="store_true", help="Run in mock mode without radar")
+    parser.add_argument(
+        "--mock-swing-speed",
+        action="store_true",
+        help="Run swing speed training mode with simulated reps and no OPS radar",
+    )
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
     parser.add_argument(
         "--web-port", type=int, default=8080, help="Web server port (default: 8080)"
@@ -2978,6 +3443,59 @@ def main():
         choices=["polling", "threshold", "speed", "sound"],
         default="polling",
         help="Trigger strategy (default: polling)",
+    )
+    parser.add_argument(
+        "--swing-speed",
+        action="store_true",
+        help="Run club-only swing speed training mode (no impact or ball required)",
+    )
+    parser.add_argument(
+        "--swing-speed-threshold",
+        type=float,
+        default=30.0,
+        help="Outbound speed threshold that starts a swing speed rep (default: 30 mph)",
+    )
+    parser.add_argument(
+        "--swing-speed-max",
+        type=float,
+        default=130.0,
+        help="Maximum plausible swing speed accepted from OPS reports; use 0 to disable (default: 130 mph)",
+    )
+    parser.add_argument(
+        "--swing-speed-min-readings",
+        type=int,
+        default=3,
+        help="Minimum qualifying radar readings required to count a swing speed rep (default: 3)",
+    )
+    parser.add_argument(
+        "--swing-speed-single-peak",
+        type=float,
+        default=60.0,
+        help="Peak speed that can count as a swing from one radar reading (default: 60 mph)",
+    )
+    parser.add_argument(
+        "--swing-speed-num-reports",
+        type=int,
+        default=8,
+        help="Number of OPS speed candidates to report per sample cycle (default: 8)",
+    )
+    parser.add_argument(
+        "--swing-speed-end-ms",
+        type=float,
+        default=1000.0,
+        help="Milliseconds below threshold before ending a swing speed rep (default: 1000)",
+    )
+    parser.add_argument(
+        "--swing-speed-cooldown-ms",
+        type=float,
+        default=750.0,
+        help="Cooldown after a swing speed rep before accepting another (default: 750)",
+    )
+    parser.add_argument(
+        "--swing-speed-rejected-cooldown-ms",
+        type=float,
+        default=100.0,
+        help="Cooldown after an ignored short motion before re-arming (default: 100)",
     )
     parser.add_argument(
         "--sound-pre-trigger",
@@ -3254,6 +3772,14 @@ def main():
     # launch angle), so require it whenever the K-LD7 radars are enabled.
     if args.kld7 and args.kld7_mount_tilt is None:
         parser.error("--kld7-mount-tilt is required when --kld7 is passed")
+    if args.mock_swing_speed:
+        args.mock = True
+        args.swing_speed = True
+    elif args.swing_speed and args.mock:
+        parser.error(
+            "--swing-speed requires real OPS243 radar hardware; use --mock-swing-speed for UI testing"
+        )
+
     if args.iwr6843 and args.kld7:
         parser.error("--iwr6843 and vertical --kld7 cannot both own launch angle")
     if args.iwr6843 and args.kld7_horizontal:
@@ -3341,6 +3867,16 @@ def main():
     # Start the monitor
     # Build trigger-specific kwargs (pre_trigger_segments always passed)
     trigger_kwargs = {"pre_trigger_segments": args.sound_pre_trigger}
+    swing_speed_kwargs = {
+        "trigger_threshold_mph": args.swing_speed_threshold,
+        "max_speed_mph": None if args.swing_speed_max <= 0 else args.swing_speed_max,
+        "min_readings": args.swing_speed_min_readings,
+        "single_reading_peak_mph": args.swing_speed_single_peak,
+        "num_reports": args.swing_speed_num_reports,
+        "end_quiet_ms": args.swing_speed_end_ms,
+        "cooldown_ms": args.swing_speed_cooldown_ms,
+        "rejected_cooldown_ms": args.swing_speed_rejected_cooldown_ms,
+    }
 
     # Initialize camera BEFORE starting monitor (so session log is accurate)
     if not args.no_camera:
@@ -3461,6 +3997,8 @@ def main():
         debug=args.debug,
         trigger_kwargs=trigger_kwargs,
         sample_rate_ksps=args.sample_rate,
+        swing_speed_mode=args.swing_speed,
+        swing_speed_kwargs=swing_speed_kwargs,
         ops_baud=args.ops_baud,
     )
 
@@ -3480,6 +4018,8 @@ def main():
     if args.mock:
         print("Running in MOCK mode - no radar required")
         print("Simulate shots via WebSocket or API")
+    if args.swing_speed:
+        print("Running in SWING SPEED mode - no ball impact trigger required")
 
     print(f"Server starting at http://{args.host}:{args.web_port}")
     print()

@@ -118,6 +118,61 @@ def test_kld7_angle_offset_override_wins():
     assert "--kld7-angle-offset 1.5" not in command
 
 
+def test_swing_speed_flags_forwarded():
+    """Swing speed training flags should reach the server command."""
+    result = _dry_run(
+        "--swing-speed",
+        "--swing-speed-threshold",
+        "35",
+        "--swing-speed-max",
+        "125",
+        "--swing-speed-min-readings",
+        "4",
+        "--swing-speed-single-peak",
+        "65",
+        "--swing-speed-num-reports",
+        "8",
+        "--swing-speed-end-ms",
+        "300",
+        "--swing-speed-cooldown-ms",
+        "900",
+        "--swing-speed-rejected-cooldown-ms",
+        "50",
+    )
+    command = result.stdout.strip()
+
+    assert "--swing-speed" in command
+    assert "--swing-speed-threshold 35" in command
+    assert "--swing-speed-max 125" in command
+    assert "--swing-speed-min-readings 4" in command
+    assert "--swing-speed-single-peak 65" in command
+    assert "--swing-speed-num-reports 8" in command
+    assert "--swing-speed-end-ms 300" in command
+    assert "--swing-speed-cooldown-ms 900" in command
+    assert "--swing-speed-rejected-cooldown-ms 50" in command
+
+
+def test_mock_swing_speed_flag_forwards_mock_mode():
+    """Mock swing speed should use the server's no-hardware training mode."""
+    result = _dry_run("--mock-swing-speed", "--swing-speed-threshold", "45")
+    command = result.stdout.strip()
+
+    assert "--mock-swing-speed" in command
+    assert "--swing-speed-threshold 45" in command
+    assert "--swing-speed " not in f"{command} "
+    assert "--mock " not in f"{command} "
+
+
+def test_mock_and_swing_speed_flags_collapse_to_mock_swing_speed():
+    """The friendly --mock --swing-speed combo should avoid the server error path."""
+    result = _dry_run("--mock", "--swing-speed")
+    command = result.stdout.strip()
+
+    assert "--mock-swing-speed" in command
+    assert "--swing-speed " not in f"{command} "
+    assert "--mock " not in f"{command} "
+
+
 def test_kld7_vertical_raw_flag_forwarded():
     """--kld7-vertical-raw reaches the server as the renamed raw flag."""
     result = _dry_run("--kld7", "--kld7-mount-tilt", "10", "--kld7-vertical-raw")

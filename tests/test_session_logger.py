@@ -1,6 +1,8 @@
 """Tests for session_logger module."""
 
 import json
+import threading
+import time
 
 from openflight import session_logger as session_logger_module
 from openflight.kld7.radc import RADC_PAYLOAD_BYTES
@@ -623,3 +625,126 @@ class TestSessionIdentity:
         first = self._start_entry(tmp_path / "a")
         second = self._start_entry(tmp_path / "b")
         assert first["session_uuid"] != second["session_uuid"]
+
+
+class _ConcurrencyProbeStream:
+    """Fake session file that detects overlapping writes deterministically.
+
+    ``write`` widens its critical section with a short sleep, so if two
+    threads are inside it at once (i.e. ``_write_entry`` is not serialized)
+    the second one observes ``_active`` already set and records an overlap.
+    The sleep releases the GIL, so with multiple writer threads and no lock
+    the overlap is reproduced on every run rather than relying on a rare
+    interleaving to surface.
+    """
+
+    def __init__(self):
+        self.lines = []
+        self.overlap_detected = False
+        self.closed = False
+        self._active = False
+
+    def write(self, data):
+        if self._active:
+            self.overlap_detected = True
+        self._active = True
+        time.sleep(0.001)
+        self.lines.append(data)
+        self._active = False
+
+    def flush(self):
+        pass
+
+    def close(self):
+        self.closed = True
+
+
+class TestWriteEntryThreadSafety:
+    """Concurrency tests for the shared session-file writer.
+
+    ``log_*`` methods are called from several threads at once (the OPS243
+    capture thread, the K-LD7 stream thread, and Flask-SocketIO handlers).
+    Without serialization, large entries' writes interleave and corrupt the
+    JSONL replay corpus, and a write can race ``end_session`` closing the
+    file.
+    """
+
+    def test_concurrent_writes_do_not_overlap_or_drop_entries(self, tmp_path):
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+
+        probe = _ConcurrencyProbeStream()
+        logger._session_file = probe  # swap the real file for the probe
+
+        threads_n = 8
+        per_thread = 5
+
+        def worker(idx):
+            for seq in range(per_thread):
+                logger._write_entry("probe", {"thread": idx, "seq": seq})
+
+        threads = [threading.Thread(target=worker, args=(idx,)) for idx in range(threads_n)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        assert not any(thread.is_alive() for thread in threads)
+        assert not probe.overlap_detected, (
+            "Concurrent _write_entry calls overlapped inside the stream write; "
+            "session JSONL lines can interleave and corrupt the replay corpus."
+        )
+        # Every entry was written exactly once and each line is intact JSON.
+        assert len(probe.lines) == threads_n * per_thread
+        for line in probe.lines:
+            assert line.endswith("\n")
+            json.loads(line)
+
+    def test_end_session_does_not_close_during_an_active_write(self, tmp_path):
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+
+        in_write = threading.Event()
+        let_write_finish = threading.Event()
+        events = []
+
+        class _BlockingFirstWriteStream:
+            """Blocks the first write so a close can try to race it."""
+
+            def __init__(self):
+                self._first = True
+
+            def write(self, data):
+                if self._first:
+                    self._first = False
+                    in_write.set()
+                    let_write_finish.wait(timeout=5)
+                events.append("write")
+
+            def flush(self):
+                pass
+
+            def close(self):
+                events.append("close")
+
+        logger._session_file = _BlockingFirstWriteStream()
+
+        writer = threading.Thread(target=lambda: logger._write_entry("blocking", {}))
+        writer.start()
+        assert in_write.wait(timeout=5)  # writer is inside write(), holding the lock
+
+        closer = threading.Thread(target=logger.end_session)
+        closer.start()
+        time.sleep(0.05)
+        # The in-flight write holds the lock, so end_session must not have
+        # closed the file yet. Without serialization it closes immediately.
+        assert "close" not in events, "end_session closed the file during an active write"
+
+        let_write_finish.set()
+        writer.join(timeout=5)
+        closer.join(timeout=5)
+
+        # The close must land after the in-flight write completed.
+        assert events[0] == "write"
+        assert "close" in events
+        assert events.index("close") == len(events) - 1

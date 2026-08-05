@@ -286,6 +286,7 @@ class Shot:
     spin_rejection_reason: Optional[str] = None
     carry_spin_adjusted: Optional[float] = None
     mode: str = "rolling-buffer"
+    player_name: str = "Player 1"
     readings_data: Optional[list] = None
     angle_source: Optional[str] = None  # "radar", "camera", "estimated", or None
     club_angle_deg: Optional[float] = None  # Club angle of attack from K-LD7 (vertical)
