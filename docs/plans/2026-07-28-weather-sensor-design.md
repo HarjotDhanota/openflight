@@ -239,6 +239,72 @@ Following the `--kld7*` / `--iwr6843*` precedent in `server.py:main()` and mirro
 
 `--weather` absent ⇒ byte-identical behaviour to today. That property is worth an explicit regression test.
 
+## Normalization: how TrackMan does it, and what the sensor changes — researched 2026-08-06
+
+The "standard-conditions carry" in this design is the same feature TrackMan
+calls **Normalization**. Their methodology, from their own documentation:
+
+- **They re-fly the measured launch data** — ball speed, launch angle, spin
+  rate — through their aerodynamic model at the reference conditions. The
+  normalized number is a fresh simulation, not a scaling of the observed
+  carry.
+- **The reference is user-typed, defaulting to 77 °F and sea level.** TPS
+  asks the user to input altitude and temperature; wind is always assumed
+  calm. TrackMan does not measure the day's conditions for this feature at
+  all — CONFIRMED from their blog and Help Center.
+- **A premium ball is assumed**; non-premium launch data is first passed
+  through their Ball Conversion.
+- Their aero model comes from robot/air-cannon testing across the ball
+  speed × spin envelope.
+
+### The counter-intuitive finding: normalization does not need the sensor
+
+Launch data is measured **at impact**, before the air has acted on the ball,
+so it is condition-independent. Re-flying it at reference air needs only the
+launch data and the model:
+
+```
+carry_normalized = simulate(launch_data, ρ_reference)     # ballistics path
+carry_normalized = table(launch_data) × factor(ρ_ref)     # table path; ×1.0 for ISA
+```
+
+Neither line contains today's density. On the table path with the ISA
+reference, the **uncorrected table number already IS the normalized number**
+— the tables encode standard-air carry, which is why the pre-weather
+OpenFlight numbers were "normalized" all along without anyone calling them
+that.
+
+### What the sensor actually buys, stated precisely
+
+1. **It makes the ACTUAL carry real.** Without it OpenFlight shows one
+   number that is neither today's carry nor labelled as standard. With it,
+   "carried 263 today / plays like 256 standard" is a truthful pair, and the
+   gap between the two is measured rather than invented.
+2. **It beats TrackMan's own workflow at the input.** TrackMan trusts the
+   user to type altitude and temperature; a typed 77 °F on a 97 °F afternoon
+   silently corrupts the actual-vs-normalized comparison. A sensor cannot be
+   mistyped and tracks a 5 °C evening drop the user would never re-enter.
+3. **It future-proofs inversion.** Any later feature that works backwards
+   from an observed landing (camera carry validation, model fitting) must
+   divide today's air out first — impossible without knowing it.
+
+What the sensor does **not** do is move the normalized figure itself. Claiming
+otherwise in a PR description would be wrong, and a reviewer who understands
+the physics would catch it.
+
+### Two caveats that bound the feature's honesty
+
+- **Normalized carry inherits spin provenance.** With `spin_source ==
+  "club_typical"` the normalized number is partly fabricated no matter how
+  good the air data is — surface the provenance next to it, exactly as rule
+  2 below says for actual carry.
+- **Reference presets must be explicit.** TrackMan's 77 °F/sea-level air
+  (~1.177 kg/m³ with their unpublished RH taken as 50%) is ~4% thinner than
+  ISA's 1.225, so an ISA-normalized OpenFlight driver reads ~2-3 yd shorter
+  than a TrackMan-normalized one for identical launch data. Not a bug —
+  a different reference — but it must be labelled or users will "fix" it
+  with the knob this document forbids.
+
 ## Do not build a fudge knob
 
 Garmin R10 users on the Garmin forums report setting elevation to **10,000 ft** in E6 Connect to make their distances look right. That is air 31% thinner than sea level — not an elevation correction for anyone outside Leadville, but a tuning knob being abused to fix something else.
