@@ -21,7 +21,9 @@ from flask import Flask, Response, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
-from .ballistics import resolve_launch, simulate
+from .ballistics import AIR_DENSITY_STD, density_carry_factor, resolve_launch, simulate
+from .environment.bme280 import detect as detect_air_sensor, open_bus as open_i2c_bus
+from .environment.provider import EnvironmentProvider
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, ClubType, Shot
 from .ops243 import (
     UART_BAUD_COMMANDS,
@@ -131,6 +133,18 @@ iwr6843_runtime_config: dict = {"enabled": False}
 # (default), all carry computations go through the legacy table estimator.
 # The simulator is opt-in until coefficients are validated against TM.
 ballistics_enabled: bool = False
+
+# Air density. The provider always exists and answers "ISA sea level, source
+# default" until a sensor is fitted, so nothing downstream needs to care
+# whether one is present.
+environment_provider = EnvironmentProvider()
+air_sensor = None
+air_sensor_thread: Optional[threading.Thread] = None
+air_sensor_stop = threading.Event()
+# Slow enough that the die stays near ambient -- self-heating is the dominant
+# sensor error, and forced mode only helps if the duty cycle is low. Weather
+# does not move faster than this.
+AIR_SENSOR_POLL_S = 2.0
 
 # Simulator connectors (optional). Populated in main() from config/sim.json +
 # CLI flags; shots fan out to every connected connector. Player/club state is
@@ -928,6 +942,13 @@ def shot_to_dict(shot: Shot) -> dict:
         "carry_spin_adjusted": round(shot.carry_spin_adjusted)
         if shot.carry_spin_adjusted
         else None,
+        # Null throughout when no sensor is fitted, so consumers can tell
+        # "measured 1.225" apart from "assumed 1.225".
+        "air_temp_c": shot.air_temp_c,
+        "air_pressure_hpa": shot.air_pressure_hpa,
+        "humidity_pct": shot.humidity_pct,
+        "air_density_kg_m3": shot.air_density_kg_m3,
+        "air_density_source": shot.air_density_source,
     }
 
 
@@ -1599,6 +1620,12 @@ def handle_get_trigger_status():
     socketio.emit("trigger_status", _get_trigger_status())
 
 
+@socketio.on("get_environment")
+def handle_get_environment():
+    """Send the current air density and where it came from."""
+    socketio.emit("environment", environment_provider.current().as_dict())
+
+
 @socketio.on("set_club")
 def handle_set_club(data):
     """Handle club selection change."""
@@ -2168,6 +2195,81 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
     return (time.time() - started) * 1000.0
 
 
+def _apply_environment(shot: Shot) -> None:
+    """Stamp the shot with the air it was struck in.
+
+    Leaves every field None when no sensor is fitted, which is what makes an
+    unconfigured install produce exactly the numbers it did before.
+    """
+    reading = environment_provider.current()
+    if reading.source == "default":
+        return
+    shot.air_temp_c = reading.temp_c
+    shot.air_pressure_hpa = reading.pressure_hpa
+    shot.humidity_pct = reading.humidity_pct
+    shot.air_density_kg_m3 = reading.air_density_kg_m3
+    shot.air_density_source = reading.source
+
+
+def _air_sensor_loop(stop_event: threading.Event, poll_s: float = AIR_SENSOR_POLL_S) -> None:
+    """Poll the sensor in the background and hand readings to the provider.
+
+    Deliberately separate from the shot path: a shot must never wait on an
+    I2C transaction. A failed read is skipped rather than retried hard -- the
+    provider falls back to ISA on its own once the last good reading goes
+    stale, so a sensor that has been unplugged degrades quietly instead of
+    pinning a stale value forever.
+    """
+    last_sent = None
+    while not stop_event.is_set():
+        try:
+            reading = air_sensor.read() if air_sensor else None
+            if reading is not None:
+                environment_provider.set_sensor_reading(reading)
+                # Only push when a rounded value actually moved. The panel is
+                # showing one decimal place, so emitting every poll would be
+                # 0.5 Hz of identical payloads to every connected tab.
+                payload = environment_provider.current().as_dict()
+                comparable = {k: v for k, v in payload.items() if k != "age_s"}
+                if comparable != last_sent:
+                    last_sent = comparable
+                    socketio.emit("environment", payload)
+        except Exception:  # pylint: disable=broad-except
+            # A driver bug must not take the thread down and silently stop all
+            # further readings; the next poll gets another chance.
+            logger.exception("[SENSOR] Poll failed")
+        stop_event.wait(poll_s)
+
+
+def start_air_sensor() -> bool:
+    """Look for a sensor and start polling it if one is there.
+
+    Returns:
+        True if a sensor was found. False is the ordinary no-sensor case, not
+        an error -- the provider keeps answering ISA sea level.
+    """
+    global air_sensor, air_sensor_thread  # pylint: disable=global-statement
+
+    bus = open_i2c_bus()
+    if bus is None:
+        return False
+    air_sensor = detect_air_sensor(bus)
+    if air_sensor is None:
+        logger.info("[SENSOR] No BME280/BMP280 found; carry assumes ISA sea level")
+        return False
+
+    air_sensor_stop.clear()
+    air_sensor_thread = threading.Thread(target=_air_sensor_loop, daemon=True)
+    air_sensor_thread.start()
+    logger.info(
+        "[SENSOR] Polling %s at 0x%02x every %.0f s",
+        air_sensor.chip,
+        air_sensor.address,
+        AIR_SENSOR_POLL_S,
+    )
+    return True
+
+
 def on_shot_detected(shot: Shot):
     """Callback when a shot is detected - emit to all clients."""
     global ball_detected, ball_detection_confidence  # pylint: disable=global-statement
@@ -2510,16 +2612,21 @@ def on_shot_detected(shot: Shot):
     # back to the table estimator otherwise (either ballistics disabled or
     # angle missing → resolve_launch returns None).
     _MIN_RELIABLE_SPIN_CONF = 0.6
+    _apply_environment(shot)
     if shot.carry_spin_adjusted is None and shot.mode != "mock":
         conditions = resolve_launch(shot) if ballistics_enabled else None
         if conditions is not None:
-            trajectory = simulate(conditions)
+            # The integrator models drag and Magnus directly, so it takes the
+            # density itself rather than a correction factor. Falls back to ISA
+            # when nothing is measured, which is what it always assumed.
+            trajectory = simulate(conditions, air_density=shot.air_density_kg_m3 or AIR_DENSITY_STD)
             shot.carry_spin_adjusted = trajectory.carry_yards
             logger.info(
-                "[SERVER] Ballistic carry: %.0f yds (spin: %.0f rpm, source: %s)",
+                "[SERVER] Ballistic carry: %.0f yds (spin: %.0f rpm, source: %s, air: %s)",
                 shot.carry_spin_adjusted,
                 conditions.spin_rpm,
                 conditions.spin_source,
+                shot.air_density_source or "default",
             )
         else:
             has_reliable_spin = (
@@ -2539,6 +2646,11 @@ def on_shot_detected(shot: Shot):
                 shot.club,
                 club_speed_mph=shot.club_speed_mph,
             )
+            # The table estimator has no physics to scale, so density is
+            # applied as a scalar afterwards. Exactly 1.0 when nothing is
+            # measured, so an unconfigured install is byte-identical to before.
+            if shot.air_density_kg_m3 is not None:
+                shot.carry_spin_adjusted *= density_carry_factor(shot.air_density_kg_m3)
             reason = "ballistics disabled" if not ballistics_enabled else "no launch angle"
             logger.info(
                 "[SERVER] Table carry (%s): %.0f yds (spin: %.0f rpm%s)",
@@ -2564,6 +2676,11 @@ def on_shot_detected(shot: Shot):
                 club_speed_mph=shot.club_speed_mph,
                 smash_factor=shot.smash_factor,
                 estimated_carry_yards=shot.estimated_carry_yards,
+                air_temp_c=shot.air_temp_c,
+                air_pressure_hpa=shot.air_pressure_hpa,
+                humidity_pct=shot.humidity_pct,
+                air_density_kg_m3=shot.air_density_kg_m3,
+                air_density_source=shot.air_density_source,
                 club=shot.club.value,
                 peak_magnitude=shot.peak_magnitude,
                 readings_count=len(shot.readings),
@@ -2857,11 +2974,7 @@ def start_monitor(
             # anchor K-LD7 correlation to the OPS trigger_time instead of the
             # USB first-byte arrival time.
             radar = getattr(monitor, "radar", None)
-            if (
-                not swing_speed_mode
-                and radar is not None
-                and hasattr(radar, "read_clock_sync")
-            ):
+            if not swing_speed_mode and radar is not None and hasattr(radar, "read_clock_sync"):
                 try:
                     clock_sync = radar.read_clock_sync()
                     session_logger.log_clock_sync(
@@ -3492,6 +3605,14 @@ def main():
         help="Cooldown after a swing speed rep before accepting another (default: 750)",
     )
     parser.add_argument(
+        "--air-sensor",
+        action="store_true",
+        help=(
+            "Read air density from a BME280/BMP280 on I2C and correct carry for it. "
+            "Without this, carry assumes ISA sea level as it always has."
+        ),
+    )
+    parser.add_argument(
         "--swing-speed-rejected-cooldown-ms",
         type=float,
         default=100.0,
@@ -3816,6 +3937,15 @@ def main():
     global calculated_spin_enabled
     calculated_spin_enabled = args.calculated_spin
     ballistics_enabled = args.ballistics
+    if args.air_sensor and not start_air_sensor():
+        # Not fatal: the provider keeps answering ISA sea level, so the unit
+        # still works exactly as it did. But the user asked for a sensor and
+        # did not get one, so say so rather than silently doing nothing.
+        logger.warning(
+            "[SENSOR] --air-sensor was passed but no BME280/BMP280 was found. "
+            "Carry assumes ISA sea level. Check wiring and that I2C is enabled "
+            "(raspi-config > Interface Options > I2C), then `i2cdetect -y 1`."
+        )
     kld7_radc_tuning_kwargs = _kld7_radc_tuning_kwargs(args)
     active_kld7_radc_tuning = dict(kld7_radc_tuning_kwargs)
 

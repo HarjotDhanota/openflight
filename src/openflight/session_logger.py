@@ -349,6 +349,11 @@ class SessionLogger:
         spin_phase_confirmed: Optional[bool] = None,
         spin_rejection_reason: Optional[str] = None,
         carry_spin_adjusted: Optional[float] = None,
+        air_temp_c: Optional[float] = None,
+        air_pressure_hpa: Optional[float] = None,
+        humidity_pct: Optional[float] = None,
+        air_density_kg_m3: Optional[float] = None,
+        air_density_source: Optional[str] = None,
         mode: str = "rolling-buffer",
         launch_angle_vertical: Optional[float] = None,
         launch_angle_horizontal: Optional[float] = None,
@@ -437,6 +442,15 @@ class SessionLogger:
             "spin_phase_confirmed": spin_phase_confirmed,
             "spin_rejection_reason": spin_rejection_reason,
             "carry_spin_adjusted": carry_spin_adjusted,
+            # The air the shot was struck in. A carry figure is only
+            # interpretable next to this -- without it a hot afternoon is
+            # silently compared against a cold morning. Null when no
+            # sensor was fitted.
+            "air_temp_c": air_temp_c,
+            "air_pressure_hpa": air_pressure_hpa,
+            "humidity_pct": humidity_pct,
+            "air_density_kg_m3": air_density_kg_m3,
+            "air_density_source": air_density_source,
             "mode": mode,
             "launch_angle_vertical": launch_angle_vertical,
             "launch_angle_horizontal": launch_angle_horizontal,
