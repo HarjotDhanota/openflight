@@ -37,6 +37,10 @@ dependencies = [
     "kld7>=0.2.1",
     "gpiozero>=2.0.1; sys_platform == 'linux'",
     "lgpio>=0.2.2.0; sys_platform == 'linux'",
+    # BME280/BMP280 air-density sensor over I2C. Linux-only (it opens
+    # /dev/i2c-*), and optional at runtime: the driver degrades to "no
+    # sensor" if the import or the bus is unavailable.
+    "smbus2>=0.4.3; sys_platform == 'linux'",
 ]
 
 [project.optional-dependencies]
