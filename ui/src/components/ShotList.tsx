@@ -1,7 +1,7 @@
 import { useMemo, memo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { Shot } from '../types/shot';
-import { getSwingSpeedMph, isSwingSpeedShot } from '../types/shot';
+import { displayCarryYards, getSwingSpeedMph, isSwingSpeedShot } from '../types/shot';
 import { useUnitPreference } from '../state/useUnitPreference';
 import { socketService } from '../services/socketService';
 import { useSystemStore } from '../stores/useSystemStore';
@@ -195,9 +195,8 @@ const ShotRow = memo(function ShotRow({
 
   const launchAngle = isNumber(shot.launch_angle_vertical) ? `${shot.launch_angle_vertical.toFixed(1)}°` : '--';
   const spinRate = isNumber(shot.spin_rpm) ? shot.spin_rpm.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '--';
-  const carryDistance = isNumber(shot.estimated_carry_yards)
-    ? formatDistance(shot.estimated_carry_yards, unitSystem, 0)
-    : '--';
+  const carry = displayCarryYards(shot);
+  const carryDistance = isNumber(carry) ? formatDistance(carry, unitSystem, 0) : '--';
 
   return (
     <div className="shot-row">

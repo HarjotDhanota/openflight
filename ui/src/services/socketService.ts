@@ -3,6 +3,7 @@ import { useSystemStore } from '../stores/useSystemStore';
 import { useShotStore } from '../stores/useShotStore';
 import { useCameraStore, type CameraStatus } from '../stores/useCameraStore';
 import { useDebugStore } from '../stores/useDebugStore';
+import { useEnvironmentStore } from '../stores/useEnvironmentStore';
 import {
   isSwingSpeedShot,
   type Shot,
@@ -11,7 +12,14 @@ import {
   type TriggerDiagnostic,
   type TriggerStatus,
 } from '../types/shot';
-import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimStatus } from '../types/socket';
+import type {
+  DebugReading,
+  RadarConfig,
+  DebugShotLog,
+  SimShotInfo,
+  SimStatus,
+  EnvironmentReading,
+} from '../types/socket';
 import { playSwingCapturedCue } from '../utils/audioCue';
 import { getServerOrigin } from '../utils/serverOrigin';
 
@@ -46,6 +54,12 @@ class SocketService {
       this.socket?.emit('get_session');
       this.socket?.emit('get_trigger_status');
       this.socket?.emit('get_radar_config');
+      this.socket?.emit('get_environment');
+    });
+
+    // Pushed whenever a rounded value moves, not on every poll.
+    this.socket.on('environment', (data: EnvironmentReading) => {
+      useEnvironmentStore.getState().setReading(data);
     });
 
     this.socket.on('disconnect', () => {

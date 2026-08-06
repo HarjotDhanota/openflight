@@ -7,6 +7,7 @@ import { useCameraStore } from './stores/useCameraStore';
 import { useDebugStore } from './stores/useDebugStore';
 import { usePlayerStore } from './stores/usePlayerStore';
 import { socketService } from './services/socketService';
+import { ConditionsView } from './components/ConditionsView';
 import { ShotDisplay } from './components/ShotDisplay';
 import { StatsView } from './components/StatsView';
 import { ShotList } from './components/ShotList';
@@ -34,7 +35,7 @@ import Logo from './logo/Logo';
 
 import './App.css';
 
-type View = 'live' | 'stats' | 'shots' | 'camera' | 'debug';
+type View = 'live' | 'stats' | 'shots' | 'camera' | 'conditions' | 'debug';
 
 // Navigation icons as inline SVGs for better control
 const Icons = {
@@ -59,6 +60,11 @@ const Icons = {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
       <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z" />
       <circle cx="12" cy="13" r="4" />
+    </svg>
+  ),
+  conditions: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+      <path d="M14 14.76V4a2 2 0 10-4 0v10.76a4 4 0 104 0z" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
   debug: (
@@ -301,6 +307,13 @@ function AppContent() {
           {cameraStatus.ball_detected && <span className="nav__ball-dot" />}
         </button>
         <button
+          className={`nav__button ${currentView === 'conditions' ? 'nav__button--active' : ''}`}
+          onClick={() => setCurrentView('conditions')}
+        >
+          {Icons.conditions}
+          <span>Conditions</span>
+        </button>
+        <button
           className={`nav__button ${currentView === 'debug' ? 'nav__button--active' : ''} ${debugMode ? 'nav__button--recording' : ''}`}
           onClick={() => setCurrentView('debug')}
         >
@@ -341,6 +354,7 @@ function AppContent() {
             onToggleStream={() => socketService.toggleCameraStream()}
           />
         )}
+        {currentView === 'conditions' && <ConditionsView unitSystem={unitSystem} />}
         {currentView === 'debug' && (
           <DebugPanel
             enabled={debugMode}

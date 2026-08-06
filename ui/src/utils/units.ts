@@ -44,3 +44,23 @@ export function formatCarryRange(carryRange: [number, number], unitSystem: UnitS
   const max = formatDistance(carryRange[1], unitSystem, 0);
   return `${min}-${max} ${getDistanceUnit(unitSystem)}`;
 }
+
+export function convertTempFromCelsius(tempC: number, unitSystem: UnitSystem): number {
+  return unitSystem === 'imperial' ? tempC * 1.8 + 32 : tempC;
+}
+
+export function getTempUnit(unitSystem: UnitSystem): string {
+  return unitSystem === 'imperial' ? '°F' : '°C';
+}
+
+export function formatTemp(tempC: number, unitSystem: UnitSystem): string {
+  return `${convertTempFromCelsius(tempC, unitSystem).toFixed(1)} ${getTempUnit(unitSystem)}`;
+}
+
+// Two decimals for inHg, none for hPa: an inch of mercury is ~34x coarser than
+// a hectopascal, so matching digit counts would be false precision one way and
+// lost precision the other. A tenth of a hPa is ~0.01% of density -- below the
+// noise floor of anything downstream.
+export function formatPressure(pressureHpa: number, unitSystem: UnitSystem): string {
+  return unitSystem === 'imperial' ? `${(pressureHpa * 0.02953).toFixed(2)} inHg` : `${pressureHpa.toFixed(0)} hPa`;
+}

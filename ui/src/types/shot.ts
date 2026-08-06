@@ -27,6 +27,13 @@ export interface Shot {
   spin_method?: string | null;
   spin_multipath_fade_hz?: number | null;
   carry_spin_adjusted: number | null;
+  // Air the shot was struck in. Null throughout when no sensor was fitted, so
+  // "measured standard air" is distinguishable from "assumed standard air".
+  air_temp_c?: number | null;
+  air_pressure_hpa?: number | null;
+  humidity_pct?: number | null;
+  air_density_kg_m3?: number | null;
+  air_density_source?: string | null;
   swing_speed_duration_ms?: number;
   swing_speed_reading_count?: number;
   swing_speed_trigger_mph?: number;
@@ -175,6 +182,20 @@ export function computeSwingSpeedStats(shots: Shot[], filter: SwingSpeedStatsFil
 /**
  * Compute session stats from an array of shots.
  */
+/**
+ * The carry OpenFlight shows.
+ *
+ * `estimated_carry_yards` is the model-neutral figure the simulator connectors
+ * put on the wire, so it is deliberately never corrected for air density --
+ * GSPro re-flies the ball in the virtual course's own air, and correcting here
+ * too would apply it twice. `carry_spin_adjusted` is what the server actually
+ * resolved, density included. Every tab reads through here so the live view,
+ * the shot list and the stats cannot disagree about what a shot carried.
+ */
+export function displayCarryYards(shot: Shot): number {
+  return shot.carry_spin_adjusted ?? shot.estimated_carry_yards;
+}
+
 export function computeStats(shots: Shot[]): SessionStats {
   if (shots.length === 0) {
     return {
@@ -191,7 +212,7 @@ export function computeStats(shots: Shot[]): SessionStats {
   const ballSpeeds = shots.map((s) => s.ball_speed_mph);
   const clubSpeeds = shots.map((s) => s.club_speed_mph).filter((v): v is number => v !== null);
   const smashFactors = shots.map((s) => s.smash_factor).filter((v): v is number => v !== null);
-  const carries = shots.map((s) => s.estimated_carry_yards);
+  const carries = shots.map(displayCarryYards);
 
   const mean = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
   const stdDev = (arr: number[]) => {

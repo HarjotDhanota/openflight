@@ -62,3 +62,18 @@ export interface DebugShotLog {
   } | null;
   club: string;
 }
+
+/** Current air density and where it came from. */
+export interface EnvironmentReading {
+  air_density_kg_m3: number;
+  /** "bme280", "bmp280", or "default" when nothing is fitted. */
+  source: string;
+  temp_c: number | null;
+  pressure_hpa: number | null;
+  humidity_pct: number | null;
+  /** True when humidity was assumed rather than measured (a BMP280). */
+  humidity_assumed: boolean;
+  age_s: number | null;
+  deviation_pct: number;
+  density_altitude_ft: number;
+}
