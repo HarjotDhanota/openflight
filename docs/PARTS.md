@@ -113,6 +113,62 @@ K-LD7 Module (UART) → FTDI 3.3V Adapter → USB → Raspberry Pi
 
 One unit is mounted vertically (launch angle), one horizontally (club path / aim direction). A `--kld7-angle-offset` parameter corrects for mounting geometry — see the [setup guide](raspberry-pi-setup.md) for calibration.
 
+## Air Density Sensor (Optional)
+
+Carry scales with air density, and without a sensor every OpenFlight number
+assumes ISA sea level — worth about **5.6 yd on a driver on a 97 °F afternoon
+at a sea-level venue**, and roughly **14 yd in Denver**. This is the best
+accuracy-per-dollar part in the build.
+
+| Part | Description | Link | ~Price |
+|------|-------------|------|--------|
+| **BME280 breakout** | Temperature, pressure **and humidity** over I²C | [Adafruit](https://www.adafruit.com/product/2652) | $15 |
+| BMP280 breakout | Temperature and pressure only — humidity is assumed | [Amazon](https://www.amazon.com/s?k=bmp280+breakout) | ~$5 |
+| **Jumper wires** | 4 wires: VIN → 3.3V, GND → GND, SCL → BCM3 (pin 5), SDA → BCM2 (pin 3) | Any | $1 |
+
+Get the **BME280**, not the BMP280. They look identical and are widely
+mislabelled — the BMP280 has no humidity channel at all. OpenFlight reads the
+chip ID and tells you which one it actually found, so a mislabelled board is
+detected rather than silently reported as bone-dry air. A BMP280 still works;
+it just assumes 50% humidity, which costs under half a yard.
+
+Cheap generic breakouts are fine. Pressure accuracy is the *least* significant
+term in the error budget — placement matters far more than the datasheet spec.
+
+### Wiring
+
+```
+BME280          Raspberry Pi 5
+------          --------------
+VIN      →      3.3V   (pin 1 or 17)
+GND      →      GND    (pin 6, 9, 14, 20, 25, 30, 34 or 39)
+SCL      →      BCM3   (pin 5)
+SDA      →      BCM2   (pin 3)
+```
+
+Enable I²C with `sudo raspi-config` → Interface Options → I2C, then confirm the
+part answers:
+
+```bash
+i2cdetect -y 1      # expect 76 or 77
+scripts/start-kiosk.sh --air-sensor
+```
+
+Both addresses are probed automatically; boards disagree about which they strap
+by default.
+
+### Placement matters more than the sensor
+
+**Self-heating is the dominant error.** Left reading continuously the die sits
+1–3 °C above ambient inside a warm enclosure, which is worth more than the
+pressure, temperature and humidity spec errors combined. OpenFlight reads it in
+forced mode every couple of seconds and sleeps in between, which keeps that near
+0.1 °C — but only if the part is also mounted somewhere sensible.
+
+Put it in the **cool-air intake path**, away from the Pi and the back of the
+screen. A sensor sitting next to the Pi's SoC reports the enclosure, not the air
+the ball flies through.
+
 ## Power & Accessories
 
 | Part | Description | Link | ~Price |
@@ -136,6 +192,7 @@ One unit is mounted vertically (launch angle), one horizontally (club path / aim
 | Core (OPS243, Pi 5, Display) | $355 |
 | Sound Trigger (SEN-14262 + resistor + wires) | $18 |
 | Power & Accessories | $27 |
+| Air Density Sensor (BME280 + wires) — **optional** | $16 |
 | **Subtotal, no angle radar** | **~$400** |
 | Angle Radar (IWR6843LEVM + cable + wire) — **current** | $156 |
 | **Total with angle radar** | **~$556** |

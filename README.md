@@ -37,6 +37,7 @@ OpenFlight is an open-source golf launch monitor that uses Doppler radar to meas
 | Raspberry Pi 5 | Runs everything | $130 |
 | 7" Touchscreen | Shows shot data | $46 |
 | SparkFun SEN-14262 | Impact sound trigger for shot capture | $18 |
+| BME280 air-density sensor (optional) | Measures the air, so carry is not guessed | $16 |
 | Power supply + accessories | | $27 |
 | **Subtotal, no angle radar** | | **~$400** |
 | TI IWR6843LEVM + cable | Launch angle (vertical + horizontal), club path | $156 |

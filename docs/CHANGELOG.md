@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Carry corrected for measured air density.** Every carry number OpenFlight
+  produced assumed ISA sea level — 15 °C, 1013.25 hPa, dry — with no way to
+  change it. Measured against this repo's own RK4 integrator that assumption is
+  worth **5.6 yd on a driver in Sacramento at 97 °F** (a sea-level venue, so
+  pure temperature error) and **14 yd in Denver**; the same swing appears within
+  one day at one venue, and both were reported as identical. Fit a ~$4 BME280 on
+  I²C and start with `--air-sensor`. The new **Conditions** tab shows what it
+  measured, led by density altitude ("plays like 2,700 ft"). BMP280 is also
+  supported, with humidity assumed. **With no sensor fitted, every carry number
+  is unchanged.** Air density only — neither radar measures wind.
 - **OPS243 over the Raspberry Pi GPIO UART.** The radar can now run on the J3
   header instead of USB, which frees the Pi's USB power budget for the TI angle
   radar. Baud is the real wire rate on that transport and the factory default of
