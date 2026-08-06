@@ -221,6 +221,56 @@ The K-LD7 modules are positioned near the OPS243-A, one mounted vertically (laun
 These are applied automatically — the one-time flash configuration is handled
 by the setup script.
 
+### Air Density (Conditions)
+
+Carry scales with air density, and every OpenFlight number has always assumed
+ISA sea level — 15 °C, 1013.25 hPa, dry. Measured against this repo's own RK4
+integrator, that assumption is worth about **5.6 yd on a driver on a 97 °F
+afternoon at a sea-level venue**, and roughly **14 yd in Denver**. The same
+swing shows up within a single day at one venue, and both readings are
+reported as identical.
+
+A ~$4 BME280 on I²C measures it instead:
+
+```bash
+scripts/start-kiosk.sh --air-sensor
+```
+
+**With no sensor fitted, every carry number is unchanged.** The flag is opt-in,
+and without it the correction factor is exactly 1.0.
+
+| Part | Measures | Notes |
+| ---- | -------- | ----- |
+| **BME280** | Temperature, pressure, humidity | Recommended |
+| BMP280 | Temperature, pressure | No humidity channel; 50% is assumed, worth under half a yard |
+
+Both are auto-detected at 0x76 and 0x77. Boards are widely mislabelled, so the
+chip ID is read rather than trusted — the **Conditions** tab names the part it
+actually found.
+
+Enable I²C first (`sudo raspi-config` → Interface Options → I2C) and confirm
+the part answers with `i2cdetect -y 1`.
+
+The sensor is read in forced mode roughly every two seconds and sleeps in
+between. That is deliberate: **self-heating is the dominant error term**, and
+in continuous mode the die sits 1–3 °C above ambient inside a warm enclosure —
+worth more than the pressure, temperature and humidity spec errors combined.
+Mount it in the cool-air path, away from the Pi and the screen.
+
+The Conditions tab leads with **density altitude** ("plays like 2,700 ft")
+rather than a percentage, because that is a figure you can check against a
+round you have played. It corrects for air density only — neither radar
+measures wind, and no sensor here can.
+
+Simulator output is deliberately left alone. GSPro and OpenGolfSim re-fly the
+ball using the *virtual* course's own altitude and weather, so the carry sent
+over OpenConnect stays the uncorrected figure; correcting it here too would
+apply the correction twice.
+
+There is deliberately **no carry-calibration multiplier**. If distances look
+wrong, the cause is almost always estimated rather than measured spin — check
+`spin_source` on the shot.
+
 ### Python API
 
 ```python
