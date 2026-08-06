@@ -299,11 +299,74 @@ the physics would catch it.
   good the air data is — surface the provenance next to it, exactly as rule
   2 below says for actual carry.
 - **Reference presets must be explicit.** TrackMan's 77 °F/sea-level air
-  (~1.177 kg/m³ with their unpublished RH taken as 50%) is ~4% thinner than
-  ISA's 1.225, so an ISA-normalized OpenFlight driver reads ~2-3 yd shorter
-  than a TrackMan-normalized one for identical launch data. Not a bug —
-  a different reference — but it must be labelled or users will "fix" it
-  with the knob this document forbids.
+  (1.1769 kg/m³ with their unpublished RH taken as 50%) is 3.93% thinner
+  than ISA's 1.225. Run through this repo's own integrator — measured
+  2026-08-06, exact:
+
+  | Shot | ISA carry | TrackMan-ref carry | Δ |
+  |---|---|---|---|
+  | Driver 165 mph / 12.5° / 2600 | 256.5 yd | 259.4 yd | **+2.9** |
+  | Driver 150 mph / 13° / 2800 | 230.4 yd | 232.6 yd | +2.2 |
+  | 7-iron 120 mph / 18° / 6500 | 182.6 yd | 185.1 yd | +2.5 |
+  | PW 102 mph / 24° / 9000 | 143.1 yd | 145.2 yd | +2.2 |
+
+  So identically-struck shots read ~1.1-1.4% (2-3 yd) longer under the
+  TrackMan reference. Not a bug — a different reference — but it must be
+  labelled or users will "fix" it with the knob this document forbids.
+
+### Who actually has a weather sensor — resolved 2026-08-06
+
+The prior-art table above left this implicit; making it explicit because it
+keeps coming up:
+
+- **TrackMan: no onboard weather sensing for normalization.** Their own TPS
+  documentation has the user type altitude, temperature and ball type into
+  Settings before hitting — if the unit measured these, it would not ask.
+  (A widely-scraped claim that the TrackMan 4 has "built-in barometric
+  sensors" traces to an AliExpress content page, not to TrackMan. UNKNOWN
+  whether the unit contains one internally; CONFIRMED that the normalization
+  workflow does not use one.) They can afford this: they track the real
+  flight, so their *actual* numbers need no air data at all.
+- **Foresight GCQuad/GC3: yes** — onboard barometer, applied automatically.
+- **Garmin R10: no sensor** — phone location / typed values.
+
+OpenFlight's BME280 puts it in Foresight's camp, which is the right camp for
+a radar that extrapolates flight rather than watching it land: our *actual*
+carry is a simulation of today's air, so today's air must be measured.
+
+### Ball conversion: TrackMan's other normalization — researched 2026-08-06
+
+TrackMan's Normalization assumes a premium ball; when the golfer declares a
+range ball, Ball Conversion first converts the measured launch data to its
+premium-ball equivalent, then normalizes. Their range product does the same
+("Data Conversion"). Magnitudes from a TrackMan-instrumented comparison of
+ball categories:
+
+- **Limited-distance soft:** ball speed reduced >5%, wedge spin reduced >5%
+- **Limited-distance hard:** ball speed reduced >5%, wedge spin *increased*
+  >10%
+- **"Medium" range balls:** close to premium, premium slightly longer
+
+Net carry differences land in the ~2-10% band depending on ball and club —
+**larger than the entire air-density effect at most venues**, and second
+only to the spin-provenance problem in the honesty ranking.
+
+Two distinct corrections hide under "ball type", and they must not be
+conflated:
+
+1. **A per-ball flight model.** Our Cd/Cl fit is premium-shaped. A worn
+   two-piece range ball has different dimples and different drag/lift, so
+   even with perfect launch data our simulated carry of *that ball's* flight
+   is wrong. This affects both the actual and the normalized figure.
+2. **TrackMan-style launch-data conversion** — "what would a premium ball
+   have done off this same swing." This changes the *question being
+   answered*, not the model, and needs the robot-testing data TrackMan has
+   and we do not.
+
+Verdict: worth a real research pass, AFTER the weather stack ships. A
+category toggle (premium / range / limited-flight) backed by published
+aero measurements would be principled; a free-form ball multiplier would be
+the fudge knob below wearing a costume. Do not build #2 without data.
 
 ## Do not build a fudge knob
 
