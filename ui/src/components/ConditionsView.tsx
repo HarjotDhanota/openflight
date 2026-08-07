@@ -39,8 +39,7 @@ export function ConditionsViewInner({
 
       {!measured ? (
         <p className="conditions__empty">
-          No air-density sensor is fitted, so carry assumes standard sea-level air — 15 °C, 1013 hPa, dry. On a hot
-          afternoon that is worth several yards on a driver, and about 14 yards at Denver&rsquo;s altitude.
+          {`No air-density sensor is fitted, so carry assumes standard sea-level air — ${formatTemp(15, unitSystem)}, ${formatPressure(1013.25, unitSystem)}, dry. On a hot afternoon that is worth several yards on a driver, and about 14 yards at Denver's altitude.`}
           <br />
           <br />
           Fit a BME280 on I²C and start with <code>--air-sensor</code> to measure it instead.

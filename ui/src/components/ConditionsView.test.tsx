@@ -33,6 +33,22 @@ describe('ConditionsView', () => {
     expect(html).toContain('--air-sensor');
   });
 
+  it('states the assumed conditions in the units the user actually reads', () => {
+    // 15 C / 1013.25 hPa is 59.0 F / 29.92 inHg. An imperial user quoted
+    // metric reference conditions cannot sanity-check them against anything.
+    const noSensor = reading({ source: 'default', deviation_pct: 0, temp_c: null });
+
+    const imperial = render(noSensor, 'imperial');
+    expect(imperial).toContain('59.0 °F');
+    expect(imperial).toContain('29.92 inHg');
+    expect(imperial).not.toContain('15.0 °C');
+
+    const metric = render(noSensor, 'metric');
+    expect(metric).toContain('15.0 °C');
+    expect(metric).toContain('1013 hPa');
+    expect(metric).not.toContain('°F');
+  });
+
   it('does not show a density readout it has not measured', () => {
     const html = render(reading({ source: 'default', deviation_pct: 0, temp_c: null }));
 
