@@ -1,6 +1,7 @@
 # Power Status: Battery Level and Supply Health
 
-*Design doc. Branch `feat/battery-status`, based on `upstream/main` (98466df). Written 2026-08-07.*
+*Design doc. Branch `feat/battery-status`, based on `upstream/main` (98466df). Written
+2026-08-07, revised after design audit.*
 
 ## What this does
 
@@ -10,36 +11,34 @@ the Pi. Optionally, an unattended shutdown before the cells are deep-discharged.
 
 ### What the user does
 
-Nothing. If a supported UPS is fitted the indicator appears; if not, it doesn't.
+Nothing. If a supported UPS is declared in config the indicator appears; if not, it doesn't.
 
 ### What the builder does, once
 
-Nothing required. Everything below has a working default. Thresholds and the opt-in
-shutdown live in `~/.config/openflight/power.json` and matching CLI flags for anyone
-who wants to change them.
+Declare the board — `"board": "x1209"` in `power.json`, or `--power-board x1209`. Everything
+else has a working default. **Nothing is probed or reconfigured without that declaration**
+(§9.3), because auto-configuring a GPIO on a machine whose wiring we do not know is not a
+safe default.
 
 ### What this cannot do
 
-**Predict runtime accurately on a pack it has never seen discharge.** The estimate is
-derived from observed voltage slope during the current session. Early in a session, or
-after a hot-swap, it has nothing to extrapolate from and reports nothing rather than
-guessing. See §5.4.
+**Predict runtime accurately on a pack it has never seen discharge.** Derived from observed
+voltage slope in the current session. Reports nothing until it has enough history. See §5.4.
 
-**Report state of charge while charging.** Charge current inflates terminal voltage —
-measured on the bench at 3.850 V resting versus 4.088 V minutes into a charge on the same
-pack. On wall power the indicator shows a charging state, not a percentage it cannot
-justify. See §5.3.
+**Know whether the charger is actually charging.** The PLD line reports *external power
+present*, which is not the same thing — a full pack on mains draws no charge current. There
+is no charger-status signal on this hardware, so the UI says "external power", never
+"charging". See §5.3.
 
 **Detect rail health on anything but a Pi 5.** The rail reader is `vcgencmd pmic_read_adc`,
-which is Pi 5 only. On a Pi 4 the pack half still works and the rail dot is absent.
+Pi 5 only. On a Pi 4 the pack half still works and the rail dot is absent.
 
-**Report per-cell state.** The X12-A1 wires its four 18650s in parallel (1S4P), confirmed
-by the measured 3.850 V pack voltage — a series pack would read ~15 V. Parallel cells share
-one terminal voltage and are electrically indistinguishable, so the percentage covers the
-whole 14 Ah pack and nothing can resolve an individual cell. A single degraded cell is held
-up by the other three: the gauge keeps reporting healthy while real runtime shrinks. This is
-physics, not a gap in the implementation — per-cell sense wires would be required, and the
-X12-A1 has none.
+**Report per-cell state.** The X12-A1 wires its four 18650s in parallel (1S4P), confirmed by
+the measured 3.850 V pack voltage — a series pack would read ~15 V. Parallel cells share one
+terminal voltage and are electrically indistinguishable, so the percentage covers the whole
+14 Ah pack. A single degraded cell is held up by the other three: the gauge keeps reporting
+healthy while real runtime shrinks. Per-cell sense wires would be required; the X12-A1 has
+none.
 
 ---
 
@@ -48,8 +47,8 @@ X12-A1 has none.
 A Pi 5 running from a Geekworm X1209 reported `Reset due to low power event. Please check
 your power supply` at boot — the DA9091 PMIC latching a brownout on the previous boot.
 
-The system had no way to show that had happened, and no way to show it was about to happen
-again. Two distinct failure modes were invisible:
+The system had no way to show that had happened, or that it was about to happen again. Two
+distinct failure modes were invisible:
 
 | Failure | Symptom | Currently visible? |
 |---|---|---|
@@ -57,19 +56,14 @@ again. Two distinct failure modes were invisible:
 | Rail sags under load | Uncommanded reset, possible SD corruption | No |
 
 These are independent. A full pack with a sagging rail and an empty pack with a clean rail
-both end the session, for different reasons, requiring different responses. **One bar cannot
-express both**, which is why §3 uses two readers and §8 draws two indicators.
-
-The USB current budget in `docs/hardware-integration.md` §5.3 is the mechanism behind the
-second row: a Pi 5 fed over the 40-pin 5V rail cannot negotiate USB-C PD, so the firmware
-assumes a weak supply and caps total USB current at 600 mA.
+both end the session, for different reasons, needing different responses. **One bar cannot
+express both**, which is why §3 uses independent readers and §8 draws two indicators.
 
 ---
 
 ## 2. What is measurable, and what was verified
 
-All of the following was confirmed on hardware (Pi 5, X1209 + X12-A1, 4× Samsung 35E 1S4P)
-before this document was written.
+Confirmed on hardware (Pi 5, X1209 + X12-A1, 4× Samsung 35E 1S4P) before this was written.
 
 ### 2.1 Pack — MAX1704x fuel gauge, I²C `0x36`
 
@@ -81,31 +75,50 @@ before this document was written.
 SMBus reads little-endian; the gauge is big-endian, so every word needs the swap. Verified:
 `i2cget -y 1 0x36 0x02 w` returned `0x60cc` → `0xcc60` = 52320 → **4.088 V**.
 
-Covers the Geekworm X120x/X12xx family and UPS-Lite. Support for other gauges is out of
-scope — see §11.
+`0x04` is **ModelGauge SOC** — a modeled state of charge that tracks continuously across
+charge and discharge. It is *not* a lookup on instantaneous VCELL, and §5.3 must not treat
+it as one.
 
-### 2.2 Source — power-loss detection, GPIO 6
+Covers the Geekworm X120x/X12xx family and UPS-Lite. Other gauges are out of scope (§11).
 
-Verified in **both** directions, which matters because a pin that never changes is
-indistinguishable from a pin that isn't connected:
+### 2.2 External power — PLD line, GPIO 6 on the X1209
+
+Verified in **both** directions:
 
 | State | `pinctrl get 6` |
 |---|---|
 | Wall power connected | `hi` |
 | On battery | `lo` |
 
-The pin must be configured as an input with a pull-up first (`pinctrl set 6 ip pu`); it reads
-`no ... --` until then, which is "unconfigured", not "low". With the pull-up enabled, `lo`
-means something is actively driving it down — a floating pin reads `hi`. That is the evidence
-the line is genuinely connected.
+The pin needs configuring as an input with pull-up first (`pinctrl set 6 ip pu`); until then
+it reads `no ... --`, which is "unconfigured", not "low".
+
+**This is exactly why `hi` cannot be trusted on its own.** With a pull-up, an *unwired* pin
+also reads `hi`. On a board with no PLD line, "hi" is indistinguishable from "wall power
+connected" — so a naive mapping would report battery operation as mains, suppress warnings,
+and disable shutdown precisely on the builds least able to detect the problem. §5.1 handles
+this; §9.3 keeps us from touching the pin at all unless a board declares it.
 
 ### 2.3 Rail — Pi 5 PMIC
 
-`vcgencmd pmic_read_adc` exposes `EXT5V_V` as `volt(24)`. `vcgencmd get_throttled` reports
-undervoltage the firmware has **already detected** — bit 0 live, bit 16 since boot.
+`vcgencmd pmic_read_adc` exposes `EXT5V_V` as `volt(24)`. `vcgencmd get_throttled` returns a
+bitmask; only two bits concern supply health:
 
-This is the important one: it needs no calibration, because the firmware is doing the
-detection. Bench baseline, idle on battery:
+| Bit | Meaning | Used for rail health? |
+|---|---|---|
+| 0 (`0x1`) | Undervoltage now | **Yes** |
+| 1 (`0x2`) | ARM frequency capped | No |
+| 2 (`0x4`) | Currently throttled | No |
+| 3 (`0x8`) | Soft temperature limit | No |
+| 16 (`0x10000`) | Undervoltage has occurred | **Yes** |
+| 17–19 | Capping / throttling / soft-limit have occurred | No |
+
+Bits 1–3 and 17–19 are thermal and frequency management. Treating them as supply faults
+would paint a hot-but-electrically-healthy Pi amber — and this build lives in a sealed IP54
+enclosure on a summer range, so thermal throttling is *expected*, not exceptional. Rail
+health masks `0x10001` and nothing else.
+
+Bench baseline, idle on battery:
 
 ```
 rail       min 5.211 V   mean 5.215 V
@@ -113,13 +126,14 @@ pack       3.850 V
 throttled  0 non-zero
 ```
 
-Comfortably healthy, which is the sanity check that §5.2's thresholds sit in the right place.
+### 2.4 External power raises terminal voltage
 
-### 2.4 Charging distorts voltage
+Pack read 3.850 V on battery, then 4.088 V minutes after wall power was reconnected. That
+rise is charge current, not stored energy.
 
-Pack read 3.850 V on battery, then 4.088 V a few minutes after wall power was reconnected.
-That rise is charge current, not stored energy. Any voltage-derived percentage over-reads
-while charging. §5.3 handles it.
+**This does not invalidate the gauge's SOC**, which is modeled precisely to handle it (§2.1).
+It does mean any *voltage-derived* percentage over-reads while charging — which matters
+because §5.3's health levels are voltage-based.
 
 ---
 
@@ -130,167 +144,286 @@ New package `src/openflight/power/`, following the shape of `inclinometer/`.
 ```
 src/openflight/power/
   __init__.py
-  models.py      PackReading · RailReading · PowerSnapshot   (frozen dataclasses)
+  models.py      PackReading · RailReading · SourceReading · PowerSnapshot · PowerView
   gauge.py       BatteryGauge Protocol
-  max1704x.py    MAX1704x over I²C + PLD on GPIO — the only gauge shipped
+  source.py      PowerSourceReader Protocol + GpioPldSource
+  max1704x.py    MAX1704x over I²C — the only gauge shipped
   pmic.py        Pi 5 rail health via vcgencmd
-  service.py     threaded sampler, smoothing, snapshot retention
-  policy.py      snapshot -> health level -> warning / shutdown decision
+  service.py     threaded sampler, snapshot retention
+  policy.py      (PolicyState, PowerSnapshot) -> (PolicyState, Decision)
   shutdown.py    the only module that can halt the machine
   config.py      ~/.config/openflight/power.json
 ```
 
-### 3.1 Two independent readers
+### 3.1 Three independent readers
 
-The pack gauge and the rail monitor answer different questions on different buses, and
-either can be absent:
+Pack gauge, power source, and rail monitor answer different questions on different buses.
+**Each can be absent independently**, so each carries its own status (§4) — a single global
+status cannot express "gauge working, PLD missing, rail fine".
 
-| Build | Fuel bar | Rail dot |
-|---|---|---|
-| Pi 5 + supported UPS | yes | yes |
-| Pi 5, wall power, no UPS | — | yes |
-| Pi 4 + supported UPS | yes | — |
-| Pi 4, wall power | — | — |
+| Build | Fuel bar | Source | Rail dot |
+|---|---|---|---|
+| Pi 5 + X1209, board declared | yes | yes | yes |
+| Pi 5 + UPS, no board declared | yes | unknown | yes |
+| Pi 5, wall power, no UPS | — | — | yes |
+| Pi 4 + UPS, board declared | yes | yes | — |
+| Pi 4, wall power | — | — | — |
 
-`PowerSnapshot` holds both as `Optional`. A missing half degrades to a missing indicator,
-never to a broken subsystem. The last row is the upstream guarantee: no hardware, no config,
-status `unavailable`, component renders nothing, **zero change for every existing builder**.
+The last row is the upstream guarantee: no hardware, no config, nothing rendered, **zero
+change for every existing builder**. `init_power()` returns `True` if *any* reader
+initialised — returning `False` on any single failure would contradict this matrix.
 
-### 3.2 Why `policy.py` is separate from `service.py`
+### 3.2 Why `source.py` is separate from `gauge.py`
 
-The service samples and smooths. It holds no opinion and cannot halt the machine.
+Power-source detection is not a property of the fuel gauge. The X1209 puts it on a GPIO; a
+PiJuice reports it over I²C; many boards have nothing. Folding it into `BatteryGauge` as an
+optional method would couple two independently-absent capabilities and make the floating-pin
+problem in §2.2 a gauge concern, which it is not.
 
-`policy.py` turns a snapshot into `ok` / `warn` / `critical` and is the only thing that can
-call for shutdown. It is pure functions over a dataclass — no thread, no bus, no clock — so
-the part with real consequences is table-driven-testable without mocking anything.
+### 3.3 Why `policy.py` is a reducer, not pure functions
 
-`shutdown.py` is separated again for the same reason: exactly one function that runs
-`systemctl poweroff`, trivially stubbed in tests, so no test run can power off a dev machine.
+An earlier draft claimed policy was "pure functions over a dataclass". That was wrong: dwell
+counting, hysteresis, runtime history, and cancellation latching all require retained state
+across samples.
 
-### 3.3 Why `gauge.py` is a Protocol with one implementation
+```python
+def step(state: PolicyState, snapshot: PowerSnapshot, now_monotonic: float
+        ) -> tuple[PolicyState, Decision]:
+```
 
-Deliberately narrow — `initialize()`, `read() -> PackReading`, `close()`, plus optional
-`on_battery() -> bool | None`. Nothing MAX-specific leaks into it.
+Deterministic and fully testable — feed a list of snapshots, assert the decision sequence —
+without a thread, a bus, or a wall clock. `now_monotonic` is a parameter, never read inside,
+so durations are exact in tests and immune to NTP steps at boot.
 
-This is not speculative generality. It is the same `Protocol` boundary `inclinometer/service.py`
-already uses for `Accelerometer`, and it is what makes the service testable with a fake instead
-of an I²C bus. That a second backend becomes a new file rather than a refactor is a side
-benefit, not the justification.
+`shutdown.py` is separated again: one function running `systemctl poweroff`, trivially
+stubbed, so no test run can power off a dev machine.
+
+### 3.4 Why `gauge.py` is a Protocol with one implementation
+
+Narrow — `initialize()`, `read() -> PackReading`, `close()`. It is the same `Protocol`
+boundary `inclinometer/service.py` already uses for `Accelerometer`, and it is what makes the
+service testable with a fake instead of an I²C bus. A second backend becoming a new file is a
+side benefit, not the justification.
 
 ---
 
 ## 4. Data model
 
+Every reader carries its own status. There is no global one.
+
 ```python
+ReaderStatus = Literal["ok", "absent", "error"]
+
 @dataclass(frozen=True)
 class PackReading:
+    status: ReaderStatus
     timestamp: float
-    volts: float
-    percent: float | None      # None when the gauge reports SOC we do not trust
-    on_battery: bool | None    # None when no PLD line is available
+    volts: float | None
+    percent: float | None          # ModelGauge SOC
+    error: str | None = None
 
 @dataclass(frozen=True)
 class RailReading:
+    status: ReaderStatus
     timestamp: float
-    ext5v_volts: float
-    throttled: int             # raw get_throttled bitmask
+    ext5v_volts: float | None
+    throttled: int | None          # raw mask; rail health uses 0x10001 (§2.3)
+    error: str | None = None
+
+@dataclass(frozen=True)
+class SourceReading:
+    status: ReaderStatus
+    timestamp: float
+    state: Literal["external", "battery", "unknown"]
+    error: str | None = None
 
 @dataclass(frozen=True)
 class PowerSnapshot:
     timestamp: float
-    pack: PackReading | None
-    rail: RailReading | None
-    status: str                # "ok" | "unavailable" | "sensor_error"
+    pack: PackReading
+    rail: RailReading
+    source: SourceReading
 ```
 
-`status` mirrors `SnapshotSelection.status` in `inclinometer/models.py` — the same vocabulary
-for the same idea, so a reader who knows one knows the other.
+`PowerView` is the serialized shape sent to the UI — snapshot plus the policy's conclusions,
+so the client renders and never re-derives:
+
+```python
+@dataclass(frozen=True)
+class PowerView:
+    pack_volts: float | None
+    pack_percent: float | None
+    pack_level: Literal["ok", "low", "critical", "unknown"]
+    rail_volts: float | None
+    rail_level: Literal["green", "amber", "red", "unknown"]
+    source: Literal["external", "battery", "unknown"]
+    runtime_minutes: int | None
+    shutdown_eligible: bool
+    pending_shutdown: PendingShutdown | None
+    warnings: list[str]
+```
 
 ---
 
 ## 5. States and thresholds
 
-### 5.1 Source state
+### 5.1 Source state, and the floating-pin rule
 
-From GPIO 6: `wall` (hi) / `battery` (lo) / `unknown` (no PLD line, or unreadable).
-Everything downstream must tolerate `unknown` — that is the state for every UPS whose
-power-loss line is not on GPIO 6.
+`external` / `battery` / `unknown`.
+
+A pin reading `hi` is only reported as `external` when **either**:
+
+1. the configured board profile declares a PLD line (§9.3), **or**
+2. this process has previously observed that pin read `lo` — proving it is driven
+
+Until one holds, `hi` yields `unknown`. A `lo` reading always yields `battery` immediately;
+it is unambiguous, since a pulled-up floating pin cannot read low.
+
+Rule two exists for a builder who wires PLD to a non-default pin and configures it: the first
+transition to battery latches the line as real for the rest of the session.
+
+`unknown` is a first-class state. Everything downstream must handle it (§5.3, §6).
 
 ### 5.2 Rail health
 
-No calibration required; two of the three inputs are the firmware's own verdict.
-
 | Level | Condition |
 |---|---|
-| green | `EXT5V_V ≥ 5.0` and `throttled == 0x0` |
-| amber | `4.9 ≤ EXT5V_V < 5.0`, or any since-boot throttle bit |
-| red | `EXT5V_V < 4.9`, or live undervoltage bit 0 |
+| green | `EXT5V_V ≥ rail_amber_volts` and `throttled & 0x10001 == 0` |
+| amber | `rail_red_volts ≤ EXT5V_V < rail_amber_volts`, or bit 16 set |
+| red | `EXT5V_V < rail_red_volts`, or bit 0 set |
+| unknown | reader `absent` or `error` |
 
-4.9 V is Raspberry Pi's documented floor for a GPIO-powered Pi 5, not a local invention.
-The measured idle baseline of 5.211 V sits mid-green.
+Defaults 5.0 / 4.9 V. **These are OpenFlight margins, not a published Raspberry Pi
+threshold.** An earlier draft attributed 4.9 V to official documentation; that attribution
+could not be substantiated and has been removed. The firmware's own undervoltage detection
+trips lower than this, so amber is intended as early warning *before* the firmware complains,
+and red should normally coincide with bit 0 rather than precede it. Both are configurable,
+and §12 item 1 tracks calibrating them against a real loaded session.
 
 ### 5.3 Pack health
 
-**Evaluated only when the source state is `battery`.** On `wall`, §2.4 applies: the reading
-is inflated by charge current, so the indicator shows charging and no percentage is claimed.
+Non-overlapping, evaluated on **voltage**, not on SOC:
 
-On `unknown` — a UPS whose power-loss line is not on GPIO 6 — pack health is evaluated as if
-on battery, **except that shutdown never fires** (§6 condition 2 requires `battery`
-explicitly). The reasoning: a percentage that is occasionally pessimistic while charging is
-tolerable, but halting a machine that might be on mains is not. Warnings still show, so the
-degradation is visible rather than silent.
+| Level | Condition |
+|---|---|
+| ok | `volts ≥ pack_low_volts` (3.6) |
+| low | `pack_critical_volts ≤ volts < pack_low_volts` (3.4–3.6) |
+| critical | `volts < pack_critical_volts` (< 3.4) |
+| unknown | reader `absent` or `error` |
 
-Defaults for 1S 18650, all overridable:
+`shutdown_eligible` is a **separate boolean** — `volts ≤ shutdown_volts` (3.2) — not a level.
+A pack below 3.2 V is therefore `critical` and visibly so whether or not auto-shutdown is
+enabled. 3.2 V is Geekworm's figure from their reference script.
 
-| Level | Pack V | Effect |
-|---|---|---|
-| ok | ≥ 3.6 | — |
-| low | 3.4 – 3.6 | warning |
-| critical | 3.3 – 3.4 | persistent warning |
-| shutdown | ≤ 3.2 | halt, only if enabled |
+**On external power**, voltage is inflated (§2.4), so voltage-based levels would read
+optimistically. Health is reported as `ok` and warnings suppressed while `source == external`
+— running on mains is not a low-battery condition.
 
-3.2 V is Geekworm's own figure from their reference script, not a guess.
+**The percentage is still shown on external power.** ModelGauge tracks across charge (§2.1),
+so suppressing it would be discarding the one reading that stays valid. The UI labels the
+state "external power" rather than "charging", since charger status is not measurable (see
+"What this cannot do").
+
+**On `unknown` source**, pack levels are evaluated as if on battery — a warning that turns
+out to be spurious costs a glance, while a missed one costs the session. Shutdown never fires
+(§6 condition 2).
 
 ### 5.4 Runtime estimate
 
-Least trustworthy output here, so it is the most conservative. Derived from the observed
-voltage slope over the current session only. Reported as `None` — and rendered as nothing —
-until at least 10 minutes of on-battery samples exist and the slope is monotonic within
-tolerance. A wrong estimate is worse than no estimate.
+Least trustworthy output, so the most conservative. Derived from voltage slope over the
+current session, reported as `None` — rendered as nothing — until:
 
-### 5.5 Hysteresis and dwell are not optional
+- ≥ 10 minutes of continuous `battery`-state samples, and
+- slope is negative and monotonic within tolerance
 
-The pack was measured moving 3.850 → 3.853 V across two seconds at idle. Under load it will
-dip several hundred millivolts and recover. Without debouncing, a transient sag triggers a
-shutdown mid-session.
+History resets to empty on: source state change, a voltage discontinuity > 0.15 V between
+consecutive samples (hot-swapped pack), or any pack reader error. A wrong estimate is worse
+than no estimate.
 
-- Entering a level requires the condition to hold for `dwell_samples` consecutive reads
-  (default 15 ≈ 30 s at the 2 s sample interval)
+### 5.5 Hysteresis and dwell
+
+The pack moved 3.850 → 3.853 V across two seconds at idle; under load it will dip hundreds of
+millivolts and recover. Without debouncing, a transient sag triggers shutdown mid-session.
+
+- Entering a level requires the condition to hold `dwell_samples` consecutive reads
+  (default 15 ≈ 30 s at 2 s interval)
 - Leaving a level requires rising `deadband_volts` above the threshold (default 0.05)
-
-Both configurable. Both are the reason §10 tests flapping explicitly.
+- **A reader error resets the dwell counter**, and never counts toward a transition — a
+  disconnected gauge must not accumulate its way into a shutdown
 
 ---
 
-## 6. Shutdown policy
+## 6. Shutdown protocol
 
-Opt-in, default **off**.
+Opt-in, default **off**. The server owns the state; the UI renders it.
 
-Fires only when *all* hold:
+### 6.1 Conditions to arm
 
-1. `auto_shutdown_enabled` is true
-2. source state is `battery` — never on wall power, under any circumstance
-3. pack volts ≤ `shutdown_volts`
-4. condition sustained past `dwell_samples`
-5. not charging
+All must hold:
 
-The UI is notified first and shows a countdown (`shutdown_grace_seconds`, default 60) which
-any UI interaction cancels for the remainder of the session. Then `shutdown.py` runs
-`systemctl poweroff`.
+1. `auto_shutdown_enabled`
+2. `source.state == "battery"` — never on `external`, never on `unknown`
+3. `pack.volts ≤ shutdown_volts`
+4. sustained past `dwell_samples`
+5. not already cancelled this session
 
-Default-off is deliberate. Software that turns the machine off is software a user must
-opt into, and the failure mode of a wrong threshold — a session ended mid-round — is more
-visible than the failure mode it prevents.
+Condition 2 subsumes the earlier draft's separate "not charging" clause, which was
+unevaluable — there is no charger-status signal (§2.2).
+
+### 6.2 State and events
+
+```python
+@dataclass(frozen=True)
+class PendingShutdown:
+    id: str                    # uuid4, new per arming
+    deadline_monotonic: float  # absolute, not a countdown
+    reason: str
+```
+
+| Event | Direction | Payload |
+|---|---|---|
+| `power` | server → all | `PowerView` (includes `pending_shutdown`) |
+| `power_shutdown_pending` | server → all | `PendingShutdown` |
+| `get_power` | client → server | — |
+| `power_shutdown_cancel` | client → server | `{id}` |
+| `power_shutdown_cancelled` | server → all | `{id}` |
+
+**Absolute deadline, not a countdown**, so a client reconnecting mid-window computes the
+remaining seconds correctly instead of restarting the clock.
+
+`get_power` on connect follows the pattern `socketService.ts` already uses for `get_session`,
+`get_trigger_status`, `get_radar_config` — so a newly connected UI has state immediately
+rather than waiting up to the 10 s heartbeat.
+
+### 6.3 Cancellation
+
+An explicit **"Keep running"** button, not incidental interaction. A stray tap must not
+silently defeat a protection the user enabled; equally, a user who wants to cancel should not
+have to guess what counts as interaction.
+
+- Any connected client may cancel. Cancellation is broadcast to all.
+- A cancel carrying a stale `id` is ignored — this is the reconnect and double-click race.
+- Cancelling **latches for the remainder of the process**: no re-arming, at any voltage.
+  Re-arming a user who has said no, once a minute, until the pack dies, is worse than
+  respecting the decision. The warning stays visible.
+
+### 6.4 Execution
+
+On deadline with no cancel:
+
+1. emit a final `power` view marking execution
+2. run the existing hardware cleanup used by `_cleanup_hardware_for_shutdown()` — radars and
+   the sampling thread stopped before the machine goes down
+3. `systemctl poweroff`
+
+The existing shutdown path at `server.py:218` is `os._exit(0)`; it stops the *server process*.
+Halting the *machine* is a new capability and must not be assumed to inherit its behaviour.
+
+If `systemctl poweroff` fails — no privileges, no systemd — log it, emit a warning to the UI,
+and **do not retry**. A failed halt is a visible degraded state, not a loop.
+
+Default-off is deliberate. The failure mode of a wrong threshold, a session ended mid-round,
+is more visible than the failure it prevents.
 
 ---
 
@@ -299,119 +432,158 @@ visible than the failure mode it prevents.
 Mirrors `init_inclinometer` at `server.py:1136`:
 
 - module-level `power_service` and `power_runtime_config: dict = {"enabled": False}`
-- `init_power(...) -> bool`, returning False on any hardware failure, never raising
+- `init_power(...) -> bool` — `True` if **any** reader initialised (§3.1); never raises
 - registered in the shutdown sequence alongside `inclinometer stop` (`server.py:202`)
 - included in the config dict at `server.py:855`
 
-Transport: a `power` socket event emitted on health-level change and on a 10 s heartbeat.
-Battery state moves slowly; the shot path is latency-critical and must not carry this.
+Transport: `power` emitted on any level change, on arming or cancelling a shutdown, and on a
+10 s heartbeat. Battery state moves slowly; the shot path is latency-critical and must not
+carry this.
 
-**The sampling thread never blocks the shot path.** I²C reads take ~1 ms and `vcgencmd`
-forks a process — both are done on the power thread, and the emit reads only the retained
-snapshot.
+**The sampling thread never blocks the shot path.** I²C reads take ~1 ms and `vcgencmd` forks
+a process — both happen on the power thread. `vcgencmd` invocations get a hard timeout
+(2 s); a hang marks the rail reader `error`, never stalls the loop. Emits read only the
+retained snapshot. `stop()` is idempotent.
 
 ---
 
 ## 8. UI
 
-Two indicators, per §1:
-
 ```
   ▮▮▮▮▮▮▯▯▯▯  62%   ●
-                    └─ rail health
+                    └─ rail health, colours per §5.2
 ```
 
-Tapping the indicator expands a detail panel:
+Tapping expands:
 
 ```
 Pack   3.81 V · 62% · on battery
 Rail   5.09 V · no throttling
-Est.   ~48 min           (omitted entirely until §5.4 is satisfied)
+Est.   ~48 min                    (omitted until §5.4 is satisfied)
 ```
 
 - `ui/src/components/BatteryStatus.tsx` — bar, percentage, rail dot, expandable detail
-- `ui/src/stores/usePowerStore.ts` — zustand, matching `useEnvironmentStore`
-- warning banner on `low` / `critical`, and the shutdown countdown
+- `ui/src/stores/usePowerStore.ts` — zustand, matching the existing store conventions
+- warning banner on `low` / `critical`, and the shutdown countdown with **"Keep running"**
 
-Rail dot colours map directly to §5.2 — green / amber / red, no separate scale.
-
-Renders `null` when status is `unavailable`, which is what makes the no-hardware guarantee
-real rather than aspirational.
+Each element renders independently: an absent gauge hides the bar while the rail dot remains,
+and vice versa. The whole component renders `null` only when all three readers are absent.
 
 ---
 
 ## 9. Configuration
 
-`~/.config/openflight/power.json`, following `environment/config.py` — load returns defaults
-on a missing, unreadable, or malformed file, because a corrupt config must never stop the
-launch monitor from starting.
+`~/.config/openflight/power.json`, following the existing config-module conventions — load
+returns defaults on a missing, unreadable, or malformed file, because a corrupt config must
+never stop the launch monitor from starting.
 
-| Key | Default |
+### 9.1 Keys
+
+| Key | Default | Validation |
+|---|---|---|
+| `board` | `null` | `null` or a known profile id |
+| `enabled` | `true` | bool |
+| `sample_interval_s` | `2.0` | finite, `0.5 ≤ x ≤ 60` |
+| `rail_amber_volts` / `rail_red_volts` | `5.0` / `4.9` | finite, `red < amber` |
+| `pack_low_volts` / `pack_critical_volts` | `3.6` / `3.4` | finite, `critical < low` |
+| `shutdown_volts` | `3.2` | finite, `≤ pack_critical_volts` |
+| `auto_shutdown_enabled` | `false` | bool |
+| `shutdown_grace_seconds` | `60` | int, `10 ≤ x ≤ 600` |
+| `dwell_samples` | `15` | int, `≥ 1` |
+| `deadband_volts` | `0.05` | finite, `≥ 0` |
+| `pld_gpio` | `null` | `null` or int `0 ≤ x ≤ 27` |
+| `i2c_bus` / `i2c_address` | `1` / `54` | ints; address `0x08–0x77` |
+
+`i2c_address` is **decimal 54**, not `0x36` — JSON has no hex literals. A string `"0x36"` is
+also accepted and parsed, since that is what people will type.
+
+Any key failing validation falls back to its default and logs a warning naming the key.
+Unknown keys are ignored and logged. A whole-file rejection would turn one typo into a
+non-booting launch monitor.
+
+### 9.2 Precedence
+
+CLI overrides file overrides default:
+
+| Source | Wins over |
 |---|---|
-| `enabled` | `"auto"` — probe, use it if present |
-| `sample_interval_s` | `2.0` |
-| `rail_amber_volts` / `rail_red_volts` | `5.0` / `4.9` |
-| `pack_low_volts` / `pack_critical_volts` | `3.6` / `3.4` |
-| `shutdown_volts` | `3.2` |
-| `auto_shutdown_enabled` | `false` |
-| `shutdown_grace_seconds` | `60` |
-| `dwell_samples` | `15` |
-| `deadband_volts` | `0.05` |
-| `pld_gpio` | `6` |
-| `i2c_address` | `0x36` |
+| `--power-*` flags | config file, defaults |
+| `power.json` | defaults |
+| `--no-power` | everything — hard disable, even if config enables it |
 
-CLI flags follow the `--inclinometer` convention: `--power`, `--power-shutdown`,
-`--power-shutdown-volts`, and `scripts/start-kiosk.sh` passthrough.
+Flags follow the `--inclinometer` convention: `--power`, `--no-power`, `--power-board`,
+`--power-shutdown`, `--power-shutdown-volts`, with `scripts/start-kiosk.sh` passthrough.
 
-The package is `power/` rather than `battery/` because it monitors the rail too, which is
-not a battery. The user-facing indicator is still a battery.
+### 9.3 Nothing is touched without a declaration
+
+`pld_gpio` defaults to `null` and **no GPIO is configured unless a board profile or explicit
+config declares one**. Auto-probing GPIO 6 would silently reconfigure a pin on builds using
+it for something else — which is not "zero change for existing builders", it is a regression
+with a friendly description.
+
+The `x1209` profile sets `pld_gpio: 6`. The I²C gauge is safe to probe without a declaration:
+a read of address `0x36` that gets no ACK is a no-op.
+
+The package is `power/` rather than `battery/` because it monitors the rail too, which is not
+a battery. The user-facing indicator is still a battery.
 
 ---
 
 ## 10. Testing
 
-`policy.py` being pure functions is what makes this cheap. Table-driven over `PowerSnapshot`:
+### 10.1 Policy — table-driven over the reducer
 
-- every rail and pack level boundary, both directions
+- every rail and pack level boundary, both directions, including exact-threshold values
 - **flapping** — a value oscillating across a threshold must not oscillate the level
-- **transient sag** — a single low read inside a healthy window must not trigger shutdown
-- **charging inflation** — high volts on `wall` must not report a percentage
-- **shutdown interlocks** — each of §6's five conditions independently blocks the halt
-- `unknown` source state at every decision point
+- **transient sag** — a single low read inside a healthy window must not arm shutdown
+- **reader error mid-dwell** — resets the counter, never accumulates toward shutdown
+- **external power** — no warnings, percentage still reported, levels forced `ok`
+- **`unknown` source** — warnings active, shutdown never arms
+- **shutdown interlocks** — each of §6.1's five conditions independently blocks arming
+- **cancel latch** — after cancel, no re-arm at any voltage for the process lifetime
+- **runtime history reset** — on source change, on a > 0.15 V discontinuity, on error
 
-Driver tests: byte-swap math against the verified `0x60cc → 4.088 V`, missing-hardware
-fallback, and I²C errors surfacing as `sensor_error` rather than exceptions.
+### 10.2 Integration
 
-`shutdown.py` is stubbed throughout. No test may power off the machine running it.
+- partial reader failure and later recovery — gauge dies, rail survives, view stays coherent
+- initial sync on connect, and reconnect mid-countdown showing correct remaining seconds
+- cancel races — stale `id`, double-cancel, cancel arriving after the deadline
+- multiple clients — one cancels, all see it
+- `systemctl poweroff` failing on permissions — warning surfaced, no retry loop
+- hardware cleanup completes before halt is invoked
+- malformed and timing-out `vcgencmd` output → `error` status, loop continues
+- config validation: each bad value falls back independently; hex-string address parses
+- `stop()` idempotent; thread joins within timeout
+
+`shutdown.py` is stubbed throughout. **No test may power off the machine running it.**
 
 ---
 
 ## 11. Scope boundaries
 
-**In this PR:** backend, socket event, indicator, config file and CLI flags.
+**In this PR:** backend, socket events, indicator, config file and CLI flags.
 
 **Not in this PR:**
 
 - *Settings UI.* `SettingsView.tsx` does not exist on `upstream/main`; it lives on
-  `test/pi-full`. Toggles live in `power.json` and CLI flags until then. This mirrors how the
-  weather subsystem shipped — see `environment/config.py:6-9`.
-- *Settings subtabs (PR 2).* Weather / Interface tabbed shell, hosting `BatterySettings`.
+  `test/pi-full`. Toggles live in `power.json` and CLI flags until then.
+- *Settings subtabs (PR 2).* Weather / Interface tabbed shell hosting `BatterySettings`.
   Depends on the weather work landing upstream first.
 - *Bubble level UI (PR 3).* The inclinometer backend is upstream as of #199 with no UI
   anywhere. The Interface tab from PR 2 is its natural home.
-- *Other gauges.* INA219, PiSugar, PiJuice. The `Protocol` accommodates them; nothing ships.
+- *Other gauges.* INA219, PiSugar, PiJuice. The Protocols accommodate them; nothing ships.
 
 ---
 
 ## 12. Open items
 
-1. **Loaded-on-battery rail margin is unmeasured.** The 5.211 V baseline is idle. The
-   thresholds in §5.2 come from Raspberry Pi's documented floor and the firmware's own
-   flags, so they do not depend on this — but the real margin under load is unknown, and
-   the system that would be measured today lacks the IWR6843 the power budget assumes.
-   The service collects exactly this data once running.
-2. **MAX1704x SOC accuracy on a 4P pack is unquantified.** ModelGauge is fitted to a single
-   LiPo cell. `percent` may need to come from a voltage curve instead. Deciding this needs
-   the discharge data from item 1.
-3. **PLD line on non-Geekworm HATs.** GPIO 6 is verified for the X1209 only. Other boards
-   report `unknown` and lose on-battery detection, which degrades §5.3 to "no pack health".
+1. **Loaded-on-battery rail margin is unmeasured.** The 5.211 V baseline is idle. §5.2's
+   5.0 / 4.9 V are OpenFlight margins, not measured ones, and the system available to measure
+   today lacks the IWR6843 the power budget assumes. The service collects this data once
+   running; revisit the defaults with a real session in hand.
+2. **ModelGauge SOC accuracy on a 4P pack is unquantified.** It is fitted to a single LiPo
+   cell. It is used for display only — no decision depends on it, since §5.3 works on voltage
+   — so an inaccuracy is cosmetic rather than dangerous. Quantifying it needs item 1's data.
+3. **PLD is verified for the X1209 only.** Other boards report `unknown` source, which per
+   §5.3 means pack warnings still work but shutdown never arms. Adding a board profile is a
+   config entry, not code.
