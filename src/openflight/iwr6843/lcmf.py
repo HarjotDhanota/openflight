@@ -321,9 +321,7 @@ def measured_channels(
     agreement metric reported to the caller.
     """
     return {
-        name: float(value)
-        for name, value in components.items()
-        if evidence.get(name) is not None
+        name: float(value) for name, value in components.items() if evidence.get(name) is not None
     }
 
 

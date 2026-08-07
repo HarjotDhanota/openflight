@@ -370,6 +370,7 @@ class SessionLogger:
         impact_timestamp: Optional[float] = None,
         player_name: Optional[str] = None,
         inclinometer: Optional[Dict] = None,
+        environment: Optional[Dict] = None,
     ):
         """
         Log a detected shot with all metrics.
@@ -476,6 +477,12 @@ class SessionLogger:
             data["pipeline_ms"] = pipeline_ms
         if inclinometer is not None:
             data["inclinometer"] = inclinometer
+        # Air density and where it came from. Without these a logged carry
+        # cannot be re-derived, and two sessions cannot be compared. Omitted
+        # entirely when no weather is configured, so those logs stay identical
+        # to what this repo wrote before the subsystem existed.
+        if environment is not None:
+            data["environment"] = environment
 
         self._write_entry("shot_detected", data)
 

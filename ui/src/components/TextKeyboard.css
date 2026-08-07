@@ -1,0 +1,176 @@
+/* On-screen keyboard for the location search.
+ *
+ * Ten keys across an 800px panel leaves ~72px each, comfortably finger-sized.
+ * Inherits .keypad__key from NumericKeypad.css so both keyboards feel the same
+ * under a thumb; only the layout differs.
+ */
+.text-keyboard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: var(--space-sm);
+}
+
+/* Wider than the numeric keypad's panel: ten keys need the room. */
+.text-keyboard__panel {
+  width: min(34rem, 100%);
+}
+
+.text-keyboard__entry {
+  display: flex;
+  align-items: center;
+  min-height: 2.2rem;
+  font-size: 1.5rem;
+  color: var(--color-cream);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Shows the box is live and where the next character lands. Without it a
+   touch keyboard with no focus ring feels unresponsive. */
+.text-keyboard__caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.4rem;
+  margin-left: 2px;
+  background: var(--color-gold);
+  animation: text-keyboard-blink 1.06s step-end infinite;
+}
+
+@keyframes text-keyboard-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .text-keyboard__caret {
+    animation: none;
+  }
+}
+
+/* Results live above the keys inside the fixed panel, and the area holds its
+   height whether or not there are any -- so arriving matches never shove the
+   keyboard down mid-type. */
+.text-keyboard__results {
+  min-height: 6.5rem;
+  max-height: 6.5rem;
+  overflow-y: auto;
+}
+
+.text-keyboard__row {
+  display: flex;
+  gap: 0.3rem;
+  justify-content: center;
+}
+
+.text-keyboard__key {
+  flex: 1;
+  min-width: 0;
+  min-height: 46px;
+  font-size: 1.05rem;
+  padding: 0;
+}
+
+/* Shift and backspace sit at the ends of the shortest row; giving them extra
+   width keeps the letter keys aligned with the rows above. */
+.text-keyboard__key--mod {
+  flex: 1.4;
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+}
+
+.text-keyboard__key--on {
+  background: rgba(212, 175, 55, 0.22);
+  border-color: rgba(212, 175, 55, 0.5);
+  color: var(--color-gold);
+}
+
+.text-keyboard__key--space {
+  flex: 4;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-transform: lowercase;
+}
+
+.text-keyboard__key--done {
+  flex: 1.6;
+  background: rgba(212, 175, 55, 0.16);
+  border-color: rgba(212, 175, 55, 0.45);
+  color: var(--color-gold);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+/* Location search results */
+.location-search__results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: var(--space-xs, 0.35rem);
+}
+
+.location-search__result {
+  min-height: 44px;
+  padding: 0 var(--space-sm);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(245, 240, 230, 0.14);
+  background: rgba(245, 240, 230, 0.04);
+  color: var(--color-cream);
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.location-search__result:active {
+  background: rgba(212, 175, 55, 0.16);
+  border-color: rgba(212, 175, 55, 0.4);
+}
+
+/* The elevation is why picking from this list beats typing coordinates: it is
+   the term that steers pressure and the one nobody knows offhand. */
+.location-search__elevation {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.location-search__empty {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  opacity: 0.7;
+  padding: var(--space-xs, 0.35rem) 0;
+}
+
+/* The panel is 480px tall. Everything shrinks rather than letting Done fall
+   off the bottom, which would trap the user in the keyboard. */
+@media (max-height: 560px) {
+  .text-keyboard__key {
+    min-height: 34px;
+    font-size: 0.9rem;
+  }
+
+  .text-keyboard__entry {
+    min-height: 1.8rem;
+    font-size: 1.2rem;
+  }
+
+  .text-keyboard__caret {
+    height: 1.1rem;
+  }
+
+  .text-keyboard__results {
+    min-height: 4.5rem;
+    max-height: 4.5rem;
+  }
+
+  .location-search__result {
+    min-height: 36px;
+  }
+}

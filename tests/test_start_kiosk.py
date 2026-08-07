@@ -285,3 +285,34 @@ def test_iwr6843_azimuth_offset_is_forwarded():
 def test_iwr6843_azimuth_offset_omitted_by_default():
     command = _dry_run("--iwr6843").stdout.strip()
     assert "--iwr6843-azimuth-offset-deg" not in command
+
+
+def test_weather_flags_are_forwarded():
+    """CLI air-density overrides only worked when invoking server.py directly;
+    the kiosk script is the documented entry point."""
+    result = _dry_run(
+        "--weather-temp-c",
+        "36",
+        "--weather-elevation-m",
+        "9",
+        "--weather-humidity",
+        "25",
+    )
+    command = result.stdout.strip()
+
+    assert "--weather-temp-c 36" in command
+    assert "--weather-elevation-m 9" in command
+    assert "--weather-humidity 25" in command
+
+
+def test_weather_density_override_is_forwarded():
+    result = _dry_run("--weather-density", "1.05")
+
+    assert "--weather-density 1.05" in result.stdout.strip()
+
+
+def test_no_weather_flags_leaves_the_command_untouched():
+    """Everyone who does not use these must get exactly the old command."""
+    command = _dry_run().stdout.strip()
+
+    assert "--weather" not in command

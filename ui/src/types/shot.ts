@@ -34,6 +34,9 @@ export interface Shot {
   humidity_pct?: number | null;
   air_density_kg_m3?: number | null;
   air_density_source?: string | null;
+  // Same carry re-run against fixed reference air, so sessions on different
+  // days compare. Null when disabled or when today's air is within 0.5% of it.
+  carry_standard_yards?: number | null;
   swing_speed_duration_ms?: number;
   swing_speed_reading_count?: number;
   swing_speed_trigger_mph?: number;

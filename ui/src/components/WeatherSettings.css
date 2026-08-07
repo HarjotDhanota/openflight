@@ -1,0 +1,460 @@
+/* Air density settings */
+.weather-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  background: var(--color-bg-card);
+  border: 1px solid rgba(245, 240, 230, 0.06);
+  border-radius: var(--radius-lg);
+  padding: var(--space-md);
+  color: var(--color-cream);
+}
+
+.weather-settings--loading {
+  opacity: 0.6;
+}
+
+.weather-settings__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.weather-settings__header h2 {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.weather-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+}
+
+.weather-badge--ok {
+  background: rgba(90, 190, 120, 0.15);
+  color: #7fd89a;
+}
+
+/* Uncorrected carry is a real accuracy problem, not a neutral state. */
+.weather-badge--warn {
+  background: rgba(230, 160, 60, 0.18);
+  color: #f0b866;
+}
+
+.weather-readout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: var(--space-sm);
+}
+
+.weather-value {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.weather-value__label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.55;
+}
+
+.weather-value__number {
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.weather-warning {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: #f0b866;
+  background: rgba(230, 160, 60, 0.08);
+  border-left: 2px solid rgba(230, 160, 60, 0.5);
+  padding: var(--space-sm);
+  border-radius: var(--radius-sm);
+}
+
+.weather-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  opacity: 0.6;
+}
+
+.weather-modes {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+}
+
+.weather-modes legend {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.55;
+  padding: 0;
+  margin-bottom: var(--space-xs);
+}
+
+.weather-modes label,
+.weather-check {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+  /* Touch target for the 7" kiosk screen. */
+  min-height: 44px;
+}
+
+.weather-location,
+.weather-manual {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.weather-location__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.weather-location__row button {
+  min-height: 44px;
+  padding: 0 var(--space-md);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(245, 240, 230, 0.18);
+  background: rgba(245, 240, 230, 0.06);
+  color: var(--color-cream);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.weather-location__row button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.weather-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.weather-field__label {
+  font-size: 0.8rem;
+}
+
+.weather-field__hint {
+  font-size: 0.72rem;
+  opacity: 0.55;
+  line-height: 1.35;
+}
+
+/* Density altitude, the headline figure. "Plays like 2,700 ft" is checkable
+   against experience in a way "-7.6%" is not, so it gets the size and the
+   raw numbers below get the small print. */
+.weather-plays-like {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: var(--space-sm) 0;
+  border-radius: var(--radius-md);
+  background: rgba(212, 175, 55, 0.06);
+  border: 1px solid rgba(212, 175, 55, 0.18);
+}
+
+.weather-plays-like__label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+}
+
+.weather-plays-like__value {
+  font-family: var(--font-display);
+  font-size: 2rem;
+  line-height: 1.1;
+  color: var(--color-gold);
+  font-variant-numeric: tabular-nums;
+}
+
+.weather-plays-like__hint {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  opacity: 0.85;
+  text-align: center;
+}
+
+/* Location: the place, then the three things you can do with it. */
+.weather-location__place {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  min-height: 40px;
+}
+
+.weather-location__name {
+  font-size: 0.95rem;
+  color: var(--color-cream);
+}
+
+/* Elevation reads as a fact about the place, not another box to fill in --
+   the search fills it in. Tapping still corrects it. */
+.weather-location__elevation {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 0 var(--space-sm);
+  border-radius: var(--radius-sm);
+  border: 1px dashed rgba(245, 240, 230, 0.25);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.weather-location__elevation:active {
+  border-color: rgba(212, 175, 55, 0.5);
+  color: var(--color-gold);
+}
+
+.weather-location__actions {
+  display: flex;
+  gap: var(--space-xs, 0.35rem);
+}
+
+.weather-location__actions button {
+  flex: 1;
+  min-height: 44px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(245, 240, 230, 0.18);
+  background: rgba(245, 240, 230, 0.06);
+  color: var(--color-cream);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.weather-location__actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.weather-location__actions button:active:not(:disabled) {
+  background: rgba(212, 175, 55, 0.16);
+  border-color: rgba(212, 175, 55, 0.4);
+}
+
+/* Stepper + box. The kiosk panel is touch-only and Raspberry Pi OS Chromium
+   ships without an on-screen keyboard, so the buttons are the primary input
+   here, not a convenience. They are sized to the 44px touch target the rest of
+   this screen uses. */
+.weather-field__control {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-xs, 0.25rem);
+}
+
+/* The value is a button, not an input: tapping it opens the in-app keypad.
+   A real <input type="number"> is dead weight on this hardware -- Raspberry Pi
+   OS Chromium has no on-screen keyboard to summon. */
+.weather-field__value {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 var(--space-sm);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(245, 240, 230, 0.18);
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--color-cream);
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.weather-field__value:active {
+  border-color: rgba(212, 175, 55, 0.45);
+  background: rgba(212, 175, 55, 0.1);
+}
+
+.weather-field__value--empty {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  opacity: 0.7;
+}
+
+.weather-field__step {
+  flex: 0 0 auto;
+  min-width: 52px;
+  min-height: 44px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(245, 240, 230, 0.18);
+  background: rgba(245, 240, 230, 0.06);
+  color: var(--color-cream);
+  font-size: 1.35rem;
+  line-height: 1;
+  font-weight: 600;
+  cursor: pointer;
+  /* A long press on a stepper should repeat, not select the glyph. */
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+.weather-field__step:active {
+  background: rgba(212, 175, 55, 0.18);
+  border-color: rgba(212, 175, 55, 0.35);
+}
+
+.weather-field input {
+  min-height: 44px;
+  padding: 0 var(--space-sm);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(245, 240, 230, 0.18);
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--color-cream);
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The spinner arrows Chromium draws are far too small for a finger and sit
+   where the +/- buttons already are. */
+.weather-field input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.weather-field input[type='number']::-webkit-outer-spin-button,
+.weather-field input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.weather-standard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  border-top: 1px solid rgba(245, 240, 230, 0.06);
+  padding-top: var(--space-md);
+}
+
+/* Auto-refresh interval. A segmented row rather than a dropdown: four coarse
+   choices, and a native <select> on the kiosk opens a list nobody can dismiss
+   without a keyboard. */
+.weather-refresh {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.weather-refresh__label {
+  font-size: 0.8rem;
+}
+
+.weather-refresh__choices {
+  display: flex;
+  gap: var(--space-xs, 0.35rem);
+}
+
+.weather-refresh__choice {
+  flex: 1;
+  min-height: 44px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(245, 240, 230, 0.18);
+  background: rgba(245, 240, 230, 0.04);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.weather-refresh__choice--on {
+  background: rgba(212, 175, 55, 0.16);
+  border-color: rgba(212, 175, 55, 0.45);
+  color: var(--color-gold);
+  font-weight: 600;
+}
+
+/* Reference preset. Two conventions exist and disagree; naming both in the UI
+   is also the shortest answer to "why 77 and not 59". */
+.weather-preset {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.weather-preset__label {
+  font-size: 0.8rem;
+}
+
+.weather-preset__choices {
+  display: flex;
+  gap: var(--space-xs, 0.35rem);
+}
+
+/* Two lines: the name, then every condition it fixes. Tapping a preset resets
+   elevation and humidity too, so naming only the temperature would hide a
+   custom elevation being thrown away. */
+.weather-preset__choice {
+  flex: 1;
+  min-width: 0;
+  min-height: 52px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 0.3rem 0.4rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(245, 240, 230, 0.18);
+  background: rgba(245, 240, 230, 0.04);
+  color: var(--text-secondary);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.weather-preset__name {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.weather-preset__conditions {
+  font-size: 0.68rem;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.weather-preset__choice--on {
+  background: rgba(212, 175, 55, 0.16);
+  border-color: rgba(212, 175, 55, 0.45);
+  color: var(--color-gold);
+  font-weight: 600;
+}
+
+/* A reading over an hour old is worth noticing, not just reporting. */
+.weather-hint--stale {
+  color: #f0b866;
+  opacity: 0.9;
+}

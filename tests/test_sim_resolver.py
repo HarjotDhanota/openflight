@@ -1,26 +1,32 @@
 """Tests for sim.resolver — the shared fallback table + provenance."""
+
 import math
 from datetime import datetime
 
 import pytest
 
 from openflight.launch_monitor import ClubType, Shot
-from openflight.sim.resolver import resolve_shot, SPIN_MODEL_RPM
+from openflight.sim.resolver import SPIN_MODEL_RPM, resolve_shot
 from openflight.sim.types import IncompleteShotError, PlayerState
 
 
 def _shot(**kw) -> Shot:
-    base = dict(ball_speed_mph=140.0, timestamp=datetime(2026, 4, 26, 12, 0, 0),
-                club=ClubType.DRIVER)
+    base = dict(
+        ball_speed_mph=140.0, timestamp=datetime(2026, 4, 26, 12, 0, 0), club=ClubType.DRIVER
+    )
     base.update(kw)
     return Shot(**base)
 
 
 def test_full_measured_shot():
     shot = _shot(
-        club_speed_mph=110.0, launch_angle_vertical=12.0,
-        launch_angle_horizontal=1.5, spin_rpm=2500.0, spin_confidence=0.9,
-        spin_axis_deg=-3.0, club_path_deg=0.5,
+        club_speed_mph=110.0,
+        launch_angle_vertical=12.0,
+        launch_angle_horizontal=1.5,
+        spin_rpm=2500.0,
+        spin_confidence=0.9,
+        spin_axis_deg=-3.0,
+        club_path_deg=0.5,
     )
     r = resolve_shot(shot, PlayerState())
     assert r.ball_speed_mph == 140.0
@@ -32,8 +38,17 @@ def test_full_measured_shot():
     assert math.isclose(r.side_spin_rpm, 2500 * math.sin(math.radians(-3.0)), rel_tol=0.01)
     assert r.club_speed_mph == 110.0
     assert r.club_path_deg == 0.5
-    for f in ("ball_speed", "vla", "hla", "total_spin", "spin_axis",
-              "back_spin", "side_spin", "club_speed", "club_path"):
+    for f in (
+        "ball_speed",
+        "vla",
+        "hla",
+        "total_spin",
+        "spin_axis",
+        "back_spin",
+        "side_spin",
+        "club_speed",
+        "club_path",
+    ):
         assert r.provenance[f] == "measured", f
 
 
@@ -109,3 +124,65 @@ def test_shot_number_uses_player_state():
     ps.next_shot_number()  # consume one
     r = resolve_shot(_shot(spin_rpm=2500.0, spin_confidence=0.9), ps)
     assert r.shot_number == 2
+
+
+class TestLocalAirNeverReachesTheSimulator:
+    """The simulator owns atmospherics for its own virtual venue.
+
+    OpenFlight measures launch data; GSPro and OpenGolfSim re-fly the ball from
+    it using the course altitude and in-game weather. A carry pre-corrected for
+    the air in the player's room would be applied on top of that -- a second
+    correction for a place the player is not playing. These pin the boundary,
+    end to end, so it cannot be crossed again by a change further upstream.
+    """
+
+    def _measured(self, **kw):
+        return _shot(
+            club_speed_mph=110.0,
+            launch_angle_vertical=12.0,
+            launch_angle_horizontal=1.5,
+            spin_rpm=2500.0,
+            spin_confidence=0.9,
+            spin_axis_deg=-3.0,
+            club_path_deg=0.5,
+            **kw,
+        )
+
+    def test_resolved_carry_ignores_measured_density(self):
+        baseline = resolve_shot(self._measured(), PlayerState()).carry_yards
+
+        thin = self._measured()
+        thin.air_density_kg_m3 = 0.97  # Denver-thin air in the player's room
+
+        assert resolve_shot(thin, PlayerState()).carry_yards == pytest.approx(baseline)
+
+    def test_the_gspro_wire_payload_carries_the_uncorrected_figure(self):
+        import json
+
+        from openflight.gspro.codec import GSProCodec
+
+        codec = GSProCodec(device_id="openflight-test", units="Yards", name="gspro")
+
+        def carry_on_the_wire(shot):
+            frame = codec.build_shot(resolve_shot(shot, PlayerState()))
+            return json.loads(frame.decode("utf-8"))["BallData"]["CarryDistance"]
+
+        baseline = carry_on_the_wire(self._measured())
+
+        thin = self._measured()
+        thin.air_density_kg_m3 = 0.97
+
+        assert carry_on_the_wire(thin) == pytest.approx(baseline)
+
+    def test_launch_data_is_what_the_simulator_gets_and_it_is_unchanged(self):
+        """The measured quantities must pass through untouched -- they are the
+        only thing OpenFlight actually observed."""
+        thin = self._measured()
+        thin.air_density_kg_m3 = 0.97
+
+        resolved = resolve_shot(thin, PlayerState())
+
+        assert resolved.ball_speed_mph == 140.0
+        assert resolved.vla == 12.0
+        assert resolved.hla == 1.5
+        assert resolved.total_spin_rpm == 2500.0

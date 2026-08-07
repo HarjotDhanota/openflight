@@ -1,16 +1,12 @@
 import { useMemo } from 'react';
-import type { Shot, SpinQuality } from '../types/shot';
-import { computeSwingSpeedStats, getSwingSpeedMph, isSwingSpeedShot } from '../types/shot';
+import { displayCarryYards, type Shot, type SpinQuality } from '../types/shot';
 import { useUnitPreference } from '../state/useUnitPreference';
 import { formatCarryRange, formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../utils/units';
 import './ShotDisplay.css';
 
 interface ShotDisplayProps {
   shot: Shot | null;
-  shots?: Shot[];
   animate?: boolean;
-  activePlayerName?: string;
-  activeTrainingImplement?: string;
 }
 
 const GAUGE_MIN = 0;
@@ -87,6 +83,7 @@ function MetricCard({
   unit,
   label,
   subtext,
+  note,
   variant = 'default',
   confidence,
 }: {
@@ -94,6 +91,8 @@ function MetricCard({
   unit?: string;
   label: string;
   subtext?: string;
+  /** Optional second, smaller line under subtext. Used for the standard carry. */
+  note?: string;
   variant?: 'default' | 'primary' | 'secondary' | 'spin';
   confidence?: SpinQuality | null;
 }) {
@@ -105,6 +104,7 @@ function MetricCard({
       </div>
       <span className="metric-card__label">{label}</span>
       {subtext && <span className="metric-card__subtext">{subtext}</span>}
+      {note && <span className="metric-card__note">{note}</span>}
       {confidence && (
         <div className={`metric-card__confidence metric-card__confidence--${confidence}`}>
           {confidence !== 'experimental' && (
@@ -132,29 +132,23 @@ function getLaunchAngleQuality(confidence: number | null): 'high' | 'medium' | '
   return 'low';
 }
 
-export function ShotDisplay({
-  shot,
-  shots = [],
-  animate = false,
-  activePlayerName,
-  activeTrainingImplement,
-}: ShotDisplayProps) {
+export function ShotDisplay({ shot, animate = false }: ShotDisplayProps) {
   const { unitSystem } = useUnitPreference();
   const carryRange = useMemo(() => {
     if (!shot) return null;
     return formatCarryRange(shot.carry_range, unitSystem);
   }, [shot, unitSystem]);
-  const swingStats = useMemo(
-    () =>
-      computeSwingSpeedStats(shots, {
-        playerName: activePlayerName,
-        trainingImplement: activeTrainingImplement,
-      }),
-    [shots, activePlayerName, activeTrainingImplement]
-  );
 
-  const displayCarry = shot?.carry_spin_adjusted ?? shot?.estimated_carry_yards ?? 0;
+  const displayCarry = shot ? displayCarryYards(shot) : 0;
   const carrySubtext = shot?.carry_spin_adjusted ? 'spin-adjusted' : carryRange || undefined;
+  // Second carry at fixed reference conditions. The server only sends it when
+  // the user wants it AND today's air actually differs, so its presence is the
+  // whole condition -- no extra flag needed here.
+  const standardCarry = shot?.carry_standard_yards;
+  const carryNote =
+    standardCarry != null
+      ? `std ${formatDistance(standardCarry, unitSystem, 0)} ${getDistanceUnit(unitSystem)}`
+      : undefined;
 
   if (!shot) {
     return (
@@ -168,57 +162,8 @@ export function ShotDisplay({
             </div>
             <div className="golf-ball-indicator__shadow" />
           </div>
-          <p className="shot-display__waiting-text">Ready</p>
-          <p className="shot-display__waiting-hint">Start a shot or swing speed session</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (isSwingSpeedShot(shot)) {
-    const lastSpeed = getSwingSpeedMph(shot);
-    const readingDetail =
-      shot.swing_speed_reading_count !== undefined ? `${shot.swing_speed_reading_count} radar readings` : undefined;
-
-    return (
-      <div className={`shot-display shot-display--swing-speed ${animate ? 'shot-display--animate' : ''}`}>
-        <div className="shot-display__layout">
-          <div className="shot-display__primary">
-            <SpeedGauge
-              speedMph={lastSpeed}
-              label="Last Swing"
-              displayValue={formatSpeed(lastSpeed, unitSystem, 1)}
-              unit={getSpeedUnit(unitSystem)}
-            />
-          </div>
-
-          <div className="shot-display__metrics shot-display__metrics--swing-speed">
-            <MetricCard
-              value={formatSpeed(swingStats.best_speed_mph, unitSystem, 1)}
-              unit={getSpeedUnit(unitSystem)}
-              label="Best"
-              subtext="player + implement"
-              variant="primary"
-            />
-            <MetricCard
-              value={formatSpeed(swingStats.avg_speed_mph, unitSystem, 1)}
-              unit={getSpeedUnit(unitSystem)}
-              label="Average"
-              subtext={`${swingStats.count} swings`}
-              variant="secondary"
-            />
-            <MetricCard value={swingStats.count} label="Swing Count" subtext={readingDetail} variant="secondary" />
-            <MetricCard
-              value={shot.training_implement_label ?? shot.club}
-              label="Implement"
-              subtext={
-                shot.swing_speed_trigger_mph !== undefined
-                  ? `${formatSpeed(shot.swing_speed_trigger_mph, unitSystem, 1)} ${getSpeedUnit(unitSystem)} trigger`
-                  : 'selected'
-              }
-              variant="secondary"
-            />
-          </div>
+          <p className="shot-display__waiting-text">Ready for your shot</p>
+          <p className="shot-display__waiting-hint">Position ball in front of radar</p>
         </div>
       </div>
     );
@@ -245,6 +190,7 @@ export function ShotDisplay({
             unit={getDistanceUnit(unitSystem)}
             label="Est. Carry"
             subtext={carrySubtext}
+            note={carryNote}
             variant="primary"
           />
           <MetricCard

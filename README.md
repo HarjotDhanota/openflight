@@ -272,6 +272,77 @@ There is deliberately **no carry-calibration multiplier**. If distances look
 wrong, the cause is almost always estimated rather than measured spin — check
 `spin_source` on the shot.
 
+Carry scales with air density. Before this existed every OpenFlight number
+assumed ISA sea level — 15 °C, 1013.25 hPa, dry — which is worth about 5.6 yd
+on a driver on a 97 °F afternoon at a **sea-level** venue, and roughly 14 yd in
+Denver. Open **Settings → Conditions** and pick a source:
+
+| Source        | How it is obtained                     | Notes                                                     |
+| ------------- | -------------------------------------- | --------------------------------------------------------- |
+| Manual        | You type temperature/pressure/humidity | Enter **absolute station pressure**, not the sea-level value a weather app shows |
+| Local weather | Open-Meteo, fetched when you tap       | Outdoor grid-cell average; no polling, no background I/O  |
+| No correction | ISA sea level                          | Exactly the pre-2026 behaviour                            |
+
+An on-unit BME280 will outrank both when its driver lands — an API reports
+outdoor conditions, and in a 22 °C garage on a 36 °C day that "correction" is
+worse than none. That is a separate change; nothing here claims sensor support
+that does not exist yet.
+
+Playing indoors keeps the fetched **pressure** (buildings are not pressure
+vessels) and replaces only the **temperature**.
+
+Local weather has an **auto-refresh** interval — **Off / 15 / 30 / 60 minutes**. It
+only ever runs once you have fetched at least once yourself, so a fresh install
+makes no unprompted network request, and it only applies in Local weather mode.
+Worth turning on for a long session: an evening can drop 5 °C over two hours,
+which is about 1.3 yd on a driver.
+
+Set your location by **searching for a place name or postal code**. Detection
+from your public IP is offered too, but it follows a VPN to its exit node
+rather than following you, so search is the reliable path. Picking a search
+result also fills in your elevation, which is what tells Open-Meteo to report
+pressure for your ground rather than its model's — 100 m out is about a yard on
+a driver.
+
+Manual entry and local weather are **independent set-ups**. Switch to manual,
+type whatever you like, and switching back leaves local exactly as it was.
+
+**With nothing configured, every carry number is unchanged.**
+
+Optionally, a second *standard conditions* carry is shown under the main one —
+the same shot re-flown in fixed reference air, so sessions on different days
+are comparable. It corrects for density only. Wind is never measured by either
+radar, which is why this is called "standard" rather than "normalized".
+
+Two conventions exist for what "standard conditions" means, and they disagree,
+so both are offered:
+
+| Reference | Conditions | ρ | Use it when |
+| --------- | ---------- | - | ----------- |
+| **ISA** (default) | 15 °C, sea level, dry | 1.225 | You want one reference throughout — this is the air the "vs ISA sea level" figure and the density altitude are measured against, so "plays like 0 ft" means today matches the reference |
+| **TrackMan** | 25 °C, sea level, 50% RH | 1.1769 | You want the figure comparable to a TrackMan session |
+
+Temperature, elevation and humidity are all adjustable; a reference matching
+neither preset reads as *Custom*. If you always play at altitude, setting your
+own elevation compares you against yourself rather than against sea level.
+
+TrackMan does not publish its reference humidity — 50% is our assumption, and
+is worth under a yard either way.
+
+There is deliberately **no carry-calibration multiplier**. If your distances
+look wrong, the cause is almost always estimated rather than measured spin —
+check `spin_source` on the shot. Faking an elevation to make numbers match (a
+common habit with other units) corrupts every subsequent carry figure, so
+entering an implausibly high elevation warns rather than silently complying.
+
+For headless or bench use, the same values can be forced for one session
+without touching saved settings:
+
+```bash
+scripts/start-kiosk.sh --weather-temp-c 36 --weather-elevation-m 9 --weather-humidity 25
+scripts/start-kiosk.sh --weather-density 1.05     # or set density directly
+```
+
 ### Python API
 
 ```python
@@ -390,4 +461,8 @@ GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later) - see LICENS
 ## Acknowledgments
 
 - [OmniPreSense](https://omnipresense.com/) for the OPS243-A radar and documentation
+- Weather data by [Open-Meteo](https://open-meteo.com/), licensed
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+- Place-name and postal-code search via Open-Meteo's Geocoding API, which is
+  built on data from [GeoNames](https://www.geonames.org/)
 - The golf hacker community for inspiration

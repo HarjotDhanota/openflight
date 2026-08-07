@@ -19,6 +19,8 @@ import type {
   SimShotInfo,
   SimStatus,
   EnvironmentReading,
+  LocationResult,
+  WeatherSettings,
 } from '../types/socket';
 import { playSwingCapturedCue } from '../utils/audioCue';
 import { getServerOrigin } from '../utils/serverOrigin';
@@ -54,12 +56,25 @@ class SocketService {
       this.socket?.emit('get_session');
       this.socket?.emit('get_trigger_status');
       this.socket?.emit('get_radar_config');
-      this.socket?.emit('get_environment');
+      this.socket?.emit('get_weather');
     });
 
-    // Pushed whenever a rounded value moves, not on every poll.
+    // Pushed on fetches and whenever a sensor poll moves a rounded value.
     this.socket.on('environment', (data: EnvironmentReading) => {
       useEnvironmentStore.getState().setReading(data);
+      useEnvironmentStore.getState().setRefreshing(false);
+    });
+
+    this.socket.on('weather_settings', (data: WeatherSettings) => {
+      useEnvironmentStore.getState().setSettings(data);
+    });
+
+    this.socket.on('weather_error', (data: { reason: string }) => {
+      useEnvironmentStore.getState().setError(data.reason);
+    });
+
+    this.socket.on('location_results', (data: { query: string; results: LocationResult[] }) => {
+      useEnvironmentStore.getState().setLocationResults(data.query, data.results);
     });
 
     this.socket.on('disconnect', () => {
@@ -241,6 +256,41 @@ class SocketService {
 
   toggleCameraStream() {
     this.socket?.emit('toggle_camera_stream');
+  }
+
+  /**
+   * Send only the fields the user just changed. The server merges them, so a
+   * partial payload cannot clobber a value that arrived while the user was
+   * editing -- coordinates from an in-flight location fetch, most of all.
+   */
+  setWeatherSettings(patch: Partial<WeatherSettings>) {
+    this.socket?.emit('set_weather_settings', patch);
+  }
+
+  /**
+   * Ask the server to look up the location and fetch current conditions.
+   * Only ever on user action -- there is no polling.
+   */
+  refreshWeather() {
+    this.socket?.emit('refresh_weather');
+  }
+
+  /**
+   * Re-detect from the public IP, replacing whatever location is set.
+   * Distinct from refreshWeather, which re-fetches the location already chosen.
+   */
+  detectLocation() {
+    this.socket?.emit('detect_location');
+  }
+
+  /** Search for a location by name or postal code. */
+  searchLocations(query: string) {
+    this.socket?.emit('search_locations', { query });
+  }
+
+  /** Adopt a searched location, which also fetches its current conditions. */
+  selectLocation(result: LocationResult) {
+    this.socket?.emit('select_location', result);
   }
 }
 
