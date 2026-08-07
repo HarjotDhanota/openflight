@@ -17,7 +17,9 @@ repos:
 
       - id: eslint
         name: eslint
-        entry: npm run lint
+        # pre-commit runs hooks from the repo root, where there is no
+        # package.json -- it lives in ui/. Matches `make lint`.
+        entry: bash -c 'cd ui && npm run lint'
         language: system
         files: ^ui/src/.*\.(ts|tsx)$
         pass_filenames: false
