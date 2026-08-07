@@ -1,6 +1,19 @@
 # Battery Status Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Implement task-by-task, in order. Each task is
+> self-contained and ends with its own commit; do not start a task before its
+> predecessor's tests pass. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> Follow strict TDD as written: the failing test comes first, you run it and
+> watch it fail, then you write the minimum code to pass. The tests encode
+> decisions that are not obvious from the code — several of them exist because
+> a design audit caught a safety bug, and weakening a test to make an
+> implementation pass will silently reintroduce it.
+>
+> Design rationale lives in
+> `docs/superpowers/specs/2026-08-07-battery-status-design.md`. Read it before
+> Task 4 (floating-pin trust), Task 6 (why thermal throttle bits are excluded)
+> and Task 8 (the five shutdown interlocks).
 
 **Goal:** Show remaining battery percentage and 5V-rail supply health in the UI, with an
 opt-in automatic shutdown before the cells are deep-discharged.
