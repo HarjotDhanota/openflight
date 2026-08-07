@@ -1058,10 +1058,21 @@ def test_parse_throttled_garbage_returns_none():
 
 
 def test_undervoltage_mask_excludes_thermal_bits():
-    # 0x2/0x4/0x8 are frequency and thermal; 0x20000+ are their sticky twins.
+    # get_throttled layout:
+    #   bit 0  0x00001  undervoltage now          <- supply
+    #   bit 1  0x00002  ARM frequency capped
+    #   bit 2  0x00004  currently throttled
+    #   bit 3  0x00008  soft temperature limit
+    #   bit 16 0x10000  undervoltage has occurred <- supply
+    #   bit 17 0x20000  frequency capping has occurred
+    #   bit 18 0x40000  throttling has occurred
+    #   bit 19 0x80000  soft temp limit has occurred
     assert UNDERVOLTAGE_MASK == 0x10001
-    assert 0x50006 & UNDERVOLTAGE_MASK == 0      # thermal only -> clean rail
-    assert 0x10000 & UNDERVOLTAGE_MASK != 0      # sticky undervoltage -> not
+    # 0x60006 = bits 1, 2, 17, 18. Everything thermal and frequency, nothing
+    # supply. Note 0x5xxxx would include bit 16 and is NOT thermal-only.
+    assert 0x60006 & UNDERVOLTAGE_MASK == 0
+    assert 0x10000 & UNDERVOLTAGE_MASK != 0      # sticky undervoltage -> caught
+    assert 0x00001 & UNDERVOLTAGE_MASK != 0      # live undervoltage -> caught
 
 
 def test_read_returns_ok_with_parsed_values():
@@ -1265,8 +1276,10 @@ def test_live_undervoltage_forces_red():
 
 
 def test_thermal_throttling_does_not_affect_rail_health():
-    # 0x50006: frequency capped + throttled + their sticky twins. No undervoltage.
-    assert rail_level(rail(5.21, throttled=0x50006), CONFIG) == "green"
+    # 0x60006 = bits 1, 2, 17, 18: frequency capped and throttled, plus their
+    # sticky twins. No undervoltage bit, so the rail is healthy -- which is the
+    # normal state for a sealed enclosure on a hot range.
+    assert rail_level(rail(5.21, throttled=0x60006), CONFIG) == "green"
 
 
 def test_rail_absent_is_unknown():
