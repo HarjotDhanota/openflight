@@ -134,11 +134,14 @@ class TestWithASensor:
         assert shot.air_density_source == "bme280"
 
     def test_the_simulator_is_given_the_measured_density(self, quiet_server, monkeypatch):
-        seen = {}
+        """The FIRST simulate call is today's carry and must get the measured
+        density. A second call may follow with the reference density -- that
+        is the standard-conditions carry doing its job, not a leak."""
+        calls = []
         real = server_module.simulate
 
         def spy(conditions, air_density=AIR_DENSITY_STD, **kwargs):
-            seen["air_density"] = air_density
+            calls.append(air_density)
             return real(conditions, air_density=air_density, **kwargs)
 
         monkeypatch.setattr(server_module, "simulate", spy)
@@ -149,8 +152,13 @@ class TestWithASensor:
 
         on_shot_detected(a_shot(launch_angle_vertical=12.0, spin_rpm=2700.0, spin_confidence=0.9))
 
-        assert seen["air_density"] == pytest.approx(0.970, abs=0.005)
-        assert seen["air_density"] != AIR_DENSITY_STD
+        assert calls[0] == pytest.approx(0.970, abs=0.005)
+        assert calls[0] != AIR_DENSITY_STD
+        # Any further call is the reference re-fly, which must NOT use today's air.
+        for reference_call in calls[1:]:
+            assert reference_call == pytest.approx(
+                server_module.environment_provider.standard_density(), abs=0.001
+            )
 
 
 class TestTheSimBoundary:

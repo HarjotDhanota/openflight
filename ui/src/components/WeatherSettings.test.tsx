@@ -10,6 +10,7 @@ const reading = (overrides: Partial<EnvironmentReading> = {}): EnvironmentReadin
   temp_c: 36.1,
   pressure_hpa: 1010.2,
   humidity_pct: 25,
+  humidity_assumed: false,
   age_s: 120,
   deviation_pct: -7.6,
   density_altitude_ft: 2685,

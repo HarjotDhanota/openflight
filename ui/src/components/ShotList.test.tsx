@@ -31,7 +31,7 @@ const shot = (overrides: Partial<Shot> = {}): Shot =>
 
 describe('ShotList', () => {
   it('shows the carry computed for the real conditions', () => {
-    const html = renderToString(<ShotList shots={[shot({ carry_spin_adjusted: 262 })]} />);
+    const html = renderToString(<ShotList shots={[shot({ carry_spin_adjusted: 262 })]} onDeleteShot={() => {}} />);
 
     expect(html).toContain('262');
   });
@@ -39,13 +39,15 @@ describe('ShotList', () => {
   it('does not show the uncorrected simulator figure', () => {
     // `estimated_carry_yards` is kept free of local air density for the sim
     // handoff. Showing it here made the Shots tab contradict the Live tab.
-    const html = renderToString(<ShotList shots={[shot({ estimated_carry_yards: 251, carry_spin_adjusted: 262 })]} />);
+    const html = renderToString(
+      <ShotList shots={[shot({ estimated_carry_yards: 251, carry_spin_adjusted: 262 })]} onDeleteShot={() => {}} />
+    );
 
     expect(html).not.toContain('251');
   });
 
   it('falls back to the estimate when no corrected carry exists', () => {
-    const html = renderToString(<ShotList shots={[shot({ carry_spin_adjusted: null })]} />);
+    const html = renderToString(<ShotList shots={[shot({ carry_spin_adjusted: null })]} onDeleteShot={() => {}} />);
 
     expect(html).toContain('251');
   });
@@ -55,7 +57,7 @@ describe('ShotList', () => {
     const hit = shot({ estimated_carry_yards: 251, carry_spin_adjusted: 262 });
 
     const live = renderToString(<ShotDisplay shot={hit} />);
-    const list = renderToString(<ShotList shots={[hit]} />);
+    const list = renderToString(<ShotList shots={[hit]} onDeleteShot={() => {}} />);
 
     expect(live).toContain('262');
     expect(list).toContain('262');

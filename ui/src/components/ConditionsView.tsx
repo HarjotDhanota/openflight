@@ -48,7 +48,9 @@ export function ConditionsViewInner({
         <>
           <div className="conditions__plays-like">
             <span className="conditions__plays-like-label">Plays like</span>
-            <span className="conditions__plays-like-value">{`${reading.density_altitude_ft.toLocaleString()} ft`}</span>
+            <span className="conditions__plays-like-value">
+              {`${(reading.density_altitude_ft ?? 0).toLocaleString()} ft`}
+            </span>
             <span className="conditions__plays-like-hint">
               {reading.deviation_pct < 0
                 ? 'thinner air than standard — the ball flies further'
