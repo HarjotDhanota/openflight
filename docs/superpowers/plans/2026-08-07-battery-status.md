@@ -1458,6 +1458,13 @@ def run(voltages, config=CONFIG, **kw):
     return decisions
 
 
+def test_first_reading_establishes_the_level_with_no_dwell():
+    # Startup must show the truth straight away, not 30 seconds of "unknown".
+    # Every other test in this file has to seed a baseline because of this.
+    assert run([3.5])[0].pack_level == "low"
+    assert run([3.9])[0].pack_level == "ok"
+
+
 def test_level_change_requires_dwell():
     levels = [d.pack_level for d in run([3.9, 3.5, 3.5, 3.5])]
     assert levels == ["ok", "ok", "ok", "low"]   # changes only on the 3rd low read
@@ -1484,14 +1491,26 @@ def test_leaving_a_level_requires_the_deadband():
 
 
 def test_reader_error_resets_dwell():
-    state, config = initial_state(), CONFIG
-    voltages = [(3.5, "ok"), (3.5, "ok"), (None, "error"), (3.5, "ok"), (3.5, "ok")]
+    # The first valid reading establishes a level with no dwell, so the
+    # indicator is right at startup rather than 30 seconds later. That means
+    # this test must seed a healthy baseline first -- starting at 3.5 V would
+    # make "low" the baseline and there would be no transition to observe.
+    state, config = initial_state(), CONFIG        # dwell_samples=3
+    voltages = [
+        (3.9, "ok"),      # 0: baseline established immediately -> "ok"
+        (3.5, "ok"),      # 1: dwell 1 toward "low"
+        (3.5, "ok"),      # 2: dwell 2
+        (None, "error"),  # 3: gauge drops out -> dwell resets to 0
+        (3.5, "ok"),      # 4: dwell 1 again (would have been 3 without the reset)
+        (3.5, "ok"),      # 5: dwell 2 -- still short of 3
+    ]
     last = None
     for index, (volts, status) in enumerate(voltages):
         state, last = step(
             state, snap(volts, t=float(index), pack_status=status), config, float(index)
         )
-    # Without the reset this would have reached "low" on the 5th sample.
+    # A disconnected gauge must not accumulate its way toward a level change,
+    # because at the bottom of the scale that path ends in a shutdown.
     assert last.pack_level == "ok"
 
 
@@ -1727,7 +1746,7 @@ def step(
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_power_policy_dwell.py -v`
-Expected: 8 passed
+Expected: 9 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1780,10 +1799,21 @@ def drive(voltages, config=ARMED, source="battery", state=None):
 
 
 def test_arms_after_dwell_when_all_conditions_hold():
-    state, decision = drive([3.1, 3.1, 3.1])
+    # dwell_samples=2, so the 2nd consecutive eligible sample arms it. Drive
+    # exactly that many: a 3rd sample would leave the last decision as "none",
+    # since arming happens once and the pending shutdown then just persists.
+    state, decision = drive([3.1, 3.1])
     assert decision.shutdown_action == "arm"
     assert state.pending_shutdown is not None
-    assert state.pending_shutdown.deadline_monotonic == 2.0 + 60
+    # Armed at the 2nd sample (now=1.0), not the last.
+    assert state.pending_shutdown.deadline_monotonic == 1.0 + 60
+
+
+def test_arming_is_not_repeated_while_pending():
+    state, decision = drive([3.1, 3.1, 3.1, 3.1])
+    assert decision.shutdown_action == "none"
+    assert state.pending_shutdown is not None
+    assert state.pending_shutdown.deadline_monotonic == 1.0 + 60   # unchanged
 
 
 def test_disabled_never_arms():
@@ -1921,7 +1951,7 @@ and `shutdown_action=action` to the `Decision(...)` construction.
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_power_policy_shutdown.py -v`
-Expected: 10 passed
+Expected: 11 passed
 
 - [ ] **Step 5: Run the whole policy suite for regressions, then commit**
 
