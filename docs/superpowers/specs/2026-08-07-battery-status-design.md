@@ -33,6 +33,14 @@ justify. See §5.3.
 **Detect rail health on anything but a Pi 5.** The rail reader is `vcgencmd pmic_read_adc`,
 which is Pi 5 only. On a Pi 4 the pack half still works and the rail dot is absent.
 
+**Report per-cell state.** The X12-A1 wires its four 18650s in parallel (1S4P), confirmed
+by the measured 3.850 V pack voltage — a series pack would read ~15 V. Parallel cells share
+one terminal voltage and are electrically indistinguishable, so the percentage covers the
+whole 14 Ah pack and nothing can resolve an individual cell. A single degraded cell is held
+up by the other three: the gauge keeps reporting healthy while real runtime shrinks. This is
+physics, not a gap in the implementation — per-cell sense wires would be required, and the
+X12-A1 has none.
+
 ---
 
 ## 1. Why this exists
