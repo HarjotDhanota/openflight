@@ -2379,7 +2379,9 @@ def start_air_sensor() -> bool:
         return False
 
     air_sensor_stop.clear()
-    air_sensor_thread = threading.Thread(target=_air_sensor_loop, daemon=True)
+    air_sensor_thread = threading.Thread(
+        target=_air_sensor_loop, args=(air_sensor_stop,), daemon=True
+    )
     air_sensor_thread.start()
     logger.info(
         "[SENSOR] Polling %s at 0x%02x every %.0f s",
@@ -4082,15 +4084,6 @@ def main():
     global calculated_spin_enabled
     calculated_spin_enabled = args.calculated_spin
     ballistics_enabled = args.ballistics
-    if args.air_sensor and not start_air_sensor():
-        # Not fatal: the provider keeps answering ISA sea level, so the unit
-        # still works exactly as it did. But the user asked for a sensor and
-        # did not get one, so say so rather than silently doing nothing.
-        logger.warning(
-            "[SENSOR] --air-sensor was passed but no BME280/BMP280 was found. "
-            "Carry assumes ISA sea level. Check wiring and that I2C is enabled "
-            "(raspi-config > Interface Options > I2C), then `i2cdetect -y 1`."
-        )
     kld7_radc_tuning_kwargs = _kld7_radc_tuning_kwargs(args)
     active_kld7_radc_tuning = dict(kld7_radc_tuning_kwargs)
 
@@ -4103,6 +4096,19 @@ def main():
     logging.getLogger("openflight.rolling_buffer").setLevel(logging.INFO)
     logging.getLogger("openflight.rolling_buffer.trigger").setLevel(logging.INFO)
     logging.getLogger("openflight.rolling_buffer.monitor").setLevel(logging.INFO)
+
+    # After logging is configured, so "[SENSOR] Found bme280 at 0x76" is
+    # actually visible -- it is the line a user wiring this for the first
+    # time is watching for.
+    if args.air_sensor and not start_air_sensor():
+        # Not fatal: the provider keeps answering ISA sea level, so the unit
+        # still works exactly as it did. But the user asked for a sensor and
+        # did not get one, so say so rather than silently doing nothing.
+        logger.warning(
+            "[SENSOR] --air-sensor was passed but no BME280/BMP280 was found. "
+            "Carry assumes ISA sea level. Check wiring and that I2C is enabled "
+            "(raspi-config > Interface Options > I2C), then `i2cdetect -y 1`."
+        )
 
     print("=" * 50)
     print("  OpenFlight UI Server")

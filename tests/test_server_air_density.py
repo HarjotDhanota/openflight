@@ -272,3 +272,55 @@ class _RunsOnce:
 
     def wait(self, _timeout=None):
         return True
+
+
+class TestStartAirSensor:
+    """Exercises the REAL thread construction, not just the loop function.
+
+    The loop was first shipped started as Thread(target=_air_sensor_loop)
+    with no args -- it died at birth with a TypeError on the Pi, the
+    provider never saw a reading, and the UI truthfully reported no sensor.
+    Every earlier test called the loop function directly, which is exactly
+    how the wiring escaped coverage.
+    """
+
+    def test_a_reading_actually_flows_from_the_started_thread(self, monkeypatch):
+        import time as _time
+
+        reading = SensorReading(temp_c=22.0, pressure_hpa=1005.0, humidity_pct=45.0, chip="bme280")
+
+        class FakeSensor:
+            chip = "bme280"
+            address = 0x76
+
+            def read(self):
+                return reading
+
+        provider = EnvironmentProvider()
+        monkeypatch.setattr(server_module, "environment_provider", provider)
+        monkeypatch.setattr(server_module, "open_i2c_bus", lambda: object())
+        monkeypatch.setattr(server_module, "detect_air_sensor", lambda bus: FakeSensor())
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *a, **k: None)
+
+        try:
+            assert server_module.start_air_sensor() is True
+            deadline = _time.time() + 5.0
+            while _time.time() < deadline:
+                if provider.current().source == "bme280":
+                    break
+                _time.sleep(0.05)
+            assert provider.current().source == "bme280"
+        finally:
+            server_module.air_sensor_stop.set()
+            if server_module.air_sensor_thread is not None:
+                server_module.air_sensor_thread.join(timeout=5.0)
+            server_module.air_sensor = None
+            server_module.air_sensor_thread = None
+
+    def test_no_bus_means_no_sensor_and_no_thread(self, monkeypatch):
+        monkeypatch.setattr(server_module, "open_i2c_bus", lambda: None)
+
+        before = server_module.air_sensor_thread
+
+        assert server_module.start_air_sensor() is False
+        assert server_module.air_sensor_thread is before
