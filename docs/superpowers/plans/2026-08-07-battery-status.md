@@ -624,9 +624,22 @@ def test_percent_is_clamped_to_100():
     assert gauge.read(timestamp=1.0).percent == 100.0
 
 
-def test_bus_error_becomes_error_status_not_exception():
+def test_initialize_raises_when_the_gauge_does_not_ack():
+    # The caller uses this to decide "no gauge fitted" and carry on with the
+    # other readers, so it must propagate rather than return a status.
     gauge = MAX1704X(bus=FakeBus(raises=OSError("no ACK")))
+    with pytest.raises(OSError):
+        gauge.initialize()
+
+
+def test_bus_error_after_init_becomes_error_status_not_exception():
+    # Initialize against a healthy bus, then break it. A gauge that answered
+    # once and later glitches must degrade to a status: an exception here
+    # would kill the sampling thread and take the indicator down for good.
+    bus = FakeBus({(0x36, 0x02): 0x60CC, (0x36, 0x04): 0x003E})
+    gauge = MAX1704X(bus=bus)
     gauge.initialize()
+    bus.raises = OSError("no ACK")
     reading = gauge.read(timestamp=1.0)
     assert reading.status == "error"
     assert reading.volts is None
@@ -781,7 +794,7 @@ class MAX1704X:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_power_max1704x.py -v`
-Expected: 6 passed
+Expected: 7 passed
 
 - [ ] **Step 5: Commit**
 
