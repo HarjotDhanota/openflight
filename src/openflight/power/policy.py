@@ -6,6 +6,7 @@ retained state that dwell, hysteresis and shutdown latching require.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field, replace
 
 from .config import PowerConfig
@@ -125,11 +126,59 @@ class Decision:
     shutdown_eligible: bool
     runtime_minutes: int | None
     warnings: list[str]
+    shutdown_action: str = "none"
 
 
 def initial_state() -> PolicyState:
     """Fresh state for a newly started service."""
     return PolicyState()
+
+
+def cancel_shutdown(state: PolicyState, shutdown_id: str) -> PolicyState:
+    """Cancel a pending shutdown and latch it off for the process lifetime.
+
+    A stale id is ignored: that is the reconnect and double-click race, where
+    a client's cancel arrives after a different shutdown has been armed.
+
+    The latch is deliberate. Re-arming a user who has already declined, once a
+    minute until the pack dies, is worse than respecting the decision -- the
+    warning stays on screen either way.
+    """
+    if state.pending_shutdown is None or state.pending_shutdown.id != shutdown_id:
+        return state
+    return replace(state, pending_shutdown=None, shutdown_cancelled=True, shutdown_dwell=0)
+
+
+def _shutdown_step(state, snapshot, config, now_monotonic, eligible, source):
+    """Decide arming/execution. Returns (pending, dwell, action)."""
+    pending = state.pending_shutdown
+
+    if pending is not None:
+        if now_monotonic >= pending.deadline_monotonic:
+            return pending, 0, "execute"
+        # Recovering disarms, but does not latch: nobody made a decision.
+        if not eligible or source != "battery":
+            return None, 0, "none"
+        return pending, state.shutdown_dwell, "none"
+
+    conditions = (
+        config.auto_shutdown_enabled
+        and source == "battery"
+        and eligible
+        and not state.shutdown_cancelled
+    )
+    if not conditions:
+        return None, 0, "none"
+
+    dwell = state.shutdown_dwell + 1
+    if dwell < config.dwell_samples:
+        return None, dwell, "none"
+    armed = PendingShutdown(
+        id=str(uuid.uuid4()),
+        deadline_monotonic=now_monotonic + config.shutdown_grace_seconds,
+        reason=f"Pack at {snapshot.pack.volts:.2f} V",
+    )
+    return armed, 0, "arm"
 
 
 def _debounce(current, proposed, pending, dwell, dwell_samples):
@@ -252,6 +301,10 @@ def step(
     elif rail_target == "red":
         warnings.append("Supply voltage too low - brownout risk")
 
+    pending, shutdown_dwell, action = _shutdown_step(
+        state, snapshot, config, now_monotonic, eligible, source
+    )
+
     new_state = replace(
         state,
         pack_level=pack_target,
@@ -260,6 +313,8 @@ def step(
         pack_dwell=pack_dwell,
         pending_rail_level=rail_pending,
         rail_dwell=rail_dwell,
+        pending_shutdown=pending,
+        shutdown_dwell=shutdown_dwell,
         last_source=source,
         last_pack_volts=snapshot.pack.volts,
         runtime_history=history,
@@ -271,5 +326,6 @@ def step(
         shutdown_eligible=eligible,
         runtime_minutes=_runtime_minutes(history, config),
         warnings=warnings,
+        shutdown_action=action,
     )
     return new_state, decision
