@@ -548,7 +548,7 @@ def load_config(path: Path = CONFIG_PATH) -> PowerConfig:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_power_config.py -v`
-Expected: 9 passed
+Expected: 10 passed
 
 - [ ] **Step 5: Commit**
 
@@ -2462,6 +2462,21 @@ def test_disabled_config_skips_initialization(monkeypatch, tmp_path):
     path = tmp_path / "power.json"
     path.write_text('{"enabled": false}', encoding="utf-8")
     assert server.init_power(config_path=path) is False
+
+
+def test_no_gpio_is_configured_without_a_declaration():
+    """The zero-change guarantee for builders who have none of this hardware.
+
+    Auto-probing a pin would silently reconfigure GPIO 6 on a build using it
+    for something else -- a regression with a friendly description. The
+    default pld_gpio is None and nothing may touch a line until a board
+    profile or explicit config declares one.
+
+    Also returns before importing gpiozero, so this passes off-Pi.
+    """
+    from openflight.power.config import PowerConfig
+
+    assert server._build_power_source(PowerConfig(pld_gpio=None)) is None
 
 
 def test_session_start_config_reports_power_block(monkeypatch, tmp_path):
