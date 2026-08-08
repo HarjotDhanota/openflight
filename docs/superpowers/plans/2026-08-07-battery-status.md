@@ -32,7 +32,12 @@ pytest.
 - **Always use `uv`** — `uv run pytest`, `uv run pylint`, `uv run ruff`. Never bare `python`/`pip`.
 - **Lint gate:** `uv run pylint src/openflight/ --fail-under=9` must pass.
 - **Format gate:** `uv run ruff check src/openflight/` and `uv run ruff format --check src/openflight/`.
-- **No new dependencies.** `smbus2`, `gpiozero`, `lgpio` are already in `pyproject.toml`.
+- **No new dependencies, Python or npm.** `smbus2`, `gpiozero`, `lgpio` are already in
+  `pyproject.toml`. On the UI side this means no `@testing-library`, no `jsdom`, and no
+  change to `vite.config.ts` — the existing suite tests with `renderToString` from
+  `react-dom/server` and that is the pattern to follow. Adding a DOM test environment is
+  a worthwhile change to shared infrastructure, but it belongs in its own PR, not
+  smuggled in behind a feature.
 - **Zero change for builders without the hardware.** No GPIO is configured, and nothing is
   rendered, unless configuration declares it.
 - **No test may power off the machine.** `shutdown.py` is stubbed in every test.
@@ -3008,130 +3013,102 @@ arrives.
 
 ```tsx
 // ui/src/components/BatteryStatus.test.tsx
-import { act, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+//
+// Uses renderToString, matching SimStatus.test.tsx and the rest of the UI
+// suite. The project has no jsdom and no @testing-library -- adding them
+// would mean three devDependencies plus a vitest environment and setupFiles
+// change, which is shared test infrastructure and does not belong inside a
+// feature PR.
+//
+// Consequence: effects do not run under SSR, so this covers first render
+// only. The countdown tick, the re-sync on a fresh view, and the click on
+// "Keep running" are verified by hand on the Pi -- see Task 12.
+import { renderToString } from 'react-dom/server';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { BatteryStatus } from './BatteryStatus';
-import { usePowerStore } from '../stores/usePowerStore';
+import { usePowerStore, type PowerView } from '../stores/usePowerStore';
 
-const base = {
-  pack_volts: 3.81, pack_percent: 62, pack_level: 'ok' as const,
-  rail_volts: 5.09, rail_level: 'green' as const, source: 'battery' as const,
+const base: PowerView = {
+  pack_volts: 3.81, pack_percent: 62, pack_level: 'ok',
+  rail_volts: 5.09, rail_level: 'green', source: 'battery',
   runtime_minutes: null, shutdown_eligible: false,
   pending_shutdown: null, shutdown_remaining_seconds: null, warnings: [],
 };
+
+const pending = { id: 'abc', reason: 'Pack at 3.18 V' };
 
 beforeEach(() => usePowerStore.setState({ view: null }));
 
 describe('BatteryStatus', () => {
   it('renders nothing when no power data has arrived', () => {
-    const { container } = render(<BatteryStatus />);
-    expect(container).toBeEmptyDOMElement();
+    expect(renderToString(<BatteryStatus />)).toBe('');
   });
 
   it('renders nothing when every reader is absent', () => {
     usePowerStore.setState({
       view: { ...base, pack_level: 'unknown', rail_level: 'unknown', pack_percent: null },
     });
-    const { container } = render(<BatteryStatus />);
-    expect(container).toBeEmptyDOMElement();
+    expect(renderToString(<BatteryStatus />)).toBe('');
   });
 
   it('shows the percentage', () => {
     usePowerStore.setState({ view: base });
-    render(<BatteryStatus />);
-    expect(screen.getByText('62%')).toBeInTheDocument();
+    expect(renderToString(<BatteryStatus />)).toContain('62%');
   });
 
-  it('shows the percentage on external power too', () => {
+  it('shows the percentage and an external-power marker on wall power', () => {
+    // ModelGauge tracks across charge, so the number stays meaningful.
     usePowerStore.setState({ view: { ...base, source: 'external' } });
-    render(<BatteryStatus />);
-    expect(screen.getByText('62%')).toBeInTheDocument();
-    expect(screen.getByLabelText(/external power/i)).toBeInTheDocument();
+    const html = renderToString(<BatteryStatus />);
+    expect(html).toContain('62%');
+    expect(html).toContain('On external power');
   });
 
-  it('shows the rail dot with its level as a class', () => {
+  it('carries the rail level as a class on the dot', () => {
     usePowerStore.setState({ view: { ...base, rail_level: 'amber' } });
-    render(<BatteryStatus />);
-    expect(screen.getByLabelText(/supply health/i)).toHaveClass('battery-status__dot--amber');
+    expect(renderToString(<BatteryStatus />)).toContain('battery-status__dot--amber');
   });
 
   it('hides the fuel bar when only the rail is present', () => {
-    usePowerStore.setState({ view: { ...base, pack_level: 'unknown', pack_percent: null } });
-    render(<BatteryStatus />);
-    expect(screen.queryByText(/%/)).not.toBeInTheDocument();
-    expect(screen.getByLabelText(/supply health/i)).toBeInTheDocument();
+    usePowerStore.setState({
+      view: { ...base, pack_level: 'unknown', pack_percent: null },
+    });
+    const html = renderToString(<BatteryStatus />);
+    expect(html).not.toContain('%');
+    expect(html).toContain('battery-status__dot');
   });
 
   it('shows a Keep running button while a shutdown is pending', () => {
     usePowerStore.setState({
-      view: {
-        ...base, pack_level: 'critical',
-        pending_shutdown: { id: 'abc', reason: 'Pack at 3.18 V' },
-        shutdown_remaining_seconds: 60,
-      },
-    });
-    render(<BatteryStatus />);
-    expect(screen.getByRole('button', { name: /keep running/i })).toBeInTheDocument();
-  });
-
-  it('counts the shutdown down once per second', () => {
-    vi.useFakeTimers();
-    usePowerStore.setState({
-      view: {
-        ...base, pack_level: 'critical',
-        pending_shutdown: { id: 'abc', reason: 'Pack at 3.18 V' },
-        shutdown_remaining_seconds: 60,
-      },
-    });
-    render(<BatteryStatus />);
-    expect(screen.getByText(/60s/)).toBeInTheDocument();
-    act(() => { vi.advanceTimersByTime(3000); });
-    expect(screen.getByText(/57s/)).toBeInTheDocument();
-    vi.useRealTimers();
-  });
-
-  it('never counts below zero', () => {
-    vi.useFakeTimers();
-    usePowerStore.setState({
-      view: {
-        ...base, pack_level: 'critical',
-        pending_shutdown: { id: 'abc', reason: 'Pack at 3.18 V' },
-        shutdown_remaining_seconds: 2,
-      },
-    });
-    render(<BatteryStatus />);
-    act(() => { vi.advanceTimersByTime(10000); });
-    expect(screen.getByText(/0s/)).toBeInTheDocument();
-    vi.useRealTimers();
-  });
-
-  it('re-syncs the countdown when a fresh view arrives', () => {
-    // A reconnect mid-window gets a server-computed remaining; the local
-    // ticker must adopt it rather than continuing from its own value.
-    vi.useFakeTimers();
-    const pending = { id: 'abc', reason: 'Pack at 3.18 V' };
-    usePowerStore.setState({
       view: { ...base, pack_level: 'critical', pending_shutdown: pending,
               shutdown_remaining_seconds: 60 },
     });
-    render(<BatteryStatus />);
-    act(() => { vi.advanceTimersByTime(5000); });
-    expect(screen.getByText(/55s/)).toBeInTheDocument();
-    act(() => {
-      usePowerStore.setState({
-        view: { ...base, pack_level: 'critical', pending_shutdown: pending,
-                shutdown_remaining_seconds: 20 },
-      });
+    expect(renderToString(<BatteryStatus />)).toContain('Keep running');
+  });
+
+  it('shows the server-supplied seconds on first render', () => {
+    // useState seeds from the server value and effects do not run in SSR, so
+    // this asserts the countdown starts from the right number -- not that it
+    // ticks.
+    usePowerStore.setState({
+      view: { ...base, pack_level: 'critical', pending_shutdown: pending,
+              shutdown_remaining_seconds: 45 },
     });
-    expect(screen.getByText(/20s/)).toBeInTheDocument();
-    vi.useRealTimers();
+    expect(renderToString(<BatteryStatus />)).toContain('45s');
+  });
+
+  it('omits the shutdown block entirely when nothing is pending', () => {
+    usePowerStore.setState({ view: { ...base, pack_level: 'critical' } });
+    const html = renderToString(<BatteryStatus />);
+    expect(html).not.toContain('Keep running');
+    expect(html).toContain('Battery critically low');
   });
 });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd ui && npx vitest run src/components/BatteryStatus.test.tsx`
+Run: `cd ui && npm test -- src/components/BatteryStatus.test.tsx`
 Expected: FAIL — cannot resolve `./BatteryStatus`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -3408,8 +3385,8 @@ Without this the component is dead code that passes its own tests and never appe
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd ui && npx vitest run src/components/BatteryStatus.test.tsx`
-Expected: 10 passed
+Run: `cd ui && npm test -- src/components/BatteryStatus.test.tsx`
+Expected: 9 passed
 
 - [ ] **Step 5: Commit**
 
@@ -3529,10 +3506,17 @@ Manual checks that automated tests cannot cover:
 2. Unplug the wall supply: bolt disappears, source flips to `on battery` within ~2 s
 3. Reconnect: bolt returns, percentage keeps updating
 4. Reload the browser mid-session: state appears immediately, not after 10 s
-5. With `--power-shutdown` and `shutdown_volts` temporarily raised above the current pack
-   voltage, confirm the countdown appears and **"Keep running"** cancels it — then confirm
-   it does not re-arm
-6. `--no-power` suppresses the indicator entirely
+5. Leave it running with a steady level and confirm the percentage keeps updating —
+   that is the Task 10b heartbeat; without it the number freezes until a level changes
+6. With `--power-shutdown` and `shutdown_volts` temporarily raised above the current pack
+   voltage, confirm the countdown **visibly ticks down once per second**, that
+   **"Keep running"** cancels it, and that it does not re-arm afterwards
+7. `--no-power` suppresses the indicator entirely
+
+Steps 5 and 6 carry more weight than the others. `renderToString` cannot run effects or
+dispatch clicks, so the countdown tick, the re-sync on a fresh view, and the cancel
+button are covered by **no automated test at all** — these three checks are the only
+verification they get.
 
 Step 5 is the one worth doing deliberately: it is the only path that can power the machine
 off, and it has never run outside a stub.
