@@ -130,11 +130,10 @@ iwr6843_runtime_config: dict = {"enabled": False}
 inclinometer_service = None
 inclinometer_runtime_config: dict = {"enabled": False}
 
-# Ballistic model toggle. When True, shot carry comes from the physics
-# simulator whenever a vertical launch angle is available. When False
-# (default), all carry computations go through the legacy table estimator.
-# The simulator is opt-in until coefficients are validated against TM.
-ballistics_enabled: bool = False
+# Ballistic model toggle. Shot carry comes from the physics simulator whenever
+# a vertical launch angle is available. Operators can explicitly disable it;
+# missing launch inputs always fall back to the legacy table estimator.
+ballistics_enabled: bool = True
 
 # Simulator connectors (optional). Populated in main() from config/sim.json +
 # CLI flags; shots fan out to every connected connector. Player/club state is
@@ -3459,6 +3458,28 @@ class MockSwingSpeedMonitor:
         self.training_implement_label = label
 
 
+def _add_ballistics_arguments(parser):
+    """Add the preferred ballistic carry model and its explicit opt-out."""
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--ballistics",
+        action="store_true",
+        dest="ballistics",
+        help=(
+            "Use the physics-based carry simulator (drag + Magnus, RK4). "
+            "This is the default; shots without a vertical launch angle "
+            "fall back to the legacy table estimator."
+        ),
+    )
+    group.add_argument(
+        "--no-ballistics",
+        action="store_false",
+        dest="ballistics",
+        help="Disable the physics simulator and use the legacy carry table for all shots.",
+    )
+    parser.set_defaults(ballistics=True)
+
+
 def main():
     """Run the server."""
     import argparse  # pylint: disable=import-outside-toplevel
@@ -3556,16 +3577,7 @@ def main():
         help="Enable simulator connectors from config/sim.json (GSPro / OpenGolfSim). "
         "Off by default.",
     )
-    parser.add_argument(
-        "--ballistics",
-        action="store_true",
-        help=(
-            "Enable the physics-based carry simulator (drag + Magnus, RK4). "
-            "When set, shots with a vertical launch angle use the simulator "
-            "for carry; otherwise they fall back to the legacy table estimator. "
-            "Default: disabled (all shots use the table)."
-        ),
-    )
+    _add_ballistics_arguments(parser)
     parser.add_argument(
         "--trigger",
         choices=["polling", "threshold", "speed", "sound"],

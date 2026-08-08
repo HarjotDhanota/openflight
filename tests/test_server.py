@@ -1,5 +1,6 @@
 """Tests for server module."""
 
+import argparse
 import json
 import sys
 from datetime import datetime
@@ -20,8 +21,8 @@ from openflight.server import (
     on_shot_detected,
     radar_launch_is_plausible,
     shot_to_dict,
-    swing_speed_to_shot_dict,
     swing_speed_to_dict,
+    swing_speed_to_shot_dict,
 )
 from openflight.swing_speed import SwingSpeedEvent
 
@@ -2618,6 +2619,27 @@ class TestOnShotDetected:
         assert shot.spin_axis_deg is None
 
 
+class TestBallisticsConfiguration:
+    """The physics model is preferred unless an operator explicitly opts out."""
+
+    @pytest.mark.parametrize(
+        ("arguments", "expected"),
+        [
+            ([], True),
+            (["--ballistics"], True),
+            (["--no-ballistics"], False),
+        ],
+    )
+    def test_cli_ballistics_preference(self, arguments, expected):
+        parser = argparse.ArgumentParser()
+        server_module._add_ballistics_arguments(parser)
+
+        assert parser.parse_args(arguments).ballistics is expected
+
+    def test_runtime_default_enables_ballistics(self):
+        assert server_module.ballistics_enabled is True
+
+
 class TestCarryComputation:
     """Tests for the ballistic carry path in on_shot_detected."""
 
@@ -2697,7 +2719,7 @@ class TestCarryComputation:
     def test_carry_skips_ballistic_when_ballistics_disabled(self, monkeypatch):
         """When ballistics_enabled is False, the simulator must not run even
         if a valid launch angle is present — carry falls through to the
-        table estimator. This is the default; `--ballistics` opts in."""
+        table estimator. Operators can request this with `--no-ballistics`."""
         self._patch_environment(monkeypatch)
         monkeypatch.setattr(server_module, "ballistics_enabled", False)
 

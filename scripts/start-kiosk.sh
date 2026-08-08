@@ -61,7 +61,7 @@ EXPERIMENTAL_KLD7_VERTICAL_IMPACT_ENERGY=""
 EXPERIMENTAL_KLD7_HORIZONTAL_IMPACT_ENERGY=""
 EXPERIMENTAL_KLD7_HORIZONTAL_RETRY_IMPACT_ENERGY=""
 EXPERIMENTAL_KLD7_HORIZONTAL_ANGLE_LIMIT=""
-BALLISTICS=false
+BALLISTICS=true
 SIM=false
 CALCULATED_SPIN=false
 SWING_SPEED=false
@@ -301,6 +301,10 @@ while [[ $# -gt 0 ]]; do
             BALLISTICS=true
             shift
             ;;
+        --no-ballistics)
+            BALLISTICS=false
+            shift
+            ;;
         --sim)
             SIM=true
             shift
@@ -491,8 +495,8 @@ if [ "$NO_CAMERA" = true ]; then
     SERVER_CMD="$SERVER_CMD --no-camera"
 fi
 
-if [ "$BALLISTICS" = true ]; then
-    SERVER_CMD="$SERVER_CMD --ballistics"
+if [ "$BALLISTICS" = false ]; then
+    SERVER_CMD="$SERVER_CMD --no-ballistics"
 fi
 
 # Simulator connectors: off unless --sim; targets come from config/sim.json

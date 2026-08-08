@@ -28,6 +28,25 @@ def _dry_run(*args: str, check: bool = True):
     )
 
 
+def test_ballistics_is_preferred_by_default():
+    command_arguments = _dry_run().stdout.strip().split()
+
+    assert "--ballistics" not in command_arguments
+    assert "--no-ballistics" not in command_arguments
+
+
+def test_no_ballistics_opt_out_is_forwarded():
+    command_arguments = _dry_run("--no-ballistics").stdout.strip().split()
+
+    assert "--no-ballistics" in command_arguments
+
+
+def test_existing_ballistics_flag_remains_accepted():
+    command_arguments = _dry_run("--ballistics").stdout.strip().split()
+
+    assert "--no-ballistics" not in command_arguments
+
+
 def test_kld7_requires_mount_tilt():
     """--kld7 without a mount tilt must fail loudly rather than assume a default."""
     result = _dry_run("--kld7", check=False)
