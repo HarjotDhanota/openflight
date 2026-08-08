@@ -57,10 +57,19 @@ class PowerService:
         self._thread.start()
 
     def stop(self) -> None:
-        """Stop sampling and release the readers. Idempotent."""
+        """Stop sampling and release the readers.
+
+        Idempotent, and safe to call from the sampling thread itself. The
+        automatic-shutdown path arrives here from inside that thread --
+        _loop -> sample_once -> pre_halt -> the server's hardware cleanup ->
+        here -- and joining our own thread would raise RuntimeError. The stop
+        event is already set in that case, so the loop exits once the current
+        iteration returns.
+        """
         self._stop_event.set()
-        if self._thread is not None:
-            self._thread.join(timeout=2.0)
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
             self._thread = None
         if self._closed:
             return

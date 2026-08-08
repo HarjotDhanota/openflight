@@ -4,6 +4,7 @@ WebSocket server for OpenFlight UI.
 Provides real-time shot data to the web frontend via Flask-SocketIO.
 """
 
+import dataclasses
 import json
 import logging
 import math
@@ -130,6 +131,10 @@ iwr6843_runtime_config: dict = {"enabled": False}
 inclinometer_service = None
 inclinometer_runtime_config: dict = {"enabled": False}
 
+# Optional battery and input-rail monitor.
+power_service = None
+power_runtime_config: dict = {"enabled": False}
+
 # Ballistic model toggle. Shot carry comes from the physics simulator whenever
 # a vertical launch angle is available. Operators can explicitly disable it;
 # missing launch inputs always fall back to the legacy table estimator.
@@ -200,6 +205,8 @@ def _cleanup_hardware_for_shutdown() -> None:
         _run_shutdown_step("K-LD7 horizontal stop", kld7_horizontal.stop)
     if inclinometer_service:
         _run_shutdown_step("inclinometer stop", inclinometer_service.stop)
+    if power_service:
+        _run_shutdown_step("power monitor stop", power_service.stop)
     if iwr6843_runtime:
         _run_shutdown_step("IWR6843 stop", iwr6843_runtime.stop)
 
@@ -852,6 +859,7 @@ def _session_start_config() -> dict:
     }
     config["iwr6843"] = dict(iwr6843_runtime_config)
     config["inclinometer"] = dict(inclinometer_runtime_config)
+    config["power"] = dict(power_runtime_config)
     return config
 
 
@@ -1130,6 +1138,172 @@ def init_iwr6843(
         iwr6843_runtime = None
         iwr6843_runtime_config = {"enabled": False, "error": str(error)}
         return False
+
+
+def _build_power_gauge(config):
+    """Return a fuel gauge, or None when none answers. Separated for tests."""
+    from .power.max1704x import MAX1704X  # pylint: disable=import-outside-toplevel
+
+    try:
+        gauge = MAX1704X(bus_number=config.i2c_bus, address=config.i2c_address)
+        gauge.initialize()
+        return gauge
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.info("[POWER] No fuel gauge at 0x%02x (%s)", config.i2c_address, error)
+        return None
+
+
+def _build_power_source(config):
+    """Return a PLD reader, or None when no line is declared.
+
+    Nothing is configured without a declaration: auto-probing a GPIO would
+    silently reconfigure a pin on builds using it for something else.
+    """
+    if config.pld_gpio is None:
+        return None
+    from gpiozero import Button  # pylint: disable=import-outside-toplevel,import-error
+
+    from .gpio_factory import (  # pylint: disable=import-outside-toplevel
+        ensure_lgpio_pin_factory,
+    )
+    from .power.source import GpioPldSource  # pylint: disable=import-outside-toplevel
+
+    try:
+        ensure_lgpio_pin_factory()
+        button = Button(config.pld_gpio, pull_up=True)
+
+        class _Pin:
+            def read(self):
+                # gpiozero Button is active-low: is_pressed True means the line
+                # is LOW, which for a PLD line means running on battery.
+                return not button.is_pressed
+
+            def close(self):
+                button.close()
+
+        return GpioPldSource(pin=config.pld_gpio, trusted=config.pld_trusted, pin_reader=_Pin())
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[POWER] GPIO %d unavailable (%s)", config.pld_gpio, error)
+        return None
+
+
+def _build_power_rail(config):  # pylint: disable=unused-argument
+    """Return a rail reader, or None on hardware without a PMIC ADC."""
+    from .power.pmic import PmicRail  # pylint: disable=import-outside-toplevel
+
+    rail = PmicRail()
+    return rail if rail.read(timestamp=0.0).status != "absent" else None
+
+
+def init_power(*, config_path=None, **overrides) -> bool:
+    """Start power monitoring. True if any reader initialised.
+
+    Returning False on a single reader's absence would contradict the support
+    matrix: a Pi 5 on wall power with no UPS has no gauge and still benefits
+    from rail health.
+    """
+    global power_service, power_runtime_config  # pylint: disable=global-statement
+
+    from .power.config import (  # pylint: disable=import-outside-toplevel
+        CONFIG_PATH,
+        load_config,
+    )
+    from .power.service import PowerService  # pylint: disable=import-outside-toplevel
+    from .power.source import NullSource  # pylint: disable=import-outside-toplevel
+
+    config = load_config(config_path or CONFIG_PATH)
+    for key, value in overrides.items():
+        if value is not None:
+            config = dataclasses.replace(config, **{key: value})
+
+    if not config.enabled:
+        power_runtime_config = {
+            "enabled": False,
+            "reason": "disabled by configuration",
+        }
+        return False
+
+    gauge = _build_power_gauge(config)
+    source = _build_power_source(config)
+    rail = _build_power_rail(config)
+
+    if gauge is None and rail is None:
+        power_runtime_config = {
+            "enabled": False,
+            "reason": "no power hardware detected",
+        }
+        return False
+
+    power_service = PowerService(
+        gauge=gauge or _NullGauge(),
+        source=source or NullSource(),
+        rail=rail or _NullRail(),
+        config=config,
+        on_view=_emit_power_view,
+        pre_halt=_cleanup_hardware_for_shutdown,
+    )
+    power_service.start()
+    power_runtime_config = {
+        "enabled": True,
+        "board": config.board,
+        "gauge": gauge is not None,
+        "source": source is not None,
+        "rail": rail is not None,
+        "auto_shutdown_enabled": config.auto_shutdown_enabled,
+    }
+    logger.info("[POWER] Monitoring started: %s", power_runtime_config)
+    return True
+
+
+def _emit_power_view(view) -> None:
+    """Push a view to every client, plus shutdown lifecycle events."""
+    socketio.emit("power", view.to_dict())
+    if view.pending_shutdown is not None:
+        socketio.emit("power_shutdown_pending", dataclasses.asdict(view.pending_shutdown))
+
+
+@socketio.on("get_power")
+def handle_get_power():
+    """Initial sync on connect, matching get_session / get_trigger_status."""
+    if power_service:
+        socketio.emit("power", power_service.latest_view().to_dict())
+
+
+@socketio.on("power_shutdown_cancel")
+def handle_power_shutdown_cancel(data):
+    """Cancel a pending shutdown; broadcast so every client agrees."""
+    if not power_service:
+        return
+    shutdown_id = (data or {}).get("id", "")
+    if power_service.cancel_shutdown(shutdown_id):
+        socketio.emit("power_shutdown_cancelled", {"id": shutdown_id})
+
+
+class _NullGauge:
+    """Stands in for an absent fuel gauge."""
+
+    def initialize(self) -> None:
+        """Nothing to configure."""
+
+    def read(self, *, timestamp):
+        from .power.models import PackReading  # pylint: disable=import-outside-toplevel
+
+        return PackReading(status="absent", timestamp=timestamp)
+
+    def close(self) -> None:
+        """No resources to release."""
+
+
+class _NullRail:
+    """Stands in for hardware with no PMIC ADC."""
+
+    def read(self, *, timestamp):
+        from .power.models import RailReading  # pylint: disable=import-outside-toplevel
+
+        return RailReading(status="absent", timestamp=timestamp)
+
+    def close(self) -> None:
+        """No resources to release."""
 
 
 def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: int = 0x18) -> bool:
