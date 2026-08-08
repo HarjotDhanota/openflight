@@ -186,6 +186,8 @@ def _debounce(current, proposed, pending, dwell, dwell_samples):
     if proposed == current:
         return current, None, 0
     if proposed != pending:
+        if dwell_samples == 1:
+            return proposed, None, 0
         return current, proposed, 1
     dwell += 1
     if dwell >= dwell_samples:
