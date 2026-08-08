@@ -44,6 +44,7 @@ class PowerService:
         self._view = _empty_view()
         self._last_decision = None
         self._last_snapshot = None
+        self._last_emit_monotonic: float | None = None
         self._halt_failed = False
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -94,7 +95,12 @@ class PowerService:
             # A cancel can only be genuine after a sample armed something, but
             # a stray client message before the first sample must not crash.
             if cancelled and self._last_decision is not None:
-                self._view = _view_from(self._state, self._last_decision, self._last_snapshot)
+                self._view = _view_from(
+                    self._state,
+                    self._last_decision,
+                    self._last_snapshot,
+                    time.monotonic(),
+                )
         if cancelled and self._on_view:
             self._on_view(self.latest_view())
         return cancelled
@@ -112,10 +118,20 @@ class PowerService:
             previous = self._view
             self._state, decision = step(self._state, snapshot, self.config, now_monotonic)
             self._last_decision, self._last_snapshot = decision, snapshot
-            self._view = _view_from(self._state, decision, snapshot)
+            self._view = _view_from(self._state, decision, snapshot, now_monotonic)
             if self._halt_failed:
                 self._view = _with_halt_failure_warning(self._view)
-            view, changed = self._view, _materially_changed(previous, self._view)
+            # Levels change rarely; volts and percent drift constantly. Without
+            # a heartbeat the UI would show a frozen percentage for as long as
+            # the level held.
+            due = (
+                self._last_emit_monotonic is None
+                or now_monotonic - self._last_emit_monotonic >= self.config.heartbeat_seconds
+            )
+            changed = _materially_changed(previous, self._view) or due
+            if changed:
+                self._last_emit_monotonic = now_monotonic
+            view = self._view
 
         # Halt last, and only once. Hardware is stopped first so radars and the
         # sampling thread are down before the machine is; a failed halt is a
@@ -164,7 +180,13 @@ def _empty_view() -> PowerView:
     )
 
 
-def _view_from(state, decision: Decision, snapshot: PowerSnapshot) -> PowerView:
+def _view_from(
+    state, decision: Decision, snapshot: PowerSnapshot, now_monotonic: float
+) -> PowerView:
+    pending = state.pending_shutdown
+    remaining = None
+    if pending is not None:
+        remaining = max(0, int(round(pending.deadline_monotonic - now_monotonic)))
     return PowerView(
         pack_volts=snapshot.pack.volts,
         pack_percent=snapshot.pack.percent,
@@ -174,7 +196,8 @@ def _view_from(state, decision: Decision, snapshot: PowerSnapshot) -> PowerView:
         source=decision.source,
         runtime_minutes=decision.runtime_minutes,
         shutdown_eligible=decision.shutdown_eligible,
-        pending_shutdown=state.pending_shutdown,
+        pending_shutdown=pending,
+        shutdown_remaining_seconds=remaining,
         warnings=decision.warnings,
     )
 

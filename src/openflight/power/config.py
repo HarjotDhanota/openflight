@@ -34,6 +34,7 @@ class PowerConfig:
     board: str | None = None
     enabled: bool = True
     sample_interval_s: float = 2.0
+    heartbeat_seconds: float = 10.0
     rail_amber_volts: float = 5.0
     rail_red_volts: float = 4.9
     pack_low_volts: float = 3.6
@@ -123,6 +124,9 @@ def load_config(path: Path = CONFIG_PATH) -> PowerConfig:
     config = PowerConfig(
         enabled=_boolean(data, "enabled", defaults.enabled),
         sample_interval_s=_number(data, "sample_interval_s", defaults.sample_interval_s, 0.5, 60.0),
+        heartbeat_seconds=_number(
+            data, "heartbeat_seconds", defaults.heartbeat_seconds, 1.0, 300.0
+        ),
         rail_amber_volts=_number(data, "rail_amber_volts", defaults.rail_amber_volts, 0.0, 6.0),
         rail_red_volts=_number(data, "rail_red_volts", defaults.rail_red_volts, 0.0, 6.0),
         pack_low_volts=_number(data, "pack_low_volts", defaults.pack_low_volts, 2.5, 4.3),

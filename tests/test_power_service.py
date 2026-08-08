@@ -1,5 +1,11 @@
 from openflight.power.config import PowerConfig
-from openflight.power.models import PackReading, RailReading, SourceReading
+from openflight.power.models import (
+    PackReading,
+    PendingShutdown,
+    PowerView,
+    RailReading,
+    SourceReading,
+)
 from openflight.power.service import PowerService
 
 
@@ -177,3 +183,75 @@ def test_failing_halt_is_reported_and_not_retried():
 
 def test_cancel_before_any_sample_does_not_crash():
     assert build().cancel_shutdown("anything") is False
+
+
+def test_view_reports_remaining_seconds_not_a_monotonic_deadline():
+    config = PowerConfig(dwell_samples=1, auto_shutdown_enabled=True, shutdown_grace_seconds=60)
+    service = build(config=config, gauge=FakeGauge(volts=3.1))
+    service.sample_once(1000.0)
+    view = service.latest_view()
+    assert view.shutdown_remaining_seconds == 60
+    service.sample_once(1030.0)
+    assert service.latest_view().shutdown_remaining_seconds == 30
+
+
+def test_remaining_seconds_is_none_when_nothing_is_pending():
+    service = build()
+    service.sample_once(0.0)
+    assert service.latest_view().shutdown_remaining_seconds is None
+
+
+def test_to_dict_omits_the_process_local_deadline():
+    view = PowerView(
+        pack_volts=3.1,
+        pack_percent=4.0,
+        pack_level="critical",
+        rail_volts=5.2,
+        rail_level="green",
+        source="battery",
+        runtime_minutes=None,
+        shutdown_eligible=True,
+        pending_shutdown=PendingShutdown(id="x", deadline_monotonic=1234.5, reason="r"),
+        shutdown_remaining_seconds=42,
+        warnings=[],
+    )
+    payload = view.to_dict()
+    # A browser cannot interpret a monotonic value from another process.
+    assert "deadline_monotonic" not in payload["pending_shutdown"]
+    assert payload["pending_shutdown"]["id"] == "x"
+    assert payload["shutdown_remaining_seconds"] == 42
+
+
+def test_heartbeat_emits_without_a_level_change():
+    seen = []
+    service = PowerService(
+        gauge=FakeGauge(volts=3.9),
+        source=FakeSource(),
+        rail=FakeRail(),
+        config=PowerConfig(dwell_samples=1, heartbeat_seconds=10.0),
+        on_view=seen.append,
+        halt=lambda: True,
+    )
+    service.sample_once(0.0)  # first view -> emit
+    service.sample_once(2.0)  # nothing changed, inside the window
+    service.sample_once(4.0)
+    assert len(seen) == 1
+    service.sample_once(11.0)  # past the heartbeat -> emit
+    assert len(seen) == 2
+
+
+def test_change_still_emits_immediately_without_waiting_for_the_heartbeat():
+    seen = []
+    gauge = FakeGauge(volts=3.9)
+    service = PowerService(
+        gauge=gauge,
+        source=FakeSource(),
+        rail=FakeRail(),
+        config=PowerConfig(dwell_samples=1, heartbeat_seconds=10.0),
+        on_view=seen.append,
+        halt=lambda: True,
+    )
+    service.sample_once(0.0)
+    gauge.volts = 3.5
+    service.sample_once(1.0)  # level change, well inside the heartbeat window
+    assert len(seen) == 2

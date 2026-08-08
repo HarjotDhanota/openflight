@@ -61,12 +61,7 @@ class PowerSnapshot:
 
 @dataclass(frozen=True)
 class PendingShutdown:
-    """An armed shutdown awaiting its deadline or a cancel.
-
-    The deadline is absolute monotonic rather than a countdown so a client
-    reconnecting mid-window computes the remaining time correctly instead of
-    restarting the clock.
-    """
+    """An armed shutdown awaiting its internal monotonic deadline or a cancel."""
 
     id: str
     deadline_monotonic: float
@@ -86,8 +81,23 @@ class PowerView:
     runtime_minutes: int | None
     shutdown_eligible: bool
     pending_shutdown: PendingShutdown | None
+    # Seconds until the pending shutdown fires, computed server-side. The
+    # deadline itself is monotonic and process-local, so a browser cannot use
+    # it; the client counts down locally from this value and a reconnect gets
+    # a fresh one via get_power.
+    shutdown_remaining_seconds: int | None = None
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        """Serialize for socket emit."""
-        return asdict(self)
+        """Serialize for socket emit.
+
+        ``deadline_monotonic`` is deliberately dropped: ``time.monotonic()``
+        has an arbitrary, process-local epoch, so the value is meaningless to
+        any other process. It stays on the dataclass because the reducer needs
+        it, and it is immune to the clock stepping at boot in a way a
+        wall-clock deadline would not be.
+        """
+        payload = asdict(self)
+        if payload["pending_shutdown"] is not None:
+            payload["pending_shutdown"].pop("deadline_monotonic", None)
+        return payload
