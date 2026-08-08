@@ -2776,24 +2776,240 @@ git commit -m "feat(power): server wiring, socket events and initial sync"
 
 ---
 
+## Task 10b: Wire format and heartbeat
+
+**Files:**
+- Modify: `src/openflight/power/models.py`, `src/openflight/power/config.py`,
+  `src/openflight/power/service.py`
+- Test: `tests/test_power_service.py` (extend)
+
+**Interfaces:**
+- Consumes: Tasks 1, 2, 9
+- Produces: `PowerView.shutdown_remaining_seconds: int | None`;
+  `PowerView.to_dict()` no longer emits `deadline_monotonic`;
+  `PowerConfig.heartbeat_seconds: float = 10.0`;
+  `PowerService.sample_once` emits on a heartbeat as well as on change
+
+**Why:** two defects found while reviewing Task 11 against the design.
+
+`deadline_monotonic` comes from `time.monotonic()`, whose epoch is process-local and
+arbitrary. A browser has no way to relate it to its own clock, so the client cannot
+derive a countdown from it. The server must keep using monotonic for the *decision* —
+that choice makes the deadline immune to NTP steps at boot — but the *display* value has
+to be a duration computed at serialization time. A reconnecting client still gets a
+correct value, because `get_power` triggers a fresh emit.
+
+Separately, `_materially_changed` gates every emit on a level change, so voltage and
+percentage would sit frozen in the UI for as long as the level held — potentially the
+whole session. The design calls for a 10 s heartbeat; it was never implemented.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# append to tests/test_power_service.py
+import time as _time
+
+from openflight.power.models import PendingShutdown, PowerView
+
+
+def test_view_reports_remaining_seconds_not_a_monotonic_deadline():
+    config = PowerConfig(
+        dwell_samples=1, auto_shutdown_enabled=True, shutdown_grace_seconds=60
+    )
+    service = build(config=config, gauge=FakeGauge(volts=3.1))
+    service.sample_once(1000.0)
+    view = service.latest_view()
+    assert view.shutdown_remaining_seconds == 60
+    service.sample_once(1030.0)
+    assert service.latest_view().shutdown_remaining_seconds == 30
+
+
+def test_remaining_seconds_is_none_when_nothing_is_pending():
+    service = build()
+    service.sample_once(0.0)
+    assert service.latest_view().shutdown_remaining_seconds is None
+
+
+def test_to_dict_omits_the_process_local_deadline():
+    view = PowerView(
+        pack_volts=3.1, pack_percent=4.0, pack_level="critical",
+        rail_volts=5.2, rail_level="green", source="battery",
+        runtime_minutes=None, shutdown_eligible=True,
+        pending_shutdown=PendingShutdown(id="x", deadline_monotonic=1234.5, reason="r"),
+        shutdown_remaining_seconds=42, warnings=[],
+    )
+    payload = view.to_dict()
+    # A browser cannot interpret a monotonic value from another process.
+    assert "deadline_monotonic" not in payload["pending_shutdown"]
+    assert payload["pending_shutdown"]["id"] == "x"
+    assert payload["shutdown_remaining_seconds"] == 42
+
+
+def test_heartbeat_emits_without_a_level_change():
+    seen = []
+    service = PowerService(
+        gauge=FakeGauge(volts=3.9), source=FakeSource(), rail=FakeRail(),
+        config=PowerConfig(dwell_samples=1, heartbeat_seconds=10.0),
+        on_view=seen.append, halt=lambda: True,
+    )
+    service.sample_once(0.0)      # first view -> emit
+    service.sample_once(2.0)      # nothing changed, inside the window
+    service.sample_once(4.0)
+    assert len(seen) == 1
+    service.sample_once(11.0)     # past the heartbeat -> emit
+    assert len(seen) == 2
+
+
+def test_change_still_emits_immediately_without_waiting_for_the_heartbeat():
+    seen = []
+    gauge = FakeGauge(volts=3.9)
+    service = PowerService(
+        gauge=gauge, source=FakeSource(), rail=FakeRail(),
+        config=PowerConfig(dwell_samples=1, heartbeat_seconds=10.0),
+        on_view=seen.append, halt=lambda: True,
+    )
+    service.sample_once(0.0)
+    gauge.volts = 3.5
+    service.sample_once(1.0)      # level change, well inside the heartbeat window
+    assert len(seen) == 2
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `uv run pytest tests/test_power_service.py -v`
+Expected: 5 failures — `TypeError` on the unexpected `shutdown_remaining_seconds` and
+`heartbeat_seconds` keyword arguments.
+
+- [ ] **Step 3: Add the field and strip the deadline from the wire format**
+
+In `models.py`, add to `PowerView` after `pending_shutdown`:
+
+```python
+    # Seconds until the pending shutdown fires, computed server-side. The
+    # deadline itself is monotonic and process-local, so a browser cannot use
+    # it; the client counts down locally from this value and a reconnect gets
+    # a fresh one via get_power.
+    shutdown_remaining_seconds: int | None = None
+```
+
+and replace `to_dict`:
+
+```python
+    def to_dict(self) -> dict:
+        """Serialize for socket emit.
+
+        ``deadline_monotonic`` is deliberately dropped: ``time.monotonic()``
+        has an arbitrary, process-local epoch, so the value is meaningless to
+        any other process. It stays on the dataclass because the reducer needs
+        it, and it is immune to the clock stepping at boot in a way a
+        wall-clock deadline would not be.
+        """
+        payload = asdict(self)
+        if payload["pending_shutdown"] is not None:
+            payload["pending_shutdown"].pop("deadline_monotonic", None)
+        return payload
+```
+
+In `config.py`, add to `PowerConfig` and to `load_config`'s validated keys:
+
+```python
+    heartbeat_seconds: float = 10.0
+```
+
+```python
+        heartbeat_seconds=_number(data, "heartbeat_seconds", defaults.heartbeat_seconds, 1.0, 300.0),
+```
+
+- [ ] **Step 4: Compute the remaining seconds and add the heartbeat**
+
+In `service.py`, add `self._last_emit_monotonic: float | None = None` to `__init__`, give
+`_view_from` the clock, and gate the emit on either condition:
+
+```python
+def _view_from(state, decision: Decision, snapshot: PowerSnapshot,
+               now_monotonic: float) -> PowerView:
+    pending = state.pending_shutdown
+    remaining = None
+    if pending is not None:
+        remaining = max(0, int(round(pending.deadline_monotonic - now_monotonic)))
+    return PowerView(
+        pack_volts=snapshot.pack.volts,
+        pack_percent=snapshot.pack.percent,
+        pack_level=decision.pack_level,
+        rail_volts=snapshot.rail.ext5v_volts,
+        rail_level=decision.rail_level,
+        source=decision.source,
+        runtime_minutes=decision.runtime_minutes,
+        shutdown_eligible=decision.shutdown_eligible,
+        pending_shutdown=pending,
+        shutdown_remaining_seconds=remaining,
+        warnings=decision.warnings,
+    )
+```
+
+In `sample_once`, replace the `changed` computation:
+
+```python
+            self._view = _view_from(self._state, decision, snapshot, now_monotonic)
+            # Levels change rarely; volts and percent drift constantly. Without
+            # a heartbeat the UI would show a frozen percentage for as long as
+            # the level held.
+            due = (
+                self._last_emit_monotonic is None
+                or now_monotonic - self._last_emit_monotonic >= self.config.heartbeat_seconds
+            )
+            changed = _materially_changed(previous, self._view) or due
+            if changed:
+                self._last_emit_monotonic = now_monotonic
+            view = self._view
+```
+
+Update the `cancel_shutdown` call site to pass a clock too — use
+`time.monotonic()` there, since a cancel is not driven by the sampling loop.
+
+- [ ] **Step 5: Run tests to verify they pass**
+
+Run: `uv run pytest tests/test_power_service.py -v`
+Expected: 16 passed (11 from Task 9 plus the 5 added here)
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/openflight/power/models.py src/openflight/power/config.py \
+        src/openflight/power/service.py tests/test_power_service.py
+git commit -m "fix(power): send remaining seconds instead of a process-local deadline, add heartbeat"
+```
+
+---
+
 ## Task 11: UI store and indicator
 
 **Files:**
 - Create: `ui/src/stores/usePowerStore.ts`, `ui/src/components/BatteryStatus.tsx`,
   `ui/src/components/BatteryStatus.css`
-- Modify: `ui/src/services/socketService.ts`
+- Modify: `ui/src/services/socketService.ts`, **`ui/src/App.tsx`**
 - Test: `ui/src/components/BatteryStatus.test.tsx`
 
 **Interfaces:**
-- Consumes: the `power` / `power_shutdown_pending` / `power_shutdown_cancelled` events
-- Produces: `usePowerStore`, `<BatteryStatus />`
+- Consumes: the `power` / `power_shutdown_pending` / `power_shutdown_cancelled` events,
+  and `shutdown_remaining_seconds` from Task 10b
+- Produces: `usePowerStore`, `<BatteryStatus />` mounted in the App header
+
+**Mounting is part of this task.** An unmounted component is dead code that passes its
+own tests — `<BatteryStatus />` goes beside `<ConnectionStatus />` at `App.tsx:231`,
+inside `header__controls`.
+
+**The countdown ticks client-side** from `shutdown_remaining_seconds`. The server sends a
+duration rather than a deadline because `time.monotonic()` is process-local (Task 10b);
+the client decrements locally between updates and re-syncs whenever a `power` event
+arrives.
 
 - [ ] **Step 1: Write the failing test**
 
 ```tsx
 // ui/src/components/BatteryStatus.test.tsx
-import { render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { act, render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BatteryStatus } from './BatteryStatus';
 import { usePowerStore } from '../stores/usePowerStore';
 
@@ -2801,7 +3017,7 @@ const base = {
   pack_volts: 3.81, pack_percent: 62, pack_level: 'ok' as const,
   rail_volts: 5.09, rail_level: 'green' as const, source: 'battery' as const,
   runtime_minutes: null, shutdown_eligible: false,
-  pending_shutdown: null, warnings: [],
+  pending_shutdown: null, shutdown_remaining_seconds: null, warnings: [],
 };
 
 beforeEach(() => usePowerStore.setState({ view: null }));
@@ -2850,11 +3066,65 @@ describe('BatteryStatus', () => {
     usePowerStore.setState({
       view: {
         ...base, pack_level: 'critical',
-        pending_shutdown: { id: 'abc', deadline_monotonic: 0, reason: 'Pack at 3.18 V' },
+        pending_shutdown: { id: 'abc', reason: 'Pack at 3.18 V' },
+        shutdown_remaining_seconds: 60,
       },
     });
     render(<BatteryStatus />);
     expect(screen.getByRole('button', { name: /keep running/i })).toBeInTheDocument();
+  });
+
+  it('counts the shutdown down once per second', () => {
+    vi.useFakeTimers();
+    usePowerStore.setState({
+      view: {
+        ...base, pack_level: 'critical',
+        pending_shutdown: { id: 'abc', reason: 'Pack at 3.18 V' },
+        shutdown_remaining_seconds: 60,
+      },
+    });
+    render(<BatteryStatus />);
+    expect(screen.getByText(/60s/)).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(3000); });
+    expect(screen.getByText(/57s/)).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it('never counts below zero', () => {
+    vi.useFakeTimers();
+    usePowerStore.setState({
+      view: {
+        ...base, pack_level: 'critical',
+        pending_shutdown: { id: 'abc', reason: 'Pack at 3.18 V' },
+        shutdown_remaining_seconds: 2,
+      },
+    });
+    render(<BatteryStatus />);
+    act(() => { vi.advanceTimersByTime(10000); });
+    expect(screen.getByText(/0s/)).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it('re-syncs the countdown when a fresh view arrives', () => {
+    // A reconnect mid-window gets a server-computed remaining; the local
+    // ticker must adopt it rather than continuing from its own value.
+    vi.useFakeTimers();
+    const pending = { id: 'abc', reason: 'Pack at 3.18 V' };
+    usePowerStore.setState({
+      view: { ...base, pack_level: 'critical', pending_shutdown: pending,
+              shutdown_remaining_seconds: 60 },
+    });
+    render(<BatteryStatus />);
+    act(() => { vi.advanceTimersByTime(5000); });
+    expect(screen.getByText(/55s/)).toBeInTheDocument();
+    act(() => {
+      usePowerStore.setState({
+        view: { ...base, pack_level: 'critical', pending_shutdown: pending,
+                shutdown_remaining_seconds: 20 },
+      });
+    });
+    expect(screen.getByText(/20s/)).toBeInTheDocument();
+    vi.useRealTimers();
   });
 });
 ```
@@ -2872,8 +3142,9 @@ import { create } from 'zustand';
 
 export interface PendingShutdown {
   id: string;
-  deadline_monotonic: number;
   reason: string;
+  // No deadline field: the server's is monotonic and process-local, so it is
+  // stripped before emit. Use shutdown_remaining_seconds below.
 }
 
 export interface PowerView {
@@ -2886,6 +3157,7 @@ export interface PowerView {
   runtime_minutes: number | null;
   shutdown_eligible: boolean;
   pending_shutdown: PendingShutdown | null;
+  shutdown_remaining_seconds: number | null;
   warnings: string[];
 }
 
@@ -2902,10 +3174,34 @@ export const usePowerStore = create<PowerState>((set) => ({
 
 ```tsx
 // ui/src/components/BatteryStatus.tsx
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { usePowerStore } from '../stores/usePowerStore';
 import { socketService } from '../services/socketService';
 import './BatteryStatus.css';
+
+/**
+ * Tick a server-supplied duration down locally.
+ *
+ * The server sends seconds remaining rather than a deadline, because its
+ * deadline comes from time.monotonic() whose epoch is process-local and
+ * meaningless here. Resetting on every change of `seconds` is what makes a
+ * reconnect correct: get_power triggers a freshly computed value and the
+ * ticker adopts it instead of continuing from its own drifted count.
+ */
+function useCountdown(seconds: number | null): number | null {
+  const [remaining, setRemaining] = useState(seconds);
+
+  useEffect(() => {
+    setRemaining(seconds);
+    if (seconds === null) return undefined;
+    const id = setInterval(() => {
+      setRemaining((value) => (value === null ? null : Math.max(0, value - 1)));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [seconds]);
+
+  return remaining;
+}
 
 /**
  * Battery level and supply health.
@@ -2918,6 +3214,9 @@ import './BatteryStatus.css';
 export function BatteryStatus() {
   const view = usePowerStore((state) => state.view);
   const [expanded, setExpanded] = useState(false);
+  // Hooks run before any early return, so the countdown is driven even on the
+  // renders where nothing is displayed.
+  const countdown = useCountdown(view?.shutdown_remaining_seconds ?? null);
 
   if (!view) return null;
 
@@ -2990,7 +3289,10 @@ export function BatteryStatus() {
 
       {pending && (
         <div className="battery-status__shutdown" role="alert">
-          <span>Shutting down to protect the battery. {pending.reason}.</span>
+          <span>
+            Shutting down in {countdown ?? 0}s to protect the battery.{' '}
+            {pending.reason}.
+          </span>
           <button
             type="button"
             onClick={() => socketService.cancelShutdown(pending.id)}
@@ -3018,6 +3320,20 @@ and a method:
     this.socket?.emit('power_shutdown_cancel', { id });
   }
 ```
+
+**Mount it.** In `ui/src/App.tsx`, import beside the other components and render beside
+`<ConnectionStatus />` at line 231, inside `header__controls`:
+
+```tsx
+import { BatteryStatus } from './components/BatteryStatus';
+```
+
+```tsx
+          <ConnectionStatus connected={connected} />
+          <BatteryStatus />
+```
+
+Without this the component is dead code that passes its own tests and never appears.
 
 ```css
 /* ui/src/components/BatteryStatus.css */
@@ -3093,7 +3409,7 @@ and a method:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd ui && npx vitest run src/components/BatteryStatus.test.tsx`
-Expected: 7 passed
+Expected: 10 passed
 
 - [ ] **Step 5: Commit**
 
