@@ -40,6 +40,11 @@ IWR6843_OUTPUT_DIR=""
 IWR6843_AZIMUTH_OFFSET=""
 INCLINOMETER=false
 INCLINOMETER_ZERO_OFFSET=""
+POWER=""
+NO_POWER=""
+POWER_BOARD=""
+POWER_SHUTDOWN=""
+POWER_SHUTDOWN_VOLTS=""
 KLD7=false
 KLD7_PORT=""
 KLD7_ANGLE_OFFSET=""
@@ -209,6 +214,11 @@ while [[ $# -gt 0 ]]; do
             INCLINOMETER_ZERO_OFFSET="$2"
             shift 2
             ;;
+        --power) POWER=1; shift ;;
+        --no-power) NO_POWER=1; shift ;;
+        --power-board) POWER_BOARD="$2"; shift 2 ;;
+        --power-shutdown) POWER_SHUTDOWN=1; shift ;;
+        --power-shutdown-volts) POWER_SHUTDOWN_VOLTS="$2"; shift 2 ;;
         --kld7)
             KLD7=true
             shift
@@ -581,6 +591,12 @@ if [ "$INCLINOMETER" = true ]; then
     SERVER_CMD="$SERVER_CMD --inclinometer"
     [ -n "$INCLINOMETER_ZERO_OFFSET" ] && SERVER_CMD="$SERVER_CMD --inclinometer-zero-offset $INCLINOMETER_ZERO_OFFSET"
 fi
+
+[ -n "$POWER" ] && SERVER_CMD="$SERVER_CMD --power"
+[ -n "$NO_POWER" ] && SERVER_CMD="$SERVER_CMD --no-power"
+[ -n "$POWER_BOARD" ] && SERVER_CMD="$SERVER_CMD --power-board $POWER_BOARD"
+[ -n "$POWER_SHUTDOWN" ] && SERVER_CMD="$SERVER_CMD --power-shutdown"
+[ -n "$POWER_SHUTDOWN_VOLTS" ] && SERVER_CMD="$SERVER_CMD --power-shutdown-volts $POWER_SHUTDOWN_VOLTS"
 
 if [ "$EXPERIMENTAL_KLD7_RAW_RADC_LOGGING" = true ]; then
     SERVER_CMD="$SERVER_CMD --kld7-raw-logging"

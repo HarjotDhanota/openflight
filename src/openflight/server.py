@@ -3847,6 +3847,34 @@ def main():
         help="Degrees added to raw LIS3DH pitch (default: 0)",
     )
     parser.add_argument(
+        "--power",
+        action="store_true",
+        help="Enable battery and supply-health monitoring",
+    )
+    parser.add_argument(
+        "--no-power",
+        action="store_true",
+        help="Disable power monitoring even if power.json enables it",
+    )
+    parser.add_argument(
+        "--power-board",
+        default=None,
+        help="UPS board profile, e.g. x1209. Declares the power-loss GPIO",
+    )
+    parser.add_argument(
+        "--power-shutdown",
+        action="store_true",
+        help=(
+            "Automatically shut down when the pack reaches the critical threshold. Off unless given"
+        ),
+    )
+    parser.add_argument(
+        "--power-shutdown-volts",
+        type=float,
+        default=None,
+        help="Pack voltage at which automatic shutdown fires (default 3.2)",
+    )
+    parser.add_argument(
         "--iwr6843-port", default=None, help="TI serial port (auto-detect by default)"
     )
     parser.add_argument(
@@ -4274,6 +4302,18 @@ def main():
         else:
             print("ERROR: IWR6843 requested but failed to initialize. Exiting.")
             sys.exit(1)
+
+    if args.no_power:
+        logger.info("[POWER] Disabled by --no-power")
+    else:
+        init_power(
+            # None means "no override, use the config file". --power forces it
+            # on for someone whose power.json disabled it.
+            enabled=True if args.power else None,
+            board=args.power_board,
+            auto_shutdown_enabled=True if args.power_shutdown else None,
+            shutdown_volts=args.power_shutdown_volts,
+        )
 
     if args.inclinometer:
         if not init_inclinometer(zero_offset_deg=args.inclinometer_zero_offset):
