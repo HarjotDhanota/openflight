@@ -2464,9 +2464,47 @@ def test_disabled_config_skips_initialization(monkeypatch, tmp_path):
     assert server.init_power(config_path=path) is False
 
 
-def test_config_dict_reports_power_block(monkeypatch, tmp_path):
+def test_session_start_config_reports_power_block(monkeypatch, tmp_path):
     server.power_runtime_config = {"enabled": True, "board": "x1209"}
-    assert server.get_config_dict()["power"]["board"] == "x1209"
+    assert server._session_start_config()["power"]["board"] == "x1209"
+
+
+def test_stop_is_safe_when_called_from_the_sampling_thread():
+    """The automatic-shutdown path re-enters stop() from inside its own thread.
+
+    _loop -> sample_once -> pre_halt -> _cleanup_hardware_for_shutdown ->
+    power_service.stop(). Joining the current thread raises RuntimeError, and
+    this is the one path no other test exercises.
+    """
+    import time
+
+    from openflight.power.config import PowerConfig
+    from openflight.power.service import PowerService
+    from tests.test_power_service import FakeGauge, FakeRail, FakeSource
+
+    calls = []
+    service = None
+
+    def cleanup():
+        calls.append("cleanup")
+        service.stop()          # exactly what the server's cleanup does
+
+    service = PowerService(
+        gauge=FakeGauge(volts=3.1), source=FakeSource(), rail=FakeRail(),
+        config=PowerConfig(
+            dwell_samples=1, auto_shutdown_enabled=True,
+            shutdown_grace_seconds=0, sample_interval_s=0.01,
+        ),
+        pre_halt=cleanup,
+        halt=lambda: calls.append("halt") or True,
+    )
+    service.start()
+    for _ in range(200):
+        if "halt" in calls:
+            break
+        time.sleep(0.01)
+    service.stop()
+    assert calls == ["cleanup", "halt"]
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -2474,7 +2512,40 @@ def test_config_dict_reports_power_block(monkeypatch, tmp_path):
 Run: `uv run pytest tests/test_power_server.py -v`
 Expected: FAIL with `AttributeError: module 'openflight.server' has no attribute 'init_power'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [ ] **Step 3: Amend `PowerService.stop()` to be current-thread-safe**
+
+Wiring `pre_halt=_cleanup_hardware_for_shutdown` creates a re-entry Task 9 did not
+have: the server's cleanup calls `power_service.stop()`, and on the automatic-shutdown
+path that cleanup runs *on the sampling thread*. `Thread.join()` on the current thread
+raises. In `src/openflight/power/service.py`:
+
+```python
+    def stop(self) -> None:
+        """Stop sampling and release the readers.
+
+        Idempotent, and safe to call from the sampling thread itself. The
+        automatic-shutdown path arrives here from inside that thread --
+        _loop -> sample_once -> pre_halt -> the server's hardware cleanup ->
+        here -- and joining our own thread would raise RuntimeError. The stop
+        event is already set in that case, so the loop exits once the current
+        iteration returns.
+        """
+        self._stop_event.set()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+            self._thread = None
+        if self._closed:
+            return
+        self._closed = True
+        for reader in (self.gauge, self.source, self.rail):
+            try:
+                reader.close()
+            except Exception as error:  # pylint: disable=broad-exception-caught
+                logger.warning("[POWER] closing a reader failed: %s", error)
+```
+
+- [ ] **Step 4: Write minimal implementation**
 
 Near the `inclinometer_service` declarations at `server.py:130`:
 
@@ -2660,18 +2731,18 @@ Register the stop step next to the inclinometer's at `server.py:202`:
         _run_shutdown_step("power monitor stop", power_service.stop)
 ```
 
-And at `server.py:855`:
+And inside `_session_start_config()` (`server.py:842`), beside the inclinometer line:
 
 ```python
     config["power"] = dict(power_runtime_config)
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 5: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_power_server.py -v`
-Expected: 4 passed
+Expected: 6 passed
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/openflight/server.py tests/test_power_server.py
