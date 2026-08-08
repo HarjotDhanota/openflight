@@ -1,0 +1,82 @@
+.battery-status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+}
+
+.battery-status__summary {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+}
+
+.battery-status__bar {
+  position: relative;
+  width: 2.6rem;
+  height: 1rem;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+}
+
+.battery-status__bar::after {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  width: calc(var(--fill) - 4px);
+  background: currentColor;
+}
+
+.battery-status__bar--low {
+  color: #e0a800;
+}
+
+.battery-status__bar--critical {
+  color: #d9534f;
+}
+
+.battery-status__dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: #6c757d;
+}
+
+.battery-status__dot--green {
+  background: #3fb950;
+}
+
+.battery-status__dot--amber {
+  background: #e0a800;
+}
+
+.battery-status__dot--red {
+  background: #d9534f;
+}
+
+.battery-status__detail {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.6rem;
+  margin: 0;
+  opacity: 0.85;
+}
+
+.battery-status__warning {
+  color: #e0a800;
+}
+
+.battery-status__shutdown {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #d9534f;
+  border-radius: 4px;
+  color: #d9534f;
+}

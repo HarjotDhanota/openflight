@@ -3,6 +3,7 @@ import { useSystemStore } from '../stores/useSystemStore';
 import { useShotStore } from '../stores/useShotStore';
 import { useCameraStore, type CameraStatus } from '../stores/useCameraStore';
 import { useDebugStore } from '../stores/useDebugStore';
+import { usePowerStore } from '../stores/usePowerStore';
 import {
   isSwingSpeedShot,
   type Shot,
@@ -46,6 +47,7 @@ class SocketService {
       this.socket?.emit('get_session');
       this.socket?.emit('get_trigger_status');
       this.socket?.emit('get_radar_config');
+      this.socket?.emit('get_power');
     });
 
     this.socket.on('disconnect', () => {
@@ -175,6 +177,8 @@ class SocketService {
       useDebugStore.getState().setTriggerStatus(data);
     });
 
+    this.socket.on('power', (view) => usePowerStore.getState().setView(view));
+
     this.socket.on(
       'cloud_upload_status',
       (data: { state: 'idle' | 'running' | 'complete' | 'error'; message: string }) => {
@@ -227,6 +231,10 @@ class SocketService {
 
   toggleCameraStream() {
     this.socket?.emit('toggle_camera_stream');
+  }
+
+  cancelShutdown(id: string) {
+    this.socket?.emit('power_shutdown_cancel', { id });
   }
 }
 

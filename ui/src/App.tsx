@@ -6,6 +6,7 @@ import { useShotStore } from './stores/useShotStore';
 import { useCameraStore } from './stores/useCameraStore';
 import { useDebugStore } from './stores/useDebugStore';
 import { usePlayerStore } from './stores/usePlayerStore';
+import { usePowerStore } from './stores/usePowerStore';
 import { socketService } from './services/socketService';
 import { ShotDisplay } from './components/ShotDisplay';
 import { StatsView } from './components/StatsView';
@@ -13,6 +14,7 @@ import { ShotList } from './components/ShotList';
 import { DebugPanel } from './components/DebugPanel';
 import { CameraFeed } from './components/CameraFeed';
 import { ConnectionStatus } from './components/ConnectionStatus';
+import { BatteryStatus } from './components/BatteryStatus';
 import { SimStatus } from './components/SimStatus';
 import { SimShotBadges } from './components/SimShotBadges';
 import { ClubPicker } from './components/ClubPicker';
@@ -89,6 +91,7 @@ function AppContent() {
     }))
   );
   const cameraStatus = useCameraStore((state) => state.cameraStatus);
+  const powerView = usePowerStore((state) => state.view);
   const selectedPlayer = usePlayerStore((state) => state.selectedPlayer);
   const { debugReadings, debugShotLogs, radarConfig, triggerDiagnostics, triggerStatus } = useDebugStore(
     useShallow((state) => ({
@@ -229,6 +232,7 @@ function AppContent() {
           />
           <SimStatus statuses={simStatuses} />
           <ConnectionStatus connected={connected} />
+          <BatteryStatus view={powerView} />
           <button className="power-button" onClick={() => setShowShutdown(true)} title="Shut down">
             <svg
               viewBox="0 0 24 24"
