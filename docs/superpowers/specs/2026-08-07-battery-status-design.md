@@ -437,8 +437,18 @@ Mirrors `init_inclinometer` at `server.py:1136`:
 - included in the config dict at `server.py:855`
 
 Transport: `power` emitted on any level change, on arming or cancelling a shutdown, and on a
-10 s heartbeat. Battery state moves slowly; the shot path is latency-critical and must not
-carry this.
+heartbeat (`heartbeat_seconds`, default 10). Battery state moves slowly; the shot path is
+latency-critical and must not carry this.
+
+The heartbeat is not optional decoration. Levels change rarely while volts and percent drift
+continuously, so a change-only emit leaves the displayed percentage frozen for as long as a
+level holds — potentially a whole session.
+
+The wire format carries `shutdown_remaining_seconds`, computed at serialization time, **not**
+`deadline_monotonic`. `time.monotonic()` has a process-local epoch, so the deadline is
+meaningless to a browser; the reducer keeps using it internally because that is what makes
+the decision immune to the clock stepping at boot. A reconnecting client gets a fresh
+duration because `get_power` triggers an emit.
 
 **The sampling thread never blocks the shot path.** I²C reads take ~1 ms and `vcgencmd` forks
 a process — both happen on the power thread. `vcgencmd` invocations get a hard timeout
@@ -484,6 +494,7 @@ never stop the launch monitor from starting.
 | `board` | `null` | `null` or a known profile id |
 | `enabled` | `true` | bool |
 | `sample_interval_s` | `2.0` | finite, `0.5 ≤ x ≤ 60` |
+| `heartbeat_seconds` | `10.0` | finite, `1 ≤ x ≤ 300` |
 | `rail_amber_volts` / `rail_red_volts` | `5.0` / `4.9` | finite, `red < amber` |
 | `pack_low_volts` / `pack_critical_volts` | `3.6` / `3.4` | finite, `critical < low` |
 | `shutdown_volts` | `3.2` | finite, `≤ pack_critical_volts` |

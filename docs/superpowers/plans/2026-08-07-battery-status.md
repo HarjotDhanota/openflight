@@ -3451,19 +3451,36 @@ Beside the `--inclinometer` arguments:
 
 - [ ] **Step 2: Wire precedence in `main()`**
 
-Beside the `args.inclinometer` block (~`server.py:4092`). `--no-power` wins over everything,
-including a config file that enables monitoring:
+Beside the `args.inclinometer` block (~`server.py:4092`).
+
+**Do not load the config here.** `init_power` already reads it and returns `False` when
+`enabled` is false, so a second read in `main()` would be redundant — and `load_config`
+is not bound at module scope. Importing it there would also collide with the unrelated
+`load_config` from `cloud.config` used at `server.py:3215` and `3234`. Pass an override
+instead and let `init_power` own the file:
 
 ```python
     if args.no_power:
         logger.info("[POWER] Disabled by --no-power")
-    elif args.power or load_config(CONFIG_PATH).enabled:
+    else:
         init_power(
+            # None means "no override, use the config file". --power forces it
+            # on for someone whose power.json disabled it.
+            enabled=True if args.power else None,
             board=args.power_board,
             auto_shutdown_enabled=True if args.power_shutdown else None,
             shutdown_volts=args.power_shutdown_volts,
         )
 ```
+
+This gives the precedence table in spec §9.2 exactly: `--no-power` beats everything,
+`--power-*` flags beat the file, the file beats defaults. `init_power`'s `**overrides`
+loop already skips `None` values, so an absent flag changes nothing.
+
+Monitoring is **on by default** when hardware is present — `enabled` defaults to `true`.
+That is safe because the I²C probe is a no-op when nothing ACKs and no GPIO is touched
+without a board declaration (§9.3). `--power` therefore exists only to override a config
+file that turned it off.
 
 - [ ] **Step 3: Add start-kiosk.sh passthrough**
 
@@ -3474,6 +3491,7 @@ Beside the `--inclinometer` cases (~line 204) and the `SERVER_CMD` assembly (~li
         --no-power) NO_POWER=1; shift ;;
         --power-board) POWER_BOARD="$2"; shift 2 ;;
         --power-shutdown) POWER_SHUTDOWN=1; shift ;;
+        --power-shutdown-volts) POWER_SHUTDOWN_VOLTS="$2"; shift 2 ;;
 ```
 
 ```bash
@@ -3481,16 +3499,26 @@ Beside the `--inclinometer` cases (~line 204) and the `SERVER_CMD` assembly (~li
 [ -n "$NO_POWER" ] && SERVER_CMD="$SERVER_CMD --no-power"
 [ -n "$POWER_BOARD" ] && SERVER_CMD="$SERVER_CMD --power-board $POWER_BOARD"
 [ -n "$POWER_SHUTDOWN" ] && SERVER_CMD="$SERVER_CMD --power-shutdown"
+[ -n "$POWER_SHUTDOWN_VOLTS" ] && SERVER_CMD="$SERVER_CMD --power-shutdown-volts $POWER_SHUTDOWN_VOLTS"
 ```
+
+All five flags declared in this task's Interfaces block must appear in both blocks above.
+A flag the server accepts but the kiosk script silently drops is worse than one that does
+not exist, because it fails only for the person who reads the docs and uses it.
 
 - [ ] **Step 4: Write `docs/power/README.md`**
 
 Cover: supported hardware (Geekworm X120x/X12xx, UPS-Lite); the one-line
-`{"board": "x1209"}` config; every key from spec §9.1 with its default and range; the trust
+`{"board": "x1209"}` config; every key from spec §9.1 with its default and range —
+**including `heartbeat_seconds`, added by Task 10b**; all five CLI flags; the trust
 rule for `pld_gpio` without a known board; how to verify with `i2cdetect -y 1` and
 `pinctrl set 6 ip pu; pinctrl get 6`; that rail health needs a Pi 5; that percentage is
 whole-pack and cannot resolve one bad cell in a 1S4P holder; and that auto-shutdown is
 opt-in.
+
+Cross-check the key list against `PowerConfig` in `src/openflight/power/config.py` rather
+than against §9.1 alone — the dataclass is the authority, and §9.1 has already drifted
+once.
 
 - [ ] **Step 5: Full verification, then commit**
 
