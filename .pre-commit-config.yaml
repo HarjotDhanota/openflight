@@ -17,7 +17,10 @@ repos:
 
       - id: eslint
         name: eslint
-        entry: npm run lint
+        # Hooks run from the repository root, which has no package.json --
+        # the UI package lives in ui/. Without --prefix this fails ENOENT the
+        # first time anyone stages a file matching the pattern below.
+        entry: npm --prefix ui run lint
         language: system
         files: ^ui/src/.*\.(ts|tsx)$
         pass_filenames: false
