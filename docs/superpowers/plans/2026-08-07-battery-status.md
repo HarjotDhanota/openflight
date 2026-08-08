@@ -3014,19 +3014,23 @@ arrives.
 ```tsx
 // ui/src/components/BatteryStatus.test.tsx
 //
-// Uses renderToString, matching SimStatus.test.tsx and the rest of the UI
-// suite. The project has no jsdom and no @testing-library -- adding them
-// would mean three devDependencies plus a vitest environment and setupFiles
-// change, which is shared test infrastructure and does not belong inside a
-// feature PR.
+// Uses renderToString, matching SimStatus.test.tsx and the rest of the suite.
+// The project has no jsdom and no @testing-library; adding them is shared
+// infrastructure and belongs in its own PR, not inside a feature.
 //
-// Consequence: effects do not run under SSR, so this covers first render
-// only. The countdown tick, the re-sync on a fresh view, and the click on
-// "Keep running" are verified by hand on the Pi -- see Task 12.
+// The view arrives as a prop rather than from the store, matching
+// ConnectionStatus and SimStatus. That is not only convention: zustand v5
+// backs its hook with useSyncExternalStore, whose server snapshot is
+// getInitialState(), so setState() is invisible to renderToString and a
+// store-reading component would render its initial state forever under SSR.
+//
+// Effects do not run under SSR, so this covers first render only. The
+// countdown tick, the re-sync on a fresh view, and the "Keep running" click
+// are verified by hand -- see Task 12.
 import { renderToString } from 'react-dom/server';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { BatteryStatus } from './BatteryStatus';
-import { usePowerStore, type PowerView } from '../stores/usePowerStore';
+import type { PowerView } from '../stores/usePowerStore';
 
 const base: PowerView = {
   pack_volts: 3.81, pack_percent: 62, pack_level: 'ok',
@@ -3037,69 +3041,66 @@ const base: PowerView = {
 
 const pending = { id: 'abc', reason: 'Pack at 3.18 V' };
 
-beforeEach(() => usePowerStore.setState({ view: null }));
-
 describe('BatteryStatus', () => {
   it('renders nothing when no power data has arrived', () => {
-    expect(renderToString(<BatteryStatus />)).toBe('');
+    expect(renderToString(<BatteryStatus view={null} />)).toBe('');
   });
 
   it('renders nothing when every reader is absent', () => {
-    usePowerStore.setState({
-      view: { ...base, pack_level: 'unknown', rail_level: 'unknown', pack_percent: null },
-    });
-    expect(renderToString(<BatteryStatus />)).toBe('');
+    const view = { ...base, pack_level: 'unknown' as const,
+                   rail_level: 'unknown' as const, pack_percent: null };
+    expect(renderToString(<BatteryStatus view={view} />)).toBe('');
   });
 
   it('shows the percentage', () => {
-    usePowerStore.setState({ view: base });
-    expect(renderToString(<BatteryStatus />)).toContain('62%');
+    expect(renderToString(<BatteryStatus view={base} />)).toContain('62%');
   });
 
   it('shows the percentage and an external-power marker on wall power', () => {
     // ModelGauge tracks across charge, so the number stays meaningful.
-    usePowerStore.setState({ view: { ...base, source: 'external' } });
-    const html = renderToString(<BatteryStatus />);
+    const html = renderToString(<BatteryStatus view={{ ...base, source: 'external' }} />);
     expect(html).toContain('62%');
     expect(html).toContain('On external power');
   });
 
   it('carries the rail level as a class on the dot', () => {
-    usePowerStore.setState({ view: { ...base, rail_level: 'amber' } });
-    expect(renderToString(<BatteryStatus />)).toContain('battery-status__dot--amber');
+    const view = { ...base, rail_level: 'amber' as const };
+    expect(renderToString(<BatteryStatus view={view} />)).toContain(
+      'battery-status__dot--amber',
+    );
   });
 
   it('hides the fuel bar when only the rail is present', () => {
-    usePowerStore.setState({
-      view: { ...base, pack_level: 'unknown', pack_percent: null },
-    });
-    const html = renderToString(<BatteryStatus />);
+    const view = { ...base, pack_level: 'unknown' as const, pack_percent: null };
+    const html = renderToString(<BatteryStatus view={view} />);
     expect(html).not.toContain('%');
     expect(html).toContain('battery-status__dot');
   });
 
-  it('shows a Keep running button while a shutdown is pending', () => {
-    usePowerStore.setState({
-      view: { ...base, pack_level: 'critical', pending_shutdown: pending,
-              shutdown_remaining_seconds: 60 },
-    });
-    expect(renderToString(<BatteryStatus />)).toContain('Keep running');
+  it('renders the warnings the server sent, verbatim', () => {
+    // Policy lives on the server. The component must not re-derive a warning
+    // from pack_level, or the two would drift.
+    const view = { ...base, pack_level: 'critical' as const,
+                   warnings: ['Battery critically low'] };
+    expect(renderToString(<BatteryStatus view={view} />)).toContain(
+      'Battery critically low',
+    );
   });
 
-  it('shows the server-supplied seconds on first render', () => {
-    // useState seeds from the server value and effects do not run in SSR, so
-    // this asserts the countdown starts from the right number -- not that it
-    // ticks.
-    usePowerStore.setState({
-      view: { ...base, pack_level: 'critical', pending_shutdown: pending,
-              shutdown_remaining_seconds: 45 },
-    });
-    expect(renderToString(<BatteryStatus />)).toContain('45s');
+  it('shows a Keep running button and the server-supplied seconds', () => {
+    // useState seeds from the prop and effects do not run in SSR, so this
+    // asserts the countdown starts from the right number -- not that it ticks.
+    const view = { ...base, pack_level: 'critical' as const,
+                   pending_shutdown: pending, shutdown_remaining_seconds: 45 };
+    const html = renderToString(<BatteryStatus view={view} />);
+    expect(html).toContain('Keep running');
+    expect(html).toContain('45s');
   });
 
   it('omits the shutdown block entirely when nothing is pending', () => {
-    usePowerStore.setState({ view: { ...base, pack_level: 'critical' } });
-    const html = renderToString(<BatteryStatus />);
+    const view = { ...base, pack_level: 'critical' as const,
+                   warnings: ['Battery critically low'] };
+    const html = renderToString(<BatteryStatus view={view} />);
     expect(html).not.toContain('Keep running');
     expect(html).toContain('Battery critically low');
   });
@@ -3152,7 +3153,7 @@ export const usePowerStore = create<PowerState>((set) => ({
 ```tsx
 // ui/src/components/BatteryStatus.tsx
 import { useEffect, useState } from 'react';
-import { usePowerStore } from '../stores/usePowerStore';
+import type { PowerView } from '../stores/usePowerStore';
 import { socketService } from '../services/socketService';
 import './BatteryStatus.css';
 
@@ -3187,9 +3188,18 @@ function useCountdown(seconds: number | null): number | null {
  * exhausted pack and a sagging 5V rail end a session for different reasons.
  * Each half renders only when its reader is present, so a build with a UPS
  * and no Pi 5 PMIC shows a bar and no dot, and vice versa.
+ *
+ * Takes the view as a prop rather than reading the store, matching
+ * ConnectionStatus and SimStatus. Beyond convention, this is what makes it
+ * testable: zustand v5 backs its hook with useSyncExternalStore, whose server
+ * snapshot is getInitialState(), so a store-reading component renders its
+ * initial state forever under renderToString and setState has no effect.
  */
-export function BatteryStatus() {
-  const view = usePowerStore((state) => state.view);
+interface BatteryStatusProps {
+  view: PowerView | null;
+}
+
+export function BatteryStatus({ view }: BatteryStatusProps) {
   const [expanded, setExpanded] = useState(false);
   // Hooks run before any early return, so the countdown is driven even on the
   // renders where nothing is displayed.
@@ -3298,19 +3308,30 @@ and a method:
   }
 ```
 
-**Mount it.** In `ui/src/App.tsx`, import beside the other components and render beside
-`<ConnectionStatus />` at line 231, inside `header__controls`:
+**Mount it.** `App.tsx` owns the store subscription and passes the view down, exactly as
+it does for `ConnectionStatus`. Add the imports:
 
 ```tsx
 import { BatteryStatus } from './components/BatteryStatus';
+import { usePowerStore } from './stores/usePowerStore';
 ```
+
+read the store alongside App's other state:
+
+```tsx
+  const powerView = usePowerStore((state) => state.view);
+```
+
+and render beside `<ConnectionStatus />` at line 231, inside `header__controls`:
 
 ```tsx
           <ConnectionStatus connected={connected} />
-          <BatteryStatus />
+          <BatteryStatus view={powerView} />
 ```
 
 Without this the component is dead code that passes its own tests and never appears.
+App is not SSR-tested, so reading the store here is fine — the `getInitialState`
+limitation only bites under `renderToString`.
 
 ```css
 /* ui/src/components/BatteryStatus.css */
