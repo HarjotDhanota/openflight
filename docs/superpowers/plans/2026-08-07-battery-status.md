@@ -2484,13 +2484,15 @@ def test_stop_is_safe_when_called_from_the_sampling_thread():
 
     calls = []
     service = None
+    gauge = FakeGauge(volts=3.1)
 
     def cleanup():
         calls.append("cleanup")
-        service.stop()          # exactly what the server's cleanup does
+        service.stop()              # exactly what the server's cleanup does
+        calls.append("stopped")     # load-bearing: never reached if stop() raises
 
     service = PowerService(
-        gauge=FakeGauge(volts=3.1), source=FakeSource(), rail=FakeRail(),
+        gauge=gauge, source=FakeSource(), rail=FakeRail(),
         config=PowerConfig(
             dwell_samples=1, auto_shutdown_enabled=True,
             shutdown_grace_seconds=0, sample_interval_s=0.01,
@@ -2504,7 +2506,15 @@ def test_stop_is_safe_when_called_from_the_sampling_thread():
             break
         time.sleep(0.01)
     service.stop()
-    assert calls == ["cleanup", "halt"]
+
+    # The "stopped" marker is what makes this test bite. sample_once wraps
+    # pre_halt in try/except, so a RuntimeError from the join is swallowed and
+    # the halt still runs -- asserting only ["cleanup", "halt"] would pass
+    # against the broken implementation.
+    assert calls == ["cleanup", "stopped", "halt"]
+    # And assert the consequence, not merely that nothing raised: aborting at
+    # the join leaves the I2C bus and GPIO line open.
+    assert gauge.closed is True
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
