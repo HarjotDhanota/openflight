@@ -38,9 +38,13 @@ SEN-14262               Raspberry Pi           OPS243
 │ GATE ─────┼──────────┼──────────┼──────────┤ HOST_INT │
 │           │          │          │          │ (J3 P3)  │
 │ GND ──────┼──────────┤ GND      ├──────────┤ GND      │
-│           │          │          │          │ (J3 P1)  │
+│           │          │          │          │ (J3 P10) │
 └───────────┘          └──────────┘          └──────────┘
 ```
+
+> **J3 pin 1 is a GPIO, not ground.** Ground is **pin 10**, and pin 1 sits at the
+> **right** end of the J3 header, so the numbering runs right to left. This was
+> corrected in [PR #166](https://github.com/jewbetcha/openflight/pull/166).
 
 See [sound-trigger-wiring.md](sound-trigger-wiring.md) for detailed instructions and troubleshooting.
 
@@ -111,11 +115,49 @@ K-LD7 Module (UART) → FTDI 3.3V Adapter → USB → Raspberry Pi
 
 One unit is mounted vertically (launch angle), one horizontally (club path / aim direction). A `--kld7-angle-offset` parameter corrects for mounting geometry — see the [setup guide](raspberry-pi-setup.md) for calibration.
 
+## Environmental & Leveling Sensors — OPTIONAL
+
+Two I²C sensors that share one bus and one pair of pins. Neither is required to
+run OpenFlight; each removes a specific source of silent error.
+
+| Part | Description | Link | ~Price |
+|------|-------------|------|--------|
+| **Adafruit BME280** | Temperature / pressure / humidity → measured air density for carry. Replaces the hardcoded ISA sea-level assumption, worth up to ~14 yd of driver carry at altitude | [Adafruit 2652](https://www.adafruit.com/product/2652) | $14.95 |
+| **Adafruit LIS3DH** | 3-axis accelerometer → measured mount pitch and roll, so the unit corrects itself on uneven ground instead of needing `--iwr6843-tilt-deg` | [Adafruit 2809](https://www.adafruit.com/product/2809) | $4.95 |
+| **QT → female sockets cable** | Connects the sensor chain to the Pi header. **Must be the FEMALE version** — the Pi header is male pins | [Adafruit 4397](https://www.adafruit.com/product/4397) | $0.95 |
+| **QT → QT cable** | Chains BME280 to LIS3DH. Pick a length that reaches the radar mount plate | [Adafruit 4210](https://www.adafruit.com/product/4210) (100 mm) or [4401](https://www.adafruit.com/product/4401) (200 mm) | $0.95-1.25 |
+| Spirit level | For the one-time leveling zero at assembly | Any | $5 |
+
+**No soldering.** The chain is Pi header → 4397 → BME280 → 4210 → LIS3DH.
+
+| 4397 wire | Pi physical pin |
+|---|---|
+| Red — 3.3V | 17 |
+| Black — GND | 25 |
+| Blue — SDA | 3 |
+| Yellow — SCL | 5 |
+
+> **Buy the BME280 from Adafruit or SparkFun, not a marketplace.** Generic
+> "GY-BME280" modules very often carry a **BMP280** die, which has no humidity
+> channel. Check with chip ID register `0xD0`: `0x60` = BME280, `0x58` = BMP280.
+> Adafruit's board defaults to I²C address **0x77** (0x76 with the ADDR jumper
+> closed); most generics default to 0x76.
+
+> **I²C is not enabled by default on this build.** Add `dtparam=i2c_arm=on` to
+> `/boot/firmware/config.txt` and add your user to the `i2c` group. See
+> [hardware-integration.md](hardware-integration.md).
+
+The LIS3DH mounts on the **radar's mount plate**, not the case, so it stays
+rigid relative to the antenna when the mount is adjusted. See the leveling
+design doc for the one-time zeroing procedure — a spirit level, once, at
+assembly.
+
 ## Power & Accessories
 
 | Part | Description | Link | ~Price |
 |------|-------------|------|--------|
-| **27W USB-C Power Supply** | Official Pi 5 power supply (5V 5A) | [Adafruit](https://www.adafruit.com/product/5814) | $14 |
+| **27W USB-C Power Supply** | Official Pi 5 power supply (5V 5A). **Not optional** — below 5A the Pi caps total USB current at 600 mA instead of 1.6 A | [Adafruit](https://www.adafruit.com/product/5814) | $14 |
+| micro-HDMI to HDMI cable | **Check what shipped with your display** — the Pi 5 has micro-HDMI ports, and some panels include a full-size HDMI cable that will not fit. The ROADOM 7" includes the correct micro-HDMI cable | Any | $8 if needed |
 | MicroSD Card (32GB+) | For Pi OS and software | Any Class 10 | $10 |
 | USB-A to Micro-USB Cable | For OPS243 radar connection | Any | $5 |
 
@@ -133,10 +175,11 @@ One unit is mounted vertically (launch angle), one horizontally (club path / aim
 |----------|--------|
 | Core (OPS243, Pi 5, Display) | $355 |
 | Sound Trigger (SEN-14262 + resistor + wires) | $18 |
-| Power & Accessories | $27 |
-| **Subtotal, no angle radar** | **~$400** |
+| Power & Accessories (incl. micro-HDMI cable) | $37 |
+| **Subtotal, no angle radar** | **~$410** |
 | Angle Radar (IWR6843LEVM + cable + wire) — **current** | $156 |
-| **Total with angle radar** | **~$556** |
+| **Total with angle radar** | **~$566** |
+| Environmental & leveling sensors (BME280 + LIS3DH + cables) — **optional** | $23 |
 | Angle Radar (2× K-LD7 + FTDI adapters) — **deprecated** | $140 |
 
 OpenFlight works without any angle radar: you get ball speed, club speed, smash

@@ -1,0 +1,270 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1300" height="1520" viewBox="0 0 1300 1520" role="img">
+<title>OpenFlight full system wiring</title>
+<desc>Raspberry Pi 5 40-pin header. Above it, the SEN-14262 sound detector and the BME280 plus LIS3DH I2C sensor chain. Below it, the OPS243-A radar and the 7-inch display. Connections that do not use the header are listed in a separate panel.</desc>
+<style>
+ .ts{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:12px;fill:#3d3d3a}
+ .tn{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:10px;fill:#3d3d3a}
+ .th{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:14px;font-weight:500;fill:#3d3d3a}
+ .tt{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:19px;font-weight:600;fill:#3d3d3a}
+ .wt{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:14px;font-weight:500;fill:#FFFFFF}
+ .wn{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:11px;fill:#FFFFFF}
+</style>
+<rect width="1300" height="1520" fill="#FFFFFF"/>
+<text class="tt" x="40" y="42">OpenFlight — full system wiring</text>
+<text class="ts" x="40" y="64">Raspberry Pi 5 · Layout A (OPS243 on GPIO UART, IWR6843 on USB) · all pin numbers are PHYSICAL</text>
+<rect x="282" y="486" width="392" height="20" fill="#FFFFFF"/>
+<text class="th" x="286" y="500">Raspberry Pi 5 — 40-pin GPIO header (pin 1 top-left)</text>
+<rect x="286" y="520" width="628" height="120" rx="6" fill="#D9B24C" stroke="#A8842E" stroke-width="1.5"/>
+<rect x="307" y="552" width="16" height="16" rx="2" fill="#E8811F" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="315" y="545" text-anchor="middle">1</text>
+<text class="tn" x="315" y="533" text-anchor="middle" fill="#7A6520">3V3</text>
+<rect x="307" y="592" width="16" height="16" rx="2" fill="#D0342C" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="315" y="623" text-anchor="middle">2</text>
+<text class="tn" x="315" y="635" text-anchor="middle" fill="#7A6520">5V</text>
+<rect x="337" y="552" width="16" height="16" rx="2" fill="#1E8A4F" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="345" y="545" text-anchor="middle">3</text>
+<text class="tn" x="345" y="533" text-anchor="middle" fill="#7A6520">SDA</text>
+<rect x="337" y="592" width="16" height="16" rx="2" fill="#D0342C" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="345" y="623" text-anchor="middle">4</text>
+<text class="tn" x="345" y="635" text-anchor="middle" fill="#7A6520">5V</text>
+<rect x="367" y="552" width="16" height="16" rx="2" fill="#17A2B8" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="375" y="545" text-anchor="middle">5</text>
+<text class="tn" x="375" y="533" text-anchor="middle" fill="#7A6520">SCL</text>
+<rect x="367" y="592" width="16" height="16" rx="2" fill="#1B1B1B" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="375" y="623" text-anchor="middle">6</text>
+<text class="tn" x="375" y="635" text-anchor="middle" fill="#7A6520">GND</text>
+<rect x="397" y="552" width="16" height="16" rx="2" fill="#FFFFFF" stroke="#9AA0A6" stroke-width="1.5"/>
+<text class="tn" x="405" y="545" text-anchor="middle">7</text>
+<text class="tn" x="405" y="533" text-anchor="middle" fill="#7A6520">G4</text>
+<rect x="397" y="592" width="16" height="16" rx="2" fill="#8A4FBF" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="405" y="623" text-anchor="middle">8</text>
+<text class="tn" x="405" y="635" text-anchor="middle" fill="#7A6520">TX0</text>
+<rect x="427" y="552" width="16" height="16" rx="2" fill="#1B1B1B" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="435" y="545" text-anchor="middle">9</text>
+<text class="tn" x="435" y="533" text-anchor="middle" fill="#7A6520">GND</text>
+<rect x="427" y="592" width="16" height="16" rx="2" fill="#2B6FD0" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="435" y="623" text-anchor="middle">10</text>
+<text class="tn" x="435" y="635" text-anchor="middle" fill="#7A6520">RX0</text>
+<rect x="457" y="552" width="16" height="16" rx="2" fill="#E8C21F" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="465" y="545" text-anchor="middle">11</text>
+<text class="tn" x="465" y="533" text-anchor="middle" fill="#7A6520">G17</text>
+<rect x="457" y="592" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="465" y="623" text-anchor="middle">12</text>
+<text class="tn" x="465" y="635" text-anchor="middle" fill="#7A6520">G18</text>
+<rect x="487" y="552" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="495" y="545" text-anchor="middle">13</text>
+<text class="tn" x="495" y="533" text-anchor="middle" fill="#7A6520">G27</text>
+<rect x="487" y="592" width="16" height="16" rx="2" fill="#1B1B1B" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="495" y="623" text-anchor="middle">14</text>
+<text class="tn" x="495" y="635" text-anchor="middle" fill="#7A6520">GND</text>
+<rect x="517" y="552" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="525" y="545" text-anchor="middle">15</text>
+<text class="tn" x="525" y="533" text-anchor="middle" fill="#7A6520">G22</text>
+<rect x="517" y="592" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="525" y="623" text-anchor="middle">16</text>
+<text class="tn" x="525" y="635" text-anchor="middle" fill="#7A6520">G23</text>
+<rect x="547" y="552" width="16" height="16" rx="2" fill="#E8811F" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="555" y="545" text-anchor="middle">17</text>
+<text class="tn" x="555" y="533" text-anchor="middle" fill="#7A6520">3V3</text>
+<rect x="547" y="592" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="555" y="623" text-anchor="middle">18</text>
+<text class="tn" x="555" y="635" text-anchor="middle" fill="#7A6520">G24</text>
+<rect x="577" y="552" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="585" y="545" text-anchor="middle">19</text>
+<text class="tn" x="585" y="533" text-anchor="middle" fill="#7A6520">MOSI</text>
+<rect x="577" y="592" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="585" y="623" text-anchor="middle">20</text>
+<text class="tn" x="585" y="635" text-anchor="middle" fill="#7A6520">GND</text>
+<rect x="607" y="552" width="16" height="16" rx="2" fill="#FFFFFF" stroke="#9AA0A6" stroke-width="1.5"/>
+<text class="tn" x="615" y="545" text-anchor="middle">21</text>
+<text class="tn" x="615" y="533" text-anchor="middle" fill="#7A6520">MISO</text>
+<rect x="607" y="592" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="615" y="623" text-anchor="middle">22</text>
+<text class="tn" x="615" y="635" text-anchor="middle" fill="#7A6520">G25</text>
+<rect x="637" y="552" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="645" y="545" text-anchor="middle">23</text>
+<text class="tn" x="645" y="533" text-anchor="middle" fill="#7A6520">SCLK</text>
+<rect x="637" y="592" width="16" height="16" rx="2" fill="#FFFFFF" stroke="#9AA0A6" stroke-width="1.5"/>
+<text class="tn" x="645" y="623" text-anchor="middle">24</text>
+<text class="tn" x="645" y="635" text-anchor="middle" fill="#7A6520">CE0</text>
+<rect x="667" y="552" width="16" height="16" rx="2" fill="#1B1B1B" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="675" y="545" text-anchor="middle">25</text>
+<text class="tn" x="675" y="533" text-anchor="middle" fill="#7A6520">GND</text>
+<rect x="667" y="592" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="675" y="623" text-anchor="middle">26</text>
+<text class="tn" x="675" y="635" text-anchor="middle" fill="#7A6520">CE1</text>
+<rect x="697" y="552" width="16" height="16" rx="2" fill="#FFFFFF" stroke="#B00020" stroke-width="1.5"/>
+<text class="tn" x="705" y="545" text-anchor="middle">27</text>
+<text class="tn" x="705" y="533" text-anchor="middle" fill="#7A6520">ID</text>
+<rect x="697" y="592" width="16" height="16" rx="2" fill="#FFFFFF" stroke="#B00020" stroke-width="1.5"/>
+<text class="tn" x="705" y="623" text-anchor="middle">28</text>
+<text class="tn" x="705" y="635" text-anchor="middle" fill="#7A6520">ID</text>
+<rect x="727" y="552" width="16" height="16" rx="2" fill="#FFFFFF" stroke="#9AA0A6" stroke-width="1.5"/>
+<text class="tn" x="735" y="545" text-anchor="middle">29</text>
+<text class="tn" x="735" y="533" text-anchor="middle" fill="#7A6520">G5</text>
+<rect x="727" y="592" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="735" y="623" text-anchor="middle">30</text>
+<text class="tn" x="735" y="635" text-anchor="middle" fill="#7A6520">GND</text>
+<rect x="757" y="552" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="765" y="545" text-anchor="middle">31</text>
+<text class="tn" x="765" y="533" text-anchor="middle" fill="#7A6520">G6</text>
+<rect x="757" y="592" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="765" y="623" text-anchor="middle">32</text>
+<text class="tn" x="765" y="635" text-anchor="middle" fill="#7A6520">G12</text>
+<rect x="787" y="552" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="795" y="545" text-anchor="middle">33</text>
+<text class="tn" x="795" y="533" text-anchor="middle" fill="#7A6520">G13</text>
+<rect x="787" y="592" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="795" y="623" text-anchor="middle">34</text>
+<text class="tn" x="795" y="635" text-anchor="middle" fill="#7A6520">GND</text>
+<rect x="817" y="552" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="825" y="545" text-anchor="middle">35</text>
+<text class="tn" x="825" y="533" text-anchor="middle" fill="#7A6520">G19</text>
+<rect x="817" y="592" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="825" y="623" text-anchor="middle">36</text>
+<text class="tn" x="825" y="635" text-anchor="middle" fill="#7A6520">G16</text>
+<rect x="847" y="552" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="855" y="545" text-anchor="middle">37</text>
+<text class="tn" x="855" y="533" text-anchor="middle" fill="#7A6520">G26</text>
+<rect x="847" y="592" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="855" y="623" text-anchor="middle">38</text>
+<text class="tn" x="855" y="635" text-anchor="middle" fill="#7A6520">G20</text>
+<rect x="877" y="552" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="885" y="545" text-anchor="middle">39</text>
+<text class="tn" x="885" y="533" text-anchor="middle" fill="#7A6520">GND</text>
+<rect x="877" y="592" width="16" height="16" rx="2" fill="#2A2A2A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="885" y="623" text-anchor="middle">40</text>
+<text class="tn" x="885" y="635" text-anchor="middle" fill="#7A6520">G21</text>
+<rect x="40" y="150" width="210" height="150" rx="10" fill="#E23A34" stroke="#141414" stroke-width="1.5"/>
+<text class="wt" x="54" y="175">SEN-14262</text>
+<text class="wn" x="54" y="195">Sound detector</text>
+<text class="wn" x="54" y="210">impact trigger</text>
+<text class="wn" x="54" y="225">R17 = 47 kOhm</text>
+<circle cx="76" cy="255" r="20" fill="#2A2A2A" stroke="#141414" stroke-width="2"/>
+<rect x="226" y="193" width="24" height="14" rx="2" fill="#EDEDED" stroke="#141414" stroke-width="1.5"/>
+<text class="wn" x="220" y="200" text-anchor="end" dominant-baseline="central">GATE</text>
+<rect x="226" y="221" width="24" height="14" rx="2" fill="#EDEDED" stroke="#141414" stroke-width="1.5"/>
+<text class="wn" x="220" y="228" text-anchor="end" dominant-baseline="central">VCC</text>
+<rect x="226" y="249" width="24" height="14" rx="2" fill="#EDEDED" stroke="#141414" stroke-width="1.5"/>
+<text class="wn" x="220" y="256" text-anchor="end" dominant-baseline="central">GND</text>
+<path d="M 250 228 L 252 228 L 252 440 L 315 440 L 315 560" fill="none" stroke="#E8811F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="315" cy="560" r="7" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<path d="M 250 256 L 262 256 L 262 452 L 435 452 L 435 560" fill="none" stroke="#1B1B1B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="435" cy="560" r="7" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<path d="M 250 200 L 272 200 L 272 464 L 465 464 L 465 560" fill="none" stroke="#E8C21F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="465" cy="560" r="7" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<circle cx="272" cy="464" r="5.5" fill="#B8901A"/>
+<path d="M 272 464 L 272 752 L 310 752 L 310 768" fill="none" stroke="#E8C21F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="650" y="150" width="240" height="120" rx="10" fill="#2B5FA8" stroke="#123C6E" stroke-width="1.5"/>
+<text class="wt" x="664" y="175">BME280</text>
+<text class="wn" x="664" y="195">Air density</text>
+<text class="wn" x="664" y="210">Adafruit 2652 · 0x77</text>
+<rect x="950" y="150" width="240" height="120" rx="10" fill="#5B3E9B" stroke="#33215C" stroke-width="1.5"/>
+<text class="wt" x="964" y="175">LIS3DH</text>
+<text class="wn" x="964" y="195">Mount tilt · 0x18</text>
+<text class="wn" x="964" y="210">Adafruit 2809</text>
+<text class="wn" x="964" y="225">goes on the radar mount plate</text>
+<path d="M890 210 L950 210" stroke="#6E7378" stroke-width="7" stroke-linecap="round"/>
+<text class="tn" x="920" y="200" text-anchor="middle">QT-QT</text>
+<rect x="590" y="296" width="300" height="28" rx="6" fill="#F2F2EE" stroke="#6E7378" stroke-width="1.5"/>
+<text class="tn" x="740" y="314" text-anchor="middle">STEMMA QT to FEMALE-socket cable (Adafruit 4397)</text>
+<path d="M690 270 L690 296" stroke="#6E7378" stroke-width="7" stroke-linecap="round"/>
+<path d="M 620 324 L 620 380 L 345 380 L 345 560" fill="none" stroke="#1E8A4F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="345" cy="560" r="7" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<text class="tn" x="620" y="342" text-anchor="middle">SDA</text>
+<path d="M 672 324 L 672 392 L 375 392 L 375 560" fill="none" stroke="#17A2B8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="375" cy="560" r="7" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<text class="tn" x="672" y="342" text-anchor="middle">SCL</text>
+<path d="M 780 324 L 780 404 L 555 404 L 555 560" fill="none" stroke="#E8811F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="555" cy="560" r="7" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<text class="tn" x="780" y="342" text-anchor="middle">3V3</text>
+<path d="M 860 324 L 860 416 L 675 416 L 675 560" fill="none" stroke="#1B1B1B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="675" cy="560" r="7" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<text class="tn" x="860" y="342" text-anchor="middle">GND</text>
+<rect x="40" y="768" width="400" height="30" rx="4" fill="#0E5730" stroke="#0A3D22" stroke-width="1.5"/>
+<text class="ts" x="452" y="783" dominant-baseline="central">J3 header — pin 1 at the RIGHT end</text>
+<rect x="40" y="835" width="400" height="185" rx="10" fill="#1E8A4F" stroke="#0E5730" stroke-width="1.5"/>
+<text class="wt" x="54" y="860">OPS243-A</text>
+<text class="wn" x="54" y="880">24 GHz Doppler — ball/club speed, spin, trigger</text>
+<text class="wn" x="54" y="895">10=GND  9=5V  7=TxD  6=RxD  3=HOST_INT</text>
+<text class="wn" x="54" y="910">J3 pin 1 is a GPIO, NOT ground</text>
+<rect x="92" y="775" width="16" height="16" rx="2" fill="#F2F2EE" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="100" y="818" text-anchor="middle">10</text>
+<rect x="122" y="775" width="16" height="16" rx="2" fill="#F2F2EE" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="130" y="818" text-anchor="middle">9</text>
+<rect x="152" y="775" width="16" height="16" rx="2" fill="#7FB79A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="160" y="818" text-anchor="middle">8</text>
+<rect x="182" y="775" width="16" height="16" rx="2" fill="#F2F2EE" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="190" y="818" text-anchor="middle">7</text>
+<rect x="212" y="775" width="16" height="16" rx="2" fill="#F2F2EE" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="220" y="818" text-anchor="middle">6</text>
+<rect x="242" y="775" width="16" height="16" rx="2" fill="#7FB79A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="250" y="818" text-anchor="middle">5</text>
+<rect x="272" y="775" width="16" height="16" rx="2" fill="#7FB79A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="280" y="818" text-anchor="middle">4</text>
+<rect x="302" y="775" width="16" height="16" rx="2" fill="#F2F2EE" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="310" y="818" text-anchor="middle">3</text>
+<rect x="332" y="775" width="16" height="16" rx="2" fill="#7FB79A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="340" y="818" text-anchor="middle">2</text>
+<rect x="362" y="775" width="16" height="16" rx="2" fill="#7FB79A" stroke="#141414" stroke-width="1.5"/>
+<text class="tn" x="370" y="818" text-anchor="middle">1</text>
+<rect x="60" y="930" width="170" height="75" rx="3" fill="#E0B63C"/>
+<rect x="250" y="930" width="170" height="75" rx="3" fill="#E0B63C"/>
+<path d="M 100 768 L 100 748 L 375 748 L 375 600" fill="none" stroke="#1B1B1B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="375" cy="600" r="7" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<path d="M 130 768 L 130 732 L 345 732 L 345 600" fill="none" stroke="#D0342C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="345" cy="600" r="7" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<path d="M 190 768 L 190 716 L 435 716 L 435 600" fill="none" stroke="#2B6FD0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="435" cy="600" r="7" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<path d="M 220 768 L 220 700 L 405 700 L 405 600" fill="none" stroke="#8A4FBF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="405" cy="600" r="7" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<rect x="760" y="820" width="440" height="170" rx="10" fill="#546E7A" stroke="#2F4048" stroke-width="1.5"/>
+<text class="wt" x="774" y="845">ROADOM 7" 1024x600</text>
+<text class="wn" x="774" y="865">Display + capacitive touch</text>
+<text class="wn" x="774" y="880">Use ONE 5V wire of the 3-pin GPIO cable.</text>
+<text class="wn" x="774" y="895">Leave the upper (Power) micro-USB unplugged —</text>
+<text class="wn" x="774" y="910">it would take 550 mA out of the Pi USB budget.</text>
+<text class="wn" x="774" y="925">FPC ribbon unused.</text>
+<path d="M 760 860 L 700 860 L 700 672 L 315 672 L 315 600" fill="none" stroke="#D0342C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="315" cy="600" r="7" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<path d="M 760 890 L 716 890 L 716 686 L 495 686 L 495 600" fill="none" stroke="#1B1B1B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="495" cy="600" r="7" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<rect x="40" y="1060" width="1220" height="200" rx="10" fill="#F7F7F5" stroke="#D8D8D4" stroke-width="1.5"/>
+<text class="th" x="60" y="1088">Connections that do NOT use the 40-pin header</text>
+<text class="ts" x="60" y="1118" font-weight="500">IWR6843LEVM</text>
+<text class="ts" x="230" y="1118">USB-A · 1 port, 2 tty devices</text>
+<text class="ts" x="580" y="1118" fill="#6E6E68">Use the Enhanced/UARTA interface, normally /dev/ttyUSB0. Current draw is UNKNOWN — measure it.</text>
+<text class="ts" x="60" y="1147" font-weight="500">Display video</text>
+<text class="ts" x="230" y="1147">Pi micro-HDMI 0 to display HDMI</text>
+<text class="ts" x="580" y="1147" fill="#6E6E68">Included HDMI cable.</text>
+<text class="ts" x="60" y="1176" font-weight="500">Display touch</text>
+<text class="ts" x="230" y="1176">USB-A · 1 port</text>
+<text class="ts" x="580" y="1176" fill="#6E6E68">The LOWER micro-USB on the panel, labelled Touch.</text>
+<text class="ts" x="60" y="1205" font-weight="500">IMX296 camera</text>
+<text class="ts" x="230" y="1205">CSI-2 / MIPI CAM connector</text>
+<text class="ts" x="580" y="1205" fill="#6E6E68">FUTURE — does not touch the header. Pi 5 has two 4-lane connectors.</text>
+<text class="ts" x="60" y="1234" font-weight="500">Power in</text>
+<text class="ts" x="230" y="1234">USB-C · official 27 W, 5V/5A</text>
+<text class="ts" x="580" y="1234" fill="#6E6E68">NOT optional. Below 5A the total USB budget drops from 1.6 A to 600 mA.</text>
+<path d="M60 1300 L86 1300" stroke="#D0342C" stroke-width="3" stroke-linecap="round"/>
+<text class="ts" x="94" y="1300" dominant-baseline="central">5V</text>
+<path d="M370 1300 L396 1300" stroke="#E8811F" stroke-width="3" stroke-linecap="round"/>
+<text class="ts" x="404" y="1300" dominant-baseline="central">3.3V</text>
+<path d="M680 1300 L706 1300" stroke="#1B1B1B" stroke-width="3" stroke-linecap="round"/>
+<text class="ts" x="714" y="1300" dominant-baseline="central">GND</text>
+<path d="M990 1300 L1016 1300" stroke="#8A4FBF" stroke-width="3" stroke-linecap="round"/>
+<text class="ts" x="1024" y="1300" dominant-baseline="central">Pi TX to OPS RxD</text>
+<path d="M60 1326 L86 1326" stroke="#2B6FD0" stroke-width="3" stroke-linecap="round"/>
+<text class="ts" x="94" y="1326" dominant-baseline="central">OPS TxD to Pi RX</text>
+<path d="M370 1326 L396 1326" stroke="#E8C21F" stroke-width="3" stroke-linecap="round"/>
+<text class="ts" x="404" y="1326" dominant-baseline="central">GATE (3-way splice)</text>
+<path d="M680 1326 L706 1326" stroke="#1E8A4F" stroke-width="3" stroke-linecap="round"/>
+<text class="ts" x="714" y="1326" dominant-baseline="central">I2C SDA</text>
+<path d="M990 1326 L1016 1326" stroke="#17A2B8" stroke-width="3" stroke-linecap="round"/>
+<text class="ts" x="1024" y="1326" dominant-baseline="central">I2C SCL</text>
+<text class="ts" x="60" y="1372" fill="#6E6E68">— All GND pins are one electrical rail. Pins 6, 9, 14 and 25 are picked to keep wires short and untangled, not because they behave differently.</text>
+<text class="ts" x="60" y="1392" fill="#6E6E68">— Pins 27 and 28 (red outline) are the HAT EEPROM I2C bus — never use them. White-outlined pins 7, 21, 24 and 29 are reserved for the future camera-trigger MCU.</text>
+<text class="ts" x="60" y="1412" fill="#6E6E68">— OPS243 J3 pin 1 is at the RIGHT end of that header and is a GPIO, NOT ground. Ground is pin 10 — corrected upstream in PR #166.</text>
+<text class="ts" x="60" y="1432" fill="#6E6E68">— The BME280 and LIS3DH have no address collision, so one bus serves both. I2C must be enabled first: dtparam=i2c_arm=on in /boot/firmware/config.txt.</text>
+</svg>

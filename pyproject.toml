@@ -97,6 +97,10 @@ research = [
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+# One-off asset generators are not library code. They exist so a committed
+# artifact (docs/assets/system-wiring.svg) can be regenerated, and holding
+# them to the source lint standard buys nothing.
+extend-exclude = ["docs/assets"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
