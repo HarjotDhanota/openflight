@@ -1,4 +1,5 @@
 """Stage 0C marked-clubhead accuracy budget."""
+
 from __future__ import annotations
 
 import math
@@ -8,7 +9,7 @@ from scipy.spatial.transform import Rotation
 
 from ..groundtruth import ball_for_impact
 from ..types import ClubheadPose
-from .camera import mono_rig, stereo_rig
+from .camera import mono_rig, scaled_intrinsics, stereo_rig
 from .experiment import pose_for_delivered, raw_metrics
 from .keypoints import Detection
 from .markers import calibrated_copy, driver_markers, iron_markers
@@ -62,7 +63,9 @@ def _bias(delta_bias: float, rng) -> np.ndarray:
     return float(delta_bias) * np.array([math.cos(theta), math.sin(theta)])
 
 
-def _correlated_field(shared: np.ndarray, marker_xyz: np.ndarray, centroid_xyz: np.ndarray) -> np.ndarray:
+def _correlated_field(
+    shared: np.ndarray, marker_xyz: np.ndarray, centroid_xyz: np.ndarray
+) -> np.ndarray:
     mag = float(np.linalg.norm(shared))
     if mag == 0.0:
         return np.zeros(2)
@@ -87,19 +90,20 @@ def _marker_detections(true_rig, fit_rig, pose, camera, sigma_c, delta_bias, rng
     return dets
 
 
-def _perturb_ball(ball, camera, ball_depth_sigma, rng):
+def _perturb_ball(ball, camera, ball_depth_sigma, rng, depth_bias_mm=0.0):
     depth_sigma = float(ball_depth_sigma)
-    if depth_sigma <= 0:
-        return np.asarray(ball, dtype=float).copy(), 0.0
-    lat_sigma = min(1.0, depth_sigma / 5.0)
-    right = camera.R_wc[0]
-    up = -camera.R_wc[1]
+    depth_bias = float(depth_bias_mm)
     forward = camera.R_wc[2]
-    delta = (
-        right * rng.normal(0.0, lat_sigma)
-        + up * rng.normal(0.0, lat_sigma)
-        + forward * rng.normal(0.0, depth_sigma)
-    )
+    delta = forward * depth_bias
+    if depth_sigma > 0:
+        lat_sigma = min(1.0, depth_sigma / 5.0)
+        right = camera.R_wc[0]
+        up = -camera.R_wc[1]
+        delta = delta + (
+            right * rng.normal(0.0, lat_sigma)
+            + up * rng.normal(0.0, lat_sigma)
+            + forward * rng.normal(0.0, depth_sigma)
+        )
     return np.asarray(ball, dtype=float) + delta, float(np.linalg.norm(delta))
 
 
@@ -135,19 +139,30 @@ def run_budget(
     baseline_mm,
     n,
     seed,
+    *,
+    camera_scale=1.0,
+    ball_depth_bias_mm=0.0,
+    blur_sigma_px=0.0,
 ):
     rng = np.random.default_rng(seed)
     true_rig = _true_rig(club)
     fit_rig = calibrated_copy(true_rig, sigma_cal, rng)
-    mono = mono_rig()
-    cams = stereo_rig(baseline_mm)
+    intrinsics = scaled_intrinsics(float(camera_scale))
+    mono = mono_rig(intrinsics)
+    cams = stereo_rig(baseline_mm, intrinsics)
+    # Motion blur over the exposure window behaves as extra centroid noise
+    # (uniform smear -> sigma = smear/sqrt(12), folded in quadrature here).
+    sigma_c_input = float(sigma_c)
+    sigma_c = math.hypot(sigma_c_input, float(blur_sigma_px))
     rows = []
     n_ok = 0
 
     for _ in range(int(n)):
         impact_pose, u0, v0 = _sample_pose(rng, true_rig.template)
         velocity = _velocity_world(impact_pose, true_rig.template)
-        frame_pose = ClubheadPose(impact_pose.rotation, impact_pose.translation - velocity * _FRAME_DT_S)
+        frame_pose = ClubheadPose(
+            impact_pose.rotation, impact_pose.translation - velocity * _FRAME_DT_S
+        )
         true_ball = ball_for_impact(impact_pose, true_rig.template, u0, v0)
         true_metrics = raw_metrics(impact_pose, true_rig.template, true_ball)
         fit = _fit_pose(
@@ -177,7 +192,9 @@ def run_budget(
         if fit.ok:
             n_ok += 1
             cam_for_ball = mono if mode == "mono" else cams[0]
-            est_ball, ball_err = _perturb_ball(true_ball, cam_for_ball, ball_depth_sigma, rng)
+            est_ball, ball_err = _perturb_ball(
+                true_ball, cam_for_ball, ball_depth_sigma, rng, ball_depth_bias_mm
+            )
             impact_est, timing_err = _extrapolate_to_impact(
                 fit.pose, velocity, sync_jitter_us, vel_err_frac, rng
             )
@@ -201,13 +218,16 @@ def run_budget(
         "club": club,
         "mode": mode,
         "params": {
-            "sigma_c": float(sigma_c),
+            "sigma_c": sigma_c_input,
             "delta_bias": float(delta_bias),
             "sigma_cal": float(sigma_cal),
             "ball_depth_sigma": float(ball_depth_sigma),
             "sync_jitter_us": float(sync_jitter_us),
             "vel_err_frac": float(vel_err_frac),
             "baseline_mm": float(baseline_mm),
+            "camera_scale": float(camera_scale),
+            "ball_depth_bias_mm": float(ball_depth_bias_mm),
+            "blur_sigma_px": float(blur_sigma_px),
         },
         "n_attempted": int(n),
         "n_ok": n_ok,
@@ -217,7 +237,9 @@ def run_budget(
 
 
 def _median(rows, key):
-    vals = [float(r[key]) for r in rows if r.get("ok") and key in r and math.isfinite(float(r[key]))]
+    vals = [
+        float(r[key]) for r in rows if r.get("ok") and key in r and math.isfinite(float(r[key]))
+    ]
     return float(np.median(vals)) if vals else float("nan")
 
 
@@ -245,8 +267,10 @@ def budget_verdict(grid):
     for metric in _METRICS:
         key = f"{metric}_median"
         candidates = [
-            c for c in cells
-            if c["axis"] not in {"baseline", "combined"} and math.isfinite(float(c.get(key, float("nan"))))
+            c
+            for c in cells
+            if c["axis"] not in {"baseline", "combined"}
+            and math.isfinite(float(c.get(key, float("nan"))))
         ]
         dominant[metric] = max(candidates, key=lambda c: c[key])["axis"] if candidates else None
     return {
