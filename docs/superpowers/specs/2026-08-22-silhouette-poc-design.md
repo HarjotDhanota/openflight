@@ -2,8 +2,8 @@
 
 **Revision:** 2 (audited 2026-08-22)
 
-**Status:** awaiting maintainer approval; implementation is prohibited until
-approval
+**Status:** revision 2 APPROVED by the maintainer 2026-08-23. Implementation
+authorized per section 12, starting with Phase 1b; Appendix B is now frozen
 
 **Branch:** `feat/silhouette-poc`
 
