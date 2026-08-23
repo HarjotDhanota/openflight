@@ -11,18 +11,19 @@ from typing import Any
 import cv2
 import numpy as np
 
-from silhouette_poc.eval.phase1b import (
+from silhouette_poc.fusion.solver import (
     _R_WC,
     BALL_RADIUS_MM,
     CAMERA_CENTER_WORLD,
     FACE_NORMAL,
     MODEL_VERSION,
-    NOMINAL_RANGE_MM,
+    RADAR_CENTER_WORLD,
     WORLD_RIGHT,
     WORLD_UP,
     _face_axes,
     _project,
     _projection_jacobian,
+    _ray_world,
     _velocity,
     camera_presets,
     club_templates,
@@ -31,14 +32,6 @@ from silhouette_poc.eval.phase1b import (
 GENERATOR_VERSION = "silhouette-generator-v1"
 _DEFAULT_DIMENSION_VARIATION = {"poc_driver": 0.08, "poc_7iron": 0.10}
 _NOMINAL_DEPTH_MM = {"poc_driver": 55.0, "poc_7iron": 18.0}
-RADAR_HEIGHT_MM = 152.4
-RADAR_CENTER_WORLD = np.array(
-    [
-        -math.sqrt(NOMINAL_RANGE_MM**2 - RADAR_HEIGHT_MM**2),
-        0.0,
-        RADAR_HEIGHT_MM,
-    ]
-)
 
 
 @dataclass(frozen=True)
@@ -54,6 +47,15 @@ class GeneratorConfig:
     fps: float = 468.0
     analogue_gain: float = 2.0
     template_dimension_variation_fraction: float | None = None
+    photometric_noise_sigma_dn: float = 1.2
+    radar_track_noise_sigma_mm: float = 3.0
+    club_scattering_center_residual_mm: float = 0.0
+    ball_scattering_center_residual_mm: float = 0.0
+    zero_noise_control: bool = False
+    shaft_connected: bool = False
+    reverse_motion: bool = False
+    club_acceleration_world_mm_s2: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    angular_acceleration_rad_s2: float = 0.0
 
     def __post_init__(self) -> None:
         if self.club not in club_templates():
@@ -68,6 +70,12 @@ class GeneratorConfig:
             raise ValueError("pre_trigger_count must select an interior trigger frame")
         if self.fps <= 0:
             raise ValueError("fps must be positive")
+        if self.photometric_noise_sigma_dn < 0.0:
+            raise ValueError("photometric noise must be non-negative")
+        if self.radar_track_noise_sigma_mm < 0.0:
+            raise ValueError("radar track noise must be non-negative")
+        if len(self.club_acceleration_world_mm_s2) != 3:
+            raise ValueError("club acceleration must contain three world components")
         fraction = self.template_dimension_variation_fraction
         if fraction is None:
             fraction = _DEFAULT_DIMENSION_VARIATION[self.club]
@@ -297,16 +305,33 @@ def generate_shot(config: GeneratorConfig) -> GeneratedShot:
             template.speed_mean_mm_s * 1.2,
         )
     )
-    velocity = _velocity(template, speed)
+    velocity = _velocity(template, speed, reverse=config.reverse_motion)
     angular_velocity = float(trajectory_rng.uniform(-5.0, 5.0))
-    axis_u_impact, axis_v_impact = _face_axes(impact_roll)
-    ball_at_impact = (
-        impact_center
-        + axis_u_impact * impact_u
-        + axis_v_impact * impact_v
-        + FACE_NORMAL * BALL_RADIUS_MM
-    )
+    if config.zero_noise_control:
+        speed = float(template.speed_mean_mm_s)
+        velocity = _velocity(template, speed, reverse=config.reverse_motion)
+        angular_velocity = 0.0
+        impact_roll = 0.0
+        last_pre_center = CAMERA_CENTER_WORLD + _ray_world(np.array([144.0, 75.0]), camera) * 1500.0
+        impact_center = last_pre_center + velocity / config.fps
+        ball_ray = _ray_world(np.array([151.0, 86.0]), camera)
+        ball_distance = (impact_center[0] + BALL_RADIUS_MM - CAMERA_CENTER_WORLD[0]) / ball_ray[0]
+        ball_at_impact = CAMERA_CENTER_WORLD + ball_ray * ball_distance
+        contact = ball_at_impact - FACE_NORMAL * BALL_RADIUS_MM
+        axis_u_impact, axis_v_impact = _face_axes(impact_roll)
+        impact_delta = contact - impact_center
+        impact_u = float(impact_delta @ axis_u_impact)
+        impact_v = float(impact_delta @ axis_v_impact)
+    else:
+        axis_u_impact, axis_v_impact = _face_axes(impact_roll)
+        ball_at_impact = (
+            impact_center
+            + axis_u_impact * impact_u
+            + axis_v_impact * impact_v
+            + FACE_NORMAL * BALL_RADIUS_MM
+        )
     ball_velocity = np.array([48_000.0, 1_500.0, 8_000.0])
+    club_acceleration = np.asarray(config.club_acceleration_world_mm_s2, dtype=float)
 
     interval_ns = int(round(1_000_000_000.0 / config.fps))
     trigger_index = config.pre_trigger_count - 1
@@ -335,8 +360,14 @@ def generate_shot(config: GeneratorConfig) -> GeneratedShot:
         ball_coverage = np.zeros_like(club_coverage)
         for sample_offset in sample_offsets:
             sample_time = float(frame_time_s + sample_offset)
-            club_center = impact_center + velocity * sample_time
-            club_roll = impact_roll + angular_velocity * sample_time
+            club_center = (
+                impact_center + velocity * sample_time + 0.5 * club_acceleration * sample_time**2
+            )
+            club_roll = (
+                impact_roll
+                + angular_velocity * sample_time
+                + 0.5 * config.angular_acceleration_rad_s2 * sample_time**2
+            )
             ball_center = (
                 ball_at_impact
                 if sample_time <= 0.0
@@ -352,6 +383,19 @@ def generate_shot(config: GeneratorConfig) -> GeneratedShot:
             ball_coverage += _ball_mask(ball_center, config.preset)
         club_coverage /= float(subsamples)
         ball_coverage /= float(subsamples)
+        if config.shaft_connected:
+            midpoint_center = (
+                impact_center
+                + velocity * float(frame_time_s)
+                + 0.5 * club_acceleration * float(frame_time_s) ** 2
+            )
+            midpoint_uv, midpoint_front = _project(midpoint_center[None, :], camera)
+            if bool(midpoint_front[0]):
+                shaft = np.zeros_like(club_coverage, dtype=np.uint8)
+                start = np.rint(midpoint_uv[0]).astype(int)
+                end = np.array([min(camera.width - 2, start[0] + 120), start[1]])
+                cv2.line(shaft, start, end, 1, thickness=3)
+                club_coverage = np.maximum(club_coverage, shaft.astype(np.float32))
         club_mask = club_coverage > 0.0
         ball_mask = ball_coverage > 0.0
         occlusion_mask = np.logical_and(club_mask, ball_mask)
@@ -359,14 +403,22 @@ def generate_shot(config: GeneratorConfig) -> GeneratedShot:
         background = np.full((camera.height, camera.width), 18.0, dtype=np.float32)
         image = background + 150.0 * club_coverage
         image = image * (1.0 - ball_coverage) + 225.0 * ball_coverage
-        image += photometric_rng.normal(0.0, 1.2, image.shape)
+        image += photometric_rng.normal(0.0, config.photometric_noise_sigma_dn, image.shape)
         frames.append(np.clip(np.rint(image), 0.0, 255.0).astype(np.uint8))
         club_masks.append(club_mask)
         ball_masks.append(ball_mask)
         occlusion_masks.append(occlusion_mask)
 
-        midpoint_center = impact_center + velocity * float(frame_time_s)
-        midpoint_roll = impact_roll + angular_velocity * float(frame_time_s)
+        midpoint_center = (
+            impact_center
+            + velocity * float(frame_time_s)
+            + 0.5 * club_acceleration * float(frame_time_s) ** 2
+        )
+        midpoint_roll = (
+            impact_roll
+            + angular_velocity * float(frame_time_s)
+            + 0.5 * config.angular_acceleration_rad_s2 * float(frame_time_s) ** 2
+        )
         midpoint_axis_u, midpoint_axis_v = _face_axes(midpoint_roll)
         midpoint_ball = (
             ball_at_impact
@@ -451,6 +503,8 @@ def generate_shot(config: GeneratorConfig) -> GeneratedShot:
             "speed_mm_s": speed,
             "velocity_world_mm_s": velocity.tolist(),
             "angular_velocity_rad_s": angular_velocity,
+            "acceleration_world_mm_s2": club_acceleration.tolist(),
+            "angular_acceleration_rad_s2": config.angular_acceleration_rad_s2,
             "poses": poses,
         },
         "ball": {
@@ -475,16 +529,16 @@ def generate_shot(config: GeneratorConfig) -> GeneratedShot:
         },
         "radar_model": {
             "static_bias_mm": 66.0069821,
-            "club_track_noise_mm": 3.0,
-            "club_scattering_center_residual_mm": 0.0,
-            "ball_track_noise_mm": 3.0,
-            "ball_scattering_center_residual_mm": 0.0,
+            "club_track_noise_mm": config.radar_track_noise_sigma_mm,
+            "club_scattering_center_residual_mm": (config.club_scattering_center_residual_mm),
+            "ball_track_noise_mm": config.radar_track_noise_sigma_mm,
+            "ball_scattering_center_residual_mm": (config.ball_scattering_center_residual_mm),
         },
         "rendering": {
             "global_shutter": True,
             "exposure_us": config.exposure_us,
             "exposure_subsamples": subsamples,
-            "photometric_noise_sigma_dn": 1.2,
+            "photometric_noise_sigma_dn": config.photometric_noise_sigma_dn,
             "mask_support_threshold": 0.0,
         },
         "visibility": {"frames": visibility_frames},

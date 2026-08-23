@@ -10,7 +10,7 @@ import numpy as np
 from openflight.iwr6843.club import ClubRangeEvidence
 from openflight.iwr6843.lcmf import BallRangeEvidence
 from openflight.iwr6843.tracking import BallTrack, Geometry
-from silhouette_poc.generator.synthetic import RADAR_CENTER_WORLD, RADAR_HEIGHT_MM
+from silhouette_poc.fusion.solver import RADAR_CENTER_WORLD, RADAR_HEIGHT_MM
 
 SCHEMA_VERSION = 1
 _MPH_PER_MS = 2.2369362920544
@@ -120,9 +120,15 @@ def _fit_track(
     ranges_mm: np.ndarray,
     times_s: np.ndarray,
     geometry: Geometry,
+    anchor_index: int,
+    neighbor_index: int,
 ) -> BallTrack:
     bins = ranges_mm / 1000.0 / geometry.range_res_m
-    slope, intercept = np.polyfit(times_s, bins, 1)
+    slope = float(
+        (bins[neighbor_index] - bins[anchor_index])
+        / (times_s[neighbor_index] - times_s[anchor_index])
+    )
+    intercept = float(bins[anchor_index] - slope * times_s[anchor_index])
     residual = bins - (slope * times_s + intercept)
     return BallTrack(
         speed_ms=float(abs(slope) * geometry.range_res_m),
@@ -165,16 +171,16 @@ def build_synthetic_radar_evidence(generated) -> tuple[RadarReplay, dict[str, fl
     ball_true = _ranges_mm(generated.truth["ball"]["centers_world_mm"])
 
     rng = np.random.default_rng(generated.child_seeds["radar"])
-    club_noise_mm = float(rng.normal(0.0, 3.0))
-    ball_noise_mm = float(rng.normal(0.0, 3.0))
+    club_noise_mm = float(rng.normal(0.0, config.radar_track_noise_sigma_mm))
+    ball_noise_mm = float(rng.normal(0.0, config.radar_track_noise_sigma_mm))
     static_bias_mm = 66.0069821
-    club_scattering_mm = 0.0
-    ball_scattering_mm = 0.0
+    club_scattering_mm = float(config.club_scattering_center_residual_mm)
+    ball_scattering_mm = float(config.ball_scattering_center_residual_mm)
     club_apparent = club_true + static_bias_mm + club_noise_mm + club_scattering_mm
     ball_apparent = ball_true + static_bias_mm + ball_noise_mm + ball_scattering_mm
 
-    club_track = _fit_track(club_apparent, track_times, geometry)
-    ball_track = _fit_track(ball_apparent, track_times, geometry)
+    club_track = _fit_track(club_apparent, track_times, geometry, impact_index, impact_index - 1)
+    ball_track = _fit_track(ball_apparent, track_times, geometry, impact_index, impact_index + 1)
     club = ClubRangeEvidence(club_track, geometry, impact_t_s)
     ball = BallRangeEvidence(ball_track, geometry, impact_t_s)
     club_speed = float(generated.truth["club"]["speed_mm_s"]) / 1000.0
