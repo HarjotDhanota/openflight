@@ -1,5 +1,14 @@
 # OpenFlight camera hardware spec v1 — from the 0A→0E sim requirements to a priced build
 
+> **SUPERSEDED IN PART (2026-08-21) — read [v2 guide §1J](markerless-club-data-guide-v2-research-corrected.md) first.**
+> Upstream PR #215 (`feat/OV9281-camera`) shipped a working behind-ball capture system: OV9281 mono GS, 320x200 @ ~468 fps
+> (**~2.14 ms gap — §0's hardest requirement, met**), straight-behind vantage, shared BCM17 trigger, full offline artifacts.
+> What it does **not** provide is the optics this spec was written for: ball is ~28 px (not ≥100), exposure 500 us (not 10–20),
+> no IR strobe, no dot ball. **§1 (single-unit architecture), §2 (capture-architecture decision — Option A is now field-proven),
+> and §5 (Pico/XTR genlock — not needed for the existing camera) are revised by §1J.** §3 (lens/sensor), §4 (illumination),
+> §6 (consumables), §7 (BOM) and §8 (gates) still stand, but now describe a **second, `shape`-optimized camera** that
+> complements the upstream one rather than replacing it.
+
 > **Status (2026-07-03):** first hardware spec. Consolidates the *verified* requirements from the simulation chain (v2 guide §1F–§1I) and the fact-checked hardware research (§1F(b)) into a camera/illumination/trigger architecture, a phased BOM, and the bench tests that resolve the remaining open decisions. This is a **procurement + build + bench** document (human/maintainer-implemented), not Codex-implementable code.
 
 ## 0. What the sim chain requires (the consolidated target)

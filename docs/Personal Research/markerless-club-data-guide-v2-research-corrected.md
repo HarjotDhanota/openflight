@@ -250,6 +250,81 @@ Not doing: more markerless pose sims, photoreal Blender, radar-spin DSP, hardwar
 
 ---
 
+## 1J. UPDATE (2026-08-21) — upstream shipped a real behind-ball camera (PR #215). Re-evaluation of the whole plan against actual hardware.
+
+**What happened.** While the sim chain (0A→0E) was finishing, upstream opened **[PR #215 `feat/OV9281-camera`](https://github.com/jewbetcha/openflight/pull/215)** (johnpacino, 2026-08-18, +12 005/−287, still OPEN): a synchronized **OV9281 mono global-shutter** rolling-buffer capture system, plus a first-cut camera **club-path / attack-angle / horizontal-launch** estimator. Independently, **PR #228** deprecates the *legacy* `CameraTracker` (Hough/YOLO ball detection) and restructures `server.py` into an `AppState` + staged pipeline, and **`upstream/main` already demoted the old camera to "experimental"** (kiosk defaults `--no-camera`, the `camera` extra is empty, `docs/yolo-performance-tuning.md` rewritten as "Camera and YOLO Experiments"). So: **the old camera path is dying and a new one is being born, and the new one lands squarely on our vantage.**
+
+This section is the re-evaluation. Nothing in 0A→0E is retracted; what changes is that several *assumed* hardware parameters are now *known*, and one of our load-bearing conclusions (stereo) has a competitor.
+
+> **AMENDED 2026-08-22 by [camera-feasibility-verdict-2026-08.md](camera-feasibility-verdict-2026-08.md).** Two claims in this section are now superseded. (1) The two-camera conclusion in §(d) is **withdrawn for basic function**: a native 1:1 `1280×200` readout with the camera **rotated 90°** yields a ~57 px ball at ~446 fps on the *same* OV9281 and the *same* 6 mm lens, landing on 0E's `ball_px=60` cell (driver axis 2.39°, iron 1.02°, wedge 1.36°) — clearing the 3° display tier. A second/bigger sensor is needed only for the 2° tier. (2) **Stage 0E's `ball_px` sweep varies sensor pixel count at *fixed* FOV** (`scaled_intrinsics` scales `fx` and `width` together), so §1I's attribution of the 240 fps failure to "the rising ball exits the tight 100 px lens frame" is **wrong** — FOV is identical at `ball_px=60` and `250`; the loss comes from the aim point. The ≥100 px requirement is a *pixel-count* spec, not a lens spec. What survives unchanged: the exposure/illumination gap is real and a **pulsed strobe with a capacitor bank is mandatory** (both commercial teardowns confirm it), and the sync gap is real but closable in software.
+
+### (a) What PR #215 actually is
+
+| Layer | What it provides |
+|---|---|
+| **Sensor/driver** | InnoMaker OV9281 mono GS on Pi 5 + a **narrow kernel patch to `ov9282`** adding `640x200`, `640x100`, **`320x200`** raw modes (`drivers/ov9281/`, `scripts/setup/install_ov9281_high_speed_driver.sh`). Measured: 640x400 ≈ 288 fps, 640x200 ≈ 536 fps, **320x200 ≈ 576 fps**; production request 450 fps, **~468 fps delivered outdoors, gaps = 0**. |
+| **Capture** | `camera/triggered_buffer.py` — pre/post ring frozen on the **shared BCM17 sound-trigger edge** (same edge as OPS/IWR). `camera/capture_runtime.py` — Picamera2 loop, per-frame `SensorTimestamp` + host monotonic ns, 150 ms pre / 50 ms post. |
+| **Artifacts** | `~/openflight_sessions/<loc>/camera/camera_<ts>_<seq>/` → `frames.npz` (frames + per-frame timing), `metadata.json` (delivered cadence, gaps, brightness), `first/trigger/last.pgm`; session JSONL gets a `camera_capture` entry keyed to shot number. **A complete offline replay dataset, co-registered with the OPS capture and the IWR dump.** |
+| **Geometry** | `CameraDeliveryGeometry` / `CameraBallGeometry`: camera height (default **0.20955 m** = 8.25 in), radar height, **tee slant range 1.575 m**, ball height, signed **lateral offset**, roll correction, mirror sign. |
+| **Measurement** | `camera/club_delivery.py` (1 347 lines) — pre-impact clubhead feature tracks → **club path + attack angle**; `camera/ball_flight.py` (692) — ball centroids → **horizontal launch**; both quality-gated and written to `Shot` as `experimental_*`. |
+| **UI/ops** | Camera tab live preview, crop/orientation/exposure controls, `preview_camera_alignment.sh`, `calibrate_camera_exposure.py`, `test_camera_clap_buffer.py`. |
+
+**The depth trick is the interesting part.** They do not use stereo. The **stationary ball (known 42.67 mm) self-calibrates focal length in pixels**, and each pixel ray is then intersected with the **IWR6843 slant-range sphere** to get metric 3D (`_pixels_to_world`). That is a *third* depth resolver our 0C budget never modelled — mono-size, stereo, and now **radar-range**.
+
+### (b) The numbers that decide whether our work drops in
+
+| 0A–0E requirement | Source | PR #215 reality | Verdict |
+|---|---|---|---|
+| Inter-frame gap **≈ 2 ms** | 0E | **~2.14 ms** (468 fps @ 320x200), gaps = 0 | Met. The single hardest capture requirement is already satisfied on ~$30 of sensor. |
+| Vantage **straight behind** | 0E | Behind the ball, ~0.21 m up, aimed down the target line, 1.575 m to tee | Met, exactly as specified. |
+| Ball **≥ 100 px** (150–250 px for margin) | 0E | Reference-ball detector gates on **9–30 px**; the shipped test fixture uses **28 px** at 1.524 m → **≈ 0.65 px/mm** | **Missed by 3.5–10×.** |
+| Head **~450 px** (≈ 4 px/mm) | 0B/0C | Same optics → clubhead (~110 mm) ≈ **70 px**, ≈ 0.65 px/mm | **Missed by ~6×.** |
+| Exposure **10–20 µs** (motion freeze) | §1F(b) | **500 µs** ambient, gain 2 (outdoor); 1000 µs default | **25–50× over.** Ball at 67 m/s smears ~33 mm ≈ 22 px; clubhead at 40 m/s smears ~20 mm ≈ 13 px. |
+| Limb-center fit **≤ 1 px** | 0E | Not measured; the smear above makes ≤1 px implausible for shape work | Unproven, likely missed. |
+| **≥ 20 dots** on a marked ball | 0E | No dot ball, no spin path at all in the PR | Not attempted. |
+| Camera↔impact sync **≤ 100 µs** | 0C | Impact found **visually** (`_detect_impact_index`) → quantized to **one frame ≈ 2.14 ms** | **~21× over.** 0C names `sync_jitter_us` the *dominant* source for face angle and impact offset. |
+| **IR strobe + IR-pass filter** | §1F(b), 0C | None — ambient light only; explicit overexposure gates instead (`SCENE_P995_MIN`, `BALL_ZONE_SATURATION_MAX`) | Not built. |
+| Depth resolver | 0C ("stereo required") | **IWR6843 range sphere**, mono camera | **Different, and possibly better than our mono baseline.** Untested in our budget. |
+
+**Read the table honestly:** the *timing* half of our capture spec is solved and shipped; the *optical* half (px/mm, exposure, illumination) is off by roughly an order of magnitude in every axis. That is not a criticism of PR #215 — it is optimized for **velocity of blobs**, where a smeared centroid is still an unbiased mid-exposure position estimate. It is fatal only for the jobs that need **shape**: spin-dot decoding and 6-DOF pose.
+
+### (c) What this does to each of our three tracks
+
+**1. Ball spin (0E) — cannot run on this configuration. Needs its own optical path.**
+At 28 px the ball is below the 60 px cell that already degraded driver axis to 2.39°, and the 500 µs exposure destroys dot centroids outright. 0E's answer is not "more fps" — fps is fine — it is **~4× the focal length and ~30× shorter exposure**, i.e. a longer lens aimed into the flight corridor plus the IR strobe from `camera-hardware-spec-v1.md` §4. **The spin camera is a second, differently-specced camera, not a re-use of this one.** The good news: PR #215 proves the *ring buffer, trigger, cadence and storage* work at ~470 fps on a Pi 5, which was Gate 1's whole purpose. **Gate 1 is effectively passed for the transport; it is untested for the optics.**
+
+**2. Marked-club "pro mode" pose (0B/0C) — same problem, same fix, plus a sync fix.**
+0.65 px/mm vs the 4 px/mm the budget assumed, *and* 2.14 ms impact-instant quantization vs the 100 µs baseline. At 40 m/s a 2.14 ms error is **86 mm of clubhead travel** — the impact-location metric collapses. **Sub-frame impact time is a cheap, high-value fix and it is half-built already:** `scripts/analysis/ops_impact_finder.py` localizes impact inside the 30 kHz OPS I/Q buffer to **~33 µs** on the Pi clock, and the camera stores both `trigger_epoch` (`time.time()`) and per-frame host monotonic ns, so the clock domains reconcile. Alternatively, back-extrapolating the post-impact ball track to the tee position gives sub-frame impact time from the camera alone.
+
+**3. Club path / attack angle — this is now *contested territory*, and that is the biggest strategic change.**
+`club_delivery.py` already produces the delivery half of the D-plane from the camera. It is heuristic (hand-tuned brightness/saturation/plausibility constants frozen against **two sessions and a 17-shot replay, with no TrackMan truth**), and its own docstring says both paths "remain experimental pending a frozen source-of-truth validation". Our `research/club_pose/` is the principled version of exactly this problem — sensitivity model, error budget, D-plane, metrics. **The highest-leverage thing we own is not a competing estimator; it is the truth framework that tells anyone whether this one works.**
+
+### (d) Revised architecture (supersedes `camera-hardware-spec-v1.md` §1–§2 where they conflict)
+
+The old spec assumed one camera family doing everything. The hardware reality splits it in two:
+
+- **Camera A — "delivery" (exists, upstream).** OV9281, 320x200 @ ~468 fps, wide-ish lens, ambient light, ~0.65 px/mm. Jobs: club path, attack angle, horizontal launch, ball-departure timing, and **the free reference-ball focal calibration**. Depth from the **IWR range sphere**.
+- **Camera B — "shape" (ours, still to build).** Longer lens (≈ 4× the plate scale → ball 100–250 px), **10–20 µs IR strobe + IR-pass filter**, aimed into the flight corridor. Jobs: **spin rate + axis** (dot ball) and, in pro mode, marked-club pose. This is Phase 1 of the old BOM, re-scoped as a *companion* to Camera A rather than a replacement.
+
+Consequences for the plan:
+
+- **The 1.8 V XTR / Pico genlock (`camera-hardware-spec-v1.md` §5, enclosure F18) is no longer needed for Camera A** — upstream freezes a software ring on the shared BCM17 edge and never touches the sensor trigger pin. It comes back only if Camera B needs hardware genlock to Camera A.
+- **Capture-architecture Option A (ROI high-fps) is confirmed in the field**, not just on the bench. Options B (staggered stereo) and C (strobe multi-pulse) can be retired as *primary* candidates; C remains the indoor high-margin fallback for Camera B.
+- **Stereo is no longer the only answer to depth.** Before spending on a second camera for depth, run the 0C budget with a `radar_depth_mm` resolver. If IWR range is good to a few mm on the clubhead, the mono+radar rig may reach the stereo cells for free. **This is the highest-value sim task left and it costs nothing.**
+- **Enclosure impact:** the camera is now **OV9281 (InnoMaker CAM-OV9281RAW-V2)**, not CAM-IMX296 — `enclosure-design/params.py` `CAM_*` and caliper worksheet §2 need re-targeting. Mount geometry becomes *metrologically load-bearing*: `camera_height_m`, `camera_lateral_offset_m` (signed, target-right positive) and `roll_correction_deg` all feed the depth solve, so the bracket must hold roll to ≲1° and the camera/IWR datum offsets must be knowable to a millimetre — which is exactly what F1/F6's shared printed datum was for. If Camera B is added, the enclosure needs **two** optical apertures, and F5's 2.0 mm clear pane becomes one clear pane (A) + one IR-pass pane (B).
+
+### (e) Open items this update creates
+
+1. **Measure, don't infer, the plate scale.** The `320x200` mode's declared libcamera `.crop` (a 320×200 native window = 25 % of the array) and its actual register programming (X 336–1151, Y 150–665 with a 2× increment ≈ 64 % of the array) **disagree**, and `_image_scale()` assumes 320x200 is a 0.5× downscale of the 640x400 field. These cannot all be true, and the answer moves px/mm by up to 2×. Run `detect_reference_ball` on one real 320x200 capture and settle it.
+2. **No offline camera replay tool exists.** `scripts/analysis/` has replay for OPS, K-LD7 and IWR but nothing for `frames.npz`. Writing one is the cheapest way to get real behind-ball data into `research/club_pose/` — and it retires **Gate 5** (the 1-day markerless photo test) with *real* captures instead of 20 hand-annotated photos.
+3. **`club_delivery.py` has no truth.** Its gates were frozen without TrackMan. Our 0C/0D machinery can produce the honest σ. That is a contribution upstream cannot make for itself.
+4. **Sub-frame impact time** — wire `ops_impact_finder.py` (~33 µs) to the camera frame timebase, or fit ball departure. Required before any impact-location claim.
+5. **PR #215 is still open** and touches `server.py`, `iwr6843/club.py` and the firmware; PR #228 refactors `server.py` underneath it. Whatever we build should target the **`camera/` package and the saved artifacts**, not `server.py`, to stay clear of that churn.
+
+**Bottom line:** upstream just gave us, for free, the hardest and least interesting two-thirds of the camera build — driver, cadence, trigger, sync, storage, UI, and a mounting geometry that matches our vantage. It did **not** give us the optics that spin and pose need, and it filled the club-path slot with an unvalidated estimator. The plan does not change direction; it changes *shape*: **stop planning a camera system; start planning a second camera and the truth framework for the first one.**
+
+---
+
 ## 2. The core problem: markerless 6-DOF clubhead pose from behind
 
 You never see the face. You recover the clubhead's rigid-body **orientation**, then read the face plane off a **club-type template**. v1's pipeline framing stands; the corrections are *how the pros actually do the pose step*:
