@@ -1,18 +1,12 @@
-# `openflight-cloud` Uploader — Implementation Spec
+# `openflight-cloud` Uploader — Wire Contract
 
-**Audience:** an agent building the uploader in the public **openflight** repo
-(AGPL-3.0). **Author:** the FlightWeb server team. This describes the wire
-contract **as the server actually implements it today** (verified against the
-deployed code, not the original draft). It supersedes the speculative parts of
-`openflight/docs/cloud-sync-design.md`; where they differ, this wins.
-
-> Drop this file into the openflight repo (e.g. `docs/openflight-cloud-uploader-spec.md`).
-> Nothing here requires importing FlightWeb code — the wire contract *is* the
-> boundary between the two repos.
+This is the wire contract implemented by the uploader in `src/openflight/cloud/`.
+The FlightWeb service is a separate system; this contract is the boundary
+between the two repositories.
 
 ---
 
-## 0. What you're building
+## 0. Client surface
 
 A small CLI, `openflight-cloud`, that lives on the Pi and pushes filtered
 session logs to the FlightWeb cloud. Three subcommands, one spool-and-retry

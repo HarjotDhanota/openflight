@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Synchronized OV9281 high-speed camera capture.** OpenFlight can now retain
+  pre- and post-impact camera frames from the shared sound trigger, align them
+  with OPS243 and IWR6843 captures, and use camera-assisted or camera-only
+  fallbacks for horizontal launch, club path, and angle of attack. The Camera
+  tab adds live alignment, crop, orientation, and lighting controls while the
+  rolling buffer remains armed. See [OV9281 Camera](camera/README.md).
+- **Battery and external-power status for Raspberry Pi UPS boards.** OpenFlight
+  can now display charging state and battery percentage, issue dismissible 20%
+  and 10% warnings while discharging, and record throttled power telemetry in
+  session logs. Enable the initial Geekworm X1202/X1206 provider with
+  `--battery geekworm`; monitoring remains disabled when no provider is
+  selected. The accompanying Pi setup installs native Linux power-supply
+  telemetry and optional taskbar capacity support without enabling automatic
+  shutdown or charging control. See [Battery Monitoring](battery/README.md).
+- **System Prerequisites:** Documented missing binary dependencies (`swig`, `liblgpio-dev`, `python3-dev`) required prior to executing `./scripts/setup/setup.sh`.
+- **Environment Reload Guidance:** Added instructions for reloading terminal environment variables (`source ~/.bashrc`) when installed dependencies or scripts (`setup.sh`, `start-kiosk.sh`) are not recognized in the current terminal session.
+- **Configurable IWR6843 capture compression.** One firmware image can now
+  switch at runtime between the recommended 24-frame, 3 ms, 53-bin IQ16
+  profile and an advanced 36-frame, 2 ms, 32-bin IQ8 profile. Both retain the
+  same 72 ms shot movie and all 3 TX x 4 RX channels. Per-frame range windows,
+  timing, and IQ8 scales are carried in the dump so offline and live processing
+  use the actual capture geometry. The dense profile uses a sparse scale
+  preview to sustain the 2 ms HWA rearm budget and exposes missed frames,
+  overruns, and clipped components through firmware `stats`.
 - **OPS243 over the Raspberry Pi GPIO UART.** The radar can now run on the J3
   header instead of USB, which frees the Pi's USB power budget for the TI angle
   radar. Baud is the real wire rate on that transport and the factory default of
@@ -86,6 +110,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--kld7-bypass-vertical-gate` renamed to `--kld7-vertical-raw`.
 
 ### Fixed
+- **Graceful IWR6843 shutdown.** Kiosk shutdown now asks the server to finish
+  hardware cleanup before escalating to process signals. An active TI dump is
+  allowed to complete, capture firmware is stopped and verified inactive, and
+  the serial port is then closed. This prevents an interrupted L3 transfer or
+  failed GPIO setup from leaving the radar unresponsive on the next startup.
+- **Raspberry Pi 5 & OS Compatibility:** Updated UART configuration documentation to support Debian Bookworm and Raspberry Pi 5 hardware using `dtparam=uart0=on` alongside legacy `enable_uart=1`.
+- **UART Diagnostic Commands:** Simplified UART verification instructions in `docs/iwr6843/README.md` and `docs/ops243-uart-migration.md` using `grep -E` to check for both legacy and modern device-tree parameters simultaneously across config paths.
+- Session logging: serialize all access to the session JSONL file with a
+  lock. The `log_*` methods are called concurrently from the OPS243
+  capture thread, the K-LD7 stream thread, and Flask-SocketIO handlers;
+  without synchronization, large entries (e.g. `rolling_buffer_capture`
+  with 2×4096 samples) could interleave and corrupt JSONL lines, and a
+  write could race `end_session()` closing the file (`AttributeError` /
+  `ValueError: I/O operation on closed file`). Corrupt lines break the
+  offline replay tooling that depends on these logs.
+- IWR6843 runtime: the ball-estimate call passed a hardcoded
+  `tdm_sign_policy="positive"` instead of the runtime's configurable field
+  (the club-path fallback already honored the field, and offline replay
+  plumbs a caller-supplied policy end to end). Any non-default policy
+  silently produced different live-vs-replay answers for the same capture.
+  Live behavior with the default is unchanged.
 - **GPIO startup on a Raspberry Pi 5.** Anything using the sound-trigger GPIO —
   the IWR6843 capture monitor and the GPIO sound trigger — died with
   `BadPinFactory: Unable to load any default pin factory!`. The cause is

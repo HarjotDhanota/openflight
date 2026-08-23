@@ -2,6 +2,7 @@
 
 import json
 import math
+import threading
 import time
 from datetime import datetime
 from unittest.mock import MagicMock
@@ -552,7 +553,12 @@ class TestSoundTriggerTimestampPropagation:
             is_open = True
 
             def __init__(self):
-                self._response = b'{"Q": [1]}'
+                self._response = (
+                    b'{"sample_time": 1.0}\r\n'
+                    b'{"trigger_time": 1.1}\r\n'
+                    b'{"I": [1]}\r\n'
+                    b'{"Q": [1]}'
+                )
 
             @property
             def in_waiting(self):
@@ -571,7 +577,7 @@ class TestSoundTriggerTimestampPropagation:
 
         response = radar.wait_for_hardware_trigger(timeout=1.0)
 
-        assert response == '{"Q": [1]}'
+        assert response.endswith('{"Q": [1]}')
         assert radar.last_hardware_trigger_first_byte_timestamp is not None
 
     def test_sound_trigger_uses_buffer_offset_for_trigger_timestamp(self):
@@ -1830,6 +1836,107 @@ class TestFindClubSpeedOverlap:
 
         assert club_speed == 75.0  # Higher magnitude
 
+    def test_accelerating_head_branch_beats_stronger_shaft_return(self, processor):
+        """Follow the upper pre-impact branch instead of the strongest reflector."""
+        ball_timestamp_ms = 30.0
+        readings = []
+        head_speeds = [60.0, 68.0, 75.0, 80.0, 82.0, 83.0, 83.0, 78.0]
+        for relative_ms, speed_mph in zip(
+            [-20.0, -18.0, -16.0, -14.0, -12.0, -10.0, -8.0, -6.0],
+            head_speeds,
+        ):
+            readings.append(
+                SpeedReading(
+                    speed_mph=speed_mph,
+                    magnitude=25.0,
+                    timestamp_ms=ball_timestamp_ms + relative_ms,
+                    direction="outbound",
+                )
+            )
+
+        # This slower shaft/body return is stronger than the club head and is
+        # what the former maximum-magnitude selector chose.
+        readings.append(
+            SpeedReading(
+                speed_mph=70.0,
+                magnitude=1000.0,
+                timestamp_ms=18.0,
+                direction="outbound",
+            )
+        )
+        readings.extend(
+            [
+                SpeedReading(98.0, 200.0, 26.0, "outbound"),
+                SpeedReading(99.0, 250.0, 27.0, "outbound"),
+                SpeedReading(100.0, 300.0, 30.0, "outbound"),
+            ]
+        )
+        timeline = SpeedTimeline(readings=readings, sample_rate_hz=937.5)
+
+        club_speed, club_ts = processor.find_club_speed(
+            timeline,
+            ball_speed_mph=100.0,
+            ball_timestamp_ms=ball_timestamp_ms,
+        )
+
+        assert club_speed == pytest.approx(82.0)
+        assert club_ts == 18.0
+
+    @pytest.mark.parametrize("club_type", [ClubType.SW, ClubType.LW])
+    def test_high_loft_wedge_uses_smooth_terminal_trace(self, processor, club_type):
+        """A high-loft wedge trace can merge into the similarly fast ball trace."""
+        ball_timestamp_ms = 30.0
+        readings = [
+            SpeedReading(speed, 30.0, ball_timestamp_ms + relative_ms, "outbound")
+            for relative_ms, speed in [
+                (-12.0, 47.0),
+                (-10.0, 52.0),
+                (-8.0, 57.0),
+                (-6.0, 62.0),
+                (-4.0, 66.0),
+                (-2.0, 68.0),
+                (-1.0, 69.0),
+                (0.0, 70.0),
+            ]
+        ]
+        timeline = SpeedTimeline(readings=readings, sample_rate_hz=937.5)
+
+        club_speed, club_ts = processor.find_club_speed(
+            timeline,
+            ball_speed_mph=70.0,
+            ball_timestamp_ms=ball_timestamp_ms,
+            club_type=club_type,
+        )
+
+        assert club_speed == pytest.approx(69.0)
+        assert club_ts == 29.0
+
+    def test_ball_contaminated_plateau_falls_back_to_credible_candidate(self, processor):
+        """A non-wedge plateau above 95% of ball speed is likely the ball."""
+        ball_timestamp_ms = 30.0
+        readings = [
+            SpeedReading(75.0, 500.0, 10.0, "outbound"),
+            SpeedReading(96.0, 20.0, 12.0, "outbound"),
+            SpeedReading(97.0, 20.0, 14.0, "outbound"),
+            SpeedReading(98.0, 20.0, 16.0, "outbound"),
+            SpeedReading(98.0, 20.0, 18.0, "outbound"),
+            SpeedReading(98.0, 20.0, 20.0, "outbound"),
+            SpeedReading(99.0, 100.0, 26.0, "outbound"),
+            SpeedReading(100.0, 200.0, 27.0, "outbound"),
+            SpeedReading(100.0, 300.0, 30.0, "outbound"),
+        ]
+        timeline = SpeedTimeline(readings=readings, sample_rate_hz=937.5)
+
+        club_speed, club_ts = processor.find_club_speed(
+            timeline,
+            ball_speed_mph=100.0,
+            ball_timestamp_ms=ball_timestamp_ms,
+            club_type=ClubType.IRON_9,
+        )
+
+        assert club_speed == 75.0
+        assert club_ts == 10.0
+
 
 class TestImpactEstimate:
     """Tests for OPS club-to-ball impact timing."""
@@ -2749,6 +2856,219 @@ class TestShutdownPreservesRollingBuffer:
         assert monitor._running is False, (
             "disconnect() must call stop() so the capture thread shuts down"
         )
+
+    def test_processing_failure_reports_capture_calculation_and_failure(self):
+        """UI feedback must cover capture and FFT work, then clear on failure."""
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="sound")
+        capture = IQCapture(
+            sample_time=0.0,
+            trigger_time=0.068,
+            i_samples=[2048] * 16,
+            q_samples=[2048] * 16,
+        )
+        states = []
+
+        class OneCaptureTrigger:
+            calls = 0
+
+            def wait_for_trigger(self, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    kwargs["capture_started_callback"]()
+                    return capture
+                monitor._running = False
+                return None
+
+            @staticmethod
+            def drain_diagnostics():
+                return []
+
+            @staticmethod
+            def reset():
+                return None
+
+        class FailingProcessor:
+            @staticmethod
+            def process_capture(*_args, **_kwargs):
+                assert states == ["capturing", "calculating"]
+                return None
+
+        monitor.trigger = OneCaptureTrigger()
+        monitor.processor = FailingProcessor()
+        monitor._diagnostic_callback = None
+        monitor._processing_callback = states.append
+        monitor._running = True
+
+        monitor._capture_loop()
+
+        assert states == ["capturing", "calculating", "failed"]
+
+    @pytest.mark.parametrize("reason", ["parse_failed", "no_outbound_speed"])
+    def test_rejected_started_capture_clears_processing_feedback(self, reason):
+        """A dump rejected before FFT must not leave capture feedback stale."""
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="sound")
+        states = []
+
+        class RejectedCaptureTrigger:
+            calls = 0
+
+            def wait_for_trigger(self, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    kwargs["capture_started_callback"]()
+                    return None
+                monitor._running = False
+                return None
+
+            @staticmethod
+            def drain_diagnostics():
+                return [{"accepted": False, "reason": reason}]
+
+            @staticmethod
+            def reset():
+                return None
+
+        monitor.trigger = RejectedCaptureTrigger()
+        monitor._diagnostic_callback = None
+        monitor._processing_callback = states.append
+        monitor._running = True
+
+        monitor._capture_loop()
+
+        assert states == ["capturing", "failed"]
+
+    def test_idle_sound_timeout_does_not_emit_processing_failure(self):
+        """No feedback should appear or clear when no hardware dump began."""
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="sound")
+        states = []
+
+        class IdleTrigger:
+            calls = 0
+
+            def wait_for_trigger(self, **_kwargs):
+                self.calls += 1
+                if self.calls > 1:
+                    monitor._running = False
+                return None
+
+            @staticmethod
+            def drain_diagnostics():
+                return []
+
+            @staticmethod
+            def reset():
+                return None
+
+        monitor.trigger = IdleTrigger()
+        monitor._diagnostic_callback = None
+        monitor._processing_callback = states.append
+        monitor._running = True
+
+        monitor._capture_loop()
+
+        assert states == []
+
+    def test_stop_cancels_idle_sound_trigger_wait(self):
+        """Default shutdown should wake the idle trigger thread immediately."""
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        waiting = threading.Event()
+
+        class IdleRadar:
+            def __init__(self):
+                self.cancel_event = None
+
+            def wait_for_hardware_trigger(
+                self,
+                timeout,
+                cancel_event=None,
+                on_first_byte=None,
+            ):
+                self.cancel_event = cancel_event
+                waiting.set()
+                if cancel_event is None:
+                    time.sleep(0.25)
+                else:
+                    cancel_event.wait(timeout)
+                return ""
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="sound")
+        monitor.radar = IdleRadar()
+        monitor.start()
+        assert waiting.wait(timeout=1.0)
+
+        started = time.monotonic()
+        monitor.stop()
+
+        assert monitor.radar.cancel_event is not None
+        assert time.monotonic() - started < 0.2
+
+    def test_stop_does_not_abandon_an_active_sound_capture(self):
+        """A slow UART dump must finish before shutdown closes the serial port."""
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        class ActiveCaptureThread:
+            def __init__(self):
+                self.join_timeouts = []
+                self.alive = True
+
+            def join(self, timeout=None):
+                self.join_timeouts.append(timeout)
+                self.alive = False
+
+            def is_alive(self):
+                return self.alive
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="sound")
+        active_thread = ActiveCaptureThread()
+        monitor._capture_thread = active_thread
+        monitor._running = True
+
+        monitor.stop()
+
+        assert active_thread.join_timeouts == [5.0]
+        assert active_thread.is_alive() is False
+        assert monitor._capture_thread is None
+
+
+class TestRollingBufferStartupMode:
+    """Startup should respect the persisted HOST_INT rolling-buffer workaround."""
+
+    def test_sound_trigger_prepares_persisted_buffer_without_runtime_gc(self):
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="sound", pre_trigger_segments=16)
+        monitor.radar = MagicMock()
+
+        assert monitor.connect() is True
+
+        monitor.radar.connect.assert_called_once()
+        monitor.radar.prepare_persisted_rolling_buffer.assert_called_once_with(
+            pre_trigger_segments=16,
+            sample_rate_ksps=30,
+        )
+        assert not monitor.radar.configure_for_rolling_buffer.called
+
+    def test_non_sound_trigger_can_configure_rolling_buffer_runtime(self):
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="manual", pre_trigger_segments=12)
+        monitor.radar = MagicMock()
+
+        assert monitor.connect() is True
+
+        monitor.radar.connect.assert_called_once()
+        monitor.radar.configure_for_rolling_buffer.assert_called_once_with(
+            pre_trigger_segments=12,
+            sample_rate_ksps=30,
+        )
+        assert not monitor.radar.prepare_persisted_rolling_buffer.called
 
 
 class TestSpinWindowTrimming:

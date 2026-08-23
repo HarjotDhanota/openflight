@@ -1,11 +1,13 @@
 """Tests for server module."""
 
+import argparse
 import json
 import sys
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from openflight import server as server_module
@@ -13,13 +15,176 @@ from openflight.iwr6843 import Calibration
 from openflight.kld7.types import KLD7Angle
 from openflight.launch_monitor import ClubType, Shot
 from openflight.ops243 import UART_BAUD_COMMANDS
+from openflight.power import PowerState
 from openflight.server import (
     MockLaunchMonitor,
+    MockSwingSpeedMonitor,
     estimate_launch_angle,
     on_shot_detected,
     radar_launch_is_plausible,
     shot_to_dict,
+    swing_speed_to_dict,
+    swing_speed_to_shot_dict,
 )
+from openflight.swing_speed import SwingSpeedEvent
+
+
+class TestCameraCaptureSettings:
+    """Tests for live-safe Camera tab controls."""
+
+    def test_exposure_quality_endpoint_uses_camera_runtime(self, monkeypatch):
+        expected = {
+            "sample_available": True,
+            "status": "good",
+            "recommendation": "hold",
+        }
+        runtime = SimpleNamespace(exposure_quality=lambda: expected)
+        monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
+
+        response = server_module.app.test_client().get("/api/camera/exposure-quality")
+
+        assert response.status_code == 200
+        assert response.get_json() == expected
+
+    def test_update_applies_controls_and_alignment(self, monkeypatch):
+        emitted = []
+        applied = []
+
+        class FakeRuntime:
+            settings = SimpleNamespace(fps=600.0)
+
+            @staticmethod
+            def status():
+                return {
+                    "running": True,
+                    "armed": True,
+                    "buffered_frames": 90,
+                    "required_pre_frames": 90,
+                }
+
+            @staticmethod
+            def update_image_controls(*, exposure_us, gain):
+                applied.append((exposure_us, gain))
+                return {"exposure_us": exposure_us, "gain": gain}
+
+            @staticmethod
+            def vertical_crop_status():
+                return {
+                    "raw_crop_adjustable": True,
+                    "vertical_offset_px": -10,
+                    "vertical_offset_min_px": -70,
+                    "vertical_offset_max_px": 70,
+                    "vertical_offset_step_px": 10,
+                }
+
+        config = {
+            "enabled": True,
+            "exposure_us": 500,
+            "gain": 2.0,
+            "width": 320,
+            "height": 200,
+        }
+        monkeypatch.setattr(server_module, "camera_capture_runtime", FakeRuntime())
+        monkeypatch.setattr(server_module, "camera_capture_config", config)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
+
+        server_module.handle_set_camera_capture_settings(
+            {
+                "exposure_us": 650,
+                "gain": 3.0,
+                "alignment_x_pct": 47,
+                "alignment_y_pct": 58,
+            }
+        )
+
+        assert applied == [(650, 3.0)]
+        assert config["alignment_x_pct"] == 47.0
+        assert config["alignment_y_pct"] == 58.0
+        assert emitted[-1][0] == "camera_capture_settings"
+        assert emitted[-1][1]["max_exposure_us"] == 1666
+        assert emitted[-1][1]["raw_crop_adjustable"] is True
+        assert emitted[-1][1]["vertical_offset_px"] == -10
+
+    def test_update_moves_real_sensor_crop(self, monkeypatch):
+        emitted = []
+        moved = []
+
+        class FakeRuntime:
+            settings = SimpleNamespace(fps=450.0)
+
+            @staticmethod
+            def status():
+                return {"running": True, "armed": True}
+
+            @staticmethod
+            def update_image_controls(**_kwargs):
+                return {"exposure_us": 500, "gain": 15.0}
+
+            @staticmethod
+            def update_vertical_crop(offset_px):
+                moved.append(offset_px)
+                return {"vertical_offset_px": offset_px}
+
+            @staticmethod
+            def vertical_crop_status():
+                return {
+                    "raw_crop_adjustable": True,
+                    "vertical_offset_px": -20,
+                    "vertical_offset_min_px": -70,
+                    "vertical_offset_max_px": 70,
+                    "vertical_offset_step_px": 10,
+                }
+
+        monkeypatch.setattr(server_module, "camera_capture_runtime", FakeRuntime())
+        monkeypatch.setattr(
+            server_module,
+            "camera_capture_config",
+            {"exposure_us": 500, "gain": 15.0},
+        )
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
+
+        server_module.handle_set_camera_capture_settings({"vertical_offset_px": -20})
+
+        assert moved == [-20]
+        assert emitted[-1][1]["vertical_offset_px"] == -20
+
+    def test_update_rejects_out_of_range_alignment(self, monkeypatch):
+        emitted = []
+        runtime = SimpleNamespace(
+            settings=SimpleNamespace(fps=300.0),
+            status=lambda: {"running": True, "armed": True},
+            update_image_controls=lambda **_kwargs: pytest.fail("controls should not update"),
+        )
+        monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
+        monkeypatch.setattr(
+            server_module,
+            "camera_capture_config",
+            {"exposure_us": 500, "gain": 2.0},
+        )
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
+
+        server_module.handle_set_camera_capture_settings({"alignment_x_pct": 101})
+
+        assert emitted == [
+            (
+                "camera_capture_settings_error",
+                {"error": "horizontal alignment must be between 0 and 100 percent"},
+            )
+        ]
 
 
 class TestShutdownCleanup:
@@ -69,10 +234,12 @@ class TestShutdownCleanup:
         monkeypatch.setattr(server_module, "camera", None)
         monkeypatch.setattr(server_module, "stop_monitor", lambda: calls.append("monitor"))
 
-        server_module._cleanup_hardware_for_shutdown()
-        server_module._cleanup_hardware_for_shutdown()
+        first_request_owned_cleanup = server_module._cleanup_hardware_for_shutdown()
+        duplicate_request_owned_cleanup = server_module._cleanup_hardware_for_shutdown()
 
         assert calls == ["camera", "monitor"]
+        assert first_request_owned_cleanup is True
+        assert duplicate_request_owned_cleanup is False
 
     def test_shutdown_stops_iwr6843_before_ops_monitor(self, monkeypatch):
         calls = []
@@ -91,6 +258,67 @@ class TestShutdownCleanup:
         server_module._cleanup_hardware_for_shutdown()
 
         assert calls == ["iwr6843", "ops243"]
+
+    def test_shutdown_step_logs_elapsed_time(self, caplog):
+        """Hardware logs should identify which cleanup step is slow in the field."""
+        with caplog.at_level("INFO", logger="openflight.server"):
+            server_module._run_shutdown_step("OPS monitor stop", lambda: None)
+
+        assert "Shutdown step OPS monitor stop completed in" in caplog.text
+
+    def test_duplicate_shutdown_thread_cannot_exit_during_owner_cleanup(self, monkeypatch):
+        """Only the thread that owns hardware cleanup may terminate the process."""
+        exit_codes = []
+        monkeypatch.setattr(server_module, "_cleanup_hardware_for_shutdown", lambda: False)
+        monkeypatch.setattr(server_module.os, "_exit", exit_codes.append)
+
+        server_module._shutdown_process_after_delay(delay_s=0)
+
+        assert exit_codes == []
+
+
+def test_shot_processing_status_is_forwarded_to_ui(monkeypatch):
+    """The monitor lifecycle should be exposed as a dedicated UI event."""
+    emitted = []
+    monkeypatch.setattr(
+        server_module.socketio,
+        "emit",
+        lambda event, payload: emitted.append((event, payload)),
+    )
+
+    server_module.on_shot_processing("capturing")
+
+    assert emitted == [("shot_processing", {"state": "capturing"})]
+
+
+def test_power_status_is_forwarded_to_ui_and_session_log(monkeypatch):
+    emitted = []
+    logged = []
+    status = server_module.PowerStatus(
+        available=True,
+        provider="geekworm",
+        state=PowerState.ON_BATTERY,
+        battery_percent=42.0,
+        battery_voltage_v=3.72,
+        external_power=False,
+        updated_at="2026-08-15T12:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        server_module.socketio,
+        "emit",
+        lambda event, payload: emitted.append((event, payload)),
+    )
+    monkeypatch.setattr(
+        server_module,
+        "get_session_logger",
+        lambda: SimpleNamespace(log_power_status=logged.append),
+    )
+
+    server_module._on_power_status(status)
+    server_module._log_power_status(status)
+
+    assert emitted == [("power_status", status.to_dict())]
+    assert logged == [status.to_dict()]
 
 
 class TestIWR6843ShotIntegration:
@@ -137,10 +365,12 @@ class TestIWR6843ShotIntegration:
 
         assert "freeze_delay_s" not in captured
         assert captured["armed"] is False
+        assert server_module.iwr6843_runtime.tdm_sign_policy == "positive"
+        assert server_module.iwr6843_runtime_config["tdm_sign_policy"] == "positive"
         server_module.iwr6843_runtime = None
 
-    def test_init_iwr6843_wires_azimuth_offset_into_runtime(self, monkeypatch, tmp_path):
-        """--iwr6843-azimuth-offset-deg must reach IWR6843Runtime, not just be parsed.
+    def test_init_iwr6843_wires_horizontal_calibration_into_runtime(self, monkeypatch, tmp_path):
+        """Horizontal calibration must reach IWR6843Runtime, not just be parsed.
 
         A flag that parses but never reaches the runtime silently reports every
         club path relative to boresight instead of the target line.
@@ -178,13 +408,17 @@ class TestIWR6843ShotIntegration:
             tx_order="auto",
             capture_timeout_s=12.0,
             azimuth_offset_deg=1.5,
+            horizontal_phase_reference_rad=-0.5,
         )
 
         assert server_module.iwr6843_runtime.azimuth_offset_deg == 1.5
+        assert server_module.iwr6843_runtime.horizontal_phase_reference_rad == -0.5
         assert server_module.iwr6843_runtime_config["azimuth_offset_deg"] == 1.5
+        assert server_module.iwr6843_runtime_config["horizontal_phase_reference_rad"] == -0.5
         server_module.iwr6843_runtime = None
 
     def test_accepted_lcmf_angle_is_applied_to_existing_shot_contract(self, monkeypatch):
+        emitted = []
         measurement = SimpleNamespace(
             accepted=True,
             angle_deg=17.42,
@@ -215,6 +449,11 @@ class TestIWR6843ShotIntegration:
         )
         monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: session)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
 
         shot = Shot(
             ball_speed_mph=100.0,
@@ -233,6 +472,19 @@ class TestIWR6843ShotIntegration:
         assert logged[0]["shot_number"] == 3
         assert logged[0]["ball_speed_mph"] == 100.0
         assert logged[0]["measurement"]["estimator"] == "lcmf_v1"
+        assert emitted == [
+            (
+                "trigger_diagnostic_update",
+                {
+                    "timestamp": shot.timestamp.isoformat(),
+                    "iwr6843": {
+                        "state": "accepted",
+                        "reason": "accepted",
+                        "angle_deg": 17.42,
+                    },
+                },
+            )
+        ]
 
     def test_iwr6843_horizontal_confidence_derived_from_coherence(self, monkeypatch):
         measurement = SimpleNamespace(
@@ -287,7 +539,220 @@ class TestIWR6843ShotIntegration:
         # a hardcoded 0.95 -- see openflight.server.horizontal_confidence_from.
         assert shot.launch_angle_horizontal_confidence == pytest.approx(0.63)
 
-    def test_horizontal_fallback_does_not_invent_confidence_for_lcmf_angle(self):
+    def test_debug_mode_exposes_rejected_club_candidates_without_promoting_them(self, monkeypatch):
+        measurement = SimpleNamespace(
+            accepted=False,
+            status="rejected_track_quality",
+            to_dict=lambda: {"status": "rejected_track_quality"},
+        )
+        club_path = SimpleNamespace(
+            accepted=False,
+            status="rejected_phase_span",
+            path_deg=None,
+            candidate_path_deg=5.8,
+            candidate_path_status="candidate_available",
+            candidate_attack_angle_deg=-4.9,
+            attack_angle_status="candidate_available",
+            to_dict=lambda: {
+                "status": "rejected_phase_span",
+                "candidate_path_deg": 5.8,
+                "candidate_attack_angle_deg": -4.9,
+            },
+        )
+        capture = SimpleNamespace(
+            trigger_timestamp=100.01,
+            path=Path("/tmp/test.l3dump"),
+            raw=b"raw",
+            dump_duration_s=4.5,
+            error=None,
+            valid=True,
+            sequence=1,
+        )
+        runtime = SimpleNamespace(
+            process_shot=lambda **kwargs: SimpleNamespace(
+                capture=capture,
+                measurement=measurement,
+                club_path=club_path,
+            )
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(server_module, "debug_mode", True)
+        shot = Shot(
+            ball_speed_mph=100.0,
+            club_speed_mph=80.0,
+            timestamp=datetime.now(),
+            impact_timestamp=100.0,
+            club=ClubType.IRON_9,
+        )
+
+        server_module._process_iwr6843_angle(shot)
+
+        assert shot.club_path_deg is None
+        assert shot.club_angle_deg is None
+        assert shot.experimental_club_path_deg == pytest.approx(5.8)
+        assert shot.experimental_club_path_status == "rejected_phase_span"
+        assert shot.experimental_attack_angle_deg == pytest.approx(-4.9)
+        assert shot.experimental_attack_angle_status == "candidate_available"
+
+    def test_non_debug_mode_emits_experimental_club_candidates(self, monkeypatch):
+        measurement = SimpleNamespace(
+            accepted=False,
+            status="rejected_track_quality",
+            to_dict=lambda: {"status": "rejected_track_quality"},
+        )
+        club_path = SimpleNamespace(
+            accepted=False,
+            status="rejected_phase_span",
+            path_deg=None,
+            candidate_path_deg=5.8,
+            candidate_path_status="candidate_noisy_fit",
+            candidate_attack_angle_deg=-4.9,
+            attack_angle_status="candidate_available",
+            to_dict=lambda: {},
+        )
+        capture = SimpleNamespace(
+            trigger_timestamp=100.01,
+            path=None,
+            raw=b"raw",
+            dump_duration_s=4.5,
+            error=None,
+            valid=True,
+            sequence=1,
+        )
+        runtime = SimpleNamespace(
+            process_shot=lambda **kwargs: SimpleNamespace(
+                capture=capture,
+                measurement=measurement,
+                club_path=club_path,
+            )
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        shot = Shot(
+            ball_speed_mph=100.0,
+            club_speed_mph=80.0,
+            timestamp=datetime.now(),
+            impact_timestamp=100.0,
+            club=ClubType.IRON_9,
+        )
+
+        server_module._process_iwr6843_angle(shot)
+
+        assert shot.club_path_deg is None
+        assert shot.club_angle_deg is None
+        assert shot.experimental_club_path_deg == pytest.approx(5.8)
+        assert shot.experimental_club_path_status == "candidate_noisy_fit"
+        assert shot.experimental_attack_angle_deg == pytest.approx(-4.9)
+        assert shot.experimental_attack_angle_status == "candidate_available"
+
+    def test_accepted_iwr_club_path_remains_experimental(self, monkeypatch):
+        measurement = SimpleNamespace(
+            accepted=False,
+            status="rejected_track_quality",
+            to_dict=lambda: {"status": "rejected_track_quality"},
+        )
+        club_path = SimpleNamespace(
+            accepted=True,
+            status="accepted",
+            path_deg=0.0,
+            confidence=0.82,
+            n_frames=5,
+            candidate_path_deg=2.6,
+            candidate_path_status="candidate_available",
+            candidate_attack_angle_deg=-4.1,
+            attack_angle_status="candidate_available",
+            to_dict=lambda: {"status": "accepted", "path_deg": 0.0},
+        )
+        capture = SimpleNamespace(
+            trigger_timestamp=100.01,
+            path=None,
+            raw=b"raw",
+            dump_duration_s=4.5,
+            error=None,
+            valid=True,
+            sequence=1,
+        )
+        runtime = SimpleNamespace(
+            process_shot=lambda **kwargs: SimpleNamespace(
+                capture=capture,
+                measurement=measurement,
+                club_path=club_path,
+            )
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        shot = Shot(
+            ball_speed_mph=100.0,
+            club_speed_mph=80.0,
+            timestamp=datetime.now(),
+            impact_timestamp=100.0,
+            club=ClubType.IRON_9,
+        )
+
+        server_module._process_iwr6843_angle(shot)
+
+        assert shot.club_path_deg is None
+        assert shot.club_angle_deg is None
+        assert shot.experimental_club_path_deg == pytest.approx(0.0)
+        assert shot.experimental_club_path_status == "accepted"
+        assert shot.experimental_attack_angle_deg == pytest.approx(-4.1)
+        assert shot.experimental_attack_angle_status == "candidate_available"
+
+    def test_debug_mode_exposes_club_rejection_without_candidate(self, monkeypatch):
+        measurement = SimpleNamespace(
+            accepted=False,
+            status="rejected_track_quality",
+            to_dict=lambda: {"status": "rejected_track_quality"},
+        )
+        club_path = SimpleNamespace(
+            accepted=False,
+            status="rejected_no_club_track",
+            path_deg=None,
+            candidate_path_deg=None,
+            candidate_path_status=None,
+            candidate_attack_angle_deg=None,
+            attack_angle_status=None,
+            to_dict=lambda: {"status": "rejected_no_club_track"},
+        )
+        capture = SimpleNamespace(
+            trigger_timestamp=100.01,
+            path=None,
+            raw=b"raw",
+            dump_duration_s=4.5,
+            error=None,
+            valid=True,
+            sequence=1,
+        )
+        runtime = SimpleNamespace(
+            process_shot=lambda **kwargs: SimpleNamespace(
+                capture=capture,
+                measurement=measurement,
+                club_path=club_path,
+            )
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(server_module, "debug_mode", True)
+        shot = Shot(
+            ball_speed_mph=100.0,
+            club_speed_mph=80.0,
+            timestamp=datetime.now(),
+            impact_timestamp=100.0,
+            club=ClubType.IRON_9,
+        )
+
+        server_module._process_iwr6843_angle(shot)
+
+        assert shot.experimental_club_path_deg is None
+        assert shot.experimental_club_path_status == "rejected_no_club_track"
+        assert shot.experimental_attack_angle_deg is None
+        assert shot.experimental_attack_angle_status == "rejected_no_club_track"
+
+    def test_horizontal_fallback_does_not_invent_measurement_for_lcmf_angle(self, monkeypatch):
+        monkeypatch.setattr(server_module, "iwr6843_runtime", SimpleNamespace())
         shot = Shot(
             ball_speed_mph=100.0,
             club_speed_mph=80.0,
@@ -304,16 +769,22 @@ class TestIWR6843ShotIntegration:
         assert shot.launch_angle_vertical_source == "radar"
         assert shot.launch_angle_confidence is None
         assert shot.launch_angle_vertical_confidence is None
-        assert shot.launch_angle_horizontal == 0.0
-        assert shot.launch_angle_horizontal_source == "estimated"
-        assert shot.launch_angle_horizontal_confidence == pytest.approx(0.35)
+        assert shot.launch_angle_horizontal is None
+        assert shot.launch_angle_horizontal_source is None
+        assert shot.launch_angle_horizontal_confidence is None
 
     def test_missing_ti_capture_preserves_ops_shot(self, monkeypatch):
+        emitted = []
         runtime = SimpleNamespace(
             process_shot=lambda **kwargs: SimpleNamespace(capture=None, measurement=None)
         )
         monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
         shot = Shot(
             ball_speed_mph=100.0,
             timestamp=datetime.now(),
@@ -324,6 +795,69 @@ class TestIWR6843ShotIntegration:
 
         assert shot.ball_speed_mph == 100.0
         assert shot.launch_angle_vertical is None
+        assert emitted == [
+            (
+                "trigger_diagnostic_update",
+                {
+                    "timestamp": shot.timestamp.isoformat(),
+                    "iwr6843": {
+                        "state": "error",
+                        "reason": "no capture matched the OPS impact timestamp",
+                    },
+                },
+            )
+        ]
+
+    def test_rejected_ti_measurement_updates_existing_trigger_row(self, monkeypatch):
+        emitted = []
+        measurement = SimpleNamespace(
+            accepted=False,
+            status="rejected_track_quality",
+            to_dict=lambda: {"status": "rejected_track_quality"},
+        )
+        capture = SimpleNamespace(
+            trigger_timestamp=100.01,
+            path=Path("/tmp/test.l3dump"),
+            raw=b"raw",
+            dump_duration_s=4.5,
+            error=None,
+            valid=True,
+            sequence=1,
+        )
+        runtime = SimpleNamespace(
+            process_shot=lambda **kwargs: SimpleNamespace(
+                capture=capture,
+                measurement=measurement,
+                club_path=None,
+            )
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
+        shot = Shot(
+            ball_speed_mph=100.0,
+            timestamp=datetime.now(),
+            club=ClubType.IRON_9,
+        )
+
+        server_module._process_iwr6843_angle(shot)
+
+        assert emitted == [
+            (
+                "trigger_diagnostic_update",
+                {
+                    "timestamp": shot.timestamp.isoformat(),
+                    "iwr6843": {
+                        "state": "rejected",
+                        "reason": "rejected_track_quality",
+                    },
+                },
+            )
+        ]
 
 
 class TestSessionErrorLogging:
@@ -562,6 +1096,16 @@ class TestKLD7Initialization:
         assert started["config"]["kld7_experiments"]["radc_tuning_params"] == tuning
         server_module.stop_monitor()
 
+    def test_start_monitor_applies_cli_debug_mode(self, monkeypatch):
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+
+        server_module.start_monitor(mock=True, trigger_type="sound", debug=True)
+
+        assert server_module.debug_mode is True
+        server_module.stop_monitor()
+
     def test_init_kld7_passes_radc_tuning_parameters(self, monkeypatch):
         """Server startup should forward experimental replay knobs to KLD7Tracker."""
         import openflight.kld7 as kld7_package
@@ -705,6 +1249,7 @@ class TestShotToDict:
         assert result["ball_speed_mph"] == 150.5
         assert result["club_speed_mph"] == 103.2
         assert result["club"] == "driver"
+        assert result["player_name"] == "Player 1"
         assert result["timestamp"] == "2024-01-15T10:30:00"
         assert "estimated_carry_yards" in result
         assert "carry_range" in result
@@ -754,6 +1299,168 @@ class TestShotToDict:
         assert result["launch_angle_horizontal_confidence"] is None
         assert result["launch_angle_horizontal_source"] is None
 
+    def test_camera_assisted_horizontal_provenance_is_included(self):
+        shot = Shot(
+            ball_speed_mph=110.0,
+            timestamp=datetime.now(),
+            launch_angle_horizontal=0.6,
+            launch_angle_horizontal_confidence=0.75,
+            launch_angle_horizontal_source="camera_assisted_experimental",
+            iwr6843_horizontal_deg=17.9,
+            iwr6843_horizontal_confidence=0.8,
+            experimental_camera_horizontal_deg=0.6,
+            experimental_camera_horizontal_confidence=0.75,
+            experimental_camera_horizontal_status="camera_assisted_high",
+            experimental_camera_iwr_delta_deg=-17.3,
+        )
+
+        result = shot_to_dict(shot)
+
+        assert result["launch_angle_horizontal"] == 0.6
+        assert result["launch_angle_horizontal_source"] == "camera_assisted_experimental"
+        assert result["iwr6843_horizontal_deg"] == 17.9
+        assert result["experimental_camera_horizontal_deg"] == 0.6
+        assert result["experimental_camera_horizontal_status"] == "camera_assisted_high"
+        assert result["experimental_camera_iwr_delta_deg"] == -17.3
+        assert "iwr6843_ball_range_evidence" not in result
+
+    def test_live_fusion_selects_camera_and_preserves_iwr(self, monkeypatch, tmp_path):
+        import numpy as np
+
+        from openflight.camera import ball_flight
+
+        estimate_call = {}
+
+        def fake_estimate(*_args, **kwargs):
+            estimate_call.update(kwargs)
+            return ball_flight.CameraBallEstimate(
+                status="accepted",
+                confidence_tier="high",
+                horizontal_deg=0.6,
+                support=20,
+            )
+
+        np.savez(
+            tmp_path / "frames.npz",
+            frames=np.zeros((8, 4, 4), dtype=np.uint8),
+            host_timestamp_ns=np.arange(8, dtype=np.int64),
+            trigger_host_timestamp_ns=np.int64(3),
+        )
+        monkeypatch.setattr(
+            ball_flight,
+            "estimate_camera_ball_flight",
+            fake_estimate,
+        )
+        monkeypatch.setattr(
+            server_module,
+            "iwr6843_runtime",
+            SimpleNamespace(
+                calibration=SimpleNamespace(
+                    tee_range_m=1.524,
+                    radar_height_m=0.15875,
+                    tee_ball_height_m=0.04,
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            server_module,
+            "camera_capture_config",
+            {
+                "mount_height_m": 0.20955,
+                "lateral_offset_m": 0.0762,
+                "horizontal_offset_deg": -0.45,
+                "roll_correction_deg": 2.8,
+                "width": 640,
+                "height": 400,
+            },
+        )
+        ball_flight_tracker = object()
+        monkeypatch.setattr(
+            server_module,
+            "camera_ball_flight_reference_tracker",
+            ball_flight_tracker,
+        )
+        shot = Shot(
+            ball_speed_mph=110.0,
+            timestamp=datetime.now(),
+            launch_angle_horizontal=17.9,
+            launch_angle_horizontal_confidence=0.8,
+            launch_angle_horizontal_source="radar",
+            iwr6843_horizontal_deg=17.9,
+            iwr6843_horizontal_confidence=0.8,
+            iwr6843_ball_range_evidence=object(),
+        )
+        capture = SimpleNamespace(valid=True, path=tmp_path)
+
+        server_module._fuse_camera_ball_flight(shot, capture)
+
+        assert shot.launch_angle_horizontal == 0.6
+        assert shot.launch_angle_horizontal_source == "camera_assisted_experimental"
+        assert shot.experimental_camera_horizontal_status == "camera_assisted_high"
+        assert shot.iwr6843_horizontal_deg == 17.9
+        assert estimate_call["geometry"].horizontal_offset_deg == -0.45
+        assert estimate_call["geometry"].camera_lateral_offset_m == 0.0762
+        assert estimate_call["geometry"].roll_correction_deg == 2.8
+        assert estimate_call["ball_tracker"] is ball_flight_tracker
+
+    def test_live_fusion_without_camera_preserves_radar_horizontal(self):
+        shot = Shot(
+            ball_speed_mph=110.0,
+            timestamp=datetime.now(),
+            launch_angle_horizontal=-2.0,
+            launch_angle_horizontal_confidence=0.7,
+            launch_angle_horizontal_source="radar",
+            iwr6843_horizontal_deg=-2.0,
+            iwr6843_horizontal_confidence=0.7,
+        )
+
+        server_module._fuse_camera_ball_flight(shot, None)
+
+        assert shot.launch_angle_horizontal == -2.0
+        assert shot.launch_angle_horizontal_confidence == 0.7
+        assert shot.launch_angle_horizontal_source == "radar"
+        assert shot.experimental_camera_horizontal_status == (
+            "camera_withheld_fallback_iwr:rejected_no_camera_capture"
+        )
+
+    def test_live_camera_fusion_loads_capture_archive_once(self, monkeypatch, tmp_path):
+        """Horizontal and club delivery should share one NPZ decode per shot."""
+        np.savez(
+            tmp_path / "frames.npz",
+            frames=np.zeros((8, 4, 4), dtype=np.uint8),
+            host_timestamp_ns=np.arange(8, dtype=np.int64),
+            trigger_host_timestamp_ns=np.int64(3),
+            pre_trigger_count=np.int32(4),
+        )
+        capture = SimpleNamespace(valid=True, path=tmp_path)
+        real_load = np.load
+        loads = []
+
+        def counted_load(*args, **kwargs):
+            loads.append(args[0])
+            return real_load(*args, **kwargs)
+
+        monkeypatch.setattr(np, "load", counted_load)
+        fused_archives = []
+        monkeypatch.setattr(
+            server_module,
+            "_fuse_camera_ball_flight",
+            lambda _shot, _capture, archive: fused_archives.append(archive),
+        )
+        monkeypatch.setattr(
+            server_module,
+            "_fuse_camera_club_delivery",
+            lambda _shot, _capture, archive: fused_archives.append(archive),
+        )
+        shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
+
+        server_module._fuse_camera_measurements(shot, capture)
+
+        assert loads == [tmp_path / "frames.npz"]
+        assert len(fused_archives) == 2
+        assert fused_archives[0] is fused_archives[1]
+        assert fused_archives[0]["frames"].shape == (8, 4, 4)
+
     def test_angle_source_none_by_default(self):
         """Shot without angle source should have None."""
         shot = Shot(
@@ -764,6 +1471,22 @@ class TestShotToDict:
         assert result["angle_source"] is None
         assert result["launch_angle_vertical_source"] is None
         assert result["launch_angle_horizontal_source"] is None
+
+    def test_camera_club_delivery_confidence_is_serialized(self):
+        shot = Shot(
+            ball_speed_mph=105.0,
+            timestamp=datetime.now(),
+            experimental_fused_attack_angle_deg=-4.2,
+            experimental_fused_attack_angle_confidence="medium",
+            experimental_fused_club_path_deg=3.1,
+            experimental_fused_club_path_confidence="high",
+            experimental_fused_status="approach_mixed",
+        )
+
+        result = shot_to_dict(shot)
+
+        assert result["experimental_fused_attack_angle_confidence"] == "medium"
+        assert result["experimental_fused_club_path_confidence"] == "high"
 
     def test_spin_diagnostics_included(self):
         """Rejected spin diagnostics should be present in UI payloads."""
@@ -793,6 +1516,331 @@ class TestShotToDict:
         assert result["spin_phase_agreement_pct"] == 2.1
         assert result["spin_phase_confirmed"] is True
         assert result["spin_rejection_reason"] == "SNR too low (2.96, need 3.0)"
+
+
+class TestSwingSpeedMode:
+    """Tests for swing speed training server helpers."""
+
+    def test_swing_speed_to_dict(self):
+        """Swing speed event payloads should be rounded and UI-friendly."""
+        event = SwingSpeedEvent(
+            peak_speed_mph=101.44,
+            timestamp=datetime(2024, 1, 15, 10, 30, 0),
+            duration_ms=347.8,
+            reading_count=9,
+            trigger_speed_mph=32.25,
+            peak_magnitude=42,
+        )
+
+        result = swing_speed_to_dict(event)
+
+        assert result == {
+            "peak_speed_mph": 101.4,
+            "timestamp": "2024-01-15T10:30:00",
+            "duration_ms": 348,
+            "reading_count": 9,
+            "trigger_speed_mph": 32.2,
+            "peak_magnitude": 42,
+            "training_implement": "driver",
+            "training_implement_label": "Driver",
+            "player_name": "Player 1",
+            "unit": "mph",
+            "mode": "swing-speed",
+        }
+
+    def test_swing_speed_to_shot_dict_supports_existing_ui(self):
+        """Swing speed events should also map to the normal shot event shape."""
+        event = SwingSpeedEvent(
+            peak_speed_mph=101.44,
+            timestamp=datetime(2024, 1, 15, 10, 30, 0),
+            duration_ms=347.8,
+            reading_count=9,
+            trigger_speed_mph=32.25,
+            peak_magnitude=42,
+        )
+
+        result = swing_speed_to_shot_dict(event)
+
+        assert result["ball_speed_mph"] == 101.4
+        assert result["club_speed_mph"] == 101.4
+        assert result["club"] == "Driver"
+        assert result["estimated_carry_yards"] == 0
+        assert result["carry_range"] == [0, 0]
+        assert result["mode"] == "swing-speed"
+        assert result["swing_speed_reading_count"] == 9
+        assert result["swing_speed_trigger_mph"] == 32.2
+        assert result["training_implement"] == "driver"
+        assert result["training_implement_label"] == "Driver"
+        assert result["player_name"] == "Player 1"
+
+    def test_set_player_updates_future_swing_speed_payloads(self, monkeypatch):
+        """Selected UI player should be stamped on subsequent swing speed reps."""
+        emitted = []
+        monkeypatch.setattr(server_module, "current_player_name", "Player 1")
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+
+        server_module.handle_set_player({"player_name": "David"})
+        event = SwingSpeedEvent(
+            peak_speed_mph=101.44,
+            timestamp=datetime(2024, 1, 15, 10, 30, 0),
+            duration_ms=347.8,
+            reading_count=9,
+            trigger_speed_mph=32.25,
+        )
+        server_module.on_swing_speed_detected(event)
+
+        assert server_module.current_player_name == "David"
+        shot_payload = next(payload for name, payload in emitted if name == "shot")
+        assert shot_payload["shot"]["player_name"] == "David"
+
+    def test_start_monitor_uses_swing_speed_monitor(self, monkeypatch):
+        """Swing speed mode should start a club-only monitor and callback."""
+        started = {}
+        session = {}
+
+        class FakeSwingSpeedMonitor:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.radar = SimpleNamespace(baud=57600)
+
+            def connect(self):
+                started["connected"] = True
+
+            def get_radar_info(self):
+                return {"Version": "test"}
+
+            def start(self, event_callback=None, live_callback=None):
+                started["event_callback"] = event_callback
+                started["live_callback"] = live_callback
+
+            def stop(self):
+                started["stopped"] = True
+
+            def disconnect(self):
+                started["disconnected"] = True
+
+        class FakeSessionLogger:
+            def start_session(self, **kwargs):
+                session.update(kwargs)
+
+            def end_session(self):
+                pass
+
+            def log_connection(self, **kwargs):
+                session["connection"] = kwargs
+
+            def log_clock_sync(self, **kwargs):
+                session["clock_sync"] = kwargs
+
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "camera", None)
+        monkeypatch.setattr(server_module, "camera_tracker", None)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: FakeSessionLogger())
+        monkeypatch.setattr(
+            "openflight.swing_speed.SwingSpeedMonitor",
+            FakeSwingSpeedMonitor,
+        )
+
+        server_module.start_monitor(
+            port="/dev/ops",
+            swing_speed_mode=True,
+            swing_speed_kwargs={
+                "trigger_threshold_mph": 35.0,
+                "max_speed_mph": 125.0,
+                "min_readings": 4,
+                "single_reading_peak_mph": 65.0,
+                "num_reports": 8,
+                "rejected_cooldown_ms": 50.0,
+            },
+        )
+
+        assert server_module.monitor.kwargs == {
+            "port": "/dev/ops",
+            "trigger_threshold_mph": 35.0,
+            "max_speed_mph": 125.0,
+            "min_readings": 4,
+            "single_reading_peak_mph": 65.0,
+            "num_reports": 8,
+            "rejected_cooldown_ms": 50.0,
+        }
+        assert started["connected"] is True
+        assert started["event_callback"] is server_module.on_swing_speed_detected
+        assert started["live_callback"] is server_module.on_live_reading
+        assert session["mode"] == "swing-speed"
+        assert session["trigger_type"] is None
+
+        server_module.stop_monitor()
+
+    def test_start_monitor_uses_mock_swing_speed_monitor(self, monkeypatch):
+        """Mock swing speed mode should exercise the swing speed UI without hardware."""
+        session = {}
+
+        class FakeSessionLogger:
+            def start_session(self, **kwargs):
+                session.update(kwargs)
+
+            def end_session(self):
+                pass
+
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "camera", None)
+        monkeypatch.setattr(server_module, "camera_tracker", None)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: FakeSessionLogger())
+
+        server_module.start_monitor(
+            mock=True,
+            swing_speed_mode=True,
+            swing_speed_kwargs={
+                "trigger_threshold_mph": 70.0,
+                "max_speed_mph": 125.0,
+                "min_readings": 5,
+            },
+        )
+
+        assert isinstance(server_module.monitor, MockSwingSpeedMonitor)
+        assert server_module.mock_mode is True
+        assert server_module.mock_swing_speed_mode is True
+        assert server_module.monitor.trigger_threshold_mph == 70.0
+        assert server_module.monitor.max_speed_mph == 125.0
+        assert server_module.monitor.min_readings == 5
+        assert session["mode"] == "swing-speed"
+        assert session["trigger_type"] is None
+
+        server_module.stop_monitor()
+
+    def test_mock_swing_speed_simulates_bounded_event(self):
+        """Mock swing speed reps should respect configured lower and upper gates."""
+        emitted = []
+        monitor = MockSwingSpeedMonitor(
+            trigger_threshold_mph=75.0,
+            max_speed_mph=110.0,
+            min_readings=5,
+        )
+
+        monitor.start(event_callback=emitted.append)
+        event = monitor.simulate_shot()
+
+        assert emitted == [event]
+        assert 75.0 <= event.peak_speed_mph <= 110.0
+        assert event.reading_count >= 5
+        assert monitor.get_session_stats()["shot_count"] == 1
+
+    def test_mock_swing_speed_stamps_training_implement(self):
+        """Mock reps should use the selected training implement metadata."""
+        monitor = MockSwingSpeedMonitor()
+
+        assert (
+            server_module.TRAINING_IMPLEMENT_LABELS["rypstick-3w-cw"]
+            == "Rypstick 3 Weights + Counterweight"
+        )
+
+        monitor.set_training_implement("rypstick-3w-cw", "Rypstick 3 Weights + Counterweight")
+        event = monitor.simulate_shot(peak_speed=95.0)
+        shot = swing_speed_to_shot_dict(event)
+
+        assert event.training_implement == "rypstick-3w-cw"
+        assert event.training_implement_label == "Rypstick 3 Weights + Counterweight"
+        assert shot["club"] == "Rypstick 3 Weights + Counterweight"
+
+    def test_delete_session_row_removes_mock_swing_speed_event(self, monkeypatch):
+        """Deleting a swing-speed UI row should remove the matching event."""
+        monitor = MockSwingSpeedMonitor(
+            trigger_threshold_mph=75.0,
+            max_speed_mph=110.0,
+            min_readings=5,
+        )
+        first = monitor.simulate_shot(peak_speed=95.0)
+        second = monitor.simulate_shot(peak_speed=101.0)
+
+        monkeypatch.setattr(server_module, "monitor", monitor)
+
+        assert server_module._delete_session_row(first.timestamp.isoformat()) is True
+        remaining = server_module._session_shots()
+
+        assert len(remaining) == 1
+        assert remaining[0]["timestamp"] == second.timestamp.isoformat()
+        assert remaining[0]["club"] == "Driver"
+
+    def test_set_radar_config_updates_swing_speed_gates(self, monkeypatch):
+        """UI tuning should update live swing-speed lower and upper gates."""
+        calls = []
+        emitted = []
+
+        class StubRadar:
+            def set_min_speed_filter(self, value):
+                calls.append(("min", value))
+
+            def set_max_speed_filter(self, value):
+                calls.append(("max", value))
+
+        class StubSwingSpeedMonitor:
+            radar = StubRadar()
+            trigger_threshold_mph = 70.0
+            max_speed_mph = 125.0
+
+        monkeypatch.setattr(server_module, "monitor", StubSwingSpeedMonitor())
+        monkeypatch.setattr(server_module, "mock_mode", False)
+        monkeypatch.setattr(server_module, "radar_config", {"min_speed": 70, "max_speed": 125})
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
+        monkeypatch.setattr(
+            server_module,
+            "log_session_error",
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            "openflight.swing_speed.SwingSpeedMonitor",
+            StubSwingSpeedMonitor,
+        )
+
+        server_module.handle_set_radar_config({"min_speed": 55, "max_speed": 115})
+
+        assert calls == [("min", 55), ("max", 115)]
+        assert server_module.monitor.trigger_threshold_mph == 55.0
+        assert server_module.monitor.max_speed_mph == 115.0
+        assert emitted[-1] == ("radar_config", {"min_speed": 55, "max_speed": 115})
+
+    def test_set_radar_config_forwards_zero_max_speed_to_clear_the_filter(self, monkeypatch):
+        """max_speed 0 must still reach the radar on the default launch path.
+
+        AN-010-AD (p10) defines "R<0 resets to no limit", so 0 is how the UI
+        clears a previously-set ceiling -- the default DebugPanel slider allows
+        it (min=0). Skipping the command leaves the old ceiling active on the
+        radar while radar_config reports 0, silently dropping fast shots.
+        """
+        calls = []
+
+        class StubRadar:
+            def set_min_speed_filter(self, value):
+                calls.append(("min", value))
+
+            def set_max_speed_filter(self, value):
+                calls.append(("max", value))
+
+        class StubMonitor:
+            radar = StubRadar()
+
+        monkeypatch.setattr(server_module, "monitor", StubMonitor())
+        monkeypatch.setattr(server_module, "mock_mode", False)
+        monkeypatch.setattr(server_module, "mock_swing_speed_mode", False)
+        monkeypatch.setattr(server_module, "radar_config", {"min_speed": 10, "max_speed": 150})
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *_a, **_kw: None)
+        monkeypatch.setattr(server_module, "log_session_error", lambda *_a, **_kw: None)
+
+        server_module.handle_set_radar_config({"max_speed": 0})
+
+        assert ("max", 0) in calls, (
+            "R<0 is the documented reset-to-no-limit; suppressing it leaves the "
+            f"previous ceiling active on the radar. Calls: {calls}"
+        )
+        assert server_module.radar_config["max_speed"] == 0
 
 
 class TestEstimateLaunchAngle:
@@ -2272,9 +3320,7 @@ class TestOnShotDetected:
         on_shot_detected(shot)
 
     def test_spin_axis_emitted_when_horizontal_confidence_clears_gate(self, monkeypatch):
-        shot = self._spin_axis_shot(
-            horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE
-        )
+        shot = self._spin_axis_shot(horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE)
 
         self._run_with_no_radar_hardware(monkeypatch, shot)
 
@@ -2290,6 +3336,50 @@ class TestOnShotDetected:
         self._run_with_no_radar_hardware(monkeypatch, shot)
 
         assert shot.spin_axis_deg is None
+
+
+class TestBallisticsConfiguration:
+    """The physics model is preferred unless an operator explicitly opts out."""
+
+    @pytest.mark.parametrize(
+        ("arguments", "expected"),
+        [
+            ([], True),
+            (["--ballistics"], True),
+            (["--no-ballistics"], False),
+        ],
+    )
+    def test_cli_ballistics_preference(self, arguments, expected):
+        parser = argparse.ArgumentParser()
+        server_module._add_ballistics_arguments(parser)
+
+        assert parser.parse_args(arguments).ballistics is expected
+
+    def test_runtime_default_enables_ballistics(self):
+        assert server_module.ballistics_enabled is True
+
+
+class TestBatteryConfiguration:
+    """Battery monitoring is explicitly enabled with a supported provider."""
+
+    def test_cli_accepts_geekworm_provider(self):
+        parser = argparse.ArgumentParser()
+        server_module._add_battery_arguments(parser)
+
+        assert parser.parse_args(["--battery", "geekworm"]).battery == "geekworm"
+
+    def test_cli_is_disabled_by_default(self):
+        parser = argparse.ArgumentParser()
+        server_module._add_battery_arguments(parser)
+
+        assert parser.parse_args([]).battery is None
+
+    def test_cli_rejects_unknown_provider(self):
+        parser = argparse.ArgumentParser()
+        server_module._add_battery_arguments(parser)
+
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--battery", "unknown"])
 
 
 class TestCarryComputation:
@@ -2371,7 +3461,7 @@ class TestCarryComputation:
     def test_carry_skips_ballistic_when_ballistics_disabled(self, monkeypatch):
         """When ballistics_enabled is False, the simulator must not run even
         if a valid launch angle is present — carry falls through to the
-        table estimator. This is the default; `--ballistics` opts in."""
+        table estimator. Operators can request this with `--no-ballistics`."""
         self._patch_environment(monkeypatch)
         monkeypatch.setattr(server_module, "ballistics_enabled", False)
 
@@ -2491,9 +3581,7 @@ class TestClubPathOwnershipGuard:
     existing --iwr6843/--kld7 (vertical) guard."""
 
     def test_iwr6843_and_kld7_horizontal_cannot_both_own_club_path(self, monkeypatch, capsys):
-        monkeypatch.setattr(
-            sys, "argv", ["openflight-server", "--iwr6843", "--kld7-horizontal"]
-        )
+        monkeypatch.setattr(sys, "argv", ["openflight-server", "--iwr6843", "--kld7-horizontal"])
 
         with pytest.raises(SystemExit) as exc_info:
             server_module.main()

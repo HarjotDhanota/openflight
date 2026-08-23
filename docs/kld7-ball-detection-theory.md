@@ -142,7 +142,8 @@ This work materially improves three things:
 The repo now has an offline command:
 
 ```bash
-PYTHONPATH=src .venv/bin/python scripts/analysis/analyze_kld7.py <capture.pkl> --pair-shots
+PYTHONPATH=src uv run python scripts/analysis/analyze_kld7.py \
+  <capture.pkl> --pair-shots
 ```
 
 That prints probable club-to-ball pairs from a long capture. This turns the
@@ -197,7 +198,8 @@ sequence logic is isolating real shot events rather than random clutter.
 Running the offline analyzer with:
 
 ```bash
-PYTHONPATH=src .venv/bin/python scripts/analysis/analyze_kld7.py <capture.pkl> --pair-shots
+PYTHONPATH=src uv run python scripts/analysis/analyze_kld7.py \
+  <capture.pkl> --pair-shots
 ```
 
 currently produces:

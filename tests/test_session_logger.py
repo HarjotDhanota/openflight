@@ -1,6 +1,10 @@
 """Tests for session_logger module."""
 
 import json
+import threading
+import time
+
+import pytest
 
 from openflight import session_logger as session_logger_module
 from openflight.kld7.radc import RADC_PAYLOAD_BYTES
@@ -242,6 +246,16 @@ class TestLogShot:
             launch_angle_horizontal_confidence=0.6,
             launch_angle_vertical_source="radar",
             launch_angle_horizontal_source="estimated",
+            experimental_attack_angle_deg=-4.9,
+            experimental_attack_angle_status="candidate_available",
+            experimental_club_path_deg=5.8,
+            experimental_club_path_status="rejected_phase_span",
+            iwr6843_horizontal_deg=17.9,
+            iwr6843_horizontal_confidence=0.8,
+            experimental_camera_horizontal_deg=0.6,
+            experimental_camera_horizontal_confidence=0.75,
+            experimental_camera_horizontal_status="camera_assisted_high",
+            experimental_camera_iwr_delta_deg=-17.3,
             impact_timestamp=1234567890.25,
         )
 
@@ -264,7 +278,39 @@ class TestLogShot:
         assert entry["launch_angle_horizontal_confidence"] == 0.6
         assert entry["launch_angle_vertical_source"] == "radar"
         assert entry["launch_angle_horizontal_source"] == "estimated"
+        assert entry["experimental_attack_angle_deg"] == -4.9
+        assert entry["experimental_attack_angle_status"] == "candidate_available"
+        assert entry["experimental_club_path_deg"] == 5.8
+        assert entry["experimental_club_path_status"] == "rejected_phase_span"
+        assert entry["iwr6843_horizontal_deg"] == 17.9
+        assert entry["iwr6843_horizontal_confidence"] == 0.8
+        assert entry["experimental_camera_horizontal_deg"] == 0.6
+        assert entry["experimental_camera_horizontal_confidence"] == 0.75
+        assert entry["experimental_camera_horizontal_status"] == "camera_assisted_high"
+        assert entry["experimental_camera_iwr_delta_deg"] == -17.3
         assert entry["impact_timestamp"] == 1234567890.25
+
+    def test_shot_logs_experimental_club_status_without_candidate(self, tmp_path):
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+
+        logger.log_shot(
+            ball_speed_mph=100.0,
+            club_speed_mph=80.0,
+            smash_factor=1.25,
+            estimated_carry_yards=130,
+            club="9_iron",
+            peak_magnitude=None,
+            readings_count=0,
+            experimental_attack_angle_status="rejected_no_club_track",
+            experimental_club_path_status="rejected_no_pre_impact_frames",
+        )
+
+        entry = json.loads(logger.session_path.read_text().strip().split("\n")[-1])
+        assert "experimental_attack_angle_deg" not in entry
+        assert entry["experimental_attack_angle_status"] == "rejected_no_club_track"
+        assert "experimental_club_path_deg" not in entry
+        assert entry["experimental_club_path_status"] == "rejected_no_pre_impact_frames"
 
     def test_rolling_buffer_capture_logs_trigger_timing(self, tmp_path):
         """Rolling-buffer captures should preserve host trigger timing fields."""
@@ -295,6 +341,29 @@ class TestLogShot:
         assert entry["trigger_timestamp_delta_from_first_byte_ms"] == 0.0
         assert entry["clock_sync_offset_s"] == 1234567790.114
         assert entry["post_trigger_duration_ms"] == 68.0
+
+
+class TestLogCameraCapture:
+    """Tests for passive high-speed camera capture logging."""
+
+    def test_camera_capture_writes_path_and_timing(self, tmp_path):
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+
+        logger.log_camera_capture(
+            shot_number=3,
+            shot_timestamp=100.0,
+            trigger_timestamp=100.012,
+            capture_path="/tmp/camera_003",
+            metadata={"frame_count": 48, "delivered_fps": 287.9},
+        )
+
+        entry = json.loads(logger.session_path.read_text().strip().split("\n")[-1])
+        assert entry["type"] == "camera_capture"
+        assert entry["shot_number"] == 3
+        assert entry["capture_path"] == "/tmp/camera_003"
+        assert entry["trigger_delta_ms"] == pytest.approx(12.0)
+        assert entry["metadata"]["frame_count"] == 48
 
 
 class TestLogKld7Buffer:
@@ -473,6 +542,19 @@ class TestLogIWR6843Capture:
             "launch_angle_deg": 17.4,
             "components_deg": {"channel_two8_deg": 14.1},
         }
+        temperature_report = {
+            "device_time_ms": 123456,
+            "rx0_c": 42,
+            "rx1_c": 43,
+            "rx2_c": 44,
+            "rx3_c": 45,
+            "tx0_c": 46,
+            "tx1_c": 47,
+            "tx2_c": 48,
+            "pm_c": 49,
+            "dig0_c": 50,
+            "dig1_c": 51,
+        }
 
         logger.log_iwr6843_capture(
             shot_number=2,
@@ -484,6 +566,7 @@ class TestLogIWR6843Capture:
             capture_error=None,
             ball_speed_mph=101.2,
             measurement=measurement,
+            temperature_report=temperature_report,
         )
 
         entry = json.loads(logger.session_path.read_text().strip().split("\n")[-1])
@@ -493,6 +576,7 @@ class TestLogIWR6843Capture:
         assert entry["capture_bytes"] == 786452
         assert entry["ball_speed_source"] == "ops243"
         assert entry["measurement"] == measurement
+        assert entry["temperature_report"] == temperature_report
 
     def test_iwr6843_capture_logs_club_path(self, tmp_path):
         """Club path evidence must be replayable from the session log alone."""
@@ -504,7 +588,7 @@ class TestLogIWR6843Capture:
             shot_timestamp=100.0,
             trigger_timestamp=100.002,
             capture_path="/tmp/x.l3dump",
-            capture_bytes=549542,
+            capture_bytes=549566,
             dump_duration_s=5.33,
             capture_error=None,
             ball_speed_mph=94.5,
@@ -516,6 +600,7 @@ class TestLogIWR6843Capture:
         assert entry["type"] == "iwr6843_capture"
         assert entry["club_path"]["path_deg"] == 2.4
         assert entry["measurement"]["track_span_s"] == 0.0334
+        assert entry["temperature_report"] is None
 
     def test_iwr6843_capture_club_path_defaults_to_none(self, tmp_path):
         logger = SessionLogger(log_dir=tmp_path, enabled=True)
@@ -607,3 +692,149 @@ class TestSessionIdentity:
         first = self._start_entry(tmp_path / "a")
         second = self._start_entry(tmp_path / "b")
         assert first["session_uuid"] != second["session_uuid"]
+
+
+class _ConcurrencyProbeStream:
+    """Fake session file that detects overlapping writes deterministically.
+
+    ``write`` widens its critical section with a short sleep, so if two
+    threads are inside it at once (i.e. ``_write_entry`` is not serialized)
+    the second one observes ``_active`` already set and records an overlap.
+    The sleep releases the GIL, so with multiple writer threads and no lock
+    the overlap is reproduced on every run rather than relying on a rare
+    interleaving to surface.
+    """
+
+    def __init__(self):
+        self.lines = []
+        self.overlap_detected = False
+        self.closed = False
+        self._active = False
+
+    def write(self, data):
+        if self._active:
+            self.overlap_detected = True
+        self._active = True
+        time.sleep(0.001)
+        self.lines.append(data)
+        self._active = False
+
+    def flush(self):
+        pass
+
+    def close(self):
+        self.closed = True
+
+
+class TestWriteEntryThreadSafety:
+    """Concurrency tests for the shared session-file writer.
+
+    ``log_*`` methods are called from several threads at once (the OPS243
+    capture thread, the K-LD7 stream thread, and Flask-SocketIO handlers).
+    Without serialization, large entries' writes interleave and corrupt the
+    JSONL replay corpus, and a write can race ``end_session`` closing the
+    file.
+    """
+
+    def test_concurrent_writes_do_not_overlap_or_drop_entries(self, tmp_path):
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+
+        probe = _ConcurrencyProbeStream()
+        logger._session_file = probe  # swap the real file for the probe
+
+        threads_n = 8
+        per_thread = 5
+
+        def worker(idx):
+            for seq in range(per_thread):
+                logger._write_entry("probe", {"thread": idx, "seq": seq})
+
+        threads = [threading.Thread(target=worker, args=(idx,)) for idx in range(threads_n)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        assert not any(thread.is_alive() for thread in threads)
+        assert not probe.overlap_detected, (
+            "Concurrent _write_entry calls overlapped inside the stream write; "
+            "session JSONL lines can interleave and corrupt the replay corpus."
+        )
+        # Every entry was written exactly once and each line is intact JSON.
+        assert len(probe.lines) == threads_n * per_thread
+        for line in probe.lines:
+            assert line.endswith("\n")
+            json.loads(line)
+
+    def test_end_session_does_not_close_during_an_active_write(self, tmp_path):
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+
+        in_write = threading.Event()
+        let_write_finish = threading.Event()
+        events = []
+
+        class _BlockingFirstWriteStream:
+            """Blocks the first write so a close can try to race it."""
+
+            def __init__(self):
+                self._first = True
+
+            def write(self, data):
+                if self._first:
+                    self._first = False
+                    in_write.set()
+                    let_write_finish.wait(timeout=5)
+                events.append("write")
+
+            def flush(self):
+                pass
+
+            def close(self):
+                events.append("close")
+
+        logger._session_file = _BlockingFirstWriteStream()
+
+        writer = threading.Thread(target=lambda: logger._write_entry("blocking", {}))
+        writer.start()
+        assert in_write.wait(timeout=5)  # writer is inside write(), holding the lock
+
+        closer = threading.Thread(target=logger.end_session)
+        closer.start()
+        time.sleep(0.05)
+        # The in-flight write holds the lock, so end_session must not have
+        # closed the file yet. Without serialization it closes immediately.
+        assert "close" not in events, "end_session closed the file during an active write"
+
+        let_write_finish.set()
+        writer.join(timeout=5)
+        closer.join(timeout=5)
+
+        # The close must land after the in-flight write completed.
+        assert events[0] == "write"
+        assert "close" in events
+        assert events.index("close") == len(events) - 1
+
+
+def test_power_status_writes_structured_session_entry(tmp_path):
+    logger = SessionLogger(log_dir=tmp_path, enabled=True)
+    logger.start_session(mode="rolling-buffer", trigger_type="sound")
+
+    logger.log_power_status(
+        {
+            "available": True,
+            "state": "on_battery",
+            "battery_percent": 42.5,
+            "battery_voltage_v": 3.72,
+            "external_power": False,
+            "updated_at": "2026-08-15T12:00:00+00:00",
+            "error": None,
+        }
+    )
+
+    entry = json.loads(logger.session_path.read_text().strip().split("\n")[-1])
+    assert entry["type"] == "power_status"
+    assert entry["state"] == "on_battery"
+    assert entry["battery_percent"] == 42.5
+    assert entry["external_power"] is False

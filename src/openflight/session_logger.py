@@ -7,6 +7,7 @@ for analysis and debugging.
 
 import json
 import logging
+import threading
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -85,6 +86,13 @@ class SessionLogger:
         self._raw_file: Optional[Any] = None
         self._session_path: Optional[Path] = None
         self._raw_path: Optional[Path] = None
+
+        # Serializes all access to ``_session_file``. The log_* methods are
+        # called concurrently from the OPS243 capture thread, the K-LD7
+        # stream thread, and Flask-SocketIO handlers; without this lock,
+        # large entries' writes interleave (corrupting the JSONL replay
+        # corpus) and a write can race end_session() closing the file.
+        self._write_lock = threading.Lock()
 
         # Counters for session summary
         self._stats = {
@@ -254,10 +262,12 @@ class SessionLogger:
 
         self._write_entry("session_end", summary)
 
-        # Close files
-        if self._session_file:
-            self._session_file.close()
-            self._session_file = None
+        # Close the session file under the write lock so it cannot be
+        # closed out from under a concurrent _write_entry call.
+        with self._write_lock:
+            if self._session_file:
+                self._session_file.close()
+                self._session_file = None
 
         if self._raw_file:
             self._raw_file.close()
@@ -275,14 +285,24 @@ class SessionLogger:
         print(f"[SESSION] Logs saved to: {self._session_path}")
 
     def _write_entry(self, entry_type: str, data: Dict[str, Any]):
-        """Write a log entry to the session file."""
+        """Write a log entry to the session file.
+
+        Serialized with ``_write_lock`` so concurrent log_* calls from
+        different threads cannot interleave a partial line into the JSONL
+        stream or write to a file that end_session() is closing. The entry
+        is serialized outside the lock to keep the critical section to the
+        write+flush.
+        """
         if not self._session_file:
             return
 
-        entry = {"ts": datetime.now().isoformat(), "type": entry_type, **data}
+        line = json.dumps({"ts": datetime.now().isoformat(), "type": entry_type, **data}) + "\n"
 
-        self._session_file.write(json.dumps(entry) + "\n")
-        self._session_file.flush()
+        with self._write_lock:
+            if not self._session_file:
+                return
+            self._session_file.write(line)
+            self._session_file.flush()
 
     def log_accepted_reading(self, reading: SpeedReading):
         """Log a reading that passed all filters and will be processed."""
@@ -340,9 +360,28 @@ class SessionLogger:
         angle_source: Optional[str] = None,
         club_angle_deg: Optional[float] = None,
         club_path_deg: Optional[float] = None,
+        experimental_attack_angle_deg: Optional[float] = None,
+        experimental_attack_angle_status: Optional[str] = None,
+        experimental_club_path_deg: Optional[float] = None,
+        experimental_club_path_status: Optional[str] = None,
+        experimental_fused_attack_angle_deg: Optional[float] = None,
+        experimental_fused_club_path_deg: Optional[float] = None,
+        experimental_fused_status: Optional[str] = None,
+        experimental_fused_attack_angle_confidence: Optional[str] = None,
+        experimental_fused_club_path_confidence: Optional[str] = None,
+        experimental_camera_trace_deg: Optional[float] = None,
+        experimental_aoa_offset_source: Optional[str] = None,
+        iwr6843_horizontal_deg: Optional[float] = None,
+        iwr6843_horizontal_confidence: Optional[float] = None,
+        experimental_camera_horizontal_deg: Optional[float] = None,
+        experimental_camera_horizontal_confidence: Optional[float] = None,
+        experimental_camera_horizontal_status: Optional[str] = None,
+        experimental_camera_iwr_delta_deg: Optional[float] = None,
         spin_axis_deg: Optional[float] = None,
         pipeline_ms: Optional[Dict] = None,
         impact_timestamp: Optional[float] = None,
+        player_name: Optional[str] = None,
+        inclinometer: Optional[Dict] = None,
     ):
         """
         Log a detected shot with all metrics.
@@ -377,6 +416,7 @@ class SessionLogger:
             carry_spin_adjusted: Carry distance adjusted for spin (rolling buffer mode only)
             mode: Radar mode ("rolling-buffer" or "mock")
             impact_timestamp: Host epoch timestamp aligned to impact/OPS trigger time
+            inclinometer: Enclosure orientation and effective IWR tilt used for the shot
         """
         if not self.enabled:
             return
@@ -390,6 +430,7 @@ class SessionLogger:
             "smash_factor": smash_factor,
             "estimated_carry_yards": estimated_carry_yards,
             "club": club,
+            "player_name": player_name,
             "peak_magnitude": peak_magnitude,
             "readings_count": readings_count,
             "readings": readings,
@@ -432,10 +473,52 @@ class SessionLogger:
             data["club_angle_deg"] = club_angle_deg
         if club_path_deg is not None:
             data["club_path_deg"] = club_path_deg
+        if experimental_attack_angle_deg is not None:
+            data["experimental_attack_angle_deg"] = experimental_attack_angle_deg
+        if experimental_attack_angle_status is not None:
+            data["experimental_attack_angle_status"] = experimental_attack_angle_status
+        if experimental_club_path_deg is not None:
+            data["experimental_club_path_deg"] = experimental_club_path_deg
+        if experimental_club_path_status is not None:
+            data["experimental_club_path_status"] = experimental_club_path_status
+        if experimental_fused_attack_angle_deg is not None:
+            data["experimental_fused_attack_angle_deg"] = experimental_fused_attack_angle_deg
+        if experimental_fused_club_path_deg is not None:
+            data["experimental_fused_club_path_deg"] = experimental_fused_club_path_deg
+        if experimental_fused_status is not None:
+            data["experimental_fused_status"] = experimental_fused_status
+        if experimental_fused_attack_angle_confidence is not None:
+            data["experimental_fused_attack_angle_confidence"] = (
+                experimental_fused_attack_angle_confidence
+            )
+        if experimental_fused_club_path_confidence is not None:
+            data["experimental_fused_club_path_confidence"] = (
+                experimental_fused_club_path_confidence
+            )
+        if experimental_camera_trace_deg is not None:
+            data["experimental_camera_trace_deg"] = experimental_camera_trace_deg
+        if experimental_aoa_offset_source is not None:
+            data["experimental_aoa_offset_source"] = experimental_aoa_offset_source
+        if iwr6843_horizontal_deg is not None:
+            data["iwr6843_horizontal_deg"] = iwr6843_horizontal_deg
+        if iwr6843_horizontal_confidence is not None:
+            data["iwr6843_horizontal_confidence"] = iwr6843_horizontal_confidence
+        if experimental_camera_horizontal_deg is not None:
+            data["experimental_camera_horizontal_deg"] = experimental_camera_horizontal_deg
+        if experimental_camera_horizontal_confidence is not None:
+            data["experimental_camera_horizontal_confidence"] = (
+                experimental_camera_horizontal_confidence
+            )
+        if experimental_camera_horizontal_status is not None:
+            data["experimental_camera_horizontal_status"] = experimental_camera_horizontal_status
+        if experimental_camera_iwr_delta_deg is not None:
+            data["experimental_camera_iwr_delta_deg"] = experimental_camera_iwr_delta_deg
         if spin_axis_deg is not None:
             data["spin_axis_deg"] = spin_axis_deg
         if pipeline_ms is not None:
             data["pipeline_ms"] = pipeline_ms
+        if inclinometer is not None:
+            data["inclinometer"] = inclinometer
 
         self._write_entry("shot_detected", data)
 
@@ -461,6 +544,37 @@ class SessionLogger:
                 "confidence": confidence,
                 "positions_tracked": positions_tracked,
                 "launch_detected": launch_detected,
+            },
+        )
+
+    def log_camera_capture(
+        self,
+        *,
+        shot_number: int,
+        shot_timestamp: Optional[float],
+        trigger_timestamp: Optional[float],
+        capture_path: Optional[str],
+        metadata: Optional[Dict] = None,
+        capture_error: Optional[str] = None,
+    ):
+        """Log a high-speed camera clip saved for offline shot correlation."""
+        if not self.enabled:
+            return
+
+        self._write_entry(
+            "camera_capture",
+            {
+                "shot_number": shot_number,
+                "shot_timestamp": shot_timestamp,
+                "trigger_timestamp": trigger_timestamp,
+                "trigger_delta_ms": (
+                    (trigger_timestamp - shot_timestamp) * 1000.0
+                    if shot_timestamp is not None and trigger_timestamp is not None
+                    else None
+                ),
+                "capture_path": capture_path,
+                "capture_error": capture_error,
+                "metadata": metadata or {},
             },
         )
 
@@ -531,6 +645,7 @@ class SessionLogger:
         ball_speed_mph: float,
         measurement: Optional[Dict] = None,
         club_path: Optional[Dict] = None,
+        temperature_report: Optional[Dict[str, Any]] = None,
     ):
         """Log the TI raw-dump reference and complete LCMF evidence."""
         if not self.enabled:
@@ -554,6 +669,7 @@ class SessionLogger:
                 "ball_speed_mph": ball_speed_mph,
                 "measurement": measurement,
                 "club_path": club_path,
+                "temperature_report": temperature_report,
             },
         )
 
@@ -631,6 +747,12 @@ class SessionLogger:
                 "club": club,
             },
         )
+
+    def log_power_status(self, status: Dict[str, Any]) -> None:
+        """Log a battery snapshot or power-state transition."""
+        if not self.enabled:
+            return
+        self._write_entry("power_status", status)
 
     def log_iq_reading(
         self,

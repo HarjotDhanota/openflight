@@ -5,10 +5,11 @@ Defines different methods for determining when to capture the rolling buffer.
 """
 
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional
 
 from .processor import RollingBufferProcessor
 from .types import IQCapture
@@ -1018,6 +1019,8 @@ class SoundTrigger(TriggerStrategy):
         radar: "OPS243Radar",
         processor: RollingBufferProcessor,
         timeout: float = 30.0,
+        cancel_event: Optional[threading.Event] = None,
+        capture_started_callback: Optional[Callable[[], None]] = None,
     ) -> Optional[IQCapture]:
         """
         Wait for hardware sound trigger and capture buffer.
@@ -1032,7 +1035,11 @@ class SoundTrigger(TriggerStrategy):
         """
         logger.info("[TRIGGER] Waiting for sound trigger (timeout=%.0fs)...", timeout)
 
-        response = radar.wait_for_hardware_trigger(timeout=timeout)
+        response = radar.wait_for_hardware_trigger(
+            timeout=timeout,
+            cancel_event=cancel_event,
+            on_first_byte=capture_started_callback,
+        )
 
         if not response:
             logger.info("[TRIGGER] Sound trigger timeout — no hardware trigger received")

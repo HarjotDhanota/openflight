@@ -18,7 +18,7 @@ from openflight.iwr6843.dump import HEADER, parse_header, payload_nbytes
 
 logger = logging.getLogger(__name__)
 
-_GRACEFUL_DUMP_SHUTDOWN_S = 8.0
+_GRACEFUL_DUMP_SHUTDOWN_S = 12.0
 
 
 def tx_order_from_config(config_path: str | Path) -> str:
@@ -49,6 +49,7 @@ class IWR6843Capture:
     raw: bytes | None
     path: Path | None
     error: str | None = None
+    temperature_report: dict[str, int] | None = None
 
     @property
     def valid(self) -> bool:
@@ -75,6 +76,7 @@ class IWR6843CaptureMonitor:
         button_factory: Callable | None = None,
         match_tolerance_s: float = 0.75,
         save_dumps: bool = False,
+        trigger_observers: list[Callable[[float], None]] | None = None,
     ):
         self.config_path = Path(config_path)
         self.output_dir = Path(output_dir).expanduser()
@@ -93,6 +95,7 @@ class IWR6843CaptureMonitor:
         self._captures: deque[IWR6843Capture] = deque()
         self._condition = threading.Condition()
         self._worker: threading.Thread | None = None
+        self._trigger_observers = list(trigger_observers or [])
 
     @property
     def port(self) -> str:
@@ -107,8 +110,10 @@ class IWR6843CaptureMonitor:
             raise FileNotFoundError(f"IWR6843 config not found: {self.config_path}")
         if self.save_dumps:
             self.output_dir.mkdir(parents=True, exist_ok=True)
+        configured = False
         try:
             self.radar.send_config(str(self.config_path))
+            configured = True
 
             button_factory = self._button_factory
             if button_factory is None:
@@ -136,7 +141,10 @@ class IWR6843CaptureMonitor:
             if self._button is not None:
                 self._button.close()
                 self._button = None
-            self.radar.close()
+            if configured:
+                self._stop_sensor_and_close()
+            else:
+                self.radar.close()
             raise
         logger.info(
             "[IWR6843] Configured on BCM%d using %s (%s%s)",
@@ -176,15 +184,21 @@ class IWR6843CaptureMonitor:
             self._last_edge_timestamp = edge_timestamp
             self._events.put_nowait(edge_timestamp)
             self._condition.notify_all()
+        for observer in self._trigger_observers:
+            try:
+                observer(edge_timestamp)
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.warning("[IWR6843] Trigger observer failed", exc_info=True)
         return True
 
-    def _validate_dump(self, raw: bytes) -> None:
+    def _validate_dump(self, raw: bytes) -> dict:
         if len(raw) < HEADER.size:
             raise ValueError(f"short IWR6843 dump: {len(raw)} bytes")
         metadata = parse_header(raw)
-        expected = HEADER.size + payload_nbytes(metadata)
+        expected = metadata["header_nbytes"] + payload_nbytes(metadata, raw)
         if len(raw) != expected:
             raise ValueError(f"short IWR6843 dump: {len(raw)} bytes, expected {expected}")
+        return metadata
 
     def _capture_path(self, sequence: int, trigger_timestamp: float) -> Path:
         timestamp = datetime.fromtimestamp(trigger_timestamp).strftime("%Y%m%d_%H%M%S_%f")[:-3]
@@ -203,13 +217,14 @@ class IWR6843CaptureMonitor:
             raw = None
             path = None
             error = None
+            metadata = None
             try:
                 logger.info(
                     "[IWR6843] Trigger #%d: dumping firmware-frozen L3 ring",
                     sequence,
                 )
                 raw = self.radar.read_dump()
-                self._validate_dump(raw)
+                metadata = self._validate_dump(raw)
                 if self.save_dumps:
                     path = self._capture_path(sequence, edge_timestamp)
                     path.write_bytes(raw)
@@ -226,6 +241,9 @@ class IWR6843CaptureMonitor:
                 raw=raw,
                 path=path,
                 error=error,
+                temperature_report=(
+                    metadata.get("temperature_report") if metadata is not None else None
+                ),
             )
             with self._condition:
                 self._capture_active = False
@@ -292,7 +310,7 @@ class IWR6843CaptureMonitor:
                 self._condition.wait(remaining)
 
     def stop(self) -> None:
-        """Release GPIO, serial transport, and worker resources."""
+        """Drain active capture, stop firmware, then release host resources."""
         if not self._running:
             return
         self._armed = False
@@ -306,21 +324,36 @@ class IWR6843CaptureMonitor:
         except queue.Full:
             pass
         if self._worker is not None:
-            # Keep UART open long enough for a normal 550 KiB dump to finish.
-            # Closing it first strands the firmware in an abandoned transfer.
+            # Preserve a complete debug dump and its trailing CLI prompt before
+            # issuing sensorStop. Closing early strands firmware mid-transfer.
             self._worker.join(timeout=_GRACEFUL_DUMP_SHUTDOWN_S)
             if self._worker.is_alive():
                 logger.warning(
-                    "[IWR6843] Active dump did not finish during shutdown; forcing serial close"
+                    "[IWR6843] Active dump did not finish within %.1fs; "
+                    "forcing serial close (board reset may be required)",
+                    _GRACEFUL_DUMP_SHUTDOWN_S,
                 )
                 self.radar.close()
                 self._worker.join(timeout=2.0)
             else:
-                self.radar.close()
+                self._stop_sensor_and_close()
             self._worker = None
         else:
-            self.radar.close()
+            self._stop_sensor_and_close()
         logger.info("[IWR6843] Capture monitor stopped")
+
+    def _stop_sensor_and_close(self) -> None:
+        """Best-effort firmware stop that never leaks the serial descriptor."""
+        try:
+            self.radar.stop_sensor()
+            logger.info("[IWR6843] Firmware capture stopped and verified inactive")
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning(
+                "[IWR6843] Firmware did not stop cleanly; board reset may be required",
+                exc_info=True,
+            )
+        finally:
+            self.radar.close()
 
 
 __all__ = [

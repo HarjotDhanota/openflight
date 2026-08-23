@@ -19,7 +19,7 @@ Two K-LD7 radars measure independent angle planes:
 | **Different USB controllers** | Spread the two K-LD7s across different USB *controllers* on the Pi, not just different ports. Two K-LD7s sharing one xHCI controller can starve each other at 3 Mbaud. See [USB bus arrangement](#usb-bus-arrangement) below. |
 | **FTDI latency_timer=1ms** | The FTDI Linux default can be `16ms`; install `sudo scripts/setup/setup_kld7_latency.sh` and verify both K-LD7 startup logs show `latency_timer=1ms`. |
 | **Different base frequencies** | Vertical: RBFR=0 (24.05 GHz), Horizontal: RBFR=2 (24.25 GHz). Set automatically by the server. |
-| **Stable device names** | Use udev rules to prevent port swaps on reboot (see [setup guide](raspberry-pi-setup.md#stable-device-names-udev-rules)) |
+| **Stable device names** | Use udev rules to prevent port swaps on reboot (see [setup guide](raspberry-pi-setup.md#k-ld7-device-names-deprecated-hardware)) |
 
 ### USB bus arrangement
 
@@ -83,25 +83,14 @@ Verify on the next kiosk start:
 ### Starting with dual radars
 
 ```bash
-# Launch-angle geometry field preset
-./scripts/start-kiosk.sh --kld7-geometry
-
-# Explicit
-./scripts/start-kiosk.sh --kld7 --kld7-port /dev/kld7_vertical \
-  --kld7-vertical-estimator geometry --kld7-mount-tilt 10 \
-  --kld7-ball-distance 5 --kld7-angle-offset 2.5 \
-  --kld7-horizontal --kld7-horizontal-port /dev/kld7_horizontal --kld7-horizontal-offset 0
+scripts/start-kiosk.sh --kld7 --kld7-mount-tilt <measured-degrees>
 ```
 
-When `--kld7-geometry` is passed, the kiosk script automatically:
-
-- Enables the vertical K-LD7 on `/dev/kld7_vertical`.
-- Uses the geometry estimator with the current field defaults:
-  `mount=10°`, `ball distance=5ft`, and vertical offset `+2.5°`.
-- Enables horizontal automatically if `/dev/kld7_horizontal` exists.
-- Uses offset `0°` for horizontal unless overridden.
-
-All explicit `--kld7-*` flags still override these defaults.
+Measure the vertical radar face with a phone inclinometer; a guessed tilt
+directly biases the launch angle. The script uses `/dev/kld7_vertical` and
+auto-enables `/dev/kld7_horizontal` when that symlink exists. Use the explicit
+port and geometry flags in [K-LD7 setup](kld7.md) only when your rig differs
+from the defaults.
 
 ### Horizontal radar mounting
 
@@ -167,11 +156,12 @@ specify the port explicitly:
 ./scripts/setup/setup_kld7_devices.sh
 
 # Or: explicit port
-scripts/start-kiosk.sh --kld7 --kld7-port /dev/ttyUSB0
+scripts/start-kiosk.sh --kld7 --kld7-mount-tilt <measured-degrees> \
+  --kld7-port /dev/ttyUSB0
 
 # Find available ports
 ls /dev/ttyUSB*
-python3 -m serial.tools.list_ports -v
+uv run python -m serial.tools.list_ports -v
 ```
 
 ### Server exits on K-LD7 failure
@@ -238,26 +228,23 @@ requires `--output`. Do not use it in production sessions.
 
 ### Launch angle calibration (vertical)
 
-The geometry estimator needs the physical mount, ball distance, and boresight
-offset to match real launch angles. The field preset is:
+The estimator needs the physical mount, ball distance, and boresight offset to
+match real launch angles. Start with the measured mount tilt:
 
 ```bash
-scripts/start-kiosk.sh --kld7-geometry
+scripts/start-kiosk.sh --kld7 --kld7-mount-tilt <measured-degrees>
 ```
-
-That expands to the current 7-iron/TrackMan-tested defaults:
-`--kld7-vertical-estimator geometry --kld7-mount-tilt 10 --kld7-ball-distance 5 --kld7-angle-offset 2.5`.
 
 To recalibrate:
 
-1. Start with `--kld7-geometry`.
-2. Hit 5-10 shots with a 7-iron
-3. Compare reported angles to expected (7i: 16-18°)
-4. Adjust mount/distance only if the physical setup changes; adjust
+1. Hit 5–10 shots beside a trusted reference monitor.
+2. Compare reported launch angles.
+3. Adjust mount/distance only if the physical setup changes; adjust
    `--kld7-angle-offset` for a stable boresight bias.
 
 ```bash
-scripts/start-kiosk.sh --kld7-geometry --kld7-angle-offset 3.5
+scripts/start-kiosk.sh --kld7 --kld7-mount-tilt <measured-degrees> \
+  --kld7-angle-offset <calibrated-degrees>
 ```
 
 ### Aim direction calibration (horizontal)

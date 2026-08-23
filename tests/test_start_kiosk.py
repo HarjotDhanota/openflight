@@ -1,10 +1,24 @@
 """Tests for the kiosk entry script flag wiring."""
 
+import shutil
 import subprocess
+from pathlib import Path
+
+import pytest
+
+# The contract under test is the bash script's flag forwarding; without a
+# POSIX shell there is nothing to exercise. With one present (e.g. Git Bash
+# on Windows) --dry-run works everywhere.
+pytestmark = pytest.mark.skipif(
+    shutil.which("bash") is None, reason="start-kiosk.sh contract tests need bash"
+)
 
 
 def _dry_run(*args: str, check: bool = True):
-    repo_root = __file__.rsplit("/tests/", 1)[0]
+    # pathlib, not string-splitting on "/tests/": __file__ uses backslashes
+    # on Windows, which made repo_root the test file itself (cwd=<file> ->
+    # NotADirectoryError in CreateProcess).
+    repo_root = Path(__file__).resolve().parents[1]
     return subprocess.run(
         ["bash", "scripts/start-kiosk.sh", *args, "--dry-run"],
         cwd=repo_root,
@@ -12,6 +26,37 @@ def _dry_run(*args: str, check: bool = True):
         capture_output=True,
         text=True,
     )
+
+
+def test_ballistics_is_preferred_by_default():
+    command_arguments = _dry_run().stdout.strip().split()
+
+    assert "--ballistics" not in command_arguments
+    assert "--no-ballistics" not in command_arguments
+
+
+def test_no_ballistics_opt_out_is_forwarded():
+    command_arguments = _dry_run("--no-ballistics").stdout.strip().split()
+
+    assert "--no-ballistics" in command_arguments
+
+
+def test_battery_provider_is_forwarded():
+    command_arguments = _dry_run("--battery", "geekworm").stdout.strip().split()
+
+    assert command_arguments[command_arguments.index("--battery") + 1] == "geekworm"
+
+
+def test_removed_geekworm_power_flag_is_not_forwarded():
+    command_arguments = _dry_run("--geekworm-power").stdout.strip().split()
+
+    assert "--geekworm-power" not in command_arguments
+
+
+def test_existing_ballistics_flag_remains_accepted():
+    command_arguments = _dry_run("--ballistics").stdout.strip().split()
+
+    assert "--no-ballistics" not in command_arguments
 
 
 def test_kld7_requires_mount_tilt():
@@ -65,6 +110,56 @@ def test_iwr6843_overrides_are_forwarded():
     assert "--iwr6843-capture-timeout 15" in command
 
 
+def test_camera_capture_flags_are_forwarded():
+    result = _dry_run(
+        "--camera-capture",
+        "--camera-capture-width",
+        "320",
+        "--camera-capture-height",
+        "240",
+        "--camera-capture-fps",
+        "300",
+        "--camera-capture-pre-ms",
+        "150",
+        "--camera-capture-post-ms",
+        "50",
+        "--camera-capture-exposure-us",
+        "1000",
+        "--camera-capture-gain",
+        "4",
+        "--camera-capture-mount-height-m",
+        "0.20955",
+        "--camera-capture-lateral-offset-m",
+        "0.0762",
+        "--camera-capture-horizontal-offset-deg",
+        "-0.45",
+        "--camera-capture-roll-deg",
+        "2.8",
+        "--camera-capture-stream",
+        "main-y",
+        "--camera-capture-scaler-crop",
+        "256,160,768,480",
+        "--camera-capture-rotate-180",
+    )
+    command = result.stdout.strip()
+
+    assert "--camera-capture" in command
+    assert "--camera-capture-width 320" in command
+    assert "--camera-capture-height 240" in command
+    assert "--camera-capture-fps 300" in command
+    assert "--camera-capture-pre-ms 150" in command
+    assert "--camera-capture-post-ms 50" in command
+    assert "--camera-capture-exposure-us 1000" in command
+    assert "--camera-capture-gain 4" in command
+    assert "--camera-capture-mount-height-m 0.20955" in command
+    assert "--camera-capture-lateral-offset-m 0.0762" in command
+    assert "--camera-capture-horizontal-offset-deg -0.45" in command
+    assert "--camera-capture-roll-deg 2.8" in command
+    assert "--camera-capture-stream main-y" in command
+    assert "--camera-capture-scaler-crop 256,160,768,480" in command
+    assert "--camera-capture-rotate-180" in command
+
+
 def test_ops_radar_port_is_forwarded_separately_from_web_port():
     result = _dry_run("--radar-port", "/dev/serial0", "--port", "9090")
     command = result.stdout.strip()
@@ -102,6 +197,61 @@ def test_kld7_angle_offset_override_wins():
 
     assert "--kld7-angle-offset 3.5" in command
     assert "--kld7-angle-offset 1.5" not in command
+
+
+def test_swing_speed_flags_forwarded():
+    """Swing speed training flags should reach the server command."""
+    result = _dry_run(
+        "--swing-speed",
+        "--swing-speed-threshold",
+        "35",
+        "--swing-speed-max",
+        "125",
+        "--swing-speed-min-readings",
+        "4",
+        "--swing-speed-single-peak",
+        "65",
+        "--swing-speed-num-reports",
+        "8",
+        "--swing-speed-end-ms",
+        "300",
+        "--swing-speed-cooldown-ms",
+        "900",
+        "--swing-speed-rejected-cooldown-ms",
+        "50",
+    )
+    command = result.stdout.strip()
+
+    assert "--swing-speed" in command
+    assert "--swing-speed-threshold 35" in command
+    assert "--swing-speed-max 125" in command
+    assert "--swing-speed-min-readings 4" in command
+    assert "--swing-speed-single-peak 65" in command
+    assert "--swing-speed-num-reports 8" in command
+    assert "--swing-speed-end-ms 300" in command
+    assert "--swing-speed-cooldown-ms 900" in command
+    assert "--swing-speed-rejected-cooldown-ms 50" in command
+
+
+def test_mock_swing_speed_flag_forwards_mock_mode():
+    """Mock swing speed should use the server's no-hardware training mode."""
+    result = _dry_run("--mock-swing-speed", "--swing-speed-threshold", "45")
+    command = result.stdout.strip()
+
+    assert "--mock-swing-speed" in command
+    assert "--swing-speed-threshold 45" in command
+    assert "--swing-speed " not in f"{command} "
+    assert "--mock " not in f"{command} "
+
+
+def test_mock_and_swing_speed_flags_collapse_to_mock_swing_speed():
+    """The friendly --mock --swing-speed combo should avoid the server error path."""
+    result = _dry_run("--mock", "--swing-speed")
+    command = result.stdout.strip()
+
+    assert "--mock-swing-speed" in command
+    assert "--swing-speed " not in f"{command} "
+    assert "--mock " not in f"{command} "
 
 
 def test_kld7_vertical_raw_flag_forwarded():
@@ -150,6 +300,32 @@ def test_startup_applies_kld7_latency_setup_before_server_start():
     assert "scripts/setup/setup_kld7_latency.sh" in script
     assert 'sudo -n "$setup_script" --latency 1' in script
     assert setup_idx < server_start_idx
+
+
+def test_camera_capture_syncs_optional_camera_dependencies():
+    """Camera startup must preserve OpenCV when uv repairs the environment."""
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts/start-kiosk.sh").read_text(encoding="utf-8")
+
+    assert 'if [ "$CAMERA_CAPTURE" = true ]; then' in script
+    assert "uv venv --clear --system-site-packages --python /usr/bin/python3" in script
+    assert "UV_SYNC_ARGS+=(--extra camera)" in script
+    assert 'UV_PYTHON=/usr/bin/python3 uv sync "${UV_SYNC_ARGS[@]}"' in script
+
+
+def test_shutdown_requests_server_cleanup_before_forcing_process_exit():
+    """The wrapper must let the server drain IWR data and stop firmware first."""
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts/start-kiosk.sh").read_text(encoding="utf-8")
+    cleanup = script[script.index("shutdown_server() {") : script.index("configure_kld7_latency()")]
+
+    api_idx = cleanup.index("/api/shutdown")
+    wait_idx = cleanup.index('kill -0 "$SERVER_PID"', api_idx)
+    term_idx = cleanup.index('kill -TERM "$SERVER_PID"')
+
+    assert api_idx < wait_idx < term_idx
 
 
 def test_radc_tuning_values_are_ignored_without_experimental_gate():
@@ -216,3 +392,18 @@ def test_iwr6843_azimuth_offset_is_forwarded():
 def test_iwr6843_azimuth_offset_omitted_by_default():
     command = _dry_run("--iwr6843").stdout.strip()
     assert "--iwr6843-azimuth-offset-deg" not in command
+
+
+def test_iwr6843_horizontal_phase_reference_is_forwarded():
+    command = _dry_run(
+        "--iwr6843",
+        "--iwr6843-horizontal-phase-reference-rad",
+        "-0.5",
+    ).stdout.strip()
+
+    assert "--iwr6843-horizontal-phase-reference-rad -0.5" in command
+
+
+def test_iwr6843_horizontal_phase_reference_is_omitted_by_default():
+    command = _dry_run("--iwr6843").stdout.strip()
+    assert "--iwr6843-horizontal-phase-reference-rad" not in command

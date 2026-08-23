@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { CameraStatus } from '../stores/useCameraStore';
 import type { Shot } from '../types/shot';
+import { computeSwingSpeedStats, getSwingSpeedMph, isSwingSpeedShot } from '../types/shot';
 import { useUnitPreference } from '../state/useUnitPreference';
 import { formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../utils/units';
 import { getServerOrigin } from '../utils/serverOrigin';
@@ -40,6 +41,11 @@ function formatSpin(value: number | null): string {
   return value.toLocaleString('en-US', { maximumFractionDigits: 0 });
 }
 
+function experimentalStatus(status: string | null | undefined): string {
+  if (!status || status === 'candidate_available') return 'experimental candidate';
+  return `experimental · ${status.replace(/^rejected_/, 'rejected: ').replaceAll('_', ' ')}`;
+}
+
 function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric'): DisplayMetric[] {
   if (!shot) {
     return [
@@ -50,11 +56,13 @@ function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric'): Dis
       { label: 'Launch', value: '--', unit: 'deg' },
       { label: 'Spin', value: '--', unit: 'rpm' },
       { label: 'Club Path', value: '--', unit: 'deg' },
+      { label: 'Club AoA', value: '--', unit: 'deg' },
       { label: 'H. Launch', value: '--', unit: 'deg' },
     ];
   }
 
   const carryYards = shot.carry_spin_adjusted ?? shot.estimated_carry_yards;
+  const fusedDeliveryAttempted = shot.experimental_fused_status != null;
 
   return [
     {
@@ -91,13 +99,62 @@ function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric'): Dis
     },
     {
       label: 'Club Path',
-      value: formatOptionalNumber(shot.club_path_deg, 1, true),
-      unit: shot.club_path_deg === null ? undefined : 'deg',
+      value: formatOptionalNumber(
+        shot.club_path_deg ??
+          shot.experimental_fused_club_path_deg ??
+          (!fusedDeliveryAttempted ? shot.experimental_club_path_deg : null) ??
+          null,
+        1,
+        true
+      ),
+      unit:
+        shot.club_path_deg == null &&
+        shot.experimental_fused_club_path_deg == null &&
+        (fusedDeliveryAttempted || shot.experimental_club_path_deg == null)
+          ? undefined
+          : 'deg',
+      detail:
+        shot.club_path_deg != null
+          ? undefined
+          : fusedDeliveryAttempted
+            ? shot.experimental_fused_club_path_deg != null
+              ? 'camera fused (exp.)'
+              : experimentalStatus(shot.experimental_fused_status)
+            : shot.experimental_club_path_deg != null || shot.experimental_club_path_status != null
+              ? experimentalStatus(shot.experimental_club_path_status)
+              : undefined,
+    },
+    {
+      label: 'Club AoA',
+      value: formatOptionalNumber(
+        shot.club_angle_deg ??
+          shot.experimental_fused_attack_angle_deg ??
+          (!fusedDeliveryAttempted ? shot.experimental_attack_angle_deg : null) ??
+          null
+      ),
+      unit:
+        shot.club_angle_deg == null &&
+        shot.experimental_fused_attack_angle_deg == null &&
+        (fusedDeliveryAttempted || shot.experimental_attack_angle_deg == null)
+          ? undefined
+          : 'deg',
+      detail:
+        shot.club_angle_deg != null
+          ? undefined
+          : fusedDeliveryAttempted
+            ? shot.experimental_fused_attack_angle_deg != null
+              ? 'camera fused (exp.)'
+              : experimentalStatus(shot.experimental_fused_status)
+            : shot.experimental_attack_angle_deg != null || shot.experimental_attack_angle_status != null
+              ? experimentalStatus(shot.experimental_attack_angle_status)
+              : undefined,
     },
     {
       label: 'H. Launch',
       value: formatOptionalNumber(shot.launch_angle_horizontal, 1, true),
       unit: shot.launch_angle_horizontal === null ? undefined : 'deg',
+      detail:
+        shot.launch_angle_horizontal_source === 'camera_assisted_experimental' ? 'camera assisted (exp.)' : undefined,
     },
   ];
 }
@@ -118,7 +175,29 @@ function DisplayMetricCard({ metric, featured = false }: { metric: DisplayMetric
 export function DisplayMode({ connected, cameraStatus, latestShot, shots }: DisplayModeProps) {
   const [failedCameraKey, setFailedCameraKey] = useState<string | null>(null);
   const { unitSystem } = useUnitPreference();
-  const metrics = buildMetrics(latestShot, unitSystem);
+  const isSwingSpeedSession = latestShot ? isSwingSpeedShot(latestShot) : false;
+  const swingStats = computeSwingSpeedStats(shots);
+  const metrics = isSwingSpeedSession
+    ? [
+        {
+          label: 'Last Swing',
+          value: formatSpeed(swingStats.last_speed_mph, unitSystem, 1),
+          unit: getSpeedUnit(unitSystem),
+        },
+        {
+          label: 'Best',
+          value: formatSpeed(swingStats.best_speed_mph, unitSystem, 1),
+          unit: getSpeedUnit(unitSystem),
+          detail: 'this session',
+        },
+        {
+          label: 'Average',
+          value: formatSpeed(swingStats.avg_speed_mph, unitSystem, 1),
+          unit: getSpeedUnit(unitSystem),
+        },
+        { label: 'Swings', value: String(swingStats.count) },
+      ]
+    : buildMetrics(latestShot, unitSystem);
   const recentShots = shots.slice(-RECENT_SHOT_COUNT).reverse();
   const cameraKey = `${cameraStatus.available}-${cameraStatus.streaming}`;
   const cameraError = failedCameraKey === cameraKey;
@@ -158,7 +237,9 @@ export function DisplayMode({ connected, cameraStatus, latestShot, shots }: Disp
 
         <div className="display-mode__shot-panel">
           <div className="display-mode__eyebrow">OpenFlight Display</div>
-          <h1 className="display-mode__title">{latestShot ? latestShot.club : 'Ready'}</h1>
+          <h1 className="display-mode__title">
+            {isSwingSpeedSession ? 'Swing Speed' : latestShot ? latestShot.club : 'Ready'}
+          </h1>
           <div className="display-mode__primary-grid">
             <DisplayMetricCard metric={metrics[0]} featured />
             <DisplayMetricCard metric={metrics[1]} featured />
@@ -178,14 +259,19 @@ export function DisplayMode({ connected, cameraStatus, latestShot, shots }: Disp
           recentShots.map((shot, index) => (
             <div className="display-shot-chip" key={shot.timestamp}>
               <span className="display-shot-chip__number">#{shots.length - index}</span>
-              <span className="display-shot-chip__club">{shot.club}</span>
-              <span className="display-shot-chip__stat">
-                {formatSpeed(shot.ball_speed_mph, unitSystem, 0)} {getSpeedUnit(unitSystem)}
+              <span className="display-shot-chip__club">
+                {isSwingSpeedShot(shot) ? (shot.training_implement_label ?? shot.club) : shot.club}
               </span>
               <span className="display-shot-chip__stat">
-                {formatDistance(shot.carry_spin_adjusted ?? shot.estimated_carry_yards, unitSystem, 0)}{' '}
-                {getDistanceUnit(unitSystem)}
+                {formatSpeed(isSwingSpeedShot(shot) ? getSwingSpeedMph(shot) : shot.ball_speed_mph, unitSystem, 0)}{' '}
+                {getSpeedUnit(unitSystem)}
               </span>
+              {!isSwingSpeedShot(shot) && (
+                <span className="display-shot-chip__stat">
+                  {formatDistance(shot.carry_spin_adjusted ?? shot.estimated_carry_yards, unitSystem, 0)}{' '}
+                  {getDistanceUnit(unitSystem)}
+                </span>
+              )}
             </div>
           ))
         )}

@@ -22,6 +22,7 @@ class FakeRadar:
         self.configs = []
         self.closed = False
         self.read_started_at = None
+        self.shutdown_events = []
 
     def send_config(self, path: str):
         self.configs.append(path)
@@ -33,7 +34,11 @@ class FakeRadar:
         return self.raw
 
     def close(self):
+        self.shutdown_events.append("close")
         self.closed = True
+
+    def stop_sensor(self):
+        self.shutdown_events.append("sensorStop")
 
 
 class FakeButton:
@@ -50,9 +55,31 @@ class FakeButton:
         self.closed = True
 
 
-def _raw_dump() -> bytes:
+def _temperature_report() -> dict[str, int]:
+    return {
+        "device_time_ms": 123456,
+        "rx0_c": 42,
+        "rx1_c": 43,
+        "rx2_c": 44,
+        "rx3_c": 45,
+        "tx0_c": 46,
+        "tx1_c": 47,
+        "tx2_c": 48,
+        "pm_c": 49,
+        "dig0_c": 50,
+        "dig1_c": 51,
+    }
+
+
+def _raw_dump(temperature_report: dict[str, int] | None = None) -> bytes:
     cube = np.zeros((2, 4, 4, 8), dtype=complex)
-    return pack_dump(cube, n_tx=2, version=3, frame_period_us=6000)
+    return pack_dump(
+        cube,
+        n_tx=2,
+        version=5 if temperature_report is not None else 3,
+        frame_period_us=6000,
+        temperature_report=temperature_report,
+    )
 
 
 def test_capture_monitor_matches_gpio_edge_to_ops_impact(tmp_path):
@@ -102,6 +129,50 @@ def test_capture_monitor_keeps_valid_raw_in_memory_without_writing_dump(tmp_path
     assert capture.raw == raw
     assert capture.path is None
     assert not (tmp_path / "dumps").exists()
+    monitor.stop()
+
+
+def test_capture_monitor_notifies_trigger_observers(tmp_path):
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+    raw = _raw_dump()
+    observed = []
+    monitor = IWR6843CaptureMonitor(
+        config_path=config,
+        output_dir=tmp_path / "dumps",
+        radar=FakeRadar(raw),
+        button_factory=FakeButton,
+        trigger_observers=[observed.append],
+    )
+    monitor.start()
+
+    edge = time.time()
+    assert monitor.notify_trigger(edge)
+    capture = monitor.capture_for_shot(edge, timeout_s=1.0)
+
+    assert capture is not None and capture.valid
+    assert observed == [edge]
+    monitor.stop()
+
+
+def test_capture_monitor_records_temperature_report_from_dump_header(tmp_path):
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+    report = _temperature_report()
+    monitor = IWR6843CaptureMonitor(
+        config_path=config,
+        output_dir=tmp_path / "dumps",
+        radar=FakeRadar(_raw_dump(temperature_report=report)),
+        button_factory=FakeButton,
+    )
+    monitor.start()
+
+    edge = time.time()
+    assert monitor.notify_trigger(edge)
+    capture = monitor.capture_for_shot(edge, timeout_s=1.0)
+
+    assert capture is not None and capture.valid
+    assert capture.temperature_report == report
     monitor.stop()
 
 
@@ -169,6 +240,32 @@ def test_capture_monitor_finishes_active_dump_before_closing_serial(tmp_path):
 
     assert not stopper.is_alive()
     assert not radar.closed_before_read_finished
+    assert radar.closed
+    assert radar.shutdown_events == ["sensorStop", "close"]
+
+
+def test_capture_monitor_closes_serial_when_sensor_stop_fails(tmp_path):
+    """A failed firmware stop must not leak the host serial descriptor."""
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+
+    class StopFailingRadar(FakeRadar):
+        def stop_sensor(self):
+            self.shutdown_events.append("sensorStop")
+            raise RuntimeError("firmware remained active")
+
+    radar = StopFailingRadar(_raw_dump())
+    monitor = IWR6843CaptureMonitor(
+        config_path=config,
+        output_dir=tmp_path / "dumps",
+        radar=radar,
+        button_factory=FakeButton,
+    )
+    monitor.start()
+
+    monitor.stop()
+
+    assert radar.shutdown_events == ["sensorStop", "close"]
     assert radar.closed
 
 
@@ -251,4 +348,5 @@ def test_capture_monitor_closes_serial_when_gpio_setup_fails(tmp_path):
         assert str(error) == "GPIO unavailable"
     else:
         raise AssertionError("expected GPIO setup to fail")
+    assert radar.shutdown_events == ["sensorStop", "close"]
     assert radar.closed

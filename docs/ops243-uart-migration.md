@@ -63,6 +63,11 @@ on the board before counting.
 | Pin 6 | `RxD` (in) | 8 | GPIO14 / `TXD0` |
 | Pin 3 | `HOST_INT` | — | sound detector `GATE` (unchanged) |
 
+![OPS243 UART migration wiring: the radar leaves USB and runs from the Raspberry Pi 5 header with 5V on J3 pin 9, ground on pin 10, and a crossed UART pair on pins 7 and 6, while the SEN-14262 GATE output is spliced three ways to J3 pin 3 and Pi physical pin 11.](assets/ops243-uart-wiring.svg)
+
+*The diagram picks physical pin 4 for 5V and pin 14 for ground; any 5V and any
+GND pin work as long as the ground is the same rail the sound detector uses.*
+
 TX and RX are **crossed**: the radar's transmit goes to the Pi's receive, and
 the Pi's transmit goes to the radar's receive. Getting pin 6 wrong is the
 quiet failure — the radar still talks, so you get readings at 19,200 baud, but
@@ -109,9 +114,12 @@ Confirm the device and that nothing else claims it:
 
 ```bash
 ls -l /dev/ttyAMA0
-grep -o 'console=serial0[^ ]*' /boot/firmware/cmdline.txt   # must print nothing
-grep enable_uart /boot/firmware/config.txt                  # expect enable_uart=1
+grep -o 'console=serial0[^ ]*' /boot/firmware/cmdline.txt      # must print nothing
+grep -E "enable_uart|dtparam=uart0" /boot/firmware/config.txt  # expect enable_uart=1 or dtparam=uart0=on
 ```
+
+Note for Raspberry Pi 5 & Newer OS Versions:
+Modern Pi OS (Debian Bookworm) and Pi 5 hardware use dtparam=uart0=on instead of the legacy enable_uart=1 setting to enable the UART0 hardware block.
 
 On a Pi 5 the 40-pin header is `/dev/ttyAMA0`. Do **not** use `/dev/serial0`,
 which points at `/dev/ttyAMA10` — the separate debug-header UART.

@@ -37,7 +37,7 @@ simulator. For setting up a specific simulator, see its page above.
 2. **Enable the feature at launch with `--sim`** (off by default). Connectors
    marked `enabled` in the file then come up:
    ```bash
-   scripts/start-kiosk.sh --kld7 --sim   # --kld7 only for deprecated K-LD7 angle-radar builds
+   scripts/start-kiosk.sh --sim
    ```
    Without `--sim`, no connectors run regardless of the file. (Once the feature
    is broadly stable it may default on.)
@@ -50,7 +50,7 @@ per-shot "Sent to <sim>" panel shows every field that was sent with an **M**
 ## How it works
 
 ```
-OPS243 + K-LD7  ──►  shot pipeline  ──►  on_shot_detected()
+OPS243 + optional angle radar  ──►  shot pipeline  ──►  on_shot_detected()
                                               │  (UI emit unchanged)
                                               ▼
                                        resolve_shot(shot)            ← sim/resolver.py

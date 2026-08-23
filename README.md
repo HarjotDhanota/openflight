@@ -4,6 +4,9 @@
 </p>
 
 <p align="center">
+  <a href="https://discord.gg/w8hhG4WVMN">
+    <img src="https://img.shields.io/badge/Discord-join%20the%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join the OpenFlight Discord" />
+  </a>
   <a href="https://buymeacoffee.com/colemangolfs">
     <img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow?style=for-the-badge&logo=buy-me-a-coffee&logoColor=white" alt="Buy Me a Coffee" />
   </a>
@@ -14,35 +17,36 @@
 
 ## Overview
 
-OpenFlight is an open-source golf launch monitor that uses Doppler radar to measure ball speed, club speed, launch angle, spin rate, and carry distance.
+OpenFlight is an open-source golf launch monitor built around the OPS243-A
+Doppler radar, with an optional TI IWR6843 angle radar.
 
 ### What It Measures
 
 - **Ball Speed**: 35-200 mph range with ±0.5% accuracy (OPS243-A)
 - **Club Speed**: Detected from pre-impact readings (OPS243-A)
 - **Smash Factor**: Ball speed / club speed ratio
-- **Launch Angle**: Vertical launch measured by K-LD7 angle radar (deprecated — see below)
-- **Club Path**: Horizontal aim direction measured by second K-LD7 (deprecated — see below)
-- **Spin Rate**: Via rolling buffer I/Q analysis (the hardest radar measurement — see [Limitations](#limitations))
-- **Carry Distance**: Computed from ball speed, launch angle, and spin
+- **Launch Angle**: Measured by the IWR6843; estimated when no trusted radar angle is available
+- **Club Path**: Experimental pre-impact estimate from the IWR6843
+- **Spin Rate**: Experimental candidate from rolling-buffer I/Q; not used for carry by default
+- **Carry Distance**: Ballistic model with explicit fallbacks for missing measurements
 
 ### Hardware at a Glance
 
 | Component | What it does | ~Cost |
 |-----------|-------------|-------|
-| OPS243-A Radar | Ball speed, club speed, spin | $249 |
+| OPS243-A Radar | Ball speed, club speed, experimental spin | $249 |
 | Raspberry Pi 5 | Runs everything | $130 |
 | 7" Touchscreen | Shows shot data | $46 |
 | SparkFun SEN-14262 | Impact sound trigger for shot capture | $18 |
 | Power supply + accessories | | $27 |
 | **Subtotal, no angle radar** | | **~$400** |
-| TI IWR6843LEVM + cable | Launch angle (vertical + horizontal), club path | $156 |
+| TI IWR6843LEVM + cable | Launch angle, experimental club path | $156 |
 | **Total with angle radar** | | **~$556** |
 | K-LD7 (×2) + FTDI adapters | Launch angle + club path (**deprecated**) | $140 |
 
-Without an angle radar you still get ball speed, club speed, smash factor, spin
-rate, and estimated carry. The angle radar adds measured launch angle and is
-what club path is derived from.
+Without an angle radar you still get ball speed, club speed, smash factor,
+experimental spin, and estimated carry. The angle radar adds measured launch
+angle and experimental club path.
 
 > **⚠️ The K-LD7 angle radars are deprecated.** The supported angle radar is now the **TI IWR6843**. Don't buy K-LD7s for a new build; their software support remains for existing builds only. See the [full parts list](docs/PARTS.md) for details and links.
 
@@ -81,8 +85,8 @@ cd openflight
 ```
 
 The script installs everything and walks you through the one-time hardware
-configuration (radar flash setup, K-LD7 device naming, auto-start) with
-prompts — no manual config editing needed. It's safe to re-run any time.
+configuration (radar flash setup, legacy K-LD7 device naming, auto-start, and
+optional cloud sync) with prompts. It's safe to re-run any time.
 See the **[Raspberry Pi Setup Guide](docs/raspberry-pi-setup.md)** for
 details and troubleshooting.
 
@@ -100,16 +104,22 @@ scripts/start-kiosk.sh --iwr6843 \
   --iwr6843-tilt-deg 5.5 --iwr6843-radar-height-m 0.229 \
   --iwr6843-ball-height-m 0.021
 
-# With K-LD7 launch-angle geometry defaults (deprecated hardware)
-scripts/start-kiosk.sh --kld7-geometry
+# With legacy K-LD7 hardware (measure the mount tilt first)
+scripts/start-kiosk.sh --kld7 --kld7-mount-tilt <measured-degrees>
+
+# Swing speed training (air swings / speed sticks, no sound trigger)
+scripts/start-kiosk.sh --swing-speed
 
 # Development mode (no hardware)
 scripts/start-kiosk.sh --mock
+
+# With Geekworm X1202/X1206 battery monitoring
+scripts/start-kiosk.sh --battery geekworm
 ```
 
-The IWR6843 geometry flags are **not optional** — a wrong value silently biases
-the launch angle rather than failing. `--iwr6843-ball-height-m` is 0.021 off a
-mat and 0.040 off a tee, which is about 0.8° of launch angle.
+The IWR6843 example values are not universal. Measure the geometry from the
+antenna center and follow the [operator guide](docs/iwr6843/README.md#measure-the-geometry);
+wrong values bias the result instead of producing an obvious startup error.
 
 Then open http://localhost:8080 or use the touchscreen.
 
@@ -136,33 +146,45 @@ for details.
 OpenFlight also serves a fullscreen-friendly browser display for tablets, TV browsers, or a Chrome tab cast to Chromecast.
 
 1. Start OpenFlight as usual with `scripts/start-kiosk.sh`.
-2. Find the OpenFlight host IP address on your LAN.
-3. Open `http://<openflight-host-ip>:8080/display` from another laptop, tablet, or TV browser.
+2. Find the OpenFlight host on your LAN — its hostname (see below) or its IP address.
+3. Open `http://<openflight-host>:8080/display` from another laptop, tablet, or TV browser.
 4. For Chromecast, open the display page in Chrome and use Chrome's built-in **Cast** feature to cast the tab.
 
+> **Prefer the hostname over the IP.** Raspberry Pi OS broadcasts its hostname over
+> mDNS (Avahi), so `http://openflight.local:8080/display` keeps working even when the
+> Pi's DHCP lease expires and it comes back on a different address — a bookmarked IP
+> breaks unless you reserved it on your router. Set the name in Raspberry Pi Imager's
+> **Hostname** field when you flash the card; the default is `raspberrypi`, i.e.
+> `raspberrypi.local`. The viewing device has to support mDNS — macOS, iOS, Windows 10+
+> and most Linux desktops do, but some smart-TV browsers don't, so use the IP there.
+
 This is browser/tab casting only. OpenFlight does not include native Cast SDK support yet.
+
+### Swing Speed Training
+
+For air swings and speed-stick training, OpenFlight can use the OPS243-A fast
+speed stream directly instead of waiting for impact audio. Start it with
+`scripts/start-kiosk.sh --swing-speed`; the server emits `swing_speed` events
+with peak club speed, rep duration, reading count, and session stats. See the
+**[Swing Speed Training Guide](docs/swing-speed-training.md)** for setup and
+tuning options.
 
 ## How It Works
 
 ### System Architecture
 
 ```
-┌─────────────┐  USB/Serial  ┌─────────────┐  Callback   ┌─────────────┐  WebSocket  ┌─────────────┐
-│  OPS243-A   │ ───────────▶ │   Rolling   │ ──────────▶ │   Flask     │ ──────────▶ │   React     │
-│   Radar     │  I/Q buffer  │   Buffer    │  on_shot()  │   Server    │   "shot"    │     UI      │
-└─────────────┘              │   Monitor   │             └─────────────┘             └─────────────┘
-                             └─────────────┘
-                                                               ▲
-┌─────────────┐  USB/Serial                                    │
-│ K-LD7 (×2)  │ ──────────────────── angle data ──────────────┘
-│ Angle Radar │
-└─────────────┘
+SEN-14262 ── trigger ──► OPS243-A ── I/Q ──► RollingBufferMonitor
+                                                   │
+IWR6843 (optional) ── angle + club path ───────────┤
+                                                   ▼
+                                           Flask + WebSocket ──► React UI
 ```
 
 1. **Sound trigger fires** — SEN-14262 detects club impact, triggers OPS243-A HOST_INT
-2. **OPS243-A dumps buffer** — Rolling buffer I/Q data is captured and analyzed for ball speed, club speed, and spin
-3. **K-LD7 correlates** — The server uses the OPS243-A impact timestamp to find the matching ball burst in the K-LD7 ring buffer, extracting launch angle and club path
-4. **Carry computed** — Ball speed + spin + launch angle → carry distance
+2. **OPS243-A dumps buffer** — I/Q data is analyzed for ball speed, club speed, and an experimental spin candidate
+3. **IWR6843 correlates** — The optional angle radar uses the same impact edge for launch angle and experimental club path
+4. **Carry computed** — The ballistic model uses trusted measurements and fills missing inputs with documented fallbacks
 5. **UI updates** — Shot data emitted via WebSocket to the React frontend
 
 ### Doppler Radar Basics
@@ -171,16 +193,18 @@ The OPS243-A transmits a 24 GHz signal. When it bounces off a moving object (the
 
 ### Positioning
 
-Place the radar **3-5 feet behind the tee**, pointing at the hitting area:
+Place the OPS243-A **3-5 feet behind the tee**, pointing down the target line:
 
 ```
                 Ball Flight Direction
                 ======================>
 
-[Tee]  ←--- 3-5 ft ---→  [OPS243-A]  [K-LD7 vertical]  [K-LD7 horizontal]
+[Tee]  ←--- 3-5 ft ---→  [OPS243-A]
 ```
 
-The K-LD7 modules are positioned near the OPS243-A, one mounted vertically (launch angle) and one horizontally (club path / aim direction).
+The IWR6843 has stricter mounting and measurement requirements; use the
+[operator guide](docs/iwr6843/README.md#mount-and-aim-the-radar) rather than assuming it
+shares the OPS243 position.
 
 ## Configuration
 
@@ -188,7 +212,7 @@ The K-LD7 modules are positioned near the OPS243-A, one mounted vertically (laun
 
 | Setting        | Value                  | Why                                          |
 | -------------- | ---------------------- | -------------------------------------------- |
-| Mode           | Rolling buffer         | Raw I/Q capture for spin + precise speeds    |
+| Mode           | Rolling buffer         | Raw I/Q capture for precise speeds and experimental spin |
 | Sample Rate    | 30 ksps                | Supports up to ~208 mph ball speed           |
 | Capture        | 4096 I/Q samples       | ~136 ms around impact                        |
 | Trigger        | Sound (SEN-14262)      | ~10 µs hardware latency via HOST_INT         |
@@ -220,28 +244,20 @@ monitor.disconnect()
 ## Limitations
 
 - **Cosine error**: If ball doesn't travel directly toward/away from radar, measured speed will be slightly lower than actual
-- **Spin detection**: The hardest radar measurement, especially indoors — the usable signal window ends when the ball hits the net, and short windows can't resolve low spin (commercial radar units have the same constraint and fall back to estimated spin indoors). Low driver-band readings (≤~3100 RPM) are reported at reduced confidence. When spin isn't measured, carry falls back to club-typical spin values. Improving this is an active focus.
+- **Spin detection**: The live multitaper value is experimental and is not used for carry by default. Short indoor flight windows and multipath make individual readings unreliable; see [Rolling Buffer and Spin Detection](docs/rolling_buffer_spin_detection.md).
 - **K-LD7 speed aliasing** (deprecated hardware): The K-LD7 max speed is 62 mph, so it's used only for angle/distance, not speed
-
-### Ball Markings
-
-Reflective markings (aluminum stickers, painted dots) noticeably improve K-LD7 launch-angle extraction — the stronger return gives multi-frame tracking, higher SNR, and more confident angles. However, a specular patch produces a pulsed, non-sinusoidal amplitude modulation that the spin detector can't interpret as seam modulation, so measured spin degrades (typically locks to the top of the valid frequency band with low confidence). Low-confidence spin automatically falls back to club-typical values in the ballistics model, so the net effect of marking a ball is better angles with no worse carry estimates. A thin painted stripe (rather than a patch) is a reasonable middle ground if you want both — it rotates through the beam more like a seam.
 
 ## Hardware Diagnostic
 
-To verify every component of your build in one shot:
+To verify the OPS243, sound trigger, and legacy K-LD7 path:
 
 ```bash
 uv run python scripts/hardware-test/diagnose.py
 ```
 
-The diagnostic walks through 6 checks:
-1. OPS243 connectivity
-2. OPS243 rolling buffer mode persistence
-3. OPS243 software trigger
-4. K-LD7 vertical (launch angle)
-5. K-LD7 horizontal (aim direction, optional)
-6. Sound trigger end-to-end (interactive — prompts you to clap near the sensor)
+The diagnostic checks the OPS243 transport, rolling-buffer persistence,
+software and hardware triggers, and any connected K-LD7 radars. IWR6843 builds
+use the [operator guide's first-capture checks](docs/iwr6843/README.md#verify-the-first-capture).
 
 Missing optional hardware (like the horizontal K-LD7) is reported as a skip rather than a failure. Pass `--require-all` to fail on skips, or `--no-interactive` to skip the sound-trigger prompt in unattended runs.
 
@@ -252,23 +268,23 @@ openflight/
 ├── src/openflight/
 │   ├── ops243.py              # OPS243-A radar driver
 │   ├── launch_monitor.py      # Shot detection & club/ball separation
-│   ├── server.py              # Flask server, K-LD7 correlation, carry
+│   ├── server.py              # Flask server and shot orchestration
 │   ├── session_logger.py      # JSONL session logging
-│   ├── kld7/                  # K-LD7 angle radar (deprecated)
-│   │   ├── radc.py            # FFT, phase interferometry, angle extraction
-│   │   ├── tracker.py         # Ring buffer, shot correlation
-│   │   ├── geometry.py        # Launch-angle trajectory fitting
-│   │   └── types.py           # Data types
-│   └── rolling_buffer/        # Spin rate detection
-│       ├── monitor.py         # Rolling buffer monitor
-│       ├── processor.py       # I/Q processing for spin
-│       ├── trigger.py         # Trigger strategies
-│       └── types.py           # Data types
+│   ├── rolling_buffer/        # OPS capture and signal processing
+│   ├── iwr6843/               # Current angle radar
+│   ├── kld7/                  # Legacy angle radar
+│   ├── sim/                   # Simulator connector framework
+│   └── cloud/                 # FlightWeb uploader
 ├── ui/                        # React frontend
 ├── scripts/                   # Utility & setup scripts
 ├── docs/                      # Documentation
 └── pyproject.toml
 ```
+
+## Community
+
+Join the **[OpenFlight Discord](https://discord.gg/w8hhG4WVMN)** to ask build
+questions, share results, and follow development.
 
 ## Contributing
 
@@ -290,13 +306,18 @@ uv run pytest tests/ -v
 - **[Parts List](docs/PARTS.md)** — What to buy
 - **[Sound Trigger Wiring](docs/sound-trigger-wiring.md)** — How to wire the sound trigger
 - **[Raspberry Pi Setup](docs/raspberry-pi-setup.md)** — Full setup guide
+- **[Battery Monitoring](docs/battery/README.md)** — Provider architecture, UI states, and shared Pi support
+- **[Geekworm X1202/X1206 Operator Guide](docs/battery/geekworm.md)** — Batteries, Pi setup, native telemetry, and warnings
 - **[IWR6843 Operator Guide](docs/iwr6843/README.md)** — Wire, flash, mount, aim, and calibrate the angle radar
+- **[LIS3DH Inclinometer Setup](docs/inclinometer/README.md)**: Add enclosure-level compensation to IWR6843 tilt
 - **[OPS243 USB → GPIO UART Migration](docs/ops243-uart-migration.md)** — Required before adding the IWR6843
 - **[IWR6843 Firmware Developer Guide](firmware/README.md)** — Build the firmware from source (not needed to flash the prebuilt image)
 - **[Simulator Connectors](docs/simulator/README.md)** — Stream shots to GSPro, OpenGolfSim, and others
 - **[Cloud Sync](docs/cloud-sync.md)** — Push filtered sessions to FlightWeb
-- **[Rolling Buffer & Spin Detection](docs/rolling_buffer_spin_detection.md)** — Spin measurement details
+- **[Rolling Buffer & Spin Detection](docs/rolling_buffer_spin_detection.md)** — Production capture and experimental spin details
 - **[Dechirped-Sideband Spin Replay](docs/spin-dechirp-replay.md)** — Next-gen spin estimator test bench
+- **[Camera and YOLO Experiments](docs/yolo-performance-tuning.md)** — Optional, non-production vision work
+- **[Legacy K-LD7 Setup](docs/kld7.md)** — Existing K-LD7 builds only
 - **[K-LD7 Ball Detection Theory](docs/kld7-ball-detection-theory.md)** — How angle detection works (deprecated hardware)
 - **[K-LD7 Session Review](docs/kld7-session-review.md)** — Offline review workflow for session JSONL files (deprecated hardware)
 - **[Observability & Log Shipping](docs/observability.md)** — Ship logs to Grafana Cloud

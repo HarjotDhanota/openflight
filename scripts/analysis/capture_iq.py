@@ -11,9 +11,9 @@ in test_rolling_buffer_persist.py). This script does NOT send GC — it
 assumes the board was configured with A! and power cycled.
 
 Usage:
-    uv run python scripts/capture_iq.py
-    uv run python scripts/capture_iq.py --pre-trigger 32 --sample-rate 30
-    uv run python scripts/capture_iq.py -o my_captures.pkl
+    uv run python scripts/analysis/capture_iq.py
+    uv run python scripts/analysis/capture_iq.py --pre-trigger 32 --sample-rate 30
+    uv run python scripts/analysis/capture_iq.py -o my_captures.pkl
 
 To analyze afterwards:
     uv run python src/analysis/analyze_capture.py ~/openflight_sessions/capture_*.pkl
@@ -73,10 +73,10 @@ def main():
         epilog="""\
 Examples:
     # Basic capture (Ctrl+C to stop and save)
-    uv run python scripts/capture_iq.py
+    uv run python scripts/analysis/capture_iq.py
 
     # With custom pre-trigger and sample rate
-    uv run python scripts/capture_iq.py --pre-trigger 32 --sample-rate 30
+    uv run python scripts/analysis/capture_iq.py --pre-trigger 32 --sample-rate 30
 
     # Analyze saved captures
     uv run python src/analysis/analyze_capture.py ~/openflight_sessions/capture_*.pkl

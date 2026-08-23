@@ -1,5 +1,7 @@
 """Tests for OPS243 radar driver."""
 
+import inspect
+import threading
 import time
 
 import pytest
@@ -137,6 +139,168 @@ class TestParseReading:
         assert reading.magnitude == 500.0
         # Positive speed = INBOUND
         assert reading.direction == Direction.INBOUND
+
+
+class _ChunkedSpeedSerial:
+    """Serial stand-in that returns speed-stream chunks over multiple polls."""
+
+    is_open = True
+
+    def __init__(self, chunks):
+        self._chunks = [chunk.encode("ascii") for chunk in chunks]
+
+    @property
+    def in_waiting(self):
+        if not self._chunks:
+            return 0
+        return len(self._chunks[0])
+
+    def read(self, _size):
+        return self._chunks.pop(0)
+
+
+class TestReadSpeedNonblocking:
+    """Tests for non-blocking speed stream reads."""
+
+    def test_buffers_partial_json_until_complete_line(self):
+        """Split JSON lines should not be parsed until the newline arrives."""
+        radar = OPS243Radar.__new__(OPS243Radar)
+        radar.serial = _ChunkedSpeedSerial(
+            [
+                '{"magnitude":286.57, ',
+                '"speed":-71.81}\n',
+            ]
+        )
+        radar._json_mode = True
+        radar._unit = "mph"
+        radar._magnitude_enabled = True
+        radar._speed_read_buffer = ""
+
+        assert radar.read_speed_nonblocking() is None
+
+        reading = radar.read_speed_nonblocking()
+
+        assert reading is not None
+        assert reading.speed == 71.81
+        assert reading.direction == Direction.OUTBOUND
+        assert reading.magnitude == 286.57
+
+    def test_returns_last_valid_complete_line(self):
+        """When several lines arrive together, the newest valid reading wins."""
+        radar = OPS243Radar.__new__(OPS243Radar)
+        radar.serial = _ChunkedSpeedSerial(
+            [
+                '{"magnitude":21.0, "speed":-21.22}\n'
+                '{"magnitude":90.0, "speed":-44.07}\n'
+            ]
+        )
+        radar._json_mode = True
+        radar._unit = "mph"
+        radar._magnitude_enabled = True
+        radar._speed_read_buffer = ""
+
+        reading = radar.read_speed_nonblocking()
+
+        assert reading is not None
+        assert reading.speed == 44.07
+        assert reading.magnitude == 90.0
+
+    def test_multi_candidate_reader_returns_all_array_speeds(self):
+        """Multi-object JSON should expose all speed candidates."""
+        radar = OPS243Radar.__new__(OPS243Radar)
+        radar.serial = _ChunkedSpeedSerial(
+            [
+                '{"magnitude":[900.0, 120.0, 80.0], '
+                '"speed":[-55.0, -101.0, 42.0]}\n'
+            ]
+        )
+        radar._json_mode = True
+        radar._unit = "mph"
+        radar._magnitude_enabled = True
+        radar._speed_read_buffer = ""
+
+        readings = radar.read_speed_candidates_nonblocking()
+
+        assert [reading.speed for reading in readings] == [55.0, 101.0, 42.0]
+        assert readings[0].direction == Direction.OUTBOUND
+        assert readings[1].direction == Direction.OUTBOUND
+        assert readings[2].direction == Direction.INBOUND
+
+
+class TestPreparePersistedRollingBuffer:
+    """Tests for returning from speed mode to sound-trigger launch mode."""
+
+    def test_prepare_rearms_without_restoring_or_saving(self, monkeypatch):
+        """Normal sound mode should not force GC/A! on a healthy persisted radar."""
+        calls = []
+
+        class FakeSerial:
+            is_open = True
+
+        radar = OPS243Radar.__new__(OPS243Radar)
+        radar.serial = FakeSerial()
+
+        monkeypatch.setattr(radar, "set_units", lambda unit: calls.append(("set_units", unit.value)))
+        monkeypatch.setattr(radar, "set_transmit_power", lambda value: calls.append(("set_transmit_power", value)))
+        monkeypatch.setattr(radar, "set_sample_rate", lambda value: calls.append(("set_sample_rate", value)))
+        monkeypatch.setattr(
+            radar,
+            "rearm_rolling_buffer",
+            lambda pre_trigger_segments: calls.append(("rearm_rolling_buffer", pre_trigger_segments)),
+        )
+        monkeypatch.setattr(
+            radar,
+            "restore_rolling_buffer_mode",
+            lambda **kwargs: calls.append(("restore_rolling_buffer_mode", kwargs)),
+        )
+
+        radar.prepare_persisted_rolling_buffer(pre_trigger_segments=16, sample_rate_ksps=30)
+
+        assert calls == [
+            ("set_units", "US"),
+            ("set_transmit_power", 3),
+            ("set_sample_rate", 30000),
+            ("rearm_rolling_buffer", 16),
+        ]
+
+    def test_restore_rolling_buffer_mode_does_not_save_to_flash(self, monkeypatch):
+        """Runtime mode switching should not send A! or write persistent flash."""
+        calls = []
+
+        class FakeSerial:
+            is_open = True
+
+            def write(self, data):
+                calls.append(("write", data))
+
+            def flush(self):
+                calls.append(("flush", None))
+
+            def reset_input_buffer(self):
+                calls.append(("reset_input_buffer", None))
+
+        radar = OPS243Radar.__new__(OPS243Radar)
+        radar.serial = FakeSerial()
+
+        monkeypatch.setattr(radar, "set_units", lambda unit: calls.append(("set_units", unit.value)))
+        monkeypatch.setattr(radar, "set_transmit_power", lambda value: calls.append(("set_transmit_power", value)))
+        monkeypatch.setattr(
+            radar,
+            "enter_rolling_buffer_mode",
+            lambda pre_trigger_segments, sample_rate_ksps: calls.append(
+                ("enter_rolling_buffer_mode", pre_trigger_segments, sample_rate_ksps)
+            ),
+        )
+
+        radar.restore_rolling_buffer_mode(pre_trigger_segments=16, sample_rate_ksps=30)
+
+        assert ("write", b"A!") not in calls
+        assert calls == [
+            ("set_units", "US"),
+            ("set_transmit_power", 3),
+            ("enter_rolling_buffer_mode", 16, 30),
+            ("reset_input_buffer", None),
+        ]
 
 
 class TestFFTSize:
@@ -419,6 +583,39 @@ class TestWaitForHardwareTrigger:
         assert response == ""
         assert time.time() - start < 1.5
 
+    def test_idle_serial_noise_does_not_start_a_hardware_capture(self):
+        """Whitespace and clock replies are not HOST_INT-triggered dumps."""
+        noise = b'\n\n{"Clock":1786805707}\r\n\n'
+        radar = self._radar(_ScheduledSerial([(0.02, noise)]))
+        events = []
+
+        response = radar.wait_for_hardware_trigger(
+            timeout=0.12,
+            dump_grace=1.0,
+            on_first_byte=lambda: events.append("capture"),
+        )
+
+        assert response == ""
+        assert events == []
+        assert radar.last_hardware_trigger_first_byte_timestamp is None
+
+    def test_idle_serial_noise_is_discarded_before_a_real_dump(self):
+        """A later capture remains readable after unsolicited serial noise."""
+        noise = b'\n\n{"Clock":1786805707}\r\n\n'
+        dump = b"".join(self._DUMP)
+        radar = self._radar(_ScheduledSerial([(0.02, noise), (0.08, dump)]))
+        events = []
+
+        response = radar.wait_for_hardware_trigger(
+            timeout=0.2,
+            dump_grace=1.0,
+            on_first_byte=lambda: events.append("capture"),
+        )
+
+        assert response == dump.decode("ascii")
+        assert events == ["capture"]
+        assert radar.last_hardware_trigger_first_byte_timestamp is not None
+
     def test_complete_dump_returns_before_grace_expires(self):
         """A dump that finishes early returns immediately on completeness."""
         schedule = [(0.05, b"".join(self._DUMP))]
@@ -427,3 +624,50 @@ class TestWaitForHardwareTrigger:
         response = radar.wait_for_hardware_trigger(timeout=5.0)
         assert response == b"".join(self._DUMP).decode("ascii")
         assert time.time() - start < 1.0
+
+    def test_idle_wait_can_be_cancelled_for_fast_shutdown(self):
+        """Shutdown should not wait for the normal 30-second trigger timeout."""
+        parameters = inspect.signature(OPS243Radar.wait_for_hardware_trigger).parameters
+        assert "cancel_event" in parameters
+
+        radar = self._radar(_ScheduledSerial([]))
+        cancel_event = threading.Event()
+        cancel_event.set()
+        start = time.monotonic()
+
+        response = radar.wait_for_hardware_trigger(
+            timeout=30.0,
+            cancel_event=cancel_event,
+        )
+
+        assert response == ""
+        assert time.monotonic() - start < 0.2
+
+    def test_cancel_does_not_discard_a_dump_that_has_started_arriving(self):
+        """Pending capture bytes win a race with the shutdown cancellation."""
+        radar = self._radar(_ScheduledSerial([(0.0, b"".join(self._DUMP))]))
+        cancel_event = threading.Event()
+        cancel_event.set()
+
+        response = radar.wait_for_hardware_trigger(
+            timeout=30.0,
+            cancel_event=cancel_event,
+        )
+
+        assert response == b"".join(self._DUMP).decode("ascii")
+
+    def test_first_byte_callback_fires_when_capture_starts(self):
+        """The UI can acknowledge impact before the complete dump arrives."""
+        parameters = inspect.signature(OPS243Radar.wait_for_hardware_trigger).parameters
+        assert "on_first_byte" in parameters
+
+        radar = self._radar(_ScheduledSerial([(0.0, b"".join(self._DUMP))]))
+        events = []
+
+        response = radar.wait_for_hardware_trigger(
+            timeout=5.0,
+            on_first_byte=lambda: events.append("first-byte"),
+        )
+
+        assert response == b"".join(self._DUMP).decode("ascii")
+        assert events == ["first-byte"]

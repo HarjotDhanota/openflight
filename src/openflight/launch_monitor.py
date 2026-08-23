@@ -286,11 +286,48 @@ class Shot:
     spin_rejection_reason: Optional[str] = None
     carry_spin_adjusted: Optional[float] = None
     mode: str = "rolling-buffer"
+    player_name: str = "Player 1"
     readings_data: Optional[list] = None
     angle_source: Optional[str] = None  # "radar", "camera", "estimated", or None
     club_angle_deg: Optional[float] = None  # Club angle of attack from K-LD7 (vertical)
     club_path_deg: Optional[float] = None  # Club path: IWR6843, or K-LD7 (deprecated, horizontal)
+    experimental_attack_angle_deg: Optional[float] = None
+    experimental_attack_angle_status: Optional[str] = None
+    experimental_club_path_deg: Optional[float] = None
+    experimental_club_path_status: Optional[str] = None
+    # Camera-fused club delivery: radar AoA candidate + per-club calibration
+    # offset, club path derived from the camera delivery-plane trace. Same
+    # experimental estimator level as the fields above.
+    experimental_fused_attack_angle_deg: Optional[float] = None
+    experimental_fused_club_path_deg: Optional[float] = None
+    experimental_fused_status: Optional[str] = None
+    experimental_fused_attack_angle_confidence: Optional[str] = None
+    experimental_fused_club_path_confidence: Optional[str] = None
+    experimental_camera_trace_deg: Optional[float] = None
+    experimental_aoa_offset_source: Optional[str] = None
+    # Independent horizontal ball-flight evidence. The camera-assisted value
+    # may become the displayed experimental result while the original IWR
+    # value remains available for replay and comparison.
+    iwr6843_horizontal_deg: Optional[float] = None
+    iwr6843_horizontal_confidence: Optional[float] = None
+    experimental_camera_horizontal_deg: Optional[float] = None
+    experimental_camera_horizontal_confidence: Optional[float] = None
+    experimental_camera_horizontal_status: Optional[str] = None
+    experimental_camera_iwr_delta_deg: Optional[float] = None
+    # Transient fitted IWR range trajectory consumed by live camera fusion.
+    # Deliberately excluded from websocket/session serializers.
+    iwr6843_club_range_evidence: object | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    iwr6843_ball_range_evidence: object | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
     spin_axis_deg: Optional[float] = None  # Spin axis tilt: 0=backspin, +right(fade), -left(draw)
+    inclinometer: Optional[dict] = None  # Stable enclosure orientation used for this shot
 
     @property
     def ball_speed_ms(self) -> float:

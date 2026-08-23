@@ -7,16 +7,13 @@ trained on golf ball datasets.
 
 Usage:
     # On Pi with display (max performance)
-    DISPLAY=:0 python scripts/test_yolo_detection.py --imgsz 320 --half
+    DISPLAY=:0 uv run python scripts/vision/test_yolo_detection.py --imgsz 320
 
     # Headless mode (saves frames)
-    python scripts/test_yolo_detection.py --headless --num-frames 5
+    uv run python scripts/vision/test_yolo_detection.py --headless --num-frames 5
 
     # Test with specific image file
-    python scripts/test_yolo_detection.py --image frame_0000.png
-
-    # Use NCNN model (fastest on Pi ARM CPU)
-    python scripts/test_yolo_detection.py --model models/golf_ball_yolo11n_new_ncnn
+    uv run python scripts/vision/test_yolo_detection.py --image frame_0000.png
 
     # Performance flags:
     #   --imgsz 320        (smaller = faster, try 320, 416, 640)
@@ -27,8 +24,8 @@ Usage:
 
 import argparse
 import sys
-import time
 import threading
+import time
 from collections import deque
 
 try:
@@ -36,15 +33,14 @@ try:
     YOLO_AVAILABLE = True
 except ImportError:
     YOLO_AVAILABLE = False
-    print("ultralytics required: pip install ultralytics")
+    print("ultralytics is not installed; see docs/yolo-performance-tuning.md")
 
 try:
     import cv2
-    import numpy as np
     CV2_AVAILABLE = True
 except ImportError:
     CV2_AVAILABLE = False
-    print("OpenCV required: pip install opencv-python")
+    print("OpenCV is not installed; see docs/yolo-performance-tuning.md")
 
 try:
     from picamera2 import Picamera2
@@ -68,7 +64,7 @@ def main():
     parser.add_argument("--width", type=int, default=640, help="Camera capture width")
     parser.add_argument("--height", type=int, default=480, help="Camera capture height")
     parser.add_argument("--confidence", type=float, default=0.3, help="Minimum confidence threshold")
-    parser.add_argument("--model", type=str, default="models/golf_ball_yolo11n_new_256.onnx", help="YOLO model to use (use NCNN for Pi)")
+    parser.add_argument("--model", type=str, default="models/golf_ball_yolo11n_new_256.onnx", help="Path to a YOLO model")
     parser.add_argument("--iou", type=float, default=0.5, help="IoU threshold for NMS (lower = fewer overlapping boxes)")
     parser.add_argument("--max-det", type=int, default=1, help="Maximum detections per frame")
     # Performance options
@@ -84,8 +80,8 @@ def main():
     args = parser.parse_args()
 
     if not YOLO_AVAILABLE or not CV2_AVAILABLE:
-        print("Missing dependencies. Install with:")
-        print("  pip install ultralytics opencv-python")
+        print("Camera experiment dependencies are missing.")
+        print("See docs/yolo-performance-tuning.md for setup guidance.")
         return 1
 
     print("=" * 50)
@@ -169,7 +165,7 @@ def main():
         for d in detections:
             print(f"  - {d['class']} (id={d['class_id']}, conf={d['confidence']:.2f})")
             if d['class_id'] == SPORTS_BALL_CLASS or d['class_id'] == GOLF_BALL_CLASS or 'ball' in d['class'].lower():
-                print(f"    ^^^ BALL DETECTED!")
+                print("    ^^^ BALL DETECTED!")
 
         # Save result
         output_file = args.image.replace('.png', '_yolo.png').replace('.jpg', '_yolo.jpg')

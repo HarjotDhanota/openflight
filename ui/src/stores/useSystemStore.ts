@@ -1,31 +1,44 @@
 import { create } from 'zustand';
+import type { PowerStatus } from '../types/power';
 import type { SimShotInfo, SimStatus } from '../types/socket';
 
 interface SystemState {
   connected: boolean;
   mockMode: boolean;
   debugMode: boolean;
+  cloudUploadState: 'idle' | 'running' | 'complete' | 'error';
+  cloudUploadMessage: string;
   simStatuses: Record<string, SimStatus>;
   latestSimShots: Record<string, SimShotInfo>;
   serverClub: string | null;
+  serverPlayerName: string | null;
+  powerStatus: PowerStatus | null;
   setConnected: (connected: boolean) => void;
   setMockMode: (mockMode: boolean) => void;
   setDebugMode: (debugMode: boolean) => void;
+  setCloudUploadStatus: (state: SystemState['cloudUploadState'], message: string) => void;
   setSimStatus: (status: SimStatus) => void;
   setLatestSimShot: (shot: SimShotInfo) => void;
   setServerClub: (club: string | null) => void;
+  setServerPlayerName: (playerName: string | null) => void;
+  setPowerStatus: (status: PowerStatus) => void;
 }
 
 export const useSystemStore = create<SystemState>((set) => ({
   connected: false,
   mockMode: false,
   debugMode: false,
+  cloudUploadState: 'idle',
+  cloudUploadMessage: '',
   simStatuses: {},
   latestSimShots: {},
   serverClub: null,
+  serverPlayerName: null,
+  powerStatus: null,
   setConnected: (connected) => set({ connected }),
   setMockMode: (mockMode) => set({ mockMode }),
   setDebugMode: (debugMode) => set({ debugMode }),
+  setCloudUploadStatus: (cloudUploadState, cloudUploadMessage) => set({ cloudUploadState, cloudUploadMessage }),
   setSimStatus: (status) =>
     set((state) => ({
       simStatuses: { ...state.simStatuses, [status.target]: status },
@@ -35,4 +48,6 @@ export const useSystemStore = create<SystemState>((set) => ({
       latestSimShots: { ...state.latestSimShots, [shot.target]: shot },
     })),
   setServerClub: (serverClub) => set({ serverClub }),
+  setServerPlayerName: (serverPlayerName) => set({ serverPlayerName }),
+  setPowerStatus: (powerStatus) => set({ powerStatus }),
 }));

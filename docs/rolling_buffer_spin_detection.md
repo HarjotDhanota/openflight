@@ -1,341 +1,78 @@
-# Rolling Buffer & Spin Detection Implementation Plan
+# Rolling Buffer Capture and Spin Detection
 
-Based on guidance from OmniPreSense (January 2026).
+OpenFlight uses the OPS243-A rolling buffer for production shot capture. Spin
+estimation from that capture remains experimental.
 
-## Overview
+## Capture pipeline
 
-The OPS243-A radar can detect golf ball spin by analyzing micro-variations in the Doppler signal caused by the spinning dimpled surface. This requires:
+1. The SEN-14262 detects impact and triggers the OPS243-A through `HOST_INT`.
+2. The radar freezes and returns 4,096 I samples and 4,096 Q samples.
+3. `RollingBufferProcessor` extracts ball and club speed from short FFT windows.
+4. An overlapping timeline separates the club, impact, and ball regions.
+5. An ungated multitaper estimator records an experimental spin candidate.
 
-1. **Rolling Buffer Mode (G1)** - Captures complete I/Q data for post-processing
-2. **Overlapping FFT Windows** - Increases temporal resolution to see spin "waviness"
-3. **Secondary FFT** - Extracts spin frequency from speed oscillations
+The normal kiosk command uses this pipeline:
 
-## Experimental Live Estimator
-
-The live rolling-buffer pipeline automatically runs the ungated multitaper
-estimator for every valid capture. No estimator flag or additional setup is
-required beyond the normal persistent rolling-buffer configuration.
-
-- The UI displays the candidate below Spin Rate with an **EXPERIMENTAL** label.
-- The result is logged with `spin_method: "multitaper_ungated"` and the detected
-  multipath fade frequency for later TrackMan comparison.
-- The estimator intentionally reports its best 1,500-11,000 RPM candidate
-  without a confidence, rail, or club-selection gate so evaluation sessions do
-  not silently discard difficult shots.
-- Experimental spin does not currently drive spin-adjusted carry. A candidate
-  can be useful for model evaluation without being reliable enough for flight
-  calculations.
-
-TrackMan-blind validation remains above the production target: July 14 had
-2,499 RPM MAE (1,682 RPM median absolute error), and the held-out July 17
-session had 3,073 RPM MAE (2,968 RPM median). Treat individual readings as
-evaluation data rather than ground truth until geometry and multipath rejection
-improve.
-
-## Current vs Rolling Buffer Approach
-
-| Aspect | Current (Streaming) | Rolling Buffer |
-|--------|---------------------|----------------|
-| Mode | Continuous reporting | Triggered capture |
-| Data | Processed speeds | Raw I/Q samples |
-| Resolution | ~56 Hz | Up to 1 kHz |
-| Spin detection | No | Yes (50-60% success) |
-| Latency | Real-time | Post-processing |
-
-## Rolling Buffer Mode Commands
-
-```
-PI    # Deactivate (idle mode)
-K+    # Enable peak detection
-G1    # Enable rolling buffer mode (4096 samples)
-S!    # Trigger capture and dump buffer
-```
-
-## Data Format from S! Command
-
-The sensor returns JSON with:
-```json
-{"sample_time": "964.003"}
-{"trigger_time": "964.105"}
-{"I": [4096 integer samples...]}
-{"Q": [4096 integer samples...]}
-```
-
-- 4096 samples = 32 blocks × 128 samples each
-- At 30ksps: ~136ms of data captured
-- Trigger time indicates when the trigger event occurred within the buffer
-
-## Triggering Strategy for Golf
-
-The radar needs a trigger to know when to dump the buffer. The recommended approach is a direct hardware trigger via HOST_INT.
-
-> **Important: Persistent Mode Required.** The OPS243-A has a firmware bug where the HOST_INT pin mode switches when transitioning from normal mode (GS) to rolling buffer mode (GC) at runtime. The fix from OmniPreSense: save rolling buffer mode to persistent memory (`A!` command) and power cycle the board. After that, hardware triggers work correctly. See the [Radar Setup section](raspberry-pi-setup.md#radar-setup-one-time) in the Pi setup guide, or run:
-> ```
-> uv run python scripts/hardware-test/test_rolling_buffer_persist.py --setup
-> # Power cycle the radar
-> uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test
-> ```
-
-### 1. Direct Hardware Sound Trigger (Recommended)
-
-Uses the SparkFun SEN-14262 sound detector wired directly to HOST_INT via a level shifter. The sound of club impact triggers the radar to dump its buffer. Near-zero latency (~10us).
-
-**Hardware Required:**
-- SparkFun SEN-14262 Sound Detector (~$12)
-- BSS138 level shifter module (~$4)
-
-**Wiring:**
-See [sound-trigger-wiring.md](sound-trigger-wiring.md) for full circuit details.
-
-**Usage:**
 ```bash
-# Default mode in start-kiosk.sh
-./scripts/start-kiosk.sh
-
-# Or explicitly
-openflight-server --mode rolling-buffer --trigger sound
+scripts/start-kiosk.sh
 ```
 
-### 2. Speed Threshold Trigger
+## One-time radar setup
 
-- Configure minimum speed threshold (e.g., 50+ mph)
-- When club head is detected above threshold, trigger fires
-- Buffer contains pre-trigger (backswing) and post-trigger (impact + ball flight)
-- ~5-6ms response time per OmniPreSense
+The OPS243-A firmware changes the `HOST_INT` behavior when rolling-buffer mode
+is entered at runtime. Save the mode to flash once, then power-cycle the radar:
 
-**Usage:**
 ```bash
-openflight-server --mode rolling-buffer --trigger speed
+uv run python scripts/hardware-test/test_rolling_buffer_persist.py --setup
+# Disconnect power from the radar for at least three seconds, then reconnect it.
+uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test
 ```
 
-### 3. GPIO Software Trigger (Fallback)
+The runtime then starts in the persisted `GC` rolling-buffer mode without
+re-entering it. See [Sound Trigger Wiring](sound-trigger-wiring.md) for the
+recommended direct hardware trigger.
 
-Uses Pi GPIO to detect sound, then sends S! command via serial. Higher latency (~1-18ms) but simpler setup.
+## Current defaults
 
-**Usage:**
+| Setting | Value |
+|---|---:|
+| OPS243-A mode | Persisted rolling buffer (`GC`) |
+| Sample rate | 30,000 samples/s |
+| Capture | 4,096 I + 4,096 Q samples |
+| Capture duration | About 136.5 ms |
+| Pre-trigger split | 16 of 32 blocks |
+| Speed window | 128 samples |
+| FFT size | 4,096 |
+| Overlap step | 32 samples (937.5 windows/s) |
+| Production trigger | SEN-14262 `GATE` to OPS243-A `HOST_INT` |
+
+Use `--buffer-split post-heavy` when more post-impact data is needed, or
+`--buffer-split pre-heavy` when the club approach matters more:
+
 ```bash
-openflight-server --mode rolling-buffer --trigger sound-gpio
+scripts/start-kiosk.sh --buffer-split post-heavy
 ```
 
-### 4. Software Polling
+## Experimental spin output
 
-- Continuously poll with S! and look for activity
-- Less efficient but simplest to implement
-- ~300ms latency
+Every valid capture runs the ungated multitaper estimator. Its candidate:
 
-**Usage:**
-```bash
-openflight-server --mode rolling-buffer --trigger polling
-```
+- is labeled **EXPERIMENTAL** in the UI;
+- is logged as `spin_method: "multitaper_ungated"`;
+- is constrained to 1,500–11,000 RPM; and
+- does not drive spin-adjusted carry.
 
-## Trigger Latency Comparison
+Treat individual values as evaluation data, not ground truth. Multipath and
+capture geometry can produce plausible but incorrect candidates, and current
+blind validation is not accurate enough for production carry calculations.
 
-| Trigger Type | Latency | Hardware Required |
-|--------------|---------|-------------------|
-| `sound` | ~10μs | SEN-14262 + level shifter (recommended) |
-| `speed` | ~5-6ms | None (uses radar detection) |
-| `sound-gpio` | ~1-18ms | SEN-14262 + GPIO wiring |
-| `polling` | ~300ms | None |
+For offline comparison and estimator work, use
+[Spin Replay and Diagnostics](spin-dechirp-replay.md). Raw captures are stored
+in the session JSONL logs described in the
+[observability guide](observability.md#session-log-format).
 
-## Signal Processing Pipeline
+## Related guides
 
-### Step 1: Capture I/Q Data
-```python
-# Send trigger command
-response = send_command('S!')
-
-# Parse response
-sample_time = data["sample_time"]
-trigger_time = data["trigger_time"]
-i_data = data["I"]  # 4096 samples
-q_data = data["Q"]  # 4096 samples
-```
-
-### Step 2: Standard FFT Processing (Speed Detection)
-```python
-WINDOW_SIZE = 128
-FFT_SIZE = 4096
-NUM_BLOCKS = 32
-
-for block_idx in range(NUM_BLOCKS):
-    start = block_idx * WINDOW_SIZE
-    end = start + WINDOW_SIZE
-
-    i_block = i_data[start:end]
-    q_block = q_data[start:end]
-
-    # Remove DC, scale, apply Hanning window
-    i_block = (i_block - np.mean(i_block)) * 3.3 / 4096
-    q_block = (q_block - np.mean(q_block)) * 3.3 / 4096
-    i_block *= np.hanning(WINDOW_SIZE)
-    q_block *= np.hanning(WINDOW_SIZE)
-
-    # FFT for speed
-    complex_signal = i_block + 1j * q_block
-    fft_result = np.fft.fft(complex_signal, FFT_SIZE)
-    magnitude = np.abs(fft_result)
-
-    # Find peaks, convert bins to speed
-    # Speed = bin_index * 0.0063 * (SAMPLE_RATE / FFT_SIZE)
-```
-
-### Step 3: Overlapping FFT for Spin (The Key Trick)
-
-Instead of stepping by 128 samples, step by 32 samples for 4x temporal resolution:
-
-```python
-STEP_SIZE = 32  # Instead of 128
-speeds_over_time = []
-
-for start in range(0, len(i_data) - WINDOW_SIZE, STEP_SIZE):
-    end = start + WINDOW_SIZE
-
-    # Process block (same as above)
-    speed = process_block(i_data[start:end], q_data[start:end])
-    speeds_over_time.append(speed)
-
-# Result: ~1kHz speed readings instead of ~250Hz
-# At 30ksps with 32-sample steps: 30000/32 = 937.5 Hz
-```
-
-### Step 4: Spin Extraction from Speed Oscillations
-
-The ball's dimpled surface causes periodic speed variations as it spins:
-
-```python
-# Filter to just ball speed readings (after impact)
-ball_speeds = extract_ball_speeds(speeds_over_time)
-
-# Remove trend (average speed)
-detrended = ball_speeds - np.mean(ball_speeds)
-
-# FFT to find oscillation frequency
-spin_fft = np.fft.fft(detrended)
-frequencies = np.fft.fftfreq(len(detrended), d=1/937.5)  # 937.5 Hz sample rate
-
-# Find dominant frequency = spin rate
-peak_idx = np.argmax(np.abs(spin_fft[1:len(spin_fft)//2])) + 1
-spin_hz = abs(frequencies[peak_idx])
-spin_rpm = spin_hz * 60
-
-print(f"Detected spin: {spin_rpm:.0f} RPM")
-```
-
-## Expected Spin Signal
-
-For a golf ball at ~3000 RPM (50 Hz):
-- At 1kHz sampling: ~20 samples per revolution
-- Should see clear sinusoidal pattern in detrended speed
-
-```
-Speed (detrended)
-    +0.5 |    *           *           *
-         |   * *         * *         * *
-       0 |--*---*-------*---*-------*---*---
-         | *     *     *     *     *     *
-    -0.5 |*       *   *       *   *
-         +--------------------------------→ Time
-              20ms     40ms     60ms
-              ↑________↑
-              One revolution at 3000 RPM
-```
-
-## Quality Assessment
-
-OmniPreSense reports 50-60% success rate. Implement quality checks:
-
-```python
-def assess_spin_quality(spin_fft, spin_rpm):
-    """Determine if spin calculation is reliable."""
-
-    # Check 1: Clear dominant peak
-    peak_magnitude = np.max(np.abs(spin_fft))
-    noise_floor = np.median(np.abs(spin_fft))
-    snr = peak_magnitude / noise_floor
-
-    if snr < 3.0:
-        return False, "Weak spin signal"
-
-    # Check 2: Reasonable RPM range for golf
-    if spin_rpm < 1000 or spin_rpm > 10000:
-        return False, f"Spin {spin_rpm} outside expected range"
-
-    # Check 3: Consistent over multiple windows
-    # (implementation depends on data structure)
-
-    return True, "Good quality"
-```
-
-## Implementation Phases
-
-### Phase 2A: Basic Rolling Buffer Capture
-- Add G1 mode initialization
-- Implement S! trigger and I/Q parsing
-- Process blocks for speed (standard method)
-- Compare accuracy to streaming mode
-
-### Phase 2B: Trigger Optimization
-- Implement speed threshold trigger
-- Tune pre/post trigger timing
-- Handle trigger timeout (no swing detected)
-
-### Phase 3A: Overlapping FFT
-- Implement 32-sample stepping
-- Store high-resolution speed timeline
-- Identify ball vs club in timeline
-
-### Phase 3B: Spin Extraction
-- Implement secondary FFT on ball speeds
-- Add quality assessment
-- Report spin only when confident
-
-## Code Structure Suggestion
-
-```python
-class RollingBufferProcessor:
-    """Handles rolling buffer capture and spin detection."""
-
-    def __init__(self, radar: OPS243Radar):
-        self.radar = radar
-        self.window_size = 128
-        self.fft_size = 4096
-        self.step_size = 32  # For spin detection
-
-    def enable_rolling_buffer(self):
-        """Switch radar to G1 mode."""
-        self.radar._send_command("PI")  # Idle
-        self.radar._send_command("K+")  # Peak detection
-        self.radar._send_command("G1")  # Rolling buffer
-
-    def trigger_capture(self) -> Optional[CaptureResult]:
-        """Trigger and retrieve buffer data."""
-        response = self.radar._send_command("S!")
-        return self._parse_capture(response)
-
-    def process_for_speed(self, capture: CaptureResult) -> List[SpeedReading]:
-        """Standard 128-sample block processing."""
-        pass
-
-    def process_for_spin(self, capture: CaptureResult) -> Optional[SpinResult]:
-        """Overlapping FFT for spin detection."""
-        pass
-
-    def disable_rolling_buffer(self):
-        """Return to normal streaming mode."""
-        self.radar._send_command("PI")
-        self.radar.configure_for_golf()
-```
-
-## References
-
-- OmniPreSense Rolling Buffer Code: https://github.com/omnipresense/rolling_buffer
-- OmniPreSense AN-027: Rolling Buffer Application Note
-- OmniPreSense Sports Ball Detection Presentation
-
-## Notes from OmniPreSense
-
-> "Spin is much more difficult to detect accurately and repeatably... What we have seen is if you have very fine resolution in the speed reports, you can see a slight waviness in the ball speed signal. If you take the FFT of that data, you can get a good spin value."
-
-> "The issue we've seen is maybe only 50-60% of the time does the data captured provide a nice-looking signal set and a solid calculation. Other times the signal looks 'sloppy' and the resulting FFT calculation is not that good."
-
-> "Note that the spin calculated is the combined back spin and side spin but since majority of hits are predominately backspin you can call it that."
+- [Raspberry Pi Setup](raspberry-pi-setup.md)
+- [Sound Trigger Wiring](sound-trigger-wiring.md)
+- [Spin Replay and Diagnostics](spin-dechirp-replay.md)

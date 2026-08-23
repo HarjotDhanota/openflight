@@ -2,6 +2,8 @@
 
 Hardware components for building the OpenFlight golf launch monitor.
 
+> **Ordering shortcut:** A shared **[OpenFlight Mouser project](https://www.mouser.com/en/Tools/Project/Share?AccessID=4c97a00bbc)** is available for the parts Mouser stocks — open it, save it to your own Mouser account, and add the whole list to your cart in one step instead of searching for each item. Check it against the tables below before you order: anything Mouser does not carry has a direct vendor link here.
+
 > **Next step after gathering parts:** See the [Raspberry Pi Setup Guide](raspberry-pi-setup.md) for assembly and software installation.
 
 ## Core Components
@@ -10,9 +12,9 @@ Hardware components for building the OpenFlight golf launch monitor.
 |------|-------------|------|--------|
 | **OPS243 Radar** | Doppler radar for ball/club speed detection | [OmniPreSense](https://omnipresense.com/product/ops243-doppler-radar-sensor/) | $249 |
 | **Raspberry Pi 5** | Main compute unit (4GB+ recommended) | [Adafruit](https://www.adafruit.com/product/5812) | $130 |
+| **7" Touchscreen Display** | HMTECH 7" 1024x600 IPS display | [Amazon](https://www.amazon.com/dp/B0D3QB7X4Z) | $46 |
 
 > **WARNING: Do NOT buy the OPS243-A-W (WiFi version).** The WiFi module locks the serial baud rate to 19200, which is far too slow for I/Q data transfer. OpenFlight requires the standard **OPS243** (USB only) which runs at 57600 baud over CDC-ACM. The WiFi version is not compatible.
-| **7" Touchscreen Display** | HMTECH 7" 1024x600 IPS display | [Amazon](https://www.amazon.com/dp/B0D3QB7X4Z) | $46 |
 
 > **Display alternative:** The [Raspberry Pi Touch Display 2](https://www.raspberrypi.com/products/touch-display-2/) (7" 720x1280, MIPI DSI) also works with the Pi 5. If you use it, print the `Touch_Display2_backplate.stl` and `Touch_Display2_shell.stl` from the IARC case instead of `monitor_shell.stl` — see the [IARC case instructions](../cad/IARC_case/README.md).
 
@@ -90,6 +92,19 @@ Full instructions: **[IWR6843 Operator Guide](iwr6843/README.md)** for wiring,
 flashing, mounting, and geometry; **[Moving the OPS243 to the Pi GPIO
 UART](ops243-uart-migration.md)** for the OPS side of Layout A.
 
+### Optional Enclosure Inclinometer
+
+An LIS3DH mounted to the enclosure base lets OpenFlight compensate the IWR6843
+tilt when the rig is placed on uneven ground.
+
+| Part | Description | Link | ~Price |
+|------|-------------|------|--------|
+| **Adafruit LIS3DH breakout** | Triple-axis accelerometer with STEMMA QT connectors | [Adafruit product 2809](https://www.adafruit.com/product/2809) | $5 |
+| **JST-SH cable kit** | Solderless STEMMA QT/Qwiic to female Dupont wiring used in the validated build | [Amazon](https://www.amazon.com/Connector-Compatible-Development-Sensors-Drivers/dp/B0GJPRX4YT) | ~$10 |
+
+See the **[LIS3DH Inclinometer Setup Guide](inclinometer/README.md)** for wiring,
+mounting, calibration, startup flags, and troubleshooting.
+
 ---
 
 ## Angle Radar (K-LD7) — DEPRECATED
@@ -166,6 +181,12 @@ assembly.
 | Part | Description | Link | ~Price |
 |------|-------------|------|--------|
 | Tripod Mount | For positioning the unit | 1/4"-20 mount | $10 |
+| **Geekworm X1202 UPS HAT** | Rechargeable Pi 5 power using four matching flat-top 18650 Li-ion cells. Cells are not included | [Geekworm](https://geekworm.com/products/x1202) | ~$48 + cells |
+| **Geekworm X1206 UPS HAT** | Larger rechargeable Pi 5 power option using four matching 21700 Li-ion cells, advertised up to 20,000mAh total. Cells are not included | [Geekworm](https://geekworm.com/products/x1206) | Varies + cells |
+| **InnoMaker OV9281 global-shutter camera** | High-speed monochrome camera for experimental vision work. Camera software is not enabled in the production kiosk path | [Amazon](https://www.amazon.com/dp/B09WTP5GZH?th=1) | ~$30 |
+
+See [Camera and YOLO Experiments](yolo-performance-tuning.md) before buying the
+camera; the standard setup does not install its optional software dependencies.
 
 ---
 
