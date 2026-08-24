@@ -9,6 +9,14 @@ from typing import Any
 IRON_THRESHOLDS = {"solve_rate": 0.80, "median_mm": 12.0, "p90_mm": 24.0}
 
 
+def rehash_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
+    bundle.pop("evaluation_hash", None)
+    bundle["evaluation_hash"] = hashlib.sha256(
+        json.dumps(bundle, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    ).hexdigest()
+    return bundle
+
+
 def _passes(rows: list[dict[str, Any]]) -> bool:
     return len(rows) == 2 and all(
         float(row["solve_rate"]) >= IRON_THRESHOLDS["solve_rate"]
@@ -60,10 +68,7 @@ def build_corrected_iron_bundle(
             "overall": "STOP_FOR_MAINTAINER_REVIEW",
         },
     }
-    bundle["evaluation_hash"] = hashlib.sha256(
-        json.dumps(bundle, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
-    ).hexdigest()
-    return bundle
+    return rehash_bundle(bundle)
 
 
 def _number(value: object, digits: int = 3) -> str:
@@ -158,6 +163,22 @@ def render_corrected_iron_markdown(bundle: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Offline Arm B calibration",
+            "",
+            "| Geometry | Fitted analytic radii (u x v) mm |",
+            "|---|---:|",
+        ]
+    )
+    for geometry, calibration in (
+        ("old distorted-axis", old.get("arm_b_calibration")),
+        ("corrected metric CAD", corrected.get("arm_b_calibration")),
+    ):
+        if calibration and calibration.get("calibrations"):
+            radii = calibration["calibrations"][0]["fitted_radii_mm"]
+            lines.append(f"| {geometry} | {float(radii[0]):.3f} x {float(radii[1]):.3f} |")
+    lines.extend(
+        [
+            "",
             "## Corrected signed errors and diagnostics",
             "",
             "| Arm | Candidate | Offset median/p90 mm | Height median/p90 mm | IoU median/p10 | Fit residual median/p90 px |",
@@ -181,6 +202,8 @@ def render_corrected_iron_markdown(bundle: dict[str, Any]) -> str:
             failures = row.get("failure_categories", {})
             detail = ", ".join(f"{name}:{count}" for name, count in failures.items()) or "none"
             lines.append(f"- `{row_label}/{row['candidate']}`: {detail}")
+    if not corrected["arm_a"]:
+        lines.append("- Arm A: no shot taxonomy; frozen LUT validation failed before evaluation.")
     lines.extend(
         [
             "",

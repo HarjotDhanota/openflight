@@ -43,6 +43,7 @@ def test_corrected_bundle_holds_driver_and_selects_only_an_iron_provisional_arm(
     old = {
         "baseline": [_cell("strobed_10us", 0.495, 4.0, 5.1)],
         "arm_b": [_cell("strobed_10us", 0.495, 4.5, 6.4)],
+        "arm_b_calibration": {"calibrations": [{"fitted_radii_mm": [40.5, 22.6]}]},
         "arm_a_validation": {"passed": False},
     }
     baseline = [
@@ -54,10 +55,7 @@ def test_corrected_bundle_holds_driver_and_selects_only_an_iron_provisional_arm(
         {**_cell(candidate, 0.9, 2.0, 4.0), "arm": "arm_b_calibrated_analytic"}
         for candidate in ("strobed_10us", "ambient_500us")
     ]
-    arm_a = [
-        {**_cell(candidate, 0.9, 2.5, 4.5), "arm": "arm_a_mesh_projection"}
-        for candidate in ("strobed_10us", "ambient_500us")
-    ]
+    arm_a = []
     validation = {"clubs": [{"club": "poc_7iron", "passed": True}]}
     manifest = {"sources": [{"source_uid": "iron", "normalization": "face-v2"}]}
 
@@ -68,6 +66,7 @@ def test_corrected_bundle_holds_driver_and_selects_only_an_iron_provisional_arm(
         arm_a,
         old=old,
         mesh_manifest=manifest,
+        arm_b_calibration={"calibrations": [{"fitted_radii_mm": [59.9, 37.5]}]},
     )
     report = render_corrected_iron_markdown(bundle)
 
@@ -78,4 +77,7 @@ def test_corrected_bundle_holds_driver_and_selects_only_an_iron_provisional_arm(
     }
     assert "DRIVER: HOLD_CAD_MESH" in report
     assert "IRON: IRON_B_CLEARS" in report
+    assert "40.500 x 22.600" in report
+    assert "59.900 x 37.500" in report
+    assert "Arm A: no shot taxonomy" in report
     json.dumps(bundle, allow_nan=False)

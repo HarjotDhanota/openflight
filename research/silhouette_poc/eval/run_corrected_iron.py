@@ -8,6 +8,7 @@ from pathlib import Path
 
 from silhouette_poc.eval.corrected_iron import (
     build_corrected_iron_bundle,
+    rehash_bundle,
     render_corrected_iron_markdown,
 )
 from silhouette_poc.eval.f1_remediation import (
@@ -44,14 +45,50 @@ def _old_results(output_root: Path) -> dict:
     baseline = _json(output_root / "results_f1_mesh_fidelity.json")
     arm_b = _json(output_root / "results_f1_arm_b.json")
     validation = _json(output_root / "f1_arm_a_lut_validation.json")
+    calibration = _json(output_root / "f1_arm_b_calibration.json")
     old_iron_validation = next(item for item in validation["clubs"] if item["club"] == "poc_7iron")
     return {
         "baseline_evaluation_hash": baseline["evaluation_hash"],
         "baseline": [row for row in baseline["cells"] if row["club"] == "poc_7iron"],
         "arm_b": [row for row in arm_b["cells"] if row["club"] == "poc_7iron"],
+        "arm_b_calibration": {
+            **calibration,
+            "calibrations": [
+                item for item in calibration["calibrations"] if item["club"] == "poc_7iron"
+            ],
+        },
         "arm_a_validation": old_iron_validation,
         "arm_a": [],
     }
+
+
+def _write_report(output_root: Path, bundle: dict) -> None:
+    report_path = output_root / OUTPUT_FILENAMES["markdown"]
+    registration = report_path.read_text(encoding="utf-8").split("## Results", 1)[0].rstrip()
+    registration = registration.replace(
+        "**Outcome status: NOT RUN.**",
+        "**Outcome status: COMPLETE — STOP_FOR_MAINTAINER_REVIEW.**",
+    )
+    rendered = render_corrected_iron_markdown(bundle)
+    result_body = rendered.split("## Paired old-vs-corrected criteria", 1)[1]
+    report_path.write_text(
+        f"{registration}\n\n## Results\n\n**DRIVER: {bundle['verdict']['driver']}**\n\n"
+        f"**IRON: {bundle['verdict']['iron']}**\n\n"
+        f"**OVERALL: {bundle['verdict']['overall']}**\n\n"
+        f"Evaluation hash: `{bundle['evaluation_hash']}`\n\n"
+        f"## Paired old-vs-corrected criteria{result_body}",
+        encoding="utf-8",
+    )
+
+
+def refresh_existing(output_root: Path) -> dict:
+    path = output_root / OUTPUT_FILENAMES["json"]
+    bundle = _json(path)
+    bundle["old_distorted_axis_results"] = _old_results(output_root)
+    rehash_bundle(bundle)
+    _write_json(path, bundle)
+    _write_report(output_root, bundle)
+    return bundle
 
 
 def run(asset_root: Path, output_root: Path, workers: int) -> dict:
@@ -106,18 +143,7 @@ def run(asset_root: Path, output_root: Path, workers: int) -> dict:
     )
     output_root.mkdir(parents=True, exist_ok=True)
     _write_json(output_root / OUTPUT_FILENAMES["json"], bundle)
-    report_path = output_root / OUTPUT_FILENAMES["markdown"]
-    registration = report_path.read_text(encoding="utf-8").split("## Results", 1)[0].rstrip()
-    rendered = render_corrected_iron_markdown(bundle)
-    result_body = rendered.split("## Paired old-vs-corrected criteria", 1)[1]
-    report_path.write_text(
-        f"{registration}\n\n## Results\n\n**DRIVER: {bundle['verdict']['driver']}**\n\n"
-        f"**IRON: {bundle['verdict']['iron']}**\n\n"
-        f"**OVERALL: {bundle['verdict']['overall']}**\n\n"
-        f"Evaluation hash: `{bundle['evaluation_hash']}`\n\n"
-        f"## Paired old-vs-corrected criteria{result_body}",
-        encoding="utf-8",
-    )
+    _write_report(output_root, bundle)
     return bundle
 
 
@@ -126,8 +152,13 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--asset-root", type=Path, default=default_mesh_asset_root())
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parent)
+    parser.add_argument("--report-only", action="store_true")
     args = parser.parse_args()
-    bundle = run(args.asset_root, args.output, args.workers)
+    bundle = (
+        refresh_existing(args.output)
+        if args.report_only
+        else run(args.asset_root, args.output, args.workers)
+    )
     print(f"DRIVER: {bundle['verdict']['driver']}")
     print(f"IRON: {bundle['verdict']['iron']}")
     print(f"OVERALL: {bundle['verdict']['overall']}")

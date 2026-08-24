@@ -2,7 +2,7 @@
 
 **Registration status: FROZEN BEFORE CORRECTED OUTCOMES on 2026-08-24.**
 
-**Outcome status: NOT RUN.**
+**Outcome status: COMPLETE — STOP_FOR_MAINTAINER_REVIEW.**
 
 The source defect correction changes mesh admission and normalization only. The
 Titleist 690CB source remains pinned to SHA-256
@@ -33,4 +33,67 @@ for maintainer review before F2.
 
 ## Results
 
-Pending.
+**DRIVER: HOLD_CAD_MESH**
+
+**IRON: IRON_NEITHER**
+
+**OVERALL: STOP_FOR_MAINTAINER_REVIEW**
+
+Evaluation hash: `9f673a63a8f08bcbb6ede8d25ac2604e8e1972324e0330fc63aed9a174b9eff4`
+
+## Paired old-vs-corrected criteria
+
+| Geometry | Arm | Candidate | Solve | Median mm | p90 mm | Solve delta vs old | Median delta mm vs old |
+|---|---|---|---:|---:|---:|---:|---:|
+| old distorted-axis | F1 mesh-truth baseline (analytic_truth) | strobed_10us | 1.000 | 1.103 | 2.769 | — | — |
+| old distorted-axis | F1 mesh-truth baseline (analytic_truth) | ambient_500us | 1.000 | 1.090 | 2.434 | — | — |
+| old distorted-axis | F1 mesh-truth baseline (mesh_truth) | strobed_10us | 0.495 | 4.005 | 5.128 | — | — |
+| old distorted-axis | F1 mesh-truth baseline (mesh_truth) | ambient_500us | 0.595 | 3.659 | 5.126 | — | — |
+| corrected metric CAD | F1 mesh-truth baseline (analytic_truth) | strobed_10us | 1.000 | 1.103 | 2.769 | 0.000 | 0.000 |
+| corrected metric CAD | F1 mesh-truth baseline (analytic_truth) | ambient_500us | 1.000 | 1.090 | 2.434 | 0.000 | 0.000 |
+| corrected metric CAD | F1 mesh-truth baseline (mesh_truth) | strobed_10us | 0.000 | — | — | -0.495 | — |
+| corrected metric CAD | F1 mesh-truth baseline (mesh_truth) | ambient_500us | 0.000 | — | — | -0.595 | — |
+| old distorted-axis | Arm B calibrated analytic | strobed_10us | 0.495 | 4.485 | 6.424 | — | — |
+| old distorted-axis | Arm B calibrated analytic | ambient_500us | 0.600 | 2.568 | 3.794 | — | — |
+| corrected metric CAD | Arm B calibrated analytic | strobed_10us | 0.000 | — | — | -0.495 | — |
+| corrected metric CAD | Arm B calibrated analytic | ambient_500us | 0.905 | 10.587 | 15.622 | 0.305 | 8.019 |
+| corrected metric CAD | Arm A mesh projection | — | — | — | — | — | — |
+
+## Arm A LUT validation
+
+| Geometry | Centroid p99 px | Covariance p99 px | Contour IoU p1 | Result |
+|---|---:|---:|---:|---|
+| old distorted-axis | 0.255 | 2.091 | 0.975 | FAIL |
+| corrected metric CAD | 0.296 | 2.984 | 0.980 | FAIL |
+
+## Offline Arm B calibration
+
+| Geometry | Fitted analytic radii (u x v) mm |
+|---|---:|
+| old distorted-axis | 40.506 x 22.620 |
+| corrected metric CAD | 59.863 x 37.500 |
+
+## Corrected signed errors and diagnostics
+
+| Arm | Candidate | Offset median/p90 mm | Height median/p90 mm | IoU median/p10 | Fit residual median/p90 px |
+|---|---|---:|---:|---:|---:|
+| F1 mesh-truth baseline (analytic_truth) | strobed_10us | 0.329/1.963 | -0.447/1.061 | 0.959/0.944 | 3.048/3.580 |
+| F1 mesh-truth baseline (analytic_truth) | ambient_500us | 0.107/1.215 | -0.332/1.044 | 0.960/0.947 | 3.830/4.498 |
+| F1 mesh-truth baseline (mesh_truth) | strobed_10us | —/— | —/— | —/— | —/— |
+| F1 mesh-truth baseline (mesh_truth) | ambient_500us | —/— | —/— | —/— | —/— |
+| Arm B calibrated analytic | strobed_10us | —/— | —/— | —/— | —/— |
+| Arm B calibrated analytic | ambient_500us | 5.135/12.873 | -4.810/4.989 | 0.809/0.762 | 10.122/10.710 |
+
+## Corrected rejection taxonomy
+
+- `F1 mesh-truth baseline (analytic_truth)/strobed_10us`: none
+- `F1 mesh-truth baseline (analytic_truth)/ambient_500us`: none
+- `F1 mesh-truth baseline (mesh_truth)/strobed_10us`: insufficient_temporal_frames:1, silhouette_fit_residual:199
+- `F1 mesh-truth baseline (mesh_truth)/ambient_500us`: insufficient_temporal_frames:2, silhouette_fit_residual:198
+- `Arm B calibrated analytic/strobed_10us`: insufficient_temporal_frames:1, silhouette_fit_residual:199
+- `Arm B calibrated analytic/ambient_500us`: insufficient_temporal_frames:2, silhouette_fit_residual:16, temporal_acceleration:1
+- Arm A: no shot taxonomy; frozen LUT validation failed before evaluation.
+
+## Decision
+
+The provisional iron result is **IRON_NEITHER**. Driver remains **HOLD_CAD_MESH**. The overall work order is **STOP_FOR_MAINTAINER_REVIEW**; no F2 work began.
