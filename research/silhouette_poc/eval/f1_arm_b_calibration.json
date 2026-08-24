@@ -1,0 +1,56 @@
+{
+  "calibration_hash": "6407733a47b59f33e8b9c691cb704906b1df9e285d9f7b8b930dce25b36f1781",
+  "calibrations": [
+    {
+      "candidate_count": 2048,
+      "candidate_count_examined": 655,
+      "centroid_floor": 0.2670181912052444,
+      "club": "poc_driver",
+      "config_hash": "e9aea642f2510605772ac78aefd6990d0274b763ace470367f7bc08d00c3bb7a",
+      "final_objective": 0.27160251855713624,
+      "fitted_radii_mm": [
+        47.063990739263176,
+        28.299737943476696
+      ],
+      "initial_objective": 0.3448105258418333,
+      "input_asset_sha256": "0b9fac0caa2f7f26bc7492a6e12047c1552a6f8d934f6828cc2b3537f75105a2",
+      "nominal_radii_mm": [
+        55.0,
+        30.0
+      ],
+      "objective": "mean(||C_mesh-C_analytic||_F^2/trace(C_mesh)^2)+mean(||centroid_mesh-project(center)||^2/trace(C_mesh))",
+      "optimizer": "L-BFGS-B",
+      "optimizer_iterations": 8,
+      "optimizer_success": true,
+      "pose_count": 256,
+      "pose_seed": 2026082401,
+      "rejected_candidate_count": 399
+    },
+    {
+      "candidate_count": 2048,
+      "candidate_count_examined": 640,
+      "centroid_floor": 0.17985651041997622,
+      "club": "poc_7iron",
+      "config_hash": "858aad89916ed44a4dd4fd894746190950e1c0d5c291930c510970399db87fae",
+      "final_objective": 0.18487846090395485,
+      "fitted_radii_mm": [
+        40.505537463568885,
+        22.620353119142784
+      ],
+      "initial_objective": 0.18800780006423534,
+      "input_asset_sha256": "f35936799295e6ce344279e557f0265ccbb8acef69c4508daff80d219d03cb85",
+      "nominal_radii_mm": [
+        40.0,
+        25.0
+      ],
+      "objective": "mean(||C_mesh-C_analytic||_F^2/trace(C_mesh)^2)+mean(||centroid_mesh-project(center)||^2/trace(C_mesh))",
+      "optimizer": "L-BFGS-B",
+      "optimizer_iterations": 7,
+      "optimizer_success": true,
+      "pose_count": 256,
+      "pose_seed": 2026082402,
+      "rejected_candidate_count": 384
+    }
+  ],
+  "procedure_version": 1
+}

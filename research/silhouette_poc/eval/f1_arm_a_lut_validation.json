@@ -1,0 +1,41 @@
+{
+  "clubs": [
+    {
+      "club": "poc_driver",
+      "count": 512,
+      "limits": {
+        "centroid_error_px_p99": 1.0,
+        "contour_iou_p1": 0.95,
+        "covariance_error_px_p99": 1.0
+      },
+      "lut_sha256": "f85397142238335cf4742adcb3a89a7e161831b80b37e14044ed1b53adec20ce",
+      "metrics": {
+        "centroid_error_px_p99": 4.627126338319404,
+        "contour_iou_p1": 0.8159291168648123,
+        "covariance_error_px_p99": 2.5781538505279173
+      },
+      "passed": false,
+      "seed": 2026082491,
+      "source_sha256": "0b9fac0caa2f7f26bc7492a6e12047c1552a6f8d934f6828cc2b3537f75105a2"
+    },
+    {
+      "club": "poc_7iron",
+      "count": 512,
+      "limits": {
+        "centroid_error_px_p99": 1.0,
+        "contour_iou_p1": 0.95,
+        "covariance_error_px_p99": 1.0
+      },
+      "lut_sha256": "aa413ccafc64435cff920c8457b3657df9c8ae8bcc64590a80992f1f3fe963fb",
+      "metrics": {
+        "centroid_error_px_p99": 0.255495374205978,
+        "contour_iou_p1": 0.9752829263360309,
+        "covariance_error_px_p99": 2.0910762590308334
+      },
+      "passed": false,
+      "seed": 2026082492,
+      "source_sha256": "f35936799295e6ce344279e557f0265ccbb8acef69c4508daff80d219d03cb85"
+    }
+  ],
+  "registration": "revision_2.3_frozen"
+}

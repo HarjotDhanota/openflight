@@ -83,8 +83,15 @@ class FusionPolicy:
             else self.sharp_fit_residual_limit_px
         )
 
-    def solve(self, shot_dir: Path | str) -> FusionResult:
-        return solve_shot(shot_dir, policy=self)
+    def solve(
+        self, shot_dir: Path | str, *, template_override=None, projection_template=None
+    ) -> FusionResult:
+        return solve_shot(
+            shot_dir,
+            policy=self,
+            template_override=template_override,
+            projection_template=projection_template,
+        )
 
 
 LEGACY_SINGLE_FRAME_POLICY = FusionPolicy(
@@ -407,7 +414,11 @@ def _refine_occluded_observation(
 
 
 def solve_shot(
-    shot_dir: Path | str, *, policy: FusionPolicy = AMBIENT_RECOVERY_POLICY
+    shot_dir: Path | str,
+    *,
+    policy: FusionPolicy = AMBIENT_RECOVERY_POLICY,
+    template_override=None,
+    projection_template=None,
 ) -> FusionResult:
     """Estimate a face impact vector from the four non-scoring Section 4 inputs."""
     capture = load_fusion_capture(shot_dir)
@@ -475,7 +486,18 @@ def solve_shot(
         diagnostics["radar"]["status"] = "ball_radar_missing"
         return _failure("ball_radar_missing", diagnostics)
 
-    template = club_templates()[capture.club]
+    template = template_override or club_templates()[capture.club]
+    if template.name != capture.club:
+        raise ValueError("template_override_club_mismatch")
+    if projection_template is not None and projection_template.club != capture.club:
+        raise ValueError("projection_template_club_mismatch")
+    diagnostics["input"]["fit_template"] = (
+        "mesh_projection_lut"
+        if projection_template is not None
+        else ("analytic_override" if template_override is not None else "analytic_registered")
+    )
+    if projection_template is not None:
+        diagnostics["input"]["mesh_lut_sha256"] = projection_template.lut_sha256
     club_speed_mm_s = float(capture.radar.ops["club_speed_mph"]) / _MPH_PER_MS * 1000.0
     velocity_world = _velocity(template, club_speed_mm_s)
     observed_motion_px = (
@@ -500,17 +522,30 @@ def solve_shot(
         apparent_range_mm = (
             club_evidence.track.range_at(radar_time, club_evidence.geometry.range_res_m) * 1000.0
         )
-        state = solve_club_state(
-            item.observation,
-            apparent_range_mm,
-            calibration_bias_mm,
-            capture.camera,
-            template,
-            velocity_world,
-            exposure,
-            RADAR_CENTER_WORLD,
-            fit_residual_limit,
-        )
+        if projection_template is None:
+            state = solve_club_state(
+                item.observation,
+                apparent_range_mm,
+                calibration_bias_mm,
+                capture.camera,
+                template,
+                velocity_world,
+                exposure,
+                RADAR_CENTER_WORLD,
+                fit_residual_limit,
+            )
+            mesh_diagnostics = {}
+        else:
+            state, mesh_diagnostics = projection_template.solve_state(
+                item.observation,
+                apparent_range_mm,
+                calibration_bias_mm,
+                capture.camera,
+                velocity_world,
+                exposure,
+                fit_residual_limit,
+                RADAR_CENTER_WORLD,
+            )
         if not state.ok:
             fit_rejections.append(
                 {"frame_index": item.frame_index, "status": state.reason or "club_state_rejected"}
@@ -529,26 +564,27 @@ def solve_shot(
             "visible_pixel_objective": False,
         }
         observation = item.observation
-        observation, fit_diagnostics = _refine_occluded_observation(
-            item,
-            state.roll_rad,
-            apparent_range_mm - calibration_bias_mm,
-            capture,
-            template,
-            velocity_world,
-            exposure,
-        )
-        state = solve_club_state(
-            observation,
-            apparent_range_mm,
-            calibration_bias_mm,
-            capture.camera,
-            template,
-            velocity_world,
-            exposure,
-            RADAR_CENTER_WORLD,
-            fit_residual_limit,
-        )
+        if projection_template is None:
+            observation, fit_diagnostics = _refine_occluded_observation(
+                item,
+                state.roll_rad,
+                apparent_range_mm - calibration_bias_mm,
+                capture,
+                template,
+                velocity_world,
+                exposure,
+            )
+            state = solve_club_state(
+                observation,
+                apparent_range_mm,
+                calibration_bias_mm,
+                capture.camera,
+                template,
+                velocity_world,
+                exposure,
+                RADAR_CENTER_WORLD,
+                fit_residual_limit,
+            )
         if not state.ok:
             fit_rejections.append(
                 {"frame_index": item.frame_index, "status": state.reason or "club_state_rejected"}
@@ -562,23 +598,40 @@ def solve_shot(
         assert state.fit_residual_px is not None
         values = np.linalg.eigvalsh(observation.covariance_px2)
         condition = float(values[-1] / max(values[0], 1e-12))
-        _, _, _, vector_u, vector_v = _silhouette_moments(
-            state.frame_center_world,
-            state.roll_rad,
-            velocity_world,
-            exposure,
-            capture.camera,
-            template,
-        )
-        center_uv = observation.centroid_uv
-        blur = _projected_velocity(state.frame_center_world, velocity_world, capture.camera) * (
-            exposure * 1e-6
-        )
         observed_contour = cv2.convexHull(
             np.column_stack(np.nonzero(item.club_mask)[::-1]).astype(np.float32)
         ).reshape(-1, 2)
-        predicted_contour = _silhouette_polygon(center_uv, vector_u, vector_v, blur)
+        if projection_template is None:
+            _, _, _, vector_u, vector_v = _silhouette_moments(
+                state.frame_center_world,
+                state.roll_rad,
+                velocity_world,
+                exposure,
+                capture.camera,
+                template,
+            )
+            center_uv = observation.centroid_uv
+            blur = _projected_velocity(state.frame_center_world, velocity_world, capture.camera) * (
+                exposure * 1e-6
+            )
+            predicted_contour = _silhouette_polygon(center_uv, vector_u, vector_v, blur)
+        else:
+            predicted_contour = projection_template.predicted_contour(
+                state.frame_center_world,
+                state.roll_rad,
+                velocity_world,
+                exposure,
+                capture.camera,
+            )
         iou = _polygon_iou(observed_contour, predicted_contour)
+        if projection_template is not None:
+            fit_diagnostics.update(
+                {
+                    "template_fit_iou": iou,
+                    "best_second_margin": condition - AMBIGUITY_RATIO_MIN,
+                    "visible_pixel_objective": True,
+                }
+            )
         diagnostics["hypotheses"]["frames"].append(
             {
                 "frame_index": item.frame_index,
@@ -597,6 +650,7 @@ def solve_shot(
                     else condition - AMBIGUITY_RATIO_MIN
                 ),
                 "visible_pixel_objective": fit_diagnostics["visible_pixel_objective"],
+                "mesh_lookup": mesh_diagnostics or None,
                 "state_parameters": {
                     "translation_world_mm": state.frame_center_world.tolist(),
                     "rotation_roll_rad": state.roll_rad,

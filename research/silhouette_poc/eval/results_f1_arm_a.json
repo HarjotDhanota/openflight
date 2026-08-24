@@ -1,0 +1,96 @@
+{
+  "arm": "arm_a_mesh_projection",
+  "cells": [],
+  "lut_validation": {
+    "clubs": [
+      {
+        "club": "poc_driver",
+        "count": 512,
+        "limits": {
+          "centroid_error_px_p99": 1.0,
+          "contour_iou_p1": 0.95,
+          "covariance_error_px_p99": 1.0
+        },
+        "lut_sha256": "f85397142238335cf4742adcb3a89a7e161831b80b37e14044ed1b53adec20ce",
+        "metrics": {
+          "centroid_error_px_p99": 4.627126338319404,
+          "contour_iou_p1": 0.8159291168648123,
+          "covariance_error_px_p99": 2.5781538505279173
+        },
+        "passed": false,
+        "seed": 2026082491,
+        "source_sha256": "0b9fac0caa2f7f26bc7492a6e12047c1552a6f8d934f6828cc2b3537f75105a2"
+      },
+      {
+        "club": "poc_7iron",
+        "count": 512,
+        "limits": {
+          "centroid_error_px_p99": 1.0,
+          "contour_iou_p1": 0.95,
+          "covariance_error_px_p99": 1.0
+        },
+        "lut_sha256": "aa413ccafc64435cff920c8457b3657df9c8ae8bcc64590a80992f1f3fe963fb",
+        "metrics": {
+          "centroid_error_px_p99": 0.255495374205978,
+          "contour_iou_p1": 0.9752829263360309,
+          "covariance_error_px_p99": 2.0910762590308334
+        },
+        "passed": false,
+        "seed": 2026082492,
+        "source_sha256": "f35936799295e6ce344279e557f0265ccbb8acef69c4508daff80d219d03cb85"
+      }
+    ],
+    "registration": "revision_2.3_frozen"
+  },
+  "mesh_manifest": {
+    "sources": [
+      {
+        "asset_path": "poc_driver.npz",
+        "asset_sha256": "6b9ba5a70b868f61fab40d2bdf11b7c355204b612f17efde76500b45b5308dc1",
+        "author": "Paul Ekins",
+        "clubhead_triangle_count": 5180,
+        "clubhead_vertex_count": 2869,
+        "download_archive_sha256": "0b9fac0caa2f7f26bc7492a6e12047c1552a6f8d934f6828cc2b3537f75105a2",
+        "download_format": "gltf",
+        "license_spdx": "CC-BY-4.0",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        "nominal_dimensions_mm": {
+          "depth": 55.0,
+          "height": 60.0,
+          "width": 110.0
+        },
+        "normalization": "largest compact welded connected component; PCA extent order; independent depth/width/height calibration",
+        "page_url": "https://sketchfab.com/3d-models/callaway-maverik-golf-driver-978d0740dc514c8695bbb02f4083f0e3",
+        "source_name": "Callaway Maverik golf driver",
+        "source_triangle_count": 41855,
+        "source_uid": "978d0740dc514c8695bbb02f4083f0e3",
+        "source_vertex_count": 93758
+      },
+      {
+        "asset_path": "poc_7iron.npz",
+        "asset_sha256": "47847962459fc55793e66274f2577226e6d17debb962fe451a3e9066b5926575",
+        "author": "GrabCAD Community contributor",
+        "clubhead_triangle_count": 26238,
+        "clubhead_vertex_count": 78714,
+        "download_format": "binary_stl_maintainer_local",
+        "license_spdx": "LicenseRef-GrabCAD-Local-Research-Only",
+        "license_url": "https://help.grabcad.com/article/246-how-can-models-be-used-and-shared",
+        "nominal_dimensions_mm": {
+          "depth": 18.0,
+          "height": 50.0,
+          "width": 80.0
+        },
+        "normalization": "largest compact welded connected component; PCA extent order; independent depth/width/height calibration",
+        "page_url": "https://grabcad.com/library/titleist-7-iron-golf-club-1",
+        "redistribution": "prohibited; local research use only",
+        "source_file_sha256": "f35936799295e6ce344279e557f0265ccbb8acef69c4508daff80d219d03cb85",
+        "source_name": "Titleist 690CB 7-iron golf club",
+        "source_triangle_count": 26238,
+        "source_uid": "grabcad:titleist-7-iron-golf-club-1:690cb-right-handed",
+        "source_vertex_count": 78714,
+        "trademark_note": "synthetic truth only; no Titleist endorsement implied"
+      }
+    ]
+  },
+  "status": "INVALID_LUT_NOT_EVALUATED"
+}
