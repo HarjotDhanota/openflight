@@ -111,7 +111,7 @@ descriptive compute-cost evidence and is not a gate. Driver remains
 
 **OVERALL: STOP_FOR_MAINTAINER_REVIEW**
 
-Evaluation hash: `e7e0ff4d793de62ddf4dc4c010f077bce82996fd649cc4c6771dcbb8335dc34d`
+Evaluation hash: `2c9bcdd91e61bb43b36fd1f6cf7cee81f099a9695650b93c6bd027361bbf2bc8`
 
 ## Paired old-vs-corrected criteria
 
@@ -192,6 +192,42 @@ Only ambient 500 us is gate-bearing. Strobe is retained as a comparison-only def
 
 - No shots: Arm A-v2 LUT validation failed closed.
 
+## Arm A-v3 exact-model result
+
+**ARM A-v3 IRON GATE: IRON_A_V3_CLEARS_AMBIENT**
+
+Previous evaluation hash: `e7e0ff4d793de62ddf4dc4c010f077bce82996fd649cc4c6771dcbb8335dc34d`
+
+LUT validation: **NOT_APPLICABLE_EXACT_MODEL**. Every pose hypothesis was rasterized exactly; the retained LUT validation machinery was not invoked.
+
+### Paired Arm A-v1/v2/v3 criteria
+
+| Model | Candidate | Gate role | Solve | Median mm | p90 mm |
+|---|---|---|---:|---:|---:|
+| v1 LUT invalid | — | — | — | — | — |
+| v2 LUT invalid | — | — | — | — | — |
+| v3 exact | strobed_10us | comparison-only | 0.605 | 9.608 | 11.220 |
+| v3 exact | ambient_500us | primary-gate | 0.840 | 9.152 | 11.577 |
+
+### Arm A-v3 signed errors and diagnostics
+
+| Candidate | Offset median/p90 mm | Height median/p90 mm | IoU median/p10 | Fit residual median/p90 px |
+|---|---:|---:|---:|---:|
+| strobed_10us | -2.661/-0.974 | 8.877/10.892 | 0.712/0.707 | 7.044/7.459 |
+| ambient_500us | -2.354/0.282 | 8.594/11.274 | 0.722/0.717 | 5.903/6.806 |
+
+### Solve wall-time (all attempted shots)
+
+| Candidate | N | Total s | Median s | p90 s | Max s |
+|---|---:|---:|---:|---:|---:|
+| strobed_10us | 200 | 6186.130 | 29.771 | 35.107 | 52.326 |
+| ambient_500us | 200 | 6999.858 | 35.356 | 36.234 | 50.593 |
+
+### Arm A-v3 rejection taxonomy
+
+- `strobed_10us` (comparison_only): insufficient_temporal_frames:1, silhouette_fit_residual:78
+- `ambient_500us` (primary_gate): insufficient_temporal_frames:2, silhouette_fit_residual:30
+
 ## Decision
 
-The accepted historical iron result remains **IRON_NEITHER**. The prospective result is **IRON_A_V2_INVALID_LUT**: Arm A-v2 failed closed before shots because its LUT validation did not pass. Driver remains **HOLD_CAD_MESH**, the work order is **STOP_FOR_MAINTAINER_REVIEW**, and F2 remains blocked.
+The accepted historical iron result remains **IRON_NEITHER**. The exact-model prospective result is **IRON_A_V3_CLEARS_AMBIENT**; only ambient 500 us determined its gate and strobe remained comparison-only. Driver remains **HOLD_CAD_MESH**, the work order is **STOP_FOR_MAINTAINER_REVIEW**, and F2 remains blocked.
