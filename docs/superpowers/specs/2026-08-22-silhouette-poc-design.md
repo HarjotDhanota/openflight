@@ -34,6 +34,17 @@ mesh per pose hypothesis; view-sampled precomputation allowed for efficiency).
 Decision rule: if B alone clears the gate, B ships and A is optional; if only
 A clears, A ships with its compute cost justified by this evidence; if neither
 clears, STOP and report. No temporal-gate loosening in either arm.
+**Revision 2.4 (2026-08-24, maintainer visual review): F2 gains a scene-kinematics
+requirement.** The generated scene, viewed from the behind-ball camera, must read
+as a real swing: (a) the clubhead approaches on a plausible inclined swing plane
+from the golfer's side of the frame (right-handed default), low through the
+hitting zone — not a descending chop from the upper frame; (b) after impact the
+ball and clubhead recede DOWNRANGE (away from the camera) with perspective scale
+change; (c) delivery attack/path angles drawn from the club-realistic ranges in
+`club_pose.groundtruth`. Kinematic realism is a truth-model change, so the
+pre-registered gates re-run unchanged with a paired before/after table.
+Additionally, every clubface result display (Studio F3 and demos) must use the
+mesh-derived face-on outline of the active club, never a hand-drawn shape.
 
 **Branch:** `feat/silhouette-poc`
 
