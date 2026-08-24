@@ -57,6 +57,7 @@ class GeneratorConfig:
     club_acceleration_world_mm_s2: tuple[float, float, float] = (0.0, 0.0, 0.0)
     angular_acceleration_rad_s2: float = 0.0
     sync_offset_us: float = 0.0
+    club_speed_mph: float | None = None
 
     def __post_init__(self) -> None:
         if self.club not in club_templates():
@@ -79,6 +80,10 @@ class GeneratorConfig:
             raise ValueError("club acceleration must contain three world components")
         if not math.isfinite(float(self.sync_offset_us)):
             raise ValueError("sync offset must be finite")
+        if self.club_speed_mph is not None and (
+            not math.isfinite(float(self.club_speed_mph)) or float(self.club_speed_mph) <= 0.0
+        ):
+            raise ValueError("club speed must be finite and positive")
         fraction = self.template_dimension_variation_fraction
         if fraction is None:
             fraction = _DEFAULT_DIMENSION_VARIATION[self.club]
@@ -308,10 +313,16 @@ def generate_shot(config: GeneratorConfig) -> GeneratedShot:
             template.speed_mean_mm_s * 1.2,
         )
     )
+    if config.club_speed_mph is not None:
+        speed = float(config.club_speed_mph) / 2.2369362920544 * 1000.0
     velocity = _velocity(template, speed, reverse=config.reverse_motion)
     angular_velocity = float(trajectory_rng.uniform(-5.0, 5.0))
     if config.zero_noise_control:
-        speed = float(template.speed_mean_mm_s)
+        speed = (
+            float(template.speed_mean_mm_s)
+            if config.club_speed_mph is None
+            else float(config.club_speed_mph) / 2.2369362920544 * 1000.0
+        )
         velocity = _velocity(template, speed, reverse=config.reverse_motion)
         angular_velocity = 0.0
         impact_roll = 0.0

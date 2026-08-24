@@ -618,9 +618,12 @@ def render_readme(bundle: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def render_sweep_svg(bundle: dict[str, Any]) -> str:
+def render_sweep_svg(
+    bundle: dict[str, Any], *, axes: dict[str, tuple[float, ...]] = SWEEP_AXES
+) -> str:
     """Render dependency-free SVG curves; JSON remains the numerical source of truth."""
-    width, height = 1200, 820
+    width = 1200
+    height = 80 + math.ceil(len(axes) / 2) * 370 + 40
     panel_width, panel_height = 540, 320
     colors = {
         ("poc_driver", "strobed_10us"): "#1565c0",
@@ -634,11 +637,11 @@ def render_sweep_svg(bundle: dict[str, Any]) -> str:
         "<style>text{font-family:Arial,sans-serif;fill:#222}.axis{stroke:#555;stroke-width:1}.grid{stroke:#ddd;stroke-width:1}.med{fill:none;stroke-width:2}.p90{fill:none;stroke-width:2;stroke-dasharray:5 4}</style>",
         '<text x="24" y="28" font-size="20" font-weight="bold">End-to-end degradation curves — median solid, p90 dashed</text>',
     ]
-    for panel, axis in enumerate(SWEEP_AXES):
+    for panel, axis in enumerate(axes):
         left = 70 + (panel % 2) * 590
         top = 70 + (panel // 2) * 370
         axis_rows = [row for row in bundle.get("sweeps", []) if row["axis"] == axis]
-        x_values = list(SWEEP_AXES[axis])
+        x_values = list(axes[axis])
         finite_y = [
             float(row[name])
             for row in axis_rows
@@ -685,7 +688,7 @@ def render_sweep_svg(bundle: dict[str, Any]) -> str:
                     parts.append(
                         f'<polyline class="{css_class}" stroke="{color}" points="{" ".join(points)}"/>'
                     )
-    legend_y = 805
+    legend_y = height - 15
     for index, (key, color) in enumerate(colors.items()):
         x = 20 + index * 290
         parts.append(

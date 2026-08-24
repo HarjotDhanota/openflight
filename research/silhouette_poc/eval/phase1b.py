@@ -87,6 +87,11 @@ def model_config_hash() -> str:
     return _canonical_hash(model_config())
 
 
+def template_config_hash(club: str) -> str:
+    """Hash the active template so scenario caching cannot outlive template changes."""
+    return _canonical_hash(asdict(club_templates()[club]))
+
+
 def _canonical_hash(payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -189,13 +194,13 @@ def build_stress_grid(n: int = 256, seed: int = 20260823) -> list[dict[str, Any]
 
 
 def is_buildable(*, preset: str, exposure_us: float, depth_source: str) -> bool:
-    """Apply the approved rule; Preset B and the A1 sensitivity cannot win."""
+    """Apply revision 2.1: ambient A0 is primary and strobe is comparison-only."""
     if depth_source != "radar":
         return False
     cfg = camera_presets()[preset]
-    existing_strobed = preset == "A0" and float(exposure_us) == 10.0
-    gate_b1_mode = cfg.gate_b1_passed and float(exposure_us) <= 20.0
-    return existing_strobed or gate_b1_mode
+    existing_ambient = preset == "A0" and float(exposure_us) == 500.0
+    gate_b1_mode = cfg.gate_b1_passed and float(exposure_us) == 500.0
+    return existing_ambient or gate_b1_mode
 
 
 # Phase 1b is the frozen gate, but Phase 3 is the owning implementation.  These
@@ -222,8 +227,11 @@ _polygon_iou = _fusion_solver._polygon_iou
 solve_club_state = _fusion_solver.solve_club_state
 
 
-@lru_cache(maxsize=16)
-def _scenarios(club: str, n: int, seed: int) -> tuple[Scenario, ...]:
+@lru_cache(maxsize=32)
+def _scenarios(
+    club: str, n: int, seed: int, active_template_config_hash: str
+) -> tuple[Scenario, ...]:
+    del active_template_config_hash  # Included solely as immutable cache-key state.
     template = club_templates()[club]
     club_code = 1 if club == "poc_driver" else 2
     rng = np.random.default_rng(np.random.SeedSequence([int(seed), club_code, 0x51A0]))
@@ -511,7 +519,12 @@ def run_cell(spec: dict[str, Any]) -> dict[str, Any]:
         "club_range_error_mm": [],
         "ball_range_error_mm": [],
     }
-    scenarios = _scenarios(spec["club"], int(spec["n"]), int(spec["seed"]))
+    scenarios = _scenarios(
+        spec["club"],
+        int(spec["n"]),
+        int(spec["seed"]),
+        template_config_hash(spec["club"]),
+    )
     for scenario in scenarios:
         row = _simulate_one(scenario, spec, rng)
         if not row["ok"]:

@@ -9,12 +9,16 @@ primary cell; calibrated-template residual variation=1%; same Phase 4 seeds.
 Registration erratum: the pre-run Markdown draft said 3.0 ms, while the executable
 solver constant and tests were already frozen at the stricter 2.5 ms used for every
 shot. No threshold changed after outcomes were observed.
+Maintainer-directed speed extension (2026-08-24): driver 90--150 mph in
+10 mph steps, ambient and comparison-only strobe, N=24 per point, using the
+existing Phase 4b sweep seed family. This axis was requested after an ad-hoc
+probe, so it is an official committed degradation record, not a blind gate.
 
 **AMBIENT RECOVERY: YES** — calibrated ambient driver and 7-iron meet the frozen recovery gates.
 
 Strobe is comparison-only and cannot win the buildable gate.
 
-Evaluation hash: `7809e5d38d6f3b53a5ae1990eee6cf7ac2fc9bb197e6341e311fdeafb2ad624e`
+Evaluation hash: `0777378db53dbbb152a1dd00edd9355580f4c8327103584bd4fd0fc1e24168d8`
 
 ## Final calibrated criteria table
 
@@ -241,3 +245,22 @@ Phase 1b material limits: solve rate 0.10, median 2 mm, p90 4 mm.
 | poc_7iron | ambient_500us | 250.000 | 24 | 1.000 | 4.10 | 5.59 | none |
 | poc_7iron | ambient_500us | 500.000 | 24 | 0.000 | — | — | extrapolation_horizon:24 |
 | poc_7iron | ambient_500us | 1000.000 | 24 | 0.000 | — | — | extrapolation_horizon:24 |
+
+### club_speed_mph
+
+| Club | Candidate | Value | N | Solve | Median mm | p90 mm | Failures |
+|---|---|---:|---:|---:|---:|---:|---|
+| poc_driver | strobed_10us | 90.000 | 24 | 1.000 | 0.81 | 1.61 | none |
+| poc_driver | strobed_10us | 100.000 | 24 | 1.000 | 0.91 | 2.03 | none |
+| poc_driver | strobed_10us | 110.000 | 24 | 1.000 | 0.82 | 1.65 | none |
+| poc_driver | strobed_10us | 120.000 | 24 | 1.000 | 0.77 | 1.54 | none |
+| poc_driver | strobed_10us | 130.000 | 24 | 1.000 | 1.02 | 2.71 | none |
+| poc_driver | strobed_10us | 140.000 | 24 | 1.000 | 1.14 | 2.48 | none |
+| poc_driver | strobed_10us | 150.000 | 24 | 1.000 | 0.84 | 1.66 | none |
+| poc_driver | ambient_500us | 90.000 | 24 | 1.000 | 0.98 | 1.72 | none |
+| poc_driver | ambient_500us | 100.000 | 24 | 1.000 | 1.16 | 1.65 | none |
+| poc_driver | ambient_500us | 110.000 | 24 | 1.000 | 0.81 | 1.48 | none |
+| poc_driver | ambient_500us | 120.000 | 24 | 1.000 | 0.93 | 1.68 | none |
+| poc_driver | ambient_500us | 130.000 | 24 | 1.000 | 1.02 | 1.77 | none |
+| poc_driver | ambient_500us | 140.000 | 24 | 1.000 | 1.34 | 1.74 | none |
+| poc_driver | ambient_500us | 150.000 | 24 | 1.000 | 1.09 | 1.88 | none |

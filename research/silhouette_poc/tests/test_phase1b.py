@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import math
+from dataclasses import replace
 
 import pytest
 
@@ -65,12 +66,33 @@ def test_core_grid_is_the_exact_frozen_cartesian_product():
     assert {cell["model_config_hash"] for cell in grid} == {phase1b.model_config_hash()}
 
 
-def test_buildable_rule_excludes_oracle_sensitivity_and_gate_b1_mode():
-    assert phase1b.is_buildable(preset="A0", exposure_us=10.0, depth_source="radar")
-    assert not phase1b.is_buildable(preset="A0", exposure_us=500.0, depth_source="radar")
+def test_revision_2_1_buildable_rule_makes_ambient_primary_and_strobe_comparison_only():
+    assert not phase1b.is_buildable(preset="A0", exposure_us=10.0, depth_source="radar")
+    assert phase1b.is_buildable(preset="A0", exposure_us=500.0, depth_source="radar")
     assert not phase1b.is_buildable(preset="A1", exposure_us=10.0, depth_source="radar")
     assert not phase1b.is_buildable(preset="B", exposure_us=10.0, depth_source="radar")
     assert not phase1b.is_buildable(preset="A0", exposure_us=10.0, depth_source="oracle")
+
+
+def test_scenario_cache_key_includes_the_active_template(monkeypatch):
+    phase1b._scenarios.cache_clear()
+    original_templates = phase1b.club_templates
+    first_hash = phase1b.template_config_hash("poc_driver")
+    first = phase1b._scenarios("poc_driver", 4, 17, first_hash)
+    templates = original_templates()
+    changed = replace(templates["poc_driver"], impact_u_limit_mm=5.0)
+    monkeypatch.setattr(
+        phase1b,
+        "club_templates",
+        lambda: {**templates, "poc_driver": changed},
+    )
+
+    second_hash = phase1b.template_config_hash("poc_driver")
+    second = phase1b._scenarios("poc_driver", 4, 17, second_hash)
+
+    assert second_hash != first_hash
+    assert second is not first
+    assert all(abs(row.impact_u_mm) <= 5.0 for row in second)
 
 
 def test_solver_source_has_no_marker_correspondence_path():

@@ -22,4 +22,4 @@ See [Phase 4b results](eval/RESULTS_E2E_4B.md),
 [canonical JSON](eval/results_e2e_4b.json), and
 [degradation curves](eval/degradation_curves_4b.svg).
 
-Evaluation hash: `7809e5d38d6f3b53a5ae1990eee6cf7ac2fc9bb197e6341e311fdeafb2ad624e`
+Evaluation hash: `0777378db53dbbb152a1dd00edd9355580f4c8327103584bd4fd0fc1e24168d8`

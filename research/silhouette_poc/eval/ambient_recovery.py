@@ -6,6 +6,7 @@ import hashlib
 import json
 import tempfile
 from concurrent.futures import ProcessPoolExecutor
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,10 @@ ATTRIBUTION_STAGES = (
 )
 _EXPOSURES = {"strobed_10us": 10, "ambient_500us": 500}
 _POPULATION_VARIATION = {"poc_driver": 0.08, "poc_7iron": 0.10}
+RECOVERY_SWEEP_AXES = {
+    **SWEEP_AXES,
+    "club_speed_mph": (90.0, 100.0, 110.0, 120.0, 130.0, 140.0, 150.0),
+}
 
 TEMPORAL_ONLY_POLICY = FusionPolicy(
     name="temporal_only",
@@ -77,6 +82,7 @@ class RecoveryCell:
     sync_offset_us: float = 0.0
     axis: str | None = None
     value: float | None = None
+    club_speed_mph: float | None = None
 
     @property
     def policy(self) -> FusionPolicy:
@@ -153,14 +159,17 @@ def build_recovery_sweep_cells(
         raise ValueError("sweep points require at least one shot")
     seeds = tuple(range(root_seed, root_seed + shots_per_point))
     cells: list[RecoveryCell] = []
-    for axis, values in SWEEP_AXES.items():
+    for axis, values in RECOVERY_SWEEP_AXES.items():
         for club in CLUBS:
+            if axis == "club_speed_mph" and club != "poc_driver":
+                continue
             for candidate in CANDIDATES:
                 for value in values:
                     template_variation = 0.01
                     radar_residual = 0.0
                     sync_offset = 0.0
                     photometric_noise = 1.2
+                    club_speed_mph = None
                     if axis == "template_variation_fraction":
                         template_variation = float(value)
                     elif axis == "radar_residual_mm":
@@ -169,6 +178,8 @@ def build_recovery_sweep_cells(
                         sync_offset = float(value)
                     elif axis == "photometric_noise_sigma_dn":
                         photometric_noise = float(value)
+                    elif axis == "club_speed_mph":
+                        club_speed_mph = float(value)
                     cells.append(
                         RecoveryCell(
                             stage="recovered_sweep",
@@ -186,6 +197,7 @@ def build_recovery_sweep_cells(
                             sync_offset_us=sync_offset,
                             axis=axis,
                             value=float(value),
+                            club_speed_mph=club_speed_mph,
                         )
                     )
     return cells
@@ -213,6 +225,7 @@ def _evaluate_task(task: tuple[RecoveryCell, int]) -> dict[str, Any]:
         radar_track_noise_sigma_mm=cell.radar_noise_sigma_mm,
         club_scattering_center_residual_mm=cell.radar_residual_mm,
         sync_offset_us=_sync_offset(cell, seed),
+        club_speed_mph=cell.club_speed_mph,
     )
     with tempfile.TemporaryDirectory(prefix="silhouette-4b-") as temporary:
         shot_dir = write_shot(Path(temporary), config)
@@ -463,6 +476,21 @@ def build_recovery_bundle(
     return bundle
 
 
+def merge_recovery_sweep_axis(
+    bundle: dict[str, Any], axis: str, results: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Replace one committed sweep axis and recompute the canonical bundle hash."""
+    if any(row.get("axis") != axis for row in results):
+        raise ValueError(f"all replacement rows must use axis {axis}")
+    merged = deepcopy(bundle)
+    merged["sweeps"] = [
+        row for row in merged.get("sweeps", []) if row.get("axis") != axis
+    ] + deepcopy(results)
+    merged.pop("evaluation_hash", None)
+    merged["evaluation_hash"] = _hash(merged)
+    return merged
+
+
 def _fmt(value: Any, digits: int = 2) -> str:
     return "—" if value is None else f"{float(value):.{digits}f}"
 
@@ -482,6 +510,10 @@ def render_recovery_markdown(bundle: dict[str, Any]) -> str:
         "Registration erratum: the pre-run Markdown draft said 3.0 ms, while the executable",
         "solver constant and tests were already frozen at the stricter 2.5 ms used for every",
         "shot. No threshold changed after outcomes were observed.",
+        "Maintainer-directed speed extension (2026-08-24): driver 90--150 mph in",
+        "10 mph steps, ambient and comparison-only strobe, N=24 per point, using the",
+        "existing Phase 4b sweep seed family. This axis was requested after an ad-hoc",
+        "probe, so it is an official committed degradation record, not a blind gate.",
         "",
         f"**AMBIENT RECOVERY: {verdict['verdict']}** — {verdict['reason']}.",
         "",
@@ -588,7 +620,7 @@ def render_recovery_markdown(bundle: dict[str, Any]) -> str:
         "![Recovered degradation curves](degradation_curves_4b.svg)",
         "",
     ]
-    for axis in SWEEP_AXES:
+    for axis in RECOVERY_SWEEP_AXES:
         lines += [
             f"### {axis}",
             "",
@@ -653,6 +685,6 @@ def render_recovery_readme(bundle: dict[str, Any]) -> str:
 
 
 def render_recovery_sweep_svg(bundle: dict[str, Any]) -> str:
-    return render_sweep_svg(bundle).replace(
+    return render_sweep_svg(bundle, axes=RECOVERY_SWEEP_AXES).replace(
         "End-to-end degradation curves", "Phase 4b recovered degradation curves"
     )
