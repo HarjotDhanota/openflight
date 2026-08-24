@@ -351,6 +351,7 @@ def solve_club_state(
     velocity_world: np.ndarray,
     exposure_us: float,
     range_origin_world: np.ndarray = CAMERA_CENTER_WORLD,
+    fit_residual_limit_px: float = FIT_RESIDUAL_LIMIT_PX,
 ) -> ClubState:
     """Fuse silhouette angular moments and calibrated club range in one solve."""
     calibrated_range = float(apparent_club_range_mm) - float(calibration_bias_mm)
@@ -387,7 +388,7 @@ def solve_club_state(
         center_world, roll, velocity_world, exposure_us, camera, template
     )
     residual = math.sqrt(float(np.linalg.norm(observation.covariance_px2 - predicted, ord="fro")))
-    if residual > FIT_RESIDUAL_LIMIT_PX:
+    if residual > float(fit_residual_limit_px):
         return ClubState(
             False,
             "silhouette_fit_residual",

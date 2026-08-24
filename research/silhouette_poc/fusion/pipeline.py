@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
+from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from silhouette_poc.fusion.solver import (
     AMBIGUITY_RATIO_MIN,
     BALL_RADIUS_MM,
     FACE_NORMAL,
+    FIT_RESIDUAL_LIMIT_PX,
     MAX_EXTRAPOLATION_S,
     RADAR_CENTER_WORLD,
     CameraPreset,
@@ -60,6 +62,45 @@ class FusionResult:
     impact_offset_mm: tuple[float, float] | None
     confidence: float | None
     diagnostics: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class FusionPolicy:
+    """Frozen frame-selection and residual-admission policy for paired evaluation."""
+
+    name: str
+    candidate_preimpact_frames: int
+    maximum_fused_frames: int
+    minimum_fused_frames: int
+    sharp_fit_residual_limit_px: float = FIT_RESIDUAL_LIMIT_PX
+    ambient_fit_residual_limit_px: float = FIT_RESIDUAL_LIMIT_PX
+    tolerate_frame_rejections: bool = False
+
+    def fit_residual_limit(self, exposure_us: float) -> float:
+        return (
+            self.ambient_fit_residual_limit_px
+            if float(exposure_us) >= 500.0
+            else self.sharp_fit_residual_limit_px
+        )
+
+    def solve(self, shot_dir: Path | str) -> FusionResult:
+        return solve_shot(shot_dir, policy=self)
+
+
+LEGACY_SINGLE_FRAME_POLICY = FusionPolicy(
+    name="legacy_single_frame",
+    candidate_preimpact_frames=1,
+    maximum_fused_frames=1,
+    minimum_fused_frames=1,
+)
+AMBIENT_RECOVERY_POLICY = FusionPolicy(
+    name="ambient_recovery",
+    candidate_preimpact_frames=7,
+    maximum_fused_frames=3,
+    minimum_fused_frames=2,
+    ambient_fit_residual_limit_px=12.0,
+    tolerate_frame_rejections=True,
+)
 
 
 @dataclass(frozen=True)
@@ -365,12 +406,14 @@ def _refine_occluded_observation(
     }
 
 
-def solve_shot(shot_dir: Path | str) -> FusionResult:
+def solve_shot(
+    shot_dir: Path | str, *, policy: FusionPolicy = AMBIENT_RECOVERY_POLICY
+) -> FusionResult:
     """Estimate a face impact vector from the four non-scoring Section 4 inputs."""
     capture = load_fusion_capture(shot_dir)
     diagnostics = _empty_diagnostics(capture)
     trigger_index = capture.pre_trigger_count - 1
-    pre_indices = list(range(trigger_index))
+    pre_indices = list(range(trigger_index))[-policy.candidate_preimpact_frames :]
     if not pre_indices:
         return _failure("insufficient_preimpact_frames", diagnostics)
 
@@ -386,7 +429,9 @@ def solve_shot(shot_dir: Path | str) -> FusionResult:
         {
             "extrapolation_horizon_s": horizon_s,
             "maximum_extrapolation_s": MAX_EXTRAPOLATION_S,
-            "used_frame_indices": pre_indices,
+            "candidate_preimpact_frame_indices": pre_indices,
+            "used_frame_indices": [],
+            "fusion_policy": policy.name,
         }
     )
     if horizon_s > MAX_EXTRAPOLATION_S:
@@ -394,14 +439,28 @@ def solve_shot(shot_dir: Path | str) -> FusionResult:
         return _failure("extrapolation_horizon", diagnostics)
 
     segmented: list[_SegmentedFrame] = []
-    try:
-        for frame_index in pre_indices:
+    segmentation_rejections: list[dict[str, Any]] = []
+    for frame_index in pre_indices:
+        try:
             item = _segment_frame(capture.frames[frame_index], frame_index)
             segmented.append(item)
             diagnostics["segmentation"]["frames"].append(item.diagnostics)
-    except ValueError as error:
-        diagnostics["segmentation"]["status"] = str(error)
-        return _failure(str(error), diagnostics)
+        except ValueError as error:
+            segmentation_rejections.append({"frame_index": frame_index, "status": str(error)})
+            if not policy.tolerate_frame_rejections:
+                diagnostics["segmentation"]["status"] = str(error)
+                return _failure(str(error), diagnostics)
+    diagnostics["segmentation"]["rejected_frames"] = segmentation_rejections
+    required_frames = min(policy.minimum_fused_frames, len(pre_indices))
+    if len(segmented) < required_frames:
+        statuses = [str(item["status"]) for item in segmentation_rejections]
+        status = (
+            statuses[0]
+            if statuses and all(item == statuses[0] for item in statuses)
+            else "insufficient_temporal_frames"
+        )
+        diagnostics["segmentation"]["status"] = status
+        return _failure(status, diagnostics)
     diagnostics["segmentation"]["status"] = "accepted"
 
     club_evidence = capture.radar.club
@@ -429,10 +488,13 @@ def solve_shot(shot_dir: Path | str) -> FusionResult:
     motion_direction = "reverse" if reverse_motion else "forward"
     calibration_bias_mm = float(capture.radar.calibration["range_bias_m"]) * 1000.0
     states = []
+    used_segmented = []
     residuals = []
     post_refine_residuals = []
     ious = []
     exposure = float(np.median(capture.exposure_us))
+    fit_residual_limit = policy.fit_residual_limit(exposure)
+    fit_rejections: list[dict[str, Any]] = []
     for item in segmented:
         radar_time = club_evidence.impact_t_s + float(frame_times[item.frame_index])
         apparent_range_mm = (
@@ -447,8 +509,14 @@ def solve_shot(shot_dir: Path | str) -> FusionResult:
             velocity_world,
             exposure,
             RADAR_CENTER_WORLD,
+            fit_residual_limit,
         )
         if not state.ok:
+            fit_rejections.append(
+                {"frame_index": item.frame_index, "status": state.reason or "club_state_rejected"}
+            )
+            if policy.tolerate_frame_rejections:
+                continue
             diagnostics["hypotheses"]["status"] = state.reason
             return _failure(state.reason or "club_state_rejected", diagnostics)
         assert state.frame_center_world is not None
@@ -479,8 +547,14 @@ def solve_shot(shot_dir: Path | str) -> FusionResult:
             velocity_world,
             exposure,
             RADAR_CENTER_WORLD,
+            fit_residual_limit,
         )
         if not state.ok:
+            fit_rejections.append(
+                {"frame_index": item.frame_index, "status": state.reason or "club_state_rejected"}
+            )
+            if policy.tolerate_frame_rejections:
+                continue
             diagnostics["hypotheses"]["status"] = state.reason
             return _failure(state.reason or "club_state_rejected", diagnostics)
         assert state.frame_center_world is not None
@@ -534,15 +608,98 @@ def solve_shot(shot_dir: Path | str) -> FusionResult:
             }
         )
         states.append(state)
+        used_segmented.append(item)
         residuals.append(measured_silhouette_residual)
         post_refine_residuals.append(state.fit_residual_px)
         ious.append(iou)
+    diagnostics["hypotheses"]["rejected_frames"] = fit_rejections
+    if len(states) < required_frames:
+        diagnostics["hypotheses"]["status"] = "insufficient_temporal_frames"
+        if fit_rejections and all(
+            item["status"] == "silhouette_fit_residual" for item in fit_rejections
+        ):
+            return _failure("silhouette_fit_residual", diagnostics)
+        return _failure("insufficient_temporal_frames", diagnostics)
+    frame_time_lookup = frame_times
+
+    def temporal_metrics(indices: tuple[int, ...]) -> tuple[float, float]:
+        selected_states = [states[index] for index in indices]
+        selected_items = [used_segmented[index] for index in indices]
+        selected_times = np.asarray(
+            [frame_time_lookup[item.frame_index] for item in selected_items], dtype=float
+        )
+        selected_rolls = (
+            np.unwrap(np.asarray([state.roll_rad for state in selected_states]) * 2.0) / 2.0
+        )
+        if len(selected_rolls) >= 2:
+            selected_rate, selected_impact_roll = np.polyfit(selected_times, selected_rolls, 1)
+        else:
+            selected_rate, selected_impact_roll = 0.0, float(selected_rolls[-1])
+        selected_last = selected_states[-1]
+        assert selected_last.frame_center_world is not None
+        selected_horizon = -float(selected_times[-1])
+        selected_impact_center = (
+            selected_last.frame_center_world + velocity_world * selected_horizon
+        )
+        selected_center_residuals = np.asarray(
+            [
+                state.frame_center_world - (selected_impact_center + velocity_world * frame_time)
+                for state, frame_time in zip(selected_states, selected_times, strict=True)
+            ]
+        )
+        position_rms = float(np.sqrt(np.mean(selected_center_residuals**2)))
+        angular_rms = float(
+            np.sqrt(
+                np.mean(
+                    (selected_rolls - (selected_rate * selected_times + selected_impact_roll)) ** 2
+                )
+            )
+        )
+        return position_rms, angular_rms
+
+    selected_indices: tuple[int, ...] | None = None
+    latest_index = len(states) - 1
+    maximum = min(policy.maximum_fused_frames, len(states))
+    full_recovery_archive = len(pre_indices) >= policy.candidate_preimpact_frames
+    if full_recovery_archive:
+        for count in range(maximum, required_frames - 1, -1):
+            candidates = [
+                indices
+                for indices in combinations(range(len(states)), count)
+                if indices[-1] == latest_index
+            ]
+            for indices in sorted(candidates, key=sum, reverse=True):
+                position_rms, angular_rms = temporal_metrics(indices)
+                if position_rms <= 5.0 and angular_rms <= 0.008:
+                    selected_indices = indices
+                    break
+            if selected_indices is not None:
+                break
+    if selected_indices is None:
+        selected_indices = tuple(range(len(states) - maximum, len(states)))
+
+    states = [states[index] for index in selected_indices]
+    used_segmented = [used_segmented[index] for index in selected_indices]
+    residuals = [residuals[index] for index in selected_indices]
+    post_refine_residuals = [post_refine_residuals[index] for index in selected_indices]
+    ious = [ious[index] for index in selected_indices]
+    diagnostics["hypotheses"]["frames"] = [
+        diagnostics["hypotheses"]["frames"][index] for index in selected_indices
+    ]
+    diagnostics["temporal"]["used_frame_indices"] = [item.frame_index for item in used_segmented]
     diagnostics["hypotheses"]["status"] = "accepted"
 
     last_state = states[-1]
     assert last_state.frame_center_world is not None
+    horizon_s = -float(frame_times[used_segmented[-1].frame_index])
+    diagnostics["temporal"]["extrapolation_horizon_s"] = horizon_s
+    if horizon_s > MAX_EXTRAPOLATION_S:
+        diagnostics["temporal"]["status"] = "extrapolation_horizon"
+        return _failure("extrapolation_horizon", diagnostics)
     impact_center = last_state.frame_center_world + velocity_world * horizon_s
-    frame_times = np.asarray([frame_times[item.frame_index] for item in segmented], dtype=float)
+    frame_times = np.asarray(
+        [frame_time_lookup[item.frame_index] for item in used_segmented], dtype=float
+    )
     rolls = np.unwrap(np.asarray([state.roll_rad for state in states]) * 2.0) / 2.0
     if len(rolls) >= 2:
         angular_rate, impact_roll = np.polyfit(frame_times, rolls, 1)
@@ -598,7 +755,7 @@ def solve_shot(shot_dir: Path | str) -> FusionResult:
         }
     )
 
-    ball_uv = np.rint(np.mean([item.ball_centroid_uv for item in segmented], axis=0))
+    ball_uv = np.rint(np.mean([item.ball_centroid_uv for item in used_segmented], axis=0))
     ball_center = _backproject_range(
         ball_uv,
         ball_impact_apparent_mm - calibration_bias_mm,
@@ -628,6 +785,7 @@ def solve_shot(shot_dir: Path | str) -> FusionResult:
             "status": "accepted",
             "silhouette_iou": float(np.mean(ious)),
             "fit_residual_px": float(np.mean(residuals)),
+            "fit_residual_limit_px": fit_residual_limit,
             "post_refine_model_residual_px": float(np.mean(post_refine_residuals)),
             "template_fit_iou": float(
                 np.mean(
