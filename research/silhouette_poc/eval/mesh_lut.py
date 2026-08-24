@@ -129,6 +129,14 @@ def _content_hash(lut: MeshProjectionLUT) -> str:
         digest.update(str(array.dtype).encode())
         digest.update(str(array.shape).encode())
         digest.update(array.tobytes())
+    if lut.representation_version != "arm_a_v1":
+        digest.update(lut.representation_version.encode())
+        if lut.covariance_log_body is None:
+            raise ValueError("mesh LUT v2 is missing covariance representation")
+        array = np.ascontiguousarray(lut.covariance_log_body)
+        digest.update(str(array.dtype).encode())
+        digest.update(str(array.shape).encode())
+        digest.update(array.tobytes())
     return digest.hexdigest()
 
 
@@ -170,24 +178,32 @@ def build_mesh_lut(mesh: TriangleMesh, club: str) -> MeshProjectionLUT:
 def save_mesh_lut(path: Path | str, lut: MeshProjectionLUT) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(
-        path,
-        club=np.asarray(lut.club),
-        yaw_grid_deg=lut.yaw_grid_deg,
-        pitch_grid_deg=lut.pitch_grid_deg,
-        roll_grid_deg=lut.roll_grid_deg,
-        centroid_offsets_px=lut.centroid_offsets_px,
-        covariance_px2=lut.covariance_px2,
-        contour_offsets_px=lut.contour_offsets_px,
-        canonical_camera_depth_mm=np.asarray(lut.canonical_camera_depth_mm),
-        source_sha256=np.asarray(lut.source_sha256),
-        lut_sha256=np.asarray(lut.lut_sha256),
-    )
+    payload = {
+        "club": np.asarray(lut.club),
+        "yaw_grid_deg": lut.yaw_grid_deg,
+        "pitch_grid_deg": lut.pitch_grid_deg,
+        "roll_grid_deg": lut.roll_grid_deg,
+        "centroid_offsets_px": lut.centroid_offsets_px,
+        "covariance_px2": lut.covariance_px2,
+        "contour_offsets_px": lut.contour_offsets_px,
+        "canonical_camera_depth_mm": np.asarray(lut.canonical_camera_depth_mm),
+        "source_sha256": np.asarray(lut.source_sha256),
+        "lut_sha256": np.asarray(lut.lut_sha256),
+    }
+    if lut.representation_version != "arm_a_v1":
+        payload["representation_version"] = np.asarray(lut.representation_version)
+        payload["covariance_log_body"] = lut.covariance_log_body
+    np.savez(path, **payload)
 
 
 @lru_cache(maxsize=4)
 def load_mesh_lut(path: str) -> MeshProjectionLUT:
     with np.load(path, allow_pickle=False) as payload:
+        representation_version = (
+            str(payload["representation_version"])
+            if "representation_version" in payload.files
+            else "arm_a_v1"
+        )
         lut = MeshProjectionLUT(
             club=str(payload["club"]),
             yaw_grid_deg=payload["yaw_grid_deg"].copy(),
@@ -199,6 +215,12 @@ def load_mesh_lut(path: str) -> MeshProjectionLUT:
             canonical_camera_depth_mm=float(payload["canonical_camera_depth_mm"]),
             source_sha256=str(payload["source_sha256"]),
             lut_sha256=str(payload["lut_sha256"]),
+            representation_version=representation_version,
+            covariance_log_body=(
+                payload["covariance_log_body"].copy()
+                if "covariance_log_body" in payload.files
+                else None
+            ),
         )
     if _content_hash(lut) != lut.lut_sha256:
         raise ValueError("mesh LUT content hash mismatch")

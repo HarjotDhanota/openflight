@@ -49,6 +49,8 @@ class MeshProjectionLUT:
     canonical_camera_depth_mm: float
     source_sha256: str
     lut_sha256: str
+    representation_version: str = "arm_a_v1"
+    covariance_log_body: np.ndarray | None = None
 
     @classmethod
     def constant_for_test(
@@ -75,10 +77,23 @@ class MeshProjectionLUT:
         if len(self.roll_grid_deg) == 1:
             return 0, 0, 0.0
         normalized = math.degrees(_normalize_roll(math.radians(roll_deg)))
+        if self.representation_version == "arm_a_v2":
+            return _bracket(self.roll_grid_deg, normalized)
         step = float(self.roll_grid_deg[1] - self.roll_grid_deg[0])
         position = (normalized - float(self.roll_grid_deg[0])) / step
         lower = int(math.floor(position)) % len(self.roll_grid_deg)
         return lower, (lower + 1) % len(self.roll_grid_deg), float(position - math.floor(position))
+
+    @staticmethod
+    def _rotation(angle_rad: float) -> np.ndarray:
+        cosine = math.cos(angle_rad)
+        sine = math.sin(angle_rad)
+        return np.array([[cosine, -sine], [sine, cosine]])
+
+    @staticmethod
+    def _symmetric_matrix_exp(value: np.ndarray) -> np.ndarray:
+        eigenvalues, eigenvectors = np.linalg.eigh((value + value.T) / 2.0)
+        return (eigenvectors * np.exp(eigenvalues)) @ eigenvectors.T
 
     @staticmethod
     def _mix(values: np.ndarray, indices: list[tuple[int, int, float]]) -> np.ndarray:
@@ -116,7 +131,15 @@ class MeshProjectionLUT:
             self._roll_bracket(math.degrees(roll_rad)),
         ]
         offset = self._mix(self.centroid_offsets_px, indices) * scale
-        covariance = self._mix(self.covariance_px2, indices) * scale**2
+        if self.representation_version == "arm_a_v2":
+            if self.covariance_log_body is None:
+                raise ValueError("mesh_lut_missing_covariance_representation")
+            log_body = self._mix(self.covariance_log_body, indices)
+            rotation = self._rotation(roll_rad)
+            body_covariance = self._symmetric_matrix_exp(log_body)
+            covariance = rotation @ body_covariance @ rotation.T * scale**2
+        else:
+            covariance = self._mix(self.covariance_px2, indices) * scale**2
         contour = self._mix(self.contour_offsets_px, indices) * scale
         return (
             offset,
@@ -189,7 +212,12 @@ class MeshProjectionLUT:
             )
         candidates = []
         try:
-            for roll_deg in self.roll_grid_deg:
+            roll_candidates = (
+                self.roll_grid_deg[:-1]
+                if self.representation_version == "arm_a_v2"
+                else self.roll_grid_deg
+            )
+            for roll_deg in roll_candidates:
                 roll = math.radians(float(roll_deg))
                 candidates.append(
                     (

@@ -4,9 +4,62 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from typing import Any
 
 IRON_THRESHOLDS = {"solve_rate": 0.80, "median_mm": 12.0, "p90_mm": 24.0}
+
+
+def revision_2_5_arm_a_verdict(*, validation_passed: bool, rows: list[dict[str, Any]]) -> str:
+    """Apply the prospective rev-2.5 gate to the primary ambient cell only."""
+    if not validation_passed:
+        return "IRON_A_V2_INVALID_LUT"
+    ambient = [row for row in rows if row.get("candidate") == "ambient_500us"]
+    if len(ambient) != 1:
+        return "IRON_A_V2_MISSING_AMBIENT"
+    row = ambient[0]
+    passes = (
+        float(row["solve_rate"]) >= IRON_THRESHOLDS["solve_rate"]
+        and row.get("impact_error_mm_median") is not None
+        and float(row["impact_error_mm_median"]) <= IRON_THRESHOLDS["median_mm"]
+        and row.get("impact_error_mm_p90") is not None
+        and float(row["impact_error_mm_p90"]) <= IRON_THRESHOLDS["p90_mm"]
+    )
+    return "IRON_A_V2_CLEARS_AMBIENT" if passes else "IRON_A_V2_FAILS_AMBIENT"
+
+
+def append_arm_a_v2_result(
+    bundle: dict[str, Any], *, validation: dict[str, Any], rows: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Append a prospective v2 result without rewriting the accepted v1 verdict."""
+    updated = deepcopy(bundle)
+    accepted_hash = updated.get("revision_2_5", {}).get(
+        "accepted_evaluation_hash", updated["evaluation_hash"]
+    )
+    clubs = validation.get("clubs", [])
+    validation_passed = len(clubs) == 1 and clubs[0].get("passed") is True
+    reported_rows = []
+    for source in rows:
+        row = deepcopy(source)
+        row["gate_role"] = (
+            "primary_gate" if row.get("candidate") == "ambient_500us" else "comparison_only"
+        )
+        reported_rows.append(row)
+    updated["revision_2_5"] = {
+        "scope": "prospective_corrected_7iron_arm_a_v2",
+        "accepted_evaluation_hash": accepted_hash,
+        "gate_candidate": "ambient_500us",
+        "comparison_only_candidates": ["strobed_10us"],
+        "arm_b_status": "RETIRED_COMPARISON_ONLY",
+        "driver_status": "HOLD_CAD_MESH",
+        "validation": validation,
+        "cells": reported_rows,
+        "iron_verdict": revision_2_5_arm_a_verdict(
+            validation_passed=validation_passed, rows=reported_rows
+        ),
+        "overall": "STOP_FOR_MAINTAINER_REVIEW",
+    }
+    return rehash_bundle(updated)
 
 
 def rehash_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
@@ -204,6 +257,76 @@ def render_corrected_iron_markdown(bundle: dict[str, Any]) -> str:
             lines.append(f"- `{row_label}/{row['candidate']}`: {detail}")
     if not corrected["arm_a"]:
         lines.append("- Arm A: no shot taxonomy; frozen LUT validation failed before evaluation.")
+    revision_2_5 = bundle.get("revision_2_5")
+    if revision_2_5:
+        lines.extend(
+            [
+                "",
+                "## Arm A-v2 prospective result",
+                "",
+                f"**REVISION 2.5 IRON GATE: {revision_2_5['iron_verdict']}**",
+                "",
+                f"Accepted v1 evaluation hash (unchanged verdict): "
+                f"`{revision_2_5['accepted_evaluation_hash']}`",
+                "",
+                "Only ambient 500 us is gate-bearing. Strobe is retained as a "
+                "comparison-only deferred fallback and cannot pass or fail this gate.",
+                "",
+                "### Paired Arm A-v1/v2 criteria",
+                "",
+                "| LUT | Candidate | Gate role | Solve | Median mm | p90 mm |",
+                "|---|---|---|---:|---:|---:|",
+            ]
+        )
+        for row in corrected.get("arm_a", []):
+            role = "primary gate" if row["candidate"] == "ambient_500us" else "comparison-only"
+            lines.append(
+                f"| v1 | {row['candidate']} | {role} | {float(row['solve_rate']):.3f} | "
+                f"{_number(row.get('impact_error_mm_median'))} | "
+                f"{_number(row.get('impact_error_mm_p90'))} |"
+            )
+        if not corrected.get("arm_a"):
+            lines.append("| v1 (invalid LUT) | — | — | — | — | — |")
+        for row in revision_2_5["cells"]:
+            lines.append(
+                f"| v2 | {row['candidate']} | {str(row['gate_role']).replace('_', '-')} | "
+                f"{float(row['solve_rate']):.3f} | "
+                f"{_number(row.get('impact_error_mm_median'))} | "
+                f"{_number(row.get('impact_error_mm_p90'))} |"
+            )
+        lines.extend(
+            [
+                "",
+                "### Paired Arm A-v1/v2 LUT validation",
+                "",
+                "| LUT | Centroid p99 px | Covariance p99 px | Contour IoU p1 | Result |",
+                "|---|---:|---:|---:|---|",
+            ]
+        )
+        for item in corrected["arm_a_validation"].get("clubs", []):
+            metrics = item.get("metrics", {})
+            lines.append(
+                f"| v1 | {_number(metrics.get('centroid_error_px_p99'))} | "
+                f"{_number(metrics.get('covariance_error_px_p99'))} | "
+                f"{_number(metrics.get('contour_iou_p1'))} | "
+                f"{'PASS' if item.get('passed') else 'FAIL'} |"
+            )
+        for item in revision_2_5["validation"].get("clubs", []):
+            metrics = item.get("metrics", {})
+            lines.append(
+                f"| v2 | {_number(metrics.get('centroid_error_px_p99'))} | "
+                f"{_number(metrics.get('covariance_error_px_p99'))} | "
+                f"{_number(metrics.get('contour_iou_p1'))} | "
+                f"{'PASS' if item.get('passed') else 'FAIL'} |"
+            )
+        lines.extend(["", "### Arm A-v2 rejection taxonomy", ""])
+        if revision_2_5["cells"]:
+            for row in revision_2_5["cells"]:
+                failures = row.get("failure_categories", {})
+                detail = ", ".join(f"{name}:{count}" for name, count in failures.items()) or "none"
+                lines.append(f"- `{row['candidate']}` ({row['gate_role']}): {detail}")
+        else:
+            lines.append("- No shots: Arm A-v2 LUT validation failed closed.")
     lines.extend(
         [
             "",

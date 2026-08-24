@@ -1,5 +1,6 @@
 import hashlib
 import inspect
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,14 @@ from silhouette_poc.eval.mesh_lut import (
     ARM_A_ROLL_GRID_DEG,
     ARM_A_VALIDATION_COUNT,
     ARM_A_YAW_GRID_DEG,
+    _content_hash,
+    load_mesh_lut,
+    save_mesh_lut,
+)
+from silhouette_poc.eval.mesh_lut_v2 import (
+    ARM_A_V2_PITCH_GRID_DEG,
+    ARM_A_V2_ROLL_GRID_DEG,
+    ARM_A_V2_YAW_GRID_DEG,
 )
 from silhouette_poc.eval.run_f1_remediation import (
     OUTPUT_FILENAMES,
@@ -51,6 +60,93 @@ def test_arm_a_lut_density_and_validation_are_frozen():
     np.testing.assert_array_equal(ARM_A_ROLL_GRID_DEG, np.arange(-90.0, 90.0, 2.0))
     assert ARM_A_CONTOUR_SAMPLES == 72
     assert ARM_A_VALIDATION_COUNT == 512
+
+
+def test_arm_a_v2_lut_density_and_closed_roll_interval_are_frozen():
+    np.testing.assert_array_equal(ARM_A_V2_YAW_GRID_DEG, np.arange(-20.0, 20.1, 2.0))
+    np.testing.assert_array_equal(ARM_A_V2_PITCH_GRID_DEG, np.arange(-20.0, 20.1, 2.0))
+    np.testing.assert_array_equal(ARM_A_V2_ROLL_GRID_DEG, np.arange(-90.0, 90.1, 1.0))
+
+
+def test_arm_a_v2_closed_roll_interpolation_does_not_wrap_asymmetric_mesh():
+    covariance = np.broadcast_to(np.eye(2), (1, 1, 3, 2, 2)).copy()
+    lut = MeshProjectionLUT(
+        club="fixture",
+        yaw_grid_deg=np.array([0.0]),
+        pitch_grid_deg=np.array([0.0]),
+        roll_grid_deg=np.array([-90.0, 0.0, 90.0]),
+        centroid_offsets_px=np.array([[[[-20.0, 0.0], [0.0, 0.0], [20.0, 0.0]]]]),
+        covariance_px2=covariance,
+        contour_offsets_px=np.zeros((1, 1, 3, 72, 2)),
+        canonical_camera_depth_mm=1.0,
+        source_sha256="fixture",
+        lut_sha256="fixture",
+        representation_version="arm_a_v2",
+        covariance_log_body=np.zeros_like(covariance),
+    )
+
+    offset, _, _, _ = lut.features(np.zeros(3), np.radians(89.0))
+
+    assert offset[0] == pytest.approx(19.7777777778)
+
+
+def test_arm_a_v2_interpolates_covariance_in_corotating_log_spd_space():
+    roll_grid = np.array([-90.0, 0.0, 90.0])
+    body = np.diag([100.0, 25.0])
+    covariances = []
+    log_body = []
+    for roll_deg in roll_grid:
+        angle = np.radians(roll_deg)
+        rotation = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
+        covariances.append(rotation @ body @ rotation.T)
+        log_body.append(np.diag(np.log([100.0, 25.0])))
+    covariance = np.asarray(covariances).reshape(1, 1, 3, 2, 2)
+    lut = MeshProjectionLUT(
+        club="fixture",
+        yaw_grid_deg=np.array([0.0]),
+        pitch_grid_deg=np.array([0.0]),
+        roll_grid_deg=roll_grid,
+        centroid_offsets_px=np.zeros((1, 1, 3, 2)),
+        covariance_px2=covariance,
+        contour_offsets_px=np.zeros((1, 1, 3, 72, 2)),
+        canonical_camera_depth_mm=1.0,
+        source_sha256="fixture",
+        lut_sha256="fixture",
+        representation_version="arm_a_v2",
+        covariance_log_body=np.asarray(log_body).reshape(1, 1, 3, 2, 2),
+    )
+
+    _, actual, _, _ = lut.features(np.zeros(3), np.radians(45.0))
+    rotation = np.array([[np.sqrt(0.5), -np.sqrt(0.5)], [np.sqrt(0.5), np.sqrt(0.5)]])
+
+    np.testing.assert_allclose(actual, rotation @ body @ rotation.T, atol=1e-10)
+
+
+def test_arm_a_v2_lut_round_trip_preserves_representation_and_hash(tmp_path: Path):
+    covariance = np.eye(2).reshape(1, 1, 1, 2, 2)
+    lut = MeshProjectionLUT(
+        club="fixture",
+        yaw_grid_deg=np.array([0.0]),
+        pitch_grid_deg=np.array([0.0]),
+        roll_grid_deg=np.array([0.0]),
+        centroid_offsets_px=np.zeros((1, 1, 1, 2)),
+        covariance_px2=covariance,
+        contour_offsets_px=np.zeros((1, 1, 1, 72, 2)),
+        canonical_camera_depth_mm=1.0,
+        source_sha256="fixture",
+        lut_sha256="pending",
+        representation_version="arm_a_v2",
+        covariance_log_body=np.zeros_like(covariance),
+    )
+    lut = replace(lut, lut_sha256=_content_hash(lut))
+    path = tmp_path / "v2.npz"
+
+    save_mesh_lut(path, lut)
+    loaded = load_mesh_lut(str(path.resolve()))
+
+    assert loaded.lut_sha256 == lut.lut_sha256
+    assert loaded.representation_version == "arm_a_v2"
+    np.testing.assert_array_equal(loaded.covariance_log_body, lut.covariance_log_body)
 
 
 def test_mesh_projection_lut_corrects_mesh_centroid_bias_before_backprojection():
