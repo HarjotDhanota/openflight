@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 from dataclasses import asdict, dataclass, replace
+from pathlib import Path
 from typing import Any
 
 import cv2
@@ -27,6 +28,12 @@ from silhouette_poc.fusion.solver import (
     _velocity,
     camera_presets,
     club_templates,
+)
+from silhouette_poc.generator.mesh_truth import (
+    TriangleMesh,
+    default_mesh_asset_root,
+    load_normalized_mesh,
+    render_mesh_mask,
 )
 
 GENERATOR_VERSION = "silhouette-generator-v1"
@@ -58,6 +65,8 @@ class GeneratorConfig:
     angular_acceleration_rad_s2: float = 0.0
     sync_offset_us: float = 0.0
     club_speed_mph: float | None = None
+    truth_geometry: str = "analytic"
+    mesh_asset_root: str | None = None
 
     def __post_init__(self) -> None:
         if self.club not in club_templates():
@@ -84,6 +93,8 @@ class GeneratorConfig:
             not math.isfinite(float(self.club_speed_mph)) or float(self.club_speed_mph) <= 0.0
         ):
             raise ValueError("club speed must be finite and positive")
+        if self.truth_geometry not in {"analytic", "mesh"}:
+            raise ValueError("truth_geometry must be 'analytic' or 'mesh'")
         fraction = self.template_dimension_variation_fraction
         if fraction is None:
             fraction = _DEFAULT_DIMENSION_VARIATION[self.club]
@@ -291,6 +302,30 @@ def generate_shot(config: GeneratorConfig) -> GeneratedShot:
         radius_u_mm=sampled_dims["width"] / 2.0,
         radius_v_mm=sampled_dims["height"] / 2.0,
     )
+    truth_mesh: TriangleMesh | None = None
+    mesh_metadata: dict[str, Any] | None = None
+    mesh_cache_sha256: str | None = None
+    if config.truth_geometry == "mesh":
+        asset_root = (
+            default_mesh_asset_root()
+            if config.mesh_asset_root is None
+            else Path(config.mesh_asset_root)
+        )
+        asset_path = asset_root / f"{config.club}.npz"
+        if not asset_path.is_file():
+            raise FileNotFoundError(
+                f"missing pinned mesh asset {asset_path}; run meshes/download_meshes.py"
+            )
+        nominal_mesh, mesh_metadata, mesh_cache_sha256 = load_normalized_mesh(
+            str(asset_path.resolve())
+        )
+        scale = np.array([scales["depth"], scales["width"], scales["height"]])
+        truth_mesh = TriangleMesh(
+            nominal_mesh.vertices_local_mm * scale,
+            nominal_mesh.faces,
+            nominal_mesh.source_uid,
+            nominal_mesh.source_sha256,
+        )
     trajectory_rng = np.random.default_rng(child_seeds["trajectory"])
     impact_center = np.array(
         [
@@ -390,13 +425,17 @@ def generate_shot(config: GeneratorConfig) -> GeneratedShot:
                 if sample_time <= 0.0
                 else ball_at_impact + ball_velocity * sample_time
             )
-            club_coverage += _ellipse_mask(
-                club_center,
-                club_roll,
-                template.radius_u_mm,
-                template.radius_v_mm,
-                config.preset,
-            )
+            if truth_mesh is None:
+                rendered_club = _ellipse_mask(
+                    club_center,
+                    club_roll,
+                    template.radius_u_mm,
+                    template.radius_v_mm,
+                    config.preset,
+                )
+            else:
+                rendered_club = render_mesh_mask(truth_mesh, club_center, club_roll, config.preset)
+            club_coverage += rendered_club
             ball_coverage += _ball_mask(ball_center, config.preset)
         club_coverage /= float(subsamples)
         ball_coverage /= float(subsamples)
@@ -557,6 +596,19 @@ def generate_shot(config: GeneratorConfig) -> GeneratedShot:
             "exposure_subsamples": subsamples,
             "photometric_noise_sigma_dn": config.photometric_noise_sigma_dn,
             "mask_support_threshold": 0.0,
+            "club_truth_geometry": config.truth_geometry,
+            "mesh": (
+                None
+                if truth_mesh is None
+                else {
+                    "source_uid": truth_mesh.source_uid,
+                    "download_archive_sha256": truth_mesh.source_sha256,
+                    "normalized_cache_sha256": mesh_cache_sha256,
+                    "vertex_count": int(len(truth_mesh.vertices_local_mm)),
+                    "triangle_count": int(len(truth_mesh.faces)),
+                    "source": mesh_metadata,
+                }
+            ),
         },
         "visibility": {"frames": visibility_frames},
         "root_seed": int(config.root_seed),
