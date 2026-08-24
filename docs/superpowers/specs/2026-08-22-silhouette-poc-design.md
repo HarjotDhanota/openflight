@@ -22,6 +22,18 @@ template fit only (GolfDB impact-labeled clips and/or maintainer phone slow-mo,
 SAM-assisted ground truth; report IoU + fit-residual distributions) — explicitly
 NOT a fusion test: no radar, no timing, different optics. F1 gates F2-F4
 ordering-wise but they may proceed in parallel once F1's grid is defined.
+**Revision 2.3 (2026-08-24, maintainer decision after F1 TEMPLATE_COLLAPSE):**
+F1 returned STOP — every mesh-truth cell failed the 0.80 solve gate (0.495–0.660),
+rejections dominated by temporal gates (view-dependent pose bias from the
+analytic template breaking trajectory consistency), accuracy on survivors intact.
+Remedy approved as two pre-registered arms under the unchanged F1 criteria on
+mesh truth: **Arm B first — mesh-calibrated analytic template** (offline
+auto-fit of analytic parameters to the per-club mesh; runtime solver
+unchanged); **Arm A — mesh-projection fit template** (solver projects the club
+mesh per pose hypothesis; view-sampled precomputation allowed for efficiency).
+Decision rule: if B alone clears the gate, B ships and A is optional; if only
+A clears, A ships with its compute cost justified by this evidence; if neither
+clears, STOP and report. No temporal-gate loosening in either arm.
 
 **Branch:** `feat/silhouette-poc`
 
