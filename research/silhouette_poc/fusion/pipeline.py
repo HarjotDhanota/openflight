@@ -492,12 +492,17 @@ def solve_shot(
     if projection_template is not None and projection_template.club != capture.club:
         raise ValueError("projection_template_club_mismatch")
     diagnostics["input"]["fit_template"] = (
-        "mesh_projection_lut"
+        getattr(projection_template, "fit_template_name", "mesh_projection_lut")
         if projection_template is not None
         else ("analytic_override" if template_override is not None else "analytic_registered")
     )
     if projection_template is not None:
-        diagnostics["input"]["mesh_lut_sha256"] = projection_template.lut_sha256
+        if hasattr(projection_template, "projection_model_sha256"):
+            diagnostics["input"]["projection_model_sha256"] = (
+                projection_template.projection_model_sha256
+            )
+        else:
+            diagnostics["input"]["mesh_lut_sha256"] = projection_template.lut_sha256
     club_speed_mm_s = float(capture.radar.ops["club_speed_mph"]) / _MPH_PER_MS * 1000.0
     velocity_world = _velocity(template, club_speed_mm_s)
     observed_motion_px = (

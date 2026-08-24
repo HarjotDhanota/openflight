@@ -2,6 +2,7 @@ import json
 
 from silhouette_poc.eval.corrected_iron import (
     append_arm_a_v2_result,
+    append_arm_a_v3_result,
     build_corrected_iron_bundle,
     render_corrected_iron_markdown,
     revision_2_5_arm_a_verdict,
@@ -9,6 +10,7 @@ from silhouette_poc.eval.corrected_iron import (
 from silhouette_poc.eval.f1_remediation import build_remediation_cells
 from silhouette_poc.eval.mesh_fidelity import build_fidelity_cells
 from silhouette_poc.eval.run_arm_a_v2_iron import OUTPUT_FILENAMES as ARM_A_V2_OUTPUT_FILENAMES
+from silhouette_poc.eval.run_arm_a_v3_iron import OUTPUT_FILENAMES as ARM_A_V3_OUTPUT_FILENAMES
 from silhouette_poc.eval.run_corrected_iron import OUTPUT_FILENAMES
 
 
@@ -33,6 +35,10 @@ def test_corrected_iron_grid_is_the_frozen_f1_subset():
         "json": "results_f1_corrected_iron.json",
         "markdown": "RESULTS_F1_CORRECTED_IRON.md",
         "lut": "poc_7iron_corrected_arm_a_v2_lut.npz",
+    }
+    assert ARM_A_V3_OUTPUT_FILENAMES == {
+        "json": "results_f1_corrected_iron.json",
+        "markdown": "RESULTS_F1_CORRECTED_IRON.md",
     }
 
 
@@ -182,3 +188,64 @@ def test_invalid_arm_a_v2_report_states_no_shots_and_blocks_f2():
     assert "| v2 (invalid LUT) | — | — | — | — | — |" in report
     assert "Arm A-v2 failed closed before shots" in report
     assert "F2 remains blocked" in report
+
+
+def test_arm_a_v3_append_uses_ambient_gate_and_reports_all_attempt_timing():
+    old = {
+        "baseline": [],
+        "arm_b": [],
+        "arm_b_calibration": None,
+        "arm_a_validation": {"passed": False},
+    }
+    bundle = build_corrected_iron_bundle(
+        [],
+        [],
+        {"clubs": [{"club": "poc_7iron", "passed": False}]},
+        [],
+        old=old,
+        mesh_manifest={"sources": []},
+    )
+    bundle = append_arm_a_v2_result(
+        bundle,
+        validation={"clubs": [{"club": "poc_7iron", "passed": False, "metrics": {}}]},
+        rows=[],
+    )
+    previous_hash = bundle["evaluation_hash"]
+    rows = [
+        {
+            **_cell("strobed_10us", 0.0, 999.0, 999.0),
+            "arm": "arm_a_v3_exact_mesh_projection",
+            "solve_wall_time_s_samples": [3.0, 5.0],
+            "solve_wall_time_s_total": 8.0,
+            "solve_wall_time_s_median": 4.0,
+            "solve_wall_time_s_p90": 4.8,
+            "solve_wall_time_s_max": 5.0,
+        },
+        {
+            **_cell("ambient_500us", 0.80, 12.0, 24.0),
+            "arm": "arm_a_v3_exact_mesh_projection",
+            "solve_wall_time_s_samples": [7.0, 9.0],
+            "solve_wall_time_s_total": 16.0,
+            "solve_wall_time_s_median": 8.0,
+            "solve_wall_time_s_p90": 8.8,
+            "solve_wall_time_s_max": 9.0,
+        },
+    ]
+
+    updated = append_arm_a_v3_result(
+        bundle,
+        rows=rows,
+        model_metadata={"model_sha256": "b" * 64, "validation": "NOT_APPLICABLE_EXACT_MODEL"},
+    )
+    report = render_corrected_iron_markdown(updated)
+
+    assert updated["verdict"] == bundle["verdict"]
+    assert updated["arm_a_v3"]["previous_evaluation_hash"] == previous_hash
+    assert updated["arm_a_v3"]["iron_verdict"] == "IRON_A_V3_CLEARS_AMBIENT"
+    assert updated["arm_a_v3"]["validation"] == "NOT_APPLICABLE_EXACT_MODEL"
+    assert updated["evaluation_hash"] != previous_hash
+    assert "Arm A-v3 exact-model result" in report
+    assert "NOT_APPLICABLE_EXACT_MODEL" in report
+    assert "Solve wall-time" in report
+    assert "8.800" in report
+    assert "comparison-only" in report

@@ -62,6 +62,36 @@ def append_arm_a_v2_result(
     return rehash_bundle(updated)
 
 
+def append_arm_a_v3_result(
+    bundle: dict[str, Any], *, rows: list[dict[str, Any]], model_metadata: dict[str, Any]
+) -> dict[str, Any]:
+    """Append the prospective exact-model result without rewriting prior verdicts."""
+    updated = deepcopy(bundle)
+    previous_hash = updated["evaluation_hash"]
+    reported_rows = []
+    for source in rows:
+        row = deepcopy(source)
+        row["gate_role"] = (
+            "primary_gate" if row.get("candidate") == "ambient_500us" else "comparison_only"
+        )
+        reported_rows.append(row)
+    base_verdict = revision_2_5_arm_a_verdict(validation_passed=True, rows=reported_rows)
+    verdict = base_verdict.replace("A_V2", "A_V3")
+    updated["arm_a_v3"] = {
+        "scope": "prospective_corrected_7iron_arm_a_v3_exact",
+        "previous_evaluation_hash": previous_hash,
+        "gate_candidate": "ambient_500us",
+        "comparison_only_candidates": ["strobed_10us"],
+        "driver_status": "HOLD_CAD_MESH",
+        "validation": model_metadata["validation"],
+        "model_metadata": deepcopy(model_metadata),
+        "cells": reported_rows,
+        "iron_verdict": verdict,
+        "overall": "STOP_FOR_MAINTAINER_REVIEW",
+    }
+    return rehash_bundle(updated)
+
+
 def rehash_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
     bundle.pop("evaluation_hash", None)
     bundle["evaluation_hash"] = hashlib.sha256(
@@ -329,7 +359,90 @@ def render_corrected_iron_markdown(bundle: dict[str, Any]) -> str:
                 lines.append(f"- `{row['candidate']}` ({row['gate_role']}): {detail}")
         else:
             lines.append("- No shots: Arm A-v2 LUT validation failed closed.")
-    if revision_2_5:
+    arm_a_v3 = bundle.get("arm_a_v3")
+    if arm_a_v3:
+        lines.extend(
+            [
+                "",
+                "## Arm A-v3 exact-model result",
+                "",
+                f"**ARM A-v3 IRON GATE: {arm_a_v3['iron_verdict']}**",
+                "",
+                f"Previous evaluation hash: `{arm_a_v3['previous_evaluation_hash']}`",
+                "",
+                f"LUT validation: **{arm_a_v3['validation']}**. Every pose hypothesis was "
+                "rasterized exactly; the retained LUT validation machinery was not invoked.",
+                "",
+                "### Paired Arm A-v1/v2/v3 criteria",
+                "",
+                "| Model | Candidate | Gate role | Solve | Median mm | p90 mm |",
+                "|---|---|---|---:|---:|---:|",
+            ]
+        )
+        if not corrected.get("arm_a"):
+            lines.append("| v1 LUT invalid | — | — | — | — | — |")
+        if revision_2_5 and not revision_2_5["cells"]:
+            lines.append("| v2 LUT invalid | — | — | — | — | — |")
+        for row in arm_a_v3["cells"]:
+            lines.append(
+                f"| v3 exact | {row['candidate']} | "
+                f"{str(row['gate_role']).replace('_', '-')} | "
+                f"{float(row['solve_rate']):.3f} | "
+                f"{_number(row.get('impact_error_mm_median'))} | "
+                f"{_number(row.get('impact_error_mm_p90'))} |"
+            )
+        lines.extend(
+            [
+                "",
+                "### Arm A-v3 signed errors and diagnostics",
+                "",
+                "| Candidate | Offset median/p90 mm | Height median/p90 mm | IoU median/p10 | Fit residual median/p90 px |",
+                "|---|---:|---:|---:|---:|",
+            ]
+        )
+        for row in arm_a_v3["cells"]:
+            lines.append(
+                f"| {row['candidate']} | "
+                f"{_number(row.get('offset_error_mm_median'))}/"
+                f"{_number(row.get('offset_error_mm_p90'))} | "
+                f"{_number(row.get('height_error_mm_median'))}/"
+                f"{_number(row.get('height_error_mm_p90'))} | "
+                f"{_number(row.get('silhouette_iou_median'))}/"
+                f"{_number(row.get('silhouette_iou_p10'))} | "
+                f"{_number(row.get('fit_residual_px_median'))}/"
+                f"{_number(row.get('fit_residual_px_p90'))} |"
+            )
+        lines.extend(
+            [
+                "",
+                "### Solve wall-time (all attempted shots)",
+                "",
+                "| Candidate | N | Total s | Median s | p90 s | Max s |",
+                "|---|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for row in arm_a_v3["cells"]:
+            lines.append(
+                f"| {row['candidate']} | {len(row['solve_wall_time_s_samples'])} | "
+                f"{_number(row.get('solve_wall_time_s_total'))} | "
+                f"{_number(row.get('solve_wall_time_s_median'))} | "
+                f"{_number(row.get('solve_wall_time_s_p90'))} | "
+                f"{_number(row.get('solve_wall_time_s_max'))} |"
+            )
+        lines.extend(["", "### Arm A-v3 rejection taxonomy", ""])
+        for row in arm_a_v3["cells"]:
+            failures = row.get("failure_categories", {})
+            detail = ", ".join(f"{name}:{count}" for name, count in failures.items()) or "none"
+            lines.append(f"- `{row['candidate']}` ({row['gate_role']}): {detail}")
+    if arm_a_v3:
+        decision = (
+            f"The accepted historical iron result remains **{bundle['verdict']['iron']}**. "
+            f"The exact-model prospective result is **{arm_a_v3['iron_verdict']}**; only "
+            "ambient 500 us determined its gate and strobe remained comparison-only. Driver "
+            "remains **HOLD_CAD_MESH**, the work order is **STOP_FOR_MAINTAINER_REVIEW**, "
+            "and F2 remains blocked."
+        )
+    elif revision_2_5:
         outcome = (
             "Arm A-v2 completed the registered cells; only ambient 500 us determined its gate"
             if revision_2_5["cells"]

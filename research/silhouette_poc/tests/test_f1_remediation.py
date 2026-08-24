@@ -7,10 +7,15 @@ import numpy as np
 import pytest
 
 from silhouette_poc.eval import mesh_lut_v2
+from silhouette_poc.eval.exact_mesh_fit import (
+    ExactMeshProjectionTemplate,
+    render_exact_mesh_mask,
+)
 from silhouette_poc.eval.f1_remediation import (
     REMEDIATION_ARMS,
     build_remediation_cells,
     decide_remediation,
+    summarize_solve_wall_times,
 )
 from silhouette_poc.eval.mesh_lut import (
     ARM_A_CONTOUR_SAMPLES,
@@ -44,6 +49,7 @@ from silhouette_poc.fusion.mesh_fit import MeshProjectionLUT
 from silhouette_poc.fusion.pipeline import AMBIENT_RECOVERY_POLICY, FusionPolicy, solve_shot
 from silhouette_poc.fusion.solver import CAMERA_CENTER_WORLD, SilhouetteObservation, camera_presets
 from silhouette_poc.generator.artifacts import write_shot
+from silhouette_poc.generator.mesh_truth import TriangleMesh
 from silhouette_poc.generator.synthetic import GeneratorConfig
 
 
@@ -155,6 +161,52 @@ def test_arm_a_v2_lut_round_trip_preserves_representation_and_hash(tmp_path: Pat
     assert loaded.lut_sha256 == lut.lut_sha256
     assert loaded.representation_version == "arm_a_v2"
     np.testing.assert_array_equal(loaded.covariance_log_body, lut.covariance_log_body)
+
+
+def test_arm_a_v3_exact_model_rasterizes_the_queried_pose_without_lut():
+    mesh = TriangleMesh(
+        vertices_local_mm=np.array(
+            [[0.0, -20.0, -10.0], [0.0, 20.0, -10.0], [0.0, 20.0, 10.0], [0.0, -20.0, 10.0]]
+        ),
+        faces=np.array([[0, 1, 2], [0, 2, 3]]),
+        source_uid="fixture:rectangle",
+        source_sha256="a" * 64,
+    )
+    model = ExactMeshProjectionTemplate(mesh, "poc_7iron", preset_name="A0")
+    center = np.array([0.0, 0.0, 0.0])
+    roll = np.radians(7.25)
+
+    offset, covariance, contour, diagnostics = model.features(center, roll)
+    mask, center_uv = render_exact_mesh_mask(mesh, center, roll, "A0")
+    expected_offset, expected_covariance, expected_contour, _ = mesh_lut_v2._mask_features(
+        mask, center_uv
+    )
+
+    np.testing.assert_allclose(offset, expected_offset)
+    np.testing.assert_allclose(covariance, expected_covariance)
+    np.testing.assert_allclose(contour, expected_contour)
+    assert diagnostics["observation_model"] == "exact_triangle_raster"
+    assert not hasattr(model, "centroid_offsets_px")
+    assert ExactMeshProjectionTemplate.solve_state is MeshProjectionLUT.solve_state
+    assert ExactMeshProjectionTemplate.predicted_contour is MeshProjectionLUT.predicted_contour
+
+
+def test_arm_a_v3_solve_wall_times_include_failed_attempts_and_raw_samples():
+    summary = summarize_solve_wall_times(
+        [
+            {"ok": True, "solve_wall_time_s": 1.0},
+            {"ok": False, "solve_wall_time_s": 3.0},
+            {"ok": True, "solve_wall_time_s": 2.0},
+        ]
+    )
+
+    assert summary == {
+        "solve_wall_time_s_samples": [1.0, 3.0, 2.0],
+        "solve_wall_time_s_total": 6.0,
+        "solve_wall_time_s_median": 2.0,
+        "solve_wall_time_s_p90": 2.8,
+        "solve_wall_time_s_max": 3.0,
+    }
 
 
 def test_mesh_projection_lut_corrects_mesh_centroid_bias_before_backprojection():

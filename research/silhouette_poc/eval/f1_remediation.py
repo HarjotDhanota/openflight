@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
+import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -19,10 +21,12 @@ from silhouette_poc.eval.e2e import (
     _initialize_worker,
     summarize_rows,
 )
+from silhouette_poc.eval.exact_mesh_fit import ExactMeshProjectionTemplate
 from silhouette_poc.eval.mesh_lut import load_mesh_lut
 from silhouette_poc.fusion.pipeline import AMBIENT_RECOVERY_POLICY
 from silhouette_poc.fusion.solver import ClubTemplate
 from silhouette_poc.generator.artifacts import write_shot
+from silhouette_poc.generator.mesh_truth import load_normalized_mesh
 from silhouette_poc.generator.synthetic import GeneratorConfig
 
 REMEDIATION_ARMS = ("arm_b_calibrated_analytic", "arm_a_mesh_projection")
@@ -281,6 +285,131 @@ def evaluate_arm_a(
         lut = load_mesh_lut(paths[cell.club])
         result["mesh_lut_sha256"] = lut.lut_sha256
         result.update(summarize_rows(grouped[cell.config_hash]))
+        result["visibility_failure_count"] = sum(
+            int(count)
+            for name, count in result["failure_categories"].items()
+            if name.startswith("visibility_")
+        )
+        results.append(result)
+    return results
+
+
+def summarize_solve_wall_times(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Retain and summarize solve-only wall time for every attempted shot."""
+    samples = [float(row["solve_wall_time_s"]) for row in rows]
+    if not samples:
+        return {
+            "solve_wall_time_s_samples": [],
+            "solve_wall_time_s_total": 0.0,
+            "solve_wall_time_s_median": None,
+            "solve_wall_time_s_p90": None,
+            "solve_wall_time_s_max": None,
+        }
+    return {
+        "solve_wall_time_s_samples": samples,
+        "solve_wall_time_s_total": float(sum(samples)),
+        "solve_wall_time_s_median": float(np.percentile(samples, 50)),
+        "solve_wall_time_s_p90": float(np.percentile(samples, 90)),
+        "solve_wall_time_s_max": float(max(samples)),
+    }
+
+
+@lru_cache(maxsize=4)
+def _load_exact_template(mesh_path: str, club: str) -> ExactMeshProjectionTemplate:
+    mesh, _, _ = load_normalized_mesh(mesh_path)
+    return ExactMeshProjectionTemplate(mesh, club, preset_name="A0")
+
+
+def _evaluate_arm_a_v3_task(task: tuple[RemediationCell, int, str, str]) -> dict[str, Any]:
+    cell, seed, mesh_asset_root, mesh_path = task
+    config = GeneratorConfig(
+        root_seed=seed,
+        club=cell.club,
+        exposure_us=cell.exposure_us,
+        preset="A0",
+        frame_count=cell.frame_count,
+        pre_trigger_count=cell.pre_trigger_count,
+        template_dimension_variation_fraction=cell.template_variation_fraction,
+        photometric_noise_sigma_dn=cell.photometric_noise_sigma_dn,
+        radar_track_noise_sigma_mm=cell.radar_noise_sigma_mm,
+        club_scattering_center_residual_mm=cell.radar_residual_mm,
+        sync_offset_us=_sync_offset(cell, seed),
+        truth_geometry="mesh",
+        mesh_asset_root=mesh_asset_root,
+    )
+    with tempfile.TemporaryDirectory(prefix="silhouette-f1a-v3-") as temporary:
+        shot_dir = write_shot(Path(temporary), config)
+        truth = json.loads((shot_dir / "truth.json").read_text(encoding="utf-8"))
+        started = time.perf_counter()
+        result = AMBIENT_RECOVERY_POLICY.solve(
+            shot_dir,
+            projection_template=_load_exact_template(mesh_path, cell.club),
+        )
+        solve_wall_time_s = time.perf_counter() - started
+    row: dict[str, Any] = {
+        "seed": seed,
+        "ok": result.ok,
+        "status": result.status,
+        "solve_wall_time_s": float(solve_wall_time_s),
+    }
+    if not result.ok:
+        return row
+    assert result.impact_offset_mm is not None
+    actual = np.asarray(result.impact_offset_mm, dtype=float)
+    expected = np.asarray(truth["impact"]["face_vector_mm"], dtype=float)
+    error = actual - expected
+    quality = result.diagnostics["quality"]
+    row.update(
+        {
+            "impact_error_mm": float(np.linalg.norm(error)),
+            "offset_error_mm": float(error[0]),
+            "height_error_mm": float(error[1]),
+            "silhouette_iou": float(quality["silhouette_iou"]),
+            "fit_residual_px": float(quality["fit_residual_px"]),
+        }
+    )
+    return row
+
+
+def evaluate_arm_a_v3(
+    cells: list[RemediationCell],
+    *,
+    mesh_asset_root: Path | str,
+    workers: int = 1,
+) -> list[dict[str, Any]]:
+    """Evaluate the frozen Arm A-v3 cells with an exact observation model."""
+    selected = [cell for cell in cells if cell.arm == "arm_a_mesh_projection"]
+    root = str(Path(mesh_asset_root).resolve())
+    mesh_paths = {cell.club: str((Path(root) / f"{cell.club}.npz").resolve()) for cell in selected}
+    tasks = [(cell, seed, root, mesh_paths[cell.club]) for cell in selected for seed in cell.seeds]
+    if workers == 1:
+        _initialize_worker()
+        rows = map(_evaluate_arm_a_v3_task, tasks)
+        executor = None
+    else:
+        executor = ProcessPoolExecutor(max_workers=workers, initializer=_initialize_worker)
+        rows = executor.map(_evaluate_arm_a_v3_task, tasks, chunksize=1)
+    grouped: dict[str, list[dict[str, Any]]] = {cell.config_hash: [] for cell in selected}
+    try:
+        for index, (task, row) in enumerate(zip(tasks, rows, strict=True), start=1):
+            grouped[task[0].config_hash].append(row)
+            if index % 20 == 0 or index == len(tasks):
+                print(f"evaluated {index}/{len(tasks)} remediation Arm A-v3 shots", flush=True)
+    finally:
+        if executor is not None:
+            executor.shutdown()
+    results = []
+    for cell in selected:
+        result = asdict(cell)
+        result["registered_arm"] = result["arm"]
+        result["arm"] = "arm_a_v3_exact_mesh_projection"
+        result["config_hash"] = cell.config_hash
+        result["policy"] = AMBIENT_RECOVERY_POLICY.name
+        model = _load_exact_template(mesh_paths[cell.club], cell.club)
+        result.update(model.metadata())
+        cell_rows = grouped[cell.config_hash]
+        result.update(summarize_rows(cell_rows))
+        result.update(summarize_solve_wall_times(cell_rows))
         result["visibility_failure_count"] = sum(
             int(count)
             for name, count in result["failure_categories"].items()
