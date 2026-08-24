@@ -16,8 +16,14 @@ from silhouette_poc.eval.mesh_fidelity import (
 )
 from silhouette_poc.eval.run_mesh_fidelity import OUTPUT_FILENAMES
 from silhouette_poc.generator.mesh_truth import (
+    ACTIVE_MESH_SOURCES,
+    CATEGORY_DIMENSIONS_MM,
     MESH_SOURCES,
     TriangleMesh,
+    admit_mesh,
+    detect_face_plane,
+    face_detection_record,
+    geometry_hash,
     load_binary_stl,
     load_gltf_archive,
     normalize_clubhead,
@@ -28,11 +34,18 @@ from silhouette_poc.generator.synthetic import GeneratorConfig, generate_shot
 from silhouette_poc.meshes.download_meshes import import_local_stl, validate_source_metadata
 
 
-def test_frozen_sources_are_downloadable_cc_by_models():
+def test_frozen_sources_retire_art_scene_driver_and_keep_local_cad_iron_active():
     assert set(MESH_SOURCES) == {"poc_driver", "poc_7iron"}
-    assert MESH_SOURCES["poc_driver"].uid == "978d0740dc514c8695bbb02f4083f0e3"
-    assert MESH_SOURCES["poc_driver"].license_spdx == "CC-BY-4.0"
-    assert MESH_SOURCES["poc_driver"].downloadable
+    driver = MESH_SOURCES["poc_driver"]
+    assert driver.uid == "978d0740dc514c8695bbb02f4083f0e3"
+    assert driver.status == "retired_source_quality"
+    assert "art scene" in driver.status_reason.lower()
+    assert set(ACTIVE_MESH_SOURCES) == {"poc_7iron"}
+    assert CATEGORY_DIMENSIONS_MM["poc_driver"] == {
+        "width": 118.0,
+        "height": 60.0,
+        "depth": 112.0,
+    }
     iron = MESH_SOURCES["poc_7iron"]
     assert iron.uid == "grabcad:titleist-7-iron-golf-club-1:690cb-right-handed"
     assert iron.license_spdx == "LicenseRef-GrabCAD-Local-Research-Only"
@@ -154,21 +167,21 @@ def test_local_stl_import_fails_closed_on_hash_mismatch(tmp_path: Path):
         import_local_stl(path, tmp_path / "assets", expected_sha256="0" * 64)
 
 
-def test_clubhead_normalization_rejects_shaft_component_and_matches_dimensions():
-    head = np.array(
+def _box_mesh(*, rotation: np.ndarray | None = None) -> TriangleMesh:
+    vertices = np.array(
         [
-            [-2, -3, -1],
-            [-2, 3, -1],
-            [-2, 3, 1],
-            [-2, -3, 1],
-            [2, -3, -1],
-            [2, 3, -1],
-            [2, 3, 1],
-            [2, -3, 1],
+            [-10, -40, -20],
+            [-10, 40, -20],
+            [-10, 40, 20],
+            [-10, -40, 20],
+            [10, -40, -20],
+            [10, 40, -20],
+            [10, 40, 20],
+            [10, -40, 20],
         ],
         dtype=float,
     )
-    head_faces = np.array(
+    faces = np.array(
         [
             [0, 1, 2],
             [0, 2, 3],
@@ -185,19 +198,82 @@ def test_clubhead_normalization_rejects_shaft_component_and_matches_dimensions()
         ],
         dtype=np.int32,
     )
-    shaft = np.array([[20, 0, 0], [120, 0, 0], [20, 0.2, 0]], dtype=float)
-    mesh = TriangleMesh(
-        np.vstack([head, shaft]),
-        np.vstack([head_faces, [[8, 9, 10]]]),
-        "fixture",
-        "2" * 64,
-    )
+    if rotation is not None:
+        vertices = vertices @ rotation.T + np.array([17.0, -9.0, 31.0])
+    return TriangleMesh(vertices, faces, "fixture", "2" * 64)
 
-    normalized = normalize_clubhead(mesh, {"width": 110.0, "height": 60.0, "depth": 55.0})
+
+def test_face_plane_geometrically_anchors_a_rotated_metric_mesh():
+    angle = np.radians(37.0)
+    tilt = np.radians(-23.0)
+    rotate_z = np.array(
+        [[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]]
+    )
+    rotate_y = np.array(
+        [[np.cos(tilt), 0, np.sin(tilt)], [0, 1, 0], [-np.sin(tilt), 0, np.cos(tilt)]]
+    )
+    rotation = rotate_z @ rotate_y
+    mesh = _box_mesh(rotation=rotation)
+
+    detection = detect_face_plane(mesh)
+
+    assert abs(float(detection.normal_source @ rotation[:, 0])) > 0.99
+    assert detection.coherent_area_mm2 == pytest.approx(3_200.0)
+    np.testing.assert_allclose(detection.face_span_mm, [80.0, 40.0], atol=1e-6)
+
+
+def test_metric_normalization_preserves_scale_and_anchors_face_to_positive_x():
+    angle = np.radians(31.0)
+    rotation = np.array(
+        [[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]]
+    )
+    mesh = _box_mesh(rotation=rotation)
+
+    normalized = normalize_clubhead(
+        mesh,
+        {"width": 80.0, "height": 40.0, "depth": 20.0},
+        source_units_mm=True,
+    )
+    normalized_face = detect_face_plane(normalized)
     extents = np.ptp(normalized.vertices_local_mm, axis=0)
 
-    assert normalized.faces.shape[0] == head_faces.shape[0]
-    np.testing.assert_allclose(extents, [55.0, 110.0, 60.0], atol=1e-8)
+    np.testing.assert_allclose(extents, [20.0, 80.0, 40.0], atol=1e-8)
+    assert float(normalized_face.normal_source @ np.array([1.0, 0.0, 0.0])) > 0.99
+    record = face_detection_record(normalized_face)
+    assert set(record) == {
+        "normal",
+        "coherent_area_mm2",
+        "face_span_mm",
+        "triangle_count",
+    }
+    assert record["normal"] == pytest.approx([1.0, 0.0, 0.0])
+
+
+def test_admission_rejects_disconnected_scene_props_and_hash_dedupes_reordering():
+    mesh = _box_mesh()
+    prop = np.array([[200.0, 0.0, 0.0], [201.0, 0.0, 0.0], [200.0, 1.0, 0.0]])
+    contaminated = TriangleMesh(
+        np.vstack([mesh.vertices_local_mm, prop]),
+        np.vstack([mesh.faces, [[8, 9, 10]]]),
+        mesh.source_uid,
+        mesh.source_sha256,
+    )
+
+    rejected = admit_mesh(
+        contaminated,
+        category_dimensions_mm={"width": 80.0, "height": 40.0, "depth": 20.0},
+        source_units_mm=True,
+    )
+    reordered = TriangleMesh(
+        mesh.vertices_local_mm[::-1],
+        (len(mesh.vertices_local_mm) - 1 - mesh.faces[:, ::-1])[::-1],
+        mesh.source_uid,
+        mesh.source_sha256,
+    )
+
+    assert not rejected.accepted
+    assert "component_count" in rejected.reasons
+    assert geometry_hash(mesh) == geometry_hash(reordered)
 
 
 def test_f1_grid_is_frozen_and_paired_with_phase4b():

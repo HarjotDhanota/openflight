@@ -55,7 +55,10 @@ class FidelityCell:
 
 
 def build_fidelity_cells(
-    *, shots_per_cell: int = 200, root_seed: int = 20260824
+    *,
+    shots_per_cell: int = 200,
+    root_seed: int = 20260824,
+    clubs: tuple[str, ...] = CLUBS,
 ) -> list[FidelityCell]:
     if shots_per_cell < 200:
         raise ValueError("F1 evaluation requires at least 200 shots per cell")
@@ -70,7 +73,7 @@ def build_fidelity_cells(
             seeds=seeds,
         )
         for arm in FIDELITY_ARMS
-        for club in CLUBS
+        for club in clubs
         for candidate in CANDIDATES
     ]
 

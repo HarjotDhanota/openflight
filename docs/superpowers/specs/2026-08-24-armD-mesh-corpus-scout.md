@@ -17,7 +17,7 @@ NEVER committed — same local-use boundary as SOURCES.md; provenance + hashes o
 
 | Category | uid | Name | Author | Faces | Screen |
 |---|---|---|---|---:|---|
-| driver (have) | `978d0740…f0e3` | Callaway Maverik golf driver | paulekins2007 | 41,855 | acquired, validated |
+| ~~driver (retired)~~ | `978d0740…f0e3` | Callaway Maverik golf driver | paulekins2007 | 41,855 | **REJECTED after F1 defect review** — posed art scene, props/disconnected shells, ambiguous sole/face, corrupt PCA normalization |
 | driver | `805c5f9e…fddb` | Callaway Maverik driver bundle | paulekins2007 | 6,779 | same club — low-poly variant; use only if geometry differs |
 | ~~driver ×2~~ | `050418e0…7cc` | TaylorMade RBZ vs Callaway GBB | elaughli | 354,590 | **REJECTED (maintainer quality screen, 2026-08-24)** — geometry quality insufficient; archive downloaded, inspected, deleted |
 | unknown club | `6d202f25…22d` | Golf Club | B_R_Brody | 91,904 | inspect type |
@@ -57,3 +57,22 @@ before admission.
 3. Geometry-hash dedupe (re-uploads count once).
 4. Provenance row per mesh: source, author, license/terms class, hash, admit/reject + reason.
 5. Freeze the admitted corpus BEFORE building the mean or running leave-one-out.
+
+### Admission implementation frozen before the corrected iron rerun
+
+- The face is the largest coherent extremity triangle cluster whose normals are
+  within 15 degrees and whose in-plane minor/major span is 0.35–0.65. Its outward
+  normal becomes +x depth; its long in-plane axis becomes +y width; +z completes
+  a right-handed frame. Scene-up and PCA extent order never assign axes.
+- Active sources must have one welded connected component. Boundary edges are
+  recorded; a seam fraction above 0.1% of approximate mesh edges rejects as
+  materially open. This admits the known clean 690CB CAD's 23 tessellation-seam
+  edges (0.058%) without suppressing the diagnostic.
+- Trusted millimetre CAD is transformed rigidly and retains scale. Plausibility
+  uses ±15% category references before normalization (with numerical tolerance);
+  driver references are 118 x 60 x 112 mm (width, height, depth).
+- Provenance includes geometry hash, component and boundary counts, pre-transform
+  dimensions, and source/normalized face normal, coherent area, span, and triangle
+  count. Geometry hash deduplicates re-indexed copies.
+- The Maverik source is retired immediately. Driver arms remain `HOLD_CAD_MESH`;
+  only the pinned 690CB iron may enter the corrected F1 subset.

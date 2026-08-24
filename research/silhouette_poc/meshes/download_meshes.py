@@ -12,16 +12,20 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Any
 
 from silhouette_poc.generator.mesh_truth import (
+    ACTIVE_MESH_SOURCES,
+    CATEGORY_DIMENSIONS_MM,
     MESH_SOURCES,
     MeshSource,
+    admit_mesh,
     default_mesh_asset_root,
+    detect_face_plane,
+    face_detection_record,
     load_binary_stl,
     load_gltf_archive,
     load_normalized_mesh,
@@ -29,11 +33,8 @@ from silhouette_poc.generator.mesh_truth import (
     save_normalized_mesh,
 )
 
-_NOMINAL_DIMENSIONS_MM = {
-    "poc_driver": {"width": 110.0, "height": 60.0, "depth": 55.0},
-    "poc_7iron": {"width": 80.0, "height": 50.0, "depth": 18.0},
-}
 _API_ROOT = "https://api.sketchfab.com/v3/models"
+_NORMALIZATION_VERSION = "geometric-face-anchor-v2"
 
 
 def _request_json(url: str, token: str | None = None) -> dict[str, Any]:
@@ -68,6 +69,8 @@ def validate_source_metadata(source: MeshSource, metadata: dict[str, Any]) -> No
 
 
 def acquire_source(source: MeshSource, token: str, output_root: Path) -> dict[str, Any]:
+    if source.status != "active":
+        raise ValueError(f"{source.club} source is retired: {source.status_reason}")
     if source.source_kind != "sketchfab":
         raise ValueError(f"{source.club} is not an authenticated Sketchfab source")
     metadata = _request_json(f"{_API_ROOT}/{source.uid}")
@@ -88,7 +91,16 @@ def acquire_source(source: MeshSource, token: str, output_root: Path) -> dict[st
                 f"download archive SHA-256 mismatch for {source.club}: {archive_sha256}"
             )
         loaded = load_gltf_archive(archive, source_uid=source.uid, source_sha256=archive_sha256)
-        normalized = normalize_clubhead(loaded, _NOMINAL_DIMENSIONS_MM[source.club])
+        admission = admit_mesh(
+            loaded,
+            category_dimensions_mm=CATEGORY_DIMENSIONS_MM[source.club],
+            source_units_mm=False,
+        )
+        if not admission.accepted:
+            raise ValueError(f"mesh admission failed for {source.club}: {admission.reasons}")
+        assert admission.face is not None
+        normalized = normalize_clubhead(loaded, CATEGORY_DIMENSIONS_MM[source.club])
+        normalized_face = detect_face_plane(normalized)
         asset_metadata = {
             "source_uid": source.uid,
             "source_name": source.name,
@@ -98,11 +110,16 @@ def acquire_source(source: MeshSource, token: str, output_root: Path) -> dict[st
             "license_url": source.license_url,
             "download_archive_sha256": archive_sha256,
             "download_format": "gltf",
-            "normalization": (
-                "largest compact welded connected component; PCA extent order; "
-                "independent depth/width/height calibration"
-            ),
-            "nominal_dimensions_mm": _NOMINAL_DIMENSIONS_MM[source.club],
+            "normalization": _NORMALIZATION_VERSION,
+            "source_units_mm": False,
+            "category_dimensions_mm": CATEGORY_DIMENSIONS_MM[source.club],
+            "geometry_sha256": admission.geometry_sha256,
+            "component_count_after_weld": admission.component_count,
+            "boundary_edge_count_after_weld": admission.boundary_edge_count,
+            "boundary_edge_fraction_after_weld": admission.boundary_edge_fraction,
+            "dimensions_before_normalization_mm": admission.dimensions_mm,
+            "face_detection_source": face_detection_record(admission.face),
+            "face_detection_normalized": face_detection_record(normalized_face),
             "source_vertex_count": int(len(loaded.vertices_local_mm)),
             "source_triangle_count": int(len(loaded.faces)),
             "clubhead_vertex_count": int(len(normalized.vertices_local_mm)),
@@ -134,7 +151,20 @@ def import_local_stl(
             raise ValueError("caller SHA-256 does not match the frozen local-source registration")
     required_hash = expected_sha256 or registered_hash
     loaded = load_binary_stl(source_path, source_uid=source.uid, expected_sha256=required_hash)
-    normalized = normalize_clubhead(loaded, _NOMINAL_DIMENSIONS_MM[source.club])
+    admission = admit_mesh(
+        loaded,
+        category_dimensions_mm=CATEGORY_DIMENSIONS_MM[source.club],
+        source_units_mm=True,
+    )
+    if not admission.accepted:
+        raise ValueError(f"mesh admission failed for {source.club}: {admission.reasons}")
+    assert admission.face is not None
+    normalized = normalize_clubhead(
+        loaded,
+        CATEGORY_DIMENSIONS_MM[source.club],
+        source_units_mm=True,
+    )
+    normalized_face = detect_face_plane(normalized)
     asset_metadata = {
         "source_uid": source.uid,
         "source_name": source.name,
@@ -145,11 +175,16 @@ def import_local_stl(
         "source_file_sha256": loaded.source_sha256,
         "download_format": "binary_stl_maintainer_local",
         "redistribution": "prohibited; local research use only",
-        "normalization": (
-            "largest compact welded connected component; PCA extent order; "
-            "independent depth/width/height calibration"
-        ),
-        "nominal_dimensions_mm": _NOMINAL_DIMENSIONS_MM[source.club],
+        "normalization": _NORMALIZATION_VERSION,
+        "source_units_mm": True,
+        "category_dimensions_mm": CATEGORY_DIMENSIONS_MM[source.club],
+        "geometry_sha256": admission.geometry_sha256,
+        "component_count_after_weld": admission.component_count,
+        "boundary_edge_count_after_weld": admission.boundary_edge_count,
+        "boundary_edge_fraction_after_weld": admission.boundary_edge_fraction,
+        "dimensions_before_normalization_mm": admission.dimensions_mm,
+        "face_detection_source": face_detection_record(admission.face),
+        "face_detection_normalized": face_detection_record(normalized_face),
         "source_vertex_count": int(len(loaded.vertices_local_mm)),
         "source_triangle_count": int(len(loaded.faces)),
         "clubhead_vertex_count": int(len(normalized.vertices_local_mm)),
@@ -176,6 +211,8 @@ def _existing_record(source: MeshSource, output_root: Path) -> dict[str, Any] | 
         raise ValueError(f"cached source SHA-256 mismatch for {source.club}")
     if source.expected_asset_sha256 is not None and (asset_sha256 != source.expected_asset_sha256):
         raise ValueError(f"cached asset SHA-256 mismatch for {source.club}")
+    if metadata.get("normalization") != _NORMALIZATION_VERSION:
+        return None
     return {**metadata, "asset_path": asset_path.name, "asset_sha256": asset_sha256}
 
 
@@ -185,25 +222,39 @@ def main() -> int:
     parser.add_argument("--local-iron", type=Path)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    token = os.environ.get("SKETCHFAB_API_TOKEN")
-    driver = MESH_SOURCES["poc_driver"]
-    driver_record = _existing_record(driver, args.output)
-    if driver_record is None:
-        if not token:
-            parser.error("SKETCHFAB_API_TOKEN is required to acquire the missing driver")
-        driver_record = acquire_source(driver, token, args.output)
-    iron = MESH_SOURCES["poc_7iron"]
+    iron = ACTIVE_MESH_SOURCES["poc_7iron"]
     iron_record = _existing_record(iron, args.output)
     if iron_record is None:
         if args.local_iron is None:
             parser.error("--local-iron is required to import the missing maintainer-local 690CB")
         iron_record = import_local_stl(args.local_iron, args.output)
-    records = [driver_record, iron_record]
+    records = [iron_record]
     (args.output / "manifest.json").write_text(
-        json.dumps({"sources": records}, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        json.dumps(
+            {
+                "sources": records,
+                "retired_sources": [
+                    {
+                        "club": source.club,
+                        "source_uid": source.uid,
+                        "status": source.status,
+                        "reason": source.status_reason,
+                    }
+                    for source in MESH_SOURCES.values()
+                    if source.status != "active"
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
     )
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+    (admit_mesh,)
+    (detect_face_plane,)
+    (face_detection_record,)

@@ -32,6 +32,8 @@ class MeshSource:
     source_kind: str = "sketchfab"
     expected_source_sha256: str | None = None
     expected_asset_sha256: str | None = None
+    status: str = "active"
+    status_reason: str = ""
 
 
 MESH_SOURCES = {
@@ -50,6 +52,11 @@ MESH_SOURCES = {
         published_triangles=41_855,
         expected_source_sha256=("0b9fac0caa2f7f26bc7492a6e12047c1552a6f8d934f6828cc2b3537f75105a2"),
         expected_asset_sha256=("6b9ba5a70b868f61fab40d2bdf11b7c355204b612f17efde76500b45b5308dc1"),
+        status="retired_source_quality",
+        status_reason=(
+            "posed art scene with grass, ball, disconnected shells, and ambiguous sole/face; "
+            "not admissible as canonical CAD geometry"
+        ),
     ),
     "poc_7iron": MeshSource(
         club="poc_7iron",
@@ -64,6 +71,14 @@ MESH_SOURCES = {
         source_kind="maintainer_local_binary_stl",
         expected_source_sha256=("f35936799295e6ce344279e557f0265ccbb8acef69c4508daff80d219d03cb85"),
     ),
+}
+
+ACTIVE_MESH_SOURCES = {
+    club: source for club, source in MESH_SOURCES.items() if source.status == "active"
+}
+CATEGORY_DIMENSIONS_MM = {
+    "poc_driver": {"width": 118.0, "height": 60.0, "depth": 112.0},
+    "poc_7iron": {"width": 80.0, "height": 50.0, "depth": 38.0},
 }
 
 
@@ -89,6 +104,39 @@ class TriangleMesh:
             raise ValueError("mesh vertices must be finite")
         object.__setattr__(self, "vertices_local_mm", vertices)
         object.__setattr__(self, "faces", faces)
+
+
+@dataclass(frozen=True)
+class FacePlaneDetection:
+    normal_source: np.ndarray
+    width_axis_source: np.ndarray
+    height_axis_source: np.ndarray
+    centroid_source: np.ndarray
+    coherent_area_mm2: float
+    face_span_mm: np.ndarray
+    triangle_indices: np.ndarray
+
+
+@dataclass(frozen=True)
+class MeshAdmission:
+    accepted: bool
+    reasons: tuple[str, ...]
+    component_count: int
+    boundary_edge_count: int
+    boundary_edge_fraction: float
+    geometry_sha256: str
+    dimensions_mm: dict[str, float]
+    face: FacePlaneDetection | None
+
+
+def face_detection_record(face: FacePlaneDetection) -> dict[str, Any]:
+    """Serialize the required face-plane provenance without embedding geometry."""
+    return {
+        "normal": face.normal_source.tolist(),
+        "coherent_area_mm2": face.coherent_area_mm2,
+        "face_span_mm": face.face_span_mm.tolist(),
+        "triangle_count": int(len(face.triangle_indices)),
+    }
 
 
 _COMPONENT_DTYPES = {
@@ -259,49 +307,209 @@ def _connected_face_components(vertices: np.ndarray, faces: np.ndarray) -> list[
     return [np.flatnonzero(labels == label) for label in np.unique(labels)]
 
 
-def normalize_clubhead(mesh: TriangleMesh, dimensions_mm: dict[str, float]) -> TriangleMesh:
-    """Select the compact head component and normalize PCA axes to calibrated dimensions."""
-    candidates: list[tuple[float, np.ndarray]] = []
-    for face_indices in _connected_face_components(mesh.vertices_local_mm, mesh.faces):
-        vertex_indices = np.unique(mesh.faces[face_indices].reshape(-1))
-        points = mesh.vertices_local_mm[vertex_indices]
-        extents = np.sort(np.ptp(points, axis=0))[::-1]
-        if extents[2] <= 0.0:
-            continue
-        compactness = float(extents[0] / extents[2])
-        if compactness <= 8.0:
-            candidates.append((float(np.prod(extents)), face_indices))
-    if not candidates:
-        raise ValueError("no compact connected component qualifies as a clubhead")
-    selected_faces = max(candidates, key=lambda item: item[0])[1]
-    old_vertices = np.unique(mesh.faces[selected_faces].reshape(-1))
-    remap = np.full(len(mesh.vertices_local_mm), -1, dtype=np.int32)
-    remap[old_vertices] = np.arange(len(old_vertices), dtype=np.int32)
-    faces = remap[mesh.faces[selected_faces]]
-    points = mesh.vertices_local_mm[old_vertices]
-
-    centered = points - np.mean(points, axis=0)
-    _, _, principal = np.linalg.svd(centered, full_matrices=False)
-    axes = principal.copy()
-    for row in range(3):
-        dominant = int(np.argmax(np.abs(axes[row])))
-        if axes[row, dominant] < 0.0:
-            axes[row] *= -1.0
-    if np.linalg.det(axes) < 0.0:
-        axes[2] *= -1.0
-    principal_points = centered @ axes.T
-    order = np.argsort(np.ptp(principal_points, axis=0))[::-1]
-    width = principal_points[:, order[0]]
-    height = principal_points[:, order[1]]
-    depth = principal_points[:, order[2]]
-    local = np.column_stack([depth, width, height])
-    local -= (np.min(local, axis=0) + np.max(local, axis=0)) / 2.0
-    target = np.array(
-        [dimensions_mm["depth"], dimensions_mm["width"], dimensions_mm["height"]],
-        dtype=float,
+def _welded_faces(vertices: np.ndarray, faces: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    welded_vertices, welded = np.unique(
+        np.round(np.asarray(vertices, dtype=float), decimals=8), axis=0, return_inverse=True
     )
-    local *= target / np.ptp(local, axis=0)
-    return TriangleMesh(local, faces, mesh.source_uid, mesh.source_sha256)
+    return welded_vertices, welded[np.asarray(faces, dtype=np.int32)]
+
+
+def geometry_hash(mesh: TriangleMesh) -> str:
+    """Hash triangle geometry independent of source vertex/face ordering."""
+    triangles = np.round(mesh.vertices_local_mm[mesh.faces], decimals=8)
+    canonical_triangles = []
+    for triangle in triangles:
+        order = np.lexsort((triangle[:, 2], triangle[:, 1], triangle[:, 0]))
+        canonical_triangles.append(triangle[order].reshape(-1))
+    canonical = np.asarray(canonical_triangles)
+    order = np.lexsort(tuple(canonical[:, column] for column in reversed(range(9))))
+    return hashlib.sha256(np.ascontiguousarray(canonical[order]).tobytes()).hexdigest()
+
+
+def _triangle_adjacency(welded_faces: np.ndarray) -> list[set[int]]:
+    edge_owners: dict[tuple[int, int], list[int]] = {}
+    for face_index, face in enumerate(welded_faces):
+        for first, second in ((face[0], face[1]), (face[1], face[2]), (face[2], face[0])):
+            edge = tuple(sorted((int(first), int(second))))
+            edge_owners.setdefault(edge, []).append(face_index)
+    adjacency = [set() for _ in welded_faces]
+    for owners in edge_owners.values():
+        for owner in owners:
+            adjacency[owner].update(other for other in owners if other != owner)
+    return adjacency
+
+
+def detect_face_plane(
+    mesh: TriangleMesh,
+    *,
+    normal_tolerance_deg: float = 15.0,
+    aspect_bounds: tuple[float, float] = (0.35, 0.65),
+) -> FacePlaneDetection:
+    """Find the largest coherent extremity plane with a clubface-like lens aspect."""
+    vertices = mesh.vertices_local_mm
+    triangles = vertices[mesh.faces]
+    cross = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+    double_area = np.linalg.norm(cross, axis=1)
+    valid = double_area > 1e-10
+    normals = np.zeros_like(cross)
+    normals[valid] = cross[valid] / double_area[valid, None]
+    areas = double_area / 2.0
+    _, welded_faces = _welded_faces(vertices, mesh.faces)
+    adjacency = _triangle_adjacency(welded_faces)
+    cosine_limit = math.cos(math.radians(normal_tolerance_deg))
+    unassigned = set(np.flatnonzero(valid).tolist())
+    candidates: list[FacePlaneDetection] = []
+    mesh_center = np.mean(vertices, axis=0)
+    while unassigned:
+        seed = max(unassigned, key=lambda index: float(areas[index]))
+        seed_normal = normals[seed]
+        region = set()
+        pending = [seed]
+        while pending:
+            current = pending.pop()
+            if current not in unassigned:
+                continue
+            if abs(float(normals[current] @ seed_normal)) < cosine_limit:
+                continue
+            unassigned.remove(current)
+            region.add(current)
+            pending.extend(adjacency[current] & unassigned)
+        if not region:
+            continue
+        indices = np.asarray(sorted(region), dtype=np.int32)
+        aligned = normals[indices] * np.sign(normals[indices] @ seed_normal)[:, None]
+        normal = np.sum(aligned * areas[indices, None], axis=0)
+        normal /= np.linalg.norm(normal)
+        vertex_indices = np.unique(mesh.faces[indices].reshape(-1))
+        points = vertices[vertex_indices]
+        centroid = np.average(np.mean(triangles[indices], axis=1), weights=areas[indices], axis=0)
+        if float(normal @ (centroid - mesh_center)) < 0.0:
+            normal *= -1.0
+        centered = points - centroid
+        planar = centered - np.outer(centered @ normal, normal)
+        _, _, axes = np.linalg.svd(planar, full_matrices=False)
+        width_axis = axes[0] - normal * float(axes[0] @ normal)
+        width_axis /= np.linalg.norm(width_axis)
+        if width_axis[int(np.argmax(np.abs(width_axis)))] < 0.0:
+            width_axis *= -1.0
+        height_axis = np.cross(normal, width_axis)
+        spans = np.array([np.ptp(points @ width_axis), np.ptp(points @ height_axis)], dtype=float)
+        if spans[1] > spans[0]:
+            spans = spans[::-1]
+            width_axis, height_axis = height_axis, -width_axis
+        aspect = float(spans[1] / max(spans[0], 1e-12))
+        projection = vertices @ normal
+        extremity_distance = min(
+            abs(float(centroid @ normal) - float(np.min(projection))),
+            abs(float(np.max(projection)) - float(centroid @ normal)),
+        )
+        depth = float(np.ptp(projection))
+        flatness = float(np.max(np.abs(centered @ normal)))
+        if (
+            aspect_bounds[0] <= aspect <= aspect_bounds[1]
+            and extremity_distance <= max(1.0, 0.10 * depth)
+            and flatness <= max(1.0, 0.04 * spans[0])
+        ):
+            candidates.append(
+                FacePlaneDetection(
+                    normal_source=normal,
+                    width_axis_source=width_axis,
+                    height_axis_source=height_axis,
+                    centroid_source=centroid,
+                    coherent_area_mm2=float(np.sum(areas[indices])),
+                    face_span_mm=spans,
+                    triangle_indices=indices,
+                )
+            )
+    if not candidates:
+        raise ValueError("no coherent extremity plane has the registered clubface lens aspect")
+    return max(candidates, key=lambda item: item.coherent_area_mm2)
+
+
+def _boundary_edge_count(mesh: TriangleMesh) -> int:
+    _, faces = _welded_faces(mesh.vertices_local_mm, mesh.faces)
+    counts: dict[tuple[int, int], int] = {}
+    for face in faces:
+        for first, second in ((face[0], face[1]), (face[1], face[2]), (face[2], face[0])):
+            edge = tuple(sorted((int(first), int(second))))
+            counts[edge] = counts.get(edge, 0) + 1
+    return sum(count != 2 for count in counts.values())
+
+
+def admit_mesh(
+    mesh: TriangleMesh,
+    *,
+    category_dimensions_mm: dict[str, float],
+    source_units_mm: bool,
+    tolerance_fraction: float = 0.15,
+) -> MeshAdmission:
+    """Apply the frozen CAD-corpus admission checks before normalization."""
+    components = _connected_face_components(mesh.vertices_local_mm, mesh.faces)
+    boundary_edges = _boundary_edge_count(mesh)
+    edge_denominator = max(1.0, 1.5 * len(mesh.faces))
+    boundary_fraction = boundary_edges / edge_denominator
+    reasons = []
+    if len(components) != 1:
+        reasons.append("component_count")
+    if boundary_fraction > 0.001:
+        reasons.append("open_boundary")
+    try:
+        face = detect_face_plane(mesh)
+    except ValueError:
+        face = None
+        reasons.append("face_plane_missing")
+    dimensions: dict[str, float] = {}
+    if face is not None:
+        dimensions = {
+            "width": float(face.face_span_mm[0]),
+            "height": float(face.face_span_mm[1]),
+            "depth": float(np.ptp(mesh.vertices_local_mm @ face.normal_source)),
+        }
+        if source_units_mm:
+            for name, nominal in category_dimensions_mm.items():
+                relative = abs(dimensions[name] - float(nominal)) / float(nominal)
+                if relative > tolerance_fraction + 0.001:
+                    reasons.append(f"dimension_{name}")
+    return MeshAdmission(
+        accepted=not reasons,
+        reasons=tuple(reasons),
+        component_count=len(components),
+        boundary_edge_count=boundary_edges,
+        boundary_edge_fraction=boundary_fraction,
+        geometry_sha256=geometry_hash(mesh),
+        dimensions_mm=dimensions,
+        face=face,
+    )
+
+
+def normalize_clubhead(
+    mesh: TriangleMesh,
+    dimensions_mm: dict[str, float],
+    *,
+    source_units_mm: bool = False,
+) -> TriangleMesh:
+    """Anchor axes to the detected face plane; preserve trusted metric CAD scale."""
+    components = _connected_face_components(mesh.vertices_local_mm, mesh.faces)
+    if len(components) != 1:
+        raise ValueError("mesh admission requires one welded connected component")
+    face = detect_face_plane(mesh)
+    axes = np.stack([face.normal_source, face.width_axis_source, face.height_axis_source])
+    local = mesh.vertices_local_mm @ axes.T
+    local -= (np.min(local, axis=0) + np.max(local, axis=0)) / 2.0
+    if not source_units_mm:
+        target = np.array(
+            [dimensions_mm["depth"], dimensions_mm["width"], dimensions_mm["height"]],
+            dtype=float,
+        )
+        local *= target / np.ptp(local, axis=0)
+    normalized = TriangleMesh(local, mesh.faces, mesh.source_uid, mesh.source_sha256)
+    normalized_face = detect_face_plane(normalized)
+    angle = math.degrees(
+        math.acos(float(np.clip(normalized_face.normal_source @ np.array([1.0, 0.0, 0.0]), -1, 1)))
+    )
+    if angle > 3.0:
+        raise ValueError(f"normalized face normal invariant failed: {angle:.3f} degrees")
+    return normalized
 
 
 def rasterize_projected_triangles(
