@@ -45,6 +45,22 @@ change; (c) delivery attack/path angles drawn from the club-realistic ranges in
 pre-registered gates re-run unchanged with a paired before/after table.
 Additionally, every clubface result display (Studio F3 and demos) must use the
 mesh-derived face-on outline of the active club, never a hand-drawn shape.
+**Revision 2.6 (2026-08-24, maintainer physical review — ROOT-CAUSE CORRECTION):**
+In this vantage the camera sits behind the ball and the clubhead approaches
+through the space between camera and ball, so **the club occludes the ball and
+the ball can never occlude the club.** The generator violated this: it
+composited the ball over the club with no depth test
+(`synthetic.py`: `image = image * (1 - ball_coverage) + 225 * ball_coverage`),
+biting a false notch out of every overlapping club silhouette. The production
+pipeline's convex-hull "silhouette completion" branch existed to repair that
+non-existent occlusion, was benign on convex analytic clubs, and destroys real
+shape on concave clubheads — the true root cause of the Arm A-v3 bias that
+Codex localized at `pipeline.py:250-257`. Decisions: (a) the generator must
+depth-order club and ball correctly (club in front throughout the capture
+window); (b) the completion heuristic is REMOVED, not re-proxied — the occlusion
+it repairs cannot occur; (c) ball-side estimators must expect the ball to be
+partially occluded BY the club during the impact window; (d) all affected
+results re-run with paired before/after tables.
 **Revision 2.5 (2026-08-24, maintainer decision after acceptance of
 `RESULTS_F1_CORRECTED_IRON`): prospective post-outcome scope alignment.**
 Revision 2.3's shorthand decision rule (an arm “clears 0.80 everywhere”) did
