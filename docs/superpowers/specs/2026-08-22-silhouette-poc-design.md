@@ -3,7 +3,10 @@
 **Revision:** 2 (audited 2026-08-22)
 
 **Status:** revision 2 APPROVED by the maintainer 2026-08-23. Implementation
-authorized per section 12, starting with Phase 1b; Appendix B is now frozen
+authorized per section 12, starting with Phase 1b; Appendix B is now frozen.
+**Revision 2.1 (2026-08-23, maintainer decision):** the strobe is demoted from
+primary Phase-A hardware to deferred fallback; the ambient-500 us single-camera
+candidate is primary. Phase 4b (ambient recovery) is inserted before Studio.
 
 **Branch:** `feat/silhouette-poc`
 
@@ -529,7 +532,13 @@ show a zero-noise recovery cell and an oracle-depth reference.
 
 A winning “buildable” cell must satisfy §2 and one of:
 
-- existing 320x200 optical mode plus a specified short-pulse strobe design; or
+- **existing 320x200 optical mode at ambient exposure (500 us) — the primary
+  Phase-A hardware: one OV9281, the current radars, no added illumination**
+  (maintainer decision 2026-08-23, revision 2.1); or
+- existing 320x200 optical mode plus a specified short-pulse strobe design —
+  **deferred fallback**: retained as a future option, selectable only if the
+  ambient candidate fails its gates after the Phase 4b mitigations
+  (multi-frame fusion, blur-aware gate tuning, template calibration); or
 - a mode that has passed Gate B1.
 
 Preset B cannot win the buildable gate before Gate B1. The 500 us blur surrogate
