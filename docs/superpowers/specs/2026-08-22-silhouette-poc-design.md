@@ -7,6 +7,21 @@ authorized per section 12, starting with Phase 1b; Appendix B is now frozen.
 **Revision 2.1 (2026-08-23, maintainer decision):** the strobe is demoted from
 primary Phase-A hardware to deferred fallback; the ambient-500 us single-camera
 candidate is primary. Phase 4b (ambient recovery) is inserted before Studio.
+**Revision 2.2 (2026-08-24, maintainer decision): Phase F (fidelity) inserted
+after Studio, before the ML leg.** F1: truth scenes rendered from real club
+meshes (license-cleared driver + 7-iron CAD; numpy triangle projection with the
+existing exposure integration) while the solver keeps its analytic template —
+the mesh-vs-analytic gap becomes the honest template-mismatch test; re-run the
+Phase 4b criteria table against mesh truth as a new pre-registered gate, and a
+solve-rate collapse legitimately forces a mesh-projection fit template
+(stop-and-report, maintainer decides). F2: photometric realism (dimpled/shaded
+ball, real composited backgrounds, sensor-noise character) shared with the ML
+leg's dataset generator. F3: Studio cosmetic realism (real driver-face outline,
+improved frame rendering). F4: real-footage evaluation of the extractor +
+template fit only (GolfDB impact-labeled clips and/or maintainer phone slow-mo,
+SAM-assisted ground truth; report IoU + fit-residual distributions) — explicitly
+NOT a fusion test: no radar, no timing, different optics. F1 gates F2-F4
+ordering-wise but they may proceed in parallel once F1's grid is defined.
 
 **Branch:** `feat/silhouette-poc`
 
