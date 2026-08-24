@@ -1,6 +1,6 @@
 # Rear-view silhouette impact-location POC — design specification
 
-**Revision:** 2 (audited 2026-08-22)
+**Revision:** 2.5 (revision 2 audited 2026-08-22)
 
 **Status:** revision 2 APPROVED by the maintainer 2026-08-23. Implementation
 authorized per section 12, starting with Phase 1b; Appendix B is now frozen.
@@ -45,6 +45,21 @@ change; (c) delivery attack/path angles drawn from the club-realistic ranges in
 pre-registered gates re-run unchanged with a paired before/after table.
 Additionally, every clubface result display (Studio F3 and demos) must use the
 mesh-derived face-on outline of the active club, never a hand-drawn shape.
+**Revision 2.5 (2026-08-24, maintainer decision after acceptance of
+`RESULTS_F1_CORRECTED_IRON`): prospective post-outcome scope alignment.**
+Revision 2.3's shorthand decision rule (an arm “clears 0.80 everywhere”) did
+not explicitly carry forward revision 2.1's hardware priority. Beginning with
+Arm A-v2, F1/remediation gates therefore evaluate only the primary Phase-A
+hardware candidate's cells: single-OV9281 `ambient_500us` with the existing
+radars. `strobed_10us` continues to run and be reported as a comparison-only,
+deferred fallback, but it cannot pass or fail a gate. This alignment is applied
+prospectively; no earlier result or verdict is rewritten. The corrected iron
+outcome also establishes that the analytic template family is exhausted against
+honest 690CB geometry (the family has no hosel): Arm B is retired as a candidate
+fix and retained only as a reported comparison arm. Arm A-v2 is authorized as a
+purely representational LUT revision under the unchanged frozen validation
+limits, solver gates, shot grid, and evaluation criteria. Driver remains
+`HOLD_CAD_MESH` until an admitted maintainer-supplied CAD driver is available.
 
 **Branch:** `feat/silhouette-poc`
 

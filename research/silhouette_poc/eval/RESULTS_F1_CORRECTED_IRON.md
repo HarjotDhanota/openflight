@@ -31,6 +31,40 @@ The retired Maverik driver is excluded. Driver status is `HOLD_CAD_MESH` until
 the maintainer supplies an admitted CAD driver. The overall result always stops
 for maintainer review before F2.
 
+### Arm A-v2 prospective registration (revision 2.5)
+
+**Registration status: FROZEN BEFORE ARM A-v2 VALIDATION OR SHOT OUTCOMES on
+2026-08-24.** This registration appends a prospective v2 arm; it does not alter
+the accepted corrected-iron outcome below.
+
+Arm A-v2 uses the same admitted metric 690CB mesh and changes only the LUT's
+representation. Its lattice is yaw `[-20, 20]` degrees in 2-degree increments,
+pitch `[-20, 20]` degrees in 2-degree increments, and a closed roll interval
+`[-90, 90]` degrees in 1-degree increments. The closed roll endpoint is stored
+and interpolated without wrapping because the hosel-bearing mesh is not
+180-degree symmetric. Centroids and 72-direction contours use trilinear
+interpolation on that closed lattice. Covariances are rotated into the queried
+roll's co-rotating image basis, represented as symmetric matrix logarithms,
+interpolated there, exponentiated, and rotated back; this preserves positive
+definiteness and removes coordinate-rotation curvature from interpolation.
+The runtime solver gates, search/refinement behavior, temporal policy, and all
+shot criteria remain unchanged.
+
+Validation remains fail-closed before any shot: the same 512 poses, 7-iron seed
+`2026082492`, pose ranges, native A0 rasterizer, and limits are reused unchanged:
+centroid p99 <=1 px, covariance p99 <=1 px, and contour IoU p1 >=0.95. This
+native-resolution validation is the registered interpolation error bound. If
+any limit fails, no Arm A-v2 shot is generated and the result is reported as
+invalid. If validation passes, only the corrected-iron Arm A cells run over the
+same frozen F1 grid: N=200, seeds `20260824`-`20261023`, `ambient_500us` plus
+`strobed_10us`, and all existing generator/fusion settings and criteria.
+
+Per revision 2.5, only `ambient_500us` is gate-bearing. `strobed_10us` remains a
+reported comparison arm and cannot pass or fail the prospective gate. The
+accepted baseline and retired Arm B results remain in the paired tables without
+rerun. Driver remains `HOLD_CAD_MESH`; F2 remains blocked pending review of the
+Arm A-v2 iron result.
+
 ## Results
 
 **DRIVER: HOLD_CAD_MESH**
