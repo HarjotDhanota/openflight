@@ -1,5 +1,14 @@
 # Arm D mesh-corpus scout (2026-08-24)
 
+**Scope decision (maintainer, 2026-08-24): the product mechanism is one shipped
+canonical template per club type — zero user setup, no per-user scanning or
+calibration.** Maintainer-scanned or maintainer-downloaded club meshes serve as
+CORPUS and HELD-OUT VALIDATION data only, never as a user-facing flow. If
+leave-one-club-out shows a category where one template cannot clear the gates,
+the approved fallback is a small per-category template library (2–3 shapes) with
+solver-side AUTO-SELECTION by fit residual over the first frames — still zero
+user setup. Per-club user calibration is explicitly out of product scope.
+
 Goal: 5–10 meshes per category (driver, iron) to build a category-mean template
 and run leave-one-club-out validation under the frozen F1 criteria. Meshes are
 NEVER committed — same local-use boundary as SOURCES.md; provenance + hashes only.
