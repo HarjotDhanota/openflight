@@ -19,7 +19,7 @@ NEVER committed — same local-use boundary as SOURCES.md; provenance + hashes o
 |---|---|---|---|---:|---|
 | driver (have) | `978d0740…f0e3` | Callaway Maverik golf driver | paulekins2007 | 41,855 | acquired, validated |
 | driver | `805c5f9e…fddb` | Callaway Maverik driver bundle | paulekins2007 | 6,779 | same club — low-poly variant; use only if geometry differs |
-| driver ×2 | `050418e0…7cc` | TaylorMade RBZ vs Callaway GBB | elaughli | 354,590 | TWO driver heads in one scene — split into two corpus entries if separable |
+| ~~driver ×2~~ | `050418e0…7cc` | TaylorMade RBZ vs Callaway GBB | elaughli | 354,590 | **REJECTED (maintainer quality screen, 2026-08-24)** — geometry quality insufficient; archive downloaded, inspected, deleted |
 | unknown club | `6d202f25…22d` | Golf Club | B_R_Brody | 91,904 | inspect type |
 | unknown club | `8b990517…41d` | Golf Club 3D | Adroneltd | 991,963 | inspect type; heavy |
 | unknown club | `5f83b786…aa5` | Golf Club | satinedean | 2,694 | inspect type |
