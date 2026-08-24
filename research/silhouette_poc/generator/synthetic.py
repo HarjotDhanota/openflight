@@ -56,6 +56,7 @@ class GeneratorConfig:
     reverse_motion: bool = False
     club_acceleration_world_mm_s2: tuple[float, float, float] = (0.0, 0.0, 0.0)
     angular_acceleration_rad_s2: float = 0.0
+    sync_offset_us: float = 0.0
 
     def __post_init__(self) -> None:
         if self.club not in club_templates():
@@ -76,6 +77,8 @@ class GeneratorConfig:
             raise ValueError("radar track noise must be non-negative")
         if len(self.club_acceleration_world_mm_s2) != 3:
             raise ValueError("club acceleration must contain three world components")
+        if not math.isfinite(float(self.sync_offset_us)):
+            raise ValueError("sync offset must be finite")
         fraction = self.template_dimension_variation_fraction
         if fraction is None:
             fraction = _DEFAULT_DIMENSION_VARIATION[self.club]
@@ -340,8 +343,11 @@ def generate_shot(config: GeneratorConfig) -> GeneratedShot:
         1_000_000_000
     )
     trigger_epoch = np.float64(1_800_000_000.0 + (config.root_seed % 100_000))
-    trigger_host_ns = np.int64(round(float(trigger_epoch) * 1_000_000_000.0))
-    host_timestamp_ns = trigger_host_ns + np.rint(frame_times_s * 1_000_000_000.0).astype(np.int64)
+    nominal_trigger_host_ns = np.int64(round(float(trigger_epoch) * 1_000_000_000.0))
+    trigger_host_ns = nominal_trigger_host_ns + np.int64(round(config.sync_offset_us * 1_000.0))
+    host_timestamp_ns = nominal_trigger_host_ns + np.rint(frame_times_s * 1_000_000_000.0).astype(
+        np.int64
+    )
 
     subsamples = 3 if config.exposure_us == 10 else 21
     exposure_s = config.exposure_us * 1e-6
@@ -523,7 +529,7 @@ def generate_shot(config: GeneratorConfig) -> GeneratedShot:
             "trigger_frame_index": trigger_index,
             "trigger_epoch_timestamp": float(trigger_epoch),
             "trigger_host_timestamp_ns": int(trigger_host_ns),
-            "camera_to_impact_offset_s": 0.0,
+            "camera_to_impact_offset_s": float(config.sync_offset_us * 1e-6),
             "radar_to_impact_offset_s": 0.0,
             "ops_to_impact_offset_s": 0.0,
         },

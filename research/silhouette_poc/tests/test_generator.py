@@ -41,6 +41,17 @@ def test_default_matrix_tracks_strobed_and_ambient_for_each_club():
     assert all(config.template_dimension_variation_fraction > 0 for config in configs)
 
 
+def test_sync_offset_is_explicit_in_artifact_timing():
+    baseline = generate_shot(_config(template_dimension_variation_fraction=0.0, sync_offset_us=0.0))
+    shifted = generate_shot(
+        _config(template_dimension_variation_fraction=0.0, sync_offset_us=250.0)
+    )
+
+    assert shifted.trigger_host_timestamp_ns - baseline.trigger_host_timestamp_ns == 250_000
+    assert shifted.truth["timing"]["camera_to_impact_offset_s"] == pytest.approx(250e-6)
+    assert shifted.frames.tolist() == baseline.frames.tolist()
+
+
 def test_generation_is_exactly_deterministic_for_same_seed_and_config():
     first = generate_shot(_config())
     second = generate_shot(_config())

@@ -91,6 +91,8 @@ def test_tracked_exposure_candidates_solve_with_measurement_noise(tmp_path, expo
 
     assert result.ok, result.status
     assert _vector_error(result, _truth(shot_dir)) <= 10.0
+    assert result.diagnostics["quality"]["fit_residual_px"] > 0.01
+    assert result.diagnostics["quality"]["post_refine_model_residual_px"] < 0.01
     assert result.diagnostics["input"]["hardware_candidate"] == (
         "ambient_500us" if exposure_us == 500 else "strobed_10us"
     )
@@ -123,6 +125,15 @@ def test_extrapolation_horizon_fails_closed_with_named_diagnostic(tmp_path):
     assert not result.ok
     assert result.status == "extrapolation_horizon"
     assert result.diagnostics["temporal"]["extrapolation_horizon_s"] == pytest.approx(1 / 300.0)
+
+
+def test_artifact_time_mapping_controls_extrapolation_horizon(tmp_path):
+    shot_dir = write_shot(tmp_path, _config(sync_offset_us=250.0))
+
+    result = solve_shot(shot_dir)
+
+    expected = 1 / 468.0 + 250e-6
+    assert result.diagnostics["temporal"]["extrapolation_horizon_s"] == pytest.approx(expected)
 
 
 def test_template_mismatch_is_measured_and_ball_occlusion_is_explained(tmp_path):

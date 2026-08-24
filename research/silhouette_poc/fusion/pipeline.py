@@ -43,6 +43,8 @@ class FusionCapture:
 
     frames: np.ndarray
     sensor_timestamp_ns: np.ndarray
+    host_timestamp_ns: np.ndarray
+    trigger_host_timestamp_ns: int
     exposure_us: np.ndarray
     pre_trigger_count: int
     metadata: dict[str, Any]
@@ -121,6 +123,8 @@ def load_fusion_capture(shot_dir: Path | str) -> FusionCapture:
             raise ValueError("camera_archive_members")
         frames = archive["frames"].copy()
         sensor_timestamp_ns = archive["sensor_timestamp_ns"].copy()
+        host_timestamp_ns = archive["host_timestamp_ns"].copy()
+        trigger_host_timestamp_ns = int(archive["trigger_host_timestamp_ns"])
         exposure_us = archive["exposure_us"].copy()
         pre_trigger_count = int(archive["pre_trigger_count"])
     if frames.ndim != 3 or len(frames) != int(metadata["frame_count"]):
@@ -128,6 +132,8 @@ def load_fusion_capture(shot_dir: Path | str) -> FusionCapture:
     return FusionCapture(
         frames=frames,
         sensor_timestamp_ns=sensor_timestamp_ns,
+        host_timestamp_ns=host_timestamp_ns,
+        trigger_host_timestamp_ns=trigger_host_timestamp_ns,
         exposure_us=exposure_us,
         pre_trigger_count=pre_trigger_count,
         metadata=metadata,
@@ -368,8 +374,14 @@ def solve_shot(shot_dir: Path | str) -> FusionResult:
     if not pre_indices:
         return _failure("insufficient_preimpact_frames", diagnostics)
 
-    frame_period_s = float(capture.radar.club.geometry.frame_period_s)
-    horizon_s = frame_period_s
+    frame_period_s = 1.0 / float(capture.metadata["settings"]["fps"])
+    sync_offset_s = (
+        capture.trigger_host_timestamp_ns - int(capture.host_timestamp_ns[trigger_index])
+    ) / 1e9
+    frame_times = (
+        np.arange(len(capture.frames), dtype=float) - float(trigger_index)
+    ) * frame_period_s - sync_offset_s
+    horizon_s = -float(frame_times[pre_indices[-1]])
     diagnostics["temporal"].update(
         {
             "extrapolation_horizon_s": horizon_s,
@@ -418,10 +430,11 @@ def solve_shot(shot_dir: Path | str) -> FusionResult:
     calibration_bias_mm = float(capture.radar.calibration["range_bias_m"]) * 1000.0
     states = []
     residuals = []
+    post_refine_residuals = []
     ious = []
     exposure = float(np.median(capture.exposure_us))
     for item in segmented:
-        radar_time = club_evidence.impact_t_s + (item.frame_index - trigger_index) * frame_period_s
+        radar_time = club_evidence.impact_t_s + float(frame_times[item.frame_index])
         apparent_range_mm = (
             club_evidence.track.range_at(radar_time, club_evidence.geometry.range_res_m) * 1000.0
         )
@@ -441,6 +454,7 @@ def solve_shot(shot_dir: Path | str) -> FusionResult:
         assert state.frame_center_world is not None
         assert state.roll_rad is not None
         assert state.fit_residual_px is not None
+        measured_silhouette_residual = state.fit_residual_px
         fit_diagnostics = {
             "template_fit_iou": None,
             "best_second_margin": None,
@@ -499,7 +513,8 @@ def solve_shot(shot_dir: Path | str) -> FusionResult:
                     _normalize_roll(state.roll_rad + math.pi),
                 ],
                 "selected_roll_rad": state.roll_rad,
-                "objective_residual_px": state.fit_residual_px,
+                "objective_residual_px": measured_silhouette_residual,
+                "post_refine_model_residual_px": state.fit_residual_px,
                 "template_fit_iou": fit_diagnostics["template_fit_iou"],
                 "hessian_condition": condition,
                 "best_second_margin": (
@@ -519,16 +534,15 @@ def solve_shot(shot_dir: Path | str) -> FusionResult:
             }
         )
         states.append(state)
-        residuals.append(state.fit_residual_px)
+        residuals.append(measured_silhouette_residual)
+        post_refine_residuals.append(state.fit_residual_px)
         ious.append(iou)
     diagnostics["hypotheses"]["status"] = "accepted"
 
     last_state = states[-1]
     assert last_state.frame_center_world is not None
     impact_center = last_state.frame_center_world + velocity_world * horizon_s
-    frame_times = np.asarray(
-        [(item.frame_index - trigger_index) * frame_period_s for item in segmented], dtype=float
-    )
+    frame_times = np.asarray([frame_times[item.frame_index] for item in segmented], dtype=float)
     rolls = np.unwrap(np.asarray([state.roll_rad for state in states]) * 2.0) / 2.0
     if len(rolls) >= 2:
         angular_rate, impact_roll = np.polyfit(frame_times, rolls, 1)
@@ -614,6 +628,7 @@ def solve_shot(shot_dir: Path | str) -> FusionResult:
             "status": "accepted",
             "silhouette_iou": float(np.mean(ious)),
             "fit_residual_px": float(np.mean(residuals)),
+            "post_refine_model_residual_px": float(np.mean(post_refine_residuals)),
             "template_fit_iou": float(
                 np.mean(
                     [
