@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from silhouette_poc.eval import mesh_lut_v2
 from silhouette_poc.eval.f1_remediation import (
     REMEDIATION_ARMS,
     build_remediation_cells,
@@ -66,6 +67,13 @@ def test_arm_a_v2_lut_density_and_closed_roll_interval_are_frozen():
     np.testing.assert_array_equal(ARM_A_V2_YAW_GRID_DEG, np.arange(-20.0, 20.1, 2.0))
     np.testing.assert_array_equal(ARM_A_V2_PITCH_GRID_DEG, np.arange(-20.0, 20.1, 2.0))
     np.testing.assert_array_equal(ARM_A_V2_ROLL_GRID_DEG, np.arange(-90.0, 90.1, 1.0))
+
+
+def test_arm_a_v2_builder_uses_isolated_processes_for_numpy_raster_workers():
+    source = inspect.getsource(mesh_lut_v2)
+
+    assert "ProcessPoolExecutor" in source
+    assert "ThreadPoolExecutor" not in source
 
 
 def test_arm_a_v2_closed_roll_interpolation_does_not_wrap_asymmetric_mesh():

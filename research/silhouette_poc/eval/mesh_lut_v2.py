@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import replace
 
 import numpy as np
@@ -23,6 +23,7 @@ from silhouette_poc.generator.mesh_truth import TriangleMesh
 ARM_A_V2_YAW_GRID_DEG = np.arange(-20.0, 20.1, 2.0)
 ARM_A_V2_PITCH_GRID_DEG = np.arange(-20.0, 20.1, 2.0)
 ARM_A_V2_ROLL_GRID_DEG = np.arange(-90.0, 90.1, 1.0)
+_BUILD_MESH: TriangleMesh | None = None
 
 
 def _rotation(angle_rad: float) -> np.ndarray:
@@ -38,6 +39,44 @@ def _symmetric_matrix_log(value: np.ndarray) -> np.ndarray:
     return (eigenvectors * np.log(eigenvalues)) @ eigenvectors.T
 
 
+def _initialize_build_worker(mesh: TriangleMesh) -> None:
+    global _BUILD_MESH
+    _BUILD_MESH = mesh
+
+
+def _render_view(task: tuple[int, int, float, float]):
+    if _BUILD_MESH is None:
+        raise RuntimeError("Arm A-v2 build worker was not initialized")
+    yaw_index, pitch_index, yaw_deg, pitch_deg = task
+    center = _center_world(yaw_deg, pitch_deg, ARM_A_CANONICAL_CAMERA_DEPTH_MM)
+    view_offsets = np.empty((len(ARM_A_V2_ROLL_GRID_DEG), 2), dtype=np.float32)
+    view_covariances = np.empty((len(ARM_A_V2_ROLL_GRID_DEG), 2, 2), dtype=np.float32)
+    view_log_body = np.empty_like(view_covariances)
+    view_contours = np.empty(
+        (len(ARM_A_V2_ROLL_GRID_DEG), ARM_A_CONTOUR_SAMPLES, 2), dtype=np.float32
+    )
+    camera = camera_presets()["A0"]
+    projected_origin = np.array([camera.cx, camera.cy])
+    for roll_index, roll_deg in enumerate(ARM_A_V2_ROLL_GRID_DEG):
+        roll_rad = math.radians(float(roll_deg))
+        mask = _render_view_mask(_BUILD_MESH, center, roll_rad)
+        offset, covariance, contour, _ = _mask_features(mask, projected_origin)
+        rotation = _rotation(roll_rad)
+        body_covariance = rotation.T @ covariance @ rotation
+        view_offsets[roll_index] = offset
+        view_covariances[roll_index] = covariance
+        view_log_body[roll_index] = _symmetric_matrix_log(body_covariance)
+        view_contours[roll_index] = contour
+    return (
+        yaw_index,
+        pitch_index,
+        view_offsets,
+        view_covariances,
+        view_log_body,
+        view_contours,
+    )
+
+
 def build_mesh_lut_v2(mesh: TriangleMesh, club: str, *, workers: int = 1) -> MeshProjectionLUT:
     """Precompute the frozen dense, closed-roll, log-SPD A-v2 representation."""
     if workers < 1:
@@ -51,47 +90,22 @@ def build_mesh_lut_v2(mesh: TriangleMesh, club: str, *, workers: int = 1) -> Mes
     covariances = np.empty((*shape, 2, 2), dtype=np.float32)
     covariance_log_body = np.empty((*shape, 2, 2), dtype=np.float32)
     contours = np.empty((*shape, ARM_A_CONTOUR_SAMPLES, 2), dtype=np.float32)
-    camera = camera_presets()["A0"]
-    projected_origin = np.array([camera.cx, camera.cy])
     tasks = [
         (yaw_index, pitch_index, float(yaw_deg), float(pitch_deg))
         for yaw_index, yaw_deg in enumerate(ARM_A_V2_YAW_GRID_DEG)
         for pitch_index, pitch_deg in enumerate(ARM_A_V2_PITCH_GRID_DEG)
     ]
 
-    def render_view(task):
-        yaw_index, pitch_index, yaw_deg, pitch_deg = task
-        center = _center_world(yaw_deg, pitch_deg, ARM_A_CANONICAL_CAMERA_DEPTH_MM)
-        view_offsets = np.empty((len(ARM_A_V2_ROLL_GRID_DEG), 2), dtype=np.float32)
-        view_covariances = np.empty((len(ARM_A_V2_ROLL_GRID_DEG), 2, 2), dtype=np.float32)
-        view_log_body = np.empty_like(view_covariances)
-        view_contours = np.empty(
-            (len(ARM_A_V2_ROLL_GRID_DEG), ARM_A_CONTOUR_SAMPLES, 2), dtype=np.float32
-        )
-        for roll_index, roll_deg in enumerate(ARM_A_V2_ROLL_GRID_DEG):
-            roll_rad = math.radians(float(roll_deg))
-            mask = _render_view_mask(mesh, center, roll_rad)
-            offset, covariance, contour, _ = _mask_features(mask, projected_origin)
-            rotation = _rotation(roll_rad)
-            body_covariance = rotation.T @ covariance @ rotation
-            view_offsets[roll_index] = offset
-            view_covariances[roll_index] = covariance
-            view_log_body[roll_index] = _symmetric_matrix_log(body_covariance)
-            view_contours[roll_index] = contour
-        return (
-            yaw_index,
-            pitch_index,
-            view_offsets,
-            view_covariances,
-            view_log_body,
-            view_contours,
-        )
-
-    rows = map(render_view, tasks)
+    _initialize_build_worker(mesh)
+    rows = map(_render_view, tasks)
     executor = None
     if workers > 1:
-        executor = ThreadPoolExecutor(max_workers=workers)
-        rows = executor.map(render_view, tasks)
+        executor = ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=_initialize_build_worker,
+            initargs=(mesh,),
+        )
+        rows = executor.map(_render_view, tasks, chunksize=1)
     try:
         for index, row in enumerate(rows, start=1):
             yaw_index, pitch_index, view_offsets, view_covariances, view_log, view_contours = row
