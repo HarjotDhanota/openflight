@@ -73,7 +73,7 @@ Arm A-v2 iron result.
 
 **OVERALL: STOP_FOR_MAINTAINER_REVIEW**
 
-Evaluation hash: `9f673a63a8f08bcbb6ede8d25ac2604e8e1972324e0330fc63aed9a174b9eff4`
+Evaluation hash: `e7e0ff4d793de62ddf4dc4c010f077bce82996fd649cc4c6771dcbb8335dc34d`
 
 ## Paired old-vs-corrected criteria
 
@@ -128,6 +128,32 @@ Evaluation hash: `9f673a63a8f08bcbb6ede8d25ac2604e8e1972324e0330fc63aed9a174b9ef
 - `Arm B calibrated analytic/ambient_500us`: insufficient_temporal_frames:2, silhouette_fit_residual:16, temporal_acceleration:1
 - Arm A: no shot taxonomy; frozen LUT validation failed before evaluation.
 
+## Arm A-v2 prospective result
+
+**REVISION 2.5 IRON GATE: IRON_A_V2_INVALID_LUT**
+
+Accepted v1 evaluation hash (unchanged verdict): `9f673a63a8f08bcbb6ede8d25ac2604e8e1972324e0330fc63aed9a174b9eff4`
+
+Only ambient 500 us is gate-bearing. Strobe is retained as a comparison-only deferred fallback and cannot pass or fail this gate.
+
+### Paired Arm A-v1/v2 criteria
+
+| LUT | Candidate | Gate role | Solve | Median mm | p90 mm |
+|---|---|---|---:|---:|---:|
+| v1 (invalid LUT) | — | — | — | — | — |
+| v2 (invalid LUT) | — | — | — | — | — |
+
+### Paired Arm A-v1/v2 LUT validation
+
+| LUT | Centroid p99 px | Covariance p99 px | Contour IoU p1 | Result |
+|---|---:|---:|---:|---|
+| v1 | 0.296 | 2.984 | 0.980 | FAIL |
+| v2 | 0.181 | 2.497 | 0.984 | FAIL |
+
+### Arm A-v2 rejection taxonomy
+
+- No shots: Arm A-v2 LUT validation failed closed.
+
 ## Decision
 
-The provisional iron result is **IRON_NEITHER**. Driver remains **HOLD_CAD_MESH**. The overall work order is **STOP_FOR_MAINTAINER_REVIEW**; no F2 work began.
+The accepted historical iron result remains **IRON_NEITHER**. The prospective result is **IRON_A_V2_INVALID_LUT**: Arm A-v2 failed closed before shots because its LUT validation did not pass. Driver remains **HOLD_CAD_MESH**, the work order is **STOP_FOR_MAINTAINER_REVIEW**, and F2 remains blocked.

@@ -154,3 +154,31 @@ def test_arm_a_v2_append_preserves_accepted_verdict_and_adds_paired_report():
     assert "0.800" in report
     assert "0.900" in report
     assert "0.960" in report
+
+
+def test_invalid_arm_a_v2_report_states_no_shots_and_blocks_f2():
+    old = {
+        "baseline": [],
+        "arm_b": [],
+        "arm_b_calibration": None,
+        "arm_a_validation": {"passed": False},
+    }
+    bundle = build_corrected_iron_bundle(
+        [],
+        [],
+        {"clubs": [{"club": "poc_7iron", "passed": False}]},
+        [],
+        old=old,
+        mesh_manifest={"sources": []},
+    )
+    updated = append_arm_a_v2_result(
+        bundle,
+        validation={"clubs": [{"club": "poc_7iron", "passed": False, "metrics": {}}]},
+        rows=[],
+    )
+
+    report = render_corrected_iron_markdown(updated)
+
+    assert "| v2 (invalid LUT) | — | — | — | — | — |" in report
+    assert "Arm A-v2 failed closed before shots" in report
+    assert "F2 remains blocked" in report

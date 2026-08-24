@@ -294,6 +294,8 @@ def render_corrected_iron_markdown(bundle: dict[str, Any]) -> str:
                 f"{_number(row.get('impact_error_mm_median'))} | "
                 f"{_number(row.get('impact_error_mm_p90'))} |"
             )
+        if not revision_2_5["cells"]:
+            lines.append("| v2 (invalid LUT) | — | — | — | — | — |")
         lines.extend(
             [
                 "",
@@ -327,15 +329,23 @@ def render_corrected_iron_markdown(bundle: dict[str, Any]) -> str:
                 lines.append(f"- `{row['candidate']}` ({row['gate_role']}): {detail}")
         else:
             lines.append("- No shots: Arm A-v2 LUT validation failed closed.")
-    lines.extend(
-        [
-            "",
-            "## Decision",
-            "",
+    if revision_2_5:
+        outcome = (
+            "Arm A-v2 completed the registered cells; only ambient 500 us determined its gate"
+            if revision_2_5["cells"]
+            else "Arm A-v2 failed closed before shots because its LUT validation did not pass"
+        )
+        decision = (
+            f"The accepted historical iron result remains **{bundle['verdict']['iron']}**. "
+            f"The prospective result is **{revision_2_5['iron_verdict']}**: {outcome}. Driver "
+            "remains **HOLD_CAD_MESH**, the work order is **STOP_FOR_MAINTAINER_REVIEW**, "
+            "and F2 remains blocked."
+        )
+    else:
+        decision = (
             f"The provisional iron result is **{bundle['verdict']['iron']}**. Driver remains "
             "**HOLD_CAD_MESH**. The overall work order is **STOP_FOR_MAINTAINER_REVIEW**; "
-            "no F2 work began.",
-            "",
-        ]
-    )
+            "no F2 work began."
+        )
+    lines.extend(["", "## Decision", "", decision, ""])
     return "\n".join(lines)
