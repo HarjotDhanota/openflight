@@ -65,6 +65,44 @@ accepted baseline and retired Arm B results remain in the paired tables without
 rerun. Driver remains `HOLD_CAD_MESH`; F2 remains blocked pending review of the
 Arm A-v2 iron result.
 
+### Arm A-v3 prospective registration (exact evaluation model)
+
+**Registration status: FROZEN BEFORE ARM A-v3 SHOT OUTCOMES on 2026-08-24.**
+The maintainer accepted A-v2's fail-closed result and attributed the remaining
+covariance error to near-discontinuous second moments at pathological views of
+the thin blade and hosel, rather than insufficient interpolation density.
+
+Arm A-v3 therefore has no LUT and no interpolation. At every pose hypothesis,
+including each centroid-correction iteration and roll-refinement query, it
+projects the admitted metric 690CB triangles through the native A0 camera and
+uses the existing NumPy triangle rasterizer to compute the exact centroid
+offset, covariance, and 72-direction contour. It uses the registered Arm A-v1
+roll search (`[-90, 90)` degrees at 2-degree spacing) followed by the unchanged
+`[-2, 2]` degree refinement at 0.25-degree spacing. The production solver's
+fit-residual gate, ambiguity gate, temporal gates, fail-closed behavior, and
+multi-frame policy are unchanged. The exact model is evaluation-only; the v1/v2
+LUT implementations and their validation machinery remain in-tree.
+
+LUT validation is inapplicable to A-v3 because no sampled representation is
+queried: its fit model invokes the same native rasterizer directly for every
+pose. This is recorded as `NOT_APPLICABLE_EXACT_MODEL`, not treated as a waived
+or passing LUT bound. The corrected-iron shot registration remains unchanged:
+N=200 per cell, seeds `20260824`-`20261023`, A0, ten frames/eight pre-trigger,
+calibrated 1% dimension residual, sigma 1.2 DN photometric noise, sigma 3 mm
+radar noise, zero scattering residual, deterministic sigma 33 us sync jitter,
+the frozen mesh truth and 21-sample exposure integration, and the 7-iron gates
+(solve >=0.80, median <=12 mm, p90 <=24 mm). `ambient_500us` is gate-bearing;
+`strobed_10us` runs and is reported as comparison-only under revision 2.5.
+
+Each attempted shot records `time.perf_counter()` wall time from immediately
+before through immediately after `AMBIENT_RECOVERY_POLICY.solve`. This includes
+archive loading, extraction, radar/temporal fusion, and all exact pose renders;
+it excludes synthetic artifact generation, truth-sidecar scoring, and temporary
+directory setup. The JSON retains all 200 per-shot seconds for each cell; the
+report publishes total, median, p90, and maximum solve wall time. Timing is
+descriptive compute-cost evidence and is not a gate. Driver remains
+`HOLD_CAD_MESH`; F2 remains blocked pending maintainer review of A-v3.
+
 ## Results
 
 **DRIVER: HOLD_CAD_MESH**
