@@ -93,21 +93,30 @@ It also costs frames. Tonight's capture had the club in view for ~34 ms:
 
 At 144 fps the club moves three head-lengths between frames and only ~5 frames carry it. **Keep the frame rate; spend the pixel headroom instead.**
 
-**The metric that actually binds is not frame count — it is the worst-case gap between the nearest frame and the impact instant.** We do not need a frame *at* impact; the radar I/Q supplies the impact time and the club's pose is extrapolated to it. Half the inter-frame travel is therefore how far that extrapolation has to reach:
+**CORRECTED 2026-08-25 — this subsection previously argued the opposite, and it was wrong.**
 
-| fps | Frame period | Club travel | **Worst-case gap** | |
+I claimed the frame rate was justified by "extrapolation reach": at 60 fps the nearest frame is up to 375 mm from impact, therefore 60 fps "is not a measurement." The arithmetic is right and the conclusion is wrong, because it treats the camera as if it had to do the job alone.
+
+**§2.4 of this document already settles it, graded [SPEC/MAN]:** Trackman 4 does markerless impact location with its **720p @ 60 fps** camera. §2.4's own words — *"At 60 fps a driver head travels ~0.7 m between frames — the camera cannot possibly track impact on its own. It works because the dual radar provides impact timing at 40,000 samples/s... **Impact location falls out of the fusion, not out of frame rate.**"* That is the same 0.7 m figure I recomputed and then misread.
+
+The radar carries timing and kinematics; the camera contributes angular and positional constraints; the silhouette model ties them together. **We have 33 µs impact timing from the OPS 30 kHz I/Q buffer — better than Trackman's 40 kHz radar — so the fusion premise holds for us at least as well as for them.**
+
+### What that means for the readout trade
+
+Frame rate is therefore **not** the binding constraint on impact location, and the trade I dismissed is reopened:
+
+| Mode | fps | Worst gap to impact | Ball | vs Trackman 4 |
 |---|---|---|---|---|
-| 4,600 | 0.22 ms | 10 mm | **5 mm** | TrackMan iO measurement camera |
-| **467** | 2.14 ms | 96 mm | **48 mm** | **OpenFlight, shipped** |
-| 253 | 3.95 ms | 178 mm | 89 mm | OV9281 640×400 |
-| 144 | 6.94 ms | 312 mm | 156 mm | OV9281 1280×800 |
-| 60 | 16.67 ms | 750 mm | **375 mm** | TrackMan 4 **video** camera |
+| **320×200, shipped** | 467 | 48 mm | 14 px | 7.8× the frame rate |
+| **640×400 (2× sub)** | 253 | 89 mm | 14 px | 4.2× |
+| **1280×800 native (1:1)** | **144** | **156 mm** | **28 px** | **2.4×** |
+| Trackman 4 (OERT) | 60 | 375 mm | ? | baseline |
 
-A driver face is ~100 mm heel-to-toe and impact location needs single-digit mm. Extrapolating a rotating head on an arc over 48 mm is demanding; over 375 mm it is not a measurement.
+**`1280×800` at 1:1 is now a leading candidate, not a rejected one.** It doubles plate scale to 0.655 px/mm and a 28 px ball, while still running **2.4× Trackman 4's frame rate** with better impact timing than theirs. On the evidence, that trade is favourable — the resolution is worth more to a silhouette fit than frames we do not need.
 
-**⚠️ Do not confuse TrackMan 4's two cameras.** Its published *"HD 720p @ 60 fps / Full HD 1080p @ 45 fps"* is the **video recording** camera — TrackMan's own wording is "Radar Synchronized High **Dynamic Range**". The measurement path is separately named "Radar Synchronized High **Speed** Optics" and **TrackMan does not publish its frame rate**. The 4,600 fps figure belongs to the iO. This is the same trap §1J already recorded for MLM2PRO — one high-speed measurement camera plus a wide-angle 2K *video* camera — and Mevo+ repeats it. Spec sheets lead with the video camera because it is the consumer-facing feature. **[MAN]** <https://www.trackman.com/golf/trackman-4/tech-specs>
+Caveats before committing to it: Trackman runs **dual** radar with correspondingly better kinematics than our OPS243 + IWR6843; their fusion model is the expensive part they spent years on; and we do not know their ball-pixel count (§2.5 — nobody publishes it, and they sit further back). So this is a strong candidate to evaluate, not a settled decision. **The A-v3 re-run should sweep frame rate as a free parameter rather than assuming 467 fps.**
 
-**Unbudgeted error term this exposes:** at 48 mm we are ~10× worse than the iO on extrapolation reach. The pose fit must therefore recover clubhead *velocity* as well as pose, and the extrapolation over that gap is an error source that no current budget cell models.
+⚠️ **Comparator set is Trackman 4, Full Swing KIT, and Mevo Gen 2.** Trackman **iO** is excluded — it is ceiling-mounted overhead (§2.4 correction), and its 4,600 fps is the price of markerless spin from overhead, not a behind-ball number. Do not anchor behind-ball arguments to it.
 
 ### 0.6.4 "Zoom" means a different lens, not a crop
 
