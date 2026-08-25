@@ -12,6 +12,54 @@
 
 ---
 
+## 0.5 Measured against a real capture (2026-08-24) — **[MEASURED]**
+
+The first real capture archive with metadata (`frames.npz`: 99 frames, `320x200` mono, plus per-frame timestamps, exposure, gain and the radar trigger) tests several assumptions in this document directly. Where §0 estimated, this section measures.
+
+| Quantity | This document assumed | Measured | Effect |
+|---|---|---|---|
+| Exposure | 500 µs ("as shipped" in `budget_radar.py`) | **997 µs** | Doubles the error — see below |
+| Analogue gain | not modelled | **15.94 = 100 % of max** | No headroom left in either knob |
+| Frame interval | 2.14 ms / 468 fps | **2.1380 ms, jitter 2.9 µs** | ✅ Confirms §0 |
+| Ball at the tee | 28 px (0.656 px/mm) | **~14–16 px (~0.35 px/mm)** | See §1 note |
+| Illumination | "absence of illumination" | **A near-field directional light was ON**, and drove 71 % of the mat to clip at 255 DN | Refines §0 |
+| Ball detectability | not modelled | **Visible in every frame — but contrast inverts sign** between address (−62 DN) and flight (+141 DN) | Breaks the fixed-polarity detector |
+
+**The exposure finding reorders the whole document.** Re-running our own pre-registered `budget_radar.py` with *only* the exposure constant changed moves median impact error from **94.9 mm to 193.5 mm**. More importantly, re-running at the higher plate scale gives **193.2 mm vs 193.5 mm** — a 0.3 mm difference. Motion smear is measured in pixels, so doubling plate scale doubles smear at the same moment it doubles detail, and the two very nearly cancel. **At 997 µs, better optics buy nothing.** §0's ranking of "~3.6× in plate scale and ~25× in exposure" as two comparable deficits is wrong: the exposure deficit dominates and the plate-scale deficit is second-order until it is fixed. This *strengthens* §0's conclusion that a pulsed strobe is the single mandatory purchase, and weakens the case for spending effort on readout modes first.
+
+**Caveat on the 94.9 → 193.5 mm figures.** `budget_radar.py` treats blur as pure centroid noise, which is the conservative screening model, not the real solver. Blur-aware template fitting forward-models the smear and does far better (A-v3 ambient: 1.050 mm median). But that result was *also* computed at 500 µs, so it too is pending a re-run at 997 µs and must not be quoted about real hardware until then.
+
+**Refinement to "absence of illumination".** §0 says no ambient configuration can reach a 20 µs exposure, which remains true. But the capture shows a bright, near-field, *directional* light that was on throughout the armed window and switched off 12.8 ms after the radar trigger — the near mat lost 58 % of its brightness while the backdrop behind it lost 14 %, which is inverse-square falloff from a source close to the tee. **Whose light this is, is unresolved.** `GPIO6` was reserved for a camera strobe and then reallocated to UPS power-loss detect (`docs/build-checklist.md`), so nothing in our software controls it. The timing relative to the trigger is too tight for coincidence. *This needs answering by whoever captured the shot, not inferring from pixels.*
+
+**A defect this surfaced.** `silhouette_poc/fusion/pipeline.py::_ball_component` thresholds at `percentile(frame,10) + 210 DN`. On a real capture the 10th percentile is 66–77 DN, putting the threshold at 276–287 DN — **above the 8-bit ceiling, so the mask is always empty and it raises `visibility_ball` unconditionally**, on every frame, for reasons unrelated to the ball. Its companion in `_separate_head_from_shaft` fails the other way: `+160 DN` admits 30 % of the frame as "bright shaft" because the saturated mat clears the bar everywhere.
+
+**The ball's contrast inverts, and that is the real defect.** The ball is visible in *every* frame of this shot — but not with a consistent sign:
+
+| | Ball | Background | Contrast | Against the `+210 DN` rule |
+|---|---|---|---|---|
+| At address (F20) | 192 DN | 255 DN (clipped mat) | **−62 DN** | wrong sign — unreachable at any threshold |
+| In flight (F76) | 224 DN | 102 DN (dark wall) | **+122 DN** | right sign, still short of the bar |
+
+So the rule fails in *both* directions, the easy case included. No choice of constant fixes it, because the background swings from 102 DN to 255 DN inside a single shot. The replacement must find compact regions differing from their **local** background in **either** direction and confirm them by **shape** — the ball is the one object in frame with a known fixed physical diameter, which is a far stronger discriminator than any DN offset.
+
+**Status of the fix (2026-08-24).** A replacement detector is in `silhouette_poc/fusion/ball_detect.py` (new file; `pipeline.py` not yet rewired), with `tests/test_ball_detect.py` pinning each defect below. Measured on the real capture:
+
+| | Old rule | New detector |
+|---|---|---|
+| Ball among candidates, 16 address frames | **0 / 16** | 3 / 16 per frame |
+| Teed-ball centre, vs hand-measured truth | never found | **3.64 px error** |
+| Circle fit bias at 120° of visible arc | −44 % | **exact** (geometric fit replaces algebraic) |
+
+Three things were needed, and only the first was expected: (1) threshold the *signed* residual against a *local* background, in both directions; (2) replace the algebraic circle fit, which was biased −44 % on the partial arcs that are the normal case here; (3) select by **departure** rather than shape — a bay contains signage and shoes that fit a circle better than a blended ball, and a shape-only score picked the golfer's leg in 10 real frames out of 10. Static clutter scores 0.00 on departure, the ball 1.00. Per-frame detection remains low (~20–45 %), so the temporal aggregation is load-bearing, not a refinement.
+
+**What is still NOT recoverable from this capture: the ball's radius, and therefore the plate scale.** The same ball in the same shot measures 6.86 px at address (biased low — the lit top blends into the clipped mat, so the half-maximum crossing lands inside the ball) and 13.97 px in flight (biased high — the core saturates and blooms, plus ~4.7 px of vertical motion smear). **A factor of 2.0 apart.** No algorithm closes that gap; it needs a correctly exposed reference ball. This is the same 2× ambiguity as Gate 0, arriving by a different route, and it means impact location in *millimetres* is blocked on exposure rather than on software.
+
+**Consequence for focal self-calibration: it survives, with a condition.** §0.5's earlier draft recorded the ball as unmeasurable at address; that was a measurement error on my part (a median taken over a region that was mostly mat, swamping the ball's ~100 px). The ball *is* measurable — but its visible extent at address is a **partial disk**, roughly full width and ~60 % of height, because the upper surface faces the light and blends into the mat. Self-calibration must therefore **fit a circle of known radius to the visible arc**, not measure a bounding box, or it will systematically under-read the diameter and inflate the derived scale.
+
+Full write-up with figures: <https://claude.ai/code/artifact/c6b048fa-6950-4433-8891-42c875600d72>
+
+---
+
 ## 1. The plate scale — settled
 
 Three artefacts disagreed about what the `320x200` mode does. Resolved from OmniVision register semantics.
@@ -32,6 +80,30 @@ Registers in `drivers/ov9281/ov9282-high-speed.patch`, `mode_320x200_regs`:
 816 columns × 516 rows sampled at step 2 → 408 × 258 available; the ISP then emits a 320 × 200 window from that.
 
 **Conclusion: the 320×200 mode subsamples 2×, which is the *same angular scale per output pixel* as the 640×400 mode (1280×800 at 2×). A ball is the same pixel size in both (~28 px). The field is 50 % of the 640×400 field in each axis.**
+
+> **[MEASURED 2026-08-24] The real capture shows a ~14–16 px ball, not 28 px — and the register analysis above is *not* what is wrong.**
+>
+> Two independent references in `frames.npz` agree: the ball measures 13.8–14.7 px in flight (~16 px back-projected to the tee), and a golf shoe spans ~48 px where 0.656 px/mm predicts 190 px for a 290 mm shoe. Both put the field of view near **930 mm**, not the 488 mm assumed here. The scene corroborates it — a 19-inch field could not contain a shoe, a stretch of mat and the golfer's leg at once.
+>
+> The distinction that matters: this section derives the **angular** scale per output pixel from `X_INC`/`Y_INC`, which is a property of the readout mode and stands. What is measured in the capture is the **plate** scale — angular scale ÷ camera-to-ball distance. So the 2× gap lands on a term this section never touched.
+>
+> **RESOLVED 2026-08-24: the lens is 2.8 mm, not 6 mm.** The unit uses the InnoMaker `CAM-MIPI9281RAW-V2` (user-confirmed exact part). Its datasheet gives a **fixed 2.8 mm wide-angle M12 lens, FOV(D) 90°, FOV(H) 72°, f/2.2, TV distortion < −17 %**. §3's "6.0 mm" was inferred by assuming `focal_px = 1000` and back-solving — it was never read off a datasheet, and it is wrong by 2.1×.
+>
+> Everything reconciles once that is corrected:
+>
+> | | Value |
+> |---|---|
+> | Effective pixel pitch, `320×200` mode (3.0 µm at 2× subsample) | 6.0 µm |
+> | **`focal_px` in the shipped mode** (2.8 mm ÷ 6.0 µm) | **466.7 px** |
+> | Measured airborne ball, 13.97 px → plate scale | 0.327 px/mm |
+> | ⇒ implied camera-to-ball distance | **1425 mm = 4.7 ft** |
+> | README's documented placement | **3–5 ft** ✅ |
+> | ⇒ implied FOV(H) | 68.9° |
+> | Datasheet FOV(H) | **72°** ✅ (gap is the −17 % distortion) |
+>
+> Three independent sources — the datasheet lens, the measured ball, and the documented placement — agree. **Gate 0 is settled: plate scale ≈ 0.33 px/mm and the ball is ≈ 14 px at the tee.** Both prior candidates were wrong: 0.656 px/mm was 2.0× too optimistic and 1.31 px/mm was 4.0×. Use `focal_px = 466.7` and derive plate scale as `466.7 / Z_mm` for whatever placement distance is actually used.
+>
+> **New consequence — lens distortion is not optional.** A 2.8 mm wide-angle at **< −17 % TV distortion** is a barrel lens, and the POC projects its mesh through an undistorted pinhole model. That is fine near the optical axis and wrong toward the edges, exactly where a clubhead sweeps. A one-time checkerboard calibration for `k1/k2` is now a prerequisite for millimetre-accurate impact location, and no such calibration exists anywhere in the repo.
 
 Therefore:
 
