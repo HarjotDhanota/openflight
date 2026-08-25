@@ -2,24 +2,22 @@
 
 Classical rear-view silhouette plus calibrated club-range fusion research.
 
-## Phase 4b ambient recovery
+## Results
 
-**Ambient 500 us: YES** — calibrated ambient driver and 7-iron meet the frozen recovery gates.
+**Ambient 500 us: UNDECIDED** — material Phase 1b disagreement must be diagnosed before interpreting the gate.
 
-The existing single OV9281 320x200 ambient configuration is the only Phase-A
-buildable candidate. The strobe remains a deferred comparison fallback.
-
-### Final calibrated results
-
-| Club | Candidate | N | Solve | Median vector error | p90 vector error | Result |
+| Club | Candidate | N | Solve rate | Median vector error | p90 vector error | Result |
 |---|---|---:|---:|---:|---:|---|
-| poc_driver | strobed_10us | 200 | 1.000 | 0.95 mm | 1.86 mm | PASS |
-| poc_driver | ambient_500us | 200 | 1.000 | 0.93 mm | 1.82 mm | PASS |
-| poc_7iron | strobed_10us | 200 | 1.000 | 1.10 mm | 2.77 mm | PASS |
-| poc_7iron | ambient_500us | 200 | 1.000 | 1.09 mm | 2.43 mm | PASS |
+| poc_driver | strobed_10us | 200 | 0.930 | 10.10 mm | 17.39 mm | FAIL |
+| poc_driver | ambient_500us | 200 | 0.975 | 10.62 mm | 18.44 mm | FAIL |
+| poc_7iron | strobed_10us | 200 | 1.000 | 6.08 mm | 13.38 mm | PASS |
+| poc_7iron | ambient_500us | 200 | 1.000 | 7.55 mm | 14.82 mm | PASS |
 
-See [Phase 4b results](eval/RESULTS_E2E_4B.md),
-[canonical JSON](eval/results_e2e_4b.json), and
-[degradation curves](eval/degradation_curves_4b.svg).
+Headline cells include registered per-club template variation: driver ±8% and
+7-iron ±10%. These are synthetic POC results, not closure of physical Gates 0, R, or T.
 
-Evaluation hash: `0777378db53dbbb152a1dd00edd9355580f4c8327103584bd4fd0fc1e24168d8`
+See [the full end-to-end report](eval/RESULTS_E2E.md),
+[canonical JSON](eval/results_e2e.json), and
+[degradation curves](eval/degradation_curves.svg).
+
+Evaluation hash: `40bb77515c114ec341eabb3ca8a92e3df2b69bd7ca4f2b7eadf1bbed49ff87f1`

@@ -1,8 +1,8 @@
 # End-to-end silhouette fusion evaluation
 
-**AMBIENT 500 us: NO** — poc_driver solve rate 0.665 < 0.800.
+**AMBIENT 500 us: UNDECIDED** — material Phase 1b disagreement must be diagnosed before interpreting the gate.
 
-Evaluation hash: `b4d4f99d1f9337105a7cf41f0885286cf51c1103680ce1bd049056c27715d5ad`
+Evaluation hash: `40bb77515c114ec341eabb3ca8a92e3df2b69bd7ca4f2b7eadf1bbed49ff87f1`
 
 Every core cell uses the full immutable artifact path and production fusion solver.
 Headline cells include registered per-club template variation (driver ±8%, 7-iron
@@ -14,14 +14,14 @@ Rejected shots remain in the solve-rate denominator. median AND p90 are reported
 
 | Club | Candidate | N | Solve rate | Vector median mm | Vector p90 mm | Signed horizontal median/p90 mm | Signed vertical median/p90 mm | IoU median | Fit residual median px | Quality rejection | Result |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| poc_driver | strobed_10us | 200 | 0.880 | 1.35 | 3.18 | 0.21/2.37 | -0.30/1.20 | 0.923 | 5.64 | 0.120 | PASS |
-| poc_driver | ambient_500us | 200 | 0.665 | 1.21 | 2.51 | -0.21/1.04 | -0.03/1.38 | 0.928 | 5.95 | 0.335 | FAIL |
-| poc_7iron | strobed_10us | 200 | 1.000 | 1.69 | 3.44 | 0.53/2.82 | -0.49/1.57 | 0.899 | 4.78 | 0.000 | PASS |
-| poc_7iron | ambient_500us | 200 | 0.935 | 1.48 | 3.14 | 0.23/1.99 | -0.15/1.76 | 0.903 | 5.48 | 0.065 | PASS |
+| poc_driver | strobed_10us | 200 | 0.930 | 10.10 | 17.39 | 2.62/7.26 | -8.84/-3.48 | 0.923 | 5.75 | 0.050 | FAIL |
+| poc_driver | ambient_500us | 200 | 0.975 | 10.62 | 18.44 | 2.47/7.33 | -10.12/-5.06 | 0.932 | 5.85 | 0.000 | FAIL |
+| poc_7iron | strobed_10us | 200 | 1.000 | 6.08 | 13.38 | 1.35/5.03 | -5.59/-0.28 | 0.911 | 4.77 | 0.000 | PASS |
+| poc_7iron | ambient_500us | 200 | 1.000 | 7.55 | 14.82 | 1.90/5.48 | -6.78/-1.02 | 0.896 | 4.82 | 0.000 | PASS |
 
 ## Ambient 500 us verdict
 
-**NO** — poc_driver solve rate 0.665 < 0.800.
+**UNDECIDED** — material Phase 1b disagreement must be diagnosed before interpreting the gate.
 
 The ambient candidate uses 21-sample exposure integration at 500 us and the same
 artifact loader, segmentation, exposure-template fit, radar solve, and temporal gates as
@@ -29,36 +29,36 @@ the strobed candidate. It is preferred Phase-A hardware only when this verdict i
 
 ## Phase 1b reconciliation
 
-**DIAGNOSED_MODEL_GAP**
+**BUG_UNRESOLVED**
 
 Material disagreement limits were frozen before this run: 0.10 solve rate, 2 mm median,
 and 4 mm p90 absolute delta.
 
 | Club | Candidate | Solve delta | Median delta mm | p90 delta mm | Status |
 |---|---|---:|---:|---:|---|
-| poc_driver | strobed_10us | -0.113 | -0.34 | 0.15 | DIAGNOSED_MODEL_GAP |
-| poc_driver | ambient_500us | -0.332 | -0.44 | -0.66 | DIAGNOSED_MODEL_GAP |
-| poc_7iron | strobed_10us | 0.000 | -0.18 | -0.17 | AGREES |
-| poc_7iron | ambient_500us | -0.065 | -0.42 | -0.62 | AGREES |
+| poc_driver | strobed_10us | -0.063 | 8.41 | 14.35 | BUG_UNRESOLVED |
+| poc_driver | ambient_500us | -0.022 | 8.97 | 15.27 | BUG_UNRESOLVED |
+| poc_7iron | strobed_10us | 0.000 | 4.22 | 9.77 | BUG_UNRESOLVED |
+| poc_7iron | ambient_500us | 0.000 | 5.65 | 11.06 | BUG_UNRESOLVED |
 
 ### Zero-mismatch reconciliation controls
 
 | Club | Candidate | Solve | Median mm | p90 mm | Phase 1b status |
 |---|---|---:|---:|---:|---|
-| poc_driver | strobed_10us | 1.000 | 0.95 | 1.76 | AGREES |
-| poc_driver | ambient_500us | 1.000 | 0.94 | 1.83 | AGREES |
-| poc_7iron | strobed_10us | 1.000 | 0.98 | 2.18 | AGREES |
-| poc_7iron | ambient_500us | 1.000 | 1.01 | 2.06 | AGREES |
+| poc_driver | strobed_10us | 0.995 | 9.83 | 17.17 | MATERIAL_DISAGREEMENT |
+| poc_driver | ambient_500us | 0.985 | 11.09 | 18.30 | MATERIAL_DISAGREEMENT |
+| poc_7iron | strobed_10us | 1.000 | 6.23 | 13.13 | MATERIAL_DISAGREEMENT |
+| poc_7iron | ambient_500us | 1.000 | 7.72 | 14.72 | MATERIAL_DISAGREEMENT |
 
 A headline-cell disagreement is diagnosed as the registered template-dimension
 model gap only when its paired zero-mismatch control agrees with Phase 1b.
 
 ## Failure taxonomy
 
-- `poc_driver/strobed_10us`: silhouette_fit_residual:24
-- `poc_driver/ambient_500us`: silhouette_fit_residual:67
+- `poc_driver/strobed_10us`: silhouette_fit_residual:10, visibility_ball:4
+- `poc_driver/ambient_500us`: visibility_ball:5
 - `poc_7iron/strobed_10us`: none:0
-- `poc_7iron/ambient_500us`: silhouette_fit_residual:13
+- `poc_7iron/ambient_500us`: none:0
 
 ## Degradation curves
 
@@ -71,122 +71,121 @@ median, and p90 at every sampled point.
 
 | Club | Candidate | Value | N | Solve | Median mm | p90 mm | Failures |
 |---|---|---:|---:|---:|---:|---:|---|
-| poc_driver | strobed_10us | 0.000 | 24 | 1.000 | 0.70 | 1.38 | none |
-| poc_driver | strobed_10us | 0.025 | 24 | 1.000 | 0.93 | 1.53 | none |
-| poc_driver | strobed_10us | 0.050 | 24 | 1.000 | 1.16 | 2.12 | none |
-| poc_driver | strobed_10us | 0.075 | 24 | 0.958 | 1.20 | 2.70 | silhouette_fit_residual:1 |
-| poc_driver | strobed_10us | 0.100 | 24 | 0.875 | 1.42 | 3.24 | silhouette_fit_residual:3 |
-| poc_driver | strobed_10us | 0.150 | 24 | 0.375 | 1.87 | 3.59 | component_shaft_connected:1, silhouette_fit_residual:14 |
-| poc_driver | ambient_500us | 0.000 | 24 | 1.000 | 0.78 | 1.38 | none |
-| poc_driver | ambient_500us | 0.025 | 24 | 0.875 | 0.94 | 1.44 | silhouette_fit_residual:3 |
-| poc_driver | ambient_500us | 0.050 | 24 | 0.750 | 0.91 | 1.89 | silhouette_fit_residual:6 |
-| poc_driver | ambient_500us | 0.075 | 24 | 0.750 | 1.15 | 2.81 | silhouette_fit_residual:6 |
-| poc_driver | ambient_500us | 0.100 | 24 | 0.667 | 1.48 | 3.07 | silhouette_fit_residual:8 |
-| poc_driver | ambient_500us | 0.150 | 24 | 0.417 | 1.53 | 3.18 | silhouette_fit_residual:14 |
-| poc_7iron | strobed_10us | 0.000 | 24 | 1.000 | 0.79 | 1.66 | none |
-| poc_7iron | strobed_10us | 0.025 | 24 | 1.000 | 0.91 | 1.94 | none |
-| poc_7iron | strobed_10us | 0.050 | 24 | 1.000 | 0.91 | 2.12 | none |
-| poc_7iron | strobed_10us | 0.075 | 24 | 1.000 | 1.35 | 2.22 | none |
-| poc_7iron | strobed_10us | 0.100 | 24 | 1.000 | 1.45 | 2.79 | none |
-| poc_7iron | strobed_10us | 0.150 | 24 | 1.000 | 1.85 | 4.25 | none |
-| poc_7iron | ambient_500us | 0.000 | 24 | 1.000 | 0.71 | 1.72 | none |
-| poc_7iron | ambient_500us | 0.025 | 24 | 1.000 | 0.77 | 1.62 | none |
-| poc_7iron | ambient_500us | 0.050 | 24 | 1.000 | 1.00 | 1.86 | none |
-| poc_7iron | ambient_500us | 0.075 | 24 | 1.000 | 1.01 | 2.64 | none |
-| poc_7iron | ambient_500us | 0.100 | 24 | 1.000 | 1.16 | 3.17 | none |
-| poc_7iron | ambient_500us | 0.150 | 24 | 0.917 | 1.66 | 4.11 | silhouette_fit_residual:2 |
+| poc_driver | strobed_10us | 0.000 | 24 | 1.000 | 10.24 | 16.52 | none |
+| poc_driver | strobed_10us | 0.025 | 24 | 1.000 | 10.82 | 17.24 | none |
+| poc_driver | strobed_10us | 0.050 | 24 | 1.000 | 10.98 | 17.41 | none |
+| poc_driver | strobed_10us | 0.075 | 24 | 0.958 | 11.62 | 17.79 | silhouette_fit_residual:1 |
+| poc_driver | strobed_10us | 0.100 | 24 | 0.917 | 11.07 | 17.98 | silhouette_fit_residual:2 |
+| poc_driver | strobed_10us | 0.150 | 24 | 0.542 | 10.85 | 16.28 | silhouette_fit_residual:11 |
+| poc_driver | ambient_500us | 0.000 | 24 | 0.958 | 11.79 | 17.61 | visibility_ball:1 |
+| poc_driver | ambient_500us | 0.025 | 24 | 0.958 | 11.85 | 16.79 | visibility_ball:1 |
+| poc_driver | ambient_500us | 0.050 | 24 | 0.958 | 10.76 | 16.79 | visibility_ball:1 |
+| poc_driver | ambient_500us | 0.075 | 24 | 0.958 | 10.76 | 17.24 | visibility_ball:1 |
+| poc_driver | ambient_500us | 0.100 | 24 | 0.958 | 12.09 | 18.06 | visibility_ball:1 |
+| poc_driver | ambient_500us | 0.150 | 24 | 0.958 | 10.71 | 18.02 | visibility_ball:1 |
+| poc_7iron | strobed_10us | 0.000 | 24 | 1.000 | 5.22 | 11.65 | none |
+| poc_7iron | strobed_10us | 0.025 | 24 | 1.000 | 5.26 | 10.76 | none |
+| poc_7iron | strobed_10us | 0.050 | 24 | 1.000 | 5.48 | 11.28 | none |
+| poc_7iron | strobed_10us | 0.075 | 24 | 1.000 | 5.60 | 11.22 | none |
+| poc_7iron | strobed_10us | 0.100 | 24 | 1.000 | 5.80 | 11.22 | none |
+| poc_7iron | strobed_10us | 0.150 | 24 | 1.000 | 6.22 | 11.56 | none |
+| poc_7iron | ambient_500us | 0.000 | 24 | 1.000 | 7.11 | 12.06 | none |
+| poc_7iron | ambient_500us | 0.025 | 24 | 1.000 | 7.34 | 12.80 | none |
+| poc_7iron | ambient_500us | 0.050 | 24 | 1.000 | 6.96 | 13.21 | none |
+| poc_7iron | ambient_500us | 0.075 | 24 | 1.000 | 7.40 | 12.82 | none |
+| poc_7iron | ambient_500us | 0.100 | 24 | 1.000 | 6.93 | 12.85 | none |
+| poc_7iron | ambient_500us | 0.150 | 24 | 1.000 | 7.10 | 12.22 | none |
 
 ### photometric_noise_sigma_dn
 
 | Club | Candidate | Value | N | Solve | Median mm | p90 mm | Failures |
 |---|---|---:|---:|---:|---:|---:|---|
-| poc_driver | strobed_10us | 0.000 | 24 | 1.000 | 0.70 | 1.38 | none |
-| poc_driver | strobed_10us | 0.600 | 24 | 1.000 | 0.70 | 1.38 | none |
-| poc_driver | strobed_10us | 1.200 | 24 | 1.000 | 0.70 | 1.38 | none |
-| poc_driver | strobed_10us | 2.400 | 24 | 1.000 | 0.70 | 1.38 | none |
-| poc_driver | strobed_10us | 4.800 | 24 | 1.000 | 0.85 | 1.38 | none |
-| poc_driver | strobed_10us | 9.600 | 24 | 0.000 | — | — | silhouette_fit_residual:23, visibility_club:1 |
-| poc_driver | ambient_500us | 0.000 | 24 | 1.000 | 0.80 | 1.27 | none |
-| poc_driver | ambient_500us | 0.600 | 24 | 1.000 | 0.72 | 1.41 | none |
-| poc_driver | ambient_500us | 1.200 | 24 | 1.000 | 0.78 | 1.38 | none |
-| poc_driver | ambient_500us | 2.400 | 24 | 1.000 | 0.81 | 1.59 | none |
-| poc_driver | ambient_500us | 4.800 | 24 | 0.958 | 0.86 | 1.49 | silhouette_fit_residual:1 |
-| poc_driver | ambient_500us | 9.600 | 24 | 0.000 | — | — | silhouette_fit_residual:24 |
-| poc_7iron | strobed_10us | 0.000 | 24 | 1.000 | 0.79 | 1.66 | none |
-| poc_7iron | strobed_10us | 0.600 | 24 | 1.000 | 0.79 | 1.66 | none |
-| poc_7iron | strobed_10us | 1.200 | 24 | 1.000 | 0.79 | 1.66 | none |
-| poc_7iron | strobed_10us | 2.400 | 24 | 1.000 | 0.79 | 1.66 | none |
-| poc_7iron | strobed_10us | 4.800 | 24 | 1.000 | 0.86 | 2.02 | none |
-| poc_7iron | strobed_10us | 9.600 | 24 | 0.000 | — | — | silhouette_ambiguous:1, silhouette_fit_residual:23 |
-| poc_7iron | ambient_500us | 0.000 | 24 | 1.000 | 0.67 | 1.59 | none |
-| poc_7iron | ambient_500us | 0.600 | 24 | 1.000 | 0.61 | 1.58 | none |
-| poc_7iron | ambient_500us | 1.200 | 24 | 1.000 | 0.71 | 1.72 | none |
-| poc_7iron | ambient_500us | 2.400 | 24 | 1.000 | 0.72 | 1.63 | none |
-| poc_7iron | ambient_500us | 4.800 | 24 | 1.000 | 0.69 | 1.55 | none |
-| poc_7iron | ambient_500us | 9.600 | 24 | 0.000 | — | — | silhouette_fit_residual:20, visibility_club:4 |
+| poc_driver | strobed_10us | 0.000 | 24 | 1.000 | 10.24 | 16.52 | none |
+| poc_driver | strobed_10us | 0.600 | 24 | 1.000 | 10.24 | 16.52 | none |
+| poc_driver | strobed_10us | 1.200 | 24 | 1.000 | 10.24 | 16.52 | none |
+| poc_driver | strobed_10us | 2.400 | 24 | 1.000 | 10.24 | 16.52 | none |
+| poc_driver | strobed_10us | 4.800 | 24 | 1.000 | 10.24 | 16.58 | none |
+| poc_driver | strobed_10us | 9.600 | 24 | 0.125 | 114.58 | 184.87 | silhouette_fit_residual:20, visibility_club:1 |
+| poc_driver | ambient_500us | 0.000 | 24 | 0.958 | 11.64 | 17.61 | visibility_ball:1 |
+| poc_driver | ambient_500us | 0.600 | 24 | 0.958 | 11.79 | 17.61 | visibility_ball:1 |
+| poc_driver | ambient_500us | 1.200 | 24 | 0.958 | 11.79 | 17.61 | visibility_ball:1 |
+| poc_driver | ambient_500us | 2.400 | 24 | 1.000 | 11.96 | 18.26 | none |
+| poc_driver | ambient_500us | 4.800 | 24 | 1.000 | 11.32 | 18.01 | none |
+| poc_driver | ambient_500us | 9.600 | 24 | 0.292 | 59.44 | 106.60 | silhouette_fit_residual:13, visibility_club:4 |
+| poc_7iron | strobed_10us | 0.000 | 24 | 1.000 | 5.22 | 11.65 | none |
+| poc_7iron | strobed_10us | 0.600 | 24 | 1.000 | 5.22 | 11.65 | none |
+| poc_7iron | strobed_10us | 1.200 | 24 | 1.000 | 5.22 | 11.65 | none |
+| poc_7iron | strobed_10us | 2.400 | 24 | 1.000 | 5.22 | 11.65 | none |
+| poc_7iron | strobed_10us | 4.800 | 24 | 1.000 | 5.35 | 11.65 | none |
+| poc_7iron | strobed_10us | 9.600 | 24 | 0.333 | 14.25 | 61.83 | silhouette_fit_residual:16 |
+| poc_7iron | ambient_500us | 0.000 | 24 | 1.000 | 7.12 | 12.08 | none |
+| poc_7iron | ambient_500us | 0.600 | 24 | 1.000 | 7.11 | 12.40 | none |
+| poc_7iron | ambient_500us | 1.200 | 24 | 1.000 | 7.11 | 12.06 | none |
+| poc_7iron | ambient_500us | 2.400 | 24 | 1.000 | 7.09 | 12.21 | none |
+| poc_7iron | ambient_500us | 4.800 | 24 | 1.000 | 7.37 | 12.15 | none |
+| poc_7iron | ambient_500us | 9.600 | 24 | 0.292 | 35.10 | 67.39 | silhouette_fit_residual:12, visibility_club:5 |
 
 ### radar_residual_mm
 
 | Club | Candidate | Value | N | Solve | Median mm | p90 mm | Failures |
 |---|---|---:|---:|---:|---:|---:|---|
-| poc_driver | strobed_10us | -40.000 | 24 | 1.000 | 4.56 | 5.54 | none |
-| poc_driver | strobed_10us | -20.000 | 24 | 1.000 | 2.34 | 3.31 | none |
-| poc_driver | strobed_10us | -10.000 | 24 | 1.000 | 1.26 | 2.29 | none |
-| poc_driver | strobed_10us | 0.000 | 24 | 1.000 | 0.70 | 1.38 | none |
-| poc_driver | strobed_10us | 10.000 | 24 | 1.000 | 1.03 | 2.03 | none |
-| poc_driver | strobed_10us | 20.000 | 24 | 1.000 | 2.19 | 3.11 | none |
-| poc_driver | strobed_10us | 40.000 | 24 | 1.000 | 4.21 | 5.52 | none |
-| poc_driver | ambient_500us | -40.000 | 24 | 1.000 | 4.36 | 5.33 | none |
-| poc_driver | ambient_500us | -20.000 | 24 | 1.000 | 2.44 | 3.19 | none |
-| poc_driver | ambient_500us | -10.000 | 24 | 1.000 | 1.20 | 2.14 | none |
-| poc_driver | ambient_500us | 0.000 | 24 | 1.000 | 0.78 | 1.38 | none |
-| poc_driver | ambient_500us | 10.000 | 24 | 1.000 | 1.06 | 2.27 | none |
-| poc_driver | ambient_500us | 20.000 | 24 | 0.875 | 2.11 | 3.41 | silhouette_fit_residual:3 |
-| poc_driver | ambient_500us | 40.000 | 24 | 0.708 | 4.01 | 5.51 | silhouette_fit_residual:7 |
-| poc_7iron | strobed_10us | -40.000 | 24 | 1.000 | 4.38 | 5.39 | none |
-| poc_7iron | strobed_10us | -20.000 | 24 | 1.000 | 2.30 | 3.35 | none |
-| poc_7iron | strobed_10us | -10.000 | 24 | 1.000 | 1.18 | 2.20 | none |
-| poc_7iron | strobed_10us | 0.000 | 24 | 1.000 | 0.79 | 1.66 | none |
-| poc_7iron | strobed_10us | 10.000 | 24 | 1.000 | 1.23 | 2.20 | none |
-| poc_7iron | strobed_10us | 20.000 | 24 | 1.000 | 2.34 | 3.14 | none |
-| poc_7iron | strobed_10us | 40.000 | 24 | 1.000 | 4.13 | 5.21 | none |
-| poc_7iron | ambient_500us | -40.000 | 24 | 1.000 | 4.20 | 5.10 | none |
-| poc_7iron | ambient_500us | -20.000 | 24 | 1.000 | 2.18 | 2.86 | none |
-| poc_7iron | ambient_500us | -10.000 | 24 | 1.000 | 1.38 | 2.08 | none |
-| poc_7iron | ambient_500us | 0.000 | 24 | 1.000 | 0.71 | 1.72 | none |
-| poc_7iron | ambient_500us | 10.000 | 24 | 1.000 | 1.27 | 2.06 | none |
-| poc_7iron | ambient_500us | 20.000 | 24 | 1.000 | 2.17 | 2.89 | none |
-| poc_7iron | ambient_500us | 40.000 | 24 | 1.000 | 4.06 | 4.97 | none |
+| poc_driver | strobed_10us | -40.000 | 24 | 1.000 | 14.81 | 20.29 | none |
+| poc_driver | strobed_10us | -20.000 | 24 | 1.000 | 12.67 | 18.50 | none |
+| poc_driver | strobed_10us | -10.000 | 24 | 1.000 | 11.49 | 17.45 | none |
+| poc_driver | strobed_10us | 0.000 | 24 | 1.000 | 10.24 | 16.52 | none |
+| poc_driver | strobed_10us | 10.000 | 24 | 1.000 | 9.07 | 15.87 | none |
+| poc_driver | strobed_10us | 20.000 | 24 | 1.000 | 7.87 | 14.67 | none |
+| poc_driver | strobed_10us | 40.000 | 24 | 1.000 | 6.59 | 12.89 | none |
+| poc_driver | ambient_500us | -40.000 | 24 | 0.958 | 15.69 | 20.73 | visibility_ball:1 |
+| poc_driver | ambient_500us | -20.000 | 24 | 0.958 | 14.49 | 19.21 | visibility_ball:1 |
+| poc_driver | ambient_500us | -10.000 | 24 | 0.958 | 13.03 | 17.94 | visibility_ball:1 |
+| poc_driver | ambient_500us | 0.000 | 24 | 0.958 | 11.79 | 17.61 | visibility_ball:1 |
+| poc_driver | ambient_500us | 10.000 | 24 | 0.958 | 11.05 | 16.52 | visibility_ball:1 |
+| poc_driver | ambient_500us | 20.000 | 24 | 0.958 | 9.60 | 15.56 | visibility_ball:1 |
+| poc_driver | ambient_500us | 40.000 | 24 | 0.958 | 7.75 | 14.56 | visibility_ball:1 |
+| poc_7iron | strobed_10us | -40.000 | 24 | 1.000 | 9.67 | 15.99 | none |
+| poc_7iron | strobed_10us | -20.000 | 24 | 1.000 | 7.45 | 13.98 | none |
+| poc_7iron | strobed_10us | -10.000 | 24 | 1.000 | 6.37 | 12.92 | none |
+| poc_7iron | strobed_10us | 0.000 | 24 | 1.000 | 5.22 | 11.65 | none |
+| poc_7iron | strobed_10us | 10.000 | 24 | 1.000 | 4.16 | 10.70 | none |
+| poc_7iron | strobed_10us | 20.000 | 24 | 1.000 | 3.33 | 9.63 | none |
+| poc_7iron | strobed_10us | 40.000 | 24 | 1.000 | 4.22 | 7.44 | none |
+| poc_7iron | ambient_500us | -40.000 | 24 | 1.000 | 11.08 | 17.00 | none |
+| poc_7iron | ambient_500us | -20.000 | 24 | 1.000 | 8.91 | 14.30 | none |
+| poc_7iron | ambient_500us | -10.000 | 24 | 1.000 | 8.73 | 13.36 | none |
+| poc_7iron | ambient_500us | 0.000 | 24 | 1.000 | 7.11 | 12.06 | none |
+| poc_7iron | ambient_500us | 10.000 | 24 | 1.000 | 5.93 | 11.37 | none |
+| poc_7iron | ambient_500us | 20.000 | 24 | 1.000 | 5.02 | 10.69 | none |
+| poc_7iron | ambient_500us | 40.000 | 24 | 1.000 | 4.32 | 8.83 | none |
 
 ### sync_offset_us
-
 | Club | Candidate | Value | N | Solve | Median mm | p90 mm | Failures |
 |---|---|---:|---:|---:|---:|---:|---|
-| poc_driver | strobed_10us | -1000.000 | 24 | 1.000 | 19.62 | 21.64 | none |
-| poc_driver | strobed_10us | -500.000 | 24 | 1.000 | 9.78 | 11.44 | none |
-| poc_driver | strobed_10us | -250.000 | 24 | 1.000 | 4.79 | 5.82 | none |
-| poc_driver | strobed_10us | 0.000 | 24 | 1.000 | 0.70 | 1.38 | none |
-| poc_driver | strobed_10us | 250.000 | 24 | 1.000 | 4.46 | 5.17 | none |
+| poc_driver | strobed_10us | -1000.000 | 24 | 1.000 | 28.49 | 32.50 | none |
+| poc_driver | strobed_10us | -500.000 | 24 | 1.000 | 19.22 | 24.78 | none |
+| poc_driver | strobed_10us | -250.000 | 24 | 1.000 | 14.55 | 21.01 | none |
+| poc_driver | strobed_10us | 0.000 | 24 | 1.000 | 10.24 | 16.52 | none |
+| poc_driver | strobed_10us | 250.000 | 24 | 1.000 | 6.89 | 12.38 | none |
 | poc_driver | strobed_10us | 500.000 | 24 | 0.000 | — | — | extrapolation_horizon:24 |
 | poc_driver | strobed_10us | 1000.000 | 24 | 0.000 | — | — | extrapolation_horizon:24 |
-| poc_driver | ambient_500us | -1000.000 | 24 | 0.708 | 18.87 | 21.05 | silhouette_fit_residual:7 |
-| poc_driver | ambient_500us | -500.000 | 24 | 0.833 | 9.37 | 10.98 | silhouette_fit_residual:4 |
-| poc_driver | ambient_500us | -250.000 | 24 | 1.000 | 4.94 | 6.12 | none |
-| poc_driver | ambient_500us | 0.000 | 24 | 1.000 | 0.78 | 1.38 | none |
-| poc_driver | ambient_500us | 250.000 | 24 | 1.000 | 4.48 | 5.55 | none |
+| poc_driver | ambient_500us | -1000.000 | 24 | 0.958 | 29.79 | 34.24 | visibility_ball:1 |
+| poc_driver | ambient_500us | -500.000 | 24 | 0.958 | 20.81 | 25.74 | visibility_ball:1 |
+| poc_driver | ambient_500us | -250.000 | 24 | 0.958 | 16.18 | 21.39 | visibility_ball:1 |
+| poc_driver | ambient_500us | 0.000 | 24 | 0.958 | 11.79 | 17.61 | visibility_ball:1 |
+| poc_driver | ambient_500us | 250.000 | 24 | 0.958 | 8.16 | 12.55 | visibility_ball:1 |
 | poc_driver | ambient_500us | 500.000 | 24 | 0.000 | — | — | extrapolation_horizon:24 |
 | poc_driver | ambient_500us | 1000.000 | 24 | 0.000 | — | — | extrapolation_horizon:24 |
-| poc_7iron | strobed_10us | -1000.000 | 24 | 1.000 | 17.99 | 20.51 | none |
-| poc_7iron | strobed_10us | -500.000 | 24 | 1.000 | 9.18 | 10.76 | none |
-| poc_7iron | strobed_10us | -250.000 | 24 | 1.000 | 4.55 | 5.86 | none |
-| poc_7iron | strobed_10us | 0.000 | 24 | 1.000 | 0.79 | 1.66 | none |
-| poc_7iron | strobed_10us | 250.000 | 24 | 1.000 | 4.40 | 5.42 | none |
+| poc_7iron | strobed_10us | -1000.000 | 24 | 1.000 | 22.54 | 28.11 | none |
+| poc_7iron | strobed_10us | -500.000 | 24 | 1.000 | 13.82 | 19.81 | none |
+| poc_7iron | strobed_10us | -250.000 | 24 | 1.000 | 9.69 | 15.80 | none |
+| poc_7iron | strobed_10us | 0.000 | 24 | 1.000 | 5.22 | 11.65 | none |
+| poc_7iron | strobed_10us | 250.000 | 24 | 1.000 | 3.52 | 7.97 | none |
 | poc_7iron | strobed_10us | 500.000 | 24 | 0.000 | — | — | extrapolation_horizon:24 |
 | poc_7iron | strobed_10us | 1000.000 | 24 | 0.000 | — | — | extrapolation_horizon:24 |
-| poc_7iron | ambient_500us | -1000.000 | 24 | 1.000 | 17.99 | 20.23 | none |
-| poc_7iron | ambient_500us | -500.000 | 24 | 1.000 | 8.98 | 10.20 | none |
-| poc_7iron | ambient_500us | -250.000 | 24 | 1.000 | 4.65 | 5.56 | none |
-| poc_7iron | ambient_500us | 0.000 | 24 | 1.000 | 0.71 | 1.72 | none |
-| poc_7iron | ambient_500us | 250.000 | 24 | 1.000 | 4.12 | 5.72 | none |
+| poc_7iron | ambient_500us | -1000.000 | 24 | 1.000 | 24.34 | 29.61 | none |
+| poc_7iron | ambient_500us | -500.000 | 24 | 1.000 | 15.32 | 21.07 | none |
+| poc_7iron | ambient_500us | -250.000 | 24 | 1.000 | 10.82 | 17.08 | none |
+| poc_7iron | ambient_500us | 0.000 | 24 | 1.000 | 7.11 | 12.06 | none |
+| poc_7iron | ambient_500us | 250.000 | 24 | 1.000 | 4.14 | 8.32 | none |
 | poc_7iron | ambient_500us | 500.000 | 24 | 0.000 | — | — | extrapolation_horizon:24 |
 | poc_7iron | ambient_500us | 1000.000 | 24 | 0.000 | — | — | extrapolation_horizon:24 |

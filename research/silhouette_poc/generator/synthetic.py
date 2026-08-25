@@ -39,6 +39,10 @@ from silhouette_poc.generator.mesh_truth import (
 GENERATOR_VERSION = "silhouette-generator-v1"
 _DEFAULT_DIMENSION_VARIATION = {"poc_driver": 0.08, "poc_7iron": 0.10}
 _NOMINAL_DEPTH_MM = {"poc_driver": 55.0, "poc_7iron": 18.0}
+_BACKGROUND_DN = 18.0
+_CLUBHEAD_CONTRAST_DN = 150.0
+_SHAFT_CONTRAST_DN = 200.0
+_BALL_DN = 245.0
 
 
 @dataclass(frozen=True)
@@ -59,7 +63,10 @@ class GeneratorConfig:
     club_scattering_center_residual_mm: float = 0.0
     ball_scattering_center_residual_mm: float = 0.0
     zero_noise_control: bool = False
-    shaft_connected: bool = False
+    shaft_connected: bool = True
+    shaft_diameter_mm: float = 10.0
+    shaft_taper_fraction: float = 0.25
+    shaft_lie_deg: float = 62.0
     reverse_motion: bool = False
     club_acceleration_world_mm_s2: tuple[float, float, float] = (0.0, 0.0, 0.0)
     angular_acceleration_rad_s2: float = 0.0
@@ -85,6 +92,12 @@ class GeneratorConfig:
             raise ValueError("photometric noise must be non-negative")
         if self.radar_track_noise_sigma_mm < 0.0:
             raise ValueError("radar track noise must be non-negative")
+        if not 5.0 <= float(self.shaft_diameter_mm) <= 20.0:
+            raise ValueError("shaft diameter must be within [5, 20] mm")
+        if not 0.0 <= float(self.shaft_taper_fraction) <= 0.5:
+            raise ValueError("shaft taper must be within [0, 0.5]")
+        if not 45.0 <= float(self.shaft_lie_deg) <= 80.0:
+            raise ValueError("shaft lie must be within [45, 80] degrees")
         if len(self.club_acceleration_world_mm_s2) != 3:
             raise ValueError("club acceleration must contain three world components")
         if not math.isfinite(float(self.sync_offset_us)):
@@ -118,6 +131,8 @@ class GeneratedShot:
     config: GeneratorConfig
     frames: np.ndarray
     club_masks: np.ndarray
+    clubhead_masks: np.ndarray
+    shaft_masks: np.ndarray
     ball_masks: np.ndarray
     occlusion_masks: np.ndarray
     sensor_timestamp_ns: np.ndarray
@@ -254,6 +269,91 @@ def _ball_mask(center_world: np.ndarray, preset_name: str) -> np.ndarray:
     return mask
 
 
+def _camera_depth_mm(point_world: np.ndarray) -> float:
+    """Optical-forward depth used for explicit scene occlusion ordering."""
+    return float((np.asarray(point_world, dtype=float) - CAMERA_CENTER_WORLD) @ _R_WC[2])
+
+
+def _shaft_local_geometry(
+    mesh: TriangleMesh | None,
+    radius_u_mm: float,
+    radius_v_mm: float,
+    lie_deg: float,
+) -> tuple[np.ndarray, np.ndarray, str]:
+    """Derive the shaft attachment and heel direction from the fitted head geometry."""
+    lie = math.radians(float(lie_deg))
+    if mesh is None:
+        heel_sign = -1.0
+        direction_yz = np.array([heel_sign * math.cos(lie), math.sin(lie)])
+        boundary_scale = 1.0 / math.sqrt(
+            (direction_yz[0] / float(radius_u_mm)) ** 2
+            + (direction_yz[1] / float(radius_v_mm)) ** 2
+        )
+        attachment = np.array(
+            [0.0, direction_yz[0] * boundary_scale, direction_yz[1] * boundary_scale]
+        )
+        return attachment, np.array([0.0, *direction_yz]), "analytic_heel_boundary"
+
+    vertices = np.asarray(mesh.vertices_local_mm, dtype=float)
+    height = float(np.ptp(vertices[:, 2]))
+    top_band = vertices[:, 2] >= float(vertices[:, 2].max()) - max(1.0, 0.01 * height)
+    attachment = np.mean(vertices[top_band], axis=0)
+    heel_delta = float(attachment[1] - np.median(vertices[:, 1]))
+    heel_sign = -1.0 if heel_delta < 0.0 else 1.0
+    direction_yz = np.array([heel_sign * math.cos(lie), math.sin(lie)])
+    return attachment, np.array([0.0, *direction_yz]), "mesh_hosel_geometry"
+
+
+def _shaft_mask(
+    attachment_world: np.ndarray,
+    axis_world: np.ndarray,
+    diameter_mm: float,
+    taper_fraction: float,
+    preset_name: str,
+) -> np.ndarray:
+    """Render a tapered shaft from its hosel attachment through the image boundary."""
+    camera = camera_presets()[preset_name]
+    points, front = _project(
+        np.stack([attachment_world, attachment_world + np.asarray(axis_world) * 100.0]), camera
+    )
+    mask = np.zeros((camera.height, camera.width), dtype=np.uint8)
+    if not bool(np.all(front)):
+        return mask
+    direction = points[1] - points[0]
+    norm = float(np.linalg.norm(direction))
+    if norm <= 1e-9:
+        return mask
+    direction /= norm
+    start = points[0]
+    intersections = []
+    if direction[0] < 0.0:
+        intersections.append((0.0 - start[0]) / direction[0])
+    elif direction[0] > 0.0:
+        intersections.append(((camera.width - 1.0) - start[0]) / direction[0])
+    if direction[1] < 0.0:
+        intersections.append((0.0 - start[1]) / direction[1])
+    elif direction[1] > 0.0:
+        intersections.append(((camera.height - 1.0) - start[1]) / direction[1])
+    positive = [value for value in intersections if value > 0.0]
+    if not positive:
+        return mask
+    end = start + direction * (min(positive) + float(diameter_mm))
+    perpendicular = np.array([-direction[1], direction[0]])
+    depth = _camera_depth_mm(attachment_world)
+    base_half_width = camera.fx * float(diameter_mm) / max(depth, 1.0) / 2.0
+    far_half_width = base_half_width * (1.0 + float(taper_fraction))
+    polygon = np.stack(
+        [
+            start - perpendicular * base_half_width,
+            start + perpendicular * base_half_width,
+            end + perpendicular * far_half_width,
+            end - perpendicular * far_half_width,
+        ]
+    )
+    cv2.fillConvexPoly(mask, np.rint(polygon).astype(np.int32), 1)
+    return mask
+
+
 def _fully_visible(mask: np.ndarray) -> bool:
     return bool(
         np.any(mask)
@@ -326,6 +426,12 @@ def generate_shot(config: GeneratorConfig) -> GeneratedShot:
             nominal_mesh.source_uid,
             nominal_mesh.source_sha256,
         )
+    shaft_attachment_local, shaft_axis_local, shaft_attachment_source = _shaft_local_geometry(
+        truth_mesh,
+        template.radius_u_mm,
+        template.radius_v_mm,
+        config.shaft_lie_deg,
+    )
     trajectory_rng = np.random.default_rng(child_seeds["trajectory"])
     impact_center = np.array(
         [
@@ -401,6 +507,8 @@ def generate_shot(config: GeneratorConfig) -> GeneratedShot:
     photometric_rng = np.random.default_rng(child_seeds["photometric"])
     frames = []
     club_masks = []
+    clubhead_masks = []
+    shaft_masks = []
     ball_masks = []
     occlusion_masks = []
     poses = []
@@ -408,8 +516,11 @@ def generate_shot(config: GeneratorConfig) -> GeneratedShot:
     visibility_frames = []
 
     for frame_index, frame_time_s in enumerate(frame_times_s):
-        club_coverage = np.zeros((camera.height, camera.width), dtype=np.float32)
-        ball_coverage = np.zeros_like(club_coverage)
+        clubhead_coverage = np.zeros((camera.height, camera.width), dtype=np.float32)
+        shaft_coverage = np.zeros_like(clubhead_coverage)
+        ball_coverage = np.zeros_like(clubhead_coverage)
+        image_accumulator = np.zeros_like(clubhead_coverage)
+        sample_depth_margins = []
         for sample_offset in sample_offsets:
             sample_time = float(frame_time_s + sample_offset)
             club_center = (
@@ -435,33 +546,58 @@ def generate_shot(config: GeneratorConfig) -> GeneratedShot:
                 )
             else:
                 rendered_club = render_mesh_mask(truth_mesh, club_center, club_roll, config.preset)
-            club_coverage += rendered_club
-            ball_coverage += _ball_mask(ball_center, config.preset)
-        club_coverage /= float(subsamples)
+            rendered_ball = _ball_mask(ball_center, config.preset)
+            club_depth = _camera_depth_mm(club_center)
+            ball_depth = _camera_depth_mm(ball_center)
+            if not club_depth < ball_depth:
+                raise ValueError("scene_occlusion_order_ball_in_front")
+            sample_depth_margins.append(ball_depth - club_depth)
+
+            rendered_shaft = np.zeros_like(rendered_club, dtype=np.uint8)
+            if config.shaft_connected:
+                axis_u, axis_v = _face_axes(club_roll)
+                attachment_world = (
+                    club_center
+                    + shaft_attachment_local[0] * FACE_NORMAL
+                    + shaft_attachment_local[1] * axis_u
+                    + shaft_attachment_local[2] * axis_v
+                )
+                axis_world = shaft_axis_local[1] * axis_u + shaft_axis_local[2] * axis_v
+                rendered_shaft = _shaft_mask(
+                    attachment_world,
+                    axis_world,
+                    config.shaft_diameter_mm,
+                    config.shaft_taper_fraction,
+                    config.preset,
+                )
+                # The template includes the hosel. Preserve those head pixels and
+                # render only the shaft extension outside the admitted head mesh.
+                rendered_shaft = rendered_shaft & ~rendered_club.astype(bool)
+
+            sample_image = np.full((camera.height, camera.width), _BACKGROUND_DN, dtype=np.float32)
+            sample_image[rendered_ball.astype(bool)] = _BALL_DN
+            sample_image[rendered_shaft.astype(bool)] = _BACKGROUND_DN + _SHAFT_CONTRAST_DN
+            sample_image[rendered_club.astype(bool)] = _BACKGROUND_DN + _CLUBHEAD_CONTRAST_DN
+            image_accumulator += sample_image
+            clubhead_coverage += rendered_club
+            shaft_coverage += rendered_shaft
+            ball_coverage += rendered_ball
+        clubhead_coverage /= float(subsamples)
+        shaft_coverage /= float(subsamples)
         ball_coverage /= float(subsamples)
-        if config.shaft_connected:
-            midpoint_center = (
-                impact_center
-                + velocity * float(frame_time_s)
-                + 0.5 * club_acceleration * float(frame_time_s) ** 2
-            )
-            midpoint_uv, midpoint_front = _project(midpoint_center[None, :], camera)
-            if bool(midpoint_front[0]):
-                shaft = np.zeros_like(club_coverage, dtype=np.uint8)
-                start = np.rint(midpoint_uv[0]).astype(int)
-                end = np.array([min(camera.width - 2, start[0] + 120), start[1]])
-                cv2.line(shaft, start, end, 1, thickness=3)
-                club_coverage = np.maximum(club_coverage, shaft.astype(np.float32))
+        club_coverage = np.maximum(clubhead_coverage, shaft_coverage)
         club_mask = club_coverage > 0.0
+        clubhead_mask = clubhead_coverage > 0.0
+        shaft_mask = shaft_coverage > 0.0
         ball_mask = ball_coverage > 0.0
         occlusion_mask = np.logical_and(club_mask, ball_mask)
 
-        background = np.full((camera.height, camera.width), 18.0, dtype=np.float32)
-        image = background + 150.0 * club_coverage
-        image = image * (1.0 - ball_coverage) + 225.0 * ball_coverage
+        image = image_accumulator / float(subsamples)
         image += photometric_rng.normal(0.0, config.photometric_noise_sigma_dn, image.shape)
         frames.append(np.clip(np.rint(image), 0.0, 255.0).astype(np.uint8))
         club_masks.append(club_mask)
+        clubhead_masks.append(clubhead_mask)
+        shaft_masks.append(shaft_mask)
         ball_masks.append(ball_mask)
         occlusion_masks.append(occlusion_mask)
 
@@ -498,12 +634,27 @@ def generate_shot(config: GeneratorConfig) -> GeneratedShot:
         visibility_frames.append(
             {
                 "frame_index": frame_index,
-                "club_fully_visible": _fully_visible(club_mask),
+                "club_fully_visible": _fully_visible(clubhead_mask),
+                "clubhead_fully_visible": _fully_visible(clubhead_mask),
+                "shaft_reaches_frame_boundary": bool(
+                    np.any(shaft_mask[0])
+                    or np.any(shaft_mask[-1])
+                    or np.any(shaft_mask[:, 0])
+                    or np.any(shaft_mask[:, -1])
+                ),
                 "ball_fully_visible": _fully_visible(ball_mask),
                 "club_pixel_count": int(np.count_nonzero(club_mask)),
+                "clubhead_pixel_count": int(np.count_nonzero(clubhead_mask)),
+                "shaft_pixel_count": int(np.count_nonzero(shaft_mask)),
                 "ball_pixel_count": int(np.count_nonzero(ball_mask)),
                 "occlusion_pixel_count": int(np.count_nonzero(occlusion_mask)),
+                "depth_order": "club_over_ball",
+                "club_camera_depth_mm": _camera_depth_mm(midpoint_center),
+                "ball_camera_depth_mm": _camera_depth_mm(midpoint_ball),
+                "minimum_depth_margin_mm": float(min(sample_depth_margins)),
                 "club_silhouette_rle": encode_rle(club_mask),
+                "clubhead_silhouette_rle": encode_rle(clubhead_mask),
+                "shaft_silhouette_rle": encode_rle(shaft_mask),
                 "ball_silhouette_rle": encode_rle(ball_mask),
                 "occlusion_rle": encode_rle(occlusion_mask),
             }
@@ -597,6 +748,17 @@ def generate_shot(config: GeneratorConfig) -> GeneratedShot:
             "photometric_noise_sigma_dn": config.photometric_noise_sigma_dn,
             "mask_support_threshold": 0.0,
             "club_truth_geometry": config.truth_geometry,
+            "occlusion_owner": "club_occludes_ball",
+            "shaft": {
+                "enabled": bool(config.shaft_connected),
+                "attachment_source": shaft_attachment_source,
+                "attachment_local_mm": shaft_attachment_local.tolist(),
+                "axis_local": shaft_axis_local.tolist(),
+                "diameter_mm": float(config.shaft_diameter_mm),
+                "taper_fraction": float(config.shaft_taper_fraction),
+                "lie_deg": float(config.shaft_lie_deg),
+                "extent": "image_boundary",
+            },
             "mesh": (
                 None
                 if truth_mesh is None
@@ -620,6 +782,8 @@ def generate_shot(config: GeneratorConfig) -> GeneratedShot:
         config=config,
         frames=np.stack(frames),
         club_masks=np.stack(club_masks),
+        clubhead_masks=np.stack(clubhead_masks),
+        shaft_masks=np.stack(shaft_masks),
         ball_masks=np.stack(ball_masks),
         occlusion_masks=np.stack(occlusion_masks),
         sensor_timestamp_ns=sensor_timestamp_ns,

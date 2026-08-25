@@ -204,22 +204,103 @@ def _weighted_moments(weights: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return centroid, covariance
 
 
-def _segment_frame(frame: np.ndarray, frame_index: int) -> _SegmentedFrame:
+def _ball_component(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray, int]:
+    """Extract the visible ball; reference selection handles club occlusion."""
     background = float(np.percentile(frame, 10))
-    ball_mask = frame.astype(float) >= background + 180.0
-    ball_components, ball_labels, ball_stats, ball_centroids = cv2.connectedComponentsWithStats(
+    ball_mask = frame.astype(float) >= background + 210.0
+    count, labels, stats, centroids = cv2.connectedComponentsWithStats(
         ball_mask.astype(np.uint8), connectivity=8
     )
-    if ball_components < 2:
+    if count < 2:
         raise ValueError("visibility_ball")
-    ball_index = 1 + int(np.argmax(ball_stats[1:, cv2.CC_STAT_AREA]))
-    ball_component = np.zeros_like(ball_mask, dtype=np.uint8)
-    ball_component[ball_labels == ball_index] = 1
-    ball_centroid = ball_centroids[ball_index].astype(float)
+    index = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    return labels == index, centroids[index].astype(float), int(stats[index, cv2.CC_STAT_AREA])
 
+
+def _separate_head_from_shaft(
+    club_mask: np.ndarray,
+    frame: np.ndarray,
+    background: float,
+    ball_centroid: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Walk the bright shaft to its ball-side end and retain the raw head region."""
+    bright = club_mask & (frame.astype(float) >= background + 160.0)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        bright.astype(np.uint8), connectivity=8
+    )
+    candidates = [index for index in range(1, count) if int(stats[index, cv2.CC_STAT_AREA]) >= 10]
+    if not candidates:
+        return (
+            club_mask,
+            np.zeros_like(club_mask),
+            {
+                "head_separation": "head_only_component",
+                "shaft_pixel_count": 0,
+            },
+        )
+    shaft_index = max(candidates, key=lambda index: int(stats[index, cv2.CC_STAT_AREA]))
+    shaft_seed = labels == shaft_index
+    rows, columns = np.nonzero(shaft_seed)
+    points = np.column_stack([columns, rows]).astype(float)
+    centered = points - points.mean(axis=0)
+    _, _, vectors = np.linalg.svd(centered, full_matrices=False)
+    projection = centered @ vectors[0]
+    band = 3.0
+    low = points[projection <= projection.min() + band].mean(axis=0)
+    high = points[projection >= projection.max() - band].mean(axis=0)
+    if np.linalg.norm(low - ball_centroid) <= np.linalg.norm(high - ball_centroid):
+        attachment, far = low, high
+    else:
+        attachment, far = high, low
+    axis = far - attachment
+    axis_norm = float(np.linalg.norm(axis))
+    if axis_norm <= 1e-9:
+        raise ValueError("component_head_unresolved")
+    axis /= axis_norm
+
+    def largest_remainder(separator: np.ndarray) -> tuple[np.ndarray, int]:
+        remainder = club_mask & ~separator
+        head_count, head_labels, head_stats, _ = cv2.connectedComponentsWithStats(
+            remainder.astype(np.uint8), connectivity=8
+        )
+        if head_count < 2:
+            raise ValueError("component_head_unresolved")
+        head_index = 1 + int(np.argmax(head_stats[1:, cv2.CC_STAT_AREA]))
+        return head_labels == head_index, int(head_stats[head_index, cv2.CC_STAT_AREA])
+
+    # The shaft's high-reflectance core is the separator. Removing it breaks
+    # the long boundary-reaching appendage while leaving the original head
+    # pixels untouched; selecting the largest remainder preserves concavities.
+    head, head_area = largest_remainder(shaft_seed)
+    for iterations in range(1, 4):
+        if not (np.any(head[0]) or np.any(head[-1]) or np.any(head[:, 0]) or np.any(head[:, -1])):
+            break
+        expanded = cv2.dilate(
+            shaft_seed.astype(np.uint8),
+            np.ones((3, 3), np.uint8),
+            iterations=iterations,
+        )
+        head, head_area = largest_remainder(expanded.astype(bool))
+    if head_area < 20:
+        raise ValueError("component_head_unresolved")
+    shaft = club_mask & ~head
+    return (
+        head,
+        shaft,
+        {
+            "head_separation": "bright_shaft_ball_side_end",
+            "shaft_pixel_count": int(np.count_nonzero(shaft)),
+            "shaft_attachment_uv": attachment.tolist(),
+            "shaft_axis_uv": axis.tolist(),
+        },
+    )
+
+
+def _segment_frame(frame: np.ndarray, frame_index: int) -> _SegmentedFrame:
+    background = float(np.percentile(frame, 10))
+    ball_component, ball_centroid, ball_area = _ball_component(frame)
     club_weights = np.clip((frame.astype(float) - background) / 150.0, 0.0, 1.0)
-    excluded_ball = cv2.dilate(ball_component, np.ones((3, 3), np.uint8), iterations=1)
-    club_weights[excluded_ball != 0] = 0.0
+    club_weights[ball_component] = 0.0
     support = club_weights > 0.10
     component_count, component_labels, stats, _ = cv2.connectedComponentsWithStats(
         support.astype(np.uint8), connectivity=8
@@ -228,10 +309,17 @@ def _segment_frame(frame: np.ndarray, frame_index: int) -> _SegmentedFrame:
         raise ValueError("component_missing")
     candidate_indices = list(range(1, component_count))
     club_index = max(candidate_indices, key=lambda index: int(stats[index, cv2.CC_STAT_AREA]))
-    club_mask = component_labels == club_index
-    area = int(stats[club_index, cv2.CC_STAT_AREA])
-    width = int(stats[club_index, cv2.CC_STAT_WIDTH])
-    height = int(stats[club_index, cv2.CC_STAT_HEIGHT])
+    combined_mask = component_labels == club_index
+    combined_area = int(stats[club_index, cv2.CC_STAT_AREA])
+    club_mask, _, separation = _separate_head_from_shaft(
+        combined_mask, frame, background, ball_centroid
+    )
+    rows, columns = np.nonzero(club_mask)
+    if not len(rows):
+        raise ValueError("component_head_unresolved")
+    area = int(len(rows))
+    width = int(np.ptp(columns) + 1)
+    height = int(np.ptp(rows) + 1)
     aspect = float(max(width, height) / max(1, min(width, height)))
     touches_edge = bool(
         np.any(club_mask[0])
@@ -241,46 +329,41 @@ def _segment_frame(frame: np.ndarray, frame_index: int) -> _SegmentedFrame:
     )
     if touches_edge:
         raise ValueError("visibility_club")
-    if aspect > 2.2:
-        raise ValueError("component_shaft_connected")
     if area < 20:
         raise ValueError("component_geometry")
-    contours, _ = cv2.findContours(
-        club_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
-    )
-    completed_mask = np.zeros_like(club_mask, dtype=np.uint8)
-    cv2.fillConvexPoly(completed_mask, cv2.convexHull(max(contours, key=cv2.contourArea)), 1)
-    completed_pixels = int(np.count_nonzero(completed_mask))
-    completion_fraction = (completed_pixels - area) / completed_pixels
     club_weights[~club_mask] = 0.0
-    if completion_fraction > 0.10:
-        moment_weights = completed_mask.astype(float)
-        moment_source = "convex_silhouette_completion"
-        diagnostic_mask = completed_mask.astype(bool)
-    else:
-        moment_weights = club_weights
-        moment_source = "exposure_intensity"
-        diagnostic_mask = club_mask
-    centroid, covariance = _weighted_moments(moment_weights)
+    centroid, covariance = _weighted_moments(club_weights)
+    extra = {
+        key: value
+        for key, value in separation.items()
+        if key not in {"head_separation", "shaft_pixel_count"}
+    }
     return _SegmentedFrame(
         frame_index=frame_index,
         observation=SilhouetteObservation(centroid, covariance),
-        club_mask=diagnostic_mask,
+        club_mask=club_mask,
         observed_club_mask=club_mask,
-        excluded_ball_mask=excluded_ball.astype(bool),
+        excluded_ball_mask=np.zeros_like(club_mask, dtype=bool),
         ball_centroid_uv=ball_centroid,
         diagnostics={
             "frame_index": frame_index,
             "component_count": component_count - 1,
             "selected_area_px": area,
-            "completed_area_px": completed_pixels,
-            "occlusion_completion_px": completed_pixels - area,
-            "occlusion_model": moment_source,
+            "combined_area_px": combined_area,
+            "completed_area_px": area,
+            "occlusion_completion_px": 0,
+            "occlusion_model": "club_occludes_ball_no_completion",
+            "moment_source": "raw_head_intensity",
+            "head_pixel_count": area,
+            "shaft_pixel_count": separation["shaft_pixel_count"],
+            "head_separation": separation["head_separation"],
+            "ball_visible_pixel_count": ball_area,
             "selected_aspect_ratio": aspect,
             "club_centroid_uv": centroid.tolist(),
             "ball_centroid_uv": ball_centroid.tolist(),
             "topology_status": "accepted",
             "fully_visible": True,
+            **extra,
         },
     )
 
@@ -448,6 +531,29 @@ def solve_shot(
     if horizon_s > MAX_EXTRAPOLATION_S:
         diagnostics["temporal"]["status"] = "extrapolation_horizon"
         return _failure("extrapolation_horizon", diagnostics)
+
+    ball_candidates = []
+    for frame_index in pre_indices:
+        try:
+            _, centroid, area = _ball_component(capture.frames[frame_index])
+            ball_candidates.append((frame_index, centroid, area))
+        except ValueError:
+            continue
+    if not ball_candidates:
+        diagnostics["segmentation"]["status"] = "visibility_ball"
+        return _failure("visibility_ball", diagnostics)
+    maximum_ball_area = max(item[2] for item in ball_candidates)
+    ball_references = [
+        item for item in ball_candidates if item[2] >= 0.98 * float(maximum_ball_area)
+    ]
+    ball_reference_uv = np.rint(np.mean([item[1] for item in ball_references], axis=0))
+    diagnostics["segmentation"]["ball_reference"] = {
+        "model": "largest_pre_swing_silhouette",
+        "frame_indices": [item[0] for item in ball_references],
+        "centroid_uv": ball_reference_uv.tolist(),
+        "maximum_visible_area_px": maximum_ball_area,
+        "impact_window_occlusion_expected": True,
+    }
 
     segmented: list[_SegmentedFrame] = []
     segmentation_rejections: list[dict[str, Any]] = []
@@ -814,9 +920,8 @@ def solve_shot(
         }
     )
 
-    ball_uv = np.rint(np.mean([item.ball_centroid_uv for item in used_segmented], axis=0))
     ball_center = _backproject_range(
-        ball_uv,
+        ball_reference_uv,
         ball_impact_apparent_mm - calibration_bias_mm,
         capture.camera,
         RADAR_CENTER_WORLD,
@@ -837,6 +942,8 @@ def solve_shot(
                 "normal": FACE_NORMAL.tolist(),
             },
             "impact_offset_mm": list(impact),
+            "ball_occlusion_model": "pre_swing_reference",
+            "ball_reference_frame_indices": [item[0] for item in ball_references],
         }
     )
     diagnostics["quality"].update(

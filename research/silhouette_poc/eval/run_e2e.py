@@ -63,7 +63,9 @@ def main() -> None:
         json.dumps(bundle, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
-    (args.output / "RESULTS_E2E.md").write_text(render_markdown(bundle) + "\n", encoding="utf-8")
+    (args.output / "RESULTS_E2E.md").write_text(
+        render_markdown(bundle).rstrip() + "\n", encoding="utf-8"
+    )
     (args.output / "degradation_curves.svg").write_text(
         render_sweep_svg(bundle) + "\n", encoding="utf-8"
     )

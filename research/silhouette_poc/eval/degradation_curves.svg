@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="820" viewBox="0 0 1200 820">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="860" viewBox="0 0 1200 860">
 <rect width="100%" height="100%" fill="white"/>
 <style>text{font-family:Arial,sans-serif;fill:#222}.axis{stroke:#555;stroke-width:1}.grid{stroke:#ddd;stroke-width:1}.med{fill:none;stroke-width:2}.p90{fill:none;stroke-width:2;stroke-dasharray:5 4}</style>
 <text x="24" y="28" font-size="20" font-weight="bold">End-to-end degradation curves — median solid, p90 dashed</text>
@@ -8,67 +8,67 @@
 <line class="grid" x1="70" y1="390.0" x2="610" y2="390.0"/>
 <text x="62" y="394.0" text-anchor="end" font-size="10">0.0</text>
 <line class="grid" x1="70" y1="310.0" x2="610" y2="310.0"/>
-<text x="62" y="314.0" text-anchor="end" font-size="10">1.2</text>
+<text x="62" y="314.0" text-anchor="end" font-size="10">5.0</text>
 <line class="grid" x1="70" y1="230.0" x2="610" y2="230.0"/>
-<text x="62" y="234.0" text-anchor="end" font-size="10">2.3</text>
+<text x="62" y="234.0" text-anchor="end" font-size="10">9.9</text>
 <line class="grid" x1="70" y1="150.0" x2="610" y2="150.0"/>
-<text x="62" y="154.0" text-anchor="end" font-size="10">3.5</text>
+<text x="62" y="154.0" text-anchor="end" font-size="10">14.9</text>
 <line class="grid" x1="70" y1="70.0" x2="610" y2="70.0"/>
-<text x="62" y="74.0" text-anchor="end" font-size="10">4.7</text>
+<text x="62" y="74.0" text-anchor="end" font-size="10">19.9</text>
 <text x="70.0" y="407" text-anchor="middle" font-size="9">0</text>
 <text x="178.0" y="407" text-anchor="middle" font-size="9">0.025</text>
 <text x="286.0" y="407" text-anchor="middle" font-size="9">0.05</text>
 <text x="394.0" y="407" text-anchor="middle" font-size="9">0.075</text>
 <text x="502.0" y="407" text-anchor="middle" font-size="9">0.1</text>
 <text x="610.0" y="407" text-anchor="middle" font-size="9">0.15</text>
-<polyline class="med" stroke="#1565c0" points="70.0,342.2 178.0,326.7 286.0,310.4 394.0,308.1 502.0,292.5 610.0,262.0"/>
-<polyline class="p90" stroke="#1565c0" points="70.0,295.7 178.0,285.3 286.0,244.6 394.0,205.2 502.0,168.5 610.0,144.3"/>
-<polyline class="med" stroke="#ef6c00" points="70.0,336.8 178.0,326.0 286.0,327.9 394.0,311.2 502.0,288.6 610.0,285.0"/>
-<polyline class="p90" stroke="#ef6c00" points="70.0,295.2 178.0,291.5 286.0,260.7 394.0,197.6 502.0,179.8 610.0,172.3"/>
-<polyline class="med" stroke="#2e7d32" points="70.0,336.2 178.0,327.8 286.0,327.4 394.0,297.3 502.0,290.5 610.0,263.1"/>
-<polyline class="p90" stroke="#2e7d32" points="70.0,276.3 178.0,257.4 286.0,244.9 394.0,237.9 502.0,199.0 610.0,99.1"/>
-<polyline class="med" stroke="#8e24aa" points="70.0,341.6 178.0,337.5 286.0,321.3 394.0,320.9 502.0,310.7 610.0,276.2"/>
-<polyline class="p90" stroke="#8e24aa" points="70.0,272.2 178.0,279.3 286.0,262.7 394.0,209.0 502.0,173.1 610.0,108.8"/>
+<polyline class="med" stroke="#1565c0" points="70.0,225.1 178.0,215.7 286.0,213.2 394.0,202.9 502.0,211.7 610.0,215.3"/>
+<polyline class="p90" stroke="#1565c0" points="70.0,123.8 178.0,112.2 286.0,109.5 394.0,103.4 502.0,100.3 610.0,127.8"/>
+<polyline class="med" stroke="#ef6c00" points="70.0,200.1 178.0,199.1 286.0,216.7 394.0,216.7 502.0,195.2 610.0,217.5"/>
+<polyline class="p90" stroke="#ef6c00" points="70.0,106.4 178.0,119.5 286.0,119.5 394.0,112.3 502.0,99.1 610.0,99.8"/>
+<polyline class="med" stroke="#2e7d32" points="70.0,305.9 178.0,305.2 286.0,301.7 394.0,299.9 502.0,296.6 610.0,289.9"/>
+<polyline class="p90" stroke="#2e7d32" points="70.0,202.4 178.0,216.7 286.0,208.2 394.0,209.2 502.0,209.2 610.0,203.8"/>
+<polyline class="med" stroke="#8e24aa" points="70.0,275.4 178.0,271.7 286.0,277.9 394.0,270.7 502.0,278.4 610.0,275.6"/>
+<polyline class="p90" stroke="#8e24aa" points="70.0,195.8 178.0,183.7 286.0,177.3 394.0,183.5 502.0,183.0 610.0,193.1"/>
 <text x="660" y="54" font-size="15">photometric_noise_sigma_dn</text>
 <line class="axis" x1="660" y1="70" x2="660" y2="390"/>
 <line class="axis" x1="660" y1="390" x2="1200" y2="390"/>
 <line class="grid" x1="660" y1="390.0" x2="1200" y2="390.0"/>
 <text x="652" y="394.0" text-anchor="end" font-size="10">0.0</text>
 <line class="grid" x1="660" y1="310.0" x2="1200" y2="310.0"/>
-<text x="652" y="314.0" text-anchor="end" font-size="10">0.6</text>
+<text x="652" y="314.0" text-anchor="end" font-size="10">50.8</text>
 <line class="grid" x1="660" y1="230.0" x2="1200" y2="230.0"/>
-<text x="652" y="234.0" text-anchor="end" font-size="10">1.1</text>
+<text x="652" y="234.0" text-anchor="end" font-size="10">101.7</text>
 <line class="grid" x1="660" y1="150.0" x2="1200" y2="150.0"/>
-<text x="652" y="154.0" text-anchor="end" font-size="10">1.7</text>
+<text x="652" y="154.0" text-anchor="end" font-size="10">152.5</text>
 <line class="grid" x1="660" y1="70.0" x2="1200" y2="70.0"/>
-<text x="652" y="74.0" text-anchor="end" font-size="10">2.2</text>
+<text x="652" y="74.0" text-anchor="end" font-size="10">203.4</text>
 <text x="660.0" y="407" text-anchor="middle" font-size="9">0</text>
 <text x="768.0" y="407" text-anchor="middle" font-size="9">0.6</text>
 <text x="876.0" y="407" text-anchor="middle" font-size="9">1.2</text>
 <text x="984.0" y="407" text-anchor="middle" font-size="9">2.4</text>
 <text x="1092.0" y="407" text-anchor="middle" font-size="9">4.8</text>
 <text x="1200.0" y="407" text-anchor="middle" font-size="9">9.6</text>
-<polyline class="med" stroke="#1565c0" points="660.0,289.2 768.0,289.2 876.0,289.2 984.0,289.2 1092.0,267.4"/>
-<polyline class="p90" stroke="#1565c0" points="660.0,191.3 768.0,191.3 876.0,191.3 984.0,191.3 1092.0,190.5"/>
-<polyline class="med" stroke="#ef6c00" points="660.0,274.7 768.0,286.6 876.0,277.8 984.0,273.9 1092.0,266.6"/>
-<polyline class="p90" stroke="#ef6c00" points="660.0,206.7 768.0,186.7 876.0,190.3 984.0,160.6 1092.0,174.5"/>
-<polyline class="med" stroke="#2e7d32" points="660.0,276.5 768.0,276.5 876.0,276.5 984.0,276.5 1092.0,266.2"/>
-<polyline class="p90" stroke="#2e7d32" points="660.0,150.4 768.0,150.4 876.0,150.4 984.0,150.4 1092.0,99.1"/>
-<polyline class="med" stroke="#8e24aa" points="660.0,292.9 768.0,302.2 876.0,288.0 984.0,286.7 1092.0,289.9"/>
-<polyline class="p90" stroke="#8e24aa" points="660.0,160.7 768.0,162.2 876.0,141.8 984.0,155.0 1092.0,166.7"/>
+<polyline class="med" stroke="#1565c0" points="660.0,373.9 768.0,373.9 876.0,373.9 984.0,373.9 1092.0,373.9 1200.0,209.7"/>
+<polyline class="p90" stroke="#1565c0" points="660.0,364.0 768.0,364.0 876.0,364.0 984.0,364.0 1092.0,363.9 1200.0,99.1"/>
+<polyline class="med" stroke="#ef6c00" points="660.0,371.7 768.0,371.4 876.0,371.4 984.0,371.2 1092.0,372.2 1200.0,296.5"/>
+<polyline class="p90" stroke="#ef6c00" points="660.0,362.3 768.0,362.3 876.0,362.3 984.0,361.3 1092.0,361.7 1200.0,222.3"/>
+<polyline class="med" stroke="#2e7d32" points="660.0,381.8 768.0,381.8 876.0,381.8 984.0,381.8 1092.0,381.6 1200.0,367.6"/>
+<polyline class="p90" stroke="#2e7d32" points="660.0,371.7 768.0,371.7 876.0,371.7 984.0,371.7 1092.0,371.7 1200.0,292.7"/>
+<polyline class="med" stroke="#8e24aa" points="660.0,378.8 768.0,378.8 876.0,378.8 984.0,378.8 1092.0,378.4 1200.0,334.8"/>
+<polyline class="p90" stroke="#8e24aa" points="660.0,371.0 768.0,370.5 876.0,371.0 984.0,370.8 1092.0,370.9 1200.0,284.0"/>
 <text x="70" y="424" font-size="15">radar_residual_mm</text>
 <line class="axis" x1="70" y1="440" x2="70" y2="760"/>
 <line class="axis" x1="70" y1="760" x2="610" y2="760"/>
 <line class="grid" x1="70" y1="760.0" x2="610" y2="760.0"/>
 <text x="62" y="764.0" text-anchor="end" font-size="10">0.0</text>
 <line class="grid" x1="70" y1="680.0" x2="610" y2="680.0"/>
-<text x="62" y="684.0" text-anchor="end" font-size="10">1.5</text>
+<text x="62" y="684.0" text-anchor="end" font-size="10">5.7</text>
 <line class="grid" x1="70" y1="600.0" x2="610" y2="600.0"/>
-<text x="62" y="604.0" text-anchor="end" font-size="10">3.0</text>
+<text x="62" y="604.0" text-anchor="end" font-size="10">11.4</text>
 <line class="grid" x1="70" y1="520.0" x2="610" y2="520.0"/>
-<text x="62" y="524.0" text-anchor="end" font-size="10">4.6</text>
+<text x="62" y="524.0" text-anchor="end" font-size="10">17.1</text>
 <line class="grid" x1="70" y1="440.0" x2="610" y2="440.0"/>
-<text x="62" y="444.0" text-anchor="end" font-size="10">6.1</text>
+<text x="62" y="444.0" text-anchor="end" font-size="10">22.8</text>
 <text x="70.0" y="777" text-anchor="middle" font-size="9">-40</text>
 <text x="160.0" y="777" text-anchor="middle" font-size="9">-20</text>
 <text x="250.0" y="777" text-anchor="middle" font-size="9">-10</text>
@@ -76,27 +76,27 @@
 <text x="430.0" y="777" text-anchor="middle" font-size="9">10</text>
 <text x="520.0" y="777" text-anchor="middle" font-size="9">20</text>
 <text x="610.0" y="777" text-anchor="middle" font-size="9">40</text>
-<polyline class="med" stroke="#1565c0" points="70.0,520.5 160.0,637.2 250.0,693.9 340.0,723.3 430.0,706.2 520.0,645.2 610.0,539.0"/>
-<polyline class="p90" stroke="#1565c0" points="70.0,469.1 160.0,586.5 250.0,639.8 340.0,687.7 430.0,653.6 520.0,596.6 610.0,470.6"/>
-<polyline class="med" stroke="#ef6c00" points="70.0,531.1 160.0,632.2 250.0,697.0 340.0,719.2 430.0,704.5 520.0,649.1 610.0,549.6"/>
-<polyline class="p90" stroke="#ef6c00" points="70.0,480.0 160.0,592.8 250.0,647.7 340.0,687.3 430.0,641.0 520.0,581.1 610.0,470.6"/>
-<polyline class="med" stroke="#2e7d32" points="70.0,530.3 160.0,639.2 250.0,697.9 340.0,718.7 430.0,695.5 520.0,637.4 610.0,543.1"/>
-<polyline class="p90" stroke="#2e7d32" points="70.0,477.3 160.0,584.1 250.0,644.4 340.0,672.8 430.0,644.8 520.0,595.1 610.0,486.7"/>
-<polyline class="med" stroke="#8e24aa" points="70.0,539.8 160.0,645.6 250.0,687.8 340.0,722.9 430.0,693.5 520.0,646.4 610.0,547.1"/>
-<polyline class="p90" stroke="#8e24aa" points="70.0,492.1 160.0,610.1 250.0,650.8 340.0,669.7 430.0,651.8 520.0,608.3 610.0,499.2"/>
+<polyline class="med" stroke="#1565c0" points="70.0,552.2 160.0,582.3 250.0,598.7 340.0,616.4 430.0,632.8 520.0,649.5 610.0,667.6"/>
+<polyline class="p90" stroke="#1565c0" points="70.0,475.3 160.0,500.5 250.0,515.2 340.0,528.2 430.0,537.3 520.0,554.2 610.0,579.2"/>
+<polyline class="med" stroke="#ef6c00" points="70.0,539.9 160.0,556.7 250.0,577.2 340.0,594.6 430.0,605.0 520.0,625.4 610.0,651.3"/>
+<polyline class="p90" stroke="#ef6c00" points="70.0,469.1 160.0,490.5 250.0,508.2 340.0,513.0 430.0,528.3 520.0,541.7 610.0,555.7"/>
+<polyline class="med" stroke="#2e7d32" points="70.0,624.3 160.0,655.5 250.0,670.7 340.0,686.8 430.0,701.6 520.0,713.2 610.0,700.7"/>
+<polyline class="p90" stroke="#2e7d32" points="70.0,535.7 160.0,563.8 250.0,578.7 340.0,596.6 430.0,609.9 520.0,624.9 610.0,655.6"/>
+<polyline class="med" stroke="#8e24aa" points="70.0,604.6 160.0,635.0 250.0,637.6 340.0,660.2 430.0,676.7 520.0,689.6 610.0,699.4"/>
+<polyline class="p90" stroke="#8e24aa" points="70.0,521.5 160.0,559.4 250.0,572.5 340.0,590.9 430.0,600.5 520.0,610.1 610.0,636.2"/>
 <text x="660" y="424" font-size="15">sync_offset_us</text>
 <line class="axis" x1="660" y1="440" x2="660" y2="760"/>
 <line class="axis" x1="660" y1="760" x2="1200" y2="760"/>
 <line class="grid" x1="660" y1="760.0" x2="1200" y2="760.0"/>
 <text x="652" y="764.0" text-anchor="end" font-size="10">0.0</text>
 <line class="grid" x1="660" y1="680.0" x2="1200" y2="680.0"/>
-<text x="652" y="684.0" text-anchor="end" font-size="10">6.0</text>
+<text x="652" y="684.0" text-anchor="end" font-size="10">9.4</text>
 <line class="grid" x1="660" y1="600.0" x2="1200" y2="600.0"/>
-<text x="652" y="604.0" text-anchor="end" font-size="10">11.9</text>
+<text x="652" y="604.0" text-anchor="end" font-size="10">18.8</text>
 <line class="grid" x1="660" y1="520.0" x2="1200" y2="520.0"/>
-<text x="652" y="524.0" text-anchor="end" font-size="10">17.9</text>
+<text x="652" y="524.0" text-anchor="end" font-size="10">28.2</text>
 <line class="grid" x1="660" y1="440.0" x2="1200" y2="440.0"/>
-<text x="652" y="444.0" text-anchor="end" font-size="10">23.8</text>
+<text x="652" y="444.0" text-anchor="end" font-size="10">37.7</text>
 <text x="660.0" y="777" text-anchor="middle" font-size="9">-1000</text>
 <text x="750.0" y="777" text-anchor="middle" font-size="9">-500</text>
 <text x="840.0" y="777" text-anchor="middle" font-size="9">-250</text>
@@ -104,20 +104,20 @@
 <text x="1020.0" y="777" text-anchor="middle" font-size="9">250</text>
 <text x="1110.0" y="777" text-anchor="middle" font-size="9">500</text>
 <text x="1200.0" y="777" text-anchor="middle" font-size="9">1000</text>
-<polyline class="med" stroke="#1565c0" points="660.0,496.2 750.0,628.6 840.0,695.6 930.0,750.6 1020.0,700.1"/>
-<polyline class="p90" stroke="#1565c0" points="660.0,469.1 750.0,606.3 840.0,681.8 930.0,741.5 1020.0,690.6"/>
-<polyline class="med" stroke="#ef6c00" points="660.0,506.3 750.0,634.1 840.0,693.5 930.0,749.5 1020.0,699.8"/>
-<polyline class="p90" stroke="#ef6c00" points="660.0,477.1 750.0,612.5 840.0,677.8 930.0,741.4 1020.0,685.4"/>
-<polyline class="med" stroke="#2e7d32" points="660.0,518.2 750.0,636.6 840.0,698.8 930.0,749.4 1020.0,700.8"/>
-<polyline class="p90" stroke="#2e7d32" points="660.0,484.3 750.0,615.4 840.0,681.2 930.0,737.7 1020.0,687.1"/>
-<polyline class="med" stroke="#8e24aa" points="660.0,518.2 750.0,639.3 840.0,697.6 930.0,750.5 1020.0,704.6"/>
-<polyline class="p90" stroke="#8e24aa" points="660.0,488.1 750.0,622.9 840.0,685.3 930.0,736.9 1020.0,683.1"/>
-<line x1="20" y1="805" x2="44" y2="805" stroke="#1565c0" stroke-width="3"/>
-<text x="50" y="809" font-size="11">poc_driver / strobed_10us</text>
-<line x1="310" y1="805" x2="334" y2="805" stroke="#ef6c00" stroke-width="3"/>
-<text x="340" y="809" font-size="11">poc_driver / ambient_500us</text>
-<line x1="600" y1="805" x2="624" y2="805" stroke="#2e7d32" stroke-width="3"/>
-<text x="630" y="809" font-size="11">poc_7iron / strobed_10us</text>
-<line x1="890" y1="805" x2="914" y2="805" stroke="#8e24aa" stroke-width="3"/>
-<text x="920" y="809" font-size="11">poc_7iron / ambient_500us</text>
+<polyline class="med" stroke="#1565c0" points="660.0,518.0 750.0,596.7 840.0,636.3 930.0,673.0 1020.0,701.5"/>
+<polyline class="p90" stroke="#1565c0" points="660.0,483.8 750.0,549.4 840.0,581.5 930.0,619.6 1020.0,654.8"/>
+<polyline class="med" stroke="#ef6c00" points="660.0,506.9 750.0,583.1 840.0,622.5 930.0,659.8 1020.0,690.6"/>
+<polyline class="p90" stroke="#ef6c00" points="660.0,469.1 750.0,541.3 840.0,578.3 930.0,610.4 1020.0,653.3"/>
+<polyline class="med" stroke="#2e7d32" points="660.0,568.4 750.0,642.6 840.0,677.6 930.0,715.6 1020.0,730.1"/>
+<polyline class="p90" stroke="#2e7d32" points="660.0,521.1 750.0,591.6 840.0,625.8 930.0,661.0 1020.0,692.3"/>
+<polyline class="med" stroke="#8e24aa" points="660.0,553.2 750.0,629.8 840.0,668.1 930.0,699.5 1020.0,724.8"/>
+<polyline class="p90" stroke="#8e24aa" points="660.0,508.4 750.0,580.9 840.0,614.9 930.0,657.6 1020.0,689.3"/>
+<line x1="20" y1="845" x2="44" y2="845" stroke="#1565c0" stroke-width="3"/>
+<text x="50" y="849" font-size="11">poc_driver / strobed_10us</text>
+<line x1="310" y1="845" x2="334" y2="845" stroke="#ef6c00" stroke-width="3"/>
+<text x="340" y="849" font-size="11">poc_driver / ambient_500us</text>
+<line x1="600" y1="845" x2="624" y2="845" stroke="#2e7d32" stroke-width="3"/>
+<text x="630" y="849" font-size="11">poc_7iron / strobed_10us</text>
+<line x1="890" y1="845" x2="914" y2="845" stroke="#8e24aa" stroke-width="3"/>
+<text x="920" y="849" font-size="11">poc_7iron / ambient_500us</text>
 </svg>

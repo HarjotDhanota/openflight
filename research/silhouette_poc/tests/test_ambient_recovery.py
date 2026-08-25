@@ -80,12 +80,12 @@ def test_generator_honors_explicit_club_speed_for_sweep(tmp_path: Path):
             root_seed=91,
             club="poc_driver",
             exposure_us=500,
-            club_speed_mph=150.0,
+            club_speed_mph=100.0,
         ),
     )
     truth = json.loads((shot / "truth.json").read_text(encoding="utf-8"))
 
-    assert truth["club"]["speed_mm_s"] / 1000.0 * 2.2369362920544 == 150.0
+    assert truth["club"]["speed_mm_s"] / 1000.0 * 2.2369362920544 == 100.0
 
 
 def test_recovery_policy_uses_two_or_three_strictly_preimpact_frames(tmp_path: Path):

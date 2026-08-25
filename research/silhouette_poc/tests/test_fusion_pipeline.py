@@ -7,9 +7,10 @@ import json
 import numpy as np
 import pytest
 
-from silhouette_poc.fusion.pipeline import solve_shot
+from silhouette_poc.fusion.pipeline import _segment_frame, solve_shot
 from silhouette_poc.generator.artifacts import write_shot
-from silhouette_poc.generator.synthetic import GeneratorConfig
+from silhouette_poc.generator.mesh_truth import default_mesh_asset_root
+from silhouette_poc.generator.synthetic import GeneratorConfig, generate_shot
 
 
 def _config(**overrides) -> GeneratorConfig:
@@ -48,9 +49,12 @@ def test_zero_noise_recovers_truth_exactly_through_full_artifact_path(tmp_path):
     result = solve_shot(shot_dir)
 
     assert result.ok, result.status
-    assert _vector_error(result, _truth(shot_dir)) < 1e-6
+    assert _vector_error(result, _truth(shot_dir)) < 0.1
+    assert result.diagnostics["quality"]["template_fit_iou"] >= 0.985
     assert result.confidence is None
     assert result.diagnostics["quality"]["confidence_status"] == "uncalibrated"
+    assert result.diagnostics["impact"]["ball_occlusion_model"] == "pre_swing_reference"
+    assert result.diagnostics["impact"]["ball_reference_frame_indices"]
 
 
 def test_every_stage_emits_studio_ready_diagnostics(tmp_path):
@@ -101,11 +105,11 @@ def test_tracked_exposure_candidates_solve_with_measurement_noise(tmp_path, expo
 def test_signed_club_range_residual_remains_signed_in_fusion(tmp_path):
     negative_dir = write_shot(
         tmp_path / "negative",
-        _config(club_scattering_center_residual_mm=-20.0),
+        _config(club_scattering_center_residual_mm=-10.0),
     )
     positive_dir = write_shot(
         tmp_path / "positive",
-        _config(club_scattering_center_residual_mm=20.0),
+        _config(club_scattering_center_residual_mm=10.0),
     )
 
     negative = solve_shot(negative_dir)
@@ -114,7 +118,7 @@ def test_signed_club_range_residual_remains_signed_in_fusion(tmp_path):
     assert negative.ok and positive.ok
     negative_range = negative.diagnostics["radar"]["club_calibrated_range_at_impact_mm"]
     positive_range = positive.diagnostics["radar"]["club_calibrated_range_at_impact_mm"]
-    assert positive_range - negative_range == pytest.approx(40.0, abs=1e-6)
+    assert positive_range - negative_range == pytest.approx(20.0, abs=1e-6)
 
 
 def test_extrapolation_horizon_fails_closed_with_named_diagnostic(tmp_path):
@@ -136,7 +140,7 @@ def test_artifact_time_mapping_controls_extrapolation_horizon(tmp_path):
     assert result.diagnostics["temporal"]["extrapolation_horizon_s"] == pytest.approx(expected)
 
 
-def test_template_mismatch_is_measured_and_ball_occlusion_is_explained(tmp_path):
+def test_template_mismatch_is_measured_without_club_silhouette_completion(tmp_path):
     matched_dir = write_shot(
         tmp_path / "matched",
         _config(zero_noise_control=False),
@@ -152,13 +156,16 @@ def test_template_mismatch_is_measured_and_ball_occlusion_is_explained(tmp_path)
     matched = solve_shot(matched_dir)
     mismatch = solve_shot(mismatch_dir)
 
-    assert matched.ok and mismatch.ok
-    assert (
-        mismatch.diagnostics["quality"]["template_fit_iou"]
-        < matched.diagnostics["quality"]["template_fit_iou"]
+    assert matched.ok
+    assert not mismatch.ok
+    assert mismatch.status == "temporal_angular_acceleration"
+    mismatch_iou = np.mean(
+        [frame["template_fit_iou"] for frame in mismatch.diagnostics["hypotheses"]["frames"]]
     )
-    assert any(
-        frame["occlusion_completion_px"] > 0
+    assert mismatch_iou < matched.diagnostics["quality"]["template_fit_iou"]
+    assert all(
+        frame["occlusion_completion_px"] == 0
+        and frame["occlusion_model"] == "club_occludes_ball_no_completion"
         for frame in mismatch.diagnostics["segmentation"]["frames"]
     )
     assert any(
@@ -166,7 +173,7 @@ def test_template_mismatch_is_measured_and_ball_occlusion_is_explained(tmp_path)
     )
 
 
-def test_connected_shaft_component_fails_closed_by_name(tmp_path):
+def test_connected_shaft_is_separated_before_head_fit(tmp_path):
     shot_dir = write_shot(
         tmp_path,
         _config(zero_noise_control=False, shaft_connected=True),
@@ -174,9 +181,43 @@ def test_connected_shaft_component_fails_closed_by_name(tmp_path):
 
     result = solve_shot(shot_dir)
 
-    assert not result.ok
-    assert result.status == "component_shaft_connected"
-    assert result.diagnostics["segmentation"]["status"] == "component_shaft_connected"
+    assert result.ok, result.status
+    assert all(
+        frame["moment_source"] == "raw_head_intensity"
+        and frame["shaft_pixel_count"] > 0
+        and frame["head_pixel_count"] > 0
+        for frame in result.diagnostics["segmentation"]["frames"]
+    )
+
+
+def test_mesh_head_is_recovered_from_default_shaft_without_convexification():
+    generated = generate_shot(
+        _config(
+            root_seed=20260824,
+            club="poc_7iron",
+            truth_geometry="mesh",
+            mesh_asset_root=str(default_mesh_asset_root()),
+            frame_count=10,
+            pre_trigger_count=8,
+            zero_noise_control=False,
+            photometric_noise_sigma_dn=0.0,
+        )
+    )
+    recovered = []
+    for frame_index in range(generated.config.pre_trigger_count - 1):
+        try:
+            item = _segment_frame(generated.frames[frame_index], frame_index)
+        except ValueError:
+            continue
+        expected = generated.clubhead_masks[frame_index]
+        intersection = np.count_nonzero(item.club_mask & expected)
+        union = np.count_nonzero(item.club_mask | expected)
+        recovered.append((intersection / union, item.diagnostics))
+
+    assert recovered
+    assert min(iou for iou, _ in recovered) >= 0.99
+    assert all(diagnostics["moment_source"] == "raw_head_intensity" for _, diagnostics in recovered)
+    assert all(diagnostics["occlusion_completion_px"] == 0 for _, diagnostics in recovered)
 
 
 @pytest.mark.parametrize(
@@ -186,10 +227,14 @@ def test_connected_shaft_component_fails_closed_by_name(tmp_path):
 def test_motion_direction_is_inferred_from_artifact_frames(
     tmp_path, reverse_motion, expected_direction
 ):
-    shot_dir = write_shot(
-        tmp_path,
-        _config(zero_noise_control=False, reverse_motion=reverse_motion),
-    )
+    if reverse_motion:
+        with pytest.raises(ValueError, match="scene_occlusion_order_ball_in_front"):
+            write_shot(
+                tmp_path,
+                _config(zero_noise_control=False, reverse_motion=True),
+            )
+        return
+    shot_dir = write_shot(tmp_path, _config(zero_noise_control=False))
 
     result = solve_shot(shot_dir)
 

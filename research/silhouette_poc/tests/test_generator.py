@@ -135,3 +135,78 @@ def test_truth_contains_required_frames_timing_masks_and_complete_config():
 def test_invalid_or_untracked_exposure_is_rejected():
     with pytest.raises(ValueError, match="exposure_us"):
         GeneratorConfig(root_seed=1, club="poc_driver", exposure_us=100)
+
+
+def test_club_is_depth_ordered_over_ball_for_every_exposure_sample():
+    generated = generate_shot(
+        _config(
+            club="poc_7iron",
+            exposure_us=10,
+            template_dimension_variation_fraction=0.0,
+            photometric_noise_sigma_dn=0.0,
+            zero_noise_control=True,
+        )
+    )
+    overlap = generated.occlusion_masks[generated.config.pre_trigger_count - 1]
+
+    assert np.count_nonzero(overlap) > 0
+    assert np.median(generated.frames[generated.config.pre_trigger_count - 1][overlap]) < 198
+    assert all(
+        frame["depth_order"] == "club_over_ball"
+        and frame["club_camera_depth_mm"] < frame["ball_camera_depth_mm"]
+        for frame in generated.truth["visibility"]["frames"]
+    )
+    assert generated.truth["rendering"]["occlusion_owner"] == "club_occludes_ball"
+
+
+def test_ball_in_front_configuration_fails_loudly():
+    with pytest.raises(ValueError, match="scene_occlusion_order_ball_in_front"):
+        generate_shot(
+            _config(
+                reverse_motion=True,
+                template_dimension_variation_fraction=0.0,
+                photometric_noise_sigma_dn=0.0,
+            )
+        )
+
+
+def test_realistic_mesh_derived_shaft_is_default_and_configurable():
+    generated = generate_shot(
+        _config(
+            club="poc_7iron",
+            truth_geometry="mesh",
+            template_dimension_variation_fraction=0.0,
+            photometric_noise_sigma_dn=0.0,
+            shaft_diameter_mm=9.5,
+            shaft_taper_fraction=0.20,
+            shaft_lie_deg=64.0,
+        )
+    )
+    shaft = generated.truth["rendering"]["shaft"]
+
+    assert shaft["enabled"] is True
+    assert shaft["attachment_source"] == "mesh_hosel_geometry"
+    assert shaft["diameter_mm"] == pytest.approx(9.5)
+    assert shaft["taper_fraction"] == pytest.approx(0.20)
+    assert shaft["lie_deg"] == pytest.approx(64.0)
+    assert np.any(generated.shaft_masks)
+    assert np.any(generated.clubhead_masks)
+    visible_shafts = [mask for mask in generated.shaft_masks if np.any(mask)]
+    assert visible_shafts
+    assert all(
+        np.any(mask[0]) or np.any(mask[-1]) or np.any(mask[:, 0]) or np.any(mask[:, -1])
+        for mask in visible_shafts
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("shaft_diameter_mm", 0.0, "shaft diameter"),
+        ("shaft_taper_fraction", 0.75, "shaft taper"),
+        ("shaft_lie_deg", 90.0, "shaft lie"),
+    ],
+)
+def test_invalid_shaft_geometry_is_rejected(field, value, message):
+    with pytest.raises(ValueError, match=message):
+        _config(**{field: value})

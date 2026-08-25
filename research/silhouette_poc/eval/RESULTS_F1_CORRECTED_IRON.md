@@ -111,7 +111,7 @@ descriptive compute-cost evidence and is not a gate. Driver remains
 
 **OVERALL: STOP_FOR_MAINTAINER_REVIEW**
 
-Evaluation hash: `2c9bcdd91e61bb43b36fd1f6cf7cee81f099a9695650b93c6bd027361bbf2bc8`
+Evaluation hash: `5f74a9b72cab056726f4d68f7715e1420c511cb1f73c6a5f872e17b236ef37f3`
 
 ## Paired old-vs-corrected criteria
 
@@ -121,14 +121,14 @@ Evaluation hash: `2c9bcdd91e61bb43b36fd1f6cf7cee81f099a9695650b93c6bd027361bbf2b
 | old distorted-axis | F1 mesh-truth baseline (analytic_truth) | ambient_500us | 1.000 | 1.090 | 2.434 | — | — |
 | old distorted-axis | F1 mesh-truth baseline (mesh_truth) | strobed_10us | 0.495 | 4.005 | 5.128 | — | — |
 | old distorted-axis | F1 mesh-truth baseline (mesh_truth) | ambient_500us | 0.595 | 3.659 | 5.126 | — | — |
-| corrected metric CAD | F1 mesh-truth baseline (analytic_truth) | strobed_10us | 1.000 | 1.103 | 2.769 | 0.000 | 0.000 |
-| corrected metric CAD | F1 mesh-truth baseline (analytic_truth) | ambient_500us | 1.000 | 1.090 | 2.434 | 0.000 | 0.000 |
+| corrected metric CAD | F1 mesh-truth baseline (analytic_truth) | strobed_10us | 1.000 | 0.965 | 1.636 | 0.000 | -0.138 |
+| corrected metric CAD | F1 mesh-truth baseline (analytic_truth) | ambient_500us | 1.000 | 1.116 | 1.937 | 0.000 | 0.025 |
 | corrected metric CAD | F1 mesh-truth baseline (mesh_truth) | strobed_10us | 0.000 | — | — | -0.495 | — |
 | corrected metric CAD | F1 mesh-truth baseline (mesh_truth) | ambient_500us | 0.000 | — | — | -0.595 | — |
 | old distorted-axis | Arm B calibrated analytic | strobed_10us | 0.495 | 4.485 | 6.424 | — | — |
 | old distorted-axis | Arm B calibrated analytic | ambient_500us | 0.600 | 2.568 | 3.794 | — | — |
 | corrected metric CAD | Arm B calibrated analytic | strobed_10us | 0.000 | — | — | -0.495 | — |
-| corrected metric CAD | Arm B calibrated analytic | ambient_500us | 0.905 | 10.587 | 15.622 | 0.305 | 8.019 |
+| corrected metric CAD | Arm B calibrated analytic | ambient_500us | 0.915 | 15.427 | 20.990 | 0.315 | 12.859 |
 | corrected metric CAD | Arm A mesh projection | — | — | — | — | — | — |
 
 ## Arm A LUT validation
@@ -149,12 +149,12 @@ Evaluation hash: `2c9bcdd91e61bb43b36fd1f6cf7cee81f099a9695650b93c6bd027361bbf2b
 
 | Arm | Candidate | Offset median/p90 mm | Height median/p90 mm | IoU median/p10 | Fit residual median/p90 px |
 |---|---|---:|---:|---:|---:|
-| F1 mesh-truth baseline (analytic_truth) | strobed_10us | 0.329/1.963 | -0.447/1.061 | 0.959/0.944 | 3.048/3.580 |
-| F1 mesh-truth baseline (analytic_truth) | ambient_500us | 0.107/1.215 | -0.332/1.044 | 0.960/0.947 | 3.830/4.498 |
+| F1 mesh-truth baseline (analytic_truth) | strobed_10us | 0.067/0.958 | -0.040/1.104 | 0.968/0.949 | 2.779/3.355 |
+| F1 mesh-truth baseline (analytic_truth) | ambient_500us | 0.264/1.243 | -0.408/0.986 | 0.958/0.890 | 3.091/3.687 |
 | F1 mesh-truth baseline (mesh_truth) | strobed_10us | —/— | —/— | —/— | —/— |
 | F1 mesh-truth baseline (mesh_truth) | ambient_500us | —/— | —/— | —/— | —/— |
 | Arm B calibrated analytic | strobed_10us | —/— | —/— | —/— | —/— |
-| Arm B calibrated analytic | ambient_500us | 5.135/12.873 | -4.810/4.989 | 0.809/0.762 | 10.122/10.710 |
+| Arm B calibrated analytic | ambient_500us | 10.002/18.031 | -8.933/-1.039 | 0.750/0.741 | 11.136/11.494 |
 
 ## Corrected rejection taxonomy
 
@@ -163,40 +163,14 @@ Evaluation hash: `2c9bcdd91e61bb43b36fd1f6cf7cee81f099a9695650b93c6bd027361bbf2b
 - `F1 mesh-truth baseline (mesh_truth)/strobed_10us`: insufficient_temporal_frames:1, silhouette_fit_residual:199
 - `F1 mesh-truth baseline (mesh_truth)/ambient_500us`: insufficient_temporal_frames:2, silhouette_fit_residual:198
 - `Arm B calibrated analytic/strobed_10us`: insufficient_temporal_frames:1, silhouette_fit_residual:199
-- `Arm B calibrated analytic/ambient_500us`: insufficient_temporal_frames:2, silhouette_fit_residual:16, temporal_acceleration:1
+- `Arm B calibrated analytic/ambient_500us`: insufficient_temporal_frames:2, silhouette_fit_residual:15
 - Arm A: no shot taxonomy; frozen LUT validation failed before evaluation.
-
-## Arm A-v2 prospective result
-
-**REVISION 2.5 IRON GATE: IRON_A_V2_INVALID_LUT**
-
-Accepted v1 evaluation hash (unchanged verdict): `9f673a63a8f08bcbb6ede8d25ac2604e8e1972324e0330fc63aed9a174b9eff4`
-
-Only ambient 500 us is gate-bearing. Strobe is retained as a comparison-only deferred fallback and cannot pass or fail this gate.
-
-### Paired Arm A-v1/v2 criteria
-
-| LUT | Candidate | Gate role | Solve | Median mm | p90 mm |
-|---|---|---|---:|---:|---:|
-| v1 (invalid LUT) | — | — | — | — | — |
-| v2 (invalid LUT) | — | — | — | — | — |
-
-### Paired Arm A-v1/v2 LUT validation
-
-| LUT | Centroid p99 px | Covariance p99 px | Contour IoU p1 | Result |
-|---|---:|---:|---:|---|
-| v1 | 0.296 | 2.984 | 0.980 | FAIL |
-| v2 | 0.181 | 2.497 | 0.984 | FAIL |
-
-### Arm A-v2 rejection taxonomy
-
-- No shots: Arm A-v2 LUT validation failed closed.
 
 ## Arm A-v3 exact-model result
 
 **ARM A-v3 IRON GATE: IRON_A_V3_CLEARS_AMBIENT**
 
-Previous evaluation hash: `e7e0ff4d793de62ddf4dc4c010f077bce82996fd649cc4c6771dcbb8335dc34d`
+Previous evaluation hash: `a081f3e53810c2e29bfa083990a87ed0eac5d31536872ab95d3fc6370c21b10d`
 
 LUT validation: **NOT_APPLICABLE_EXACT_MODEL**. Every pose hypothesis was rasterized exactly; the retained LUT validation machinery was not invoked.
 
@@ -205,28 +179,27 @@ LUT validation: **NOT_APPLICABLE_EXACT_MODEL**. Every pose hypothesis was raster
 | Model | Candidate | Gate role | Solve | Median mm | p90 mm |
 |---|---|---|---:|---:|---:|
 | v1 LUT invalid | — | — | — | — | — |
-| v2 LUT invalid | — | — | — | — | — |
-| v3 exact | strobed_10us | comparison-only | 0.605 | 9.608 | 11.220 |
-| v3 exact | ambient_500us | primary-gate | 0.840 | 9.152 | 11.577 |
+| v3 exact | strobed_10us | comparison-only | 0.995 | 0.938 | 1.631 |
+| v3 exact | ambient_500us | primary-gate | 0.990 | 1.050 | 1.767 |
 
 ### Arm A-v3 signed errors and diagnostics
 
 | Candidate | Offset median/p90 mm | Height median/p90 mm | IoU median/p10 | Fit residual median/p90 px |
 |---|---:|---:|---:|---:|
-| strobed_10us | -2.661/-0.974 | 8.877/10.892 | 0.712/0.707 | 7.044/7.459 |
-| ambient_500us | -2.354/0.282 | 8.594/11.274 | 0.722/0.717 | 5.903/6.806 |
+| strobed_10us | 0.074/0.720 | 0.027/1.041 | 0.985/0.972 | 2.144/3.184 |
+| ambient_500us | -0.134/0.652 | 0.285/1.402 | 0.966/0.938 | 2.388/3.500 |
 
 ### Solve wall-time (all attempted shots)
 
 | Candidate | N | Total s | Median s | p90 s | Max s |
 |---|---:|---:|---:|---:|---:|
-| strobed_10us | 200 | 6186.130 | 29.771 | 35.107 | 52.326 |
-| ambient_500us | 200 | 6999.858 | 35.356 | 36.234 | 50.593 |
+| strobed_10us | 200 | 7358.341 | 36.527 | 38.184 | 54.307 |
+| ambient_500us | 200 | 7449.625 | 36.988 | 38.706 | 56.436 |
 
 ### Arm A-v3 rejection taxonomy
 
-- `strobed_10us` (comparison_only): insufficient_temporal_frames:1, silhouette_fit_residual:78
-- `ambient_500us` (primary_gate): insufficient_temporal_frames:2, silhouette_fit_residual:30
+- `strobed_10us` (comparison_only): insufficient_temporal_frames:1
+- `ambient_500us` (primary_gate): insufficient_temporal_frames:2
 
 ## Decision
 
