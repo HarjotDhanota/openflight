@@ -200,3 +200,71 @@ before it is trusted against real data.
 4. **Establish the provenance of `RADAR_STATIC_BIAS_MM`.**
 5. Only then: the A-v3 re-run, sweeping exposure, plate scale **and frame rate** as free
    parameters.
+
+---
+
+## 6. Removing the sound trigger entirely (2026-08-25) — **[MEASURED]**
+
+Raised by the maintainer: acoustic delay scales with how far the user places the unit, so
+it cannot be calibrated out in general. Can the camera and radars do it alone?
+
+**Yes, and the camera alone already beats the microphone.** Watching a **22x22 px window**
+on the teed ball — 484 pixels, trivial at 467 fps — the shot crosses a 6-sigma threshold
+at **frame 67** on the reference capture. The acoustic trigger fired at **frame 74**.
+
+| | Fires at | vs microphone |
+|---|---|---|
+| Camera ROI watch on the tee | **F67** | **15.0 ms earlier** |
+| SEN-14262 acoustic | F74 | baseline |
+
+Quiet-period residual in that window is 1.51 DN mean; the shot drives it to 35–66 DN. The
+margin is enormous, and it has **no distance dependence**.
+
+This is what the photometric class does. Foresight's GCQuad detects a shot by *"monitoring
+when the ball disappears from the hitting zone"* its cameras already track — continuous
+monitoring, no discrete trigger, plus a ball-found indicator. **[MAN]** Acoustic triggering
+appears in patent claim language as one option among many, not in shipping products of this
+class.
+
+**Recommended architecture:**
+
+1. **Detection** — camera ROI watch on the tee zone. Freeze the ring. No microphone.
+2. **Timing** — retrospective, never from whatever fired the capture. Three independent
+   routes already exist: `iwr6843/shot.py::impact_time_s` (ball range walk back-extrapolated
+   to the tee, 14/14 on the 2026-07-25 captures), `rolling_buffer/processor.py::estimate_impact`
+   (OPS club-to-ball speed transition), and camera back-extrapolation of the ball's flight.
+
+Note the ROI fired at F67 on **club arrival**, not ball departure — which is preferable for
+triggering (it captures *before* impact) but means the two events must be separated
+retrospectively. A hand or club entering the ROI during setup could also false-fire, so this
+should be armed only from the READY state (see
+`2026-08-25-ball-placement-and-exposure-readiness.md`).
+
+## 7. Mesh identity dominates the fit — and hosel removal does NOT fix it
+
+First fit of the real mesh to real pixels (`silhouette_poc/replay/fit_real.py`). The club
+swung was a **9-iron**; available meshes are a Titleist 690CB *blade* and a driver.
+
+| Frame | Observed | 690CB blade | Blade, hosel removed | Driver |
+|---|---|---|---|---|
+| F66 | 759 px | 0.388 | 0.371 | **0.623** |
+| F68 | 481 px | 0.460 | 0.379 | **0.652** |
+| F70 | 219 px | 0.236 | 0.274 | **0.606** |
+
+**The driver mesh fits a 9-iron better than the blade does.** The blade includes a hosel
+(96.9 mm span vs a 54.8 mm head), and removing it looked like the obvious fix since the
+observed head is ~58 mm against the driver's 60 mm. **It did not help** — 0.460 to 0.379 at
+F68. The hosel is not where the error is; a muscleback blade is simply not shaped like a
+modern 9-iron.
+
+**Consequence for the design.** The plan is *one canonical template per club type, zero user
+setup*. This says head shape varies enough WITHIN a type that one template may not cover it,
+and that IoU against a partial silhouette will prefer the wrong club. **Settle this before
+relying on the canonical-template assumption.**
+
+**What did land:** at F68 the fit independently recovers range **1425 mm** at roll -2 deg,
+matching the camera-to-ball distance derived separately from the measured 13.97 px ball and
+the 2.8 mm datasheet lens. Two unrelated routes, same number.
+
+**Scale of the gap:** synthetic evaluation of the same machinery reached IoU **0.9928**. Real
+pixels give 0.65 with a mismatched model. **Synthetic performance is not predictive here.**
