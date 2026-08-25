@@ -2830,6 +2830,11 @@ def _fuse_camera_ball_flight(
                                 roll_correction_deg=float(
                                     camera_capture_config.get("roll_correction_deg", 0.0)
                                 ),
+                                horizontal_pixel_sign=(
+                                    -1.0
+                                    if camera_capture_config.get("mirror_horizontal")
+                                    else 1.0
+                                ),
                                 image_width_px=int(camera_capture_config["width"]),
                                 image_height_px=int(camera_capture_config["height"]),
                             ),

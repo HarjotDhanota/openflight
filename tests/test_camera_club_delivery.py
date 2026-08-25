@@ -16,6 +16,7 @@ from openflight.camera.club_delivery import (
     ReferenceBallTracker,
     TraceResult,
     _detect_impact_index,
+    _preferred_path_estimate,
     aoa_offset_for_club,
     camera_ops_delivery_from_feature_pair,
     combine_approach_estimates,
@@ -63,6 +64,19 @@ def test_impact_detection_uses_first_departure_near_trigger():
     assert _detect_impact_index(frames, ball, trigger_index=44) == 41
 
 
+def test_impact_detection_accepts_camera_departure_after_early_gpio_trigger():
+    frames = np.zeros((70, 9, 9), dtype=np.uint8)
+    yy, xx = np.mgrid[:9, :9]
+    ball = _Ball()
+    ball.x = 4.0
+    ball.y = 4.0
+    ball.diameter_px = 8.0
+    core = (xx - ball.x) ** 2 + (yy - ball.y) ** 2 <= 3**2
+    frames[:53, core] = 160
+
+    assert _detect_impact_index(frames, ball, trigger_index=44) == 52
+
+
 def test_reference_ball_tracker_falls_back_to_established_tee_anchor():
     tracker = ReferenceBallTracker()
     for x in (323.0, 324.0, 325.0):
@@ -93,6 +107,52 @@ def test_reference_ball_tracker_returns_rolling_anchor_for_stable_geometry():
     assert third.x == pytest.approx(321.0)
     assert third.y == pytest.approx(191.0)
     assert third.diameter_px == pytest.approx(15.0)
+
+
+def test_reference_ball_tracker_fallback_requires_established_anchor():
+    tracker = ReferenceBallTracker()
+
+    assert tracker.fallback() is None
+    for x in (320.0, 321.0):
+        tracker.resolve_stable(ReferenceBall(x, 190.0, 14.0, 140))
+    assert tracker.fallback() is None
+
+    tracker.resolve_stable(ReferenceBall(322.0, 190.0, 14.0, 140))
+
+    anchor = tracker.fallback()
+    assert anchor is not None
+    assert anchor.x == pytest.approx(321.0)
+    assert anchor.y == pytest.approx(190.0)
+
+
+def test_club_delivery_uses_established_anchor_when_detection_is_missing(monkeypatch):
+    tracker = ReferenceBallTracker()
+    for x in (159.0, 160.0, 161.0):
+        tracker.resolve_stable(ReferenceBall(x, 100.0, 14.0, 140))
+    monkeypatch.setattr(
+        club_delivery_module,
+        "detect_reference_ball",
+        lambda _frames: (_ for _ in ()).throw(ValueError("not found")),
+    )
+
+    result = estimate_chained_delivery(
+        np.full((60, 200, 320), 200, dtype=np.uint8),
+        np.arange(60, dtype=np.int64) * 2_000_000,
+        trigger_index=40,
+        range_evidence=None,
+        geometry=CameraDeliveryGeometry(
+            camera_height_m=0.2032,
+            radar_height_m=0.1524,
+            tee_range_m=1.524,
+            ball_height_m=0.04,
+            image_width_px=320,
+            image_height_px=200,
+        ),
+        ops_club_speed_mph=80.0,
+        ball_tracker=tracker,
+    )
+
+    assert result.status != "rejected_no_ball"
 
 
 def _project_impact_tracks(
@@ -236,6 +296,37 @@ class TestChainedImpactDelivery:
         assert result.attack_angle_deg == pytest.approx(-22.0)
         assert result.path_confidence_tier == "high"
         assert result.attack_confidence_tier == "low"
+
+    def test_impact_straddling_path_wins_over_broad_approach_consensus(self):
+        path_windows = [
+            ApproachPairEstimate(path, -4.0, 1.0, 1.0, 12)
+            for path in (6.0, 7.0, 8.0, 9.0)
+        ]
+        impact_path = ApproachPairEstimate(3.0, -4.0, 1.0, 1.0, 12)
+
+        result = combine_approach_estimates(
+            path_windows,
+            attack_estimate=impact_path,
+            preferred_path_estimate=impact_path,
+            timing_plausible=True,
+        )
+
+        assert result.club_path_deg == pytest.approx(3.0)
+
+    def test_path_interval_priority_is_impact_then_final_approach(self):
+        impact = ApproachPairEstimate(3.0, -4.0, 1.0, 1.0, 12)
+        final_approach = ApproachPairEstimate(7.0, -4.0, 1.0, 1.0, 12)
+
+        assert _preferred_path_estimate({(-4, -1): final_approach}) is final_approach
+        assert (
+            _preferred_path_estimate(
+                {
+                    (-4, -1): final_approach,
+                    (-2, 1): impact,
+                }
+            )
+            is impact
+        )
 
     def test_approach_consensus_keeps_unstable_path_visible_as_low_confidence(self):
         path_windows = [

@@ -70,6 +70,8 @@ describe('CameraFeed', () => {
     expect(html).toContain('Indoor dark');
     expect(html).toContain('Night');
     expect(html).toContain('1000<!-- --> µs · <!-- -->20<!-- -->×');
+    expect(html).toContain('Facility dark');
+    expect(html).toContain('1250<!-- --> µs · <!-- -->16<!-- -->×');
     expect(html).toContain('Ball placement guide');
     expect(html).toContain('50% across · 78% down');
     expect(html).not.toContain('type="range"');

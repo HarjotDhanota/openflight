@@ -23,6 +23,7 @@ from openflight.camera.geometry import deroll_normalized_offsets
 
 MPH_PER_MS = 2.23694
 PARAMETER_SWEEP_SIZE = 27
+MAX_IWR_FALLBACK_ABS_DEG = 20.0
 
 
 @dataclass(frozen=True)
@@ -479,10 +480,14 @@ def estimate_camera_ball_flight(
     try:
         anchor = detect_reference_ball(frames)
     except ValueError:
-        return CameraBallEstimate("rejected_reference_ball_not_found")
-    if ball_tracker is not None:
-        resolver = getattr(ball_tracker, "resolve_stable", ball_tracker.resolve)
-        anchor, _anchor_source = resolver(anchor)
+        fallback = getattr(ball_tracker, "fallback", None)
+        anchor = fallback() if fallback is not None else None
+        if anchor is None:
+            return CameraBallEstimate("rejected_reference_ball_not_found")
+    else:
+        if ball_tracker is not None:
+            resolver = getattr(ball_tracker, "resolve_stable", ball_tracker.resolve)
+            anchor, _anchor_source = resolver(anchor)
     if not 9.0 <= anchor.diameter_px <= 30.0:
         return CameraBallEstimate("rejected_implausible_reference_ball")
 
@@ -612,16 +617,6 @@ def select_camera_assisted_horizontal(
         else None
     )
     if estimate.depth_source == "camera_size" and camera_deg is not None:
-        if iwr_horizontal_deg is not None:
-            return HorizontalFusionDecision(
-                iwr_horizontal_deg,
-                "radar",
-                iwr_confidence,
-                "camera_only_available_fallback_iwr",
-                iwr_horizontal_deg,
-                camera_deg,
-                delta,
-            )
         return HorizontalFusionDecision(
             camera_deg,
             "camera_only_experimental",
@@ -642,31 +637,28 @@ def select_camera_assisted_horizontal(
             delta,
         )
     if estimate.confidence_tier == "experimental" and camera_deg is not None:
-        if iwr_horizontal_deg is not None:
-            if delta is not None and abs(delta) <= 3.0:
-                return HorizontalFusionDecision(
-                    camera_deg,
-                    "camera_assisted_experimental",
-                    0.45,
-                    "camera_assisted_experimental_agreement",
-                    iwr_horizontal_deg,
-                    camera_deg,
-                    delta,
-                )
-            return HorizontalFusionDecision(
-                iwr_horizontal_deg,
-                "radar",
-                iwr_confidence,
-                "camera_experimental_disagreement_fallback_iwr",
-                iwr_horizontal_deg,
-                camera_deg,
-                delta,
-            )
+        agreement = delta is not None and abs(delta) <= 3.0
         return HorizontalFusionDecision(
             camera_deg,
             "camera_assisted_experimental",
-            0.30,
-            "camera_experimental_no_iwr",
+            0.45 if agreement else 0.30,
+            (
+                "camera_assisted_experimental_agreement"
+                if agreement
+                else "camera_experimental_disagreement"
+                if iwr_horizontal_deg is not None
+                else "camera_experimental_no_iwr"
+            ),
+            iwr_horizontal_deg,
+            camera_deg,
+            delta,
+        )
+    if iwr_horizontal_deg is not None and abs(iwr_horizontal_deg) > MAX_IWR_FALLBACK_ABS_DEG:
+        return HorizontalFusionDecision(
+            None,
+            None,
+            None,
+            "camera_withheld_iwr_implausible",
             iwr_horizontal_deg,
             camera_deg,
             delta,

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+import openflight.camera.ball_flight as ball_flight_module
 from openflight.camera.ball_flight import (
     BallCandidate,
     CameraBallEstimate,
@@ -14,10 +15,42 @@ from openflight.camera.ball_flight import (
     _confidence_tier,
     _path_estimate,
     _rough_path_score,
+    estimate_camera_ball_flight,
     select_camera_assisted_horizontal,
 )
+from openflight.camera.club_delivery import ReferenceBallTracker
 from openflight.camera.club_motion import ReferenceBall
 from openflight.iwr6843.lcmf import BallRangeEvidence, LCMFResult
+
+
+def test_ball_flight_uses_established_anchor_when_detection_is_missing(monkeypatch):
+    tracker = ReferenceBallTracker()
+    for x in (159.0, 160.0, 161.0):
+        tracker.resolve_stable(ReferenceBall(x, 100.0, 14.0, 140))
+    monkeypatch.setattr(
+        ball_flight_module,
+        "detect_reference_ball",
+        lambda _frames: (_ for _ in ()).throw(ValueError("not found")),
+    )
+
+    result = estimate_camera_ball_flight(
+        np.zeros((20, 200, 320), dtype=np.uint8),
+        np.arange(20, dtype=np.int64) * 2_000_000,
+        trigger_ns=10_000_000,
+        range_evidence=None,
+        geometry=CameraBallGeometry(
+            camera_height_m=0.2032,
+            radar_height_m=0.1524,
+            tee_range_m=1.524,
+            ball_height_m=0.04,
+            image_width_px=320,
+            image_height_px=200,
+        ),
+        ops_ball_speed_mph=100.0,
+        ball_tracker=tracker,
+    )
+
+    assert result.status != "rejected_reference_ball_not_found"
 
 
 def _project_world_point(
@@ -327,18 +360,18 @@ def test_high_camera_estimate_replaces_iwr_but_preserves_both_values():
     assert decision.status == "camera_assisted_high"
 
 
-def test_experimental_camera_disagreement_falls_back_to_available_iwr():
+def test_experimental_camera_disagreement_keeps_measured_camera_trajectory():
     decision = select_camera_assisted_horizontal(
         _estimate("experimental", 5.0),
         iwr_horizontal_deg=-2.0,
         iwr_confidence=0.7,
     )
 
-    assert decision.selected_deg == pytest.approx(-2.0)
-    assert decision.source == "radar"
-    assert decision.confidence == pytest.approx(0.7)
+    assert decision.selected_deg == pytest.approx(5.0)
+    assert decision.source == "camera_assisted_experimental"
+    assert decision.confidence == pytest.approx(0.3)
     assert decision.camera_horizontal_deg == pytest.approx(5.0)
-    assert decision.status == "camera_experimental_disagreement_fallback_iwr"
+    assert decision.status == "camera_experimental_disagreement"
 
 
 def test_experimental_camera_agreement_is_selected():
@@ -387,6 +420,26 @@ def test_camera_size_depth_is_labeled_as_camera_only_fallback():
     assert decision.status == "camera_only_experimental"
 
 
+def test_camera_size_depth_remains_selected_when_iwr_is_available():
+    estimate = CameraBallEstimate(
+        status="accepted_camera_only",
+        confidence_tier="experimental",
+        horizontal_deg=3.0,
+        depth_source="camera_size",
+    )
+
+    decision = select_camera_assisted_horizontal(
+        estimate,
+        iwr_horizontal_deg=-8.0,
+        iwr_confidence=0.9,
+    )
+
+    assert decision.selected_deg == pytest.approx(3.0)
+    assert decision.source == "camera_only_experimental"
+    assert decision.confidence == pytest.approx(0.3)
+    assert decision.status == "camera_only_experimental"
+
+
 def test_withheld_camera_falls_back_to_unchanged_iwr():
     decision = select_camera_assisted_horizontal(
         _estimate("withheld", None),
@@ -398,6 +451,20 @@ def test_withheld_camera_falls_back_to_unchanged_iwr():
     assert decision.source == "radar"
     assert decision.confidence == pytest.approx(0.7)
     assert decision.status == "camera_withheld_fallback_iwr"
+
+
+def test_withheld_camera_rejects_implausible_iwr_fallback():
+    decision = select_camera_assisted_horizontal(
+        _estimate("withheld", None),
+        iwr_horizontal_deg=38.0,
+        iwr_confidence=0.95,
+    )
+
+    assert decision.selected_deg is None
+    assert decision.source is None
+    assert decision.confidence is None
+    assert decision.iwr_horizontal_deg == pytest.approx(38.0)
+    assert decision.status == "camera_withheld_iwr_implausible"
 
 
 def test_lcmf_ball_range_evidence_is_transient():

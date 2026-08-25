@@ -1,12 +1,13 @@
 """Camera-assisted experimental club delivery (attack angle + club path).
 
-The live estimator tracks clubhead image features across several short,
-strictly pre-impact intervals. Its preferred path combines camera transverse
-motion, IWR6843 depth, and OPS club speed. When IWR club range is unavailable,
-camera perspective flow plus OPS speed closes a lower-confidence 3D fallback.
-Post-impact pixels are deliberately excluded because the launched ball, shaft,
-and deflected clubhead can otherwise replace the incoming clubhead. Both paths
-remain experimental pending a frozen source-of-truth validation.
+The live estimator tracks clubhead image features across short intervals around
+impact. Its preferred path spans the final approach through the first
+post-impact frame, combining camera transverse motion, IWR6843 depth, and OPS
+club speed. A fully pre-impact interval is the next choice so launched-ball or
+deflected-head pixels cannot silently replace a missing impact track. When IWR
+club range is unavailable, camera perspective flow plus OPS speed closes a
+lower-confidence 3D fallback. Both paths remain experimental pending broader
+source-of-truth validation.
 
 The older radar-AoA/camera-trace functions remain below for replay comparisons,
 but the OpenFlight server no longer uses their per-club correction offsets.
@@ -40,7 +41,7 @@ GLOBAL_SATURATION_HINT = 0.05
 # A real impact must sit near the sound-trigger frame; a far-off "impact"
 # means the ball patch never departed (wrong blob detected).
 IMPACT_PRE_TRIGGER_MAX = 8
-IMPACT_POST_TRIGGER_MAX = 3
+IMPACT_POST_TRIGGER_MAX = 10
 # Moving-bright mask (adaptive): pixels saturated NOW but dark in the
 # pre-swing background isolate the chrome shaft from static bright clutter.
 BRIGHT_NOW_FLOOR = 110.0
@@ -85,7 +86,8 @@ APPROACH_ATTACK_VELOCITY_MAD_MAX_MPH = 12.0
 APPROACH_MEDIUM_AOA_RANGE_DEG = (-18.0, 12.0)
 APPROACH_MEDIUM_SPEED_RATIO_RANGE = (0.6, 1.4)
 APPROACH_MEDIUM_VELOCITY_MAD_MAX_MPH = 18.0
-APPROACH_PATH_OFFSETS = ((-1, 0), (-2, 0), (-3, -1), (-3, 0))
+PREFERRED_PATH_OFFSETS = ((-2, 1), (-4, -1))
+APPROACH_PATH_OFFSETS = (*PREFERRED_PATH_OFFSETS, (-1, 0), (-2, 0), (-3, -1), (-3, 0))
 GOLF_BALL_DIAMETER_M = 0.04267
 REFERENCE_IMAGE_SIZE = (640, 400)
 
@@ -155,7 +157,7 @@ class ChainedDelivery:
 
 @dataclass(frozen=True)
 class ApproachPairEstimate:
-    """One strictly pre-impact camera/IWR velocity interval."""
+    """One short camera/IWR velocity interval around impact."""
 
     path_deg: float
     attack_angle_deg: float
@@ -210,6 +212,12 @@ class ReferenceBallTracker:
         if anchor is not None and len(self._samples) >= self.min_fallback_samples:
             return anchor, "session_anchor"
         return resolved, "warming" if source == "detected" else source
+
+    def fallback(self) -> ReferenceBall | None:
+        """Return an established session anchor without adding an observation."""
+        if len(self._samples) < self.min_fallback_samples:
+            return None
+        return self._anchor()
 
 
 def _pixels_to_world(
@@ -291,9 +299,10 @@ def combine_approach_estimates(
     path_estimates: list[ApproachPairEstimate],
     *,
     attack_estimate: ApproachPairEstimate | None,
+    preferred_path_estimate: ApproachPairEstimate | None = None,
     timing_plausible: bool,
 ) -> ChainedDelivery:
-    """Combine independent pre-impact windows without coupling path and AoA."""
+    """Combine independent impact windows without coupling path and AoA."""
     path_candidates = [
         estimate
         for estimate in path_estimates
@@ -304,7 +313,28 @@ def combine_approach_estimates(
     path_deg = None
     path_mad = None
     path_confidence = "withheld"
-    if len(path_candidates) >= APPROACH_MIN_PATH_WINDOWS:
+    if preferred_path_estimate is not None:
+        path_deg = preferred_path_estimate.path_deg
+        values = np.asarray([estimate.path_deg for estimate in path_candidates])
+        path_mad = (
+            float(np.median(np.abs(values - path_deg))) if len(values) else None
+        )
+        preferred_quality = (
+            CHAINED_SPEED_RATIO_RANGE[0]
+            <= preferred_path_estimate.speed_ratio_ops
+            <= CHAINED_SPEED_RATIO_RANGE[1]
+            and preferred_path_estimate.velocity_mad_mph <= CHAINED_VELOCITY_MAD_MAX_MPH
+            and CHAINED_PATH_RANGE_DEG[0]
+            <= preferred_path_estimate.path_deg
+            <= CHAINED_PATH_RANGE_DEG[1]
+        )
+        if preferred_quality and timing_plausible:
+            path_confidence = (
+                "high" if path_mad is not None and path_mad <= 2.0 else "medium"
+            )
+        else:
+            path_confidence = "low"
+    elif len(path_candidates) >= APPROACH_MIN_PATH_WINDOWS:
         values = np.asarray([estimate.path_deg for estimate in path_candidates])
         median = float(np.median(values))
         path_mad = float(np.median(np.abs(values - median)))
@@ -380,6 +410,17 @@ def combine_approach_estimates(
             **common,
         )
     return ChainedDelivery(status="rejected_no_stable_approach", **common)
+
+
+def _preferred_path_estimate(
+    pair_estimates: dict[tuple[int, int], ApproachPairEstimate],
+) -> ApproachPairEstimate | None:
+    """Select the interval nearest TrackMan's instantaneous-impact definition."""
+    for offsets in PREFERRED_PATH_OFFSETS:
+        estimate = pair_estimates.get(offsets)
+        if estimate is not None:
+            return estimate
+    return None
 
 
 def delivery_from_feature_tracks(
@@ -871,9 +912,12 @@ def estimate_chained_delivery(
     try:
         ball = detect_reference_ball(frames)
     except ValueError:
-        return ChainedDelivery(status="rejected_no_ball", scene_p995=scene_p995)
-    if ball_tracker is not None:
-        ball, _ball_source = ball_tracker.resolve(ball)
+        ball = ball_tracker.fallback() if ball_tracker is not None else None
+        if ball is None:
+            return ChainedDelivery(status="rejected_no_ball", scene_p995=scene_p995)
+    else:
+        if ball_tracker is not None:
+            ball, _ball_source = ball_tracker.resolve(ball)
     yy, xx = np.mgrid[0 : frames.shape[1], 0 : frames.shape[2]]
     image_scale = _image_scale(frames.shape)
     ball_zone_radius = max(50.0, BALL_ZONE_RADIUS_PX * image_scale)
@@ -891,7 +935,9 @@ def estimate_chained_delivery(
             int(timestamps_ns[impact_idx]) - int(timestamps_ns[trigger_index])
         ) / 1e6
         timing_plausible = camera_quality_clean and (
-            trigger_index - IMPACT_PRE_TRIGGER_MAX <= impact_idx <= trigger_index
+            trigger_index - IMPACT_PRE_TRIGGER_MAX
+            <= impact_idx
+            <= trigger_index + IMPACT_POST_TRIGGER_MAX
         )
 
     contact_camera_s = (int(timestamps_ns[impact_idx]) + int(timestamps_ns[impact_idx + 1])) / 2e9
@@ -957,6 +1003,7 @@ def estimate_chained_delivery(
     result = combine_approach_estimates(
         list(pair_estimates.values()),
         attack_estimate=pair_estimates.get((-1, 0)),
+        preferred_path_estimate=_preferred_path_estimate(pair_estimates),
         timing_plausible=timing_plausible,
     )
     if range_evidence is None and (

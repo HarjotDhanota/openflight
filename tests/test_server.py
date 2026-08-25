@@ -1370,6 +1370,7 @@ class TestShotToDict:
                 "lateral_offset_m": 0.0762,
                 "horizontal_offset_deg": -0.45,
                 "roll_correction_deg": 2.8,
+                "mirror_horizontal": True,
                 "width": 640,
                 "height": 400,
             },
@@ -1401,6 +1402,7 @@ class TestShotToDict:
         assert estimate_call["geometry"].horizontal_offset_deg == -0.45
         assert estimate_call["geometry"].camera_lateral_offset_m == 0.0762
         assert estimate_call["geometry"].roll_correction_deg == 2.8
+        assert estimate_call["geometry"].horizontal_pixel_sign == -1.0
         assert estimate_call["ball_tracker"] is ball_flight_tracker
 
     def test_live_fusion_without_camera_preserves_radar_horizontal(self):

@@ -52,6 +52,7 @@ const BRIGHTNESS_STEPS = [
   { id: 'indoor-dark', label: 'Indoor dark', exposureUs: 650, gain: 15 },
   { exposureUs: 800, gain: 18 },
   { id: 'night', label: 'Night', exposureUs: 1000, gain: 20 },
+  { id: 'facility-dark', label: 'Facility dark', exposureUs: 1250, gain: 16 },
 ] as const;
 
 const CAMERA_PROFILES = BRIGHTNESS_STEPS.filter((step) => 'id' in step);
