@@ -1,5 +1,14 @@
 """Render every frame of the real capture with club + ball outlines drawn on it.
 
+The capture archive is CAMERA-ONLY: no I/Q, no IWR frames, no range, no radar of
+any kind. `pre_trigger_count` and `trigger_host_timestamp_ns` come from the
+SEN-14262 ACOUSTIC trigger on BCM17.
+
+That trigger LAGS true impact. At the trigger frame the ball is already ~48 px
+off the tee, which back-extrapolates to impact at least 4.7 frames (>=10 ms)
+earlier. Sound needs 4.2 ms to cross 1.43 m and the rest is host-side latency.
+Do not treat the trigger frame as the impact frame.
+
 Honest overlay: what the detectors actually output, frame by frame, including the
 frames where they fail. Nothing is hand-drawn and nothing is hidden.
 """
@@ -221,7 +230,7 @@ def main():
         if i == impact:
             cv2.putText(
                 vis,
-                "RADAR TRIGGER",
+                "ACOUSTIC TRIGGER - not impact",
                 (8, 40),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.42,
@@ -231,7 +240,7 @@ def main():
             )
             cv2.putText(
                 vis,
-                "RADAR TRIGGER",
+                "ACOUSTIC TRIGGER - not impact",
                 (8, 40),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.42,
