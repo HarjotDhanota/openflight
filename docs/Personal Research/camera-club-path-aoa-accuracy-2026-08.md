@@ -116,3 +116,96 @@ slightly noisy.
 - Whether the two frames chosen by the pair estimator are close enough to impact. The radar
   side found impact landing 2–4 frames from where it was assumed, which put the club-path
   estimator on the follow-through; the camera side has not been checked for the same fault.
+
+---
+
+## 5. CORRECTION and three larger findings (2026-08-25, multi-agent investigation + verification)
+
+### 5.1 §1's ~2.7° is MODE-DEPENDENT, and wrong for the shipped mode
+
+I computed the distortion error assuming a clubhead well off-axis in a full frame. The
+shipped `320×200` mode reads only the **central 640×400 of the 1280×800 array** (registers
+X 336–1151, Y 150–665, 2× subsample), so the in-frame field radius never exceeds ~0.55 of
+the lens's full field.
+
+Correct mechanism: radial distortion rotates a short image displacement by at most
+`atan((rho-1)/(2*sqrt(rho)))`, where `rho` is radial-over-tangential scale. At real geometry:
+
+| Clubhead radius from the true axis | Angular error |
+|---|---|
+| 25–35 px (impact zone) | **0.06°** |
+| 70 px | 0.25° |
+| 95 px (follow-through) | 0.47° |
+| 209 px (extreme corner) | 1.0–2.6° |
+
+**At `320×200`, distortion is fourth on the error list, not first.** The ~2.7° figure is
+right only for a `640×400`-style full field, where a clubhead 0.8 m off-axis rotates by
+2.4–4.3°.
+
+**Do not ship a datasheet `k1` at 320×200.** If the lens is k₂-dominated, correcting with
+`k1 = -0.191` turns 0.026° into 0.225° — worse than leaving it alone.
+
+⚠️ **Which mode actually runs is unresolved.** The code defaults to `640×400`
+(`server.py:4231`, `capture_runtime.py:49`, `club_delivery.py:113`, `REFERENCE_IMAGE_SIZE`),
+while `docs/camera/README.md:170` says the production experiment "should use the fixed
+320×200 mode". **Pin this before acting on any distortion number.**
+
+### 5.2 The optical axis is not where the code assumes — ~1.0° of pure yaw
+
+`_pixels_to_world` uses `center_x = image_width/2`. For the `320×200` crop the optical axis
+is at output **(151.75, 124.75)**, not (160, 100), derived from
+`OV9282_PIXEL_ARRAY_LEFT/TOP = 8` (active-array centre is native 647.5/407.5, not 640/400)
+and the ISP offset being in the decimated domain.
+
+The **−8.25 px X error is a pure 1.01° yaw** and lands directly on club path. The +24.75 px
+Y error cancels, because pitch is already derived from the ball's `ball_z`.
+
+**Fix, ~5 lines, no checkerboard:** port the yaw term that already exists at
+`club_delivery.py:650-652` (`yaw_rad = expected_azimuth - observed_azimuth`) into
+`_pixels_to_world`, where line 248 currently **discards the ball's azimuth as `_ball_x`**.
+Deriving yaw from the ball also absorbs unmeasured M12 lens centration (±50 µm = ±8 output px).
+
+### 5.3 BIGGER THAN BOTH — `detect_reference_ball` locks onto a false object
+
+**Verified directly.** On the real capture:
+
+```
+detect_reference_ball(F[10:70]) -> x=182.8  y=128.8  diameter=17.0 px
+hand-measured teed ball          -> x=125.8  y=157.4  diameter ~8.6 visible / ~14 true
+```
+
+**It is 63.8 px away, on the dark backdrop (DN 94–168), not the ball.** And it passes every
+gate — the workflow's verifiers found `speed_ratio` stays 0.999–1.007 throughout.
+
+This is the worst of the three because `focal_px = diameter_px * range / ball_diameter`, so
+the scale error multiplies **every** world coordinate, and the camera **pitch** is derived
+from the same false object's `y`. Reported effect: ~1.2–1.8× focal error, −1.3° path,
+−1.6° AoA.
+
+**Fix this before touching optics.** No distortion or lens work matters while the
+self-calibration is anchored to the wrong object.
+
+### 5.4 Do NOT change the lens
+
+The premise that a narrower lens would cut background is already satisfied in silicon: the
+`320×200` mode delivers **37.8° × 24.2°**, not the lens's 90° diagonal — ~46 % of the
+horizontal field is already discarded.
+
+**Ball-in-frame is the binding constraint** (measured from `frames.npz`: the ball is
+trackable for 13 frames, climbing 10.8° of the 12.2° available above the axis):
+
+| Focal | Trackable ball frames | Frame rate | Depth of field |
+|---|---|---|---|
+| **2.8 mm** | **16.6** | 468 fps | hyperfocal from 420 mm |
+| 4.0 mm | 9.8 | ~360 | hyperfocal from 657 mm |
+| 6.0 mm | 6.0 | ~261 | 938–2964 mm |
+| 12.0 mm | 3.0 | ~142 | **375 mm total** |
+
+Buying vertical field back costs rows, and frame time scales with rows. **Light is not a
+reason either way** — at fixed f-number, focal length does not change per-pixel exposure.
+
+---
+
+**Revised priority: (1) fix `detect_reference_ball`; (2) derive the optical axis / yaw from
+the ball; (3) pin which capture mode runs; (4) distortion only if running 640×400; (5) keep
+the 2.8 mm lens.**
