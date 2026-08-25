@@ -60,6 +60,64 @@ Full write-up with figures: <https://claude.ai/code/artifact/c6b048fa-6950-4433-
 
 ---
 
+## 0.6 Frame rate, readout mode, and "zoom" — **[MEASURED + DERIVED]**
+
+Raised 2026-08-25: *do we even need 467 fps, would a higher-resolution mode be better, and can we zoom?* Working it through with the corrected 2.8 mm lens changes §0's central recommendation.
+
+### 0.6.1 Frame rate is not the binding constraint — pixel throughput is
+
+| Mode | Pixel rate | Effective pitch | `focal_px` | px/mm @1425 mm | Ball |
+|---|---|---|---|---|---|
+| 1280×800 native (1:1) | 147 Mpx/s | 3.0 µm | 933 | 0.655 | **27.9 px** |
+| 640×400 (2× subsample) | 65 Mpx/s | 6.0 µm | 467 | 0.327 | 14.0 px |
+| **320×200 — SHIPPED** | **30 Mpx/s** | 6.0 µm | 467 | 0.327 | **14.0 px** |
+| 1280×200 strip (1:1, rotated) | 114 Mpx/s | 3.0 µm | 933 | 0.655 | **27.9 px** |
+
+**The shipped mode uses about 20 % of the sensor's pixel budget.** There is roughly 5× headroom, which means resolution can be bought *without* giving up frame rate. Frame rate was never the thing to trade.
+
+### 0.6.2 640×400 is a trap
+
+It is the obvious "higher resolution" move and it does nothing for us. Per §1's register analysis, 640×400 is `1280×800` at 2× subsample and `320×200` is a *crop* of the same subsampled field — **identical angular scale per output pixel**. Switching modes widens the field and leaves the ball at 14 px. Only a **1:1 (unbinned) readout** raises plate scale.
+
+### 0.6.3 Dropping frame rate buys nothing for blur
+
+Blur depends on exposure time, not frame rate. And exposure is *capped by* the frame period, so a lower frame rate only permits a **longer** exposure — the wrong direction. The only thing a lower frame rate buys is freed pixel budget, and §0.6.1 shows we do not need to free any.
+
+It also costs frames. Tonight's capture had the club in view for ~34 ms:
+
+| | Frame interval | Club travel between frames | Frames with club in view |
+|---|---|---|---|
+| 467 fps | 2.14 ms | 96 mm | ~16 |
+| 253 fps | 3.95 ms | 178 mm | ~9 |
+| 144 fps | 6.94 ms | 312 mm | ~5 |
+
+At 144 fps the club moves three head-lengths between frames and only ~5 frames carry it. **Keep the frame rate; spend the pixel headroom instead.**
+
+### 0.6.4 "Zoom" means a different lens, not a crop
+
+Digital zoom adds no information — it is interpolation. A *native crop* is not zoom either; it is how the 1:1 strip is obtained, and its benefit comes from the unbinned pixels, not the cropping. The real lever is that **M12 is a screw mount and the lens is interchangeable** (~$15):
+
+| Lens, 1:1 readout | `focal_px` | px/mm | Ball | Field width |
+|---|---|---|---|---|
+| **2.8 mm (fitted)** | 933 | 0.655 | 27.9 px | 1954 mm |
+| 4.0 mm | 1333 | 0.936 | 39.9 px | 1368 mm |
+| **6.0 mm** | 2000 | 1.404 | **59.9 px** | 912 mm |
+| 8.0 mm | 2667 | 1.871 | 79.9 px | 684 mm |
+
+⚠️ The enclosure params list `CAM_FLANGE_C/CS = 17.526/12.526` (C/CS mount) while the fitted camera is **M12**. Confirm the mechanical interface before ordering anything.
+
+### 0.6.5 Knock-on: §0's headline is overstated by 2.1×
+
+§0 recommends *"a native 1:1 readout of a 1280×200 strip with the camera rotated 90° delivers a ~57 px ball at ~446 fps on the same sensor and the same 6 mm lens."* That 57 px was computed on the **inferred 6 mm lens**. The lens is 2.8 mm, so the same strip delivers **~28 px**, not 57 — and §0's conclusion that this "lands on Stage 0E's `ball_px=60` cell and clears the 3° display tier" **does not hold as written**.
+
+**The recommendation is rescuable, but it now needs two changes rather than one:** the 1:1 strip readout *and* a longer lens. 6 mm at 1:1 gives 59.9 px — which is what §0 believed it was getting — and still leaves a 912 mm field.
+
+The cost is the framing tension §1J already named: a longer lens narrows the field and trades against the camera's *other* job, live swing preview and alignment, which is presumably why a 2.8 mm wide-angle is fitted in the first place. That trade is now a real decision rather than a hypothetical.
+
+**Open:** whether a 912 mm field still contains the launch corridor for long enough, and whether preview/alignment can live with it or needs its own treatment.
+
+---
+
 ## 1. The plate scale — settled
 
 Three artefacts disagreed about what the `320x200` mode does. Resolved from OmniVision register semantics.
