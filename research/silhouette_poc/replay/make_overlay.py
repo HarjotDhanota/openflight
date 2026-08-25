@@ -69,7 +69,7 @@ def club_mask(frame, background, noise, tee_xy=None, min_area=120, max_dist=130.
     m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
     n, lab, st, cent = cv2.connectedComponentsWithStats(m, 8)
     H, W = frame.shape
-    best, best_d = None, 1e9
+    out = []
     for j in range(1, n):
         x, y, w, h, a = st[j]
         if a < min_area or a > 0.35 * H * W:
@@ -78,18 +78,68 @@ def club_mask(frame, background, noise, tee_xy=None, min_area=120, max_dist=130.
             continue
         if cent[j][1] < 0.35 * H:  # the club sweeps low, along the mat
             continue
-        # Nearest to the ball, NOT largest. The golfer's leg and shoe are bigger
-        # than the clubhead and were being outlined instead of it.
-        d = (
-            0.0
-            if tee_xy is None
-            else float(np.hypot(cent[j][0] - tee_xy[0], cent[j][1] - tee_xy[1]))
-        )
-        if tee_xy is not None and d > max_dist:
-            continue
-        if d < best_d:
-            best, best_d = (lab == j).astype(np.uint8), d
-    return best
+        out.append(((lab == j).astype(np.uint8), np.array(cent[j], dtype=float), int(a)))
+    return out
+
+
+def track_club(frames, backgrounds, noises, level_pre, tee_xy, gate_px=34.0):
+    """Follow ONE clubhead once it is acquired, instead of re-choosing each frame.
+
+    Re-selecting the component nearest the tee every frame let the outline jump
+    onto the ball: after impact the ball is the thing closest to the tee, so a
+    proximity rule hands the club's identity straight to it. A real clubhead has
+    continuity - it arrives, sweeps through and leaves - so the track is seeded
+    near the tee and then propagated by motion, and it is allowed to end.
+    """
+    per_frame = []
+    for i, frame in enumerate(frames):
+        same = abs(float(frame.mean()) - level_pre) < 25.0
+        per_frame.append(club_mask(frame, backgrounds[same], noises[same], tee_xy=tee_xy))
+
+    # Seed where the clubhead is CLEAREST, not at the first frame that happens to
+    # contain a blob - acquiring on the first hit locked onto early sensor noise.
+    seed, seed_area = None, 0
+    for i, cands in enumerate(per_frame):
+        for mask, cen, area in cands:
+            if np.linalg.norm(cen - tee_xy) <= 130.0 and area > seed_area:
+                seed, seed_area = i, area
+    if seed is None:
+        return {}
+
+    tracked: dict[int, np.ndarray] = {}
+
+    def walk(order):
+        pos = vel = None
+        misses = 0
+        for i in order:
+            cands = per_frame[i]
+            if pos is None:
+                near = [c for c in cands if np.linalg.norm(c[1] - tee_xy) <= 130.0]
+                if not near:
+                    return
+                mask, cen, _ = max(near, key=lambda c: c[2])
+                tracked[i], pos, vel = mask, cen, np.zeros(2)
+                continue
+            if not cands:
+                misses += 1
+                if misses >= 3:
+                    return
+                continue
+            pred = pos + vel
+            pool = [c for c in cands if np.linalg.norm(c[1] - pred) <= gate_px + 12.0 * misses]
+            if not pool:
+                misses += 1
+                if misses >= 3:
+                    return
+                continue
+            mask, cen, _ = min(pool, key=lambda c: float(np.linalg.norm(c[1] - pred)))
+            if misses == 0:
+                vel = cen - pos
+            tracked[i], pos, misses = mask, cen, 0
+
+    walk(range(seed, len(per_frame)))  # forward through impact
+    walk(range(seed, -1, -1))  # backward into the downswing
+    return tracked
 
 
 def main():
@@ -114,28 +164,17 @@ def main():
         teed, teed_c, teed_r = None, None, None
         print("teed ball not found:", exc)
 
-    # PASS 1 - club masks. A real club sweep occupies CONSECUTIVE frames; isolated
-    # single-frame hits at a fixed 7-frame spacing are a lighting beat, not a club.
-    masks = []
-    for i, frame in enumerate(F):
-        same = abs(float(frame.mean()) - level_pre) < 25.0
-        masks.append(
-            club_mask(
-                frame, bg_pre if same else bg_post, noise_pre if same else noise_post, tee_xy=teed_c
-            )
-        )
-    keep = [False] * len(masks)
-    for i in range(len(masks)):
-        if masks[i] is None:
-            continue
-        prev = i > 0 and masks[i - 1] is not None
-        nxt = i + 1 < len(masks) and masks[i + 1] is not None
-        keep[i] = prev or nxt
-    dropped = sum(1 for i, m in enumerate(masks) if m is not None and not keep[i])
-    print(
-        f"club: {sum(1 for m in masks if m is not None)} raw detections, "
-        f"{dropped} dropped as isolated, {sum(keep)} kept"
+    # PASS 1 - follow ONE clubhead by motion continuity. Selecting the component
+    # nearest the tee every frame handed the club's identity to the ball as soon
+    # as the ball became the closest thing to the tee.
+    masks = track_club(
+        F,
+        {True: bg_pre, False: bg_post},
+        {True: noise_pre, False: noise_post},
+        level_pre,
+        teed_c if teed_c is not None else np.array([160.0, 150.0]),
     )
+    print(f"club tracked for {len(masks)} frames: {sorted(masks)}")
 
     # PASS 2 - track the ball AWAY from the tee with a motion gate.
     # Picking the roundest candidate per frame is not tracking: it locks onto fixed
@@ -184,7 +223,7 @@ def main():
         )
         row = {"frame": i, "t_ms": round((st[i] - t0) / 1e6, 2), "club": False, "ball": None}
 
-        cm = masks[i] if keep[i] else None
+        cm = masks.get(i)
         if cm is not None:
             cs, _ = cv2.findContours(
                 cv2.resize(cm, None, fx=SCALE, fy=SCALE, interpolation=cv2.INTER_NEAREST),
