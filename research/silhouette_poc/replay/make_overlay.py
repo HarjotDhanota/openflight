@@ -297,7 +297,7 @@ def main():
             cv2.circle(
                 vis,
                 (int(round(teed_c[0] * SCALE)), int(round(teed_c[1] * SCALE))),
-                int(round(max(teed_r, 3.0) * SCALE)),
+                int(round(teed_r * SCALE)),
                 BALL,
                 2,
                 cv2.LINE_AA,
