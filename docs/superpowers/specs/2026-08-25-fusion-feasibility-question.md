@@ -75,6 +75,62 @@ FMCW radar with angle capability, the clubhead is large and metallic, and it is 
 streaming. If it can produce even coarse clubhead range+angle, that closes the gap directly
 and moves us onto Trackman's actual architecture rather than a weaker substitute.
 
+## 3a. First-pass answer from the radar's own config (2026-08-25)
+
+No IWR6843 shot data exists locally — `~/openflight_sessions/` holds only mock sessions with
+zero-byte raw logs — so this could not be tested against real captures. But the configured
+chirp answers most of it. From `config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg`
+(`profileCfg 0 60.0 7 3 38 0 0 100 1 128 4000 0 0 30`, `frameCfg 0 2 12 0 3 1 0`):
+
+| Quantity | Value |
+|---|---|
+| Wavelength | 5.00 mm |
+| Swept bandwidth during ADC | 3.20 GHz |
+| **Range resolution** | **47 mm** |
+| Range window (53 bins) | 2.5 m |
+| Chirp period, TDM ×3 | 135 µs per Doppler sample |
+| **Max unambiguous velocity** | **±9.3 m/s** |
+| Frame rate | 333 fps (wide) / 500 fps (dense) |
+
+**Doppler is useless to us — everything aliases.** Clubhead 36–50 m/s and ball 55–73 m/s all
+fold back inside ±9.3 m/s (a 50 m/s driver head reads as −5.6 m/s). This is exactly why
+`tracking.py` opens with *"RANSAC line fit of range vs time = the unambiguous ball speed.
+Doppler is [ambiguous]"* — the existing design already works around it.
+
+**But range-vs-time is strong, and that is what matters.** At 47 mm resolution and 333–500 fps
+the clubhead moves 90–135 mm per frame, i.e. **2–3 range bins per frame** — a clean track.
+
+**And before impact the clubhead is the only fast-moving object in the scene.** The ball is
+stationary and falls to the existing `mti_filter`; static clutter likewise. So pre-impact the
+club should be the *dominant* moving return, using the same machinery `find_ball` already runs.
+
+⇒ **The gap identified in §3 looks like a software gap, not a sensor gap.**
+
+### The angle caveat, and why it does not matter
+
+`channelCfg 15 7` = 4 RX × 3 TX → 8 azimuth virtual channels, giving azimuth resolution of
+roughly 2/8 rad ≈ **14°**, or ~**357 mm** cross-range at 1.43 m. Far too coarse to locate a
+clubhead laterally.
+
+**This is fine, because we do not need radar angle.** The design is already *pixel ray ∩ radar
+range sphere*: the **camera** supplies angle precisely and the **radar** supplies range. Splitting
+it that way plays to each sensor's strength — and it is the same division Trackman describes.
+
+So the candidate architecture is: **camera angle (sub-pixel) + IWR clubhead range (47 mm bins,
+better with sub-bin interpolation) = clubhead 3D position**, which is the input §3 said we were
+missing.
+
+### What still needs a real capture
+
+1. Does a clubhead return actually appear, at what SNR, and is it separable from the golfer's
+   body and arms — which are also moving, closer, and larger?
+2. Sub-bin range accuracy achievable in practice (47 mm bins; interpolation typically buys
+   5–15 mm at good SNR, which is what decides whether this is useful).
+3. Whether the return survives the moment of impact, when club and ball briefly coincide.
+
+**Required capture:** one real shot with IWR6843 L3 dump enabled and the camera capturing
+simultaneously, so radar and silhouette can be checked against each other on the same swing.
+
 ## 4. A bug found while auditing
 
 `silhouette_poc/fusion/solver.py` hardcodes `NOMINAL_RANGE_MM = 1_575.0`. The real capture
