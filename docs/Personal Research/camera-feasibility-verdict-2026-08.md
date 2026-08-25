@@ -93,6 +93,22 @@ It also costs frames. Tonight's capture had the club in view for ~34 ms:
 
 At 144 fps the club moves three head-lengths between frames and only ~5 frames carry it. **Keep the frame rate; spend the pixel headroom instead.**
 
+**The metric that actually binds is not frame count — it is the worst-case gap between the nearest frame and the impact instant.** We do not need a frame *at* impact; the radar I/Q supplies the impact time and the club's pose is extrapolated to it. Half the inter-frame travel is therefore how far that extrapolation has to reach:
+
+| fps | Frame period | Club travel | **Worst-case gap** | |
+|---|---|---|---|---|
+| 4,600 | 0.22 ms | 10 mm | **5 mm** | TrackMan iO measurement camera |
+| **467** | 2.14 ms | 96 mm | **48 mm** | **OpenFlight, shipped** |
+| 253 | 3.95 ms | 178 mm | 89 mm | OV9281 640×400 |
+| 144 | 6.94 ms | 312 mm | 156 mm | OV9281 1280×800 |
+| 60 | 16.67 ms | 750 mm | **375 mm** | TrackMan 4 **video** camera |
+
+A driver face is ~100 mm heel-to-toe and impact location needs single-digit mm. Extrapolating a rotating head on an arc over 48 mm is demanding; over 375 mm it is not a measurement.
+
+**⚠️ Do not confuse TrackMan 4's two cameras.** Its published *"HD 720p @ 60 fps / Full HD 1080p @ 45 fps"* is the **video recording** camera — TrackMan's own wording is "Radar Synchronized High **Dynamic Range**". The measurement path is separately named "Radar Synchronized High **Speed** Optics" and **TrackMan does not publish its frame rate**. The 4,600 fps figure belongs to the iO. This is the same trap §1J already recorded for MLM2PRO — one high-speed measurement camera plus a wide-angle 2K *video* camera — and Mevo+ repeats it. Spec sheets lead with the video camera because it is the consumer-facing feature. **[MAN]** <https://www.trackman.com/golf/trackman-4/tech-specs>
+
+**Unbudgeted error term this exposes:** at 48 mm we are ~10× worse than the iO on extrapolation reach. The pose fit must therefore recover clubhead *velocity* as well as pose, and the extrapolation over that gap is an error source that no current budget cell models.
+
 ### 0.6.4 "Zoom" means a different lens, not a crop
 
 Digital zoom adds no information — it is interpolation. A *native crop* is not zoom either; it is how the 1:1 strip is obtained, and its benefit comes from the unbinned pixels, not the cropping. The real lever is that **M12 is a screw mount and the lens is interchangeable** (~$15):
