@@ -99,7 +99,7 @@ I claimed the frame rate was justified by "extrapolation reach": at 60 fps the n
 
 **§2.4 of this document already settles it, graded [SPEC/MAN]:** Trackman 4 does markerless impact location with its **720p @ 60 fps** camera. §2.4's own words — *"At 60 fps a driver head travels ~0.7 m between frames — the camera cannot possibly track impact on its own. It works because the dual radar provides impact timing at 40,000 samples/s... **Impact location falls out of the fusion, not out of frame rate.**"* That is the same 0.7 m figure I recomputed and then misread.
 
-The radar carries timing and kinematics; the camera contributes angular and positional constraints; the silhouette model ties them together. **We have 33 µs impact timing from the OPS 30 kHz I/Q buffer — better than Trackman's 40 kHz radar — so the fusion premise holds for us at least as well as for them.**
+The radar carries timing and kinematics; the camera contributes angular and positional constraints; the silhouette model ties them together. **We have 33 µs impact timing from the OPS 30 kHz I/Q buffer** — coarser than Trackman's 40 kHz (25 µs), but 33 µs is only 1.5 mm of clubhead travel at 45 m/s, so it is comfortably better than *needed*. `ops243.py::set_sample_rate` also documents 100 ksps, which would give 10 µs at the cost of shortening the 4096-sample buffer from 136 ms to 41 ms. **The fusion premise holds for us.** (An earlier revision of this line claimed ours was better than Trackman's; that was backwards — see `docs/superpowers/specs/2026-08-25-fusion-feasibility-question.md` §2.)
 
 ### What that means for the readout trade
 
