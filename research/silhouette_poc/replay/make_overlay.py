@@ -24,12 +24,35 @@ import numpy as np
 
 sys.path.insert(0, r"C:\Users\harjo\Desktop\Coding\OpenFlight\openflight\research")
 from silhouette_poc.fusion.ball_detect import find_teed_ball  # noqa: E402
+from silhouette_poc.fusion.solver import CAMERA_CENTER_WORLD, _ray_world  # noqa: E402
+from silhouette_poc.generator.mesh_truth import TriangleMesh  # noqa: E402
+from silhouette_poc.replay.fit_real import (  # noqa: E402
+    fit_frame_6dof,
+    measured_camera,
+    render_mask_6dof,
+)
 
 OUT = pathlib.Path(__file__).parent
 SCALE = 2
 TEE = (80, 120, 220, 190)
 
-CLUB = (60, 220, 255)  # amber  (BGR)
+CLUB = (150, 120, 255)  # projected 3D mesh (BGR)
+OBSERVED = (60, 220, 255)  # the observed silhouette the fit consumes
+
+
+def _mesh_path() -> pathlib.Path:
+    """Locate the mesh whether run from the repo or a scratch copy."""
+    here = pathlib.Path(__file__).resolve()
+    for base in (here.parents[1], *(p for p in here.parents)):
+        cand = base / "meshes" / "assets" / "poc_7iron.npz"
+        if cand.exists():
+            return cand
+    import silhouette_poc
+
+    return pathlib.Path(silhouette_poc.__file__).parent / "meshes" / "assets" / "poc_7iron.npz"
+
+
+MESH_PATH = _mesh_path()
 BALL = (200, 235, 120)  # teal
 GHOST = (120, 120, 120)
 
@@ -270,6 +293,41 @@ def main():
     )
     print(f"club tracked for {len(masks)} frames: {sorted(masks)}")
 
+    # Fit the actual 3D CAD mesh to each tracked silhouette. What gets DRAWN is the
+    # projected mesh at the fitted pose - the model's own output - not the contour of
+    # a background-subtraction blob. The blob is the observation the fit consumes; it
+    # is not the system's answer, and drawing it as if it were overstates the result.
+    mesh_contours: dict[int, np.ndarray] = {}
+    mesh_iou: dict[int, float] = {}
+    if MESH_PATH.exists():
+        d = np.load(MESH_PATH)
+        mesh = TriangleMesh(d["vertices_local_mm"], d["faces"], "poc_7iron", "x" * 64)
+        cam = measured_camera(F.shape[2], F.shape[1])
+        for i, m in sorted(masks.items()):
+            fit = fit_frame_6dof(mesh, m, cam)
+            if not fit["ok"]:
+                continue
+            ys, xs = np.nonzero(m.astype(bool))
+            ray = _ray_world(np.array([xs.mean(), ys.mean()], dtype=float), cam)
+            rendered = render_mask_6dof(
+                mesh,
+                CAMERA_CENTER_WORLD + ray * fit["range_mm"],
+                fit["yaw_deg"],
+                fit["pitch_deg"],
+                fit["roll_deg"],
+                cam,
+            )
+            if rendered is None:
+                continue
+            mesh_contours[i] = rendered
+            mesh_iou[i] = fit["iou"]
+        print(
+            f"mesh fitted on {len(mesh_contours)}/{len(masks)} tracked frames; "
+            f"median IoU {np.median(list(mesh_iou.values())):.3f}"
+            if mesh_iou
+            else "no mesh fits"
+        )
+
     report = []
     frames_out = []
     for i, frame in enumerate(F):
@@ -288,9 +346,20 @@ def main():
                 cv2.RETR_EXTERNAL,
                 cv2.CHAIN_APPROX_SIMPLE,
             )
-            cv2.drawContours(vis, cs, -1, CLUB, 2, cv2.LINE_AA)
+            cv2.drawContours(vis, cs, -1, OBSERVED, 1, cv2.LINE_AA)
             row["club"] = True
             row["club_px"] = int(cm.sum())
+            if i in mesh_contours:
+                mc = cv2.resize(
+                    mesh_contours[i].astype(np.uint8),
+                    None,
+                    fx=SCALE,
+                    fy=SCALE,
+                    interpolation=cv2.INTER_NEAREST,
+                )
+                mcs, _ = cv2.findContours(mc, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(vis, mcs, -1, CLUB, 2, cv2.LINE_AA)
+                row["mesh_iou"] = round(float(mesh_iou[i]), 3)
 
         # ball: the teed fit while it is still on the tee, then the moving blob
         if i < departure and teed_c is not None:
