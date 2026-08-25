@@ -296,3 +296,118 @@ def fit_frame_6dof(
         "pitch_deg": pitch,
         "roll_deg": roll,
     }
+
+
+# --------------------------------------------------------------------------
+# Sequence fitting with physical bounds and temporal smoothness.
+#
+# Fitting each frame independently maximises silhouette overlap and produces
+# poses that are individually plausible and collectively absurd: on the reference
+# capture the recovered yaw/pitch/roll jumped by more than 100 degrees between
+# adjacent frames while the fitted range wandered 1120-1430 mm, when a clubhead's
+# orientation evolves smoothly and its range recedes monotonically.
+#
+# A 20-40 px silhouette does not uniquely determine six degrees of freedom - many
+# orientations project to nearly the same outline - so the fix is to stop treating
+# frames as independent and to refuse physically impossible poses.
+# --------------------------------------------------------------------------
+
+# Physical envelope for an iron through impact. Wider than a real swing, but far
+# narrower than the unconstrained search, which was free to choose any orientation.
+# NOTE ON THESE BOUNDS. An earlier version set them to a real club's envelope
+# (yaw +/-25, pitch 5-55, roll +/-35) on the assumption that yaw/pitch/roll ARE
+# face angle, dynamic loft and lie. They are not - they are offsets from the
+# MESH's own normalised frame, which already has an arbitrary orientation baked
+# in by the normalisation step. The fit promptly pinned all three angles to their
+# bounds, which is the signature of an envelope that does not contain the answer.
+#
+# Until the mesh's canonical zero-pose is established against a real club at
+# address, these can only be loose sanity limits, not physical constraints.
+YAW_BOUND_DEG = 60.0
+PITCH_RANGE_DEG = (-40.0, 90.0)
+ROLL_BOUND_DEG = 70.0
+
+
+def fit_sequence(
+    mesh,
+    masks: dict[int, np.ndarray],
+    camera: CameraPreset,
+    *,
+    smooth_deg: float = 70.0,
+    smooth_mm: float = 300.0,
+    range_grid_mm=(1325.0, 1425.0, 1525.0),
+    yaw_grid=(-40.0, -20.0, 0.0, 20.0, 40.0),
+    pitch_grid=(-30.0, 0.0, 30.0, 60.0, 85.0),
+    roll_grid=(-60.0, -30.0, 0.0, 30.0, 60.0),
+) -> dict[int, dict]:
+    """Fit an ordered run of frames, penalising jumps between consecutive poses.
+
+    Score is IoU minus a smoothness penalty against the previous accepted pose.
+    `smooth_deg` and `smooth_mm` set how much orientation and range change costs
+    one unit of IoU, so a large IoU gain can still justify real motion while noise
+    cannot.
+    """
+    out: dict[int, dict] = {}
+    prev = None
+    for i in sorted(masks):
+        observed = masks[i].astype(bool)
+        if int(observed.sum()) < 40:
+            continue
+        ys, xs = np.nonzero(observed)
+        ray = _ray_world(np.array([xs.mean(), ys.mean()], dtype=float), camera)
+
+        def score(rng, yaw, pitch, roll):
+            if abs(yaw) > YAW_BOUND_DEG or not PITCH_RANGE_DEG[0] <= pitch <= PITCH_RANGE_DEG[1]:
+                return -1.0
+            if abs(roll) > ROLL_BOUND_DEG:
+                return -1.0
+            m = render_mask_6dof(mesh, CAMERA_CENTER_WORLD + ray * rng, yaw, pitch, roll, camera)
+            if m is None:
+                return -1.0
+            value = iou(m, observed)
+            if prev is not None:
+                d_ang = (
+                    abs(yaw - prev["yaw_deg"])
+                    + abs(pitch - prev["pitch_deg"])
+                    + abs(roll - prev["roll_deg"])
+                )
+                d_rng = abs(rng - prev["range_mm"])
+                value -= d_ang / (3.0 * smooth_deg) + d_rng / smooth_mm
+            return value
+
+        best = (-1.0, None)
+        for rng in range_grid_mm:
+            for yaw in yaw_grid:
+                for pitch in pitch_grid:
+                    for roll in roll_grid:
+                        s = score(rng, yaw, pitch, roll)
+                        if s > best[0]:
+                            best = (s, (rng, yaw, pitch, roll))
+        if best[1] is None:
+            continue
+        rng, yaw, pitch, roll = best[1]
+        step = [50.0, 8.0, 8.0, 8.0]
+        for _ in range(4):
+            improved = False
+            for k, delta in enumerate(step):
+                for d in (-delta, delta):
+                    cand = [rng, yaw, pitch, roll]
+                    cand[k] += d
+                    s = score(*cand)
+                    if s > best[0]:
+                        best = (s, tuple(cand))
+                        rng, yaw, pitch, roll = cand
+                        improved = True
+            if not improved:
+                step = [x / 2.0 for x in step]
+
+        m = render_mask_6dof(mesh, CAMERA_CENTER_WORLD + ray * rng, yaw, pitch, roll, camera)
+        prev = {
+            "range_mm": rng,
+            "yaw_deg": yaw,
+            "pitch_deg": pitch,
+            "roll_deg": roll,
+            "iou": iou(m, observed) if m is not None else 0.0,
+        }
+        out[i] = dict(prev, mask=m)
+    return out

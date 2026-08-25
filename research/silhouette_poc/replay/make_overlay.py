@@ -24,7 +24,10 @@ import numpy as np
 
 sys.path.insert(0, r"C:\Users\harjo\Desktop\Coding\OpenFlight\openflight\research")
 from silhouette_poc.fusion.ball_detect import find_teed_ball  # noqa: E402
-from silhouette_poc.fusion.solver import CAMERA_CENTER_WORLD, _ray_world  # noqa: E402
+from silhouette_poc.fusion.solver import (  # noqa: E402
+    CAMERA_CENTER_WORLD as _CCW,  # noqa: E402
+    _ray_world,
+)
 from silhouette_poc.generator.mesh_truth import TriangleMesh  # noqa: E402
 from silhouette_poc.replay.fit_real import (  # noqa: E402
     fit_frame_6dof,
@@ -299,6 +302,7 @@ def main():
     # is not the system's answer, and drawing it as if it were overstates the result.
     mesh_contours: dict[int, np.ndarray] = {}
     mesh_iou: dict[int, float] = {}
+    mesh_pose: dict[int, tuple] = {}
     if MESH_PATH.exists():
         d = np.load(MESH_PATH)
         mesh = TriangleMesh(d["vertices_local_mm"], d["faces"], "poc_7iron", "x" * 64)
@@ -311,7 +315,7 @@ def main():
             ray = _ray_world(np.array([xs.mean(), ys.mean()], dtype=float), cam)
             rendered = render_mask_6dof(
                 mesh,
-                CAMERA_CENTER_WORLD + ray * fit["range_mm"],
+                _CCW + ray * fit["range_mm"],
                 fit["yaw_deg"],
                 fit["pitch_deg"],
                 fit["roll_deg"],
@@ -321,6 +325,12 @@ def main():
                 continue
             mesh_contours[i] = rendered
             mesh_iou[i] = fit["iou"]
+            mesh_pose[i] = (
+                fit["yaw_deg"],
+                fit["pitch_deg"],
+                fit["roll_deg"],
+                fit["range_mm"],
+            )
         print(
             f"mesh fitted on {len(mesh_contours)}/{len(masks)} tracked frames; "
             f"median IoU {np.median(list(mesh_iou.values())):.3f}"
@@ -360,6 +370,9 @@ def main():
                 mcs, _ = cv2.findContours(mc, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 cv2.drawContours(vis, mcs, -1, CLUB, 2, cv2.LINE_AA)
                 row["mesh_iou"] = round(float(mesh_iou[i]), 3)
+                if i in mesh_pose:
+                    yw, pch, rl, rg = mesh_pose[i]
+                    row["pose"] = [round(yw, 1), round(pch, 1), round(rl, 1), round(rg)]
 
         # ball: the teed fit while it is still on the tee, then the moving blob
         if i < departure and teed_c is not None:
