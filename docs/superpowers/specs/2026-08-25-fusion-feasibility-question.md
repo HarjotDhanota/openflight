@@ -39,7 +39,56 @@ edit introduced the error. But two things follow:
   only **41 ms at 100 ksps**. Whether 41 ms still brackets impact reliably is untested and
   is a cheap experiment.
 
-## 3. The real gap: nothing measures the CLUBHEAD in 3D
+## 3. WITHDRAWN — this section's central claim was false
+
+> **CORRECTION 2026-08-25 (later the same day).** §3 below claimed there is "no clubhead
+> detector, tracker, or state anywhere in the module." **That is wrong.**
+> `src/openflight/iwr6843/club.py` is **38 KB** and has been in the tree the whole time.
+>
+> **How I got it wrong:** my audit ran
+> `grep -rniE "club" src/openflight/iwr6843/*.py | head -12`. Results are alphabetical,
+> `calibration_session.py` sorts before `club.py` and had more than twelve matches, so
+> `head -12` truncated `club.py` out of the output entirely. I then reported the absence of
+> evidence as evidence of absence, and committed it. **Never conclude "X does not exist"
+> from a truncated search.**
+>
+> ### What actually exists
+>
+> | Capability | Where | What it does |
+> |---|---|---|
+> | Clubhead detection + tracking | `iwr6843/club.py` | `find_club`, `estimate_club_path` — converts each snapshot to Cartesian (x along boresight, y cross-range) and fits **both against time**, so `path_deg = atan2(v_y, v_x)` is exact for straight-line motion |
+> | Attack angle | `iwr6843/club.py` | `estimate_attack_angle_candidate`, impact-centred windows |
+> | **Camera+radar+OPS fusion** | `camera/club_delivery.py` (1394 lines) | *"combines camera transverse motion, IWR6843 depth, and OPS club speed"*, with a camera-only perspective-flow fallback when IWR range is unavailable |
+> | Ball flight reconstruction | `camera/ball_flight.py` | camera centroids give bearing, **IWR range is the preferred depth source**, apparent ball size is the fallback |
+> | Reference-ball anchoring | `club_delivery.ReferenceBallTracker` | rolling session anchor, rejects false blobs |
+> | Measured rig geometry | `club_delivery.CameraDeliveryGeometry` | camera/radar heights, tee range, lateral offset, roll correction |
+>
+> **So the pixel-ray ∩ range-sphere architecture is not a proposal — it is implemented and
+> merged.** The fusion premise this document set out to test is already answered in the
+> affirmative by working code.
+>
+> ### Two independent corroborations of our own measurements
+>
+> - `ReferenceBallTracker` gates on `9.0 <= diameter_px <= 30.0`. **Our measured ~14 px sits
+>   comfortably inside it**; the previously-assumed 28 px sat at the very top of the range.
+> - `iwr6843/calibration.py` carries `tee_range_m  # tape-measured launch point (slant)` —
+>   the tape measurement §4 asks for already has a home in the calibration schema.
+>
+> ### What genuinely does NOT exist (verified with untruncated searches)
+>
+> - **Impact location on the face: nothing.** No match for `impact_location`,
+>   `strike_location`, `face_impact`, `impact_point`, `heel_toe` or `gear_effect` anywhere
+>   in `src/openflight/`.
+> - **Clubface orientation measured optically:** `face_angle` appears only in `server.py`,
+>   not in any camera or radar module.
+>
+> **Therefore the silhouette work is complementary, not redundant, and its position is much
+> stronger than this document originally concluded.** Clubhead *kinematics* are solved
+> upstream; what silhouette fitting adds is clubface *orientation* and the ball's position
+> relative to the face — the two things impact location actually needs — and it can now sit
+> on top of merged fusion infrastructure instead of inventing it.
+
+## 3 (superseded). The claimed gap: nothing measures the CLUBHEAD in 3D
 
 This is the finding that matters, and it is the question to answer before any more
 optimisation work.
