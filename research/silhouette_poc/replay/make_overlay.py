@@ -43,8 +43,16 @@ def deflicker(frame, background):
     return f * float(np.clip(gain, 0.5, 2.0))
 
 
-def club_mask(frame, background, noise, tee_xy=None, min_area=350, max_dist=130.0):
-    """Moving region that is plausibly the club: dark against the lit mat."""
+def club_mask(frame, background, noise, tee_xy=None, min_area=120, max_dist=130.0):
+    """Moving region that is plausibly the club: dark against the lit mat.
+
+    `min_area` is deliberately low. As the clubhead nears impact its face turns
+    toward the light and saturation eats into it: the non-saturated part of the
+    impact zone falls from 413 px at F70 to 53 px at F76 on the reference capture.
+    A 350 px gate rejected genuine 250-300 px clubheads in exactly the six frames
+    closest to impact - the ones that matter most. 120 px recovers all of them;
+    below ~100 px noise starts winning instead.
+    """
     d = background.astype(np.float32) - deflicker(frame, background)
     thr = max(4.0 * noise, 30.0)
     m = (np.abs(d) > thr).astype(np.uint8)
