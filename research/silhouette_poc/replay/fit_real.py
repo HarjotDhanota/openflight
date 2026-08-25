@@ -181,3 +181,118 @@ def fit_frame(
 
     score, center, roll_deg, range_mm, n_ren = best
     return RealFit(True, "ok", score, center, roll_deg, range_mm, n_obs, n_ren)
+
+
+# --------------------------------------------------------------------------
+# 6-DOF pose fitting.
+#
+# The POC's pose model is 4-DOF: three position and ONE rotation. `FACE_NORMAL`
+# is a hardcoded constant and `_face_axes(roll)` only spins u/v within the plane
+# perpendicular to it, so the clubface always points the same world direction and
+# the head can only slide along a ray and rotate like a propeller.
+#
+# That cannot represent loft, lie or face angle - and face orientation is exactly
+# what impact location needs. Every "the mesh does not match" result should be
+# read against this limitation before blaming the mesh.
+# --------------------------------------------------------------------------
+
+
+def _rot(axis: np.ndarray, angle_rad: float) -> np.ndarray:
+    """Rodrigues rotation about an arbitrary axis."""
+    a = np.asarray(axis, dtype=float)
+    a = a / np.linalg.norm(a)
+    K = np.array([[0.0, -a[2], a[1]], [a[2], 0.0, -a[0]], [-a[1], a[0], 0.0]])
+    return np.eye(3) + math.sin(angle_rad) * K + (1.0 - math.cos(angle_rad)) * (K @ K)
+
+
+def triad(yaw_deg: float, pitch_deg: float, roll_deg: float) -> tuple[np.ndarray, ...]:
+    """Full orientation as an orthonormal (normal, u, v) triad.
+
+    yaw   - about world up, i.e. FACE ANGLE (open/closed)
+    pitch - about world right, i.e. DYNAMIC LOFT
+    roll  - about the face normal, i.e. LIE / toe-up rotation
+    """
+    from silhouette_poc.fusion.solver import WORLD_RIGHT, WORLD_UP
+
+    R = _rot(WORLD_UP, math.radians(yaw_deg)) @ _rot(WORLD_RIGHT, math.radians(pitch_deg))
+    n = R @ FACE_NORMAL
+    u = R @ WORLD_RIGHT
+    v = R @ WORLD_UP
+    Rr = _rot(n, math.radians(roll_deg))
+    return n, Rr @ u, Rr @ v
+
+
+def render_mask_6dof(mesh, center_world, yaw_deg, pitch_deg, roll_deg, camera):
+    """Project and rasterise with a FULL orientation rather than roll alone."""
+    n, u, v = triad(yaw_deg, pitch_deg, roll_deg)
+    local = mesh.vertices_local_mm
+    world = (
+        np.asarray(center_world, dtype=float)[None, :]
+        + local[:, 0, None] * n[None, :]
+        + local[:, 1, None] * u[None, :]
+        + local[:, 2, None] * v[None, :]
+    )
+    uv, front = _project(world, camera)
+    _, center_front = _project(np.asarray(center_world, dtype=float)[None, :], camera)
+    if not bool(center_front[0]) or not front.any():
+        return None
+    faces = mesh.faces[np.all(front[mesh.faces], axis=1)]
+    if not len(faces):
+        return None
+    return rasterize_projected_triangles(uv, faces, width=camera.width, height=camera.height)
+
+
+def fit_frame_6dof(
+    mesh,
+    observed_mask,
+    camera,
+    *,
+    range_grid_mm=(1300.0, 1425.0, 1550.0),
+    yaw_grid=(-40.0, -20.0, 0.0, 20.0, 40.0),
+    pitch_grid=(-40.0, -20.0, 0.0, 20.0, 40.0),
+    roll_grid=(-60.0, -30.0, 0.0, 30.0, 60.0, 90.0),
+):
+    """Best 6-DOF pose by direct IoU. Coarse grid, then local refinement."""
+    observed = observed_mask.astype(bool)
+    if int(observed.sum()) < 40:
+        return {"ok": False, "reason": "observed_mask_too_small", "iou": 0.0}
+    ys, xs = np.nonzero(observed)
+    ray = _ray_world(np.array([xs.mean(), ys.mean()], dtype=float), camera)
+
+    def score(rng, yaw, pitch, roll):
+        m = render_mask_6dof(mesh, CAMERA_CENTER_WORLD + ray * rng, yaw, pitch, roll, camera)
+        return (0.0, None) if m is None else (iou(m, observed), m)
+
+    best = (0.0, None)
+    for rng in range_grid_mm:
+        for yaw in yaw_grid:
+            for pitch in pitch_grid:
+                for roll in roll_grid:
+                    s, _ = score(rng, yaw, pitch, roll)
+                    if s > best[0]:
+                        best = (s, (rng, yaw, pitch, roll))
+    if best[1] is None:
+        return {"ok": False, "reason": "no_pose_projected", "iou": 0.0}
+
+    rng, yaw, pitch, roll = best[1]
+    step = [60.0, 10.0, 10.0, 15.0]
+    for _ in range(4):
+        improved = False
+        for k, deltas in enumerate(step):
+            for d in (-deltas, deltas):
+                cand = [rng, yaw, pitch, roll]
+                cand[k] += d
+                s, _ = score(*cand)
+                if s > best[0]:
+                    best, (rng, yaw, pitch, roll), improved = (s, tuple(cand)), cand, True
+        if not improved:
+            step = [x / 2.0 for x in step]
+    return {
+        "ok": True,
+        "reason": "ok",
+        "iou": best[0],
+        "range_mm": rng,
+        "yaw_deg": yaw,
+        "pitch_deg": pitch,
+        "roll_deg": roll,
+    }
