@@ -82,7 +82,7 @@ def club_mask(frame, background, noise, tee_xy=None, min_area=120, max_dist=130.
     return out
 
 
-def track_club(frames, backgrounds, noises, level_pre, tee_xy, gate_px=34.0):
+def track_club(frames, backgrounds, noises, level_pre, tee_xy, gate_px=34.0, ball_track=None):
     """Follow ONE clubhead once it is acquired, instead of re-choosing each frame.
 
     Re-selecting the component nearest the tee every frame let the outline jump
@@ -91,10 +91,24 @@ def track_club(frames, backgrounds, noises, level_pre, tee_xy, gate_px=34.0):
     continuity - it arrives, sweeps through and leaves - so the track is seeded
     near the tee and then propagated by motion, and it is allowed to end.
     """
+    # Veto anything sitting on the AIRBORNE ball. Once struck, the ball is a moving
+    # blob of similar size to the shrinking clubhead, and it sits closer to the
+    # tracker's prediction - so the club outline transferred onto it for several
+    # frames and then jumped back. The two trackers must be mutually exclusive.
+    ball_track = ball_track or {}
+
     per_frame = []
     for i, frame in enumerate(frames):
         same = abs(float(frame.mean()) - level_pre) < 25.0
-        per_frame.append(club_mask(frame, backgrounds[same], noises[same], tee_xy=tee_xy))
+        cands = club_mask(frame, backgrounds[same], noises[same], tee_xy=tee_xy)
+        # Only veto once the ball has SEPARATED from the club. At impact the two
+        # occupy the same place, so an unconditional veto deletes the clubhead too
+        # and the track dies at F69.
+        if i in ball_track and tee_xy is not None and ball_track[i][1] < tee_xy[1] - 25.0:
+            bx, by, br = ball_track[i]
+            veto_px = max(2.5 * br, 12.0)
+            cands = [c for c in cands if float(np.hypot(c[1][0] - bx, c[1][1] - by)) > veto_px]
+        per_frame.append(cands)
 
     # Seed where the clubhead is CLEAREST, not at the first frame that happens to
     # contain a blob - acquiring on the first hit locked onto early sensor noise.
@@ -133,6 +147,20 @@ def track_club(frames, backgrounds, noises, level_pre, tee_xy, gate_px=34.0):
                     return
                 continue
             mask, cen, _ = min(pool, key=lambda c: float(np.linalg.norm(c[1] - pred)))
+            # FAIL CLOSED when the clubhead has no contrast left to track. As the face
+            # turns toward the light its brightness converges on the saturated mat: on
+            # the reference capture the impact region falls from 550 px of >30 DN
+            # contrast at F68 to 19-80 px by F73. Past that there is nothing to track,
+            # and the tracker was latching onto mat-edge artifacts and reporting them
+            # as the club. Better to stop than to draw an outline on the wrong object.
+            cy, cx = int(round(cen[1])), int(round(cen[0]))
+            y0, y1 = max(0, cy - 18), min(frames[i].shape[0], cy + 18)
+            x0, x1 = max(0, cx - 35), min(frames[i].shape[1], cx + 35)
+            region = np.abs(
+                frames[i][y0:y1, x0:x1].astype(np.float32) - backgrounds[True][y0:y1, x0:x1]
+            )
+            if int((region > 30.0).sum()) < 170:
+                return
             if misses == 0:
                 vel = cen - pos
             tracked[i], pos, misses = mask, cen, 0
@@ -164,25 +192,16 @@ def main():
         teed, teed_c, teed_r = None, None, None
         print("teed ball not found:", exc)
 
-    # PASS 1 - follow ONE clubhead by motion continuity. Selecting the component
-    # nearest the tee every frame handed the club's identity to the ball as soon
-    # as the ball became the closest thing to the tee.
-    masks = track_club(
-        F,
-        {True: bg_pre, False: bg_post},
-        {True: noise_pre, False: noise_post},
-        level_pre,
-        teed_c if teed_c is not None else np.array([160.0, 150.0]),
-    )
-    print(f"club tracked for {len(masks)} frames: {sorted(masks)}")
-
-    # PASS 2 - track the ball AWAY from the tee with a motion gate.
+    # PASS 1 - track the ball AWAY from the tee with a motion gate.
     # Picking the roundest candidate per frame is not tracking: it locks onto fixed
     # scenery. Seed at the teed position, predict, gate, and be willing to LOSE it.
+    departure = impact
+
     track_xy: dict[int, tuple[float, float, float]] = {}
+    ball_back: dict[int, tuple[float, float, float]] = {}
     if teed_c is not None:
         last_y, misses = float(teed_c[1]), 0
-        for i in range(impact, len(F)):
+        for i in range(departure, len(F)):
             if abs(float(F[i].mean()) - level_pre) >= 25.0:
                 print(
                     f"ball tracking stops at F{i}: the tee light went out, so the "
@@ -210,7 +229,46 @@ def main():
             a, cx, cy, r = max(pool)
             track_xy[i] = (float(cx), float(cy), float(max(r, 2.0)))
             last_y, misses = float(cy), 0
+    # The acoustic trigger lags impact by ~5 frames, so the measured flight track
+    # starts late and the club tracker was left unprotected exactly when the ball was
+    # climbing past it - it transferred onto the ball at F73 and stayed there.
+    #
+    # Absence-based and brightness-based departure detection both failed here (F65,
+    # four frames early - the club occluding the ball, and its own specular flash).
+    # The measured flight track is unambiguous, so extrapolate THAT backwards along
+    # its own fitted line to cover the frames the trigger missed.
+    if len(track_xy) >= 3:
+        idx = np.array(sorted(track_xy), dtype=float)
+        xy = np.array([track_xy[int(i)] for i in idx])
+        fy = np.polyfit(idx, xy[:, 1], 1)
+        fx = np.polyfit(idx, xy[:, 0], 1)
+        fr = np.polyfit(idx, xy[:, 2], 1)
+        first = int(idx[0])
+        for j in range(first - 1, max(first - 8, 0), -1):
+            y = float(np.polyval(fy, j))
+            if y >= teed_c[1] - 4.0:  # back at the tee: before departure
+                break
+            ball_back[j] = (float(np.polyval(fx, j)), y, max(float(np.polyval(fr, j)), 2.0))
+        if ball_back:
+            print(
+                f"ball back-extrapolated over F{min(ball_back)}-F{max(ball_back)} "
+                f"to cover the trigger lag"
+            )
+
     print(f"ball tracked in flight for {len(track_xy)} frames after impact")
+
+    # PASS 2 - follow ONE clubhead by motion continuity. Selecting the component
+    # nearest the tee every frame handed the club's identity to the ball as soon
+    # as the ball became the closest thing to the tee.
+    masks = track_club(
+        F,
+        {True: bg_pre, False: bg_post},
+        {True: noise_pre, False: noise_post},
+        level_pre,
+        teed_c if teed_c is not None else np.array([160.0, 150.0]),
+        ball_track={**ball_back, **track_xy},
+    )
+    print(f"club tracked for {len(masks)} frames: {sorted(masks)}")
 
     report = []
     frames_out = []
@@ -235,7 +293,7 @@ def main():
             row["club_px"] = int(cm.sum())
 
         # ball: the teed fit while it is still on the tee, then the moving blob
-        if i < impact and teed_c is not None:
+        if i < departure and teed_c is not None:
             cv2.circle(
                 vis,
                 (int(round(teed_c[0] * SCALE)), int(round(teed_c[1] * SCALE))),
