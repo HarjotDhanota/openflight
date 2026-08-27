@@ -3644,3 +3644,105 @@ class TestOpsBaudValidation:
         a stricter check would reject a legitimate fallback to 115200, which the
         flag's own help text tells operators to use."""
         assert good in UART_BAUD_COMMANDS
+
+
+class TestOpticalTimestampSource:
+    """The club path must be timed on the sensor clock, not the callback clock.
+
+    Every camera archive stores both ``sensor_timestamp_ns`` (hardware, start of
+    exposure) and ``host_timestamp_ns`` (stamped after the frame is unpacked).
+    ``estimate_chained_delivery`` takes ``trigger_index`` separately, so it uses
+    its timestamp argument only for differences -- which makes the sensor clock
+    strictly correct there.
+
+    Measured on session 20260825_181734: using host timestamps injects 2.04%
+    typical and 28.7% worst-case club-speed error over the preferred three-frame
+    interval (43% over the two-frame variant), because the host offset jitters
+    by ~131 us while the sensor interval is stable to a few microseconds.
+    """
+
+    def _archive(self, tmp_path):
+        np.savez(
+            tmp_path / "frames.npz",
+            frames=np.zeros((24, 4, 4), dtype=np.uint8),
+            sensor_timestamp_ns=np.arange(24, dtype=np.int64) * 2138000,
+            host_timestamp_ns=np.arange(24, dtype=np.int64) * 2138000 + 7_000_000,
+            trigger_host_timestamp_ns=np.int64(3),
+            pre_trigger_count=np.int32(18),
+        )
+        return SimpleNamespace(valid=True, path=tmp_path)
+
+    def _wire(self, monkeypatch):
+        from openflight.camera import club_delivery
+
+        seen = {}
+
+        def fake_estimate(frames, timestamps_ns, **kwargs):
+            seen["timestamps_ns"] = np.asarray(timestamps_ns)
+            return club_delivery.ChainedDelivery(status="accepted")
+
+        monkeypatch.setattr(club_delivery, "estimate_chained_delivery", fake_estimate)
+        monkeypatch.setattr(
+            server_module,
+            "iwr6843_runtime",
+            SimpleNamespace(
+                calibration=SimpleNamespace(
+                    tee_range_m=1.575,
+                    radar_height_m=0.1524,
+                    tee_ball_height_m=0.04,
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            server_module,
+            "camera_capture_config",
+            {
+                "mount_height_m": 0.2032,
+                "lateral_offset_m": -0.060325,
+                "roll_correction_deg": 0.0,
+                "mirror_horizontal": True,
+                "width": 320,
+                "height": 200,
+            },
+        )
+        return seen
+
+    def test_club_delivery_is_timed_on_the_sensor_clock(self, monkeypatch, tmp_path):
+        """The sensor timestamps must reach the estimator when present."""
+        capture = self._archive(tmp_path)
+        seen = self._wire(monkeypatch)
+        shot = Shot(
+            ball_speed_mph=110.0,
+            timestamp=datetime.now(),
+            club_speed_mph=85.0,
+            iwr6843_club_range_evidence=object(),
+        )
+
+        server_module._fuse_camera_club_delivery(shot, capture)
+
+        expected = np.arange(24, dtype=np.int64) * 2138000
+        np.testing.assert_array_equal(seen["timestamps_ns"], expected)
+
+    def test_club_delivery_falls_back_to_host_clock(self, monkeypatch, tmp_path):
+        """Archives predating sensor timestamps must still run, not fail closed."""
+        np.savez(
+            tmp_path / "frames.npz",
+            frames=np.zeros((24, 4, 4), dtype=np.uint8),
+            host_timestamp_ns=np.arange(24, dtype=np.int64) * 2138000,
+            trigger_host_timestamp_ns=np.int64(3),
+            pre_trigger_count=np.int32(18),
+        )
+        capture = SimpleNamespace(valid=True, path=tmp_path)
+        seen = self._wire(monkeypatch)
+        shot = Shot(
+            ball_speed_mph=110.0,
+            timestamp=datetime.now(),
+            club_speed_mph=85.0,
+            iwr6843_club_range_evidence=object(),
+        )
+
+        server_module._fuse_camera_club_delivery(shot, capture)
+
+        np.testing.assert_array_equal(
+            seen["timestamps_ns"], np.arange(24, dtype=np.int64) * 2138000
+        )

@@ -2678,6 +2678,30 @@ def _load_camera_capture_archive(camera_capture) -> dict[str, object] | None:
         return None
 
 
+def _optical_timestamps_ns(archive):
+    """Frame times for optical motion, on the sensor clock when it exists.
+
+    ``sensor_timestamp_ns`` is hardware metadata for the start of exposure.
+    ``host_timestamp_ns`` is stamped after the frame is unpacked, so it carries
+    delivery jitter that a photon timestamp does not. A constant offset between
+    the two would be harmless because club velocity is a difference, but the
+    offset is not constant: measured on session 20260825_181734 it moves by
+    ~131 us between adjacent frames while the sensor interval is stable to a
+    few microseconds. Over the three-frame interval ``PREFERRED_PATH_OFFSETS``
+    prefers, that is 2.04% of typical club-speed error and 28.7% at worst.
+
+    Only callers that use these purely as DIFFERENCES may switch. The ball
+    flight estimator may not: it subtracts ``trigger_host_timestamp_ns`` from
+    them to index the radar range, so its timestamps are tied to the host clock
+    until the two clocks are explicitly mapped.
+    """
+    import numpy as np  # noqa: PLC0415  pylint: disable=import-outside-toplevel
+
+    if "sensor_timestamp_ns" in archive:
+        return np.asarray(archive["sensor_timestamp_ns"], dtype=np.int64)
+    return np.asarray(archive["host_timestamp_ns"], dtype=np.int64)
+
+
 def _fuse_camera_club_delivery(
     shot: Shot,
     camera_capture,
@@ -2717,7 +2741,7 @@ def _fuse_camera_club_delivery(
                         else:
                             fused = estimate_chained_delivery(
                                 archive["frames"],
-                                archive["host_timestamp_ns"],
+                                _optical_timestamps_ns(archive),
                                 trigger_index=trigger_index,
                                 range_evidence=shot.iwr6843_club_range_evidence,
                                 geometry=CameraDeliveryGeometry(
@@ -2831,9 +2855,7 @@ def _fuse_camera_ball_flight(
                                     camera_capture_config.get("roll_correction_deg", 0.0)
                                 ),
                                 horizontal_pixel_sign=(
-                                    -1.0
-                                    if camera_capture_config.get("mirror_horizontal")
-                                    else 1.0
+                                    -1.0 if camera_capture_config.get("mirror_horizontal") else 1.0
                                 ),
                                 image_width_px=int(camera_capture_config["width"]),
                                 image_height_px=int(camera_capture_config["height"]),
