@@ -1,0 +1,1642 @@
+[
+  {
+    "shot": 2,
+    "club": "7-iron",
+    "base_attack_angle_deg": -27.038716039606886,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": 25.726405041760806,
+    "base_path_status": "candidate_noisy_fit",
+    "jackknife": [
+      {
+        "deleted_frame": 0,
+        "n_points": 27,
+        "attack_angle_deg": -20.643390609443205
+      },
+      {
+        "deleted_frame": 1,
+        "n_points": 29,
+        "attack_angle_deg": -27.662397970922438
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 35,
+        "attack_angle_deg": -27.902218067811162
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 30,
+        "attack_angle_deg": -28.235294465901976
+      },
+      {
+        "deleted_frame": 4,
+        "n_points": 35,
+        "attack_angle_deg": -27.233036758682005
+      }
+    ],
+    "jackknife_attack_range_deg": 7.591903856458771,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -26.299220481780683,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 29.331846616378957,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -27.310475337251606,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 25.64957126161776,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -27.038716039606886,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 25.726405041760806,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -20.793982767010792,
+        "attack_status": "candidate_noisy_fit",
+        "path_deg": 3.0919641052472686,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -20.79398276701079,
+        "attack_status": "candidate_noisy_fit",
+        "path_deg": 3.0919641052472673,
+        "path_status": "candidate_noisy_fit"
+      }
+    ],
+    "impact_attack_range_deg": 6.516492570240818,
+    "impact_path_range_deg": 26.23988251113169
+  },
+  {
+    "shot": 3,
+    "club": "7-iron",
+    "base_attack_angle_deg": -27.52193632636909,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": 18.930296691203626,
+    "base_path_status": "candidate_noisy_fit",
+    "jackknife": [
+      {
+        "deleted_frame": 0,
+        "n_points": 16,
+        "attack_angle_deg": -21.325802181174076
+      },
+      {
+        "deleted_frame": 1,
+        "n_points": 18,
+        "attack_angle_deg": -28.817508942174488
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 23,
+        "attack_angle_deg": -28.57544352754661
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 24,
+        "attack_angle_deg": -27.96915777268082
+      }
+    ],
+    "jackknife_attack_range_deg": 7.491706761000412,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -27.570738033199564,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 23.2703503964582,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -28.43128710592105,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 6.584667271154337,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -27.52193632636909,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 18.930296691203626,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -21.325802181174076,
+        "attack_status": "candidate_available",
+        "path_deg": -11.772345072809593,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -21.325802181174076,
+        "attack_status": "candidate_available",
+        "path_deg": -11.772345072809593,
+        "path_status": "candidate_available"
+      }
+    ],
+    "impact_attack_range_deg": 7.105484924746975,
+    "impact_path_range_deg": 35.04269546926779
+  },
+  {
+    "shot": 4,
+    "club": "7-iron",
+    "base_attack_angle_deg": -22.496044402019095,
+    "base_attack_status": "candidate_noisy_fit",
+    "base_path_deg": 11.343019202754471,
+    "base_path_status": "candidate_noisy_fit",
+    "jackknife": [
+      {
+        "deleted_frame": 1,
+        "n_points": 15,
+        "attack_angle_deg": -9.35789654057698
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 17,
+        "attack_angle_deg": -24.604117369919916
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 20,
+        "attack_angle_deg": -24.03347445447034
+      },
+      {
+        "deleted_frame": 4,
+        "n_points": 18,
+        "attack_angle_deg": -24.272711003211533
+      },
+      {
+        "deleted_frame": 5,
+        "n_points": 22,
+        "attack_angle_deg": -22.76489570690311
+      }
+    ],
+    "jackknife_attack_range_deg": 15.246220829342935,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -28.03598084643456,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 22.83353640722078,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -21.644542464494833,
+        "attack_status": "candidate_noisy_fit",
+        "path_deg": 11.476314177062285,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -22.496044402019095,
+        "attack_status": "candidate_noisy_fit",
+        "path_deg": 11.343019202754471,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -10.276981959170083,
+        "attack_status": "candidate_available",
+        "path_deg": 11.71007698974927,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -14.385029748634429,
+        "attack_status": "candidate_available",
+        "path_deg": 6.321659054460596,
+        "path_status": "candidate_available"
+      }
+    ],
+    "impact_attack_range_deg": 17.758998887264475,
+    "impact_path_range_deg": 16.511877352760184
+  },
+  {
+    "shot": 5,
+    "club": "7-iron",
+    "base_attack_angle_deg": -25.355911515602475,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": 9.37252168998053,
+    "base_path_status": "candidate_available",
+    "jackknife": [
+      {
+        "deleted_frame": 1,
+        "n_points": 13,
+        "attack_angle_deg": -20.157738882806086
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 10,
+        "attack_angle_deg": -27.587958435286083
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 19,
+        "attack_angle_deg": -25.803727144539895
+      },
+      {
+        "deleted_frame": 4,
+        "n_points": 18,
+        "attack_angle_deg": -26.010270928060145
+      }
+    ],
+    "jackknife_attack_range_deg": 7.430219552479997,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -29.57253600199242,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 20.64991754897412,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -29.57253600199242,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 20.64991754897412,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -25.355911515602475,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 9.37252168998053,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -24.86416846004531,
+        "attack_status": "candidate_available",
+        "path_deg": 10.728872663883168,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -19.118919398040543,
+        "attack_status": "candidate_noisy_fit",
+        "path_deg": -20.344973941647986,
+        "path_status": "candidate_noisy_fit"
+      }
+    ],
+    "impact_attack_range_deg": 10.453616603951879,
+    "impact_path_range_deg": 40.99489149062211
+  },
+  {
+    "shot": 6,
+    "club": "7-iron",
+    "base_attack_angle_deg": -27.50502843818501,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": 6.714477119632784,
+    "base_path_status": "candidate_noisy_fit",
+    "jackknife": [
+      {
+        "deleted_frame": 0,
+        "n_points": 15,
+        "attack_angle_deg": -21.21774407209695
+      },
+      {
+        "deleted_frame": 1,
+        "n_points": 16,
+        "attack_angle_deg": -29.76774077878635
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 21,
+        "attack_angle_deg": -27.95453252991853
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 20,
+        "attack_angle_deg": -27.995647613246835
+      }
+    ],
+    "jackknife_attack_range_deg": 8.549996706689402,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -30.55046733580975,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 16.39458607588764,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -30.55046733580975,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 16.39458607588764,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -27.50502843818501,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 6.714477119632784,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -26.794955246757553,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": -6.730131687577009,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -20.348169466859076,
+        "attack_status": "candidate_available",
+        "path_deg": -8.92237575096507,
+        "path_status": "candidate_available"
+      }
+    ],
+    "impact_attack_range_deg": 10.202297868950673,
+    "impact_path_range_deg": 25.31696182685271
+  },
+  {
+    "shot": 8,
+    "club": "7-iron",
+    "base_attack_angle_deg": -31.853474452749523,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": 45.98345499494253,
+    "base_path_status": "candidate_out_of_bounds",
+    "jackknife": [
+      {
+        "deleted_frame": 0,
+        "n_points": 25,
+        "attack_angle_deg": -26.187376664171154
+      },
+      {
+        "deleted_frame": 1,
+        "n_points": 26,
+        "attack_angle_deg": -33.1679685832604
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 36,
+        "attack_angle_deg": -32.045085355185314
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 25,
+        "attack_angle_deg": -32.80012978512807
+      },
+      {
+        "deleted_frame": 4,
+        "n_points": 36,
+        "attack_angle_deg": -31.88110535480177
+      }
+    ],
+    "jackknife_attack_range_deg": 6.9805919190892425,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -31.88110535480177,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 32.78580479111445,
+        "path_status": "candidate_out_of_bounds"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -31.88110535480177,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 32.78580479111445,
+        "path_status": "candidate_out_of_bounds"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -31.853474452749523,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 45.98345499494253,
+        "path_status": "candidate_out_of_bounds"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -31.853474452749523,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 45.98345499494253,
+        "path_status": "candidate_out_of_bounds"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -31.853474452749523,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 45.98345499494253,
+        "path_status": "candidate_out_of_bounds"
+      }
+    ],
+    "impact_attack_range_deg": 0.027630902052248274,
+    "impact_path_range_deg": 13.197650203828076
+  },
+  {
+    "shot": 9,
+    "club": "7-iron",
+    "base_attack_angle_deg": -31.79421437984931,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": 5.086163915931849,
+    "base_path_status": "candidate_available",
+    "jackknife": [
+      {
+        "deleted_frame": 1,
+        "n_points": 10,
+        "attack_angle_deg": -30.17403727325345
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 11,
+        "attack_angle_deg": -32.859106502375894
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 17,
+        "attack_angle_deg": -31.66970416504294
+      }
+    ],
+    "jackknife_attack_range_deg": 2.685069229122444,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -30.593246181449167,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 3.5211283435643814,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -31.64596139941394,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 5.110863162162952,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -31.79421437984931,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 5.086163915931849,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -32.08795611804447,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": -5.463587296175415,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -30.97369030318984,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": -4.572642812315772,
+        "path_status": "candidate_available"
+      }
+    ],
+    "impact_attack_range_deg": 1.4947099365952994,
+    "impact_path_range_deg": 10.574450458338367
+  },
+  {
+    "shot": 11,
+    "club": "7-iron",
+    "base_attack_angle_deg": -29.079032934675578,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": 15.04082907578247,
+    "base_path_status": "candidate_available",
+    "jackknife": [
+      {
+        "deleted_frame": 0,
+        "n_points": 23,
+        "attack_angle_deg": -20.737954677431123
+      },
+      {
+        "deleted_frame": 1,
+        "n_points": 25,
+        "attack_angle_deg": -30.064012379295946
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 32,
+        "attack_angle_deg": -29.596004180439564
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 23,
+        "attack_angle_deg": -30.962746820613567
+      },
+      {
+        "deleted_frame": 4,
+        "n_points": 33,
+        "attack_angle_deg": -29.188779277745134
+      }
+    ],
+    "jackknife_attack_range_deg": 10.224792143182444,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -28.434900252892422,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 8.363892338597758,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -29.764668287117264,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 14.611226812326787,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -29.079032934675578,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 15.04082907578247,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -20.737954677431123,
+        "attack_status": "candidate_available",
+        "path_deg": 5.292183466171225,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -20.737954677431123,
+        "attack_status": "candidate_available",
+        "path_deg": 5.292183466171225,
+        "path_status": "candidate_available"
+      }
+    ],
+    "impact_attack_range_deg": 9.02671360968614,
+    "impact_path_range_deg": 9.748645609611245
+  },
+  {
+    "shot": 14,
+    "club": "9-iron",
+    "base_attack_angle_deg": -29.13164915884549,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": 21.813160396881447,
+    "base_path_status": "candidate_noisy_fit",
+    "jackknife": [
+      {
+        "deleted_frame": 0,
+        "n_points": 23,
+        "attack_angle_deg": -22.01435716747329
+      },
+      {
+        "deleted_frame": 1,
+        "n_points": 24,
+        "attack_angle_deg": -30.532583588444325
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 32,
+        "attack_angle_deg": -29.601690155333557
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 28,
+        "attack_angle_deg": -30.394752603132563
+      },
+      {
+        "deleted_frame": 4,
+        "n_points": 33,
+        "attack_angle_deg": -29.270481651825477
+      }
+    ],
+    "jackknife_attack_range_deg": 8.518226420971036,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -29.290302780879223,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 37.079898971956446,
+        "path_status": "candidate_out_of_bounds"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -29.290302780879223,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 37.079898971956446,
+        "path_status": "candidate_out_of_bounds"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -29.13164915884549,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 21.813160396881447,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -27.42720135846759,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 23.754486294006753,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -20.983704736896087,
+        "attack_status": "candidate_available",
+        "path_deg": 17.996078351909727,
+        "path_status": "candidate_available"
+      }
+    ],
+    "impact_attack_range_deg": 8.306598043983136,
+    "impact_path_range_deg": 19.08382062004672
+  },
+  {
+    "shot": 15,
+    "club": "9-iron",
+    "base_attack_angle_deg": -33.91255824240284,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": 8.472162928810892,
+    "base_path_status": "candidate_noisy_fit",
+    "jackknife": [
+      {
+        "deleted_frame": 0,
+        "n_points": 22,
+        "attack_angle_deg": -31.35011804197806
+      },
+      {
+        "deleted_frame": 1,
+        "n_points": 22,
+        "attack_angle_deg": -34.54512723187662
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 24,
+        "attack_angle_deg": -34.075987584431374
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 27,
+        "attack_angle_deg": -34.42274548190873
+      },
+      {
+        "deleted_frame": 4,
+        "n_points": 29,
+        "attack_angle_deg": -34.02000951465956
+      }
+    ],
+    "jackknife_attack_range_deg": 3.1950091898985598,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -33.87567284999917,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 8.485425096644978,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -33.9652095228365,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 8.463034240437565,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -33.91255824240284,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 8.472162928810892,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -31.30269062149763,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 11.599607649453713,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -31.30269062149763,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 11.599607649453713,
+        "path_status": "candidate_noisy_fit"
+      }
+    ],
+    "impact_attack_range_deg": 2.662518901338874,
+    "impact_path_range_deg": 3.1365734090161475
+  },
+  {
+    "shot": 16,
+    "club": "9-iron",
+    "base_attack_angle_deg": -26.843704419254212,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": -16.390395193439716,
+    "base_path_status": "candidate_noisy_fit",
+    "jackknife": [
+      {
+        "deleted_frame": 1,
+        "n_points": 21,
+        "attack_angle_deg": -25.184956019488673
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 26,
+        "attack_angle_deg": -26.35849250690525
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 22,
+        "attack_angle_deg": -28.10921732805433
+      },
+      {
+        "deleted_frame": 4,
+        "n_points": 29,
+        "attack_angle_deg": -26.664880159815976
+      },
+      {
+        "deleted_frame": 5,
+        "n_points": 30,
+        "attack_angle_deg": -26.941620519542926
+      }
+    ],
+    "jackknife_attack_range_deg": 2.924261308565658,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -29.626617374253772,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 0.07529050574152008,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -29.158535151986317,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 0.09875069183958812,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -26.843704419254212,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": -16.390395193439716,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -26.843704419254212,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": -16.390395193439716,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -26.843704419254212,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": -16.390395193439716,
+        "path_status": "candidate_noisy_fit"
+      }
+    ],
+    "impact_attack_range_deg": 2.78291295499956,
+    "impact_path_range_deg": 16.489145885279303
+  },
+  {
+    "shot": 17,
+    "club": "9-iron",
+    "base_attack_angle_deg": -26.55489742476439,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": -22.380200687441828,
+    "base_path_status": "candidate_available",
+    "jackknife": [
+      {
+        "deleted_frame": 1,
+        "n_points": 13,
+        "attack_angle_deg": -20.683848906777484
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 18,
+        "attack_angle_deg": -27.19276226768962
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 22,
+        "attack_angle_deg": -27.578337528732703
+      },
+      {
+        "deleted_frame": 5,
+        "n_points": 22,
+        "attack_angle_deg": -26.870541403086055
+      }
+    ],
+    "jackknife_attack_range_deg": 6.894488621955219,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -29.732090982751014,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 7.759116754724519,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -27.247269261858392,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": -22.384981321673557,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -26.55489742476439,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": -22.380200687441828,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -21.42125283408834,
+        "attack_status": "candidate_available",
+        "path_deg": -4.721855020818252,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -22.13709336817217,
+        "attack_status": "candidate_available",
+        "path_deg": -1.9449445390079323,
+        "path_status": "candidate_noisy_fit"
+      }
+    ],
+    "impact_attack_range_deg": 8.310838148662675,
+    "impact_path_range_deg": 30.144098076398077
+  },
+  {
+    "shot": 18,
+    "club": "9-iron",
+    "base_attack_angle_deg": -31.149769754154487,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": -11.45578864427287,
+    "base_path_status": "candidate_available",
+    "jackknife": [
+      {
+        "deleted_frame": 1,
+        "n_points": 18,
+        "attack_angle_deg": -28.234453070519592
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 18,
+        "attack_angle_deg": -31.03314460728149
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 24,
+        "attack_angle_deg": -32.67224381977644
+      },
+      {
+        "deleted_frame": 5,
+        "n_points": 24,
+        "attack_angle_deg": -30.956438165088905
+      }
+    ],
+    "jackknife_attack_range_deg": 4.437790749256848,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -33.519690692608535,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": -8.586814614381924,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -33.519690692608535,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": -8.586814614381924,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -31.149769754154487,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": -11.45578864427287,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -31.149769754154487,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": -11.45578864427287,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -31.149769754154487,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": -11.45578864427287,
+        "path_status": "candidate_available"
+      }
+    ],
+    "impact_attack_range_deg": 2.3699209384540474,
+    "impact_path_range_deg": 2.8689740298909463
+  },
+  {
+    "shot": 20,
+    "club": "9-iron",
+    "base_attack_angle_deg": -25.032898070169253,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": 16.90878937989266,
+    "base_path_status": "candidate_available",
+    "jackknife": [
+      {
+        "deleted_frame": 1,
+        "n_points": 16,
+        "attack_angle_deg": -22.183971625539545
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 18,
+        "attack_angle_deg": -25.185014124783116
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 23,
+        "attack_angle_deg": -26.03638640691566
+      },
+      {
+        "deleted_frame": 4,
+        "n_points": 26,
+        "attack_angle_deg": -25.155991427455568
+      },
+      {
+        "deleted_frame": 5,
+        "n_points": 25,
+        "attack_angle_deg": -24.958070883405625
+      }
+    ],
+    "jackknife_attack_range_deg": 3.8524147813761154,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -30.57979667694388,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 30.222666215655007,
+        "path_status": "candidate_out_of_bounds"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -30.57979667694388,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 30.222666215655007,
+        "path_status": "candidate_out_of_bounds"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -25.032898070169253,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 16.90878937989266,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -25.032898070169253,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 16.85753861091929,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -25.032898070169253,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 16.85753861091929,
+        "path_status": "candidate_available"
+      }
+    ],
+    "impact_attack_range_deg": 5.546898606774626,
+    "impact_path_range_deg": 13.365127604735719
+  },
+  {
+    "shot": 21,
+    "club": "9-iron",
+    "base_attack_angle_deg": -30.909666513043,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": 22.25272271855211,
+    "base_path_status": "candidate_available",
+    "jackknife": [
+      {
+        "deleted_frame": 0,
+        "n_points": 26,
+        "attack_angle_deg": -25.665996405021847
+      },
+      {
+        "deleted_frame": 1,
+        "n_points": 27,
+        "attack_angle_deg": -32.07405293009901
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 30,
+        "attack_angle_deg": -31.5103668444194
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 28,
+        "attack_angle_deg": -31.864369016266192
+      }
+    ],
+    "jackknife_attack_range_deg": 6.408056525077161,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -30.441058497632106,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 26.979563738581103,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -31.851404369346444,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 17.225630134957754,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -30.909666513043,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 22.25272271855211,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -25.665996405021847,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 24.933914535112592,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -25.665996405021847,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 24.933914535112592,
+        "path_status": "candidate_noisy_fit"
+      }
+    ],
+    "impact_attack_range_deg": 6.185407964324597,
+    "impact_path_range_deg": 9.753933603623349
+  },
+  {
+    "shot": 23,
+    "club": "9-iron",
+    "base_attack_angle_deg": -35.21637773482902,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": 4.251137696451103,
+    "base_path_status": "candidate_available",
+    "jackknife": [
+      {
+        "deleted_frame": 0,
+        "n_points": 28,
+        "attack_angle_deg": -32.349268982971054
+      },
+      {
+        "deleted_frame": 1,
+        "n_points": 28,
+        "attack_angle_deg": -35.21990245410162
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 29,
+        "attack_angle_deg": -36.566826504760975
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 36,
+        "attack_angle_deg": -35.24601370609921
+      },
+      {
+        "deleted_frame": 4,
+        "n_points": 35,
+        "attack_angle_deg": -35.19517190116273
+      }
+    ],
+    "jackknife_attack_range_deg": 4.217557521789921,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -34.926316444150316,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 2.165783099716155,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -35.19517190116273,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 2.1388631444632304,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -35.21637773482902,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 4.251137696451103,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -35.21637773482902,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 4.251137696451103,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -35.21637773482902,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 4.251137696451103,
+        "path_status": "candidate_available"
+      }
+    ],
+    "impact_attack_range_deg": 0.29006129067870035,
+    "impact_path_range_deg": 2.1122745519878725
+  },
+  {
+    "shot": 24,
+    "club": "9-iron",
+    "base_attack_angle_deg": -32.72765046858845,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": 25.107316268842343,
+    "base_path_status": "candidate_available",
+    "jackknife": [
+      {
+        "deleted_frame": 0,
+        "n_points": 21,
+        "attack_angle_deg": -26.521958680550934
+      },
+      {
+        "deleted_frame": 1,
+        "n_points": 21,
+        "attack_angle_deg": -34.379922153018924
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 26,
+        "attack_angle_deg": -33.91704867387987
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 31,
+        "attack_angle_deg": -32.83557773567015
+      },
+      {
+        "deleted_frame": 4,
+        "n_points": 29,
+        "attack_angle_deg": -32.75675180540535
+      }
+    ],
+    "jackknife_attack_range_deg": 7.85796347246799,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -37.31697659880315,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 34.28066895102045,
+        "path_status": "candidate_out_of_bounds"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -32.75675180540535,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 37.214484694308496,
+        "path_status": "candidate_out_of_bounds"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -32.72765046858845,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 25.107316268842343,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -32.72842415044869,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 24.891610354379836,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -32.72842415044869,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 24.891610354379836,
+        "path_status": "candidate_noisy_fit"
+      }
+    ],
+    "impact_attack_range_deg": 4.589326130214701,
+    "impact_path_range_deg": 12.32287433992866
+  },
+  {
+    "shot": 25,
+    "club": "9-iron",
+    "base_attack_angle_deg": -34.482045631194204,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": 14.646432617365576,
+    "base_path_status": "candidate_available",
+    "jackknife": [
+      {
+        "deleted_frame": 0,
+        "n_points": 31,
+        "attack_angle_deg": -32.394949762753306
+      },
+      {
+        "deleted_frame": 1,
+        "n_points": 31,
+        "attack_angle_deg": -34.59050289681769
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 34,
+        "attack_angle_deg": -35.03947581689227
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 41,
+        "attack_angle_deg": -34.57108260998052
+      },
+      {
+        "deleted_frame": 4,
+        "n_points": 35,
+        "attack_angle_deg": -34.77450419540456
+      }
+    ],
+    "jackknife_attack_range_deg": 2.6445260541389644,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -33.890891655761436,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 3.9563738122723153,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -36.409966298002104,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 25.208834024620657,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -34.482045631194204,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 14.646432617365576,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -32.45183421292982,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 7.283681604755729,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -32.45183421292982,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 7.283681604755729,
+        "path_status": "candidate_noisy_fit"
+      }
+    ],
+    "impact_attack_range_deg": 3.958132085072286,
+    "impact_path_range_deg": 21.252460212348343
+  },
+  {
+    "shot": 26,
+    "club": "9-iron",
+    "base_attack_angle_deg": -35.56811178323475,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": 26.273628957841613,
+    "base_path_status": "candidate_noisy_fit",
+    "jackknife": [
+      {
+        "deleted_frame": 0,
+        "n_points": 27,
+        "attack_angle_deg": -32.45840714660876
+      },
+      {
+        "deleted_frame": 1,
+        "n_points": 29,
+        "attack_angle_deg": -36.06377191706549
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 30,
+        "attack_angle_deg": -37.17632135502294
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 36,
+        "attack_angle_deg": -35.02440920105553
+      },
+      {
+        "deleted_frame": 4,
+        "n_points": 34,
+        "attack_angle_deg": -35.64028532141688
+      }
+    ],
+    "jackknife_attack_range_deg": 4.717914208414186,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -34.09897676566136,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 33.320902076171684,
+        "path_status": "candidate_out_of_bounds"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -34.70236062902508,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 25.46656767606947,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -35.56811178323475,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 26.273628957841613,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -32.43668587466559,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": -0.3512128708527217,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -32.43668587466559,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": -0.3512128708527217,
+        "path_status": "candidate_noisy_fit"
+      }
+    ],
+    "impact_attack_range_deg": 3.131425908569156,
+    "impact_path_range_deg": 33.672114947024404
+  },
+  {
+    "shot": 28,
+    "club": "9-iron",
+    "base_attack_angle_deg": -31.45312087383361,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": 15.511670927781346,
+    "base_path_status": "candidate_available",
+    "jackknife": [
+      {
+        "deleted_frame": 0,
+        "n_points": 31,
+        "attack_angle_deg": -28.44635319729329
+      },
+      {
+        "deleted_frame": 1,
+        "n_points": 31,
+        "attack_angle_deg": -32.487864330965
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 33,
+        "attack_angle_deg": -31.64638471257091
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 36,
+        "attack_angle_deg": -31.99907024348632
+      },
+      {
+        "deleted_frame": 4,
+        "n_points": 33,
+        "attack_angle_deg": -31.454186284671948
+      }
+    ],
+    "jackknife_attack_range_deg": 4.041511133671712,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -31.942054050292917,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 28.848241009261564,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -33.60760603838196,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 18.818465365321362,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -31.45312087383361,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 15.511670927781346,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -28.479670132278404,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": -4.957101041432709,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -28.490225815649556,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": -4.845256317875566,
+        "path_status": "candidate_noisy_fit"
+      }
+    ],
+    "impact_attack_range_deg": 5.127935906103556,
+    "impact_path_range_deg": 33.80534205069427
+  },
+  {
+    "shot": 29,
+    "club": "9-iron",
+    "base_attack_angle_deg": -32.26148008047495,
+    "base_attack_status": "candidate_out_of_bounds",
+    "base_path_deg": 7.720047693428876,
+    "base_path_status": "candidate_available",
+    "jackknife": [
+      {
+        "deleted_frame": 0,
+        "n_points": 26,
+        "attack_angle_deg": -29.016731448760638
+      },
+      {
+        "deleted_frame": 1,
+        "n_points": 24,
+        "attack_angle_deg": -33.5115046734441
+      },
+      {
+        "deleted_frame": 2,
+        "n_points": 30,
+        "attack_angle_deg": -31.868382388458233
+      },
+      {
+        "deleted_frame": 3,
+        "n_points": 29,
+        "attack_angle_deg": -33.35619398745128
+      },
+      {
+        "deleted_frame": 4,
+        "n_points": 35,
+        "attack_angle_deg": -32.31550237617977
+      }
+    ],
+    "jackknife_attack_range_deg": 4.494773224683463,
+    "impact_perturbations": [
+      {
+        "shift_ms": -2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -33.16284977398694,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 18.730550935966612,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": -1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -33.422470109724316,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 11.069993939204538,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 0.0,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -32.26148008047495,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": 7.720047693428876,
+        "path_status": "candidate_available"
+      },
+      {
+        "shift_ms": 1.4,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -28.931307500023593,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": -13.448705902572772,
+        "path_status": "candidate_noisy_fit"
+      },
+      {
+        "shift_ms": 2.1385,
+        "status": "rejected_phase_span",
+        "attack_angle_deg": -28.931307500023593,
+        "attack_status": "candidate_out_of_bounds",
+        "path_deg": -13.448705902572772,
+        "path_status": "candidate_noisy_fit"
+      }
+    ],
+    "impact_attack_range_deg": 4.491162609700723,
+    "impact_path_range_deg": 32.17925683853939
+  }
+]

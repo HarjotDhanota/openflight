@@ -1,0 +1,2415 @@
+{
+  "summary": [
+    {
+      "variant": "baseline",
+      "accepted": 21,
+      "mean_delta_from_baseline_deg": 0.0,
+      "sd_delta_from_baseline_deg": 0.0,
+      "gap_deg": 3.040563754644971
+    },
+    {
+      "variant": "tilt_minus_2deg",
+      "accepted": 21,
+      "mean_delta_from_baseline_deg": -4.1247366311049465,
+      "sd_delta_from_baseline_deg": 0.5521439391667431,
+      "gap_deg": 2.968807764031272
+    },
+    {
+      "variant": "tilt_plus_2deg",
+      "accepted": 21,
+      "mean_delta_from_baseline_deg": 4.04882489630432,
+      "sd_delta_from_baseline_deg": 0.5787525592757887,
+      "gap_deg": 2.595189894785019
+    },
+    {
+      "variant": "radar_height_minus_20mm",
+      "accepted": 21,
+      "mean_delta_from_baseline_deg": -0.7534059363034454,
+      "sd_delta_from_baseline_deg": 0.17665932430687808,
+      "gap_deg": 3.1025508532209045
+    },
+    {
+      "variant": "radar_height_plus_20mm",
+      "accepted": 21,
+      "mean_delta_from_baseline_deg": 0.7797017631160037,
+      "sd_delta_from_baseline_deg": 0.21275038251742037,
+      "gap_deg": 2.947196137424015
+    },
+    {
+      "variant": "ball_height_minus_10mm",
+      "accepted": 21,
+      "mean_delta_from_baseline_deg": 0.40525484118379557,
+      "sd_delta_from_baseline_deg": 0.06598441257513914,
+      "gap_deg": 3.0418321434530533
+    },
+    {
+      "variant": "ball_height_plus_10mm",
+      "accepted": 21,
+      "mean_delta_from_baseline_deg": -0.4119218965937814,
+      "sd_delta_from_baseline_deg": 0.07945655167543897,
+      "gap_deg": 3.0726553861260157
+    },
+    {
+      "variant": "tee_range_minus_30mm",
+      "accepted": 21,
+      "mean_delta_from_baseline_deg": -0.46220435864361453,
+      "sd_delta_from_baseline_deg": 0.11694472703088556,
+      "gap_deg": 2.9886462038081234
+    },
+    {
+      "variant": "tee_range_plus_30mm",
+      "accepted": 21,
+      "mean_delta_from_baseline_deg": 0.47930332695146405,
+      "sd_delta_from_baseline_deg": 0.1191614629209584,
+      "gap_deg": 3.1188671117706477
+    },
+    {
+      "variant": "channel_phase_minus_0p1rad",
+      "accepted": 21,
+      "mean_delta_from_baseline_deg": -1.5271619570645247,
+      "sd_delta_from_baseline_deg": 1.1084014477957733,
+      "gap_deg": 2.782951035464013
+    },
+    {
+      "variant": "channel_phase_plus_0p1rad",
+      "accepted": 21,
+      "mean_delta_from_baseline_deg": 1.5792528969988207,
+      "sd_delta_from_baseline_deg": 0.5215599495388832,
+      "gap_deg": 2.7206776655980853
+    }
+  ],
+  "shots": {
+    "baseline": [
+      {
+        "shot": 2,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 19.451625849169414,
+        "components_deg": {
+          "channel_two8_deg": 20.83447237570127,
+          "channel_four4_path_tdm_deg": 18.068779322637557
+        }
+      },
+      {
+        "shot": 3,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 15.342279600665197,
+        "components_deg": {
+          "channel_two8_deg": 15.962815381093389,
+          "channel_four4_path_tdm_deg": 14.721743820237005
+        }
+      },
+      {
+        "shot": 4,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 17.484740632708093,
+        "components_deg": {
+          "channel_two8_deg": 18.81471109333923,
+          "channel_four4_path_tdm_deg": 16.154770172076955
+        }
+      },
+      {
+        "shot": 5,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 18.70356441074579,
+        "components_deg": {
+          "channel_two8_deg": 20.44739027833145,
+          "channel_four4_path_tdm_deg": 16.959738543160135
+        }
+      },
+      {
+        "shot": 6,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 17.959569166915013,
+        "components_deg": {
+          "channel_two8_deg": 19.51867951737056,
+          "channel_four4_path_tdm_deg": 16.400458816459466
+        }
+      },
+      {
+        "shot": 8,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 18.311739394297298,
+        "components_deg": {
+          "channel_two8_deg": 19.384465322908074,
+          "channel_four4_path_tdm_deg": 17.239013465686526
+        }
+      },
+      {
+        "shot": 9,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 20.557030252586774,
+        "components_deg": {
+          "channel_two8_deg": 22.04123680839597,
+          "channel_four4_path_tdm_deg": 19.07282369677758
+        }
+      },
+      {
+        "shot": 11,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 20.12769631603053,
+        "components_deg": {
+          "channel_two8_deg": 21.502246331780007,
+          "channel_four4_path_tdm_deg": 18.753146300281053
+        }
+      },
+      {
+        "shot": 14,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 21.466868164668327,
+        "components_deg": {
+          "channel_two8_deg": 23.54154455568473,
+          "channel_four4_path_tdm_deg": 19.39219177365192
+        }
+      },
+      {
+        "shot": 15,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 13.913856347610892,
+        "components_deg": {
+          "channel_two8_deg": 14.827963058670232,
+          "channel_four4_path_tdm_deg": 12.999749636551552
+        }
+      },
+      {
+        "shot": 16,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.304755622170752,
+        "components_deg": {
+          "channel_two8_deg": 24.668072910068425,
+          "channel_four4_path_tdm_deg": 19.941438334273084
+        }
+      },
+      {
+        "shot": 17,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.560975688468357,
+        "components_deg": {
+          "channel_two8_deg": 24.22725413859291,
+          "channel_four4_path_tdm_deg": 20.894697238343802
+        }
+      },
+      {
+        "shot": 18,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 24.679574779144005,
+        "components_deg": {
+          "channel_two8_deg": 25.797379958112266,
+          "channel_four4_path_tdm_deg": 23.561769600175747
+        }
+      },
+      {
+        "shot": 20,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.415917257000217,
+        "components_deg": {
+          "channel_two8_deg": 24.97837046714747,
+          "channel_four4_path_tdm_deg": 19.853464046852963
+        }
+      },
+      {
+        "shot": 21,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 21.899796763274807,
+        "components_deg": {
+          "channel_two8_deg": 24.07154980229414,
+          "channel_four4_path_tdm_deg": 19.72804372425547
+        }
+      },
+      {
+        "shot": 23,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.055131825007535,
+        "components_deg": {
+          "channel_two8_deg": 23.87263158559011,
+          "channel_four4_path_tdm_deg": 20.237632064424965
+        }
+      },
+      {
+        "shot": 24,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 25.281362447923858,
+        "components_deg": {
+          "channel_two8_deg": 26.109160499573168,
+          "channel_four4_path_tdm_deg": 24.453564396274547
+        }
+      },
+      {
+        "shot": 25,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 26.609497696843718,
+        "components_deg": {
+          "channel_two8_deg": 26.44510285081879,
+          "channel_four4_path_tdm_deg": 26.773892542868644
+        }
+      },
+      {
+        "shot": 26,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 12.903375421089581,
+        "components_deg": {
+          "channel_two8_deg": 11.972281890247865,
+          "channel_four4_path_tdm_deg": 13.834468951931298
+        }
+      },
+      {
+        "shot": 28,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 23.378621924413572,
+        "components_deg": {
+          "channel_two8_deg": 23.43873187876817,
+          "channel_four4_path_tdm_deg": 23.318511970058978
+        }
+      },
+      {
+        "shot": 29,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 20.457244010335966,
+        "components_deg": {
+          "channel_two8_deg": 22.531077325417137,
+          "channel_four4_path_tdm_deg": 18.383410695254796
+        }
+      }
+    ],
+    "tilt_minus_2deg": [
+      {
+        "shot": 2,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 15.803152402250028,
+        "components_deg": {
+          "channel_two8_deg": 16.634741118299768,
+          "channel_four4_path_tdm_deg": 14.97156368620029
+        }
+      },
+      {
+        "shot": 3,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 10.50931345565607,
+        "components_deg": {
+          "channel_two8_deg": 8.91437714046367,
+          "channel_four4_path_tdm_deg": 12.10424977084847
+        }
+      },
+      {
+        "shot": 4,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 12.708877599393897,
+        "components_deg": {
+          "channel_two8_deg": 14.066719479456237,
+          "channel_four4_path_tdm_deg": 11.351035719331557
+        }
+      },
+      {
+        "shot": 5,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 14.828062097392287,
+        "components_deg": {
+          "channel_two8_deg": 13.882939003489879,
+          "channel_four4_path_tdm_deg": 15.773185191294694
+        }
+      },
+      {
+        "shot": 6,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 13.814675316999471,
+        "components_deg": {
+          "channel_two8_deg": 14.5389943105053,
+          "channel_four4_path_tdm_deg": 13.090356323493642
+        }
+      },
+      {
+        "shot": 8,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 14.393110214740439,
+        "components_deg": {
+          "channel_two8_deg": 15.25736991852677,
+          "channel_four4_path_tdm_deg": 13.528850510954108
+        }
+      },
+      {
+        "shot": 9,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 16.575107783765258,
+        "components_deg": {
+          "channel_two8_deg": 17.81300004450019,
+          "channel_four4_path_tdm_deg": 15.337215523030325
+        }
+      },
+      {
+        "shot": 11,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 16.663416705215617,
+        "components_deg": {
+          "channel_two8_deg": 17.560719806391095,
+          "channel_four4_path_tdm_deg": 15.766113604040141
+        }
+      },
+      {
+        "shot": 14,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 18.701218377050047,
+        "components_deg": {
+          "channel_two8_deg": 19.855417142390387,
+          "channel_four4_path_tdm_deg": 17.547019611709704
+        }
+      },
+      {
+        "shot": 15,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 9.824200120699857,
+        "components_deg": {
+          "channel_two8_deg": 10.12537546581969,
+          "channel_four4_path_tdm_deg": 9.523024775580021
+        }
+      },
+      {
+        "shot": 16,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 18.56606851200899,
+        "components_deg": {
+          "channel_two8_deg": 20.37733302386231,
+          "channel_four4_path_tdm_deg": 16.754804000155673
+        }
+      },
+      {
+        "shot": 17,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 18.260348030029636,
+        "components_deg": {
+          "channel_two8_deg": 19.816999267887606,
+          "channel_four4_path_tdm_deg": 16.703696792171666
+        }
+      },
+      {
+        "shot": 18,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 20.05891766781555,
+        "components_deg": {
+          "channel_two8_deg": 20.787965315578216,
+          "channel_four4_path_tdm_deg": 19.329870020052883
+        }
+      },
+      {
+        "shot": 20,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 18.374840820809666,
+        "components_deg": {
+          "channel_two8_deg": 20.780015399573212,
+          "channel_four4_path_tdm_deg": 15.96966624204612
+        }
+      },
+      {
+        "shot": 21,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 17.23724081270202,
+        "components_deg": {
+          "channel_two8_deg": 19.570002614478152,
+          "channel_four4_path_tdm_deg": 14.90447901092589
+        }
+      },
+      {
+        "shot": 23,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 17.356216095439223,
+        "components_deg": {
+          "channel_two8_deg": 18.70210999845318,
+          "channel_four4_path_tdm_deg": 16.010322192425264
+        }
+      },
+      {
+        "shot": 24,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 21.33519446781433,
+        "components_deg": {
+          "channel_two8_deg": 21.38689948876916,
+          "channel_four4_path_tdm_deg": 21.283489446859498
+        }
+      },
+      {
+        "shot": 25,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.91868665202516,
+        "components_deg": {
+          "channel_two8_deg": 21.001462726853546,
+          "channel_four4_path_tdm_deg": 24.835910577196767
+        }
+      },
+      {
+        "shot": 26,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 7.688788383773998,
+        "components_deg": {
+          "channel_two8_deg": 4.878078616560067,
+          "channel_four4_path_tdm_deg": 10.499498150987929
+        }
+      },
+      {
+        "shot": 28,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 19.467534204390788,
+        "components_deg": {
+          "channel_two8_deg": 18.8333566870741,
+          "channel_four4_path_tdm_deg": 20.101711721707474
+        }
+      },
+      {
+        "shot": 29,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 16.160784597893507,
+        "components_deg": {
+          "channel_two8_deg": 18.104294256528807,
+          "channel_four4_path_tdm_deg": 14.217274939258207
+        }
+      }
+    ],
+    "tilt_plus_2deg": [
+      {
+        "shot": 2,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 23.060816377590964,
+        "components_deg": {
+          "channel_two8_deg": 24.743636943274026,
+          "channel_four4_path_tdm_deg": 21.3779958119079
+        }
+      },
+      {
+        "shot": 3,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 20.747311105358904,
+        "components_deg": {
+          "channel_two8_deg": 22.047681659707557,
+          "channel_four4_path_tdm_deg": 19.446940551010247
+        }
+      },
+      {
+        "shot": 4,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 21.963142985859307,
+        "components_deg": {
+          "channel_two8_deg": 23.078923413164134,
+          "channel_four4_path_tdm_deg": 20.84736255855448
+        }
+      },
+      {
+        "shot": 5,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 23.880797934598988,
+        "components_deg": {
+          "channel_two8_deg": 24.909100067451615,
+          "channel_four4_path_tdm_deg": 22.852495801746365
+        }
+      },
+      {
+        "shot": 6,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 21.52851254654233,
+        "components_deg": {
+          "channel_two8_deg": 23.28079897975043,
+          "channel_four4_path_tdm_deg": 19.77622611333423
+        }
+      },
+      {
+        "shot": 8,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 22.758575439892386,
+        "components_deg": {
+          "channel_two8_deg": 23.7573297518558,
+          "channel_four4_path_tdm_deg": 21.759821127928973
+        }
+      },
+      {
+        "shot": 9,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 24.6438672607178,
+        "components_deg": {
+          "channel_two8_deg": 26.139806462878806,
+          "channel_four4_path_tdm_deg": 23.147928058556797
+        }
+      },
+      {
+        "shot": 11,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 23.951482163250837,
+        "components_deg": {
+          "channel_two8_deg": 25.54045361795956,
+          "channel_four4_path_tdm_deg": 22.36251070854211
+        }
+      },
+      {
+        "shot": 14,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 26.121270776425398,
+        "components_deg": {
+          "channel_two8_deg": 27.958617166774555,
+          "channel_four4_path_tdm_deg": 24.28392438607624
+        }
+      },
+      {
+        "shot": 15,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 18.105865975090637,
+        "components_deg": {
+          "channel_two8_deg": 19.74760650356941,
+          "channel_four4_path_tdm_deg": 16.464125446611863
+        }
+      },
+      {
+        "shot": 16,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 25.979632390158123,
+        "components_deg": {
+          "channel_two8_deg": 28.48482661532046,
+          "channel_four4_path_tdm_deg": 23.47443816499578
+        }
+      },
+      {
+        "shot": 17,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 26.400913393545945,
+        "components_deg": {
+          "channel_two8_deg": 28.629361417142935,
+          "channel_four4_path_tdm_deg": 24.172465369948956
+        }
+      },
+      {
+        "shot": 18,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 28.22829316466266,
+        "components_deg": {
+          "channel_two8_deg": 30.24090003311408,
+          "channel_four4_path_tdm_deg": 26.215686296211235
+        }
+      },
+      {
+        "shot": 20,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 26.13442173429028,
+        "components_deg": {
+          "channel_two8_deg": 28.025468114676798,
+          "channel_four4_path_tdm_deg": 24.243375353903765
+        }
+      },
+      {
+        "shot": 21,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 26.28464448420102,
+        "components_deg": {
+          "channel_two8_deg": 28.480945421043128,
+          "channel_four4_path_tdm_deg": 24.088343547358914
+        }
+      },
+      {
+        "shot": 23,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 26.257300480608325,
+        "components_deg": {
+          "channel_two8_deg": 28.170276107162394,
+          "channel_four4_path_tdm_deg": 24.344324854054257
+        }
+      },
+      {
+        "shot": 24,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 28.60560153856201,
+        "components_deg": {
+          "channel_two8_deg": 30.315784463385146,
+          "channel_four4_path_tdm_deg": 26.895418613738872
+        }
+      },
+      {
+        "shot": 25,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 30.11775127056798,
+        "components_deg": {
+          "channel_two8_deg": 30.976724216770297,
+          "channel_four4_path_tdm_deg": 29.258778324365665
+        }
+      },
+      {
+        "shot": 26,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 17.260520947974904,
+        "components_deg": {
+          "channel_two8_deg": 17.388650193455465,
+          "channel_four4_path_tdm_deg": 17.132391702494346
+        }
+      },
+      {
+        "shot": 28,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 26.564384075775074,
+        "components_deg": {
+          "channel_two8_deg": 27.4144726616144,
+          "channel_four4_path_tdm_deg": 25.714295489935747
+        }
+      },
+      {
+        "shot": 29,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 24.295440347786553,
+        "components_deg": {
+          "channel_two8_deg": 26.402758325481123,
+          "channel_four4_path_tdm_deg": 22.18812237009198
+        }
+      }
+    ],
+    "radar_height_minus_20mm": [
+      {
+        "shot": 2,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 18.885482698550256,
+        "components_deg": {
+          "channel_two8_deg": 20.06241926679987,
+          "channel_four4_path_tdm_deg": 17.708546130300643
+        }
+      },
+      {
+        "shot": 3,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 14.372484673010996,
+        "components_deg": {
+          "channel_two8_deg": 14.635650286115458,
+          "channel_four4_path_tdm_deg": 14.109319059906534
+        }
+      },
+      {
+        "shot": 4,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 16.51431166658243,
+        "components_deg": {
+          "channel_two8_deg": 17.9019569576702,
+          "channel_four4_path_tdm_deg": 15.12666637549466
+        }
+      },
+      {
+        "shot": 5,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 17.57911409488012,
+        "components_deg": {
+          "channel_two8_deg": 19.03053265401014,
+          "channel_four4_path_tdm_deg": 16.1276955357501
+        }
+      },
+      {
+        "shot": 6,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 17.17069259135992,
+        "components_deg": {
+          "channel_two8_deg": 18.683043218948832,
+          "channel_four4_path_tdm_deg": 15.658341963771008
+        }
+      },
+      {
+        "shot": 8,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 17.601564095438153,
+        "components_deg": {
+          "channel_two8_deg": 18.633606556999354,
+          "channel_four4_path_tdm_deg": 16.569521633876953
+        }
+      },
+      {
+        "shot": 9,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 19.983734949496103,
+        "components_deg": {
+          "channel_two8_deg": 21.166452900654217,
+          "channel_four4_path_tdm_deg": 18.80101699833799
+        }
+      },
+      {
+        "shot": 11,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 19.49662963709178,
+        "components_deg": {
+          "channel_two8_deg": 20.86469627603434,
+          "channel_four4_path_tdm_deg": 18.128562998149217
+        }
+      },
+      {
+        "shot": 14,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 20.883781761771434,
+        "components_deg": {
+          "channel_two8_deg": 22.82899696401838,
+          "channel_four4_path_tdm_deg": 18.93856655952449
+        }
+      },
+      {
+        "shot": 15,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 13.307759143335561,
+        "components_deg": {
+          "channel_two8_deg": 14.167022091923753,
+          "channel_four4_path_tdm_deg": 12.448496194747369
+        }
+      },
+      {
+        "shot": 16,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 21.67911152737853,
+        "components_deg": {
+          "channel_two8_deg": 23.934278959344468,
+          "channel_four4_path_tdm_deg": 19.423944095412597
+        }
+      },
+      {
+        "shot": 17,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 21.72663960327082,
+        "components_deg": {
+          "channel_two8_deg": 23.389101127897842,
+          "channel_four4_path_tdm_deg": 20.064178078643792
+        }
+      },
+      {
+        "shot": 18,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 23.82181483907588,
+        "components_deg": {
+          "channel_two8_deg": 24.785290548786485,
+          "channel_four4_path_tdm_deg": 22.858339129365277
+        }
+      },
+      {
+        "shot": 20,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 21.73277785268284,
+        "components_deg": {
+          "channel_two8_deg": 24.231717011949275,
+          "channel_four4_path_tdm_deg": 19.233838693416406
+        }
+      },
+      {
+        "shot": 21,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 20.971937923642116,
+        "components_deg": {
+          "channel_two8_deg": 23.327887354892535,
+          "channel_four4_path_tdm_deg": 18.615988492391697
+        }
+      },
+      {
+        "shot": 23,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 21.188615152670025,
+        "components_deg": {
+          "channel_two8_deg": 22.9628474042963,
+          "channel_four4_path_tdm_deg": 19.41438290104375
+        }
+      },
+      {
+        "shot": 24,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 24.49692134143862,
+        "components_deg": {
+          "channel_two8_deg": 25.159897824304878,
+          "channel_four4_path_tdm_deg": 23.83394485857237
+        }
+      },
+      {
+        "shot": 25,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 26.222709323902457,
+        "components_deg": {
+          "channel_two8_deg": 25.181333315947995,
+          "channel_four4_path_tdm_deg": 27.26408533185692
+        }
+      },
+      {
+        "shot": 26,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 11.993165054738434,
+        "components_deg": {
+          "channel_two8_deg": 10.731940148523313,
+          "channel_four4_path_tdm_deg": 13.254389960953553
+        }
+      },
+      {
+        "shot": 28,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.74116104700564,
+        "components_deg": {
+          "channel_two8_deg": 22.739745146205202,
+          "channel_four4_path_tdm_deg": 22.74257694780608
+        }
+      },
+      {
+        "shot": 29,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 19.67328993137523,
+        "components_deg": {
+          "channel_two8_deg": 21.738560952797922,
+          "channel_four4_path_tdm_deg": 17.608018909952538
+        }
+      }
+    ],
+    "radar_height_plus_20mm": [
+      {
+        "shot": 2,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 20.0922456839165,
+        "components_deg": {
+          "channel_two8_deg": 21.544954649251572,
+          "channel_four4_path_tdm_deg": 18.639536718581425
+        }
+      },
+      {
+        "shot": 3,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 16.334967972254866,
+        "components_deg": {
+          "channel_two8_deg": 17.31514990799361,
+          "channel_four4_path_tdm_deg": 15.354786036516119
+        }
+      },
+      {
+        "shot": 4,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 18.3177679176987,
+        "components_deg": {
+          "channel_two8_deg": 19.474404389404697,
+          "channel_four4_path_tdm_deg": 17.1611314459927
+        }
+      },
+      {
+        "shot": 5,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 19.842371633419788,
+        "components_deg": {
+          "channel_two8_deg": 21.84125176947039,
+          "channel_four4_path_tdm_deg": 17.84349149736919
+        }
+      },
+      {
+        "shot": 6,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 18.711012122701398,
+        "components_deg": {
+          "channel_two8_deg": 20.318553834202802,
+          "channel_four4_path_tdm_deg": 17.103470411199993
+        }
+      },
+      {
+        "shot": 8,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 19.158578067794252,
+        "components_deg": {
+          "channel_two8_deg": 20.19476483303799,
+          "channel_four4_path_tdm_deg": 18.12239130255052
+        }
+      },
+      {
+        "shot": 9,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 21.368436066736134,
+        "components_deg": {
+          "channel_two8_deg": 22.851351868051232,
+          "channel_four4_path_tdm_deg": 19.885520265421036
+        }
+      },
+      {
+        "shot": 11,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 20.812872272618776,
+        "components_deg": {
+          "channel_two8_deg": 22.204714724358723,
+          "channel_four4_path_tdm_deg": 19.421029820878825
+        }
+      },
+      {
+        "shot": 14,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.259361651003818,
+        "components_deg": {
+          "channel_two8_deg": 24.409936939210322,
+          "channel_four4_path_tdm_deg": 20.108786362797314
+        }
+      },
+      {
+        "shot": 15,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 14.735293066246097,
+        "components_deg": {
+          "channel_two8_deg": 15.937465245471843,
+          "channel_four4_path_tdm_deg": 13.533120887020349
+        }
+      },
+      {
+        "shot": 16,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 23.00565563528623,
+        "components_deg": {
+          "channel_two8_deg": 25.419741154531014,
+          "channel_four4_path_tdm_deg": 20.59157011604145
+        }
+      },
+      {
+        "shot": 17,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 23.459029205685496,
+        "components_deg": {
+          "channel_two8_deg": 25.268341821691028,
+          "channel_four4_path_tdm_deg": 21.64971658967997
+        }
+      },
+      {
+        "shot": 18,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 24.73484077942885,
+        "components_deg": {
+          "channel_two8_deg": 26.75741428474935,
+          "channel_four4_path_tdm_deg": 22.712267274108353
+        }
+      },
+      {
+        "shot": 20,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 23.516331113761773,
+        "components_deg": {
+          "channel_two8_deg": 25.74187725331966,
+          "channel_four4_path_tdm_deg": 21.290784974203888
+        }
+      },
+      {
+        "shot": 21,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.805243931657763,
+        "components_deg": {
+          "channel_two8_deg": 25.02438550648865,
+          "channel_four4_path_tdm_deg": 20.58610235682688
+        }
+      },
+      {
+        "shot": 23,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.873749884040464,
+        "components_deg": {
+          "channel_two8_deg": 24.70704856718413,
+          "channel_four4_path_tdm_deg": 21.040451200896797
+        }
+      },
+      {
+        "shot": 24,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 25.99265483514602,
+        "components_deg": {
+          "channel_two8_deg": 26.909595742756807,
+          "channel_four4_path_tdm_deg": 25.075713927535237
+        }
+      },
+      {
+        "shot": 25,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 27.34800106315611,
+        "components_deg": {
+          "channel_two8_deg": 27.312972632375576,
+          "channel_four4_path_tdm_deg": 27.38302949393665
+        }
+      },
+      {
+        "shot": 26,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 13.610319318334586,
+        "components_deg": {
+          "channel_two8_deg": 12.859068911665664,
+          "channel_four4_path_tdm_deg": 14.361569725003505
+        }
+      },
+      {
+        "shot": 28,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 24.03788866167779,
+        "components_deg": {
+          "channel_two8_deg": 24.262348559877662,
+          "channel_four4_path_tdm_deg": 23.813428763477923
+        }
+      },
+      {
+        "shot": 29,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 21.222339713940364,
+        "components_deg": {
+          "channel_two8_deg": 23.30035114330315,
+          "channel_four4_path_tdm_deg": 19.14432828457758
+        }
+      }
+    ],
+    "ball_height_minus_10mm": [
+      {
+        "shot": 2,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 19.767966941464394,
+        "components_deg": {
+          "channel_two8_deg": 21.122717664822016,
+          "channel_four4_path_tdm_deg": 18.41321621810677
+        }
+      },
+      {
+        "shot": 3,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 15.836164470845848,
+        "components_deg": {
+          "channel_two8_deg": 16.486012285297868,
+          "channel_four4_path_tdm_deg": 15.18631665639383
+        }
+      },
+      {
+        "shot": 4,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 17.832935317745516,
+        "components_deg": {
+          "channel_two8_deg": 19.00947530870956,
+          "channel_four4_path_tdm_deg": 16.656395326781475
+        }
+      },
+      {
+        "shot": 5,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 19.226652485232435,
+        "components_deg": {
+          "channel_two8_deg": 21.029952211659204,
+          "channel_four4_path_tdm_deg": 17.42335275880567
+        }
+      },
+      {
+        "shot": 6,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 18.342748068165612,
+        "components_deg": {
+          "channel_two8_deg": 19.870980984173737,
+          "channel_four4_path_tdm_deg": 16.814515152157483
+        }
+      },
+      {
+        "shot": 8,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 18.724203735252587,
+        "components_deg": {
+          "channel_two8_deg": 19.754494341733746,
+          "channel_four4_path_tdm_deg": 17.69391312877143
+        }
+      },
+      {
+        "shot": 9,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 21.007385096210832,
+        "components_deg": {
+          "channel_two8_deg": 22.485315861727145,
+          "channel_four4_path_tdm_deg": 19.529454330694524
+        }
+      },
+      {
+        "shot": 11,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 20.435946693097893,
+        "components_deg": {
+          "channel_two8_deg": 21.766163088348346,
+          "channel_four4_path_tdm_deg": 19.10573029784744
+        }
+      },
+      {
+        "shot": 14,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 21.949856086614876,
+        "components_deg": {
+          "channel_two8_deg": 24.001341397082005,
+          "channel_four4_path_tdm_deg": 19.898370776147747
+        }
+      },
+      {
+        "shot": 15,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 14.306774997350068,
+        "components_deg": {
+          "channel_two8_deg": 15.33064280103126,
+          "channel_four4_path_tdm_deg": 13.282907193668876
+        }
+      },
+      {
+        "shot": 16,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.6955349738613,
+        "components_deg": {
+          "channel_two8_deg": 25.048147442857484,
+          "channel_four4_path_tdm_deg": 20.34292250486512
+        }
+      },
+      {
+        "shot": 17,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.976484031096774,
+        "components_deg": {
+          "channel_two8_deg": 24.648898853770138,
+          "channel_four4_path_tdm_deg": 21.30406920842341
+        }
+      },
+      {
+        "shot": 18,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 25.11537505364543,
+        "components_deg": {
+          "channel_two8_deg": 26.254178170383025,
+          "channel_four4_path_tdm_deg": 23.97657193690783
+        }
+      },
+      {
+        "shot": 20,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.675121502434287,
+        "components_deg": {
+          "channel_two8_deg": 25.35045337885567,
+          "channel_four4_path_tdm_deg": 19.999789626012905
+        }
+      },
+      {
+        "shot": 21,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.2719310316911,
+        "components_deg": {
+          "channel_two8_deg": 24.474957880613285,
+          "channel_four4_path_tdm_deg": 20.068904182768915
+        }
+      },
+      {
+        "shot": 23,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.424927861625697,
+        "components_deg": {
+          "channel_two8_deg": 24.20908796584996,
+          "channel_four4_path_tdm_deg": 20.640767757401438
+        }
+      },
+      {
+        "shot": 24,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 25.664204867797267,
+        "components_deg": {
+          "channel_two8_deg": 26.479480136093187,
+          "channel_four4_path_tdm_deg": 24.848929599501346
+        }
+      },
+      {
+        "shot": 25,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 27.06436957245358,
+        "components_deg": {
+          "channel_two8_deg": 26.926003863951962,
+          "channel_four4_path_tdm_deg": 27.202735280955196
+        }
+      },
+      {
+        "shot": 26,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 13.390979273164598,
+        "components_deg": {
+          "channel_two8_deg": 12.469717169650153,
+          "channel_four4_path_tdm_deg": 14.312241376679044
+        }
+      },
+      {
+        "shot": 28,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 23.81744901619586,
+        "components_deg": {
+          "channel_two8_deg": 23.830513148476395,
+          "channel_four4_path_tdm_deg": 23.80438488391532
+        }
+      },
+      {
+        "shot": 29,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 20.848564159983454,
+        "components_deg": {
+          "channel_two8_deg": 22.91355190464116,
+          "channel_four4_path_tdm_deg": 18.783576415325747
+        }
+      }
+    ],
+    "ball_height_plus_10mm": [
+      {
+        "shot": 2,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 19.115806016478626,
+        "components_deg": {
+          "channel_two8_deg": 20.500354883672898,
+          "channel_four4_path_tdm_deg": 17.731257149284353
+        }
+      },
+      {
+        "shot": 3,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 14.843504572891568,
+        "components_deg": {
+          "channel_two8_deg": 15.436035372962577,
+          "channel_four4_path_tdm_deg": 14.25097377282056
+        }
+      },
+      {
+        "shot": 4,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 17.04930449951857,
+        "components_deg": {
+          "channel_two8_deg": 18.451502889280707,
+          "channel_four4_path_tdm_deg": 15.647106109756434
+        }
+      },
+      {
+        "shot": 5,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 18.12435385454974,
+        "components_deg": {
+          "channel_two8_deg": 19.75806234548359,
+          "channel_four4_path_tdm_deg": 16.490645363615883
+        }
+      },
+      {
+        "shot": 6,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 17.544913771052716,
+        "components_deg": {
+          "channel_two8_deg": 19.114371540803084,
+          "channel_four4_path_tdm_deg": 15.975456001302346
+        }
+      },
+      {
+        "shot": 8,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 17.932685371607548,
+        "components_deg": {
+          "channel_two8_deg": 19.049979065092938,
+          "channel_four4_path_tdm_deg": 16.815391678122158
+        }
+      },
+      {
+        "shot": 9,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 20.084909236565522,
+        "components_deg": {
+          "channel_two8_deg": 21.560341398661908,
+          "channel_four4_path_tdm_deg": 18.60947707446914
+        }
+      },
+      {
+        "shot": 11,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 19.78846314322603,
+        "components_deg": {
+          "channel_two8_deg": 21.177412705451058,
+          "channel_four4_path_tdm_deg": 18.399513581001
+        }
+      },
+      {
+        "shot": 14,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 20.97046282392619,
+        "components_deg": {
+          "channel_two8_deg": 23.077795716339583,
+          "channel_four4_path_tdm_deg": 18.8631299315128
+        }
+      },
+      {
+        "shot": 15,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 13.685893580616494,
+        "components_deg": {
+          "channel_two8_deg": 14.651315186543082,
+          "channel_four4_path_tdm_deg": 12.720471974689904
+        }
+      },
+      {
+        "shot": 16,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 21.97229505787475,
+        "components_deg": {
+          "channel_two8_deg": 24.30910388707457,
+          "channel_four4_path_tdm_deg": 19.635486228674928
+        }
+      },
+      {
+        "shot": 17,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.18396953067981,
+        "components_deg": {
+          "channel_two8_deg": 23.86687958643514,
+          "channel_four4_path_tdm_deg": 20.50105947492448
+        }
+      },
+      {
+        "shot": 18,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 24.235058283412517,
+        "components_deg": {
+          "channel_two8_deg": 25.32118692025244,
+          "channel_four4_path_tdm_deg": 23.148929646572594
+        }
+      },
+      {
+        "shot": 20,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.095423065034627,
+        "components_deg": {
+          "channel_two8_deg": 24.593357472168297,
+          "channel_four4_path_tdm_deg": 19.597488657900957
+        }
+      },
+      {
+        "shot": 21,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 21.511545583802516,
+        "components_deg": {
+          "channel_two8_deg": 23.732279396341085,
+          "channel_four4_path_tdm_deg": 19.29081177126395
+        }
+      },
+      {
+        "shot": 23,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 21.66114570273964,
+        "components_deg": {
+          "channel_two8_deg": 23.49901651182315,
+          "channel_four4_path_tdm_deg": 19.823274893656123
+        }
+      },
+      {
+        "shot": 24,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 24.874966920753224,
+        "components_deg": {
+          "channel_two8_deg": 25.695419135785563,
+          "channel_four4_path_tdm_deg": 24.05451470572088
+        }
+      },
+      {
+        "shot": 25,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 26.144554360836374,
+        "components_deg": {
+          "channel_two8_deg": 25.9532772478888,
+          "channel_four4_path_tdm_deg": 26.33583147378395
+        }
+      },
+      {
+        "shot": 26,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 12.410395306877094,
+        "components_deg": {
+          "channel_two8_deg": 11.468412386309689,
+          "channel_four4_path_tdm_deg": 13.352378227444499
+        }
+      },
+      {
+        "shot": 28,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.899390722580634,
+        "components_deg": {
+          "channel_two8_deg": 23.031384417705684,
+          "channel_four4_path_tdm_deg": 22.76739702745558
+        }
+      },
+      {
+        "shot": 29,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 20.085822337576104,
+        "components_deg": {
+          "channel_two8_deg": 22.19244945150091,
+          "channel_four4_path_tdm_deg": 17.9791952236513
+        }
+      }
+    ],
+    "tee_range_minus_30mm": [
+      {
+        "shot": 2,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 19.101404484966302,
+        "components_deg": {
+          "channel_two8_deg": 20.466065430871392,
+          "channel_four4_path_tdm_deg": 17.73674353906121
+        }
+      },
+      {
+        "shot": 3,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 14.933021690836085,
+        "components_deg": {
+          "channel_two8_deg": 15.511503852536574,
+          "channel_four4_path_tdm_deg": 14.354539529135598
+        }
+      },
+      {
+        "shot": 4,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 17.074485980695894,
+        "components_deg": {
+          "channel_two8_deg": 18.436268742453496,
+          "channel_four4_path_tdm_deg": 15.71270321893829
+        }
+      },
+      {
+        "shot": 5,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 18.139794315881133,
+        "components_deg": {
+          "channel_two8_deg": 19.71993585517119,
+          "channel_four4_path_tdm_deg": 16.55965277659108
+        }
+      },
+      {
+        "shot": 6,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 17.56179921618409,
+        "components_deg": {
+          "channel_two8_deg": 19.089202078983195,
+          "channel_four4_path_tdm_deg": 16.03439635338499
+        }
+      },
+      {
+        "shot": 8,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 17.925684623696053,
+        "components_deg": {
+          "channel_two8_deg": 19.01535008330578,
+          "channel_four4_path_tdm_deg": 16.836019164086327
+        }
+      },
+      {
+        "shot": 9,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 20.004670482688773,
+        "components_deg": {
+          "channel_two8_deg": 21.457495870068946,
+          "channel_four4_path_tdm_deg": 18.551845095308597
+        }
+      },
+      {
+        "shot": 11,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 19.756865448879537,
+        "components_deg": {
+          "channel_two8_deg": 21.126240988900697,
+          "channel_four4_path_tdm_deg": 18.387489908858377
+        }
+      },
+      {
+        "shot": 14,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 20.856645673426783,
+        "components_deg": {
+          "channel_two8_deg": 22.900599347475,
+          "channel_four4_path_tdm_deg": 18.81269199937856
+        }
+      },
+      {
+        "shot": 15,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 13.744807781809227,
+        "components_deg": {
+          "channel_two8_deg": 14.632974342053123,
+          "channel_four4_path_tdm_deg": 12.856641221565331
+        }
+      },
+      {
+        "shot": 16,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 21.886618296593472,
+        "components_deg": {
+          "channel_two8_deg": 24.172362733022585,
+          "channel_four4_path_tdm_deg": 19.60087386016436
+        }
+      },
+      {
+        "shot": 17,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.082567189451566,
+        "components_deg": {
+          "channel_two8_deg": 23.713960484409533,
+          "channel_four4_path_tdm_deg": 20.451173894493596
+        }
+      },
+      {
+        "shot": 18,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 24.10514226801087,
+        "components_deg": {
+          "channel_two8_deg": 25.08945832769632,
+          "channel_four4_path_tdm_deg": 23.12082620832542
+        }
+      },
+      {
+        "shot": 20,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.028766823399707,
+        "components_deg": {
+          "channel_two8_deg": 24.47405841904071,
+          "channel_four4_path_tdm_deg": 19.583475227758704
+        }
+      },
+      {
+        "shot": 21,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 21.414596386370555,
+        "components_deg": {
+          "channel_two8_deg": 23.547685776130336,
+          "channel_four4_path_tdm_deg": 19.281506996610776
+        }
+      },
+      {
+        "shot": 23,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 21.56845087848796,
+        "components_deg": {
+          "channel_two8_deg": 23.352799686094553,
+          "channel_four4_path_tdm_deg": 19.78410207088136
+        }
+      },
+      {
+        "shot": 24,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 24.696043469287932,
+        "components_deg": {
+          "channel_two8_deg": 25.48461543901352,
+          "channel_four4_path_tdm_deg": 23.907471499562345
+        }
+      },
+      {
+        "shot": 25,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 25.960530228301238,
+        "components_deg": {
+          "channel_two8_deg": 25.814120693140822,
+          "channel_four4_path_tdm_deg": 26.106939763461654
+        }
+      },
+      {
+        "shot": 26,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 12.553796624033852,
+        "components_deg": {
+          "channel_two8_deg": 11.665783951290145,
+          "channel_four4_path_tdm_deg": 13.44180929677756
+        }
+      },
+      {
+        "shot": 28,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.75393720646121,
+        "components_deg": {
+          "channel_two8_deg": 22.91860368583074,
+          "channel_four4_path_tdm_deg": 22.58927072709168
+        }
+      },
+      {
+        "shot": 29,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 20.009302970091554,
+        "components_deg": {
+          "channel_two8_deg": 22.049523487073206,
+          "channel_four4_path_tdm_deg": 17.9690824531099
+        }
+      }
+    ],
+    "tee_range_plus_30mm": [
+      {
+        "shot": 2,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 19.804014691956894,
+        "components_deg": {
+          "channel_two8_deg": 21.189681101751123,
+          "channel_four4_path_tdm_deg": 18.418348282162665
+        }
+      },
+      {
+        "shot": 3,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 15.768478105509711,
+        "components_deg": {
+          "channel_two8_deg": 16.43913509667366,
+          "channel_four4_path_tdm_deg": 15.097821114345763
+        }
+      },
+      {
+        "shot": 4,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 17.835387118780126,
+        "components_deg": {
+          "channel_two8_deg": 19.050163420661367,
+          "channel_four4_path_tdm_deg": 16.620610816898882
+        }
+      },
+      {
+        "shot": 5,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 19.26177526041171,
+        "components_deg": {
+          "channel_two8_deg": 21.146050118534355,
+          "channel_four4_path_tdm_deg": 17.377500402289066
+        }
+      },
+      {
+        "shot": 6,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 18.355588963977894,
+        "components_deg": {
+          "channel_two8_deg": 19.923597682358032,
+          "channel_four4_path_tdm_deg": 16.787580245597752
+        }
+      },
+      {
+        "shot": 8,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 18.747915096995712,
+        "components_deg": {
+          "channel_two8_deg": 19.804909143937973,
+          "channel_four4_path_tdm_deg": 17.69092105005345
+        }
+      },
+      {
+        "shot": 9,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 21.110125524273155,
+        "components_deg": {
+          "channel_two8_deg": 22.60442696038833,
+          "channel_four4_path_tdm_deg": 19.61582408815798
+        }
+      },
+      {
+        "shot": 11,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 20.501599422487946,
+        "components_deg": {
+          "channel_two8_deg": 21.870946891550542,
+          "channel_four4_path_tdm_deg": 19.13225195342535
+        }
+      },
+      {
+        "shot": 14,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.120137947761833,
+        "components_deg": {
+          "channel_two8_deg": 24.234043331817244,
+          "channel_four4_path_tdm_deg": 20.006232563706423
+        }
+      },
+      {
+        "shot": 15,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 14.239822962526283,
+        "components_deg": {
+          "channel_two8_deg": 15.308411178021457,
+          "channel_four4_path_tdm_deg": 13.171234747031107
+        }
+      },
+      {
+        "shot": 16,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.782787581834334,
+        "components_deg": {
+          "channel_two8_deg": 25.192719491737208,
+          "channel_four4_path_tdm_deg": 20.37285567193146
+        }
+      },
+      {
+        "shot": 17,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 23.065390612954943,
+        "components_deg": {
+          "channel_two8_deg": 24.77655709432756,
+          "channel_four4_path_tdm_deg": 21.35422413158232
+        }
+      },
+      {
+        "shot": 18,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 25.30544465428948,
+        "components_deg": {
+          "channel_two8_deg": 26.485369312123005,
+          "channel_four4_path_tdm_deg": 24.12551999645596
+        }
+      },
+      {
+        "shot": 20,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.754955336004304,
+        "components_deg": {
+          "channel_two8_deg": 25.493264517898332,
+          "channel_four4_path_tdm_deg": 20.016646154110276
+        }
+      },
+      {
+        "shot": 21,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.382185797251058,
+        "components_deg": {
+          "channel_two8_deg": 24.637211669371794,
+          "channel_four4_path_tdm_deg": 20.12715992513032
+        }
+      },
+      {
+        "shot": 23,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.558041468715718,
+        "components_deg": {
+          "channel_two8_deg": 24.410632828233428,
+          "channel_four4_path_tdm_deg": 20.705450109198008
+        }
+      },
+      {
+        "shot": 24,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 25.904959130921597,
+        "components_deg": {
+          "channel_two8_deg": 26.788535946201982,
+          "channel_four4_path_tdm_deg": 25.02138231564121
+        }
+      },
+      {
+        "shot": 25,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 27.324107093955497,
+        "components_deg": {
+          "channel_two8_deg": 27.186339931467327,
+          "channel_four4_path_tdm_deg": 27.461874256443664
+        }
+      },
+      {
+        "shot": 26,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 13.210889054896949,
+        "components_deg": {
+          "channel_two8_deg": 12.298713363157404,
+          "channel_four4_path_tdm_deg": 14.123064746636496
+        }
+      },
+      {
+        "shot": 28,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 23.979342086532043,
+        "components_deg": {
+          "channel_two8_deg": 24.001977786591024,
+          "channel_four4_path_tdm_deg": 23.95670638647306
+        }
+      },
+      {
+        "shot": 29,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 20.917645525013256,
+        "components_deg": {
+          "channel_two8_deg": 23.023251432194826,
+          "channel_four4_path_tdm_deg": 18.81203961783169
+        }
+      }
+    ],
+    "channel_phase_minus_0p1rad": [
+      {
+        "shot": 2,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 17.515012717568727,
+        "components_deg": {
+          "channel_two8_deg": 20.50988542360284,
+          "channel_four4_path_tdm_deg": 14.520140011534616
+        }
+      },
+      {
+        "shot": 3,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 14.139980842609829,
+        "components_deg": {
+          "channel_two8_deg": 14.757248759618124,
+          "channel_four4_path_tdm_deg": 13.522712925601533
+        }
+      },
+      {
+        "shot": 4,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 15.69037813586058,
+        "components_deg": {
+          "channel_two8_deg": 18.320761566661865,
+          "channel_four4_path_tdm_deg": 13.059994705059298
+        }
+      },
+      {
+        "shot": 5,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 16.47747711167309,
+        "components_deg": {
+          "channel_two8_deg": 17.532175274106873,
+          "channel_four4_path_tdm_deg": 15.422778949239303
+        }
+      },
+      {
+        "shot": 6,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 15.913464273917409,
+        "components_deg": {
+          "channel_two8_deg": 18.856672314704813,
+          "channel_four4_path_tdm_deg": 12.970256233130007
+        }
+      },
+      {
+        "shot": 8,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 16.769761755660625,
+        "components_deg": {
+          "channel_two8_deg": 18.946868495180954,
+          "channel_four4_path_tdm_deg": 14.592655016140299
+        }
+      },
+      {
+        "shot": 9,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 21.70088878045943,
+        "components_deg": {
+          "channel_two8_deg": 21.70088878045943,
+          "channel_four4_path_tdm_deg": 12.635567021397879
+        }
+      },
+      {
+        "shot": 11,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 18.789782672415097,
+        "components_deg": {
+          "channel_two8_deg": 21.03193456237898,
+          "channel_four4_path_tdm_deg": 16.547630782451215
+        }
+      },
+      {
+        "shot": 14,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 20.205820093582563,
+        "components_deg": {
+          "channel_two8_deg": 22.6337196635578,
+          "channel_four4_path_tdm_deg": 17.777920523607325
+        }
+      },
+      {
+        "shot": 15,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 11.772593092254917,
+        "components_deg": {
+          "channel_two8_deg": 14.068688116569414,
+          "channel_four4_path_tdm_deg": 9.47649806794042
+        }
+      },
+      {
+        "shot": 16,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 20.844513711680193,
+        "components_deg": {
+          "channel_two8_deg": 24.351897870663926,
+          "channel_four4_path_tdm_deg": 17.337129552696464
+        }
+      },
+      {
+        "shot": 17,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 20.846445271766353,
+        "components_deg": {
+          "channel_two8_deg": 24.08027858076737,
+          "channel_four4_path_tdm_deg": 17.612611962765335
+        }
+      },
+      {
+        "shot": 18,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 21.58522660702126,
+        "components_deg": {
+          "channel_two8_deg": 25.11138874843186,
+          "channel_four4_path_tdm_deg": 18.059064465610657
+        }
+      },
+      {
+        "shot": 20,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 20.893335549146318,
+        "components_deg": {
+          "channel_two8_deg": 24.523275855361383,
+          "channel_four4_path_tdm_deg": 17.263395242931253
+        }
+      },
+      {
+        "shot": 21,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 23.59738738588054,
+        "components_deg": {
+          "channel_two8_deg": 23.59738738588054,
+          "channel_four4_path_tdm_deg": 15.048277566947942
+        }
+      },
+      {
+        "shot": 23,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 19.767847041325965,
+        "components_deg": {
+          "channel_two8_deg": 23.317286818586556,
+          "channel_four4_path_tdm_deg": 16.21840726406537
+        }
+      },
+      {
+        "shot": 24,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 23.741318180554465,
+        "components_deg": {
+          "channel_two8_deg": 25.559139127343766,
+          "channel_four4_path_tdm_deg": 21.92349723376517
+        }
+      },
+      {
+        "shot": 25,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 24.32105390229648,
+        "components_deg": {
+          "channel_two8_deg": 25.606956004206797,
+          "channel_four4_path_tdm_deg": 23.035151800386164
+        }
+      },
+      {
+        "shot": 26,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 10.147976817773882,
+        "components_deg": {
+          "channel_two8_deg": 10.91459822675156,
+          "channel_four4_path_tdm_deg": 9.381355408796205
+        }
+      },
+      {
+        "shot": 28,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.349157122520353,
+        "components_deg": {
+          "channel_two8_deg": 23.045050337295105,
+          "channel_four4_path_tdm_deg": 21.653263907745597
+        }
+      },
+      {
+        "shot": 29,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 18.725401406746606,
+        "components_deg": {
+          "channel_two8_deg": 22.15590757761749,
+          "channel_four4_path_tdm_deg": 15.294895235875718
+        }
+      }
+    ],
+    "channel_phase_plus_0p1rad": [
+      {
+        "shot": 2,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 20.725155232212277,
+        "components_deg": {
+          "channel_two8_deg": 21.062159636693135,
+          "channel_four4_path_tdm_deg": 20.38815082773142
+        }
+      },
+      {
+        "shot": 3,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 17.130369930104507,
+        "components_deg": {
+          "channel_two8_deg": 17.149811264924278,
+          "channel_four4_path_tdm_deg": 17.110928595284737
+        }
+      },
+      {
+        "shot": 4,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 19.33648070178404,
+        "components_deg": {
+          "channel_two8_deg": 19.714431629138563,
+          "channel_four4_path_tdm_deg": 18.958529774429522
+        }
+      },
+      {
+        "shot": 5,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 21.661332701190883,
+        "components_deg": {
+          "channel_two8_deg": 21.166412522403387,
+          "channel_four4_path_tdm_deg": 22.15625287997838
+        }
+      },
+      {
+        "shot": 6,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 19.61105852430226,
+        "components_deg": {
+          "channel_two8_deg": 20.239281535926317,
+          "channel_four4_path_tdm_deg": 18.982835512678204
+        }
+      },
+      {
+        "shot": 8,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 19.955700621811168,
+        "components_deg": {
+          "channel_two8_deg": 19.923531420119897,
+          "channel_four4_path_tdm_deg": 19.987869823502436
+        }
+      },
+      {
+        "shot": 9,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 22.473708070592444,
+        "components_deg": {
+          "channel_two8_deg": 22.419035005972233,
+          "channel_four4_path_tdm_deg": 22.528381135212655
+        }
+      },
+      {
+        "shot": 11,
+        "club": "7-iron",
+        "status": "accepted",
+        "angle_deg": 21.26266079143857,
+        "components_deg": {
+          "channel_two8_deg": 21.981899425023816,
+          "channel_four4_path_tdm_deg": 20.543422157853325
+        }
+      },
+      {
+        "shot": 14,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 23.49775792255361,
+        "components_deg": {
+          "channel_two8_deg": 24.432835659192737,
+          "channel_four4_path_tdm_deg": 22.56268018591448
+        }
+      },
+      {
+        "shot": 15,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 15.384566190832711,
+        "components_deg": {
+          "channel_two8_deg": 15.814105559674037,
+          "channel_four4_path_tdm_deg": 14.955026821991387
+        }
+      },
+      {
+        "shot": 16,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 23.716724429721804,
+        "components_deg": {
+          "channel_two8_deg": 25.116131791117525,
+          "channel_four4_path_tdm_deg": 22.317317068326084
+        }
+      },
+      {
+        "shot": 17,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 23.892809381531062,
+        "components_deg": {
+          "channel_two8_deg": 24.74642593444708,
+          "channel_four4_path_tdm_deg": 23.039192828615047
+        }
+      },
+      {
+        "shot": 18,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 26.435297753775096,
+        "components_deg": {
+          "channel_two8_deg": 26.582189334726024,
+          "channel_four4_path_tdm_deg": 26.28840617282417
+        }
+      },
+      {
+        "shot": 20,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 23.933244103667086,
+        "components_deg": {
+          "channel_two8_deg": 25.288182740512568,
+          "channel_four4_path_tdm_deg": 22.5783054668216
+        }
+      },
+      {
+        "shot": 21,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 23.50593850604782,
+        "components_deg": {
+          "channel_two8_deg": 24.361493561427906,
+          "channel_four4_path_tdm_deg": 22.650383450667736
+        }
+      },
+      {
+        "shot": 23,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 23.733075170864844,
+        "components_deg": {
+          "channel_two8_deg": 24.68570213539437,
+          "channel_four4_path_tdm_deg": 22.78044820633532
+        }
+      },
+      {
+        "shot": 24,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 25.558549635237192,
+        "components_deg": {
+          "channel_two8_deg": 26.400858280692113,
+          "channel_four4_path_tdm_deg": 24.71624098978227
+        }
+      },
+      {
+        "shot": 25,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 28.44850646929764,
+        "components_deg": {
+          "channel_two8_deg": 26.93152539243676,
+          "channel_four4_path_tdm_deg": 29.96548754615852
+        }
+      },
+      {
+        "shot": 26,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 14.6406969464498,
+        "components_deg": {
+          "channel_two8_deg": 12.624156888468132,
+          "channel_four4_path_tdm_deg": 16.65723700443147
+        }
+      },
+      {
+        "shot": 28,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 24.027223805361125,
+        "components_deg": {
+          "channel_two8_deg": 23.779686019908063,
+          "channel_four4_path_tdm_deg": 24.274761590814187
+        }
+      },
+      {
+        "shot": 29,
+        "club": "9-iron",
+        "status": "accepted",
+        "angle_deg": 22.09867751926899,
+        "components_deg": {
+          "channel_two8_deg": 22.963884728520387,
+          "channel_four4_path_tdm_deg": 21.233470310017587
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,325 @@
+{
+  "test6_vertical": [
+    {
+      "coefficient": 0.68,
+      "seven_mean_deg": 29.181001033661378,
+      "nine_mean_deg": 33.85671696243797,
+      "gap_deg": 4.675715928776594,
+      "gap_bootstrap_95_deg": [
+        0.47194289247534815,
+        8.754035000246498
+      ]
+    },
+    {
+      "coefficient": 0.72,
+      "seven_mean_deg": 27.325320420680193,
+      "nine_mean_deg": 31.717155763670043,
+      "gap_deg": 4.39183534298985,
+      "gap_bootstrap_95_deg": [
+        0.6347901018471857,
+        8.094221484589477
+      ]
+    },
+    {
+      "coefficient": 0.81,
+      "seven_mean_deg": 23.820145929493503,
+      "nine_mean_deg": 27.675762388219525,
+      "gap_deg": 3.855616458726022,
+      "gap_bootstrap_95_deg": [
+        0.7176201928993982,
+        6.765191126222868
+      ]
+    },
+    {
+      "coefficient": 0.86,
+      "seven_mean_deg": 22.189832212662488,
+      "nine_mean_deg": 25.79604453917278,
+      "gap_deg": 3.606212326510292,
+      "gap_bootstrap_95_deg": [
+        0.7555588772140028,
+        6.206154635076008
+      ]
+    }
+  ],
+  "test6_horizontal": [
+    {
+      "coefficient": 0.61,
+      "median_face_deg": -2.6170869801945127,
+      "range_deg": [
+        -12.040918616971549,
+        8.57427267647385
+      ]
+    },
+    {
+      "coefficient": 0.63,
+      "median_face_deg": -2.4441635839978613,
+      "range_deg": [
+        -11.472000565639117,
+        7.827152908966742
+      ]
+    },
+    {
+      "coefficient": 0.69,
+      "median_face_deg": -1.8657968274986807,
+      "range_deg": [
+        -9.963130951235716,
+        5.999354312567649
+      ]
+    },
+    {
+      "coefficient": 0.76,
+      "median_face_deg": -1.1756820464539848,
+      "range_deg": [
+        -8.503895205727162,
+        4.761519046936418
+      ]
+    },
+    {
+      "coefficient": 0.87,
+      "median_face_deg": -0.27979121299428567,
+      "range_deg": [
+        -6.6852417889110844,
+        3.218798247898481
+      ]
+    }
+  ],
+  "test6_face_sign_changes": [
+    15,
+    17,
+    18,
+    21,
+    23,
+    29
+  ],
+  "test7_components": [
+    {
+      "model": "two8",
+      "seven_mean_deg": 19.813252138614978,
+      "nine_mean_deg": 22.80624007084503,
+      "gap_deg": 2.9929879322300508
+    },
+    {
+      "model": "four4_path_tdm",
+      "seven_mean_deg": 17.171309267164503,
+      "nine_mean_deg": 20.25944884422445,
+      "gap_deg": 3.0881395770599482
+    }
+  ],
+  "test7_pairwise": {
+    "mean_two8_minus_four4_deg": 2.583039472270065,
+    "sd_two8_minus_four4_deg": 1.7304981804641915,
+    "correlation": 0.8938264012439977
+  },
+  "test7_raw_phase_slope": "not logged in this capture export",
+  "test11_impulse": [
+    {
+      "shot": 2,
+      "club": "7-iron",
+      "feasible_grid_points": 19295,
+      "total_grid_points": 673200,
+      "feasible_fraction": 0.028661616161616162,
+      "required_restitution_range": [
+        0.7411115419900731,
+        1.8205934383226041
+      ]
+    },
+    {
+      "shot": 3,
+      "club": "7-iron",
+      "feasible_grid_points": 67038,
+      "total_grid_points": 673200,
+      "feasible_fraction": 0.09958110516934046,
+      "required_restitution_range": [
+        0.5669895403448366,
+        1.385700404807352
+      ]
+    },
+    {
+      "shot": 4,
+      "club": "7-iron",
+      "feasible_grid_points": 51019,
+      "total_grid_points": 673200,
+      "feasible_fraction": 0.0757857991681521,
+      "required_restitution_range": [
+        0.6221336148525982,
+        1.5553873704561108
+      ]
+    },
+    {
+      "shot": 5,
+      "club": "7-iron",
+      "feasible_grid_points": 54336,
+      "total_grid_points": 673200,
+      "feasible_fraction": 0.08071301247771837,
+      "required_restitution_range": [
+        0.5400827157799044,
+        1.5148918266337001
+      ]
+    },
+    {
+      "shot": 6,
+      "club": "7-iron",
+      "feasible_grid_points": 59899,
+      "total_grid_points": 673200,
+      "feasible_fraction": 0.08897653000594177,
+      "required_restitution_range": [
+        0.5912731678647485,
+        1.4650290458198234
+      ]
+    },
+    {
+      "shot": 8,
+      "club": "7-iron",
+      "feasible_grid_points": 61272,
+      "total_grid_points": 673200,
+      "feasible_fraction": 0.09101604278074867,
+      "required_restitution_range": [
+        0.6062482797675914,
+        1.4534087444411368
+      ]
+    },
+    {
+      "shot": 9,
+      "club": "7-iron",
+      "feasible_grid_points": 31236,
+      "total_grid_points": 673200,
+      "feasible_fraction": 0.046399286987522284,
+      "required_restitution_range": [
+        0.6969046920340298,
+        1.7408322190030123
+      ]
+    },
+    {
+      "shot": 11,
+      "club": "7-iron",
+      "feasible_grid_points": 63792,
+      "total_grid_points": 673200,
+      "feasible_fraction": 0.09475935828877005,
+      "required_restitution_range": [
+        0.5660765955814229,
+        1.4251207714508878
+      ]
+    },
+    {
+      "shot": 14,
+      "club": "9-iron",
+      "feasible_grid_points": 52112,
+      "total_grid_points": 673200,
+      "feasible_fraction": 0.07740938799762329,
+      "required_restitution_range": [
+        0.5890113743134644,
+        1.5637188229931858
+      ]
+    },
+    {
+      "shot": 15,
+      "club": "9-iron",
+      "feasible_grid_points": 63792,
+      "total_grid_points": 673200,
+      "feasible_fraction": 0.09475935828877005,
+      "required_restitution_range": [
+        0.5814218577150789,
+        1.421510517371435
+      ]
+    },
+    {
+      "shot": 16,
+      "club": "9-iron",
+      "feasible_grid_points": 45651,
+      "total_grid_points": 673200,
+      "feasible_fraction": 0.06781194295900178,
+      "required_restitution_range": [
+        0.6229058182775331,
+        1.6270772176460948
+      ]
+    },
+    {
+      "shot": 17,
+      "club": "9-iron",
+      "feasible_grid_points": 51310,
+      "total_grid_points": 673200,
+      "feasible_fraction": 0.07621806298276887,
+      "required_restitution_range": [
+        0.5914128298801851,
+        1.5770203393332118
+      ]
+    },
+    {
+      "shot": 18,
+      "club": "9-iron",
+      "feasible_grid_points": 40691,
+      "total_grid_points": 673200,
+      "feasible_fraction": 0.06044414735591206,
+      "required_restitution_range": [
+        0.6550923296517999,
+        1.673141384017566
+      ]
+    },
+    {
+      "shot": 20,
+      "club": "9-iron",
+      "feasible_grid_points": 0,
+      "total_grid_points": 673200,
+      "feasible_fraction": 0.0,
+      "required_restitution_range": [
+        2.1054137131803476,
+        9.809714591661534
+      ]
+    },
+    {
+      "shot": 21,
+      "club": "9-iron",
+      "feasible_grid_points": 46041,
+      "total_grid_points": 673200,
+      "feasible_fraction": 0.06839126559714795,
+      "required_restitution_range": [
+        0.643268409750414,
+        1.620101467035716
+      ]
+    },
+    {
+      "shot": 23,
+      "club": "9-iron",
+      "feasible_grid_points": 54579,
+      "total_grid_points": 673200,
+      "feasible_fraction": 0.08107397504456328,
+      "required_restitution_range": [
+        0.5910133479004755,
+        1.5313643988093646
+      ]
+    },
+    {
+      "shot": 26,
+      "club": "9-iron",
+      "feasible_grid_points": 51786,
+      "total_grid_points": 673200,
+      "feasible_fraction": 0.07692513368983957,
+      "required_restitution_range": [
+        0.43331654033120004,
+        1.1629881497298191
+      ]
+    },
+    {
+      "shot": 28,
+      "club": "9-iron",
+      "feasible_grid_points": 45822,
+      "total_grid_points": 673200,
+      "feasible_fraction": 0.06806595365418895,
+      "required_restitution_range": [
+        0.6391881058741347,
+        1.6281228562181504
+      ]
+    },
+    {
+      "shot": 29,
+      "club": "9-iron",
+      "feasible_grid_points": 49141,
+      "total_grid_points": 673200,
+      "feasible_fraction": 0.07299613784907903,
+      "required_restitution_range": [
+        0.6393426370200523,
+        1.5696057873313687
+      ]
+    }
+  ]
+}

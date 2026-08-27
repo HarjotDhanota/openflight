@@ -1,0 +1,515 @@
+[
+  {
+    "shot": 2,
+    "club": "7-iron",
+    "status": "available",
+    "n_head_frames": 4,
+    "intervals": [
+      [
+        65,
+        66
+      ],
+      [
+        66,
+        67
+      ]
+    ],
+    "radar_rate_mps": 34.16783439783023,
+    "camera_predicted_rate_mps": [
+      36.0591570411479,
+      34.121429479415646
+    ],
+    "residual_mps": [
+      1.8913226433176717,
+      -0.04640491841458072
+    ],
+    "median_residual_mps": 0.9224588624515455,
+    "within_shot_residual_range_mps": 1.9377275617322525
+  },
+  {
+    "shot": 3,
+    "club": "7-iron",
+    "status": "no_ball_track"
+  },
+  {
+    "shot": 4,
+    "club": "7-iron",
+    "status": "available",
+    "n_head_frames": 2,
+    "intervals": [
+      [
+        66,
+        67
+      ]
+    ],
+    "radar_rate_mps": 31.12063986247312,
+    "camera_predicted_rate_mps": [
+      34.12028331893361
+    ],
+    "residual_mps": [
+      2.9996434564604897
+    ],
+    "median_residual_mps": 2.9996434564604897,
+    "within_shot_residual_range_mps": 0.0
+  },
+  {
+    "shot": 5,
+    "club": "7-iron",
+    "status": "available",
+    "n_head_frames": 5,
+    "intervals": [
+      [
+        66,
+        67
+      ],
+      [
+        70,
+        71
+      ],
+      [
+        71,
+        72
+      ]
+    ],
+    "radar_rate_mps": 34.093481639747225,
+    "camera_predicted_rate_mps": [
+      35.45461362588093,
+      38.417855699982304,
+      38.06058422533624
+    ],
+    "residual_mps": [
+      1.3611319861337066,
+      4.32437406023508,
+      3.967102585589018
+    ],
+    "median_residual_mps": 3.967102585589018,
+    "within_shot_residual_range_mps": 2.963242074101373
+  },
+  {
+    "shot": 6,
+    "club": "7-iron",
+    "status": "available",
+    "n_head_frames": 3,
+    "intervals": [
+      [
+        65,
+        66
+      ]
+    ],
+    "radar_rate_mps": 36.566851984305075,
+    "camera_predicted_rate_mps": [
+      35.0142154118476
+    ],
+    "residual_mps": [
+      -1.552636572457473
+    ],
+    "median_residual_mps": -1.552636572457473,
+    "within_shot_residual_range_mps": 0.0
+  },
+  {
+    "shot": 8,
+    "club": "7-iron",
+    "status": "no_consecutive_optical_interval",
+    "n_head_frames": 1,
+    "radar_rate_mps": 35.07873884545563
+  },
+  {
+    "shot": 9,
+    "club": "7-iron",
+    "status": "available",
+    "n_head_frames": 3,
+    "intervals": [
+      [
+        66,
+        67
+      ]
+    ],
+    "radar_rate_mps": 33.38950044480869,
+    "camera_predicted_rate_mps": [
+      36.319099681557056
+    ],
+    "residual_mps": [
+      2.9295992367483663
+    ],
+    "median_residual_mps": 2.9295992367483663,
+    "within_shot_residual_range_mps": 0.0
+  },
+  {
+    "shot": 11,
+    "club": "7-iron",
+    "status": "available",
+    "n_head_frames": 3,
+    "intervals": [
+      [
+        65,
+        66
+      ],
+      [
+        66,
+        67
+      ]
+    ],
+    "radar_rate_mps": 34.14030981276616,
+    "camera_predicted_rate_mps": [
+      35.13541099214003,
+      34.25706421095186
+    ],
+    "residual_mps": [
+      0.9951011793738687,
+      0.116754398185698
+    ],
+    "median_residual_mps": 0.5559277887797833,
+    "within_shot_residual_range_mps": 0.8783467811881707
+  },
+  {
+    "shot": 14,
+    "club": "9-iron",
+    "status": "available",
+    "n_head_frames": 3,
+    "intervals": [
+      [
+        64,
+        65
+      ],
+      [
+        65,
+        66
+      ]
+    ],
+    "radar_rate_mps": 32.47874998748703,
+    "camera_predicted_rate_mps": [
+      31.418541161904137,
+      32.31661306168451
+    ],
+    "residual_mps": [
+      -1.0602088255828903,
+      -0.16213692580252115
+    ],
+    "median_residual_mps": -0.6111728756927057,
+    "within_shot_residual_range_mps": 0.8980718997803692
+  },
+  {
+    "shot": 15,
+    "club": "9-iron",
+    "status": "available",
+    "n_head_frames": 3,
+    "intervals": [
+      [
+        66,
+        67
+      ]
+    ],
+    "radar_rate_mps": 31.5803886746532,
+    "camera_predicted_rate_mps": [
+      33.01361905991968
+    ],
+    "residual_mps": [
+      1.4332303852664765
+    ],
+    "median_residual_mps": 1.4332303852664765,
+    "within_shot_residual_range_mps": 0.0
+  },
+  {
+    "shot": 16,
+    "club": "9-iron",
+    "status": "available",
+    "n_head_frames": 3,
+    "intervals": [
+      [
+        66,
+        67
+      ],
+      [
+        67,
+        68
+      ]
+    ],
+    "radar_rate_mps": 33.410186703949364,
+    "camera_predicted_rate_mps": [
+      29.57816126886306,
+      31.497770063988387
+    ],
+    "residual_mps": [
+      -3.8320254350863046,
+      -1.912416639960977
+    ],
+    "median_residual_mps": -2.8722210375236408,
+    "within_shot_residual_range_mps": 1.9196087951253276
+  },
+  {
+    "shot": 17,
+    "club": "9-iron",
+    "status": "available",
+    "n_head_frames": 3,
+    "intervals": [
+      [
+        65,
+        66
+      ],
+      [
+        66,
+        67
+      ]
+    ],
+    "radar_rate_mps": 32.55482836641576,
+    "camera_predicted_rate_mps": [
+      30.788491486613207,
+      33.587375385634125
+    ],
+    "residual_mps": [
+      -1.7663368798025552,
+      1.032547019218363
+    ],
+    "median_residual_mps": -0.3668949302920961,
+    "within_shot_residual_range_mps": 2.798883899020918
+  },
+  {
+    "shot": 18,
+    "club": "9-iron",
+    "status": "available",
+    "n_head_frames": 5,
+    "intervals": [
+      [
+        66,
+        67
+      ],
+      [
+        67,
+        68
+      ],
+      [
+        71,
+        72
+      ]
+    ],
+    "radar_rate_mps": 33.34938824800111,
+    "camera_predicted_rate_mps": [
+      31.633896556790834,
+      31.240816909090142,
+      32.50725626082287
+    ],
+    "residual_mps": [
+      -1.7154916912102784,
+      -2.10857133891097,
+      -0.8421319871782416
+    ],
+    "median_residual_mps": -1.7154916912102784,
+    "within_shot_residual_range_mps": 1.2664393517327284
+  },
+  {
+    "shot": 20,
+    "club": "9-iron",
+    "status": "available",
+    "n_head_frames": 4,
+    "intervals": [
+      [
+        65,
+        66
+      ],
+      [
+        66,
+        67
+      ]
+    ],
+    "radar_rate_mps": 32.426585173302904,
+    "camera_predicted_rate_mps": [
+      32.88053310003731,
+      32.46060327239272
+    ],
+    "residual_mps": [
+      0.45394792673440776,
+      0.03401809908981335
+    ],
+    "median_residual_mps": 0.24398301291211055,
+    "within_shot_residual_range_mps": 0.4199298276445944
+  },
+  {
+    "shot": 21,
+    "club": "9-iron",
+    "status": "available",
+    "n_head_frames": 5,
+    "intervals": [
+      [
+        64,
+        65
+      ],
+      [
+        65,
+        66
+      ],
+      [
+        66,
+        67
+      ]
+    ],
+    "radar_rate_mps": 32.48497355308395,
+    "camera_predicted_rate_mps": [
+      33.505344050423844,
+      33.68072277047367,
+      33.65573989382733
+    ],
+    "residual_mps": [
+      1.020370497339897,
+      1.195749217389725,
+      1.1707663407433841
+    ],
+    "median_residual_mps": 1.1707663407433841,
+    "within_shot_residual_range_mps": 0.17537872004982802
+  },
+  {
+    "shot": 23,
+    "club": "9-iron",
+    "status": "available",
+    "n_head_frames": 5,
+    "intervals": [
+      [
+        65,
+        66
+      ],
+      [
+        66,
+        67
+      ],
+      [
+        69,
+        70
+      ]
+    ],
+    "radar_rate_mps": 34.410663443365706,
+    "camera_predicted_rate_mps": [
+      33.33730231637235,
+      31.600212923462287,
+      35.56444197255604
+    ],
+    "residual_mps": [
+      -1.0733611269933547,
+      -2.8104505199034193,
+      1.1537785291903333
+    ],
+    "median_residual_mps": -1.0733611269933547,
+    "within_shot_residual_range_mps": 3.9642290490937526
+  },
+  {
+    "shot": 24,
+    "club": "9-iron",
+    "status": "available",
+    "n_head_frames": 2,
+    "intervals": [
+      [
+        66,
+        67
+      ]
+    ],
+    "radar_rate_mps": 34.409821944620425,
+    "camera_predicted_rate_mps": [
+      33.019719063915055
+    ],
+    "residual_mps": [
+      -1.3901028807053706
+    ],
+    "median_residual_mps": -1.3901028807053706,
+    "within_shot_residual_range_mps": 0.0
+  },
+  {
+    "shot": 25,
+    "club": "9-iron",
+    "status": "available",
+    "n_head_frames": 3,
+    "intervals": [
+      [
+        66,
+        67
+      ]
+    ],
+    "radar_rate_mps": 34.14648596792314,
+    "camera_predicted_rate_mps": [
+      33.45090543963122
+    ],
+    "residual_mps": [
+      -0.6955805282919201
+    ],
+    "median_residual_mps": -0.6955805282919201,
+    "within_shot_residual_range_mps": 0.0
+  },
+  {
+    "shot": 26,
+    "club": "9-iron",
+    "status": "available",
+    "n_head_frames": 3,
+    "intervals": [
+      [
+        65,
+        66
+      ],
+      [
+        66,
+        67
+      ]
+    ],
+    "radar_rate_mps": 30.6035984460358,
+    "camera_predicted_rate_mps": [
+      31.67102375638955,
+      33.043818091020846
+    ],
+    "residual_mps": [
+      1.067425310353748,
+      2.4402196449850457
+    ],
+    "median_residual_mps": 1.753822477669397,
+    "within_shot_residual_range_mps": 1.3727943346312976
+  },
+  {
+    "shot": 28,
+    "club": "9-iron",
+    "status": "available",
+    "n_head_frames": 3,
+    "intervals": [
+      [
+        64,
+        65
+      ],
+      [
+        65,
+        66
+      ]
+    ],
+    "radar_rate_mps": 31.883763223681072,
+    "camera_predicted_rate_mps": [
+      32.0197217361565,
+      32.69802394694405
+    ],
+    "residual_mps": [
+      0.13595851247542612,
+      0.8142607232629757
+    ],
+    "median_residual_mps": 0.4751096178692009,
+    "within_shot_residual_range_mps": 0.6783022107875496
+  },
+  {
+    "shot": 29,
+    "club": "9-iron",
+    "status": "available",
+    "n_head_frames": 3,
+    "intervals": [
+      [
+        64,
+        65
+      ],
+      [
+        65,
+        66
+      ]
+    ],
+    "radar_rate_mps": 32.00191602132581,
+    "camera_predicted_rate_mps": [
+      30.645788938379063,
+      32.77833165358837
+    ],
+    "residual_mps": [
+      -1.3561270829467489,
+      0.7764156322625553
+    ],
+    "median_residual_mps": -0.2898557253420968,
+    "within_shot_residual_range_mps": 2.132542715209304
+  }
+]
