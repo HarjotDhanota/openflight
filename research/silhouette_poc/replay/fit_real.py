@@ -8,12 +8,27 @@ Three corrections are required before the existing machinery can be used at all,
 because the shipped `A0` preset describes a camera we do not have:
 
     A0 says          fx = 1033 px,  plate scale 0.656 px/mm,  range 1575 mm
-    measured         fx = 466.7 px, plate scale 0.327 px/mm,  range ~1425 mm
+    measured         fx = 466.7 px, plate scale 0.295 px/mm,  range ~1581 mm
 
-`fx` follows from the datasheet lens (2.8 mm) over the effective pixel pitch of
-the shipped 320x200 mode (3.0 um at 2x subsample = 6.0 um). The range follows
-from the measured 13.97 px ball. See docs/Personal Research/camera-feasibility
--verdict-2026-08.md sections 0.5 and 1.
+`fx` follows from the NOMINAL datasheet lens (2.8 mm) over the effective pixel
+pitch of the shipped 320x200 mode (3.0 um at 2x subsample = 6.0 um). It is not
+a calibrated camera matrix: there is no distortion model, no separately
+estimated principal point, and no independent fx/fy.
+
+The RANGE was previously 1425 mm, from a 13.97 px ball. That is wrong. Across
+the 21 correctly exposed shots of session 20260825_181734 the teed ball
+measures 12.77 px, and the tape chain -- camera lens 203.2 mm above the floor
+(kiosk log `mount_height_m`), ball centre 40 mm, radar slant tee range 1575 mm,
+camera lateral offset -60.325 mm -- gives 1581 mm. The 13.97 px figure traces
+to the capture that turned out 99.8 % clipped, where the ball bloomed.
+
+That matters more than a 10 % scale error. Both `range_grid_mm` defaults below
+spanned 1300-1550 and 1325-1525, so neither CONTAINED the true range. The local
+refinement below is not bounded by the grid, so it could in principle climb out
+-- but it hill-climbs greedily from the best COARSE pose, and that pose was
+selected at the wrong depth. Reaching the truth was therefore left to chance
+rather than to the search. See
+docs/superpowers/specs/2026-08-26-falsification-results.md sections 6b and 6d.
 
 The pose model here is the one the POC already uses: 3D centre plus roll about
 the face normal. That is **4 degrees of freedom, not 6** - the face normal is
@@ -44,6 +59,8 @@ LENS_MM = 2.8
 PITCH_UM = 3.0
 SUBSAMPLE = 2
 FOCAL_PX = LENS_MM / (PITCH_UM * SUBSAMPLE * 1e-3)  # 466.7
+# Tape chain, not a ball measurement: see the module docstring.
+CAMERA_BALL_RANGE_MM = 1581.0
 
 
 def measured_camera(width: int = 320, height: int = 200) -> CameraPreset:
@@ -56,7 +73,7 @@ def measured_camera(width: int = 320, height: int = 200) -> CameraPreset:
         fy=FOCAL_PX,
         cx=width / 2.0,
         cy=height / 2.0,
-        plate_scale_px_per_mm=FOCAL_PX / 1425.0,
+        plate_scale_px_per_mm=FOCAL_PX / CAMERA_BALL_RANGE_MM,
         sensor_crop=(336, 150, 816, 516),
         sampling_increment=(SUBSAMPLE, SUBSAMPLE),
         isp_offset=(4, 4),
@@ -247,7 +264,7 @@ def fit_frame_6dof(
     observed_mask,
     camera,
     *,
-    range_grid_mm=(1300.0, 1425.0, 1550.0),
+    range_grid_mm=(1456.0, 1581.0, 1706.0),
     yaw_grid=(-40.0, -20.0, 0.0, 20.0, 40.0),
     pitch_grid=(-40.0, -20.0, 0.0, 20.0, 40.0),
     roll_grid=(-60.0, -30.0, 0.0, 30.0, 60.0, 90.0),
@@ -335,17 +352,19 @@ def fit_sequence(
     *,
     smooth_deg: float = 70.0,
     smooth_mm: float = 300.0,
-    range_grid_mm=(1325.0, 1425.0, 1525.0),
+    range_grid_mm=(1481.0, 1581.0, 1681.0),
     yaw_grid=(-40.0, -20.0, 0.0, 20.0, 40.0),
     pitch_grid=(-30.0, 0.0, 30.0, 60.0, 85.0),
     roll_grid=(-60.0, -30.0, 0.0, 30.0, 60.0),
+    refine_range: bool = True,
 ) -> dict[int, dict]:
     """Fit an ordered run of frames, penalising jumps between consecutive poses.
 
     Score is IoU minus a smoothness penalty against the previous accepted pose.
     `smooth_deg` and `smooth_mm` set how much orientation and range change costs
     one unit of IoU, so a large IoU gain can still justify real motion while noise
-    cannot.
+    cannot. Set ``refine_range=False`` with a singleton ``range_grid_mm`` to keep
+    an externally measured range hard-pinned during local refinement.
     """
     out: dict[int, dict] = {}
     prev = None
@@ -390,6 +409,8 @@ def fit_sequence(
         for _ in range(4):
             improved = False
             for k, delta in enumerate(step):
+                if k == 0 and not refine_range:
+                    continue
                 for d in (-delta, delta):
                     cand = [rng, yaw, pitch, roll]
                     cand[k] += d
