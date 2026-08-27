@@ -88,6 +88,10 @@ sudo apt update
 sudo apt install -y rpicam-apps python3-picamera2 ffmpeg
 ```
 
+The main `scripts/setup/setup.sh` installer also installs FFmpeg automatically
+on Raspberry Pi systems when it is missing. Picamera2 remains an operating-
+system package because it must match Raspberry Pi OS and its libcamera stack.
+
 Install OpenFlight's optional camera image-processing dependency from the
 repository root:
 
@@ -96,8 +100,6 @@ uv sync --extra camera
 ```
 
 OpenCV is intentionally not installed for radar-only OpenFlight systems.
-Picamera2 remains an operating-system package because it must match Raspberry
-Pi OS and its installed libcamera stack.
 
 Reboot after enabling or changing camera hardware:
 
@@ -210,9 +212,10 @@ entire usable area of a compact sensor crop.
 ## Camera Tab Controls
 
 When `--camera-capture` is enabled, the Camera tab keeps the preview visible
-beside an operator-control column. Exposure and analogue gain apply to the
-running Picamera2 pipeline without stopping the rolling buffer. The horizontal
-and vertical alignment controls move the preview guide only.
+beside an operator-control column. Exposure and analogue gain are selected
+automatically. The tab shows the current shutter, gain, impact-area brightness,
+contrast, motion-blur risk, and whether camera-assisted analysis is eligible.
+There is no manual exposure override in the UI.
 
 With the OpenFlight driver and the fixed `320x200` capture mode, **View up** and
 **View down** move the real sensor window in safe 10-pixel steps. Each move
@@ -224,13 +227,43 @@ direction printed on the button.
 
 Resolution, requested frame rate, and pre/post-trigger timing are shown as
 read-only capture provenance. Changing those values requires a controlled
-camera restart and is intentionally not part of the first live-control pass.
-The UI clamps exposure below the configured frame period.
+camera restart and is intentionally not part of the live-control path.
 
-## Exposure Calibration
+## Automatic Exposure
 
-Lighting varies too much for one universal exposure. Calibrate in the actual
-hitting environment:
+Lighting varies too much for one universal exposure. OpenFlight measures the
+center-lower impact region and selects from camera settings validated to fit
+inside the configured frame period.
+
+At startup, the controller begins with the last good setting saved for the same
+resolution and frame rate. If that setting is not usable, it can jump several
+steps and recheck after `300 ms`, rather than waiting through one five-second
+step at a time. It makes at most three fast startup adjustments.
+
+After startup, the controller:
+
+- Samples the latest stable frame every five seconds.
+- Requires two consecutive bad samples before changing a setting.
+- Moves only one validated step during normal operation.
+- Waits ten seconds after a steady-state adjustment.
+- Defers changes while a triggered post-impact camera tail is being collected.
+- Recovers automatically when lighting improves.
+
+The last good setting is stored at:
+
+```text
+~/.config/openflight/camera-exposure.json
+```
+
+If the available lighting cannot produce a usable image, OpenFlight does not
+stop the camera. Preview and raw frame capture continue, but camera-assisted
+horizontal launch, Club Path, and Attack Angle are withheld for that shot.
+Horizontal launch falls back to the IWR6843 path. The Camera tab reports
+**Lighting needed** and **Radar fallback active** so the operator can add or
+redirect light without restarting the session.
+
+The standalone calibration sweep remains useful when diagnosing an unusual
+lighting installation:
 
 ```bash
 cd ~/openflight
@@ -245,9 +278,9 @@ uv run --no-project --python /usr/bin/python3 \
   --settle-ms 150
 ```
 
-Outdoor testing favored approximately `500 us / gain 2`. Indoor testing may
-require more analogue gain, but excessive gain reduces clubhead edge quality.
-Prefer adding light to the hitting area over raising gain indefinitely.
+Prefer adding light to the hitting area over relying on long shutter times or
+high gain. Both can reduce clubhead edge quality even when the preview appears
+bright enough.
 
 ## Standalone Trigger Test
 
@@ -285,8 +318,6 @@ scripts/start-kiosk.sh \
   --camera-capture-fps 450 \
   --camera-capture-pre-ms 150 \
   --camera-capture-post-ms 50 \
-  --camera-capture-exposure-us 500 \
-  --camera-capture-gain 15 \
   --camera-capture-rotate-180 \
   --session-location home
 ```
@@ -294,6 +325,27 @@ scripts/start-kiosk.sh \
 `--camera-capture` is separate from the legacy camera tracker. When capture is
 enabled, OpenFlight keeps a rolling pre-trigger frame buffer and freezes it
 from the same sound-trigger event used by the radar pipeline.
+
+## Shot Replay
+
+A shot with a matched high-speed camera capture exposes **Replay** in the Live
+header and a play control in its Shots row. Replay opens a full-screen,
+touch-friendly 60 FPS slow-motion player with play/pause, restart, scrubbing,
+looping, selectable `1x`, `0.5x`, `0.25x`, and `0.1x` playback speeds, and an
+impact marker derived from the recorded trigger frame. Each replay carries its
+saved-frame orientation, so the player applies the operator-facing left/right
+correction only when needed and never flips a capture twice. Saved frames used
+by camera geometry remain unchanged.
+
+The browser-ready H.264 MP4 is intentionally lazy. Shot processing registers
+only the existing `frames.npz`; OpenFlight does not run FFmpeg until the user
+selects Replay. The first request creates `replay.mp4` atomically beside the raw
+capture, and later requests reuse that file. Closing the player while it is
+preparing does not affect the shot or raw frames. Preparation and playback
+failures are shown as retryable player states, while server-side failures are
+logged without interrupting launch-monitor operation. FFmpeg preparation is
+serialized across replays to avoid simultaneous CPU and memory spikes on the
+Raspberry Pi.
 
 ## Saved Artifacts
 
@@ -306,10 +358,13 @@ Camera captures are written under:
 Each capture contains:
 
 - `frames.npz`: grayscale frames and per-frame timing/control metadata.
-- `metadata.json`: delivered cadence, frame gaps, brightness, timing, and settings.
+- `metadata.json`: delivered cadence, frame gaps, brightness, timing, settings,
+  and the capture-time automatic-exposure decision.
 - `first.pgm`: first buffered frame.
 - `trigger.pgm`: frame nearest the hardware trigger.
 - `last.pgm`: final post-trigger frame.
+- `replay.mp4`: optional 60 FPS slow-motion video, created only after the first
+  manual Replay selection and then cached.
 
 The session JSONL contains a `camera_capture` entry linking the shot number to
 the camera directory. Keep the JSONL, OPS capture, IWR6843 dump, and camera
@@ -344,14 +399,16 @@ restored the stock driver. Re-run the high-speed driver installer and reboot.
 
 ### Frames are dark
 
-Use the exposure calibration script in the real hitting environment. Verify
-that the lens cap is removed and that light reaches the clubhead path, not just
-the stationary ball.
+Verify that the lens cap is removed and that light reaches the clubhead path,
+not just the stationary ball. If the Camera tab remains on **Lighting needed**
+at the brightest validated setting, add or redirect light. Preview and raw
+capture continue while radar-only measurements remain active.
 
 ### Highlights are solid white
 
-Reduce exposure first, then gain. Clipped ball and club pixels cannot provide
-reliable centroids even when the image looks bright enough to a person.
+Redirect intense light away from reflective surfaces and the ball. The
+automatic controller will move darker, but clipped ball and club pixels cannot
+provide reliable centroids even when the image looks bright enough to a person.
 
 ### Frame gaps increase
 

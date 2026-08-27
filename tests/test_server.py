@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from openflight import server as server_module
+from openflight.camera.replay import ReplayNotFoundError, ReplayPreparationError
 from openflight.iwr6843 import Calibration
 from openflight.kld7.types import KLD7Angle
 from openflight.launch_monitor import ClubType, Shot
@@ -38,17 +39,24 @@ class TestCameraCaptureSettings:
             "status": "good",
             "recommendation": "hold",
         }
-        runtime = SimpleNamespace(exposure_quality=lambda: expected)
+        auto_exposure = {
+            "enabled": True,
+            "status": "ready",
+            "analysis_eligible": True,
+        }
+        runtime = SimpleNamespace(
+            exposure_quality=lambda: dict(expected),
+            auto_exposure_status=lambda: auto_exposure,
+        )
         monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
 
         response = server_module.app.test_client().get("/api/camera/exposure-quality")
 
         assert response.status_code == 200
-        assert response.get_json() == expected
+        assert response.get_json() == {**expected, "auto_exposure": auto_exposure}
 
-    def test_update_applies_controls_and_alignment(self, monkeypatch):
+    def test_update_applies_alignment_without_manual_exposure(self, monkeypatch):
         emitted = []
-        applied = []
 
         class FakeRuntime:
             settings = SimpleNamespace(fps=600.0)
@@ -61,11 +69,6 @@ class TestCameraCaptureSettings:
                     "buffered_frames": 90,
                     "required_pre_frames": 90,
                 }
-
-            @staticmethod
-            def update_image_controls(*, exposure_us, gain):
-                applied.append((exposure_us, gain))
-                return {"exposure_us": exposure_us, "gain": gain}
 
             @staticmethod
             def vertical_crop_status():
@@ -95,20 +98,44 @@ class TestCameraCaptureSettings:
 
         server_module.handle_set_camera_capture_settings(
             {
-                "exposure_us": 650,
-                "gain": 3.0,
                 "alignment_x_pct": 47,
                 "alignment_y_pct": 58,
             }
         )
 
-        assert applied == [(650, 3.0)]
         assert config["alignment_x_pct"] == 47.0
         assert config["alignment_y_pct"] == 58.0
         assert emitted[-1][0] == "camera_capture_settings"
         assert emitted[-1][1]["max_exposure_us"] == 1666
         assert emitted[-1][1]["raw_crop_adjustable"] is True
         assert emitted[-1][1]["vertical_offset_px"] == -10
+
+    def test_update_rejects_manual_exposure_override(self, monkeypatch):
+        emitted = []
+        runtime = SimpleNamespace(
+            settings=SimpleNamespace(fps=488.0),
+            status=lambda: {"running": True, "armed": True},
+        )
+        monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
+        monkeypatch.setattr(
+            server_module,
+            "camera_capture_config",
+            {"exposure_us": 500, "gain": 12.0},
+        )
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
+
+        server_module.handle_set_camera_capture_settings({"exposure_us": 650})
+
+        assert emitted == [
+            (
+                "camera_capture_settings_error",
+                {"error": "Camera exposure and gain are managed automatically"},
+            )
+        ]
 
     def test_update_moves_real_sensor_crop(self, monkeypatch):
         emitted = []
@@ -185,6 +212,157 @@ class TestCameraCaptureSettings:
                 {"error": "horizontal alignment must be between 0 and 100 percent"},
             )
         ]
+
+class TestCameraReplayAPI:
+    """Camera replay is prepared only through the explicit HTTP action."""
+
+    def test_prepare_replay_returns_cached_video_url(self, monkeypatch, tmp_path):
+        video = tmp_path / "replay.mp4"
+        video.write_bytes(b"mp4")
+        calls = []
+
+        class FakeManager:
+            @staticmethod
+            def prepare(replay_id):
+                calls.append(replay_id)
+                return SimpleNamespace(
+                    video_path=video,
+                    payload={
+                        "id": replay_id,
+                        "frame_count": 99,
+                        "trigger_frame": 73,
+                        "playback_fps": 60,
+                        "duration_seconds": 1.65,
+                        "display_mirror_horizontal": True,
+                    },
+                )
+
+        monkeypatch.setattr(server_module, "camera_replay_manager", FakeManager())
+
+        response = server_module.app.test_client().post("/api/camera/replays/replay-123/prepare")
+
+        assert response.status_code == 200
+        assert calls == ["replay-123"]
+        assert response.get_json()["video_url"] == ("/api/camera/replays/replay-123/video")
+        assert response.get_json()["trigger_frame"] == 73
+        assert response.get_json()["display_mirror_horizontal"] is True
+
+    def test_prepare_replay_is_not_available_via_get(self):
+        response = server_module.app.test_client().get("/api/camera/replays/replay-123/prepare")
+
+        assert response.status_code == 405
+
+    @pytest.mark.parametrize(
+        ("error", "status"),
+        [
+            (ReplayNotFoundError("missing"), 404),
+            (ReplayPreparationError("broken capture"), 503),
+        ],
+    )
+    def test_prepare_replay_reports_safe_errors(self, monkeypatch, error, status):
+        manager = SimpleNamespace(prepare=lambda _replay_id: (_ for _ in ()).throw(error))
+        monkeypatch.setattr(server_module, "camera_replay_manager", manager)
+
+        response = server_module.app.test_client().post("/api/camera/replays/replay-123/prepare")
+
+        assert response.status_code == status
+        assert response.get_json() == {"error": str(error)}
+
+    def test_prepare_replay_catches_unexpected_errors_and_logs_them(self, monkeypatch):
+        logged = []
+        manager = SimpleNamespace(
+            prepare=lambda _replay_id: (_ for _ in ()).throw(RuntimeError("private path"))
+        )
+        monkeypatch.setattr(server_module, "camera_replay_manager", manager)
+        monkeypatch.setattr(
+            server_module,
+            "log_session_error",
+            lambda message, **kwargs: logged.append((message, kwargs)),
+        )
+
+        response = server_module.app.test_client().post("/api/camera/replays/replay-123/prepare")
+
+        assert response.status_code == 500
+        assert response.get_json() == {"error": "Camera replay could not be prepared"}
+        assert logged[0][0] == "Camera replay preparation failed"
+        assert logged[0][1]["context"] == {"replay_id": "replay-123"}
+
+    def test_video_endpoint_supports_range_requests(self, monkeypatch, tmp_path):
+        video = tmp_path / "replay.mp4"
+        video.write_bytes(b"0123456789")
+        manager = SimpleNamespace(video_path=lambda _replay_id: video)
+        monkeypatch.setattr(server_module, "camera_replay_manager", manager)
+
+        response = server_module.app.test_client().get(
+            "/api/camera/replays/replay-123/video",
+            headers={"Range": "bytes=2-5"},
+        )
+
+        assert response.status_code == 206
+        assert response.data == b"2345"
+        assert response.mimetype == "video/mp4"
+
+    def test_video_endpoint_reports_storage_error(self, monkeypatch):
+        manager = SimpleNamespace(
+            video_path=lambda _replay_id: (_ for _ in ()).throw(
+                ReplayPreparationError("Camera replay storage is unavailable")
+            )
+        )
+        monkeypatch.setattr(server_module, "camera_replay_manager", manager)
+
+        response = server_module.app.test_client().get("/api/camera/replays/replay-123/video")
+
+        assert response.status_code == 503
+        assert response.get_json() == {"error": "Camera replay storage is unavailable"}
+
+    def test_matching_capture_registers_replay_without_preparing_it(self, monkeypatch, tmp_path):
+        calls = []
+        descriptor = {
+            "id": "replay-123",
+            "frame_count": 99,
+            "trigger_frame": 73,
+            "playback_fps": 60,
+            "duration_seconds": 1.65,
+            "display_mirror_horizontal": True,
+        }
+
+        class FakeManager:
+            @staticmethod
+            def register(path, metadata):
+                calls.append((path, metadata))
+                return descriptor
+
+            @staticmethod
+            def prepare(_replay_id):
+                pytest.fail("matching a shot must not build the MP4")
+
+        monkeypatch.setattr(server_module, "camera_replay_manager", FakeManager())
+        shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
+        capture = SimpleNamespace(
+            valid=True,
+            path=tmp_path,
+            metadata={"frame_count": 99, "pre_trigger_frames": 74},
+        )
+
+        server_module._attach_camera_replay(shot, capture)
+
+        assert calls == [(tmp_path, capture.metadata)]
+        assert shot.camera_replay == descriptor
+        assert shot_to_dict(shot)["camera_replay"] == descriptor
+
+    def test_deleting_shot_revokes_replay_access_without_deleting_capture(self, monkeypatch):
+        replay_ids = []
+        manager = SimpleNamespace(unregister=lambda replay_id: replay_ids.append(replay_id))
+        shot = Shot(
+            ball_speed_mph=100.0,
+            timestamp=datetime.now(),
+            camera_replay={"id": "replay-123"},
+        )
+        monkeypatch.setattr(server_module, "camera_replay_manager", manager)
+        monkeypatch.setattr(server_module, "monitor", SimpleNamespace(_shots=[shot]))
+
+        assert server_module._delete_session_row(shot.timestamp.isoformat()) is True
+        assert replay_ids == ["replay-123"]
 
 
 class TestShutdownCleanup:
@@ -1463,6 +1641,51 @@ class TestShotToDict:
         assert fused_archives[0] is fused_archives[1]
         assert fused_archives[0]["frames"].shape == (8, 4, 4)
 
+    def test_live_camera_fusion_withholds_dark_frames_and_preserves_iwr(self, monkeypatch):
+        runtime = SimpleNamespace(camera_analysis_eligible=False)
+        monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
+        monkeypatch.setattr(
+            server_module,
+            "_load_camera_capture_archive",
+            lambda _capture: pytest.fail("dark camera frames should not be decoded"),
+        )
+        shot = Shot(
+            ball_speed_mph=110.0,
+            timestamp=datetime.now(),
+            launch_angle_horizontal=-1.8,
+            launch_angle_horizontal_confidence=0.8,
+            launch_angle_horizontal_source="radar",
+            iwr6843_horizontal_deg=-1.8,
+            iwr6843_horizontal_confidence=0.8,
+        )
+
+        server_module._fuse_camera_measurements(shot, SimpleNamespace(valid=True))
+
+        assert shot.launch_angle_horizontal == -1.8
+        assert shot.launch_angle_horizontal_source == "radar"
+        assert shot.experimental_camera_horizontal_status == "rejected_lighting_quality"
+        assert shot.experimental_fused_status == "rejected_lighting_quality"
+        assert shot.experimental_fused_attack_angle_deg is None
+        assert shot.experimental_fused_club_path_deg is None
+
+    def test_camera_fusion_uses_capture_time_exposure_state(self, monkeypatch):
+        runtime = SimpleNamespace(camera_analysis_eligible=True)
+        monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
+        monkeypatch.setattr(
+            server_module,
+            "_load_camera_capture_archive",
+            lambda _capture: pytest.fail("ineligible capture should not be decoded"),
+        )
+        shot = Shot(ball_speed_mph=110.0, timestamp=datetime.now())
+        capture = SimpleNamespace(
+            valid=True,
+            metadata={"auto_exposure": {"analysis_eligible": False}},
+        )
+
+        server_module._fuse_camera_measurements(shot, capture)
+
+        assert shot.experimental_fused_status == "rejected_lighting_quality"
+
     def test_angle_source_none_by_default(self):
         """Shot without angle source should have None."""
         shot = Shot(
@@ -1518,6 +1741,44 @@ class TestShotToDict:
         assert result["spin_phase_agreement_pct"] == 2.1
         assert result["spin_phase_confirmed"] is True
         assert result["spin_rejection_reason"] == "SNR too low (2.96, need 3.0)"
+
+
+class TestSessionStateClub:
+    """Connect snapshots must include the active club so a UI reload can restore it."""
+
+    @staticmethod
+    def _connect_session_state(monkeypatch, monitor):
+        emitted = []
+        monkeypatch.setattr(server_module, "monitor", monitor)
+        monkeypatch.setattr(server_module, "mock_mode", True)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        monkeypatch.setattr(server_module, "camera", None)
+        monkeypatch.setattr(server_module, "camera_enabled", False)
+        monkeypatch.setattr(server_module, "camera_streaming", False)
+        monkeypatch.setattr(server_module, "ball_detected", False)
+        monkeypatch.setattr(server_module, "power_monitor", None)
+        monkeypatch.setattr(server_module, "_emit_sim_snapshot", lambda: None)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+        server_module.handle_connect()
+        return next(data for name, data in emitted if name == "session_state")
+
+    def test_connect_session_state_includes_current_club(self, monkeypatch):
+        """Reload/dismiss keeps the server club, not a reset to driver."""
+        monitor = MockLaunchMonitor()
+        monitor.set_club(ClubType.IRON_7)
+
+        payload = self._connect_session_state(monkeypatch, monitor)
+
+        assert payload["club"] == "7-iron"
+
+    def test_connect_session_state_defaults_to_driver(self, monkeypatch):
+        """A fresh monitor with no set_club still reports driver."""
+        payload = self._connect_session_state(monkeypatch, MockLaunchMonitor())
+
+        assert payload["club"] == "driver"
 
 
 class TestSwingSpeedMode:
@@ -2066,6 +2327,124 @@ class TestMockLaunchMonitor:
 
         assert monitor._shots == []
         assert monitor.get_session_stats()["shot_count"] == 0
+
+
+class TestHandleClearSession:
+    """Clear session removes only the active player's shots."""
+
+    def test_removes_only_named_player_shots(self, monkeypatch):
+        """Other players' shots must remain after a clear."""
+        monitor = MockLaunchMonitor()
+        monitor.connect()
+        monitor.start()
+        james = monitor.simulate_shot(ball_speed=140.0)
+        james.player_name = "James"
+        alex = monitor.simulate_shot(ball_speed=150.0)
+        alex.player_name = "Alex"
+
+        emitted = []
+        monkeypatch.setattr(server_module, "monitor", monitor)
+        monkeypatch.setattr(server_module, "current_player_name", "James")
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+
+        server_module.handle_clear_session({"player_name": "James"})
+
+        assert [shot.player_name for shot in monitor.get_shots()] == ["Alex"]
+        _event, payload = next(args for args in emitted if args[0] == "session_cleared")
+        assert payload["player_name"] == "James"
+        assert len(payload["shots"]) == 1
+        assert payload["shots"][0]["player_name"] == "Alex"
+
+    def test_uses_current_player_when_payload_omits_name(self, monkeypatch):
+        """Socket clients that omit player_name still clear the active player."""
+        monitor = MockLaunchMonitor()
+        monitor.connect()
+        monitor.start()
+        first = monitor.simulate_shot()
+        first.player_name = "Alex"
+        second = monitor.simulate_shot()
+        second.player_name = "James"
+
+        monkeypatch.setattr(server_module, "monitor", monitor)
+        monkeypatch.setattr(server_module, "current_player_name", "Alex")
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
+
+        server_module.handle_clear_session()
+
+        assert [shot.player_name for shot in monitor.get_shots()] == ["James"]
+
+    def test_matches_player_name_case_insensitively(self, monkeypatch):
+        """UI and radar casing should not leave a player's shots behind."""
+        monitor = MockLaunchMonitor()
+        monitor.connect()
+        monitor.start()
+        shot = monitor.simulate_shot()
+        shot.player_name = "james"
+        other = monitor.simulate_shot()
+        other.player_name = "Alex"
+
+        monkeypatch.setattr(server_module, "monitor", monitor)
+        monkeypatch.setattr(server_module, "current_player_name", "James")
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
+
+        server_module.handle_clear_session({"player_name": " JAMES "})
+
+        assert [shot.player_name for shot in monitor.get_shots()] == ["Alex"]
+
+    def test_treats_missing_player_name_as_player_1(self, monkeypatch):
+        """Unstamped shots belong to the default player."""
+        monitor = MockLaunchMonitor()
+        monitor.connect()
+        monitor.start()
+        unstamped = monitor.simulate_shot()
+        unstamped.player_name = "Player 1"
+        named = monitor.simulate_shot()
+        named.player_name = "Alex"
+
+        monkeypatch.setattr(server_module, "monitor", monitor)
+        monkeypatch.setattr(server_module, "current_player_name", "Player 1")
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
+
+        server_module.handle_clear_session({"player_name": "Player 1"})
+
+        assert [shot.player_name for shot in monitor.get_shots()] == ["Alex"]
+
+    def test_clears_only_that_player_swing_speed_events(self, monkeypatch):
+        """Swing-speed mode stores reps, not ball-flight shots."""
+        monitor = MockSwingSpeedMonitor()
+        james = monitor.simulate_shot(peak_speed=95.0)
+        james.player_name = "James"
+        alex = monitor.simulate_shot(peak_speed=100.0)
+        alex.player_name = "Alex"
+
+        emitted = []
+        monkeypatch.setattr(server_module, "monitor", monitor)
+        monkeypatch.setattr(server_module, "current_player_name", "James")
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+
+        server_module.handle_clear_session({"player_name": "James"})
+
+        assert [event.player_name for event in monitor.get_events()] == ["Alex"]
+        _event, payload = next(args for args in emitted if args[0] == "session_cleared")
+        assert payload["shots"][0]["player_name"] == "Alex"
+
+    def test_emits_cleared_payload_without_monitor(self, monkeypatch):
+        """UI still gets an ack so the confirm dialog can close."""
+        emitted = []
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "current_player_name", "James")
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+
+        server_module.handle_clear_session({"player_name": "James"})
+
+        _event, payload = next(args for args in emitted if args[0] == "session_cleared")
+        assert payload == {"player_name": "James", "shots": []}
 
 
 class TestRadarLaunchGuard:

@@ -62,6 +62,12 @@ class TriggeredFrameBuffer:
             return len(self._pre)
 
     @property
+    def capture_busy(self) -> bool:
+        """Whether a triggered post-impact tail is still being collected."""
+        with self._condition:
+            return self._capturing
+
+    @property
     def latest_frame(self) -> Optional[CameraFrame]:
         """Most recent frame available without disturbing capture state."""
         with self._condition:

@@ -36,6 +36,29 @@ export interface CameraCaptureSettings {
   vertical_offset_min_px?: number;
   vertical_offset_max_px?: number;
   vertical_offset_step_px?: number;
+  auto_exposure?: CameraAutoExposureStatus;
+}
+
+export interface CameraAutoExposureStatus {
+  enabled: boolean;
+  status: 'calibrating' | 'ready' | 'adjusting' | 'lighting_required' | 'unavailable';
+  analysis_eligible: boolean;
+  message: string;
+  motion_blur_risk: 'low' | 'elevated' | 'high';
+  capture_deferred?: boolean;
+  exposure_us?: number;
+  gain?: number;
+  observation?: {
+    sample_available: boolean;
+    status: 'good' | 'too_dark' | 'too_bright' | 'marginal' | 'unavailable';
+    recommendation?: 'brighter' | 'darker' | 'hold';
+    message?: string;
+    median?: number | null;
+    p90?: number | null;
+    contrast?: number | null;
+    clipped_pct?: number | null;
+    dark_pct?: number | null;
+  };
 }
 
 interface CameraState {

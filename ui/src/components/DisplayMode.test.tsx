@@ -44,6 +44,8 @@ describe('DisplayMode', () => {
     expect(html).toContain('261');
     expect(html).toContain('Socket connected');
     expect(html).toContain('display-shot-chip__number');
+    expect(html).toContain('metric-card--emphasis');
+    expect(html).not.toContain('display-metric');
   });
 
   it('shows rejection details for status-only experimental club metrics', () => {

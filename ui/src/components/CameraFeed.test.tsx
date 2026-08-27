@@ -35,6 +35,21 @@ const captureSettings: CameraCaptureSettings = {
   vertical_offset_min_px: -70,
   vertical_offset_max_px: 70,
   vertical_offset_step_px: 10,
+  auto_exposure: {
+    enabled: true,
+    status: 'ready',
+    analysis_eligible: true,
+    message: 'Impact-area exposure and contrast look good',
+    motion_blur_risk: 'low',
+    exposure_us: 500,
+    gain: 12,
+    observation: {
+      sample_available: true,
+      status: 'good',
+      median: 108,
+      contrast: 94,
+    },
+  },
 };
 
 describe('CameraFeed', () => {
@@ -57,21 +72,16 @@ describe('CameraFeed', () => {
 
     expect(html).toContain('camera-feed__workspace');
     expect(html).toContain('Camera setup');
-    expect(html).toContain('Environment profile');
-    expect(html).toContain('Exposure check');
+    expect(html).toContain('Automatic exposure');
+    expect(html).toContain('Auto exposure');
     expect(html).toContain('camera-feed__exposure-quality');
-    expect(html).toContain('Darker');
-    expect(html).toContain('Brighter');
-    expect(html).toContain('Outdoor sun');
-    expect(html).toContain('250<!-- --> µs · <!-- -->4<!-- -->×');
-    expect(html).toContain('Outdoor shade');
-    expect(html).toContain('Evening');
-    expect(html).toContain('Indoor bright');
-    expect(html).toContain('Indoor dark');
-    expect(html).toContain('Night');
-    expect(html).toContain('1000<!-- --> µs · <!-- -->20<!-- -->×');
-    expect(html).toContain('Facility dark');
-    expect(html).toContain('1250<!-- --> µs · <!-- -->16<!-- -->×');
+    expect(html).toContain('Camera analysis active');
+    expect(html).toContain('Impact median');
+    expect(html).toContain('Motion blur risk');
+    expect(html).toContain('500<!-- --> µs');
+    expect(html).not.toContain('Environment profile');
+    expect(html).not.toContain('Darker');
+    expect(html).not.toContain('Brighter');
     expect(html).toContain('Ball placement guide');
     expect(html).toContain('50% across · 78% down');
     expect(html).not.toContain('type="range"');
@@ -82,6 +92,32 @@ describe('CameraFeed', () => {
     expect(html).toContain('-20 px');
     expect(html).toContain('320 × 200');
     expect(html).toContain('600 fps');
+    expect(html).toContain('Armed');
+  });
+
+  it('explains lighting failure without disabling capture', () => {
+    const html = renderToString(
+      <CameraFeed
+        cameraStatus={cameraStatus}
+        captureSettings={{
+          ...captureSettings,
+          auto_exposure: {
+            ...captureSettings.auto_exposure!,
+            status: 'lighting_required',
+            analysis_eligible: false,
+            message: 'Camera lighting is insufficient; add or redirect light toward the ball',
+          },
+        }}
+        captureSettingsError={null}
+        onToggleCamera={vi.fn()}
+        onToggleStream={vi.fn()}
+        onUpdateCaptureSettings={vi.fn()}
+      />
+    );
+
+    expect(html).toContain('Lighting needed');
+    expect(html).toContain('Radar fallback active');
+    expect(html).toContain('Preview and raw clips continue recording');
     expect(html).toContain('Armed');
   });
 });

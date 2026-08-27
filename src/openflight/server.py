@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from flask import Flask, Response, jsonify, send_from_directory
+from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
@@ -130,6 +130,7 @@ iwr6843_runtime = None
 iwr6843_runtime_config: dict = {"enabled": False}
 camera_capture_runtime = None
 camera_capture_config: dict = {"enabled": False}
+camera_replay_manager = None
 camera_reference_ball_tracker = None
 camera_ball_flight_reference_tracker = None
 
@@ -940,6 +941,7 @@ def shot_to_dict(shot: Shot) -> dict:
         ),
         "experimental_camera_horizontal_status": shot.experimental_camera_horizontal_status,
         "experimental_camera_iwr_delta_deg": shot.experimental_camera_iwr_delta_deg,
+        "camera_replay": dict(shot.camera_replay) if shot.camera_replay else None,
         "spin_axis_deg": shot.spin_axis_deg,
         "inclinometer": shot.inclinometer,
         # Spin data from rolling buffer mode
@@ -1108,6 +1110,7 @@ def init_camera_capture(
 ) -> bool:
     """Initialize passive high-speed camera capture for offline alignment."""
     global camera_capture_runtime, camera_capture_config  # pylint: disable=global-statement
+    global camera_replay_manager  # pylint: disable=global-statement
     global camera_reference_ball_tracker  # pylint: disable=global-statement
     global camera_ball_flight_reference_tracker  # pylint: disable=global-statement
     try:
@@ -1127,6 +1130,9 @@ def init_camera_capture(
             roll_correction_deg=roll_correction_deg,
             scaler_crop=scaler_crop,
             gpio_pin=gpio_pin,
+            auto_exposure_state_path=(
+                Path.home() / ".config" / "openflight" / "camera-exposure.json"
+            ),
         )
         camera_capture_runtime = CameraCaptureRuntime(
             output_dir=output_dir,
@@ -1134,6 +1140,10 @@ def init_camera_capture(
             use_gpio_trigger=use_gpio_trigger,
         )
         camera_capture_runtime.start()
+        settings = camera_capture_runtime.settings
+        from .camera.replay import CameraReplayManager
+
+        camera_replay_manager = CameraReplayManager(output_dir)
         from openflight.camera.club_delivery import (  # noqa: PLC0415
             ReferenceBallTracker,
         )
@@ -1154,6 +1164,7 @@ def init_camera_capture(
             "post_frames": settings.post_frames,
             "exposure_us": settings.exposure_us,
             "gain": settings.gain,
+            "auto_exposure_enabled": settings.auto_exposure,
             "stream": settings.stream,
             "rotate_180": settings.rotate_180,
             "mirror_horizontal": settings.mirror_horizontal,
@@ -1176,6 +1187,7 @@ def init_camera_capture(
             exc=error,
         )
         camera_capture_runtime = None
+        camera_replay_manager = None
         camera_reference_ball_tracker = None
         camera_ball_flight_reference_tracker = None
         camera_capture_config = {"enabled": False, "error": str(error)}
@@ -1568,10 +1580,94 @@ def camera_capture_preview():
 
 @app.route("/api/camera/exposure-quality")
 def camera_capture_exposure_quality():
-    """Exposure guidance derived from the latest raw impact-zone pixels."""
+    """Automatic exposure state derived from the latest impact-zone pixels."""
     if camera_capture_runtime is None:
         return jsonify({"sample_available": False, "status": "unavailable"}), 404
-    return jsonify(camera_capture_runtime.exposure_quality())
+    quality = camera_capture_runtime.exposure_quality()
+    quality["auto_exposure"] = camera_capture_runtime.auto_exposure_status()
+    return jsonify(quality)
+
+
+@app.route("/api/camera/replays/<replay_id>/prepare", methods=["GET", "POST"])
+def prepare_camera_replay(replay_id: str):
+    """Create a cached MP4 only after an explicit replay interaction."""
+    from .camera.replay import ReplayNotFoundError, ReplayPreparationError
+
+    if request.method != "POST":
+        return jsonify({"error": "Use POST to prepare a camera replay"}), 405
+    if camera_replay_manager is None:
+        return jsonify({"error": "Camera replay was not found"}), 404
+    try:
+        prepared = camera_replay_manager.prepare(replay_id)
+    except ReplayNotFoundError as error:
+        return jsonify({"error": str(error)}), 404
+    except ReplayPreparationError as error:
+        logger.warning("[CAMERA] Could not prepare replay %s: %s", replay_id, error)
+        log_session_error(
+            "Camera replay preparation failed",
+            component="camera_capture",
+            context={"replay_id": replay_id},
+            exc=error,
+        )
+        return jsonify({"error": str(error)}), 503
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.exception("[CAMERA] Unexpected replay preparation failure for %s", replay_id)
+        log_session_error(
+            "Camera replay preparation failed",
+            component="camera_capture",
+            context={"replay_id": replay_id},
+            exc=error,
+        )
+        return jsonify({"error": "Camera replay could not be prepared"}), 500
+
+    payload = dict(prepared.payload)
+    payload["video_url"] = f"/api/camera/replays/{replay_id}/video"
+    return jsonify(payload)
+
+
+@app.route("/api/camera/replays/<replay_id>/video")
+def camera_replay_video(replay_id: str):  # pylint: disable=too-many-return-statements
+    """Stream a previously prepared replay with HTTP range support."""
+    from .camera.replay import (
+        ReplayNotFoundError,
+        ReplayNotReadyError,
+        ReplayPreparationError,
+    )
+
+    if camera_replay_manager is None:
+        return jsonify({"error": "Camera replay was not found"}), 404
+    try:
+        video_path = camera_replay_manager.video_path(replay_id)
+    except ReplayNotFoundError as error:
+        return jsonify({"error": str(error)}), 404
+    except ReplayNotReadyError as error:
+        return jsonify({"error": str(error)}), 409
+    except ReplayPreparationError as error:
+        logger.warning("[CAMERA] Could not read replay %s: %s", replay_id, error)
+        return jsonify({"error": str(error)}), 503
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.exception("[CAMERA] Unexpected replay lookup failure for %s", replay_id)
+        log_session_error(
+            "Camera replay lookup failed",
+            component="camera_capture",
+            context={"replay_id": replay_id},
+            exc=error,
+        )
+        return jsonify({"error": "Camera replay video is unavailable"}), 500
+    try:
+        return send_file(video_path, mimetype="video/mp4", conditional=True, etag=True)
+    except OSError as error:
+        logger.warning("[CAMERA] Could not stream replay %s: %s", replay_id, error)
+        return jsonify({"error": "Camera replay video is unavailable"}), 503
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.exception("[CAMERA] Unexpected replay streaming failure for %s", replay_id)
+        log_session_error(
+            "Camera replay streaming failed",
+            component="camera_capture",
+            context={"replay_id": replay_id},
+            exc=error,
+        )
+        return jsonify({"error": "Camera replay video is unavailable"}), 500
 
 
 def _camera_capture_settings_payload() -> dict:
@@ -1583,6 +1679,16 @@ def _camera_capture_settings_payload() -> dict:
     if camera_capture_runtime is not None:
         payload.update(camera_capture_runtime.status())
         payload.update(camera_capture_runtime.vertical_crop_status())
+        payload["exposure_us"] = getattr(
+            camera_capture_runtime.settings,
+            "exposure_us",
+            payload.get("exposure_us"),
+        )
+        payload["gain"] = getattr(
+            camera_capture_runtime.settings,
+            "gain",
+            payload.get("gain"),
+        )
         frame_period_us = round(1_000_000 / camera_capture_runtime.settings.fps)
         payload["max_exposure_us"] = frame_period_us - 1
     return payload
@@ -1611,8 +1717,8 @@ def handle_set_camera_capture_settings(data):
         return
 
     try:
-        exposure_us = int(data.get("exposure_us", camera_capture_config["exposure_us"]))
-        gain = float(data.get("gain", camera_capture_config["gain"]))
+        if "exposure_us" in data or "gain" in data:
+            raise ValueError("Camera exposure and gain are managed automatically")
         alignment_x_pct = float(
             data.get("alignment_x_pct", camera_capture_config.get("alignment_x_pct", 50.0))
         )
@@ -1630,13 +1736,8 @@ def handle_set_camera_capture_settings(data):
                 int(data["vertical_offset_px"])
             )
 
-        applied = camera_capture_runtime.update_image_controls(
-            exposure_us=exposure_us,
-            gain=gain,
-        )
         camera_capture_config.update(
             {
-                **applied,
                 **crop_update,
                 "alignment_x_pct": alignment_x_pct,
                 "alignment_y_pct": alignment_y_pct,
@@ -1845,6 +1946,38 @@ def _get_trigger_status() -> dict:
     }
 
 
+def _current_club_id() -> str:
+    """Club id the kiosk should restore after a reload."""
+    if monitor is None:
+        return ClubType.DRIVER.value
+    club = getattr(monitor, "_current_club", None)
+    if club is None:
+        return ClubType.DRIVER.value
+    return club.value if hasattr(club, "value") else str(club)
+
+
+def _session_state_payload(*, include_runtime_meta: bool = False) -> dict:
+    """Build the session_state event the UI applies on connect and refresh."""
+    payload = {
+        "stats": monitor.get_session_stats() if monitor else {},
+        "shots": _session_shots(),
+        "player_name": current_player_name,
+        "club": _current_club_id(),
+    }
+    if include_runtime_meta:
+        payload.update(
+            {
+                "mock_mode": mock_mode,
+                "debug_mode": debug_mode,
+                "camera_available": camera is not None,
+                "camera_enabled": camera_enabled,
+                "camera_streaming": camera_streaming,
+                "ball_detected": ball_detected,
+            }
+        )
+    return payload
+
+
 def _session_shots() -> list[dict]:
     """Return current session rows in the UI's shot-shaped payload format."""
     from .swing_speed import SwingSpeedMonitor  # pylint: disable=import-outside-toplevel
@@ -1854,6 +1987,18 @@ def _session_shots() -> list[dict]:
     if isinstance(monitor, (SwingSpeedMonitor, MockSwingSpeedMonitor)):
         return [swing_speed_to_shot_dict(event) for event in monitor.get_events()]
     return [shot_to_dict(shot) for shot in monitor.get_shots()]
+
+
+def _unregister_camera_replay(shot: Shot) -> None:
+    """Revoke live replay access while preserving the session artifacts."""
+    replay = getattr(shot, "camera_replay", None)
+    replay_id = replay.get("id") if isinstance(replay, dict) else None
+    if not replay_id or camera_replay_manager is None:
+        return
+    try:
+        camera_replay_manager.unregister(replay_id)
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[CAMERA] Could not unregister replay %s: %s", replay_id, error)
 
 
 def _delete_session_row(timestamp: str) -> bool:
@@ -1878,6 +2023,7 @@ def _delete_session_row(timestamp: str) -> bool:
         return False
     for index, shot in enumerate(shots):
         if shot.timestamp.isoformat() == timestamp:
+            _unregister_camera_replay(shot)
             del shots[index]
             return True
     return False
@@ -1938,21 +2084,7 @@ def handle_connect():
     if power_monitor and power_monitor.status:
         socketio.emit("power_status", power_monitor.status.to_dict())
     if monitor:
-        stats = monitor.get_session_stats()
-        socketio.emit(
-            "session_state",
-            {
-                "stats": stats,
-                "shots": _session_shots(),
-                "mock_mode": mock_mode,
-                "debug_mode": debug_mode,
-                "camera_available": camera is not None,
-                "camera_enabled": camera_enabled,
-                "camera_streaming": camera_streaming,
-                "ball_detected": ball_detected,
-                "player_name": current_player_name,
-            },
-        )
+        socketio.emit("session_state", _session_state_payload(include_runtime_meta=True))
         socketio.emit("trigger_status", _get_trigger_status())
 
 
@@ -2009,12 +2141,63 @@ def handle_set_training_implement(data):
     )
 
 
-@socketio.on("clear_session")
-def handle_clear_session():
-    """Clear all recorded shots."""
-    if monitor:
+def _normalize_player_name(name) -> str:
+    """Match UI player scoping: trim, default Player 1, case-insensitive."""
+    text = str(name).strip() if name is not None else ""
+    return (text or "Player 1").lower()
+
+
+def _player_matches(stored_name, player_name: str) -> bool:
+    """True when a shot/event belongs to player_name."""
+    return _normalize_player_name(stored_name) == _normalize_player_name(player_name)
+
+
+def _clear_player_rows(player_name: str) -> None:
+    """Remove one player's shots or swing-speed reps from the active monitor."""
+    from .swing_speed import SwingSpeedMonitor  # pylint: disable=import-outside-toplevel
+
+    if not monitor:
+        return
+
+    if isinstance(monitor, (SwingSpeedMonitor, MockSwingSpeedMonitor)):
+        events = getattr(monitor, "_events", None)
+        if events is not None:
+            events[:] = [
+                event for event in events if not _player_matches(event.player_name, player_name)
+            ]
+        return
+
+    shots = getattr(monitor, "_shots", None)
+    if shots is not None:
+        removed = [
+            shot
+            for shot in shots
+            if _player_matches(getattr(shot, "player_name", None), player_name)
+        ]
+        shots[:] = [
+            shot
+            for shot in shots
+            if not _player_matches(getattr(shot, "player_name", None), player_name)
+        ]
+        for shot in removed:
+            _unregister_camera_replay(shot)
+        return
+
+    if hasattr(monitor, "clear_session"):
         monitor.clear_session()
-        socketio.emit("session_cleared")
+
+
+@socketio.on("clear_session")
+def handle_clear_session(data=None):
+    """Clear recorded shots for the active player only."""
+    raw_name = data.get("player_name") if isinstance(data, dict) else None
+    player_name = str(raw_name).strip()[:40] if raw_name else current_player_name
+    player_name = player_name or current_player_name
+    _clear_player_rows(player_name)
+    socketio.emit(
+        "session_cleared",
+        {"player_name": player_name, "shots": _session_shots()},
+    )
 
 
 @socketio.on("upload_cloud")
@@ -2027,11 +2210,7 @@ def handle_upload_cloud():
 def handle_get_session():
     """Get current session data."""
     if monitor:
-        stats = monitor.get_session_stats()
-        socketio.emit(
-            "session_state",
-            {"stats": stats, "shots": _session_shots(), "player_name": current_player_name},
-        )
+        socketio.emit("session_state", _session_state_payload())
 
 
 @socketio.on("delete_shot")
@@ -2044,11 +2223,7 @@ def handle_delete_shot(data):
         socketio.emit("delete_shot_error", {"error": "Shot not found"})
         return
 
-    stats = monitor.get_session_stats() if monitor else {}
-    socketio.emit(
-        "session_state",
-        {"stats": stats, "shots": _session_shots(), "player_name": current_player_name},
-    )
+    socketio.emit("session_state", _session_state_payload())
 
 
 @socketio.on("simulate_shot")
@@ -2909,9 +3084,62 @@ def _fuse_camera_ball_flight(
 
 def _fuse_camera_measurements(shot: Shot, camera_capture) -> None:
     """Decode one camera clip and share it across all live estimators."""
+    captured_auto_exposure = (
+        camera_capture.metadata.get("auto_exposure")
+        if camera_capture is not None
+        and isinstance(getattr(camera_capture, "metadata", None), dict)
+        else None
+    )
+    analysis_eligible = (
+        bool(captured_auto_exposure.get("analysis_eligible"))
+        if isinstance(captured_auto_exposure, dict)
+        else (
+            camera_capture_runtime.camera_analysis_eligible
+            if camera_capture_runtime is not None
+            else True
+        )
+    )
+    if not analysis_eligible:
+        shot.experimental_camera_horizontal_status = "rejected_lighting_quality"
+        shot.experimental_camera_horizontal_deg = None
+        shot.experimental_camera_horizontal_confidence = None
+        shot.experimental_camera_iwr_delta_deg = None
+        shot.experimental_fused_attack_angle_deg = None
+        shot.experimental_fused_club_path_deg = None
+        shot.experimental_fused_status = "rejected_lighting_quality"
+        shot.experimental_fused_attack_angle_confidence = "withheld"
+        shot.experimental_fused_club_path_confidence = "withheld"
+        logger.warning(
+            "[SERVER] Camera analysis withheld for lighting quality; using radar fallback"
+        )
+        return
     camera_archive = _load_camera_capture_archive(camera_capture)
     _fuse_camera_ball_flight(shot, camera_capture, camera_archive)
     _fuse_camera_club_delivery(shot, camera_capture, camera_archive)
+
+
+def _attach_camera_replay(shot: Shot, camera_capture) -> None:
+    """Expose a matched raw clip without doing any video conversion."""
+    if (
+        camera_replay_manager is None
+        or camera_capture is None
+        or not camera_capture.valid
+        or not camera_capture.path
+    ):
+        return
+    try:
+        shot.camera_replay = camera_replay_manager.register(
+            camera_capture.path,
+            camera_capture.metadata,
+        )
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[CAMERA] Replay registration failed: %s", error)
+        log_session_error(
+            "Camera replay registration failed",
+            component="camera_capture",
+            context={"stage": "replay_registration"},
+            exc=error,
+        )
 
 
 def on_shot_detected(shot: Shot):
@@ -3277,6 +3505,8 @@ def on_shot_detected(shot: Shot):
             context={"stage": "camera_capture_match", "ball_speed_mph": shot.ball_speed_mph},
             exc=error,
         )
+
+    _attach_camera_replay(shot, camera_capture)
 
     if shot.mode != "mock":
         _fuse_camera_measurements(shot, camera_capture)
@@ -4255,8 +4485,18 @@ def main():
     parser.add_argument("--camera-capture-fps", type=float, default=300.0)
     parser.add_argument("--camera-capture-pre-ms", type=float, default=150.0)
     parser.add_argument("--camera-capture-post-ms", type=float, default=50.0)
-    parser.add_argument("--camera-capture-exposure-us", type=int, default=1000)
-    parser.add_argument("--camera-capture-gain", type=float, default=4.0)
+    parser.add_argument(
+        "--camera-capture-exposure-us",
+        type=int,
+        default=1000,
+        help="Manual exposure fallback; the Camera tab can switch out of automatic mode.",
+    )
+    parser.add_argument(
+        "--camera-capture-gain",
+        type=float,
+        default=4.0,
+        help="Manual gain fallback; the Camera tab can switch out of automatic mode.",
+    )
     parser.add_argument(
         "--camera-capture-mount-height-m",
         type=float,

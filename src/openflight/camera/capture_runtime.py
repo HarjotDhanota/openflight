@@ -16,6 +16,13 @@ from typing import Callable, Literal
 
 import numpy as np
 
+from openflight.camera.auto_exposure import (
+    AutoExposureDecision,
+    AutoExposurePolicy,
+    ExposureObservation,
+    measure_exposure,
+    motion_blur_risk,
+)
 from openflight.camera.triggered_buffer import (
     CameraFrame,
     TriggeredCapture,
@@ -32,6 +39,9 @@ CameraCaptureStream = Literal["raw", "main-y"]
 
 RASPBERRY_PI_DIST_PACKAGES = Path("/usr/lib/python3/dist-packages")
 OV9281_VERTICAL_OFFSET_PATH = Path("/sys/module/ov9282/parameters/strip_y_offset")
+AUTO_EXPOSURE_SAMPLE_INTERVAL_S = 5.0
+AUTO_EXPOSURE_STARTUP_SETTLE_S = 0.3
+AUTO_EXPOSURE_ADJUSTMENT_COOLDOWN_S = 10.0
 
 
 def vertical_crop_limits(width: int, height: int) -> dict[str, int] | None:
@@ -60,6 +70,8 @@ class CameraCaptureSettings:
     scaler_crop: tuple[int, int, int, int] | None = None
     gpio_pin: int = 17
     match_tolerance_s: float = 0.75
+    auto_exposure: bool = True
+    auto_exposure_state_path: Path | None = None
 
     @property
     def pre_frames(self) -> int:
@@ -140,6 +152,13 @@ class CameraCaptureRuntime:
         self._button_factory = button_factory
         self._use_gpio_trigger = use_gpio_trigger
         self._vertical_offset_path = Path(vertical_offset_path)
+        self._auto_exposure_state_path = (
+            Path(self.settings.auto_exposure_state_path).expanduser()
+            if self.settings.auto_exposure_state_path is not None
+            else None
+        )
+        self._last_persisted_controls: tuple[int, float] | None = None
+        self._restore_auto_exposure_controls()
         self._camera = None
         self._button = None
         self._ring = TriggeredFrameBuffer(self.settings.pre_frames, self.settings.post_frames)
@@ -150,8 +169,29 @@ class CameraCaptureRuntime:
         self._captures: list[SavedCameraCapture] = []
         self._condition = threading.Condition()
         self._trigger_epochs: queue.Queue[float] = queue.Queue()
+        self._trigger_auto_exposure: queue.Queue[dict] = queue.Queue()
         self._camera_control_lock = threading.Lock()
+        self._trigger_exposure_lock = threading.Lock()
         self._reconfigure_lock = threading.Lock()
+        self._auto_exposure_policy = AutoExposurePolicy(fps=self.settings.fps)
+        self._auto_exposure_stop = threading.Event()
+        self._auto_exposure_worker: threading.Thread | None = None
+        self._auto_exposure_lock = threading.Lock()
+        self._auto_exposure_decision = AutoExposureDecision(
+            status="unavailable",
+            analysis_eligible=not self.settings.auto_exposure,
+            message="Waiting for automatic exposure calibration",
+            observation=ExposureObservation(
+                sample_available=False,
+                status="unavailable",
+                recommendation="hold",
+                message="Waiting for a camera frame",
+            ),
+            motion_blur_risk=motion_blur_risk(self.settings.exposure_us),
+        )
+        self._auto_exposure_last_check_epoch: float | None = None
+        self._auto_exposure_last_adjustment_epoch: float | None = None
+        self._auto_exposure_capture_deferred = False
 
     def start(self) -> None:
         """Start the camera and, optionally, the GPIO edge listener."""
@@ -193,6 +233,8 @@ class CameraCaptureRuntime:
         try:
             self._camera.start()
             self._wait_for_prebuffer()
+            if self.settings.auto_exposure:
+                self._start_auto_exposure()
             if self._use_gpio_trigger:
                 self._start_gpio_trigger()
         except Exception:
@@ -211,6 +253,10 @@ class CameraCaptureRuntime:
     def stop(self) -> None:
         """Stop camera capture and release hardware resources."""
         self._running = False
+        self._auto_exposure_stop.set()
+        if self._auto_exposure_worker is not None:
+            self._auto_exposure_worker.join(timeout=3.0)
+            self._auto_exposure_worker = None
         if self._button is not None:
             self._button.close()
             self._button = None
@@ -265,53 +311,32 @@ class CameraCaptureRuntime:
     def exposure_quality(self) -> dict:
         """Rate exposure in the center-lower hitting zone of the latest frame."""
         frame = self._ring.latest_frame
-        if frame is None:
-            return {
-                "sample_available": False,
-                "status": "unavailable",
-                "recommendation": "hold",
-                "message": "Waiting for a camera frame",
-            }
+        image = frame.image if frame is not None else np.asarray([])
+        return measure_exposure(image).to_dict()
 
-        image = np.asarray(frame.image)
-        height, width = image.shape
-        region = image[
-            round(height * 0.45) : round(height * 0.9),
-            round(width * 0.2) : round(width * 0.8),
-        ]
-        p10, median, p90 = (float(np.percentile(region, value)) for value in (10, 50, 90))
-        clipped_pct = float(np.mean(region >= 250) * 100.0)
-        dark_pct = float(np.mean(region <= 12) * 100.0)
-        contrast = p90 - p10
+    @property
+    def camera_analysis_eligible(self) -> bool:
+        """Whether current lighting permits camera-derived shot metrics."""
+        if not self.settings.auto_exposure:
+            return True
+        with self._auto_exposure_lock:
+            return self._auto_exposure_decision.analysis_eligible
 
-        if clipped_pct >= 8.0 or median >= 205.0:
-            status = "too_bright"
-            recommendation = "darker"
-            message = "Impact area is clipping; move one step darker"
-        elif p90 < 75.0 or median < 28.0 or contrast < 30.0:
-            status = "too_dark"
-            recommendation = "brighter"
-            message = "Club contrast is low; move one step brighter"
-        elif clipped_pct <= 2.0 and 45.0 <= median <= 180.0 and p90 >= 100.0:
-            status = "good"
-            recommendation = "hold"
-            message = "Impact-area exposure and contrast look good"
-        else:
-            status = "marginal"
-            recommendation = "darker" if clipped_pct > 2.0 or median > 180.0 else "brighter"
-            message = f"Usable, but try one step {recommendation}"
-
-        return {
-            "sample_available": True,
-            "status": status,
-            "recommendation": recommendation,
-            "message": message,
-            "median": round(median, 1),
-            "p90": round(p90, 1),
-            "contrast": round(contrast, 1),
-            "clipped_pct": round(clipped_pct, 2),
-            "dark_pct": round(dark_pct, 2),
-        }
+    def auto_exposure_status(self) -> dict:
+        """Return controller state for diagnostics and the operator UI."""
+        with self._auto_exposure_lock:
+            payload = self._auto_exposure_decision.to_dict()
+            payload.update(
+                {
+                    "enabled": self.settings.auto_exposure,
+                    "capture_deferred": self._auto_exposure_capture_deferred,
+                    "last_check_timestamp": self._auto_exposure_last_check_epoch,
+                    "last_adjustment_timestamp": self._auto_exposure_last_adjustment_epoch,
+                }
+            )
+        payload["exposure_us"] = self.settings.exposure_us
+        payload["gain"] = self.settings.gain
+        return payload
 
     def update_image_controls(self, *, exposure_us: int, gain: float) -> dict:
         """Apply exposure and gain without stopping the rolling buffer."""
@@ -426,6 +451,8 @@ class CameraCaptureRuntime:
         self._ring = TriggeredFrameBuffer(self.settings.pre_frames, self.settings.post_frames)
         self._ready = queue.Queue()
         self._trigger_epochs = queue.Queue()
+        self._trigger_auto_exposure = queue.Queue()
+        self._auto_exposure_policy.reset()
 
     def status(self) -> dict:
         """Return lightweight state for the operator UI."""
@@ -435,6 +462,7 @@ class CameraCaptureRuntime:
             "armed": self._running and buffered_frames >= self.settings.pre_frames,
             "buffered_frames": buffered_frames,
             "required_pre_frames": self.settings.pre_frames,
+            "auto_exposure": self.auto_exposure_status(),
         }
 
     def notify_trigger(self, timestamp: float | None = None) -> bool:
@@ -442,16 +470,14 @@ class CameraCaptureRuntime:
         if not self._running:
             return False
         trigger_epoch = time.time() if timestamp is None else float(timestamp)
-        self._trigger_epochs.put(trigger_epoch)
-        accepted = self._ring.trigger(time.monotonic_ns())
-        if not accepted:
-            try:
-                self._trigger_epochs.get_nowait()
-            except queue.Empty:
-                pass
-            logger.debug("[CAMERA] Ignoring trigger edge while capture is busy")
-            return False
-        return True
+        with self._trigger_exposure_lock:
+            accepted = self._ring.trigger(time.monotonic_ns())
+            if not accepted:
+                logger.debug("[CAMERA] Ignoring trigger edge while capture is busy")
+                return False
+            self._trigger_epochs.put(trigger_epoch)
+            self._trigger_auto_exposure.put(self.auto_exposure_status())
+            return True
 
     def capture_for_shot(
         self,
@@ -512,6 +538,133 @@ class CameraCaptureRuntime:
                 f"{self._ring.buffered_frames}/{self.settings.pre_frames} pre-trigger frames"
             )
 
+    def _start_auto_exposure(self) -> None:
+        """Start non-blocking exposure calibration and monitoring."""
+        self._auto_exposure_policy.reset()
+        self._auto_exposure_stop.clear()
+        self._auto_exposure_worker = threading.Thread(
+            target=self._auto_exposure_loop,
+            name="camera-auto-exposure",
+            daemon=True,
+        )
+        self._auto_exposure_worker.start()
+
+    def _auto_exposure_loop(self) -> None:
+        delay_s = 0.0
+        while self._running and not self._auto_exposure_stop.wait(delay_s):
+            try:
+                decision = self._run_auto_exposure_cycle()
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.warning("[CAMERA] Automatic exposure check failed", exc_info=True)
+                delay_s = AUTO_EXPOSURE_SAMPLE_INTERVAL_S
+                continue
+
+            if decision is None:
+                delay_s = 0.1
+            elif decision.should_apply and self._auto_exposure_policy.startup:
+                delay_s = AUTO_EXPOSURE_STARTUP_SETTLE_S
+            elif decision.should_apply:
+                delay_s = AUTO_EXPOSURE_ADJUSTMENT_COOLDOWN_S
+            else:
+                delay_s = AUTO_EXPOSURE_SAMPLE_INTERVAL_S
+
+    def _run_auto_exposure_cycle(self) -> AutoExposureDecision | None:
+        """Measure one stable frame and apply the policy's requested control step."""
+        with self._trigger_exposure_lock:
+            if self._ring.capture_busy:
+                with self._auto_exposure_lock:
+                    self._auto_exposure_capture_deferred = True
+                return None
+
+            frame = self._ring.latest_frame
+            observation = measure_exposure(
+                frame.image if frame is not None else np.asarray([]),
+            )
+            decision = self._auto_exposure_policy.evaluate(
+                observation,
+                exposure_us=self.settings.exposure_us,
+                gain=self.settings.gain,
+            )
+            if decision.should_apply:
+                self.update_image_controls(
+                    exposure_us=decision.target.exposure_us,
+                    gain=decision.target.gain,
+                )
+                logger.info(
+                    "[CAMERA] Auto exposure: %s -> %dus gain %.1f (%s)",
+                    observation.status,
+                    decision.target.exposure_us,
+                    decision.target.gain,
+                    decision.message,
+                )
+            elif decision.status == "lighting_required":
+                logger.warning("[CAMERA] %s", decision.message)
+
+            checked_at = time.time()
+            with self._auto_exposure_lock:
+                self._auto_exposure_decision = decision
+                self._auto_exposure_capture_deferred = False
+                self._auto_exposure_last_check_epoch = checked_at
+                if decision.should_apply:
+                    self._auto_exposure_last_adjustment_epoch = checked_at
+        if decision.status == "ready" and observation.status == "good":
+            self._persist_auto_exposure_controls()
+        return decision
+
+    def _restore_auto_exposure_controls(self) -> None:
+        """Use the last good setting as the next startup seed for this mode."""
+        path = self._auto_exposure_state_path
+        if not self.settings.auto_exposure or path is None or not path.exists():
+            return
+        try:
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            same_mode = (
+                saved.get("version") == 1
+                and int(saved["width"]) == self.settings.width
+                and int(saved["height"]) == self.settings.height
+                and math.isclose(float(saved["fps"]), self.settings.fps, rel_tol=0.001)
+            )
+            exposure_us = int(saved["exposure_us"])
+            gain = float(saved["gain"])
+            frame_period_us = round(1_000_000 / self.settings.fps)
+            if same_mode and 0 < exposure_us < frame_period_us and gain > 0:
+                self.settings = replace(
+                    self.settings,
+                    exposure_us=exposure_us,
+                    gain=gain,
+                )
+                self._last_persisted_controls = (exposure_us, gain)
+                logger.info(
+                    "[CAMERA] Restored auto exposure seed: %dus gain %.1f",
+                    exposure_us,
+                    gain,
+                )
+        except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
+            logger.warning("[CAMERA] Ignoring invalid auto exposure state: %s", path)
+
+    def _persist_auto_exposure_controls(self) -> None:
+        """Atomically remember a validated setting without delaying capture."""
+        path = self._auto_exposure_state_path
+        controls = (self.settings.exposure_us, self.settings.gain)
+        if path is None or controls == self._last_persisted_controls:
+            return
+        payload = {
+            "version": 1,
+            "width": self.settings.width,
+            "height": self.settings.height,
+            "fps": self.settings.fps,
+            "exposure_us": controls[0],
+            "gain": controls[1],
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(f"{path.suffix}.tmp")
+            temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+            temporary.replace(path)
+            self._last_persisted_controls = controls
+        except OSError:
+            logger.warning("[CAMERA] Could not persist auto exposure state", exc_info=True)
+
     def _on_frame(self, request) -> None:
         try:
             metadata = request.get_metadata()
@@ -552,10 +705,20 @@ class CameraCaptureRuntime:
             if capture is None:
                 break
             trigger_epoch = self._trigger_epochs.get() if not self._trigger_epochs.empty() else 0.0
+            auto_exposure = (
+                self._trigger_auto_exposure.get()
+                if not self._trigger_auto_exposure.empty()
+                else None
+            )
             self._sequence += 1
             sequence = self._sequence
             try:
-                saved = self._save_capture(sequence, trigger_epoch, capture)
+                saved = self._save_capture(
+                    sequence,
+                    trigger_epoch,
+                    capture,
+                    auto_exposure=auto_exposure,
+                )
             except Exception as exc:  # pylint: disable=broad-except
                 logger.warning("[CAMERA] Capture #%d save failed: %s", sequence, exc, exc_info=True)
                 saved = SavedCameraCapture(
@@ -575,6 +738,8 @@ class CameraCaptureRuntime:
         sequence: int,
         trigger_epoch: float,
         capture: TriggeredCapture,
+        *,
+        auto_exposure: dict | None = None,
     ) -> SavedCameraCapture:
         timestamp = datetime.fromtimestamp(trigger_epoch or time.time()).strftime(
             "%Y%m%d_%H%M%S_%f"
@@ -645,7 +810,9 @@ class CameraCaptureRuntime:
                     "mirror_horizontal": self.settings.mirror_horizontal,
                     "roll_correction_deg": self.settings.roll_correction_deg,
                     "scaler_crop": self.settings.scaler_crop,
+                    "auto_exposure": self.settings.auto_exposure,
                 },
+                "auto_exposure": auto_exposure or self.auto_exposure_status(),
             }
         )
         (shot_dir / "metadata.json").write_text(json.dumps(summary, indent=2) + "\n")

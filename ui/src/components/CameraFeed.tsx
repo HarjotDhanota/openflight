@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { useCameraPointerDragScroll } from '../hooks/useCameraPointerDragScroll';
-import type { CameraCaptureSettings, CameraStatus } from '../stores/useCameraStore';
+import type { CameraAutoExposureStatus, CameraCaptureSettings, CameraStatus } from '../stores/useCameraStore';
 import { verticalViewTargets } from '../utils/cameraView';
 import { getServerOrigin } from '../utils/serverOrigin';
 import './CameraFeed.css';
@@ -16,6 +16,7 @@ interface CameraFeedProps {
 
 interface CaptureSettingsPanelProps {
   settings: CameraCaptureSettings;
+  exposureQuality: ExposureQuality | null;
   error: string | null;
   onUpdate: (settings: Partial<CameraCaptureSettings>) => void;
 }
@@ -36,50 +37,18 @@ interface ExposureQuality {
   message?: string;
   clipped_pct?: number;
   contrast?: number;
+  auto_exposure?: CameraAutoExposureStatus;
 }
 
-const BRIGHTNESS_STEPS = [
-  { exposureUs: 100, gain: 2 },
-  { exposureUs: 150, gain: 3 },
-  { exposureUs: 200, gain: 3 },
-  { id: 'outdoor-sun', label: 'Outdoor sun', exposureUs: 250, gain: 4 },
-  { exposureUs: 300, gain: 5 },
-  { id: 'outdoor-shade', label: 'Outdoor shade', exposureUs: 350, gain: 6 },
-  { exposureUs: 400, gain: 8 },
-  { id: 'evening', label: 'Evening', exposureUs: 450, gain: 10 },
-  { id: 'indoor-bright', label: 'Indoor bright', exposureUs: 500, gain: 12 },
-  { exposureUs: 500, gain: 15 },
-  { id: 'indoor-dark', label: 'Indoor dark', exposureUs: 650, gain: 15 },
-  { exposureUs: 800, gain: 18 },
-  { id: 'night', label: 'Night', exposureUs: 1000, gain: 20 },
-  { id: 'facility-dark', label: 'Facility dark', exposureUs: 1250, gain: 16 },
-] as const;
+const AUTO_EXPOSURE_LABELS: Record<CameraAutoExposureStatus['status'], string> = {
+  calibrating: 'Checking',
+  ready: 'Ready',
+  adjusting: 'Adjusting',
+  lighting_required: 'Lighting needed',
+  unavailable: 'Waiting',
+};
 
-const CAMERA_PROFILES = BRIGHTNESS_STEPS.filter((step) => 'id' in step);
-
-function brightnessStepIndex(settings: CameraCaptureSettings): number {
-  const exact = BRIGHTNESS_STEPS.findIndex(
-    (step) => step.exposureUs === settings.exposure_us && step.gain === settings.gain
-  );
-  if (exact >= 0) return exact;
-  const currentSignal = Math.max(1, (settings.exposure_us ?? 250) * (settings.gain ?? 4));
-  return BRIGHTNESS_STEPS.reduce((best, step, index) => {
-    const distance = Math.abs(Math.log(step.exposureUs * step.gain) - Math.log(currentSignal));
-    const bestStep = BRIGHTNESS_STEPS[best];
-    const bestDistance = Math.abs(Math.log(bestStep.exposureUs * bestStep.gain) - Math.log(currentSignal));
-    return distance < bestDistance ? index : best;
-  }, 0);
-}
-
-function brightnessStepLabel(index: number): string {
-  const named = BRIGHTNESS_STEPS.map((step, stepIndex) => ('label' in step ? { ...step, stepIndex } : null))
-    .filter((step): step is NonNullable<typeof step> => step !== null)
-    .reduce((best, step) => (Math.abs(step.stepIndex - index) < Math.abs(best.stepIndex - index) ? step : best));
-  const delta = index - named.stepIndex;
-  return `${named.label}${delta === 0 ? '' : ` ${delta > 0 ? '+' : ''}${delta}`}`;
-}
-
-function CaptureSettingsPanel({ settings, error, onUpdate }: CaptureSettingsPanelProps) {
+function CaptureSettingsPanel({ settings, exposureQuality, error, onUpdate }: CaptureSettingsPanelProps) {
   const verticalOffset = settings.vertical_offset_px ?? 0;
   const verticalMin = settings.vertical_offset_min_px ?? verticalOffset;
   const verticalMax = settings.vertical_offset_max_px ?? verticalOffset;
@@ -87,11 +56,11 @@ function CaptureSettingsPanel({ settings, error, onUpdate }: CaptureSettingsPane
   const viewTargets = verticalViewTargets(verticalOffset, verticalStep, settings.rotate_180 ?? false);
   const viewUpOffset = viewTargets.up;
   const viewDownOffset = viewTargets.down;
-  const brightnessIndex = brightnessStepIndex(settings);
-  const setBrightnessStep = (index: number) => {
-    const step = BRIGHTNESS_STEPS[index];
-    onUpdate({ exposure_us: step.exposureUs, gain: step.gain });
-  };
+  const autoExposure = exposureQuality?.auto_exposure ?? settings.auto_exposure;
+  const exposureObservation = autoExposure?.observation;
+  const exposureStatus = autoExposure?.capture_deferred
+    ? 'Capturing shot'
+    : AUTO_EXPOSURE_LABELS[autoExposure?.status ?? 'unavailable'];
 
   return (
     <aside className="camera-settings">
@@ -135,52 +104,49 @@ function CaptureSettingsPanel({ settings, error, onUpdate }: CaptureSettingsPane
 
         <section className="camera-settings__section">
           <div className="camera-settings__section-title">
-            <span>Environment profile</span>
-            <small>applies live</small>
+            <span>Automatic exposure</span>
+            <small>checks every 5 seconds</small>
           </div>
-          <div className="camera-settings__profiles">
-            {CAMERA_PROFILES.map((profile) => {
-              const isActive = settings.exposure_us === profile.exposureUs && settings.gain === profile.gain;
-              return (
-                <button
-                  key={profile.id}
-                  type="button"
-                  className={`camera-settings__profile ${isActive ? 'camera-settings__profile--active' : ''}`}
-                  disabled={!settings.available}
-                  onClick={() => onUpdate({ exposure_us: profile.exposureUs, gain: profile.gain })}
-                >
-                  <strong>{profile.label}</strong>
-                  <span>
-                    {profile.exposureUs} µs · {profile.gain}×
-                  </span>
-                </button>
-              );
-            })}
+          <div
+            className={`camera-settings__auto-status camera-settings__auto-status--${autoExposure?.status ?? 'unavailable'}`}
+          >
+            <div>
+              <strong>{exposureStatus}</strong>
+              <span>{autoExposure?.message ?? 'Waiting for the first camera check'}</span>
+            </div>
+            <span className="camera-settings__auto-dot" aria-hidden="true" />
           </div>
-          <div className="camera-settings__brightness-stepper">
-            <button
-              type="button"
-              disabled={!settings.available || brightnessIndex === 0}
-              onClick={() => setBrightnessStep(brightnessIndex - 1)}
-            >
-              Darker −
-            </button>
-            <output>
-              <strong>{brightnessStepLabel(brightnessIndex)}</strong>
-              <span>
-                {BRIGHTNESS_STEPS[brightnessIndex].exposureUs} µs · {BRIGHTNESS_STEPS[brightnessIndex].gain}×
-              </span>
-            </output>
-            <button
-              type="button"
-              disabled={!settings.available || brightnessIndex === BRIGHTNESS_STEPS.length - 1}
-              onClick={() => setBrightnessStep(brightnessIndex + 1)}
-            >
-              + Brighter
-            </button>
+          <dl className="camera-settings__exposure-metrics">
+            <div>
+              <dt>Shutter</dt>
+              <dd>{autoExposure?.exposure_us ?? settings.exposure_us ?? '—'} µs</dd>
+            </div>
+            <div>
+              <dt>Gain</dt>
+              <dd>{autoExposure?.gain ?? settings.gain ?? '—'}×</dd>
+            </div>
+            <div>
+              <dt>Impact median</dt>
+              <dd>{exposureObservation?.median ?? '—'}</dd>
+            </div>
+            <div>
+              <dt>Contrast</dt>
+              <dd>{exposureObservation?.contrast ?? exposureQuality?.contrast ?? '—'}</dd>
+            </div>
+          </dl>
+          <div
+            className={`camera-settings__analysis-state ${autoExposure?.analysis_eligible ? 'camera-settings__analysis-state--ready' : ''}`}
+          >
+            <strong>{autoExposure?.analysis_eligible ? 'Camera analysis active' : 'Radar fallback active'}</strong>
+            <span>
+              {autoExposure?.analysis_eligible
+                ? 'Camera-assisted aim, club path, and attack angle are eligible.'
+                : 'Preview and raw clips continue recording; camera-derived metrics are withheld.'}
+            </span>
           </div>
           <p className="camera-settings__note">
-            Brighter profiles keep the club sharper. Night prioritizes flashlight visibility and may add motion blur.
+            Motion blur risk: <strong>{autoExposure?.motion_blur_risk ?? 'checking'}</strong>. Add or redirect light if
+            the camera reaches its limit.
           </p>
         </section>
 
@@ -317,7 +283,8 @@ export function CameraFeed({
               className={`camera-feed__exposure-quality camera-feed__exposure-quality--${exposureQuality?.status ?? 'checking'}`}
               title={exposureQuality?.message ?? 'Analyzing the impact area'}
             >
-              Exposure check: {exposureQuality ? exposureQuality.status.replace('_', ' ') : 'checking'}
+              Auto exposure:{' '}
+              {exposureQuality?.auto_exposure ? AUTO_EXPOSURE_LABELS[exposureQuality.auto_exposure.status] : 'checking'}
             </span>
             {lastUpdated && <span className="camera-feed__timestamp">preview {lastUpdated.toLocaleTimeString()}</span>}
           </div>
@@ -364,6 +331,7 @@ export function CameraFeed({
           </div>
           <CaptureSettingsPanel
             settings={captureSettings}
+            exposureQuality={exposureQuality}
             error={captureSettingsError}
             onUpdate={onUpdateCaptureSettings}
           />
