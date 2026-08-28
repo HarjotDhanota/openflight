@@ -62,8 +62,21 @@ fits that cost ~25 minutes per arm.
 
 ### Running it on your own device
 
-You do not need anyone else's capture. Hit shots on your own OpenFlight unit,
-then export the session the server wrote:
+Two inputs are not in git, and both fail closed with instructions when absent.
+
+**One-time setup — the club mesh.** Every analysis run projects the 7-iron
+model, so this is needed whichever capture you use. It is a GrabCAD community
+model used as local research truth and is **not redistributed**;
+`research/silhouette_poc/meshes/SOURCES.md` records the source link, expected
+SHA-256, and licence position, and you fetch your own copy under GrabCAD's
+terms:
+
+```bash
+uv run --group research python     research/silhouette_poc/meshes/download_meshes.py --local-iron <path-to-STL>
+```
+
+**Then your own captures.** You do not need anyone else's data. Hit shots on
+your own OpenFlight unit, then export the session the server wrote:
 
 ```bash
 scripts/start-kiosk.sh                       # hit shots
@@ -77,10 +90,9 @@ radar dump, and writes `excluded_shots.csv` explaining any it dropped — so a
 thin export is diagnosable. That means the camera and the IWR6843 both need to
 be enabled while you capture.
 
-The reference **capture session** used throughout the report (~163 MB) is also
-available from the maintainer if you want to reproduce its exact numbers;
-scripts resolve it via `OPENFLIGHT_SESSION` and fail closed with instructions
-until one is present. The **7-iron mesh** is fetched from
+The reference **capture session** used throughout the report (~163 MB) is
+available from the maintainer if you want to reproduce its exact numbers. Your
+own export works for everything else. The **7-iron mesh** is fetched from
 GrabCAD (local research use only, no redistribution);
 `research/silhouette_poc/meshes/SOURCES.md` has the provenance, hashes, and
 download script.
