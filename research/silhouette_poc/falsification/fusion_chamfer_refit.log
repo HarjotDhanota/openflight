@@ -1,0 +1,20 @@
+shot   2 r=1.4m  IoU-opt iou=0.4006 cham=2.343px  refit[chamfer] iou=0.3979 cham=2.274px  refit[iou] iou=0.4007 cham=2.342px
+shot   2 r=1.6m  IoU-opt iou=0.3939 cham=2.547px  refit[chamfer] iou=0.3975 cham=2.297px  refit[iou] iou=0.4013 cham=2.376px
+shot   2 r=1.8m  IoU-opt iou=0.3966 cham=2.421px  refit[chamfer] iou=0.3936 cham=2.294px  refit[iou] iou=0.4010 cham=2.348px
+shot   5 r=1.4m  IoU-opt iou=0.3762 cham=2.821px  refit[chamfer] iou=0.3701 cham=2.619px  refit[iou] iou=0.3822 cham=2.800px
+shot   5 r=1.6m  IoU-opt iou=0.3802 cham=2.830px  refit[chamfer] iou=0.3535 cham=2.653px  refit[iou] iou=0.3806 cham=2.831px
+shot   5 r=1.8m  IoU-opt iou=0.3766 cham=2.844px  refit[chamfer] iou=0.3542 cham=2.662px  refit[iou] iou=0.3782 cham=2.817px
+shot  18 r=1.4m  IoU-opt iou=0.3512 cham=2.808px  refit[chamfer] iou=0.3383 cham=2.705px  refit[iou] iou=0.3512 cham=2.804px
+shot  18 r=1.6m  IoU-opt iou=0.3499 cham=2.814px  refit[chamfer] iou=0.3388 cham=2.705px  refit[iou] iou=0.3502 cham=2.811px
+shot  18 r=1.8m  IoU-opt iou=0.3482 cham=2.829px  refit[chamfer] iou=0.3319 cham=2.725px  refit[iou] iou=0.3482 cham=2.829px
+shot  20 r=1.4m  IoU-opt iou=0.3958 cham=2.513px  refit[chamfer] iou=0.3861 cham=2.409px  refit[iou] iou=0.3958 cham=2.513px
+shot  20 r=1.6m  IoU-opt iou=0.3945 cham=2.505px  refit[chamfer] iou=0.3883 cham=2.407px  refit[iou] iou=0.3947 cham=2.504px
+shot  20 r=1.8m  IoU-opt iou=0.3942 cham=2.468px  refit[chamfer] iou=0.3874 cham=2.414px  refit[iou] iou=0.3942 cham=2.468px
+shot  21 r=1.4m  IoU-opt iou=0.3774 cham=2.621px  refit[chamfer] iou=0.3434 cham=2.417px  refit[iou] iou=0.3774 cham=2.621px
+shot  21 r=1.6m  IoU-opt iou=0.3758 cham=2.664px  refit[chamfer] iou=0.3454 cham=2.429px  refit[iou] iou=0.3758 cham=2.664px
+shot  21 r=1.8m  IoU-opt iou=0.3727 cham=2.686px  refit[chamfer] iou=0.3445 cham=2.418px  refit[iou] iou=0.3753 cham=2.636px
+shot  23 r=1.4m  IoU-opt iou=0.4295 cham=2.318px  refit[chamfer] iou=0.4272 cham=2.227px  refit[iou] iou=0.4296 cham=2.350px
+shot  23 r=1.6m  IoU-opt iou=0.4285 cham=2.334px  refit[chamfer] iou=0.4207 cham=2.239px  refit[iou] iou=0.4294 cham=2.320px
+shot  23 r=1.8m  IoU-opt iou=0.4284 cham=2.323px  refit[chamfer] iou=0.4226 cham=2.238px  refit[iou] iou=0.4284 cham=2.323px
+
+wrote 18 records to research\silhouette_poc\falsification\fusion_chamfer_refit.json

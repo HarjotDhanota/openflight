@@ -1,0 +1,6 @@
+shot  20 r=1.6m omega= 1304.1 deg/s IoU=0.3945 cost=-0.0057 evals=69
+shot  20 r=1.4m omega= 1490.3 deg/s IoU=0.3958 cost=-0.0044 evals=75
+shot  20 r=1.8m omega= 1159.2 deg/s IoU=0.3942 cost=-0.0061 evals=88
+radius 1.6m: n=1, median IoU cost -0.0057, range -0.0057..-0.0057
+radius 1.4m: n=1, median IoU cost -0.0044, range -0.0044..-0.0044
+radius 1.8m: n=1, median IoU cost -0.0061, range -0.0061..-0.0061

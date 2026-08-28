@@ -1,0 +1,30 @@
+  shot   2: 4 club frames
+  shot   3: 7 club frames
+  shot   4: 4 club frames
+  shot   5: 7 club frames
+  shot   6: 8 club frames
+  shot   8: 8 club frames
+  shot   9: 6 club frames
+  shot  11: 9 club frames
+  shot  14: 6 club frames
+  shot  15: 8 club frames
+  shot  16: 7 club frames
+  shot  17: 7 club frames
+  shot  18: 7 club frames
+  shot  20: 9 club frames
+  shot  21: 6 club frames
+  shot  23: 10 club frames
+  shot  24: 5 club frames
+  shot  25: 6 club frames
+  shot  26: 2 club frames
+  shot  28: 8 club frames
+  shot  29: 10 club frames
+
+=== A  OLD grid (what shipped)  grid (1300.0, 1425.0, 1550.0) ===
+  frames fitted        144/144
+  IoU                  median 0.4963  mean 0.5014  p10 0.4126
+  fitted range mm      median  1270.0  IQR 1172-1485
+  outside the grid      20.8% above the top node,  58.3% below the bottom node
+  RAILED on refinement  17.4% hit the +-240 mm refinement limit
+  vs the tape 1581 mm  median error  -311.0 mm
+  adjacent-frame jump  median  45.71 deg, >45 deg on  52.0% of 100 pairs

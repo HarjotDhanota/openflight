@@ -1,0 +1,19 @@
+shot   2  7-iron  loft  +70.9 face -154.1 lie  14.9  iou 0.3989 cham 2.624px  outside     (shipped out, v-ratio 0.94)
+shot   5  7-iron  loft  +47.0 face  +59.7 lie  59.9  iou 0.3361 cham 2.227px  outside     (shipped out, v-ratio 0.95)
+shot  18  9-iron  loft  +68.5 face  +33.4 lie  53.6  iou 0.3590 cham 2.256px  outside     (shipped out, v-ratio 1.00)
+shot  20  9-iron  loft  +55.4 face  +44.0 lie  58.4  iou 0.3478 cham 2.435px  outside     (shipped out, v-ratio 0.96)
+shot  21  9-iron  loft  +71.2 face   +6.4 lie  51.5  iou 0.3769 cham 2.572px  outside     (shipped out, v-ratio 0.95)
+shot  23  9-iron  loft  +75.6 face  +11.7 lie  47.6  iou 0.3578 cham 2.546px  outside     (shipped out, v-ratio 1.02)
+
+=== 6 shots, 4 free parameters, radar-derived range ===
+  physically plausible pose: 0/6   (shipped 5-parameter fit: 0/6)
+  static geometry for reference: loft 33.10 deg, lie 61.19 deg
+    dynamic loft: mean  +64.8 deg, sd  10.1 deg, range  +47.0 to  +75.6
+      face angle: mean   +0.2 deg, sd  71.4 deg, range -154.1 to  +59.7
+             lie: mean  +47.6 deg, sd  15.2 deg, range  +14.9 to  +59.9
+  IoU     mean 0.3628  (shipped 0.3871)
+  chamfer mean 2.443 px
+  radar range span across fitted frames: +406 mm
+  fused |v| / radar club speed: 0.97 +- 0.03 (1.00 would mean the two agree exactly)
+
+wrote C:\Users\harjo\Desktop\Coding\OpenFlight\openflight\research\silhouette_poc\falsification\fused_refit.json

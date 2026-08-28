@@ -1,0 +1,26 @@
+arm A shot   2: 4/4
+arm A shot   3: 0/0
+arm A shot   4: 2/2
+arm A shot   5: 5/5
+arm A shot   6: 3/3
+arm A shot   8: 1/1
+arm A shot   9: 3/3
+arm A shot  11: 3/3
+arm A shot  14: 3/3
+arm A shot  15: 3/3
+arm A shot  16: 3/3
+arm A shot  17: 3/3
+arm A shot  18: 5/5
+arm A shot  20: 4/4
+arm A shot  21: 5/5
+arm A shot  23: 5/5
+arm A shot  24: 2/2
+arm A shot  25: 3/3
+arm A shot  26: 3/3
+arm A shot  28: 3/3
+arm A shot  29: 3/3
+
+arm A: 66 frames
+median IoU 0.4518
+median range 1175.0 mm
+adjacent jump median 1.0 deg; >45 deg 0.0%

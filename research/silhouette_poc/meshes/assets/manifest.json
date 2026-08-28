@@ -1,0 +1,72 @@
+{
+  "retired_sources": [
+    {
+      "club": "poc_driver",
+      "reason": "posed art scene with grass, ball, disconnected shells, and ambiguous sole/face; not admissible as canonical CAD geometry",
+      "source_uid": "978d0740dc514c8695bbb02f4083f0e3",
+      "status": "retired_source_quality"
+    }
+  ],
+  "sources": [
+    {
+      "asset_path": "poc_7iron.npz",
+      "asset_sha256": "d63bf7cf1224eb9ce0c7480967057201a4843f3cc2612e4f779ec48fd0839c8a",
+      "author": "GrabCAD Community contributor",
+      "boundary_edge_count_after_weld": 23,
+      "boundary_edge_fraction_after_weld": 0.0005843941357318902,
+      "category_dimensions_mm": {
+        "depth": 38.0,
+        "height": 50.0,
+        "width": 80.0
+      },
+      "clubhead_triangle_count": 26238,
+      "clubhead_vertex_count": 78714,
+      "component_count_after_weld": 1,
+      "dimensions_before_normalization_mm": {
+        "depth": 33.1290019891087,
+        "height": 42.496675254406405,
+        "width": 79.7388796376476
+      },
+      "download_format": "binary_stl_maintainer_local",
+      "face_detection_normalized": {
+        "coherent_area_mm2": 863.295795790536,
+        "face_span_mm": [
+          79.7388796376476,
+          42.49667525440641
+        ],
+        "normal": [
+          1.0,
+          -1.3375819215402126e-17,
+          -8.260614140770516e-17
+        ],
+        "triangle_count": 1177
+      },
+      "face_detection_source": {
+        "coherent_area_mm2": 863.295795790536,
+        "face_span_mm": [
+          79.7388796376476,
+          42.496675254406405
+        ],
+        "normal": [
+          0.1129687269954978,
+          -0.25374940442145955,
+          -0.9606504600929369
+        ],
+        "triangle_count": 1177
+      },
+      "geometry_sha256": "87cfacdf639f8c7203ffdfb7da2c9e7ba60a63ed302fc6dbb5db2aed2b9047e3",
+      "license_spdx": "LicenseRef-GrabCAD-Local-Research-Only",
+      "license_url": "https://help.grabcad.com/article/246-how-can-models-be-used-and-shared",
+      "normalization": "geometric-face-anchor-v2",
+      "page_url": "https://grabcad.com/library/titleist-7-iron-golf-club-1",
+      "redistribution": "prohibited; local research use only",
+      "source_file_sha256": "f35936799295e6ce344279e557f0265ccbb8acef69c4508daff80d219d03cb85",
+      "source_name": "Titleist 690CB 7-iron golf club",
+      "source_triangle_count": 26238,
+      "source_uid": "grabcad:titleist-7-iron-golf-club-1:690cb-right-handed",
+      "source_units_mm": true,
+      "source_vertex_count": 78714,
+      "trademark_note": "synthetic truth only; no Titleist endorsement implied"
+    }
+  ]
+}

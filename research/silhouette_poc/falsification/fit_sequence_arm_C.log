@@ -1,0 +1,26 @@
+arm C shot   2: 4/4
+arm C shot   3: 0/0
+arm C shot   4: 2/2
+arm C shot   5: 5/5
+arm C shot   6: 3/3
+arm C shot   8: 1/1
+arm C shot   9: 3/3
+arm C shot  11: 3/3
+arm C shot  14: 3/3
+arm C shot  15: 3/3
+arm C shot  16: 3/3
+arm C shot  17: 3/3
+arm C shot  18: 5/5
+arm C shot  20: 4/4
+arm C shot  21: 5/5
+arm C shot  23: 5/5
+arm C shot  24: 2/2
+arm C shot  25: 3/3
+arm C shot  26: 3/3
+arm C shot  28: 3/3
+arm C shot  29: 3/3
+
+arm C: 66 frames
+median IoU 0.3550
+median range 1581.0 mm
+adjacent jump median 0.0 deg; >45 deg 0.0%

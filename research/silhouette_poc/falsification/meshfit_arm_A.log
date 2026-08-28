@@ -1,0 +1,31 @@
+  shot   2: 4 club frames
+  shot   3: 0 club frames
+  shot   4: 2 club frames
+  shot   5: 5 club frames
+  shot   6: 3 club frames
+  shot   8: 1 club frames
+  shot   9: 3 club frames
+  shot  11: 3 club frames
+  shot  14: 3 club frames
+  shot  15: 3 club frames
+  shot  16: 3 club frames
+  shot  17: 3 club frames
+  shot  18: 5 club frames
+  shot  20: 4 club frames
+  shot  21: 5 club frames
+  shot  23: 5 club frames
+  shot  24: 2 club frames
+  shot  25: 3 club frames
+  shot  26: 3 club frames
+  shot  28: 3 club frames
+  shot  29: 3 club frames
+
+=== arm A  grid (1300.0, 1425.0, 1550.0) ===
+  frames fitted        66/66
+  IoU                  median 0.4625  mean 0.4746  p10 0.4130
+  fitted range mm      median  1180.0  IQR 1120-1270
+  outside the grid       1.5% above the top node,  78.8% below the bottom node
+  RAILED on refinement  18.2% hit the +-240 mm refinement limit
+  vs the tape 1581 mm  median error  -401.0 mm
+  adjacent-frame jump  median  44.68 deg, >45 deg on  50.0% of 36 pairs
+wrote C:\Users\harjo\Desktop\Coding\OpenFlight\openflight\research\silhouette_poc\falsification\meshfit_arm_A.json

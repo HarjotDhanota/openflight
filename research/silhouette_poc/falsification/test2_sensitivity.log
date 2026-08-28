@@ -1,0 +1,47 @@
+  2   7-iron  18.313  18.871  19.532  20.296  20.996
+  3   7-iron  13.843  14.490  15.211  16.045  17.032
+  4   7-iron  16.236  16.598  17.179  17.926  18.559
+  5   7-iron  19.521  20.161  20.684  21.586  22.306
+  6   7-iron  16.576  17.316  17.935  18.544  19.301
+  8   7-iron  17.443  17.820  18.342  18.961  19.701
+  9   7-iron  19.510  20.172  20.803  21.438  22.129
+ 11   7-iron  19.081  19.645  20.195  20.794  21.468
+ 14   9-iron  21.000  21.442  21.935  22.398  22.963
+ 15   9-iron  12.849  13.359  13.754  14.215  15.399
+ 16   9-iron  21.594  22.019  22.487  23.034  23.518
+ 17   9-iron  21.496  22.082  22.657  23.309  24.050
+ 18   9-iron  23.749  24.292  25.049  25.676  26.306
+ 20   9-iron  21.117  21.789  22.411  23.010  23.186
+ 21   9-iron  20.683  21.248  21.879  22.550  23.079
+ 23   9-iron  21.133  21.763  22.141  22.826  23.523
+ 24   9-iron  24.322  25.000  25.628  26.312  27.005
+ 25   9-iron  25.692  26.349  26.943  27.775  28.406
+ 26   9-iron  11.221  11.930  12.626  13.325  14.125
+ 28   9-iron  22.630  23.233  23.781  24.342  24.921
+ 29   9-iron  19.431  19.981  20.589  21.109  21.701
+
+scales: (0.97, 0.985, 1.0, 1.015, 1.03)
+  shot   2   7-iron  dLA/dv = +0.901 deg/(m/s)   max nonlinearity 0.0698 deg
+  shot   3   7-iron  dLA/dv = +1.048 deg/(m/s)   max nonlinearity 0.1212 deg
+  shot   4   7-iron  dLA/dv = +0.837 deg/(m/s)   max nonlinearity 0.1311 deg
+  shot   5   7-iron  dLA/dv = +1.053 deg/(m/s)   max nonlinearity 0.1674 deg
+  shot   6   7-iron  dLA/dv = +0.902 deg/(m/s)   max nonlinearity 0.0586 deg
+  shot   8   7-iron  dLA/dv = +0.739 deg/(m/s)   max nonlinearity 0.1212 deg
+  shot   9   7-iron  dLA/dv = +0.880 deg/(m/s)   max nonlinearity 0.0230 deg
+  shot  11   7-iron  dLA/dv = +0.827 deg/(m/s)   max nonlinearity 0.0466 deg
+  shot  14   9-iron  dLA/dv = +0.794 deg/(m/s)   max nonlinearity 0.0389 deg
+  shot  15   9-iron  dLA/dv = +0.863 deg/(m/s)   max nonlinearity 0.2955 deg
+  shot  16   9-iron  dLA/dv = +0.771 deg/(m/s)   max nonlinearity 0.0438 deg
+  shot  17   9-iron  dLA/dv = +1.007 deg/(m/s)   max nonlinearity 0.0640 deg
+  shot  18   9-iron  dLA/dv = +1.005 deg/(m/s)   max nonlinearity 0.0723 deg
+  shot  20   9-iron  dLA/dv = +0.777 deg/(m/s)   max nonlinearity 0.1883 deg
+  shot  21   9-iron  dLA/dv = +0.902 deg/(m/s)   max nonlinearity 0.0529 deg
+  shot  23   9-iron  dLA/dv = +0.897 deg/(m/s)   max nonlinearity 0.1365 deg
+  shot  24   9-iron  dLA/dv = +0.987 deg/(m/s)   max nonlinearity 0.0255 deg
+  shot  25   9-iron  dLA/dv = +1.133 deg/(m/s)   max nonlinearity 0.0895 deg
+  shot  26   9-iron  dLA/dv = +1.115 deg/(m/s)   max nonlinearity 0.0410 deg
+  shot  28   9-iron  dLA/dv = +0.885 deg/(m/s)   max nonlinearity 0.0210 deg
+  shot  29   9-iron  dLA/dv = +0.854 deg/(m/s)   max nonlinearity 0.0268 deg
+
+=== dLA/dv over 21 shots: mean +0.913 median +0.897 sd 0.113 deg per (m/s) ===
+    i.e. a 1% OPS ball-speed error moves LCMF vertical launch by ~0.41 deg
