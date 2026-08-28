@@ -1,0 +1,119 @@
+[
+  {
+    "shot": 18,
+    "club": "9-iron",
+    "frames": [
+      66,
+      67,
+      68,
+      71,
+      72
+    ],
+    "speed_mps": 35.32359370854192,
+    "swing_radius_m": 1.6,
+    "required_omega_deg_s": 1264.9330229589498,
+    "axis_world": [
+      -0.45143214089759387,
+      -0.023046104559746466,
+      0.8920077910137535
+    ],
+    "params": [
+      35.31914415965737,
+      28.93563071912124,
+      65.59933313301796,
+      -177.07752489021675,
+      63.1266394561554
+    ],
+    "free_per_frame_mean_iou": 0.44187938697855744,
+    "constrained_mean_iou": 0.3499026250279325,
+    "iou_cost": -0.09197676195062493,
+    "per_frame_iou": [
+      0.33177022274325907,
+      0.33608490566037735,
+      0.3996710526315789,
+      0.4635658914728682,
+      0.21842105263157896
+    ],
+    "optimizer_success": true,
+    "optimizer_message": "Optimization terminated successfully.",
+    "optimizer_evaluations": 78
+  },
+  {
+    "shot": 18,
+    "club": "9-iron",
+    "frames": [
+      66,
+      67,
+      68,
+      71,
+      72
+    ],
+    "speed_mps": 35.32359370854192,
+    "swing_radius_m": 1.4,
+    "required_omega_deg_s": 1445.6377405245144,
+    "axis_world": [
+      -0.4382920627448245,
+      -0.09130113913034367,
+      0.8941835212798257
+    ],
+    "params": [
+      34.76401848063009,
+      28.984678646472833,
+      66.31803523413325,
+      -168.23292727157713,
+      63.40374751618518
+    ],
+    "free_per_frame_mean_iou": 0.44187938697855744,
+    "constrained_mean_iou": 0.35115695328150187,
+    "iou_cost": -0.09072243369705557,
+    "per_frame_iou": [
+      0.33021077283372363,
+      0.33884297520661155,
+      0.40131578947368424,
+      0.4658385093167702,
+      0.21957671957671956
+    ],
+    "optimizer_success": true,
+    "optimizer_message": "Optimization terminated successfully.",
+    "optimizer_evaluations": 74
+  },
+  {
+    "shot": 18,
+    "club": "9-iron",
+    "frames": [
+      66,
+      67,
+      68,
+      71,
+      72
+    ],
+    "speed_mps": 35.32359370854192,
+    "swing_radius_m": 1.8,
+    "required_omega_deg_s": 1124.3849092968444,
+    "axis_world": [
+      -0.46185522476207963,
+      -0.04201953079692493,
+      0.8859594293146696
+    ],
+    "params": [
+      36.295945701749986,
+      28.574339613874997,
+      65.586639211875,
+      -174.80154870900003,
+      62.369821203
+    ],
+    "free_per_frame_mean_iou": 0.44187938697855744,
+    "constrained_mean_iou": 0.3482173390923717,
+    "iou_cost": -0.09366204788618576,
+    "per_frame_iou": [
+      0.33411488862837047,
+      0.33372641509433965,
+      0.3996710526315789,
+      0.4605873261205564,
+      0.21298701298701297
+    ],
+    "optimizer_success": true,
+    "optimizer_message": "Optimization terminated successfully.",
+    "optimizer_evaluations": 72
+  }
+]

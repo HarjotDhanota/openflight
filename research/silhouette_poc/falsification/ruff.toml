@@ -1,0 +1,8 @@
+# These are standalone replay scripts, not library code. They bootstrap
+# sys.path so they can be run directly from a clone without installing the
+# research package, which necessarily puts imports after that setup.
+[lint]
+extend-ignore = [
+    "E402",  # imports follow the sys.path bootstrap, by design
+    "E702",  # `lo = list(base); hi = list(base)` reads better paired
+]
