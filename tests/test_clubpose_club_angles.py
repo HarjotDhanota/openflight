@@ -12,7 +12,7 @@ import math
 import numpy as np
 import pytest
 
-from silhouette_poc.replay.club_angles import (
+from openflight.camera.clubpose.angles import (
     ENVELOPE,
     STATIC_LIE_DEG,
     STATIC_LOFT_DEG,

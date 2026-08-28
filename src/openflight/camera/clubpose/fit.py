@@ -44,7 +44,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from silhouette_poc.fusion.solver import (
+from openflight.camera.clubpose.mesh import rasterize_projected_triangles
+from openflight.camera.clubpose.projection import (
     CAMERA_CENTER_WORLD,
     FACE_NORMAL,
     CameraPreset,
@@ -52,7 +53,6 @@ from silhouette_poc.fusion.solver import (
     _project,
     _ray_world,
 )
-from silhouette_poc.generator.mesh_truth import rasterize_projected_triangles
 
 # Measured configuration of the shipped camera. NOT the A0 preset.
 LENS_MM = 2.8
@@ -229,7 +229,7 @@ def triad(yaw_deg: float, pitch_deg: float, roll_deg: float) -> tuple[np.ndarray
     pitch - about world right, i.e. DYNAMIC LOFT
     roll  - about the face normal, i.e. LIE / toe-up rotation
     """
-    from silhouette_poc.fusion.solver import WORLD_RIGHT, WORLD_UP
+    from openflight.camera.clubpose.projection import WORLD_RIGHT, WORLD_UP
 
     R = _rot(WORLD_UP, math.radians(yaw_deg)) @ _rot(WORLD_RIGHT, math.radians(pitch_deg))
     n = R @ FACE_NORMAL

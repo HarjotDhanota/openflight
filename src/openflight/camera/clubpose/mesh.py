@@ -15,7 +15,7 @@ from typing import Any
 
 import numpy as np
 
-from silhouette_poc.fusion.solver import FACE_NORMAL, _face_axes, _project, camera_presets
+from openflight.camera.clubpose.projection import FACE_NORMAL, _face_axes, _project, camera_presets
 
 
 @dataclass(frozen=True)
@@ -602,4 +602,4 @@ def load_normalized_mesh(path: str) -> tuple[TriangleMesh, dict[str, Any], str]:
 
 
 def default_mesh_asset_root() -> Path:
-    return Path(__file__).resolve().parents[1] / "meshes" / "assets"
+    return Path(__file__).resolve().parent / "meshes" / "assets"

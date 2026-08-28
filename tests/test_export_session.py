@@ -215,9 +215,9 @@ class TestFailsClearly:
 def test_export_is_readable_by_the_session_finder(tmp_path, shots):
     """End to end: the finder the research scripts use must accept the result."""
     sys.path.insert(
-        0, str(Path(__file__).parent.parent / "research" / "silhouette_poc" / "falsification")
+        0, str(Path(__file__).parent.parent / "src")
     )
-    from session_path import find_session  # noqa: PLC0415
+    from openflight.camera.clubpose.session import find_session  # noqa: PLC0415
 
     log = _live_session(tmp_path, shots=shots)
     out = tmp_path / "export"

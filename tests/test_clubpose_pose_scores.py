@@ -18,10 +18,10 @@ import math
 import numpy as np
 import pytest
 
-from silhouette_poc.fusion.solver import CAMERA_CENTER_WORLD, _ray_world
-from silhouette_poc.generator.mesh_truth import TriangleMesh
-from silhouette_poc.replay.fit_real import measured_camera, render_mask_6dof
-from silhouette_poc.replay.pose_scores import (
+from openflight.camera.clubpose.fit import measured_camera, render_mask_6dof
+from openflight.camera.clubpose.mesh import TriangleMesh
+from openflight.camera.clubpose.projection import CAMERA_CENTER_WORLD, _ray_world
+from openflight.camera.clubpose.scores import (
     Pose,
     chamfer_px,
     load_annotations,

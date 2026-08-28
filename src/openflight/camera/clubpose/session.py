@@ -1,8 +1,6 @@
-"""Locate the capture session these scripts replay.
+"""Locate the capture session and club mesh this package reads.
 
-Every script here reads one filtered session export. That path used to be a
-hard-coded absolute path on one machine, which meant nobody else could run any
-of them. Resolution order:
+Resolution order for the session:
 
     1. the OPENFLIGHT_SESSION environment variable
     2. a --session argument, via `add_session_argument` / `session_from_args`
@@ -29,7 +27,7 @@ DEFAULT_NAME = "openflight_session_20260825_181734_filtered"
 _SEARCH_ROOTS = (
     Path.home() / "Downloads",
     Path.home(),
-    Path(__file__).resolve().parents[3].parent,
+    Path(__file__).resolve().parents[4].parent,
 )
 
 
@@ -103,7 +101,7 @@ class MeshNotFound(RuntimeError):
     """The club mesh is absent, with instructions for acquiring it."""
 
 
-MESH_RELATIVE = "research/silhouette_poc/meshes/assets/poc_7iron.npz"
+MESH_RELATIVE = "research/openflight.camera.clubpose/meshes/assets/poc_7iron.npz"
 
 _MESH_HELP = (
     "Could not find the club mesh these scripts project.\n\n"
@@ -112,8 +110,8 @@ _MESH_HELP = (
     "local research use only, with no redistribution. Fetch it and normalise\n"
     "it with:\n"
     "    uv run --group research python \\\n"
-    "        research/silhouette_poc/meshes/download_meshes.py --local-iron <STL>\n\n"
-    "research/silhouette_poc/meshes/SOURCES.md has the source link, the\n"
+    "        research/openflight.camera.clubpose/meshes/download_meshes.py --local-iron <STL>\n\n"
+    "research/openflight.camera.clubpose/meshes/SOURCES.md has the source link, the\n"
     "expected SHA-256, and the licence position."
 )
 
@@ -127,10 +125,9 @@ def load_mesh(repo_root=None):
     as find_session does for the capture export.
     """
     import numpy as np  # noqa: PLC0415
+    from openflight.camera.clubpose.mesh import TriangleMesh  # noqa: PLC0415
 
-    from silhouette_poc.generator.mesh_truth import TriangleMesh  # noqa: PLC0415
-
-    root = Path(repo_root) if repo_root else Path(__file__).resolve().parents[3]
+    root = Path(repo_root) if repo_root else Path(__file__).resolve().parents[4]
     path = root / MESH_RELATIVE
     if not path.is_file():
         raise MeshNotFound(_MESH_HELP.format(path=path))

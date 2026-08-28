@@ -25,7 +25,7 @@ import math
 
 import numpy as np
 
-from .fit_real import triad
+from .fit import triad
 
 FACE_NORMAL_LOCAL = np.array([-0.941, 0.021, -0.337])
 FACE_NORMAL_LOCAL = FACE_NORMAL_LOCAL / np.linalg.norm(FACE_NORMAL_LOCAL)

@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from silhouette_poc.fusion.ball_detect import (
+from openflight.camera.clubpose.teed_ball import (
     BallNotFound,
     _fit_circle,
     candidates,

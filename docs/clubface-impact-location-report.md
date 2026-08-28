@@ -1,4 +1,4 @@
-<!-- Generated from the published report by research/silhouette_poc/report_to_md.py. Do not edit by hand. -->
+<!-- Generated from the published report by the report generator on the fork. Do not edit by hand. -->
 
 # Markerless clubface impact location
 
@@ -342,7 +342,7 @@ Ordered by dependency. Each item carries the measurement that justifies it. Item
 
 ## 08. Reproducing this work
 
-All analysis in this report is reproducible from the repository. Scripts live in `research/silhouette_poc/falsification/`; start with its `README.md`.
+Every figure here was produced by a script. Those scripts and their recorded results are kept on the fork ([`falsification/`](https://github.com/HarjotDhanota/openflight/tree/feat/silhouette-poc/research/silhouette_poc/falsification)) rather than in this repository: each answered one question once, and the answers are stated above. The library they exercise is `src/openflight/camera/clubpose/`, with its tests in `tests/`.
 
 | Result | Script |
 |---|---|
@@ -351,8 +351,8 @@ All analysis in this report is reproducible from the repository. Scripts live in
 | Range model test | `test_radar_range_ramp.py` |
 | Doppler width / ISAR assessment | `test_isar_doppler_width.py` |
 | Acoustic trigger timing | `src/openflight/acoustic.py`, `tests/test_acoustic.py` |
-| Delivered loft / face angle / lie | `research/silhouette_poc/replay/club_angles.py`, `research/silhouette_poc/tests/test_club_angles.py` |
-| Scoring primitives and their unit tests | `research/silhouette_poc/replay/pose_scores.py`, `research/silhouette_poc/tests/test_pose_scores.py` |
+| Delivered loft / face angle / lie | `src/openflight/camera/clubpose/angles.py`, `tests/test_clubpose_club_angles.py` |
+| Scoring primitives and their unit tests | `src/openflight/camera/clubpose/scores.py`, `tests/test_clubpose_pose_scores.py` |
 
 Scripts resolve the capture export via `OPENFLIGHT_SESSION`, a `--session` argument, or conventional paths, and fail with an actionable message if none is found. The club mesh is not redistributed; it is available from GrabCAD and is used for research only.
 

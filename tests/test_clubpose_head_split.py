@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 import pytest
 
-from silhouette_poc.replay.head_split import (
+from openflight.camera.clubpose.head_split import (
     HEAD_CORE_PX,
     SHAFT_MAX_PX,
     SHAFT_REACH_PX,

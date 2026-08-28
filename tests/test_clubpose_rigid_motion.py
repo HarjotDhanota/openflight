@@ -7,7 +7,7 @@ import math
 import numpy as np
 import pytest
 
-from silhouette_poc.replay.rigid_motion import axis_from_angles, constrained_omega_deg_s
+from openflight.camera.clubpose.motion import axis_from_angles, constrained_omega_deg_s
 
 
 @pytest.mark.parametrize(

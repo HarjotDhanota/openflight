@@ -24,7 +24,7 @@ other:
     720p 60 fps camera cannot track impact alone either.
 
 Neither is validated against truth on real pixels. Nothing in this module
-should be quoted as an accuracy figure. ``silhouette_poc/tests/test_pose_scores.py`` shows
+should be quoted as an accuracy figure. ``openflight.camera.clubpose/tests/test_pose_scores.py`` shows
 only that they rank a known pose first on synthetic masks, which establishes
 they are not broken, not that they work.
 """
@@ -39,14 +39,14 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .fit_real import iou as _iou, render_mask_6dof, triad
+from .fit import iou as _iou, render_mask_6dof, triad
 
 
 @dataclass(frozen=True)
 class Pose:
     """A full clubhead pose: where the centre is, and how it is oriented.
 
-    Angles follow ``fit_real.triad``: yaw about world up is FACE ANGLE, pitch
+    Angles follow ``fit.triad``: yaw about world up is FACE ANGLE, pitch
     about world right is DYNAMIC LOFT, roll about the face normal is LIE.
     """
 

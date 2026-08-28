@@ -54,8 +54,7 @@ thin enough that several tests cannot discriminate.
 
 ## Running the code
 
-Everything lives in `research/silhouette_poc/`: the pose library (`replay/`,
-`fusion/`, `generator/`) and the falsification harness (`falsification/`),
+The library lives in `src/openflight/camera/clubpose/`, with its tests in `tests/`,
 whose `README.md` maps every script to the question it answers. Per-shot
 result JSONs are committed so conclusions can be re-analysed without repeating
 fits that cost ~25 minutes per arm.
@@ -67,13 +66,13 @@ Two inputs are not in git, and both fail closed with instructions when absent.
 **One-time setup — the club mesh.** Every analysis run projects the 7-iron
 model, so this is needed whichever capture you use. It is a GrabCAD community
 model used as local research truth and is **not redistributed**;
-`research/silhouette_poc/meshes/SOURCES.md` records the source link, expected
+`src/openflight/camera/clubpose/meshes/SOURCES.md` records the source link, expected
 SHA-256, and licence position, and you fetch your own copy under GrabCAD's
 terms:
 
 ```bash
 uv run --group research python \
-    research/silhouette_poc/meshes/download_meshes.py --local-iron <path-to-STL>
+    scripts/analysis/download_club_mesh.py --local-iron <path-to-STL>
 ```
 
 **Then your own captures.** You do not need anyone else's data. Hit shots on
@@ -97,7 +96,7 @@ The reference **capture session** used throughout the report (~163 MB) is
 available from the maintainer if you want to reproduce its exact numbers. Your
 own export works for everything else. The **7-iron mesh** is fetched from
 GrabCAD (local research use only, no redistribution);
-`research/silhouette_poc/meshes/SOURCES.md` has the provenance, hashes, and
+`src/openflight/camera/clubpose/meshes/SOURCES.md` has the provenance, hashes, and
 download script.
 
 Deliberately excluded from this branch: the superseded synthetic-phase
