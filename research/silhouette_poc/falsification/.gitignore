@@ -1,0 +1,22 @@
+# Regenerable output from the falsification scripts.
+#
+# What stays in git: the scripts (~340 kB) and the per-frame result JSON
+# (~340 kB). The JSON is kept deliberately -- it lets anyone re-analyse a run
+# without repeating the fit, which costs about 25 minutes per arm.
+#
+# What is excluded: renders and intermediate arrays, which any script here
+# rebuilds on demand and which total roughly 14 MB.
+#
+# NOTE ON LICENCE: renders/ contains direct projections of the 7-iron mesh.
+# research/silhouette_poc/meshes/SOURCES.md admits that model for local research
+# use only, with "neither the STL nor its normalized NPZ may be committed" and
+# only "provenance, hash, attribution, and aggregate evaluation results" entering
+# the repository. A render of the geometry is not an aggregate result, so it stays
+# out of git along with the asset itself.
+
+renders/
+*.npy
+*.log
+
+# base64 staging for the artifact page
+_*.txt
