@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Attack angle no longer inflated by 1/cos(club path).** The camera club
+  delivery divided vertical speed by the forward component alone instead of the
+  full horizontal speed, overstating attack angle on any shot with club path.
+
 ### Added
 - **Track-derived club metrics, all experimental and all unvalidated against a
   reference instrument.** A 3-D clubhead track
