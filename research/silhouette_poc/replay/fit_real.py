@@ -28,7 +28,7 @@ refinement below is not bounded by the grid, so it could in principle climb out
 -- but it hill-climbs greedily from the best COARSE pose, and that pose was
 selected at the wrong depth. Reaching the truth was therefore left to chance
 rather than to the search. See
-docs/superpowers/specs/2026-08-26-falsification-results.md sections 6b and 6d.
+the technical report's clubhead-range section.
 
 The pose model here is the one the POC already uses: 3D centre plus roll about
 the face normal. That is **4 degrees of freedom, not 6** - the face normal is
