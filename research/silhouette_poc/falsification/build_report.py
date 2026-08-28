@@ -240,7 +240,7 @@ def heading(anchor: str, outline) -> str:
 def build(figures: dict[str, str]) -> str:
     parts = [
         '<meta charset="utf-8">',
-        "<title>Clubface Impact Location</title>",
+        "<title>Technical Report</title>",
         '<link rel="preconnect" href="https://fonts.googleapis.com">',
         '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
         "family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600"
