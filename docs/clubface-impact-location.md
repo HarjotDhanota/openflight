@@ -25,7 +25,7 @@ conclusion was reached.
 - **Validated:** ball detection (21/22), impact timing (camera and radar agree
   to 0.66 frames), camera attitude (measured, not assumed), and the fused
   radar+camera clubhead velocity, which matches the OPS243's independent club
-  speed at 0.97–1.00 ± 0.03.
+  speed with a mean ratio of 0.970 (sd 0.029, spread 0.941–1.015).
 - **Not yet working:** clubhead orientation. Face angle, dynamic loft and
   impact location remain model-dependent inferences with no accuracy figure
   against truth.
