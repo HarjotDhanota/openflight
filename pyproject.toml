@@ -89,6 +89,11 @@ dev = [
 ]
 research = [
     "opencv-python>=4.8",
+    # pose_landscape.py plots the objective surface. numpy and scipy come
+    # from the base dependencies; matplotlib does not, and lived only in the
+    # optional camera extra, so a fresh clone running the replay scripts hit
+    # a ModuleNotFoundError.
+    "matplotlib>=3.5.0",
 ]
 
 [tool.ruff]
