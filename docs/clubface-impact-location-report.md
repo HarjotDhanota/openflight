@@ -351,8 +351,8 @@ All analysis in this report is reproducible from the repository. Scripts live in
 | Range model test | `test_radar_range_ramp.py` |
 | Doppler width / ISAR assessment | `test_isar_doppler_width.py` |
 | Acoustic trigger timing | `src/openflight/acoustic.py`, `tests/test_acoustic.py` |
-| Delivered loft / face angle / lie | `replay/club_angles.py`, `tests/test_club_angles.py` |
-| Scoring primitives and their unit tests | `replay/pose_scores.py`, `tests/test_pose_scores.py` |
+| Delivered loft / face angle / lie | `research/silhouette_poc/replay/club_angles.py`, `research/silhouette_poc/tests/test_club_angles.py` |
+| Scoring primitives and their unit tests | `research/silhouette_poc/replay/pose_scores.py`, `research/silhouette_poc/tests/test_pose_scores.py` |
 
 Scripts resolve the capture export via `OPENFLIGHT_SESSION`, a `--session` argument, or conventional paths, and fail with an actionable message if none is found. The club mesh is not redistributed; it is available from GrabCAD and is used for research only.
 
