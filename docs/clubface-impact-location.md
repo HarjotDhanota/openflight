@@ -6,9 +6,11 @@ and IWR6843 radars, ambient light, no markers on the ball or club.
 
 ## Read this first
 
-**[Technical report](https://claude.ai/code/artifact/c8817c34-c3ea-4455-9700-cf5a4e238b75)**
-— the full assessment: what is measured, what is not, and what would resolve
-the rest. States every retracted claim alongside what replaced it.
+**[Technical report](clubface-impact-location-report.md)** — the full assessment:
+what is measured, what is not, and what would resolve the rest. States every
+retracted claim alongside what replaced it. The
+[web version](https://claude.ai/code/artifact/c8817c34-c3ea-4455-9700-cf5a4e238b75)
+carries eleven figures: real frames with the model’s own projections overlaid.
 
 **[Fusion status, frame by frame](https://claude.ai/code/artifact/ab9f69dd-de06-4335-83b1-29e3e29ee6b9)**
 — two real shots with the model's own projections overlaid, nothing padded.
