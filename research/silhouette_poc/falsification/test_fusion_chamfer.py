@@ -48,7 +48,6 @@ sys.path.insert(0, str(ROOT / "research"))
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).parent))
 
-from silhouette_poc.generator.mesh_truth import TriangleMesh  # noqa: E402
 from silhouette_poc.replay.fit_real import (  # noqa: E402
     CAMERA_CENTER_WORLD,
     _ray_world,
@@ -62,7 +61,8 @@ from silhouette_poc.replay.rigid_motion import (  # noqa: E402
     rotation_from_omega_deg_s,
 )
 
-from test_meshfit_depth_ab import EXCLUDE, MESH, SESSION, club_masks  # noqa: E402
+from session_path import load_mesh  # noqa: E402
+from test_meshfit_depth_ab import EXCLUDE, SESSION, club_masks  # noqa: E402
 from test_rigid_rotation_prior import render  # noqa: E402
 
 PINNED_MM = 1581.0
@@ -176,10 +176,7 @@ def main():
     )
     args = parser.parse_args()
 
-    mesh_data = np.load(MESH)
-    mesh = TriangleMesh(
-        mesh_data["vertices_local_mm"], mesh_data["faces"], "poc_7iron", "x" * 64
-    )
+    mesh = load_mesh()
     prior = load_prior_fits()
     if not prior:
         raise SystemExit(

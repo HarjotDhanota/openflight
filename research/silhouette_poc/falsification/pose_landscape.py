@@ -39,7 +39,6 @@ import matplotlib  # noqa: E402
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
-from silhouette_poc.generator.mesh_truth import TriangleMesh  # noqa: E402
 from silhouette_poc.replay.fit_real import _ray_world  # noqa: E402
 
 from test_fusion_chamfer import (  # noqa: E402
@@ -48,7 +47,8 @@ from test_fusion_chamfer import (  # noqa: E402
     sequence_metrics,
     shot_context,
 )
-from test_meshfit_depth_ab import EXCLUDE, MESH, SESSION  # noqa: E402
+from session_path import load_mesh  # noqa: E402
+from test_meshfit_depth_ab import EXCLUDE, SESSION  # noqa: E402
 
 AXES = ("yaw", "pitch", "roll")
 
@@ -178,10 +178,7 @@ def main():
     )
     args = parser.parse_args()
 
-    mesh_data = np.load(MESH)
-    mesh = TriangleMesh(
-        mesh_data["vertices_local_mm"], mesh_data["faces"], "poc_7iron", "x" * 64
-    )
+    mesh = load_mesh()
     prior = load_prior_fits()
     with open(SESSION / "shots.csv", newline="", encoding="utf-8") as handle:
         rows = {

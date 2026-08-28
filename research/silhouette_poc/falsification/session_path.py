@@ -97,3 +97,42 @@ def add_session_argument(parser) -> None:
 
 def session_from_args(args) -> Path:
     return find_session(getattr(args, "session", None))
+
+
+class MeshNotFound(RuntimeError):
+    """The club mesh is absent, with instructions for acquiring it."""
+
+
+MESH_RELATIVE = "research/silhouette_poc/meshes/assets/poc_7iron.npz"
+
+_MESH_HELP = (
+    "Could not find the club mesh these scripts project.\n\n"
+    "Expected at:\n    {path}\n\n"
+    "It is not in git: the model is a GrabCAD community upload admitted for\n"
+    "local research use only, with no redistribution. Fetch it and normalise\n"
+    "it with:\n"
+    "    uv run --group research python \\\n"
+    "        research/silhouette_poc/meshes/download_meshes.py --local-iron <STL>\n\n"
+    "research/silhouette_poc/meshes/SOURCES.md has the source link, the\n"
+    "expected SHA-256, and the licence position."
+)
+
+
+def load_mesh(repo_root=None):
+    """Load the 7-iron mesh, or raise MeshNotFound with guidance.
+
+    The mesh is not redistributed, so a fresh clone will not have it. Failing
+    with a bare FileNotFoundError on a path nobody recognises sends people into
+    the source tree to work out what is missing; this says it outright, exactly
+    as find_session does for the capture export.
+    """
+    import numpy as np  # noqa: PLC0415
+
+    from silhouette_poc.generator.mesh_truth import TriangleMesh  # noqa: PLC0415
+
+    root = Path(repo_root) if repo_root else Path(__file__).resolve().parents[3]
+    path = root / MESH_RELATIVE
+    if not path.is_file():
+        raise MeshNotFound(_MESH_HELP.format(path=path))
+    data = np.load(path)
+    return TriangleMesh(data["vertices_local_mm"], data["faces"], "poc_7iron", "x" * 64)
