@@ -49,6 +49,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 # Trackman CSV column aliases
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class HeaderAlias:
     """Trackman header match rule."""
@@ -57,22 +58,66 @@ class HeaderAlias:
     exact: bool = False
 
 
+@dataclass(frozen=True)
+class ClubMetric:
+    """One club delivery metric, declared once and used everywhere.
+
+    ``of_keys`` deliberately lists only fields the pipeline has ACCEPTED.
+    The raw ``experimental_*_deg`` candidates are excluded: they are populated
+    even when the status says ``candidate_out_of_bounds``, and scoring a value
+    the system itself rejected against truth would report agreement the
+    product never claimed. An empty metric is the honest result.
+    """
+
+    field: str
+    label: str
+    tm_aliases: Tuple[str, ...]
+    of_keys: Tuple[str, ...] = ()
+    unit: str = "deg"
+
+
+CLUB_METRICS: Tuple[ClubMetric, ...] = (
+    ClubMetric(
+        "attack_angle",
+        "attack angle",
+        ("attack angle", "angle of attack"),
+        ("experimental_fused_attack_angle_deg",),
+    ),
+    ClubMetric("club_path", "club path", ("club path",), ("experimental_fused_club_path_deg",)),
+    ClubMetric("face_angle", "face angle", ("face angle",)),
+    ClubMetric("face_to_path", "face to path", ("face to path",)),
+    ClubMetric("dynamic_loft", "dynamic loft", ("dynamic loft", "dyn loft")),
+    ClubMetric("spin_loft", "spin loft", ("spin loft",)),
+    ClubMetric("swing_plane", "swing plane", ("swing plane",)),
+    ClubMetric("swing_direction", "swing direction", ("swing direction",)),
+    ClubMetric("spin_axis", "spin axis", ("spin axis",)),
+    ClubMetric("impact_height_mm", "impact height", ("impact height",), unit="mm"),
+    ClubMetric("impact_offset_mm", "impact offset", ("impact offset",), unit="mm"),
+    ClubMetric("low_point_mm", "low point", ("low point",), unit="mm"),
+)
+
+
 # Each canonical field maps to a list of header rules. Most fields use
 # substring matching because Trackman exports add unit suffixes like
 # "(mph)". Timestamp aliases intentionally include exact-only rules for
 # generic names like "date" and "time" so "Last data Point - Time" does
 # not steal the session timestamp from a real "Date" column.
 _TM_ALIAS_CONFIG: Dict[str, List[str | HeaderAlias]] = {
-    "ball_speed_mph":          ["ball speed", "ballspeed"],
-    "club_speed_mph":          ["club speed", "clubspeed", "club head speed", "clubheadspeed"],
-    "smash_factor":            ["smash factor", "smashfactor"],
-    "launch_angle_vertical":   ["launch angle v", "launch angle (v)", "vertical launch", "launch angle"],
+    "ball_speed_mph": ["ball speed", "ballspeed"],
+    "club_speed_mph": ["club speed", "clubspeed", "club head speed", "clubheadspeed"],
+    "smash_factor": ["smash factor", "smashfactor"],
+    "launch_angle_vertical": [
+        "launch angle v",
+        "launch angle (v)",
+        "vertical launch",
+        "launch angle",
+    ],
     "launch_angle_horizontal": ["launch direction", "launch angle h", "side angle", "azimuth"],
-    "spin_rpm":                ["spin rate", "total spin", "spinrate"],
-    "carry_yards":             ["carry distance", "carry"],
-    "club":                    ["club type", "club name", "club"],
-    "shot_number":             ["shot number", "shotnumber", "shot"],
-    "timestamp":               [
+    "spin_rpm": ["spin rate", "total spin", "spinrate"],
+    "carry_yards": ["carry distance", "carry"],
+    "club": ["club type", "club name", "club"],
+    "shot_number": ["shot number", "shotnumber", "shot"],
+    "timestamp": [
         "date/time",
         "datetime",
         "timestamp",
@@ -82,10 +127,13 @@ _TM_ALIAS_CONFIG: Dict[str, List[str | HeaderAlias]] = {
 }
 
 
+for _metric in CLUB_METRICS:
+    _TM_ALIAS_CONFIG[_metric.field] = list(_metric.tm_aliases)
+
+
 _TM_ALIASES: Dict[str, List[HeaderAlias]] = {
     field_name: [
-        alias if isinstance(alias, HeaderAlias) else HeaderAlias(alias)
-        for alias in aliases
+        alias if isinstance(alias, HeaderAlias) else HeaderAlias(alias) for alias in aliases
     ]
     for field_name, aliases in _TM_ALIAS_CONFIG.items()
 }
@@ -143,15 +191,15 @@ def _build_column_map(headers: List[str]) -> Dict[str, str]:
 # A loose normalizer: strip case/whitespace/dashes, accept "7i" / "7iron"
 # / "7-iron" / "iron 7" etc. Both systems should agree after normalization.
 _CLUB_PATTERNS: List[Tuple[re.Pattern, str]] = [
-    (re.compile(r"\b(driver|drv|1w|1-wood)\b"),     "driver"),
-    (re.compile(r"\b(\d)\s*-?\s*(wood|w)\b"),        r"\1-wood"),
-    (re.compile(r"\b(\d)\s*-?\s*(hybrid|h|hy)\b"),   r"\1-hybrid"),
-    (re.compile(r"\b(\d)\s*-?\s*(iron|i)\b"),        r"\1-iron"),
-    (re.compile(r"\biron\s*-?\s*(\d)\b"),            r"\1-iron"),
-    (re.compile(r"\bpitching\s*wedge\b|\bpw\b"),     "pw"),
-    (re.compile(r"\bgap\s*wedge\b|\bgw\b"),          "gw"),
-    (re.compile(r"\bsand\s*wedge\b|\bsw\b"),         "sw"),
-    (re.compile(r"\blob\s*wedge\b|\blw\b"),          "lw"),
+    (re.compile(r"\b(driver|drv|1w|1-wood)\b"), "driver"),
+    (re.compile(r"\b(\d)\s*-?\s*(wood|w)\b"), r"\1-wood"),
+    (re.compile(r"\b(\d)\s*-?\s*(hybrid|h|hy)\b"), r"\1-hybrid"),
+    (re.compile(r"\b(\d)\s*-?\s*(iron|i)\b"), r"\1-iron"),
+    (re.compile(r"\biron\s*-?\s*(\d)\b"), r"\1-iron"),
+    (re.compile(r"\bpitching\s*wedge\b|\bpw\b"), "pw"),
+    (re.compile(r"\bgap\s*wedge\b|\bgw\b"), "gw"),
+    (re.compile(r"\bsand\s*wedge\b|\bsw\b"), "sw"),
+    (re.compile(r"\blob\s*wedge\b|\blw\b"), "lw"),
 ]
 
 
@@ -172,9 +220,11 @@ def normalize_club(raw: Optional[str]) -> str:
 # Loaders
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Shot:
     """Canonical per-shot record used by both sources."""
+
     source: str  # "of" or "tm"
     shot_number: Optional[int]
     timestamp: Optional[datetime]
@@ -191,6 +241,20 @@ class Shot:
     spin_candidate_rpm: Optional[float] = None
     spin_rejection_reason: Optional[str] = None
     carry_yards: Optional[float] = None
+    # Club delivery, declared in CLUB_METRICS. Absent means not measured --
+    # never zero, which would read as a square face or a level attack.
+    attack_angle: Optional[float] = None
+    club_path: Optional[float] = None
+    face_angle: Optional[float] = None
+    face_to_path: Optional[float] = None
+    dynamic_loft: Optional[float] = None
+    spin_loft: Optional[float] = None
+    swing_plane: Optional[float] = None
+    swing_direction: Optional[float] = None
+    spin_axis: Optional[float] = None
+    impact_height_mm: Optional[float] = None
+    impact_offset_mm: Optional[float] = None
+    low_point_mm: Optional[float] = None
     raw: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -247,36 +311,48 @@ def load_openflight(path: Path) -> List[Shot]:
             if entry.get("type") != "shot_detected":
                 continue
             data = entry.get("data", entry)  # tolerate flat or nested
-            shots.append(Shot(
-                source="of",
-                shot_number=_to_int(data.get("shot_number")),
-                # OpenFlight uses ``ts`` at the entry level. Older logs
-                # may use ``timestamp`` instead. Try both.
-                timestamp=_parse_timestamp(
-                    entry.get("ts")
-                    or entry.get("timestamp")
-                    or data.get("timestamp")),
-                club=normalize_club(data.get("club")),
-                ball_speed_mph=_to_float(data.get("ball_speed_mph")),
-                club_speed_mph=_to_float(data.get("club_speed_mph")),
-                smash_factor=_to_float(data.get("smash_factor")),
-                launch_angle_vertical=_to_float(
-                    data.get("launch_angle_vertical")),
-                launch_angle_horizontal=_to_float(
-                    data.get("launch_angle_horizontal")),
-                spin_rpm=_to_float(data.get("spin_rpm")),
-                spin_confidence=_to_float(data.get("spin_confidence")),
-                spin_quality=data.get("spin_quality"),
-                spin_snr=_to_float(data.get("spin_snr")),
-                spin_candidate_rpm=_to_float(
-                    data.get("spin_candidate_rpm")),
-                spin_rejection_reason=data.get("spin_rejection_reason"),
-                carry_yards=_to_float(
-                    data.get("carry_spin_adjusted")
-                    or data.get("estimated_carry_yards")),
-                raw=data,
-            ))
+            shots.append(
+                Shot(
+                    source="of",
+                    shot_number=_to_int(data.get("shot_number")),
+                    # OpenFlight uses ``ts`` at the entry level. Older logs
+                    # may use ``timestamp`` instead. Try both.
+                    timestamp=_parse_timestamp(
+                        entry.get("ts") or entry.get("timestamp") or data.get("timestamp")
+                    ),
+                    club=normalize_club(data.get("club")),
+                    ball_speed_mph=_to_float(data.get("ball_speed_mph")),
+                    club_speed_mph=_to_float(data.get("club_speed_mph")),
+                    smash_factor=_to_float(data.get("smash_factor")),
+                    launch_angle_vertical=_to_float(data.get("launch_angle_vertical")),
+                    launch_angle_horizontal=_to_float(data.get("launch_angle_horizontal")),
+                    spin_rpm=_to_float(data.get("spin_rpm")),
+                    spin_confidence=_to_float(data.get("spin_confidence")),
+                    spin_quality=data.get("spin_quality"),
+                    spin_snr=_to_float(data.get("spin_snr")),
+                    spin_candidate_rpm=_to_float(data.get("spin_candidate_rpm")),
+                    spin_rejection_reason=data.get("spin_rejection_reason"),
+                    carry_yards=_to_float(
+                        data.get("carry_spin_adjusted") or data.get("estimated_carry_yards")
+                    ),
+                    raw=data,
+                    **_openflight_club_metrics(data),
+                )
+            )
     return shots
+
+
+def _openflight_club_metrics(data: Dict[str, Any]) -> Dict[str, Optional[float]]:
+    """Club metrics from an OpenFlight shot record, accepted values only."""
+    out: Dict[str, Optional[float]] = {}
+    for metric in CLUB_METRICS:
+        value = None
+        for key in metric.of_keys:
+            value = _to_float(data.get(key))
+            if value is not None:
+                break
+        out[metric.field] = value
+    return out
 
 
 def _looks_like_units_row(row: Dict[str, Any]) -> bool:
@@ -319,8 +395,7 @@ def load_trackman(path: Path) -> List[Shot]:
         if reader.fieldnames is None:
             return shots
         # Defensively strip BOMs from header field names too.
-        cleaned_headers = [h.lstrip("\ufeff").strip()
-                           for h in reader.fieldnames]
+        cleaned_headers = [h.lstrip("\ufeff").strip() for h in reader.fieldnames]
         reader.fieldnames = cleaned_headers
         col_map = _build_column_map(cleaned_headers)
         units = _detect_units(cleaned_headers)
@@ -352,22 +427,23 @@ def load_trackman(path: Path) -> List[Shot]:
             if carry_unit == "m" and carry is not None:
                 carry *= 1.093613
 
-            shots.append(Shot(
-                source="tm",
-                shot_number=_to_int(_get(row, "shot_number")),
-                timestamp=_parse_timestamp(_get(row, "timestamp")),
-                club=normalize_club(_get(row, "club")),
-                ball_speed_mph=ball,
-                club_speed_mph=club_sp,
-                smash_factor=_to_float(_get(row, "smash_factor")),
-                launch_angle_vertical=_to_float(
-                    _get(row, "launch_angle_vertical")),
-                launch_angle_horizontal=_to_float(
-                    _get(row, "launch_angle_horizontal")),
-                spin_rpm=_to_float(_get(row, "spin_rpm")),
-                carry_yards=carry,
-                raw=dict(row),
-            ))
+            shots.append(
+                Shot(
+                    source="tm",
+                    shot_number=_to_int(_get(row, "shot_number")),
+                    timestamp=_parse_timestamp(_get(row, "timestamp")),
+                    club=normalize_club(_get(row, "club")),
+                    ball_speed_mph=ball,
+                    club_speed_mph=club_sp,
+                    smash_factor=_to_float(_get(row, "smash_factor")),
+                    launch_angle_vertical=_to_float(_get(row, "launch_angle_vertical")),
+                    launch_angle_horizontal=_to_float(_get(row, "launch_angle_horizontal")),
+                    spin_rpm=_to_float(_get(row, "spin_rpm")),
+                    carry_yards=carry,
+                    raw=dict(row),
+                    **{m.field: _to_float(_get(row, m.field)) for m in CLUB_METRICS},
+                )
+            )
     return shots
 
 
@@ -375,21 +451,26 @@ def load_trackman(path: Path) -> List[Shot]:
 # Pairing
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Pair:
     of: Optional[Shot]
     tm: Optional[Shot]
-    match_quality: str  # "good" | "ball_speed_mismatch" | "unmatched_openflight" | "unmatched_trackman"
+    match_quality: (
+        str  # "good" | "ball_speed_mismatch" | "unmatched_openflight" | "unmatched_trackman"
+    )
     notes: str = ""
 
 
 def _sort_for_pairing(shots: Iterable[Shot]) -> List[Shot]:
     """Order shots for chronological pairing. Prefer timestamp; fall
     back to shot_number; preserve input order otherwise (stable)."""
+
     def key(s: Shot, idx: int) -> Tuple:
         ts = s.timestamp.timestamp() if s.timestamp else float("inf")
         sn = s.shot_number if s.shot_number is not None else float("inf")
         return (ts, sn, idx)
+
     indexed = list(enumerate(shots))
     indexed.sort(key=lambda item: key(item[1], item[0]))
     return [s for _, s in indexed]
@@ -429,7 +510,7 @@ def pair_shots(
             ord_map = {"wood": 1, "hybrid": 2, "iron": 3}
             return (ord_map[m.group(2)], int(m.group(1)), c)
         if c in ("pw", "gw", "sw", "lw"):
-            return (4, ["pw","gw","sw","lw"].index(c), c)
+            return (4, ["pw", "gw", "sw", "lw"].index(c), c)
         return (5, 0, c)
 
     for club in sorted(clubs, key=club_sort_key):
@@ -440,29 +521,39 @@ def pair_shots(
             of_s, tm_s = of_seq[i], tm_seq[j]
             mq = "good"
             notes = ""
-            if (of_s.ball_speed_mph is not None
-                    and tm_s.ball_speed_mph is not None):
+            if of_s.ball_speed_mph is not None and tm_s.ball_speed_mph is not None:
                 d = abs(of_s.ball_speed_mph - tm_s.ball_speed_mph)
                 if d > ball_speed_tol_mph:
                     mq = "ball_speed_mismatch"
-                    notes = (f"ball-speed delta {d:.1f} mph "
-                             f"exceeds tol {ball_speed_tol_mph} mph; "
-                             f"check pairing manually")
-            pairs.append(Pair(of=of_s, tm=tm_s,
-                              match_quality=mq, notes=notes))
+                    notes = (
+                        f"ball-speed delta {d:.1f} mph "
+                        f"exceeds tol {ball_speed_tol_mph} mph; "
+                        f"check pairing manually"
+                    )
+            pairs.append(Pair(of=of_s, tm=tm_s, match_quality=mq, notes=notes))
             i += 1
             j += 1
 
         # Trailing unmatched shots from either side — keep so the user
         # can see where alignment ran off.
         for k in range(i, len(of_seq)):
-            pairs.append(Pair(of=of_seq[k], tm=None,
-                              match_quality="unmatched_openflight",
-                              notes="no Trackman shot for this club position"))
+            pairs.append(
+                Pair(
+                    of=of_seq[k],
+                    tm=None,
+                    match_quality="unmatched_openflight",
+                    notes="no Trackman shot for this club position",
+                )
+            )
         for k in range(j, len(tm_seq)):
-            pairs.append(Pair(of=None, tm=tm_seq[k],
-                              match_quality="unmatched_trackman",
-                              notes="no OpenFlight shot for this club position"))
+            pairs.append(
+                Pair(
+                    of=None,
+                    tm=tm_seq[k],
+                    match_quality="unmatched_trackman",
+                    notes="no OpenFlight shot for this club position",
+                )
+            )
 
     return pairs
 
@@ -472,19 +563,45 @@ def pair_shots(
 # ---------------------------------------------------------------------------
 
 _OUTPUT_FIELDS = [
-    "shot_number_of", "shot_number_tm",
-    "timestamp_of", "timestamp_tm",
+    "shot_number_of",
+    "shot_number_tm",
+    "timestamp_of",
+    "timestamp_tm",
     "club",
-    "ball_speed_of", "ball_speed_tm", "ball_speed_delta",
-    "club_speed_of", "club_speed_tm", "club_speed_delta",
-    "smash_of", "smash_tm", "smash_delta",
-    "launch_v_of", "launch_v_tm", "launch_v_delta",
-    "launch_h_of", "launch_h_tm", "launch_h_delta",
-    "spin_of", "spin_tm", "spin_delta",
-    "spin_candidate_of", "spin_confidence_of", "spin_quality_of",
-    "spin_snr_of", "spin_rejection_of",
-    "carry_of", "carry_tm", "carry_delta",
-    "match_quality", "notes",
+    "ball_speed_of",
+    "ball_speed_tm",
+    "ball_speed_delta",
+    "club_speed_of",
+    "club_speed_tm",
+    "club_speed_delta",
+    "smash_of",
+    "smash_tm",
+    "smash_delta",
+    "launch_v_of",
+    "launch_v_tm",
+    "launch_v_delta",
+    "launch_h_of",
+    "launch_h_tm",
+    "launch_h_delta",
+    "spin_of",
+    "spin_tm",
+    "spin_delta",
+    "spin_candidate_of",
+    "spin_confidence_of",
+    "spin_quality_of",
+    "spin_snr_of",
+    "spin_rejection_of",
+    "carry_of",
+    "carry_tm",
+    "carry_delta",
+    "match_quality",
+    "notes",
+]
+
+# Club delivery columns follow the ball columns, generated from the same
+# table as the Shot fields so the two cannot drift apart.
+_OUTPUT_FIELDS += [
+    f"{metric.field}_{suffix}" for metric in CLUB_METRICS for suffix in ("of", "tm", "delta")
 ]
 
 
@@ -496,52 +613,112 @@ def _delta(a: Optional[float], b: Optional[float]) -> Optional[float]:
 
 def _row(pair: Pair) -> Dict[str, Any]:
     of, tm = pair.of, pair.tm
+
     def f(val: Any) -> Any:
         if isinstance(val, float):
             return round(val, 3)
         return val
+
     return {
-        "shot_number_of":   f(of.shot_number) if of else None,
-        "shot_number_tm":   f(tm.shot_number) if tm else None,
-        "timestamp_of":     of.timestamp.isoformat() if of and of.timestamp else None,
-        "timestamp_tm":     tm.timestamp.isoformat() if tm and tm.timestamp else None,
-        "club":             (of or tm).club if (of or tm) else "",
-        "ball_speed_of":    f(of.ball_speed_mph) if of else None,
-        "ball_speed_tm":    f(tm.ball_speed_mph) if tm else None,
-        "ball_speed_delta": _delta(of.ball_speed_mph if of else None,
-                                   tm.ball_speed_mph if tm else None),
-        "club_speed_of":    f(of.club_speed_mph) if of else None,
-        "club_speed_tm":    f(tm.club_speed_mph) if tm else None,
-        "club_speed_delta": _delta(of.club_speed_mph if of else None,
-                                   tm.club_speed_mph if tm else None),
-        "smash_of":         f(of.smash_factor) if of else None,
-        "smash_tm":         f(tm.smash_factor) if tm else None,
-        "smash_delta":      _delta(of.smash_factor if of else None,
-                                   tm.smash_factor if tm else None),
-        "launch_v_of":      f(of.launch_angle_vertical) if of else None,
-        "launch_v_tm":      f(tm.launch_angle_vertical) if tm else None,
-        "launch_v_delta":   _delta(of.launch_angle_vertical if of else None,
-                                   tm.launch_angle_vertical if tm else None),
-        "launch_h_of":      f(of.launch_angle_horizontal) if of else None,
-        "launch_h_tm":      f(tm.launch_angle_horizontal) if tm else None,
-        "launch_h_delta":   _delta(of.launch_angle_horizontal if of else None,
-                                   tm.launch_angle_horizontal if tm else None),
-        "spin_of":          f(of.spin_rpm) if of else None,
-        "spin_tm":          f(tm.spin_rpm) if tm else None,
-        "spin_delta":       _delta(of.spin_rpm if of else None,
-                                   tm.spin_rpm if tm else None),
+        "shot_number_of": f(of.shot_number) if of else None,
+        "shot_number_tm": f(tm.shot_number) if tm else None,
+        "timestamp_of": of.timestamp.isoformat() if of and of.timestamp else None,
+        "timestamp_tm": tm.timestamp.isoformat() if tm and tm.timestamp else None,
+        "club": (of or tm).club if (of or tm) else "",
+        "ball_speed_of": f(of.ball_speed_mph) if of else None,
+        "ball_speed_tm": f(tm.ball_speed_mph) if tm else None,
+        "ball_speed_delta": _delta(
+            of.ball_speed_mph if of else None, tm.ball_speed_mph if tm else None
+        ),
+        "club_speed_of": f(of.club_speed_mph) if of else None,
+        "club_speed_tm": f(tm.club_speed_mph) if tm else None,
+        "club_speed_delta": _delta(
+            of.club_speed_mph if of else None, tm.club_speed_mph if tm else None
+        ),
+        "smash_of": f(of.smash_factor) if of else None,
+        "smash_tm": f(tm.smash_factor) if tm else None,
+        "smash_delta": _delta(of.smash_factor if of else None, tm.smash_factor if tm else None),
+        "launch_v_of": f(of.launch_angle_vertical) if of else None,
+        "launch_v_tm": f(tm.launch_angle_vertical) if tm else None,
+        "launch_v_delta": _delta(
+            of.launch_angle_vertical if of else None, tm.launch_angle_vertical if tm else None
+        ),
+        "launch_h_of": f(of.launch_angle_horizontal) if of else None,
+        "launch_h_tm": f(tm.launch_angle_horizontal) if tm else None,
+        "launch_h_delta": _delta(
+            of.launch_angle_horizontal if of else None, tm.launch_angle_horizontal if tm else None
+        ),
+        "spin_of": f(of.spin_rpm) if of else None,
+        "spin_tm": f(tm.spin_rpm) if tm else None,
+        "spin_delta": _delta(of.spin_rpm if of else None, tm.spin_rpm if tm else None),
         "spin_candidate_of": f(of.spin_candidate_rpm) if of else None,
         "spin_confidence_of": f(of.spin_confidence) if of else None,
-        "spin_quality_of":  of.spin_quality if of else None,
-        "spin_snr_of":      f(of.spin_snr) if of else None,
+        "spin_quality_of": of.spin_quality if of else None,
+        "spin_snr_of": f(of.spin_snr) if of else None,
         "spin_rejection_of": of.spin_rejection_reason if of else None,
-        "carry_of":         f(of.carry_yards) if of else None,
-        "carry_tm":         f(tm.carry_yards) if tm else None,
-        "carry_delta":      _delta(of.carry_yards if of else None,
-                                   tm.carry_yards if tm else None),
-        "match_quality":    pair.match_quality,
-        "notes":            pair.notes,
+        "carry_of": f(of.carry_yards) if of else None,
+        "carry_tm": f(tm.carry_yards) if tm else None,
+        "carry_delta": _delta(of.carry_yards if of else None, tm.carry_yards if tm else None),
+        "match_quality": pair.match_quality,
+        "notes": pair.notes,
+        **{
+            column: value
+            for metric in CLUB_METRICS
+            for column, value in (
+                (f"{metric.field}_of", f(getattr(of, metric.field)) if of else None),
+                (f"{metric.field}_tm", f(getattr(tm, metric.field)) if tm else None),
+                (
+                    f"{metric.field}_delta",
+                    _delta(
+                        getattr(of, metric.field) if of else None,
+                        getattr(tm, metric.field) if tm else None,
+                    ),
+                ),
+            )
+        },
     }
+
+
+def print_club_delivery_summary(pairs: List[Pair]) -> None:
+    """Report every club metric, including the ones OpenFlight cannot produce.
+
+    Listing only the metrics that happen to have values would make an empty
+    comparison look like a clean one. A metric Trackman measured and OpenFlight
+    did not is the most important line in this table.
+    """
+    print("\n=== Club delivery ===")
+    header = f"{'metric':<16}{'n':>4}{'OF mean':>10}{'TM mean':>10}{'bias':>9}{'RMSE':>8}"
+    print(header)
+    print("-" * len(header))
+    for metric in CLUB_METRICS:
+        both, of_only, tm_only = [], 0, 0
+        for pair in pairs:
+            of_value = getattr(pair.of, metric.field) if pair.of else None
+            tm_value = getattr(pair.tm, metric.field) if pair.tm else None
+            if of_value is not None and tm_value is not None:
+                both.append((of_value, tm_value))
+            elif of_value is not None:
+                of_only += 1
+            elif tm_value is not None:
+                tm_only += 1
+        name = f"{metric.label} ({metric.unit})" if metric.unit != "deg" else metric.label
+        if both:
+            of_values = [a for a, _ in both]
+            tm_values = [b for _, b in both]
+            deltas = [a - b for a, b in both]
+            bias = sum(deltas) / len(deltas)
+            print(
+                f"{name:<16}{len(both):>4}"
+                f"{sum(of_values) / len(of_values):>10.2f}"
+                f"{sum(tm_values) / len(tm_values):>10.2f}"
+                f"{bias:>9.2f}{_rmse(deltas):>8.2f}"
+            )
+        elif tm_only:
+            print(f"{name:<16}{0:>4}{'--':>10}{'measured':>10}{'not produced by OpenFlight':>18}")
+        elif of_only:
+            print(f"{name:<16}{0:>4}{'measured':>10}{'--':>10}{'no Trackman column':>18}")
+        else:
+            print(f"{name:<16}{0:>4}{'--':>10}{'--':>10}{'absent from both':>18}")
 
 
 def write_comparison_csv(pairs: List[Pair], output: Path) -> None:
@@ -558,12 +735,12 @@ def write_comparison_csv(pairs: List[Pair], output: Path) -> None:
 # ---------------------------------------------------------------------------
 
 _DELTA_LABELS = [
-    ("ball_speed_delta", "ball speed",  "mph"),
-    ("club_speed_delta", "club speed",  "mph"),
-    ("launch_v_delta",   "launch V",    "deg"),
-    ("launch_h_delta",   "launch H",    "deg"),
-    ("spin_delta",       "spin",        "rpm"),
-    ("carry_delta",      "carry",       "yds"),
+    ("ball_speed_delta", "ball speed", "mph"),
+    ("club_speed_delta", "club speed", "mph"),
+    ("launch_v_delta", "launch V", "deg"),
+    ("launch_h_delta", "launch H", "deg"),
+    ("spin_delta", "spin", "rpm"),
+    ("carry_delta", "carry", "yds"),
 ]
 
 
@@ -680,15 +857,15 @@ def print_ball_speed_calibration(pairs: List[Pair]) -> None:
 
     if len(of) < 3:
         print()
-        print("  (not enough good ball-speed pairs to recommend a "
-              f"calibration — need >=3, got {len(of)})")
+        print(
+            "  (not enough good ball-speed pairs to recommend a "
+            f"calibration — need >=3, got {len(of)})"
+        )
         return
 
     slope_lin, offset_lin, sd_lin = _fit_linear(of, tm)
     slope_prop, sd_prop = _fit_proportional(of, tm)
-    raw_resid_sd = (
-        sum((b - a) ** 2 for a, b in zip(of, tm)) / len(of)
-    ) ** 0.5
+    raw_resid_sd = (sum((b - a) ** 2 for a, b in zip(of, tm)) / len(of)) ** 0.5
 
     print()
     print("=" * 72)
@@ -698,12 +875,11 @@ def print_ball_speed_calibration(pairs: List[Pair]) -> None:
     print()
     print(f"  Uncorrected residual (TM - OF) stddev:    {raw_resid_sd:6.3f} mph")
     print()
-    print( "  Two-parameter model (slope + offset):")
-    print(f"    corrected_of_mph = {slope_lin:.5f} * raw_of_mph "
-          f"{offset_lin:+.4f}")
+    print("  Two-parameter model (slope + offset):")
+    print(f"    corrected_of_mph = {slope_lin:.5f} * raw_of_mph {offset_lin:+.4f}")
     print(f"    residual stddev: {sd_lin:6.3f} mph")
     print()
-    print( "  One-parameter model (slope only):")
+    print("  One-parameter model (slope only):")
     print(f"    corrected_of_mph = {slope_prop:.5f} * raw_of_mph")
     print(f"    residual stddev: {sd_prop:6.3f} mph")
     print()
@@ -742,10 +918,7 @@ def print_launch_angle_calibration(pairs: List[Pair]) -> None:
     for label, field_name, short_name in axes:
         of, tm = _metric_pairs(pairs, field_name)
         if len(of) < 3:
-            print(
-                f"  {label}: not enough good paired values "
-                f"(need >=3, got {len(of)})"
-            )
+            print(f"  {label}: not enough good paired values (need >=3, got {len(of)})")
             continue
 
         any_axis = True
@@ -767,10 +940,7 @@ def print_launch_angle_calibration(pairs: List[Pair]) -> None:
         print(f"    raw MAE / RMSE:         {mae:6.2f} / {raw_rmse:6.2f} deg")
         print(f"    offset-only correction: corrected = raw {offset:+.2f} deg")
         print(f"    offset-only RMSE:       {offset_rmse:6.2f} deg")
-        print(
-            f"    linear correction:      corrected = {slope:.4f} * raw "
-            f"{intercept:+.3f}"
-        )
+        print(f"    linear correction:      corrected = {slope:.4f} * raw {intercept:+.3f}")
         print(f"    linear residual stddev: {fit_sd:6.2f} deg")
         print(f"    OF↔TM correlation:      {corr:+6.2f}")
         if abs(corr) < 0.5:
@@ -785,20 +955,17 @@ def print_launch_angle_calibration(pairs: List[Pair]) -> None:
     print("=" * 72)
 
 
-def _format_metric_summary_line(label: str, vals: List[float],
-                                unit: str) -> str:
+def _format_metric_summary_line(label: str, vals: List[float], unit: str) -> str:
     """Format a single per-metric summary row. With one sample we
     suppress the (meaningless) stddev rather than printing 0.00 next
     to a single value, which previously misled the user."""
     n = len(vals)
     if n == 1:
-        return (f"    {label:<12}  {vals[0]:>+12.2f} {unit:<3}  "
-                f"{'(n=1)':>9}  {vals[0]:>+7.2f}")
+        return f"    {label:<12}  {vals[0]:>+12.2f} {unit:<3}  {'(n=1)':>9}  {vals[0]:>+7.2f}"
     mean = statistics.fmean(vals)
     sd = statistics.pstdev(vals)
     mx = max(vals, key=abs)
-    return (f"    {label:<12}  {mean:>+12.2f} {unit:<3}  "
-            f"{sd:>9.2f}  {mx:>+7.2f}")
+    return f"    {label:<12}  {mean:>+12.2f} {unit:<3}  {sd:>9.2f}  {mx:>+7.2f}"
 
 
 def _format_pair_short(row: Dict[str, Any]) -> str:
@@ -813,15 +980,21 @@ def _format_pair_short(row: Dict[str, Any]) -> str:
     of_b_s = f"{of_b:.1f} mph" if of_b is not None else "(no OF)"
     tm_b_s = f"{tm_b:.1f} mph" if tm_b is not None else "(no TM)"
     notes = row.get("notes") or ""
-    return (f"    OF #{of_n} ({of_t})  ↔  TM #{tm_n} ({tm_t})    "
-            f"OF: {of_b_s}    TM: {tm_b_s}    {notes}")
+    return (
+        f"    OF #{of_n} ({of_t})  ↔  TM #{tm_n} ({tm_t})    "
+        f"OF: {of_b_s}    TM: {tm_b_s}    {notes}"
+    )
 
 
 def print_summary(pairs: List[Pair]) -> None:
     rows = [_row(p) for p in pairs]
     by_club: Dict[str, List[Dict[str, Any]]] = {}
-    counts = {"good": 0, "ball_speed_mismatch": 0,
-              "unmatched_openflight": 0, "unmatched_trackman": 0}
+    counts = {
+        "good": 0,
+        "ball_speed_mismatch": 0,
+        "unmatched_openflight": 0,
+        "unmatched_trackman": 0,
+    }
     for r in rows:
         counts[r["match_quality"]] = counts.get(r["match_quality"], 0) + 1
         by_club.setdefault(r["club"] or "(no club)", []).append(r)
@@ -842,10 +1015,8 @@ def print_summary(pairs: List[Pair]) -> None:
         if not good:
             print(f"  {club}: no good pairs ({len(by_club[club])} total)")
             continue
-        print(f"  {club} — {len(good)} good pair(s) "
-              f"(of {len(by_club[club])} total)")
-        print(f"    {'metric':<12}  {'mean Δ (of-tm)':>15}  "
-              f"{'stddev':>10}  {'|max|':>8}")
+        print(f"  {club} — {len(good)} good pair(s) (of {len(by_club[club])} total)")
+        print(f"    {'metric':<12}  {'mean Δ (of-tm)':>15}  {'stddev':>10}  {'|max|':>8}")
         for key, label, unit in _DELTA_LABELS:
             vals = [r[key] for r in good if r[key] is not None]
             if not vals:
@@ -858,14 +1029,12 @@ def print_summary(pairs: List[Pair]) -> None:
     # the alignment or ignore them.
     rejected = [r for r in rows if r["match_quality"] == "ball_speed_mismatch"]
     if rejected:
-        print(f"  Ball-speed-mismatch pairs ({len(rejected)}) "
-              "— excluded from per-club stats:")
+        print(f"  Ball-speed-mismatch pairs ({len(rejected)}) — excluded from per-club stats:")
         for r in rejected:
             print(_format_pair_short(r))
         print()
 
-    unmatched = [r for r in rows
-                 if r["match_quality"].startswith("unmatched_")]
+    unmatched = [r for r in rows if r["match_quality"].startswith("unmatched_")]
     if unmatched:
         print(f"  Unmatched pairs ({len(unmatched)}):")
         for r in unmatched:
@@ -879,23 +1048,28 @@ def print_summary(pairs: List[Pair]) -> None:
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Pair OpenFlight ↔ Trackman shots and emit a "
-                    "side-by-side comparison CSV.",
+        description="Pair OpenFlight ↔ Trackman shots and emit a side-by-side comparison CSV.",
     )
-    parser.add_argument("--openflight", required=True, type=Path,
-                        help="OpenFlight session JSONL file")
-    parser.add_argument("--trackman", required=True, type=Path,
-                        help="Trackman CSV export")
-    parser.add_argument("--output", required=True, type=Path,
-                        help="Output comparison CSV")
-    parser.add_argument("--ball-speed-tol", type=float, default=5.0,
-                        help="Max ball-speed delta (mph) before a pair "
-                             "is flagged as a likely mis-pair (default 5.0)")
-    parser.add_argument("--club-filter", default=None,
-                        help="Comma-separated list of clubs to include "
-                             "(e.g. '7-iron,driver'). Default: all.")
+    parser.add_argument(
+        "--openflight", required=True, type=Path, help="OpenFlight session JSONL file"
+    )
+    parser.add_argument("--trackman", required=True, type=Path, help="Trackman CSV export")
+    parser.add_argument("--output", required=True, type=Path, help="Output comparison CSV")
+    parser.add_argument(
+        "--ball-speed-tol",
+        type=float,
+        default=5.0,
+        help="Max ball-speed delta (mph) before a pair "
+        "is flagged as a likely mis-pair (default 5.0)",
+    )
+    parser.add_argument(
+        "--club-filter",
+        default=None,
+        help="Comma-separated list of clubs to include (e.g. '7-iron,driver'). Default: all.",
+    )
     args = parser.parse_args(argv)
 
     if not args.openflight.exists():
@@ -907,19 +1081,18 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     of_shots = load_openflight(args.openflight)
     tm_shots = load_trackman(args.trackman)
-    print(f"Loaded {len(of_shots)} OpenFlight shots, "
-          f"{len(tm_shots)} Trackman shots")
+    print(f"Loaded {len(of_shots)} OpenFlight shots, {len(tm_shots)} Trackman shots")
 
     club_filter = (
-        [c.strip() for c in args.club_filter.split(",") if c.strip()]
-        if args.club_filter else None
+        [c.strip() for c in args.club_filter.split(",") if c.strip()] if args.club_filter else None
     )
-    pairs = pair_shots(of_shots, tm_shots,
-                       ball_speed_tol_mph=args.ball_speed_tol,
-                       club_filter=club_filter)
+    pairs = pair_shots(
+        of_shots, tm_shots, ball_speed_tol_mph=args.ball_speed_tol, club_filter=club_filter
+    )
     write_comparison_csv(pairs, args.output)
     print(f"Wrote {len(pairs)} pair rows to {args.output}")
     print_summary(pairs)
+    print_club_delivery_summary(pairs)
     print_ball_speed_calibration(pairs)
     print_launch_angle_calibration(pairs)
     return 0
