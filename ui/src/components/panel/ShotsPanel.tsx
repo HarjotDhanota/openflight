@@ -1,7 +1,12 @@
 import { useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { Shot } from '../../types/shot';
-import { filterShotsByPlayer, getSwingSpeedMph, isSwingSpeedShot } from '../../types/shot';
+import {
+  displayCarryYards,
+  filterShotsByPlayer,
+  getSwingSpeedMph,
+  isSwingSpeedShot,
+} from '../../types/shot';
 import { useDragScroll } from '../../hooks/useDragScroll';
 import { useUnitPreference } from '../../state/useUnitPreference';
 import { useSystemStore } from '../../stores/useSystemStore';
@@ -50,7 +55,7 @@ function rowValues(shot: Shot, unitSystem: UnitSystem): string[] {
     shot.club_speed_mph === null ? '—' : formatSpeed(shot.club_speed_mph, unitSystem, 1),
     optionalNumber(shot.launch_angle_vertical),
     shot.spin_rpm === null ? '—' : shot.spin_rpm.toLocaleString(getHtmlLang(), { maximumFractionDigits: 0 }),
-    formatDistance(shot.estimated_carry_yards, unitSystem, 0),
+    formatDistance(displayCarryYards(shot), unitSystem, 0),
   ];
 }
 

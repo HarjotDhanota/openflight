@@ -48,6 +48,8 @@ describe('session stats', () => {
     ]);
 
     expect(stats.avg_carry_est).toBe(234);
+  });
+});
 
 function makeShot(overrides: Partial<Shot> = {}): Shot {
   return {

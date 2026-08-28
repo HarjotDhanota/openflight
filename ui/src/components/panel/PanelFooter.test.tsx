@@ -1,6 +1,7 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { PanelFooter } from './PanelFooter';
+import { PANEL_VIEWS } from './views';
 import type { PanelView } from './views';
 import type { PowerStatus } from '../../types/power';
 
@@ -120,6 +121,7 @@ describe('PanelFooter', () => {
     expect(html).toContain('panel-footer__nav');
     expect(html).toContain('panel-footer__tabs');
     expect(html).toContain('aria-label="Panels"');
-    expect(html.match(/panel-header__divider/g)).toHaveLength(5);
+    // One divider per gap between tabs: 7 tabs, 6 gaps.
+    expect(html.match(/panel-header__divider/g)).toHaveLength(PANEL_VIEWS.length - 1);
   });
 });

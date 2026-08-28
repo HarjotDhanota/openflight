@@ -6,6 +6,7 @@ export const fr: Messages = {
   'nav.stats': 'Stats',
   'nav.shots': 'Coups',
   'nav.camera': 'Caméra',
+  'nav.conditions': 'Conditions',
   'nav.debug': 'Debug',
   'nav.panels': 'Panneaux',
   'nav.openMenu': 'Ouvrir le menu',
@@ -222,4 +223,23 @@ export const fr: Messages = {
   'display.clubPath': 'Trajectoire club',
 
   'sim.connectors': 'Connecteurs simulateur',
+
+  // Conditions panel (air-density sensor).
+  'conditions.loading': 'Lecture des conditions…',
+  'conditions.sensorNone': 'Aucun capteur',
+  'conditions.noSensor': 'Aucun capteur de densité de l\'air',
+  'conditions.noSensorDetail':
+    'La distance suppose un air standard au niveau de la mer : {temp}, {pressure}, sec. Installez un BME280 en I²C et démarrez avec --air-sensor pour la mesurer.',
+  'conditions.playsLike': 'Équivaut à',
+  'conditions.thinner': 'Air plus léger que la norme : la balle vole plus loin',
+  'conditions.denser': 'Air plus dense que la norme : la balle vole moins loin',
+  'conditions.density': 'Densité',
+  'conditions.vsIsa': 'par rapport à l\'ISA niveau de la mer',
+  'conditions.temp': 'Temp.',
+  'conditions.pressure': 'Pression',
+  'conditions.humidity': 'Humidité',
+  'conditions.humidityAssumed': '{value}% (estimée)',
+  'conditions.humidityNote': 'Cette puce ne mesure pas l\'humidité ; 50% est supposé. L\'humidité est le plus faible des trois termes : moins d\'un demi-mètre au driver.',
+  'conditions.updated': 'Mis à jour {age}',
+  'conditions.windNote': 'Corrige uniquement la densité de l\'air. Aucun radar ne mesure le vent, et aucun capteur ici ne le peut : un vent de face n\'est pas une question de densité.',
 };

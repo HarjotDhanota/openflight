@@ -721,6 +721,95 @@
   letter-spacing: -0.03em;
 }
 
+/* ------------------------------------------------------- conditions panel -- */
+
+.conditions-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.conditions-panel > .panel__body--empty {
+  flex: 1;
+}
+
+/* Density altitude leads: "plays like 2,700 ft" is the one number a golfer
+   already has an instinct for, where 1.163 kg/m3 is not. */
+.conditions-panel__plays-like {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 20px 22px;
+}
+
+.conditions-panel__plays-like-label {
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.conditions-panel__plays-like-value {
+  font-size: clamp(2.2rem, 9vh, 3.4rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.conditions-panel__plays-like-hint {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.conditions-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  background: var(--color-border);
+  gap: 1px;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* Two tiles when a BMP280 reports no humidity channel, five with a BME280. */
+.conditions-panel__grid--of-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.conditions-panel__grid--of-4 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.conditions-panel__grid .metric-card {
+  padding: 16px;
+  justify-content: stretch;
+  border-radius: 0;
+}
+
+.conditions-panel__grid .metric-card__value {
+  font-size: clamp(1.5rem, 5vh, 2.1rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.conditions-panel__note,
+.conditions-panel__age {
+  margin: 0;
+  padding: 12px 22px 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  max-width: 68ch;
+}
+
+.conditions-panel__age {
+  font-variant-numeric: tabular-nums;
+}
+
+.conditions-panel__note:last-child {
+  padding-bottom: 20px;
+}
+
 /* ---------------------------------------------------------- players panel -- */
 
 .players-panel__grid {

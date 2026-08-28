@@ -26,7 +26,15 @@ describe('App shell', () => {
     for (const view of PANEL_VIEWS) {
       expect(html).toContain(`<span>${view.label}</span>`);
     }
-    expect(PANEL_VIEWS.map((view) => view.id)).toEqual(['live', 'stats', 'shots', 'camera', 'players', 'debug']);
+    expect(PANEL_VIEWS.map((view) => view.id)).toEqual([
+      'live',
+      'stats',
+      'shots',
+      'camera',
+      'conditions',
+      'players',
+      'debug',
+    ]);
   });
 
   it('marks the Live tab pressed and shows the Live panel', () => {

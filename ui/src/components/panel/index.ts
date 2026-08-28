@@ -12,4 +12,5 @@ export { SimulateBubble } from './SimulateBubble';
 export { StatsPanel } from './StatsPanel';
 export { ShotsPanel } from './ShotsPanel';
 export { CameraPanel } from './CameraPanel';
+export { ConditionsPanel } from './ConditionsPanel';
 export { PANEL_VIEWS, type PanelView } from './views';

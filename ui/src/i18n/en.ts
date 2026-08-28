@@ -4,6 +4,7 @@ export const en = {
   'nav.stats': 'Stats',
   'nav.shots': 'Shots',
   'nav.camera': 'Camera',
+  'nav.conditions': 'Conditions',
   'nav.debug': 'Debug',
   'nav.panels': 'Panels',
   'nav.openMenu': 'Open menu',
@@ -220,6 +221,25 @@ export const en = {
   'display.clubPath': 'Club Path',
 
   'sim.connectors': 'Simulator connectors',
+
+  // Conditions panel (air-density sensor).
+  'conditions.loading': 'Reading conditions…',
+  'conditions.sensorNone': 'No sensor',
+  'conditions.noSensor': 'No air-density sensor',
+  'conditions.noSensorDetail':
+    'Carry assumes standard sea-level air — {temp}, {pressure}, dry. Fit a BME280 on I²C and start with --air-sensor to measure it instead.',
+  'conditions.playsLike': 'Plays like',
+  'conditions.thinner': 'Thinner air than standard — the ball flies further',
+  'conditions.denser': 'Denser air than standard — the ball flies shorter',
+  'conditions.density': 'Density',
+  'conditions.vsIsa': 'vs ISA sea level',
+  'conditions.temp': 'Temp',
+  'conditions.pressure': 'Pressure',
+  'conditions.humidity': 'Humidity',
+  'conditions.humidityAssumed': '{value}% (assumed)',
+  'conditions.humidityNote': 'This chip has no humidity channel, so 50% is assumed. Humidity is the smallest of the three terms — worth under half a yard on a driver.',
+  'conditions.updated': 'Updated {age}',
+  'conditions.windNote': 'Corrects for air density only. Neither radar measures wind, and no amount of sensing here can — a headwind is not an air-density effect.',
 } as const;
 
 export type MessageKey = keyof typeof en;

@@ -6,6 +6,7 @@ export const es: Messages = {
   'nav.stats': 'Estadísticas',
   'nav.shots': 'Golpes',
   'nav.camera': 'Cámara',
+  'nav.conditions': 'Condiciones',
   'nav.debug': 'Depuración',
   'nav.panels': 'Paneles',
   'nav.openMenu': 'Abrir menú',
@@ -222,4 +223,23 @@ export const es: Messages = {
   'display.clubPath': 'Path del palo',
 
   'sim.connectors': 'Conectores de simulador',
+
+  // Conditions panel (air-density sensor).
+  'conditions.loading': 'Leyendo condiciones…',
+  'conditions.sensorNone': 'Sin sensor',
+  'conditions.noSensor': 'Sin sensor de densidad del aire',
+  'conditions.noSensorDetail':
+    'El alcance asume aire estándar a nivel del mar: {temp}, {pressure}, seco. Instala un BME280 en I²C e inicia con --air-sensor para medirlo.',
+  'conditions.playsLike': 'Juega como',
+  'conditions.thinner': 'Aire más ligero que el estándar: la bola vuela más lejos',
+  'conditions.denser': 'Aire más denso que el estándar: la bola vuela menos',
+  'conditions.density': 'Densidad',
+  'conditions.vsIsa': 'frente a ISA nivel del mar',
+  'conditions.temp': 'Temp.',
+  'conditions.pressure': 'Presión',
+  'conditions.humidity': 'Humedad',
+  'conditions.humidityAssumed': '{value}% (asumida)',
+  'conditions.humidityNote': 'Este chip no mide humedad, así que se asume 50%. La humedad es el menor de los tres factores: menos de medio metro con un driver.',
+  'conditions.updated': 'Actualizado {age}',
+  'conditions.windNote': 'Solo corrige la densidad del aire. Ningún radar mide el viento, y ningún sensor aquí puede hacerlo: el viento en contra no es densidad.',
 };

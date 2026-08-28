@@ -18,6 +18,7 @@ import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog'
 import { CameraReplayDialog } from './components/CameraReplayDialog';
 import {
   CameraPanel,
+  ConditionsPanel,
   LivePanel,
   AddPlayerDialog,
   ClearSessionDialog,
@@ -357,6 +358,7 @@ function AppContent() {
             onUpdateCaptureSettings={(settings) => socketService.setCameraCaptureSettings(settings)}
           />
         )}
+          {currentView === 'conditions' && <ConditionsPanel />}
         {currentView === 'debug' && (
           <div className="panel">
             <PanelHeader
