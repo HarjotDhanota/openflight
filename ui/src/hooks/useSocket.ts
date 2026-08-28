@@ -6,8 +6,11 @@ export function useSocket() {
     socketService.connect();
   }, []);
 
-  const shutdown = useCallback(() => {
-    fetch('/api/shutdown', { method: 'POST' }).catch(() => {});
+  const shutdown = useCallback(async () => {
+    const response = await fetch('/api/shutdown', { method: 'POST' });
+    if (!response.ok) {
+      throw new Error(`Shutdown request failed (${response.status})`);
+    }
   }, []);
 
   return { shutdown };

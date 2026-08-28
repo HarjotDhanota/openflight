@@ -114,9 +114,12 @@ Confirm the device and that nothing else claims it:
 
 ```bash
 ls -l /dev/ttyAMA0
-grep -o 'console=serial0[^ ]*' /boot/firmware/cmdline.txt   # must print nothing
-grep enable_uart /boot/firmware/config.txt                  # expect enable_uart=1
+grep -o 'console=serial0[^ ]*' /boot/firmware/cmdline.txt      # must print nothing
+grep -E "enable_uart|dtparam=uart0" /boot/firmware/config.txt  # expect enable_uart=1 or dtparam=uart0=on
 ```
+
+Note for Raspberry Pi 5 & Newer OS Versions:
+Modern Pi OS (Debian Bookworm) and Pi 5 hardware use dtparam=uart0=on instead of the legacy enable_uart=1 setting to enable the UART0 hardware block.
 
 On a Pi 5 the 40-pin header is `/dev/ttyAMA0`. Do **not** use `/dev/serial0`,
 which points at `/dev/ttyAMA10` — the separate debug-header UART.

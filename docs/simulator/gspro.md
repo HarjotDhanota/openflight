@@ -70,7 +70,7 @@ requirements and setup specific to GSPro.
    ```
    Then enable simulator connectors at launch with `--sim` (off by default):
    ```bash
-   scripts/start-kiosk.sh --kld7 --sim   # --kld7 only for deprecated K-LD7 angle-radar builds
+   scripts/start-kiosk.sh --sim
    ```
 
 4. **Open GSPro and start a round**, then open the **GSPro Connect** window

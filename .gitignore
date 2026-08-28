@@ -76,3 +76,9 @@ ui/playwright-report/
 ui/test-results/
 
 .superpowers/
+
+#Markdown preview files
+.crossnote/config.js
+.crossnote/head.html
+.crossnote/parser.js
+.crossnote/style.less

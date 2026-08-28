@@ -5,10 +5,11 @@ Defines different methods for determining when to capture the rolling buffer.
 """
 
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional
 
 from .processor import RollingBufferProcessor
 from .types import IQCapture
@@ -582,10 +583,10 @@ class GPIOSoundTrigger(TriggerStrategy):
             gpio_pin: GPIO pin (BCM numbering) for GATE input (default: 17)
             pre_trigger_segments: Number of pre-trigger segments for S# command.
                 Each segment = 128 samples = ~4.27ms at 30ksps.
-                Default 20 gives ~85ms pre-trigger, ~51ms post-trigger.
+                Default 32 gives ~136ms total rolling window (50/50 pre/post split).
                 NOTE: This is passed to enter_rolling_buffer_mode() by the caller.
                 The trigger does NOT configure rolling buffer mode itself.
-            debounce_ms: Debounce time in ms to ignore rapid triggers (default: 200)
+            debounce_ms: Debounce time in ms to ignore rapid triggers (default: 20)
         """
         super().__init__(pre_trigger_segments=pre_trigger_segments)
         self.gpio_pin = gpio_pin
@@ -941,9 +942,7 @@ class SoundTrigger(TriggerStrategy):
         ):
             selected_sync = previous_sync
             selected_source = "previous"
-            selected_reason = (
-                f"fresh_rejected:{fresh_reason};previous_age:{previous_age_s:.1f}s"
-            )
+            selected_reason = f"fresh_rejected:{fresh_reason};previous_age:{previous_age_s:.1f}s"
         elif previous_valid and previous_age_s is not None:
             selected_reason = (
                 f"fresh_rejected:{fresh_reason};previous_too_old:{previous_age_s:.1f}s"
@@ -1018,6 +1017,8 @@ class SoundTrigger(TriggerStrategy):
         radar: "OPS243Radar",
         processor: RollingBufferProcessor,
         timeout: float = 30.0,
+        cancel_event: Optional[threading.Event] = None,
+        capture_started_callback: Optional[Callable[[], None]] = None,
     ) -> Optional[IQCapture]:
         """
         Wait for hardware sound trigger and capture buffer.
@@ -1032,7 +1033,11 @@ class SoundTrigger(TriggerStrategy):
         """
         logger.info("[TRIGGER] Waiting for sound trigger (timeout=%.0fs)...", timeout)
 
-        response = radar.wait_for_hardware_trigger(timeout=timeout)
+        response = radar.wait_for_hardware_trigger(
+            timeout=timeout,
+            cancel_event=cancel_event,
+            on_first_byte=capture_started_callback,
+        )
 
         if not response:
             logger.info("[TRIGGER] Sound trigger timeout — no hardware trigger received")

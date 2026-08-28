@@ -35,7 +35,7 @@ setup specific to OpenGolfSim.
    ```
 4. **Start OpenFlight with simulator connectors on** (`--sim`, off by default):
    ```bash
-   scripts/start-kiosk.sh --kld7 --sim   # --kld7 only for deprecated K-LD7 angle-radar builds
+   scripts/start-kiosk.sh --sim
    ```
    The header OpenGolfSim pill should turn **green**.
 5. **Hit a shot.** It appears in OpenGolfSim; with debug mode on, the "Sent to

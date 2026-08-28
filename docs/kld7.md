@@ -1,5 +1,8 @@
 # K-LD7 Launch Angle & Direction
 
+> **Deprecated:** K-LD7 support is retained for existing builds. New builds
+> should use the [IWR6843 setup](iwr6843/README.md).
+
 The K-LD7 radars measure the ball's **launch angle** (vertical) and
 **launch direction** (horizontal aim) to complement the OPS243's ball
 speed. Two modules are used: one mounted to look in the vertical plane,
@@ -110,5 +113,6 @@ by the two-ray pipeline.
 ## Troubleshooting
 
 See [kld7-troubleshooting.md](kld7-troubleshooting.md) for detection and
-serial issues, and [kld7-timing-drift-debug.md](kld7-timing-drift-debug.md)
-for OPS/K-LD7 timing-drift diagnostics.
+serial issues. For validation sessions and offline tooling, see the
+[TrackMan test process](trackman-test-process.md) and
+[K-LD7 analysis tools](../scripts/analysis/kld7_analysis_tooling.md).

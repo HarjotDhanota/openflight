@@ -6,127 +6,159 @@ import { useShotStore } from './stores/useShotStore';
 import { useCameraStore } from './stores/useCameraStore';
 import { useDebugStore } from './stores/useDebugStore';
 import { usePlayerStore } from './stores/usePlayerStore';
+import { useHeroMetricStore } from './stores/useHeroMetricStore';
+import { useCameraReplayController } from './hooks/useCameraReplayController';
 import { socketService } from './services/socketService';
-import { ConditionsView } from './components/ConditionsView';
-import { ShotDisplay } from './components/ShotDisplay';
-import { StatsView } from './components/StatsView';
-import { ShotList } from './components/ShotList';
+import { shouldEchoSelectionToServer } from './services/playerSocketSync';
 import { DebugPanel } from './components/DebugPanel';
-import { CameraFeed } from './components/CameraFeed';
-import { ConnectionStatus } from './components/ConnectionStatus';
-import { SimStatus } from './components/SimStatus';
-import { SimShotBadges } from './components/SimShotBadges';
-import { ClubPicker } from './components/ClubPicker';
-import { ClubSelectScreen } from './components/ClubSelectScreen';
-import { TrainingImplementPicker } from './components/TrainingImplementPicker';
-import { PlayerPicker } from './components/PlayerPicker';
-import { BallDetectionIndicator } from './components/BallDetectionIndicator';
 import { DisplayMode } from './components/DisplayMode';
-import { unlockAudioCue } from './utils/audioCue';
+import { SimShotBadges } from './components/SimShotBadges';
+import { ShotProcessingArea } from './components/ShotProcessingArea';
+import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog';
+import { CameraReplayDialog } from './components/CameraReplayDialog';
 import {
-  useLaunchDaddy,
-  LaunchDaddyOverlay,
-  LaunchDaddyBrand,
-  LaunchDaddySecretIndicator,
-} from './components/LaunchDaddy';
-import { useUnitPreference } from './state/useUnitPreference';
+  CameraPanel,
+  LivePanel,
+  AddPlayerDialog,
+  ClearSessionDialog,
+  SimulateBubble,
+  MenuSheet,
+  PanelFooter,
+  PanelHeader,
+  PanelAction,
+  PickerOverlay,
+  PlayersPanel,
+  ShotsPanel,
+  StatsPanel,
+  clubSections,
+  trainingImplementSections,
+  type PanelView,
+} from './components/panel';
+import { shouldEnableLiveBallWarning } from './components/panel/liveMetrics';
+import { filterShotsByPlayer } from './types/shot';
+import { getClubName } from './data/clubs';
+import { getTrainingImplementLabel } from './data/trainingImplements';
+import { unlockAudioCue } from './utils/audioCue';
+import { useLaunchDaddy, LaunchDaddyOverlay, LaunchDaddyBrand } from './components/LaunchDaddy';
 
-import Logo from './logo/Logo';
-
-import './App.css';
-
-type View = 'live' | 'stats' | 'shots' | 'camera' | 'conditions' | 'debug';
-
-// Navigation icons as inline SVGs for better control
-const Icons = {
-  live: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-      <circle cx="12" cy="12" r="3" />
-      <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
-      <path d="M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
-    </svg>
-  ),
-  stats: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-      <path d="M18 20V10M12 20V4M6 20v-6" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  ),
-  shots: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-      <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  ),
-  camera: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-      <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z" />
-      <circle cx="12" cy="13" r="4" />
-    </svg>
-  ),
-  conditions: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-      <path d="M14 14.76V4a2 2 0 10-4 0v10.76a4 4 0 104 0z" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  ),
-  debug: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-      <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  ),
-};
+import { useI18n } from './i18n/useI18n';
+import './components/panel/panel.css';
 
 function AppContent() {
+  const { t } = useI18n();
   const { shutdown } = useSocket();
-  const { connected, mockMode, debugMode, simStatuses, latestSimShots, serverClub } = useSystemStore(
+  const { connected, mockMode, debugMode, latestSimShots, serverClub } = useSystemStore(
     useShallow((state) => ({
       connected: state.connected,
       mockMode: state.mockMode,
       debugMode: state.debugMode,
-      simStatuses: state.simStatuses,
       latestSimShots: state.latestSimShots,
       serverClub: state.serverClub,
     }))
   );
-  const { latestShot, shots, isNewShot, shotVersion } = useShotStore(
+  const { latestShot, shots, isNewShot, shotProcessingPhase, shotVersion } = useShotStore(
     useShallow((state) => ({
       latestShot: state.latestShot,
       shots: state.shots,
       isNewShot: state.isNewShot,
+      shotProcessingPhase: state.shotProcessingPhase,
       shotVersion: state.shotVersion,
     }))
   );
-  const cameraStatus = useCameraStore((state) => state.cameraStatus);
-  const selectedPlayer = usePlayerStore((state) => state.selectedPlayer);
-  const { debugReadings, debugShotLogs, radarConfig, triggerDiagnostics, triggerStatus } = useDebugStore(
+  const { cameraStatus, captureSettings, captureSettingsError } = useCameraStore(
+    useShallow((state) => ({
+      cameraStatus: state.cameraStatus,
+      captureSettings: state.captureSettings,
+      captureSettingsError: state.captureSettingsError,
+    }))
+  );
+  const { selectedPlayer, players, selectPlayer, addPlayer, removePlayer } = usePlayerStore(
+    useShallow((state) => ({
+      selectedPlayer: state.selectedPlayer,
+      players: state.players,
+      selectPlayer: state.selectPlayer,
+      addPlayer: state.addPlayer,
+      removePlayer: state.removePlayer,
+    }))
+  );
+  const serverPlayerName = useSystemStore((state) => state.serverPlayerName);
+  const { heroMetricId, setHeroMetricId } = useHeroMetricStore(
+    useShallow((state) => ({ heroMetricId: state.heroMetricId, setHeroMetricId: state.setHeroMetricId }))
+  );
+  const {
+    debugReadings,
+    debugShotLogs,
+    radarConfig,
+    triggerDiagnostics,
+    triggerStatus,
+    iwr6843Alert,
+    dismissIWR6843Alert,
+  } = useDebugStore(
     useShallow((state) => ({
       debugReadings: state.debugReadings,
       debugShotLogs: state.debugShotLogs,
       radarConfig: state.radarConfig,
       triggerDiagnostics: state.triggerDiagnostics,
       triggerStatus: state.triggerStatus,
+      iwr6843Alert: state.iwr6843Alert,
+      dismissIWR6843Alert: state.dismissIWR6843Alert,
     }))
   );
 
-  const [currentView, setCurrentView] = useState<View>('live');
+  const [currentView, setCurrentView] = useState<PanelView>('live');
   const [selectedClub, setSelectedClub] = useState('driver');
   const [selectedTrainingImplement, setSelectedTrainingImplement] = useState('driver');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [showShutdown, setShowShutdown] = useState(false);
+  const [shutdownState, setShutdownState] = useState<ShutdownState>('confirm');
+  // Open on every app load so the user confirms their club before the first
+  // shot; dismissing keeps the default. The /display route returns early below,
+  // so this never appears in the passive TV view.
+  const [pickerOpen, setPickerOpen] = useState(true);
+  const [addPlayerOpen, setAddPlayerOpen] = useState(false);
+  const [newPlayerName, setNewPlayerName] = useState('');
+  const [clearSessionOpen, setClearSessionOpen] = useState(false);
+  const { activeReplay, openReplay, closeReplay, reportPlaybackError } = useCameraReplayController();
+
   // Reflect a server-pushed club change (e.g. the club changed in the connected
-  // simulator) in the local picker, without echoing back to the server. Done
-  // during render (React's "adjust state when an input changes" pattern) rather
-  // than in an effect, which avoids a cascading-render lint error.
+  // simulator) locally without echoing back. Done during render (React's "adjust
+  // state when an input changes" pattern) rather than in an effect.
   const [appliedServerClub, setAppliedServerClub] = useState<string | null>(null);
   if (serverClub && serverClub !== appliedServerClub) {
     setAppliedServerClub(serverClub);
     setSelectedClub(serverClub);
   }
-  // Shown on every app load so the user confirms their club before the first
-  // shot (skippable, keeps the default). The /display route returns early
-  // below, so this interstitial never appears in the passive TV view.
-  const [showClubSelect, setShowClubSelect] = useState(true);
-  const [showShutdown, setShowShutdown] = useState(false);
-  const { isLaunchDaddyMode, isExploding, triggerExplosion, handleSecretTap } = useLaunchDaddy();
-  const { unitSystem, setUnitSystem } = useUnitPreference();
+  // Same pattern for a server-pushed player change. This used to live in
+  // PlayerPicker, which the menu sheet replaced.
+  const [appliedServerPlayer, setAppliedServerPlayer] = useState<string | null>(null);
+  if (serverPlayerName && serverPlayerName !== appliedServerPlayer) {
+    setAppliedServerPlayer(serverPlayerName);
+    if (serverPlayerName !== selectedPlayer) {
+      selectPlayer(serverPlayerName);
+    }
+  }
+
+  const { isLaunchDaddyMode, isExploding, triggerExplosion } = useLaunchDaddy();
   const isDisplayRoute = typeof window !== 'undefined' && window.location.pathname.replace(/\/$/, '') === '/display';
   const isSwingSpeedMode = triggerStatus.mode === 'swing-speed';
+  const activeImplementLabel = isSwingSpeedMode
+    ? getTrainingImplementLabel(selectedTrainingImplement)
+    : getClubName(selectedClub);
+
+  // Push the local player to the server once connected, so a reload restores it.
+  // Do not re-emit when selectedPlayer changes: that echoes player_changed back
+  // as set_player and races with the connect-time session_state snapshot.
+  useEffect(() => {
+    if (!connected || !shouldEchoSelectionToServer('became-connected')) return;
+    socketService.setPlayer(usePlayerStore.getState().selectedPlayer);
+  }, [connected]);
+
+  useEffect(() => {
+    return socketService.onSessionCleared(() => {
+      setClearSessionOpen(false);
+      setCurrentView('live');
+    });
+  }, []);
 
   // Trigger explosion when a new shot is detected in Launch Daddy mode
   useEffect(() => {
@@ -147,229 +179,276 @@ function AppContent() {
     };
   }, []);
 
-  const handleClubChange = (club: string) => {
-    setSelectedClub(club);
-    socketService.setClub(club);
+  const handleSelectPlayer = (playerName: string) => {
+    selectPlayer(playerName);
+    socketService.setPlayer(playerName);
+    setCurrentView('live');
   };
 
-  const handleTrainingImplementChange = (implement: string) => {
-    setSelectedTrainingImplement(implement);
-    socketService.setTrainingImplement(implement);
+  const handleRemovePlayer = (playerName: string) => {
+    if (playerName === usePlayerStore.getState().selectedPlayer) return;
+    removePlayer(playerName);
   };
+
+  const handleAddPlayer = () => {
+    if (!newPlayerName.trim()) return;
+    const playerName = addPlayer(newPlayerName);
+    socketService.setPlayer(playerName);
+    setNewPlayerName('');
+    setAddPlayerOpen(false);
+  };
+
+  const handlePickerSelect = (id: string) => {
+    if (isSwingSpeedMode) {
+      setSelectedTrainingImplement(id);
+      socketService.setTrainingImplement(id);
+    } else {
+      setSelectedClub(id);
+      socketService.setClub(id);
+    }
+    setPickerOpen(false);
+  };
+
+  const handleShutdown = async () => {
+    setShutdownState('pending');
+    try {
+      await shutdown();
+    } catch {
+      setShutdownState('error');
+    }
+  };
+
+  const closeShutdown = () => {
+    setShowShutdown(false);
+    setShutdownState('confirm');
+  };
+
+  const playerShots = filterShotsByPlayer(shots, selectedPlayer);
+  const playerLatestShot = playerShots[playerShots.length - 1] ?? null;
+  const playerIsNewShot = Boolean(
+    isNewShot && latestShot && playerLatestShot && latestShot.timestamp === playerLatestShot.timestamp
+  );
 
   if (isDisplayRoute) {
     return <DisplayMode connected={connected} cameraStatus={cameraStatus} latestShot={latestShot} shots={shots} />;
   }
 
+  const changeClubAction = (
+    <PanelAction onClick={() => setPickerOpen(true)}>
+      {isSwingSpeedMode ? t('app.changeImplement') : t('app.changeClub')}
+    </PanelAction>
+  );
+  const latestReplay = playerLatestShot?.camera_replay;
+
+  const liveHeaderActions = (
+    <>
+      {latestReplay ? (
+        <PanelAction variant="secondary" onClick={() => openReplay(latestReplay)}>
+          {t('replay.open')}
+        </PanelAction>
+      ) : null}
+      {changeClubAction}
+    </>
+  );
+
+  const addPlayerAction = <PanelAction onClick={() => setAddPlayerOpen(true)}>{t('menu.addPlayer')}</PanelAction>;
+
+  const clearSessionAction = (
+    <PanelAction variant="danger" onClick={() => setClearSessionOpen(true)}>
+      {t('app.clearSession')}
+    </PanelAction>
+  );
+
+  const debugRecordAction = (
+    <PanelAction variant="secondary" onClick={() => socketService.toggleDebug()}>
+      {debugMode ? t('app.stopRecording') : t('app.record')}
+    </PanelAction>
+  );
+
   return (
-    <div className={`app ${isLaunchDaddyMode ? 'app--launch-daddy' : ''} ${isExploding ? 'app--exploding' : ''}`}>
-      {showClubSelect && (
-        <ClubSelectScreen
-          selectedClub={selectedClub}
-          onSelect={(club) => {
-            handleClubChange(club);
-            setShowClubSelect(false);
-          }}
-          onSkip={() => setShowClubSelect(false)}
-        />
-      )}
-
-      {/* Launch Daddy Overlay */}
+    <div className={`panel-app ${isLaunchDaddyMode ? 'app--launch-daddy' : ''} ${isExploding ? 'app--exploding' : ''}`}>
       <LaunchDaddyOverlay />
-      <LaunchDaddySecretIndicator />
 
-      <header className="header">
-        {/* Secret activation area - click/tap 5 times quickly */}
-        <div
-          className="header__secret-tap"
-          onClick={handleSecretTap}
-          onKeyDown={(e) => e.key === 'Enter' && handleSecretTap()}
-          role="button"
-          tabIndex={0}
-          style={{
-            padding: '8px',
-            cursor: 'pointer',
-            minWidth: '44px',
-            minHeight: '44px',
-            display: 'flex',
-            alignItems: 'center',
-            userSelect: 'none',
-          }}
-        >
-          {isLaunchDaddyMode ? <LaunchDaddyBrand /> : <Logo size="small" variant="light" />}
-        </div>
-        <div className="header__controls">
-          <div className="unit-toggle" role="group" aria-label="Display units">
-            <button
-              type="button"
-              className={`unit-toggle__button ${unitSystem === 'imperial' ? 'unit-toggle__button--active' : ''}`}
-              onClick={() => setUnitSystem('imperial')}
-              aria-pressed={unitSystem === 'imperial'}
-            >
-              MPH/YDS
-            </button>
-            <button
-              type="button"
-              className={`unit-toggle__button ${unitSystem === 'metric' ? 'unit-toggle__button--active' : ''}`}
-              onClick={() => setUnitSystem('metric')}
-              aria-pressed={unitSystem === 'metric'}
-            >
-              KMH/M
-            </button>
+      {iwr6843Alert && (
+        <div className="iwr-alert" role="alert">
+          <div>
+            <strong>{t('live.tiRadarFailed')}</strong>
+            <span>{t('live.tiRadarDetail', { reason: iwr6843Alert.reason })}</span>
           </div>
-          <PlayerPicker />
-          {isSwingSpeedMode ? (
-            <TrainingImplementPicker
-              selectedImplement={selectedTrainingImplement}
-              onImplementChange={handleTrainingImplementChange}
-            />
-          ) : (
-            <ClubPicker selectedClub={selectedClub} onClubChange={handleClubChange} />
-          )}
-          <BallDetectionIndicator
-            available={cameraStatus.available}
-            enabled={cameraStatus.enabled}
-            detected={cameraStatus.ball_detected}
-            confidence={cameraStatus.ball_confidence}
-            onToggle={() => socketService.toggleCamera()}
-          />
-          <SimStatus statuses={simStatuses} />
-          <ConnectionStatus connected={connected} />
-          <button className="power-button" onClick={() => setShowShutdown(true)} title="Shut down">
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              width="20"
-              height="20"
-            >
-              <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
-              <line x1="12" y1="2" x2="12" y2="12" />
-            </svg>
+          <button type="button" onClick={dismissIWR6843Alert} aria-label={t('live.dismissAlert')}>
+            {t('live.dismiss')}
           </button>
         </div>
-      </header>
-
-      {showShutdown && (
-        <div className="shutdown-overlay">
-          <div className="shutdown-dialog">
-            <p>Shut down OpenFlight?</p>
-            <div className="shutdown-dialog__buttons">
-              <button
-                className="shutdown-dialog__confirm"
-                onClick={() => {
-                  shutdown();
-                  setShowShutdown(false);
-                }}
-              >
-                Shut Down
-              </button>
-              <button className="shutdown-dialog__cancel" onClick={() => setShowShutdown(false)}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
-      <nav className="nav">
-        <button
-          className={`nav__button ${currentView === 'live' ? 'nav__button--active' : ''}`}
-          onClick={() => setCurrentView('live')}
-        >
-          {Icons.live}
-          <span>Live</span>
-        </button>
-        <button
-          className={`nav__button ${currentView === 'stats' ? 'nav__button--active' : ''}`}
-          onClick={() => setCurrentView('stats')}
-        >
-          {Icons.stats}
-          <span>Stats</span>
-        </button>
-        <button
-          className={`nav__button ${currentView === 'shots' ? 'nav__button--active' : ''}`}
-          onClick={() => setCurrentView('shots')}
-        >
-          {Icons.shots}
-          <span>Shots</span>
-          {shots.length > 0 && <span className="nav__badge">{shots.length}</span>}
-        </button>
-        <button
-          className={`nav__button ${currentView === 'camera' ? 'nav__button--active' : ''} ${cameraStatus.streaming ? 'nav__button--streaming' : ''}`}
-          onClick={() => setCurrentView('camera')}
-        >
-          {Icons.camera}
-          <span>Camera</span>
-          {cameraStatus.ball_detected && <span className="nav__ball-dot" />}
-        </button>
-        <button
-          className={`nav__button ${currentView === 'conditions' ? 'nav__button--active' : ''}`}
-          onClick={() => setCurrentView('conditions')}
-        >
-          {Icons.conditions}
-          <span>Conditions</span>
-        </button>
-        <button
-          className={`nav__button ${currentView === 'debug' ? 'nav__button--active' : ''} ${debugMode ? 'nav__button--recording' : ''}`}
-          onClick={() => setCurrentView('debug')}
-        >
-          {Icons.debug}
-          <span>Debug</span>
-          {debugMode && <span className="nav__recording-dot" />}
-        </button>
-      </nav>
+      {showShutdown ? (
+        <ShutdownDialog state={shutdownState} onConfirm={handleShutdown} onCancel={closeShutdown} />
+      ) : null}
 
-      <main className="main">
+      {activeReplay ? (
+        <CameraReplayDialog
+          replay={activeReplay.replay}
+          state={activeReplay.state}
+          onClose={closeReplay}
+          onRetry={() => openReplay(activeReplay.replay)}
+          onPlaybackError={reportPlaybackError}
+        />
+      ) : null}
+
+      <main className="panel-app__main">
         {currentView === 'live' && (
-          <div className="live-view">
-            {isNewShot && <div key={shotVersion} className="shot-flash" />}
-            <ShotDisplay
-              key={shotVersion}
-              shot={latestShot}
-              shots={shots}
-              animate={isNewShot}
-              activePlayerName={selectedPlayer}
-              activeTrainingImplement={isSwingSpeedMode ? selectedTrainingImplement : undefined}
-            />
+          <>
+            <ShotProcessingArea phase={shotProcessingPhase}>
+              <LivePanel
+                key={shotVersion}
+                shot={playerLatestShot}
+                shots={shots}
+                playerName={selectedPlayer}
+                clubLabel={activeImplementLabel}
+                activeTrainingImplement={isSwingSpeedMode ? selectedTrainingImplement : undefined}
+                selectedMetricId={heroMetricId}
+                onSelectMetric={setHeroMetricId}
+                isNewShot={playerIsNewShot}
+                ballDetectionEnabled={shouldEnableLiveBallWarning(currentView, cameraStatus)}
+                ballDetected={cameraStatus.ball_detected}
+                headerAction={liveHeaderActions}
+              />
+            </ShotProcessingArea>
             {debugMode && <SimShotBadges latestSimShots={latestSimShots} />}
-            {mockMode && (
-              <button className="simulate-button" onClick={() => socketService.simulateShot()}>
-                {isSwingSpeedMode ? 'Simulate Swing' : 'Simulate Shot'}
-              </button>
-            )}
-          </div>
+          </>
         )}
-        {currentView === 'stats' && <StatsView shots={shots} onClearSession={() => socketService.clearSession()} />}
+        {currentView === 'players' && (
+          <PlayersPanel
+            players={players}
+            selectedPlayer={selectedPlayer}
+            shots={shots}
+            onSelectPlayer={handleSelectPlayer}
+            onRemovePlayer={handleRemovePlayer}
+            headerAction={addPlayerAction}
+          />
+        )}
+        {currentView === 'stats' && (
+          <StatsPanel
+            shots={shots}
+            activeClub={selectedClub}
+            playerName={selectedPlayer}
+            headerAction={clearSessionAction}
+          />
+        )}
         {currentView === 'shots' && (
-          <ShotList shots={shots} onDeleteShot={(timestamp) => socketService.deleteShot(timestamp)} />
+          <ShotsPanel
+            shots={shots}
+            playerName={selectedPlayer}
+            clubLabel={activeImplementLabel}
+            onDeleteShot={(timestamp) => socketService.deleteShot(timestamp)}
+            onReplayShot={(shot) => {
+              if (shot.camera_replay) openReplay(shot.camera_replay);
+            }}
+          />
         )}
         {currentView === 'camera' && (
-          <CameraFeed
+          <CameraPanel
             cameraStatus={cameraStatus}
+            clubLabel={activeImplementLabel}
+            captureSettings={captureSettings}
+            captureSettingsError={captureSettingsError}
             onToggleCamera={() => socketService.toggleCamera()}
             onToggleStream={() => socketService.toggleCameraStream()}
+            onUpdateCaptureSettings={(settings) => socketService.setCameraCaptureSettings(settings)}
           />
         )}
-        {currentView === 'conditions' && <ConditionsView unitSystem={unitSystem} />}
         {currentView === 'debug' && (
-          <DebugPanel
-            enabled={debugMode}
-            readings={debugReadings}
-            shotLogs={debugShotLogs}
-            radarConfig={radarConfig}
-            cameraStatus={cameraStatus}
-            mockMode={mockMode}
-            onToggle={() => socketService.toggleDebug()}
-            onUpdateConfig={(config) => socketService.setRadarConfig(config)}
-            triggerDiagnostics={triggerDiagnostics}
-            triggerStatus={triggerStatus}
-          />
+          <div className="panel">
+            <PanelHeader
+              title={t('nav.debug')}
+              subtitle={debugMode ? t('app.debugRecording') : t('app.debugIdle')}
+              actions={debugRecordAction}
+            />
+            <div className="panel__body panel-app__debug">
+              <DebugPanel
+                enabled={debugMode}
+                readings={debugReadings}
+                shotLogs={debugShotLogs}
+                radarConfig={radarConfig}
+                cameraStatus={cameraStatus}
+                mockMode={mockMode}
+                onToggle={() => socketService.toggleDebug()}
+                onUpdateConfig={(config) => socketService.setRadarConfig(config)}
+                triggerDiagnostics={triggerDiagnostics}
+                triggerStatus={triggerStatus}
+              />
+            </div>
+          </div>
         )}
+        {mockMode && currentView === 'live' ? (
+          <SimulateBubble
+            label={isSwingSpeedMode ? t('app.simulateSwing') : t('app.simulateShot')}
+            onSimulate={() => socketService.simulateShot()}
+          />
+        ) : null}
       </main>
+
+      {/*
+       * Overlays sit outside <main> so they cover the footer too, matching how
+       * 6a draws them over the whole card.
+       */}
+      {menuOpen ? (
+        <MenuSheet
+          onClose={() => setMenuOpen(false)}
+          onShutdown={() => {
+            setMenuOpen(false);
+            setShutdownState('confirm');
+            setShowShutdown(true);
+          }}
+        />
+      ) : null}
+
+      {addPlayerOpen ? (
+        <AddPlayerDialog
+          name={newPlayerName}
+          onChange={setNewPlayerName}
+          onAdd={handleAddPlayer}
+          onCancel={() => {
+            setNewPlayerName('');
+            setAddPlayerOpen(false);
+          }}
+        />
+      ) : null}
+
+      {clearSessionOpen ? (
+        <ClearSessionDialog
+          playerName={selectedPlayer}
+          onConfirm={() => socketService.clearSession(selectedPlayer)}
+          onCancel={() => setClearSessionOpen(false)}
+        />
+      ) : null}
+
+      {pickerOpen ? (
+        <PickerOverlay
+          title={isSwingSpeedMode ? t('app.selectImplement') : t('app.selectClub')}
+          selectedId={isSwingSpeedMode ? selectedTrainingImplement : selectedClub}
+          sections={isSwingSpeedMode ? trainingImplementSections() : clubSections()}
+          onSelect={handlePickerSelect}
+          onClose={() => setPickerOpen(false)}
+          wide={isSwingSpeedMode}
+        />
+      ) : null}
+
+      <PanelFooter
+        currentView={currentView}
+        onChangeView={setCurrentView}
+        onOpenMenu={() => setMenuOpen((open) => !open)}
+        menuOpen={menuOpen}
+        shotCount={playerShots.length}
+        cameraStreaming={cameraStatus.streaming}
+        ballDetected={cameraStatus.ball_detected}
+        debugRecording={debugMode}
+        brand={isLaunchDaddyMode ? <LaunchDaddyBrand /> : undefined}
+        onShutdown={() => {
+          setShutdownState('confirm');
+          setShowShutdown(true);
+        }}
+      />
     </div>
   );
 }

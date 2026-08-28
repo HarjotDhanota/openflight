@@ -29,10 +29,11 @@ openflight-cloud push --retry      # also re-attempt parked/failed sessions
 > predates it, reinstall so the console script gets wired up:
 >
 > ```bash
-> uv pip install -e .
+> uv sync
 > ```
 >
-> Until then you can run it as a module: `python -m openflight.cloud.cli link`.
+> Until then you can run it as a module:
+> `uv run python -m openflight.cloud.cli link`.
 
 ## Linking a device
 

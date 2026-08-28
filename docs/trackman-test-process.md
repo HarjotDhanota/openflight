@@ -18,24 +18,23 @@ For every test pass, preserve enough raw data and diagnostics to answer:
 ## Before A Session
 
 1. Pull latest `main` on the Pi and restart OpenFlight with the Trackman test
-   preset:
+   preset and the measured vertical-radar tilt:
 
    ```bash
-   scripts/start-kiosk.sh --trackman-test
+   scripts/start-kiosk.sh --trackman-test \
+     --kld7-mount-tilt <measured-degrees>
    ```
 
-   This enables both K-LD7 radars, raw RADC payload logging,
-   `--session-location trackman`, and the K-LD7 geometry field defaults:
-   `--kld7-vertical-estimator geometry`, `--kld7-mount-tilt 10`,
-   `--kld7-ball-distance 5`, and `--kld7-angle-offset 2.5`. It intentionally
-   does not enable saved-angle Trackman calibration or experimental RADC tuning,
-   so the field session keeps production angle extraction behavior while
-   preserving raw payloads for replay.
+   This enables both K-LD7 radars, raw RADC payload logging, and
+   `--session-location trackman`. It keeps production angle extraction while
+   preserving raw payloads for replay. Mount tilt has no safe default because
+   an incorrect value directly biases launch angle.
    To verify the exact server command without starting hardware or the kiosk,
    run:
 
    ```bash
-   scripts/start-kiosk.sh --trackman-test --dry-run
+   scripts/start-kiosk.sh --trackman-test \
+     --kld7-mount-tilt <measured-degrees> --dry-run
    ```
 2. Confirm the selected club in the UI matches the club being hit.
    - This matters for launch-angle fallbacks, spin expectations, and club-aware
@@ -83,13 +82,8 @@ Optional when debugging K-LD7 angles:
 - K-LD7 raw ADC `.pkl` from `scripts/analysis/capture_kld7_radc.py`
 - Any `diagnose_kld7_raw_adc.py` output directories
 
-Common local paths:
-
-- Current workspace: `/Users/colemanrollins/conductor/workspaces/openflight/<workspace>`
-- Main parent checkout: `/Users/colemanrollins/code/openflight`
-
-The Pi or parent checkout may contain session logs that are not present in the
-Conductor workspace. Check both before assuming a file is missing.
+Session logs normally live in `~/openflight_sessions/`. Copy the matching log
+and reference export into the same analysis workspace before comparing them.
 
 ## Raw K-LD7 ADC Capture
 
@@ -366,7 +360,7 @@ Run focused checks after changing launch angle, spin, logging, or comparison
 scripts:
 
 ```bash
-ruff check \
+uv run ruff check \
   src/openflight/rolling_buffer \
   src/openflight/server.py \
   src/openflight/session_logger.py \
@@ -376,23 +370,17 @@ ruff check \
   tests/test_session_logger.py \
   tests/test_compare_trackman.py
 
-PYTHONPATH=src:scripts/analysis uv run --no-project \
-  --with pytest --with pyserial --with flask --with flask-socketio \
-  --with flask-cors --with numpy --with scipy \
-  python -m pytest \
+uv run pytest \
   tests/test_rolling_buffer.py \
   tests/test_session_logger.py \
   tests/test_server.py \
   tests/test_compare_trackman.py
 ```
 
-For the full suite, include optional analysis dependencies:
+For the full suite:
 
 ```bash
-PYTHONPATH=src:scripts/analysis uv run --no-project \
-  --with pytest --with pyserial --with flask --with flask-socketio \
-  --with flask-cors --with numpy --with scipy --with matplotlib \
-  python -m pytest tests
+uv run pytest tests
 ```
 
 ## Related Docs

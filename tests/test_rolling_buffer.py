@@ -2,6 +2,7 @@
 
 import json
 import math
+import threading
 import time
 from datetime import datetime
 from unittest.mock import MagicMock
@@ -552,7 +553,12 @@ class TestSoundTriggerTimestampPropagation:
             is_open = True
 
             def __init__(self):
-                self._response = b'{"Q": [1]}'
+                self._response = (
+                    b'{"sample_time": 1.0}\r\n'
+                    b'{"trigger_time": 1.1}\r\n'
+                    b'{"I": [1]}\r\n'
+                    b'{"Q": [1]}'
+                )
 
             @property
             def in_waiting(self):
@@ -571,7 +577,7 @@ class TestSoundTriggerTimestampPropagation:
 
         response = radar.wait_for_hardware_trigger(timeout=1.0)
 
-        assert response == '{"Q": [1]}'
+        assert response.endswith('{"Q": [1]}')
         assert radar.last_hardware_trigger_first_byte_timestamp is not None
 
     def test_sound_trigger_uses_buffer_offset_for_trigger_timestamp(self):
@@ -2850,6 +2856,185 @@ class TestShutdownPreservesRollingBuffer:
         assert monitor._running is False, (
             "disconnect() must call stop() so the capture thread shuts down"
         )
+
+    def test_processing_failure_reports_capture_calculation_and_failure(self):
+        """UI feedback must cover capture and FFT work, then clear on failure."""
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="sound")
+        capture = IQCapture(
+            sample_time=0.0,
+            trigger_time=0.068,
+            i_samples=[2048] * 16,
+            q_samples=[2048] * 16,
+        )
+        states = []
+
+        class OneCaptureTrigger:
+            calls = 0
+
+            def wait_for_trigger(self, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    kwargs["capture_started_callback"]()
+                    return capture
+                monitor._running = False
+                return None
+
+            @staticmethod
+            def drain_diagnostics():
+                return []
+
+            @staticmethod
+            def reset():
+                return None
+
+        class FailingProcessor:
+            @staticmethod
+            def process_capture(*_args, **_kwargs):
+                assert states == ["capturing", "calculating"]
+                return None
+
+        monitor.trigger = OneCaptureTrigger()
+        monitor.processor = FailingProcessor()
+        monitor._diagnostic_callback = None
+        monitor._processing_callback = states.append
+        monitor._running = True
+
+        monitor._capture_loop()
+
+        assert states == ["capturing", "calculating", "failed"]
+
+    @pytest.mark.parametrize("reason", ["parse_failed", "no_outbound_speed"])
+    def test_rejected_started_capture_clears_processing_feedback(self, reason):
+        """A dump rejected before FFT must not leave capture feedback stale."""
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="sound")
+        states = []
+
+        class RejectedCaptureTrigger:
+            calls = 0
+
+            def wait_for_trigger(self, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    kwargs["capture_started_callback"]()
+                    return None
+                monitor._running = False
+                return None
+
+            @staticmethod
+            def drain_diagnostics():
+                return [{"accepted": False, "reason": reason}]
+
+            @staticmethod
+            def reset():
+                return None
+
+        monitor.trigger = RejectedCaptureTrigger()
+        monitor._diagnostic_callback = None
+        monitor._processing_callback = states.append
+        monitor._running = True
+
+        monitor._capture_loop()
+
+        assert states == ["capturing", "failed"]
+
+    def test_idle_sound_timeout_does_not_emit_processing_failure(self):
+        """No feedback should appear or clear when no hardware dump began."""
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="sound")
+        states = []
+
+        class IdleTrigger:
+            calls = 0
+
+            def wait_for_trigger(self, **_kwargs):
+                self.calls += 1
+                if self.calls > 1:
+                    monitor._running = False
+                return None
+
+            @staticmethod
+            def drain_diagnostics():
+                return []
+
+            @staticmethod
+            def reset():
+                return None
+
+        monitor.trigger = IdleTrigger()
+        monitor._diagnostic_callback = None
+        monitor._processing_callback = states.append
+        monitor._running = True
+
+        monitor._capture_loop()
+
+        assert states == []
+
+    def test_stop_cancels_idle_sound_trigger_wait(self):
+        """Default shutdown should wake the idle trigger thread immediately."""
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        waiting = threading.Event()
+
+        class IdleRadar:
+            def __init__(self):
+                self.cancel_event = None
+
+            def wait_for_hardware_trigger(
+                self,
+                timeout,
+                cancel_event=None,
+                on_first_byte=None,
+            ):
+                self.cancel_event = cancel_event
+                waiting.set()
+                if cancel_event is None:
+                    time.sleep(0.25)
+                else:
+                    cancel_event.wait(timeout)
+                return ""
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="sound")
+        monitor.radar = IdleRadar()
+        monitor.start()
+        assert waiting.wait(timeout=1.0)
+
+        started = time.monotonic()
+        monitor.stop()
+
+        assert monitor.radar.cancel_event is not None
+        assert time.monotonic() - started < 0.2
+
+    def test_stop_does_not_abandon_an_active_sound_capture(self):
+        """A slow UART dump must finish before shutdown closes the serial port."""
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        class ActiveCaptureThread:
+            def __init__(self):
+                self.join_timeouts = []
+                self.alive = True
+
+            def join(self, timeout=None):
+                self.join_timeouts.append(timeout)
+                self.alive = False
+
+            def is_alive(self):
+                return self.alive
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="sound")
+        active_thread = ActiveCaptureThread()
+        monitor._capture_thread = active_thread
+        monitor._running = True
+
+        monitor.stop()
+
+        assert active_thread.join_timeouts == [5.0]
+        assert active_thread.is_alive() is False
+        assert monitor._capture_thread is None
 
 
 class TestRollingBufferStartupMode:

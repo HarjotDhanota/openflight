@@ -9,7 +9,7 @@ Thank you for your interest in contributing to OpenFlight! This document provide
 - Python 3.10 or higher
 - Node.js 20+ (for UI development)
 - Git
-- [uv](https://github.com/astral-sh/uv) package manager (recommended)
+- [uv](https://github.com/astral-sh/uv) package manager (required)
 
 ### Development Setup
 
@@ -78,6 +78,9 @@ make format
 ```
 
 ### TypeScript/React
+
+Use the checked-in [UI color palette](docs/color_palette.html) when adding or
+changing visual states.
 
 ```bash
 cd ui
@@ -202,8 +205,11 @@ openflight/
 │   ├── ops243.py         # Radar driver
 │   ├── launch_monitor.py # Shot detection
 │   ├── server.py         # WebSocket server
-│   ├── kld7/             # K-LD7 angle radar (deprecated)
-│   └── rolling_buffer/   # Spin detection
+│   ├── rolling_buffer/   # OPS capture and signal processing
+│   ├── iwr6843/          # Current angle radar
+│   ├── kld7/             # Legacy angle radar
+│   ├── sim/              # Simulator connectors
+│   └── cloud/            # FlightWeb uploader
 ├── ui/                   # React frontend
 │   └── src/
 │       ├── components/   # UI components

@@ -36,10 +36,11 @@ Speed limits by sample rate:
 import json
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import serial
 import serial.tools.list_ports
@@ -1467,7 +1468,11 @@ class OPS243Radar:
         return full_response
 
     def wait_for_hardware_trigger(
-        self, timeout: float = 30.0, dump_grace: Optional[float] = None
+        self,
+        timeout: float = 30.0,
+        dump_grace: Optional[float] = None,
+        cancel_event: Optional[threading.Event] = None,
+        on_first_byte: Optional[Callable[[], None]] = None,
     ) -> str:
         """
         Wait for hardware trigger to fire and read the buffer dump.
@@ -1483,6 +1488,9 @@ class OPS243Radar:
                 timeout window must not have its dump cut off by the original
                 deadline. None derives it from baud (floor 8s): the ~40.6KB
                 dump takes ~1.8s over UART at 230,400 but 21s at 19,200.
+            cancel_event: Stops an idle wait promptly during shutdown. Once a
+                dump has started, it is allowed to finish normally.
+            on_first_byte: Called once when a hardware-triggered dump begins.
 
         Returns:
             Raw response string containing JSON lines, or empty string on timeout
@@ -1497,6 +1505,8 @@ class OPS243Radar:
         self.serial.reset_input_buffer()
 
         response_lines = []
+        idle_bytes = bytearray()
+        capture_markers = (b'{"sample_time"', b'{"trigger_time"')
         start_time = time.time()
         deadline = start_time + timeout
         last_data_time = None
@@ -1504,14 +1514,37 @@ class OPS243Radar:
         self.last_hardware_trigger_first_byte_timestamp = None
 
         while time.time() < deadline:
-            if self.serial.in_waiting:
-                first_byte_timestamp = time.time() if last_data_time is None else None
-                chunk = self.serial.read(self.serial.in_waiting)
+            waiting = self.serial.in_waiting
+            if waiting:
+                chunk = self.serial.read(waiting)
+                first_byte_timestamp = None
+                if last_data_time is None:
+                    idle_bytes.extend(chunk)
+                    marker_offsets = [idle_bytes.find(marker) for marker in capture_markers]
+                    marker_offsets = [offset for offset in marker_offsets if offset >= 0]
+                    if not marker_offsets:
+                        # Preserve enough trailing bytes to recognize a marker split
+                        # across reads, while discarding unsolicited CLI/clock noise.
+                        max_marker = max(len(marker) for marker in capture_markers)
+                        if len(idle_bytes) > max_marker:
+                            del idle_bytes[:-max_marker]
+                        time.sleep(0.01)
+                        continue
+                    capture_start = min(marker_offsets)
+                    chunk = bytes(idle_bytes[capture_start:])
+                    idle_bytes.clear()
+                    first_byte_timestamp = time.time()
+
                 response_lines.append(chunk.decode("ascii", errors="ignore"))
                 bytes_received += len(chunk)
                 if first_byte_timestamp is not None:
                     last_data_time = first_byte_timestamp
                     self.last_hardware_trigger_first_byte_timestamp = last_data_time
+                    if on_first_byte is not None:
+                        try:
+                            on_first_byte()
+                        except Exception:
+                            logger.warning("[OPS] First-byte callback failed", exc_info=True)
                     # The trigger fired — the dump is now in flight. Extend
                     # the deadline so a late trigger gets its full dump.
                     deadline = max(deadline, last_data_time + dump_grace)
@@ -1535,6 +1568,9 @@ class OPS243Radar:
 
                 time.sleep(0.01)
             else:
+                if cancel_event is not None and cancel_event.is_set() and last_data_time is None:
+                    logger.info("[OPS] Hardware trigger wait cancelled before capture")
+                    break
                 # If we've started receiving data, use shorter timeout
                 if last_data_time and (time.time() - last_data_time) > 0.5:
                     full_response = "".join(response_lines)

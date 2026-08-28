@@ -14,14 +14,29 @@ Make sure you have all the hardware. See the **[Parts List](PARTS.md)** for what
 - OPS243-A Doppler Radar + USB cable
 - SparkFun SEN-14262 sound detector (wired per the [Sound Trigger Wiring Guide](sound-trigger-wiring.md))
 
+**Optional:**
+- TI IWR6843LEVM + data cable — measured launch angle and experimental club path; see the [IWR6843 Operator Guide](iwr6843/README.md)
+- Geekworm X1202 or X1206 UPS HAT — portable Pi 5 power using four separately purchased 18650 or 21700 cells; see the [battery monitoring overview](battery/README.md) and [Geekworm operator guide](battery/geekworm.md)
+- InnoMaker OV9281 global-shutter camera (~$30) — experimental vision work; see [Camera and YOLO Experiments](yolo-performance-tuning.md)
+
 **Optional (deprecated):**
 - K-LD7 + FTDI adapter (×2) — for launch angle and club path (see [Parts List](PARTS.md)). **Deprecated** — superseded by a more capable radar chip; don't buy for a new build. Supported for existing builds only.
 
 ## Setup
 
-### 1. Install Raspberry Pi OS
+### 1. Install Raspberry Pi OS and Dependencies
 
 Use Raspberry Pi Imager to flash **Raspberry Pi OS (64-bit)** to your SD card.
+
+On the first boot, before cloning OpenFlight, you'll likely need a few dependencies to run the setup.sh script.
+
+Run the following command:
+
+```bash
+sudo apt update && sudo apt install -y swig liblgpio-dev python3-dev
+```
+
+If `./scripts/setup/setup.sh` updates `~/.bashrc`, you may need to run `source ~/.bashrc` (or open a new terminal) so your current shell picks up the new environment variables immediately without needing to reboot or re-login.
 
 ### 2. Run the setup script
 
@@ -42,8 +57,11 @@ configuration with prompts:
    (you'll be asked to unplug/replug the radar once)
 3. **K-LD7 radars** (deprecated; if you have them) — identifies each radar by
    plugging them in one at a time, so OpenFlight always knows which is which
-4. **Auto-start on boot** — optional systemd service
-5. **Desktop shortcut** — optional
+4. **Geekworm UPS** (optional) — enables native X1202/X1206 battery and
+   external-power telemetry, Pi power settings, and desktop battery support
+5. **Auto-start on boot** — optional systemd service
+6. **Desktop shortcut** — optional
+7. **FlightWeb cloud sync** — optional uploader and device linking
 
 Every step can be skipped and the script is **safe to re-run** any time —
 it picks up where you left off.
@@ -51,12 +69,16 @@ it picks up where you left off.
 ### 3. Start hitting balls
 
 ```bash
-./scripts/start-kiosk.sh                # Default: rolling buffer + sound trigger
-./scripts/start-kiosk.sh --kld7         # With K-LD7 angle radars (deprecated)
-./scripts/start-kiosk.sh --mock         # Mock mode (no hardware)
+./scripts/start-kiosk.sh        # Default: rolling buffer + sound trigger
+./scripts/start-kiosk.sh --mock # Mock mode (no hardware)
 ```
 
 Then open `http://localhost:8080` or use the touchscreen.
+
+For the current IWR6843 angle radar, use the measured startup command in the
+[IWR6843 Operator Guide](iwr6843/README.md#start-openflight). Existing K-LD7
+builds use `--kld7 --kld7-mount-tilt <measured-degrees>`; see
+[Legacy K-LD7 Setup](kld7.md).
 
 ### 4. (Optional) Stream to a golf simulator
 
@@ -142,58 +164,38 @@ what you flashed.
 > every capture. Use a separately powered USB hub for both radars instead
 > (operator guide, Option B).
 
+### Geekworm X1202/X1206 UPS
+
+The optional UPS setup is automated and safe to rerun:
+
+```bash
+sudo ./scripts/battery/geekworm/setup.sh
+sudo reboot
+./scripts/battery/geekworm/setup.sh --verify
+```
+
+It enables I2C, native Linux battery and charger devices, the Pi 5 EEPROM power
+settings required by Geekworm, and the Raspberry Pi taskbar compatibility
+package. It does not install automatic shutdown or charging-control services.
+
+Cell type, board-revision power limits, physical installation, every system
+change, and troubleshooting are documented in the
+**[Geekworm X1202/X1206 Operator Guide](battery/geekworm.md)**.
+
 ### K-LD7 Device Names (Deprecated Hardware)
 
-USB serial adapters can swap between `/dev/ttyUSB0` and `/dev/ttyUSB1` after a
-reboot, so OpenFlight needs fixed names (`/dev/kld7_vertical` and
-`/dev/kld7_horizontal`) to tell the two radars apart. The wizard handles this —
-you just plug each radar in when asked:
+Existing K-LD7 builds need stable `/dev/kld7_vertical` and
+`/dev/kld7_horizontal` names because USB adapter numbers can swap after a
+reboot. Run the device wizard, then follow the legacy guide:
 
 ```bash
-./scripts/setup/setup_kld7_devices.sh          # run / redo the mapping
-./scripts/setup/setup_kld7_devices.sh --show   # check the current mapping
+./scripts/setup/setup_kld7_devices.sh
+./scripts/setup/setup_kld7_devices.sh --show
 ```
 
-It also installs the FTDI low-latency rule (the K-LD7 RADC stream runs at
-3 Mbaud and needs `latency_timer=1ms` instead of the Linux default 16ms).
-On startup, the server logs should show both radars at `1ms`:
-
-```text
-[KLD7:vertical] USB serial latency_timer=1ms ...
-[KLD7:horizontal] USB serial latency_timer=1ms ...
-```
-
-<details>
-<summary>Manual steps (what the wizard does)</summary>
-
-Find each adapter's serial number:
-
-```bash
-udevadm info -a /dev/ttyUSB0 | grep '{serial}' | head -1
-udevadm info -a /dev/ttyUSB1 | grep '{serial}' | head -1
-```
-
-Create a udev rule with the serial numbers (replace `FTXXXXXX`/`FTYYYYYY`):
-
-```bash
-sudo tee /etc/udev/rules.d/99-kld7.rules << 'EOF'
-SUBSYSTEM=="tty", ATTRS{serial}=="FTXXXXXX", SYMLINK+="kld7_vertical"
-SUBSYSTEM=="tty", ATTRS{serial}=="FTYYYYYY", SYMLINK+="kld7_horizontal"
-EOF
-
-sudo udevadm control --reload-rules && sudo udevadm trigger
-```
-
-Then install the latency rule:
-
-```bash
-sudo scripts/setup/setup_kld7_latency.sh
-```
-
-Use `--dry-run` to preview the rule, or `--all-ftdi` if the `/dev/kld7_*`
-names aren't set up yet.
-
-</details>
+The wizard also installs the required FTDI low-latency rule. See
+[Legacy K-LD7 Setup](kld7.md) for mounting and startup, and
+[K-LD7 Troubleshooting](kld7-troubleshooting.md) for serial failures.
 
 ### Auto-Start on Boot
 
@@ -231,45 +233,17 @@ sudo systemctl restart openflight
 
 </details>
 
----
-
-## K-LD7 Physical Setup (Deprecated Hardware)
-
-> **⚠️ DEPRECATED:** The K-LD7 angle radars are deprecated — this section applies to existing K-LD7 builds only.
-
-### Mounting
-
-- **Vertical unit** — measures launch angle. Mount with the antenna plane vertical, aimed at the hitting area.
-- **Horizontal unit** — measures club path / aim direction. Mount with the antenna plane horizontal.
-
-Both should be positioned near the OPS243-A, 3-5 feet behind the tee.
-
-### Geometry Calibration
-
-The vertical K-LD7 geometry estimator needs the physical mount tilt,
-ball-to-radar distance, and boresight offset to match real launch angles.
-
-1. Start a session with `--kld7-geometry`
-2. Hit 5-10 shots with a known club (7-iron recommended)
-3. Compare reported launch angles to expected values:
-   - Wedge: 24-30°, 7-iron: 16-18°, 5-iron: 12-14°, Driver: 10-14°
-4. Keep `--kld7-mount-tilt` and `--kld7-ball-distance` matched to the physical
-   setup; adjust `--kld7-angle-offset` for a stable boresight bias.
-
-The current field preset is mount tilt `10°`, ball distance `5ft`, and angle
-offset `+2.5°`. The exact values depend on your mounting position.
-
-See [K-LD7 Troubleshooting](kld7-troubleshooting.md) for more details.
-
 ## Running OpenFlight
 
 ### Kiosk Mode (Fullscreen — Recommended)
 
 ```bash
-./scripts/start-kiosk.sh                    # Default: rolling buffer + sound trigger
-./scripts/start-kiosk.sh --kld7-geometry    # With K-LD7 launch-angle geometry defaults
-./scripts/start-kiosk.sh --mock             # Mock mode (no hardware needed)
+./scripts/start-kiosk.sh        # Default: rolling buffer + sound trigger
+./scripts/start-kiosk.sh --mock # Mock mode (no hardware needed)
 ```
+
+Use the [IWR6843 Operator Guide](iwr6843/README.md#start-openflight) or
+[Legacy K-LD7 Setup](kld7.md) for angle-radar startup commands.
 
 ### Manual Start
 
@@ -302,8 +276,10 @@ See [observability.md](observability.md) for full setup and LogQL queries.
 ### Radar Not Detected
 
 ```bash
-ls /dev/ttyACM* /dev/ttyUSB*
-openflight --port /dev/ttyACM0 --info
+uv run python scripts/hardware-test/diagnose.py
+
+# OPS243 connected through the Pi GPIO UART
+uv run python scripts/hardware-test/diagnose.py --ops-port /dev/ttyAMA0
 ```
 
 ### Sound Trigger Not Working
@@ -348,41 +324,14 @@ Look for "Client disconnected/connected" messages.
 
 ### Display Issues Over SSH
 
-Use `DISPLAY=:0` prefix for commands that need the Pi's display.
+Use `DISPLAY=:0` before commands that need the Pi's display.
 
-## CLI Reference
-
-### Kiosk
+## Useful Commands
 
 ```bash
-./scripts/start-kiosk.sh                                      # Default
-./scripts/start-kiosk.sh --mock                                # No hardware
-./scripts/start-kiosk.sh --kld7-geometry                       # With angle radar
-./scripts/start-kiosk.sh --port 3000                           # Custom port
-```
-
-### Server
-
-```bash
-openflight-server                    # Start with radar
-openflight-server --mock             # Mock mode
-openflight-server --web-port 3000    # Custom port
-```
-
-### Setup
-
-```bash
-./scripts/setup/setup.sh                       # Full interactive setup (re-run safe)
-./scripts/setup/setup.sh --deps-only           # Dependencies only
-./scripts/setup/setup_kld7_devices.sh          # K-LD7 device naming wizard
-./scripts/setup/setup_kld7_devices.sh --show   # Show current K-LD7 mapping
-```
-
-### Testing
-
-```bash
-uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test    # Sound trigger
-uv run python scripts/hardware-test/test_sound_trigger_hardware.py           # Direct trigger test
-uv run python scripts/hardware-test/test_kld7.py                             # K-LD7 standalone
-uv run pytest tests/ -v                                                      # Full test suite
+./scripts/setup/setup.sh --deps-only                              # Dependencies only
+./scripts/start-kiosk.sh --port 3000                              # Custom web port
+uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test
+uv run python scripts/hardware-test/test_sound_trigger_hardware.py
+uv run pytest tests/ -v
 ```

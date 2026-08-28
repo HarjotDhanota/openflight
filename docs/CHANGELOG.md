@@ -8,6 +8,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Automatic OV9281 exposure control.** High-speed camera capture now measures
+  the impact area every five seconds, restores the last known-good setting at
+  startup, and selects a shutter/gain combination that preserves club contrast
+  without excessive clipping or motion blur. Large lighting changes re-enter
+  fast convergence while smaller changes require confirmation. Camera-derived
+  shot analysis is withheld when lighting is unsuitable, but radar processing
+  and shot display continue normally with an operator-facing lighting warning.
+- **Instrument-panel kiosk UI.** The dashboard is a tabbed shell (Live, Stats,
+  Shots, Camera, Players, Debug) instead of the previous stacked shot and stats
+  views. Tap a Live metric to pin it top-left while keeping all ten metrics
+  visible. The footer logo opens units, dark/light theme, language, simulator,
+  and ball-detection status; a persistent footer power button opens the shutdown
+  confirmation. Club (or training implement) selection is a Live header action.
+  See the [UI README](../ui/README.md).
+- **Kiosk languages.** English, Spanish, French, and Portuguese. Choice is
+  stored in `localStorage` (`openflight.locale:v1`).
+- **Dark and light themes.** Toggle in the footer menu; stored as
+  `openflight.theme` (default dark).
+- **Synchronized OV9281 high-speed camera capture.** OpenFlight can now retain
+  pre- and post-impact camera frames from the shared sound trigger, align them
+  with OPS243 and IWR6843 captures, and use camera-assisted or camera-only
+  fallbacks for horizontal launch, club path, and angle of attack. The Camera
+  tab adds live alignment, crop, orientation, and lighting controls while the
+  rolling buffer remains armed. See [OV9281 Camera](camera/README.md).
+- **On-demand camera shot replay.** Camera-backed shots can open a 60 FPS
+  slow-motion impact player from Live or Shots, with touch controls, scrubbing,
+  and a trigger-frame impact marker. MP4 conversion starts only after a manual
+  Replay selection, caches the result beside the raw capture, and reports
+  retryable preparation or playback failures without affecting shot results.
+- **Battery and external-power status for Raspberry Pi UPS boards.** OpenFlight
+  can now display charging state and battery percentage, issue dismissible 20%
+  and 10% warnings while discharging, and record throttled power telemetry in
+  session logs. Enable the initial Geekworm X1202/X1206 provider with
+  `--battery geekworm`; monitoring remains disabled when no provider is
+  selected. The accompanying Pi setup installs native Linux power-supply
+  telemetry and optional taskbar capacity support without enabling automatic
+  shutdown or charging control. See [Battery Monitoring](battery/README.md).
+- **System Prerequisites:** Documented missing binary dependencies (`swig`, `liblgpio-dev`, `python3-dev`) required prior to executing `./scripts/setup/setup.sh`.
+- **Environment Reload Guidance:** Added instructions for reloading terminal environment variables (`source ~/.bashrc`) when installed dependencies or scripts (`setup.sh`, `start-kiosk.sh`) are not recognized in the current terminal session.
+- **Configurable IWR6843 capture compression.** One firmware image can now
+  switch at runtime between the recommended 24-frame, 3 ms, 53-bin IQ16
+  profile and an advanced 36-frame, 2 ms, 32-bin IQ8 profile. Both retain the
+  same 72 ms shot movie and all 3 TX x 4 RX channels. Per-frame range windows,
+  timing, and IQ8 scales are carried in the dump so offline and live processing
+  use the actual capture geometry. The dense profile uses a sparse scale
+  preview to sustain the 2 ms HWA rearm budget and exposes missed frames,
+  overruns, and clipped components through firmware `stats`.
 - **Carry corrected for measured air density.** Every carry number OpenFlight
   produced assumed ISA sea level — 15 °C, 1013.25 hPa, dry — with no way to
   change it. Measured against this repo's own RK4 integrator that assumption is
@@ -84,6 +131,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trusting it.
 
 ### Changed
+- Display mode (`/display`) now uses the same metric cards and theme tokens as
+  the kiosk Live view.
 - The vertical estimator is now a fixed cascade (two_ray → geometry →
   single-frame geometry → naive); it is no longer user-selectable. Launch-angle
   source and confidence semantics changed accordingly.
@@ -96,6 +145,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--kld7-bypass-vertical-gate` renamed to `--kld7-vertical-raw`.
 
 ### Fixed
+- **Graceful IWR6843 shutdown.** Kiosk shutdown now asks the server to finish
+  hardware cleanup before escalating to process signals. An active TI dump is
+  allowed to complete, capture firmware is stopped and verified inactive, and
+  the serial port is then closed. This prevents an interrupted L3 transfer or
+  failed GPIO setup from leaving the radar unresponsive on the next startup.
+- **Raspberry Pi 5 & OS Compatibility:** Updated UART configuration documentation to support Debian Bookworm and Raspberry Pi 5 hardware using `dtparam=uart0=on` alongside legacy `enable_uart=1`.
+- **UART Diagnostic Commands:** Simplified UART verification instructions in `docs/iwr6843/README.md` and `docs/ops243-uart-migration.md` using `grep -E` to check for both legacy and modern device-tree parameters simultaneously across config paths.
 - Session logging: serialize all access to the session JSONL file with a
   lock. The `log_*` methods are called concurrently from the OPS243
   capture thread, the K-LD7 stream thread, and Flask-SocketIO handlers;

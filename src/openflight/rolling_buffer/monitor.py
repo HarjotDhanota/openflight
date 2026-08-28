@@ -266,8 +266,11 @@ class RollingBufferMonitor:
 
         self._running = False
         self._capture_thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
         self._shot_callback: Optional[Callable[[Shot], None]] = None
         self._live_callback: Optional[Callable[[SpeedReading], None]] = None
+        self._diagnostic_callback: Optional[Callable[[dict], None]] = None
+        self._processing_callback: Optional[Callable[[str], None]] = None
         self._shots: List[Shot] = []
         self._current_club: ClubType = ClubType.DRIVER
 
@@ -346,6 +349,7 @@ class RollingBufferMonitor:
         shot_callback: Optional[Callable[[Shot], None]] = None,
         live_callback: Optional[Callable[[SpeedReading], None]] = None,
         diagnostic_callback: Optional[Callable[[dict], None]] = None,
+        processing_callback: Optional[Callable[[str], None]] = None,
     ):
         """
         Start monitoring for shots.
@@ -354,10 +358,13 @@ class RollingBufferMonitor:
             shot_callback: Called when a complete shot is detected
             live_callback: Called for live readings (limited in rolling buffer mode)
             diagnostic_callback: Called with trigger diagnostic data for UI display
+            processing_callback: Called with "started" or "failed" around shot processing
         """
         self._shot_callback = shot_callback
         self._live_callback = live_callback
         self._diagnostic_callback = diagnostic_callback
+        self._processing_callback = processing_callback
+        self._stop_event.clear()
         self._running = True
 
         self._capture_thread = threading.Thread(
@@ -371,10 +378,27 @@ class RollingBufferMonitor:
     def stop(self):
         """Stop monitoring."""
         self._running = False
+        self._stop_event.set()
         if self._capture_thread:
-            self._capture_thread.join(timeout=5.0)
-            self._capture_thread = None
+            capture_thread = self._capture_thread
+            # Idle sound waits are cancelled immediately. If bytes are
+            # already arriving, let the bounded radar dump and re-arm
+            # finish before the serial port is closed.
+            capture_thread.join(timeout=5.0)
+            if capture_thread.is_alive():
+                logger.warning("[MONITOR] Capture thread still active during shutdown")
+            else:
+                self._capture_thread = None
         logger.info("[MONITOR] Rolling buffer monitor stopped")
+
+    def _notify_processing(self, state: str) -> None:
+        """Report shot-processing lifecycle without letting UI errors break capture."""
+        if not self._processing_callback:
+            return
+        try:
+            self._processing_callback(state)
+        except Exception:
+            logger.warning("[MONITOR] Processing status callback failed", exc_info=True)
 
     def _emit_diagnostics(self, wall_clock_ms: float = 0):
         """Drain trigger diagnostics and emit them to logger and UI."""
@@ -418,11 +442,25 @@ class RollingBufferMonitor:
                 # Wait for trigger and capture
                 # Use a long timeout so sound/hardware triggers can wait
                 # for the next swing without noisy timeout-restart cycles.
-                capture = self.trigger.wait_for_trigger(
-                    radar=self.radar,
-                    processor=self.processor,
-                    timeout=30.0,
-                )
+                trigger_kwargs = {
+                    "radar": self.radar,
+                    "processor": self.processor,
+                    "timeout": 30.0,
+                }
+                capture_started = False
+
+                def on_capture_started() -> None:
+                    nonlocal capture_started
+                    capture_started = True
+                    self._notify_processing("capturing")
+
+                if self.trigger_type == "sound":
+                    trigger_kwargs["cancel_event"] = self._stop_event
+                    trigger_kwargs["capture_started_callback"] = on_capture_started
+                capture = self.trigger.wait_for_trigger(**trigger_kwargs)
+
+                if not self._running:
+                    break
 
                 trigger_latency_ms = (time.time() - trigger_start) * 1000
 
@@ -430,9 +468,12 @@ class RollingBufferMonitor:
                 self._emit_diagnostics(trigger_latency_ms)
 
                 if capture is None:
+                    if capture_started:
+                        self._notify_processing("failed")
                     continue
 
                 # Process capture (FFT + speed/spin extraction)
+                self._notify_processing("calculating")
                 process_start = time.time()
                 processed = self.processor.process_capture(
                     capture,
@@ -448,6 +489,7 @@ class RollingBufferMonitor:
                 logger.info("[MONITOR] process_capture: %.1fms", process_ms)
 
                 if processed is None:
+                    self._notify_processing("failed")
                     logger.warning("[MONITOR] Failed to process capture")
                     # Emit diagnostic for processing failure
                     diag = {
@@ -652,7 +694,9 @@ class RollingBufferMonitor:
                     if self._diagnostic_callback:
                         self._diagnostic_callback(
                             {
-                                "timestamp": datetime.now().isoformat(),
+                                # Correlation key used when the slower IWR6843
+                                # result enriches this same UI history row.
+                                "timestamp": shot.timestamp.isoformat(),
                                 "accepted": True,
                                 "reason": "accepted",
                                 "trigger_type": self.trigger_type,
@@ -705,6 +749,7 @@ class RollingBufferMonitor:
                             total_ms,
                         )
                 else:
+                    self._notify_processing("failed")
                     logger.info(
                         "[MONITOR] Shot validation failed: ball=%.1f mph (min 15 mph)",
                         processed.ball_speed_mph if processed else 0,
@@ -744,6 +789,7 @@ class RollingBufferMonitor:
                 self.trigger.reset()
 
             except Exception as e:
+                self._notify_processing("failed")
                 logger.error("[MONITOR] Capture loop error: %s", e, exc_info=True)
                 log_session_error(
                     "Rolling buffer capture loop error",

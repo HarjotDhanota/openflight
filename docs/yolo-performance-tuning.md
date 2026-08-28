@@ -1,143 +1,82 @@
-# YOLO Detection Performance Tuning on Raspberry Pi
+# Camera and YOLO Experiments
 
-> **Note**: YOLO is optional. OpenFlight uses Hough circle detection by default, which requires no ML model and runs efficiently on Pi. Use YOLO via `--camera-model` only if you need higher detection accuracy.
+Camera detection is experimental and is not part of the production kiosk. The
+standard setup omits camera dependencies, and `scripts/start-kiosk.sh` starts
+the server with `--no-camera`.
 
-This guide covers how to optimize YOLO golf ball detection for maximum FPS on Raspberry Pi 5.
+Use this guide only to evaluate a CSI camera such as the optional InnoMaker
+OV9281 global-shutter module. OpenFlight shot measurements still come from the
+radars.
 
-## Camera in OpenFlight UI
+## Prerequisites
 
-The camera is enabled by default when running `start-kiosk.sh`. In the UI:
-- **Header**: Ball detection indicator shows if a ball is detected (click to toggle camera)
-- **Camera Tab**: View live feed with detection overlay
+The experiment script requires these modules in the Pi's Python environment:
 
-To customize the model used:
+- `picamera2` for CSI camera capture;
+- `ultralytics` for YOLO inference; and
+- `opencv-python` for image processing and display.
+
+They are intentionally absent from OpenFlight's normal install. Install them in
+a separate experimental environment appropriate for your Raspberry Pi OS image;
+do not add them to the production kiosk unless camera support is being restored.
+
+## Check the camera
+
+Confirm Raspberry Pi OS sees the module before debugging OpenFlight:
+
 ```bash
-./scripts/start-kiosk.sh --camera-model models/golf_ball_yolo11n.onnx
+rpicam-hello --list-cameras
 ```
 
-## Quick Start (Best Balance)
-
-For ~30 FPS with good detection quality:
+Then run a short headless capture with an existing YOLO model:
 
 ```bash
-# Export model to ONNX at 256px
-python scripts/vision/test_yolo_detection.py \
+uv run python scripts/vision/test_yolo_detection.py \
+  --model models/golf_ball_yolo11n_new_256.onnx \
+  --headless --num-frames 10
+```
+
+For a desktop preview on the Pi:
+
+```bash
+DISPLAY=:0 uv run python scripts/vision/test_yolo_detection.py \
+  --model models/golf_ball_yolo11n_new_256.onnx \
+  --imgsz 256 --threaded
+```
+
+## Useful options
+
+| Option | Purpose | Default |
+|---|---|---:|
+| `--imgsz` | YOLO inference size; smaller is faster | 256 |
+| `--width` / `--height` | Camera capture resolution | 640 × 480 |
+| `--fps` | Requested camera frame rate | 60 |
+| `--confidence` | Minimum detection confidence | 0.3 |
+| `--threaded` | Separate capture and inference threads | off |
+| `--no-display` | Skip overlay display while benchmarking | off |
+| `--buffer-count` | Camera buffers; fewer reduces latency | 2 |
+| `--image PATH` | Test one saved image instead of the camera | unset |
+
+Start at `--imgsz 256`. Reduce it if inference is too slow, or increase it when
+the ball is too small to detect reliably. Measure performance on the actual Pi;
+frame rate depends on the model, runtime, resolution, and thermal state.
+
+## Model export
+
+Export a PyTorch model to ONNX:
+
+```bash
+uv run python scripts/vision/test_yolo_detection.py \
   --model models/golf_ball_yolo11n.pt \
-  --imgsz 256 \
-  --export-onnx
-
-# Run detection
-DISPLAY=:0 python scripts/vision/test_yolo_detection.py \
-  --model models/golf_ball_yolo11n.onnx \
-  --imgsz 256 \
-  --threaded
+  --imgsz 256 --export-onnx
 ```
 
-## Performance vs Quality Tradeoffs
+OpenVINO export is also supported with `--export-openvino`; add `--int8` only
+after checking the accuracy loss on representative ball images.
 
-| Input Size | Expected FPS | Detection Quality | Notes |
-|------------|--------------|-------------------|-------|
-| 640 | ~12 | Best | Default, too slow for real-time |
-| 320 | ~20 | Good | Solid detection |
-| 288 | ~25 | Good | Good middle ground |
-| 256 | ~30 | Good | Recommended balance |
-| 224 | ~40 | Acceptable | Slight quality drop |
-| 192 | ~50 | Reduced | Small objects harder to detect |
+## Production status
 
-## Export Formats
-
-### ONNX (Recommended)
-Most stable and well-supported on Pi:
-
-```bash
-python scripts/vision/test_yolo_detection.py \
-  --model models/golf_ball_yolo11n.pt \
-  --imgsz <SIZE> \
-  --export-onnx
-```
-
-### OpenVINO
-Alternative runtime, supports INT8 quantization:
-
-```bash
-pip install openvino
-
-python scripts/vision/test_yolo_detection.py \
-  --model models/golf_ball_yolo11n.pt \
-  --imgsz <SIZE> \
-  --export-openvino
-```
-
-With INT8 quantization (faster but lower accuracy):
-```bash
-python scripts/vision/test_yolo_detection.py \
-  --model models/golf_ball_yolo11n.pt \
-  --imgsz <SIZE> \
-  --export-openvino --int8
-```
-
-### NCNN
-Theoretically fastest on ARM, but has stability issues (segfaults). Not recommended.
-
-## Runtime Parameters
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `--imgsz` | Inference input size (smaller = faster) | 640 |
-| `--threaded` | Separate capture/inference threads | off |
-| `--half` | FP16 half-precision (PyTorch only) | off |
-| `--confidence` | Detection threshold (lower = more detections) | 0.3 |
-| `--no-display` | Skip drawing overlays for benchmarking | off |
-| `--fps` | Target camera FPS | 60 |
-| `--buffer-count` | Camera buffer count (lower = less latency) | 2 |
-
-## Example Commands
-
-### Maximum FPS (reduced detection quality)
-```bash
-DISPLAY=:0 python scripts/vision/test_yolo_detection.py \
-  --model models/golf_ball_yolo11n.onnx \
-  --imgsz 192 \
-  --threaded \
-  --confidence 0.2
-```
-
-### Best detection (slower)
-```bash
-DISPLAY=:0 python scripts/vision/test_yolo_detection.py \
-  --model models/golf_ball_yolo11n.onnx \
-  --imgsz 320 \
-  --threaded
-```
-
-### Headless benchmark
-```bash
-python scripts/vision/test_yolo_detection.py \
-  --model models/golf_ball_yolo11n.onnx \
-  --imgsz 256 \
-  --threaded \
-  --no-display
-```
-
-### Lower confidence for more detections
-```bash
-DISPLAY=:0 python scripts/vision/test_yolo_detection.py \
-  --model models/golf_ball_yolo11n.onnx \
-  --imgsz 224 \
-  --threaded \
-  --confidence 0.15
-```
-
-## Optimization Summary
-
-1. **Use ONNX export** - More stable than NCNN on Pi
-2. **Reduce input size** - Biggest performance gain (256 or 224 recommended)
-3. **Use `--threaded`** - Separates capture from inference
-4. **Match camera to inference size** - Reduces scaling overhead
-5. **INT8 quantization** - Faster but hurts small object detection
-
-## Hardware Upgrades for 60+ FPS
-
-To exceed ~50 FPS on Pi, you'd need:
-- Coral USB TPU Accelerator (~$60)
-- Or switch to a simpler non-YOLO detection method
+The server still contains an optional camera tracker, but the kiosk disables it
+and the camera dependency extra is empty. Restoring camera-assisted measurement
+requires dependency packaging, startup integration, hardware validation, and
+tests; this benchmark script alone does not enable it.

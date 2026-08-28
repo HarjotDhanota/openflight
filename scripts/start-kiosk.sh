@@ -17,6 +17,22 @@ MOCK_SWING_SPEED=false
 RADAR_LOG=false
 DEBUG_MODE=false
 NO_CAMERA=true  # Camera disabled by default (K-LD7 radar handles angle)
+CAMERA_CAPTURE=false
+CAMERA_CAPTURE_WIDTH=""
+CAMERA_CAPTURE_HEIGHT=""
+CAMERA_CAPTURE_FPS=""
+CAMERA_CAPTURE_PRE_MS=""
+CAMERA_CAPTURE_POST_MS=""
+CAMERA_CAPTURE_EXPOSURE_US=""
+CAMERA_CAPTURE_GAIN=""
+CAMERA_CAPTURE_MOUNT_HEIGHT_M=""
+CAMERA_CAPTURE_LATERAL_OFFSET_M=""
+CAMERA_CAPTURE_HORIZONTAL_OFFSET_DEG=""
+CAMERA_CAPTURE_ROLL_DEG=""
+CAMERA_CAPTURE_STREAM=""
+CAMERA_CAPTURE_SCALER_CROP=""
+CAMERA_CAPTURE_ROTATE_180=false
+CAMERA_CAPTURE_MIRROR_HORIZONTAL=false
 TRACKMAN_TEST=false
 SESSION_LOCATION=""
 DRY_RUN=false
@@ -38,6 +54,7 @@ IWR6843_TX_ORDER=""
 IWR6843_CAPTURE_TIMEOUT=""
 IWR6843_OUTPUT_DIR=""
 IWR6843_AZIMUTH_OFFSET=""
+IWR6843_HORIZONTAL_PHASE_REFERENCE_RAD=""
 INCLINOMETER=false
 INCLINOMETER_ZERO_OFFSET=""
 KLD7=false
@@ -61,10 +78,11 @@ EXPERIMENTAL_KLD7_VERTICAL_IMPACT_ENERGY=""
 EXPERIMENTAL_KLD7_HORIZONTAL_IMPACT_ENERGY=""
 EXPERIMENTAL_KLD7_HORIZONTAL_RETRY_IMPACT_ENERGY=""
 EXPERIMENTAL_KLD7_HORIZONTAL_ANGLE_LIMIT=""
-BALLISTICS=false
+BALLISTICS=true
 AIR_SENSOR=false
 SIM=false
 CALCULATED_SPIN=false
+BATTERY_PROVIDER=""
 SWING_SPEED=false
 SWING_SPEED_THRESHOLD=""
 SWING_SPEED_MIN_READINGS=""
@@ -106,6 +124,10 @@ while [[ $# -gt 0 ]]; do
             RADAR_LOG=true
             shift
             ;;
+        --battery)
+            BATTERY_PROVIDER="$2"
+            shift 2
+            ;;
         --debug|-d)
             DEBUG_MODE=true
             shift
@@ -124,6 +146,70 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-camera)
             NO_CAMERA=true
+            shift
+            ;;
+        --camera-capture)
+            CAMERA_CAPTURE=true
+            shift
+            ;;
+        --camera-capture-width)
+            CAMERA_CAPTURE_WIDTH="$2"
+            shift 2
+            ;;
+        --camera-capture-height)
+            CAMERA_CAPTURE_HEIGHT="$2"
+            shift 2
+            ;;
+        --camera-capture-fps)
+            CAMERA_CAPTURE_FPS="$2"
+            shift 2
+            ;;
+        --camera-capture-pre-ms)
+            CAMERA_CAPTURE_PRE_MS="$2"
+            shift 2
+            ;;
+        --camera-capture-post-ms)
+            CAMERA_CAPTURE_POST_MS="$2"
+            shift 2
+            ;;
+        --camera-capture-exposure-us)
+            CAMERA_CAPTURE_EXPOSURE_US="$2"
+            shift 2
+            ;;
+        --camera-capture-gain)
+            CAMERA_CAPTURE_GAIN="$2"
+            shift 2
+            ;;
+        --camera-capture-mount-height-m)
+            CAMERA_CAPTURE_MOUNT_HEIGHT_M="$2"
+            shift 2
+            ;;
+        --camera-capture-lateral-offset-m)
+            CAMERA_CAPTURE_LATERAL_OFFSET_M="$2"
+            shift 2
+            ;;
+        --camera-capture-horizontal-offset-deg)
+            CAMERA_CAPTURE_HORIZONTAL_OFFSET_DEG="$2"
+            shift 2
+            ;;
+        --camera-capture-roll-deg)
+            CAMERA_CAPTURE_ROLL_DEG="$2"
+            shift 2
+            ;;
+        --camera-capture-stream)
+            CAMERA_CAPTURE_STREAM="$2"
+            shift 2
+            ;;
+        --camera-capture-scaler-crop)
+            CAMERA_CAPTURE_SCALER_CROP="$2"
+            shift 2
+            ;;
+        --camera-capture-rotate-180)
+            CAMERA_CAPTURE_ROTATE_180=true
+            shift
+            ;;
+        --camera-capture-mirror-horizontal)
+            CAMERA_CAPTURE_MIRROR_HORIZONTAL=true
             shift
             ;;
         --mode)
@@ -200,6 +286,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --iwr6843-azimuth-offset-deg)
             IWR6843_AZIMUTH_OFFSET="$2"
+            shift 2
+            ;;
+        --iwr6843-horizontal-phase-reference-rad)
+            IWR6843_HORIZONTAL_PHASE_REFERENCE_RAD="$2"
             shift 2
             ;;
         --inclinometer)
@@ -306,6 +396,10 @@ while [[ $# -gt 0 ]]; do
             AIR_SENSOR=true
             shift
             ;;
+        --no-ballistics)
+            BALLISTICS=false
+            shift
+            ;;
         --sim)
             SIM=true
             shift
@@ -409,13 +503,52 @@ if [ "$KLD7" = true ] && [ -z "$KLD7_MOUNT_TILT" ]; then
     exit 1
 fi
 
-cleanup() {
-    log "Shutting down..."
-    if [ -n "$SERVER_PID" ]; then
-        kill $SERVER_PID 2>/dev/null || true
+shutdown_server() {
+    if [ -z "$SERVER_PID" ] || ! kill -0 "$SERVER_PID" 2>/dev/null; then
+        return 0
     fi
+
+    log "Requesting graceful hardware shutdown..."
+    if curl -fsS --max-time 2 -X POST "http://$HOST:$PORT/api/shutdown" >/dev/null 2>&1; then
+        # IWR dumps normally take 5-8 seconds. Allow the server to preserve an
+        # active dump, stop capture firmware, and close hardware in order.
+        for _ in {1..80}; do
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+                wait "$SERVER_PID" 2>/dev/null || true
+                return 0
+            fi
+            sleep 0.25
+        done
+        warn "Server did not complete graceful shutdown within 20 seconds"
+    else
+        warn "Server shutdown API unavailable; falling back to process signal"
+    fi
+
+    if kill -0 "$SERVER_PID" 2>/dev/null; then
+        kill -TERM "$SERVER_PID" 2>/dev/null || true
+        for _ in {1..8}; do
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+                wait "$SERVER_PID" 2>/dev/null || true
+                return 0
+            fi
+            sleep 0.25
+        done
+    fi
+
+    if kill -0 "$SERVER_PID" 2>/dev/null; then
+        warn "Forcing server exit; connected radar hardware may require reset"
+        kill -KILL "$SERVER_PID" 2>/dev/null || true
+    fi
+    wait "$SERVER_PID" 2>/dev/null || true
+}
+
+cleanup() {
+    # Prevent a second signal from re-entering cleanup while hardware drains.
+    trap - SIGINT SIGTERM
+    log "Shutting down..."
+    shutdown_server
     if [ -n "$BROWSER_PID" ]; then
-        kill $BROWSER_PID 2>/dev/null || true
+        kill "$BROWSER_PID" 2>/dev/null || true
     fi
     # Chromium forks child processes that survive kill — clean them all
     pkill -f "chromium.*--kiosk" 2>/dev/null || true
@@ -496,8 +629,31 @@ if [ "$NO_CAMERA" = true ]; then
     SERVER_CMD="$SERVER_CMD --no-camera"
 fi
 
-if [ "$BALLISTICS" = true ]; then
-    SERVER_CMD="$SERVER_CMD --ballistics"
+if [ -n "$BATTERY_PROVIDER" ]; then
+    SERVER_CMD="$SERVER_CMD --battery $BATTERY_PROVIDER"
+fi
+
+if [ "$BALLISTICS" = false ]; then
+    SERVER_CMD="$SERVER_CMD --no-ballistics"
+fi
+
+if [ "$CAMERA_CAPTURE" = true ]; then
+    SERVER_CMD="$SERVER_CMD --camera-capture"
+    [ -n "$CAMERA_CAPTURE_WIDTH" ] && SERVER_CMD="$SERVER_CMD --camera-capture-width $CAMERA_CAPTURE_WIDTH"
+    [ -n "$CAMERA_CAPTURE_HEIGHT" ] && SERVER_CMD="$SERVER_CMD --camera-capture-height $CAMERA_CAPTURE_HEIGHT"
+    [ -n "$CAMERA_CAPTURE_FPS" ] && SERVER_CMD="$SERVER_CMD --camera-capture-fps $CAMERA_CAPTURE_FPS"
+    [ -n "$CAMERA_CAPTURE_PRE_MS" ] && SERVER_CMD="$SERVER_CMD --camera-capture-pre-ms $CAMERA_CAPTURE_PRE_MS"
+    [ -n "$CAMERA_CAPTURE_POST_MS" ] && SERVER_CMD="$SERVER_CMD --camera-capture-post-ms $CAMERA_CAPTURE_POST_MS"
+    [ -n "$CAMERA_CAPTURE_EXPOSURE_US" ] && SERVER_CMD="$SERVER_CMD --camera-capture-exposure-us $CAMERA_CAPTURE_EXPOSURE_US"
+    [ -n "$CAMERA_CAPTURE_GAIN" ] && SERVER_CMD="$SERVER_CMD --camera-capture-gain $CAMERA_CAPTURE_GAIN"
+    [ -n "$CAMERA_CAPTURE_MOUNT_HEIGHT_M" ] && SERVER_CMD="$SERVER_CMD --camera-capture-mount-height-m $CAMERA_CAPTURE_MOUNT_HEIGHT_M"
+    [ -n "$CAMERA_CAPTURE_LATERAL_OFFSET_M" ] && SERVER_CMD="$SERVER_CMD --camera-capture-lateral-offset-m $CAMERA_CAPTURE_LATERAL_OFFSET_M"
+    [ -n "$CAMERA_CAPTURE_HORIZONTAL_OFFSET_DEG" ] && SERVER_CMD="$SERVER_CMD --camera-capture-horizontal-offset-deg $CAMERA_CAPTURE_HORIZONTAL_OFFSET_DEG"
+    [ -n "$CAMERA_CAPTURE_ROLL_DEG" ] && SERVER_CMD="$SERVER_CMD --camera-capture-roll-deg $CAMERA_CAPTURE_ROLL_DEG"
+    [ -n "$CAMERA_CAPTURE_STREAM" ] && SERVER_CMD="$SERVER_CMD --camera-capture-stream $CAMERA_CAPTURE_STREAM"
+    [ -n "$CAMERA_CAPTURE_SCALER_CROP" ] && SERVER_CMD="$SERVER_CMD --camera-capture-scaler-crop $CAMERA_CAPTURE_SCALER_CROP"
+    [ "$CAMERA_CAPTURE_ROTATE_180" = true ] && SERVER_CMD="$SERVER_CMD --camera-capture-rotate-180"
+    [ "$CAMERA_CAPTURE_MIRROR_HORIZONTAL" = true ] && SERVER_CMD="$SERVER_CMD --camera-capture-mirror-horizontal"
 fi
 
 if [ "$AIR_SENSOR" = true ]; then
@@ -580,6 +736,7 @@ if [ "$IWR6843" = true ]; then
     [ -n "$IWR6843_CAPTURE_TIMEOUT" ] && SERVER_CMD="$SERVER_CMD --iwr6843-capture-timeout $IWR6843_CAPTURE_TIMEOUT"
     [ -n "$IWR6843_OUTPUT_DIR" ] && SERVER_CMD="$SERVER_CMD --iwr6843-output-dir $IWR6843_OUTPUT_DIR"
     [ -n "$IWR6843_AZIMUTH_OFFSET" ] && SERVER_CMD="$SERVER_CMD --iwr6843-azimuth-offset-deg $IWR6843_AZIMUTH_OFFSET"
+    [ -n "$IWR6843_HORIZONTAL_PHASE_REFERENCE_RAD" ] && SERVER_CMD="$SERVER_CMD --iwr6843-horizontal-phase-reference-rad $IWR6843_HORIZONTAL_PHASE_REFERENCE_RAD"
 fi
 
 if [ "$INCLINOMETER" = true ]; then
@@ -672,7 +829,21 @@ if ! command -v uv >/dev/null 2>&1; then
     error "uv not found. Install it: https://docs.astral.sh/uv/"
     exit 1
 fi
-uv sync --quiet
+UV_SYNC_ARGS=(--quiet)
+if [ "$CAMERA_CAPTURE" = true ]; then
+    # Picamera2 is supplied by Raspberry Pi OS and must remain visible inside
+    # the project environment; the camera extra supplies portable OpenCV. Keep
+    # this selection through the final `uv run`: .python-version pins 3.11,
+    # while libcamera's native extension is built for the OS Python ABI.
+    export UV_PYTHON=/usr/bin/python3
+    if [ ! -x .venv/bin/python ] || ! .venv/bin/python -c "import picamera2" >/dev/null 2>&1; then
+        uv venv --clear --system-site-packages --python /usr/bin/python3
+    fi
+    UV_SYNC_ARGS+=(--extra camera)
+    uv sync "${UV_SYNC_ARGS[@]}"
+else
+    uv sync "${UV_SYNC_ARGS[@]}"
+fi
 
 configure_kld7_latency
 
@@ -744,7 +915,7 @@ else
     log "Ballistic carry model disabled (using legacy table)"
 fi
 
-uv run $SERVER_CMD &
+uv run ${OPENFLIGHT_UV_RUN_ARGS:-} $SERVER_CMD &
 SERVER_PID=$!
 
 # Wait for server to be ready

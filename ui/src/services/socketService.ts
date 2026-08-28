@@ -1,15 +1,15 @@
 import { io, type Socket } from 'socket.io-client';
 import { useSystemStore } from '../stores/useSystemStore';
 import { useShotStore } from '../stores/useShotStore';
-import { useCameraStore, type CameraStatus } from '../stores/useCameraStore';
+import { useCameraStore, type CameraCaptureSettings, type CameraStatus } from '../stores/useCameraStore';
 import { useDebugStore } from '../stores/useDebugStore';
 import { useEnvironmentStore } from '../stores/useEnvironmentStore';
 import {
-  isSwingSpeedShot,
   type Shot,
   type SessionStats,
   type SessionState,
   type TriggerDiagnostic,
+  type TriggerDiagnosticUpdate,
   type TriggerStatus,
 } from '../types/shot';
 import type {
@@ -20,13 +20,18 @@ import type {
   SimStatus,
   EnvironmentReading,
 } from '../types/socket';
-import { playSwingCapturedCue } from '../utils/audioCue';
+import type { PowerStatus } from '../types/power';
 import { getServerOrigin } from '../utils/serverOrigin';
+import { handleShotMessage } from './handleShotMessage';
+import { ingestSocketPlayerName } from './playerSocketSync';
+import { ingestSessionClub } from './sessionClubSync';
+import { remainingShotsAfterClear } from './sessionClear';
 
 const SOCKET_URL = getServerOrigin();
 
 class SocketService {
   private socket: Socket | null = null;
+  private sessionClearedListeners = new Set<() => void>();
 
   connect() {
     if (this.socket) return;
@@ -54,6 +59,7 @@ class SocketService {
       this.socket?.emit('get_session');
       this.socket?.emit('get_trigger_status');
       this.socket?.emit('get_radar_config');
+      this.socket?.emit('get_camera_capture_settings');
       this.socket?.emit('get_environment');
     });
 
@@ -65,14 +71,20 @@ class SocketService {
     this.socket.on('disconnect', () => {
       console.log('Disconnected from server');
       useSystemStore.getState().setConnected(false);
+      useShotStore.getState().finishShotProcessing();
+    });
+
+    this.socket.on('shot_processing', (data: { state: 'capturing' | 'calculating' | 'failed' }) => {
+      const shotStore = useShotStore.getState();
+      if (data.state === 'failed') {
+        shotStore.finishShotProcessing();
+      } else {
+        shotStore.startShotProcessing(data.state);
+      }
     });
 
     this.socket.on('shot', (data: { shot: Shot; stats: SessionStats }) => {
-      // Need to get latest state of addShot to prevent stale closures
-      useShotStore.getState().addShot(data.shot);
-      if (isSwingSpeedShot(data.shot)) {
-        playSwingCapturedCue();
-      }
+      handleShotMessage(data);
     });
 
     // Swing-speed mode also emits a normal `shot` event, handled above, so the
@@ -83,6 +95,10 @@ class SocketService {
 
     this.socket.on('sim_status', (data: SimStatus) => {
       useSystemStore.getState().setSimStatus(data);
+    });
+
+    this.socket.on('power_status', (data: PowerStatus) => {
+      useSystemStore.getState().setPowerStatus(data);
     });
 
     this.socket.on('sim_shot', (data: SimShotInfo) => {
@@ -98,11 +114,11 @@ class SocketService {
     });
 
     this.socket.on('club_changed', (data: { club: string }) => {
-      useSystemStore.getState().setServerClub(data.club);
+      ingestSessionClub(data.club);
     });
 
     this.socket.on('player_changed', (data: { player_name: string }) => {
-      useSystemStore.getState().setServerPlayerName(data.player_name);
+      ingestSocketPlayerName('player_changed', data.player_name);
     });
 
     this.socket.on(
@@ -129,9 +145,8 @@ class SocketService {
         if (data.debug_mode !== undefined) {
           systemStore.setDebugMode(data.debug_mode);
         }
-        if (data.player_name !== undefined) {
-          systemStore.setServerPlayerName(data.player_name);
-        }
+        ingestSocketPlayerName('session_state', data.player_name);
+        ingestSessionClub(data.club);
 
         // Update camera status from session state
         if (data.camera_available !== undefined) {
@@ -168,6 +183,14 @@ class SocketService {
       useCameraStore.getState().setCameraStatus(data);
     });
 
+    this.socket.on('camera_capture_settings', (data: CameraCaptureSettings) => {
+      useCameraStore.getState().setCaptureSettings(data);
+    });
+
+    this.socket.on('camera_capture_settings_error', (data: { error: string }) => {
+      useCameraStore.getState().setCaptureSettingsError(data.error);
+    });
+
     this.socket.on('ball_detection', (data: { detected: boolean; confidence: number }) => {
       useCameraStore.getState().setCameraStatus({
         ball_detected: data.detected,
@@ -175,14 +198,24 @@ class SocketService {
       });
     });
 
-    this.socket.on('session_cleared', () => {
-      useShotStore.getState().clearShots();
+    this.socket.on('session_cleared', (data?: { player_name?: string; shots?: Shot[] }) => {
+      const remaining = remainingShotsAfterClear(useShotStore.getState().shots, data);
+      if (remaining.length === 0) {
+        useShotStore.getState().clearShots();
+      } else {
+        useShotStore.getState().setShots(remaining);
+      }
+      this.sessionClearedListeners.forEach((listener) => listener());
     });
 
     this.socket.on('trigger_diagnostic', (data: TriggerDiagnostic) => {
       const debugStore = useDebugStore.getState();
       debugStore.addTriggerDiagnostic(data);
       debugStore.updateTriggerStatusStats(data.accepted);
+    });
+
+    this.socket.on('trigger_diagnostic_update', (data: TriggerDiagnosticUpdate) => {
+      useDebugStore.getState().updateTriggerDiagnostic(data);
     });
 
     this.socket.on('trigger_status', (data: TriggerStatus) => {
@@ -198,8 +231,15 @@ class SocketService {
   }
 
   // Emitters
-  clearSession() {
-    this.socket?.emit('clear_session');
+  onSessionCleared(listener: () => void) {
+    this.sessionClearedListeners.add(listener);
+    return () => {
+      this.sessionClearedListeners.delete(listener);
+    };
+  }
+
+  clearSession(playerName: string) {
+    this.socket?.emit('clear_session', { player_name: playerName });
   }
 
   uploadCloud() {
@@ -241,6 +281,10 @@ class SocketService {
 
   toggleCameraStream() {
     this.socket?.emit('toggle_camera_stream');
+  }
+
+  setCameraCaptureSettings(settings: Partial<CameraCaptureSettings>) {
+    this.socket?.emit('set_camera_capture_settings', settings);
   }
 }
 
