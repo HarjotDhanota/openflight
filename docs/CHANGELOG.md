@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Clubface impact-location investigation.** A replay harness and pose
+  library for measuring clubface impact location and face angle from the
+  behind-ball camera and the two radars, with no markers. Ball flight is
+  validated against the radar; clubhead orientation is not yet, and
+  `docs/clubface-impact-location.md` records what is measured, what is not,
+  and where help is most useful. The scripts run against a capture session
+  supplied separately.
+- **Club delivery in the Trackman comparison.** `compare_trackman.py` now
+  compares twelve club metrics — attack angle, club path, face angle,
+  face-to-path, dynamic loft, spin loft, swing plane and direction, spin axis,
+  impact height and offset, low point — alongside the existing ball data. The
+  summary names metrics OpenFlight cannot yet produce rather than omitting
+  them, and only pipeline-accepted values are compared.
+- **Trajectory metrics on every shot.** Apex, lateral deviation, flight time,
+  landing speed, landing angle and total distance now reach the shot payload.
+  The ballistics simulator already computed them; only carry was kept.
+- **Acoustic trigger timing derived from the installation.**
+  `openflight.acoustic` computes impact time as the trigger time minus the
+  sound's travel time from the ball to the microphone, so a unit mounted
+  further back stays correct. On a 1.575 m rig the lag is 4.59 ms.
 - **Automatic OV9281 exposure control.** High-speed camera capture now measures
   the impact area every five seconds, restores the last known-good setting at
   startup, and selects a shutter/gain combination that preserves club contrast
@@ -135,6 +155,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--kld7-bypass-vertical-gate` renamed to `--kld7-vertical-raw`.
 
 ### Fixed
+- **Attack angle no longer inflated by club path.** The camera club-delivery
+  estimator divided the vertical velocity component by the forward component
+  alone, which overstates attack angle by 1/cos(path). Measured on a 21-shot
+  session: +0.05° mean, rising to 0.60° at a 30° path.
+- **Optical club motion reads the sensor clock.** Frame timing for club-motion
+  estimation now prefers the camera's sensor timestamps over host timestamps,
+  which jitter with scheduling, when the capture carries them.
 - **Graceful IWR6843 shutdown.** Kiosk shutdown now asks the server to finish
   hardware cleanup before escalating to process signals. An active TI dump is
   allowed to complete, capture firmware is stopped and verified inactive, and
