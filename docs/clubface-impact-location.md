@@ -1,0 +1,65 @@
+# Clubface impact location: status and how to help
+
+An investigation into measuring clubface impact location and face angle from
+the existing hardware — the single behind-ball OV9281 camera plus the OPS243
+and IWR6843 radars, ambient light, no markers on the ball or club.
+
+## Read this first
+
+**[Technical report](https://claude.ai/code/artifact/c8817c34-c3ea-4455-9700-cf5a4e238b75)**
+— the full assessment: what is measured, what is not, and what would resolve
+the rest. States every retracted claim alongside what replaced it.
+
+**[Fusion status, frame by frame](https://claude.ai/code/artifact/ab9f69dd-de06-4335-83b1-29e3e29ee6b9)**
+— two real shots with the model's own projections overlaid, nothing padded.
+Thirty seconds of stepping through it conveys the state faster than any prose.
+
+**[Full working log](https://claude.ai/code/artifact/42a6f3f4-0b9b-4faf-bf9c-1ff45b4e94dd)**
+— the chronological record, corrections applied in place, for tracing how any
+conclusion was reached.
+
+## Where it stands, in three lines
+
+- **Validated:** ball detection (21/22), impact timing (camera and radar agree
+  to 0.66 frames), camera attitude (measured, not assumed), and the fused
+  radar+camera clubhead velocity, which matches the OPS243's independent club
+  speed at 0.97–1.00 ± 0.03.
+- **Not yet working:** clubhead orientation. Face angle, dynamic loft and
+  impact location remain model-dependent inferences with no accuracy figure
+  against truth.
+- **Why:** the first 5° of face angle change the projected silhouette by zero
+  pixels; one pixel of segmentation error is worth about 10° of face angle;
+  and the club is segmentable for only ~10 pre-impact frames, of which the
+  current extractor keeps 3–5, against a four-parameter fit.
+
+## Where help is most valuable
+
+1. **A session recorded alongside a Trackman.** The comparison harness in
+   `scripts/analysis/compare_trackman.py` covers twelve club-delivery metrics,
+   but no figure can be validated until it has truth to compare against.
+2. **Clubhead segmentation.** Extracting more of the ~10 frames the club
+   appears in roughly doubles the observations per shot. The masks currently
+   come from a hard background-difference threshold.
+3. **A capture at 1280×800 1:1** (doubles plate scale at the same frame rate)
+   **and across a wide club-speed range** (a driver and a wedge; the existing
+   session is 7-iron/9-iron with no speed overlap, which starves several
+   discriminating tests of power).
+
+## Running the code
+
+Everything lives in `research/silhouette_poc/`: the pose library (`replay/`,
+`fusion/`, `generator/`) and the falsification harness (`falsification/`),
+whose `README.md` maps every script to the question it answers. Per-shot
+result JSONs are committed so conclusions can be re-analysed without repeating
+fits that cost ~25 minutes per arm.
+
+Two inputs are not in git. The **capture session** (~163 MB) is available from
+the maintainer; scripts resolve it via `OPENFLIGHT_SESSION` and fail closed
+with instructions until it is present. The **7-iron mesh** is fetched from
+GrabCAD (local research use only, no redistribution);
+`research/silhouette_poc/meshes/SOURCES.md` has the provenance, hashes, and
+download script.
+
+Deliberately excluded from this branch: the superseded synthetic-phase
+evaluation, the old web studio, and the June–July simulation studies. They
+remain on the fork's `feat/silhouette-poc` branch for archaeology.
