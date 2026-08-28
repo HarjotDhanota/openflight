@@ -15,7 +15,7 @@ without a reference instrument: a 7-iron delivered with negative loft, or a
 shaft twenty degrees off its lie, is wrong whatever it scores.
 
 Club axes are measured off the mesh (see
-``falsification/test5q2g_face_plane_bug.py``), not assumed, and give
+the fork's feat/silhouette-poc branch), not assumed, and give
 loft 33.10 deg / lie 61.19 deg -- consistent with a 690CB catalogue 34/62.
 """
 

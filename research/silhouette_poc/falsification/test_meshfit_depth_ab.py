@@ -35,8 +35,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "research"))
 sys.path.insert(0, str(ROOT / "src"))
 
-from session_path import find_session  # noqa: E402
-from silhouette_poc.generator.mesh_truth import TriangleMesh  # noqa: E402
+from session_path import find_session, load_mesh  # noqa: E402
 from silhouette_poc.replay.fit_real import (  # noqa: E402
     CAMERA_CENTER_WORLD,
     _ray_world,
@@ -298,8 +297,7 @@ def main_arm(name: str):
 
     with open(SESSION / "shots.csv", newline="", encoding="utf-8") as h:
         rows = [r for r in csv.DictReader(h) if int(r["shot_number"]) not in EXCLUDE]
-    d = np.load(MESH)
-    mesh = TriangleMesh(d["vertices_local_mm"], d["faces"], "poc_7iron", "x" * 64)
+    mesh = load_mesh()
 
     shots, cam = [], None
     for row in rows:
