@@ -151,18 +151,6 @@ def camera_presets() -> dict[str, CameraPreset]:
     }
 
 
-def club_templates() -> dict[str, ClubTemplate]:
-    """The two named POC analytic templates frozen for Phase 1b."""
-    return {
-        "poc_driver": ClubTemplate(
-            "poc_driver", 55.0, 30.0, 45_000.0, 3_000.0, 20.0, 15.0, (0.88, 0.25, -0.40)
-        ),
-        "poc_7iron": ClubTemplate(
-            "poc_7iron", 40.0, 25.0, 36_000.0, 2_500.0, 16.0, 18.0, (0.82, 0.20, -0.54)
-        ),
-    }
-
-
 def _project(points_world: np.ndarray, camera: CameraPreset) -> tuple[np.ndarray, np.ndarray]:
     points = np.asarray(points_world, dtype=float).reshape(-1, 3)
     cam = (points - CAMERA_CENTER_WORLD) @ _R_WC.T
@@ -340,70 +328,3 @@ def _polygon_iou(a: np.ndarray, b: np.ndarray) -> float:
 
 def _normalize_roll(angle: float) -> float:
     return (float(angle) + math.pi / 2.0) % math.pi - math.pi / 2.0
-
-
-def solve_club_state(
-    observation: SilhouetteObservation,
-    apparent_club_range_mm: float,
-    calibration_bias_mm: float,
-    camera: CameraPreset,
-    template: ClubTemplate,
-    velocity_world: np.ndarray,
-    exposure_us: float,
-    range_origin_world: np.ndarray = CAMERA_CENTER_WORLD,
-    fit_residual_limit_px: float = FIT_RESIDUAL_LIMIT_PX,
-) -> ClubState:
-    """Fuse silhouette angular moments and calibrated club range in one solve."""
-    calibrated_range = float(apparent_club_range_mm) - float(calibration_bias_mm)
-    if not math.isfinite(calibrated_range) or calibrated_range <= 0.0:
-        return ClubState(False, "radar_invalid_range", None, None, None, None, None)
-    center_world = _backproject_range(
-        observation.centroid_uv,
-        calibrated_range,
-        camera,
-        range_origin_world,
-    )
-    blur_vector = _projected_velocity(center_world, velocity_world, camera) * (
-        float(exposure_us) * 1e-6
-    )
-    corrected = observation.covariance_px2 - np.outer(blur_vector, blur_vector) / 12.0
-
-    center_uv, front = _project(center_world[None, :], camera)
-    jacobian = _projection_jacobian(center_world, camera)
-    if not bool(front[0]) or not bool(np.all(np.isfinite(jacobian))):
-        return ClubState(False, "projection_invalid", None, None, None, calibrated_range, None)
-    if abs(float(np.linalg.det(jacobian))) < 1e-9:
-        return ClubState(False, "silhouette_degenerate", None, None, None, calibrated_range, None)
-    inverse = np.linalg.inv(jacobian)
-    body_covariance = inverse @ corrected @ inverse.T
-    values, vectors = np.linalg.eigh(body_covariance)
-    if not bool(np.all(np.isfinite(values))) or values[0] <= 0.0:
-        return ClubState(False, "silhouette_degenerate", None, None, None, calibrated_range, None)
-    ratio = float(values[1] / values[0])
-    if ratio < AMBIGUITY_RATIO_MIN:
-        return ClubState(False, "silhouette_ambiguous", None, None, None, calibrated_range, None)
-    major = vectors[:, 1]
-    roll = _normalize_roll(math.atan2(float(major[1]), float(major[0])))
-    _, predicted, _, _, _ = _silhouette_moments(
-        center_world, roll, velocity_world, exposure_us, camera, template
-    )
-    residual = math.sqrt(float(np.linalg.norm(observation.covariance_px2 - predicted, ord="fro")))
-    if residual > float(fit_residual_limit_px):
-        return ClubState(
-            False,
-            "silhouette_fit_residual",
-            None,
-            None,
-            residual,
-            calibrated_range,
-            predicted,
-        )
-    return ClubState(
-        True,
-        None,
-        center_world,
-        roll,
-        residual,
-        calibrated_range,
-        predicted,
-    )

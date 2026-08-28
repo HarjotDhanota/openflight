@@ -23,11 +23,8 @@ import numpy as np
 
 HEAD_CORE_PX = 4.0  # exceeds every measured shaft inscribed radius (max 3.0)
 SHAFT_MAX_PX = 3.5  # below every measured head inscribed radius (min 5.0)
-# Reach of a component's farthest pixel from its own head core, measured over
-# 205 components in five shots (diag_reach.py):
-#     compact head alone   4.2 - 40.8 px
-#     head + shaft         145.4 - 187.2 px
-# Any threshold in 41..145 separates them perfectly. 60 sits in that gap.
+# Measured over 205 components: head alone reaches 4-41 px, head+shaft
+# 145-187 px. 60 sits inside the empty gap.
 SHAFT_REACH_PX = 60.0
 
 

@@ -153,10 +153,8 @@ def fit_frame(
     ray = _ray_world(centroid, camera)
 
     def point_at(range_mm: float) -> np.ndarray:
-        # The world origin is the IMPACT POINT and the camera sits away from it,
-        # so a point at range R along the ray is measured FROM THE CAMERA, not
-        # from the origin. Getting this wrong put every hypothesis in the wrong
-        # place and rendered the mesh at a fraction of its true size.
+        # Range is measured from the CAMERA, not the world origin (the impact
+        # point). Confusing the two renders the mesh at a fraction of true size.
         return CAMERA_CENTER_WORLD + ray * float(range_mm)
 
     best = (0.0, None, None, None, 0)
@@ -200,18 +198,9 @@ def fit_frame(
     return RealFit(True, "ok", score, center, roll_deg, range_mm, n_obs, n_ren)
 
 
-# --------------------------------------------------------------------------
-# 6-DOF pose fitting.
-#
-# The POC's pose model is 4-DOF: three position and ONE rotation. `FACE_NORMAL`
-# is a hardcoded constant and `_face_axes(roll)` only spins u/v within the plane
-# perpendicular to it, so the clubface always points the same world direction and
-# the head can only slide along a ray and rotate like a propeller.
-#
-# That cannot represent loft, lie or face angle - and face orientation is exactly
-# what impact location needs. Every "the mesh does not match" result should be
-# read against this limitation before blaming the mesh.
-# --------------------------------------------------------------------------
+# 6-DOF pose fitting. The earlier 4-DOF model (position + one in-plane spin)
+# could not represent loft, lie or face angle at all; read any older
+# "mesh does not match" result against that limitation.
 
 
 def _rot(axis: np.ndarray, angle_rad: float) -> np.ndarray:
@@ -315,31 +304,13 @@ def fit_frame_6dof(
     }
 
 
-# --------------------------------------------------------------------------
-# Sequence fitting with physical bounds and temporal smoothness.
-#
-# Fitting each frame independently maximises silhouette overlap and produces
-# poses that are individually plausible and collectively absurd: on the reference
-# capture the recovered yaw/pitch/roll jumped by more than 100 degrees between
-# adjacent frames while the fitted range wandered 1120-1430 mm, when a clubhead's
-# orientation evolves smoothly and its range recedes monotonically.
-#
-# A 20-40 px silhouette does not uniquely determine six degrees of freedom - many
-# orientations project to nearly the same outline - so the fix is to stop treating
-# frames as independent and to refuse physically impossible poses.
-# --------------------------------------------------------------------------
+# Sequence fitting. Independent per-frame fits produced angles jumping >100
+# degrees between adjacent frames: a 20-40 px silhouette under-determines six
+# DOF, so frames share bounds and temporal smoothness instead.
 
-# Physical envelope for an iron through impact. Wider than a real swing, but far
-# narrower than the unconstrained search, which was free to choose any orientation.
-# NOTE ON THESE BOUNDS. An earlier version set them to a real club's envelope
-# (yaw +/-25, pitch 5-55, roll +/-35) on the assumption that yaw/pitch/roll ARE
-# face angle, dynamic loft and lie. They are not - they are offsets from the
-# MESH's own normalised frame, which already has an arbitrary orientation baked
-# in by the normalisation step. The fit promptly pinned all three angles to their
-# bounds, which is the signature of an envelope that does not contain the answer.
-#
-# Until the mesh's canonical zero-pose is established against a real club at
-# address, these can only be loose sanity limits, not physical constraints.
+# Loose sanity bounds, not a physical envelope: yaw/pitch/roll are offsets
+# from the mesh's own normalised frame, not face angle / loft / lie. A real
+# club's envelope pinned all three to its edges.
 YAW_BOUND_DEG = 60.0
 PITCH_RANGE_DEG = (-40.0, 90.0)
 ROLL_BOUND_DEG = 70.0

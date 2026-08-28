@@ -15,8 +15,6 @@ from typing import Any
 
 import numpy as np
 
-from openflight.camera.clubpose.projection import FACE_NORMAL, _face_axes, _project, camera_presets
-
 
 @dataclass(frozen=True)
 class MeshSource:
@@ -29,7 +27,7 @@ class MeshSource:
     license_url: str
     downloadable: bool
     published_triangles: int
-    source_kind: str = "sketchfab"
+    source_kind: str = "maintainer_local_binary_stl"
     expected_source_sha256: str | None = None
     expected_asset_sha256: str | None = None
     status: str = "active"
@@ -37,27 +35,6 @@ class MeshSource:
 
 
 MESH_SOURCES = {
-    "poc_driver": MeshSource(
-        club="poc_driver",
-        uid="978d0740dc514c8695bbb02f4083f0e3",
-        name="Callaway Maverik golf driver",
-        author="Paul Ekins",
-        page_url=(
-            "https://sketchfab.com/3d-models/"
-            "callaway-maverik-golf-driver-978d0740dc514c8695bbb02f4083f0e3"
-        ),
-        license_spdx="CC-BY-4.0",
-        license_url="https://creativecommons.org/licenses/by/4.0/",
-        downloadable=True,
-        published_triangles=41_855,
-        expected_source_sha256=("0b9fac0caa2f7f26bc7492a6e12047c1552a6f8d934f6828cc2b3537f75105a2"),
-        expected_asset_sha256=("6b9ba5a70b868f61fab40d2bdf11b7c355204b612f17efde76500b45b5308dc1"),
-        status="retired_source_quality",
-        status_reason=(
-            "posed art scene with grass, ball, disconnected shells, and ambiguous sole/face; "
-            "not admissible as canonical CAD geometry"
-        ),
-    ),
     "poc_7iron": MeshSource(
         club="poc_7iron",
         uid="grabcad:titleist-7-iron-golf-club-1:690cb-right-handed",
@@ -77,7 +54,6 @@ ACTIVE_MESH_SOURCES = {
     club: source for club, source in MESH_SOURCES.items() if source.status == "active"
 }
 CATEGORY_DIMENSIONS_MM = {
-    "poc_driver": {"width": 118.0, "height": 60.0, "depth": 112.0},
     "poc_7iron": {"width": 80.0, "height": 50.0, "depth": 38.0},
 }
 
@@ -553,24 +529,6 @@ def rasterize_projected_triangles(
         np.add.at(difference, ends[visible] + 1, -1)
         mask[row] = np.cumsum(difference[:-1]) > 0
     return mask
-
-
-def render_mesh_mask(
-    mesh: TriangleMesh, center_world: np.ndarray, roll_rad: float, preset_name: str
-) -> np.ndarray:
-    """Project local mesh triangles through an existing explicit camera preset."""
-    axis_u, axis_v = _face_axes(roll_rad)
-    local = mesh.vertices_local_mm
-    world = (
-        np.asarray(center_world, dtype=float)[None, :]
-        + local[:, 0, None] * FACE_NORMAL[None, :]
-        + local[:, 1, None] * axis_u[None, :]
-        + local[:, 2, None] * axis_v[None, :]
-    )
-    uv, front = _project(world, camera_presets()[preset_name])
-    faces = mesh.faces[np.all(front[mesh.faces], axis=1)]
-    camera = camera_presets()[preset_name]
-    return rasterize_projected_triangles(uv, faces, width=camera.width, height=camera.height)
 
 
 def save_normalized_mesh(path: Path | str, mesh: TriangleMesh, metadata: dict[str, Any]) -> str:

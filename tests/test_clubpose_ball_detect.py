@@ -14,7 +14,7 @@ from openflight.camera.clubpose.teed_ball import (
     BallNotFound,
     _fit_circle,
     candidates,
-    find_teed_ball,
+    fit_teed_ball_sequence,
 )
 
 
@@ -85,14 +85,16 @@ def test_detector_is_not_fooled_by_a_static_round_distractor():
             ys, xs = np.mgrid[0:200, 0:320]
             frame[(xs - 127) ** 2 + (ys - 154) ** 2 <= 49] = 60
         frames.append(frame)
-    result = find_teed_ball(np.array(frames), 30, (80, 120, 200, 190), lead=30, look_after=4)
+    result = fit_teed_ball_sequence(
+        np.array(frames), 30, (80, 120, 200, 190), lead=30, look_after=4
+    )
     assert result.center == pytest.approx(np.array([127.0, 154.0]), abs=3.0)
 
 
 def test_rejection_is_named_not_silent():
     frames = np.full((20, 200, 320), 128, dtype=np.uint8)
     with pytest.raises(BallNotFound) as excinfo:
-        find_teed_ball(frames, 12, (80, 120, 200, 190), lead=10, look_after=3)
+        fit_teed_ball_sequence(frames, 12, (80, 120, 200, 190), lead=10, look_after=3)
     assert str(excinfo.value) in {
         "no_candidate_in_tee_region",
         "no_departing_candidate_in_tee_region",
@@ -124,19 +126,19 @@ TEE = (80, 120, 220, 190)
 def test_picks_the_struck_ball_when_several_are_on_the_mat():
     """A real bay holds spares. Only the struck ball leaves."""
     scene = _mat_scene(40, [(127, 154, 30), (160, 168, None), (100, 140, None)])
-    result = find_teed_ball(scene, 30, TEE, lead=30, look_after=4)
+    result = fit_teed_ball_sequence(scene, 30, TEE, lead=30, look_after=4)
     assert result.center == pytest.approx(np.array([127.0, 154.0]), abs=4.0)
 
 
 def test_a_spare_ball_swept_over_by_the_club_is_not_mistaken_for_the_struck_one():
     """Brief occlusion looks like a partial departure; full departure must outrank it."""
     scene = _mat_scene(40, [(127, 154, 30), (175, 170, None)], occluder=(175, 170, {32, 33, 34}))
-    result = find_teed_ball(scene, 30, TEE, lead=30, look_after=4)
+    result = fit_teed_ball_sequence(scene, 30, TEE, lead=30, look_after=4)
     assert result.center == pytest.approx(np.array([127.0, 154.0]), abs=4.0)
 
 
 def test_selection_is_by_departure_not_by_position_in_the_tee_region():
     """The struck ball need not be the one nearest the middle of the region."""
     scene = _mat_scene(40, [(200, 180, None), (95, 130, 30)])
-    result = find_teed_ball(scene, 30, TEE, lead=30, look_after=4)
+    result = fit_teed_ball_sequence(scene, 30, TEE, lead=30, look_after=4)
     assert result.center == pytest.approx(np.array([95.0, 130.0]), abs=4.0)

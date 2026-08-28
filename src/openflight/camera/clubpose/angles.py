@@ -35,9 +35,7 @@ SHAFT_LOCAL = SHAFT_LOCAL / np.linalg.norm(SHAFT_LOCAL)
 STATIC_LOFT_DEG = 33.10
 STATIC_LIE_DEG = 61.19
 
-# Wider than any real delivery, deliberately: a pose outside one of these is
-# wrong, not merely unusual. Dynamic loft stays positive because a lofted iron
-# cannot present a downward-facing face at contact.
+# Wider than any real delivery: outside these a pose is wrong, not unusual.
 ENVELOPE = {
     "dynamic_loft_deg": (15.0, 50.0),
     "face_angle_deg": (-25.0, 25.0),
@@ -62,9 +60,7 @@ def delivered_angles(basis_world: np.ndarray) -> dict[str, float]:
     face = basis @ FACE_NORMAL_LOCAL
     shaft = basis @ SHAFT_LOCAL
     face_norm, shaft_norm = np.linalg.norm(face), np.linalg.norm(shaft)
-    # Fail closed. A collapsed basis silently yields NaN angles, which then
-    # pass every comparison in `in_envelope` as False and read as "implausible
-    # pose" rather than "broken input".
+    # Fail closed: NaN angles would read as "implausible pose", not "broken input".
     if (
         not (np.isfinite(face_norm) and np.isfinite(shaft_norm))
         or min(face_norm, shaft_norm) < 1e-9
@@ -110,8 +106,7 @@ def square_pose(
 
     def cost(params: np.ndarray) -> float:
         angles = angles_from_pose(*params)
-        # Circular difference on the azimuth, so a solution near +-180 is not
-        # judged to be 360 degrees away from its own target.
+        # Circular difference: near +-180 is not 360 degrees from its target.
         total = 0.0
         for key, want in target.items():
             delta = angles[key] - want

@@ -71,26 +71,18 @@ SHA-256, and licence position, and you fetch your own copy under GrabCAD's
 terms:
 
 ```bash
-uv run --group research python \
+uv run python \
     scripts/analysis/download_club_mesh.py --local-iron <path-to-STL>
 ```
 
-**Then your own captures.** You do not need anyone else's data. Hit shots on
-your own OpenFlight unit, then export the session the server wrote:
+**Then your own captures.** The library takes frames and a mesh; it has no
+opinion about where your data lives. A session recorded by `start-kiosk.sh`
+already contains everything needed — the camera `frames.npz` and the IWR6843
+`.l3dump` per shot — and `openflight.iwr6843.replay.inputs_from_session`
+resolves those paths straight out of the session JSONL.
 
-```bash
-scripts/start-kiosk.sh                       # hit shots
-uv run python scripts/analysis/export_session.py \
-    ~/openflight_sessions/session_<stamp>.jsonl --output ~/my_session
-export OPENFLIGHT_SESSION=~/my_session
-uv run --group research python \
-    research/silhouette_poc/falsification/test_delivered_angles.py
-```
-
-The exporter includes only shots that have **both** a camera capture and a
-radar dump, and writes `excluded_shots.csv` explaining any it dropped — so a
-thin export is diagnosable. That means the camera and the IWR6843 both need to
-be enabled while you capture.
+Both the camera and the IWR6843 must be enabled while capturing; a shot
+missing either one cannot be fitted.
 
 The reference **capture session** used throughout the report (~163 MB) is
 available from the maintainer if you want to reproduce its exact numbers. Your

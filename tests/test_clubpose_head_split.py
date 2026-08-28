@@ -94,11 +94,8 @@ def test_merged_centroid_is_wrong_which_is_why_this_exists():
 
     got_head, _ = split_head(merged)
     fixed = float(np.linalg.norm(centroid(got_head) - centroid(head)))
-    # A short stub of shaft stays attached: the cut lands on the distance-
-    # transform ridge, and in this fixture the shaft meets the ellipse
-    # tangentially so there is no sharp constriction to land on. A real hosel
-    # is a genuine neck and the residual is smaller. What matters is that the
-    # centroid is the head's rather than the merged blob's.
+    # A shaft stub stays attached in this fixture (no sharp constriction);
+    # what matters is the centroid is the head's, not the merged blob's.
     assert fixed < drift / 3.0, f"split centroid {fixed:.1f} px off vs merged {drift:.1f}"
 
 

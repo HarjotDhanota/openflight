@@ -217,7 +217,7 @@ def candidates(
     return found
 
 
-def find_ball(frame: np.ndarray, **kwargs) -> BallFit:
+def fit_teed_ball(frame: np.ndarray, **kwargs) -> BallFit:
     """Single-frame best guess. Shape only — see find_ball_at_address for the real one."""
     found = candidates(frame, **kwargs)
     if not found:
@@ -225,7 +225,7 @@ def find_ball(frame: np.ndarray, **kwargs) -> BallFit:
     return max(found, key=lambda c: (c.arc_coverage_deg / 360.0) * min(c.circularity, 1.0))
 
 
-def find_teed_ball(
+def fit_teed_ball_sequence(
     frames: np.ndarray,
     impact_index: int,
     tee_region: tuple[int, int, int, int],
