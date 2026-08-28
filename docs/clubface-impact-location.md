@@ -41,9 +41,9 @@ longer need anyone else's data to do it — see *Running it on your own device*
 below. The current session is 21 shots of 7-iron and 9-iron from a single rig,
 thin enough that several tests cannot discriminate.
 
-1. **A session recorded alongside a Trackman.** The comparison harness in
-   `scripts/analysis/compare_trackman.py` covers twelve club-delivery metrics,
-   but no figure can be validated until it has truth to compare against.
+1. **A session recorded alongside a Trackman.** Nothing here has been scored
+   against a reference instrument, so no accuracy figure exists for any club
+   metric. This is the single measurement that would change that.
 2. **Clubhead segmentation.** Extracting more of the ~10 frames the club
    appears in roughly doubles the observations per shot. The masks currently
    come from a hard background-difference threshold.

@@ -21,12 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/clubface-impact-location.md` records what is measured, what is not,
   and where help is most useful. The scripts run against a capture session
   supplied separately.
-- **Club delivery in the Trackman comparison.** `compare_trackman.py` now
-  compares twelve club metrics — attack angle, club path, face angle,
-  face-to-path, dynamic loft, spin loft, swing plane and direction, spin axis,
-  impact height and offset, low point — alongside the existing ball data. The
-  summary names metrics OpenFlight cannot yet produce rather than omitting
-  them, and only pipeline-accepted values are compared.
 - **Acoustic trigger timing derived from the installation.**
   `openflight.acoustic` computes impact time as the trigger time minus the
   sound's travel time from the ball to the microphone, so a unit mounted

@@ -298,8 +298,8 @@ Ordered by dependency. Each item carries the measurement that justifies it. Item
 
 | Item | Outcome |
 |---|---|
-| **Extend the Trackman comparison to club metrics** | Shipped. |
-| `compare_trackman.py` now compares twelve club delivery metrics — attack angle, club path, face angle, face-to-path, dynamic loft, spin loft, swing plane and direction, spin axis, impact height and offset, low point — and its summary names the metrics OpenFlight cannot yet produce rather than omitting them. Only pipeline-accepted values are read, never rejected candidates. **The harness is ready; it now needs a session alongside a Trackman.** |
+| **Extend the Trackman comparison to club metrics** | Written; in a separate PR. |
+| `compare_trackman.py` pairs OpenFlight and Trackman shots but compares ball data only, so no club-side figure can be scored against truth. An extension covering twelve club-delivery metrics is written and tested, but OpenFlight can currently supply only two of them (attack angle and club path) and there is no Trackman session to run it against, so it is offered as its own change rather than bundled here. |
 | **Impact timing from the installation** | Shipped. |
 | `src/openflight/acoustic.py`: contact = trigger − distance ÷ speed of sound. Model and measured ball departure agree to **0.04 frames**. This also corrected a 3.89-frame error that had anchored the research fits (§03). |
 | **Surface computed trajectory metrics** | Open; not in this branch. |
