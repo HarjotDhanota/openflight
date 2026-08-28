@@ -1,0 +1,98 @@
+[
+  {
+    "shot": 2,
+    "club": "7-iron",
+    "fused": {
+      "dynamic_loft_deg": 27.34936463609843,
+      "face_angle_deg": -162.97165128692464,
+      "lie_deg": 5.240561830488883
+    },
+    "fused_ok": false,
+    "shipped": {
+      "dynamic_loft_deg": 10.00113651983504,
+      "face_angle_deg": -173.2059516909238,
+      "lie_deg": 4.040757112525464
+    },
+    "shipped_ok": false
+  },
+  {
+    "shot": 5,
+    "club": "7-iron",
+    "fused": {
+      "dynamic_loft_deg": -25.462324613874465,
+      "face_angle_deg": 150.9483548024329,
+      "lie_deg": 44.06634706668873
+    },
+    "fused_ok": false,
+    "shipped": {
+      "dynamic_loft_deg": 25.368883301135458,
+      "face_angle_deg": -158.41665805135906,
+      "lie_deg": 2.4500585055627475
+    },
+    "shipped_ok": false
+  },
+  {
+    "shot": 18,
+    "club": "9-iron",
+    "fused": {
+      "dynamic_loft_deg": -12.602072522331222,
+      "face_angle_deg": 157.102762234925,
+      "lie_deg": 53.111036699873395
+    },
+    "fused_ok": false,
+    "shipped": {
+      "dynamic_loft_deg": 15.113430770293734,
+      "face_angle_deg": -164.22608282956838,
+      "lie_deg": 1.6090934396761738
+    },
+    "shipped_ok": false
+  },
+  {
+    "shot": 20,
+    "club": "9-iron",
+    "fused": {
+      "dynamic_loft_deg": -42.13188099931051,
+      "face_angle_deg": 136.54068384413264,
+      "lie_deg": 44.08880168090766
+    },
+    "fused_ok": false,
+    "shipped": {
+      "dynamic_loft_deg": 9.961955932868838,
+      "face_angle_deg": -168.77773183931927,
+      "lie_deg": 4.4915457730430415
+    },
+    "shipped_ok": false
+  },
+  {
+    "shot": 21,
+    "club": "9-iron",
+    "fused": {
+      "dynamic_loft_deg": 28.4504523039462,
+      "face_angle_deg": -168.72352865979008,
+      "lie_deg": 11.209304864082714
+    },
+    "fused_ok": false,
+    "shipped": {
+      "dynamic_loft_deg": 13.239911432611997,
+      "face_angle_deg": -157.34526853843388,
+      "lie_deg": 0.399545802219383
+    },
+    "shipped_ok": false
+  },
+  {
+    "shot": 23,
+    "club": "9-iron",
+    "fused": {
+      "dynamic_loft_deg": -30.196390848938826,
+      "face_angle_deg": 129.7394947079265,
+      "lie_deg": 42.1820239505234
+    },
+    "fused_ok": false,
+    "shipped": {
+      "dynamic_loft_deg": -1.0131667067655614,
+      "face_angle_deg": -159.519106890724,
+      "lie_deg": 11.60506196689022
+    },
+    "shipped_ok": false
+  }
+]

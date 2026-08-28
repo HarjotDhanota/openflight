@@ -1,0 +1,1023 @@
+{
+  "n_frames_total": 112,
+  "n_frames_above_snr": 112,
+  "min_snr_db": 6.0,
+  "point_target_control_bins": 1.265625,
+  "predicted_rotation_bins": 1.35756,
+  "quadrature_expectation_bins": 1.8560107203960328,
+  "median_width_bins": 1.9453125,
+  "mean_width_bins": 1.91015625,
+  "sd_width_bins": 0.6799327990240036,
+  "frames_below_point_target_floor": 26,
+  "resolution_hz": 617.283950617284,
+  "records": [
+    {
+      "shot": 2,
+      "club": "7-iron",
+      "frame": 0,
+      "range_m": 1.0416712564059114,
+      "width_bins": 1.96875,
+      "snr_db": 18.20625933803905,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 2,
+      "club": "7-iron",
+      "frame": 1,
+      "range_m": 1.147473041833965,
+      "width_bins": 2.109375,
+      "snr_db": 15.915444125501391,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 2,
+      "club": "7-iron",
+      "frame": 2,
+      "range_m": 1.2532748272620187,
+      "width_bins": 1.125,
+      "snr_db": 15.845397981909342,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 2,
+      "club": "7-iron",
+      "frame": 3,
+      "range_m": 1.3590766126900722,
+      "width_bins": 1.125,
+      "snr_db": 14.06701833229711,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 2,
+      "club": "7-iron",
+      "frame": 4,
+      "range_m": 1.4648783981181257,
+      "width_bins": 3.1875,
+      "snr_db": 11.012813040929913,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 3,
+      "club": "7-iron",
+      "frame": 0,
+      "range_m": 1.057484206331911,
+      "width_bins": 1.921875,
+      "snr_db": 19.129855547555664,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 3,
+      "club": "7-iron",
+      "frame": 1,
+      "range_m": 1.1666547374045353,
+      "width_bins": 1.125,
+      "snr_db": 12.031144975943306,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 3,
+      "club": "7-iron",
+      "frame": 2,
+      "range_m": 1.2758252684771598,
+      "width_bins": 1.078125,
+      "snr_db": 10.068867724165587,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 3,
+      "club": "7-iron",
+      "frame": 3,
+      "range_m": 1.3849957995497841,
+      "width_bins": 2.8125,
+      "snr_db": 12.437013374212176,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 3,
+      "club": "7-iron",
+      "frame": 4,
+      "range_m": 1.4941663306224084,
+      "width_bins": 1.171875,
+      "snr_db": 11.700372626408978,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 4,
+      "club": "7-iron",
+      "frame": 0,
+      "range_m": 0.9700598141530188,
+      "width_bins": 2.90625,
+      "snr_db": 16.284142545445864,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 4,
+      "club": "7-iron",
+      "frame": 1,
+      "range_m": 1.069950383859698,
+      "width_bins": 1.546875,
+      "snr_db": 16.49752681868112,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 4,
+      "club": "7-iron",
+      "frame": 2,
+      "range_m": 1.1698409535663767,
+      "width_bins": 1.6875,
+      "snr_db": 9.448646214225171,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 4,
+      "club": "7-iron",
+      "frame": 3,
+      "range_m": 1.269731523273056,
+      "width_bins": 1.125,
+      "snr_db": 12.68291077198656,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 4,
+      "club": "7-iron",
+      "frame": 4,
+      "range_m": 1.3696220929797351,
+      "width_bins": 2.15625,
+      "snr_db": 14.733578182413293,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 4,
+      "club": "7-iron",
+      "frame": 5,
+      "range_m": 1.4695126626864141,
+      "width_bins": 2.484375,
+      "snr_db": 20.91075019574792,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 5,
+      "club": "7-iron",
+      "frame": 0,
+      "range_m": 0.9697899448532885,
+      "width_bins": 2.15625,
+      "snr_db": 10.906397996446778,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 5,
+      "club": "7-iron",
+      "frame": 1,
+      "range_m": 1.075872508613305,
+      "width_bins": 2.53125,
+      "snr_db": 13.419761383425852,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 5,
+      "club": "7-iron",
+      "frame": 2,
+      "range_m": 1.1819550723733214,
+      "width_bins": 2.671875,
+      "snr_db": 17.277283224070832,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 5,
+      "club": "7-iron",
+      "frame": 3,
+      "range_m": 1.2880376361333379,
+      "width_bins": 1.640625,
+      "snr_db": 8.223933624643454,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 5,
+      "club": "7-iron",
+      "frame": 4,
+      "range_m": 1.3941201998933543,
+      "width_bins": 2.0625,
+      "snr_db": 17.41638611553379,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 5,
+      "club": "7-iron",
+      "frame": 5,
+      "range_m": 1.5002027636533708,
+      "width_bins": 1.171875,
+      "snr_db": 16.563777455968925,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 6,
+      "club": "7-iron",
+      "frame": 0,
+      "range_m": 1.0666006813624895,
+      "width_bins": 2.4375,
+      "snr_db": 16.89746097759786,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 6,
+      "club": "7-iron",
+      "frame": 1,
+      "range_m": 1.1773950026277844,
+      "width_bins": 1.21875,
+      "snr_db": 16.108653698758637,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 6,
+      "club": "7-iron",
+      "frame": 2,
+      "range_m": 1.2881893238930795,
+      "width_bins": 1.59375,
+      "snr_db": 10.783313738290985,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 6,
+      "club": "7-iron",
+      "frame": 3,
+      "range_m": 1.3989836451583746,
+      "width_bins": 1.078125,
+      "snr_db": 11.646902631464403,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 6,
+      "club": "7-iron",
+      "frame": 4,
+      "range_m": 1.5097779664236695,
+      "width_bins": 2.8125,
+      "snr_db": 15.24814789368053,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 8,
+      "club": "7-iron",
+      "frame": 0,
+      "range_m": 1.1127373926167037,
+      "width_bins": 2.25,
+      "snr_db": 17.153085651038666,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 8,
+      "club": "7-iron",
+      "frame": 1,
+      "range_m": 1.218181382284747,
+      "width_bins": 1.171875,
+      "snr_db": 14.035457104591426,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 8,
+      "club": "7-iron",
+      "frame": 2,
+      "range_m": 1.32362537195279,
+      "width_bins": 1.59375,
+      "snr_db": 10.948899734606012,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 8,
+      "club": "7-iron",
+      "frame": 3,
+      "range_m": 1.4290693616208332,
+      "width_bins": 2.671875,
+      "snr_db": 15.192712113528678,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 8,
+      "club": "7-iron",
+      "frame": 4,
+      "range_m": 1.5345133512888762,
+      "width_bins": 1.21875,
+      "snr_db": 10.874642249153872,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 9,
+      "club": "7-iron",
+      "frame": 0,
+      "range_m": 0.9397638239164017,
+      "width_bins": 3.84375,
+      "snr_db": 11.396717611678032,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 9,
+      "club": "7-iron",
+      "frame": 1,
+      "range_m": 1.042363396887015,
+      "width_bins": 1.265625,
+      "snr_db": 15.239235544836054,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 9,
+      "club": "7-iron",
+      "frame": 2,
+      "range_m": 1.1449629698576285,
+      "width_bins": 2.53125,
+      "snr_db": 14.564679583564516,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 9,
+      "club": "7-iron",
+      "frame": 3,
+      "range_m": 1.2475625428282417,
+      "width_bins": 1.96875,
+      "snr_db": 11.757642674770059,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 9,
+      "club": "7-iron",
+      "frame": 4,
+      "range_m": 1.3501621157988555,
+      "width_bins": 1.3125,
+      "snr_db": 14.529042164752862,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 9,
+      "club": "7-iron",
+      "frame": 5,
+      "range_m": 1.4527616887694685,
+      "width_bins": 2.484375,
+      "snr_db": 15.244386202224868,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 11,
+      "club": "7-iron",
+      "frame": 0,
+      "range_m": 1.053880821646466,
+      "width_bins": 1.40625,
+      "snr_db": 19.893852058287006,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 11,
+      "club": "7-iron",
+      "frame": 1,
+      "range_m": 1.1605805718727917,
+      "width_bins": 1.453125,
+      "snr_db": 11.208597106829213,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 11,
+      "club": "7-iron",
+      "frame": 2,
+      "range_m": 1.2672803220991176,
+      "width_bins": 1.265625,
+      "snr_db": 11.768774251967702,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 11,
+      "club": "7-iron",
+      "frame": 3,
+      "range_m": 1.3739800723254434,
+      "width_bins": 2.109375,
+      "snr_db": 18.244848595432288,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 11,
+      "club": "7-iron",
+      "frame": 4,
+      "range_m": 1.4806798225517692,
+      "width_bins": 2.71875,
+      "snr_db": 14.301872912838501,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 14,
+      "club": "9-iron",
+      "frame": 0,
+      "range_m": 1.0959491025119377,
+      "width_bins": 1.21875,
+      "snr_db": 21.49328589396545,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 14,
+      "club": "9-iron",
+      "frame": 1,
+      "range_m": 1.198979871130402,
+      "width_bins": 2.0625,
+      "snr_db": 20.50108394616707,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 14,
+      "club": "9-iron",
+      "frame": 2,
+      "range_m": 1.3020106397488664,
+      "width_bins": 2.4375,
+      "snr_db": 14.384756675568141,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 14,
+      "club": "9-iron",
+      "frame": 3,
+      "range_m": 1.4050414083673306,
+      "width_bins": 2.25,
+      "snr_db": 15.002053978762913,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 14,
+      "club": "9-iron",
+      "frame": 4,
+      "range_m": 1.5080721769857952,
+      "width_bins": 1.21875,
+      "snr_db": 16.079941320280348,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 15,
+      "club": "9-iron",
+      "frame": 0,
+      "range_m": 1.0750421870273836,
+      "width_bins": 1.3125,
+      "snr_db": 16.070438891993536,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 15,
+      "club": "9-iron",
+      "frame": 1,
+      "range_m": 1.1779978936197422,
+      "width_bins": 1.125,
+      "snr_db": 12.797607310720718,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 15,
+      "club": "9-iron",
+      "frame": 2,
+      "range_m": 1.280953600212101,
+      "width_bins": 2.765625,
+      "snr_db": 14.706103870278671,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 15,
+      "club": "9-iron",
+      "frame": 3,
+      "range_m": 1.3839093068044597,
+      "width_bins": 2.15625,
+      "snr_db": 17.13762364581832,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 15,
+      "club": "9-iron",
+      "frame": 4,
+      "range_m": 1.4868650133968182,
+      "width_bins": 3.375,
+      "snr_db": 7.877606785651165,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 16,
+      "club": "9-iron",
+      "frame": 0,
+      "range_m": 1.0311902679144533,
+      "width_bins": 0.84375,
+      "snr_db": 16.158498837720707,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 16,
+      "club": "9-iron",
+      "frame": 1,
+      "range_m": 1.1333109402613628,
+      "width_bins": 2.671875,
+      "snr_db": 16.776550051519326,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 16,
+      "club": "9-iron",
+      "frame": 2,
+      "range_m": 1.2354316126082723,
+      "width_bins": 2.578125,
+      "snr_db": 12.228266647065382,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 16,
+      "club": "9-iron",
+      "frame": 3,
+      "range_m": 1.3375522849551817,
+      "width_bins": 1.96875,
+      "snr_db": 17.83063538879089,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 16,
+      "club": "9-iron",
+      "frame": 4,
+      "range_m": 1.439672957302091,
+      "width_bins": 1.96875,
+      "snr_db": 10.82307229084904,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 16,
+      "club": "9-iron",
+      "frame": 5,
+      "range_m": 1.5417936296490002,
+      "width_bins": 1.125,
+      "snr_db": 9.97877002692292,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 17,
+      "club": "9-iron",
+      "frame": 0,
+      "range_m": 0.9927121265094627,
+      "width_bins": 2.71875,
+      "snr_db": 14.832568132728483,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 17,
+      "club": "9-iron",
+      "frame": 1,
+      "range_m": 1.0926186797793789,
+      "width_bins": 1.640625,
+      "snr_db": 16.4047222728323,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 17,
+      "club": "9-iron",
+      "frame": 2,
+      "range_m": 1.1925252330492948,
+      "width_bins": 2.53125,
+      "snr_db": 15.935063118950385,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 17,
+      "club": "9-iron",
+      "frame": 3,
+      "range_m": 1.2924317863192112,
+      "width_bins": 1.921875,
+      "snr_db": 18.88858701250009,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 17,
+      "club": "9-iron",
+      "frame": 4,
+      "range_m": 1.3923383395891273,
+      "width_bins": 1.921875,
+      "snr_db": 9.987830188015618,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 17,
+      "club": "9-iron",
+      "frame": 5,
+      "range_m": 1.4922448928590435,
+      "width_bins": 2.4375,
+      "snr_db": 10.607063745734743,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 18,
+      "club": "9-iron",
+      "frame": 0,
+      "range_m": 1.028333599561796,
+      "width_bins": 1.359375,
+      "snr_db": 15.803003082544954,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 18,
+      "club": "9-iron",
+      "frame": 1,
+      "range_m": 1.1308256676175685,
+      "width_bins": 1.078125,
+      "snr_db": 12.164062783561956,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 18,
+      "club": "9-iron",
+      "frame": 2,
+      "range_m": 1.233317735673341,
+      "width_bins": 3.1875,
+      "snr_db": 14.055091567902668,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 18,
+      "club": "9-iron",
+      "frame": 3,
+      "range_m": 1.3358098037291133,
+      "width_bins": 2.296875,
+      "snr_db": 15.464105509753146,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 18,
+      "club": "9-iron",
+      "frame": 4,
+      "range_m": 1.4383018717848857,
+      "width_bins": 3.5625,
+      "snr_db": 6.735561421020723,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 18,
+      "club": "9-iron",
+      "frame": 5,
+      "range_m": 1.540793939840658,
+      "width_bins": 1.453125,
+      "snr_db": 9.382865530608743,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 20,
+      "club": "9-iron",
+      "frame": 0,
+      "range_m": 1.0123913975540644,
+      "width_bins": 1.59375,
+      "snr_db": 16.626188291312623,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 20,
+      "club": "9-iron",
+      "frame": 1,
+      "range_m": 1.1129228808114113,
+      "width_bins": 2.015625,
+      "snr_db": 16.816206498675307,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 20,
+      "club": "9-iron",
+      "frame": 2,
+      "range_m": 1.2134543640687583,
+      "width_bins": 2.484375,
+      "snr_db": 15.024750524793951,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 20,
+      "club": "9-iron",
+      "frame": 3,
+      "range_m": 1.3139858473261055,
+      "width_bins": 1.125,
+      "snr_db": 11.129695165980209,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 20,
+      "club": "9-iron",
+      "frame": 4,
+      "range_m": 1.4145173305834524,
+      "width_bins": 1.21875,
+      "snr_db": 12.32156077881353,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 20,
+      "club": "9-iron",
+      "frame": 5,
+      "range_m": 1.5150488138407994,
+      "width_bins": 1.828125,
+      "snr_db": 17.59340793145573,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 21,
+      "club": "9-iron",
+      "frame": 0,
+      "range_m": 1.0759698754293976,
+      "width_bins": 0.75,
+      "snr_db": 15.327017005079714,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 21,
+      "club": "9-iron",
+      "frame": 1,
+      "range_m": 1.179382905121578,
+      "width_bins": 1.453125,
+      "snr_db": 17.059337511618374,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 21,
+      "club": "9-iron",
+      "frame": 2,
+      "range_m": 1.2827959348137585,
+      "width_bins": 2.671875,
+      "snr_db": 14.593383380185738,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 21,
+      "club": "9-iron",
+      "frame": 3,
+      "range_m": 1.3862089645059394,
+      "width_bins": 1.546875,
+      "snr_db": 15.215538804239273,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 21,
+      "club": "9-iron",
+      "frame": 4,
+      "range_m": 1.48962199419812,
+      "width_bins": 2.296875,
+      "snr_db": 13.36536897935233,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 23,
+      "club": "9-iron",
+      "frame": 0,
+      "range_m": 1.1374244383061871,
+      "width_bins": 1.359375,
+      "snr_db": 17.778283239388397,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 23,
+      "club": "9-iron",
+      "frame": 1,
+      "range_m": 1.2401318355889681,
+      "width_bins": 2.0625,
+      "snr_db": 20.095928787040997,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 23,
+      "club": "9-iron",
+      "frame": 2,
+      "range_m": 1.3428392328717493,
+      "width_bins": 2.4375,
+      "snr_db": 17.183053014884273,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 23,
+      "club": "9-iron",
+      "frame": 3,
+      "range_m": 1.4455466301545306,
+      "width_bins": 2.0625,
+      "snr_db": 7.228175551161458,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 23,
+      "club": "9-iron",
+      "frame": 4,
+      "range_m": 1.548254027437312,
+      "width_bins": 1.640625,
+      "snr_db": 8.60672501076701,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 24,
+      "club": "9-iron",
+      "frame": 0,
+      "range_m": 1.1450239081132407,
+      "width_bins": 1.078125,
+      "snr_db": 24.44574811007591,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 24,
+      "club": "9-iron",
+      "frame": 1,
+      "range_m": 1.2497148315623021,
+      "width_bins": 2.15625,
+      "snr_db": 18.770264593741093,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 24,
+      "club": "9-iron",
+      "frame": 2,
+      "range_m": 1.3544057550113637,
+      "width_bins": 1.078125,
+      "snr_db": 10.869490855907857,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 24,
+      "club": "9-iron",
+      "frame": 3,
+      "range_m": 1.4590966784604251,
+      "width_bins": 1.5,
+      "snr_db": 9.617451311067002,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 24,
+      "club": "9-iron",
+      "frame": 4,
+      "range_m": 1.5637876019094867,
+      "width_bins": 2.015625,
+      "snr_db": 11.654554801703135,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 25,
+      "club": "9-iron",
+      "frame": 0,
+      "range_m": 1.0469699073086574,
+      "width_bins": 1.640625,
+      "snr_db": 23.180694345090988,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 25,
+      "club": "9-iron",
+      "frame": 1,
+      "range_m": 1.152895286990766,
+      "width_bins": 2.25,
+      "snr_db": 17.938208391986514,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 25,
+      "club": "9-iron",
+      "frame": 2,
+      "range_m": 1.2588206666728747,
+      "width_bins": 2.34375,
+      "snr_db": 14.089290397552851,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 25,
+      "club": "9-iron",
+      "frame": 3,
+      "range_m": 1.3647460463549832,
+      "width_bins": 2.8125,
+      "snr_db": 10.11795936030429,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 25,
+      "club": "9-iron",
+      "frame": 4,
+      "range_m": 1.4706714260370917,
+      "width_bins": 1.265625,
+      "snr_db": 15.672944884610644,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 26,
+      "club": "9-iron",
+      "frame": 0,
+      "range_m": 1.06845874434625,
+      "width_bins": 1.3125,
+      "snr_db": 16.792379910700028,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 26,
+      "club": "9-iron",
+      "frame": 1,
+      "range_m": 1.1660156044541674,
+      "width_bins": 2.203125,
+      "snr_db": 13.129299196468507,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 26,
+      "club": "9-iron",
+      "frame": 2,
+      "range_m": 1.2635724645620847,
+      "width_bins": 2.4375,
+      "snr_db": 14.77023126011034,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 26,
+      "club": "9-iron",
+      "frame": 3,
+      "range_m": 1.3611293246700022,
+      "width_bins": 1.359375,
+      "snr_db": 12.08227633089763,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 26,
+      "club": "9-iron",
+      "frame": 4,
+      "range_m": 1.4586861847779196,
+      "width_bins": 1.125,
+      "snr_db": 10.694232613623576,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 28,
+      "club": "9-iron",
+      "frame": 0,
+      "range_m": 1.0838967890406426,
+      "width_bins": 0.703125,
+      "snr_db": 16.776894609029313,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 28,
+      "club": "9-iron",
+      "frame": 1,
+      "range_m": 1.18601227021109,
+      "width_bins": 2.484375,
+      "snr_db": 17.43439776444528,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 28,
+      "club": "9-iron",
+      "frame": 2,
+      "range_m": 1.2881277513815372,
+      "width_bins": 3.0,
+      "snr_db": 13.645006956487482,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 28,
+      "club": "9-iron",
+      "frame": 3,
+      "range_m": 1.3902432325519847,
+      "width_bins": 2.15625,
+      "snr_db": 17.72814170396838,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 28,
+      "club": "9-iron",
+      "frame": 4,
+      "range_m": 1.4923587137224321,
+      "width_bins": 1.078125,
+      "snr_db": 13.125081025164306,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 29,
+      "club": "9-iron",
+      "frame": 0,
+      "range_m": 1.1020360523295434,
+      "width_bins": 1.875,
+      "snr_db": 21.383011949557723,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 29,
+      "club": "9-iron",
+      "frame": 1,
+      "range_m": 1.202929750177674,
+      "width_bins": 2.4375,
+      "snr_db": 16.458716313112035,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 29,
+      "club": "9-iron",
+      "frame": 2,
+      "range_m": 1.303823448025804,
+      "width_bins": 3.234375,
+      "snr_db": 11.307891446134219,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 29,
+      "club": "9-iron",
+      "frame": 3,
+      "range_m": 1.4047171458739343,
+      "width_bins": 1.171875,
+      "snr_db": 16.863765985858755,
+      "resolution_hz": 617.283950617284
+    },
+    {
+      "shot": 29,
+      "club": "9-iron",
+      "frame": 4,
+      "range_m": 1.5056108437220643,
+      "width_bins": 1.3125,
+      "snr_db": 12.818458631666996,
+      "resolution_hz": 617.283950617284
+    }
+  ]
+}

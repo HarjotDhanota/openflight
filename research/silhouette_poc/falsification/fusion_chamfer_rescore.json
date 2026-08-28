@@ -1,0 +1,320 @@
+[
+  {
+    "shot": 2,
+    "club": "7-iron",
+    "swing_radius_m": 1.4,
+    "speed_mps": 38.191359692611684,
+    "frames": [
+      65,
+      66,
+      67,
+      71
+    ],
+    "required_omega_deg_s": 1563.002660180499,
+    "at_iou_optimum": {
+      "mean_iou": 0.4006496766041814,
+      "mean_chamfer_px": 2.343012422323227
+    }
+  },
+  {
+    "shot": 2,
+    "club": "7-iron",
+    "swing_radius_m": 1.6,
+    "speed_mps": 38.191359692611684,
+    "frames": [
+      65,
+      66,
+      67,
+      71
+    ],
+    "required_omega_deg_s": 1367.6273276579366,
+    "at_iou_optimum": {
+      "mean_iou": 0.3939196870373995,
+      "mean_chamfer_px": 2.547464929521084
+    }
+  },
+  {
+    "shot": 2,
+    "club": "7-iron",
+    "swing_radius_m": 1.8,
+    "speed_mps": 38.191359692611684,
+    "frames": [
+      65,
+      66,
+      67,
+      71
+    ],
+    "required_omega_deg_s": 1215.6687356959435,
+    "at_iou_optimum": {
+      "mean_iou": 0.39661563185488874,
+      "mean_chamfer_px": 2.421238586306572
+    }
+  },
+  {
+    "shot": 5,
+    "club": "7-iron",
+    "swing_radius_m": 1.4,
+    "speed_mps": 38.601040547478796,
+    "frames": [
+      66,
+      67,
+      70,
+      71,
+      72
+    ],
+    "required_omega_deg_s": 1579.7690772742112,
+    "at_iou_optimum": {
+      "mean_iou": 0.3761813994583828,
+      "mean_chamfer_px": 2.8212888062000276
+    }
+  },
+  {
+    "shot": 5,
+    "club": "7-iron",
+    "swing_radius_m": 1.6,
+    "speed_mps": 38.601040547478796,
+    "frames": [
+      66,
+      67,
+      70,
+      71,
+      72
+    ],
+    "required_omega_deg_s": 1382.2979426149348,
+    "at_iou_optimum": {
+      "mean_iou": 0.38021835804675697,
+      "mean_chamfer_px": 2.830060970783234
+    }
+  },
+  {
+    "shot": 5,
+    "club": "7-iron",
+    "swing_radius_m": 1.8,
+    "speed_mps": 38.601040547478796,
+    "frames": [
+      66,
+      67,
+      70,
+      71,
+      72
+    ],
+    "required_omega_deg_s": 1228.7092823243865,
+    "at_iou_optimum": {
+      "mean_iou": 0.3765746687019104,
+      "mean_chamfer_px": 2.844043582677841
+    }
+  },
+  {
+    "shot": 18,
+    "club": "9-iron",
+    "swing_radius_m": 1.4,
+    "speed_mps": 35.32359370854192,
+    "frames": [
+      66,
+      67,
+      68,
+      71,
+      72
+    ],
+    "required_omega_deg_s": 1445.6377405245144,
+    "at_iou_optimum": {
+      "mean_iou": 0.35115695328150187,
+      "mean_chamfer_px": 2.8081927597522736
+    }
+  },
+  {
+    "shot": 18,
+    "club": "9-iron",
+    "swing_radius_m": 1.6,
+    "speed_mps": 35.32359370854192,
+    "frames": [
+      66,
+      67,
+      68,
+      71,
+      72
+    ],
+    "required_omega_deg_s": 1264.9330229589498,
+    "at_iou_optimum": {
+      "mean_iou": 0.3499026250279325,
+      "mean_chamfer_px": 2.8138148307800295
+    }
+  },
+  {
+    "shot": 18,
+    "club": "9-iron",
+    "swing_radius_m": 1.8,
+    "speed_mps": 35.32359370854192,
+    "frames": [
+      66,
+      67,
+      68,
+      71,
+      72
+    ],
+    "required_omega_deg_s": 1124.3849092968444,
+    "at_iou_optimum": {
+      "mean_iou": 0.3482173390923717,
+      "mean_chamfer_px": 2.8294103026390074
+    }
+  },
+  {
+    "shot": 20,
+    "club": "9-iron",
+    "swing_radius_m": 1.4,
+    "speed_mps": 36.41607598818754,
+    "frames": [
+      65,
+      66,
+      67,
+      70
+    ],
+    "required_omega_deg_s": 1490.3481861077466,
+    "at_iou_optimum": {
+      "mean_iou": 0.3958406505045246,
+      "mean_chamfer_px": 2.5134999752044678
+    }
+  },
+  {
+    "shot": 20,
+    "club": "9-iron",
+    "swing_radius_m": 1.6,
+    "speed_mps": 36.41607598818754,
+    "frames": [
+      65,
+      66,
+      67,
+      70
+    ],
+    "required_omega_deg_s": 1304.054662844278,
+    "at_iou_optimum": {
+      "mean_iou": 0.3945392418365924,
+      "mean_chamfer_px": 2.5046469643712044
+    }
+  },
+  {
+    "shot": 20,
+    "club": "9-iron",
+    "swing_radius_m": 1.8,
+    "speed_mps": 36.41607598818754,
+    "frames": [
+      65,
+      66,
+      67,
+      70
+    ],
+    "required_omega_deg_s": 1159.1597003060251,
+    "at_iou_optimum": {
+      "mean_iou": 0.39422023470456596,
+      "mean_chamfer_px": 2.4677092730998993
+    }
+  },
+  {
+    "shot": 21,
+    "club": "9-iron",
+    "swing_radius_m": 1.4,
+    "speed_mps": 36.14295541827613,
+    "frames": [
+      64,
+      65,
+      66,
+      67,
+      70
+    ],
+    "required_omega_deg_s": 1479.1705747119381,
+    "at_iou_optimum": {
+      "mean_iou": 0.3774069162776553,
+      "mean_chamfer_px": 2.62096306681633
+    }
+  },
+  {
+    "shot": 21,
+    "club": "9-iron",
+    "swing_radius_m": 1.6,
+    "speed_mps": 36.14295541827613,
+    "frames": [
+      64,
+      65,
+      66,
+      67,
+      70
+    ],
+    "required_omega_deg_s": 1294.274252872946,
+    "at_iou_optimum": {
+      "mean_iou": 0.37584959992675226,
+      "mean_chamfer_px": 2.664458817243576
+    }
+  },
+  {
+    "shot": 21,
+    "club": "9-iron",
+    "swing_radius_m": 1.8,
+    "speed_mps": 36.14295541827613,
+    "frames": [
+      64,
+      65,
+      66,
+      67,
+      70
+    ],
+    "required_omega_deg_s": 1150.4660025537296,
+    "at_iou_optimum": {
+      "mean_iou": 0.3726606957151695,
+      "mean_chamfer_px": 2.685957533121109
+    }
+  },
+  {
+    "shot": 23,
+    "club": "9-iron",
+    "swing_radius_m": 1.4,
+    "speed_mps": 35.9608750383352,
+    "frames": [
+      65,
+      66,
+      67,
+      69,
+      70
+    ],
+    "required_omega_deg_s": 1471.7188337813998,
+    "at_iou_optimum": {
+      "mean_iou": 0.42948920746224883,
+      "mean_chamfer_px": 2.317900890111923
+    }
+  },
+  {
+    "shot": 23,
+    "club": "9-iron",
+    "swing_radius_m": 1.6,
+    "speed_mps": 35.9608750383352,
+    "frames": [
+      65,
+      66,
+      67,
+      69,
+      70
+    ],
+    "required_omega_deg_s": 1287.7539795587247,
+    "at_iou_optimum": {
+      "mean_iou": 0.4284561605857581,
+      "mean_chamfer_px": 2.334412842988968
+    }
+  },
+  {
+    "shot": 23,
+    "club": "9-iron",
+    "swing_radius_m": 1.8,
+    "speed_mps": 35.9608750383352,
+    "frames": [
+      65,
+      66,
+      67,
+      69,
+      70
+    ],
+    "required_omega_deg_s": 1144.6702040521998,
+    "at_iou_optimum": {
+      "mean_iou": 0.4283743904538344,
+      "mean_chamfer_px": 2.32346048951149
+    }
+  }
+]
