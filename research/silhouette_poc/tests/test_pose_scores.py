@@ -180,7 +180,7 @@ class TestAnnotationStorage:
     def test_roundtrips_a_labelled_pose(self, tmp_path):
         path = tmp_path / "labels.jsonl"
         pose = Pose(CENTER, 3.0, -7.5, 12.0)
-        save_annotation(path, shot=2, frame=64, pose=pose, annotator="harjot", pass_index=1)
+        save_annotation(path, shot=2, frame=64, pose=pose, annotator="reviewer", pass_index=1)
         got = load_annotations(path)
         assert len(got) == 1
         assert got[0]["shot"] == 2 and got[0]["frame"] == 64

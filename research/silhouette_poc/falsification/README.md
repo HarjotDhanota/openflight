@@ -5,13 +5,11 @@ capture session, rather than against simulation. Each one answers a question and
 prints its evidence; none of them is a pytest test despite the `test_` prefix,
 which is historical. Run them directly.
 
-The narrative write-ups are the place to start, not the code:
-
-| document | what it covers |
-|---|---|
-| `docs/superpowers/specs/2026-08-26-codex-handoff.md` | **start here** — current state, seven retracted claims, ranked open problems |
-| `docs/superpowers/specs/2026-08-26-falsification-results.md` | falsification tests 1, 2, 5, 9 and the mesh-frame investigation |
-| `docs/superpowers/specs/2026-08-26-codex-followup-results.md` | tests 3, 4, 6–8, 10, 11 and the resolution-scaling refutation |
+The write-up is the place to start, not the code:
+[`docs/clubface-impact-location-report.md`](../../../docs/clubface-impact-location-report.md)
+states what is measured, what is not, and every claim that was published and
+later retracted. The session-by-session working documents live on the fork's
+`feat/silhouette-poc` branch.
 
 ## Setup
 
