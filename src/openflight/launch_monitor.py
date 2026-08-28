@@ -286,6 +286,15 @@ class Shot:
     spin_phase_confirmed: bool = False
     spin_rejection_reason: Optional[str] = None
     carry_spin_adjusted: Optional[float] = None
+    # Trajectory metrics from the ballistics simulator. None means the
+    # simulation did not run; zero would read as a flat, instant, dead-straight
+    # shot, which is a measurement rather than an absence.
+    apex_yards: Optional[float] = None
+    lateral_yards: Optional[float] = None
+    flight_time_s: Optional[float] = None
+    landing_speed_mph: Optional[float] = None
+    landing_angle_deg: Optional[float] = None
+    total_yards: Optional[float] = None
     mode: str = "rolling-buffer"
     player_name: str = "Player 1"
     readings_data: Optional[list] = None
@@ -415,3 +424,24 @@ class Shot:
         if self.spin_confidence >= 0.4:
             return "medium"
         return "low"
+
+
+def apply_trajectory(shot: Shot, trajectory, *, overwrite_carry: bool = True) -> None:
+    """Copy a simulated trajectory onto a shot.
+
+    The simulator already returns apex, lateral deviation, flight time, landing
+    speed and landing angle alongside carry. Keeping only carry threw away five
+    reportable metrics that cost nothing extra to compute.
+
+    ``overwrite_carry`` is False when carry came from a path trusted more than
+    the simulation; the remaining metrics are still filled in, since a shot with
+    a measured carry and no apex is missing data for no reason.
+    """
+    if overwrite_carry:
+        shot.carry_spin_adjusted = trajectory.carry_yards
+    shot.apex_yards = trajectory.apex_yards
+    shot.lateral_yards = trajectory.lateral_yards
+    shot.flight_time_s = trajectory.flight_time_s
+    shot.landing_speed_mph = trajectory.landing_speed_mph
+    shot.landing_angle_deg = trajectory.landing_angle_deg
+    shot.total_yards = trajectory.total_yards
