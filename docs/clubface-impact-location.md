@@ -36,6 +36,11 @@ conclusion was reached.
 
 ## Where help is most valuable
 
+**Contributing a capture is the most useful thing you can do**, and you no
+longer need anyone else's data to do it — see *Running it on your own device*
+below. The current session is 21 shots of 7-iron and 9-iron from a single rig,
+thin enough that several tests cannot discriminate.
+
 1. **A session recorded alongside a Trackman.** The comparison harness in
    `scripts/analysis/compare_trackman.py` covers twelve club-delivery metrics,
    but no figure can be validated until it has truth to compare against.
