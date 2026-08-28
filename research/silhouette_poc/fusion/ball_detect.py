@@ -1,7 +1,7 @@
 """Polarity-agnostic ball detection with known-radius arc fitting.
 
-Replaces the fixed-polarity, fixed-magnitude rule in
-`silhouette_poc/fusion/pipeline.py::_ball_component`:
+Replaces the fixed-polarity, fixed-magnitude rule used by the superseded
+synthetic pipeline (on the fork's feat/silhouette-poc branch):
 
     ball_mask = frame >= percentile(frame, 10) + 210.0
 
