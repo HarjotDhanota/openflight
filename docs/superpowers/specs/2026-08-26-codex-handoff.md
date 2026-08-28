@@ -26,6 +26,18 @@ Supersedes nothing; **extends** `2026-08-26-agent-handoff.md` and
 | Field of view today = 2.17 m | **WRONG** | **1.08 m.** I used the full sensor width where the capture reads half of it. |
 | Mesh-fit numbers from the first A/B run (144 frames, IoU 0.4565…) | **CONTAMINATED** | My tracker followed the **ball** after impact. Ball frames scored the *highest* IoU and *best* coherence. Superseded by the 66-frame pre-impact run in §3.4. |
 
+| **"The trigger lags impact by 2.11 frames; contact is at frame 71.9"** — I published this, then retracted it | **MY ERROR** | The original **6.0 ± 0.68 frames / contact at frame 68** is right. Rendering frames 66–75 shows the clubhead reaching the ball at **f67**, covering the tee through f72, ball airborne by **f73**. |
+
+**Do not re-derive impact time from the ball track.** Two methods agreed with each other and
+both were wrong: quadratic extrapolation of the image track gave f71.9, the Test 1 ballistic
+fit gave f72.6. `t0` in that fit is a **free parameter that trades against launch speed**,
+not a measurement — on shot 16 it returns a launch *after* the trigger fired, which is
+impossible. The quadratic reaches five frames outside its own data.
+
+**Open, and never measured:** sound covers the 1.575 m from ball to microphone in 4.6 ms, so
+~8 ms of the 12.8 ms lag is detector and processing latency. Plausible for a threshold
+envelope detector; unverified.
+
 **The pattern, and it cost most of a session:** every one came from inferring a physical
 fact from geometry or arithmetic instead of measuring the thing. The convex-hull depth test
 actively misled (the hosel protrudes past the face plane, so hull facets bridge across the
