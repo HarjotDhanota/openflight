@@ -27,9 +27,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   impact height and offset, low point — alongside the existing ball data. The
   summary names metrics OpenFlight cannot yet produce rather than omitting
   them, and only pipeline-accepted values are compared.
-- **Trajectory metrics on every shot.** Apex, lateral deviation, flight time,
-  landing speed, landing angle and total distance now reach the shot payload.
-  The ballistics simulator already computed them; only carry was kept.
 - **Acoustic trigger timing derived from the installation.**
   `openflight.acoustic` computes impact time as the trigger time minus the
   sound's travel time from the ball to the microphone, so a unit mounted
