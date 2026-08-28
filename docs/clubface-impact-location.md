@@ -72,7 +72,8 @@ SHA-256, and licence position, and you fetch your own copy under GrabCAD's
 terms:
 
 ```bash
-uv run --group research python     research/silhouette_poc/meshes/download_meshes.py --local-iron <path-to-STL>
+uv run --group research python \
+    research/silhouette_poc/meshes/download_meshes.py --local-iron <path-to-STL>
 ```
 
 **Then your own captures.** You do not need anyone else's data. Hit shots on
@@ -80,9 +81,11 @@ your own OpenFlight unit, then export the session the server wrote:
 
 ```bash
 scripts/start-kiosk.sh                       # hit shots
-uv run python scripts/analysis/export_session.py     ~/openflight_sessions/session_<stamp>.jsonl --output ~/my_session
+uv run python scripts/analysis/export_session.py \
+    ~/openflight_sessions/session_<stamp>.jsonl --output ~/my_session
 export OPENFLIGHT_SESSION=~/my_session
-uv run --group research python     research/silhouette_poc/falsification/test_delivered_angles.py
+uv run --group research python \
+    research/silhouette_poc/falsification/test_delivered_angles.py
 ```
 
 The exporter includes only shots that have **both** a camera capture and a
