@@ -1,10 +1,13 @@
-"""Acquire and normalize the frozen Phase F1 meshes without vendoring them.
+"""Acquire and normalize the club meshes without vendoring them.
 
-Usage from the repository root:
+The 7-iron used by this research is a GrabCAD community model. It is not
+redistributed, so you fetch your own copy under GrabCAD's terms and point this
+script at it; see SOURCES.md for the link, the expected SHA-256 and the licence
+position. Run from the repository root:
 
-    $env:SKETCHFAB_API_TOKEN = "..."
-    uv run --group research python research/silhouette_poc/meshes/download_meshes.py `
-        --local-iron "C:/path/to/690CB 7-iron.STL"
+    uv run --group research python research/silhouette_poc/meshes/download_meshes.py         --local-iron "/path/to/690CB 7-iron.STL"
+
+Sources declared as Sketchfab downloads instead need SKETCHFAB_API_TOKEN set.
 """
 
 from __future__ import annotations
@@ -12,12 +15,16 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Any
 
-from silhouette_poc.generator.mesh_truth import (
+ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "research"))
+
+from silhouette_poc.generator.mesh_truth import (  # noqa: E402
     ACTIVE_MESH_SOURCES,
     CATEGORY_DIMENSIONS_MM,
     MESH_SOURCES,

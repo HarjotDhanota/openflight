@@ -24,7 +24,7 @@ other:
     720p 60 fps camera cannot track impact alone either.
 
 Neither is validated against truth on real pixels. Nothing in this module
-should be quoted as an accuracy figure. ``tests/test_pose_scores.py`` shows
+should be quoted as an accuracy figure. ``silhouette_poc/tests/test_pose_scores.py`` shows
 only that they rank a known pose first on synthetic masks, which establishes
 they are not broken, not that they work.
 """
