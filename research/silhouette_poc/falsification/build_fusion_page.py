@@ -253,9 +253,13 @@ That is the single most important number on this page.</p>
   the projected silhouette by zero pixels, and one pixel of segmentation error is worth
   about ten degrees. Both shots below fail primarily on face angle.</p>
 </div>
-<p>The useful next step is not a better fit. It is <b>more usable frames</b> &mdash; a
-longer segmentable approach, which means better separation of the clubhead from the mat
-and the shaft, and more pixels on the target.</p>
+<p>The useful next step is not a better fit, and it is not more video &mdash; each
+capture already holds 99 frames, and the club is only <b>in frame for about ten of
+them</b> (roughly f62&ndash;f72 at this framing). The step is <b>extracting more of those
+ten</b>: the current segmenter keeps 3&ndash;5, losing the early frames against the dark
+netting, so better separation roughly <b>doubles</b> the observations per shot. That is a
+bounded gain, and it multiplies with resolution &mdash; the same frames, more pixels
+each.</p>
 </div>
 <script>window.__SHOTS__ = {json.dumps(payload)};</script>
 <script>{JS}</script>

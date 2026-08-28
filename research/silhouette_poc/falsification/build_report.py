@@ -297,7 +297,7 @@ def _summary() -> str:
   <p>The acoustic trigger lag was previously stated as <b>6.0 frames</b>. It is <b>2.11 frames</b> on this rig &mdash; the sound's travel time over 1.575&nbsp;m &mdash; and it varies with how far the unit sits from the ball. The wrong constant put contact at frame 68 on every shot instead of a per-shot value near 71.9, and it anchored the clubhead range model and every pose fit below. Those results are <b>superseded</b>; see &sect;03. Production measurement paths are unaffected.</p>
 </div>
 
-<p>The highest-value next step is not another estimator. It is <b>extending the Trackman comparison to club metrics</b>, since no club figure can be validated until it exists. Full priorities in <a href="#recommendations">Recommendations</a>.</p>
+<p>The highest-value next step is not another estimator. The club-metric comparison harness has now been <b>built and shipped</b>; the step is a <b>session alongside a Trackman</b> to give it truth to compare against. Full priorities, including what was completed on 2026-08-27 and what each completion showed, in <a href="#recommendations">Recommendations</a>.</p>
 """
 
 
@@ -526,32 +526,44 @@ def _comparators() -> str:
 def _recommendations() -> str:
     return f"""
 {heading("recommendations", OUTLINE)}
-<p>Ordered by dependency. Each item carries the measurement that justifies it.</p>
+<p>Ordered by dependency. Each item carries the measurement that justifies it. Items completed since this report was first issued are kept, with their outcomes, because several outcomes changed what the remaining items are worth.</p>
 
-<h3 style="margin-top:26px">Tier 1 &mdash; prerequisite for any accuracy claim</h3>
+<h3 style="margin-top:26px">Completed, 2026-08-27 &mdash; and what each one showed</h3>
+<div class="scroll"><table>
+  <tr><th>Item</th><th>Outcome</th></tr>
+  <tr><td><b>Extend the Trackman comparison to club metrics</b></td><td class="t-ok">Shipped.</td></tr>
+  <tr><td colspan="2"><code>compare_trackman.py</code> now compares twelve club delivery metrics &mdash; attack angle, club path, face angle, face-to-path, dynamic loft, spin loft, swing plane and direction, spin axis, impact height and offset, low point &mdash; and its summary names the metrics OpenFlight cannot yet produce rather than omitting them. Only pipeline-accepted values are read, never rejected candidates. <b>The harness is ready; it now needs a session alongside a Trackman.</b></td></tr>
+  <tr><td><b>Impact timing from the installation</b></td><td class="t-ok">Shipped.</td></tr>
+  <tr><td colspan="2"><code>src/openflight/acoustic.py</code>: contact = trigger &minus; distance &divide; speed of sound. Model and measured ball departure agree to <b>0.04 frames</b>. This also corrected a 3.89-frame error that had anchored the research fits (&sect;03).</td></tr>
+  <tr><td><b>Surface computed trajectory metrics</b></td><td class="t-ok">Shipped.</td></tr>
+  <tr><td colspan="2">Apex, lateral deviation, flight time, landing speed, landing angle and total distance now reach the Shot object and the UI payload. Five Trackman-parity outputs that were being computed and discarded.</td></tr>
+  <tr><td><b>Radar range model + rotation-axis constraint</b></td><td class="t-warn">Implemented; orientation still fails.</td></tr>
+  <tr><td colspan="2">Range now comes from the radar's own range rate and the rotation axis from the fused velocity, dropping the fit from five free parameters to four. The velocity half <b>validates</b>: fused |v| matches the OPS243's independent club speed at <b>0.97&ndash;1.00&nbsp;&plusmn;&nbsp;0.03</b>. The orientation half does not: <b>0 of 6</b> shots land inside the physical envelope, and refitting with the corrected impact anchor moved the recovered angles substantially &mdash; a fit that sensitive to its time anchor is not extracting orientation from the pixels. <b>This is why the remaining items are ordered as they are.</b></td></tr>
+  <tr><td><b>Analyse the raw radar captures</b></td><td class="t-warn">Opened; rotation unconfirmed.</td></tr>
+  <tr><td colspan="2">All 22 <code>.l3dump</code> files decoded. The clubhead's Doppler width (1.95 bins median) exceeds the point-target floor (1.27) by close to the rotation-predicted amount, but the discriminating test has no statistical power on a 7-iron/9-iron-only session. Needs the wide-speed-range capture below.</td></tr>
+</table></div>
+
+<h3>Tier 1 &mdash; prerequisite for any accuracy claim</h3>
 <div class="scroll"><table>
   <tr><th>Item</th><th>Justification</th><th class="num">Cost</th></tr>
-  <tr><td><b>Extend the Trackman comparison to club metrics</b></td><td><code>scripts/analysis/compare_trackman.py</code> compares ball speed, club speed, smash factor, launch angles, spin and carry. It compares <b>no club data</b>. Until it does, no face-angle or impact-location figure can be validated against truth.</td><td class="num">1 session + 1 day</td></tr>
+  <tr><td><b>A session alongside a Trackman, using the new club-metric comparison</b></td><td>The harness exists; no club figure can be validated until it has truth to compare against.</td><td class="num">1 session</td></tr>
   <tr><td><b>Target at a taped position, visible to both sensors</b></td><td>Resolves the <b>5&deg;</b> camera/radar disagreement, which nothing in the current data can arbitrate.</td><td class="num">1 session</td></tr>
 </table></div>
 
 <h3>Tier 2 &mdash; actionable with existing data</h3>
 <div class="scroll"><table>
   <tr><th>Item</th><th>Justification</th><th class="num">Cost</th></tr>
-  <tr><td><b>Re-solve orientation under the radar range model</b></td><td>Constant range rejected at <b>p &asymp; 0.04</b>; the club traverses <b>529&nbsp;mm</b> during the fitted frames. Re-rendering alone is neutral &mdash; the angles must be refitted.</td><td class="num">hours</td></tr>
-  <tr><td><b>Constrain the rotation axis from radar and camera</b></td><td>Radar range rate supplies the radial velocity component, the camera centroid track the two perpendicular components. Removes <b>2 of 5</b> free parameters currently absorbing noise.</td><td class="num">hours</td></tr>
-  <tr><td><b>Correct <code>detect_face_plane</code></b></td><td>Anchors the model frame to the cavity rim on the reverse of the club. True loft <b>33.10&deg;</b>, reported 17.5&deg;. All mesh-derived dynamic loft inherits the error.</td><td class="num">hours</td></tr>
-  <tr><td><b>Analyse the 22 raw radar captures</b></td><td><code>dump.py</code> already decodes them. Includes the ISAR rotation estimate in &sect;{_num("radar-isar")}.</td><td class="num">days</td></tr>
-  <tr><td><b>Surface computed trajectory metrics</b></td><td><code>ballistics.py</code> returns apex, lateral deviation, landing angle, landing speed and total distance. <b>None reach the Shot object or the UI.</b> Five Trackman-parity outputs already computed.</td><td class="num">hours</td></tr>
+  <tr><td><b>Extract more of the frames the club already appears in</b></td><td>The club is visible for roughly <b>ten frames</b> before contact (about f62&ndash;f72 at this framing); the current extractor keeps <b>3&ndash;5</b>, losing the early frames against the dark netting. A better segmenter therefore roughly <b>doubles</b> the observations per shot &mdash; a bounded gain, not an open-ended one, since nothing recovers more frames than the club is in view for. Against four fit parameters, 5&rarr;10 observations changes the conditioning materially.</td><td class="num">days</td></tr>
+  <tr><td><b>Correct <code>detect_face_plane</code></b></td><td>Still anchors the model frame to the cavity rim on the reverse of the club (true loft <b>33.10&deg;</b>, reported 17.5&deg;). Interim workaround exists: <code>replay/club_angles.py</code> carries the measured axes, and its <code>square_pose()</code> is now the required seed for any fit &mdash; the mesh frame's origin is a <em>backwards</em> club.</td><td class="num">hours</td></tr>
 </table></div>
 
 <h3>Tier 3 &mdash; requires a new capture or hardware change</h3>
 <div class="scroll"><table>
   <tr><th>Item</th><th>Justification</th><th class="num">Cost</th></tr>
-  <tr><td><b>Capture at 1280&times;800, 1:1</b></td><td>Plate scale doubles to <b>0.655 px/mm</b>, so 10&deg; of face angle becomes 4 px rather than 2. The optical half of this is certain; whether segmentation error stays near 1 px is not &mdash; earlier testing on real segmented edges gave a 0.78&times; improvement, not 2&times;.</td><td class="num">1 session</td></tr>
-  <tr><td><b>Capture across a wide club-speed range</b></td><td>Every shot here is a 7-iron or 9-iron and the two do not overlap in speed. A 12&nbsp;% total spread leaves any speed-scaling test unable to discriminate. A driver and a wedge in one session removes the confound.</td><td class="num">1 session</td></tr>
+  <tr><td><b>Capture at 1280&times;800, 1:1</b></td><td>Plate scale doubles to <b>0.655 px/mm</b>, so 10&deg; of face angle becomes 4 px rather than 2, at the same frame rate and field of view. Multiplies with the segmentation item above &mdash; same frames, more pixels each. The optical half is certain; whether segmentation error stays near 1 px is not &mdash; earlier testing on real segmented edges gave a 0.78&times; improvement, not 2&times;.</td><td class="num">1 session</td></tr>
+  <tr><td><b>Capture across a wide club-speed range</b></td><td>Every shot here is a 7-iron or 9-iron with no speed overlap, which left the radar-rotation test unable to discriminate. A driver and a wedge in one session removes the confound and would settle whether the Doppler broadening is rotation.</td><td class="num">1 session</td></tr>
   <tr><td><b>Lux and exposure ladder in the bay</b></td><td>Determines whether the optical route is a one-degree or four-degree instrument. Comparator anchors: Trackman 4 at 700&ndash;800 lux, Mevo Gen 2 at 300 lux, both continuous.</td><td class="num">1 session</td></tr>
-  <tr><td><b>Dimension the enclosure; self-level the camera</b></td><td>Camera pitch is currently recovered from footage rather than specified, so it is not reproducible on a second unit. <code>inclinometer.py</code> already tilt-compensates the radar.</td><td class="num">days</td></tr>
+  <tr><td><b>Dimension the enclosure; self-level the camera</b></td><td>Camera pitch is currently recovered from footage rather than specified, so it is not reproducible on a second unit. <code>inclinometer.py</code> already tilt-compensates the radar. The acoustic timing fix also depends on a per-installation ball-to-unit distance, which belongs in the same calibration record.</td><td class="num">days</td></tr>
 </table></div>
 
 <h3>Candidate approaches, not yet evaluated</h3>
