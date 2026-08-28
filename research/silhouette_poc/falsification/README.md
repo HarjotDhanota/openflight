@@ -81,8 +81,13 @@ Each answers one question against the capture session and prints its evidence.
 
 ## Using your own captures
 
-These scripts replay a session export, not a live device. To make one from your
-own shots:
+These scripts need two things that are not in git: the **club mesh** (every run
+projects it — see `../meshes/SOURCES.md`, fetched under GrabCAD's terms) and a
+**session export**.
+
+    uv run --group research python ../meshes/download_meshes.py --local-iron <STL>
+
+They replay an export, not a live device. To make one from your own shots:
 
 ```bash
 uv run python scripts/analysis/export_session.py \
