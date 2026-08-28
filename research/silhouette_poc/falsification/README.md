@@ -79,6 +79,21 @@ Each answers one question against the capture session and prints its evidence.
 | `test_isar_doppler_width.py` | is the clubhead's rotation visible in the radar's Doppler spread? |
 | `render_fusion_view.py` | draw the model's own projection over the real frames |
 
+## Using your own captures
+
+These scripts replay a session export, not a live device. To make one from your
+own shots:
+
+```bash
+uv run python scripts/analysis/export_session.py \
+    ~/openflight_sessions/session_<stamp>.jsonl --output ~/my_session
+export OPENFLIGHT_SESSION=~/my_session
+```
+
+Both the camera and the IWR6843 must have been enabled during capture: the
+exporter drops any shot missing either asset and records why in
+`excluded_shots.csv`.
+
 ## Outputs
 
 Eight result JSONs are committed because later scripts read them as inputs
