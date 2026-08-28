@@ -53,7 +53,6 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).parent))
 
 from openflight.acoustic import impact_frame_from_trigger  # noqa: E402
-from silhouette_poc.generator.mesh_truth import TriangleMesh  # noqa: E402
 from silhouette_poc.replay.fit_real import (  # noqa: E402
     CAMERA_CENTER_WORLD,
     _ray_world,
@@ -71,7 +70,8 @@ from silhouette_poc.replay.rigid_motion import rotation_from_omega_deg_s  # noqa
 
 from test_fusion_chamfer import MISS_PENALTY_PX, MPH_PER_MPS, load_prior_fits  # noqa: E402
 from flight_track import track_flight  # noqa: E402
-from test_meshfit_depth_ab import EXCLUDE, MESH, SESSION, club_masks  # noqa: E402
+from session_path import load_mesh  # noqa: E402
+from test_meshfit_depth_ab import EXCLUDE, SESSION, club_masks  # noqa: E402
 from test_rigid_rotation_prior import render  # noqa: E402
 
 BALL_RANGE_MM = 1581.0
@@ -303,10 +303,7 @@ def main():
     )
     args = parser.parse_args()
 
-    mesh_data = np.load(MESH)
-    mesh = TriangleMesh(
-        mesh_data["vertices_local_mm"], mesh_data["faces"], "poc_7iron", "x" * 64
-    )
+    mesh = load_mesh()
     prior = load_prior_fits()
     with open(SESSION / "shots.csv", newline="", encoding="utf-8") as handle:
         rows = {

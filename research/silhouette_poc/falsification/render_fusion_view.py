@@ -36,7 +36,6 @@ sys.path.insert(0, str(ROOT / "research"))
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).parent))
 
-from silhouette_poc.generator.mesh_truth import TriangleMesh  # noqa: E402
 from silhouette_poc.replay.club_angles import delivered_angles, in_envelope  # noqa: E402
 from silhouette_poc.replay.fit_real import CAMERA_CENTER_WORLD, triad  # noqa: E402
 from silhouette_poc.replay.pose_scores import mask_edge  # noqa: E402
@@ -44,7 +43,8 @@ from silhouette_poc.replay.rigid_motion import rotation_from_omega_deg_s  # noqa
 
 from flight_track import teed_ball, track_flight  # noqa: E402
 from test_fused_refit import build_context, omega_from_phase  # noqa: E402
-from test_meshfit_depth_ab import MESH, SESSION, club_masks  # noqa: E402
+from session_path import load_mesh  # noqa: E402
+from test_meshfit_depth_ab import SESSION, club_masks  # noqa: E402
 from test_rigid_rotation_prior import render  # noqa: E402
 
 # 2x is legible at 640x400 and keeps the page inside the 16 MB artifact
@@ -209,10 +209,7 @@ def main():
         rows = {int(r["shot_number"]): r for r in csv.DictReader(handle)}
     wanted = args.shot or [18, 2]
 
-    mesh_data = np.load(MESH)
-    mesh = TriangleMesh(
-        mesh_data["vertices_local_mm"], mesh_data["faces"], "poc_7iron", "x" * 64
-    )
+    mesh = load_mesh()
     args.out.mkdir(parents=True, exist_ok=True)
     manifest = []
     for shot in wanted:
