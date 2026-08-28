@@ -1,24 +1,11 @@
 """Resolves air density from whatever sources are available.
 
-One object owns the question "what is the air density right now, and how do we
-know". Everything else -- the shot path, the conditions screen, the session
-log -- asks it rather than reimplementing the precedence.
+One object owns the precedence so the shot path, the conditions screen and
+the session log cannot disagree. Sensor first, then ISA sea level -- the
+only behaviour before this subsystem. Manual entry and a weather API slot
+in between as separate changes.
 
-Source order, best first:
-
-  1. sensor   a fitted BME280 or BMP280, read on a background poll
-  2. default  ISA sea level -- the only behaviour before this subsystem
-
-Manual entry and an outdoor weather API are separate changes. They slot in
-between those two: both are better than assuming ISA, and both are worse than
-measuring the air the ball actually flies through. An API in particular
-reports OUTDOOR conditions, so in a 22 C garage on a 36 C day its correction
-is actively wrong -- worse than none. That asymmetry is the whole argument
-for fitting a sensor, and it is why the sensor sits at the top rather than
-being averaged in.
-
-Nothing here performs I/O. Readings are pushed in by the poll thread;
-``current()`` is a pure read, so it is safe to call from the shot path.
+Nothing here performs I/O; ``current()`` is a pure read.
 """
 
 import logging
@@ -33,16 +20,12 @@ logger = logging.getLogger(__name__)
 
 ISA_DENSITY = 1.225
 
-# Used when the part has no humidity channel (BMP280). The midpoint bounds the
-# error at roughly half the dry-to-saturated span -- about 0.6% of density at
-# 25 C, or 0.4 yd on a driver. Smaller than the bias the sensor removes by a
-# wide margin, so it is worth stating rather than worth blocking on.
+# BMP280 has no humidity channel. The midpoint bounds the error at ~0.6% of
+# density, far smaller than the bias the sensor removes.
 ASSUMED_HUMIDITY_PCT = 50.0
 
-# Older than this and the sensor is treated as absent. The poll runs every
-# couple of seconds, so reaching this means the part stopped answering --
-# usually a jumper that has worked loose. Better to fall back to ISA and say
-# so than to keep applying a reading from an hour ago.
+# The poll runs every couple of seconds, so reaching this means the part
+# stopped answering. Fall back to ISA rather than apply a stale reading.
 SENSOR_MAX_AGE_S = 60.0
 
 
@@ -56,8 +39,7 @@ class EnvironmentReading:
     pressure_hpa: Optional[float] = None
     humidity_pct: Optional[float] = None
     age_s: Optional[float] = None
-    # True when humidity was assumed rather than measured, so the UI can say
-    # so instead of presenting an assumption as a reading.
+    # Lets the UI mark an assumption rather than present it as a reading.
     humidity_assumed: bool = False
 
     def as_dict(self) -> dict:
@@ -71,9 +53,7 @@ class EnvironmentReading:
             "humidity_assumed": self.humidity_assumed,
             "age_s": round(self.age_s) if self.age_s is not None else None,
             "deviation_pct": round(100.0 * (self.air_density_kg_m3 / ISA_DENSITY - 1.0), 1),
-            # The headline figure on the panel: the same density in the unit
-            # people can sanity-check against experience. "Plays like 2,700 ft"
-            # can be checked against a round; "-7.6%" cannot.
+            # The panel's headline: the unit people can check against a round.
             "density_altitude_ft": round(density_altitude_ft(self.air_density_kg_m3)),
         }
 
@@ -81,8 +61,7 @@ class EnvironmentReading:
 class EnvironmentProvider:
     """Holds the latest sensor reading and resolves it to a density.
 
-    Args:
-        now: Clock, injected so staleness is testable without sleeping.
+    The clock is injected so staleness is testable without sleeping.
     """
 
     def __init__(self, now: Callable[[], float] = time.time):
@@ -117,14 +96,9 @@ class EnvironmentProvider:
                 self._reading.temp_c, self._reading.pressure_hpa * 100.0, humidity
             )
         except (ValueError, TypeError):
-            # Out-of-range values mean a faulty part or a garbled read, not
-            # weather. Loud in the log, but the shot still gets a number --
-            # this runs on the shot path, outside the caller's guard, so
-            # raising here would lose the shot rather than the correction.
-            #
-            # %r rather than %.1f: the value may not be a number at all, and a
-            # formatting error inside the handler would raise the very
-            # exception this exists to swallow.
+            # A faulty part or garbled read, not weather. This runs on the
+            # shot path, so raising would lose the shot, not the correction.
+            # %r, not %.1f: the value may not be a number at all.
             logger.warning(
                 "[SENSOR] Rejecting %s reading: %r C, %r hPa, %r%% RH",
                 self._reading.chip,

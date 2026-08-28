@@ -145,16 +145,13 @@ inclinometer_runtime_config: dict = {"enabled": False}
 # missing launch inputs always fall back to the legacy table estimator.
 ballistics_enabled: bool = True
 
-# Air density. The provider always exists and answers "ISA sea level, source
-# default" until a sensor is fitted, so nothing downstream needs to care
-# whether one is present.
+# Always present; answers ISA sea level until a sensor is fitted.
 environment_provider = EnvironmentProvider()
 air_sensor = None
 air_sensor_thread: Optional[threading.Thread] = None
 air_sensor_stop = threading.Event()
-# Slow enough that the die stays near ambient -- self-heating is the dominant
-# sensor error, and forced mode only helps if the duty cycle is low. Weather
-# does not move faster than this.
+# Low duty cycle keeps the die near ambient; self-heating dominates the
+# sensor error budget.
 AIR_SENSOR_POLL_S = 2.0
 
 # Simulator connectors (optional). Populated in main() from config/sim.json +
@@ -1001,8 +998,8 @@ def shot_to_dict(shot: Shot) -> dict:
         "carry_spin_adjusted": round(shot.carry_spin_adjusted)
         if shot.carry_spin_adjusted
         else None,
-        # Null throughout when no sensor is fitted, so consumers can tell
-        # "measured 1.225" apart from "assumed 1.225".
+        # Null when no sensor is fitted, so measured 1.225 is distinguishable
+        # from assumed 1.225.
         "air_temp_c": shot.air_temp_c,
         "air_pressure_hpa": shot.air_pressure_hpa,
         "humidity_pct": shot.humidity_pct,
@@ -2840,11 +2837,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
 
 
 def _apply_environment(shot: Shot) -> None:
-    """Stamp the shot with the air it was struck in.
-
-    Leaves every field None when no sensor is fitted, which is what makes an
-    unconfigured install produce exactly the numbers it did before.
-    """
+    """Stamp the shot with the air it was struck in, or nothing without a sensor."""
     reading = environment_provider.current()
     if reading.source == "default":
         return
@@ -2856,13 +2849,10 @@ def _apply_environment(shot: Shot) -> None:
 
 
 def _air_sensor_loop(stop_event: threading.Event, poll_s: float = AIR_SENSOR_POLL_S) -> None:
-    """Poll the sensor in the background and hand readings to the provider.
+    """Poll the sensor and hand readings to the provider.
 
-    Deliberately separate from the shot path: a shot must never wait on an
-    I2C transaction. A failed read is skipped rather than retried hard -- the
-    provider falls back to ISA on its own once the last good reading goes
-    stale, so a sensor that has been unplugged degrades quietly instead of
-    pinning a stale value forever.
+    Off the shot path: a shot must never wait on an I2C transaction. Failed
+    reads are skipped; the provider expires the last good one on its own.
     """
     last_sent = None
     while not stop_event.is_set():
@@ -2870,28 +2860,21 @@ def _air_sensor_loop(stop_event: threading.Event, poll_s: float = AIR_SENSOR_POL
             reading = air_sensor.read() if air_sensor else None
             if reading is not None:
                 environment_provider.set_sensor_reading(reading)
-                # Only push when a rounded value actually moved. The panel is
-                # showing one decimal place, so emitting every poll would be
-                # 0.5 Hz of identical payloads to every connected tab.
+                # Only push when a rounded value moved; the panel shows one
+                # decimal place.
                 payload = environment_provider.current().as_dict()
                 comparable = {k: v for k, v in payload.items() if k != "age_s"}
                 if comparable != last_sent:
                     last_sent = comparable
                     socketio.emit("environment", payload)
         except Exception:  # pylint: disable=broad-except
-            # A driver bug must not take the thread down and silently stop all
-            # further readings; the next poll gets another chance.
+            # A driver bug must not stop all further readings.
             logger.exception("[SENSOR] Poll failed")
         stop_event.wait(poll_s)
 
 
 def start_air_sensor() -> bool:
-    """Look for a sensor and start polling it if one is there.
-
-    Returns:
-        True if a sensor was found. False is the ordinary no-sensor case, not
-        an error -- the provider keeps answering ISA sea level.
-    """
+    """Start polling if a sensor is fitted. False is the ordinary no-sensor case."""
     global air_sensor, air_sensor_thread  # pylint: disable=global-statement
 
     bus = open_i2c_bus()
@@ -3628,9 +3611,7 @@ def on_shot_detected(shot: Shot):
     if shot.carry_spin_adjusted is None and shot.mode != "mock":
         conditions = resolve_launch(shot) if ballistics_enabled else None
         if conditions is not None:
-            # The integrator models drag and Magnus directly, so it takes the
-            # density itself rather than a correction factor. Falls back to ISA
-            # when nothing is measured, which is what it always assumed.
+            # The integrator takes density directly, falling back to ISA.
             trajectory = simulate(conditions, air_density=shot.air_density_kg_m3 or AIR_DENSITY_STD)
             shot.carry_spin_adjusted = trajectory.carry_yards
             logger.info(
@@ -3658,9 +3639,8 @@ def on_shot_detected(shot: Shot):
                 shot.club,
                 club_speed_mph=shot.club_speed_mph,
             )
-            # The table estimator has no physics to scale, so density is
-            # applied as a scalar afterwards. Exactly 1.0 when nothing is
-            # measured, so an unconfigured install is byte-identical to before.
+            # The table path has no physics to scale, so density applies as a
+            # scalar. Exactly 1.0 with no sensor.
             if shot.air_density_kg_m3 is not None:
                 shot.carry_spin_adjusted *= density_carry_factor(shot.air_density_kg_m3)
             reason = "ballistics disabled" if not ballistics_enabled else "no launch angle"
@@ -5152,13 +5132,9 @@ def main():
     logging.getLogger("openflight.rolling_buffer.trigger").setLevel(logging.INFO)
     logging.getLogger("openflight.rolling_buffer.monitor").setLevel(logging.INFO)
 
-    # After logging is configured, so "[SENSOR] Found bme280 at 0x76" is
-    # actually visible -- it is the line a user wiring this for the first
-    # time is watching for.
+    # After logging is configured, so the discovery line is visible.
     if args.air_sensor and not start_air_sensor():
-        # Not fatal: the provider keeps answering ISA sea level, so the unit
-        # still works exactly as it did. But the user asked for a sensor and
-        # did not get one, so say so rather than silently doing nothing.
+        # Not fatal, but the user asked for a sensor and did not get one.
         logger.warning(
             "[SENSOR] --air-sensor was passed but no BME280/BMP280 was found. "
             "Carry assumes ISA sea level. Check wiring and that I2C is enabled "

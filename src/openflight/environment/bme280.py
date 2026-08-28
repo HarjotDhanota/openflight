@@ -1,40 +1,10 @@
 """Bosch BME280 / BMP280 driver over I2C.
 
-Reads temperature, absolute station pressure and (on the BME280) relative
-humidity, which is everything ``density.air_density`` needs. A ~$4 part
-removes what is otherwise the largest systematic error in the carry
-pipeline: a 14-yard bias on a driver in Denver, and 5-6 yards on a hot
-afternoon at a sea-level venue.
-
-Why this rather than a library
-------------------------------
-``smbus2`` is a thin ioctl wrapper with no compensation math, so the Bosch
-algorithm has to live somewhere regardless. The Adafruit CircuitPython stack
-would supply it, but pulls in Blinka and its board-detection layer -- a
-large dependency tree for one sensor on one board. What is implemented here
-is ~150 lines of arithmetic transcribed from the datasheet.
-
-Why forced mode
----------------
-Self-heating is the dominant error term. In continuous mode the die sits
-1-3 C above ambient inside a warm enclosure, which is 0.26-0.77 yd on a
-driver -- larger than the pressure, temperature and humidity spec errors
-combined. A single forced measurement every couple of seconds, with the part
-asleep in between, keeps that near 0.1 C. Everything else in the error
-budget is noise by comparison.
-
-Safety
-------
-``read()`` never raises. It runs on a background poll thread whose value is
-consumed on the shot path, and a loose jumper wire must not be able to stop
-someone hitting balls. Every failure returns ``None`` and the caller falls
-back to the previous source.
-
-NOTE: the compensation is cross-checked against the datasheet's
-floating-point formulation in the tests, but has NOT yet been confirmed
-against a physical chip. The failure mode would be a consistent offset
-rather than a crash. Confirm against a reference thermometer and barometer
-before trusting the numbers in the field.
+Reads temperature, absolute station pressure and, on the BME280, relative
+humidity. Forced mode with the part asleep between samples: in continuous
+mode self-heating puts the die 1-3 C above ambient, which dominates the
+error budget. ``read()`` never raises; it runs on a background poll thread
+and every failure returns None.
 """
 
 import logging
@@ -44,8 +14,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# I2C addresses. SDO to ground gives 0x76, SDO to VDDIO gives 0x77; breakout
-# boards disagree about which they strap by default, so both are tried.
+# Breakout boards disagree about which address they strap, so both are tried.
 PRIMARY_ADDRESS = 0x76
 SECONDARY_ADDRESS = 0x77
 
@@ -78,8 +47,7 @@ MODE_FORCED = 0b01
 
 STATUS_MEASURING = 0b1000
 
-# A x4 pressure conversion takes well under 20 ms. This is a wedged-bus
-# backstop, not a timing budget.
+# Wedged-bus backstop; a x4 conversion takes well under 20 ms.
 MAX_CONVERSION_POLLS = 50
 CONVERSION_POLL_S = 0.002
 
@@ -94,9 +62,7 @@ class SensorReading:
 
     temp_c: float
     pressure_hpa: float
-    # None on a BMP280, which has no humidity channel at all. Deliberately not
-    # 0.0: that is indistinguishable from bone-dry air and would be applied to
-    # the density as though it had been measured.
+    # None, not 0.0, on a BMP280: 0.0 would read as measured bone-dry air.
     humidity_pct: Optional[float]
     chip: str
 
@@ -146,14 +112,8 @@ def _s12(value):
 class BME280:
     """A BME280 or BMP280 on an I2C bus.
 
-    Args:
-        bus: Anything with smbus2's ``read_byte_data``, ``read_i2c_block_data``
-            and ``write_byte_data``. Injected so tests need no hardware.
-        address: I2C address. Defaults to the primary.
-
-    Raises:
-        Bme280Error: If the chip ID is not a part this driver understands.
-            Construction is the only place this raises -- reads never do.
+    The bus is injected so tests need no hardware. Construction is the only
+    place this raises; reads never do.
     """
 
     def __init__(self, bus, address: int = PRIMARY_ADDRESS):
@@ -189,10 +149,7 @@ class BME280:
 
         values["h1"] = block[25]
         second = self._bus.read_i2c_block_data(self.address, CALIB_2_REG, CALIB_2_LEN)
-        # dig_H4 and dig_H5 share the byte at 0xE5, split across its nibbles:
-        # H4 takes the low nibble, H5 the high one. Getting this wrong is the
-        # classic BME280 driver bug, and it produces humidity that looks
-        # plausible until the air is very dry or very wet.
+        # dig_H4 and dig_H5 share 0xE5: H4 takes the low nibble, H5 the high.
         values["h2"] = _s16(second, 0)
         values["h3"] = second[2]
         values["h4"] = _s12(((second[3] & 0xFF) << 4) | (second[4] & 0x0F))
@@ -201,13 +158,7 @@ class BME280:
         return Calibration(**values)
 
     def read(self) -> Optional[SensorReading]:
-        """Take one forced-mode measurement.
-
-        Returns:
-            The conditions, or ``None`` if anything went wrong -- a bus error,
-            a chip that never finished converting, or an unreadable block.
-            Never raises: this feeds the shot path.
-        """
+        """One forced-mode measurement, or None. Never raises: feeds the shot path."""
         try:
             self._start_forced_measurement()
             if not self._wait_for_conversion():
@@ -217,9 +168,7 @@ class BME280:
                 return None
             block = self._bus.read_i2c_block_data(self.address, DATA_REG, 8)
         except OSError as exc:
-            # Loose wiring, a bus in use, or the part briefly browning out.
-            # Transient by nature, so nothing is latched off -- the next poll
-            # tries again.
+            # Transient by nature, so nothing is latched off.
             logger.warning("[SENSOR] Read from 0x%02x failed: %s", self.address, exc)
             return None
 
@@ -239,10 +188,8 @@ class BME280:
         )
 
     def _start_forced_measurement(self) -> None:
-        # ctrl_hum MUST be written before ctrl_meas: the datasheet specifies
-        # that changes to ctrl_hum only take effect after a subsequent write to
-        # ctrl_meas. Reversed, humidity silently samples at the wrong
-        # oversampling and reads plausibly wrong.
+        # ctrl_hum must precede ctrl_meas: per the datasheet it only takes
+        # effect on the following ctrl_meas write.
         if self.has_humidity:
             self._bus.write_byte_data(self.address, CTRL_HUM_REG, OVERSAMPLE_X1)
         self._bus.write_byte_data(self.address, CONFIG_REG, 0x00)  # no IIR, no standby
@@ -262,9 +209,7 @@ class BME280:
         return False
 
     def _compensate_temperature(self, raw: int):
-        """Returns (degrees C, t_fine). t_fine carries the temperature into the
-        pressure and humidity compensation, which is why it is threaded
-        through rather than recomputed."""
+        """Returns (degrees C, t_fine). t_fine feeds pressure and humidity."""
         cal = self.calibration
         var1 = (raw / 16384.0 - cal.t1 / 1024.0) * cal.t2
         var2 = (raw / 131072.0 - cal.t1 / 8192.0) ** 2 * cal.t3
@@ -280,8 +225,7 @@ class BME280:
         var1 = (cal.p3 * var1 * var1 / 524288.0 + cal.p2 * var1) / 524288.0
         var1 = (1.0 + var1 / 32768.0) * cal.p1
         if var1 == 0.0:
-            # Only reachable from a corrupt calibration block; guarded because
-            # the alternative is ZeroDivisionError on the poll thread.
+            # Corrupt calibration block; the alternative is ZeroDivisionError.
             return 0.0
         pressure = 1048576.0 - raw
         pressure = (pressure - var2 / 4096.0) * 6250.0 / var1
@@ -296,22 +240,12 @@ class BME280:
             cal.h2 / 65536.0 * (1.0 + cal.h6 / 67108864.0 * h * (1.0 + cal.h3 / 67108864.0 * h))
         )
         h = h * (1.0 - cal.h1 * h / 524288.0)
-        # The datasheet clamps here. A working part legitimately reports a
-        # little over 100% in fog, but far outside that is a fault.
+        # Datasheet clamp; a working part reports a little over 100% in fog.
         return min(100.0, max(0.0, h))
 
 
 def detect(bus, addresses=(PRIMARY_ADDRESS, SECONDARY_ADDRESS)) -> Optional[BME280]:
-    """Find a supported part on the bus.
-
-    Args:
-        bus: An smbus2-compatible bus.
-        addresses: Addresses to probe, in preference order.
-
-    Returns:
-        The sensor, or ``None`` if nothing supported answered. No sensor
-        fitted is the common case, not an error, so this does not raise.
-    """
+    """Find a supported part, or None. No sensor fitted is the common case."""
     for address in addresses:
         try:
             sensor = BME280(bus, address)
@@ -324,12 +258,7 @@ def detect(bus, addresses=(PRIMARY_ADDRESS, SECONDARY_ADDRESS)) -> Optional[BME2
 
 
 def open_bus(bus_number: int = 1):
-    """Open the Pi's I2C bus. Imported lazily so smbus2 is only needed on a Pi.
-
-    Returns:
-        An open bus, or ``None`` if smbus2 is missing or the bus device is
-        absent -- both of which mean "no sensor", not "crash".
-    """
+    """Open the Pi's I2C bus, or None. smbus2 is imported lazily."""
     try:
         from smbus2 import SMBus  # noqa: PLC0415 -- optional, Linux-only dependency
     except ImportError:

@@ -60,9 +60,9 @@ class TestWithASensor:
         assert current.humidity_pct == pytest.approx(28.0)
 
     def test_the_source_names_the_chip_that_was_actually_found(self):
-        """A BMP280 is a materially different reading -- its humidity is
-        assumed, not measured -- so the provenance must say which part it was
-        rather than flattening both to "sensor"."""
+        """A BMP280 is a materially different reading -- its humidity is assumed, not
+        measured -- so the provenance must say which part it was rather than flattening
+        both to "sensor"."""
         provider = EnvironmentProvider()
         provider.set_sensor_reading(reading(chip="bmp280", humidity_pct=None))
 
@@ -79,9 +79,8 @@ class TestAMissingHumidityChannel:
         assert provider.current().humidity_pct == ASSUMED_HUMIDITY_PCT
 
     def test_the_assumption_costs_less_than_the_sensor_it_replaces(self):
-        """Going bone-dry to saturated is worth ~1.2% of density at 25 C, so
-        assuming the midpoint bounds the error at ~0.6% -- about 0.4 yd on a
-        driver. Worth stating, not worth blocking on."""
+        """Going bone-dry to saturated is worth ~1.2% of density at 25 C, so assuming the
+        midpoint bounds the error at ~0.6% -- about 0.4 yd on a driver."""
         provider = EnvironmentProvider()
 
         provider.set_sensor_reading(reading(chip="bmp280", humidity_pct=None, temp_c=25.0))
@@ -126,8 +125,7 @@ class TestAStaleReading:
 
 
 class TestBadReadingsDegrade:
-    """Resolution runs on the shot path, outside the caller's exception guard.
-    Anything that raises here loses the shot, not just the correction."""
+    """Resolution runs on the shot path, outside the caller's exception guard."""
 
     @pytest.mark.parametrize(
         "bad",

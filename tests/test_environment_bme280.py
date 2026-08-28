@@ -116,13 +116,9 @@ def data_block(raw_temp=RAW_TEMP, raw_pressure=RAW_PRESSURE, raw_humidity=RAW_HU
 
 
 class FakeBus:
-    """A BME280 at the register level.
-
-    Records every write so the forced-mode handshake can be asserted, which
-    matters: the datasheet requires ctrl_hum to be written BEFORE ctrl_meas,
-    because ctrl_hum only takes effect on a subsequent ctrl_meas write. Get
-    that order wrong and humidity silently reads at the wrong oversampling.
-    """
+    """A BME280 at the register level. Records every write so the forced-mode handshake can
+    be asserted, which matters: the datasheet requires ctrl_hum to be written BEFORE
+    ctrl_meas, because ctrl_hum only takes effect on a subsequent ctrl_meas write."""
 
     def __init__(
         self, *, chip_id=BME280_CHIP_ID, addresses=(PRIMARY_ADDRESS,), calib=None, data=None
@@ -210,10 +206,7 @@ class TestChipDetection:
         assert sensor.has_humidity is True
 
     def test_a_bmp280_is_recognised_and_reports_no_humidity_channel(self):
-        """The BMP280 is pin- and register-compatible but has no humidity
-        sensor. Boards are widely mislabelled, so this must be detected rather
-        than assumed -- reading its (absent) humidity registers returns zeros,
-        which would otherwise look like a real 0% RH reading."""
+        """The BMP280 is pin- and register-compatible but has no humidity sensor."""
         sensor = BME280(FakeBus(chip_id=BMP280_CHIP_ID))
         assert sensor.chip == "bmp280"
         assert sensor.has_humidity is False
@@ -223,8 +216,8 @@ class TestChipDetection:
             BME280(FakeBus(chip_id=0x1F))
 
     def test_the_secondary_address_is_tried_when_nothing_answers_at_the_primary(self):
-        """SDO tied high moves the part to 0x77, and breakout boards differ on
-        which they default to."""
+        """SDO tied high moves the part to 0x77, and breakout boards differ on which they
+        default to."""
         bus = FakeBus(addresses=(SECONDARY_ADDRESS,))
 
         sensor = detect(bus)
@@ -248,9 +241,7 @@ class TestForcedModeHandshake:
     """Self-heating is the dominant error term, and forced mode is the fix."""
 
     def test_ctrl_hum_is_written_before_ctrl_meas(self):
-        """Datasheet 5.4.3: ctrl_hum only takes effect after a write to
-        ctrl_meas. Reversing these two silently leaves humidity oversampling
-        at whatever it was, which reads as a plausible but wrong value."""
+        """Datasheet 5.4.3: ctrl_hum only takes effect after a write to ctrl_meas."""
         bus = FakeBus()
         BME280(bus).read()
 
@@ -260,10 +251,8 @@ class TestForcedModeHandshake:
         assert registers.index(CTRL_HUM_REG) < registers.index(CTRL_MEAS_REG)
 
     def test_the_chip_is_left_in_sleep_between_readings(self):
-        """Continuous mode warms the die 1-3 C above ambient, which is 0.26-0.77
-        yd on a driver -- larger than every other sensor error combined. The
-        mode bits of the final ctrl_meas write must request a single forced
-        measurement, after which the part returns to sleep on its own."""
+        """Continuous mode warms the die 1-3 C above ambient, which is 0.26-0.77 yd on a
+        driver -- larger than every other sensor error combined."""
         bus = FakeBus()
         BME280(bus).read()
 
@@ -280,8 +269,7 @@ class TestForcedModeHandshake:
         assert bus.reads.count(STATUS_REG) >= 4
 
     def test_a_conversion_that_never_completes_gives_up_instead_of_hanging(self):
-        """This runs on a background thread, but a wedged bus must not pin a
-        core forever."""
+        """This runs on a background thread, but a wedged bus must not pin a core forever."""
         bus = FakeBus()
         bus.busy_reads = 10_000
 
@@ -318,10 +306,9 @@ class TestCompensation:
         assert warmer.temp_c > cooler.temp_c
 
     def test_a_signed_calibration_word_is_read_as_signed(self):
-        """dig_T2 and most of the pressure constants are signed. Reading them
-        unsigned still produces a number, just a wildly wrong one -- which is
-        why this asserts the sign flips the result rather than checking a
-        magnitude."""
+        """dig_T2 and most of the pressure constants are signed. Reading them unsigned
+        still produces a number, just a wildly wrong one -- which is why this asserts
+        the sign flips the result rather than checking a magnitude."""
         positive = BME280(FakeBus(calib={"T2": 26619})).read()
         negative = BME280(FakeBus(calib={"T2": -26619})).read()
 
@@ -329,8 +316,7 @@ class TestCompensation:
         assert negative.temp_c < 0
 
     def test_the_packed_twelve_bit_humidity_constants_round_trip(self):
-        """dig_H4 and dig_H5 share the byte at 0xE5, split across its nibbles.
-        Getting the packing wrong is the classic BME280 driver bug."""
+        """dig_H4 and dig_H5 share the byte at 0xE5, split across its nibbles."""
         sensor = BME280(FakeBus(calib={"H4": 322, "H5": 50}))
 
         assert sensor.calibration.h4 == 322
@@ -345,8 +331,8 @@ class TestCompensation:
 
 class TestBmp280HasNoHumidity:
     def test_humidity_is_none_rather_than_zero(self):
-        """Zero would be indistinguishable from bone-dry air, and would be
-        applied to the density as though it had been measured."""
+        """Zero would be indistinguishable from bone-dry air, and would be applied to the
+        density as though it had been measured."""
         reading = BME280(FakeBus(chip_id=BMP280_CHIP_ID)).read()
 
         assert reading.humidity_pct is None
@@ -373,8 +359,8 @@ class TestBusFailuresNeverRaise:
         assert BME280(self.ExplodingBus()).read() is None
 
     def test_a_later_read_can_still_succeed(self):
-        """A loose Dupont wire drops out and comes back; one bad read must not
-        latch the sensor off for the rest of the session."""
+        """A loose Dupont wire drops out and comes back; one bad read must not latch the
+        sensor off for the rest of the session."""
         bus = self.ExplodingBus()
         sensor = BME280(bus)
         assert sensor.read() is None

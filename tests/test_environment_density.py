@@ -15,7 +15,6 @@ from openflight.environment.density import (
     R_WATER_VAPOUR,
     air_density,
     density_altitude_ft,
-    pressure_from_elevation_pa,
     saturation_vapour_pressure_pa,
 )
 
@@ -80,12 +79,7 @@ class TestAirDensity:
         [(5.0, -0.33, 0.05), (15.0, -0.64, 0.05), (25.0, -1.18, 0.05), (35.0, -2.10, 0.05)],
     )
     def test_humidity_is_the_smallest_term(self, temp_c, expected_pct, tol):
-        """Pins the magnitudes the design doc justifies buying a BME280 on.
-
-        Going bone-dry to saturated is worth at most ~2%. If this test ever
-        fails high, the humidity channel matters more than we claimed and the
-        BMP280 fallback assumption needs revisiting.
-        """
+        """Pins the magnitudes the design doc justifies buying a BME280 on."""
         dry = air_density(temp_c, 101325.0, 0.0)
         wet = air_density(temp_c, 101325.0, 100.0)
         assert 100.0 * (wet / dry - 1.0) == pytest.approx(expected_pct, abs=tol)
@@ -140,47 +134,6 @@ class TestAirDensityValidation:
             air_density(15.0, pressure_pa, 50.0)
 
 
-class TestPressureFromElevation:
-    """The no-barometer fallback."""
-
-    def test_sea_level_is_isa_standard(self):
-        assert pressure_from_elevation_pa(0.0) == pytest.approx(101325.0, abs=1.0)
-
-    @pytest.mark.parametrize(
-        "elevation_m,expected_pa,tol",
-        [(1609.0, 83400.0, 700.0), (500.0, 95461.0, 300.0), (2500.0, 74692.0, 700.0)],
-    )
-    def test_matches_isa_table(self, elevation_m, expected_pa, tol):
-        assert pressure_from_elevation_pa(elevation_m) == pytest.approx(expected_pa, abs=tol)
-
-    def test_falls_monotonically_with_height(self):
-        heights = [0.0, 500.0, 1000.0, 2000.0, 3000.0]
-        values = [pressure_from_elevation_pa(h) for h in heights]
-        assert values == sorted(values, reverse=True)
-
-    def test_output_is_accepted_by_air_density(self):
-        """The two functions must compose without tripping the pressure bounds."""
-        for elevation_m in (0.0, 1609.0, 3000.0):
-            rho = air_density(20.0, pressure_from_elevation_pa(elevation_m), 40.0)
-            assert 0.7 < rho < 1.4
-
-    def test_estimated_pressure_is_close_to_measured(self):
-        """Sacramento, elev 9 m: the elevation path should track a real barometer.
-
-        Measured 1010.2 hPa on 2026-07-29 gave rho=1.1315 at 36.1 C / 25% RH.
-        The elevation estimate cannot see weather, so it will differ -- but by
-        well under 1%, which is a fraction of a yard.
-        """
-        measured = air_density(36.1, 101020.0, 25.0)
-        estimated = air_density(36.1, pressure_from_elevation_pa(9.0), 25.0)
-        assert abs(estimated / measured - 1.0) < 0.01
-
-    @pytest.mark.parametrize("elevation_m", [-1000.0, 9000.0, 100000.0])
-    def test_rejects_impossible_elevations(self, elevation_m):
-        with pytest.raises(ValueError, match="elevation_m"):
-            pressure_from_elevation_pa(elevation_m)
-
-
 class TestPurity:
     """density.py must stay dependency-free so it is trivially testable."""
 
@@ -193,12 +146,8 @@ class TestPurity:
 
 
 class TestDensityAltitude:
-    """The density figure in a unit people actually reason in.
-
-    "Plays like 2,700 ft" is checkable against experience; "-7.6%" is not.
-    Standard aviation formula, computed from the density already resolved, so
-    it introduces no new inputs and cannot disagree with the carry correction.
-    """
+    """The density figure in a unit people actually reason in. "Plays like 2,700 ft" is
+    checkable against experience; "-7.6%" is not."""
 
     def test_isa_sea_level_is_zero(self):
         assert density_altitude_ft(1.225) == pytest.approx(0.0, abs=1.0)
@@ -208,8 +157,8 @@ class TestDensityAltitude:
         assert density_altitude_ft(0.97) == pytest.approx(7760, abs=100)
 
     def test_a_hot_day_at_sea_level_still_reads_thousands_of_feet(self):
-        """Sacramento at 97 F. The whole point of the readout: a sea-level
-        venue can play like it is most of a mile up."""
+        """Sacramento at 97 F. The whole point of the readout: a sea-level venue can play
+        like it is most of a mile up."""
         assert density_altitude_ft(1.1316) == pytest.approx(2685, abs=100)
 
     def test_dense_air_reads_below_sea_level(self):
@@ -226,8 +175,8 @@ class TestDensityAltitude:
 
 
 class TestNonFiniteHumidityIsRejected:
-    """Clamping alone laundered nonsense into a plausible answer: NaN survives
-    min/max untouched and poisons the density silently."""
+    """Clamping alone laundered nonsense into a plausible answer: NaN survives min/max
+    untouched and poisons the density silently."""
 
     @pytest.mark.parametrize("humidity", [float("nan"), float("inf"), float("-inf")])
     def test_rejected(self, humidity):
@@ -236,6 +185,6 @@ class TestNonFiniteHumidityIsRejected:
 
     @pytest.mark.parametrize("humidity", [0.0, 50.0, 100.0, -5.0, 120.0, 1e308])
     def test_finite_values_including_absurd_ones_still_clamp(self, humidity):
-        """1e308 is out of range the same way 120 is, and the clamp is
-        documented behaviour for those -- only non-finite input is rejected."""
+        """1e308 is out of range the same way 120 is, and the clamp is documented behaviour
+        for those -- only non-finite input is rejected."""
         assert 1.0 < air_density(20.0, 101325.0, humidity) < 1.3

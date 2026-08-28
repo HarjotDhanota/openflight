@@ -36,24 +36,10 @@ BALL_RADIUS_M = 0.02135
 BALL_AREA_M2 = math.pi * BALL_RADIUS_M**2
 AIR_DENSITY_STD = 1.225  # kg/m³ at sea level, 15 °C ISA
 
-# Carry scales approximately as (ρ/ρ_std)^-CARRY_DENSITY_EXPONENT. Used ONLY
-# by the table estimator, which has no physics to scale — `simulate` takes
-# air_density directly and needs no approximation.
-#
-# Fitting this module's own integrator gives an exponent that varies by club
-# (driver ≈0.28, wedge ≈0.39: wedges are proportionally more density-sensitive).
-# A single value is used deliberately. The table path only runs when ballistics
-# is disabled or no launch angle was measured — an already-degraded estimate
-# the docstrings put at ±10-15% — so a ~1% approximation on top of it is noise.
-#
-# Measured against the integrator across ±10% density and the whole bag, 0.30
-# holds the residual under 1% of carry: 2.2 yd on a driver, under 1 yd from a
-# 7-iron down. Sweeping the exponent shows 0.30 is the worst-case-% optimum
-# (0.29 is marginally better in absolute yards, 2.11 vs 2.14, and worse in
-# percentage terms). tests/test_ballistics.py pins this; if the Cd/Cl
-# coefficients above are ever retuned, that test fails rather than letting the
-# stale fit quietly skew every table-estimated carry. A per-club table would be
-# curve-fit precision layered on a much coarser estimate.
+# Carry scales roughly as (rho/rho_std)^-CARRY_DENSITY_EXPONENT. Table path
+# only; `simulate` takes air_density directly. Fitting this module's own
+# integrator across +-10% density and the whole bag puts 0.30 within 1% of
+# carry; test_ballistics.py pins it so retuning Cd/Cl fails loudly.
 CARRY_DENSITY_EXPONENT = 0.30
 
 # Cd = CD_BASE + CD_SPIN_COEFF * Sp
@@ -380,25 +366,11 @@ def simulate(
 
 
 def density_carry_factor(air_density: float) -> float:
-    """Multiplier that corrects a table-estimated carry for air density.
+    """Multiplier correcting a table-estimated carry for air density.
 
-    For the TABLE path only. `simulate` accepts ``air_density`` directly and
-    models drag and Magnus properly; nothing here should ever be applied to
-    its output.
-
-    Thinner air means less drag means more carry, so densities below
-    ``AIR_DENSITY_STD`` return a factor above 1.0.
-
-    Args:
-        air_density: Measured or estimated air density in kg/m³.
-
-    Returns:
-        Multiplier to apply to a table-estimated carry in yards. Exactly 1.0
-        at ISA sea level, so existing behaviour is unchanged when no
-        environmental data is available.
-
-    Raises:
-        ValueError: If ``air_density`` is not positive.
+    Table path only; `simulate` models drag and Magnus properly. Thinner air
+    gives a factor above 1.0, and ISA sea level gives exactly 1.0, so
+    behaviour is unchanged without a sensor.
     """
     if air_density <= 0:
         raise ValueError(f"air_density={air_density} must be positive")

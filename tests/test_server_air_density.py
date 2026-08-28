@@ -65,8 +65,8 @@ class TestNoSensorChangesNothing:
         assert shot.carry_spin_adjusted == pytest.approx(expected)
 
     def test_the_shot_carries_no_environmental_claim(self, quiet_server):
-        """None, not 1.225. A consumer must be able to tell "measured standard
-        air" from "assumed standard air"."""
+        """None, not 1.225. A consumer must be able to tell "measured standard air" from
+        "assumed standard air"."""
         shot = a_shot()
 
         on_shot_detected(shot)
@@ -154,19 +154,13 @@ class TestWithASensor:
 
 
 class TestTheSimBoundary:
-    """GSPro and OpenGolfSim re-fly the ball using the VIRTUAL course's
-    altitude and weather. Sending them a density-corrected carry would apply
-    the correction twice -- once for the real range, once for the simulated
-    one."""
+    """GSPro and OpenGolfSim re-fly the ball using the VIRTUAL course's altitude and
+    weather."""
 
     def test_density_does_not_move_the_figure_the_sims_are_sent(self, quiet_server):
-        """Compares two identical shots in very different air.
-
-        Deliberately NOT "the value is unchanged after on_shot_detected" --
-        that fails for an unrelated reason, because the server populates a
-        launch angle and the property is derived from it. The invariant that
-        matters is that the DENSITY does not reach it.
-        """
+        """Compares two identical shots in very different air. Deliberately NOT "the value
+        is unchanged after on_shot_detected" -- that fails for an unrelated reason,
+        because the server populates a launch angle and the property is derived from it."""
         sea_level = a_shot()
         on_shot_detected(sea_level)
 
@@ -257,8 +251,8 @@ def _run_loop_once(sensor, provider, stop, monkeypatch=None):
 
 
 class _RunsOnce:
-    """An Event that reports "not set" exactly once, so the loop body executes
-    a single time and then exits."""
+    """An Event that reports "not set" exactly once, so the loop body executes a single
+    time and then exits."""
 
     def __init__(self, inner):
         self._inner = inner
@@ -275,14 +269,7 @@ class _RunsOnce:
 
 
 class TestStartAirSensor:
-    """Exercises the REAL thread construction, not just the loop function.
-
-    The loop was first shipped started as Thread(target=_air_sensor_loop)
-    with no args -- it died at birth with a TypeError on the Pi, the
-    provider never saw a reading, and the UI truthfully reported no sensor.
-    Every earlier test called the loop function directly, which is exactly
-    how the wiring escaped coverage.
-    """
+    """Exercises the REAL thread construction, not just the loop function."""
 
     def test_a_reading_actually_flows_from_the_started_thread(self, monkeypatch):
         import time as _time

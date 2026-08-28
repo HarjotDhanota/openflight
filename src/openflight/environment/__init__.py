@@ -11,7 +11,6 @@ from openflight.environment.density import (
     R_DRY_AIR,
     R_WATER_VAPOUR,
     air_density,
-    pressure_from_elevation_pa,
     saturation_vapour_pressure_pa,
 )
 
@@ -19,6 +18,5 @@ __all__ = [
     "R_DRY_AIR",
     "R_WATER_VAPOUR",
     "air_density",
-    "pressure_from_elevation_pa",
     "saturation_vapour_pressure_pa",
 ]
