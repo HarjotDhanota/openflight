@@ -22,7 +22,12 @@ from flask_cors import CORS
 from flask_socketio import SocketIO
 
 from .ballistics import resolve_launch, simulate
-from .launch_monitor import SPIN_CONFIDENCE_HIGH, ClubType, Shot
+from .launch_monitor import (
+    SPIN_CONFIDENCE_HIGH,
+    ClubType,
+    Shot,
+    apply_trajectory,
+)
 from .ops243 import (
     UART_BAUD_COMMANDS,
     Direction,
@@ -891,6 +896,17 @@ ball_speed_correction_ball_above_radar_ft = -4.0 / 12.0
 calculated_spin_enabled = False
 
 
+def _round_or_none(value, digits: int):
+    """Round for display, but keep the difference between zero and absent.
+
+    A missing trajectory metric must not serialise as 0: a landing angle of
+    zero degrees is a measurement, and a very different one.
+    """
+    if value is None:
+        return None
+    return round(float(value), digits) if digits else round(float(value))
+
+
 def shot_to_dict(shot: Shot) -> dict:
     """Convert Shot to JSON-serializable dict."""
     return {
@@ -987,6 +1003,14 @@ def shot_to_dict(shot: Shot) -> dict:
         "carry_spin_adjusted": round(shot.carry_spin_adjusted)
         if shot.carry_spin_adjusted
         else None,
+        # Trajectory metrics from the same simulation that produced carry.
+        # Emitted unrounded except where a whole yard is the useful precision.
+        "apex_yards": _round_or_none(shot.apex_yards, 1),
+        "lateral_yards": _round_or_none(shot.lateral_yards, 1),
+        "flight_time_s": _round_or_none(shot.flight_time_s, 2),
+        "landing_speed_mph": _round_or_none(shot.landing_speed_mph, 1),
+        "landing_angle_deg": _round_or_none(shot.landing_angle_deg, 1),
+        "total_yards": _round_or_none(shot.total_yards, 0),
     }
 
 
@@ -3548,7 +3572,7 @@ def on_shot_detected(shot: Shot):
         conditions = resolve_launch(shot) if ballistics_enabled else None
         if conditions is not None:
             trajectory = simulate(conditions)
-            shot.carry_spin_adjusted = trajectory.carry_yards
+            apply_trajectory(shot, trajectory)
             logger.info(
                 "[SERVER] Ballistic carry: %.0f yds (spin: %.0f rpm, source: %s)",
                 shot.carry_spin_adjusted,
