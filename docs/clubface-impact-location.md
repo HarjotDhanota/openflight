@@ -55,9 +55,27 @@ whose `README.md` maps every script to the question it answers. Per-shot
 result JSONs are committed so conclusions can be re-analysed without repeating
 fits that cost ~25 minutes per arm.
 
-Two inputs are not in git. The **capture session** (~163 MB) is available from
-the maintainer; scripts resolve it via `OPENFLIGHT_SESSION` and fail closed
-with instructions until it is present. The **7-iron mesh** is fetched from
+### Running it on your own device
+
+You do not need anyone else's capture. Hit shots on your own OpenFlight unit,
+then export the session the server wrote:
+
+```bash
+scripts/start-kiosk.sh                       # hit shots
+uv run python scripts/analysis/export_session.py     ~/openflight_sessions/session_<stamp>.jsonl --output ~/my_session
+export OPENFLIGHT_SESSION=~/my_session
+uv run --group research python     research/silhouette_poc/falsification/test_delivered_angles.py
+```
+
+The exporter includes only shots that have **both** a camera capture and a
+radar dump, and writes `excluded_shots.csv` explaining any it dropped — so a
+thin export is diagnosable. That means the camera and the IWR6843 both need to
+be enabled while you capture.
+
+The reference **capture session** used throughout the report (~163 MB) is also
+available from the maintainer if you want to reproduce its exact numbers;
+scripts resolve it via `OPENFLIGHT_SESSION` and fail closed with instructions
+until one is present. The **7-iron mesh** is fetched from
 GrabCAD (local research use only, no redistribution);
 `research/silhouette_poc/meshes/SOURCES.md` has the provenance, hashes, and
 download script.

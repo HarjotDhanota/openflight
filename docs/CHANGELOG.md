@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Session export for camera-vision replay.**
+  `scripts/analysis/export_session.py` turns a live session JSONL and its
+  per-shot captures into the export format the camera-vision scripts replay,
+  so anyone with an OpenFlight device can hit shots and run the analysis on
+  their own data. Shots missing either the camera capture or the radar dump
+  are excluded with a recorded reason.
 - **Clubface impact-location investigation.** A replay harness and pose
   library for measuring clubface impact location and face angle from the
   behind-ball camera and the two radars, with no markers. Ball flight is
