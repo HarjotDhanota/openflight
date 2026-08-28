@@ -82,3 +82,13 @@ ui/test-results/
 .crossnote/head.html
 .crossnote/parser.js
 .crossnote/style.less
+
+# Falsification scripts re-derive their results into the directory they live in.
+# The committed JSONs are inputs to other scripts; these are outputs, and a
+# contributor following the docs should not end up with a dirty tree.
+research/silhouette_poc/falsification/delivered_angles.json
+research/silhouette_poc/falsification/fusion_chamfer.json
+research/silhouette_poc/falsification/isar_doppler_width.json
+research/silhouette_poc/falsification/pose_landscape.json
+research/silhouette_poc/falsification/radar_range_ramp.json
+research/silhouette_poc/falsification/rigid_rotation_constrained.json
