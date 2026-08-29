@@ -14,6 +14,8 @@ import pytest
 
 from openflight.camera.clubpose.angles import (
     ENVELOPE,
+    HEEL_TOE_LOCAL,
+    MESH_HOSEL_AXIS_LOCAL,
     STATIC_LIE_DEG,
     STATIC_LOFT_DEG,
     angles_from_pose,
@@ -22,6 +24,46 @@ from openflight.camera.clubpose.angles import (
     in_envelope,
     square_pose,
 )
+from openflight.camera.clubpose.fit import measured_camera, render_mask_6dof
+from openflight.camera.clubpose.mesh import TriangleMesh
+from openflight.camera.clubpose.projection import CAMERA_CENTER_WORLD, _project, _ray_world
+
+
+def _box_mesh() -> TriangleMesh:
+    vertices = np.array(
+        [[x, y, z] for x in (-19.0, 19.0) for y in (-40.0, 40.0) for z in (-25.0, 25.0)],
+        dtype=float,
+    )
+    faces = np.array(
+        [
+            [0, 1, 3],
+            [0, 3, 2],
+            [4, 6, 7],
+            [4, 7, 5],
+            [0, 4, 5],
+            [0, 5, 1],
+            [2, 3, 7],
+            [2, 7, 6],
+            [0, 2, 6],
+            [0, 6, 4],
+            [1, 5, 7],
+            [1, 7, 3],
+        ],
+        dtype=np.int32,
+    )
+    return TriangleMesh(vertices, faces, "grounded-box", "synthetic")
+
+
+def _rotation(axis: np.ndarray, angle_deg: float) -> np.ndarray:
+    axis = np.asarray(axis, dtype=float)
+    axis /= np.linalg.norm(axis)
+    cross = np.array([[0.0, -axis[2], axis[1]], [axis[2], 0.0, -axis[0]], [-axis[1], axis[0], 0.0]])
+    angle = math.radians(angle_deg)
+    return (
+        np.eye(3) * math.cos(angle)
+        + (1.0 - math.cos(angle)) * np.outer(axis, axis)
+        + math.sin(angle) * cross
+    )
 
 
 class TestSquarePose:
@@ -33,15 +75,6 @@ class TestSquarePose:
         assert got["face_angle_deg"] == pytest.approx(0.0, abs=0.05)
         assert got["lie_deg"] == pytest.approx(STATIC_LIE_DEG, abs=0.05)
 
-    def test_the_square_pose_is_nowhere_near_the_origin(self):
-        """This is the whole reason the module exists: a fit seeded on a grid
-        around zero never reaches the square club."""
-        yaw, pitch, roll = square_pose()
-        assert abs(math.remainder(pitch, 360.0)) > 90.0, (
-            f"pitch {pitch} is near zero, so the seeding hazard has gone away "
-            "and the warning in the docstring should be revisited"
-        )
-
     def test_the_origin_is_a_backwards_club(self):
         origin = angles_from_pose(0.0, 0.0, 0.0)
         assert abs(origin["face_angle_deg"]) > 150.0
@@ -51,6 +84,30 @@ class TestSquarePose:
         got = angles_from_pose(*square_pose(dynamic_loft_deg=28.0, face_angle_deg=-4.0))
         assert got["dynamic_loft_deg"] == pytest.approx(28.0, abs=0.05)
         assert got["face_angle_deg"] == pytest.approx(-4.0, abs=0.05)
+
+    def test_square_pose_has_a_horizontal_sole_and_heel_toward_golfer(self):
+        basis = basis_from_angles(*square_pose())
+        heel = basis @ HEEL_TOE_LOCAL
+
+        assert heel[1] < 0.0
+        assert abs(heel[2]) < 1e-3
+        assert angles_from_pose(*square_pose())["sole_tilt_deg"] == pytest.approx(0.0, abs=0.05)
+
+    def test_square_pose_projects_wider_than_tall_with_shaft_up_left(self):
+        camera = measured_camera()
+        center = CAMERA_CENTER_WORLD + _ray_world(np.array([160.0, 145.0]), camera) * 1_581.0
+        pose = square_pose()
+        mask = render_mask_6dof(_box_mesh(), center, *pose, camera)
+        assert mask is not None
+        ys, xs = np.nonzero(mask)
+        assert np.ptp(xs) > np.ptp(ys)
+
+        basis = basis_from_angles(*pose)
+        shaft = basis @ MESH_HOSEL_AXIS_LOCAL
+        projected, front = _project(np.stack([center, center + shaft * 100.0]), camera)
+        assert front.all()
+        assert projected[1, 0] < projected[0, 0]
+        assert projected[1, 1] < projected[0, 1]
 
 
 class TestDeliveredAngles:
@@ -89,7 +146,23 @@ class TestEnvelope:
         assert not in_envelope({"dynamic_loft_deg": 27.3, "face_angle_deg": -163.0, "lie_deg": 5.2})
 
     def test_a_realistic_delivery_is_accepted(self):
-        assert in_envelope({"dynamic_loft_deg": 27.5, "face_angle_deg": -1.8, "lie_deg": 62.4})
+        assert in_envelope(
+            {
+                "dynamic_loft_deg": 27.5,
+                "face_angle_deg": -1.8,
+                "lie_deg": 62.4,
+                "sole_tilt_deg": 1.2,
+            }
+        )
+
+    def test_old_quarter_turn_roll_is_rejected(self):
+        basis = basis_from_angles(*square_pose())
+        face = basis @ np.asarray([-0.941, 0.021, 0.337])
+        rolled = _rotation(face, 73.0) @ basis
+        angles = delivered_angles(rolled)
+
+        assert abs(angles["sole_tilt_deg"]) > 15.0
+        assert not in_envelope(angles)
 
     def test_envelope_covers_the_static_geometry_with_margin(self):
         low, high = ENVELOPE["dynamic_loft_deg"]

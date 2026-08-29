@@ -18,6 +18,8 @@ import numpy as np
 
 @dataclass(frozen=True)
 class MeshSource:
+    """Pinned acquisition identity and physical handedness for one mesh source."""
+
     club: str
     uid: str
     name: str
@@ -27,6 +29,7 @@ class MeshSource:
     license_url: str
     downloadable: bool
     published_triangles: int
+    handedness: str = "unknown"
     source_kind: str = "maintainer_local_binary_stl"
     expected_source_sha256: str | None = None
     expected_asset_sha256: str | None = None
@@ -45,6 +48,7 @@ MESH_SOURCES = {
         license_url=("https://help.grabcad.com/article/246-how-can-models-be-used-and-shared"),
         downloadable=False,
         published_triangles=26_238,
+        handedness="left",
         source_kind="maintainer_local_binary_stl",
         expected_source_sha256=("f35936799295e6ce344279e557f0265ccbb8acef69c4508daff80d219d03cb85"),
     ),
@@ -66,6 +70,7 @@ class TriangleMesh:
     faces: np.ndarray
     source_uid: str
     source_sha256: str
+    handedness: str = "right"
 
     def __post_init__(self) -> None:
         vertices = np.asarray(self.vertices_local_mm, dtype=float)
@@ -78,12 +83,16 @@ class TriangleMesh:
             raise ValueError("mesh face index is outside the vertex array")
         if not np.all(np.isfinite(vertices)):
             raise ValueError("mesh vertices must be finite")
+        if self.handedness not in {"left", "right", "unknown"}:
+            raise ValueError("mesh handedness must be left, right, or unknown")
         object.__setattr__(self, "vertices_local_mm", vertices)
         object.__setattr__(self, "faces", faces)
 
 
 @dataclass(frozen=True)
 class FacePlaneDetection:
+    """Measured coherent planar patch and its source-coordinate axes."""
+
     normal_source: np.ndarray
     width_axis_source: np.ndarray
     height_axis_source: np.ndarray
@@ -95,6 +104,8 @@ class FacePlaneDetection:
 
 @dataclass(frozen=True)
 class MeshAdmission:
+    """Fail-closed topology, scale, and face-plane admission result."""
+
     accepted: bool
     reasons: tuple[str, ...]
     component_count: int
@@ -229,11 +240,17 @@ def load_gltf_archive(
         visit(int(root), np.eye(4))
     if not vertices or not faces:
         raise ValueError("glTF scene contains no triangle geometry")
-    return TriangleMesh(np.vstack(vertices), np.vstack(faces), source_uid, source_sha256)
+    return TriangleMesh(
+        np.vstack(vertices), np.vstack(faces), source_uid, source_sha256, handedness="unknown"
+    )
 
 
 def load_binary_stl(
-    path: Path | str, *, source_uid: str, expected_sha256: str | None
+    path: Path | str,
+    *,
+    source_uid: str,
+    expected_sha256: str | None,
+    handedness: str = "unknown",
 ) -> TriangleMesh:
     """Decode a binary STL after an optional fail-closed source-hash check."""
     payload = Path(path).read_bytes()
@@ -257,7 +274,7 @@ def load_binary_stl(
     records = np.frombuffer(payload, dtype=record_dtype, count=triangle_count, offset=84)
     vertices = records["vertices"].reshape(-1, 3).astype(float)
     faces = np.arange(len(vertices), dtype=np.int32).reshape(-1, 3)
-    return TriangleMesh(vertices, faces, source_uid, digest)
+    return TriangleMesh(vertices, faces, source_uid, digest, handedness=handedness)
 
 
 def _connected_face_components(vertices: np.ndarray, faces: np.ndarray) -> list[np.ndarray]:
@@ -478,7 +495,13 @@ def normalize_clubhead(
             dtype=float,
         )
         local *= target / np.ptp(local, axis=0)
-    normalized = TriangleMesh(local, mesh.faces, mesh.source_uid, mesh.source_sha256)
+    normalized = TriangleMesh(
+        local,
+        mesh.faces,
+        mesh.source_uid,
+        mesh.source_sha256,
+        handedness=mesh.handedness,
+    )
     normalized_face = detect_face_plane(normalized)
     angle = math.degrees(
         math.acos(float(np.clip(normalized_face.normal_source @ np.array([1.0, 0.0, 0.0]), -1, 1)))
@@ -497,7 +520,7 @@ def rasterize_projected_triangles(
     finite = np.all(np.isfinite(triangles), axis=(1, 2))
     triangles = triangles[finite]
     mask = np.zeros((height, width), dtype=bool)
-    if not len(triangles):
+    if triangles.size == 0:
         return mask
     min_y = np.min(triangles[:, :, 1], axis=1)
     max_y = np.max(triangles[:, :, 1], axis=1)
@@ -531,33 +554,77 @@ def rasterize_projected_triangles(
     return mask
 
 
+def mirror_to_right_handed(mesh: TriangleMesh) -> TriangleMesh:
+    """Mirror a left-handed local frame through z and restore outward winding."""
+    if mesh.handedness == "right":
+        return mesh
+    if mesh.handedness != "left":
+        raise ValueError("only an explicitly left-handed mesh may be mirrored")
+    vertices = mesh.vertices_local_mm.copy()
+    vertices[:, 2] *= -1.0
+    mirrored = TriangleMesh(
+        vertices,
+        mesh.faces[:, [0, 2, 1]],
+        mesh.source_uid,
+        mesh.source_sha256,
+        handedness="right",
+    )
+    # Re-detect after reflection rather than transforming stale plane metadata.
+    detect_face_plane(mirrored)
+    return mirrored
+
+
 def save_normalized_mesh(path: Path | str, mesh: TriangleMesh, metadata: dict[str, Any]) -> str:
     """Write a deterministic local cache and return its content SHA-256."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    stored_metadata = {**metadata, "handedness": mesh.handedness}
     np.savez(
         path,
         vertices_local_mm=mesh.vertices_local_mm,
         faces=mesh.faces,
         source_uid=np.asarray(mesh.source_uid),
         source_sha256=np.asarray(mesh.source_sha256),
-        metadata_json=np.asarray(json.dumps(metadata, sort_keys=True, separators=(",", ":"))),
+        handedness=np.asarray(mesh.handedness),
+        metadata_json=np.asarray(
+            json.dumps(stored_metadata, sort_keys=True, separators=(",", ":"))
+        ),
     )
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 @lru_cache(maxsize=8)
 def load_normalized_mesh(path: str) -> tuple[TriangleMesh, dict[str, Any], str]:
+    """Load a cache and apply its explicit left-to-right handedness transform."""
     payload = np.load(path, allow_pickle=False)
+    metadata = json.loads(str(payload["metadata_json"]))
+    source_uid = str(payload["source_uid"])
+    if "handedness" in payload.files:
+        handedness = str(payload["handedness"])
+    else:
+        handedness = str(metadata.get("handedness", "unknown"))
+        if source_uid == MESH_SOURCES["poc_7iron"].uid:
+            handedness = "left"
     mesh = TriangleMesh(
         payload["vertices_local_mm"],
         payload["faces"],
-        str(payload["source_uid"]),
+        source_uid,
         str(payload["source_sha256"]),
+        handedness=handedness,
     )
-    metadata = json.loads(str(payload["metadata_json"]))
+    if mesh.handedness == "left":
+        source_handedness = mesh.handedness
+        mesh = mirror_to_right_handed(mesh)
+        metadata = {
+            **metadata,
+            "source_handedness": source_handedness,
+            "handedness": mesh.handedness,
+            "handedness_transform": "mirror_local_z_reverse_winding",
+            "face_detection_loaded_right_handed": face_detection_record(detect_face_plane(mesh)),
+        }
     return mesh, metadata, hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def default_mesh_asset_root() -> Path:
+    """Return the ignored local directory holding normalized mesh caches."""
     return Path(__file__).resolve().parent / "meshes" / "assets"

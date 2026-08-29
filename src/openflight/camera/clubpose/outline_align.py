@@ -174,17 +174,28 @@ def _solve_lie(
         return _axial_delta(projected, observed_angle_deg)
 
     samples = np.linspace(low, high, 18)
-    errors = np.asarray([error(float(value)) for value in samples])
+    errors = np.full(len(samples), np.nan, dtype=float)
+    for index, value in enumerate(samples):
+        try:
+            errors[index] = error(float(value))
+        except (RuntimeError, ValueError):
+            # The independent sole-tilt envelope can reject the lie endpoints.
+            continue
     roots: list[float] = []
     for index in range(len(samples) - 1):
         first, second = float(errors[index]), float(errors[index + 1])
+        if not (math.isfinite(first) and math.isfinite(second)):
+            continue
         if first == 0.0:
             roots.append(float(samples[index]))
         elif first * second < 0.0 and abs(first - second) < 90.0:
             roots.append(float(brentq(error, float(samples[index]), float(samples[index + 1]))))
     if roots:
         return min(roots, key=lambda value: abs(value - STATIC_LIE_DEG)), "shaft_root"
-    closest = int(np.argmin(np.abs(errors)))
+    finite = np.flatnonzero(np.isfinite(errors))
+    if finite.size == 0:
+        return STATIC_LIE_DEG, "static_fallback_lie_unsolved"
+    closest = int(finite[np.argmin(np.abs(errors[finite]))])
     if abs(float(errors[closest])) <= 1.0:
         return float(samples[closest]), "shaft_sample"
     return STATIC_LIE_DEG, "static_fallback_lie_unsolved"

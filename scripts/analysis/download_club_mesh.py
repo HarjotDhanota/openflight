@@ -5,9 +5,13 @@ redistributed, so you fetch your own copy under GrabCAD's terms and point this
 script at it; see SOURCES.md for the link, the expected SHA-256 and the licence
 position. Run from the repository root:
 
-    uv run python scripts/analysis/download_club_mesh.py \n        --local-iron "/path/to/690CB 7-iron.STL"
+    uv run python scripts/analysis/download_club_mesh.py \
+        --local-iron "/path/to/690CB 7-iron.STL"
 
 """
+
+# Imports follow the repository-root path bootstrap below.
+# pylint: disable=wrong-import-position
 
 from __future__ import annotations
 
@@ -35,7 +39,7 @@ from openflight.camera.clubpose.mesh import (  # noqa: E402
     save_normalized_mesh,
 )
 
-_NORMALIZATION_VERSION = "geometric-face-anchor-v2"
+_NORMALIZATION_VERSION = "geometric-face-anchor-v3-handedness"
 
 
 def validate_source_metadata(source: MeshSource, metadata: dict[str, Any]) -> None:
@@ -68,7 +72,12 @@ def import_local_stl(
         if expected_sha256.lower() != registered_hash.lower():
             raise ValueError("caller SHA-256 does not match the frozen local-source registration")
     required_hash = expected_sha256 or registered_hash
-    loaded = load_binary_stl(source_path, source_uid=source.uid, expected_sha256=required_hash)
+    loaded = load_binary_stl(
+        source_path,
+        source_uid=source.uid,
+        expected_sha256=required_hash,
+        handedness=source.handedness,
+    )
     admission = admit_mesh(
         loaded,
         category_dimensions_mm=CATEGORY_DIMENSIONS_MM[source.club],
@@ -94,6 +103,9 @@ def import_local_stl(
         "download_format": "binary_stl_maintainer_local",
         "redistribution": "prohibited; local research use only",
         "normalization": _NORMALIZATION_VERSION,
+        "handedness": normalized.handedness,
+        "load_handedness": "right",
+        "handedness_transform": "mirror_local_z_reverse_winding",
         "source_units_mm": True,
         "category_dimensions_mm": CATEGORY_DIMENSIONS_MM[source.club],
         "geometry_sha256": admission.geometry_sha256,
@@ -111,12 +123,15 @@ def import_local_stl(
     }
     asset_path = output_root / f"{source.club}.npz"
     asset_sha256 = save_normalized_mesh(asset_path, normalized, asset_metadata)
-    record = {**asset_metadata, "asset_path": asset_path.name, "asset_sha256": asset_sha256}
+    load_normalized_mesh.cache_clear()
+    _, loaded_metadata, _ = load_normalized_mesh(str(asset_path.resolve()))
+    record = {**loaded_metadata, "asset_path": asset_path.name, "asset_sha256": asset_sha256}
     print(json.dumps(record, indent=2, sort_keys=True))
     return record
 
 
 def _existing_record(source: MeshSource, output_root: Path) -> dict[str, Any] | None:
+    """Return a valid current cache record, or request a fresh import."""
     asset_path = output_root / f"{source.club}.npz"
     if not asset_path.is_file():
         return None
@@ -135,6 +150,7 @@ def _existing_record(source: MeshSource, output_root: Path) -> dict[str, Any] | 
 
 
 def main() -> int:
+    """Import any missing local assets and write their ignored manifest."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=default_mesh_asset_root())
     parser.add_argument("--local-iron", type=Path)
@@ -180,6 +196,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-    (admit_mesh,)
-    (detect_face_plane,)
-    (face_detection_record,)

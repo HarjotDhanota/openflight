@@ -199,3 +199,54 @@ settings were retained and no check-directed tuning run was made.
 **Verdict: the translation-only outline is not alignable to ±1 px on this session.**
 This is a repeatability and fail-closed result, not an accuracy claim against truth;
 no truth reference exists.
+
+**Correction, 2026-08-28:** the result immediately above is void. Its normalized
+mesh was left-handed and its `square_pose()` solution left the sole rolled about
+73°, producing a 22 × 39 px upright template beside a roughly horizontal head.
+The 0/21 result therefore measured a bad coordinate frame, not image-edge
+localisability. The earlier fused-pose envelope verdict used the same frame and
+is void for the same reason. The recorded run remains here for provenance only.
+
+## Grounded outline alignment — corrected rerun
+
+The pinned STL is now explicitly recorded as left-handed and mirrored to a
+right-handed runtime mesh by flipping local z and reversing triangle winding.
+The striking-face heel–toe axis supplies a horizontal sole constraint, with the
+heel toward world −y; a virtual catalogue-lie shaft driven by the observed image
+shaft replaces the mesh's suspect 76° hosel axis as the pose reference. On shot
+014 f71, the unchanged ball-ray/radar-range render moved from a 22 × 39 px upright
+shape beside the club to a wide, grounded head whose sole and hosel sit on the
+real head and shaft with no image search.
+
+The full 21-shot replay then used exactly the previous alignment thresholds,
+support/residual gates, ±12 px search, camera, range, and pre-registered checks.
+The 690CB 7-iron mesh was again used for the 9-iron shots, retaining the known
+few-millimetre head-shape bias.
+
+| Pre-registered check | Corrected result | Threshold | Outcome |
+|---|---:|---:|---|
+| Two-frame consistency | 0/21 shots; none passed both frames and was evaluable | ≥ 80% within 1 px | **FAIL** |
+| Shot 014 vs hand marks | f71 rejected; f72 midpoint error 10.0 px and topline error 3.5 px | both offsets within 1.5 px | **FAIL** |
+| Availability | 0/21 shots passed in both frames | ≥ 17/21 | **FAIL** |
+| Loft sensitivity ±5° | maximum 2.062 px over 16 returned variants | offset moves ≤ 1 px | **FAIL** |
+| Face-angle sensitivity ±10° | maximum 1.601 px; one variant unavailable | offset moves ≤ 1 px | **FAIL** |
+| Lie sensitivity ±3° | maximum 8.860 px; four variants unavailable | offset moves ≤ 1 px | **FAIL** |
+| Accepted residual distribution | median 1.369 px over 8 accepted frames | median ≤ 1.0 px | **FAIL** |
+| Sheet inspection | corrected shape, but sole-shadow locks and closed failures remain | inspect every f71/f72 overlay at 8× | **FAIL** |
+
+The corrected f71 sheet has two accepted frames, 13 `residual_above_1_5`, three
+`support_below_half`, one `search_boundary`, and two out-of-envelope
+`nominal_pose_failed` results. The f72 sheet has six accepted frames, six
+`residual_above_1_5`, five `search_boundary`, two `support_below_half`, and the
+same two nominal-pose failures. No shot has both frames accepted. The gross
+shaft/shadow swap from the mirrored, rolled template is gone: the hosel now runs
+along the real up-left shaft and the head is horizontal. The remaining wrong
+locks pull the lower outline onto the sole shadow, while several toe/ball-side
+boundaries stop at the search limit. Shots 020 and 025 still fail before render
+because their fused attack priors imply physical-envelope violations. These
+visual failures did not motivate a threshold change; no tuning run was made.
+
+**Verdict: correcting handedness and grounding fixes the template geometry, but
+the unchanged translation-only alignment still does not localise the outline to
+±1 px on this session.** This is a repeatability and fail-closed result only;
+there is still no truth reference and no accuracy claim.

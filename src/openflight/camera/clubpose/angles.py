@@ -1,22 +1,12 @@
-"""Clubface orientation in the terms a golfer uses, and the poses that are possible.
+"""Delivered club angles in the normalized, right-handed 690CB frame.
 
-The fitter parameterises orientation as yaw, pitch and roll applied to the
-mesh's own frame. Those numbers are not checkable by eye, are not what the
-product reports, and are measured from a misleading origin: the mesh's local
-+x axis points out the BACK of the club, so ``triad(0, 0, 0)`` is a clubface
-aimed at the camera -- **face angle +178.7 deg, loft -19.7 deg**.
-
-That origin caused a real error. A fit seeded on a grid around zero searches
-the neighbourhood of a backwards club and never reaches the square one, which
-sits near ``pitch = -194 deg``. Seeds must come from :func:`square_pose`.
-
-The three angles here have known physical envelopes, so they validate a fit
-without a reference instrument: a 7-iron delivered with negative loft, or a
-shaft twenty degrees off its lie, is wrong whatever it scores.
-
-Club axes are measured off the mesh (see
-the fork's feat/silhouette-poc branch), not assumed, and give
-loft 33.10 deg / lie 61.19 deg -- consistent with a 690CB catalogue 34/62.
+The striking-face axes were measured from the largest coherent planar patch on
+the face, not from the cavity-rim plane used by mesh normalization. In the
+source cache the heel axis was approximately ``(0, +1, +0.06)`` and pointed at
+the hosel. Loading mirrors local z, so the right-handed constants below carry
+the opposite z sign. ``MESH_HOSEL_AXIS_LOCAL`` records the suspect CAD hosel for
+diagnostics only; pose construction uses the image shaft and the virtual
+``SHAFT_LOCAL`` tied to the catalogue lie.
 """
 
 from __future__ import annotations
@@ -24,13 +14,21 @@ from __future__ import annotations
 import math
 
 import numpy as np
+from scipy.optimize import brentq
 
 from .fit import triad
 
-FACE_NORMAL_LOCAL = np.array([-0.941, 0.021, -0.337])
-FACE_NORMAL_LOCAL = FACE_NORMAL_LOCAL / np.linalg.norm(FACE_NORMAL_LOCAL)
-SHAFT_LOCAL = np.array([-0.245, 0.295, -0.924])
-SHAFT_LOCAL = SHAFT_LOCAL / np.linalg.norm(SHAFT_LOCAL)
+FACE_NORMAL_LOCAL = np.array([-0.941, 0.021, 0.337], dtype=float)
+FACE_NORMAL_LOCAL /= np.linalg.norm(FACE_NORMAL_LOCAL)
+
+# Heel direction from the 80.6 mm striking-face patch; source was (0,+1,+0.06).
+HEEL_TOE_LOCAL = np.array([0.0, 1.0, -0.06], dtype=float)
+HEEL_TOE_LOCAL -= FACE_NORMAL_LOCAL * float(HEEL_TOE_LOCAL @ FACE_NORMAL_LOCAL)
+HEEL_TOE_LOCAL /= np.linalg.norm(HEEL_TOE_LOCAL)
+
+# Mirrored CAD hosel/ferrule direction. It is not the shaft reference used by fits.
+MESH_HOSEL_AXIS_LOCAL = np.array([-0.245, 0.295, 0.924], dtype=float)
+MESH_HOSEL_AXIS_LOCAL /= np.linalg.norm(MESH_HOSEL_AXIS_LOCAL)
 
 STATIC_LOFT_DEG = 33.10
 STATIC_LIE_DEG = 61.19
@@ -40,7 +38,52 @@ ENVELOPE = {
     "dynamic_loft_deg": (15.0, 50.0),
     "face_angle_deg": (-25.0, 25.0),
     "lie_deg": (45.0, 78.0),
+    "sole_tilt_deg": (-15.0, 15.0),
 }
+
+
+def _rotation(axis: np.ndarray, angle_rad: float) -> np.ndarray:
+    axis = np.asarray(axis, dtype=float)
+    axis /= np.linalg.norm(axis)
+    cross = np.array(
+        [
+            [0.0, -axis[2], axis[1]],
+            [axis[2], 0.0, -axis[0]],
+            [-axis[1], axis[0], 0.0],
+        ]
+    )
+    cosine, sine = math.cos(angle_rad), math.sin(angle_rad)
+    return cosine * np.eye(3) + (1.0 - cosine) * np.outer(axis, axis) + sine * cross
+
+
+def _grounded_basis(dynamic_loft_deg: float, face_angle_deg: float) -> np.ndarray:
+    loft = math.radians(float(dynamic_loft_deg))
+    face_angle = math.radians(float(face_angle_deg))
+    face_world = np.array(
+        [
+            math.cos(loft) * math.cos(face_angle),
+            math.cos(loft) * math.sin(face_angle),
+            math.sin(loft),
+        ]
+    )
+    heel_world = np.array([math.sin(face_angle), -math.cos(face_angle), 0.0])
+    height_world = np.cross(face_world, heel_world)
+    height_world /= np.linalg.norm(height_world)
+
+    height_local = np.cross(FACE_NORMAL_LOCAL, HEEL_TOE_LOCAL)
+    height_local /= np.linalg.norm(height_local)
+    local_frame = np.column_stack((FACE_NORMAL_LOCAL, HEEL_TOE_LOCAL, height_local))
+    world_frame = np.column_stack((face_world, heel_world, height_world))
+    return world_frame @ local_frame.T
+
+
+_STATIC_GROUNDED_BASIS = _grounded_basis(STATIC_LOFT_DEG, 0.0)
+_STATIC_SHAFT_WORLD = np.array(
+    [0.0, -math.cos(math.radians(STATIC_LIE_DEG)), math.sin(math.radians(STATIC_LIE_DEG))]
+)
+# A virtual shaft with catalogue geometry. The mesh's long hosel has a measured 76 degree lie.
+SHAFT_LOCAL = _STATIC_GROUNDED_BASIS.T @ _STATIC_SHAFT_WORLD
+SHAFT_LOCAL /= np.linalg.norm(SHAFT_LOCAL)
 
 
 def basis_from_angles(yaw_deg: float, pitch_deg: float, roll_deg: float) -> np.ndarray:
@@ -50,28 +93,21 @@ def basis_from_angles(yaw_deg: float, pitch_deg: float, roll_deg: float) -> np.n
 
 
 def delivered_angles(basis_world: np.ndarray) -> dict[str, float]:
-    """Dynamic loft, face angle and lie in degrees, from a local-to-world basis.
-
-    World axes are x downrange, y right, z up. Face angle is the azimuth of the
-    face normal about vertical, so zero is square and positive is open for a
-    right-handed player.
-    """
+    """Return loft, face, golf lie, and sole tilt for a right-handed head."""
     basis = np.asarray(basis_world, dtype=float)
     face = basis @ FACE_NORMAL_LOCAL
     shaft = basis @ SHAFT_LOCAL
-    face_norm, shaft_norm = np.linalg.norm(face), np.linalg.norm(shaft)
-    # Fail closed: NaN angles would read as "implausible pose", not "broken input".
-    if (
-        not (np.isfinite(face_norm) and np.isfinite(shaft_norm))
-        or min(face_norm, shaft_norm) < 1e-9
-    ):
+    heel = basis @ HEEL_TOE_LOCAL
+    norms = np.asarray([np.linalg.norm(face), np.linalg.norm(shaft), np.linalg.norm(heel)])
+    if not np.all(np.isfinite(norms)) or float(np.min(norms)) < 1e-9:
         raise ValueError("degenerate basis: club axes collapse to zero length")
-    face = face / face_norm
-    shaft = shaft / shaft_norm
+    face, shaft, heel = face / norms[0], shaft / norms[1], heel / norms[2]
     return {
         "dynamic_loft_deg": math.degrees(math.asin(float(np.clip(face[2], -1.0, 1.0)))),
         "face_angle_deg": math.degrees(math.atan2(float(face[1]), float(face[0]))),
-        "lie_deg": math.degrees(math.asin(float(np.clip(abs(shaft[2]), -1.0, 1.0)))),
+        "lie_deg": math.degrees(math.asin(float(np.clip(shaft[2], -1.0, 1.0)))),
+        # Positive means the toe (opposite HEEL_TOE_LOCAL) is above the heel.
+        "sole_tilt_deg": -math.degrees(math.asin(float(np.clip(heel[2], -1.0, 1.0)))),
     }
 
 
@@ -85,6 +121,21 @@ def in_envelope(angles: dict[str, float]) -> bool:
     return all(low <= angles[key] <= high for key, (low, high) in ENVELOPE.items())
 
 
+def _pose_from_basis(basis: np.ndarray) -> tuple[float, float, float]:
+    normal = basis[:, 0]
+    yaw_deg = math.degrees(math.atan2(float(normal[1]), float(normal[0])))
+    pitch_deg = -math.degrees(math.asin(float(np.clip(normal[2], -1.0, 1.0))))
+    _, unrolled_width, _ = triad(yaw_deg, pitch_deg, 0.0)
+    width = basis[:, 1]
+    roll_deg = math.degrees(
+        math.atan2(float(normal @ np.cross(unrolled_width, width)), float(unrolled_width @ width))
+    )
+    pose = (yaw_deg, pitch_deg, roll_deg)
+    if not np.allclose(basis_from_angles(*pose), basis, atol=1e-7):
+        raise RuntimeError("grounded basis is not representable by the renderer pose")
+    return pose
+
+
 def square_pose(
     dynamic_loft_deg: float = STATIC_LOFT_DEG,
     face_angle_deg: float = 0.0,
@@ -92,53 +143,34 @@ def square_pose(
     *,
     seed_pose: tuple[float, float, float] | None = None,
 ) -> tuple[float, float, float]:
-    """The (yaw, pitch, roll) that delivers the requested angles.
+    """Build the unique grounded right-handed pose for the requested delivery.
 
-    Solved rather than hard-coded, so it stays correct if the mesh, its
-    measured axes, or ``triad``'s convention change. Used to seed fits: a grid
-    around the origin searches the neighbourhood of a backwards club.
+    The default has a horizontal sole and heel toward world -y. Non-static lie
+    rotates that grounded head only enough for the virtual image-shaft reference
+    to reach the requested elevation. ``seed_pose`` remains API-compatible but
+    cannot select the old rolled branch.
     """
-    from scipy.optimize import minimize  # noqa: PLC0415
+    del seed_pose
+    grounded = _grounded_basis(float(dynamic_loft_deg), float(face_angle_deg))
+    face_world = grounded @ FACE_NORMAL_LOCAL
 
-    target = {
-        "dynamic_loft_deg": float(dynamic_loft_deg),
-        "face_angle_deg": float(face_angle_deg),
-        "lie_deg": float(lie_deg),
-    }
+    def error(delta_deg: float) -> float:
+        rotated = _rotation(face_world, math.radians(delta_deg)) @ grounded
+        shaft = rotated @ SHAFT_LOCAL
+        elevation = math.degrees(math.asin(float(np.clip(shaft[2], -1.0, 1.0))))
+        return elevation - float(lie_deg)
 
-    def cost(params: np.ndarray) -> float:
-        angles = angles_from_pose(*params)
-        # Circular difference: near +-180 is not 360 degrees from its target.
-        total = 0.0
-        for key, want in target.items():
-            delta = angles[key] - want
-            if key == "face_angle_deg":
-                delta = math.remainder(delta, 360.0)
-            total += delta * delta
-        return total
-
-    seeds = (
-        [np.asarray(seed_pose, dtype=float)]
-        if seed_pose is not None
-        else [
-            np.array([yaw, pitch, roll], dtype=float)
-            for yaw in (-90.0, 0.0, 90.0, 180.0)
-            for pitch in (-180.0, -90.0, 0.0, 90.0)
-            for roll in (-90.0, 0.0, 90.0, 180.0)
-        ]
-    )
-    best = None
-    for seed in seeds:
-        result = minimize(
-            cost,
-            seed,
-            method="Nelder-Mead",
-            options={"maxiter": 2000, "xatol": 1e-5, "fatol": 1e-10},
-        )
-        if best is None or result.fun < best.fun:
-            best = result
-    if best is None or best.fun > 1e-3:
-        raise RuntimeError(
-            f"no pose delivers {target}; residual {None if best is None else best.fun}"
-        )
-    return tuple(float(v) for v in best.x)
+    samples = np.linspace(-90.0, 90.0, 73)
+    errors = np.asarray([error(float(value)) for value in samples])
+    roots: list[float] = []
+    for index in range(len(samples) - 1):
+        first, second = float(errors[index]), float(errors[index + 1])
+        if abs(first) < 1e-9:
+            roots.append(float(samples[index]))
+        elif first * second < 0.0:
+            roots.append(float(brentq(error, float(samples[index]), float(samples[index + 1]))))
+    if not roots:
+        raise RuntimeError(f"no grounded pose delivers lie {float(lie_deg):.3f} degrees")
+    delta_deg = min(roots, key=abs)
+    basis = _rotation(face_world, math.radians(delta_deg)) @ grounded
+    return _pose_from_basis(basis)

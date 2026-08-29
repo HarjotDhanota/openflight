@@ -9,7 +9,7 @@ and leaves downloaded files ignored by Git.
 | Club | Source | Model ID | License | Published geometry |
 |---|---|---|---|---:|
 | Driver (RETIRED) | [Callaway Maverik Golf Driver](https://sketchfab.com/3d-models/callaway-maverik-golf-driver-978d0740dc514c8695bbb02f4083f0e3), Paul Ekins | `978d0740dc514c8695bbb02f4083f0e3` | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 41,855 triangles |
-| 7-iron | [Titleist 7-iron golf club](https://grabcad.com/library/titleist-7-iron-golf-club-1), GrabCAD Community contributor; maintainer-downloaded 690CB right-handed STL | `grabcad:titleist-7-iron-golf-club-1:690cb-right-handed` | Local research use only; no redistribution | 26,238 triangles |
+| 7-iron | [Titleist 7-iron golf club](https://grabcad.com/library/titleist-7-iron-golf-club-1), GrabCAD Community contributor; 690CB STL labelled right-handed but measured as left-handed/mirrored | `grabcad:titleist-7-iron-golf-club-1:690cb-right-handed` | Local research use only; no redistribution | 26,238 triangles |
 
 The Sketchfab v3 metadata reports the driver as downloadable and labels its
 license `CC Attribution`, with author credit required and commercial use allowed.
@@ -18,8 +18,11 @@ cache rather than vendoring the archive: it preserves source provenance, does no
 add a third-party binary payload to OpenFlight, and follows the design
 specification's existing no-redistribution boundary.
 
-The right-handed Titleist 690CB source is a maintainer-supplied, millimetre-scaled
-binary STL from the named GrabCAD model. Its source SHA-256 is
+The Titleist 690CB source is a maintainer-supplied, millimetre-scaled binary STL
+from the named GrabCAD model. Its file/UID label says right-handed, but the
+normalized geometry is left-handed: the striking-face heel axis points toward
+the +y hosel while its local shaft/hosel direction makes a physical right-handed
+grounded construction point into the floor. Its source SHA-256 is
 `f35936799295e6ce344279e557f0265ccbb8acef69c4508daff80d219d03cb85`.
 It is **local use only**: neither the STL nor its normalized NPZ may be committed.
 Only its provenance, hash, attribution, and aggregate evaluation results enter
@@ -41,7 +44,7 @@ category references are 118 mm width, 60 mm height, and 112 mm depth.
 
 The 690CB was re-imported from the same pinned STL using geometric face anchoring
 and trusted source millimetres. Corrected normalized asset SHA-256 is
-`d63bf7cf1224eb9ce0c7480967057201a4843f3cc2612e4f779ec48fd0839c8a`;
+`9588c7dee779c4f57570bcc7fb03492236143db63c231534809525613090d06e`;
 geometry hash is
 `87cfacdf639f8c7203ffdfb7da2c9e7ba60a63ed302fc6dbb5db2aed2b9047e3`.
 It has one welded component and 23 boundary edges out of approximately 39,357
@@ -49,6 +52,14 @@ edges (0.058%, retained as a provenance diagnostic). Before normalization, the
 detected coherent face patch is 79.739 x 42.497 mm, 863.296 mm2, with source
 normal `(0.112969, -0.253749, -0.960650)`. After the rigid axis transform the
 normal is `(1, 0, 0)` to numerical precision; no dimension scaling is applied.
+
+The v3 cache records source handedness as `left`. `load_normalized_mesh` converts
+this asset to the right-handed runtime frame by mirroring local z and reversing
+triangle winding, then re-detects the face plane instead of transforming stale
+plane metadata. The manifest records source-left, runtime-right, and the named
+`mirror_local_z_reverse_winding` transform. This is a reflection correction for
+the pinned STL, not a change to `normalize_clubhead`; its source-to-local axes
+remain a proper rotation and its geometry hash is unchanged.
 
 ### Pre-outcome iron-source substitution
 
