@@ -1,0 +1,182 @@
+{
+  "caveat": "CONSISTENCY ONLY. No ground truth exists. Scored against pass-1 hand marks, which also define the crop, origin and landmark convention.",
+  "session": "C:\\Users\\harjo\\Downloads\\openflight_session_20260825_181734_filtered\\openflight_session_20260825_181734_filtered",
+  "marks_pass": 1,
+  "ball_veto": true,
+  "side_margin_px": 0.0,
+  "reference_mm_per_px": 3.573210258927658,
+  "face_height_band_mm": [
+    45.0,
+    50.0
+  ],
+  "templates": {
+    "occupancy": {
+      "7-iron": {
+        "n_samples": 14,
+        "heel_mode_effective": "occupancy",
+        "heel_fell_off_before_edge": true,
+        "left_edge_fraction": 0.0,
+        "floor_fraction": 0.0,
+        "bbox_width_mm": 139.35520009817867,
+        "bbox_height_mm": 74.1441128727489,
+        "column_depth": {
+          "median_mm": 45.11177951896168,
+          "p10_mm": 26.352425659591475,
+          "p90_mm": 66.10438979016168,
+          "max_mm": 67.8909949196255,
+          "n": 156
+        },
+        "row_width": {
+          "median_mm": 96.92332827341272,
+          "p10_mm": 30.19362668793871,
+          "p90_mm": 125.95566162719994,
+          "max_mm": 127.74226675666377,
+          "n": 78
+        },
+        "mean_sample_iou": 0.6959436481835769,
+        "median_sample_iou": 0.701451181256658,
+        "min_sample_iou": 0.5315004315127605,
+        "landmarks": {
+          "heel": [
+            56.77812227048927,
+            52.10077059664244
+          ],
+          "toe": [
+            183.2218777295107,
+            66.2852940363479
+          ],
+          "topline": [
+            150.29108133217727,
+            24.0
+          ],
+          "midpoint": [
+            120.0,
+            24.0
+          ]
+        }
+      },
+      "9-iron": {
+        "n_samples": 23,
+        "heel_mode_effective": "occupancy",
+        "heel_fell_off_before_edge": true,
+        "left_edge_fraction": 0.0,
+        "floor_fraction": 0.0,
+        "bbox_width_mm": 134.8886872745191,
+        "bbox_height_mm": 68.78429748435741,
+        "column_depth": {
+          "median_mm": 44.66512823659573,
+          "p10_mm": 25.90577437722552,
+          "p90_mm": 63.42448209596593,
+          "max_mm": 65.21108722542976,
+          "n": 151
+        },
+        "row_width": {
+          "median_mm": 85.7570462142638,
+          "p10_mm": 22.68988514419063,
+          "p90_mm": 117.37995700577358,
+          "max_mm": 120.59584623880846,
+          "n": 77
+        },
+        "mean_sample_iou": 0.7422571817785103,
+        "median_sample_iou": 0.7528103767757875,
+        "min_sample_iou": 0.5685954562570604,
+        "landmarks": {
+          "heel": [
+            65.05082323251217,
+            50.31007073378687
+          ],
+          "toe": [
+            174.94917676748784,
+            62.23596668520998
+          ],
+          "topline": [
+            140.21500208888156,
+            24.0
+          ],
+          "midpoint": [
+            120.0,
+            24.0
+          ]
+        }
+      }
+    },
+    "crop": {
+      "7-iron": {
+        "n_samples": 14,
+        "heel_mode_effective": "crop",
+        "heel_fell_off_before_edge": true,
+        "left_edge_fraction": 0.0,
+        "floor_fraction": 0.0,
+        "bbox_width_mm": 108.98291289729357,
+        "bbox_height_mm": 67.8909949196255,
+        "column_depth": {
+          "median_mm": 50.91824618971913,
+          "p10_mm": 34.92813028101786,
+          "p90_mm": 66.10438979016168,
+          "max_mm": 67.8909949196255,
+          "n": 122
+        },
+        "row_width": {},
+        "mean_sample_iou": 0.7566617254799791,
+        "median_sample_iou": 0.747638926202236,
+        "min_sample_iou": 0.5711446740858506,
+        "landmarks": {
+          "heel": [
+            56.77812227048927,
+            52.10077059664244
+          ],
+          "toe": [
+            183.2218777295107,
+            66.2852940363479
+          ],
+          "topline": [
+            150.29108133217727,
+            24.0
+          ],
+          "midpoint": [
+            120.0,
+            24.0
+          ]
+        }
+      },
+      "9-iron": {
+        "n_samples": 23,
+        "heel_mode_effective": "crop",
+        "heel_fell_off_before_edge": true,
+        "left_edge_fraction": 0.0,
+        "floor_fraction": 0.0,
+        "bbox_width_mm": 96.47667699104676,
+        "bbox_height_mm": 65.21108722542976,
+        "column_depth": {
+          "median_mm": 50.91824618971913,
+          "p10_mm": 35.46411181985701,
+          "p90_mm": 64.31778466069784,
+          "max_mm": 65.21108722542976,
+          "n": 108
+        },
+        "row_width": {},
+        "mean_sample_iou": 0.808950812786986,
+        "median_sample_iou": 0.8268882175226586,
+        "min_sample_iou": 0.6151576331728529,
+        "landmarks": {
+          "heel": [
+            65.05082323251217,
+            50.31007073378687
+          ],
+          "toe": [
+            174.94917676748784,
+            62.23596668520998
+          ],
+          "topline": [
+            140.21500208888156,
+            24.0
+          ],
+          "midpoint": [
+            120.0,
+            24.0
+          ]
+        }
+      }
+    }
+  }
+}

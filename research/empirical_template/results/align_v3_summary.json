@@ -1,0 +1,221 @@
+{
+  "caveat": "CONSISTENCY ONLY. No ground truth exists. Scored against PASS-1 hand marks. The impact zone is a consistency reading, not a measurement of where the ball struck.",
+  "session": "C:\\Users\\harjo\\Downloads\\openflight_session_20260825_181734_filtered\\openflight_session_20260825_181734_filtered",
+  "configuration": {
+    "heel_mode": "crop",
+    "side_margin_px": 0.0,
+    "top_margin_px": 2.0,
+    "ridge": true,
+    "ball_veto": true,
+    "marks_pass": 1,
+    "face_centre_toeward_mm": 8.0
+  },
+  "counts": {
+    "shots": 21,
+    "frames_aligned": 142,
+    "frames_accepted": 140,
+    "shots_with_all_f66_f71": 20,
+    "marked_frames_scored": 36
+  },
+  "iou": {
+    "n": 142,
+    "median": 0.8230962643678161,
+    "p90": 0.8917799040206608,
+    "mean": 0.8106215613414304,
+    "max": 0.9320987654320988
+  },
+  "scores_vs_marks_px": {
+    "raw_heel_x": {
+      "n": 36,
+      "median": 1.2207699622214392,
+      "p90": 2.5821842644315325,
+      "mean": 1.3246465952771989,
+      "max": 4.51978855474303,
+      "bias": 0.01623770441686645
+    },
+    "raw_toe_x": {
+      "n": 36,
+      "median": 0.5173587453158035,
+      "p90": 1.2145305617251694,
+      "mean": 0.6700481546401522,
+      "max": 1.7692616478298646,
+      "bias": 0.27198548137145906
+    },
+    "raw_topline_y": {
+      "n": 36,
+      "median": 0.8116994000484965,
+      "p90": 1.5241645971739928,
+      "mean": 0.9319983563559452,
+      "max": 2.772332421523174,
+      "bias": 0.8116994000484965
+    },
+    "def_heel_x": {
+      "n": 36,
+      "median": 1.2900000000000205,
+      "p90": 2.6736499914831455,
+      "mean": 1.2709965120001694,
+      "max": 4.0800000000000125,
+      "bias": 0.24158662979604628
+    },
+    "def_toe_x": {
+      "n": 36,
+      "median": 0.6675034899994188,
+      "p90": 1.5065465281241472,
+      "mean": 0.7487730377082289,
+      "max": 2.5885989831684526,
+      "bias": -0.4458332358406665
+    },
+    "def_topline_y": {
+      "n": 36,
+      "median": 0.58497545129039,
+      "p90": 1.2369039011129388,
+      "mean": 0.7109405583650141,
+      "max": 3.4432086037470526,
+      "bias": 0.58497545129039
+    }
+  },
+  "pre_registered_gate_raw_convention": {
+    "checks": {
+      "raw_heel_x": {
+        "median": 1.2207699622214392,
+        "p90": 2.5821842644315325,
+        "median_pass": false,
+        "p90_pass": false
+      },
+      "raw_toe_x": {
+        "median": 0.5173587453158035,
+        "p90": 1.2145305617251694,
+        "median_pass": true,
+        "p90_pass": true
+      },
+      "raw_topline_y": {
+        "median": 0.8116994000484965,
+        "p90": 1.5241645971739928,
+        "median_pass": true,
+        "p90_pass": true
+      }
+    },
+    "result": "FAIL"
+  },
+  "pre_registered_gate_definition_matched": {
+    "checks": {
+      "def_heel_x": {
+        "median": 1.2900000000000205,
+        "p90": 2.6736499914831455,
+        "median_pass": false,
+        "p90_pass": false
+      },
+      "def_toe_x": {
+        "median": 0.6675034899994188,
+        "p90": 1.5065465281241472,
+        "median_pass": true,
+        "p90_pass": true
+      },
+      "def_topline_y": {
+        "median": 0.58497545129039,
+        "p90": 1.2369039011129388,
+        "median_pass": true,
+        "p90_pass": true
+      }
+    },
+    "result": "FAIL"
+  },
+  "roll_ramp": {
+    "n_shots": 21,
+    "slope_deg_per_frame": {
+      "n": 21,
+      "median": 1.3214285714285758,
+      "p90": 1.9196428571428639,
+      "mean": 1.216921768707491,
+      "max": 2.687500000000012
+    },
+    "slope_median_deg_per_frame": 1.3214285714285758,
+    "slope_iqr_deg_per_frame": 0.423214285714264,
+    "slope_median_deg_per_ms": 0.6179231103243281,
+    "roll_at_f66_median": -5.940476190476247,
+    "roll_at_f72_median": 1.6999999999999602,
+    "fit_rms_deg": {
+      "n": 21,
+      "median": 2.5333867587456442,
+      "p90": 3.3092615089614585,
+      "mean": 2.494007825010087,
+      "max": 4.551715307979835
+    },
+    "shots_with_positive_slope": 19,
+    "note": "OBSERVABLE WITH NO TRUTH. Nothing in this session measures clubface rotation independently; this is the roll the IoU search chose, fitted against frame."
+  },
+  "impact_zone": {
+    "impact_toeward_mm": {
+      "quad": {
+        "n": 21,
+        "median": -29.831101910012517,
+        "p90": -11.606684153545329,
+        "mean": -28.22188818960061,
+        "max": -1.8745724734575206
+      },
+      "mark": {
+        "n": 21,
+        "median": -30.253324454055274,
+        "p90": -11.775038455356972,
+        "mean": -27.001734352337177,
+        "max": -2.7151351403469866
+      },
+      "quad_minus_mark_abs": {
+        "n": 21,
+        "median": 3.1944977844680835,
+        "p90": 7.324939546052548,
+        "mean": 3.7487235251314193,
+        "max": 11.376275385844622
+      },
+      "quad_minus_mark_bias": -0.898367105466285
+    },
+    "impact_below_topline_mm": {
+      "quad": {
+        "n": 21,
+        "median": -8.1397788855829,
+        "p90": 7.763422597397104,
+        "mean": -4.986076825073623,
+        "max": 23.68785142626801
+      },
+      "mark": {
+        "n": 21,
+        "median": 1.0452133077449142,
+        "p90": 9.206927047505035,
+        "mean": 0.15371623103345705,
+        "max": 25.33974960284234
+      },
+      "quad_minus_mark_abs": {
+        "n": 21,
+        "median": 5.58017254001858,
+        "p90": 14.352425243742111,
+        "mean": 6.5929563221391065,
+        "max": 21.169751554747975
+      },
+      "quad_minus_mark_bias": -5.098423301591936
+    },
+    "face_width_mm": {
+      "quad": {
+        "n": 21,
+        "median": 99.56212979677211,
+        "p90": 114.50836866873895,
+        "mean": 104.69011010539931,
+        "max": 115.79524103227337
+      },
+      "mark": {
+        "n": 21,
+        "median": 103.06828311467953,
+        "p90": 115.82298049183878,
+        "mean": 105.09079814769328,
+        "max": 124.26291538105595
+      },
+      "quad_minus_mark_abs": {
+        "n": 21,
+        "median": 3.638304772923135,
+        "p90": 9.238146361794008,
+        "mean": 4.244260711778724,
+        "max": 12.274424499906104
+      },
+      "quad_minus_mark_bias": 0.599589145693173
+    }
+  }
+}

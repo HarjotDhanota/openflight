@@ -160,3 +160,50 @@ The `it1repro` configuration reproduces iteration 1's scores to the digit.
 | `align_{tag}_summary.json` | both gates, both conventions, hosel split, carry disagreement |
 | `sheets_v2/<shot>.png` | as before, with the outline's own extents dotted |
 | `rolllock_{tag}_<shot>_f<n>.png` | raw / mask / fitted roll / roll-0, 8× |
+
+## Iteration 3
+
+`build_template_v3.py` and `align_and_carry_v3.py`. Two changes, and the
+pre-registered gate passes for the first time.
+
+1. **The heel edge comes from the data.** The side crop moves to the marks
+   (0 px margin) and the heel side is not cut at all; the outline is the
+   intersection of the per-column run downward from each column's topmost
+   occupied row (iteration 2's sole) and the per-row run leftward from each
+   row's rightmost occupied column (the heel). A pre-registered fallback to a
+   crop at the heel mark fires if more than half the occupied rows still reach
+   the grid's left edge. It did not fire — but the fall-off lands 30-35 mm too
+   far left, up the hosel neck, so the outline's minimum-x extent is no longer
+   the heel and only the raw landmark heel is meaningful on this template.
+2. **The tee / flying-ball veto runs after contact.** Contact is f71.853 at
+   467.6 fps, so f72 is 0.31 ms past it and the ball is moving. `head_masks_v3`
+   finds the departing ball as the brightest disk at the teed ball's diameter,
+   no lower than the tee row, accepts it only if it is at least 0.8x as bright
+   as the teed ball on the background median, and vetoes that disk on
+   post-contact frames only.
+
+```bash
+uv run python research/empirical_template/build_template_v3.py
+uv run python research/empirical_template/align_and_carry_v3.py \
+    --heel-mode occupancy --tag v3_dataheel      # the configuration that passes
+uv run python research/empirical_template/align_and_carry_v3.py \
+    --heel-mode crop --tag v3
+uv run python research/empirical_template/align_and_carry_v3.py \
+    --heel-mode crop --no-ball-veto --no-sheets --tag v3_noveto
+```
+
+Everything scored is carried to contact by the quadratic over f66-f72, not just
+the midpoint: the heel and toe landmarks, the outline's own x extents, and the
+top edge at the ball's column. The f71/f72 interpolation is kept as the check.
+
+| File | Contents |
+| --- | --- |
+| `template_v3_{occupancy,crop}_{7,9}-iron.png|npz` | outline, occupancy, per-column depth and per-row width |
+| `template_v3_summary.json` | left-edge fraction, fallback state, row-width stats |
+| `align_{tag}_{per_frame,per_shot}.csv` | adds every carried observable, the roll-ramp fit and the impact zone |
+| `align_{tag}_summary.json` | both gates, the roll ramp, the impact zone against the marks |
+
+The impact zone uses one fixed convention: face centre 8 mm toe-ward of the
+heel-toe midpoint, ball depth below the topline at the ball's own column. Both
+readings carry a large systematic offset from the oblique projection, so only
+the shot-to-shot agreement with the hand marks is a result.

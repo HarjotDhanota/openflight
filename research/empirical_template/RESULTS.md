@@ -497,3 +497,279 @@ uv run python research/empirical_template/align_and_carry_v2.py \
 Outputs: `template_v2_{occupancy,cut}_*.png|npz`, `template_v2_summary.json`,
 `align_{tag}_{per_frame,per_shot}.csv`, `align_{tag}_summary.json`,
 `sheets_v2/<shot>.png`, `rolllock_{tag}_<shot>_f72.png`.
+
+---
+
+# Iteration 3 — the heel from the data, the ball vetoed after contact
+
+Same session, same 21 shots, same leave-one-shot-out, same pre-registered gate.
+`build_template_v3.py` and `align_and_carry_v3.py`. `load_marks_pass1` is the
+only loader used. Four configurations are compared, all through one code path:
+
+| tag | heel edge | side crop | ball veto |
+| --- | --- | --- | --- |
+| `v2` | crop, ±2 px outside the marks | symmetric | no |
+| `v3_noveto` | crop, AT the marks | 0 px margin | no |
+| `v3` | crop, AT the marks | 0 px margin | **yes** |
+| `v3_dataheel` | **occupancy fall-off in x** | toe side only | **yes** |
+
+## 1. The heel edge from the data
+
+The side crop moves to the marks: the toe side is cut at the toe mark exactly
+and the heel side is not cut at all. The outline is then the intersection of two
+occupancy runs — per column downward from that column's topmost occupied row
+(iteration 2's sole), and per row leftward from that row's rightmost occupied
+column (the new heel).
+
+**The occupancy does fall through 0.5 on the way left** — the left-edge fraction
+is 0.00 on both clubs, so the pre-registered fallback to a crop at the heel mark
+did not fire. **But it falls off in the wrong place, and further wrong than the
+sole did.** The template's bounding box goes from 117.0 × 67.9 mm (7-iron) and
+104.5 × 65.2 mm (9-iron) in iteration 2 to **139.4 × 74.1 mm** and
+**134.9 × 68.8 mm**, and the render shows why: with the heel open, the outline
+runs up the **hosel neck** — which `split_head` assigns to the head by
+construction, since it cuts across the neck rather than below it — and then out
+along the shaft shadow. The median per-row width is 96.9 mm (7-iron) and 85.8 mm
+(9-iron), so the body is the right size; the extra 30-35 mm is a tail.
+
+Read `results/template_v3_occupancy_9-iron.png` next to
+`template_v2_occupancy_9-iron.png`. The consequence is immediate and it is the
+one thing iteration 3 cannot claim: **the outline's minimum-x extent is no
+longer the heel**, so the definition-matched heel reading collapses (bias
+−10.51 px ≈ −38 mm, which is the length of the tail). On this template the raw
+landmark is the only heel figure that means anything.
+
+The self-IoU falls again, 0.77-0.81 → 0.70-0.74, for the same honest reason as
+in iteration 2: there is more shape to disagree with.
+
+## 2. The flying-ball veto
+
+Contact is f71.853 at 467.6 fps, so f72 is 0.147 frames — 0.31 ms — after it.
+`head_masks_v3` runs the veto only on frames strictly after contact.
+
+Measured over the 21 shots at f72: the veto **fires on 15**, and fails closed on
+6 where nothing near the tee reaches 0.8× the teed ball's own brightness on the
+background median. Where it fires, the detected ball sits a median **2.7 px**
+(p90 5.1 px) from the tee position — a ball leaving at ~50 m/s covers ~4 px in
+0.31 ms, so this is the departing ball and not a redetection of the tee. It
+removes a median of 34 px from a 527 px head mask, and much more where it
+matters: `shot_021_9-iron` 527 → 358 px, `shot_009_7-iron` 375 → 225 px.
+
+`shot_021_9-iron` f72, iteration 2's worst lock, is the clean test. Iteration 2
+locked it at **+17.0°** (IoU 0.734) and so does `v3_noveto` (+17.0°, IoU 0.729),
+which moved the side crop but not the ball — so the bad lock was the ball, not
+the crop. With the veto it goes to **+0.0°** (`v3`, IoU 0.594, then rejected on
+the 0.60 IoU gate — fail-closed rather than a bad number) and to **−1.5°**
+(`v3_dataheel`, IoU 0.635, accepted). Renders:
+`results/rolllock_v3*_shot_021_9-iron_f72.png`.
+
+The veto's effect is not confined to f72. Because the template is built from
+f71 **and** f72 samples of the other shots, cleaning f72 cleans the template and
+therefore every frame: `v3_noveto` → `v3` moves the raw topline from 0.93 / 2.22
+to 0.81 / 1.52 px, and the topline p90 at f71 from 5.18 to 1.52 px.
+
+**It does not fix `shot_016_9-iron` f71.** That frame is before contact, the ball
+is still teed and stationary, and its 920 px mask is head + shaft + turf shadow
+merged. No ball veto can touch it; it needs a better segmenter.
+
+## 3. Score against the pass-1 marks
+
+median / p90 px, bias (predicted − marked), accepted marked frames.
+
+| axis | `v2` (it 2) | `v3_noveto` | `v3` | **`v3_dataheel`** |
+| --- | --- | --- | --- | --- |
+| heel x, raw | 0.97 / 2.45 (−0.02) | 1.42 / 2.67 (+0.07) | 1.22 / 2.58 (+0.02) | **0.89 / 1.71** (−0.17) |
+| toe x, raw | 0.59 / 1.20 (+0.08) | 0.52 / 1.18 (+0.28) | 0.52 / 1.21 (+0.27) | **0.52 / 1.09** (−0.01) |
+| topline y, raw | 0.92 / 1.71 (+0.92) | 0.93 / 2.22 (+0.93) | 0.81 / 1.52 (+0.81) | **0.85 / 1.78** (+0.80) |
+| heel x, def | 2.08 / 3.52 (−1.94) | 1.08 / 2.70 (+0.20) | 1.29 / 2.67 (+0.24) | 10.51 / 11.86 (−10.51) |
+| toe x, def | 0.79 / 1.29 (−0.38) | 0.48 / 1.47 (−0.34) | 0.67 / 1.51 (−0.45) | 0.48 / 1.44 (−0.48) |
+| topline y, def | 0.64 / 1.48 (+0.64) | 0.67 / 2.40 (+0.67) | 0.58 / 1.24 (+0.58) | 0.49 / 1.60 (+0.43) |
+| frames accepted | 141 / 142 | 141 / 142 | 140 / 142 | 136 / 142 |
+| availability (f66–f71) | 20 / 21 | 20 / 21 | 20 / 21 | 18 / 21 |
+| marked frames scored | 37 | 37 | 36 | 34 |
+| median local IoU | 0.805 | 0.830 | 0.823 | 0.737 |
+
+Two things to read off this before the gate table.
+
+**Moving the side crop to the marks, on its own, made the heel worse.** `v3`
+against `v2`: 0.97 / 2.45 → 1.22 / 2.58 px. It removed the −1.94 px definition
+bias (def heel bias +0.24) exactly as predicted, and it cost median accuracy,
+because a template cut flush at the marks has less overlap to work with at the
+heel and lets the roll wander (`shot_009` f71 roll 0.0° → +6.0°, heel error
++3.59 → +4.52 px). The definition bias was real; removing it was not what fixed
+the heel.
+
+**Opening the heel is what fixed it.** Including the hosel neck gives the search
+a real, high-contrast structure at the heel end to lock onto — the same
+structure the annotator was looking at when placing the heel mark, which
+`RESULTS.md` §1 already noted "sits at the hosel". Heel p90 goes 2.58 → 1.71 px.
+
+### Pre-registered gate
+
+| criterion | required | `v2` (it 2) | `v3` | **`v3_dataheel`** |
+| --- | --- | --- | --- | --- |
+| heel x median | ≤ 1 | 0.97 PASS | 1.22 **FAIL** | **0.89 PASS** |
+| heel x p90 | ≤ 2 | 2.45 **FAIL** | 2.58 **FAIL** | **1.71 PASS** |
+| toe x median / p90 | ≤ 1 / ≤ 2 | 0.59 / 1.20 PASS | 0.52 / 1.21 PASS | **0.52 / 1.09 PASS** |
+| topline y median | ≤ 1 | 0.92 PASS | 0.81 PASS | **0.85 PASS** |
+| topline y p90 | ≤ 2 | 1.71 PASS | 1.52 PASS | **1.78 PASS** |
+| availability f66–f71 | ≥ 17 | 20 / 21 PASS | 20 / 21 PASS | **18 / 21 PASS** |
+| **overall, raw convention** | | **FAIL** | **FAIL** | **PASS** |
+| overall, definition-matched | | FAIL | FAIL | FAIL (heel only) |
+
+**The pre-registered gate PASSES, in the raw landmark convention, on
+`v3_dataheel`.** It is the first configuration in three iterations to clear all
+six criteria.
+
+### Is the pass an artefact of rejecting more frames?
+
+`v3_dataheel` scores 34 marked frames where iteration 2 scored 37, so this had
+to be checked before the pass could be claimed. Two ways, both of which hold:
+
+* **On the 34 marked frames accepted by BOTH configurations**, iteration 2's
+  heel is 0.96 / 2.45 px and `v3_dataheel`'s is **0.89 / 1.71 px**. The
+  improvement is on a matched set.
+* **Forcing `v3_dataheel` to be scored on all 37 frames iteration 2 accepted**,
+  ignoring its own gate, gives **0.96 / 1.80 px** — still inside the 2 px p90.
+  The three frames it drops are `shot_009` f72 (which would have been 5.63 px),
+  `shot_017` f72 (0.23 px) and `shot_023` f72 (1.41 px): one genuine catch and
+  two frames it lost for nothing.
+
+So the pass survives both. What it does not survive is the definition-matched
+convention, and the reason is entirely the hosel tail described in §1 — not the
+heel placement.
+
+## 4. The roll ramp — an observable with no truth
+
+Nothing in this session measures clubface rotation independently. What follows
+is the roll the IoU search chose, fitted as a straight line against frame over
+each shot's accepted f66–f72, and it should be read as a property of the fit
+until something else confirms it.
+
+| | `v3_noveto` | `v3` | `v3_dataheel` |
+| --- | --- | --- | --- |
+| median slope | +1.46 °/frame | +1.32 °/frame | **+0.63 °/frame** |
+| | +0.68 °/ms | +0.62 °/ms | **+0.30 °/ms** |
+| IQR of slope | 0.69 | 0.42 | 0.74 |
+| fitted roll, f66 → f72 | −7.3 → +1.8° | −5.9 → +1.7° | **−4.4 → +0.6°** |
+| straight-line fit rms | 2.2° | 2.5° | 2.5° |
+| shots with positive slope | 21 / 21 | 19 / 21 | 19 / 21 |
+
+**The sign is stable and the magnitude is not.** Every configuration finds the
+face rotating the same way — from several degrees closed at f66 to roughly
+square at f72 — and 19 to 21 of the 21 shots individually agree. But the median
+slope more than doubles between configurations that differ only in the
+template's heel edge, so the *rate* is a property of the template as much as of
+the club. Per shot (`v3_dataheel`) the slope runs from −0.58 to +2.81 °/frame,
+and the straight-line residual is a median 2.5° against a total ramp of about
+5° — the ramp is barely larger than its own scatter within a single shot.
+
+**Reportable: the sign, and an order of magnitude of a few tenths of a degree
+per frame. Not reportable: any per-shot rotation rate.**
+
+## 5. First automatic impact-zone reading
+
+Because the gate passes, the zone is read out. One convention, fixed before the
+numbers: **face centre is 8 mm toe-ward of the heel–toe midpoint** along the
+heel-to-toe direction, and **ball depth is measured below the topline at the
+ball's own column**. The outline reading carries heel, toe and the top edge at
+the ball's column to `f_c` by the quadratic over f66–f72; the marks' reading
+interpolates the f71/f72 marks to `f_c` and extrapolates the heel→topline line
+back to the ball's column, because the topline mark sits a median +11 px
+toe-ward of the ball where the crown is about 13 mm higher.
+
+**These are consistency figures against a hand annotation, not impact locations.**
+The convention carries a large systematic offset — both readings put the ball
+about 30 mm heel-ward of the face centre on nearly every shot, which is not a
+plausible strike pattern and is a property of the oblique projection and the
+midpoint convention, not of the golfer.
+
+| quantity | outline (quadratic) | marks | \|difference\| median / p90 | bias | r over 21 shots | rms difference |
+| --- | --- | --- | --- | --- | --- | --- |
+| impact, toe-ward of face centre | −28.7 mm | −30.3 mm | **1.9 / 3.6 mm** | +0.5 mm | **+0.971** | 2.6 mm |
+| ball below topline at ball column | −5.6 mm | +1.0 mm | 5.1 / 15.2 mm | −3.5 mm | +0.841 | 7.7 mm |
+| face width heel→toe | 99.3 mm | 103.1 mm | 3.7 / 9.2 mm | +0.6 mm | +0.795 | 5.1 mm |
+
+The heel–toe channel is the usable one: shot-to-shot spread is 10.8 mm (outline)
+against 10.3 mm (marks), the two track at r = 0.971, and the rms disagreement is
+2.6 mm. The vertical channel is not: 7.7 mm rms against a 10.5 mm spread, with
+`shot_024` off by 18.6 mm.
+
+The carry model is not the limit. Quadratic against the f71/f72 pair disagrees
+by a median 0.4 mm (p90 0.9 mm) toe-ward and 1.2 mm (p90 3.5 mm) vertically.
+
+Per shot (`results/align_v3_dataheel_per_shot.csv`), toe-ward of face centre,
+outline vs marks, in mm:
+
+| shot | outline | marks | shot | outline | marks |
+| --- | --- | --- | --- | --- | --- |
+| 002 7i | −34.1 | −30.5 | 018 9i | −36.2 | −34.4 |
+| 003 7i | −28.7 | −31.9 | 020 9i | −25.1 | −25.7 |
+| 004 7i | −3.8 | −2.7 | 021 9i | −29.0 | −27.1 |
+| 005 7i | −40.4 | −36.7 | 023 9i | −32.6 | −34.8 |
+| 006 7i | −38.4 | −42.0 | 024 9i | −12.4 | −14.1 |
+| 008 7i | −27.2 | −27.5 | 025 9i | −33.6 | −32.4 |
+| 009 7i | −44.1 | −43.3 | 026 9i | −21.8 | −24.9 |
+| 011 7i | −16.9 | −19.2 | 028 9i | −28.0 | −31.5 |
+| 014 9i | −33.4 | −34.1 | 029 9i | −11.3 | −11.8 |
+| 015 9i | −6.4 | −10.0 | 016 9i | −27.0 | −21.9 |
+| 017 9i | −32.2 | −30.3 | | | |
+
+The 40 mm shot-to-shot range is reproduced shot by shot without ever seeing the
+marks for that shot.
+
+## 6. Verdict
+
+> **Yes, in one convention, with three named caveats.** With the heel edge taken
+> from the occupancy fall-off in x, the ball vetoed after contact and the side
+> crop at the marks, the data-built outline reaches **heel 0.89 / 1.71 px, toe
+> 0.52 / 1.09 px, topline 0.85 / 1.78 px** against the pass-1 marks on 18 of 21
+> shots. **The pre-registered gate PASSES.** It survives being re-scored on the
+> frames iteration 2 accepted (0.96 / 1.80 px).
+
+The three caveats, stated plainly:
+
+1. **It passes in the raw landmark convention only.** The definition-matched
+   heel fails by 10.5 px, because opening the heel side lets the outline run up
+   the hosel neck and out along the shaft shadow, so its leftmost point is no
+   longer the heel. The template that passes is 30-35 mm wider than the club.
+2. **It costs frames.** Availability 20 → 18 of 21, accepted frames 141 → 136,
+   median local IoU 0.805 → 0.737. The wider template fits worse, and the gates
+   reject more — which is the right direction for a fail-closed system but is
+   not free.
+3. **It is still consistency, not accuracy.** Every figure is against one
+   annotator's reading of the same pixels, whose own second-pass spread is
+   0.4-0.7 px median and 1.3-1.7 px p90 — the gate is now within a factor of
+   about two of the label noise, which is close to the point where this
+   reference stops being able to discriminate.
+
+Separately established by iteration 3:
+
+* **The 48 mm cut, the ±2 px side margin and the missing post-contact veto were
+  three independent defects, and they had to be fixed in that order.** Moving
+  the side crop to the marks alone made the heel worse (2.45 → 2.58 px p90); it
+  was opening the heel that fixed it (→ 1.71 px).
+* **The post-contact ball veto is real and cheap.** It fires on 15 of 21 shots
+  at f72, fails closed on the rest, and its effect propagates through the
+  leave-one-shot-out template into every frame — topline p90 at f71 falls from
+  5.18 to 1.52 px.
+* **The face rotates the same way on 19 of 21 shots, and the rate is not
+  measurable here.** −4 to −6° at f66, roughly square at f72, but the fitted
+  slope doubles when only the template's heel edge changes.
+* **The heel–toe impact channel is the first automatic reading that tracks the
+  hand marks**: r = 0.971, 2.6 mm rms over a 10.8 mm shot-to-shot spread. The
+  vertical channel is not there yet (7.7 mm rms), and the absolute offsets in
+  both channels are conventions, not strike locations.
+
+## Reproducing
+
+```bash
+export OPENFLIGHT_SESSION=.../openflight_session_20260825_181734_filtered
+uv run python research/empirical_template/build_template_v3.py
+uv run python research/empirical_template/align_and_carry_v3.py \
+    --heel-mode occupancy --tag v3_dataheel      # the configuration that passes
+uv run python research/empirical_template/align_and_carry_v3.py \
+    --heel-mode crop --tag v3
+uv run python research/empirical_template/align_and_carry_v3.py \
+    --heel-mode crop --no-ball-veto --no-sheets --tag v3_noveto
+```
