@@ -110,3 +110,53 @@ Flags: `--session`, `--marks`, `--out`, `--exclude-shot` (defaults to 1),
 | `align_summary.json` | all aggregate scores and the pre-registered pass/fail |
 
 **Look at the sheets before quoting any number.**
+
+## Iteration 2
+
+`build_template_v2.py` and `align_and_carry_v2.py`. Same gate, same
+leave-one-shot-out, three changes, each switchable so the iteration-1
+configuration runs through the same code:
+
+1. **The sole comes from the data.** Samples are cropped on the top (topline
+   row − 2 px) and sides (heel/toe ± 2 px) only; the bottom of the outline is
+   the per-column depth at which the mean occupancy falls through 0.5. A
+   pre-registered fallback reverts to the 48 mm cut if more than half the
+   occupied columns still reach the grid floor. It did not fire.
+2. **The topline is refined on the specular ridge**, fused with the mask edge:
+   a ±3 px vertical sweep maximising an equal-weight, min-max-normalised sum of
+   the local IoU and a line response measured on toe-side columns more than one
+   ball radius from the ball.
+3. **The carry is interpolation between f71 and f72**, cross-checked by a
+   quadratic over f66–f72. The linear carry is dropped.
+
+**Marks: pass 1 only.** `contact_marks.jsonl` now holds a second annotator's
+pass, and `build_template.load_marks` has no pass filter and takes the last
+line for each `(shot, frame)` — so iteration 1's loader would now score against
+pass 2. `build_template_v2.load_marks_pass1` filters on `pass_index == 1` and
+`annotator == "harjot"`. Use it for anything new.
+
+**Two scoring conventions**, because the pass-1 marks are not a single
+landmark constellation: the topline mark sits a median +11 px right of the ball
+centre on a crown that slopes −0.33 px/px, and the toe mark is the head's
+widest point, a median 9.9 px below the topline row. Errors are reported both
+in iteration 1's landmark convention and definition-matched (topline at the
+mark's own column on the outline's top edge; toe/heel at the outline's x
+extents).
+
+```bash
+uv run python research/empirical_template/build_template_v2.py
+uv run python research/empirical_template/align_and_carry_v2.py --tag v2
+uv run python research/empirical_template/align_and_carry_v2.py \
+    --sole-mode cut --top-margin 0 --no-ridge --no-sheets --tag it1repro
+```
+
+The `it1repro` configuration reproduces iteration 1's scores to the digit.
+
+| File | Contents |
+| --- | --- |
+| `template_v2_{occupancy,cut}_{7,9}-iron.png|npz` | v2 occupancy map, outline, per-column depth |
+| `template_v2_summary.json` | per-club depth stats, floor fraction, fallback state |
+| `align_{tag}_{per_frame,per_shot}.csv` | adds ridge offset, outline extents, top edge at the mark's column, shaft area |
+| `align_{tag}_summary.json` | both gates, both conventions, hosel split, carry disagreement |
+| `sheets_v2/<shot>.png` | as before, with the outline's own extents dotted |
+| `rolllock_{tag}_<shot>_f<n>.png` | raw / mask / fitted roll / roll-0, 8× |
