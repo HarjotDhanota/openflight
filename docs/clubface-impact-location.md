@@ -201,7 +201,8 @@ This is a repeatability and fail-closed result, not an accuracy claim against tr
 no truth reference exists.
 
 **Correction, 2026-08-28:** the result immediately above is void. Its normalized
-mesh was left-handed and its `square_pose()` solution left the sole rolled about
+mesh was mirrored relative to the world frame and its `square_pose()` solution
+left the sole rolled about
 73°, producing a 22 × 39 px upright template beside a roughly horizontal head.
 The 0/21 result therefore measured a bad coordinate frame, not image-edge
 localisability. The earlier fused-pose envelope verdict used the same frame and
@@ -209,14 +210,31 @@ is void for the same reason. The recorded run remains here for provenance only.
 
 ## Grounded outline alignment — corrected rerun
 
-The pinned STL is now explicitly recorded as left-handed and mirrored to a
-right-handed runtime mesh by flipping local z and reversing triangle winding.
+The pinned STL is now explicitly reflected into the world frame at load, by
+flipping local z and reversing triangle winding.
 The striking-face heel–toe axis supplies a horizontal sole constraint, with the
 heel toward world −y; a virtual catalogue-lie shaft driven by the observed image
 shaft replaces the mesh's suspect 76° hosel axis as the pose reference. On shot
 014 f71, the unchanged ball-ray/radar-range render moved from a 22 × 39 px upright
 shape beside the club to a wide, grounded head whose sole and hosel sit on the
 real head and shaft with no image search.
+
+**Amended, 2026-08-28:** the reflection is right; its original explanation was
+not. That explanation recorded the 690CB source as left-handed. It is not: the
+source is a RIGHT-handed club, exactly as its file label says. The frame is the
+left-handed thing. `projection._project` maps world +y to the image RIGHT, where
+a physical camera behind the ball looking downrange with +z up would put world
+−y — the projector's (right, down, forward) basis satisfies right × down =
+−forward. That convention is deliberate: with +y on the image right, a positive
+face angle is an open face and a positive club path is in-to-out for a
+right-handed golfer. The cost is that a right-handed club loaded unchanged
+renders as its own mirror image. So the correct statement is **source
+right-handed; mirrored at load into the left-handed world frame (y = image
+right)**, and the `handedness` field on the source registration and in the asset
+manifest is the load-time reflection flag rather than a claim about the CAD.
+Nothing about the mirroring, the frame, or any measured result above changes;
+only the label does. The frame itself is now pinned by
+`tests/test_clubpose_camera_center.py::TestWorldFrameHandedness`.
 
 The full 21-shot replay then used exactly the previous alignment thresholds,
 support/residual gates, ±12 px search, camera, range, and pre-registered checks.

@@ -103,6 +103,11 @@ def import_local_stl(
         "download_format": "binary_stl_maintainer_local",
         "redistribution": "prohibited; local research use only",
         "normalization": _NORMALIZATION_VERSION,
+        # Source right-handed; mirrored at load into the left-handed world
+        # frame (y = image right). "handedness" is the load-time reflection
+        # flag carried from the source registration, NOT a claim about the CAD;
+        # "load_handedness" is the state after the reflection. See
+        # `mesh.mirror_to_right_handed`.
         "handedness": normalized.handedness,
         "load_handedness": "right",
         "handedness_transform": "mirror_local_z_reverse_winding",

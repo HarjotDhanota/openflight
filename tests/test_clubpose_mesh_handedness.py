@@ -1,4 +1,14 @@
-"""The normalized 690CB cache is mirrored to a physical right-handed head at load."""
+"""A cache flagged for reflection is mirrored into the world frame at load.
+
+The 690CB source is a right-handed club. It is mirrored because this repo's
+world frame is left-handed as an imaging frame -- `_project` puts world +y on
+the image right, where a physical camera would put world -y -- so a right-handed
+club loaded unchanged renders as its own mirror image. The ``handedness`` flag
+therefore means "reflect this at load", not "this CAD is a left-handed club";
+``_left_handed_box`` below is named for the flag it carries. See
+`tests/test_clubpose_camera_center.py::TestWorldFrameHandedness` for the frame
+itself.
+"""
 
 from __future__ import annotations
 

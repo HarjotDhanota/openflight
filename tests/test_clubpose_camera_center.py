@@ -135,3 +135,57 @@ def test_moving_the_camera_moves_the_geometry_and_nothing_else_has_to_change():
     # The same pixel on the two cameras is a different world point.
     other = camera.center_world + _ray_world(ball_uv, camera) * 1500.0
     assert float(np.linalg.norm(point - other)) > 50.0
+
+
+class TestWorldFrameHandedness:
+    """The world frame is LEFT-handed as an imaging frame, on purpose.
+
+    World +x is downrange and +z is up, and `_project` puts world +y on the
+    image RIGHT. A physical camera cannot do that. Its basis (right, down,
+    forward) is right-handed, so right = down x forward = (-z) x (+x) = -y: a
+    real camera behind the ball looking downrange with +z up sees world +y on
+    the image LEFT. This projector's basis satisfies right x down = -forward.
+
+    The convention is chosen for the golfer, not the optics: with +y on the
+    image right, a positive face angle is an OPEN face and a positive club path
+    is IN-TO-OUT for a right-handed golfer, which is how every launch monitor
+    reports them and how `angles.delivered_angles` computes them.
+
+    The cost is that a physically right-handed club mesh, loaded unchanged into
+    this frame, renders as its own mirror image. That -- not any defect in the
+    690CB STL -- is why `mesh.mirror_to_right_handed` flips local z at load. The
+    source is a right-handed club; the frame it is being loaded into is the
+    left-handed thing. See `tests/test_clubpose_mesh_handedness.py`.
+
+    Changing any of this silently flips the sign of every reported face angle
+    and club path, so it is pinned here rather than left to a comment.
+    """
+
+    def test_world_plus_y_lands_to_the_image_right(self):
+        camera = measured_camera()
+        uv, front = _project(
+            np.array([[0.0, 0.0, 0.0], [0.0, 100.0, 0.0], [0.0, -100.0, 0.0]]), camera
+        )
+
+        assert bool(np.all(front))
+        origin_x, plus_y_x, minus_y_x = uv[0, 0], uv[1, 0], uv[2, 0]
+        assert plus_y_x > origin_x, "world +y must project to the image right"
+        assert minus_y_x < origin_x
+        # Purely lateral motion does not move the point up or down the image.
+        np.testing.assert_allclose(uv[:, 1], uv[0, 1], atol=1e-9)
+
+    def test_world_plus_z_lands_higher_up_the_image(self):
+        """Row indices grow downward, so 'up' is a SMALLER pixel y."""
+        camera = measured_camera()
+        uv, front = _project(np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 100.0]]), camera)
+
+        assert bool(np.all(front))
+        assert uv[1, 1] < uv[0, 1]
+
+    def test_the_image_basis_is_left_handed(self):
+        """right x down = -forward. A physical camera gives +forward."""
+        camera = measured_camera()
+        right, down, forward = camera.rotation_world_to_camera
+
+        np.testing.assert_allclose(np.cross(right, down), -forward, atol=1e-12)
+        assert float(np.cross(right, down) @ forward) < 0.0

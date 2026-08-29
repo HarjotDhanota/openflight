@@ -18,7 +18,17 @@ import numpy as np
 
 @dataclass(frozen=True)
 class MeshSource:
-    """Pinned acquisition identity and physical handedness for one mesh source."""
+    """Pinned acquisition identity and load-time chirality for one mesh source.
+
+    ``handedness`` does NOT record the club the CAD file depicts. It records the
+    source geometry's chirality RELATIVE TO this repo's world frame, which is
+    left-handed as an imaging frame: `projection._project` puts world +y on the
+    image right, where a physical camera looking downrange with +z up would put
+    world -y. See `tests/test_clubpose_camera_center.py`. A physically
+    right-handed club loaded unchanged into that frame therefore renders as its
+    own mirror image, so ``"left"`` here means "reflect this at load", not "this
+    is a left-handed club".
+    """
 
     club: str
     uid: str
@@ -48,6 +58,9 @@ MESH_SOURCES = {
         license_url=("https://help.grabcad.com/article/246-how-can-models-be-used-and-shared"),
         downloadable=False,
         published_triangles=26_238,
+        # Source right-handed; mirrored at load into the left-handed world frame
+        # (y = image right). The value is the load-time reflection flag, not a
+        # claim about the CAD -- see `MeshSource` and `mirror_to_right_handed`.
         handedness="left",
         source_kind="maintainer_local_binary_stl",
         expected_source_sha256=("f35936799295e6ce344279e557f0265ccbb8acef69c4508daff80d219d03cb85"),
@@ -742,7 +755,16 @@ def rasterize_projected_triangles(
 
 
 def mirror_to_right_handed(mesh: TriangleMesh) -> TriangleMesh:
-    """Mirror a left-handed local frame through z and restore outward winding."""
+    """Reflect a mesh through local z into the world frame, restoring winding.
+
+    The 690CB source is a RIGHT-handed club. It is mirrored because the frame it
+    is being loaded into is the left-handed one: world +y projects to the image
+    right, which is the mirror of what a physical camera behind the ball would
+    see. Loading a right-handed club unchanged would render a left-handed club,
+    so local z is flipped and triangle winding reversed to undo the frame's own
+    reflection. ``handedness == "left"`` is the flag for "needs this", and the
+    result is labelled ``"right"`` meaning "now agrees with the world frame".
+    """
     if mesh.handedness == "right":
         return mesh
     if mesh.handedness != "left":
@@ -782,7 +804,12 @@ def save_normalized_mesh(path: Path | str, mesh: TriangleMesh, metadata: dict[st
 
 @lru_cache(maxsize=8)
 def load_normalized_mesh(path: str) -> tuple[TriangleMesh, dict[str, Any], str]:
-    """Load a cache and apply its explicit left-to-right handedness transform."""
+    """Load a cache and apply its recorded reflection into the world frame.
+
+    A cache flagged ``"left"`` is a right-handed source that has not yet been
+    reflected into this repo's left-handed world frame; see
+    `mirror_to_right_handed`.
+    """
     payload = np.load(path, allow_pickle=False)
     metadata = json.loads(str(payload["metadata_json"]))
     source_uid = str(payload["source_uid"])

@@ -34,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hand-transcribed constants kept as the reference they must agree with.
 
 ### Fixed
+- **Club-mesh handedness, correctly labelled.** The 690CB source is a
+  right-handed club, as its file label says, and is mirrored at load into the
+  left-handed world frame (`y` = image right). The earlier note had this
+  backwards, recording the source as left-handed. The world frame is left-handed
+  as an imaging frame by deliberate choice — it makes a positive face angle open
+  and a positive club path in-to-out for a right-handed golfer — so a
+  right-handed club loaded unchanged renders as its own mirror image. Labels and
+  documentation only: the mirroring, the frame and every measured result are
+  unchanged, and the frame is now pinned by a regression test.
 - **Camera position is part of the camera model.** `CameraPreset` carries its
   own optical centre, derived from the measured 203.2 mm lens height and 1581 mm
   camera-to-ball range, and projection and backprojection both use it. The
