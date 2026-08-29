@@ -418,8 +418,25 @@ def _plots(clean: list[dict[str, Any]], outliers: list[dict[str, Any]], out: Pat
             suffix_values.append(float(np.median(values)))
             labels.append(club)
         axis.plot(labels, suffix_values, marker="o", label=f"k_v={k_v}")
-    for low, high, club in ((25, 33, "7-iron"), (33, 41, "9-iron")):
-        axis.fill_between([club], [low], [high], color="0.85", zorder=0)
+    for index, (club, limits) in enumerate(SANITY.items()):
+        low, high = limits["dynamic_loft_deg"]
+        axis.bar(
+            index,
+            high - low,
+            bottom=low,
+            width=0.55,
+            color="0.87",
+            zorder=0,
+            label="plausible band" if index == 0 else None,
+        )
+        axis.annotate(
+            f"{club} {low:.0f}-{high:.0f}",
+            (index, high),
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            color="0.35",
+        )
     axis.set_ylabel("median dynamic loft (deg)")
     axis.set_title("Coefficient sensitivity - shaded = plausible band")
     axis.grid(alpha=0.25)
