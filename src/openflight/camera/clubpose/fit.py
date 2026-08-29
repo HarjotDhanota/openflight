@@ -46,12 +46,14 @@ import numpy as np
 
 from openflight.camera.clubpose.mesh import rasterize_projected_triangles
 from openflight.camera.clubpose.projection import (
-    CAMERA_CENTER_WORLD,
+    CAMERA_BALL_RANGE_MM,
+    CAMERA_HEIGHT_MM,
     FACE_NORMAL,
     CameraPreset,
     _face_axes,
     _project,
     _ray_world,
+    camera_center_world,
 )
 
 # Measured configuration of the shipped camera. NOT the A0 preset.
@@ -59,8 +61,9 @@ LENS_MM = 2.8
 PITCH_UM = 3.0
 SUBSAMPLE = 2
 FOCAL_PX = LENS_MM / (PITCH_UM * SUBSAMPLE * 1e-3)  # 466.7
-# Tape chain, not a ball measurement: see the module docstring.
-CAMERA_BALL_RANGE_MM = 1581.0
+# The tape chain lives in `projection.py`, which also derives the camera centre
+# from it, so the fitter and the projector cannot drift apart. Re-exported here
+# because this module's docstring and its callers name it.
 
 
 def measured_camera(width: int = 320, height: int = 200) -> CameraPreset:
@@ -80,6 +83,9 @@ def measured_camera(width: int = 320, height: int = 200) -> CameraPreset:
         orientation="rot180",
         gate_b1_passed=False,
         physical_status="measured_from_real_capture",
+        center_world_mm=tuple(
+            float(v) for v in camera_center_world(CAMERA_HEIGHT_MM, CAMERA_BALL_RANGE_MM)
+        ),
     )
 
 
@@ -154,7 +160,7 @@ def fit_frame(
 
     def point_at(range_mm: float) -> np.ndarray:
         # Range is from the CAMERA, not the world origin at the impact point.
-        return CAMERA_CENTER_WORLD + ray * float(range_mm)
+        return camera.center_world + ray * float(range_mm)
 
     best = (0.0, None, None, None, 0)
     for range_mm in range_grid_mm:
@@ -263,7 +269,7 @@ def fit_frame_6dof(
     ray = _ray_world(np.array([xs.mean(), ys.mean()], dtype=float), camera)
 
     def score(rng, yaw, pitch, roll):
-        m = render_mask_6dof(mesh, CAMERA_CENTER_WORLD + ray * rng, yaw, pitch, roll, camera)
+        m = render_mask_6dof(mesh, camera.center_world + ray * rng, yaw, pitch, roll, camera)
         return (0.0, None) if m is None else (iou(m, observed), m)
 
     best = (0.0, None)
@@ -346,7 +352,7 @@ def fit_sequence(
                 return -1.0
             if abs(roll) > ROLL_BOUND_DEG:
                 return -1.0
-            m = render_mask_6dof(mesh, CAMERA_CENTER_WORLD + ray * rng, yaw, pitch, roll, camera)
+            m = render_mask_6dof(mesh, camera.center_world + ray * rng, yaw, pitch, roll, camera)
             if m is None:
                 return -1.0
             value = iou(m, observed)
@@ -388,7 +394,7 @@ def fit_sequence(
             if not improved:
                 step = [x / 2.0 for x in step]
 
-        m = render_mask_6dof(mesh, CAMERA_CENTER_WORLD + ray * rng, yaw, pitch, roll, camera)
+        m = render_mask_6dof(mesh, camera.center_world + ray * rng, yaw, pitch, roll, camera)
         prev = {
             "range_mm": rng,
             "yaw_deg": yaw,

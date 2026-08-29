@@ -25,7 +25,6 @@ from openflight.camera.clubpose.angles import (
 from openflight.camera.clubpose.contact_edges import _principal_line
 from openflight.camera.clubpose.fit import render_mask_6dof
 from openflight.camera.clubpose.projection import (
-    CAMERA_CENTER_WORLD,
     CameraPreset,
     _project,
     _ray_world,
@@ -140,7 +139,7 @@ def _physical_pose(
 
 def _center_world(ball: ReferenceBall, camera: CameraPreset, range_mm: float) -> np.ndarray:
     ray = _ray_world(np.asarray([ball.x, ball.y], dtype=float), camera)
-    return CAMERA_CENTER_WORLD + ray * float(range_mm)
+    return camera.center_world + ray * float(range_mm)
 
 
 def _axial_angle(vector_xy: np.ndarray) -> float:

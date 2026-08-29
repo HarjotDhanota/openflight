@@ -3,13 +3,27 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import lru_cache
 
 import cv2
 import numpy as np
 
+# Measured rig geometry (tape chain, 2026-08-26). The OV9281 lens sits 203.2 mm
+# above the floor -- the kiosk log's `mount_height_m` -- and 1581 mm from the
+# ball centre, which is the world origin. Both numbers are measured, not
+# nominal, and they are what `measured_camera()` in `fit.py` is built from.
+CAMERA_HEIGHT_MM = 203.2
+CAMERA_BALL_RANGE_MM = 1581.0
+
+# Superseded Phase-1b values, kept for provenance and for the radar.
+# `NOMINAL_RANGE_MM` is the radar's own measured slant tee range and still
+# anchors `RADAR_CENTER_WORLD`; it is NOT the camera-to-ball range.
+# `PHASE1B_CAMERA_HEIGHT_MM` is the lens height the frozen Phase-1b solver
+# assumed before the mount was taped, and nothing derives geometry from it.
 NOMINAL_RANGE_MM = 1_575.0
-CAMERA_HEIGHT_MM = 209.55
+PHASE1B_CAMERA_HEIGHT_MM = 209.55
+
 RADAR_STATIC_BIAS_MM = 66.0069821
 BALL_RADIUS_MM = 42.67 / 2.0
 FRAME_TO_IMPACT_S = 1.0e-3
@@ -23,16 +37,63 @@ AMBIGUITY_RATIO_MIN = 1.10
 MODEL_VERSION = "phase1b-v1-frozen"
 RADAR_HEIGHT_MM = 152.4
 
-_CAMERA_X_MM = math.sqrt(NOMINAL_RANGE_MM**2 - CAMERA_HEIGHT_MM**2)
-CAMERA_CENTER_WORLD = np.array([-_CAMERA_X_MM, 0.0, CAMERA_HEIGHT_MM])
 TARGET_WORLD = np.zeros(3)
 WORLD_RIGHT = np.array([0.0, 1.0, 0.0])
 WORLD_UP = np.array([0.0, 0.0, 1.0])
 FACE_NORMAL = np.array([1.0, 0.0, 0.0])
-_FORWARD = (TARGET_WORLD - CAMERA_CENTER_WORLD) / np.linalg.norm(TARGET_WORLD - CAMERA_CENTER_WORLD)
-_DOWN = np.cross(WORLD_RIGHT, _FORWARD)
-_DOWN /= np.linalg.norm(_DOWN)
-_R_WC = np.stack([WORLD_RIGHT, _DOWN, _FORWARD])
+
+
+def camera_center_world(
+    height_mm: float = CAMERA_HEIGHT_MM, range_mm: float = CAMERA_BALL_RANGE_MM
+) -> np.ndarray:
+    """Camera centre for a lens ``height_mm`` up and ``range_mm`` from the origin.
+
+    The camera sits behind the ball on the -x side, level with it in y, so the
+    slant range and the height fix the remaining coordinate exactly.
+    """
+    height = float(height_mm)
+    slant = float(range_mm)
+    if not math.isfinite(height) or not math.isfinite(slant):
+        raise ValueError("camera height and range must be finite")
+    if height < 0.0 or slant <= 0.0 or height >= slant:
+        raise ValueError(
+            f"camera height {height} mm must sit inside range {slant} mm and above the floor"
+        )
+    return np.array([-math.sqrt(slant**2 - height**2), 0.0, height])
+
+
+@lru_cache(maxsize=16)
+def _rotation_world_to_camera(center_world_mm: tuple[float, float, float]) -> np.ndarray:
+    """World-to-camera rotation for a centre aimed at the world origin.
+
+    Rows are the camera's right, down and forward axes in world coordinates.
+    The result is cached and read-only: it is rebuilt for every projected point
+    otherwise, and callers must not be able to corrupt a shared basis.
+    """
+    center = np.asarray(center_world_mm, dtype=float)
+    forward = TARGET_WORLD - center
+    norm = float(np.linalg.norm(forward))
+    if norm < 1e-9:
+        raise ValueError("camera centre coincides with the world origin")
+    forward = forward / norm
+    down = np.cross(WORLD_RIGHT, forward)
+    down_norm = float(np.linalg.norm(down))
+    if down_norm < 1e-9:
+        raise ValueError("camera boresight is parallel to world right")
+    rotation = np.stack([WORLD_RIGHT, down / down_norm, forward])
+    rotation.flags.writeable = False
+    return rotation
+
+
+CAMERA_CENTER_WORLD = camera_center_world()
+DEFAULT_CENTER_WORLD_MM = (
+    float(CAMERA_CENTER_WORLD[0]),
+    float(CAMERA_CENTER_WORLD[1]),
+    float(CAMERA_CENTER_WORLD[2]),
+)
+# The Phase-1b centre, superseded by the tape chain above. Kept so a frozen
+# result can be reproduced, not because anything should build geometry on it.
+PHASE1B_CAMERA_CENTER_WORLD = camera_center_world(PHASE1B_CAMERA_HEIGHT_MM, NOMINAL_RANGE_MM)
 RADAR_CENTER_WORLD = np.array(
     [
         -math.sqrt(NOMINAL_RANGE_MM**2 - RADAR_HEIGHT_MM**2),
@@ -60,10 +121,24 @@ class CameraPreset:
     orientation: str
     gate_b1_passed: bool
     physical_status: str
+    # Where this camera is. Part of the camera model rather than a module
+    # constant, so a preset and the geometry it is projected through cannot
+    # disagree. Stored as a tuple to keep the dataclass hashable and frozen.
+    center_world_mm: tuple[float, float, float] = field(default=DEFAULT_CENTER_WORLD_MM)
 
     @property
     def horizontal_fov_deg(self) -> float:
         return math.degrees(2.0 * math.atan(self.width / (2.0 * self.fx)))
+
+    @property
+    def center_world(self) -> np.ndarray:
+        """This camera's optical centre in world millimetres."""
+        return np.asarray(self.center_world_mm, dtype=float)
+
+    @property
+    def rotation_world_to_camera(self) -> np.ndarray:
+        """Read-only world-to-camera rotation implied by this camera's centre."""
+        return _rotation_world_to_camera(tuple(float(v) for v in self.center_world_mm))
 
 
 @dataclass(frozen=True)
@@ -153,7 +228,7 @@ def camera_presets() -> dict[str, CameraPreset]:
 
 def _project(points_world: np.ndarray, camera: CameraPreset) -> tuple[np.ndarray, np.ndarray]:
     points = np.asarray(points_world, dtype=float).reshape(-1, 3)
-    cam = (points - CAMERA_CENTER_WORLD) @ _R_WC.T
+    cam = (points - camera.center_world) @ camera.rotation_world_to_camera.T
     in_front = cam[:, 2] > 1e-9
     safe_z = np.where(in_front, cam[:, 2], 1.0)
     uv = np.column_stack(
@@ -167,7 +242,7 @@ def _project(points_world: np.ndarray, camera: CameraPreset) -> tuple[np.ndarray
 
 def _ray_world(uv: np.ndarray, camera: CameraPreset) -> np.ndarray:
     xy = np.array([(uv[0] - camera.cx) / camera.fx, (uv[1] - camera.cy) / camera.fy, 1.0])
-    ray = xy @ _R_WC
+    ray = xy @ camera.rotation_world_to_camera
     return ray / np.linalg.norm(ray)
 
 
@@ -175,17 +250,24 @@ def _backproject_range(
     uv: np.ndarray,
     range_mm: float,
     camera: CameraPreset,
-    range_origin_world: np.ndarray = CAMERA_CENTER_WORLD,
+    range_origin_world: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Intersect a camera ray with a range sphere around the supplied sensor."""
+    """Intersect a camera ray with a range sphere around the supplied sensor.
+
+    ``range_origin_world`` defaults to the camera's own centre, so a camera-side
+    range needs no second geometry argument.
+    """
     ray = _ray_world(uv, camera)
-    offset = CAMERA_CENTER_WORLD - np.asarray(range_origin_world, dtype=float)
+    center = camera.center_world
+    if range_origin_world is None:
+        range_origin_world = center
+    offset = center - np.asarray(range_origin_world, dtype=float)
     projection = float(offset @ ray)
     discriminant = projection**2 - float(offset @ offset) + float(range_mm) ** 2
     if discriminant < 0.0:
         return np.full(3, np.nan)
     distance = -projection + math.sqrt(discriminant)
-    return CAMERA_CENTER_WORLD + ray * distance
+    return center + ray * distance
 
 
 def _range_mm(
