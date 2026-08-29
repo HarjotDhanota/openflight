@@ -35,7 +35,7 @@ import numpy as np
 from scipy.optimize import brentq
 
 from .fit import triad
-from .mesh import TriangleMesh, default_mesh_asset_root, detect_striking_face, load_normalized_mesh
+from .mesh import TriangleMesh, detect_striking_face, load_club_mesh, mesh_asset_path
 
 # Hand-transcribed from the measured striking-face patch. Kept frozen: they are
 # what a re-derivation is checked against, not merely a default.
@@ -52,8 +52,6 @@ REFERENCE_HEEL_TOE_LOCAL /= np.linalg.norm(REFERENCE_HEEL_TOE_LOCAL)
 # Wider than any plausible transcription or detector difference, tight enough
 # that a differently oriented mesh cannot pass.
 FACE_AXES_AGREEMENT_LIMIT_DEG = 3.0
-
-MESH_ASSET_NAME = "poc_7iron.npz"
 
 # Mirrored CAD hosel/ferrule direction. It is not the shaft reference used by fits.
 MESH_HOSEL_AXIS_LOCAL = np.array([-0.245, 0.295, 0.924], dtype=float)
@@ -94,13 +92,22 @@ def _rotation(axis: np.ndarray, angle_rad: float) -> np.ndarray:
     return cosine * np.eye(3) + (1.0 - cosine) * np.outer(axis, axis) + sine * cross
 
 
+def _checked_handedness(handedness: str) -> str:
+    if handedness not in {"right", "left"}:
+        raise ValueError(f"handedness must be 'right' or 'left', got {handedness!r}")
+    return handedness
+
+
 def _grounded_basis_from(
     face_normal_local: np.ndarray,
     heel_toe_local: np.ndarray,
     dynamic_loft_deg: float,
     face_angle_deg: float,
 ) -> np.ndarray:
-    """Local-to-world rotation putting a head with these axes on the ground."""
+    """Local-to-world rotation putting a right-handed head on the ground.
+
+    The heel goes toward world -y, the side a right-handed golfer stands on.
+    """
     loft = math.radians(float(dynamic_loft_deg))
     face_angle = math.radians(float(face_angle_deg))
     face_world = np.array(
@@ -209,17 +216,18 @@ def face_axes_from_mesh(
 _MESH_AXES_CACHE: dict[int, tuple[TriangleMesh, ClubAxes]] = {}
 
 
-@lru_cache(maxsize=1)
-def _default_club_axes() -> ClubAxes:
+@lru_cache(maxsize=2)
+def _default_club_axes(handedness: str = "right") -> ClubAxes:
     """Axes from the local mesh cache, or the reference constants without it."""
-    path = default_mesh_asset_root() / MESH_ASSET_NAME
-    if not path.exists():
+    if not mesh_asset_path(handedness=handedness).exists():
         return REFERENCE_CLUB_AXES
-    mesh, _metadata, _digest = load_normalized_mesh(str(path))
+    mesh, _metadata, _digest = load_club_mesh(handedness=handedness)
     return _build_axes(*face_axes_from_mesh(mesh), "mesh")
 
 
-def club_axes(mesh: TriangleMesh | None = None, *, strict: bool = True) -> ClubAxes:
+def club_axes(
+    mesh: TriangleMesh | None = None, *, strict: bool = True, handedness: str = "right"
+) -> ClubAxes:
     """The axes to measure delivered angles against, from a mesh where possible.
 
     Args:
@@ -233,13 +241,17 @@ def club_axes(mesh: TriangleMesh | None = None, *, strict: bool = True) -> ClubA
             Pass ``strict=False`` to fall back to them instead, for callers that
             must keep working against synthetic or stand-in meshes; the returned
             ``source`` says which happened.
+        handedness: Which club to read the local cache for when ``mesh`` is
+            omitted. Right-handed by default; ``"left"`` is the explicit case
+            and needs the separately registered left-handed asset.
 
     Raises:
         RuntimeError: If ``strict`` and the mesh's axes fail verification.
-        ValueError: If ``strict`` and the mesh has no clubface-sized patch.
+        ValueError: If ``strict`` and the mesh has no clubface-sized patch, or
+            if ``handedness`` is neither "right" nor "left".
     """
     if mesh is None:
-        return _default_club_axes()
+        return _default_club_axes(_checked_handedness(handedness))
     cached = _MESH_AXES_CACHE.get(id(mesh))
     if cached is not None and cached[0] is mesh:
         return cached[1]
@@ -337,16 +349,32 @@ def square_pose(
     *,
     seed_pose: tuple[float, float, float] | None = None,
     axes: ClubAxes | None = None,
+    handedness: str = "right",
 ) -> tuple[float, float, float]:
-    """Build the unique grounded right-handed pose for the requested delivery.
+    """Build the unique grounded pose for the requested delivery.
 
-    The default has a horizontal sole and heel toward world -y. Non-static lie
-    rotates that grounded head only enough for the virtual image-shaft reference
-    to reach the requested elevation. ``seed_pose`` remains API-compatible but
-    cannot select the old rolled branch. ``axes`` defaults to the frozen
-    reference constants.
+    Right-handed by default: a horizontal sole and the heel toward world -y,
+    the side a right-handed golfer stands on. Non-static lie rotates that
+    grounded head only enough for the virtual image-shaft reference to reach the
+    requested elevation. ``seed_pose`` remains API-compatible but cannot select
+    the old rolled branch. ``axes`` defaults to the frozen reference constants.
+
+    ``handedness="left"`` is refused rather than guessed. A left-handed delivery
+    needs the left-handed model: its heel goes toward +y, and the virtual shaft
+    has to be grounded off ITS axes, not off a mirrored copy of the right-handed
+    ones. Mirroring the right-handed axes was tried and does not even solve --
+    no rotation about the face normal reaches the catalogue lie -- so shipping a
+    branch here would be shipping arithmetic nothing has rendered. Import the
+    left-handed 690CB (`download_club_mesh.py --local-iron-left`) and the branch
+    can be built and checked against a real render.
     """
     del seed_pose
+    if _checked_handedness(handedness) == "left":
+        raise NotImplementedError(
+            "left-handed square_pose needs the left-handed 690CB asset, which has not "
+            "been imported; see MESH_SOURCES['poc_7iron_left'] and "
+            "scripts/analysis/download_club_mesh.py --local-iron-left"
+        )
     resolved = _resolve(axes)
     grounded = _grounded_basis(float(dynamic_loft_deg), float(face_angle_deg), resolved)
     face_world = grounded @ resolved.face_normal_local

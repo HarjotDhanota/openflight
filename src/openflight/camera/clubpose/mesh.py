@@ -18,16 +18,24 @@ import numpy as np
 
 @dataclass(frozen=True)
 class MeshSource:
-    """Pinned acquisition identity and load-time chirality for one mesh source.
+    """Pinned acquisition identity and frame handling for one mesh source.
 
-    ``handedness`` does NOT record the club the CAD file depicts. It records the
-    source geometry's chirality RELATIVE TO this repo's world frame, which is
-    left-handed as an imaging frame: `projection._project` puts world +y on the
-    image right, where a physical camera looking downrange with +z up would put
-    world -y. See `tests/test_clubpose_camera_center.py`. A physically
-    right-handed club loaded unchanged into that frame therefore renders as its
-    own mirror image, so ``"left"`` here means "reflect this at load", not "this
-    is a left-handed club".
+    Two facts that used to share one ``handedness`` string, now separate because
+    they are independent and the old single field was named for the one it was
+    NOT carrying:
+
+    ``club_handedness``
+        Which club the CAD file depicts: ``"right"`` for a right-handed club,
+        ``"left"`` for a left-handed one. Right-handed is the default; a
+        left-handed model is registered separately and asked for explicitly.
+
+    ``reflect_into_world_frame``
+        Whether the geometry must be reflected when it is loaded. True for every
+        physical model, of either handedness, because this repo's world frame is
+        left-handed as an imaging frame: `projection._project` puts world +y on
+        the image right, where a physical camera looking downrange with +z up
+        would put world -y (see `tests/test_clubpose_camera_center.py`). Any real
+        club loaded unchanged into that frame renders as its own mirror image.
     """
 
     club: str
@@ -39,7 +47,8 @@ class MeshSource:
     license_url: str
     downloadable: bool
     published_triangles: int
-    handedness: str = "unknown"
+    club_handedness: str = "right"
+    reflect_into_world_frame: bool = True
     source_kind: str = "maintainer_local_binary_stl"
     expected_source_sha256: str | None = None
     expected_asset_sha256: str | None = None
@@ -58,32 +67,61 @@ MESH_SOURCES = {
         license_url=("https://help.grabcad.com/article/246-how-can-models-be-used-and-shared"),
         downloadable=False,
         published_triangles=26_238,
-        # Source right-handed; mirrored at load into the left-handed world frame
-        # (y = image right). The value is the load-time reflection flag, not a
-        # claim about the CAD -- see `MeshSource` and `mirror_to_right_handed`.
-        handedness="left",
+        club_handedness="right",
+        reflect_into_world_frame=True,
         source_kind="maintainer_local_binary_stl",
         expected_source_sha256=("f35936799295e6ce344279e557f0265ccbb8acef69c4508daff80d219d03cb85"),
+    ),
+    # The same GrabCAD listing ships a left-handed 690CB. It is registered so a
+    # left-handed golfer can be fitted against a left-handed model rather than a
+    # mirrored right-handed one, but no maintainer copy has been imported yet:
+    # `expected_source_sha256` stays None until one is, and
+    # `download_club_mesh.py --local-iron-left` refuses to import an unpinned
+    # source without an explicit hash. Nothing here fabricates the geometry.
+    "poc_7iron_left": MeshSource(
+        club="poc_7iron_left",
+        uid="grabcad:titleist-7-iron-golf-club-1:690cb-left-handed",
+        name="Titleist 690CB 7-iron golf club, left-handed",
+        author="GrabCAD Community contributor",
+        page_url="https://grabcad.com/library/titleist-7-iron-golf-club-1",
+        license_spdx="LicenseRef-GrabCAD-Local-Research-Only",
+        license_url=("https://help.grabcad.com/article/246-how-can-models-be-used-and-shared"),
+        downloadable=False,
+        published_triangles=26_238,
+        club_handedness="left",
+        reflect_into_world_frame=True,
+        source_kind="maintainer_local_binary_stl",
+        expected_source_sha256=None,
     ),
 }
 
 ACTIVE_MESH_SOURCES = {
     club: source for club, source in MESH_SOURCES.items() if source.status == "active"
 }
+# A left-handed 690CB is the same club, so it carries the same reference box.
 CATEGORY_DIMENSIONS_MM = {
     "poc_7iron": {"width": 80.0, "height": 50.0, "depth": 38.0},
+    "poc_7iron_left": {"width": 80.0, "height": 50.0, "depth": 38.0},
 }
 
 
 @dataclass(frozen=True)
 class TriangleMesh:
-    """Triangle mesh in club-local coordinates: +x depth, +y width, +z height."""
+    """Triangle mesh in club-local coordinates: +x depth, +y width, +z height.
+
+    ``club_handedness`` is which club this is, defaulting to right-handed.
+    ``reflect_into_world_frame`` is whether this geometry STILL needs reflecting
+    into the world frame -- it is cleared once `reflect_mesh_into_world_frame`
+    has run. It defaults to False because geometry constructed directly in code
+    is authored in the world frame already; only imported CAD arrives needing it.
+    """
 
     vertices_local_mm: np.ndarray
     faces: np.ndarray
     source_uid: str
     source_sha256: str
-    handedness: str = "right"
+    club_handedness: str = "right"
+    reflect_into_world_frame: bool = False
 
     def __post_init__(self) -> None:
         vertices = np.asarray(self.vertices_local_mm, dtype=float)
@@ -96,8 +134,10 @@ class TriangleMesh:
             raise ValueError("mesh face index is outside the vertex array")
         if not np.all(np.isfinite(vertices)):
             raise ValueError("mesh vertices must be finite")
-        if self.handedness not in {"left", "right", "unknown"}:
-            raise ValueError("mesh handedness must be left, right, or unknown")
+        if self.club_handedness not in {"left", "right", "unknown"}:
+            raise ValueError("club_handedness must be left, right, or unknown")
+        if not isinstance(self.reflect_into_world_frame, bool):
+            raise ValueError("reflect_into_world_frame must be a bool")
         object.__setattr__(self, "vertices_local_mm", vertices)
         object.__setattr__(self, "faces", faces)
 
@@ -254,7 +294,12 @@ def load_gltf_archive(
     if not vertices or not faces:
         raise ValueError("glTF scene contains no triangle geometry")
     return TriangleMesh(
-        np.vstack(vertices), np.vstack(faces), source_uid, source_sha256, handedness="unknown"
+        np.vstack(vertices),
+        np.vstack(faces),
+        source_uid,
+        source_sha256,
+        club_handedness="unknown",
+        reflect_into_world_frame=True,
     )
 
 
@@ -263,9 +308,15 @@ def load_binary_stl(
     *,
     source_uid: str,
     expected_sha256: str | None,
-    handedness: str = "unknown",
+    club_handedness: str = "right",
+    reflect_into_world_frame: bool = True,
 ) -> TriangleMesh:
-    """Decode a binary STL after an optional fail-closed source-hash check."""
+    """Decode a binary STL after an optional fail-closed source-hash check.
+
+    Imported CAD defaults to a right-handed club that still needs reflecting
+    into the world frame, which is what every physical model registered so far
+    is.
+    """
     payload = Path(path).read_bytes()
     digest = hashlib.sha256(payload).hexdigest()
     if expected_sha256 is not None and digest.lower() != expected_sha256.lower():
@@ -287,7 +338,14 @@ def load_binary_stl(
     records = np.frombuffer(payload, dtype=record_dtype, count=triangle_count, offset=84)
     vertices = records["vertices"].reshape(-1, 3).astype(float)
     faces = np.arange(len(vertices), dtype=np.int32).reshape(-1, 3)
-    return TriangleMesh(vertices, faces, source_uid, digest, handedness=handedness)
+    return TriangleMesh(
+        vertices,
+        faces,
+        source_uid,
+        digest,
+        club_handedness=club_handedness,
+        reflect_into_world_frame=reflect_into_world_frame,
+    )
 
 
 def _connected_face_components(vertices: np.ndarray, faces: np.ndarray) -> list[np.ndarray]:
@@ -754,47 +812,65 @@ def rasterize_projected_triangles(
     return mask
 
 
-def mirror_to_right_handed(mesh: TriangleMesh) -> TriangleMesh:
+def reflect_mesh_into_world_frame(mesh: TriangleMesh) -> TriangleMesh:
     """Reflect a mesh through local z into the world frame, restoring winding.
 
-    The 690CB source is a RIGHT-handed club. It is mirrored because the frame it
-    is being loaded into is the left-handed one: world +y projects to the image
-    right, which is the mirror of what a physical camera behind the ball would
-    see. Loading a right-handed club unchanged would render a left-handed club,
+    This repo's world frame is left-handed as an imaging frame: world +y
+    projects to the image right, which is the mirror of what a physical camera
+    behind the ball would see. Any real club -- right-handed or left-handed --
+    loaded unchanged into that frame therefore renders as its own mirror image,
     so local z is flipped and triangle winding reversed to undo the frame's own
-    reflection. ``handedness == "left"`` is the flag for "needs this", and the
-    result is labelled ``"right"`` meaning "now agrees with the world frame".
+    reflection.
+
+    This does not change WHICH club the mesh is: ``club_handedness`` is carried
+    through untouched. It clears ``reflect_into_world_frame``, and is a no-op on
+    a mesh that is already in the world frame.
     """
-    if mesh.handedness == "right":
+    if not mesh.reflect_into_world_frame:
         return mesh
-    if mesh.handedness != "left":
-        raise ValueError("only an explicitly left-handed mesh may be mirrored")
     vertices = mesh.vertices_local_mm.copy()
     vertices[:, 2] *= -1.0
-    mirrored = TriangleMesh(
+    reflected = TriangleMesh(
         vertices,
         mesh.faces[:, [0, 2, 1]],
         mesh.source_uid,
         mesh.source_sha256,
-        handedness="right",
+        club_handedness=mesh.club_handedness,
+        reflect_into_world_frame=False,
     )
     # Re-detect after reflection rather than transforming stale plane metadata.
-    detect_face_plane(mirrored)
-    return mirrored
+    detect_face_plane(reflected)
+    return reflected
+
+
+# Bumped whenever the cache's own fields change meaning. v3 carried a single
+# `handedness` string in which "left" meant "reflect me"; v4 splits that into
+# `club_handedness` and `reflect_into_world_frame`. A v3 cache is migrated
+# explicitly on load, and an unrecognised version is refused rather than
+# guessed at -- a silently misread cache is a silently mirrored clubhead.
+MESH_CACHE_VERSION = 4
+_LEGACY_CACHE_MIGRATION = "v3_handedness_string"
 
 
 def save_normalized_mesh(path: Path | str, mesh: TriangleMesh, metadata: dict[str, Any]) -> str:
     """Write a deterministic local cache and return its content SHA-256."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    stored_metadata = {**metadata, "handedness": mesh.handedness}
+    stored_metadata = {
+        **metadata,
+        "cache_version": MESH_CACHE_VERSION,
+        "club_handedness": mesh.club_handedness,
+        "reflect_into_world_frame": mesh.reflect_into_world_frame,
+    }
     np.savez(
         path,
         vertices_local_mm=mesh.vertices_local_mm,
         faces=mesh.faces,
         source_uid=np.asarray(mesh.source_uid),
         source_sha256=np.asarray(mesh.source_sha256),
-        handedness=np.asarray(mesh.handedness),
+        cache_version=np.asarray(MESH_CACHE_VERSION),
+        club_handedness=np.asarray(mesh.club_handedness),
+        reflect_into_world_frame=np.asarray(mesh.reflect_into_world_frame),
         metadata_json=np.asarray(
             json.dumps(stored_metadata, sort_keys=True, separators=(",", ":"))
         ),
@@ -802,39 +878,73 @@ def save_normalized_mesh(path: Path | str, mesh: TriangleMesh, metadata: dict[st
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _cache_frame_fields(
+    payload, metadata: dict[str, Any], source_uid: str
+) -> tuple[str, bool, str]:
+    """Read club handedness and the pending-reflection flag out of a cache.
+
+    Returns the migration marker alongside them, empty for a current cache.
+    """
+    if "cache_version" in payload.files:
+        version = int(payload["cache_version"])
+        if version != MESH_CACHE_VERSION:
+            raise ValueError(
+                f"unsupported mesh cache version {version}: this build writes and reads "
+                f"version {MESH_CACHE_VERSION}. Re-import the asset with "
+                "scripts/analysis/download_club_mesh.py rather than loading it."
+            )
+        return str(payload["club_handedness"]), bool(payload["reflect_into_world_frame"]), ""
+
+    # v3 and earlier: one `handedness` string, where "left" meant "reflect me".
+    # The only asset ever written with it is the right-handed 690CB.
+    if "handedness" in payload.files:
+        legacy = str(payload["handedness"])
+    else:
+        legacy = str(metadata.get("handedness", "unknown"))
+        if source_uid == MESH_SOURCES["poc_7iron"].uid:
+            legacy = "left"
+    if legacy == "left":
+        return "right", True, _LEGACY_CACHE_MIGRATION
+    if legacy == "right":
+        return str(metadata.get("club_handedness", "right")), False, _LEGACY_CACHE_MIGRATION
+    return "unknown", False, _LEGACY_CACHE_MIGRATION
+
+
 @lru_cache(maxsize=8)
 def load_normalized_mesh(path: str) -> tuple[TriangleMesh, dict[str, Any], str]:
     """Load a cache and apply its recorded reflection into the world frame.
 
-    A cache flagged ``"left"`` is a right-handed source that has not yet been
-    reflected into this repo's left-handed world frame; see
-    `mirror_to_right_handed`.
+    A cache whose ``reflect_into_world_frame`` is set holds CAD that has not yet
+    been reflected into this repo's left-handed world frame; see
+    `reflect_mesh_into_world_frame`. Prefer `load_club_mesh`, which resolves the
+    asset by club and handedness instead of by path.
     """
     payload = np.load(path, allow_pickle=False)
     metadata = json.loads(str(payload["metadata_json"]))
     source_uid = str(payload["source_uid"])
-    if "handedness" in payload.files:
-        handedness = str(payload["handedness"])
-    else:
-        handedness = str(metadata.get("handedness", "unknown"))
-        if source_uid == MESH_SOURCES["poc_7iron"].uid:
-            handedness = "left"
+    club_handedness, pending, migrated_from = _cache_frame_fields(payload, metadata, source_uid)
     mesh = TriangleMesh(
         payload["vertices_local_mm"],
         payload["faces"],
         source_uid,
         str(payload["source_sha256"]),
-        handedness=handedness,
+        club_handedness=club_handedness,
+        reflect_into_world_frame=pending,
     )
-    if mesh.handedness == "left":
-        source_handedness = mesh.handedness
-        mesh = mirror_to_right_handed(mesh)
+    metadata = {
+        **metadata,
+        "cache_version": MESH_CACHE_VERSION,
+        "club_handedness": mesh.club_handedness,
+        "world_frame_reflected": pending,
+    }
+    if migrated_from:
+        metadata["cache_migrated_from"] = migrated_from
+    if pending:
+        mesh = reflect_mesh_into_world_frame(mesh)
         metadata = {
             **metadata,
-            "source_handedness": source_handedness,
-            "handedness": mesh.handedness,
-            "handedness_transform": "mirror_local_z_reverse_winding",
-            "face_detection_loaded_right_handed": face_detection_record(detect_face_plane(mesh)),
+            "world_frame_reflection_transform": "mirror_local_z_reverse_winding",
+            "face_detection_after_reflection": face_detection_record(detect_face_plane(mesh)),
         }
     return mesh, metadata, hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -842,3 +952,29 @@ def load_normalized_mesh(path: str) -> tuple[TriangleMesh, dict[str, Any], str]:
 def default_mesh_asset_root() -> Path:
     """Return the ignored local directory holding normalized mesh caches."""
     return Path(__file__).resolve().parent / "meshes" / "assets"
+
+
+def _checked_handedness(handedness: str) -> str:
+    if handedness not in {"right", "left"}:
+        raise ValueError(f"handedness must be 'right' or 'left', got {handedness!r}")
+    return handedness
+
+
+def mesh_asset_path(
+    club: str = "poc_7iron", *, handedness: str = "right", root: Path | None = None
+) -> Path:
+    """Where one club's normalized cache lives. Right-handed unless asked.
+
+    A right-handed golfer swings a right-handed club, so that is the default
+    everywhere; ``handedness="left"`` selects the separately registered
+    left-handed model rather than mirroring the right-handed one.
+    """
+    suffix = "" if _checked_handedness(handedness) == "right" else "_left"
+    return (root or default_mesh_asset_root()) / f"{club}{suffix}.npz"
+
+
+def load_club_mesh(
+    club: str = "poc_7iron", *, handedness: str = "right", root: Path | None = None
+) -> tuple[TriangleMesh, dict[str, Any], str]:
+    """Load one club's normalized cache by club and handedness, not by path."""
+    return load_normalized_mesh(str(mesh_asset_path(club, handedness=handedness, root=root)))

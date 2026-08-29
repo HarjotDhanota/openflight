@@ -2,10 +2,10 @@
 
 The 690CB source is a right-handed club. It is mirrored because this repo's
 world frame is left-handed as an imaging frame -- `_project` puts world +y on
-the image right, where a physical camera would put world -y -- so a right-handed
-club loaded unchanged renders as its own mirror image. The ``handedness`` flag
-therefore means "reflect this at load", not "this CAD is a left-handed club";
-``_left_handed_box`` below is named for the flag it carries. See
+the image right, where a physical camera would put world -y -- so any real club
+loaded unchanged renders as its own mirror image. That is what
+``reflect_into_world_frame`` records; ``club_handedness`` separately records
+which club the CAD depicts, and is untouched by the reflection. See
 `tests/test_clubpose_camera_center.py::TestWorldFrameHandedness` for the frame
 itself.
 """
@@ -24,7 +24,7 @@ from openflight.camera.clubpose.mesh import (
 )
 
 
-def _left_handed_box() -> TriangleMesh:
+def _unreflected_box() -> TriangleMesh:
     vertices = np.array(
         [[x, y, z] for x in (-5.0, 5.0) for y in (-40.0, 40.0) for z in (-20.0, 20.0)]
     )
@@ -45,31 +45,40 @@ def _left_handed_box() -> TriangleMesh:
         ],
         dtype=np.int32,
     )
-    return TriangleMesh(vertices, faces, "synthetic-left", "synthetic", handedness="left")
+    return TriangleMesh(
+        vertices,
+        faces,
+        "synthetic-right",
+        "synthetic",
+        club_handedness="right",
+        reflect_into_world_frame=True,
+    )
 
 
-def test_left_handed_cache_is_mirrored_and_rewound_at_load(tmp_path):
-    source = _left_handed_box()
-    path = tmp_path / "left_head.npz"
-    save_normalized_mesh(path, source, {"handedness": "left"})
+def test_unreflected_cache_is_mirrored_and_rewound_at_load(tmp_path):
+    source = _unreflected_box()
+    path = tmp_path / "head.npz"
+    save_normalized_mesh(path, source, {})
 
     loaded, metadata, _ = load_normalized_mesh(str(path.resolve()))
 
-    assert loaded.handedness == "right"
+    assert loaded.reflect_into_world_frame is False
     assert np.array_equal(loaded.vertices_local_mm[:, :2], source.vertices_local_mm[:, :2])
     assert np.array_equal(loaded.vertices_local_mm[:, 2], -source.vertices_local_mm[:, 2])
     assert np.array_equal(loaded.faces, source.faces[:, [0, 2, 1]])
-    assert metadata["source_handedness"] == "left"
-    assert metadata["handedness"] == "right"
-    assert metadata["handedness_transform"] == "mirror_local_z_reverse_winding"
-    assert metadata["face_detection_loaded_right_handed"]["triangle_count"] > 0
+    # Reflecting into the frame does not change which club it is.
+    assert loaded.club_handedness == "right"
+    assert metadata["club_handedness"] == "right"
+    assert metadata["world_frame_reflected"] is True
+    assert metadata["world_frame_reflection_transform"] == "mirror_local_z_reverse_winding"
+    assert metadata["face_detection_after_reflection"]["triangle_count"] > 0
 
 
-def test_loaded_right_handed_grounded_pose_puts_hosel_up_and_toward_golfer(tmp_path):
-    path = tmp_path / "left_head.npz"
-    save_normalized_mesh(path, _left_handed_box(), {"handedness": "left"})
+def test_loaded_grounded_pose_puts_hosel_up_and_toward_golfer(tmp_path):
+    path = tmp_path / "head.npz"
+    save_normalized_mesh(path, _unreflected_box(), {})
     loaded, _, _ = load_normalized_mesh(str(path.resolve()))
-    assert loaded.handedness == "right"
+    assert loaded.reflect_into_world_frame is False
 
     shaft = basis_from_angles(*square_pose()) @ MESH_HOSEL_AXIS_LOCAL
     forward_lean_deg = math.degrees(

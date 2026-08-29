@@ -33,6 +33,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-derived from it when the local mesh cache is present, with the previously
   hand-transcribed constants kept as the reference they must agree with.
 
+### Changed
+- **Right-handed is the explicit default in `clubpose`, and the reflection flag
+  is named for what it does.** One `handedness` string used to carry two
+  unrelated facts, under the name of the one it was not carrying: the
+  right-handed 690CB was registered as `handedness="left"` because `"left"`
+  meant "reflect this at load". It is now `club_handedness` (which club the CAD
+  depicts) and `reflect_into_world_frame` (whether the geometry still needs
+  reflecting, true for every physical model of either handedness). Asset lookup,
+  mesh loading, `club_axes` and `square_pose` all default to right-handed, and
+  the mesh cache is versioned so a v3 cache is migrated explicitly and an
+  unrecognised one refused. The left-handed 690CB is registered so left-handed
+  golfers can be fitted against a left-handed model rather than a mirrored
+  right-handed one; importing it needs `download_club_mesh.py --local-iron-left`.
+  Behaviour is unchanged and the no-search clubhead render is pixel-identical.
+
 ### Fixed
 - **Club-mesh handedness, correctly labelled.** The 690CB source is a
   right-handed club, as its file label says, and is mirrored at load into the

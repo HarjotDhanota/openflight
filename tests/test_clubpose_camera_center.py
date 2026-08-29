@@ -151,11 +151,11 @@ class TestWorldFrameHandedness:
     is IN-TO-OUT for a right-handed golfer, which is how every launch monitor
     reports them and how `angles.delivered_angles` computes them.
 
-    The cost is that a physically right-handed club mesh, loaded unchanged into
-    this frame, renders as its own mirror image. That -- not any defect in the
-    690CB STL -- is why `mesh.mirror_to_right_handed` flips local z at load. The
-    source is a right-handed club; the frame it is being loaded into is the
-    left-handed thing. See `tests/test_clubpose_mesh_handedness.py`.
+    The cost is that any real club mesh, of either handedness, loaded unchanged
+    into this frame renders as its own mirror image. That -- not any defect in
+    the 690CB STL -- is why `mesh.reflect_mesh_into_world_frame` flips local z at
+    load. The source is a right-handed club; the frame it is being loaded into is
+    the left-handed thing. See `tests/test_clubpose_mesh_handedness.py`.
 
     Changing any of this silently flips the sign of every reported face angle
     and club path, so it is pinned here rather than left to a comment.

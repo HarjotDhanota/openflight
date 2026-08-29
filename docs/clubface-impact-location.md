@@ -236,6 +236,19 @@ Nothing about the mirroring, the frame, or any measured result above changes;
 only the label does. The frame itself is now pinned by
 `tests/test_clubpose_camera_center.py::TestWorldFrameHandedness`.
 
+**Amended, 2026-08-29:** the two facts the old `handedness` field confused are
+now separate fields, and right-handed is the explicit default. `club_handedness`
+records which club the CAD depicts; `reflect_into_world_frame` records whether
+the geometry still has to be reflected, which is true for every physical model
+of either handedness. The mesh cache carries both behind a version guard, and a
+v3 cache is migrated rather than reinterpreted. Behaviour is unchanged: the
+right-handed asset is still reflected at load and the no-search shot 014 f71
+render above is pixel-identical, which a test now holds by mask hash. A
+left-handed 690CB is registered for left-handed golfers so they are fitted
+against a left-handed model instead of a mirrored right-handed one; it has not
+been imported, and `square_pose(handedness="left")` refuses rather than guessing
+until it is.
+
 The full 21-shot replay then used exactly the previous alignment thresholds,
 support/residual gates, ±12 px search, camera, range, and pre-registered checks.
 The 690CB 7-iron mesh was again used for the 9-iron shots, retaining the known

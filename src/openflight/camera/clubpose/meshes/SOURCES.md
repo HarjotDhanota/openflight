@@ -9,7 +9,7 @@ and leaves downloaded files ignored by Git.
 | Club | Source | Model ID | License | Published geometry |
 |---|---|---|---|---:|
 | Driver (RETIRED) | [Callaway Maverik Golf Driver](https://sketchfab.com/3d-models/callaway-maverik-golf-driver-978d0740dc514c8695bbb02f4083f0e3), Paul Ekins | `978d0740dc514c8695bbb02f4083f0e3` | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 41,855 triangles |
-| 7-iron | [Titleist 7-iron golf club](https://grabcad.com/library/titleist-7-iron-golf-club-1), GrabCAD Community contributor; 690CB STL is right-handed, as labelled, and is mirrored at load into the left-handed world frame | `grabcad:titleist-7-iron-golf-club-1:690cb-right-handed` | Local research use only; no redistribution | 26,238 triangles |
+| 7-iron | [Titleist 7-iron golf club](https://grabcad.com/library/titleist-7-iron-golf-club-1), GrabCAD Community contributor; right-handed 690CB STL, the default; reflected into the left-handed world frame at load | `grabcad:titleist-7-iron-golf-club-1:690cb-right-handed` | Local research use only; no redistribution | 26,238 triangles |
 
 The Sketchfab v3 metadata reports the driver as downloadable and labels its
 license `CC Attribution`, with author credit required and commercial use allowed.
@@ -20,15 +20,16 @@ specification's existing no-redistribution boundary.
 
 The Titleist 690CB source is a maintainer-supplied, millimetre-scaled binary STL
 from the named GrabCAD model. Its file/UID label says right-handed and that is
-correct: the source is a right-handed club, and it is mirrored at load into the
-left-handed world frame (y = image right). An earlier note here read the
-required reflection backwards and recorded the SOURCE as left-handed. The
-symptom it described is real -- loaded unchanged, the striking-face heel axis
-points toward the +y hosel and a right-handed grounded construction drives the
-shaft into the floor -- but the cause is the frame, not the CAD: `_project` maps
-world +y to the image right, which is the mirror of what a physical camera
-behind the ball would see, so a right-handed club loaded unchanged renders as a
-left-handed one. Its source SHA-256 is
+correct: the source is a right-handed club, and right-handed is the default
+everywhere in `clubpose`. It is reflected into the left-handed world frame at
+load (y = image right). An earlier note here read the required reflection
+backwards and recorded the SOURCE as left-handed. The symptom it described is
+real -- loaded unchanged, the striking-face heel axis points toward the +y hosel
+and a right-handed grounded construction drives the shaft into the floor -- but
+the cause is the frame, not the CAD: `_project` maps world +y to the image
+right, which is the mirror of what a physical camera behind the ball would see,
+so any real club loaded unchanged renders as its own mirror image. Its source
+SHA-256 is
 `f35936799295e6ce344279e557f0265ccbb8acef69c4508daff80d219d03cb85`.
 It is **local use only**: neither the STL nor its normalized NPZ may be committed.
 Only its provenance, hash, attribution, and aggregate evaluation results enter
@@ -59,17 +60,38 @@ detected coherent face patch is 79.739 x 42.497 mm, 863.296 mm2, with source
 normal `(0.112969, -0.253749, -0.960650)`. After the rigid axis transform the
 normal is `(1, 0, 0)` to numerical precision; no dimension scaling is applied.
 
-The v3 cache records handedness as `left`. That field is the load-time
-reflection FLAG -- "reflect this asset on load" -- and not a statement that the
-CAD depicts a left-handed club. `load_normalized_mesh` reflects the asset into
-the world frame by mirroring local z and reversing triangle winding, then
-re-detects the face plane instead of transforming stale plane metadata. The
-manifest records source-left, runtime-right, and the named
-`mirror_local_z_reverse_winding` transform; read those as "needs reflection" and
-"reflected", i.e. source right-handed, mirrored at load into the left-handed
-world frame (y = image right). This is a frame correction for the pinned STL,
-not a change to `normalize_clubhead`; its source-to-local axes remain a proper
-rotation and its geometry hash is unchanged.
+### Handedness and the world frame
+
+Right-handed by default; left-handed via `handedness="left"`; all physical
+geometry is reflected into the left-handed world frame at load. Those are three
+separate statements and the cache now stores them as separate fields:
+
+| Field | Meaning |
+|---|---|
+| `club_handedness` | which club the CAD depicts, `"right"` or `"left"` |
+| `reflect_into_world_frame` | whether the geometry still needs reflecting |
+
+A v3 cache had only `handedness`, in which `"left"` meant "reflect me" while
+being named for the other fact entirely. v4 splits them, `MESH_CACHE_VERSION`
+guards the difference, and a v3 cache is migrated explicitly on load rather than
+reinterpreted -- an unrecognised version is refused, because a silently misread
+cache is a silently mirrored clubhead.
+
+`load_normalized_mesh` reflects a flagged asset by mirroring local z and
+reversing triangle winding, then re-detects the face plane instead of
+transforming stale plane metadata. Reflection does not change `club_handedness`:
+a left-handed club needs reflecting just as much as a right-handed one, because
+the reflection is about the frame, not the club. This is a frame correction for
+the pinned STL, not a change to `normalize_clubhead`; its source-to-local axes
+remain a proper rotation and its geometry hash is unchanged.
+
+A left-handed golfer should be fitted against the left-handed 690CB from the
+same GrabCAD listing, registered as `poc_7iron_left`, rather than against a
+mirrored right-handed one. No maintainer copy has been imported, so it has no
+pinned SHA-256 yet and `--local-iron-left` requires the hash to be named on
+first import. Until it exists, `square_pose(handedness="left")` raises rather
+than guessing: mirroring the right-handed axes into a left-handed target does
+not solve for the catalogue lie, so there is no correct answer to give.
 
 ### Pre-outcome iron-source substitution
 
