@@ -318,6 +318,52 @@ PITCH_RANGE_DEG = (-40.0, 90.0)
 ROLL_BOUND_DEG = 70.0
 
 
+def _smoothness_penalty(
+    prev: dict | None,
+    rng: float,
+    yaw: float,
+    pitch: float,
+    roll: float,
+    smooth_deg: float,
+    smooth_mm: float,
+    *,
+    penalise_range: bool,
+) -> float:
+    """What one pose costs for differing from the previously accepted one.
+
+    The penalty exists to stop a 20-40 px silhouette inventing motion between
+    frames. Radar-measured range motion is not invented, so when the range is
+    pinned to a measurement (`penalise_range=False`) the depth term is dropped
+    entirely: charging for it would pull every frame back toward its
+    neighbour's depth and undo the measurement it was given.
+    """
+    if prev is None:
+        return 0.0
+    angular = (
+        abs(yaw - prev["yaw_deg"]) + abs(pitch - prev["pitch_deg"]) + abs(roll - prev["roll_deg"])
+    )
+    penalty = angular / (3.0 * smooth_deg)
+    if penalise_range:
+        penalty += abs(rng - prev["range_mm"]) / smooth_mm
+    return penalty
+
+
+def _validated_frame_ranges(range_mm_by_frame: dict[int, float], frames) -> dict[int, float]:
+    """Fail closed on a per-frame range table that cannot pin every frame."""
+    ranges = {int(frame): float(value) for frame, value in range_mm_by_frame.items()}
+    missing = sorted(frame for frame in frames if frame not in ranges)
+    if missing:
+        raise ValueError(f"range_mm_by_frame has no range for frames {missing}")
+    bad = sorted(
+        frame
+        for frame, value in ranges.items()
+        if not math.isfinite(value) or value <= 0.0  # a range is a positive distance
+    )
+    if bad:
+        raise ValueError(f"range_mm_by_frame holds non-physical ranges for frames {bad}")
+    return ranges
+
+
 def fit_sequence(
     mesh,
     masks: dict[int, np.ndarray],
@@ -330,6 +376,7 @@ def fit_sequence(
     pitch_grid=(-30.0, 0.0, 30.0, 60.0, 85.0),
     roll_grid=(-60.0, -30.0, 0.0, 30.0, 60.0),
     refine_range: bool = True,
+    range_mm_by_frame: dict[int, float] | None = None,
 ) -> dict[int, dict]:
     """Fit an ordered run of frames, penalising jumps between consecutive poses.
 
@@ -338,7 +385,22 @@ def fit_sequence(
     one unit of IoU, so a large IoU gain can still justify real motion while noise
     cannot. Set ``refine_range=False`` with a singleton ``range_grid_mm`` to keep
     an externally measured range hard-pinned during local refinement.
+
+    ``range_mm_by_frame`` supplies a MEASURED range per frame -- normally
+    `fusion.ranges_from_radar`, which anchors the radar's range rate at the
+    taped ball range at impact. When it is given, depth stops being a fitted
+    parameter: each frame is pinned to its own measurement, ``range_grid_mm``
+    and ``refine_range`` are ignored, and the smoothness penalty drops its range
+    term, because motion the radar measured is not motion the fit invented.
+    Every frame in ``masks`` must appear in it; a missing or non-physical range
+    is an error rather than a silent fall back to the grid.
     """
+    frame_ranges = (
+        None
+        if range_mm_by_frame is None
+        else _validated_frame_ranges(range_mm_by_frame, sorted(masks))
+    )
+    penalise_range = frame_ranges is None
     out: dict[int, dict] = {}
     prev = None
     for i in sorted(masks):
@@ -347,6 +409,8 @@ def fit_sequence(
             continue
         ys, xs = np.nonzero(observed)
         ray = _ray_world(np.array([xs.mean(), ys.mean()], dtype=float), camera)
+        frame_grid = range_grid_mm if frame_ranges is None else (frame_ranges[i],)
+        refine_this_range = refine_range and frame_ranges is None
 
         def score(rng, yaw, pitch, roll):
             if abs(yaw) > YAW_BOUND_DEG or not PITCH_RANGE_DEG[0] <= pitch <= PITCH_RANGE_DEG[1]:
@@ -356,19 +420,12 @@ def fit_sequence(
             m = render_mask_6dof(mesh, camera.center_world + ray * rng, yaw, pitch, roll, camera)
             if m is None:
                 return -1.0
-            value = iou(m, observed)
-            if prev is not None:
-                d_ang = (
-                    abs(yaw - prev["yaw_deg"])
-                    + abs(pitch - prev["pitch_deg"])
-                    + abs(roll - prev["roll_deg"])
-                )
-                d_rng = abs(rng - prev["range_mm"])
-                value -= d_ang / (3.0 * smooth_deg) + d_rng / smooth_mm
-            return value
+            return iou(m, observed) - _smoothness_penalty(
+                prev, rng, yaw, pitch, roll, smooth_deg, smooth_mm, penalise_range=penalise_range
+            )
 
         best = (-1.0, None)
-        for rng in range_grid_mm:
+        for rng in frame_grid:
             for yaw in yaw_grid:
                 for pitch in pitch_grid:
                     for roll in roll_grid:
@@ -382,7 +439,7 @@ def fit_sequence(
         for _ in range(4):
             improved = False
             for k, delta in enumerate(step):
-                if k == 0 and not refine_range:
+                if k == 0 and not refine_this_range:
                     continue
                 for d in (-delta, delta):
                     cand = [rng, yaw, pitch, roll]
