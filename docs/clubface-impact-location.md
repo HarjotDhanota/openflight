@@ -94,3 +94,72 @@ download script.
 Deliberately excluded from this branch: the superseded synthetic-phase
 evaluation, the old web studio, and the June–July simulation studies. They
 remain on the fork's `feat/silhouette-poc` branch for archaeology.
+
+## Contact edges — spike result
+
+Session `20260825_181734` was replayed after un-mirroring every capture, excluding
+clipped `shot_001`, and using f71/f72 around the measured contact time. Ball location
+and diameter came from `club_motion.detect_reference_ball`; each JSON record carries
+the per-shot plate scale `42.67 / diameter_px`. The output sheets were rendered at 8×
+and inspected before the results below were recorded.
+
+| Pre-registered check | Result | Threshold | Outcome |
+|---|---:|---:|---|
+| Width constancy, 7-iron | 28.827 ± 3.892 px over 8 returned frames | sd ≤ 1.5 px | **FAIL** |
+| Width constancy, 9-iron | 25.770 ± 1.094 px over 3 returned frames | sd ≤ 1.5 px | PASS numerically, but sparse |
+| Width constancy, both clubs | 7-iron failed; 9-iron passed on 3 frames | both clubs pass | **FAIL** |
+| Two-frame consistency | 1/21 shots (4.8%) | `|Δtoe − Δheel| ≤ 1 px` on ≥ 80% | **FAIL** |
+| Hand-mark agreement, shot 014 | largest returned-edge difference 6.333 px; f72 heel unavailable | every edge within 1.5 px | **FAIL** |
+| Availability | 3/21 shots returned all three edges in both frames | ≥ 17/21 | **FAIL** |
+| Sheet inspection | many closed failures and several visibly wrong locks | inspect all f71/f72 overlays | **FAIL** |
+
+The width outliers more than 3 px from their club median were shot 005 f71
+(33.142 px), shot 006 f71 (25.108 px), and shot 009 f71 (21.315 px). The
+shot-014 comparisons were: f71 heel 160.644 versus 165, toe 187.649 versus 191,
+and topline row 142.093 versus 141; f72 heel unavailable, toe 183.667 versus 190,
+and topline row 142.209 versus 140. These hand marks are only a sanity anchor,
+not truth.
+
+| Shot | f71 status | f72 status | Δtoe − Δheel (px) | Δtopline (px) |
+|---|---|---|---:|---:|
+| 002 | ok | ok | -2.818 | 0.371 |
+| 003 | ok | ok | -0.118 | -0.223 |
+| 004 | `topline_insufficient_points` | `topline_insufficient_points` | — | — |
+| 005 | ok | `topline_insufficient_inliers` | — | — |
+| 006 | ok | `shaft_insufficient_pixels` | — | — |
+| 008 | `topline_insufficient_inliers` | `topline_insufficient_inliers` | — | — |
+| 009 | ok | ok | 7.236 | -0.513 |
+| 011 | `topline_insufficient_points` | `topline_insufficient_points` | — | — |
+| 014 | ok | `shaft_insufficient_inliers` | — | — |
+| 015 | `topline_insufficient_points` | `topline_insufficient_points` | — | — |
+| 016 | `topline_insufficient_points` | `topline_insufficient_points` | — | — |
+| 017 | `topline_insufficient_inliers` | `topline_insufficient_inliers` | — | — |
+| 018 | `topline_insufficient_inliers` | ok | — | — |
+| 020 | `topline_insufficient_points` | `topline_insufficient_inliers` | — | — |
+| 021 | `topline_insufficient_inliers` | `topline_insufficient_inliers` | — | — |
+| 023 | `topline_insufficient_inliers` | `shaft_insufficient_inliers` | — | — |
+| 024 | `topline_insufficient_points` | `topline_insufficient_points` | — | — |
+| 025 | `topline_insufficient_inliers` | `topline_insufficient_inliers` | — | — |
+| 026 | `topline_insufficient_inliers` | `topline_insufficient_points` | — | — |
+| 028 | ok | `shaft_insufficient_pixels;toe_insufficient_crossings` | — | — |
+| 029 | `topline_insufficient_points` | `topline_insufficient_points` | — | — |
+
+The first sheets showed the topline fit locking onto the diagonal shaft highlight.
+Restricting the robust fit to the unobscured toe-side ridge removed that specific
+swap. The final sheets still show the cyan line following the bright ball cap or
+an internal head highlight in accepted shots, heel intersections landing on the
+wrong junction, and toe crossings stopping on internal face detail. Shot 014 f71
+is representative: its heel is left of the marked shaft/topline junction and its
+toe crossings have a 9.952 px row spread. Many other frames fail closed even though
+a blurred ridge is visible.
+
+Because those visible ridges and shafts were being rejected, one complete diagnostic
+rerun lowered the topline gate from `max(205, mat + 50)` to `max(190, mat + 35)` and
+the shaft gate from `max(210, mat + 55)` to `max(195, mat + 40)`. Availability rose
+only to 5/21, two-frame consistency remained 1/21, and the sheets admitted more ball-cap
+and internal-highlight locks. The change was rejected; the table above is from a fresh
+full replay with the specified thresholds restored.
+
+**Verdict: not findable to ±1 px on this session with these three automatic edge
+detectors.** This is a consistency and availability result only; no accuracy claim
+against truth exists.
