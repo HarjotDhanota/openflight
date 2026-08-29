@@ -19,6 +19,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   envelopes. Includes the technical report on what is validated (fused
   radar+camera clubhead velocity, ball detection, impact timing) and what is
   not (clubhead orientation has no accuracy figure against truth).
+- **Radar+camera clubhead fusion (`openflight.camera.clubpose.fusion`).**
+  Per-frame clubhead range from the radar's range rate, anchored at the taped
+  ball range at impact, and clubhead velocity from
+  `dP/dt = (dr/dt)·ray + r·d(ray)/dt` — the radar supplying the radial term and
+  the camera the transverse ones. The velocity is the part that validates: it
+  matches the OPS243's independent club speed, which takes no part in the
+  computation. `fit_sequence` accepts those ranges through `range_mm_by_frame`,
+  pinning depth to the measurement instead of searching a static grid.
+- **Striking-face detection (`mesh.detect_striking_face`).** The largest
+  coherent planar region on a clubhead mesh, distinct from the cavity-rim plane
+  that mesh normalization anchors the frame to. The delivered-angle axes are now
+  re-derived from it when the local mesh cache is present, with the previously
+  hand-transcribed constants kept as the reference they must agree with.
+
+### Fixed
+- **Camera position is part of the camera model.** `CameraPreset` carries its
+  own optical centre, derived from the measured 203.2 mm lens height and 1581 mm
+  camera-to-ball range, and projection and backprojection both use it. The
+  clubpose fitter previously cast rays from a nominal 1575 mm camera and
+  rendered them from the measured one. The retired `A0` preset, which claimed to
+  describe the shipped camera with intrinsics 2.2x off, has been removed.
 
 ### Added
 - **Automatic OV9281 exposure control.** High-speed camera capture now measures
