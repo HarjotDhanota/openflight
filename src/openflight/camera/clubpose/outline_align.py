@@ -61,10 +61,18 @@ class OutlineTemplate:
     normal_bins: np.ndarray = dataclass_field(repr=False)
     topline_xs: np.ndarray = dataclass_field(repr=False)
     topline_ys: np.ndarray = dataclass_field(repr=False)
+    center_x: float
+    center_y: float
+    top_y: float
+    bottom_y: float
+    height_px: float
     heel_x: float
     toe_x: float
     midpoint_x: float
     topline_row_at_ball: float
+    boundary_candidate_count: int
+    boundary_kept_count: int
+    boundary_fraction_kept: float
     shaft_angle_deg: float
     lie_used_deg: float
     lie_source: str
@@ -239,7 +247,7 @@ def detect_shaft_line(frame: np.ndarray, ball: ReferenceBall, mat_level: float) 
 
 def _render_boundary(
     mask: np.ndarray, ball: ReferenceBall
-) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int] | None:
     inside = mask.astype(np.uint8)
     eroded = cv2.erode(inside, np.ones((3, 3), np.uint8))
     boundary = (inside > 0) & (eroded == 0)
@@ -257,11 +265,43 @@ def _render_boundary(
         ball.diameter_px / 2.0 + 1.0
     )
     points, normals = points[keep], normals[keep]
+    candidate_count = len(points)
+    keep = nonsole_boundary_mask(normals)
+    points, normals = points[keep], normals[keep]
     if len(points) < 12:
         return None
     angles = np.mod(np.arctan2(normals[:, 1], normals[:, 0]), 2.0 * np.pi)
     bins = np.mod(np.rint(angles / (2.0 * np.pi / _NORMAL_BINS)).astype(int), _NORMAL_BINS)
-    return points, normals, bins
+    return points, normals, bins, candidate_count
+
+
+def nonsole_boundary_mask(normals_xy: np.ndarray) -> np.ndarray:
+    """Keep topline and side normals; reject downward-dominant sole normals."""
+    normals = np.asarray(normals_xy, dtype=float)
+    if normals.ndim != 2 or normals.shape[1] != 2:
+        raise ValueError("boundary normals must have shape [N,2]")
+    downward_dominant = (normals[:, 1] > 0.0) & (np.abs(normals[:, 1]) > np.abs(normals[:, 0]))
+    return ~downward_dominant
+
+
+def linear_motion_carry(
+    frame_indices: np.ndarray,
+    aligned_centres_xy: np.ndarray,
+    *,
+    target_frame: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Fit image-plane outline velocity and carry each observation to a target time."""
+    frames = np.asarray(frame_indices, dtype=float)
+    centres = np.asarray(aligned_centres_xy, dtype=float)
+    if frames.ndim != 1 or centres.shape != (len(frames), 2) or len(frames) < 2:
+        raise ValueError("motion carry needs matching frame [N] and centre [N,2] arrays")
+    if not np.all(np.isfinite(frames)) or not np.all(np.isfinite(centres)):
+        raise ValueError("motion carry inputs must be finite")
+    centered_frames = frames - float(np.mean(frames))
+    design = np.column_stack((centered_frames, np.ones(len(frames))))
+    velocity = np.linalg.lstsq(design, centres, rcond=None)[0][0]
+    carries = (float(target_frame) - frames)[:, None] * velocity[None, :]
+    return velocity, carries
 
 
 def _topline(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -300,14 +340,15 @@ def build_nominal_outline(  # pylint: disable=too-many-arguments,too-many-positi
     boundary = _render_boundary(mask, ball)
     if boundary is None:
         return None, "template_boundary_too_small"
-    _, full_x = np.nonzero(mask)
+    full_y, full_x = np.nonzero(mask)
     if full_x.size == 0:
         return None, "template_boundary_too_small"
     topline_xs, topline_ys = _topline(mask)
     topline_at_ball = float(np.interp(ball.x, topline_xs, topline_ys))
     shaft_angle = _projected_shaft_angle(center, camera, loft_deg, face_angle_deg, lie_deg)
-    points, normals, bins = boundary
+    points, normals, bins, candidate_count = boundary
     heel_x, toe_x = float(full_x.min()), float(full_x.max())
+    kept_count = len(points)
     return (
         OutlineTemplate(
             mask=mask,
@@ -316,10 +357,18 @@ def build_nominal_outline(  # pylint: disable=too-many-arguments,too-many-positi
             normal_bins=bins,
             topline_xs=topline_xs,
             topline_ys=topline_ys,
+            center_x=(float(full_x.min()) + float(full_x.max())) / 2.0,
+            center_y=(float(full_y.min()) + float(full_y.max())) / 2.0,
+            top_y=float(full_y.min()),
+            bottom_y=float(full_y.max()),
+            height_px=float(full_y.max() - full_y.min() + 1),
             heel_x=heel_x,
             toe_x=toe_x,
             midpoint_x=(heel_x + toe_x) / 2.0,
             topline_row_at_ball=topline_at_ball,
+            boundary_candidate_count=candidate_count,
+            boundary_kept_count=kept_count,
+            boundary_fraction_kept=kept_count / candidate_count,
             shaft_angle_deg=shaft_angle,
             lie_used_deg=float(lie_deg),
             lie_source=lie_source,

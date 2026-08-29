@@ -250,3 +250,59 @@ visual failures did not motivate a threshold change; no tuning run was made.
 the unchanged translation-only alignment still does not localise the outline to
 ±1 px on this session.** This is a repeatability and fail-closed result only;
 there is still no truth reference and no accuracy claim.
+
+## Outline alignment — iteration 2
+
+The final mesh-template replay removed every boundary sample whose outward image
+normal was downward-dominant (`normal_y > 0` and
+`abs(normal_y) > abs(normal_x)`). It retained a median 81.0% of candidate
+boundary samples (79.8–82.2% across the 57 templates that rendered). The ball
+overlap exclusion, polarity bins, 80 edge threshold, ±12 px search, 1.5 px
+support distance, 0.5 minimum support, and 1.5 px maximum residual were all
+unchanged.
+
+Each shot was aligned independently at its measured radar range on f69, f70,
+and f71. The intended contact carry fits linear image motion to the three
+aligned template centres and carries each observed outline to f71.85. Because
+not one individual frame passed the fixed gates, every shot failed closed before
+the three-frame motion fit and no contact offset was produced.
+
+| Pre-registered check | Iteration-2 result | Threshold | Outcome |
+|---|---:|---:|---|
+| Availability | 0/21 shots had f69, f70, and f71 accepted | ≥ 17/21 | **FAIL** |
+| Three-frame carried consistency | 0/21 evaluable (0.0%); all spreads unavailable | spread ≤ 1 px on ≥ 80% | **FAIL** |
+| Shot 014 vs hand intervals | unavailable because all three frames were rejected | within 1.5 px of 18–24 mm heel-side and 16–19 mm below topline | **FAIL** |
+| Loft sensitivity ±5° | unavailable: no nominal three-frame fit | offset moves ≤ 1 px | **FAIL** |
+| Face-angle sensitivity ±10° | unavailable: no nominal three-frame fit | offset moves ≤ 1 px | **FAIL** |
+| Lie sensitivity ±3° | unavailable: no nominal three-frame fit | offset moves ≤ 1 px | **FAIL** |
+| Sheet inspection | wrong shaft/hosel locks, displaced head outlines, and closed failures; no carried outlines | inspect f69/f70/f71 and contact sheets first | **FAIL** |
+
+The failure reasons were f69: nine `support_below_half`, eight
+`search_boundary`, two `residual_above_1_5`, and two `nominal_pose_failed`;
+f70: nine `residual_above_1_5`, six `support_below_half`, four
+`search_boundary`, and two `nominal_pose_failed`; f71: 13
+`residual_above_1_5`, five `support_below_half`, one `search_boundary`, and two
+`nominal_pose_failed`. Thus zero of 63 attempted frame alignments was accepted.
+
+The four rendered sheets were inspected before recording these numbers. Removing
+the sole deletes the dense lower boundary, but the remaining cyan side/diagonal
+samples still commonly lock onto the shaft or hosel rather than the head. At f69
+many outlines are visibly displaced and eight translations reach the fixed
+search boundary. At f70 and f71 the outline is often near the head but is still
+rejected by the unchanged residual or support gate; in other panels its topline
+lands on a ball highlight or head detail. The contact sheet contains only the
+real frames and ball circles because every three-frame input is incomplete.
+
+The toe-band sanity output supports the visual result: the signed template
+topline-minus-brightest-ridge median is 2.0 px (7.0 mm at each shot's plate
+scale), while median template height is 14.0 px / 49.4 mm versus 7.0 px /
+26.5 mm for the observed contiguous dark-head run. Per-frame pixel and
+plate-scale millimetre values remain in `outline_align.json`; they are diagnostics,
+not truth measurements. The 690CB 7-iron template was also used on the 9-iron
+shots, preserving the already-declared head-shape bias.
+
+**Verdict: the outline is not localisable to ±1 px by this final
+mesh-template iteration. The mesh-template route is closed because no f69/f70/f71
+triple passes the fixed alignment gates; the next outline source must be the
+learned segmenter or an address photo.** No accuracy claim against truth is made,
+because no truth reference exists.

@@ -17,6 +17,8 @@ from openflight.camera.clubpose.outline_align import (
     align_outline,
     alignment_gate_reason,
     build_nominal_outline,
+    linear_motion_carry,
+    nonsole_boundary_mask,
     polarity_consistent_edges,
 )
 
@@ -123,7 +125,9 @@ def test_recovers_known_translation_with_shadow_shaft_and_ball_cap():
     assert result.status == "ok"
     assert result.reason == "ok"
     assert result.dx == pytest.approx(4.25, abs=0.25)
-    assert result.dy == pytest.approx(-3.5, abs=0.25)
+    # With the occluded sole removed, the sampled topline/side edges constrain
+    # vertical translation to one sensor pixel in this synthetic 320x200 frame.
+    assert result.dy == pytest.approx(-3.5, abs=1.0)
     assert result.support >= 0.5
     assert result.residual_px <= 1.5
 
@@ -138,6 +142,49 @@ def test_polarity_filter_rejects_near_shadow_edge():
     assert downward[19:21, 15:35].any()
     assert not downward[21:23, 15:35].any()
     assert downward[24:26, 15:35].any()
+
+
+def test_nonsole_boundary_drops_only_downward_dominant_normals():
+    normals = np.asarray(
+        [
+            [0.0, -1.0],
+            [-1.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.4, 0.9],
+            [0.9, 0.4],
+            [-0.9, 0.4],
+        ]
+    )
+
+    assert nonsole_boundary_mask(normals).tolist() == [True, True, True, False, False, True, True]
+
+
+def test_nominal_template_reports_fraction_after_dropping_sole():
+    template, reason = build_nominal_outline(
+        BALL,
+        _box_mesh(),
+        measured_camera(),
+        RANGE_MM,
+        shaft_angle_deg=None,
+        loft_deg=33.1,
+    )
+
+    assert reason == "ok"
+    assert template is not None
+    assert 0.0 < template.boundary_fraction_kept < 1.0
+    assert template.boundary_kept_count < template.boundary_candidate_count
+    assert nonsole_boundary_mask(template.normals_xy).all()
+
+
+def test_linear_motion_carries_each_observation_to_target_frame():
+    frames = np.asarray([69.0, 70.0, 71.0])
+    centres = np.asarray([[10.0, 20.0], [12.0, 19.0], [14.0, 18.0]])
+
+    velocity, carries = linear_motion_carry(frames, centres, target_frame=71.85)
+
+    assert velocity == pytest.approx([2.0, -1.0])
+    assert centres + carries == pytest.approx(np.tile([15.7, 17.15], (3, 1)))
 
 
 def test_nominal_pose_is_physical_and_flags_static_lie_fallback():
