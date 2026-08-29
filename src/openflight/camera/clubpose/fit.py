@@ -4,10 +4,11 @@ Everything the POC has measured so far came from fitting the mesh to SYNTHETIC
 silhouettes produced by the same mesh. This module points it at real pixels for
 the first time, which is the actual thing under validation.
 
-Three corrections are required before the existing machinery can be used at all,
-because the shipped `A0` preset describes a camera we do not have:
+Three corrections were required before the existing machinery could be used at
+all, because the preset that claimed to be the shipped camera -- the retired
+`A0`, since removed from `camera_presets()` -- described a camera we do not have:
 
-    A0 says          fx = 1033 px,  plate scale 0.656 px/mm,  range 1575 mm
+    A0 said          fx = 1033 px,  plate scale 0.656 px/mm,  range 1575 mm
     measured         fx = 466.7 px, plate scale 0.295 px/mm,  range ~1581 mm
 
 `fx` follows from the NOMINAL datasheet lens (2.8 mm) over the effective pixel
@@ -56,7 +57,7 @@ from openflight.camera.clubpose.projection import (
     camera_center_world,
 )
 
-# Measured configuration of the shipped camera. NOT the A0 preset.
+# Measured configuration of the shipped camera, from the real capture.
 LENS_MM = 2.8
 PITCH_UM = 3.0
 SUBSAMPLE = 2

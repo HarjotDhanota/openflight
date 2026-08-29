@@ -173,24 +173,20 @@ class ClubState:
 
 
 def camera_presets() -> dict[str, CameraPreset]:
-    """Return independent intrinsics; no fixed-FOV scaling is permitted."""
+    """Return independent intrinsics; no fixed-FOV scaling is permitted.
+
+    These are HYPOTHETICAL configurations only, and each says so in its own
+    ``physical_status``. For the camera actually in the kiosk use
+    ``openflight.camera.clubpose.fit.measured_camera()``.
+
+    The retired ``A0`` entry used to live here claiming
+    ``existing_320x200_plus_10us_strobe`` -- that it described the shipped
+    hardware -- with fx = 1033 px and a 0.656 px/mm plate scale. The shipped
+    camera measures fx = 466.7 px and 0.295 px/mm, so A0 was wrong by 2.2x in
+    the quantity that turns pixels into millimetres. Nothing called it, which
+    is the only reason it never produced a wrong number.
+    """
     return {
-        "A0": CameraPreset(
-            name="A0",
-            width=320,
-            height=200,
-            fx=1033.0,
-            fy=1033.0,
-            cx=160.0,
-            cy=100.0,
-            plate_scale_px_per_mm=0.656,
-            sensor_crop=(336, 150, 816, 516),
-            sampling_increment=(2, 2),
-            isp_offset=(4, 4),
-            orientation="landscape_register_window",
-            gate_b1_passed=False,
-            physical_status="existing_320x200_plus_10us_strobe",
-        ),
         "A1": CameraPreset(
             name="A1",
             width=320,
