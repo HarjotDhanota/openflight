@@ -100,8 +100,21 @@ CLUB_SPEED_PROJECTION_RANGE = (0.70, 1.20)
 # The OPS transition selector measures the club-head branch near impact. Use
 # that result while selecting the IWR range walk, not only as a rejection after
 # the tracker has already chosen hands or shaft. The preferred ratio is a
-# fastest-credible threshold rather than an equality target because IWR sees
-# radial speed while OPS estimates total club speed.
+# fastest-credible threshold rather than an equality target because the two
+# sensors disagree on the clubhead by ~9% (ratio 0.83-0.98, median 0.910 over
+# the 21 shots of 2026-08-25).
+#
+# That gap is NOT a projection. Both sensors are treated as co-located -- the
+# shipped ball cosine correction takes its geometry straight from this
+# calibration -- so they project onto the same line of sight, and the clubhead's
+# radial fraction is 0.99 (its descent angle and the LOS depression to it both
+# sit near -4 deg; see docs/superpowers/specs/2026-08-28-speed-contract-audit.md).
+# It is a sensor-to-sensor measurement difference: the range-walk RANSAC fits a
+# slope over PRE_IMPACT_FRAMES against 4.7 cm bins and tracks a centroid-like
+# scattering centre, while the OPS Doppler FFT picks the fastest scatterer. The
+# IWR side is the one that under-reads -- its club speeds imply a 7-iron smash
+# factor of 1.478, above the physical ceiling -- so do not use it to "correct"
+# the OPS. The threshold below is empirical; leave it alone.
 CLUB_PREFERRED_SPEED_RATIO = 0.82
 CLUB_TRACK_SPEED_LIMIT_MS = (12.0, 60.0)
 
