@@ -535,6 +535,101 @@ Stage 1–3 numbers in hand; do not pre-buy.
   already works on 17/21; the unlock is the 5° offset calibration.
 
 
+## 1L. UPDATE (2026-08-29) — what the existing 21 shots turned out to hold: D-plane, swing plane, hand marks, and the first outline extractor that passes its gates
+
+Follows §1K. Everything here is a CONSISTENCY result on session 20260825 (no reference
+instrument). Branches: `feat/clubpose-drift-fixes` (9 commits, rebased onto `feat/clubpose-fit`
+@ 8d244e2, suite green), `chore/speed-contract-check`, `research/session-metrics`
+(`research/session_metrics/`, `research/empirical_template/`), `research/pose-refit-corrected`.
+
+### 1L.1 Stage 0 closed
+- **Code drift fixed** (drift branch): camera position from the measured 203.2 mm / 1581 mm
+  (an ~8 mm ray-vs-render origin mismatch in every earlier fit); A0 preset deleted;
+  `clubpose/fusion.py` (validated range ramp + fused velocity); `fit_sequence(range_mm_by_frame)`;
+  `detect_striking_face()` (2928 mm², 0.03° from the constants); lazy `club_axes()`;
+  right-handed defaults everywhere, the reflection into the left-handed world frame named
+  honestly (`reflect_into_world_frame`), LH 690CB registered (`--local-iron-left`).
+- **World frame is left-handed by convention** (y = image right) — verified: `_project` maps +y to
+  larger pixel x while looking +x with z up. The mesh is right-handed; it is mirrored at load.
+  Do not refactor the frame until the address-photo template lands.
+- **Smash factor**: derivable now on OPS+IWR (bias +0.009); OPS-only builds read −0.024 (fix
+  proposed); absolute club speed needs TrackMan.
+- **Radar-only club path: closed.** A0 control reproduced 21/22 (residual = debug-only
+  candidate fields); A1 window-scope MTI +0.12 rad (no help); A2 velocity sources identical;
+  A3 impact-anchored attack fit WORSE (−43°). Phase span ≈ 3.3 rad on every shot regardless →
+  scatterer migration on a rotating head is what remains; needs the driver+wedge session.
+- **Camera pitch solved per shot from the ball**: −0.22° ± 0.12° (the "level" inference holds to
+  the tape chain); lateral offset −55.7 mm vs tape −60.3; **roll 3.2°** (net/gravel line) —
+  camera or mat, unresolved. `clubpose/projection.py` aims the model at the origin (7.4° down):
+  every earlier world-frame loft/lie carried that tilt; the refit solves pitch instead.
+
+### 1L.2 D-plane and swing plane on the session (`research/session_metrics/RESULTS.md`)
+- **Dynamic loft as shipped: 7i 23.9°, 9i 28.3° — LOW, and it is the radar's vertical launch**
+  (`launch_angle_vertical_source = radar` 22/22; LCMF reads ~5° low vs the camera+IWR
+  reconstruction). With the camera launch DL ≈ 30° / 35° = plausible. Attack-angle choice moves
+  DL 0.2°; coefficients 3.6°. ⇒ promote the camera-derived vertical launch before shipping DL.
+- **Face angle**: the fused club path is the noise (sd 5.9°, ~5° too in-to-out — the
+  "camera-vs-radar horizontal offset" lives in the fused PATH); the 3-D head-track path (sd 2.2°)
+  gives F = −1.35° (sd 2.6) / −0.04°, face-to-path −2.6 / −1.1°. Centring needs only +2.3° on H.
+- **Swing plane 58.9° ± 4.4° (18/21), swing direction +4.3°** (all within ±8.7°), arc radius
+  1.14 m (low — the linear range ramp stretches early frames), in-plane speed 0.90×OPS (partly
+  circular). **The head lands 20 mm from the ball centre at the acoustic contact frame with
+  nothing forcing it.**
+- Mask lessons: the head images as a RIM (close + hole fill); the tee veto must not run
+  pre-impact and MUST run post-impact (f72 = +0.15 frame: the departing ball joins the mask).
+
+### 1L.3 Hand marks (two passes) — the labels that unblocked the extractor
+- Harjot marked heel/toe/topline on f71+f72 of all 21 shots (`openflight/contact_marks.jsonl`,
+  tool `scripts/analysis/mark_contact_edges.py`): width sd 1.3–1.5 px per club (the gate no
+  extractor had passed), two-frame consistency ~1 px; the 7-iron mesh is **2–3 px (7–10 mm) too
+  narrow** for these clubs (report C check #1, now measured).
+- Second pass (claude-opus): definitions were read differently — pass-1 topline marks sit +11 px
+  right of the ball (the cap hides the topline), pass-1 toe = widest point ~10 px below the
+  topline row. After removing those offsets the true hand noise is heel 0.50/1.73, toe 0.37/1.49,
+  topline 0.66/1.28 px (median/p90). Score extractors at the marks' own locations.
+- Zones (conventions stated): heel-toe 6 heel / 9 heel-centre / 3 centre / 3 centre-toe / 0 toe;
+  high-low over-read by ~10 mm by the topline-x offset — most "centre-high" are centre.
+
+### 1L.4 THE MILESTONE — a data-built outline passes the ±1/2 px gates (`research/empirical_template/`)
+Three iterations, leave-one-shot-out vs pass-1 marks, thresholds fixed in advance:
+| edge (median/p90 px) | it1 (48 mm cut) | it2 (sole from occupancy) | **it3 (+ heel from occupancy, ball veto after contact)** |
+|---|---|---|---|
+| toe | 0.50/1.07 | 0.59/1.20 | **0.52/1.09** |
+| heel | 0.81/2.38 | 0.97/2.45 | **0.89/1.71** |
+| topline | 1.10/3.63 | 0.92/1.71 | **0.85/1.78** |
+| availability | 20/21 | 20/21 | 18/21 |
+- Template = per club, head masks cropped by the marks → occupancy map → 0.5 contour; sole and
+  heel edges from where the occupancy falls off (the heel edge runs up the hosel neck — a
+  consistent landmark, not the face heel; the sole includes ~15 mm of shadow).
+- Alignment = translation ±12 px + roll ±20° at the **radar-pinned size** (36 % size change
+  f66→f72 carried with no fitted scale), local IoU, fail-closed < 0.6. No shaft/shadow locks.
+- Carry to contact: quadratic over f66–f72 ≈ f71/f72 interpolation (0.14 px). **The linear carry
+  is wrong by 6–10 px** — the projected head decelerates as it swings onto the optical axis.
+- **First automatic impact zone**: heel-toe agrees with the hand marks at **r = 0.971, 2.6 mm rms**
+  (vs 10.8 mm shot-to-shot spread); vertical r = 0.84, 7.7 mm rms — not yet. Absolute offsets
+  (~−30 mm, midpoint convention + oblique projection) mean nothing until foot spray.
+- Roll ramp observable: −5° at f66 → ~0 at contact on 19/21 shots (+0.63°/frame median).
+
+### 1L.5 The mesh-silhouette orientation route — closed, diagnosed
+Corrected-frame refit (solved pitch, grounded seed, hosel clipped, bounds on the seed): 0/139
+frames in envelope, 100 % rail-pinned in the SAME direction on every shot (a modelling error,
+not search noise); IoU prefers the impossible pose 0.32 vs 0.19; `smooth_deg=70` froze earlier
+"coherence" numbers; the mask swings 219–905 px across one clean shot. **The mesh fits a
+different shape than the mask; the data-built outline IS the mask's shape.** Also: the
+"ω = v/r validator fails 2.5×" claim compared unlike axes — the shaft turns 507°/s in the image
+(the release, about the line of sight) while v/r (1421°/s) is about the swing-plane normal, nearly
+invisible from behind.
+
+### 1L.6 What this changes on the roadmap
+- Stage 2 now has a concrete impact-zone path: promote build/align/carry into `clubpose` with
+  tests; fix the vertical channel via the bright ridge; replace the leave-one-out template with
+  a per-club address photo; foot spray in Stage 1 for the first accuracy number.
+- Ship dynamic loft on the camera-derived launch, club path from the 3-D track, swing plane /
+  direction / low point from the same track — all software on existing data.
+- Face angle still waits for the launch-direction offset (+2.3°, not 5°) → Stage 1.
+- Open calibration items for Stage 1: phone level (roll 3.2° unexplained), re-tape lens height.
+
+
 ## 2. The core problem: markerless 6-DOF clubhead pose from behind
 
 You never see the face. You recover the clubhead's rigid-body **orientation**, then read the face plane off a **club-type template**. v1's pipeline framing stands; the corrections are *how the pros actually do the pose step*:
