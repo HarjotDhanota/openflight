@@ -16,10 +16,11 @@ from scipy.optimize import brentq
 from openflight.camera.club_motion import BALL_DIAMETER_MM, ReferenceBall
 from openflight.camera.clubpose.angles import (
     ENVELOPE,
-    SHAFT_LOCAL,
     STATIC_LIE_DEG,
+    ClubAxes,
     angles_from_pose,
     basis_from_angles,
+    club_axes,
     square_pose,
 )
 from openflight.camera.clubpose.contact_edges import _principal_line
@@ -114,22 +115,35 @@ class _EdgeField:
     edge_count: int
 
 
-@lru_cache(maxsize=1)
-def _canonical_square_pose() -> tuple[float, float, float]:
-    return square_pose()
+def _mesh_axes(mesh) -> ClubAxes:
+    """The club's own striking-face axes, or the reference ones.
+
+    ``strict=False``: this renderer is also driven with synthetic and stand-in
+    meshes -- sensitivity studies and tests -- that carry no clubface-sized
+    planar patch. Those fall back to the frozen reference axes, which are the
+    definition the derived ones are checked against anyway. The choice is
+    recorded on the returned object's ``source``.
+    """
+    return club_axes(mesh, strict=False)
+
+
+@lru_cache(maxsize=4)
+def _canonical_square_pose(axes: ClubAxes) -> tuple[float, float, float]:
+    return square_pose(axes=axes)
 
 
 @lru_cache(maxsize=512)
 def _physical_pose(
-    loft_deg: float, face_angle_deg: float, lie_deg: float
+    loft_deg: float, face_angle_deg: float, lie_deg: float, axes: ClubAxes
 ) -> tuple[float, float, float]:
     pose = square_pose(
         float(loft_deg),
         float(face_angle_deg),
         float(lie_deg),
-        seed_pose=_canonical_square_pose(),
+        seed_pose=_canonical_square_pose(axes),
+        axes=axes,
     )
-    delivered = angles_from_pose(*pose)
+    delivered = angles_from_pose(*pose, axes=axes)
     if not all(
         low - 1e-3 <= delivered[key] <= high + 1e-3 for key, (low, high) in ENVELOPE.items()
     ):
@@ -150,34 +164,38 @@ def _axial_delta(first_deg: float, second_deg: float) -> float:
     return (float(first_deg) - float(second_deg) + 90.0) % 180.0 - 90.0
 
 
-def _projected_shaft_angle(
+def _projected_shaft_angle(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     center_world: np.ndarray,
     camera: CameraPreset,
     loft_deg: float,
     face_angle_deg: float,
     lie_deg: float,
+    axes: ClubAxes,
 ) -> float:
-    pose = _physical_pose(float(loft_deg), float(face_angle_deg), float(lie_deg))
-    shaft_world = basis_from_angles(*pose) @ SHAFT_LOCAL
+    pose = _physical_pose(float(loft_deg), float(face_angle_deg), float(lie_deg), axes)
+    shaft_world = basis_from_angles(*pose) @ axes.shaft_local
     uv, front = _project(np.stack([center_world, center_world + shaft_world * 100.0]), camera)
     if not bool(np.all(front)):
         raise ValueError("shaft axis projects behind the camera")
     return _axial_angle(uv[1] - uv[0])
 
 
-def _solve_lie(
+def _solve_lie(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     observed_angle_deg: float | None,
     center_world: np.ndarray,
     camera: CameraPreset,
     loft_deg: float,
     face_angle_deg: float,
+    axes: ClubAxes,
 ) -> tuple[float, str]:
     if observed_angle_deg is None or not math.isfinite(observed_angle_deg):
         return STATIC_LIE_DEG, "static_fallback_no_shaft"
     low, high = ENVELOPE["lie_deg"]
 
     def error(lie_deg: float) -> float:
-        projected = _projected_shaft_angle(center_world, camera, loft_deg, face_angle_deg, lie_deg)
+        projected = _projected_shaft_angle(
+            center_world, camera, loft_deg, face_angle_deg, lie_deg, axes
+        )
         return _axial_delta(projected, observed_angle_deg)
 
     samples = np.linspace(low, high, 18)
@@ -323,14 +341,15 @@ def build_nominal_outline(  # pylint: disable=too-many-arguments,too-many-positi
 ) -> tuple[OutlineTemplate | None, str]:
     """Render the physical fixed pose on the camera ray through the ball."""
     center = _center_world(ball, camera, range_mm)
+    axes = _mesh_axes(mesh)
     try:
         if lie_override_deg is None:
             lie_deg, lie_source = _solve_lie(
-                shaft_angle_deg, center, camera, loft_deg, face_angle_deg
+                shaft_angle_deg, center, camera, loft_deg, face_angle_deg, axes
             )
         else:
             lie_deg, lie_source = float(lie_override_deg), "sensitivity_override"
-        pose = _physical_pose(float(loft_deg), float(face_angle_deg), float(lie_deg))
+        pose = _physical_pose(float(loft_deg), float(face_angle_deg), float(lie_deg), axes)
     except (RuntimeError, ValueError):
         return None, "nominal_pose_failed"
     mask = render_mask_6dof(mesh, center, *pose, camera)
@@ -344,7 +363,7 @@ def build_nominal_outline(  # pylint: disable=too-many-arguments,too-many-positi
         return None, "template_boundary_too_small"
     topline_xs, topline_ys = _topline(mask)
     topline_at_ball = float(np.interp(ball.x, topline_xs, topline_ys))
-    shaft_angle = _projected_shaft_angle(center, camera, loft_deg, face_angle_deg, lie_deg)
+    shaft_angle = _projected_shaft_angle(center, camera, loft_deg, face_angle_deg, lie_deg, axes)
     points, normals, bins, candidate_count = boundary
     heel_x, toe_x = float(full_x.min()), float(full_x.max())
     kept_count = len(points)
