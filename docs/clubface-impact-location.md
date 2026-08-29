@@ -163,3 +163,39 @@ full replay with the specified thresholds restored.
 **Verdict: not findable to ±1 px on this session with these three automatic edge
 detectors.** This is a consistency and availability result only; no accuracy claim
 against truth exists.
+
+## Outline alignment — spike result
+
+Session `20260825_181734` was replayed after un-mirroring every capture and excluding
+`shot_001`. The fixed 690CB 7-iron outline used the measured camera, the ball ray,
+radar range ramp, shaft-derived lie, and fused-attack loft prior; only its image-plane
+translation was searched. The same 7-iron mesh was used for the 9-iron shots, so their
+few-millimetre head-shape difference is a known bias. No threshold or search-range
+setting was changed after seeing the data.
+
+| Pre-registered check | Result | Threshold | Outcome |
+|---|---:|---:|---|
+| Two-frame consistency | 0/21 shots evaluable and within 1 px | ≥ 80% within 1 px | **FAIL** |
+| Shot 014 vs hand marks | neither frame passed the alignment gates | both offsets within 1.5 px | **FAIL** |
+| Availability | 0/21 shots passed in both frames | ≥ 17/21 | **FAIL** |
+| Loft sensitivity ±5° | unavailable: no nominal alignment was accepted | offset moves ≤ 1 px | **FAIL** |
+| Face-angle sensitivity ±10° | unavailable: no nominal alignment was accepted | offset moves ≤ 1 px | **FAIL** |
+| Lie sensitivity ±3° | unavailable: no nominal alignment was accepted | offset moves ≤ 1 px | **FAIL** |
+| Accepted residual distribution | unavailable: 0 accepted frames | median ≤ 1.0 px | **FAIL** |
+| Sheet inspection | systematic wrong locks and closed failures | inspect every f71/f72 overlay at 8× | **FAIL** |
+
+The f71 sheet contained 16 `support_below_half`, two `search_boundary`, one
+`residual_above_1_5`, and two `nominal_pose_failed` results. The f72 sheet contained
+13 `support_below_half`, six `search_boundary`, and two `nominal_pose_failed` results.
+In both sheets, the candidate outline commonly sits below or beside the visible head:
+its lower arc follows the sole shadow, its hosel boundary crosses the shaft or ball,
+and several translations stop on the ±12 px boundary. Shot 014 follows the same
+sole/shadow structure rather than the hand-marked head outline. Shots 020 and 025 fail
+closed before rendering because their accepted fused attack values produce dynamic
+lofts of 2.12° and 58.33°, outside the physical pose envelope. Lowering an edge gate
+would admit more of the visible shadow and internal highlights, so the pre-registered
+settings were retained and no check-directed tuning run was made.
+
+**Verdict: the translation-only outline is not alignable to ±1 px on this session.**
+This is a repeatability and fail-closed result, not an accuracy claim against truth;
+no truth reference exists.

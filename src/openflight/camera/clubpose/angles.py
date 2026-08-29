@@ -89,6 +89,8 @@ def square_pose(
     dynamic_loft_deg: float = STATIC_LOFT_DEG,
     face_angle_deg: float = 0.0,
     lie_deg: float = STATIC_LIE_DEG,
+    *,
+    seed_pose: tuple[float, float, float] | None = None,
 ) -> tuple[float, float, float]:
     """The (yaw, pitch, roll) that delivers the requested angles.
 
@@ -115,18 +117,26 @@ def square_pose(
             total += delta * delta
         return total
 
+    seeds = (
+        [np.asarray(seed_pose, dtype=float)]
+        if seed_pose is not None
+        else [
+            np.array([yaw, pitch, roll], dtype=float)
+            for yaw in (-90.0, 0.0, 90.0, 180.0)
+            for pitch in (-180.0, -90.0, 0.0, 90.0)
+            for roll in (-90.0, 0.0, 90.0, 180.0)
+        ]
+    )
     best = None
-    for yaw in (-90.0, 0.0, 90.0, 180.0):
-        for pitch in (-180.0, -90.0, 0.0, 90.0):
-            for roll in (-90.0, 0.0, 90.0, 180.0):
-                result = minimize(
-                    cost,
-                    np.array([yaw, pitch, roll], dtype=float),
-                    method="Nelder-Mead",
-                    options={"maxiter": 2000, "xatol": 1e-5, "fatol": 1e-10},
-                )
-                if best is None or result.fun < best.fun:
-                    best = result
+    for seed in seeds:
+        result = minimize(
+            cost,
+            seed,
+            method="Nelder-Mead",
+            options={"maxiter": 2000, "xatol": 1e-5, "fatol": 1e-10},
+        )
+        if best is None or result.fun < best.fun:
+            best = result
     if best is None or best.fun > 1e-3:
         raise RuntimeError(
             f"no pose delivers {target}; residual {None if best is None else best.fun}"
