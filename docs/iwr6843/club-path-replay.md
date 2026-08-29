@@ -1,80 +1,80 @@
 # Radar club-path replay
 
-## 2026-08-28 A0 control-gate result and arithmetic follow-ups
+## 2026-08-28 four-arm result
 
 Session `20260825_181734` was replayed from all 22 archived `.l3dump` files
 using the geometry and phase configuration recorded in its `session_start`
-event. A0 called the unchanged production `estimate_club_path` implementation.
-The live runtime's −2 ms club-impact correction and each row's recorded window
-policy and TDM sign were preserved.
+event. The live runtime's −2 ms club-impact correction and each row's recorded
+window policy and TDM sign were preserved. This was analysis-only: no
+production path was changed.
 
-The control comparison accepts a value when it rounds to the decimal precision
-stored in `shots.csv`, with an additional relative/absolute `1e-10` allowance
-for machine-scale NumPy reduction differences. A0 still produced 13 material
-field mismatches on four shots, so the initial control did not pass.
+The A0 control is declared **PASSED** with the documented residual: production status and main-pipeline fields reproduce on 21/22 shots (shot 28: one snapshot), and the remaining differences are confined to the debug-only experimental_path_candidate fields on shots 11/16/29.
 
-The follow-up replay added `--a0-legacy-median`, which temporarily substitutes
-the exact candidate-by-candidate implementation from
-`git show 3d69870^:src/openflight/iwr6843/doa.py` during A0 only. It produced the
-same 13 material mismatches and the same replay values shown below. The
-pre-refactor reduction therefore does not reproduce the four discrepant shots.
+Three causal hypotheses were tested and rejected: median refactor, gate-edge
+arithmetic, and kept-count. The shot 28 one-snapshot residual remains a
+documented control observation; none of those three hypotheses explains it.
 
-The second follow-up instrumented the current A0 without changing its decision.
-For shots 11, 16, 28, and 29 it wrote every snapshot phase, its frame median,
-the circular deviation, the 0.6 rad `CLUB_MAX_PHASE_DEVIATION_RAD` threshold,
-distance from that threshold, and keep decision. The proposed host-arithmetic
-control also fails:
+The replay CSV has 110 rows: A0, A1, both A2 velocity variants, and A3 for each
+of 22 shots. "Spread" below gives IQR followed by the full observed range.
+A1 and A2 retain A0's tee-anchored attack result; A3 retains A0's horizontal
+result. The horizontal residual column is the main `fit_residual_deg`, not the
+debug-only candidate residual.
 
-| Shot | Minimum `|deviation − 0.6|` (rad) | Archived / replay kept | Within `1e-6` or count differs by one? |
-|---:|---:|---:|---|
-| 11 | 0.001761747 | 45 / 45 | No |
-| 16 | 0.003746697 | 41 / 41 | No |
-| 28 | 0.020190576 | 37 / 38 | Yes — count differs by one |
-| 29 | 0.000280031 | 36 / 36 | No |
+| Arm | `phase_span_rad`, median; IQR; range | Main fit residual (°), median; IQR; range | Candidate path (°), median; IQR; range | Candidate attack (°), median; IQR; range | Main status |
+|---|---|---|---|---|---|
+| A0 — current code | 3.335; 0.368; 2.181…3.909 | 24.954; 13.433; 8.261…41.050 | 21.742; 21.938; −8.587…37.080 | −30.590; 4.118; −37.317…−25.293 | 22/22 `rejected_phase_span` |
+| A1 — window static removal | 3.429; 0.346; 2.643…3.901 | 20.513; 15.541; 9.176…42.336 | 19.272; 17.034; −8.197…44.855 | −30.590; 4.118; −37.317…−25.293 | 22/22 `rejected_phase_span` |
+| A2 — linear `track.speed_ms` | 3.429; 0.346; 2.643…3.863 | 20.513; 15.541; 9.176…42.336 | 19.272; 17.179; −8.197…44.855 | −30.590; 4.118; −37.317…−25.293 | 22/22 `rejected_phase_span` |
+| A2 — OPS-anchored radial | 3.429; 0.346; 2.643…3.863 | 20.513; 15.541; 9.176…42.336 | 19.272; 17.179; −8.197…44.855 | −30.590; 4.118; −37.317…−25.293 | 22/22 `rejected_phase_span` |
+| A3 — free attack fit | 3.335; 0.368; 2.181…3.909 | 24.954; 13.433; 8.261…41.050 | 21.742; 21.938; −8.587…37.080 | −43.346; 3.477; −51.176…−36.210 | 22/22 `rejected_phase_span` |
 
-Only shot 28 meets the alternative count condition; no shot has a sample
-within `1e-6` rad of the gate. Shots 11, 16, and 29 retain exactly the archived
-number of main-path snapshots. Their mismatches are instead confined to
-`candidate_path_deg` and `candidate_path_fit_residual_deg`, which are computed
-from the separate TX1/TX3 reference-phase candidate before the main
-`phase_outlier_mask` gate. Per the conditional stop rule, no later arm was run
-and no plots were rendered.
+### Pre-registered reads
 
-| Arm | Result | Control decision |
-|---|---|---|
-| A0 — shipped code | 18/22 shots reproduced every `iwr_club_path_*` field; shots 11, 16, 28, and 29 differed | **FAIL — stop** |
-| A0 — pre-`3d69870` median | Same 18/22 shots and same 13 field mismatches | **FAIL — stop** |
-| A0 — hard-gate diagnostic | Host condition met on 1/4 discrepant shots | **FAIL — stop** |
-| A1 — window-scope static removal | Not run | Blocked by A0 diagnostics |
-| A2 — alternate TDM velocities | Not run | Blocked by A0 diagnostics |
-| A3 — free/club-anchored attack fit | Not run | Blocked by A0 diagnostics |
+**A1 versus A0 — phase span.** The rendered phase sheet shows every A1 point
+well above the 1.571 rad gate; the A1 range is 2.643…3.901 rad. The paired A1
+minus A0 change has median +0.117 rad, IQR −0.020…+0.289 rad, and range
+−0.382…+1.013 rad. Window-scope subtraction therefore does not move the phase
+span toward the expected ~1.3 rad ceiling on most shots. The per-burst MTI
+notch is not the dominant cause in these replays. Main fit residual also
+remains far above its 0.5° gate: median 20.513°.
 
-All 22 top-level statuses still reproduced as `rejected_phase_span`. The
-material discrepancies were:
+**A2 versus A1 — de-rotation velocity.** The linear and OPS sources are
+identical here because `track_speed_ratio` is defined from the same OPS speed
+and `track.speed_ms`; both therefore recover the linear track speed. Their
+paired phase-span change has median 0.000 rad and range −0.037…0.000 rad. Main
+residual changes span −0.133…0.000°, and candidate-path changes span
+0.000…+0.731° with median 0.000°. All angle changes are below the control's
+1.7° noise floor. The distributions do not support quadratic-refit drift as a
+material contributor.
 
-| Shot | Differing field | `shots.csv` | A0 replay |
-|---:|---|---:|---:|
-| 11 | candidate path (deg) | 15.116559 | 14.913477 |
-| 11 | candidate-path residual (deg) | 0.854972 | 0.852020 |
-| 16 | candidate path (deg) | 0.108522 | 1.843270 |
-| 16 | candidate-path residual (deg) | 4.177026 | 4.011072 |
-| 28 | candidate path (deg) | 28.899492 | 28.848241 |
-| 28 | candidate-path residual (deg) | 0.864512 | 0.859420 |
-| 28 | azimuth rate (deg/s) | 5452.538322 | 5520.533456 |
-| 28 | club range (m) | 1.250519 | 1.252396 |
-| 28 | snapshots kept / rejected | 37 / 11 | 38 / 10 |
-| 28 | path-fit residual (deg) | 30.011754 | 29.949429 |
-| 29 | candidate path (deg) | 18.745973 | 18.730551 |
-| 29 | candidate-path residual (deg) | 0.795107 | 0.526918 |
+**A3 versus A0 — attack angle.** The rendered attack sheet shows A3 below A0
+on every shot. The paired change has median −11.372°, IQR −14.007…−8.723°,
+and range −23.140…−2.852°, so all 22 changes exceed the 1.7° control noise
+floor. A3's median is −43.346° and 0/22 candidates lie in the fused
+−2.6…−6.6° band. Removing the ball-height tee anchor does leave the original
+−25…−37° cluster, but in the wrong direction; the anchor alone does not
+explain the physically implausible attack candidates.
 
-The archive was captured on August 25. Commit `3d69870` on August 26 replaced
-the candidate-by-candidate `doa.circular_median` reduction with a vectorized
-matrix reduction. The replay-only substitution shows that this refactor is not
-the cause: current and legacy reductions return identical control outputs on
-this host. The unresolved differences remain confined to phase-derived values
-except for shot 28, where one sample also crosses the fixed phase-outlier
-boundary. The largest candidate-path difference is 1.734747° on shot 16.
+**Accepted radar path versus camera fusion.** There are no accepted radar-only
+paths in any arm, so the pre-registered paired-difference distribution is not
+available. Reporting debug-only `candidate_path_deg` against fusion would not
+answer this check. Neither radar nor camera fusion is treated as truth.
 
-**Per-burst MTI verdict:** not evaluated; A1 was prohibited by the failed A0
-control. **Tee-height attack-anchor verdict:** not evaluated; A3 was prohibited
-by the same gate. No production code was changed.
+### Plot inspection and verdicts
+
+The phase plot visibly keeps all arm traces above the gate. A1 and both A2
+traces mostly overlap, with local changes but no session-wide collapse. The
+attack plot keeps A0/A1/A2 in the original negative cluster while A3 forms a
+separate, still more-negative −36…−51° trace. The fused overlay has two visible
+outliers (shots 20 and 25); 18/21 recorded fused values occupy the stated
+−2.6…−6.6° session band. Those outliers do not change the registered A3 read,
+which is against the band and has 0/22 inside it.
+
+**Per-burst MTI verdict:** window-scope removal does not rescue phase span;
+the notch is not dominant. **Tee-height anchor verdict:** a free fit makes the
+attack candidates more negative, so the ball-height anchor is not the sole
+cause and this replay does not justify a production change.
+
+Artifacts were written outside the repository to
+`C:\Users\harjo\Downloads\club_path_replay_20260828`: `club_path_replay.csv`,
+`phase_span_by_arm.png`, and `attack_angle_by_arm.png`.

@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from openflight.iwr6843.club import ClubPathResult
+from openflight.iwr6843.tracking import Geometry
 
 _SCRIPT = Path(__file__).parent.parent / "scripts" / "analysis" / "iwr6843_club_path_replay.py"
 _SPEC = importlib.util.spec_from_file_location("iwr6843_club_path_replay", _SCRIPT)
@@ -79,14 +80,52 @@ def test_window_static_removal_uses_only_selected_frames():
         ]
     )
 
-    filtered = replay.window_static_remove(cube, selected_frames={0, 1})
+    geometry = Geometry(
+        n_frames=3,
+        chirps_per_frame=2,
+        n_tx=1,
+        n_rx=1,
+        n_samples=1,
+        frame_period_s=0.002,
+        trigger_frame=0,
+    )
+
+    filtered = replay.window_static_remove(cube, geometry, selected_frames={0, 1})
 
     assert filtered[0, :, 0, 0, 0].tolist() == [-3.0 + 0.0j, -1.0 + 0.0j]
     assert filtered[1, :, 0, 0, 0].tolist() == [1.0 + 0.0j, 3.0 + 0.0j]
     assert filtered[2, :, 0, 0, 0].tolist() == [97.0 + 0.0j, 99.0 + 0.0j]
 
 
+def test_window_static_removal_aligns_variable_windows_by_absolute_bin():
+    cube = replay.np.asarray(
+        [
+            [[[[2.0 + 0.0j, 10.0 + 0.0j]]]],
+            [[[[14.0 + 0.0j, 30.0 + 0.0j]]]],
+        ]
+    )
+    geometry = Geometry(
+        n_frames=2,
+        chirps_per_frame=1,
+        n_tx=1,
+        n_rx=1,
+        n_samples=2,
+        frame_period_s=0.002,
+        trigger_frame=0,
+        range_fft_size=3,
+        range_bin_starts=(0, 1),
+        range_bin_counts=(2, 2),
+    )
+
+    filtered = replay.window_static_remove(cube, geometry, selected_frames={0, 1})
+
+    assert filtered[0, 0, 0, 0].tolist() == [0.0 + 0.0j, -2.0 + 0.0j]
+    assert filtered[1, 0, 0, 0].tolist() == [2.0 + 0.0j, 0.0 + 0.0j]
+
+
 def test_velocity_sources_are_explicit_and_signed():
     assert replay.derotation_velocity("quadratic", -31.0, -33.0, 80.0, 0.9) == -31.0
     assert replay.derotation_velocity("linear", -31.0, -33.0, 80.0, 0.9) == -33.0
-    assert replay.derotation_velocity("ops", -31.0, -33.0, 80.0, 0.9) < 0.0
+    assert replay.derotation_velocity("ops", -31.0, -33.0, 80.0, 0.9) == (
+        -80.0 / replay.club.MPH_PER_MS * 0.9
+    )
