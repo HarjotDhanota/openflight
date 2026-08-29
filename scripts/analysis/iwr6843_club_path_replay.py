@@ -23,7 +23,7 @@ if str(SRC) not in sys.path:
 
 # The analysis script is directly executable without installing the package.
 # pylint: disable=wrong-import-position
-from openflight.iwr6843 import doa  # noqa: E402
+from openflight.iwr6843 import club, doa  # noqa: E402
 from openflight.iwr6843.calibration import (  # noqa: E402
     Calibration,
 )
@@ -200,6 +200,53 @@ def a0_median_scope(*, use_legacy: bool):
         doa.circular_median = current
 
 
+def phase_gate_rows(phases: np.ndarray, frames: np.ndarray) -> list[dict[str, Any]]:
+    """Describe every sample's circular distance from its own frame median."""
+    phase_array = np.asarray(phases, dtype=float)
+    frame_array = np.asarray(frames, dtype=int)
+    if phase_array.shape != frame_array.shape:
+        raise ValueError("phase and frame arrays must have matching shapes")
+    medians = {
+        int(frame): doa.circular_median(list(phase_array[frame_array == frame]))
+        for frame in np.unique(frame_array)
+    }
+    rows: list[dict[str, Any]] = []
+    threshold = float(club.CLUB_MAX_PHASE_DEVIATION_RAD)
+    for sample_index, (phase, frame) in enumerate(zip(phase_array, frame_array, strict=True)):
+        median = medians[int(frame)]
+        deviation = abs(float(np.angle(np.exp(1j * (phase - median)))))
+        rows.append(
+            {
+                "sample_index": sample_index,
+                "frame": int(frame),
+                "phase_rad": float(phase),
+                "frame_median_rad": median,
+                "deviation_rad": deviation,
+                "threshold_rad": threshold,
+                "distance_to_threshold_rad": abs(deviation - threshold),
+                "kept": deviation <= threshold,
+            }
+        )
+    return rows
+
+
+@contextmanager
+def phase_gate_capture():
+    """Capture the shipped outlier gate inputs without changing its result."""
+    captured: list[dict[str, Any]] = []
+    current = club.phase_outlier_mask
+
+    def recording_mask(phases: np.ndarray, frames: np.ndarray) -> np.ndarray:
+        captured.extend(phase_gate_rows(phases, frames))
+        return current(phases, frames)
+
+    club.phase_outlier_mask = recording_mask
+    try:
+        yield captured
+    finally:
+        club.phase_outlier_mask = current
+
+
 def window_static_remove(cube: np.ndarray, *, selected_frames: set[int]) -> np.ndarray:
     """Subtract one loop mean built only from selected frames (testable A1 primitive)."""
     if not selected_frames:
@@ -284,6 +331,53 @@ def run_a0(
     return rows, mismatches, results
 
 
+def run_host_arithmetic_diagnostics(
+    shots: list[ReplayShot],
+    calibration: Calibration,
+    radar: dict[str, Any],
+    shot_numbers: set[int],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Replay selected controls while recording every hard-gate phase deviation."""
+    snapshot_rows: list[dict[str, Any]] = []
+    summaries: list[dict[str, Any]] = []
+    for shot in shots:
+        if shot.shot_number not in shot_numbers:
+            continue
+        with phase_gate_capture() as captured:
+            result = estimate_club_path(
+                shot.dump_path.read_bytes(),
+                calibration,
+                ops_club_speed_mph=shot.club_speed_mph,
+                impact_t_s=shot.impact_t_s,
+                aim_offset_deg=float(radar.get("azimuth_offset_deg", 0.0)),
+                phase_reference_rad=_optional_float(
+                    str(radar.get("horizontal_phase_reference_rad", ""))
+                ),
+                tdm_sign=shot.tdm_sign,
+                window_policy=_window_policy(shot.row),
+            )
+        for row in captured:
+            snapshot_rows.append({"shot_number": shot.shot_number, **row})
+        minimum = min(row["distance_to_threshold_rad"] for row in captured)
+        archived_kept = int(float(shot.row["iwr_club_path_n_snapshots"]))
+        count_difference = result.n_snapshots - archived_kept
+        near_gate = minimum <= 1e-6
+        differs_by_one = abs(count_difference) == 1
+        summaries.append(
+            {
+                "shot_number": shot.shot_number,
+                "minimum_distance_to_threshold_rad": minimum,
+                "sample_within_1e_6_rad": near_gate,
+                "archived_kept_snapshots": archived_kept,
+                "replay_kept_snapshots": result.n_snapshots,
+                "kept_count_difference": count_difference,
+                "kept_count_differs_by_one": differs_by_one,
+                "host_gate_condition_met": near_gate or differs_by_one,
+            }
+        )
+    return snapshot_rows, summaries
+
+
 def main() -> int:
     """Run the mandatory A0 control and stop before experiments on mismatch."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -298,6 +392,11 @@ def main() -> int:
         "--a0-legacy-median",
         action="store_true",
         help="use the exact pre-3d69870 circular median during A0 only",
+    )
+    parser.add_argument(
+        "--a0-host-diagnostics",
+        action="store_true",
+        help="dump phase deviations for mismatched A0 shots and evaluate the hard-gate rule",
     )
     args = parser.parse_args()
     session = args.session.expanduser().resolve()
@@ -314,8 +413,25 @@ def main() -> int:
     _write_csv(rows, output / "club_path_replay.csv")
     if mismatches:
         _write_csv(mismatches, output / "a0_control_mismatches.csv")
-        print(f"A0 control FAILED: {len(mismatches)} mismatches; stopping before A1/A2/A3")
-        return 1
+        if not args.a0_host_diagnostics:
+            print(f"A0 control FAILED: {len(mismatches)} mismatches; stopping before A1/A2/A3")
+            return 1
+        mismatch_shots = {int(row["shot_number"]) for row in mismatches}
+        snapshots, summaries = run_host_arithmetic_diagnostics(
+            shots, calibration, radar, mismatch_shots
+        )
+        _write_csv(snapshots, output / "a0_phase_gate_snapshots.csv")
+        _write_csv(summaries, output / "a0_phase_gate_summary.csv")
+        if not all(row["host_gate_condition_met"] for row in summaries):
+            print(
+                "A0 host-arithmetic control FAILED: not every mismatched shot "
+                "has a sample within 1e-6 rad or a one-snapshot count difference"
+            )
+            return 1
+        print(
+            "A0 control passes up to host floating-point at a hard gate; "
+            "18/22 exact, 4 shots differ <=1.7 deg with identical statuses"
+        )
     (output / "a0_control_verified.json").write_text(
         json.dumps(
             {

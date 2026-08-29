@@ -56,6 +56,20 @@ def test_legacy_median_context_substitutes_and_restores_pre_refactor_reduction()
     assert replay.doa.circular_median is current
 
 
+def test_phase_gate_rows_report_circular_deviation_and_threshold_margin():
+    phases = replay.np.asarray([3.0, -3.0, 2.0])
+    frames = replay.np.asarray([4, 4, 5])
+
+    rows = replay.phase_gate_rows(phases, frames)
+
+    assert [row["frame"] for row in rows] == [4, 4, 5]
+    assert all(row["threshold_rad"] == replay.club.CLUB_MAX_PHASE_DEVIATION_RAD for row in rows)
+    assert rows[0]["deviation_rad"] < 0.3
+    assert rows[0]["kept"] is True
+    assert rows[2]["deviation_rad"] == 0.0
+    assert rows[2]["distance_to_threshold_rad"] == replay.club.CLUB_MAX_PHASE_DEVIATION_RAD
+
+
 def test_window_static_removal_uses_only_selected_frames():
     cube = replay.np.asarray(
         [
