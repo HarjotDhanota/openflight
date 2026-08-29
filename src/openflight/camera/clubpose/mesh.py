@@ -419,6 +419,193 @@ def detect_face_plane(
     return max(candidates, key=lambda item: item.coherent_area_mm2)
 
 
+@dataclass(frozen=True)
+class StrikingFace:
+    """The largest coherent planar patch on a clubhead: the part that hits the ball.
+
+    Distinct from `FacePlaneDetection`, which finds the coherent extremity plane
+    with a clubface-like lens aspect and, on the normalized 690CB, returns the
+    much smaller cavity rim that the mesh frame is anchored to.
+    """
+
+    normal_local: np.ndarray
+    centroid_local: np.ndarray
+    long_axis_local: np.ndarray
+    area_mm2: float
+    span_mm: np.ndarray
+    triangle_indices: np.ndarray
+
+
+def _triangle_normals_and_areas(mesh: TriangleMesh) -> tuple[np.ndarray, np.ndarray]:
+    """Outward unit normals and areas, from the mesh's own triangle winding."""
+    triangles = mesh.vertices_local_mm[mesh.faces]
+    cross = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+    double_area = np.linalg.norm(cross, axis=1)
+    normals = np.zeros_like(cross)
+    valid = double_area > 1e-10
+    normals[valid] = cross[valid] / double_area[valid, None]
+    return normals, double_area / 2.0
+
+
+def _adjacency_csr(mesh: TriangleMesh) -> tuple[np.ndarray, np.ndarray]:
+    """Triangle-to-triangle adjacency in CSR form, over welded vertices.
+
+    The dict-of-sets form used by `detect_face_plane` costs seconds on a 26k
+    triangle mesh, which is too slow to sit behind an import.
+    """
+    _, welded_faces = _welded_faces(mesh.vertices_local_mm, mesh.faces)
+    count = len(welded_faces)
+    edges = np.sort(
+        np.concatenate([welded_faces[:, [0, 1]], welded_faces[:, [1, 2]], welded_faces[:, [2, 0]]]),
+        axis=1,
+    )
+    owners = np.tile(np.arange(count, dtype=np.int64), 3)
+    order = np.lexsort((edges[:, 1], edges[:, 0]))
+    edges, owners = edges[order], owners[order]
+    if len(edges) < 2:
+        return np.zeros(count + 1, dtype=np.int64), np.zeros(0, dtype=np.int64)
+    # Triangles sharing an edge are adjacent in this sort, so chaining
+    # consecutive owners inside each edge group spans the whole group.
+    shared = np.all(edges[1:] == edges[:-1], axis=1)
+    left, right = owners[:-1][shared], owners[1:][shared]
+    sources = np.concatenate([left, right])
+    targets = np.concatenate([right, left])
+    order = np.argsort(sources, kind="stable")
+    sources, targets = sources[order], targets[order]
+    indptr = np.zeros(count + 1, dtype=np.int64)
+    np.cumsum(np.bincount(sources, minlength=count), out=indptr[1:])
+    return indptr, targets
+
+
+def _coherent_region(
+    seed: int,
+    normals: np.ndarray,
+    indptr: np.ndarray,
+    neighbours: np.ndarray,
+    assigned: np.ndarray,
+    cosine_limit: float,
+) -> np.ndarray:
+    """Triangles reachable from ``seed`` whose normal stays within tolerance of it.
+
+    Tolerance is measured against the SEED's normal, not a neighbour's, so a
+    gently curved shell cannot walk the region around a corner one triangle at
+    a time.
+    """
+    seed_normal = normals[seed]
+    region = [seed]
+    assigned[seed] = True
+    pending = [seed]
+    while pending:
+        current = pending.pop()
+        for neighbour in neighbours[indptr[current] : indptr[current + 1]]:
+            if assigned[neighbour]:
+                continue
+            if float(normals[neighbour] @ seed_normal) < cosine_limit:
+                continue
+            assigned[neighbour] = True
+            region.append(int(neighbour))
+            pending.append(int(neighbour))
+    return np.asarray(region, dtype=np.int32)
+
+
+def _dominant_depth_slab(depths: np.ndarray, areas: np.ndarray, slab_mm: float) -> np.ndarray:
+    """Keep the slab of the given thickness holding the most area.
+
+    A coherent normal cluster can still straddle a step -- two parallel shelves
+    joined round an edge read as one region. Only the dominant shelf is planar.
+    """
+    order = np.argsort(depths, kind="stable")
+    sorted_depths = depths[order]
+    cumulative = np.concatenate([[0.0], np.cumsum(areas[order])])
+    ends = np.searchsorted(sorted_depths, sorted_depths + float(slab_mm), side="right")
+    weights = cumulative[ends] - cumulative[: len(sorted_depths)]
+    best = int(np.argmax(weights))
+    return order[best : ends[best]]
+
+
+def _in_plane_axes(
+    points: np.ndarray, centroid: np.ndarray, normal: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Long and short in-plane axes of a planar point set, plus their spans.
+
+    The long axis's sign is fixed by making its largest-magnitude component
+    positive, the same convention `detect_face_plane` uses for its width axis,
+    so the axis is reproducible rather than dependent on SVD sign luck.
+    """
+    centered = points - centroid
+    planar = centered - np.outer(centered @ normal, normal)
+    _, _, axes = np.linalg.svd(planar, full_matrices=False)
+    long_axis = axes[0] - normal * float(axes[0] @ normal)
+    long_axis /= np.linalg.norm(long_axis)
+    if long_axis[int(np.argmax(np.abs(long_axis)))] < 0.0:
+        long_axis *= -1.0
+    short_axis = np.cross(normal, long_axis)
+    spans = np.array([np.ptp(points @ long_axis), np.ptp(points @ short_axis)], dtype=float)
+    return long_axis, short_axis, spans
+
+
+def detect_striking_face(
+    mesh: TriangleMesh,
+    *,
+    normal_tolerance_deg: float = 6.0,
+    depth_slab_mm: float = 1.5,
+    min_area_mm2: float = 2_000.0,
+) -> StrikingFace:
+    """Find the largest coherent planar region: the face that strikes the ball.
+
+    Triangles are clustered by normal within ``normal_tolerance_deg`` of a seed
+    and by adjacency, then trimmed to the dominant ``depth_slab_mm`` shelf so a
+    cluster that straddles a step cannot pass as one plane. The largest
+    surviving region of at least ``min_area_mm2`` wins; the default floor is set
+    for an iron, whose face is a few thousand square millimetres.
+
+    The normal's SIGN comes from the mesh's own triangle winding, which points
+    out of the solid. It is not re-derived from the mesh centroid: on an iron
+    the striking face sits behind the head's centre of area along its own
+    normal, so a centroid test flips it.
+
+    Raises:
+        ValueError: If no planar region reaches ``min_area_mm2``.
+    """
+    normals, areas = _triangle_normals_and_areas(mesh)
+    indptr, neighbours = _adjacency_csr(mesh)
+    cosine_limit = math.cos(math.radians(float(normal_tolerance_deg)))
+    assigned = areas <= 1e-10
+    centroids = np.mean(mesh.vertices_local_mm[mesh.faces], axis=1)
+    best: StrikingFace | None = None
+    for seed in np.argsort(-areas, kind="stable"):
+        if assigned[seed]:
+            continue
+        region = _coherent_region(int(seed), normals, indptr, neighbours, assigned, cosine_limit)
+        if best is not None and float(areas[region].sum()) <= best.area_mm2:
+            continue
+        region = region[
+            _dominant_depth_slab(centroids[region] @ normals[seed], areas[region], depth_slab_mm)
+        ]
+        area = float(areas[region].sum())
+        if area < float(min_area_mm2) or (best is not None and area <= best.area_mm2):
+            continue
+        normal = np.sum(normals[region] * areas[region, None], axis=0)
+        normal /= np.linalg.norm(normal)
+        centroid = np.average(centroids[region], weights=areas[region], axis=0)
+        points = mesh.vertices_local_mm[np.unique(mesh.faces[region].reshape(-1))]
+        long_axis, _short_axis, spans = _in_plane_axes(points, centroid, normal)
+        best = StrikingFace(
+            normal_local=normal,
+            centroid_local=centroid,
+            long_axis_local=long_axis,
+            area_mm2=area,
+            span_mm=spans,
+            triangle_indices=region,
+        )
+    if best is None:
+        raise ValueError(
+            f"no coherent planar region reaches {float(min_area_mm2):.0f} mm2; "
+            "the mesh has no clubface-sized flat patch"
+        )
+    return best
+
+
 def _boundary_edge_count(mesh: TriangleMesh) -> int:
     _, faces = _welded_faces(mesh.vertices_local_mm, mesh.faces)
     counts: dict[tuple[int, int], int] = {}

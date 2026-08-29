@@ -7,6 +7,19 @@ the hosel. Loading mirrors local z, so the right-handed constants below carry
 the opposite z sign. ``MESH_HOSEL_AXIS_LOCAL`` records the suspect CAD hosel for
 diagnostics only; pose construction uses the image shaft and the virtual
 ``SHAFT_LOCAL`` tied to the catalogue lie.
+
+Those axes are now RE-DERIVED from the mesh at import, by
+`mesh.detect_striking_face`, whenever the local mesh cache is present -- the
+patch it finds is the same one they were measured from. The hand-transcribed
+constants stay as `REFERENCE_FACE_NORMAL_LOCAL` and `REFERENCE_HEEL_TOE_LOCAL`:
+they are the regression reference the derived axes must agree with to within
+`FACE_AXES_AGREEMENT_LIMIT_DEG`, and they are the fallback when the cache is
+absent, since it is a license-pinned local artefact that is not committed.
+`FACE_AXES_SOURCE` records which of the two is live.
+
+Importing this module therefore loads and validates the mesh when the cache is
+present, which costs a couple of seconds once per process. The load is itself
+cached, so a process that goes on to fit poses pays nothing extra.
 """
 
 from __future__ import annotations
@@ -17,14 +30,87 @@ import numpy as np
 from scipy.optimize import brentq
 
 from .fit import triad
+from .mesh import TriangleMesh, default_mesh_asset_root, detect_striking_face, load_normalized_mesh
 
-FACE_NORMAL_LOCAL = np.array([-0.941, 0.021, 0.337], dtype=float)
-FACE_NORMAL_LOCAL /= np.linalg.norm(FACE_NORMAL_LOCAL)
+# Hand-transcribed from the measured striking-face patch. Kept frozen: they are
+# what a re-derivation is checked against, not merely a default.
+REFERENCE_FACE_NORMAL_LOCAL = np.array([-0.941, 0.021, 0.337], dtype=float)
+REFERENCE_FACE_NORMAL_LOCAL /= np.linalg.norm(REFERENCE_FACE_NORMAL_LOCAL)
 
 # Heel direction from the 80.6 mm striking-face patch; source was (0,+1,+0.06).
-HEEL_TOE_LOCAL = np.array([0.0, 1.0, -0.06], dtype=float)
-HEEL_TOE_LOCAL -= FACE_NORMAL_LOCAL * float(HEEL_TOE_LOCAL @ FACE_NORMAL_LOCAL)
-HEEL_TOE_LOCAL /= np.linalg.norm(HEEL_TOE_LOCAL)
+REFERENCE_HEEL_TOE_LOCAL = np.array([0.0, 1.0, -0.06], dtype=float)
+REFERENCE_HEEL_TOE_LOCAL -= REFERENCE_FACE_NORMAL_LOCAL * float(
+    REFERENCE_HEEL_TOE_LOCAL @ REFERENCE_FACE_NORMAL_LOCAL
+)
+REFERENCE_HEEL_TOE_LOCAL /= np.linalg.norm(REFERENCE_HEEL_TOE_LOCAL)
+
+# Wider than any plausible transcription or detector difference, tight enough
+# that a differently oriented mesh cannot pass.
+FACE_AXES_AGREEMENT_LIMIT_DEG = 3.0
+
+
+def _angle_deg(first: np.ndarray, second: np.ndarray) -> float:
+    cosine = float(first @ second) / (np.linalg.norm(first) * np.linalg.norm(second))
+    return math.degrees(math.acos(float(np.clip(cosine, -1.0, 1.0))))
+
+
+def face_axes_from_mesh(
+    mesh: TriangleMesh, *, verify: bool = True
+) -> tuple[np.ndarray, np.ndarray]:
+    """Striking-face normal and heel-toe axis, measured off the mesh itself.
+
+    The normal is the largest coherent planar patch's own normal, and the
+    heel-toe axis is that patch's in-plane long axis, orthogonalized against it.
+
+    Args:
+        mesh: A normalized, right-handed clubhead mesh.
+        verify: Check both axes against the frozen reference constants and
+            refuse to return axes that disagree by more than
+            `FACE_AXES_AGREEMENT_LIMIT_DEG`. A mesh that fails is a DIFFERENT
+            club or a differently oriented frame, and silently adopting its
+            axes would move every delivered angle without saying so.
+
+    Raises:
+        RuntimeError: If ``verify`` and either axis disagrees with its
+            reference.
+        ValueError: If the mesh has no clubface-sized planar patch.
+    """
+    face = detect_striking_face(mesh)
+    normal = np.asarray(face.normal_local, dtype=float)
+    normal = normal / np.linalg.norm(normal)
+    heel = np.asarray(face.long_axis_local, dtype=float)
+    heel = heel - normal * float(heel @ normal)
+    heel /= np.linalg.norm(heel)
+    if verify:
+        for measured, reference, name in (
+            (normal, REFERENCE_FACE_NORMAL_LOCAL, "striking-face normal"),
+            (heel, REFERENCE_HEEL_TOE_LOCAL, "heel-toe axis"),
+        ):
+            offset = _angle_deg(measured, reference)
+            if offset > FACE_AXES_AGREEMENT_LIMIT_DEG:
+                raise RuntimeError(
+                    f"mesh {name} {np.round(measured, 4).tolist()} is {offset:.2f} degrees "
+                    f"from the reference {np.round(reference, 4).tolist()}, over the "
+                    f"{FACE_AXES_AGREEMENT_LIMIT_DEG:.1f} degree limit"
+                )
+    return normal, heel
+
+
+def _face_axes_at_import() -> tuple[np.ndarray, np.ndarray] | None:
+    """Re-derive the axes from the local mesh cache, or None when there is none."""
+    path = default_mesh_asset_root() / "poc_7iron.npz"
+    if not path.exists():
+        return None
+    mesh, _metadata, _digest = load_normalized_mesh(str(path))
+    return face_axes_from_mesh(mesh)
+
+
+_DERIVED_FACE_AXES = _face_axes_at_import()
+FACE_AXES_SOURCE = "mesh" if _DERIVED_FACE_AXES is not None else "reference_constants"
+FACE_NORMAL_LOCAL, HEEL_TOE_LOCAL = _DERIVED_FACE_AXES or (
+    REFERENCE_FACE_NORMAL_LOCAL,
+    REFERENCE_HEEL_TOE_LOCAL,
+)
 
 # Mirrored CAD hosel/ferrule direction. It is not the shaft reference used by fits.
 MESH_HOSEL_AXIS_LOCAL = np.array([-0.245, 0.295, 0.924], dtype=float)
