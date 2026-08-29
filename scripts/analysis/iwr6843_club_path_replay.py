@@ -8,6 +8,7 @@ import csv
 import json
 import math
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -22,6 +23,7 @@ if str(SRC) not in sys.path:
 
 # The analysis script is directly executable without installing the package.
 # pylint: disable=wrong-import-position
+from openflight.iwr6843 import doa  # noqa: E402
 from openflight.iwr6843.calibration import (  # noqa: E402
     Calibration,
 )
@@ -179,6 +181,25 @@ def control_mismatches(result: ClubPathResult, row: dict[str, str]) -> list[dict
     return mismatches
 
 
+def legacy_circular_median(values: list[float]) -> float:
+    """Pre-3d69870 circular median, copied verbatim for the A0 replay control."""
+    array = np.asarray(values, dtype=float)
+    scores = [np.median(np.abs(np.angle(np.exp(1j * (array - candidate))))) for candidate in array]
+    return float(array[int(np.argmin(scores))])
+
+
+@contextmanager
+def a0_median_scope(*, use_legacy: bool):
+    """Temporarily substitute the capture-era phase reduction for A0 only."""
+    current = doa.circular_median
+    if use_legacy:
+        doa.circular_median = legacy_circular_median
+    try:
+        yield
+    finally:
+        doa.circular_median = current
+
+
 def window_static_remove(cube: np.ndarray, *, selected_frames: set[int]) -> np.ndarray:
     """Subtract one loop mean built only from selected frames (testable A1 primitive)."""
     if not selected_frames:
@@ -232,29 +253,34 @@ def _write_csv(rows: list[dict[str, Any]], path: Path) -> None:
 
 
 def run_a0(
-    shots: list[ReplayShot], calibration: Calibration, radar: dict[str, Any]
+    shots: list[ReplayShot],
+    calibration: Calibration,
+    radar: dict[str, Any],
+    *,
+    use_legacy_median: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[ClubPathResult]]:
     """Run the untouched shipped estimator and audit it against shots.csv."""
     rows: list[dict[str, Any]] = []
     mismatches: list[dict[str, Any]] = []
     results: list[ClubPathResult] = []
-    for shot in shots:
-        result = estimate_club_path(
-            shot.dump_path.read_bytes(),
-            calibration,
-            ops_club_speed_mph=shot.club_speed_mph,
-            impact_t_s=shot.impact_t_s,
-            aim_offset_deg=float(radar.get("azimuth_offset_deg", 0.0)),
-            phase_reference_rad=_optional_float(
-                str(radar.get("horizontal_phase_reference_rad", ""))
-            ),
-            tdm_sign=shot.tdm_sign,
-            window_policy=_window_policy(shot.row),
-        )
-        results.append(result)
-        rows.append(_result_row(shot, "A0", result))
-        for mismatch in control_mismatches(result, shot.row):
-            mismatches.append({"shot_number": shot.shot_number, **mismatch})
+    with a0_median_scope(use_legacy=use_legacy_median):
+        for shot in shots:
+            result = estimate_club_path(
+                shot.dump_path.read_bytes(),
+                calibration,
+                ops_club_speed_mph=shot.club_speed_mph,
+                impact_t_s=shot.impact_t_s,
+                aim_offset_deg=float(radar.get("azimuth_offset_deg", 0.0)),
+                phase_reference_rad=_optional_float(
+                    str(radar.get("horizontal_phase_reference_rad", ""))
+                ),
+                tdm_sign=shot.tdm_sign,
+                window_policy=_window_policy(shot.row),
+            )
+            results.append(result)
+            rows.append(_result_row(shot, "A0", result))
+            for mismatch in control_mismatches(result, shot.row):
+                mismatches.append({"shot_number": shot.shot_number, **mismatch})
     return rows, mismatches, results
 
 
@@ -268,12 +294,22 @@ def main() -> int:
         action="store_true",
         help="run and verify A0 without executing any experimental arm",
     )
+    parser.add_argument(
+        "--a0-legacy-median",
+        action="store_true",
+        help="use the exact pre-3d69870 circular median during A0 only",
+    )
     args = parser.parse_args()
     session = args.session.expanduser().resolve()
     output = args.out.expanduser().resolve()
     calibration, radar = _calibration(_session_start(session))
     shots = load_shots(session)
-    rows, mismatches, _results = run_a0(shots, calibration, radar)
+    rows, mismatches, _results = run_a0(
+        shots,
+        calibration,
+        radar,
+        use_legacy_median=args.a0_legacy_median,
+    )
     output.mkdir(parents=True, exist_ok=True)
     _write_csv(rows, output / "club_path_replay.csv")
     if mismatches:
@@ -281,7 +317,15 @@ def main() -> int:
         print(f"A0 control FAILED: {len(mismatches)} mismatches; stopping before A1/A2/A3")
         return 1
     (output / "a0_control_verified.json").write_text(
-        json.dumps({"shots": len(shots), "mismatches": 0}, indent=2) + "\n",
+        json.dumps(
+            {
+                "shots": len(shots),
+                "mismatches": 0,
+                "legacy_median": args.a0_legacy_median,
+            },
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
     print(f"A0 control PASS: all shipped fields reproduce for {len(shots)}/22 shots")

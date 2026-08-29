@@ -44,6 +44,18 @@ def test_control_comparison_uses_csv_printed_precision():
     ]
 
 
+def test_legacy_median_context_substitutes_and_restores_pre_refactor_reduction():
+    current = replay.doa.circular_median
+    values = [2.9, -3.0, 3.1, -2.8]
+    expected = replay.legacy_circular_median(values)
+
+    with replay.a0_median_scope(use_legacy=True):
+        assert replay.doa.circular_median is replay.legacy_circular_median
+        assert replay.doa.circular_median(values) == expected
+
+    assert replay.doa.circular_median is current
+
+
 def test_window_static_removal_uses_only_selected_frames():
     cube = replay.np.asarray(
         [
