@@ -325,6 +325,216 @@ Consequences for the plan:
 
 ---
 
+## 1K. UPDATE (2026-08-28) — foundational research pass: are we on the right track, is the mesh hurting us, and the roadmap to full club data
+
+Six independent research passes (premise audit, comparator patents, club model, metric physics,
+optics/vantage, radar club path), each reading this guide and the August measurements first and
+tagging claims CONFIRMED / INFERRED / UNKNOWN. Full reports in
+`docs/Personal Research/research-2026-08-28/` (A–F). This section is the reconciled synthesis;
+where the passes disagree it says so. Code claims below were re-verified by reading the source on
+`feat/clubpose-fit` @ `75d86bf`.
+
+### 1K.1 Verdict: on the right track — one cycle late, and blocked by calibration, not sensing
+
+The architecture is right and is now corroborated from three independent directions:
+
+- **[CONFIRMED — patents, report B]** No comparator reads face orientation from a behind-ball
+  image. Full Swing KIT's patent (US 11,311,789) states face angle is *"Calculated (club and ball
+  path off tee)"* from radar; the word "camera" appears once, in the background. Mevo Gen 2's Pro
+  Package (path, face-to-path, dynamic loft) is pure radar D-plane inversion — no camera, no
+  sticker. Trackman 4's OERT (US 10,953,303 → US 12,263,393, granted 2025-04-01, Trackman A/S)
+  claims exactly our fusion: *track a fix-point on the club across frames bracketing the
+  radar-set impact instant, then read the ball-contact point relative to it.* Face angle and
+  dynamic loft are then read at the contact point with a gear-effect correction from the
+  camera-derived impact location. **The commercial answer to "face angle from behind the ball"
+  is: you don't look at the face; you infer it from where the ball went.**
+- **[CONFIRMED — geometry, report E]** Behind-ball is provably degenerate for face angle and
+  dynamic loft (rotations about axes the camera stares down; measured 5° → 0 px). Repositioning
+  the camera inside one enclosure (raise 300–500 mm, offset 250 mm, look-down) buys ≤ 0.4 px per
+  5° — real, not a rescue. A stereo pair in the same enclosure buys clubhead *depth* (σ_Z ≈ 6 mm
+  at 250 mm baseline today, ~1.5 mm at 1:1 + 6 mm) but not face/loft. Only a face-on second
+  camera removes the degeneracy, and that is the vantage every optical face/loft product uses.
+- **[CONFIRMED — our data, §1J/report A]** The fused radar-radial + camera-transverse clubhead
+  velocity matches the OPS243 to 0.97–1.00; the silhouette pose fit cannot see orientation; the
+  July §1C prediction ("not achievable by any optical method from this vantage") was re-tested in
+  August at some cost and confirmed with real numbers. The pivot to translation-only fusion is
+  correct; it has not yet produced a result.
+
+**What is actually hindering progress** (ranked; each is a calibration or bookkeeping problem,
+none is a sensor limit):
+
+1. **The ~5° camera-vs-radar horizontal offset was never resolved.** It enters the D-plane face
+   angle as `Δoffset / k_h = 5° / 0.69 ≈ 7.3°` of *systematic* error — 6× the ~1.2° random budget
+   and enough to flip open/closed [report D §3.3]. Every face-angle route is blocked on this one
+   measurement (a target at a taped position visible to both sensors). Publishing face angle
+   before it closes would be actively harmful.
+2. **No truth exists for any club metric.** `estimate_chained_delivery`'s attack angle / club path
+   are the most load-bearing unvalidated numbers in the project (frozen against a 17-shot replay,
+   no TrackMan) [A]. The 2026-08-25 session was recorded *alongside a TrackMan* — if that TM
+   export exists, path/AoA truth exists today and `compare_trackman.py`'s club metrics can run
+   without a new session. **Ask for it before scheduling anything.**
+3. **Code has drifted from the measurements** [A, verified]: `projection.py:11-12` still builds
+   `CAMERA_CENTER_WORLD` from `NOMINAL_RANGE_MM = 1575` / `CAMERA_HEIGHT_MM = 209.55` (measured
+   1581 / 203.2 — `fit.measured_camera()` fixes fx but not the camera position); the A0 preset
+   (fx = 1033) is dead but still exported; `fit_sequence` still uses a static 3-point range grid
+   (1481/1581/1681) — the "radar range model: Implemented" line in the report is true only on
+   `feat/silhouette-poc`; `detect_face_plane` still selects the cavity rim. Status claims must
+   name the branch and commit they are true on.
+4. **The radar club-path pipeline has two concrete, previously undiagnosed defects** [report F,
+   verified in source]: (i) the horizontal-path step (`club.py:751`) subtracts the per-burst mean
+   over loops — the `scope="burst"` MTI mode whose own docstring (`tracking.py:156-160`) says it
+   notches movers near `n × λ/(2·T_loop)`; with λ = 4.835 mm and T_loop = 135 µs that is 17.9,
+   **35.8**, 53.7 m/s, and 35.8 m/s sits inside this session's club band (33–39 m/s). (ii) the
+   attack-angle candidate (`club.py:506`) reuses the ball's `trajectory.fit_tee`, which forces the
+   club's height fit through the **ball's** tee-resting height over a 4-frame baseline — a
+   structural cause for the −25…−37° value on every shot regardless of swing. The earlier
+   "phase aliasing" story was wrong in detail: TDM radial motion *is* compensated
+   (`doa.py:314-319`) from the radar's own quadratic-refit speed; its sensitivity (0.117 rad per
+   m/s on the 45 µs hop) makes a 1–2 m/s refit drift a plausible contributor, not the cause.
+   Both fixes are replayable on the 22 `.l3dump` files with no hardware.
+5. **The mesh has been treated as a scale and face-centre reference it cannot provide** (§1K.2).
+6. **The resolution plan under-counted the light cost** [report E]: 640×400 is *not* 1:1 (same
+   2×2 subsample as 320×200, confirmed from `ov9282-high-speed.patch` registers `0x3814/0x3815 =
+   0x22`); the only 1:1 mode is the stock, unpatched 1280×800 (datasheet 120 fps; "144 fps" is
+   UNKNOWN until benched), which costs **≈15× the light** of today's bay at ≤1.5 px blur; +6 mm
+   ≈27×, +8 mm ≈52× (not realistic without a strobe). **The bay's lux has never been measured.**
+   Frame rate is never the binding constraint; light is, at every mode.
+
+### 1K.2 Is the 690CB 7-iron mesh okay, or hurting us? — keep for pose, replace for scale
+
+[report C, with the repo facts verified]
+
+| Use | Mesh error is… | Verdict |
+|---|---|---|
+| (a) 6-DoF silhouette pose fit | second-order: 2–3 px of dimension error vs 1 px ≈ 10° segmentation noise | **adequate** — the mesh is not why the fit failed |
+| (b) 2-D template alignment at contact | **first-order and systematic**: rendered size = mm × fx / range, so a 6–8 % size error is a constant ~2–3 px offset that the pre-registered checks (f71/f72 self-consistency, one hand-marked shot) **cannot detect** | not adequate without an independent scale source |
+| (c) outline → face-centre offset (the mm impact number) | first-order, highest consequence, currently built on an undefined landmark (`detect_face_plane` picks the cavity rim; no face-centre landmark exists in code) | not adequate; highest-priority fix |
+
+Unresolved facts about the mesh itself: it passes `admit_mesh`'s 15 % height tolerance exactly
+at the boundary (79.7 × 42.5 mm patch vs 80 × 50 nominal); its 63.8 mm hosel+ferrule is 1.5–2×
+published hosel depths; Titleist's own page lists the 690.CB 7-iron at 36°/63° vs the repo's
+cited "34/62" (mesh measures 33.10/61.19) — UNKNOWN which is right for this casting. Real-iron
+variation: players-vs-GI head length ~8.5 mm (≈2.5 px), 7i→9i within a set 2–5 mm (INFERRED),
+loft 4.4° across categories; face height and face-centre-to-hosel offset are **not published by
+any manufacturer**. We do not know the make/model of the clubs in the session.
+
+**Replacement for (b)/(c): a per-club address photo from the same fixed camera.** For irons the
+ball at address ≈ ball at impact, so one photo of the club soled behind the ball *is* the outline
+template and gives the face-centre landmark directly (grooves visible) — no CAD, no licence, no
+7-iron-mesh-on-9-iron problem, and it works for whatever club a user brings. A parametric head
+model is the fallback if address pose differs from delivered pose by more than the zone width.
+
+Check to run now, on existing data: heel-toe extent in px at the radar-measured range on every
+pre-impact frame across the 21 shots vs the mesh's projected width at that range. This isolates
+absolute size from the shaft-tail/shadow pixels that inflate the "43–55 % coverage" figure.
+
+### 1K.3 What each metric needs — observability on this hardware
+
+[report D; iron coefficients from Wood et al.: k_h = 0.69 ± 0.03, k_v = 0.81 ± 0.05; TrackMan's
+blog quotes 75–85 % — the discrepancy is unresolved and is itself a reason to calibrate k locally]
+
+| Metric | Inputs | Propagated error | Verdict |
+|---|---|---|---|
+| Smash factor | ball speed / club speed | ~5 % systematic if the OPS243 radial-vs-total contract is unresolved (§1J, LCMF speed contract) | DERIVABLE NOW — flag the contract |
+| Club path, attack angle | fused clubhead velocity | production estimator's range; same-point (centroid vs contact) unproven | DERIVABLE AFTER CALIBRATION (truth session) |
+| Dynamic loft | `DL = A + (V − A)/k_v` | **~1.7°**, dominated by k_v uncertainty (2.56 of 2.97 deg²), not sensor noise | DERIVABLE AFTER CALIBRATION — cheapest D-plane win; calibrate k_v on our own data |
+| Spin loft | DL − A | ~3.0° | coarse classification only |
+| Face angle | `F = P + (H − P)/k_h` | ~1.2° random; **~7.3° systematic** from the 5° offset | BLOCKED on the offset; then derivable |
+| Face-to-path | F − P | inherits the above | BLOCKED |
+| Impact location, zone | ball vs head outline at contact + fused timing | ~±5 mm | DERIVABLE NOW (coarse) once the outline edges are found |
+| Impact location, mm (TrackMan format) | full head pose + face origin | ill-posed from behind | NEEDS a second view |
+| Spin axis | independent 3-D ball spin | radar spin intermittent; even TrackMan's principle is unstable < ~3,000 rpm | opportunistic only |
+| Swing plane / direction / low point | arc fit over ±2.5 ft, hundreds of samples | our window is 4–5 frames | NEEDS a wider window / second view |
+| Dynamic lie | full pose | ±11° ceiling | NOT FEASIBLE |
+
+Two definition facts to freeze now: TrackMan reads face angle and dynamic loft **at the contact
+point**, not face centre — on a driver a 10 mm toe strike reads ~2° more open (bulge). On a flat
+iron face the two conventions coincide, so for the current iron work this is moot, but the product
+must state its convention. Iron gear effect is ~15–19× weaker than driver (CG ~2 mm behind the
+face vs 30–40 mm), so ball flight cannot refine an iron impact zone; for drivers it can weakly
+corroborate one.
+
+### 1K.4 Roadmap to full club data
+
+Ordered by dependency. Each stage has a gate that must be *measured*, not inferred.
+
+**Stage 0 — now, existing data, days (no hardware).**
+- Fix code drift: `CAMERA_CENTER_WORLD` from measured 203.2 / 1581; delete or quarantine the A0
+  preset; retire the static range grid in `fit_sequence` or wire the radar range rate; fix
+  `detect_face_plane` (or add an explicit face-centre landmark). Status claims name branch+commit.
+- Mesh scale check (§1K.2) across the 21 shots.
+- Radar club path: replay the 22 dumps with (i) window-scope MTI on the horizontal path and
+  (ii) the attack-angle fit anchored at impact range instead of the ball's tee height. Report
+  `phase_span_rad` and attack angle before/after. Gate: phase span toward ≤ π/2 on most shots;
+  attack angle into −2…−9°.
+- Outline-alignment spike (running): reinterpret as a *localisation* test (can the outline be
+  locked to ±1 px in f71/f72), not a mm result — it cannot certify scale.
+- Smash factor: verify the OPS243 speed contract on both speeds, then ship.
+- Ask for the TrackMan export from 2026-08-25. If it exists, run `compare_trackman.py` club
+  metrics on path/AoA today.
+
+**Stage 1 — one capture session, designed to close six questions at once.**
+1. Taped target visible to camera and radar → closes the 5° horizontal offset (and measures any
+   vertical analogue, currently UNKNOWN).
+2. Alongside a TrackMan (or the existing export) → truth for path/AoA/DL/face.
+3. Foot spray on the face, photographed after each shot → truth for impact zone.
+4. Per-club address photo before the first shot of each club → the outline template (§1K.2).
+5. Driver + wedge + 7i + 9i → removes the club-speed confound (radar rotation test, k calibration).
+6. Lux meter at the ball and corridor; then the free 1280×800 1:1 mode on the stock lens with a
+   lux ladder (stop when gain floors and exposure ≤ 70 µs) → settles whether 1:1 is usable
+   without a strobe, and the real fps of that mode. Do not buy a lens until this passes.
+
+**Stage 2 — software after Stage 1 (order = what a user sees soonest).**
+Smash factor → path/AoA (validated, calibrated) → dynamic loft and spin loft (k_v calibrated
+locally) → **coarse impact zone** (address-photo template + fused timing + radar range;
+withheld with a reason when edges fail) → radar-only path as a lighting-independent fallback if
+the Stage-0 fixes land. The learned segmenter (labelling spec, 2026-08-28) runs in parallel; its
+payoff is availability of outline edges, at 320×200 now and 1280×800 later.
+
+**Stage 3 — face angle, only after the offset closes.** `F = P + (H − P)/k_h` with locally
+calibrated k_h; face-to-path; for drivers, the gear-effect correction from the impact zone.
+
+**Stage 4 — one hardware decision, not four.** mm-grade impact location, swing plane /
+direction / low point, dynamic lie, and optical face/loft all need the same thing: a second view.
+A face-on camera on a cable (Pi 5 has two CSI ports; sync already solved to ~33 µs via
+`ops_impact_finder.py`) removes the degeneracy outright but breaks "one unit". Decide once, with
+Stage 1–3 numbers in hand; do not pre-buy.
+
+### 1K.5 Where the passes disagree, and how it was resolved
+
+| Disagreement | Resolution |
+|---|---|
+| A: "run the outline-alignment spike first" vs C: "the mesh can't carry scale for it" | Both right about different things. Run it as a localisation test; its checks cannot detect a constant scale bias, so the mm conversion moves to the address-photo template and the mesh-width check gates any mm claim. |
+| Earlier memory: radar path rejected by "phase aliasing" vs F: MTI notch + tee anchor | F's mechanisms are verified in source; the aliasing story is withdrawn as the cause. Scatterer migration remains UNKNOWN (no statistical power on a 7i/9i-only session). |
+| Report §07 "radar range model — Implemented" vs A: not in `src/` on `feat/clubpose-fit` | Both true; the implementation is on `feat/silhouette-poc` only. Scope every status line to a branch. |
+| Guide §1E (July: MARKED behind-ball) vs maintainer (Aug: markerless, no strobe) | Constraint stands. Markers, if ever, belong on a measuring rig (foot spray) not the product. |
+| D: iron gear effect negligible vs B: TrackMan's 10 mm → 2° | Not a conflict: B's figure is a driver (bulge/roll, deep CG); D's is irons (flat face, CG ~2 mm). State the club when quoting either. |
+| E: 1280×800 "~144 fps" (earlier memory) vs datasheet 120 fps | UNKNOWN until benched; Stage 1 item 6 measures it. |
+
+### 1K.6 Questions we should be asking now
+
+1. Does a TrackMan export for session 20260825_181734 exist? (If yes, club-metric truth exists today.)
+2. What is the lux at the ball in the bay? (Never measured; gates every resolution decision.)
+3. What make/model were the 7-iron and 9-iron? (Gates the mesh/template question.)
+4. Is the OPS243 club speed radial or total, and is the ball speed treated the same way? (Smash factor.)
+5. Is there a vertical camera-vs-radar offset like the horizontal 5°? (Would block dynamic loft the same way.)
+6. Which reference point defines our face angle / dynamic loft — CG, face centre, or contact point? (Freeze it; TrackMan is inconsistent.)
+7. Does Picamera2 on the kiosk actually select `MODE_1280_800` when asked, and at what delivered fps?
+8. Would the maintainer ever accept a second, face-on camera module? (Decides whether Stage 4 exists.)
+9. Patent posture: the fix-point-at-radar-timed-impact method is claimed by Trackman (US 10,953,303 family, live to ~2038). Open-source, non-commercial use is a different risk profile from a product; flag for the maintainer, not a technical blocker.
+10. Is "impact location" for the product a zone or a mm dot? (Zone is derivable now; the dot needs Stage 4.)
+
+### 1K.7 Corrections to earlier statements in this guide and the memories
+
+- "Radar club path is rejected because of phase aliasing" → withdrawn; see §1K.1 item 4.
+- "640×400 is a 1:1 crop" (anywhere it appears) → wrong; only 1280×800/720 are 1:1.
+- "1280×800 runs at ~144 fps" → UNKNOWN; datasheet says 120.
+- "Use the mesh to convert ball-vs-outline into mm on the face" (template-alignment brief) → the
+  mesh cannot carry that scale; use the address photo.
+- "Radar club path rejected 21/21 — that is the unlock for face angle" → the *camera-fused* path
+  already works on 17/21; the unlock is the 5° offset calibration.
+
+
 ## 2. The core problem: markerless 6-DOF clubhead pose from behind
 
 You never see the face. You recover the clubhead's rigid-body **orientation**, then read the face plane off a **club-type template**. v1's pipeline framing stands; the corrections are *how the pros actually do the pose step*:
