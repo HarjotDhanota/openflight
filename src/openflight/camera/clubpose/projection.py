@@ -9,12 +9,31 @@ from functools import lru_cache
 import cv2
 import numpy as np
 
-# Measured rig geometry (tape chain, 2026-08-26). The OV9281 lens sits 203.2 mm
-# above the floor -- the kiosk log's `mount_height_m` -- and 1581 mm from the
-# ball centre, which is the world origin. Both numbers are measured, not
-# nominal, and they are what `measured_camera()` in `fit.py` is built from.
-CAMERA_HEIGHT_MM = 203.2
+# Measured rig geometry (tape chain, 2026-08-26). Two DIFFERENT heights meet
+# here and they were previously the same constant:
+#
+#   * the OV9281 lens sits 203.2 mm above the FLOOR (the kiosk log's
+#     `mount_height_m`), and
+#   * the world origin is the BALL CENTRE, which the tape puts 40 mm above the
+#     floor -- so the camera's world z is 163.2 mm, not 203.2 mm.
+#
+# `camera_center_world` takes the height ABOVE THE BALL for that reason. Using
+# the floor height there put the camera 40 mm high and, because the centre is
+# forced onto the 1581 mm range sphere, ~4 mm too near in x as well.
+CAMERA_LENS_HEIGHT_MM = 203.2
+BALL_CENTRE_HEIGHT_MM = 40.0
+CAMERA_HEIGHT_ABOVE_BALL_MM = CAMERA_LENS_HEIGHT_MM - BALL_CENTRE_HEIGHT_MM
 CAMERA_BALL_RANGE_MM = 1581.0
+
+# The lens is offset laterally from the ball line: -60.325 mm by tape (-55.7 mm
+# solved from the teed ball's observed column). Declared here with the rest of
+# the chain; `camera_center_world` consumes it.
+CAMERA_LATERAL_OFFSET_MM = -60.325
+
+# Kept because callers and docstrings name it. It is the FLOOR-referenced lens
+# height and is NOT a world coordinate; anything placing the camera wants
+# `CAMERA_HEIGHT_ABOVE_BALL_MM`.
+CAMERA_HEIGHT_MM = CAMERA_LENS_HEIGHT_MM
 
 # Superseded Phase-1b values, kept for provenance and for the radar.
 # `NOMINAL_RANGE_MM` is the radar's own measured slant tee range and still
@@ -43,23 +62,53 @@ WORLD_UP = np.array([0.0, 0.0, 1.0])
 FACE_NORMAL = np.array([1.0, 0.0, 0.0])
 
 
-def camera_center_world(
-    height_mm: float = CAMERA_HEIGHT_MM, range_mm: float = CAMERA_BALL_RANGE_MM
-) -> np.ndarray:
-    """Camera centre for a lens ``height_mm`` up and ``range_mm`` from the origin.
+def taped_camera_ball_range_mm(
+    radar_range_mm: float = NOMINAL_RANGE_MM,
+    radar_height_mm: float = RADAR_HEIGHT_MM,
+    ball_height_mm: float = BALL_CENTRE_HEIGHT_MM,
+    lens_height_mm: float = CAMERA_LENS_HEIGHT_MM,
+    lateral_mm: float = CAMERA_LATERAL_OFFSET_MM,
+) -> float:
+    """Camera-to-ball slant range from the tape chain, not from a comment.
 
-    The camera sits behind the ball on the -x side, level with it in y, so the
-    slant range and the height fix the remaining coordinate exactly.
+    The radar's own measured slant tee range fixes the DOWNRANGE distance to
+    the ball once its height above the ball centre is taken out; the camera
+    then sits at that same downrange distance, offset laterally and raised to
+    the lens height. Running it out gives 1580.6 mm, which is where
+    ``CAMERA_BALL_RANGE_MM`` came from.
     """
-    height = float(height_mm)
+    radar_rise = float(radar_height_mm) - float(ball_height_mm)
+    squared = float(radar_range_mm) ** 2 - radar_rise**2
+    if squared <= 0.0:
+        raise ValueError("radar slant range must exceed its own height above the ball")
+    downrange = math.sqrt(squared)
+    rise = float(lens_height_mm) - float(ball_height_mm)
+    return math.sqrt(downrange**2 + float(lateral_mm) ** 2 + rise**2)
+
+
+def camera_center_world(
+    height_above_ball_mm: float = CAMERA_HEIGHT_ABOVE_BALL_MM,
+    range_mm: float = CAMERA_BALL_RANGE_MM,
+    lateral_mm: float = 0.0,
+) -> np.ndarray:
+    """Camera centre for a lens ``height_above_ball_mm`` up and ``range_mm`` away.
+
+    The height is measured from the BALL CENTRE -- the world origin -- not from
+    the floor. The camera sits behind the ball on the -x side; the slant range,
+    the height and the lateral offset fix the remaining coordinate exactly.
+    """
+    height = float(height_above_ball_mm)
     slant = float(range_mm)
-    if not math.isfinite(height) or not math.isfinite(slant):
-        raise ValueError("camera height and range must be finite")
-    if height < 0.0 or slant <= 0.0 or height >= slant:
+    lateral = float(lateral_mm)
+    if not all(math.isfinite(value) for value in (height, slant, lateral)):
+        raise ValueError("camera height, range and lateral offset must be finite")
+    remaining = slant**2 - height**2 - lateral**2
+    if height < 0.0 or slant <= 0.0 or remaining <= 0.0:
         raise ValueError(
-            f"camera height {height} mm must sit inside range {slant} mm and above the floor"
+            f"camera height {height} mm and lateral offset {lateral} mm must sit "
+            f"inside range {slant} mm, above the ball centre"
         )
-    return np.array([-math.sqrt(slant**2 - height**2), 0.0, height])
+    return np.array([-math.sqrt(remaining), lateral, height])
 
 
 @lru_cache(maxsize=16)
@@ -93,6 +142,8 @@ DEFAULT_CENTER_WORLD_MM = (
 )
 # The Phase-1b centre, superseded by the tape chain above. Kept so a frozen
 # result can be reproduced, not because anything should build geometry on it.
+# Phase 1b measured its lens height from the floor and used it as a world z, so
+# it is reproduced exactly that way.
 PHASE1B_CAMERA_CENTER_WORLD = camera_center_world(PHASE1B_CAMERA_HEIGHT_MM, NOMINAL_RANGE_MM)
 RADAR_CENTER_WORLD = np.array(
     [

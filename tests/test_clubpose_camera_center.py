@@ -9,7 +9,9 @@ from another. The offset is only ~8 mm, but it is a silent inconsistency in
 the one geometric quantity every pose depends on.
 
 The measured chain is: OV9281 lens 203.2 mm above the floor (kiosk log
-`mount_height_m`), 1581 mm from the ball centre at the world origin.
+`mount_height_m`), 1581 mm from the ball centre at the world origin. The ball
+centre is itself 40 mm above the floor, so the camera's WORLD z is 163.2 mm --
+see `TestTheTapeChainIsExplicit`.
 """
 
 from __future__ import annotations
@@ -33,7 +35,8 @@ from openflight.camera.clubpose.projection import (
     camera_center_world,
 )
 
-MEASURED_HEIGHT_MM = 203.2
+MEASURED_LENS_HEIGHT_MM = 203.2
+MEASURED_HEIGHT_ABOVE_BALL_MM = 163.2
 MEASURED_RANGE_MM = 1581.0
 
 
@@ -64,7 +67,7 @@ def _box_mesh() -> TriangleMesh:
 
 
 def test_the_measured_constants_are_the_taped_ones():
-    assert CAMERA_HEIGHT_MM == pytest.approx(MEASURED_HEIGHT_MM)
+    assert CAMERA_HEIGHT_MM == pytest.approx(MEASURED_LENS_HEIGHT_MM)
     assert CAMERA_BALL_RANGE_MM == pytest.approx(MEASURED_RANGE_MM)
 
 
@@ -72,26 +75,31 @@ def test_measured_camera_carries_its_own_centre():
     camera = measured_camera()
     centre = camera.center_world
 
-    assert centre[2] == pytest.approx(MEASURED_HEIGHT_MM, abs=1e-9)
+    assert centre[2] == pytest.approx(MEASURED_HEIGHT_ABOVE_BALL_MM, abs=1e-9)
     assert float(np.linalg.norm(centre)) == pytest.approx(MEASURED_RANGE_MM, abs=1e-9)
     # Behind the ball: the camera looks downrange along +x.
     assert centre[0] < 0.0
-    assert centre[1] == pytest.approx(0.0, abs=1e-12)
 
 
-@pytest.mark.parametrize("height_mm", (0.0, 100.0, 203.2, 400.0))
+@pytest.mark.parametrize("lateral_mm", (0.0, -60.325, 120.0))
+@pytest.mark.parametrize("height_mm", (0.0, 100.0, 163.2, 400.0))
 @pytest.mark.parametrize("range_mm", (900.0, 1581.0, 2400.0))
-def test_a_camera_centre_is_always_on_its_own_range_sphere(height_mm, range_mm):
-    centre = camera_center_world(height_mm, range_mm)
+def test_a_camera_centre_is_always_on_its_own_range_sphere(height_mm, range_mm, lateral_mm):
+    centre = camera_center_world(height_mm, range_mm, lateral_mm)
 
     assert float(np.linalg.norm(centre)) == pytest.approx(range_mm, abs=1e-9)
     assert centre[2] == pytest.approx(height_mm, abs=1e-9)
-    assert centre[0] == pytest.approx(-math.sqrt(range_mm**2 - height_mm**2), abs=1e-9)
+    assert centre[1] == pytest.approx(lateral_mm, abs=1e-9)
+    assert centre[0] == pytest.approx(
+        -math.sqrt(range_mm**2 - height_mm**2 - lateral_mm**2), abs=1e-9
+    )
 
 
 def test_a_camera_centre_outside_its_range_sphere_is_rejected():
     with pytest.raises(ValueError):
         camera_center_world(2000.0, 1581.0)
+    with pytest.raises(ValueError):
+        camera_center_world(163.2, 1581.0, 2000.0)
 
 
 def test_a_ray_at_the_measured_range_round_trips_to_the_same_pixel():
@@ -189,3 +197,40 @@ class TestWorldFrameHandedness:
 
         np.testing.assert_allclose(np.cross(right, down), -forward, atol=1e-12)
         assert float(np.cross(right, down) @ forward) < 0.0
+
+
+class TestTheTapeChainIsExplicit:
+    """`CAMERA_HEIGHT_MM` was floor-referenced and used as a world z.
+
+    The world origin is the BALL CENTRE, which the tape puts 40 mm above the
+    floor, while the lens is 203.2 mm above the floor. Feeding the floor
+    height into `camera_center_world` therefore placed the camera 40 mm too
+    high AND, because the centre was forced onto the 1581 mm sphere, 40 mm's
+    worth too near in x. Both heights are named separately now, and the chain
+    that produced 1581 mm is executable rather than a comment.
+    """
+
+    def test_the_two_heights_are_named_separately(self):
+        from openflight.camera.clubpose.projection import (
+            BALL_CENTRE_HEIGHT_MM,
+            CAMERA_HEIGHT_ABOVE_BALL_MM,
+            CAMERA_LENS_HEIGHT_MM,
+        )
+
+        assert CAMERA_LENS_HEIGHT_MM == pytest.approx(203.2)
+        assert BALL_CENTRE_HEIGHT_MM == pytest.approx(40.0)
+        assert CAMERA_HEIGHT_ABOVE_BALL_MM == pytest.approx(163.2)
+
+    def test_the_tape_chain_reproduces_the_measured_camera_ball_range(self):
+        """Radar slant range + the four taped offsets, in one function."""
+        from openflight.camera.clubpose.projection import taped_camera_ball_range_mm
+
+        assert taped_camera_ball_range_mm() == pytest.approx(MEASURED_RANGE_MM, abs=1.0)
+
+    def test_the_camera_centre_sits_above_the_ball_not_above_the_floor(self):
+        from openflight.camera.clubpose.projection import CAMERA_HEIGHT_ABOVE_BALL_MM
+
+        centre = measured_camera().center_world
+
+        assert centre[2] == pytest.approx(CAMERA_HEIGHT_ABOVE_BALL_MM, abs=1e-9)
+        assert float(np.linalg.norm(centre)) == pytest.approx(MEASURED_RANGE_MM, abs=1e-9)

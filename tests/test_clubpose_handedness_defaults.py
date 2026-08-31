@@ -271,10 +271,14 @@ class TestRenderIsUnchanged:
 
     BALL_UV = (137.0, 121.0)
     RANGE_MM = 1516.0
-    MASK_PIXELS = 351
+    # Re-baselined 2026-08-30 with the camera height measured from the BALL
+    # CENTRE rather than the floor (40 mm). The bounding box is unchanged and
+    # the silhouette gains one pixel; the pre-correction figures were 351 px
+    # and bc62d84d...87fcf.
+    MASK_PIXELS = 352
     BBOX_X = (121, 152)
     BBOX_Y = (105, 135)
-    MASK_SHA256 = "bc62d84d264fd1351bc0cdb2f187de8619f8d3a09875ccfc13d8dc3f1ea87fcf"
+    MASK_SHA256 = "467c9f52381754f0c2f0202bd982aac15087497f3be0a1641b45266d3e1b12e9"
 
     def test_the_no_search_render_is_pixel_identical(self):
         mesh, _metadata, _digest = load_club_mesh()

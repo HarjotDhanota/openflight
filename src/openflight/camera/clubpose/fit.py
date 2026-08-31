@@ -48,7 +48,7 @@ import numpy as np
 from openflight.camera.clubpose.mesh import rasterize_projected_triangles
 from openflight.camera.clubpose.projection import (
     CAMERA_BALL_RANGE_MM,
-    CAMERA_HEIGHT_MM,
+    CAMERA_HEIGHT_ABOVE_BALL_MM,
     FACE_NORMAL,
     CameraPreset,
     _face_axes,
@@ -85,7 +85,7 @@ def measured_camera(width: int = 320, height: int = 200) -> CameraPreset:
         gate_b1_passed=False,
         physical_status="measured_from_real_capture",
         center_world_mm=tuple(
-            float(v) for v in camera_center_world(CAMERA_HEIGHT_MM, CAMERA_BALL_RANGE_MM)
+            float(v) for v in camera_center_world(CAMERA_HEIGHT_ABOVE_BALL_MM, CAMERA_BALL_RANGE_MM)
         ),
     )
 
