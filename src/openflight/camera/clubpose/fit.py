@@ -377,7 +377,7 @@ def _smoothness_penalty(
     yaw: float,
     pitch: float,
     roll: float,
-    smooth_deg: float,
+    smooth_deg: float | None,
     smooth_mm: float,
     *,
     penalise_range: bool,
@@ -389,13 +389,20 @@ def _smoothness_penalty(
     pinned to a measurement (`penalise_range=False`) the depth term is dropped
     entirely: charging for it would pull every frame back toward its
     neighbour's depth and undo the measurement it was given.
+
+    ``smooth_deg=None`` drops the ANGULAR term for the same kind of reason --
+    see `fit_sequence`, and `test_clubpose_fit_smoothness` for the arithmetic.
     """
     if prev is None:
         return 0.0
-    angular = (
-        abs(yaw - prev["yaw_deg"]) + abs(pitch - prev["pitch_deg"]) + abs(roll - prev["roll_deg"])
-    )
-    penalty = angular / (3.0 * smooth_deg)
+    penalty = 0.0
+    if smooth_deg is not None:
+        angular = (
+            abs(yaw - prev["yaw_deg"])
+            + abs(pitch - prev["pitch_deg"])
+            + abs(roll - prev["roll_deg"])
+        )
+        penalty += angular / (3.0 * smooth_deg)
     if penalise_range:
         penalty += abs(rng - prev["range_mm"]) / smooth_mm
     return penalty
@@ -422,7 +429,7 @@ def fit_sequence(
     masks: dict[int, np.ndarray],
     camera: CameraPreset,
     *,
-    smooth_deg: float = 70.0,
+    smooth_deg: float | None = None,
     smooth_mm: float = 300.0,
     range_grid_mm=(1481.0, 1581.0, 1681.0),
     yaw_grid=YAW_GRID_DEG,
@@ -438,6 +445,14 @@ def fit_sequence(
     one unit of IoU, so a large IoU gain can still justify real motion while noise
     cannot. Set ``refine_range=False`` with a singleton ``range_grid_mm`` to keep
     an externally measured range hard-pinned during local refinement.
+
+    ``smooth_deg`` DEFAULTS TO None -- no angular penalty. The previous default
+    of 70.0 charges 1/210 of an IoU point per degree of orientation change, and
+    a 20-40 px silhouette buys about 0.002 per degree of yaw: the penalty was
+    more than twice the evidence, so frame two could not afford to move and
+    every frame after it inherited frame one's pose. On the seven-frame runs
+    this pipeline fits, that froze the whole sequence. Pass a number when the
+    run is long enough and noisy enough for the penalty to be affordable.
 
     ``range_mm_by_frame`` supplies a MEASURED range per frame -- normally
     `fusion.ranges_from_radar`, which anchors the radar's range rate at the
