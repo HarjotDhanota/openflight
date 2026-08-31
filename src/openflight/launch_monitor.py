@@ -318,6 +318,14 @@ class Shot:
     experimental_camera_horizontal_confidence: Optional[float] = None
     experimental_camera_horizontal_status: Optional[str] = None
     experimental_camera_iwr_delta_deg: Optional[float] = None
+    # Independent VERTICAL launch evidence: the ball's post-impact camera rays
+    # lifted by the IWR6843 ball range walk. UNVALIDATED AGAINST A REFERENCE
+    # INSTRUMENT, and deliberately NOT a source for `launch_angle_vertical` --
+    # it is carried alongside so the two can be compared, never substituted.
+    experimental_camera_vertical_launch_deg: Optional[float] = None
+    experimental_camera_vertical_launch_status: Optional[str] = None
+    experimental_camera_vertical_launch_confidence: Optional[str] = None
+    experimental_camera_vertical_launch_lcmf_delta_deg: Optional[float] = None
     # Transient fitted IWR range trajectory consumed by live camera fusion.
     # Deliberately excluded from websocket/session serializers.
     iwr6843_club_range_evidence: object | None = field(
