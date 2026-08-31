@@ -18,6 +18,8 @@ synthetic, and that is where the head genuinely ends.
 
 from __future__ import annotations
 
+# cv2's bindings are generated at import, so pylint cannot see any of them.
+# pylint: disable=no-member
 import cv2
 import numpy as np
 
@@ -69,3 +71,25 @@ def split_head(component: np.ndarray) -> tuple[np.ndarray, np.ndarray] | None:
     if int(head.sum()) < 60:
         return None
     return head, shaft
+
+
+def clip_hosel(mask: np.ndarray) -> np.ndarray:
+    """Cut a RENDERED mask at the hosel neck, the way `split_head` cuts a real one.
+
+    Every observed mask this project fits has been through `split_head`, so a
+    rendered template that still carries a hosel and a stub of shaft is a
+    systematic area excess -- at the heel end, which is where the heel landmark
+    is read. Running the render through the same function makes one convention
+    cut both sides of the comparison.
+
+    A mask with no body thick enough to be a clubhead is returned UNCHANGED.
+    That is fail-open on the cut, not on the mask: there is nothing there to
+    remove, and the caller's own size gates still apply.
+    """
+    binary = np.asarray(mask).astype(np.uint8)
+    if not binary.any():
+        return np.asarray(mask).astype(bool)
+    split = split_head(binary)
+    if split is None:
+        return binary.astype(bool)
+    return split[0] > 0

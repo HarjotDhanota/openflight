@@ -45,6 +45,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from openflight.camera.clubpose.head_split import clip_hosel as _clip_hosel
 from openflight.camera.clubpose.mesh import rasterize_projected_triangles
 from openflight.camera.clubpose.projection import (
     CAMERA_BALL_RANGE_MM,
@@ -172,13 +173,14 @@ def render_mask(mesh, center_world, roll_rad, camera) -> tuple[np.ndarray, np.nd
     if not bool(center_front[0]) or not front.any():
         return None
     faces = mesh.faces[np.all(front[mesh.faces], axis=1)]
-    if not len(faces):
+    if faces.size == 0:
         return None
     mask = rasterize_projected_triangles(uv, faces, width=camera.width, height=camera.height)
     return mask, center_uv[0]
 
 
 def iou(a: np.ndarray, b: np.ndarray) -> float:
+    """Intersection over union of two boolean masks; 0.0 when both are empty."""
     a = a.astype(bool)
     b = b.astype(bool)
     union = np.count_nonzero(a | b)
@@ -187,6 +189,8 @@ def iou(a: np.ndarray, b: np.ndarray) -> float:
 
 @dataclass
 class RealFit:
+    """One frame's 4-DOF result -- centre, roll and range -- or why there is none."""
+
     ok: bool
     reason: str
     iou: float
@@ -295,8 +299,14 @@ def triad(yaw_deg: float, pitch_deg: float, roll_deg: float) -> tuple[np.ndarray
     return n, Rr @ u, Rr @ v
 
 
-def render_mask_6dof(mesh, center_world, yaw_deg, pitch_deg, roll_deg, camera):
-    """Project and rasterise with a FULL orientation rather than roll alone."""
+def render_mask_6dof(mesh, center_world, yaw_deg, pitch_deg, roll_deg, camera, *, clip_hosel=False):
+    """Project and rasterise with a FULL orientation rather than roll alone.
+
+    ``clip_hosel`` cuts the rendered mask at the hosel neck with the same
+    `head_split.split_head` that produced every observed mask this is compared
+    against. Off by default so a synthetic-against-synthetic comparison is
+    unaffected; anything scored against a segmented frame wants it on.
+    """
     n, u, v = triad(yaw_deg, pitch_deg, roll_deg)
     local = mesh.vertices_local_mm
     world = (
@@ -310,9 +320,10 @@ def render_mask_6dof(mesh, center_world, yaw_deg, pitch_deg, roll_deg, camera):
     if not bool(center_front[0]) or not front.any():
         return None
     faces = mesh.faces[np.all(front[mesh.faces], axis=1)]
-    if not len(faces):
+    if faces.size == 0:
         return None
-    return rasterize_projected_triangles(uv, faces, width=camera.width, height=camera.height)
+    mask = rasterize_projected_triangles(uv, faces, width=camera.width, height=camera.height)
+    return _clip_hosel(mask) if clip_hosel else mask
 
 
 def fit_frame_6dof(
@@ -480,6 +491,8 @@ def fit_sequence(
         frame_grid = range_grid_mm if frame_ranges is None else (frame_ranges[i],)
         refine_this_range = refine_range and frame_ranges is None
 
+        # `ray` and `observed` are this frame's; the closure is built, used and
+        # discarded inside one iteration, never deferred past it.
         def score(rng, yaw, pitch, roll):
             if not pose_in_bounds(yaw, pitch, roll):
                 return -1.0
