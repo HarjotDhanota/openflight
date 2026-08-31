@@ -76,6 +76,7 @@ from openflight.camera.club_motion import ReferenceBall
 from openflight.camera.clubpose.fusion import ranges_from_radar
 from openflight.camera.clubpose.head_split import split_head
 from openflight.camera.clubpose.projection import (
+    BALL_RADIUS_MM,
     CAMERA_BALL_RANGE_MM,
     CameraPreset,
     _ray_world,
@@ -86,6 +87,7 @@ __all__ = [
     "HeadTrack",
     "HeadTrackPoint",
     "HeadTrackQuality",
+    "ball_anchored_rotation",
     "build_head_track",
     "head_masks",
     "moving_mask",
@@ -435,6 +437,50 @@ def _drop_jumps(masks: dict[int, np.ndarray], rejected: dict[str, list[int]]) ->
             del masks[index]
 
 
+def ball_anchored_rotation(ball: ReferenceBall, camera: CameraPreset) -> np.ndarray:
+    """Rotation taking the observed teed-ball ray onto the taped ball direction.
+
+    THIS IS LOAD-BEARING FOR EVERY ELEVATION-DEPENDENT QUANTITY, and skipping
+    it does not announce itself: the swing plane and the arc radius barely move
+    without it, while the attack angle shifts by 6-7 degrees. On the
+    development session the uncorrected model put the clubhead 196 mm below and
+    beside the ball at the moment of contact; anchored, the median transverse
+    miss was 20 mm, which is half a ball.
+
+    The reason is that `projection` builds its camera by aiming the lens at the
+    world origin, and the rig's lens is level instead. The teed ball is the one
+    calibration target that appears in every frame of every shot -- its world
+    position is the tape chain's and its image position is measured -- so one
+    rotation reconciles the two and absorbs the difference.
+
+    Args:
+        ball: The stationary teed ball, in image pixels.
+        camera: The camera model whose boresight is being corrected.
+
+    Returns:
+        A ``[3,3]`` rotation matrix to apply to every world ray. It is the
+        identity when the observed ball already lies on the modelled boresight.
+    """
+    observed = _ray_world(np.array([ball.x, ball.y]), camera)
+    target = np.array([0.0, 0.0, BALL_RADIUS_MM]) - camera.center_world
+    target = target / np.linalg.norm(target)
+    axis = np.cross(observed, target)
+    sine = float(np.linalg.norm(axis))
+    cosine = float(observed @ target)
+    if sine < 1e-12:
+        return np.eye(3)
+    axis = axis / sine
+    cross = np.array(
+        [
+            [0.0, -axis[2], axis[1]],
+            [axis[2], 0.0, -axis[0]],
+            [-axis[1], axis[0], 0.0],
+        ]
+    )
+    angle = math.atan2(sine, cosine)
+    return np.eye(3) + math.sin(angle) * cross + (1.0 - math.cos(angle)) * (cross @ cross)
+
+
 def build_head_track(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     frames: np.ndarray,
     ball: ReferenceBall,
@@ -444,6 +490,7 @@ def build_head_track(  # pylint: disable=too-many-arguments,too-many-positional-
     fps: float,
     *,
     ball_range_mm: float = CAMERA_BALL_RANGE_MM,
+    boresight: str = "ball",
 ) -> HeadTrack:
     """Reconstruct the clubhead's 3-D track and the swing metrics it supports.
 
@@ -464,6 +511,11 @@ def build_head_track(  # pylint: disable=too-many-arguments,too-many-positional-
         fps: Delivered capture rate.
         ball_range_mm: Camera-to-ball range at contact, the anchor for the
             radar's depth walk. Defaults to the measured tape chain.
+        boresight: ``"ball"`` re-aims the camera so the observed teed ball's own
+            ray lands on the taped ball position, which is what every
+            elevation-dependent quantity below depends on -- see
+            `ball_anchored_rotation`. ``"raw"`` uses the shipped aim-at-origin
+            model unchanged, and is for reproducing that comparison only.
 
     Returns:
         A `HeadTrack`. Its ``status`` is ``"ok"`` only when every gate passed;
@@ -475,6 +527,9 @@ def build_head_track(  # pylint: disable=too-many-arguments,too-many-positional-
         return HeadTrack(
             status="rejected_no_contact_frame", reason="contact frame or capture rate is unusable"
         )
+
+    if boresight not in ("ball", "raw"):
+        raise ValueError(f"boresight must be 'ball' or 'raw', got {boresight!r}")
 
     masks, rejected = head_masks(frames, ball, f_contact)
     if len(masks) < MIN_TRACK_POINTS:
@@ -488,10 +543,11 @@ def build_head_track(  # pylint: disable=too-many-arguments,too-many-positional-
     elapsed = np.asarray(order, dtype=float) / fps
     contact_s = f_contact / fps
     ranges = ranges_from_radar(elapsed, contact_s, range_rate_ms, ball_range_mm=ball_range_mm)
+    rotation = np.eye(3) if boresight == "raw" else ball_anchored_rotation(ball, camera)
     points: list[HeadTrackPoint] = []
     for frame, time_s, range_mm in zip(order, elapsed, ranges, strict=True):
         u_px, v_px = _centroid(masks[frame])
-        ray = _ray_world(np.array([u_px, v_px]), camera)
+        ray = rotation @ _ray_world(np.array([u_px, v_px]), camera)
         points.append(
             HeadTrackPoint(
                 frame=frame,

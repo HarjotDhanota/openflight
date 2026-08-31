@@ -32,6 +32,7 @@ from openflight.camera.clubpose.head_track import (
     MIN_TRACK_POINTS,
     HeadTrack,
     HeadTrackPoint,
+    ball_anchored_rotation,
     build_head_track,
     swing_metrics,
 )
@@ -365,3 +366,109 @@ def test_build_head_track_rejects_a_non_finite_range_rate() -> None:
 
     assert track.status == "rejected_no_range_rate"
     assert track.swing_plane_deg is None
+
+
+def test_the_boresight_is_anchored_on_the_observed_teed_ball() -> None:
+    """The rotation is identity only when the ball already lies on the boresight.
+
+    `projection` aims the lens at the world origin; the rig's lens is level.
+    The teed ball is the calibration target that reconciles the two, and every
+    elevation-dependent quantity depends on it.
+    """
+    camera = measured_camera(IMAGE_WIDTH, IMAGE_HEIGHT)
+    on_axis, _ = _project(np.array([[0.0, 0.0, 21.335]]), camera)
+    aligned = ReferenceBall(
+        x=float(on_axis[0][0]), y=float(on_axis[0][1]), diameter_px=12.77, area_px=128
+    )
+    offset = ReferenceBall(
+        x=float(on_axis[0][0]) + 6.0, y=float(on_axis[0][1]) - 9.0, diameter_px=12.77, area_px=128
+    )
+
+    assert ball_anchored_rotation(aligned, camera) == pytest.approx(np.eye(3), abs=1e-9)
+    rotation = ball_anchored_rotation(offset, camera)
+    assert rotation @ rotation.T == pytest.approx(np.eye(3), abs=1e-9)
+    assert np.linalg.det(rotation) == pytest.approx(1.0, abs=1e-9)
+    assert rotation != pytest.approx(np.eye(3), abs=1e-6)
+
+
+def _rodrigues(axis, angle_deg: float) -> np.ndarray:
+    """A rotation matrix, built independently of the module under test."""
+    unit = np.asarray(axis, dtype=float)
+    unit = unit / np.linalg.norm(unit)
+    cross = np.array([[0.0, -unit[2], unit[1]], [unit[2], 0.0, -unit[0]], [-unit[1], unit[0], 0.0]])
+    angle = math.radians(angle_deg)
+    return np.eye(3) + math.sin(angle) * cross + (1.0 - math.cos(angle)) * (cross @ cross)
+
+
+def test_the_anchored_boresight_recovers_a_lens_that_is_not_aimed_where_modelled() -> None:
+    """A tilted lens is reconstructed correctly only when the ball anchors it.
+
+    `projection` builds its camera by aiming the lens at the world origin, and
+    the rig's lens is level instead. Here the whole scene -- arc AND teed ball
+    -- is rendered as a rotated lens would see it, so the shipped model is
+    genuinely wrong about the boresight, exactly as on the real rig.
+
+    The radar anchor fixes only the head's DEPTH at contact; where it lands
+    across the boresight is free, which is what makes the contact check
+    evidence rather than arithmetic. On the development session the
+    uncorrected model missed the ball by 196 mm and the anchored one by 20 mm,
+    and the attack angle moved 6-7 degrees with it.
+    """
+    camera = measured_camera(IMAGE_WIDTH, IMAGE_HEIGHT)
+    world, times, frames, _contact_s, truth = _synthetic_arc(n_pre=13, n_post=3)
+    ball_world = np.array([0.0, 0.0, 21.335])
+
+    centre = camera.center_world
+    # The rig's actual error, not an invented one. `projection` aims the lens
+    # at the world origin, which from 203 mm up and 1568 mm back is a 7.4 deg
+    # downward pitch; the real lens is LEVEL. So the tilt under test is the
+    # rotation from the modelled boresight to the horizontal.
+    modelled = -centre / np.linalg.norm(centre)
+    axis = np.cross(modelled, np.array([1.0, 0.0, 0.0]))
+    tilt = _rodrigues(axis, math.degrees(math.asin(float(np.linalg.norm(axis)))))
+    # What a lens rotated by `tilt` sees is what the UNROTATED model sees of a
+    # scene rotated the other way about the camera centre.
+
+    def as_seen(points: np.ndarray) -> np.ndarray:
+        return centre + (points - centre) @ tilt
+
+    seen_uv, _ = _project(as_seen(ball_world[None, :]), camera)
+    image = _render_swing(as_seen(world), frames, camera, seen_uv[0])
+    observed = ReferenceBall(
+        x=float(seen_uv[0][0]), y=float(seen_uv[0][1]), diameter_px=12.77, area_px=128
+    )
+    # The radar measures the TRUE range, which the tilt does not change.
+    ranges = np.linalg.norm(world - centre, axis=1)
+    common = {
+        "range_rate_ms": float(np.polyfit(times, ranges, 1)[0]) / 1000.0,
+        "f_contact": CONTACT_FRAME,
+        "fps": CAPTURE_FPS,
+    }
+
+    anchored = build_head_track(image, observed, camera, boresight="ball", **common)
+    raw = build_head_track(image, observed, camera, boresight="raw", **common)
+
+    assert anchored.status == "ok", anchored.reason
+    assert raw.status == "ok", raw.reason
+    assert anchored.quality.contact_transverse_miss_mm < raw.quality.contact_transverse_miss_mm
+    anchored_error = abs(anchored.attack_angle_deg - truth["attack_angle_deg"])
+    raw_error = abs(raw.attack_angle_deg - truth["attack_angle_deg"])
+    assert anchored_error < raw_error
+    # The plane barely notices the boresight; the elevation angles do. That
+    # asymmetry is the reason the correction is easy to omit unnoticed.
+    assert abs(anchored.swing_plane_deg - raw.swing_plane_deg) < 2.0
+    assert raw_error - anchored_error > 1.0
+
+
+def test_an_unknown_boresight_is_refused() -> None:
+    camera, image, ball, rate, _, _ = _rendered_case()
+    with pytest.raises(ValueError, match="boresight"):
+        build_head_track(
+            image,
+            ball,
+            camera,
+            range_rate_ms=rate,
+            f_contact=CONTACT_FRAME,
+            fps=CAPTURE_FPS,
+            boresight="sideways",
+        )
