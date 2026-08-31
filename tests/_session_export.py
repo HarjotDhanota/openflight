@@ -32,6 +32,8 @@ BALL_TO_UNIT_M = 1.575
 SPEED_OF_SOUND_M_S = 343.0
 EXCLUDED_SHOTS = frozenset({1})
 
+MARKS_PATH = Path(__file__).resolve().parents[2] / "openflight" / "contact_marks.jsonl"
+
 _DEFAULT = (
     Path.home()
     / "Downloads"
@@ -50,6 +52,11 @@ def session_dir() -> Path | None:
 requires_session = pytest.mark.skipif(
     session_dir() is None,
     reason="the 2026-08-25 camera session export is not present locally",
+)
+
+requires_marks = pytest.mark.skipif(
+    session_dir() is None or not MARKS_PATH.is_file(),
+    reason=f"the export or the hand marks ({MARKS_PATH}) are not present locally",
 )
 
 
@@ -125,3 +132,53 @@ def load_shot(name: str) -> SessionShot:
 def teed_balls() -> tuple[tuple[str, object], ...]:
     """(shot name, ReferenceBall) for every included shot."""
     return tuple((name, load_shot(name).ball) for name in shot_names())
+
+
+def pass_one_marks() -> dict:
+    """The maintainer's hand marks, PASS 1 ONLY, as `head_outline.Landmarks`.
+
+    The file holds two passes by two annotators and their conventions differ by
+    4-11 px, so a loader with no pass filter silently scores against the wrong
+    one. Pass 2 is never the regression reference.
+    """
+    import numpy as np
+
+    from openflight.camera.clubpose.head_outline import Landmarks
+
+    path = MARKS_PATH
+    if not path.is_file():
+        return {}
+    marks: dict = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        if record.get("skipped"):
+            continue
+        if record.get("pass_index") != 1 or record.get("annotator") != "harjot":
+            continue
+        key = (record["shot"], int(record["frame"]))
+        if key in marks:
+            raise AssertionError(f"duplicate pass-1 mark for {key}")
+        marks[key] = Landmarks(
+            heel=np.asarray(record["marks"]["heel"], dtype=float),
+            toe=np.asarray(record["marks"]["toe"], dtype=float),
+            topline=np.asarray(record["marks"]["topline"], dtype=float),
+        )
+    return marks
+
+
+def swing(name: str):
+    """One shot as a `head_outline.SwingFrames`."""
+    from openflight.camera.clubpose.head_outline import SwingFrames
+
+    loaded = load_shot(name)
+    return SwingFrames(
+        frames=loaded.frames,
+        ball=loaded.ball,
+        fps=loaded.fps,
+        contact_frame=loaded.contact_frame,
+        range_rate_ms=loaded.range_rate_ms,
+        club=loaded.club,
+        name=loaded.name,
+    )
