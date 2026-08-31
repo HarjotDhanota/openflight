@@ -68,6 +68,52 @@ FOCAL_PX = LENS_MM / (PITCH_UM * SUBSAMPLE * 1e-3)  # 466.7
 # from it, so the fitter and the projector cannot drift apart. Re-exported here
 # because this module's docstring and its callers name it.
 
+# Independent per-frame fits jumped >100 deg between frames: a 20-40 px
+# silhouette under-determines six DOF, so frames share bounds and smoothness.
+
+# The GROUNDED pose -- a real club, sole on the ground, face square -- frozen.
+# `angles.square_pose()` computes it, but `angles` imports `triad` from this
+# module, so it cannot be called from here; `test_clubpose_fit_pose_box`
+# asserts the two agree.
+#
+# It matters because `triad(0, 0, 0)` is the mesh's own normalised frame and in
+# the world frame that is a BACKWARDS club, face toward the golfer. Bounds and
+# grids centred on (0, 0, 0) therefore scored the grounded pose -1.0 before a
+# mask was rendered: the search was never offered the club it was looking for.
+GROUNDED_POSE_DEG = (-179.95683175631507, 13.360819162637801, 3.4586763279020394)
+
+# Loose sanity bounds only, as half-widths about the grounded pose: yaw, pitch
+# and roll here are renderer angles, not face angle / dynamic loft / lie.
+POSE_BOUND_DEG = (60.0, 65.0, 70.0)
+
+# One coarse grid shape for all three axes, as offsets from the grounded pose.
+# The zero offset is a node, so the coarse stage starts ON the grounded pose.
+GRID_OFFSETS_DEG = (-40.0, -20.0, 0.0, 20.0, 40.0)
+
+
+def _grid(axis: int) -> tuple[float, ...]:
+    return tuple(GROUNDED_POSE_DEG[axis] + offset for offset in GRID_OFFSETS_DEG)
+
+
+YAW_GRID_DEG = _grid(0)
+PITCH_GRID_DEG = _grid(1)
+ROLL_GRID_DEG = _grid(2)
+
+
+def pose_in_bounds(yaw_deg: float, pitch_deg: float, roll_deg: float) -> bool:
+    """Is this renderer pose within the sanity box around the grounded pose?
+
+    The comparison WRAPS: the grounded yaw is -180.0, and +180 is the same
+    club. Comparing on the line would put half the box on the far side of the
+    branch cut and reject poses a degree away from the answer.
+    """
+    return all(
+        abs(math.remainder(float(value) - centre, 360.0)) <= bound
+        for value, centre, bound in zip(
+            (yaw_deg, pitch_deg, roll_deg), GROUNDED_POSE_DEG, POSE_BOUND_DEG, strict=True
+        )
+    )
+
 
 def measured_camera(
     width: int = 320,
@@ -275,9 +321,9 @@ def fit_frame_6dof(
     camera,
     *,
     range_grid_mm=(1456.0, 1581.0, 1706.0),
-    yaw_grid=(-40.0, -20.0, 0.0, 20.0, 40.0),
-    pitch_grid=(-40.0, -20.0, 0.0, 20.0, 40.0),
-    roll_grid=(-60.0, -30.0, 0.0, 30.0, 60.0, 90.0),
+    yaw_grid=YAW_GRID_DEG,
+    pitch_grid=PITCH_GRID_DEG,
+    roll_grid=ROLL_GRID_DEG,
 ):
     """Best 6-DOF pose by direct IoU. Coarse grid, then local refinement."""
     observed = observed_mask.astype(bool)
@@ -323,16 +369,6 @@ def fit_frame_6dof(
         "pitch_deg": pitch,
         "roll_deg": roll,
     }
-
-
-# Independent per-frame fits jumped >100 deg between frames: a 20-40 px
-# silhouette under-determines six DOF, so frames share bounds and smoothness.
-
-# Loose sanity bounds only: yaw/pitch/roll are offsets from the mesh's own
-# normalised frame, not face angle / loft / lie.
-YAW_BOUND_DEG = 60.0
-PITCH_RANGE_DEG = (-40.0, 90.0)
-ROLL_BOUND_DEG = 70.0
 
 
 def _smoothness_penalty(
@@ -389,9 +425,9 @@ def fit_sequence(
     smooth_deg: float = 70.0,
     smooth_mm: float = 300.0,
     range_grid_mm=(1481.0, 1581.0, 1681.0),
-    yaw_grid=(-40.0, -20.0, 0.0, 20.0, 40.0),
-    pitch_grid=(-30.0, 0.0, 30.0, 60.0, 85.0),
-    roll_grid=(-60.0, -30.0, 0.0, 30.0, 60.0),
+    yaw_grid=YAW_GRID_DEG,
+    pitch_grid=PITCH_GRID_DEG,
+    roll_grid=ROLL_GRID_DEG,
     refine_range: bool = True,
     range_mm_by_frame: dict[int, float] | None = None,
 ) -> dict[int, dict]:
@@ -430,9 +466,7 @@ def fit_sequence(
         refine_this_range = refine_range and frame_ranges is None
 
         def score(rng, yaw, pitch, roll):
-            if abs(yaw) > YAW_BOUND_DEG or not PITCH_RANGE_DEG[0] <= pitch <= PITCH_RANGE_DEG[1]:
-                return -1.0
-            if abs(roll) > ROLL_BOUND_DEG:
+            if not pose_in_bounds(yaw, pitch, roll):
                 return -1.0
             m = render_mask_6dof(mesh, camera.center_world + ray * rng, yaw, pitch, roll, camera)
             if m is None:

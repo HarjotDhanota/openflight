@@ -18,6 +18,12 @@ import pytest
 
 from openflight.camera.clubpose import fit
 
+# This file is about DEPTH. Orientation is pinned to the single pose the fitter
+# is allowed to reach -- the grounded one -- because `pose_in_bounds` scores
+# anything outside the box -1.0 and a singleton grid at the backwards triad
+# origin would leave every frame unfitted for a reason that is not depth.
+_YAW, _PITCH, _ROLL = fit.GROUNDED_POSE_DEG
+
 
 def _stub_camera() -> types.SimpleNamespace:
     """A camera that carries only what `fit_sequence` asks a camera for."""
@@ -51,9 +57,9 @@ def test_fit_sequence_can_keep_a_singleton_range_hard_pinned(monkeypatch):
         _masks(0),
         _stub_camera(),
         range_grid_mm=(1581.0,),
-        yaw_grid=(0.0,),
-        pitch_grid=(0.0,),
-        roll_grid=(0.0,),
+        yaw_grid=(_YAW,),
+        pitch_grid=(_PITCH,),
+        roll_grid=(_ROLL,),
         refine_range=False,
     )
 
@@ -69,9 +75,9 @@ class TestPerFrameRadarRange:
             object(),
             _masks(*self.RANGES),
             _stub_camera(),
-            yaw_grid=(0.0,),
-            pitch_grid=(0.0,),
-            roll_grid=(0.0,),
+            yaw_grid=(_YAW,),
+            pitch_grid=(_PITCH,),
+            roll_grid=(_ROLL,),
             **kwargs,
         )
 
@@ -111,9 +117,9 @@ class TestPerFrameRadarRange:
                 _masks(0, 1, 2),
                 _stub_camera(),
                 range_mm_by_frame={0: 1500.0, 1: 1550.0},
-                yaw_grid=(0.0,),
-                pitch_grid=(0.0,),
-                roll_grid=(0.0,),
+                yaw_grid=(_YAW,),
+                pitch_grid=(_PITCH,),
+                roll_grid=(_ROLL,),
             )
 
     @pytest.mark.parametrize("bad", (float("nan"), 0.0, -1.0))
@@ -125,9 +131,9 @@ class TestPerFrameRadarRange:
                 _masks(0),
                 _stub_camera(),
                 range_mm_by_frame={0: bad},
-                yaw_grid=(0.0,),
-                pitch_grid=(0.0,),
-                roll_grid=(0.0,),
+                yaw_grid=(_YAW,),
+                pitch_grid=(_PITCH,),
+                roll_grid=(_ROLL,),
             )
 
 
