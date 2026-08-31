@@ -264,9 +264,19 @@ class TestRenderIsUnchanged:
     """The pixels this refactor is not allowed to move.
 
     Captured from the no-search `square_pose()` render at c4fbada, immediately
-    before the rename, and confirmed by eye against the real shot 014 frame 71:
-    the rendered hosel follows the real shaft up-left and the sole sits on the
-    real sole. A sign flip anywhere in the reflection gate changes the hash.
+    before the rename. A sign flip anywhere in the reflection gate changes the
+    hash.
+
+    `BALL_UV` is NOT the clubhead's pixel on shot 014 frame 71, whatever this
+    docstring said before: the head's mask centroid there is (172.4, 147.8) and
+    this anchor is (137, 121), 40 px away. It is an arbitrary but fixed ray, and
+    that is all this test needs -- it is a pixel-identity guard on the mesh
+    reflection, not a claim about where a club is. The by-eye check against
+    shot 014 f71 is done by anchoring on the head's own centroid at its radar
+    range, and it was re-run after the 2026-08-30 camera-geometry corrections:
+    the rendered sole still sits on the real sole and the hosel still follows
+    the real shaft up-left, with IoU against the observed head mask moving from
+    0.354 to 0.359 and the rendered bounding box moving by at most one pixel.
     """
 
     BALL_UV = (137.0, 121.0)

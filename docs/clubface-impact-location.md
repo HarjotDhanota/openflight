@@ -337,3 +337,30 @@ mesh-template iteration. The mesh-template route is closed because no f69/f70/f7
 triple passes the fixed alignment gates; the next outline source must be the
 learned segmenter or an address photo.** No accuracy claim against truth is made,
 because no truth reference exists.
+
+## Mesh route, re-run on the corrected geometry (2026-08-31)
+
+The eight geometry defects fixed on `feat/clubpose-impact-zone` were fixed for
+the OUTLINE extractor, not to reopen the mesh route. The route was re-run on
+the corrected code once, to record what changed:
+
+| shot | frames | median IoU | max IoU | fitted yaw, f66 -> f71 |
+| --- | --- | --- | --- | --- |
+| 014 9-iron | f66-f71 | 0.651 | 0.669 | -132 -124 -132 -140 -184 -180 |
+| 002 7-iron | f66-f71 | 0.634 | 0.674 | -152 -132 -132 -176 -196 -140 |
+| 020 9-iron | f66-f71 | 0.652 | 0.686 | -144 -156 -168 -184 -172 -152 |
+
+`fit_sequence` with the radar-pinned per-frame range, the search box centred on
+`square_pose()` and no smoothness penalty. The IoU is much better than anything
+this route reached before -- previously the grounded pose was outside the box
+and could not be tried at all -- and **the route still fails, on the quantity it
+was always failing on.** The fitted yaw wanders 40 to 60 degrees between
+consecutive frames within a single shot, on every shot. A clubface rotates a few
+tenths of a degree per frame. Six frames 2.1 ms apart cannot be showing 60
+degrees of face rotation, so the orientation is not being measured; the search
+is sliding along a flat direction of the IoU surface, which is the same
+anti-correlation finding recorded above.
+
+**Verdict unchanged: the mesh-template route stays closed.** Better geometry
+raised the IoU and did not make the orientation identifiable from a 20-40 px
+silhouette. The impact zone is read from the data-built outline instead.
