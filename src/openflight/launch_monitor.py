@@ -309,6 +309,13 @@ class Shot:
     experimental_fused_club_path_confidence: Optional[str] = None
     experimental_camera_trace_deg: Optional[float] = None
     experimental_aoa_offset_source: Optional[str] = None
+    # Heel-toe impact zone from the data-built clubhead outline. A dict, not a
+    # number: the reading is a CONSISTENCY figure against one annotator's hand
+    # marks, on a face-centre convention that puts the ball ~30 mm heel-ward on
+    # nearly every swing, so the status, the reason and the convention have to
+    # travel with it. Off by default; see `server.impact_zone_settings` and
+    # docs/clubface-impact-location.md.
+    experimental_impact_zone: Optional[dict] = None
     # Independent horizontal ball-flight evidence. The camera-assisted value
     # may become the displayed experimental result while the original IWR
     # value remains available for replay and comparison.

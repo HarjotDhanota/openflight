@@ -128,6 +128,14 @@ kld7_horizontal = None
 experimental_kld7_radc_tuning: bool = False
 experimental_kld7_raw_radc_logging: bool = False
 
+# Heel-toe impact zone from the camera's data-built clubhead outline. OFF, and
+# withheld even when on unless a template exists for the club that was hit. It
+# is a consistency reading against one annotator's hand marks on a face-centre
+# convention that is not a strike location; see
+# docs/clubface-impact-location.md.
+experimental_impact_zone: bool = False
+experimental_impact_zone_templates: str | None = None
+
 # TI IWR6843 L3 rolling-buffer capture + LCMF-v1 launch angle.
 iwr6843_runtime = None
 iwr6843_runtime_config: dict = {"enabled": False}
@@ -1058,6 +1066,18 @@ def _kld7_angle_log_payload(
     if selection_details:
         payload.update(selection_details)
     return payload
+
+
+def impact_zone_settings() -> dict:
+    """Whether the experimental impact zone runs, and where its templates are.
+
+    Both halves must be present. The flag alone reads nothing, because the
+    outline is per club and no template ships with the repository.
+    """
+    return {
+        "enabled": bool(experimental_impact_zone),
+        "template_dir": experimental_impact_zone_templates,
+    }
 
 
 def _experimental_kld7_raw_radc_logging_enabled() -> bool:
@@ -3084,6 +3104,37 @@ def _load_camera_capture_archive(camera_capture) -> dict[str, object] | None:
         return None
 
 
+def _read_impact_zone(shot: Shot, archive, trigger_index):
+    """The experimental heel-toe impact zone for one shot, or why there is none.
+
+    OFF by default, and withheld even when on unless a template exists for the
+    club that was hit. The result is returned rather than logged as a number,
+    because it carries the convention that produced it and that convention is
+    not a strike location -- see `impact_zone_settings` and
+    docs/clubface-impact-location.md.
+    """
+    from openflight.camera.clubpose.impact_zone import withheld  # noqa: PLC0415
+
+    settings = impact_zone_settings()
+    if not settings["enabled"]:
+        return withheld("impact_zone_disabled")
+    try:
+        from openflight.camera.club_delivery import estimate_impact_zone  # noqa: PLC0415
+
+        return estimate_impact_zone(
+            None if archive is None else archive.get("frames"),
+            None if archive is None else archive.get("host_timestamp_ns"),
+            trigger_index=trigger_index,
+            range_evidence=shot.iwr6843_club_range_evidence,
+            club=getattr(shot.club, "value", None),
+            template_dir=settings["template_dir"],
+            mirror_horizontal=bool(camera_capture_config.get("mirror_horizontal")),
+        )
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] Impact zone could not be read: %s", error)
+        return withheld(f"impact_zone_error_{type(error).__name__}")
+
+
 def _fuse_camera_club_delivery(
     shot: Shot,
     camera_capture,
@@ -3098,6 +3149,11 @@ def _fuse_camera_club_delivery(
         )
 
         fused = ChainedDelivery(status="rejected_no_camera_capture")
+        # Kept in the outer scope so the experimental impact zone can read the
+        # same archive and trigger frame the delivery estimator used, rather
+        # than loading and re-deriving them.
+        archive_for_zone = None
+        trigger_for_zone = None
         if camera_capture is not None and camera_capture.valid and camera_capture.path:
             frames_path = Path(camera_capture.path) / "frames.npz"
             if frames_path.exists():
@@ -3114,6 +3170,7 @@ def _fuse_camera_club_delivery(
                         if "pre_trigger_count" in archive
                         else None
                     )
+                    archive_for_zone, trigger_for_zone = archive, trigger_index
                     if iwr6843_runtime is None:
                         fused = ChainedDelivery(status="rejected_no_iwr_runtime")
                     else:
@@ -3157,6 +3214,9 @@ def _fuse_camera_club_delivery(
         shot.experimental_fused_club_path_confidence = fused.path_confidence_tier
         shot.experimental_camera_trace_deg = None
         shot.experimental_aoa_offset_source = "none_chained_3d"
+        shot.experimental_impact_zone = _read_impact_zone(
+            shot, archive_for_zone, trigger_for_zone
+        ).as_dict()
         logger.info(
             "[SERVER] Camera/IWR chained club delivery: AoA %s path %s "
             "(status=%s, features=%d, speed_ratio=%s, velocity_mad=%s mph, "
@@ -5378,6 +5438,29 @@ def main():
         ),
     )
     parser.add_argument(
+        "--experimental-impact-zone",
+        dest="experimental_impact_zone",
+        action="store_true",
+        help=(
+            "Read the experimental heel-toe impact zone from the camera's "
+            "data-built clubhead outline (off by default). It is a CONSISTENCY "
+            "reading against one annotator's hand marks, on a face-centre "
+            "convention that is not a strike location, and it stays withheld "
+            "unless --experimental-impact-zone-templates holds an outline for "
+            "the club that was hit. See docs/clubface-impact-location.md."
+        ),
+    )
+    parser.add_argument(
+        "--experimental-impact-zone-templates",
+        dest="experimental_impact_zone_templates",
+        default=None,
+        help=(
+            "Directory of per-club clubhead outlines (<club>.npz) for the "
+            "experimental impact zone. None ship with the repository; build one "
+            "with clubpose.head_outline.build_template_self_built."
+        ),
+    )
+    parser.add_argument(
         "--kld7-horizontal",
         action="store_true",
         help="[DEPRECATED] Enable K-LD7 horizontal angle radar (club path)",
@@ -5523,6 +5606,10 @@ def main():
         parser.error(f"--ops-baud must be one of {supported} (got {args.ops_baud})")
     global experimental_kld7_radc_tuning
     global experimental_kld7_raw_radc_logging
+    global experimental_impact_zone
+    global experimental_impact_zone_templates
+    experimental_impact_zone = bool(args.experimental_impact_zone)
+    experimental_impact_zone_templates = args.experimental_impact_zone_templates
     global active_kld7_radc_tuning
     global ballistics_enabled
     global battery_provider

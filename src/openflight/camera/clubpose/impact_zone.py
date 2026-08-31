@@ -77,6 +77,13 @@ ZONE_SHOULDER_MM = 15.0
 MIN_QUAD_FRAMES = 4
 MIN_AVAILABLE_FRAMES = 4
 
+# The capture's trigger is the IMPACT SOUND arriving at the microphone, not the
+# ball being hit. On the shipped rig the unit sits 1.575 m from the ball, so the
+# trigger lands 4.59 ms -- 2.15 frames at 468 fps -- after contact. Everything
+# in this module is anchored on contact, so the walk-back happens once, here.
+BALL_TO_UNIT_M = 1.575
+SPEED_OF_SOUND_M_S = 343.0
+
 CENTRE_CONVENTION = (
     "face centre = heel-toe midpoint of the aligned outline, plus "
     f"{FACE_CENTRE_TOEWARD_MM:.0f} mm toe-ward. This is a CONVENTION, not a "
@@ -130,6 +137,26 @@ class ImpactZoneResult:
             "rejected_frames": {int(k): v for k, v in self.rejected_frames.items()},
             "centre_convention": self.centre_convention,
         }
+
+
+def contact_frame_from_trigger(
+    trigger_index: int,
+    fps: float,
+    *,
+    ball_to_unit_m: float = BALL_TO_UNIT_M,
+    speed_of_sound_m_s: float = SPEED_OF_SOUND_M_S,
+) -> float:
+    """The frame at which the ball was struck, from the acoustic trigger frame.
+
+    ``trigger_index`` is the index of the last PRE-trigger frame, which is how
+    the capture archive reports it, so the trigger itself is the frame after
+    it. Contact is that instant minus the sound's flight time from the ball to
+    the microphone.
+    """
+    rate = float(fps)
+    if not math.isfinite(rate) or rate <= 0.0:
+        raise ValueError(f"frame rate must be a positive number of frames per second, got {fps}")
+    return (int(trigger_index) + 1) - float(ball_to_unit_m) / float(speed_of_sound_m_s) * rate
 
 
 def withheld(reason: str, **extra) -> ImpactZoneResult:

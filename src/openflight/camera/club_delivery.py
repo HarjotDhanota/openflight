@@ -316,9 +316,7 @@ def combine_approach_estimates(
     if preferred_path_estimate is not None:
         path_deg = preferred_path_estimate.path_deg
         values = np.asarray([estimate.path_deg for estimate in path_candidates])
-        path_mad = (
-            float(np.median(np.abs(values - path_deg))) if len(values) else None
-        )
+        path_mad = float(np.median(np.abs(values - path_deg))) if len(values) else None
         preferred_quality = (
             CHAINED_SPEED_RATIO_RANGE[0]
             <= preferred_path_estimate.speed_ratio_ops
@@ -329,9 +327,7 @@ def combine_approach_estimates(
             <= CHAINED_PATH_RANGE_DEG[1]
         )
         if preferred_quality and timing_plausible:
-            path_confidence = (
-                "high" if path_mad is not None and path_mad <= 2.0 else "medium"
-            )
+            path_confidence = "high" if path_mad is not None and path_mad <= 2.0 else "medium"
         else:
             path_confidence = "low"
     elif len(path_candidates) >= APPROACH_MIN_PATH_WINDOWS:
@@ -1392,3 +1388,119 @@ def fuse_club_delivery(
         offset_source=offset_source,
         trace_deg=trace.trace_deg,
     )
+
+
+# --- experimental impact zone -------------------------------------------------
+# Promoted from research on 2026-08-31 and wired here behind a flag that is OFF.
+# It is a CONSISTENCY reading against one annotator's hand marks, on a
+# face-centre convention that puts the ball about 30 mm heel-ward of centre on
+# nearly every swing; only the shot-to-shot variation has been shown to mean
+# anything. See docs/clubface-impact-location.md before reading a number off it.
+
+IMPACT_ZONE_TEMPLATE_SUFFIX = ".npz"
+
+
+def impact_zone_template_path(template_dir, club: str):
+    """Where the outline for one club lives, or None when there is no directory."""
+    from pathlib import Path  # noqa: PLC0415
+
+    if template_dir is None:
+        return None
+    return Path(template_dir) / f"{club}{IMPACT_ZONE_TEMPLATE_SUFFIX}"
+
+
+def _camera_fps(host_timestamp_ns) -> float | None:
+    """Delivered frame rate from the archive's own host timestamps."""
+    stamps = np.asarray(host_timestamp_ns, dtype=np.int64)
+    if stamps.size < 2:
+        return None
+    steps = np.diff(stamps.astype(float))
+    steps = steps[steps > 0.0]
+    if steps.size == 0:
+        return None
+    period_s = float(np.median(steps)) / 1e9
+    if not math.isfinite(period_s) or period_s <= 0.0:
+        return None
+    return 1.0 / period_s
+
+
+def estimate_impact_zone(
+    frames,
+    host_timestamp_ns,
+    *,
+    trigger_index,
+    range_evidence,
+    club,
+    template_dir,
+    mirror_horizontal: bool = False,
+):
+    """Read the heel-toe impact zone, or say which piece of evidence was missing.
+
+    Every argument is a thing the shot record may or may not have, and each
+    absence has its own reason: there is no partial answer and no default
+    substituted for a measurement. In particular the outline's SCALE comes from
+    the radar's range, so without `range_evidence` there is no reading at all
+    rather than a reading at an assumed size.
+
+    Returns an `ImpactZoneResult`, which carries its own status, the reason it
+    withheld, and the face-centre convention it used.
+    """
+    from openflight.camera.clubpose.head_outline import (  # noqa: PLC0415
+        ClubOutlineTemplate,
+        SwingFrames,
+    )
+    from openflight.camera.clubpose.impact_zone import (  # noqa: PLC0415
+        contact_frame_from_trigger,
+        extract_impact_zone,
+        withheld,
+    )
+
+    if frames is None or getattr(frames, "ndim", 0) != 3 or len(frames) < 20:
+        return withheld("no_camera_frames")
+    if trigger_index is None:
+        return withheld("no_camera_trigger_frame")
+    if range_evidence is None:
+        return withheld("no_iwr_range_evidence")
+    if not club:
+        return withheld("no_club_selected")
+    path = impact_zone_template_path(template_dir, club)
+    if path is None:
+        return withheld("no_impact_zone_template_directory")
+    if not path.is_file():
+        return withheld(f"no_impact_zone_template_for_{club}", club=club)
+    fps = _camera_fps(host_timestamp_ns)
+    if fps is None:
+        return withheld("camera_frame_rate_not_recoverable", club=club)
+
+    try:
+        template = ClubOutlineTemplate.load(path)
+    except (OSError, ValueError, KeyError) as error:
+        return withheld(f"impact_zone_template_unreadable_{type(error).__name__}", club=club)
+
+    pixels = np.asarray(frames)
+    if mirror_horizontal:
+        pixels = pixels[:, :, ::-1]
+    try:
+        ball = detect_reference_ball(pixels)
+    except ValueError:
+        return withheld("no_teed_ball_for_the_impact_zone", club=club)
+
+    geometry = getattr(range_evidence, "geometry", None)
+    track = getattr(range_evidence, "track", None)
+    impact_t_s = getattr(range_evidence, "impact_t_s", None)
+    if geometry is None or track is None or impact_t_s is None:
+        return withheld("no_iwr_range_evidence", club=club)
+    # The rate AT IMPACT, which is the quadratic refit's local value when the
+    # track has one and the track average when it does not.
+    range_rate_ms = float(track.speed_ms_at(float(impact_t_s), float(geometry.range_res_m)))
+
+    swing = SwingFrames(
+        frames=pixels,
+        ball=ball,
+        fps=float(fps),
+        contact_frame=contact_frame_from_trigger(int(trigger_index), float(fps)),
+        range_rate_ms=range_rate_ms,
+        club=str(club),
+        name="live",
+    )
+    return extract_impact_zone(swing, template)

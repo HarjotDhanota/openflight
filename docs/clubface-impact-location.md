@@ -364,3 +364,105 @@ anti-correlation finding recorded above.
 **Verdict unchanged: the mesh-template route stays closed.** Better geometry
 raised the IoU and did not make the orientation identifiable from a 20-40 px
 silhouette. The impact zone is read from the data-built outline instead.
+
+## Impact zone — promoted (2026-08-31)
+
+**NO GROUND TRUTH EXISTS. This is a consistency reading, not a measurement of
+where the ball struck the face.** Every figure below is against
+`contact_marks.jsonl` pass 1 — one annotator's reading of the same pixels,
+whose own second-pass spread is 0.4–0.7 px median and 1.3–1.7 px p90. Nothing
+has been scored against a launch monitor, a foot-spray strike, or any other
+independent instrument. The gate is within about a factor of two of the label
+noise, which is close to the point where this reference stops being able to
+discriminate at all.
+
+The data-built outline extractor from `research/empirical_template` iteration 3
+now ships as `clubpose.head_outline` and `clubpose.impact_zone`, running on the
+corrected camera geometry (level boresight, ball-referenced height, taped
+lateral offset). The mesh-template route stays closed — see the section above.
+
+### What it reports
+
+| field | status |
+| --- | --- |
+| `heel_toe_mm`, `zone` | shipped-experimental. Five bands at ±5 / ±15 mm. |
+| `high_low_mm` | `experimental_unvalidated`. Never a zone. |
+| `face_width_mm`, `frame_iou`, `rejected_frames` | diagnostics. |
+| `centre_convention` | carried on every result, including withheld ones. |
+
+**The absolute offset is a convention, not a strike location.** The face centre
+is the aligned outline's heel–toe midpoint plus 8 mm toe-ward, which puts the
+ball about 30 mm heel-ward of centre on nearly every shot. That is not a
+plausible strike pattern; it is the oblique rear view and the midpoint
+convention. Only the shot-to-shot VARIATION has been shown to mean anything.
+
+### Regression, leave-one-out over 21 shots
+
+In the research's own configuration the port reproduces iteration 3 to the
+digit, which is the check that the port is faithful:
+
+| axis | registered 2026-08-29 | port | |
+| --- | --- | --- | --- |
+| heel x | 0.89 / 1.71 px | 0.89 / 1.71 | PASS |
+| toe x | 0.52 / 1.09 px | 0.52 / 1.09 | PASS |
+| topline y | 0.85 / 1.78 px | 0.85 / 1.78 | PASS |
+| marked frames scored | 34 | 34 | |
+
+With the USGA gates the shipped extractor adds:
+
+| quantity | gate | measured | |
+| --- | --- | --- | --- |
+| heel x | ≤ 1 / ≤ 2 px | 0.76 / 1.64 | PASS |
+| toe x | ≤ 1 / ≤ 2 px | 0.53 / 1.03 | PASS |
+| topline y | ≤ 1 / ≤ 2 px | 0.85 / 1.81 | PASS |
+| heel–toe zone r vs the marks | ≥ 0.95 | **0.962** over 20 shots | PASS |
+| shots producing a reading | ≥ 17 of 21 | 20 / 21 | PASS |
+| strict availability (all of f_c−6…f_c−1) | ≥ 17 of 21 | **5 / 21** | **MISS** |
+
+### The two misses, reported rather than tuned away
+
+**Strict availability.** Requiring every one of the six pre-contact frames to
+survive falls from 16/21 without the USGA gates (against the registered 18/21 —
+the difference is the new physical mask-area gate) to 5/21 with them, because
+the topline gate rejects the earliest frame on most shots, where the head
+images 36 % larger and the outline sits worst. It does not stop a reading: the
+carry needs four frames, not six, and 20 of 21 shots produce one. The
+regression test carries this as `xfail(strict=True)` with the reason written
+out, so it cannot be quietly fixed by moving a threshold.
+
+**The USGA topline rule is finer than this instrument.** Part 2 §4a(i) allows
+2.54 mm above the topline, which is 0.72 px at this plate scale, and the
+extractor's own topline placement p90 is 1.78 px. A gate at the rule's own
+value rejects the entire session, because it measures the extractor's residual
+and not the club. The shipped gate is the rule PLUS the extractor's stated
+tolerance and both numbers are named in the code, so it catches gross
+segmentation failures and is **not** a conformance test. The heel/shaft-plane
+rule (§1d, 15.88 mm ≈ 4.5 px) is above the placement noise and is applied as
+stated.
+
+### Wiring
+
+`server.py` populates `Shot.experimental_impact_zone` — a dict, so the status,
+the reason and the convention travel with the number — behind
+`--experimental-impact-zone`, **off by default**. It stays withheld unless the
+camera archive, the IWR range evidence and an outline for the selected club are
+all present; `--experimental-impact-zone-templates` names the outline
+directory, and none ship with the repository. There is no UI.
+
+### Stage 1: the foot-spray calibration that replaces the convention
+
+The convention above is the largest single caveat and the cheapest to remove.
+The plan, in order:
+
+1. **Foot spray on the face, one session, ~30 shots.** Powder the face, hit,
+   photograph the face after each shot with a phone at a fixed jig. The mark's
+   centre in face coordinates is the reference this project has never had.
+2. **An address frame per shot.** Capture the frame before the swing with the
+   ball teed and the club soled behind it. That fixes the face centre in the
+   camera's own frame instead of inferring it from the outline's midpoint, and
+   it is what `head_outline.build_template_from_address_photo` is reserved for.
+3. **Score the extractor against the powder marks, not against the annotator.**
+   Only then does "impact location" stop being a consistency figure. Until it
+   happens, the heel–toe reading is a repeatable number whose zero is unknown,
+   and the vertical channel is not usable at all (7.7 mm rms against a 10.5 mm
+   spread).
