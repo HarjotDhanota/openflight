@@ -29,7 +29,12 @@ SPEED_BOUNDS_MS = (20.0, 90.0)
 FAST_TRACK_MS = 26.5  # RADIAL m/s: slowest real SW ball reads ~27.5
 #                               (66 mph x cos projection); flying tee ~25
 FAST_SUPPORT_FRAC = 0.55  # of the most-inliers candidate
-MAX_RADIAL_ACCEL = 200.0  # m/s^2 sanity for the quadratic refit
+# m/s^2 sanity for the quadratic refit. This is a BALL-flight number: a ball's
+# radial acceleration is a projection effect of order 10 m/s^2. A clubhead swung
+# on a ~1.5 m radius at 35-50 m/s carries v^2/r = 800-1700 m/s^2 of centripetal
+# acceleration and a large fraction of it lands on the line of sight, so the
+# club estimator passes its own bound -- see `club.CLUB_MAX_RADIAL_ACCEL`.
+MAX_RADIAL_ACCEL = 200.0
 
 
 @dataclass
@@ -129,6 +134,11 @@ class BallTrack:
     def range_at(self, t_s: float, range_res_m: float) -> float:
         """Predicted range in meters at time t."""
         return self.bin_at(t_s) * range_res_m
+
+    @property
+    def range_model(self) -> str:
+        """Which model `speed_ms_at` and a range walk get: quadratic or linear."""
+        return "linear" if self.quad_bins is None else "quadratic"
 
     def speed_ms_at(self, t_s: float, range_res_m: float) -> float:
         """LOCAL radial speed from the quadratic refit (line slope if none).
@@ -287,6 +297,7 @@ def find_ball(
     gates_m: tuple[tuple[float, float], ...] = BALL_GATES_M,
     speed_bounds_ms: tuple[float, float] = SPEED_BOUNDS_MS,
     time_window_s: tuple[float, float] | None = None,
+    max_radial_accel: float = MAX_RADIAL_ACCEL,
 ) -> BallTrack | None:
     """RANSAC a range walk inside ``gates_m``/``speed_bounds_ms``; None when
     no plausible streak exists.
@@ -303,6 +314,12 @@ def find_ball(
     speed band overlaps the ball's, it must also pass ``time_window_s`` to
     restrict the search to pre-impact frames — otherwise this fitter will
     happily lock onto the ball instead of the club.
+
+    ``max_radial_accel`` is the sanity bound on the quadratic refit, and it is
+    a per-TARGET number: the ball's 200 m/s^2 throws away every clubhead's
+    curvature, which is hundreds of m/s^2. The refit is only as good as the
+    inlier set the LINEAR RANSAC above chose, so it is a better range model
+    than the line and not a calibrated acceleration.
     """
     power = loop_power(mti)
     loops_idx, bins = _detections(power, geo, max_range_m=max_range_m, gates_m=gates_m)
@@ -363,7 +380,7 @@ def find_ball(
     quad = None
     if inl.sum() >= 10:
         q2, q1, q0 = np.polyfit(times[inl], bins[inl], 2)
-        if abs(2.0 * q2 * res) < MAX_RADIAL_ACCEL:
+        if abs(2.0 * q2 * res) < max_radial_accel:
             quad = (float(q2), float(q1), float(q0))
     span_s = t_last - t_first
     return BallTrack(

@@ -105,6 +105,13 @@ CLUB_SPEED_PROJECTION_RANGE = (0.70, 1.20)
 CLUB_PREFERRED_SPEED_RATIO = 0.82
 CLUB_TRACK_SPEED_LIMIT_MS = (12.0, 60.0)
 
+# Sanity bound on the quadratic range refit for a CLUB, replacing the ball's
+# 200 m/s^2. A clubhead on a 1.5 m radius at 50 m/s carries v^2/r = 1667 m/s^2
+# of centripetal acceleration; the line-of-sight component cannot exceed the
+# magnitude, and the tangential term adds a few hundred. 2500 sits above the
+# physical ceiling and well below anything that would be a fitting artefact.
+CLUB_MAX_RADIAL_ACCEL = 2500.0
+
 # A real club track must extrapolate to the known ball position at impact.
 # Four 4.7 cm range bins leave room for range quantisation and a slightly
 # imperfect impact timestamp without admitting a mover that misses the tee.
@@ -369,6 +376,7 @@ def find_club(
         speed_bounds_ms=speed_bounds_ms,
         min_ball_ms=max(speed_bounds_ms[0], ops_speed_ms * CLUB_PREFERRED_SPEED_RATIO),
         time_window_s=window_s,
+        max_radial_accel=CLUB_MAX_RADIAL_ACCEL,
     )
     mode = "ops_speed_prior"
     if track is None:
@@ -382,6 +390,7 @@ def find_club(
             speed_bounds_ms=CLUB_SPEED_BOUNDS_MS,
             min_ball_ms=CLUB_SPEED_BOUNDS_MS[0],
             time_window_s=window_s,
+            max_radial_accel=CLUB_MAX_RADIAL_ACCEL,
         )
         mode = "broad_fallback"
     if track is None:

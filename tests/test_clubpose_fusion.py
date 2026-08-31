@@ -14,6 +14,7 @@ arithmetic is right, so a disagreement on real pixels is about the pixels.
 from __future__ import annotations
 
 import math
+import types
 
 import numpy as np
 import pytest
@@ -58,12 +59,12 @@ class TestRangesFromRadar:
         impact = float(times[5])
         ranges = ranges_from_radar(times, impact, 33.0, BALL_RANGE_MM)
 
-        assert ranges[5] == pytest.approx(BALL_RANGE_MM, abs=1e-9)
+        assert ranges.ranges_mm[5] == pytest.approx(BALL_RANGE_MM, abs=1e-9)
 
     def test_the_default_anchor_is_the_measured_tape_range(self):
         ranges = ranges_from_radar([0.0], 0.0, 33.0)
 
-        assert ranges[0] == pytest.approx(CAMERA_BALL_RANGE_MM, abs=1e-9)
+        assert ranges.ranges_mm[0] == pytest.approx(CAMERA_BALL_RANGE_MM, abs=1e-9)
         assert CAMERA_BALL_RANGE_MM == pytest.approx(BALL_RANGE_MM)
 
     def test_range_walks_back_along_the_radar_range_rate(self):
@@ -74,16 +75,18 @@ class TestRangesFromRadar:
         """
         dt = 1.0 / CAPTURE_FPS
         times = np.asarray([0.0, dt, 2.0 * dt])
-        ranges = ranges_from_radar(times, 2.0 * dt, 33.0, BALL_RANGE_MM)
+        walked = ranges_from_radar(times, 2.0 * dt, 33.0, BALL_RANGE_MM).ranges_mm
 
-        assert ranges[0] < ranges[1] < ranges[2] == pytest.approx(BALL_RANGE_MM)
-        np.testing.assert_allclose(np.diff(ranges), 33.0 * 1000.0 * dt, atol=1e-9)
+        assert walked[0] < walked[1] < walked[2] == pytest.approx(BALL_RANGE_MM)
+        np.testing.assert_allclose(np.diff(walked), 33.0 * 1000.0 * dt, atol=1e-9)
 
     def test_the_span_is_the_distance_the_club_covers(self):
         times = np.arange(16, dtype=float) / CAPTURE_FPS
         ranges = ranges_from_radar(times, float(times[-1]), 33.0)
 
-        assert float(np.ptp(ranges)) == pytest.approx(33.0 * 1000.0 * float(np.ptp(times)))
+        assert float(np.ptp(ranges.ranges_mm)) == pytest.approx(
+            33.0 * 1000.0 * float(np.ptp(times))
+        )
 
     @pytest.mark.parametrize(
         ("times", "impact", "rate", "anchor"),
@@ -231,3 +234,68 @@ class TestRotationFromOmega:
     def test_rejects_a_non_finite_omega(self):
         with pytest.raises(ValueError):
             rotation_from_omega_deg_s([0.0, float("nan"), 0.0], 0.002)
+
+
+class TestTheRangeModelIsStated:
+    """A straight-line range is a MODEL, and a caller has to be able to see it.
+
+    `fit_sequence` takes `range_mm_by_frame` and calls it a measurement. It is
+    a measurement of the range RATE walked out under an assumption about the
+    rate's own constancy, and on a clubhead that assumption is wrong by tens of
+    millimetres over a capture (`test_iwr6843_club_quadratic_range`). Nothing
+    downstream could previously tell which model it had been handed.
+    """
+
+    def test_a_rate_alone_reports_a_linear_walk(self):
+        ranges = ranges_from_radar([0.0, 0.002, 0.004], 0.004, 33.0)
+
+        assert ranges.model == "linear"
+        assert ranges.range_accel_ms2 == pytest.approx(0.0)
+
+    def test_an_acceleration_reports_a_quadratic_walk_and_curves(self):
+        times = np.asarray([0.0, 0.002, 0.004])
+        straight = ranges_from_radar(times, 0.004, 33.0).ranges_mm
+        curved = ranges_from_radar(times, 0.004, 33.0, range_accel_ms2=-1500.0)
+
+        assert curved.model == "quadratic"
+        assert curved.ranges_mm[-1] == pytest.approx(CAMERA_BALL_RANGE_MM, abs=1e-9)
+        assert float(np.abs(curved.ranges_mm - straight).max()) > 2.0
+
+    def test_a_zero_acceleration_reproduces_the_linear_walk_exactly(self):
+        times = np.asarray([0.0, 0.002, 0.004])
+
+        np.testing.assert_allclose(
+            ranges_from_radar(times, 0.004, 33.0, range_accel_ms2=0.0).ranges_mm,
+            ranges_from_radar(times, 0.004, 33.0).ranges_mm,
+            atol=1e-12,
+        )
+
+    def test_a_track_without_a_quadratic_refit_says_linear(self):
+        from openflight.camera.clubpose.fusion import ranges_from_track
+
+        track = types.SimpleNamespace(speed_ms=33.0, quad_bins=None)
+        ranges = ranges_from_track(track, [0.0, 0.002, 0.004], 0.004, 0.0469)
+
+        assert ranges.model == "linear"
+        np.testing.assert_allclose(
+            ranges.ranges_mm,
+            ranges_from_radar([0.0, 0.002, 0.004], 0.004, 33.0).ranges_mm,
+            atol=1e-9,
+        )
+
+    def test_a_track_with_a_quadratic_refit_says_quadratic_and_uses_it(self):
+        from openflight.camera.clubpose.fusion import ranges_from_track
+
+        res = 0.0469
+        # bins(t) = q2 t^2 + q1 t + q0, chosen so the rate at impact is 33 m/s
+        # and the radial acceleration is -1500 m/s^2.
+        q2 = -1500.0 / (2.0 * res)
+        q1 = (33.0 - (-1500.0) * 0.004) / res
+        track = types.SimpleNamespace(speed_ms=33.0, quad_bins=(q2, q1, 100.0))
+        times = np.asarray([0.0, 0.002, 0.004])
+        ranges = ranges_from_track(track, times, 0.004, res)
+
+        assert ranges.model == "quadratic"
+        assert ranges.ranges_mm[-1] == pytest.approx(CAMERA_BALL_RANGE_MM, abs=1e-9)
+        assert ranges.range_accel_ms2 == pytest.approx(-1500.0)
+        assert ranges.range_rate_ms == pytest.approx(33.0)

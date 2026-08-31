@@ -38,6 +38,7 @@ depended on session paths, masks or plotting removed.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -45,14 +46,34 @@ from openflight.camera.clubpose.motion import rotation_from_omega_deg_s
 from openflight.camera.clubpose.projection import CAMERA_BALL_RANGE_MM
 
 __all__ = [
+    "RadarRanges",
     "axis_basis",
     "clubhead_velocity_world",
     "omega_from_phase",
     "ranges_from_radar",
+    "ranges_from_track",
     "rotation_from_omega_deg_s",
 ]
 
 MM_PER_M = 1000.0
+
+
+@dataclass(frozen=True)
+class RadarRanges:
+    """Per-frame camera-to-clubhead range, AND the model that produced it.
+
+    A straight-line range walk is a model, not a measurement: it is the range
+    RATE walked out under an assumption that the rate is constant. On a
+    clubhead that assumption is wrong by tens of millimetres over one capture
+    (`tests/test_iwr6843_club_quadratic_range`). `fit_sequence` calls what it
+    is handed a measurement and pins depth to it, so which model it got has to
+    travel with the numbers rather than be inferred from the call site.
+    """
+
+    ranges_mm: np.ndarray
+    model: str
+    range_rate_ms: float
+    range_accel_ms2: float
 
 
 def ranges_from_radar(
@@ -60,7 +81,9 @@ def ranges_from_radar(
     impact_elapsed_s: float,
     range_rate_ms: float,
     ball_range_mm: float = CAMERA_BALL_RANGE_MM,
-) -> np.ndarray:
+    *,
+    range_accel_ms2: float = 0.0,
+) -> RadarRanges:
     """Per-frame camera-to-clubhead range, from the radar's own range rate.
 
     The clubhead is at the ball at impact, and the ball's range is taped, so
@@ -75,12 +98,18 @@ def ranges_from_radar(
             OPENING. The camera sits behind the ball, so a club swinging
             downrange into the ball is receding: it is nearer the camera than
             the ball before impact, and reaches the ball's range at contact.
+            With a non-zero ``range_accel_ms2`` this is the rate AT IMPACT.
         ball_range_mm: Camera-to-ball range at impact. Defaults to the measured
             1581 mm tape chain.
+        range_accel_ms2: Radial acceleration, in m/s^2, if one was measured --
+            `iwr6843.tracking.BallTrack.quad_bins`, via `ranges_from_track`.
+            Zero, the default, is the straight-line walk, and the result says
+            so in ``model``.
 
     Returns:
-        One range in millimetres per entry of ``elapsed_s``. The entry at the
-        impact anchor is exactly ``ball_range_mm``.
+        A `RadarRanges` whose ``ranges_mm`` holds one range in millimetres per
+        entry of ``elapsed_s``. The entry at the impact anchor is exactly
+        ``ball_range_mm``.
 
     Raises:
         ValueError: If any input is not finite.
@@ -88,14 +117,53 @@ def ranges_from_radar(
     times = np.asarray(elapsed_s, dtype=float)
     impact = float(impact_elapsed_s)
     rate = float(range_rate_ms)
+    accel = float(range_accel_ms2)
     anchor = float(ball_range_mm)
     if not np.all(np.isfinite(times)):
         raise ValueError("elapsed_s must be finite")
-    if not all(math.isfinite(value) for value in (impact, rate, anchor)):
-        raise ValueError("impact time, range rate and ball range must be finite")
+    if not all(math.isfinite(value) for value in (impact, rate, accel, anchor)):
+        raise ValueError("impact time, range rate, acceleration and ball range must be finite")
     if anchor <= 0.0:
         raise ValueError("ball range must be positive")
-    return anchor - rate * MM_PER_M * (impact - times)
+    delta = times - impact
+    walk = rate * delta + 0.5 * accel * delta**2
+    return RadarRanges(
+        ranges_mm=anchor + MM_PER_M * walk,
+        model="linear" if accel == 0.0 else "quadratic",
+        range_rate_ms=rate,
+        range_accel_ms2=accel,
+    )
+
+
+def ranges_from_track(
+    track,
+    elapsed_s,
+    impact_elapsed_s: float,
+    range_res_m: float,
+    ball_range_mm: float = CAMERA_BALL_RANGE_MM,
+) -> RadarRanges:
+    """`ranges_from_radar` fed from a fitted radar track, quadratic if it has one.
+
+    ``track`` is duck-typed on `iwr6843.tracking.BallTrack`: it needs
+    ``speed_ms`` and ``quad_bins``. When the quadratic refit survived its
+    sanity bound the rate AT IMPACT and the radial acceleration are read off
+    it, and the result says ``model == "quadratic"``; otherwise the track
+    average is walked out straight and it says ``"linear"``. Either way the
+    range at the impact anchor is exactly ``ball_range_mm``.
+    """
+    impact = float(impact_elapsed_s)
+    quad = getattr(track, "quad_bins", None)
+    if quad is None:
+        return ranges_from_radar(elapsed_s, impact, float(track.speed_ms), ball_range_mm)
+    q2, q1, _q0 = (float(value) for value in quad)
+    res = float(range_res_m)
+    return ranges_from_radar(
+        elapsed_s,
+        impact,
+        (2.0 * q2 * impact + q1) * res,
+        ball_range_mm,
+        range_accel_ms2=2.0 * q2 * res,
+    )
 
 
 def clubhead_velocity_world(rays, ranges_mm, elapsed_s, range_rate_ms: float) -> np.ndarray:

@@ -466,8 +466,10 @@ def fit_sequence(
     run is long enough and noisy enough for the penalty to be affordable.
 
     ``range_mm_by_frame`` supplies a MEASURED range per frame -- normally
-    `fusion.ranges_from_radar`, which anchors the radar's range rate at the
-    taped ball range at impact. When it is given, depth stops being a fitted
+    `fusion.ranges_from_radar(...).ranges_mm`, which anchors the radar's range
+    rate at the taped ball range at impact. That result also carries the MODEL
+    it used, linear or quadratic, and on a clubhead the difference is tens of
+    millimetres over one capture; a caller that cares should read it. When it is given, depth stops being a fitted
     parameter: each frame is pinned to its own measurement, ``range_grid_mm``
     and ``refine_range`` are ignored, and the smoothness penalty drops its range
     term, because motion the radar measured is not motion the fit invented.
