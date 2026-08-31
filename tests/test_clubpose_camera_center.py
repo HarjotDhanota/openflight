@@ -35,6 +35,8 @@ from openflight.camera.clubpose.projection import (
     camera_center_world,
 )
 
+from . import _session_export as session
+
 MEASURED_LENS_HEIGHT_MM = 203.2
 MEASURED_HEIGHT_ABOVE_BALL_MM = 163.2
 MEASURED_RANGE_MM = 1581.0
@@ -234,3 +236,45 @@ class TestTheTapeChainIsExplicit:
 
         assert centre[2] == pytest.approx(CAMERA_HEIGHT_ABOVE_BALL_MM, abs=1e-9)
         assert float(np.linalg.norm(centre)) == pytest.approx(MEASURED_RANGE_MM, abs=1e-9)
+
+
+class TestTheLensIsOffsetLaterally:
+    """`camera_center_world` hard-coded y = 0; the tape says -60.325 mm.
+
+    The teed ball's COLUMN is the evidence, and it is independent of the
+    camera's pitch in the same way its row is independent of the lateral
+    offset. Centred, the ball is predicted 16.6 px from where it images. With
+    the taped offset the median residual falls to about 1 px, which corresponds
+    to a solved offset of -55.7 mm -- 4.6 mm from the tape, on a lens whose
+    optical centre the tape cannot reach.
+    """
+
+    def test_the_measured_camera_carries_the_taped_lateral_offset(self):
+        from openflight.camera.clubpose.projection import CAMERA_LATERAL_OFFSET_MM
+
+        assert CAMERA_LATERAL_OFFSET_MM == pytest.approx(-60.325)
+        assert measured_camera().center_world[1] == pytest.approx(CAMERA_LATERAL_OFFSET_MM)
+        assert float(np.linalg.norm(measured_camera().center_world)) == pytest.approx(
+            MEASURED_RANGE_MM, abs=1e-9
+        )
+
+    @session.requires_session
+    def test_the_taped_offset_cuts_the_ball_column_residual(self):
+        from openflight.camera.clubpose.projection import camera_center_world
+
+        camera = measured_camera()
+        centred = dataclasses.replace(
+            camera, center_world_mm=tuple(float(v) for v in camera_center_world(lateral_mm=0.0))
+        )
+        columns = [session.load_shot(name).ball.x for name in session.shot_names()]
+
+        def residual(cam):
+            uv, front = _project(np.zeros((1, 3)), cam)
+            assert bool(front[0])
+            return float(np.median([abs(float(uv[0, 0]) - column) for column in columns]))
+
+        with_offset, without = residual(camera), residual(centred)
+
+        assert without > 10.0
+        assert with_offset < 3.0
+        assert with_offset < without / 4.0

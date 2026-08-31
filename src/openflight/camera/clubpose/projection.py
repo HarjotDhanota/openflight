@@ -1,5 +1,8 @@
 """Frozen Phase 1b club-state solver, promoted to the Phase 3 fusion package."""
 
+# cv2's bindings are generated at import, so pylint cannot see any of them.
+# pylint: disable=no-member
+
 from __future__ import annotations
 
 import math
@@ -25,9 +28,11 @@ BALL_CENTRE_HEIGHT_MM = 40.0
 CAMERA_HEIGHT_ABOVE_BALL_MM = CAMERA_LENS_HEIGHT_MM - BALL_CENTRE_HEIGHT_MM
 CAMERA_BALL_RANGE_MM = 1581.0
 
-# The lens is offset laterally from the ball line: -60.325 mm by tape (-55.7 mm
-# solved from the teed ball's observed column). Declared here with the rest of
-# the chain; `camera_center_world` consumes it.
+# The lens is offset laterally from the ball line. Taped at -60.325 mm; solved
+# at -55.7 mm from the teed ball's observed column over the 21 shots of session
+# 20260825_181734. The tape is the default because it is the independent
+# measurement; the 4.6 mm disagreement is a lens whose optical centre a tape
+# measure cannot reach, and it costs about 1.3 px in the ball's column.
 CAMERA_LATERAL_OFFSET_MM = -60.325
 
 # Kept because callers and docstrings name it. It is the FLOOR-referenced lens
@@ -100,7 +105,7 @@ def taped_camera_ball_range_mm(
 def camera_center_world(
     height_above_ball_mm: float = CAMERA_HEIGHT_ABOVE_BALL_MM,
     range_mm: float = CAMERA_BALL_RANGE_MM,
-    lateral_mm: float = 0.0,
+    lateral_mm: float = CAMERA_LATERAL_OFFSET_MM,
 ) -> np.ndarray:
     """Camera centre for a lens ``height_above_ball_mm`` up and ``range_mm`` away.
 
@@ -241,6 +246,7 @@ class CameraPreset:
 
     @property
     def horizontal_fov_deg(self) -> float:
+        """Full horizontal field of view implied by ``fx`` and the sensor width."""
         return math.degrees(2.0 * math.atan(self.width / (2.0 * self.fx)))
 
     @property
@@ -270,12 +276,16 @@ class ClubTemplate:
 
 @dataclass(frozen=True)
 class SilhouetteObservation:
+    """One measured silhouette: its centroid and second moments, in pixels."""
+
     centroid_uv: np.ndarray
     covariance_px2: np.ndarray
 
 
 @dataclass(frozen=True)
 class ClubState:
+    """The solver's answer for one frame, or the reason it withheld one."""
+
     ok: bool
     reason: str | None
     frame_center_world: np.ndarray | None
