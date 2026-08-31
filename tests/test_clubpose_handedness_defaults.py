@@ -271,14 +271,22 @@ class TestRenderIsUnchanged:
 
     BALL_UV = (137.0, 121.0)
     RANGE_MM = 1516.0
-    # Re-baselined 2026-08-30 with the camera height measured from the BALL
-    # CENTRE rather than the floor (40 mm). The bounding box is unchanged and
-    # the silhouette gains one pixel; the pre-correction figures were 351 px
-    # and bc62d84d...87fcf.
-    MASK_PIXELS = 352
+    # Re-baselined 2026-08-30 by the camera-geometry corrections: the height is
+    # now measured from the BALL CENTRE rather than the floor, and the boresight
+    # is LEVEL rather than aimed at the world origin. The head is anchored on
+    # its own observed pixel through the same camera it is rendered from, so the
+    # placement is unchanged -- the bounding box does not move and the
+    # silhouette gains four pixels out of 351, which is the head being seen from
+    # a camera 7.2 deg less tilted. Confirmed by eye against shot 014 frame 71
+    # after the change, as it was before it.
+    #
+    #   351 px, bc62d84d...87fcf   before any correction
+    #   352 px, 467c9f52...12e9    ball-referenced height alone
+    #   355 px, 164185d4...6929    and a level boresight
+    MASK_PIXELS = 355
     BBOX_X = (121, 152)
     BBOX_Y = (105, 135)
-    MASK_SHA256 = "467c9f52381754f0c2f0202bd982aac15087497f3be0a1641b45266d3e1b12e9"
+    MASK_SHA256 = "164185d4c84452571dd26f28912e1b779b53f274718821f718635e2f08626929"
 
     def test_the_no_search_render_is_pixel_identical(self):
         mesh, _metadata, _digest = load_club_mesh()

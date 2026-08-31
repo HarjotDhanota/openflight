@@ -20,7 +20,6 @@ import pytest
 
 from openflight.camera.clubpose.fit import measured_camera, render_mask_6dof
 from openflight.camera.clubpose.mesh import TriangleMesh
-from openflight.camera.clubpose.projection import CAMERA_CENTER_WORLD, _ray_world
 from openflight.camera.clubpose.scores import (
     Pose,
     chamfer_px,
@@ -32,10 +31,19 @@ from openflight.camera.clubpose.scores import (
     score_pose,
 )
 
-# World X is DOWNRANGE, Z is up -- so a centre must be built from a camera ray,
-# exactly as fit_frame_6dof does, not written down as a bare triple.
+# World X is DOWNRANGE, Z is up. The box sits at the BALL -- the world origin --
+# which is where a clubhead is at the instant that matters, and which is where
+# this fixture already resolved to while the camera was (wrongly) aimed at the
+# origin: the ray through the principal point hit it by construction.
+#
+# It cannot go back to being built from the principal-point ray now that the
+# camera is level, because that puts the box on the boresight, viewed along its
+# own face normal. A 40 mm-thin box seen exactly face-on changes its silhouette
+# only to SECOND order in yaw, so 4 deg of yaw error rasterises to the identical
+# mask and the ranking tests measure nothing. The obliquity is the fixture's
+# whole content, so it is stated rather than inherited from a camera defect.
 _CAM = measured_camera(320, 200)
-CENTER = tuple(CAMERA_CENTER_WORLD + _ray_world(np.array([_CAM.cx, _CAM.cy]), _CAM) * 1581.0)
+CENTER = (0.0, 0.0, 0.0)
 
 
 def box_mesh() -> TriangleMesh:

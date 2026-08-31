@@ -49,6 +49,8 @@ from openflight.camera.clubpose.mesh import rasterize_projected_triangles
 from openflight.camera.clubpose.projection import (
     CAMERA_BALL_RANGE_MM,
     CAMERA_HEIGHT_ABOVE_BALL_MM,
+    CAMERA_PITCH_DEG,
+    CAMERA_ROLL_DEG,
     FACE_NORMAL,
     CameraPreset,
     _face_axes,
@@ -67,8 +69,21 @@ FOCAL_PX = LENS_MM / (PITCH_UM * SUBSAMPLE * 1e-3)  # 466.7
 # because this module's docstring and its callers name it.
 
 
-def measured_camera(width: int = 320, height: int = 200) -> CameraPreset:
-    """The camera we actually have, from datasheet optics and measured range."""
+def measured_camera(
+    width: int = 320,
+    height: int = 200,
+    *,
+    pitch_deg: float = CAMERA_PITCH_DEG,
+    roll_deg: float = CAMERA_ROLL_DEG,
+) -> CameraPreset:
+    """The camera we actually have, from datasheet optics and measured range.
+
+    ``pitch_deg`` is the mount's boresight elevation. The default is the
+    session median solved from the teed ball's row; a caller with its own
+    session should solve its own with `projection.camera_pitch_from_ball_row`
+    and pass it here, because the mount is re-taped between sessions and the
+    per-shot scatter is 0.12 deg.
+    """
     return CameraPreset(
         name="MEASURED",
         width=width,
@@ -87,6 +102,8 @@ def measured_camera(width: int = 320, height: int = 200) -> CameraPreset:
         center_world_mm=tuple(
             float(v) for v in camera_center_world(CAMERA_HEIGHT_ABOVE_BALL_MM, CAMERA_BALL_RANGE_MM)
         ),
+        pitch_deg=float(pitch_deg),
+        roll_deg=float(roll_deg),
     )
 
 

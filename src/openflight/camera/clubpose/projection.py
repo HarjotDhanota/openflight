@@ -35,6 +35,17 @@ CAMERA_LATERAL_OFFSET_MM = -60.325
 # `CAMERA_HEIGHT_ABOVE_BALL_MM`.
 CAMERA_HEIGHT_MM = CAMERA_LENS_HEIGHT_MM
 
+# Where the camera POINTS. Solved per shot from the teed ball's own row over
+# the 21 shots of session 20260825_181734: median -0.21 deg, sd 0.12 deg. The
+# mount is level; the documented default is rounded to -0.22 deg, which is
+# inside a tenth of the per-shot scatter.
+CAMERA_PITCH_DEG = -0.22
+# UNRESOLVED. The session's net lines image with a 3.18 deg tilt. That is
+# consistent with a camera roll and it is NOT evidence of one -- nothing has
+# established that the nets are plumb, and the teed ball is a point target that
+# carries no roll information at all. Left at zero until something measures it.
+CAMERA_ROLL_DEG = 0.0
+
 # Superseded Phase-1b values, kept for provenance and for the radar.
 # `NOMINAL_RANGE_MM` is the radar's own measured slant tee range and still
 # anchors `RADAR_CENTER_WORLD`; it is NOT the camera-to-ball range.
@@ -111,27 +122,73 @@ def camera_center_world(
     return np.array([-math.sqrt(remaining), lateral, height])
 
 
-@lru_cache(maxsize=16)
-def _rotation_world_to_camera(center_world_mm: tuple[float, float, float]) -> np.ndarray:
-    """World-to-camera rotation for a centre aimed at the world origin.
+@lru_cache(maxsize=32)
+def _rotation_world_to_camera(pitch_deg: float, roll_deg: float) -> np.ndarray:
+    """World-to-camera rotation for a boresight at ``pitch_deg`` / ``roll_deg``.
 
     Rows are the camera's right, down and forward axes in world coordinates.
+    At zero pitch and roll the camera is LEVEL: it looks straight downrange
+    along world +x, with world +y on the image right and world +z up. Positive
+    pitch raises the boresight; positive roll turns the camera clockwise about
+    the boresight, so a point on the image right swings DOWN.
+
+    This used to aim the boresight at the world origin, which made pitch a
+    consequence of the mount height rather than a property of the mount. At
+    163.2 mm over 1571 mm that is 5.9 deg of invented down-tilt, and the teed
+    ball -- whose world position is taped -- landed 46.8 px off its own pixel.
+
     The result is cached and read-only: it is rebuilt for every projected point
     otherwise, and callers must not be able to corrupt a shared basis.
     """
-    center = np.asarray(center_world_mm, dtype=float)
-    forward = TARGET_WORLD - center
-    norm = float(np.linalg.norm(forward))
-    if norm < 1e-9:
-        raise ValueError("camera centre coincides with the world origin")
-    forward = forward / norm
-    down = np.cross(WORLD_RIGHT, forward)
-    down_norm = float(np.linalg.norm(down))
-    if down_norm < 1e-9:
-        raise ValueError("camera boresight is parallel to world right")
-    rotation = np.stack([WORLD_RIGHT, down / down_norm, forward])
+    if not all(math.isfinite(value) for value in (pitch_deg, roll_deg)):
+        raise ValueError("camera pitch and roll must be finite")
+    pitch = math.radians(float(pitch_deg))
+    roll = math.radians(float(roll_deg))
+    forward = np.array([math.cos(pitch), 0.0, math.sin(pitch)])
+    down = np.array([math.sin(pitch), 0.0, -math.cos(pitch)])
+    right = np.array(WORLD_RIGHT, dtype=float)
+    if roll:
+        # Rodrigues about the boresight. Rotating BOTH image axes by the same
+        # rotation preserves right x down = -forward, so the frame stays the
+        # left-handed imaging frame `TestWorldFrameHandedness` pins.
+        cosine, sine = math.cos(roll), math.sin(roll)
+        cross = np.array(
+            [
+                [0.0, -forward[2], forward[1]],
+                [forward[2], 0.0, -forward[0]],
+                [-forward[1], forward[0], 0.0],
+            ]
+        )
+        rotation_about_boresight = np.eye(3) + sine * cross + (1.0 - cosine) * (cross @ cross)
+        right = rotation_about_boresight @ right
+        down = rotation_about_boresight @ down
+    rotation = np.stack([right, down, forward])
     rotation.flags.writeable = False
     return rotation
+
+
+def camera_pitch_from_ball_row(
+    ball_row_px: float, camera: "CameraPreset", ball_world_mm: np.ndarray = TARGET_WORLD
+) -> float:
+    """Solve the boresight pitch that puts the teed ball on ``ball_row_px``.
+
+    Closed form, and exact: the ball's world position is taped and its row is
+    observed, so the only unknown in
+
+        (row - cy) / fy = (sin p * dx - cos p * dz) / (cos p * dx + sin p * dz)
+
+    is ``p``. The camera's LATERAL offset never enters -- it moves the ball's
+    column, not its row -- so the two calibrations separate and neither has to
+    be guessed before the other.
+
+    Over the 21 shots of session 20260825_181734 this gives a median of
+    -0.21 deg with a standard deviation of 0.12 deg, which is a level mount.
+    See `CAMERA_PITCH_DEG`.
+    """
+    delta = np.asarray(ball_world_mm, dtype=float).reshape(3) - camera.center_world
+    downrange, rise = float(delta[0]), float(delta[2])
+    k = (float(ball_row_px) - camera.cy) / camera.fy
+    return math.degrees(math.atan2(k * downrange + rise, downrange - k * rise))
 
 
 CAMERA_CENTER_WORLD = camera_center_world()
@@ -176,6 +233,11 @@ class CameraPreset:
     # constant, so a preset and the geometry it is projected through cannot
     # disagree. Stored as a tuple to keep the dataclass hashable and frozen.
     center_world_mm: tuple[float, float, float] = field(default=DEFAULT_CENTER_WORLD_MM)
+    # And where it POINTS, for the same reason. Zero is a LEVEL camera looking
+    # straight downrange; it is not "aimed at the ball". `measured_camera()`
+    # carries the solved mount pitch.
+    pitch_deg: float = 0.0
+    roll_deg: float = 0.0
 
     @property
     def horizontal_fov_deg(self) -> float:
@@ -188,8 +250,8 @@ class CameraPreset:
 
     @property
     def rotation_world_to_camera(self) -> np.ndarray:
-        """Read-only world-to-camera rotation implied by this camera's centre."""
-        return _rotation_world_to_camera(tuple(float(v) for v in self.center_world_mm))
+        """Read-only world-to-camera rotation implied by this camera's mount."""
+        return _rotation_world_to_camera(float(self.pitch_deg), float(self.roll_deg))
 
 
 @dataclass(frozen=True)
