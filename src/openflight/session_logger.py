@@ -377,6 +377,7 @@ class SessionLogger:
         experimental_camera_horizontal_confidence: Optional[float] = None,
         experimental_camera_horizontal_status: Optional[str] = None,
         experimental_camera_iwr_delta_deg: Optional[float] = None,
+        experimental_track_metrics: Optional[Dict] = None,
         spin_axis_deg: Optional[float] = None,
         pipeline_ms: Optional[Dict] = None,
         impact_timestamp: Optional[float] = None,
@@ -518,6 +519,18 @@ class SessionLogger:
             data["experimental_camera_horizontal_status"] = experimental_camera_horizontal_status
         if experimental_camera_iwr_delta_deg is not None:
             data["experimental_camera_iwr_delta_deg"] = experimental_camera_iwr_delta_deg
+        if experimental_track_metrics:
+            # One block rather than a dozen keyword arguments: these are all
+            # experimental, they are written and read together, and a status
+            # here is meaningless without the value it qualifies. Populated
+            # entries only, matching every other field above.
+            data.update(
+                {
+                    name: value
+                    for name, value in experimental_track_metrics.items()
+                    if value is not None
+                }
+            )
         if spin_axis_deg is not None:
             data["spin_axis_deg"] = spin_axis_deg
         if pipeline_ms is not None:

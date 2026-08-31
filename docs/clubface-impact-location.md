@@ -337,3 +337,57 @@ mesh-template iteration. The mesh-template route is closed because no f69/f70/f7
 triple passes the fixed alignment gates; the next outline source must be the
 learned segmenter or an address photo.** No accuracy claim against truth is made,
 because no truth reference exists.
+
+## Track-derived club metrics — promoted (experimental)
+
+Three results from the 2026-08-29 research pass are now library code and
+experimental `Shot` fields. **None of them has been validated against a
+reference instrument.** They were developed on one 21-shot session and checked
+for *consistency* — against each other, against an OPS243 club speed that takes
+no part in the computation, and against the bands a golf swing is expected to
+occupy. A plausible number here is not a correct number.
+
+**1. A 3-D clubhead track** (`camera.clubpose.head_track`). Each frame's head
+mask centroid becomes one camera ray, scaled by one radar range from
+`ranges_from_radar` and anchored at the ball's own taped range at contact.
+Neither sensor can supply the other's part, so the depth costs no free
+parameter. From the track: swing plane to the ground, swing direction, arc
+radius, the arc's low point relative to the ball, and club path and attack
+angle at contact from the fitted arc's tangent. Position and velocity at
+contact are quadratic in time, never linear — the head decelerates onto the
+optical axis, and a straight line through the track is the average of the arc
+rather than the tangent to it.
+
+The reconstruction fails closed, with a named reason, under six segmentable
+frames, on a collinear track, and with no radar range rate; it demotes itself to
+`low_quality` when the plane residual or the leave-one-out spread does not
+support the answer.
+
+**2. A camera-derived vertical launch angle**
+(`camera.ball_flight.select_camera_vertical_launch`). The ball's post-impact
+camera rays, lifted by the IWR6843's ball range walk. This is carried as
+independent evidence *alongside* `launch_angle_vertical` and never replaces it.
+The gate is stricter than the horizontal estimator's: bearing barely depends on
+depth, so that path accepts an apparent-ball-size fallback, but elevation
+depends on depth directly, so a result whose depth did not come from the radar
+is stored and labelled `withheld_no_iwr_range_walk` rather than offered.
+
+**3. The D-plane inversion** (`openflight.club_metrics`). Dynamic loft, spin
+loft, face angle and face-to-path from the published relations, each reporting
+the coefficient that produced it.
+
+### What is withheld, and why
+
+| Field | Status when withheld | Reason |
+| --- | --- | --- |
+| `experimental_dynamic_loft_deg`, `experimental_spin_loft_deg` | `withheld_lcmf_launch_bias` | The inversion weights the vertical launch angle by `1/k_v` and the attack angle by only `-(1/k_v - 1)`, so the loft is very nearly a restatement of the launch angle. Without a camera-derived launch angle it is not computed at all; the shipped launch angle is deliberately not accepted as a substitute. |
+| `experimental_face_angle_deg` | `withheld_launch_direction_offset` (always) | **The value is computed and stored; the status says it must not be displayed.** Centring the development session's face angle on a plausible mean required either +2.3° on the horizontal launch angle or −7.6° on the club path — one unexplained discrepancy read off either instrument, and not accounted for by the known camera-versus-radar horizontal offset. |
+| `experimental_arc_radius_m` | *(offered, but biased)* | On the development session this read ~25 % below the 1.4–1.8 m the `ω = v/r` validator expects, on 17 of 18 shots. Anything downstream that consumes it inherits that bias. |
+
+### What this promotion does not change
+
+The additions are strictly additive. `launch_angle_vertical`,
+`launch_angle_horizontal`, `club_path_deg`, the IWR `estimate_club_path`
+estimator and the fused camera+radar estimator all behave exactly as before, and
+no UI surface reads the new fields. `scripts/analysis/replay_track_metrics.py`
+re-runs the session and prints the per-shot table.
