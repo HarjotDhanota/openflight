@@ -1,0 +1,10 @@
+# The OpenFlight fork clone and its git worktrees are their own repositories
+openflight/
+openflight-*/
+
+# Python
+__pycache__/
+*.pyc
+
+# Browser automation logs
+.playwright-mcp/
