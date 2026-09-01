@@ -106,6 +106,36 @@ SIDE_MARGIN_PX = 0.0
 # 0.5 on the way there and the edge reverts to a crop at the mark.
 FALLBACK_EDGE_FRACTION = 0.5
 
+# --- the blur filter on self-built templates -------------------------------
+# The head's transverse image speed across the alignment window, measured on
+# the 2026-08-25 session: 14-29 mm/frame five to three frames before contact,
+# falling through ~7 mm/frame to ~0 at the contact instant (the arc's lateral
+# turning point). A mask is the union of the head's positions across the
+# exposure, so a fast frame's silhouette is smeared along the motion -- the
+# session's masks span 118-200 mm against a 97 mm head -- and a template
+# averaged over such masks inherits the smear: its toe landmark measured
+# 3-10 mm beyond even the sharpest mask's toe, which shifted every impact
+# reading 10-25 mm heel-ward and put 7 of 18 readings past the heel edge of
+# any conforming face (2026-09-01 audit; the physics veto is that those shots
+# left at 96-114 mph, which hosel contact cannot produce).
+#
+# The correction is a CALIBRATION OF THE TOE LANDMARK, not a change of shape:
+# the outline, heel and topline still come from every frame, because a
+# template built from the slow frames alone was tried and imports their own
+# artefacts -- the stationary ball punches a notch in the crown and the shaft
+# is fully merged into the heel at contact -- which failed the topline and
+# heel gates on most frames (availability 11/21 against 18/21). Instead, the
+# finished template is placed on each frame measured slower than this
+# threshold, its toe landmark's overhang past that frame's own mask toe is
+# taken, and the median overhang is subtracted from the landmark. The labels-
+# built path is untouched: it is the pinned regression reference, and its
+# marked frames sit at f_c-1/f_c+1 where the head is slowest.
+MAX_TEMPLATE_SPEED_MM_PER_FRAME = 10.0
+# Below this many slow frames the median would be a couple of masks' accident,
+# so the calibration stands down and the report says so -- the pre-2026-09-01
+# landmark, named rather than silent.
+MIN_TOE_CALIBRATION_FRAMES = 4
+
 # --- alignment -------------------------------------------------------------
 ROLL_LIMIT_DEG = 20.0
 ROLL_STEP_DEG = 1.0
@@ -318,6 +348,38 @@ def head_masks(swing: SwingFrames, wanted: Iterable[int] | None = None) -> MaskR
             continue
         masks[index] = head
     return MaskReport(masks=masks, reasons=reasons, ball_vetoes=vetoes)
+
+
+def mask_speeds(swing: SwingFrames, report: MaskReport) -> dict[int, float]:
+    """Per-frame TOE-EDGE speed in MILLIMETRES PER FRAME, from the masks.
+
+    The blur proxy for the self-built template filter. It is the toe-side
+    extreme's motion -- the mask's maximum column, under the module's
+    heel-left/toe-right convention -- and deliberately NOT the centroid: the
+    centroid jumps 20+ mm/frame at contact from mask-shape changes alone (the
+    ball hole, the shaft merge) and on the 2026-08-25 session it rated one
+    7-iron frame in 52 as slow. The toe edge is the landmark the smear
+    actually corrupts, and it decelerates smoothly into contact
+    (29, 22, 15, 7, ~0 mm/frame on the audited shots).
+
+    A frame's speed is the mean of its adjacent edge displacements per frame
+    of gap, converted at that frame's own range. A frame with no adjacent
+    mask has no estimate and is absent from the result -- absence is
+    "unknown", never "slow".
+    """
+    edges: dict[int, float] = {}
+    for frame, mask in report.masks.items():
+        cols = np.flatnonzero(mask.any(axis=0))
+        if cols.size:
+            edges[frame] = float(cols.max())
+    ordered = sorted(edges)
+    gathered: dict[int, list[float]] = {}
+    for first, second in zip(ordered, ordered[1:]):
+        gap = float(second - first)
+        step_px = abs(edges[second] - edges[first]) / gap
+        gathered.setdefault(first, []).append(step_px * swing.mm_per_px(first))
+        gathered.setdefault(second, []).append(step_px * swing.mm_per_px(second))
+    return {frame: float(np.mean(values)) for frame, values in gathered.items()}
 
 
 def shaft_line(swing: SwingFrames, frame: int) -> tuple[float, float] | None:
@@ -662,12 +724,23 @@ def build_template_from_labels(
 
 @dataclass(frozen=True)
 class SelfBuildReport:
-    """A self-built template and how far its landmarks moved on each pass."""
+    """A self-built template, its convergence, and whether the toe was calibrated.
+
+    ``toe_calibrated`` False on a template that DID build means the session
+    had fewer than `MIN_TOE_CALIBRATION_FRAMES` slow frames and the toe
+    landmark is the raw average -- the pre-2026-09-01 landmark, which carries
+    the smeared toe. Read it before trusting absolute offsets.
+    ``toe_overhang_mm`` is the median overhang that was subtracted: on the
+    2026-08-25 session it is of order 5-9 mm.
+    """
 
     template: ClubOutlineTemplate | None
     movement_px: tuple[float, ...] = ()
     converged: bool = False
     reason: str = "ok"
+    toe_calibrated: bool = False
+    toe_calibration_frames: int = 0
+    toe_overhang_mm: float | None = None
 
 
 def build_template_self_built(
@@ -678,6 +751,7 @@ def build_template_self_built(
     passes: int = 3,
     convergence_px: float = 0.5,
     exclude: str | None = None,
+    toe_calibration: bool = True,
 ) -> SelfBuildReport:
     """Build from a golfer's OWN swings, with no marks anywhere.
 
@@ -688,13 +762,25 @@ def build_template_self_built(
     movement of the mean landmark between passes is returned, and
     ``converged`` says whether the last pass moved it less than
     ``convergence_px``.
+
+    Last, the toe landmark is calibrated against the frames measured slow
+    (`calibrate_toe_landmark`, `MAX_TEMPLATE_SPEED_MM_PER_FRAME`), because the
+    raw average inherits the motion smear of the fast frames.
+    ``toe_calibration=False`` is the ablation, for tests and audits only.
     """
     frames: list[tuple[SwingFrames, int, np.ndarray]] = []
+    slow_frames: list[tuple[SwingFrames, int, np.ndarray]] = []
     for swing in swings:
         if swing.name == exclude or (club and swing.club != club):
             continue
         report = head_masks(swing)
-        frames.extend((swing, frame, mask) for frame, mask in sorted(report.masks.items()))
+        speeds = mask_speeds(swing, report)
+        for frame, mask in sorted(report.masks.items()):
+            frames.append((swing, frame, mask))
+            speed = speeds.get(frame)
+            # No estimate is "unknown", never "slow".
+            if speed is not None and speed <= MAX_TEMPLATE_SPEED_MM_PER_FRAME:
+                slow_frames.append((swing, frame, mask))
     if not frames:
         return SelfBuildReport(None, reason="no_head_masks_in_the_session")
 
@@ -738,11 +824,60 @@ def build_template_self_built(
         template, samples = rebuilt, refined
         if movement[-1] <= convergence_px:
             break
+
+    calibration = calibrate_toe_landmark(template, slow_frames) if toe_calibration else None
+    if calibration is not None:
+        template = calibration[0]
     return SelfBuildReport(
         template=template,
         movement_px=tuple(movement),
         converged=bool(movement) and movement[-1] <= convergence_px,
+        toe_calibrated=calibration is not None,
+        toe_calibration_frames=len(slow_frames) if calibration is not None else 0,
+        toe_overhang_mm=None if calibration is None else calibration[1],
     )
+
+
+def calibrate_toe_landmark(
+    template: ClubOutlineTemplate,
+    slow_frames: Sequence[tuple[SwingFrames, int, np.ndarray]],
+) -> tuple[ClubOutlineTemplate, float] | None:
+    """Pull the toe landmark in by its median overhang past the SLOW masks' toes.
+
+    The template is placed on every slow frame exactly as a reading would
+    place it; the overhang is the placed toe landmark's column minus the
+    mask's own maximum column, in millimetres at that frame's range. The
+    median over the frames is subtracted from the landmark along the outline's
+    heel-to-toe direction. Nothing else about the template changes, so every
+    alignment gate sees the same shape it was validated on.
+
+    Returns None -- no calibration, template untouched -- with fewer than
+    `MIN_TOE_CALIBRATION_FRAMES` slow frames or placements.
+    """
+    if len(slow_frames) < MIN_TOE_CALIBRATION_FRAMES:
+        return None
+    overhangs: list[float] = []
+    for swing, frame, mask in slow_frames:
+        alignment = align_frame(swing, template, frame, mask)
+        if alignment is None:
+            continue
+        cols = np.flatnonzero(mask.any(axis=0))
+        if cols.size == 0:
+            continue
+        placed_toe_x = float(alignment.landmarks["toe"][0])
+        overhangs.append((placed_toe_x - float(cols.max())) * swing.mm_per_px(frame))
+    if len(overhangs) < MIN_TOE_CALIBRATION_FRAMES:
+        return None
+    overhang_mm = float(np.median(overhangs))
+    heel, toe = template.landmarks["heel"], template.landmarks["toe"]
+    span = toe - heel
+    length = float(np.hypot(*span))
+    if length <= 0.0:
+        return None
+    unit = span / length
+    shifted = dict(template.landmarks)
+    shifted["toe"] = toe - unit * (overhang_mm / template.mm_per_template_px)
+    return replace(template, landmarks=shifted), overhang_mm
 
 
 def build_template_from_address_photo(

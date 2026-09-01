@@ -512,3 +512,171 @@ class TestZoneCorrelation:
     def test_too_few_pairs_is_refused(self):
         with pytest.raises(ValueError):
             zone.zone_correlation([1.0, 2.0], [1.0, 2.0])
+
+
+class TestMaskSpeeds:
+    """The blur proxy: transverse centroid speed, per frame, in millimetres."""
+
+    def test_the_synthetic_approach_measures_its_own_nine_px_per_frame(self):
+        report = outline.head_masks(APPROACH)
+        speeds = outline.mask_speeds(APPROACH, report)
+
+        assert set(speeds) <= set(APPROACH.align_frames)
+        assert len(speeds) >= 4
+        for frame, speed in speeds.items():
+            expected = 9.0 * APPROACH.mm_per_px(frame)
+            assert 0.5 * expected <= speed <= 1.5 * expected, (frame, speed, expected)
+
+    def test_a_lone_mask_has_no_estimate_rather_than_a_guess(self):
+        report = outline.head_masks(APPROACH)
+        only = outline.MaskReport(masks={69: report.masks[69]}, reasons={}, ball_vetoes={})
+
+        assert outline.mask_speeds(APPROACH, only) == {}
+
+
+class TestTheToeCalibration:
+    """The fast frames' smear must not end up in the toe landmark.
+
+    The 2026-09-01 audit: the head moves 14-29 mm/frame at f_c-5..f_c-3 and
+    ~0 at contact, the fast masks are smeared along the motion, and a template
+    averaged over them carried a toe 3-10 mm beyond even the sharpest mask's,
+    which shifted every reading 10-25 mm heel-ward. The shape is still built
+    from every frame (a slow-frames-only shape failed the topline and heel
+    gates); only the toe LANDMARK is calibrated against the slow masks.
+    """
+
+    @staticmethod
+    def _two_phase_frames() -> np.ndarray:
+        """Fast-and-smeared before f68, slow-and-true from f68 on."""
+
+        def head_at(index):
+            if index >= 68:
+                return BALL.x - 1.5 * (CONTACT - index), BALL.y + 4.0
+            x_at_68 = BALL.x - 1.5 * (CONTACT - 68)
+            return x_at_68 - 9.0 * (68 - index), BALL.y + 4.0
+
+        frames = np.full((99, HEIGHT, WIDTH), 90, dtype=np.uint8)
+        radius = int(round(BALL.diameter_px / 2.0))
+        grid_y, grid_x = np.mgrid[0:HEIGHT, 0:WIDTH]
+        disc = (grid_x - BALL.x) ** 2 + (grid_y - BALL.y) ** 2 <= radius**2
+        frames[:, disc] = 235
+        for index in range(64, 99):
+            x, y = head_at(index)
+            # The fast frames are SMEARED. 30 px of extra width is the field
+            # magnitude: 14-29 mm/frame of motion at ~3 mm/px. The width
+            # returns to true on the first slow frame, so the toe edge's own
+            # motion -- the proxy -- is fast exactly where the mask is wide.
+            wide = 30 if index >= 68 else 60
+            top, left = int(round(y - 8)), int(round(x - wide / 2))
+            frames[index, top : top + 16, left : left + wide] = 25
+            frames[index, disc] = 235
+        return frames
+
+    @staticmethod
+    def _toe_offset_mm(template) -> float:
+        span = template.landmarks["toe"][0] - template.landmarks["midpoint"][0]
+        return float(span) * template.mm_per_template_px
+
+    def test_the_overhang_is_measured_on_the_slow_frames_and_reported(self):
+        swing = _swing(self._two_phase_frames())
+        report = outline.build_template_self_built([swing], "7-iron", 3.5732, passes=1)
+
+        assert report.template is not None
+        assert report.toe_calibrated
+        assert report.toe_calibration_frames >= outline.MIN_TOE_CALIBRATION_FRAMES
+        assert report.toe_overhang_mm is not None
+        assert report.toe_overhang_mm > 3.0
+
+    def test_the_calibrated_toe_sits_short_of_the_raw_average_by_the_overhang(self):
+        """The toe LANDMARK is the mean of the samples' toe extremes, so it --
+        not the outline shape, which the 0.5 occupancy threshold protects from
+        a minority of wide masks -- is where the smear lands, and it is the
+        anchor every impact reading is measured from."""
+        swing = _swing(self._two_phase_frames())
+        calibrated = outline.build_template_self_built([swing], "7-iron", 3.5732, passes=1)
+        raw = outline.build_template_self_built(
+            [swing], "7-iron", 3.5732, passes=1, toe_calibration=False
+        )
+
+        assert calibrated.template is not None and raw.template is not None
+        assert not raw.toe_calibrated
+        pulled_in = self._toe_offset_mm(raw.template) - self._toe_offset_mm(calibrated.template)
+        assert pulled_in > 3.0
+        assert pulled_in == pytest.approx(calibrated.toe_overhang_mm, abs=1.0)
+
+    def test_the_shape_is_untouched_by_the_calibration(self):
+        """Only the landmark moves; every alignment gate sees the validated shape."""
+        swing = _swing(self._two_phase_frames())
+        calibrated = outline.build_template_self_built([swing], "7-iron", 3.5732, passes=1)
+        raw = outline.build_template_self_built(
+            [swing], "7-iron", 3.5732, passes=1, toe_calibration=False
+        )
+
+        np.testing.assert_array_equal(calibrated.template.outline, raw.template.outline)
+        np.testing.assert_allclose(
+            calibrated.template.landmarks["heel"], raw.template.landmarks["heel"]
+        )
+
+    def test_a_session_with_no_slow_frames_leaves_the_landmark_alone_and_says_so(self):
+        """APPROACH moves 9 px/frame everywhere -- no frame is slow, so the
+        calibration stands down rather than refusing a template."""
+        report = outline.build_template_self_built([APPROACH], "7-iron", 3.5732, passes=1)
+
+        assert report.template is not None
+        assert not report.toe_calibrated
+        assert report.toe_overhang_mm is None
+        assert report.toe_calibration_frames == 0
+
+
+class TestThePhysicsGate:
+    """A reading beyond any conforming face is a failed anchor, not a strike."""
+
+    def test_a_mid_face_contact_passes(self):
+        ok, reason = zone.reading_is_physical(-45.0)
+
+        assert ok
+        assert reason == "ok"
+
+    def test_contact_beyond_any_iron_face_is_withheld_by_name(self):
+        deep = zone.MAX_IRON_BLADE_MM + zone.BLADE_GATE_MARGIN_MM + 1.0
+        ok, reason = zone.reading_is_physical(-deep)
+
+        assert not ok
+        assert "beyond_any_iron_face" in reason
+
+    def test_contact_beyond_the_toe_is_withheld_by_name(self):
+        ok, reason = zone.reading_is_physical(zone.TOE_SIDE_MARGIN_MM + 1.0)
+
+        assert not ok
+        assert "beyond_the_toe" in reason
+
+    def test_the_boundary_is_the_blade_plus_the_margin(self):
+        edge = zone.MAX_IRON_BLADE_MM + zone.BLADE_GATE_MARGIN_MM
+
+        assert zone.reading_is_physical(-edge + 0.1)[0]
+        assert not zone.reading_is_physical(-edge - 0.1)[0]
+
+    def test_read_impact_reports_the_toe_anchored_offset(self):
+        carry = zone.Carry(
+            values={
+                "heel_x": 100.0,
+                "heel_y": 150.0,
+                "toe_x": 200.0,
+                "toe_y": 150.0,
+                "topline_at_ball_y": 140.0,
+            },
+            model="quadratic",
+            disagreement_px=None,
+            frames=(68, 69, 70, 71),
+        )
+        reading = zone.read_impact(carry, np.array([150.0, 146.0]), 1.0)
+
+        assert reading is not None
+        heel_toe, width, high_low, from_toe = reading
+        assert from_toe == pytest.approx(-50.0)
+        assert width == pytest.approx(100.0)
+        assert heel_toe == pytest.approx(-8.0)
+        assert high_low == pytest.approx(6.0)
+
+    def test_the_result_dict_carries_the_toe_anchored_channel(self):
+        assert "ball_from_toe_mm" in zone.withheld("because").as_dict()

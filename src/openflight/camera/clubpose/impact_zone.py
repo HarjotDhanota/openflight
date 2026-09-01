@@ -74,6 +74,19 @@ TOPLINE_PLACEMENT_TOLERANCE_PX = 2.0
 ZONE_CENTRE_MM = 5.0
 ZONE_SHOULDER_MM = 15.0
 
+# The physics gate on the reading itself. No conforming iron blade is longer
+# heel-to-toe than the official game-improvement band's 87 mm
+# (`head_outline.CATEGORY_BLADE_LENGTH_MM`), and the toe landmark's residual
+# uncertainty after the toe calibration is of order 10-15 mm, so a reading that
+# puts the contact further from the TOE than the sum of the two is not a
+# strike location -- it is a failed anchor, and it is withheld by name. The
+# veto that motivated it, 2026-08-31: seven readings sat 88-94+ mm from the
+# toe on shots that left at 96-114 mph with normal smash factors, and hosel
+# contact cannot produce those numbers.
+MAX_IRON_BLADE_MM = 87.0
+BLADE_GATE_MARGIN_MM = 15.0
+TOE_SIDE_MARGIN_MM = 10.0
+
 MIN_QUAD_FRAMES = 4
 MIN_AVAILABLE_FRAMES = 4
 
@@ -109,6 +122,7 @@ class ImpactZoneResult:
     heel_toe_mm: float | None = None
     zone: str | None = None
     face_width_mm: float | None = None
+    ball_from_toe_mm: float | None = None
     high_low_mm: float | None = None
     high_low_status: str = "experimental_unvalidated"
     carry_model: str = ""
@@ -128,6 +142,7 @@ class ImpactZoneResult:
             "heel_toe_mm": self.heel_toe_mm,
             "zone": self.zone,
             "face_width_mm": self.face_width_mm,
+            "ball_from_toe_mm": self.ball_from_toe_mm,
             "high_low_mm": self.high_low_mm,
             "high_low_status": self.high_low_status,
             "carry_model": self.carry_model,
@@ -387,8 +402,15 @@ def zone_for(heel_toe_mm: float) -> str:
 
 def read_impact(
     carry: Carry, ball: np.ndarray, mm_per_px: float
-) -> tuple[float, float, float] | None:
-    """(heel-toe mm, face width mm, high-low mm) under the stated convention."""
+) -> tuple[float, float, float, float] | None:
+    """(heel-toe mm, face width mm, high-low mm, ball-from-toe mm).
+
+    ``ball_from_toe_mm`` is the TOE-ANCHORED reading: the ball's offset from
+    the toe landmark along the span, negative heel-ward. It exists because the
+    toe is the better-measured end (toe p90 1.09 px against heel 1.71) and
+    because the midpoint convention inherits the template's heel-side
+    hosel tail; the physics gate below is expressed in it.
+    """
     heel = np.array([carry.values["heel_x"], carry.values["heel_y"]])
     toe = np.array([carry.values["toe_x"], carry.values["toe_y"]])
     span = toe - heel
@@ -399,7 +421,24 @@ def read_impact(
     centre = 0.5 * (heel + toe) + unit * (FACE_CENTRE_TOEWARD_MM / mm_per_px)
     heel_toe_mm = float(np.dot(ball - centre, unit)) * mm_per_px
     high_low_mm = (float(ball[1]) - carry.values["topline_at_ball_y"]) * mm_per_px
-    return heel_toe_mm, length * mm_per_px, high_low_mm
+    ball_from_toe_mm = float(np.dot(ball - toe, unit)) * mm_per_px
+    return heel_toe_mm, length * mm_per_px, high_low_mm, ball_from_toe_mm
+
+
+def reading_is_physical(ball_from_toe_mm: float) -> tuple[bool, str]:
+    """Whether a contact this far from the toe can exist on a conforming iron.
+
+    Toe-ward of the toe by more than `TOE_SIDE_MARGIN_MM`, or heel-ward of it
+    by more than the longest official iron blade plus the anchor's own margin,
+    is not a place a ball can meet a face. Cross-sensor context makes the veto
+    concrete: hosel contact does not send a ball out at 96-114 mph, so a
+    reading out here is a failed anchor, never an exotic strike.
+    """
+    if ball_from_toe_mm > TOE_SIDE_MARGIN_MM:
+        return False, f"contact_{ball_from_toe_mm:.0f}_mm_beyond_the_toe"
+    if -ball_from_toe_mm > MAX_IRON_BLADE_MM + BLADE_GATE_MARGIN_MM:
+        return False, (f"contact_{-ball_from_toe_mm:.0f}_mm_from_the_toe_is_beyond_any_iron_face")
+    return True, "ok"
 
 
 def extract_impact_zone(
@@ -448,13 +487,17 @@ def extract_impact_zone(
     reading = read_impact(carry, np.array([swing.ball.x, swing.ball.y]), mm_per_px)
     if reading is None:
         return withheld("carried_outline_has_no_heel_toe_span", rejected_frames=rejected, **common)
-    heel_toe_mm, face_width_mm, high_low_mm = reading
+    heel_toe_mm, face_width_mm, high_low_mm, ball_from_toe_mm = reading
+    physical, physics_reason = reading_is_physical(ball_from_toe_mm)
+    if not physical:
+        return withheld(physics_reason, rejected_frames=rejected, **common)
     return ImpactZoneResult(
         status="ok",
         reason="ok",
         heel_toe_mm=heel_toe_mm,
         zone=zone_for(heel_toe_mm),
         face_width_mm=face_width_mm,
+        ball_from_toe_mm=ball_from_toe_mm,
         high_low_mm=high_low_mm,
         carry_model=carry.model,
         carry_disagreement_mm=(
