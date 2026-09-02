@@ -1504,7 +1504,8 @@ def estimate_impact_zone(
     # the unit sits wherever the user put it -- rather than the test rig's
     # taped 1.575 m. The constant stands in only when the rig geometry
     # carries no mic position, and the solution names that by warning.
-    setup = solve_setup(ball, RigGeometry.test_rig())
+    rig = RigGeometry.test_rig()
+    setup = solve_setup(ball, rig)
     ball_to_unit_m = setup.mic_to_ball_m if setup.mic_to_ball_m is not None else BALL_TO_UNIT_M
 
     swing = SwingFrames(
@@ -1518,4 +1519,4 @@ def estimate_impact_zone(
         club=str(club),
         name="live",
     )
-    return extract_impact_zone(swing, template)
+    return extract_impact_zone(swing, template, setup=setup, rig=rig)

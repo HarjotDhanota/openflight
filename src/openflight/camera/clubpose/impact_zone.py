@@ -49,6 +49,10 @@ from openflight.camera.clubpose.head_outline import (
     shaft_line,
     top_edge_at,
 )
+from openflight.camera.clubpose.impact_projection import (
+    ASSUMED_DYNAMIC_LOFT_DEG,
+    project_impact,
+)
 
 # The convention, fixed before any number was read from it.
 FACE_CENTRE_TOEWARD_MM = 8.0
@@ -125,6 +129,14 @@ class ImpactZoneResult:
     ball_from_toe_mm: float | None = None
     high_low_mm: float | None = None
     high_low_status: str = "experimental_unvalidated"
+    # The 3-D projection channel (`impact_projection`): the CONTACT POINT in
+    # face coordinates, absorbing the drop, foreshortening and parallax the
+    # 2-D channels above carry. Populated only when the caller supplies the
+    # setup geometry; its own failure never withholds the 2-D reading.
+    ball_from_toe_3d_mm: float | None = None
+    high_low_3d_mm: float | None = None
+    projection_status: str = "not_run"
+    projection_assumptions: tuple[str, ...] = ()
     carry_model: str = ""
     carry_disagreement_mm: float | None = None
     frames_used: tuple[int, ...] = ()
@@ -145,6 +157,10 @@ class ImpactZoneResult:
             "ball_from_toe_mm": self.ball_from_toe_mm,
             "high_low_mm": self.high_low_mm,
             "high_low_status": self.high_low_status,
+            "ball_from_toe_3d_mm": self.ball_from_toe_3d_mm,
+            "high_low_3d_mm": self.high_low_3d_mm,
+            "projection_status": self.projection_status,
+            "projection_assumptions": list(self.projection_assumptions),
             "carry_model": self.carry_model,
             "carry_disagreement_mm": self.carry_disagreement_mm,
             "frames_used": list(self.frames_used),
@@ -441,18 +457,62 @@ def reading_is_physical(ball_from_toe_mm: float) -> tuple[bool, str]:
     return True, "ok"
 
 
+def projection_fields(swing, carry: Carry, setup, rig, loft_deg, face_angle_deg, club) -> dict:
+    """The 3-D projection channel's fields, or the named reason it did not run.
+
+    ``setup`` and ``rig`` are `rig_geometry.SetupSolution` / `RigGeometry`
+    (duck-typed here to keep this module import-light). The channel is
+    additive: its failure populates ``projection_status`` and never withholds
+    the 2-D reading, because the two rest on different assumptions.
+    """
+    if setup is None or rig is None:
+        return {"projection_status": "not_run_no_setup_geometry"}
+    loft = loft_deg if loft_deg is not None else ASSUMED_DYNAMIC_LOFT_DEG.get(club)
+    if loft is None:
+        return {"projection_status": f"not_run_no_loft_for_{club or 'unknown_club'}"}
+    projection = project_impact(
+        (swing.ball.x, swing.ball.y),
+        (carry.values["heel_x"], carry.values["heel_y"]),
+        (carry.values["toe_x"], carry.values["toe_y"]),
+        (swing.ball.x, carry.values["topline_at_ball_y"]),
+        range_to_ball_mm=setup.range_to_ball_mm,
+        focal_px=rig.focal_px,
+        principal_point=rig.principal_point,
+        loft_deg=loft,
+        face_angle_deg=face_angle_deg,
+    )
+    if not projection.ok:
+        return {"projection_status": projection.reason}
+    return {
+        "projection_status": "ok",
+        "ball_from_toe_3d_mm": projection.ball_from_toe_mm,
+        "high_low_3d_mm": projection.high_low_mm,
+        "projection_assumptions": projection.assumptions,
+    }
+
+
 def extract_impact_zone(
     swing: SwingFrames,
     template: ClubOutlineTemplate,
     *,
     ridge: bool = True,
     report: MaskReport | None = None,
+    setup=None,
+    rig=None,
+    loft_deg: float | None = None,
+    face_angle_deg: float = 0.0,
 ) -> ImpactZoneResult:
     """Segment, align, gate, carry to contact and read the zone. Fails closed.
 
     Every path out of this function that is not a full answer is an
     `ImpactZoneResult` with ``status == "withheld"`` and a reason naming the
     gate that stopped it. There is no partial reading.
+
+    With ``setup`` and ``rig`` (`rig_geometry.SetupSolution` / `RigGeometry`)
+    the result additionally carries the 3-D projection channel -- the contact
+    point B − r·n̂ in face coordinates (`impact_projection`) -- under its own
+    status and named assumptions. ``loft_deg`` defaults to the per-club
+    `ASSUMED_DYNAMIC_LOFT_DEG` convention until the D-plane loft ships.
     """
     common = {"template_source": template.source, "club": template.club or swing.club}
     if template.outline.size == 0 or not template.outline.any():
@@ -491,6 +551,9 @@ def extract_impact_zone(
     physical, physics_reason = reading_is_physical(ball_from_toe_mm)
     if not physical:
         return withheld(physics_reason, rejected_frames=rejected, **common)
+    projected = projection_fields(
+        swing, carry, setup, rig, loft_deg, face_angle_deg, common["club"]
+    )
     return ImpactZoneResult(
         status="ok",
         reason="ok",
@@ -506,6 +569,7 @@ def extract_impact_zone(
         frames_used=carry.frames,
         frame_iou={f: a.iou for f, a in sorted(accepted.items())},
         rejected_frames=rejected,
+        **projected,
         **common,
     )
 
