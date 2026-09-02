@@ -94,6 +94,16 @@ TOE_SIDE_MARGIN_MM = 10.0
 MIN_QUAD_FRAMES = 4
 MIN_AVAILABLE_FRAMES = 4
 
+# The carry may EXTRAPOLATE: the quadratic is evaluated at the contact
+# instant even when no accepted frame lies beyond it. On the 2026-08-25
+# session 11 of 20 readings do not bracket contact, by up to 0.853 frames
+# (1.82 ms), and the pair cross-check (carry_disagreement_mm) is None exactly
+# there -- the registered 0.14 px agreement applies only where both models
+# exist. The extrapolation distance is therefore serialized on every result,
+# and past this bound -- beyond anything the session produced, so nothing is
+# retuned -- the reading is withheld by name (2026-09-01 audit).
+MAX_CARRY_EXTRAPOLATION_FRAMES = 1.0
+
 # The capture's trigger is the IMPACT SOUND arriving at the microphone, not the
 # ball being hit. On the shipped rig the unit sits 1.575 m from the ball, so the
 # trigger lands 4.59 ms -- 2.15 frames at 468 fps -- after contact. Everything
@@ -137,6 +147,9 @@ class ImpactZoneResult:
     high_low_3d_mm: float | None = None
     projection_status: str = "not_run"
     projection_assumptions: tuple[str, ...] = ()
+    # How far past the last ACCEPTED frame the carry extrapolated to reach
+    # the contact instant, in frames. Zero when accepted frames bracket it.
+    carry_extrapolation_frames: float | None = None
     carry_model: str = ""
     carry_disagreement_mm: float | None = None
     frames_used: tuple[int, ...] = ()
@@ -161,6 +174,7 @@ class ImpactZoneResult:
             "high_low_3d_mm": self.high_low_3d_mm,
             "projection_status": self.projection_status,
             "projection_assumptions": list(self.projection_assumptions),
+            "carry_extrapolation_frames": self.carry_extrapolation_frames,
             "carry_model": self.carry_model,
             "carry_disagreement_mm": self.carry_disagreement_mm,
             "frames_used": list(self.frames_used),
@@ -402,6 +416,17 @@ def carry_to_contact(per_frame: Mapping[int, Mapping[str, float]], contact: floa
     )
 
 
+def carry_extrapolation_frames(carry: Carry, contact_frame: float) -> float:
+    """How far past the last ACCEPTED frame the carry reached for contact.
+
+    Zero when the accepted frames bracket the contact instant. The audit
+    measured 11 of 20 session readings extrapolating, by up to 0.853 frames;
+    the value travels on every result so a consumer can weigh the reading,
+    and `MAX_CARRY_EXTRAPOLATION_FRAMES` bounds it fail-closed.
+    """
+    return max(0.0, float(contact_frame) - max(carry.frames))
+
+
 # ---------------------------------------------------------------------------
 # the reading
 # ---------------------------------------------------------------------------
@@ -542,6 +567,13 @@ def extract_impact_zone(
         return withheld(
             "carry_to_contact_had_too_few_finite_frames", rejected_frames=rejected, **common
         )
+    extrapolation = carry_extrapolation_frames(carry, swing.contact_frame)
+    if extrapolation > MAX_CARRY_EXTRAPOLATION_FRAMES:
+        return withheld(
+            f"carry_extrapolated_{extrapolation:.2f}_frames_past_the_last_accepted_frame",
+            rejected_frames=rejected,
+            **common,
+        )
 
     mm_per_px = swing.plate_mm_per_px
     reading = read_impact(carry, np.array([swing.ball.x, swing.ball.y]), mm_per_px)
@@ -569,6 +601,7 @@ def extract_impact_zone(
         frames_used=carry.frames,
         frame_iou={f: a.iou for f, a in sorted(accepted.items())},
         rejected_frames=rejected,
+        carry_extrapolation_frames=extrapolation,
         **projected,
         **common,
     )

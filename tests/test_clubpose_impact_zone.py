@@ -680,3 +680,34 @@ class TestThePhysicsGate:
 
     def test_the_result_dict_carries_the_toe_anchored_channel(self):
         assert "ball_from_toe_mm" in zone.withheld("because").as_dict()
+
+
+class TestCarryExtrapolationReporting:
+    """2026-09-01 audit: the carry's extrapolation distance is serialized and bounded."""
+
+    @staticmethod
+    def _carry(frames):
+        return zone.Carry(
+            values={name: 0.0 for name in zone.OBSERVABLES},
+            model="quadratic",
+            disagreement_px=None,
+            frames=tuple(frames),
+        )
+
+    def test_bracketing_frames_extrapolate_nothing(self):
+        assert zone.carry_extrapolation_frames(self._carry([66, 70, 71, 72]), 71.85) == 0.0
+
+    def test_the_distance_past_the_last_accepted_frame_is_measured(self):
+        assert zone.carry_extrapolation_frames(self._carry([66, 69, 70, 71]), 71.85) == (
+            pytest.approx(0.85)
+        )
+
+    def test_the_bound_is_beyond_anything_the_session_produced(self):
+        """0.853 frames was the session's worst; the gate must not move results."""
+        assert zone.MAX_CARRY_EXTRAPOLATION_FRAMES >= 0.9
+
+    def test_the_result_dict_carries_the_distance(self):
+        as_dict = zone.withheld("because").as_dict()
+
+        assert "carry_extrapolation_frames" in as_dict
+        assert as_dict["carry_extrapolation_frames"] is None
