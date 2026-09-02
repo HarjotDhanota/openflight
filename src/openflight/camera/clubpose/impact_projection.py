@@ -126,9 +126,12 @@ def project_impact(
     `rig_geometry.solve_setup` and `RigGeometry`; the landmark pixels are the
     carried-to-contact values the 2-D reading already uses. One stated
     geometric assumption beyond the loft/face-angle inputs: the silhouette
-    landmarks lie ON the face plane -- the head's ~20 mm of depth puts them
-    within a few millimetres of it, and the error enters only through the
-    plane's small tilt.
+    landmarks lie ON the face plane. That is NOT a few-millimetre nicety --
+    the 2026-09-01 audit swept landmark depths of 0-20 mm behind the face
+    and measured up to 1.6 mm of heel-toe error but up to 15.5 mm of
+    high-low error, because a depth-displaced topline ray intersects the
+    lofted plane well below the true edge. The heel-toe channel is robust to
+    it; the vertical channel is NOT, and its assumption string says so.
     """
     if not (math.isfinite(float(range_to_ball_mm)) and float(range_to_ball_mm) > 0.0):
         return ImpactProjection(False, f"range_{range_to_ball_mm}_is_not_a_distance")
@@ -173,6 +176,7 @@ def project_impact(
             f"face_angle_{float(face_angle_deg):.1f}_deg"
             + ("_assumed_square" if abs(float(face_angle_deg)) < 1e-9 else ""),
             "camera_roll_zero_until_the_inclinometer_readout",
-            "silhouette_landmarks_taken_to_lie_on_the_face_plane",
+            "silhouette_landmarks_taken_to_lie_on_the_face_plane"
+            "_heel_toe_robust_high_low_up_to_15mm_at_20mm_landmark_depth",
         ),
     )

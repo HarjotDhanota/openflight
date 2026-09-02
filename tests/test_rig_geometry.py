@@ -82,12 +82,14 @@ class TestSolveSetup:
         assert right.lateral_offset_mm == pytest.approx(-left.lateral_offset_mm)
 
     def test_the_session_ball_reproduces_the_taped_rig(self):
-        """At the tape-consistent diameter (12.60 px at 1581 mm) the solves
-        land on the taped chain: range, lateral, height, and the 1.575 m
-        mic distance the acoustic walk-back hardcodes today."""
-        solution = solve_setup(_ball(x=176.5, y=146.0, diameter_px=12.60), RIG)
+        """At the tape-consistent diameter the solves land on the taped chain:
+        range, lateral, height, and the 1.575 m mic distance the acoustic
+        walk-back hardcodes today. 12.665 px is the diameter whose pinhole
+        DEPTH puts the SLANT at the taped 1581 mm at this ball's off-axis
+        position (the 2026-09-01 audit's depth-vs-slant fix)."""
+        solution = solve_setup(_ball(x=176.5, y=146.0, diameter_px=12.665), RIG)
 
-        assert solution.range_to_ball_mm == pytest.approx(1581.0, abs=1.0)
+        assert solution.range_to_ball_mm == pytest.approx(1581.0, abs=1.5)
         assert solution.lateral_offset_mm == pytest.approx(-55.9, abs=1.0)
         # 163.2 mm taped; the ball-row solve assumes a level boresight and the
         # solved -0.22 deg mount accounts for the ~6 mm gap.
@@ -95,13 +97,14 @@ class TestSolveSetup:
         assert solution.mic_to_ball_m == pytest.approx(1.575, abs=0.015)
 
     def test_the_measured_ball_diameter_shows_the_cross_check_working(self):
-        """The session's measured 12.77 px ball solves ~21 mm nearer than the
-        tape -- the range_disagreement_mm cross-check is exactly for this."""
+        """The session's measured 12.77 px ball solves ~13 mm nearer than the
+        tape (post-slant-fix; it was 21 before the audit's correction) -- the
+        range_disagreement_mm cross-check is exactly for this."""
         solution = solve_setup(_ball(x=176.5, y=146.0, diameter_px=12.77), RIG)
 
         disagreement = solution.range_disagreement_mm(1581.0)
         assert disagreement < 0.0
-        assert abs(disagreement) == pytest.approx(21.0, abs=5.0)
+        assert abs(disagreement) == pytest.approx(13.0, abs=5.0)
 
     def test_the_height_assumption_is_named(self):
         solution = solve_setup(_ball(), RIG)
@@ -157,3 +160,27 @@ class TestTheAcousticSeam:
         assert contact_frame_from_trigger(
             71, 467.6, ball_to_unit_m=near.mic_to_ball_m
         ) > contact_frame_from_trigger(71, 467.6, ball_to_unit_m=far.mic_to_ball_m)
+
+
+class TestDepthVersusSlant:
+    """The 2026-09-01 audit's fix: f*D/d is DEPTH; the reported range is SLANT."""
+
+    def test_an_off_axis_ball_reports_a_longer_range_by_exactly_the_ray_length(self):
+        centred = solve_setup(_ball(x=160.0, y=100.0, diameter_px=12.6), RIG)
+        off_axis = solve_setup(_ball(x=176.5, y=146.0, diameter_px=12.6), RIG)
+
+        ray_length = math.hypot(16.5 / RIG.focal_px, 46.0 / RIG.focal_px, 1.0)
+        assert centred.range_to_ball_mm == pytest.approx(RIG.focal_px * BALL_DIAMETER_MM / 12.6), (
+            "on the axis, slant IS depth"
+        )
+        assert off_axis.range_to_ball_mm / centred.range_to_ball_mm == pytest.approx(
+            ray_length, abs=1e-9
+        )
+        assert off_axis.range_to_ball_mm - centred.range_to_ball_mm == pytest.approx(8.6, abs=0.3)
+
+    def test_the_transverse_scale_uses_the_depth_not_the_slant(self):
+        off_axis = solve_setup(_ball(x=176.5, y=146.0, diameter_px=12.6), RIG)
+
+        depth = RIG.focal_px * BALL_DIAMETER_MM / 12.6
+        assert off_axis.mm_per_px_at_ball == pytest.approx(depth / RIG.focal_px)
+        assert off_axis.mm_per_px_at_ball < off_axis.range_to_ball_mm / RIG.focal_px

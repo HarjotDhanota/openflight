@@ -174,8 +174,14 @@ def solve_setup(ball, rig: RigGeometry) -> SetupSolution:
     `camera.club_motion.ReferenceBall` in production. The solves, each exact
     given its stated assumption:
 
-      * RANGE from the ball's angular size: ``focal * 42.67 / diameter_px``.
-      * SCALE at the ball: ``range / focal``.
+      * RANGE from the ball's angular size: the pinhole DEPTH is
+        ``focal * 42.67 / diameter_px``, and the reported range is the SLANT
+        along the ball's pixel ray -- +8.6 mm over the depth at the session
+        ball's off-axis position (2026-09-01 audit fix). Half a pixel of
+        diameter moves the solve ~60-65 mm, which is why the radar
+        cross-check (`range_disagreement_mm`) exists.
+      * SCALE at the ball: ``depth / focal`` (transverse pixels convert at
+        the depth, not the slant).
       * LATERAL OFFSET of the camera from the ball line, from the ball's
         column: the ball imaging right of centre means the camera sits left
         of the line, so the sign matches `projection.CAMERA_LATERAL_OFFSET_MM`
@@ -192,8 +198,19 @@ def solve_setup(ball, rig: RigGeometry) -> SetupSolution:
         raise ValueError(f"ball diameter must be positive pixels, got {ball.diameter_px}")
     cx, cy = rig.principal_point
 
-    range_mm = rig.focal_px * BALL_DIAMETER_MM / diameter_px
-    mm_per_px = range_mm / rig.focal_px
+    # f*D/d is the pinhole DEPTH along the optical axis; the slant range to
+    # an off-axis ball exceeds it by the pixel ray's length -- +8.6 mm at the
+    # session ball's position (2026-09-01 audit). The transverse scale
+    # divides the DEPTH, not the slant, for the same reason.
+    depth_mm = rig.focal_px * BALL_DIAMETER_MM / diameter_px
+    direction = (
+        (float(ball.x) - cx) / rig.focal_px,
+        (float(ball.y) - cy) / rig.focal_px,
+        1.0,
+    )
+    ball_cam = tuple(depth_mm * component for component in direction)
+    range_mm = math.hypot(*ball_cam)
+    mm_per_px = depth_mm / rig.focal_px
     lateral_mm = -(float(ball.x) - cx) * mm_per_px
     height_mm = (float(ball.y) - cy) * mm_per_px
 
@@ -225,14 +242,8 @@ def solve_setup(ball, rig: RigGeometry) -> SetupSolution:
 
     mic_to_ball_m: float | None = None
     if rig.mic_offset_mm is not None:
-        # The ball's position in camera axes: its pixel ray scaled to range.
-        direction = (
-            (float(ball.x) - cx) / rig.focal_px,
-            (float(ball.y) - cy) / rig.focal_px,
-            1.0,
-        )
-        norm = math.hypot(*direction)
-        ball_cam = tuple(range_mm * component / norm for component in direction)
+        # ball_cam above is already the exact back-projection: the pixel ray
+        # at the solved depth, unnormalized.
         mic_to_ball_m = math.dist(ball_cam, rig.mic_offset_mm) / 1000.0
         solved_from["mic_to_ball_m"] = (
             "ball position in camera axes against the rig's mic offset "
