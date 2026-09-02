@@ -14,7 +14,11 @@ fixed by two transfer coefficients::
     horizontal launch  H ~= P + k_h * (F  - P)   ->   F  = P + (H - P) / k_h
 
 with A the attack angle, P the club path, DL the dynamic loft and F the face
-angle. Spin loft is ``DL - A`` and face-to-path is ``F - P``. The coefficients
+angle. Spin loft is the full 3-D angle between the face normal and the club's
+motion -- ``acos(cos DL * cos A * cos(F - P) + sin DL * sin A)`` -- which
+reduces to ``DL - A`` only when the face matches the path (the 2026-09-01
+audit measured the 2-D subtraction 4.9 deg short at 20 deg of face-to-path).
+Face-to-path is ``F - P``. The coefficients
 are Wood et al.'s 7-iron values, ``k_v = 0.81`` and ``k_h = 0.69``, and every
 function reports the coefficient it used so a caller sweeping the bracket can
 say which one produced a given figure.
@@ -69,6 +73,7 @@ __all__ = [
     "face_angle",
     "face_to_path",
     "spin_loft",
+    "spin_loft_3d",
 ]
 
 # Wood et al. 7-iron transfer coefficients. Treated as exact; the plausible
@@ -134,21 +139,49 @@ def dynamic_loft(
     return DPlaneAngle(attack + (vertical - attack) / coefficient, coefficient)
 
 
+def spin_loft_3d(
+    dynamic_loft_deg: float,
+    attack_angle_deg: float,
+    face_to_path_deg: float,
+) -> float:
+    """The 3-D angle between the face normal and the clubhead's velocity.
+
+    ``acos(cos DL * cos A * cos(F - P) + sin DL * sin A)``, in degrees. With
+    zero face-to-path this reduces exactly to ``DL - A``; the 2026-09-01
+    audit's counterexample -- DL 30, A -5, F-P 20 -- is 39.904 deg where the
+    2-D subtraction said 35.0.
+    """
+    loft = math.radians(_check_angle("dynamic_loft_deg", dynamic_loft_deg))
+    attack = math.radians(_check_angle("attack_angle_deg", attack_angle_deg))
+    separation = math.radians(_check_angle("face_to_path_deg", face_to_path_deg))
+    cosine = math.cos(loft) * math.cos(attack) * math.cos(separation) + math.sin(loft) * math.sin(
+        attack
+    )
+    return math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
+
+
 def spin_loft(
     vertical_launch_deg: float,
     attack_angle_deg: float,
     k_v: float = K_VERTICAL_DEFAULT,
+    face_to_path_deg: float = 0.0,
 ) -> DPlaneAngle:
-    """Spin loft, ``SL = DL - A``, which reduces to ``(V - A) / k_v``.
+    """Spin loft: the 3-D face-normal-to-velocity angle (`spin_loft_3d`).
 
-    UNVALIDATED AGAINST A REFERENCE INSTRUMENT. Note that this is the SAME
-    quantity as the dynamic loft less a measured attack angle, so it cannot
-    corroborate it: if one is implausible the other is implausible with it.
+    UNVALIDATED AGAINST A REFERENCE INSTRUMENT. With ``face_to_path_deg`` at
+    its default this is the old ``DL - A``; a nonzero separation adds the
+    horizontal component the 2-D subtraction omitted. Note that the vertical
+    part is the SAME quantity as the dynamic loft less a measured attack
+    angle, so it cannot corroborate it: if one is implausible the other is
+    implausible with it.
 
     Args:
         vertical_launch_deg: Vertical launch angle of the ball.
         attack_angle_deg: Attack angle, negative for a descending blow.
         k_v: Fraction of the loft above the attack angle the ball takes.
+        face_to_path_deg: Horizontal face-to-path separation. A geometry
+            input only -- supplying the COMPUTED (withheld) value is fine,
+            because it never rides the result as a face angle.
 
     Returns:
         The spin loft in degrees, with ``k_v`` alongside it.
@@ -157,7 +190,10 @@ def spin_loft(
         ValueError: If an angle is not finite or ``k_v`` is outside (0, 1].
     """
     loft = dynamic_loft(vertical_launch_deg, attack_angle_deg, k_v)
-    return DPlaneAngle(loft.deg - float(attack_angle_deg), loft.coefficient)
+    return DPlaneAngle(
+        spin_loft_3d(loft.deg, float(attack_angle_deg), face_to_path_deg),
+        loft.coefficient,
+    )
 
 
 def face_angle(
@@ -254,8 +290,15 @@ def _loft_block(
     vertical: float | None,
     attack: float | None,
     k_v: float,
+    face_to_path: float | None,
 ) -> tuple[float | None, float | None, str]:
-    """(dynamic loft, spin loft, status) under the launch-angle policy."""
+    """(dynamic loft, spin loft, status) under the launch-angle policy.
+
+    ``face_to_path`` is the COMPUTED horizontal separation -- a geometry input
+    to the 3-D spin loft, not an offered face angle. None (no direction or no
+    path) falls back to zero separation, which understates the spin loft by
+    the horizontal component and is the best available statement.
+    """
     if vertical is None:
         # Deliberately NOT falling back to the shipped launch angle: the loft
         # is 1/k_v times it, so the fallback would manufacture a number.
@@ -264,7 +307,7 @@ def _loft_block(
         return None, None, STATUS_WITHHELD_NO_ATTACK
     return (
         dynamic_loft(vertical, attack, k_v).deg,
-        spin_loft(vertical, attack, k_v).deg,
+        spin_loft(vertical, attack, k_v, face_to_path_deg=face_to_path or 0.0).deg,
         STATUS_EXPERIMENTAL,
     )
 
@@ -335,8 +378,8 @@ def dplane_from_sources(  # pylint: disable=too-many-arguments
     attack = _usable(attack_angle_deg)
     path = _usable(club_path_deg)
 
-    loft, spin, loft_status = _loft_block(vertical, attack, coefficient_v)
     face, curve, face_status = _face_block(horizontal, path, coefficient_h)
+    loft, spin, loft_status = _loft_block(vertical, attack, coefficient_v, curve)
     offered = loft_status == STATUS_EXPERIMENTAL
     return DPlaneResult(
         dynamic_loft_deg=loft if offered else None,

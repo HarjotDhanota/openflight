@@ -6,6 +6,10 @@ only fallback. OPS ball speed gates target identity. IWR horizontal remains an
 independent comparison and fallback.
 """
 
+# cv2's bindings are generated at import, so pylint cannot see any of them.
+# The same disable, for the same reason, heads `clubpose/head_outline.py`.
+# pylint: disable=no-member
+
 from __future__ import annotations
 
 import math
@@ -40,6 +44,18 @@ class BallCandidate:
     mean_intensity: float
 
 
+# The shipped OV9281 optics: the 2.8 mm datasheet lens over the 6.0 um
+# effective pixel pitch of the 320-wide mode gives 466.67 px, and the same
+# field of view resampled to another width scales the focal with it. This is
+# a NOMINAL value; a calibrated one comes in through `CameraBallGeometry
+# .focal_px` and wins. It exists because the 2026-09-01 audit found the focal
+# being re-derived per shot from the segmented ball's diameter, which swung
+# it 364-452 px and read vertical launch ~3 deg high on the session.
+SHIPPED_FOCAL_PX_AT_320 = 466.6667
+
+SPEED_OF_SOUND_M_S = 343.0
+
+
 @dataclass(frozen=True)
 class CameraBallGeometry:
     """Measured geometry shared by the rear camera and IWR6843."""
@@ -59,6 +75,23 @@ class CameraBallGeometry:
     ball_diameter_m: float = BALL_DIAMETER_MM / 1000.0
     image_width_px: int = 640
     image_height_px: int = 400
+    # A CALIBRATED focal length, when one exists. None falls back to the
+    # shipped-optics nominal scaled to this image width.
+    focal_px: float | None = None
+
+    @property
+    def nominal_focal_px(self) -> float:
+        """The focal the model must use: calibrated if supplied, else nominal."""
+        if self.focal_px is not None:
+            return float(self.focal_px)
+        return SHIPPED_FOCAL_PX_AT_320 * self.image_width_px / 320.0
+
+    @property
+    def trigger_sound_delay_s(self) -> float:
+        """Ball-to-microphone sound flight: physical contact PRECEDES the
+        acoustic trigger by this much, so a camera time measured from the
+        trigger sits this much later on the radar's impact-anchored clock."""
+        return float(self.tee_range_m) / SPEED_OF_SOUND_M_S
 
     @property
     def ball_forward_m(self) -> float:
@@ -155,15 +188,19 @@ def _camera_model(
     anchor: ReferenceBall,
     geometry: CameraBallGeometry,
 ) -> tuple[float, float, np.ndarray]:
-    """Infer focal scale and pose from the stationary regulation-size ball."""
+    """Fixed-lens camera model; the stationary ball sets POSE, never the lens.
+
+    2026-09-01 audit: this used to re-derive the focal length from the
+    segmented ball's diameter every shot. At 10-13 px that diameter is
+    threshold- and bloom-sensitive; the implied focal swung 364-452 px
+    against the 466.7 px shipped optics, and the session's vertical launch
+    read ~3 deg high for it. The focal is now the geometry's
+    calibrated/nominal value, and the ball contributes only what it is good
+    for: the mount pitch, from its centroid row.
+    """
     center_x = geometry.image_width_px / 2.0
     center_y = geometry.image_height_px / 2.0
-    camera_ball_range = math.sqrt(
-        geometry.camera_lateral_offset_m**2
-        + geometry.ball_forward_m**2
-        + (geometry.ball_height_m - geometry.camera_height_m) ** 2
-    )
-    focal_px = anchor.diameter_px * camera_ball_range / geometry.ball_diameter_m
+    focal_px = geometry.nominal_focal_px
     ball_x = geometry.horizontal_pixel_sign * (anchor.x - center_x) / focal_px
     ball_z = -(anchor.y - center_y) / focal_px
     _ball_x, ball_z = deroll_normalized_offsets(
@@ -392,9 +429,15 @@ def _path_estimate(
         if range_evidence is None:
             position = _project_from_ball_size(candidate, model=model, geometry=geometry)
         else:
+            # Two 2026-09-01 audit corrections, landed together under one
+            # contract: camera times are anchored on the ACOUSTIC trigger
+            # while the radar track is anchored on physical impact, which
+            # precedes the trigger by the sound flight; and the raw track
+            # carries the calibration bias the LCMF strips internally, so the
+            # corrected range is read through the evidence, never the track.
             radar_range = float(
-                range_evidence.track.range_at(
-                    range_evidence.impact_t_s + relative_time,
+                range_evidence.true_range_at(
+                    range_evidence.impact_t_s + geometry.trigger_sound_delay_s + relative_time,
                     range_evidence.geometry.range_res_m,
                 )
             )

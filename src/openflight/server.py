@@ -2246,7 +2246,9 @@ def _delete_session_row(timestamp: str) -> bool:
             return False
         for index, event in enumerate(events):
             if event.timestamp.isoformat() == timestamp:
-                del events[index]
+                # A duck-typed monitor attribute; astroid cannot infer the
+                # container type behind getattr and flags the delete.
+                del events[index]  # pylint: disable=unsupported-delete-operation
                 return True
         return False
 
@@ -2256,7 +2258,8 @@ def _delete_session_row(timestamp: str) -> bool:
     for index, shot in enumerate(shots):
         if shot.timestamp.isoformat() == timestamp:
             _unregister_camera_replay(shot)
-            del shots[index]
+            # Same duck-typed getattr container as the events branch above.
+            del shots[index]  # pylint: disable=unsupported-delete-operation
             return True
     return False
 
@@ -3345,9 +3348,12 @@ def _apply_dplane_metrics(shot: Shot) -> None:
     shot.experimental_dynamic_loft_status = result.dynamic_loft_status
     shot.experimental_spin_loft_deg = result.spin_loft_deg
     shot.experimental_spin_loft_status = result.spin_loft_status
-    # STORED, NOT DISPLAYED. The computed value is kept so the uncalibrated
-    # horizontal offset behind it stays open to study; the status forbids use.
-    shot.experimental_face_angle_deg = result.computed_face_angle_deg
+    # FAIL-CLOSED (2026-09-02, audit finding): a withheld status must never
+    # travel with a numeric value -- a status-ignoring consumer would present
+    # it. This reverses the earlier stored-not-displayed choice, with sign-off.
+    # The inversion stays open to study because its INPUTS (launch angles,
+    # path, attack) are all serialized; recompute from those, never from here.
+    shot.experimental_face_angle_deg = result.face_angle_deg
     shot.experimental_face_angle_status = result.face_angle_status
 
 
@@ -4689,7 +4695,11 @@ def start_monitor(
         if iwr6843_runtime is not None:
             iwr6843_runtime.capture_monitor.arm()
     else:
-        monitor.start(shot_callback=on_shot_detected, live_callback=on_live_reading)
+        # The monitor here is one of several duck-typed implementations;
+        # astroid resolves a variant whose start() it thinks lacks the kwarg.
+        monitor.start(  # pylint: disable=unexpected-keyword-arg
+            shot_callback=on_shot_detected, live_callback=on_live_reading
+        )
 
 
 def _fire_cloud_push(session_logger):

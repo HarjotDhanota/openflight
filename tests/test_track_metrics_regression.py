@@ -36,15 +36,18 @@ _SPEC.loader.exec_module(replay_track_metrics)
 # below are the research's own, to the decimal.
 BALL_TO_UNIT_M = 1.575
 
-# Known gaps, measured by this promotion and NOT tuned away. The camera's
-# vertical launch angle -- the existing ball-flight reconstruction's own
-# output, exposed rather than rewritten -- reads about 4 deg higher on this
-# session than the figure the promotion brief expected, and the D-plane loft
-# carries that through at 1/k_v. Both bounds are deliberately loose: they exist
-# to catch the gap CHANGING, not to bless its size.
+# Known gaps, measured and NOT tuned away. Re-registered 2026-09-02 after the
+# audit's three camera corrections landed together (fixed intrinsics instead
+# of a per-shot ball-derived focal; the LCMF range bias applied at the
+# evidence boundary; the acoustic sound-flight delay added to the range
+# query): the measured dynamic-loft medians moved from 35.7/39.4 to
+# 32.20 (7-iron) and 36.56 (9-iron), i.e. the loft now sits 0.6-1.2 deg above
+# the research band instead of ~5. The bounds below are the new measured
+# values +-2 deg; they exist to catch the residual gap CHANGING, not to bless
+# its size, and nothing here was adjusted to make a suite pass.
 EXPECTED_MISS = {
-    "7-iron": (33.0, 39.0),
-    "9-iron": (36.0, 42.0),
+    "7-iron": (30.2, 34.2),
+    "9-iron": (34.6, 38.6),
 }
 
 
@@ -136,14 +139,15 @@ def test_the_boresight_anchor_puts_the_head_on_the_ball_at_contact(replay) -> No
 
 
 def test_the_dynamic_loft_gap_against_the_research_expectation_has_not_moved(replay) -> None:
-    """A pinned MISS: the camera launch angle overshoots the expected loft band.
+    """A pinned MISS: the camera launch angle still overshoots the loft band.
 
     The research brief expected 29-31 deg for the 7-iron and 34-36 for the
-    9-iron, from a camera launch angle of about 24 and 27 deg. The shipped
-    ball-flight reconstruction returns about 28 and 30 on this session, and the
-    inversion carries that through at 1/k_v, so the loft lands roughly 5 deg
-    high. Nothing is tuned to close it; this test exists so the gap cannot
-    change size unremarked.
+    9-iron. Before the 2026-09-01 audit corrections the reconstruction
+    overshot by roughly 5 deg; with fixed intrinsics, the range bias and the
+    acoustic delay applied, the medians are 32.20 and 36.56 -- 0.6-1.2 deg
+    above the band. The residual is the unresolved camera-vs-LCMF elevation
+    datum (physical boresight, uncalibrated). Nothing is tuned to close it;
+    this test exists so the gap cannot change size unremarked.
     """
     _records, summary = replay
     for club, (low, high) in EXPECTED_MISS.items():

@@ -92,6 +92,9 @@ def _synthetic_path(
         horizontal_pixel_sign=-1.0 if mirror_horizontal else 1.0,
         image_width_px=640,
         image_height_px=400,
+        # The synthetic camera's lens, supplied as the CALIBRATED value: the
+        # model no longer derives a focal from the ball (2026-09-01 audit).
+        focal_px=480.0,
     )
     focal_px = 480.0
     pitch_rad = 0.0
@@ -133,8 +136,14 @@ def _synthetic_path(
             speed_ms * math.sin(vertical),
         ]
     )
+    # Camera timestamps are measured from the ACOUSTIC trigger, which the
+    # ball-to-microphone sound flight delays past physical impact -- so by
+    # camera time t the ball has flown trigger_sound_delay_s + t. The old
+    # harness equated trigger with impact, which is the very defect the
+    # 2026-09-01 audit corrected in production.
     relative_times = np.arange(8, dtype=float) * 0.0035 + 0.007
-    positions = np.asarray([tee + velocity * time_s for time_s in relative_times])
+    flight_times = relative_times + geometry.trigger_sound_delay_s
+    positions = np.asarray([tee + velocity * time_s for time_s in flight_times])
     timestamps_ns = np.asarray(relative_times * 1e9, dtype=np.int64)
 
     candidates = []
@@ -170,9 +179,11 @@ def _synthetic_path(
 
     class SyntheticRangeTrack:
         def range_at(self, time_s, _range_resolution_m):
-            return float(np.interp(time_s, relative_times, radar_ranges))
+            return float(np.interp(time_s, flight_times, radar_ranges))
 
-    evidence = SimpleNamespace(
+    # The REAL evidence class, so the synthetic exercises the same
+    # true_range_at contract production consumes (zero bias here).
+    evidence = BallRangeEvidence(
         track=SyntheticRangeTrack(),
         geometry=SimpleNamespace(range_res_m=0.046875),
         impact_t_s=0.0,
@@ -737,3 +748,67 @@ def test_estimate_publishes_no_vertical_spread_when_it_found_no_ball():
     assert estimate.vertical_parameter_mad_deg is None
     assert estimate.vertical_deg is None
     assert select_camera_vertical_launch(estimate, lcmf_vertical_deg=19.5).vertical_deg is None
+
+
+class TestAuditIntrinsicsAndRangeContract:
+    """2026-09-01 audit fixes: fixed intrinsics, calibrated range, sound delay."""
+
+    @staticmethod
+    def _geometry(**overrides):
+        base = {
+            "camera_height_m": 0.2032,
+            "radar_height_m": 0.1524,
+            "tee_range_m": 1.524,
+            "ball_height_m": 0.04,
+            "image_width_px": 320,
+            "image_height_px": 200,
+        }
+        base.update(overrides)
+        return CameraBallGeometry(**base)
+
+    def test_the_camera_model_never_derives_focal_from_the_ball_diameter(self):
+        """A bloom-shrunken ball must not change the lens; only the row may
+        move the pitch, and these anchors share a row."""
+        geometry = self._geometry()
+        small = ReferenceBall(x=176.5, y=146.0, diameter_px=10.2, area_px=90)
+        large = ReferenceBall(x=176.5, y=146.0, diameter_px=12.6, area_px=140)
+
+        focal_small, pitch_small, _ = _camera_model(small, geometry)
+        focal_large, pitch_large, _ = _camera_model(large, geometry)
+
+        assert focal_small == focal_large
+        assert focal_small == pytest.approx(geometry.nominal_focal_px)
+        assert pitch_small == pytest.approx(pitch_large)
+
+    def test_a_supplied_calibrated_focal_wins_over_the_nominal(self):
+        geometry = self._geometry(focal_px=480.0)
+
+        assert geometry.nominal_focal_px == pytest.approx(480.0)
+
+    def test_the_nominal_focal_scales_with_the_image_width(self):
+        narrow = self._geometry()
+        wide = self._geometry(image_width_px=640, image_height_px=400)
+
+        assert narrow.nominal_focal_px == pytest.approx(466.6667, abs=1e-3)
+        assert wide.nominal_focal_px == pytest.approx(933.3334, abs=1e-3)
+
+    def test_ball_range_evidence_applies_the_lcmf_calibration_bias(self):
+        class _Track:
+            @staticmethod
+            def range_at(_time_s, _range_res_m):
+                return 1.6
+
+        evidence = BallRangeEvidence(
+            track=_Track(), geometry=None, impact_t_s=0.05, range_bias_m=0.0660069821
+        )
+
+        assert evidence.true_range_at(0.05, 0.0469) == pytest.approx(1.6 - 0.0660069821)
+        assert BallRangeEvidence(_Track(), None, 0.05).true_range_at(0.05, 0.0469) == (
+            pytest.approx(1.6)
+        )
+
+    def test_the_sound_flight_delay_comes_from_the_tee_range(self):
+        assert self._geometry().trigger_sound_delay_s == pytest.approx(1.524 / 343.0)
+        assert self._geometry(tee_range_m=3.048).trigger_sound_delay_s == pytest.approx(
+            3.048 / 343.0
+        )

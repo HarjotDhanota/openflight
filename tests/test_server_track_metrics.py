@@ -20,6 +20,7 @@ import pytest
 import openflight.server as server_module
 from openflight.camera.club_motion import ReferenceBall
 from openflight.camera.clubpose.head_track import HeadTrack, HeadTrackQuality
+from openflight.club_metrics import spin_loft_3d
 from openflight.launch_monitor import Shot
 from openflight.server import shot_to_dict
 
@@ -235,7 +236,11 @@ def test_the_dplane_loft_uses_the_camera_launch_angle(rig, monkeypatch) -> None:
 
     assert shot.experimental_dynamic_loft_status == "experimental"
     assert shot.experimental_dynamic_loft_deg == pytest.approx(-4.6 + (24.2 + 4.6) / 0.81, abs=1e-6)
-    assert shot.experimental_spin_loft_deg == pytest.approx((24.2 + 4.6) / 0.81, abs=1e-6)
+    # The 3-D spin loft (2026-09-01 audit): the computed face-to-path from the
+    # rig's H=0.5, P=1.6 enters as geometry. Derived, not tuned.
+    assert shot.experimental_spin_loft_deg == pytest.approx(
+        spin_loft_3d(-4.6 + (24.2 + 4.6) / 0.81, -4.6, (0.5 - 1.6) / 0.69), abs=1e-6
+    )
 
 
 def test_without_the_camera_launch_angle_the_loft_is_withheld(rig, monkeypatch) -> None:
@@ -263,7 +268,11 @@ def test_the_face_angle_is_stored_with_a_status_that_forbids_display(rig, monkey
     server_module._fuse_track_club_metrics(shot, rig.capture)
 
     assert shot.experimental_face_angle_status == "withheld_launch_direction_offset"
-    assert shot.experimental_face_angle_deg == pytest.approx(1.6 + (0.5 - 1.6) / 0.69, abs=1e-6)
+    # FAIL-CLOSED (2026-09-02, audit): a withheld status must never travel with
+    # a numeric value -- a status-ignoring consumer would present it. The
+    # inversion stays open to study because its inputs (launch angles, path,
+    # attack) are all serialized; recompute from those, never from the record.
+    assert shot.experimental_face_angle_deg is None
 
 
 def test_the_track_fusion_never_writes_a_shipped_field(rig, monkeypatch) -> None:
@@ -313,7 +322,7 @@ def test_shot_to_dict_carries_the_new_fields() -> None:
         experimental_dynamic_loft_status="experimental",
         experimental_spin_loft_deg=35.2,
         experimental_spin_loft_status="experimental",
-        experimental_face_angle_deg=-0.09,
+        experimental_face_angle_deg=None,
         experimental_face_angle_status="withheld_launch_direction_offset",
         experimental_camera_vertical_launch_status="accepted",
     )
@@ -328,7 +337,7 @@ def test_shot_to_dict_carries_the_new_fields() -> None:
     assert payload["experimental_arc_radius_m"] == pytest.approx(1.14)
     assert payload["experimental_dynamic_loft_deg"] == pytest.approx(30.6)
     assert payload["experimental_spin_loft_deg"] == pytest.approx(35.2)
-    assert payload["experimental_face_angle_deg"] == pytest.approx(-0.09)
+    assert payload["experimental_face_angle_deg"] is None
     assert payload["experimental_face_angle_status"] == "withheld_launch_direction_offset"
     assert payload["experimental_camera_vertical_launch_deg"] == pytest.approx(24.2)
     assert payload["experimental_camera_vertical_launch_status"] == "accepted"
@@ -354,7 +363,7 @@ def test_the_session_logger_records_the_track_metrics_block(tmp_path) -> None:
         experimental_track_metrics={
             "experimental_track_status": "ok",
             "experimental_swing_plane_deg": 58.9,
-            "experimental_face_angle_deg": -0.09,
+            "experimental_face_angle_deg": None,
             "experimental_face_angle_status": "withheld_launch_direction_offset",
             "experimental_dynamic_loft_deg": None,
         },

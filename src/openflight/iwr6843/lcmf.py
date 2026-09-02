@@ -62,11 +62,22 @@ SINGLE_CHANNEL_CONFIDENCE_FACTOR = 0.7
 
 @dataclass(frozen=True)
 class BallRangeEvidence:
-    """Transient fitted ball trajectory shared with camera fusion."""
+    """Transient fitted ball trajectory shared with camera fusion.
+
+    ``range_bias_m`` is the SAME calibration the LCMF applies internally via
+    ``Calibration.true_range`` -- the 2026-09-01 audit found it was dropped at
+    this boundary, so every camera consumer read the raw biased track while
+    the LCMF read the corrected one. Consumers must call `true_range_at`.
+    """
 
     track: tracking.BallTrack
     geometry: tracking.Geometry
     impact_t_s: float
+    range_bias_m: float = 0.0
+
+    def true_range_at(self, time_s: float, range_res_m: float) -> float:
+        """The calibrated physical range at ``time_s`` -- what LCMF itself uses."""
+        return float(self.track.range_at(time_s, range_res_m)) - self.range_bias_m
 
 
 @dataclass
@@ -198,7 +209,7 @@ def _result_from_track(
         track_span_s=(track.t_last - track.t_first) if track is not None else None,
         impact_t_s=impact_t_s,
         range_evidence=(
-            BallRangeEvidence(track, shot.geometry, impact_t_s)
+            BallRangeEvidence(track, shot.geometry, impact_t_s, cal.range_bias_m)
             if track is not None and impact_t_s is not None
             else None
         ),

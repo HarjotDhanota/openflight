@@ -13,6 +13,11 @@ The older radar-AoA/camera-trace functions remain below for replay comparisons,
 but the OpenFlight server no longer uses their per-club correction offsets.
 """
 
+# cv2's bindings are generated at import, so pylint cannot see any of them
+# (the same disable heads `clubpose/head_outline.py`), and astroid's Optional-
+# tuple inference cannot follow the `best`-candidate pattern below.
+# pylint: disable=no-member,unsubscriptable-object
+
 from __future__ import annotations
 
 import math
@@ -325,9 +330,7 @@ def combine_approach_estimates(
     if preferred_path_estimate is not None:
         path_deg = preferred_path_estimate.path_deg
         values = np.asarray([estimate.path_deg for estimate in path_candidates])
-        path_mad = (
-            float(np.median(np.abs(values - path_deg))) if len(values) else None
-        )
+        path_mad = float(np.median(np.abs(values - path_deg))) if len(values) else None
         preferred_quality = (
             CHAINED_SPEED_RATIO_RANGE[0]
             <= preferred_path_estimate.speed_ratio_ops
@@ -338,9 +341,7 @@ def combine_approach_estimates(
             <= CHAINED_PATH_RANGE_DEG[1]
         )
         if preferred_quality and timing_plausible:
-            path_confidence = (
-                "high" if path_mad is not None and path_mad <= 2.0 else "medium"
-            )
+            path_confidence = "high" if path_mad is not None and path_mad <= 2.0 else "medium"
         else:
             path_confidence = "low"
     elif len(path_candidates) >= APPROACH_MIN_PATH_WINDOWS:
@@ -950,7 +951,6 @@ def estimate_chained_delivery(
         )
 
     contact_camera_s = (int(timestamps_ns[impact_idx]) + int(timestamps_ns[impact_idx + 1])) / 2e9
-    track = range_evidence.track if range_evidence is not None else None
     radar_geo = range_evidence.geometry if range_evidence is not None else None
     impact_t_s = range_evidence.impact_t_s if range_evidence is not None else None
     pair_estimates: dict[tuple[int, int], ApproachPairEstimate] = {}
@@ -981,9 +981,12 @@ def estimate_chained_delivery(
             )
         else:
             relative_s = camera_times_s - contact_camera_s
+            # The raw track carries the calibration bias the LCMF strips
+            # internally (2026-09-01 audit); read the corrected range through
+            # the evidence, never the bare track.
             radar_ranges_m = np.asarray(
                 [
-                    float(track.range_at(impact_t_s + offset, radar_geo.range_res_m))
+                    float(range_evidence.true_range_at(impact_t_s + offset, radar_geo.range_res_m))
                     for offset in relative_s
                 ]
             )

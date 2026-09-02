@@ -23,6 +23,7 @@ from openflight.club_metrics import (
     face_angle,
     face_to_path,
     spin_loft,
+    spin_loft_3d,
 )
 
 
@@ -34,8 +35,8 @@ def test_dynamic_loft_inverts_the_published_relation() -> None:
     assert result.coefficient == pytest.approx(K_VERTICAL_DEFAULT)
 
 
-def test_spin_loft_is_dynamic_loft_less_attack_angle() -> None:
-    """SL = DL - A, which reduces to (V - A) / k_v."""
+def test_spin_loft_reduces_to_dynamic_loft_less_attack_when_face_matches_path() -> None:
+    """At zero face-to-path, SL = DL - A = (V - A) / k_v exactly."""
     result = spin_loft(vertical_launch_deg=24.0, attack_angle_deg=-5.0)
 
     assert result.deg == pytest.approx(29.0 / 0.81)
@@ -134,7 +135,12 @@ def test_a_complete_set_of_sources_produces_a_loft_and_records_its_provenance() 
     assert result.dynamic_loft_status == "experimental"
     assert result.dynamic_loft_deg == pytest.approx(-5.0 + 29.0 / 0.81)
     assert result.spin_loft_status == "experimental"
-    assert result.spin_loft_deg == pytest.approx(29.0 / 0.81)
+    # The 3-D spin loft (2026-09-01 audit): the computed face-to-path -- a
+    # geometry input, never an offered face -- adds its horizontal component.
+    # Derived, not tuned: DL = A + (V-A)/k_v, F-P = (H-P)/k_h.
+    assert result.spin_loft_deg == pytest.approx(
+        spin_loft_3d(-5.0 + 29.0 / 0.81, -5.0, (0.0 - 1.5) / 0.69)
+    )
     assert result.sources["vertical_launch"] == "camera_ball_flight"
     assert result.sources["attack_angle"] == "head_track"
     assert result.k_vertical == pytest.approx(K_VERTICAL_DEFAULT)
@@ -214,3 +220,11 @@ def test_a_non_finite_input_is_treated_as_absent_rather_than_raising() -> None:
 
     assert result.dynamic_loft_status == "withheld_lcmf_launch_bias"
     assert result.dynamic_loft_deg is None
+
+
+def test_spin_loft_is_the_three_d_face_to_velocity_angle() -> None:
+    """The 2026-09-01 audit counterexample: DL 30, A -5, F-P 20 is 39.904 deg,
+    where the old 2-D subtraction said 35.0. And the zero-separation case
+    reduces exactly to DL - A."""
+    assert spin_loft_3d(30.0, -5.0, 20.0) == pytest.approx(39.904, abs=0.01)
+    assert spin_loft_3d(30.0, -5.0, 0.0) == pytest.approx(35.0, abs=1e-9)
