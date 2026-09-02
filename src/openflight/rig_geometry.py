@@ -42,10 +42,18 @@ from typing import Mapping
 
 BALL_DIAMETER_MM = 42.67  # a conforming ball; also head_outline.BALL_DIAMETER_MM
 
-# The shipped OV9281 mode's optics, from the datasheet lens over the effective
-# pixel pitch (2.8 mm / 6.0 um). The same arithmetic lives in
-# `clubpose.fit.FOCAL_PX`; `test_rig_geometry` pins the two to each other so
-# they cannot drift apart without a test naming it.
+# The shipped OV9281 mode's optics, from the vendor-confirmed lens over the
+# effective pixel pitch (2.8 mm / 6.0 um). Inno-Maker's CAM-MIPI9281RAW-V2
+# page (checked 2026-09-02) confirms the 2.8 mm lens and 3.0 um pixels, and
+# adds two facts the pinhole model must respect: the lens is a WIDE-ANGLE
+# FISHEYE with TV distortion < -17 percent, and the quoted 72 deg horizontal
+# FOV only reconciles with f = 933 px full-width WITH that barrel distortion
+# (a pure pinhole at 933 px gives 68.9 deg). Distortion is sub-percent within
+# ~60 px of the principal point -- where the teed ball lives -- but grows
+# roughly quadratically to several px near the crop's corners, which is one
+# more reason the checkerboard calibration (audit follow-up) is the durable
+# answer. The same arithmetic lives in `clubpose.fit.FOCAL_PX`;
+# `test_rig_geometry` pins the two to each other so they cannot drift apart.
 _TEST_RIG_FOCAL_PX = 2.8 / (3.0 * 2 * 1e-3)
 
 # A ball this small in the frame makes the range solve too soft to trust: at
