@@ -44,13 +44,17 @@ class BallCandidate:
     mean_intensity: float
 
 
-# The shipped OV9281 optics: the 2.8 mm datasheet lens over the 6.0 um
-# effective pixel pitch of the 320-wide mode gives 466.67 px, and the same
-# field of view resampled to another width scales the focal with it. This is
-# a NOMINAL value; a calibrated one comes in through `CameraBallGeometry
-# .focal_px` and wins. It exists because the 2026-09-01 audit found the focal
-# being re-derived per shot from the segmented ball's diameter, which swung
-# it 364-452 px and read vertical launch ~3 deg high on the session.
+# The shipped OV9281 optics: the 2.8 mm lens over the 6.0 um effective pixel
+# pitch of the 320-wide mode gives 466.67 px, and the same field of view
+# resampled to another width scales the focal with it. Vendor-confirmed
+# (Inno-Maker CAM-MIPI9281RAW-V2, checked 2026-09-02): 2.8 mm lens, 3.0 um
+# pixels -- and a WIDE-ANGLE FISHEYE with TV distortion < -17 percent, so the
+# zero-distortion pinhole here is only sub-percent honest within ~60 px of
+# the principal point and degrades toward the crop's corners. This is a
+# NOMINAL value; a calibrated one comes in through
+# `CameraBallGeometry.focal_px` and wins. It exists because the 2026-09-01
+# audit found the focal being re-derived per shot from the segmented ball's
+# diameter, which swung it 364-452 px and read vertical launch ~3 deg high.
 SHIPPED_FOCAL_PX_AT_320 = 466.6667
 
 SPEED_OF_SOUND_M_S = 343.0
