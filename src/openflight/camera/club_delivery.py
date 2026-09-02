@@ -13,6 +13,10 @@ The older radar-AoA/camera-trace functions remain below for replay comparisons,
 but the OpenFlight server no longer uses their per-club correction offsets.
 """
 
+# cv2's bindings are generated at import, so pylint cannot see any of them.
+# The same disable, for the same reason, heads `clubpose/head_outline.py`.
+# pylint: disable=no-member
+
 from __future__ import annotations
 
 import math
@@ -1450,10 +1454,12 @@ def estimate_impact_zone(
         SwingFrames,
     )
     from openflight.camera.clubpose.impact_zone import (  # noqa: PLC0415
+        BALL_TO_UNIT_M,
         contact_frame_from_trigger,
         extract_impact_zone,
         withheld,
     )
+    from openflight.rig_geometry import RigGeometry, solve_setup  # noqa: PLC0415
 
     if frames is None or getattr(frames, "ndim", 0) != 3 or len(frames) < 20:
         return withheld("no_camera_frames")
@@ -1494,11 +1500,20 @@ def estimate_impact_zone(
     # track has one and the track average when it does not.
     range_rate_ms = float(track.speed_ms_at(float(impact_t_s), float(geometry.range_res_m)))
 
+    # The acoustic walk-back uses THIS setup's solved mic-to-ball distance --
+    # the unit sits wherever the user put it -- rather than the test rig's
+    # taped 1.575 m. The constant stands in only when the rig geometry
+    # carries no mic position, and the solution names that by warning.
+    setup = solve_setup(ball, RigGeometry.test_rig())
+    ball_to_unit_m = setup.mic_to_ball_m if setup.mic_to_ball_m is not None else BALL_TO_UNIT_M
+
     swing = SwingFrames(
         frames=pixels,
         ball=ball,
         fps=float(fps),
-        contact_frame=contact_frame_from_trigger(int(trigger_index), float(fps)),
+        contact_frame=contact_frame_from_trigger(
+            int(trigger_index), float(fps), ball_to_unit_m=ball_to_unit_m
+        ),
         range_rate_ms=range_rate_ms,
         club=str(club),
         name="live",
