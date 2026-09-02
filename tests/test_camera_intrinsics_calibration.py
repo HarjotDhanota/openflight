@@ -84,14 +84,17 @@ class TestTheSolver:
         assert result.rms_reprojection_px < 0.1
 
     def test_the_report_quantifies_the_barrel_at_working_radii(self):
+        """Near the centre the truth is only -0.03 px -- below solver noise,
+        so only its MAGNITUDE is asserted; at 120 px the barrel is ~-2 px and
+        both its sign and growth are real signals."""
         views = _synthetic_views()
         result = calib.solve_from_correspondences(views, (WIDTH, HEIGHT), SQUARE_MM)
 
         near = result.distortion_displacement_px(30.0)
         far = result.distortion_displacement_px(120.0)
-        assert near < 0.0, "barrel distortion pulls points inward"
+        assert abs(near) < 0.3, "sub-pixel near the centre, as the pipeline assumes"
+        assert far < -1.0, "barrel distortion pulls far points clearly inward"
         assert far < near, "and it grows with radius"
-        assert abs(near) < 1.0, "sub-pixel near the centre, as the pipeline assumes"
 
     def test_too_few_views_are_refused_by_name(self):
         views = _synthetic_views()[:3]
