@@ -450,14 +450,41 @@ def _write_csv(path: Path, records: list[dict[str, Any]]) -> None:
         writer.writerows(records)
 
 
-def replay_session(
+@dataclass(frozen=True)
+class SessionContext:
+    """One export opened for replay: its rows, capture directories and rig.
+
+    Shared by every offline replay so they all read the same configuration,
+    the same calibration and the same acoustic path length.
+    """
+
+    session: Path
+    rows: list[dict[str, str]]
+    shot_dirs: dict[int, Path]
+    config: dict[str, Any] | None
+    calibration: Any
+    ball_to_unit_m: float
+
+    def shots(self, excluded: tuple[int, ...]) -> list[tuple[Path, dict[str, str]]]:
+        """(capture directory, csv row) for every shot that is not excluded."""
+        chosen = []
+        for row in self.rows:
+            number = int(row["shot_number"])
+            if number in excluded or number not in self.shot_dirs:
+                continue
+            chosen.append((self.shot_dirs[number], row))
+        return chosen
+
+
+def load_session(
     session: Path,
     *,
-    excluded: tuple[int, ...] = DEFAULT_EXCLUDED,
     calibration_path: str | None = DEFAULT_CALIBRATION,
     ball_to_unit_m: float | None = None,
-) -> list[dict[str, Any]]:
-    """Run every shot of one export through the promoted metrics."""
+) -> SessionContext:
+    """Open one export the way every replay must: config from its own source
+    log, the array calibration built against that config, and the acoustic
+    path defaulting to the export's tee slant range."""
     with (session / "shots.csv").open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     shot_dirs = {
@@ -489,22 +516,30 @@ def replay_session(
             if config is not None
             else DEFAULT_BALL_TO_UNIT_M
         )
+    return SessionContext(session, rows, shot_dirs, config, calibration, float(ball_to_unit_m))
 
-    records: list[dict[str, Any]] = []
-    for row in rows:
-        number = int(row["shot_number"])
-        if number in excluded or number not in shot_dirs:
-            continue
-        records.append(
-            analyse_shot(
-                shot_dirs[number],
-                row,
-                config=config,
-                calibration=calibration,
-                ball_to_unit_m=ball_to_unit_m,
-            )
+
+def replay_session(
+    session: Path,
+    *,
+    excluded: tuple[int, ...] = DEFAULT_EXCLUDED,
+    calibration_path: str | None = DEFAULT_CALIBRATION,
+    ball_to_unit_m: float | None = None,
+) -> list[dict[str, Any]]:
+    """Run every shot of one export through the promoted metrics."""
+    context = load_session(
+        session, calibration_path=calibration_path, ball_to_unit_m=ball_to_unit_m
+    )
+    return [
+        analyse_shot(
+            shot_dir,
+            row,
+            config=context.config,
+            calibration=context.calibration,
+            ball_to_unit_m=context.ball_to_unit_m,
         )
-    return records
+        for shot_dir, row in context.shots(excluded)
+    ]
 
 
 def build_parser() -> argparse.ArgumentParser:

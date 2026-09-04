@@ -812,3 +812,102 @@ class TestAuditIntrinsicsAndRangeContract:
         assert self._geometry(tee_range_m=3.048).trigger_sound_delay_s == pytest.approx(
             3.048 / 343.0
         )
+
+
+class TestTheBallClock:
+    """The ball's own contact time, read off its flight line.
+
+    The synthetic harness launches the ball from the tee at physical impact,
+    which precedes the acoustic trigger by the sound flight; so on the
+    camera's trigger-relative clock the line must pass the tee at
+    -trigger_sound_delay_s. Nothing about the ball's speed is used to find it.
+    """
+
+    def test_the_flight_line_passes_the_tee_at_minus_the_sound_flight(self):
+        geometry, _anchor, model, candidates, timestamps, evidence, _speed = _synthetic_path()
+
+        result = _path_estimate(
+            path=list(enumerate(candidates)),
+            frame_indices=list(range(len(candidates))),
+            timestamps_ns=timestamps,
+            trigger_ns=0,
+            range_evidence=evidence,
+            ops_ball_speed_mph=100.0,
+            iwr_vertical_deg=None,
+            model=model,
+            geometry=geometry,
+            thresholds=(100, 12, 5),
+        )
+
+        assert result is not None
+        _score, estimate = result
+        assert estimate.contact_time_s == pytest.approx(-geometry.trigger_sound_delay_s, abs=1e-4)
+
+    @pytest.mark.parametrize("vertical_deg", [10.0, 20.0, 35.0])
+    @pytest.mark.parametrize("horizontal_deg", [-8.0, 0.0, 6.0])
+    def test_the_clock_does_not_depend_on_where_the_ball_went(self, vertical_deg, horizontal_deg):
+        geometry, _anchor, model, candidates, timestamps, evidence, _speed = _synthetic_path(
+            horizontal_deg=horizontal_deg, vertical_deg=vertical_deg
+        )
+
+        _score, estimate = _path_estimate(
+            path=list(enumerate(candidates)),
+            frame_indices=list(range(len(candidates))),
+            timestamps_ns=timestamps,
+            trigger_ns=0,
+            range_evidence=evidence,
+            ops_ball_speed_mph=100.0,
+            iwr_vertical_deg=None,
+            model=model,
+            geometry=geometry,
+            thresholds=(100, 12, 5),
+        )
+
+        assert estimate.contact_time_s == pytest.approx(-geometry.trigger_sound_delay_s, abs=2e-4)
+
+    def test_a_lateral_rest_error_barely_moves_the_clock(self):
+        """The rest point is the NOMINAL tee; a ball 50 mm off the target line
+        projects onto the velocity by sin(launch bearing) and is worth well
+        under a tenth of a frame."""
+        geometry, _anchor, model, candidates, timestamps, evidence, _speed = _synthetic_path(
+            horizontal_deg=6.0, tee_x_m=0.05
+        )
+
+        _score, estimate = _path_estimate(
+            path=list(enumerate(candidates)),
+            frame_indices=list(range(len(candidates))),
+            timestamps_ns=timestamps,
+            trigger_ns=0,
+            range_evidence=evidence,
+            ops_ball_speed_mph=100.0,
+            iwr_vertical_deg=None,
+            model=model,
+            geometry=geometry,
+            thresholds=(100, 12, 5),
+        )
+
+        frame_s = 1.0 / 467.6
+        assert abs(estimate.contact_time_s + geometry.trigger_sound_delay_s) < 0.1 * frame_s
+
+    def test_the_consensus_publishes_the_clock_and_its_spread(self):
+        geometry, anchor, _model, candidates, timestamps, evidence, _speed = _synthetic_path()
+        frames = _render_ball_flight(geometry, anchor, candidates)
+
+        result = estimate_camera_ball_flight(
+            frames,
+            timestamps,
+            trigger_ns=0,
+            range_evidence=evidence,
+            geometry=geometry,
+            ops_ball_speed_mph=100.0,
+        )
+
+        assert result.ball_clock_contact_s is not None
+        assert result.ball_clock_contact_s == pytest.approx(
+            -geometry.trigger_sound_delay_s, abs=0.5 / 467.6
+        )
+        assert result.ball_clock_contact_mad_s is not None
+        assert result.ball_clock_contact_mad_s < 0.25 / 467.6
+
+    def test_no_path_means_no_clock(self):
+        assert CameraBallEstimate("rejected_no_stable_path").ball_clock_contact_s is None

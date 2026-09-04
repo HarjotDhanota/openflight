@@ -131,6 +131,13 @@ class CameraBallEstimate:
     # `parameter_mad_deg` above is the horizontal one, and the two do not move
     # together: bearing is nearly independent of depth and elevation is not.
     vertical_parameter_mad_deg: float | None = None
+    # The ball's own clock: when the fitted flight line passes through the
+    # ball's rest position, in seconds on the camera's trigger-relative time
+    # base. Physical contact precedes the acoustic trigger by the sound
+    # flight, so this should read close to -trigger_sound_delay_s; the
+    # difference is an independent check on the whole timing chain.
+    ball_clock_contact_s: float | None = None
+    ball_clock_contact_mad_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -186,6 +193,7 @@ class _PathEstimate:
     n_points: int
     first_frame: int
     last_frame: int
+    contact_time_s: float
 
 
 def _camera_model(
@@ -397,6 +405,32 @@ def _robust_velocity(times: np.ndarray, positions: np.ndarray) -> tuple[np.ndarr
     return velocity, float(np.median(residual))
 
 
+def _line_intercept(times: np.ndarray, positions: np.ndarray, velocity: np.ndarray) -> np.ndarray:
+    """Where the fitted flight line sits at time zero: the same robust
+    intercept `_robust_velocity` fits, kept rather than discarded."""
+    return np.median(positions - times[:, None] * velocity, axis=0)
+
+
+def _contact_time_s(intercept: np.ndarray, velocity: np.ndarray, rest: np.ndarray) -> float:
+    """The time at which the flight line passes closest to the ball's rest
+    position -- the instant the ball left the tee, on the camera's clock.
+
+    Over the 15 frames the estimator uses, gravity and drag bend the line by
+    millimetres against the metre-plus it travels, and a lateral error in the
+    rest point projects onto the velocity by the sine of a launch angle of a
+    few degrees; both are below a tenth of a frame.
+    """
+    speed_sq = float(velocity @ velocity)
+    if speed_sq <= 0.0:
+        return math.nan
+    return float((rest - intercept) @ velocity) / speed_sq
+
+
+def _rest_position(geometry: CameraBallGeometry) -> np.ndarray:
+    """The ball on the tee, in the radar-centred world the flight is fitted in."""
+    return np.array([0.0, geometry.ball_forward_m, geometry.ball_height_m])
+
+
 def _horizontal(velocity: np.ndarray) -> float:
     """Return motion direction relative to the camera optical target line."""
     angle = math.atan2(float(velocity[0]), float(velocity[1]))
@@ -457,6 +491,11 @@ def _path_estimate(
     times_array = np.asarray(times)
     positions_array = np.stack(positions)
     velocity, fit_median = _robust_velocity(times_array, positions_array)
+    contact_time = _contact_time_s(
+        _line_intercept(times_array, positions_array, velocity),
+        velocity,
+        _rest_position(geometry),
+    )
     horizontal = _apply_horizontal_offset(
         _horizontal(velocity),
         geometry.horizontal_offset_deg,
@@ -529,6 +568,7 @@ def _path_estimate(
         n_points=len(positions_array),
         first_frame=actual_frames[0],
         last_frame=actual_frames[-1],
+        contact_time_s=contact_time,
     )
 
 
@@ -657,6 +697,13 @@ def estimate_camera_ball_flight(
     if depth_source == "camera_size" and tier == "high":
         tier = "experimental"
     representative = min(estimates, key=lambda item: abs(item.horizontal_deg - median_horizontal))
+    contact_times = np.asarray(
+        [e.contact_time_s for e in estimates if math.isfinite(e.contact_time_s)]
+    )
+    ball_clock = float(np.median(contact_times)) if len(contact_times) else None
+    ball_clock_mad = (
+        float(np.median(np.abs(contact_times - ball_clock))) if ball_clock is not None else None
+    )
     return CameraBallEstimate(
         status=(
             "accepted_camera_only"
@@ -679,6 +726,8 @@ def estimate_camera_ball_flight(
         first_frame=representative.first_frame,
         last_frame=representative.last_frame,
         depth_source=depth_source,
+        ball_clock_contact_s=ball_clock,
+        ball_clock_contact_mad_s=ball_clock_mad,
     )
 
 
