@@ -15,8 +15,10 @@ from openflight.camera.ball_flight import (
     _confidence_tier,
     _path_estimate,
     _rough_path_score,
+    _vertical_confidence_tier,
     estimate_camera_ball_flight,
     select_camera_assisted_horizontal,
+    select_camera_vertical_launch,
 )
 from openflight.camera.club_delivery import ReferenceBallTracker
 from openflight.camera.club_motion import ReferenceBall
@@ -78,6 +80,7 @@ def _synthetic_path(
     horizontal_offset_deg: float = 0.0,
     camera_lateral_offset_m: float = 0.0,
     mirror_horizontal: bool = False,
+    vertical_deg: float = 20.0,
 ):
     geometry = CameraBallGeometry(
         camera_height_m=0.20955,
@@ -89,6 +92,9 @@ def _synthetic_path(
         horizontal_pixel_sign=-1.0 if mirror_horizontal else 1.0,
         image_width_px=640,
         image_height_px=400,
+        # The synthetic camera's lens, supplied as the CALIBRATED value: the
+        # model no longer derives a focal from the ball (2026-09-01 audit).
+        focal_px=480.0,
     )
     focal_px = 480.0
     pitch_rad = 0.0
@@ -121,7 +127,7 @@ def _synthetic_path(
 
     speed_ms = 45.0
     horizontal = math.radians(horizontal_deg)
-    vertical = math.radians(20.0)
+    vertical = math.radians(vertical_deg)
     forward = speed_ms * math.cos(vertical) * math.cos(horizontal)
     velocity = np.array(
         [
@@ -130,8 +136,14 @@ def _synthetic_path(
             speed_ms * math.sin(vertical),
         ]
     )
+    # Camera timestamps are measured from the ACOUSTIC trigger, which the
+    # ball-to-microphone sound flight delays past physical impact -- so by
+    # camera time t the ball has flown trigger_sound_delay_s + t. The old
+    # harness equated trigger with impact, which is the very defect the
+    # 2026-09-01 audit corrected in production.
     relative_times = np.arange(8, dtype=float) * 0.0035 + 0.007
-    positions = np.asarray([tee + velocity * time_s for time_s in relative_times])
+    flight_times = relative_times + geometry.trigger_sound_delay_s
+    positions = np.asarray([tee + velocity * time_s for time_s in flight_times])
     timestamps_ns = np.asarray(relative_times * 1e9, dtype=np.int64)
 
     candidates = []
@@ -167,9 +179,11 @@ def _synthetic_path(
 
     class SyntheticRangeTrack:
         def range_at(self, time_s, _range_resolution_m):
-            return float(np.interp(time_s, relative_times, radar_ranges))
+            return float(np.interp(time_s, flight_times, radar_ranges))
 
-    evidence = SimpleNamespace(
+    # The REAL evidence class, so the synthetic exercises the same
+    # true_range_at contract production consumes (zero bias here).
+    evidence = BallRangeEvidence(
         track=SyntheticRangeTrack(),
         geometry=SimpleNamespace(range_res_m=0.046875),
         impact_t_s=0.0,
@@ -481,3 +495,320 @@ def test_lcmf_ball_range_evidence_is_transient():
 
     assert result.range_evidence is evidence
     assert "range_evidence" not in result.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Camera-derived vertical launch, experimentally.
+#
+# UNVALIDATED AGAINST A REFERENCE INSTRUMENT. What these tests establish is
+# that the reconstruction returns the launch angle it was given and that the
+# status paths withhold when their evidence is missing. Whether the
+# reconstruction is closer to the truth than the shipped LCMF launch angle is
+# NOT settled here and has never been settled against a launch monitor.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("vertical_deg", [16.0, 20.0, 24.0, 27.0, 32.0])
+def test_vertical_launch_is_recovered_across_the_iron_band(vertical_deg):
+    """The ball's camera rays plus the IWR range walk return the launch we set."""
+    geometry, _anchor, model, candidates, timestamps, evidence, speed_ms = _synthetic_path(
+        vertical_deg=vertical_deg
+    )
+
+    result = _path_estimate(
+        path=list(enumerate(candidates)),
+        frame_indices=list(range(len(candidates))),
+        timestamps_ns=timestamps,
+        trigger_ns=0,
+        range_evidence=evidence,
+        ops_ball_speed_mph=speed_ms * 2.23694,
+        iwr_vertical_deg=None,
+        model=model,
+        geometry=geometry,
+        thresholds=(100, 12, 5),
+    )
+
+    assert result is not None
+    _score, estimate = result
+    assert estimate.vertical_deg == pytest.approx(vertical_deg, abs=0.3)
+
+
+def test_vertical_launch_does_not_lean_on_the_radar_prior():
+    """Handing the scorer a wrong LCMF prior must not move the reconstruction.
+
+    The prior only ranks candidate paths; it must never be blended into the
+    answer, or the camera would stop being independent evidence about the
+    launch angle it is meant to cross-check.
+    """
+    geometry, _anchor, model, candidates, timestamps, evidence, speed_ms = _synthetic_path(
+        vertical_deg=27.0
+    )
+    common = {
+        "path": list(enumerate(candidates)),
+        "frame_indices": list(range(len(candidates))),
+        "timestamps_ns": timestamps,
+        "trigger_ns": 0,
+        "range_evidence": evidence,
+        "ops_ball_speed_mph": speed_ms * 2.23694,
+        "model": model,
+        "geometry": geometry,
+        "thresholds": (100, 12, 5),
+    }
+    honest = _path_estimate(iwr_vertical_deg=27.0, **common)
+    misled = _path_estimate(iwr_vertical_deg=18.0, **common)
+
+    assert honest is not None and misled is not None
+    assert misled[1].vertical_deg == pytest.approx(honest[1].vertical_deg, abs=1e-9)
+
+
+def test_vertical_launch_is_accepted_on_the_iwr_range_walk():
+    """A stable consensus on radar depth is offered, with its own provenance."""
+    estimate = CameraBallEstimate(
+        status="accepted",
+        confidence_tier="high",
+        horizontal_deg=1.2,
+        vertical_deg=24.4,
+        support=18,
+        vertical_parameter_mad_deg=0.2,
+        depth_source="iwr_range",
+    )
+    decision = select_camera_vertical_launch(estimate, lcmf_vertical_deg=19.6)
+
+    assert decision.status == "accepted"
+    assert decision.vertical_deg == pytest.approx(24.4)
+    assert decision.confidence_tier in {"high", "experimental"}
+    assert decision.depth_source == "iwr_range"
+    assert decision.lcmf_vertical_deg == pytest.approx(19.6)
+    assert decision.lcmf_delta_deg == pytest.approx(4.8)
+
+
+def test_vertical_launch_is_withheld_without_the_iwr_range_walk():
+    """Apparent ball size is not depth enough for an elevation angle.
+
+    The horizontal estimator accepts a camera-only fallback because bearing
+    barely depends on depth. Elevation does, so the value is computed, kept and
+    labelled -- never offered.
+    """
+    estimate = CameraBallEstimate(
+        status="accepted_camera_only",
+        confidence_tier="experimental",
+        horizontal_deg=1.2,
+        vertical_deg=24.4,
+        support=18,
+        vertical_parameter_mad_deg=0.2,
+        depth_source="camera_size",
+    )
+    decision = select_camera_vertical_launch(estimate, lcmf_vertical_deg=19.6)
+
+    assert decision.status == "withheld_no_iwr_range_walk"
+    assert decision.vertical_deg is None
+    assert decision.computed_vertical_deg == pytest.approx(24.4)
+    assert decision.confidence_tier == "withheld"
+
+
+def test_vertical_launch_is_withheld_when_the_sweep_disagrees_with_itself():
+    """A vertical angle that moves with the detector thresholds is not a measurement."""
+    estimate = CameraBallEstimate(
+        status="accepted",
+        confidence_tier="high",
+        horizontal_deg=1.2,
+        vertical_deg=24.4,
+        support=18,
+        vertical_parameter_mad_deg=4.0,
+        depth_source="iwr_range",
+    )
+    decision = select_camera_vertical_launch(estimate, lcmf_vertical_deg=19.6)
+
+    assert decision.status == "withheld_unstable_vertical_consensus"
+    assert decision.vertical_deg is None
+    assert decision.computed_vertical_deg == pytest.approx(24.4)
+
+
+def test_vertical_launch_is_rejected_when_no_ball_path_was_found():
+    """No path, no angle, and the reason is the estimator's own."""
+    decision = select_camera_vertical_launch(
+        CameraBallEstimate(status="rejected_no_stable_path"),
+        lcmf_vertical_deg=19.6,
+    )
+
+    assert decision.status == "rejected_no_stable_path"
+    assert decision.vertical_deg is None
+    assert decision.computed_vertical_deg is None
+
+
+def test_vertical_launch_reports_no_delta_without_an_lcmf_value():
+    """The comparison is optional; its absence is not a rejection."""
+    estimate = CameraBallEstimate(
+        status="accepted",
+        confidence_tier="high",
+        horizontal_deg=1.2,
+        vertical_deg=24.4,
+        support=18,
+        vertical_parameter_mad_deg=0.2,
+        depth_source="iwr_range",
+    )
+    decision = select_camera_vertical_launch(estimate, lcmf_vertical_deg=None)
+
+    assert decision.status == "accepted"
+    assert decision.vertical_deg == pytest.approx(24.4)
+    assert decision.lcmf_delta_deg is None
+
+
+def test_vertical_confidence_needs_both_support_and_agreement():
+    """Neither a wide sweep nor a tight one alone earns the top tier."""
+    assert _vertical_confidence_tier(9, 0.2) == "high"
+    assert _vertical_confidence_tier(9, 0.9) == "experimental"
+    assert _vertical_confidence_tier(1, 0.2) == "withheld"
+    assert _vertical_confidence_tier(9, 3.0) == "withheld"
+
+
+def _render_ball_flight(geometry, anchor, candidates):
+    """Frames carrying a bright disc at each synthetic ball position."""
+    cv2 = pytest.importorskip("cv2")
+    frames = np.full(
+        (len(candidates), geometry.image_height_px, geometry.image_width_px), 40, np.uint8
+    )
+    for index, candidate in enumerate(candidates):
+        cv2.circle(
+            frames[index],
+            (int(round(candidate.x)), int(round(candidate.y))),
+            max(2, int(round(math.sqrt(4.0 * candidate.area / math.pi) / 2.0))),
+            235,
+            -1,
+        )
+        # The teed ball has to remain findable as the size and pose anchor.
+        cv2.circle(
+            frames[index],
+            (int(round(anchor.x)), int(round(anchor.y))),
+            max(2, int(round(anchor.diameter_px / 2.0))),
+            235,
+            -1,
+        )
+    return frames
+
+
+def test_estimate_recovers_a_rendered_vertical_launch_and_publishes_its_spread():
+    """Synthetic ballistic frames, end to end, through the whole sweep.
+
+    UNVALIDATED AGAINST A REFERENCE INSTRUMENT. This shows the reconstruction
+    returns the launch angle it was given, not that it is right on real pixels.
+    """
+    geometry, anchor, _model, candidates, timestamps, evidence, speed_ms = _synthetic_path(
+        vertical_deg=24.0
+    )
+    frames = _render_ball_flight(geometry, anchor, candidates)
+
+    estimate = estimate_camera_ball_flight(
+        frames,
+        timestamps,
+        trigger_ns=0,
+        range_evidence=evidence,
+        geometry=geometry,
+        ops_ball_speed_mph=speed_ms * 2.23694,
+        # The anchor's apparent SIZE sets the focal scale, so a rasterised disc
+        # measured back off its own antialiased edge would set the scale from a
+        # rendering artefact rather than from the geometry under test. The ball
+        # detector has its own tests; here the anchor is pinned to truth.
+        # (`resolve` is supplied too: the estimator's `getattr` default is
+        # evaluated eagerly, so a tracker without it raises even when
+        # `resolve_stable` is present.)
+        ball_tracker=SimpleNamespace(
+            resolve_stable=lambda _candidate: (anchor, "test_anchor"),
+            resolve=lambda _candidate: (anchor, "test_anchor"),
+        ),
+    )
+
+    assert estimate.vertical_deg == pytest.approx(24.0, abs=0.3)
+    assert estimate.vertical_parameter_mad_deg is not None
+    assert estimate.depth_source == "iwr_range"
+
+    decision = select_camera_vertical_launch(estimate, lcmf_vertical_deg=19.5)
+    assert decision.computed_vertical_deg == pytest.approx(24.0, abs=0.3)
+    assert decision.lcmf_delta_deg == pytest.approx(4.5, abs=0.3)
+
+
+def test_estimate_publishes_no_vertical_spread_when_it_found_no_ball():
+    """The field exists on every result; a failed capture leaves it empty."""
+    geometry, anchor, _model, _candidates, timestamps, evidence, speed_ms = _synthetic_path(
+        vertical_deg=24.0
+    )
+    frames = np.zeros(
+        (len(timestamps), geometry.image_height_px, geometry.image_width_px), np.uint8
+    )
+    estimate = estimate_camera_ball_flight(
+        frames,
+        timestamps,
+        trigger_ns=0,
+        range_evidence=evidence,
+        geometry=geometry,
+        ops_ball_speed_mph=speed_ms * 2.23694,
+        ball_tracker=SimpleNamespace(fallback=lambda: anchor),
+    )
+
+    assert estimate.vertical_parameter_mad_deg is None
+    assert estimate.vertical_deg is None
+    assert select_camera_vertical_launch(estimate, lcmf_vertical_deg=19.5).vertical_deg is None
+
+
+class TestAuditIntrinsicsAndRangeContract:
+    """2026-09-01 audit fixes: fixed intrinsics, calibrated range, sound delay."""
+
+    @staticmethod
+    def _geometry(**overrides):
+        base = {
+            "camera_height_m": 0.2032,
+            "radar_height_m": 0.1524,
+            "tee_range_m": 1.524,
+            "ball_height_m": 0.04,
+            "image_width_px": 320,
+            "image_height_px": 200,
+        }
+        base.update(overrides)
+        return CameraBallGeometry(**base)
+
+    def test_the_camera_model_never_derives_focal_from_the_ball_diameter(self):
+        """A bloom-shrunken ball must not change the lens; only the row may
+        move the pitch, and these anchors share a row."""
+        geometry = self._geometry()
+        small = ReferenceBall(x=176.5, y=146.0, diameter_px=10.2, area_px=90)
+        large = ReferenceBall(x=176.5, y=146.0, diameter_px=12.6, area_px=140)
+
+        focal_small, pitch_small, _ = _camera_model(small, geometry)
+        focal_large, pitch_large, _ = _camera_model(large, geometry)
+
+        assert focal_small == focal_large
+        assert focal_small == pytest.approx(geometry.nominal_focal_px)
+        assert pitch_small == pytest.approx(pitch_large)
+
+    def test_a_supplied_calibrated_focal_wins_over_the_nominal(self):
+        geometry = self._geometry(focal_px=480.0)
+
+        assert geometry.nominal_focal_px == pytest.approx(480.0)
+
+    def test_the_nominal_focal_scales_with_the_image_width(self):
+        narrow = self._geometry()
+        wide = self._geometry(image_width_px=640, image_height_px=400)
+
+        assert narrow.nominal_focal_px == pytest.approx(466.6667, abs=1e-3)
+        assert wide.nominal_focal_px == pytest.approx(933.3334, abs=1e-3)
+
+    def test_ball_range_evidence_applies_the_lcmf_calibration_bias(self):
+        class _Track:
+            @staticmethod
+            def range_at(_time_s, _range_res_m):
+                return 1.6
+
+        evidence = BallRangeEvidence(
+            track=_Track(), geometry=None, impact_t_s=0.05, range_bias_m=0.0660069821
+        )
+
+        assert evidence.true_range_at(0.05, 0.0469) == pytest.approx(1.6 - 0.0660069821)
+        assert BallRangeEvidence(_Track(), None, 0.05).true_range_at(0.05, 0.0469) == (
+            pytest.approx(1.6)
+        )
+
+    def test_the_sound_flight_delay_comes_from_the_tee_range(self):
+        assert self._geometry().trigger_sound_delay_s == pytest.approx(1.524 / 343.0)
+        assert self._geometry(tee_range_m=3.048).trigger_sound_delay_s == pytest.approx(
+            3.048 / 343.0
+        )

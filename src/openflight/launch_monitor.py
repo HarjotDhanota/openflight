@@ -325,6 +325,38 @@ class Shot:
     experimental_camera_horizontal_confidence: Optional[float] = None
     experimental_camera_horizontal_status: Optional[str] = None
     experimental_camera_iwr_delta_deg: Optional[float] = None
+    # Independent VERTICAL launch evidence: the ball's post-impact camera rays
+    # lifted by the IWR6843 ball range walk. UNVALIDATED AGAINST A REFERENCE
+    # INSTRUMENT, and deliberately NOT a source for `launch_angle_vertical` --
+    # it is carried alongside so the two can be compared, never substituted.
+    experimental_camera_vertical_launch_deg: Optional[float] = None
+    experimental_camera_vertical_launch_status: Optional[str] = None
+    experimental_camera_vertical_launch_confidence: Optional[str] = None
+    experimental_camera_vertical_launch_lcmf_delta_deg: Optional[float] = None
+    # Track-derived club metrics, from the 3-D clubhead reconstruction and the
+    # D-plane inversion it feeds. ALL UNVALIDATED AGAINST A REFERENCE
+    # INSTRUMENT: these were developed as consistency results on one session
+    # and none has been scored against a launch monitor. They are additive --
+    # nothing here replaces `club_path_deg`, the fused estimator, or any
+    # displayed launch angle.
+    experimental_track_status: Optional[str] = None
+    experimental_swing_plane_deg: Optional[float] = None
+    experimental_swing_direction_deg: Optional[float] = None
+    experimental_track_club_path_deg: Optional[float] = None
+    experimental_track_attack_angle_deg: Optional[float] = None
+    experimental_low_point_mm: Optional[float] = None
+    # Carries a known one-sided bias: on the development session this read
+    # ~25 % below the band the omega = v/r validator expects, on 17 of 18
+    # shots. Anything downstream that consumes it inherits that.
+    experimental_arc_radius_m: Optional[float] = None
+    experimental_dynamic_loft_deg: Optional[float] = None
+    experimental_dynamic_loft_status: Optional[str] = None
+    experimental_spin_loft_deg: Optional[float] = None
+    experimental_spin_loft_status: Optional[str] = None
+    # COMPUTED AND STORED, NEVER DISPLAYED. The status carries the reason: the
+    # horizontal launch offset behind it is uncalibrated.
+    experimental_face_angle_deg: Optional[float] = None
+    experimental_face_angle_status: Optional[str] = None
     # Transient fitted IWR range trajectory consumed by live camera fusion.
     # Deliberately excluded from websocket/session serializers.
     iwr6843_club_range_evidence: object | None = field(

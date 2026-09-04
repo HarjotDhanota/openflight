@@ -6,6 +6,10 @@ only fallback. OPS ball speed gates target identity. IWR horizontal remains an
 independent comparison and fallback.
 """
 
+# cv2's bindings are generated at import, so pylint cannot see any of them.
+# The same disable, for the same reason, heads `clubpose/head_outline.py`.
+# pylint: disable=no-member
+
 from __future__ import annotations
 
 import math
@@ -40,6 +44,22 @@ class BallCandidate:
     mean_intensity: float
 
 
+# The shipped OV9281 optics: the 2.8 mm lens over the 6.0 um effective pixel
+# pitch of the 320-wide mode gives 466.67 px, and the same field of view
+# resampled to another width scales the focal with it. Vendor-confirmed
+# (Inno-Maker CAM-MIPI9281RAW-V2, checked 2026-09-02): 2.8 mm lens, 3.0 um
+# pixels -- and a WIDE-ANGLE FISHEYE with TV distortion < -17 percent, so the
+# zero-distortion pinhole here is only sub-percent honest within ~60 px of
+# the principal point and degrades toward the crop's corners. This is a
+# NOMINAL value; a calibrated one comes in through
+# `CameraBallGeometry.focal_px` and wins. It exists because the 2026-09-01
+# audit found the focal being re-derived per shot from the segmented ball's
+# diameter, which swung it 364-452 px and read vertical launch ~3 deg high.
+SHIPPED_FOCAL_PX_AT_320 = 466.6667
+
+SPEED_OF_SOUND_M_S = 343.0
+
+
 @dataclass(frozen=True)
 class CameraBallGeometry:
     """Measured geometry shared by the rear camera and IWR6843."""
@@ -59,6 +79,23 @@ class CameraBallGeometry:
     ball_diameter_m: float = BALL_DIAMETER_MM / 1000.0
     image_width_px: int = 640
     image_height_px: int = 400
+    # A CALIBRATED focal length, when one exists. None falls back to the
+    # shipped-optics nominal scaled to this image width.
+    focal_px: float | None = None
+
+    @property
+    def nominal_focal_px(self) -> float:
+        """The focal the model must use: calibrated if supplied, else nominal."""
+        if self.focal_px is not None:
+            return float(self.focal_px)
+        return SHIPPED_FOCAL_PX_AT_320 * self.image_width_px / 320.0
+
+    @property
+    def trigger_sound_delay_s(self) -> float:
+        """Ball-to-microphone sound flight: physical contact PRECEDES the
+        acoustic trigger by this much, so a camera time measured from the
+        trigger sits this much later on the radar's impact-anchored clock."""
+        return float(self.tee_range_m) / SPEED_OF_SOUND_M_S
 
     @property
     def ball_forward_m(self) -> float:
@@ -90,6 +127,10 @@ class CameraBallEstimate:
     first_frame: int | None = None
     last_frame: int | None = None
     depth_source: str | None = None
+    # Dispersion of the VERTICAL angle across the detector-threshold sweep.
+    # `parameter_mad_deg` above is the horizontal one, and the two do not move
+    # together: bearing is nearly independent of depth and elevation is not.
+    vertical_parameter_mad_deg: float | None = None
 
 
 @dataclass(frozen=True)
@@ -103,6 +144,34 @@ class HorizontalFusionDecision:
     iwr_horizontal_deg: float | None
     camera_horizontal_deg: float | None
     camera_iwr_delta_deg: float | None
+
+
+@dataclass(frozen=True)
+class VerticalLaunchDecision:
+    """Camera-derived vertical launch angle, and whether it may be shown.
+
+    UNVALIDATED AGAINST A REFERENCE INSTRUMENT. This is the ball's own
+    post-impact camera rays lifted to metres by the IWR6843's ball range walk,
+    and it is offered as INDEPENDENT EVIDENCE about the launch angle, never as
+    a replacement for `launch_angle_vertical`. On the development session it
+    read consistently higher than the shipped LCMF value; which of the two is
+    closer to the truth has never been settled, because no reference instrument
+    has scored either.
+
+    ``vertical_deg`` is populated only when the result passed its gates.
+    ``computed_vertical_deg`` always carries what the reconstruction produced,
+    so a withheld result can still be logged and studied.
+    """
+
+    status: str
+    vertical_deg: float | None = None
+    computed_vertical_deg: float | None = None
+    confidence_tier: str = "withheld"
+    depth_source: str | None = None
+    parameter_mad_deg: float | None = None
+    support: int = 0
+    lcmf_vertical_deg: float | None = None
+    lcmf_delta_deg: float | None = None
 
 
 @dataclass(frozen=True)
@@ -123,15 +192,19 @@ def _camera_model(
     anchor: ReferenceBall,
     geometry: CameraBallGeometry,
 ) -> tuple[float, float, np.ndarray]:
-    """Infer focal scale and pose from the stationary regulation-size ball."""
+    """Fixed-lens camera model; the stationary ball sets POSE, never the lens.
+
+    2026-09-01 audit: this used to re-derive the focal length from the
+    segmented ball's diameter every shot. At 10-13 px that diameter is
+    threshold- and bloom-sensitive; the implied focal swung 364-452 px
+    against the 466.7 px shipped optics, and the session's vertical launch
+    read ~3 deg high for it. The focal is now the geometry's
+    calibrated/nominal value, and the ball contributes only what it is good
+    for: the mount pitch, from its centroid row.
+    """
     center_x = geometry.image_width_px / 2.0
     center_y = geometry.image_height_px / 2.0
-    camera_ball_range = math.sqrt(
-        geometry.camera_lateral_offset_m**2
-        + geometry.ball_forward_m**2
-        + (geometry.ball_height_m - geometry.camera_height_m) ** 2
-    )
-    focal_px = anchor.diameter_px * camera_ball_range / geometry.ball_diameter_m
+    focal_px = geometry.nominal_focal_px
     ball_x = geometry.horizontal_pixel_sign * (anchor.x - center_x) / focal_px
     ball_z = -(anchor.y - center_y) / focal_px
     _ball_x, ball_z = deroll_normalized_offsets(
@@ -360,9 +433,15 @@ def _path_estimate(
         if range_evidence is None:
             position = _project_from_ball_size(candidate, model=model, geometry=geometry)
         else:
+            # Two 2026-09-01 audit corrections, landed together under one
+            # contract: camera times are anchored on the ACOUSTIC trigger
+            # while the radar track is anchored on physical impact, which
+            # precedes the trigger by the sound flight; and the raw track
+            # carries the calibration bias the LCMF strips internally, so the
+            # corrected range is read through the evidence, never the track.
             radar_range = float(
-                range_evidence.track.range_at(
-                    range_evidence.impact_t_s + relative_time,
+                range_evidence.true_range_at(
+                    range_evidence.impact_t_s + geometry.trigger_sound_delay_s + relative_time,
                     range_evidence.geometry.range_res_m,
                 )
             )
@@ -570,6 +649,9 @@ def estimate_camera_ball_flight(
     horizontal = np.asarray([estimate.horizontal_deg for estimate in estimates])
     median_horizontal = float(np.median(horizontal))
     parameter_mad = float(np.median(np.abs(horizontal - median_horizontal)))
+    vertical = np.asarray([estimate.vertical_deg for estimate in estimates])
+    median_vertical = float(np.median(vertical))
+    vertical_mad = float(np.median(np.abs(vertical - median_vertical)))
     window_mad = float(np.median([estimate.window_mad_deg for estimate in estimates]))
     tier = _confidence_tier(len(estimates), parameter_mad, window_mad)
     if depth_source == "camera_size" and tier == "high":
@@ -585,7 +667,8 @@ def estimate_camera_ball_flight(
         ),
         confidence_tier=tier,
         horizontal_deg=median_horizontal if tier != "withheld" else None,
-        vertical_deg=float(np.median([estimate.vertical_deg for estimate in estimates])),
+        vertical_deg=median_vertical,
+        vertical_parameter_mad_deg=vertical_mad,
         support=len(estimates),
         support_pct=100.0 * len(estimates) / PARAMETER_SWEEP_SIZE,
         parameter_mad_deg=parameter_mad,
@@ -682,3 +765,83 @@ __all__ = [
     "estimate_camera_ball_flight",
     "select_camera_assisted_horizontal",
 ]
+
+
+# A camera-derived elevation angle is only as good as its depth, and the
+# detector-threshold sweep is the only dispersion estimate available without a
+# reference instrument. These bands mirror `_confidence_tier`'s intent: enough
+# independent parameter settings had to agree, and they had to agree closely.
+VERTICAL_HIGH_SUPPORT = 9
+VERTICAL_HIGH_MAD_DEG = 0.5
+VERTICAL_EXPERIMENTAL_SUPPORT = 2
+VERTICAL_EXPERIMENTAL_MAD_DEG = 1.5
+
+
+def _vertical_confidence_tier(support: int, parameter_mad_deg: float) -> str:
+    """Map sweep consensus on the VERTICAL angle to a confidence tier."""
+    if support >= VERTICAL_HIGH_SUPPORT and parameter_mad_deg <= VERTICAL_HIGH_MAD_DEG:
+        return "high"
+    if (
+        support >= VERTICAL_EXPERIMENTAL_SUPPORT
+        and parameter_mad_deg <= VERTICAL_EXPERIMENTAL_MAD_DEG
+    ):
+        return "experimental"
+    return "withheld"
+
+
+def select_camera_vertical_launch(
+    estimate: CameraBallEstimate,
+    *,
+    lcmf_vertical_deg: float | None,
+) -> VerticalLaunchDecision:
+    """Decide whether the camera's vertical launch angle may be offered.
+
+    UNVALIDATED AGAINST A REFERENCE INSTRUMENT. The result is independent
+    evidence about the launch angle, not a correction to `launch_angle_vertical`
+    and not a replacement for it. Nothing here writes to the shipped launch
+    angle or to LCMF; ``lcmf_vertical_deg`` is read only so the difference can
+    be recorded.
+
+    The gates are stricter than the horizontal estimator's in one specific way.
+    Bearing barely depends on depth, so that estimator accepts an apparent-size
+    depth fallback; elevation depends on depth directly, so a result whose
+    depth did not come from the IWR6843's range walk is computed, kept and
+    labelled, never offered.
+
+    Args:
+        estimate: The camera ball-flight consensus result.
+        lcmf_vertical_deg: The shipped launch angle, for comparison only. May
+            be ``None``.
+
+    Returns:
+        A `VerticalLaunchDecision`. ``vertical_deg`` is populated only when
+        ``status`` is ``"accepted"``; ``computed_vertical_deg`` always carries
+        whatever the reconstruction produced.
+    """
+    computed = estimate.vertical_deg
+    delta = (
+        computed - lcmf_vertical_deg
+        if computed is not None and lcmf_vertical_deg is not None
+        else None
+    )
+    common = {
+        "computed_vertical_deg": computed,
+        "depth_source": estimate.depth_source,
+        "parameter_mad_deg": estimate.vertical_parameter_mad_deg,
+        "support": estimate.support,
+        "lcmf_vertical_deg": lcmf_vertical_deg,
+        "lcmf_delta_deg": delta,
+    }
+    if computed is None:
+        return VerticalLaunchDecision(status=estimate.status, **common)
+    if estimate.depth_source != "iwr_range":
+        return VerticalLaunchDecision(status="withheld_no_iwr_range_walk", **common)
+    mad = estimate.vertical_parameter_mad_deg
+    if mad is None:
+        return VerticalLaunchDecision(status="withheld_unstable_vertical_consensus", **common)
+    tier = _vertical_confidence_tier(estimate.support, mad)
+    if tier == "withheld":
+        return VerticalLaunchDecision(status="withheld_unstable_vertical_consensus", **common)
+    return VerticalLaunchDecision(
+        status="accepted", vertical_deg=computed, confidence_tier=tier, **common
+    )

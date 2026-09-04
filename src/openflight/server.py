@@ -1191,6 +1191,7 @@ def shot_to_dict(shot: Shot) -> dict:
             shot.experimental_camera_horizontal_confidence
         ),
         "experimental_camera_horizontal_status": shot.experimental_camera_horizontal_status,
+        **_track_metrics_payload(shot),
         "experimental_camera_iwr_delta_deg": shot.experimental_camera_iwr_delta_deg,
         "camera_replay": dict(shot.camera_replay) if shot.camera_replay else None,
         "spin_axis_deg": shot.spin_axis_deg,
@@ -2265,7 +2266,9 @@ def _delete_session_row(timestamp: str) -> bool:
             return False
         for index, event in enumerate(events):
             if event.timestamp.isoformat() == timestamp:
-                del events[index]
+                # A duck-typed monitor attribute; astroid cannot infer the
+                # container type behind getattr and flags the delete.
+                del events[index]  # pylint: disable=unsupported-delete-operation
                 return True
         return False
 
@@ -2275,7 +2278,8 @@ def _delete_session_row(timestamp: str) -> bool:
     for index, shot in enumerate(shots):
         if shot.timestamp.isoformat() == timestamp:
             _unregister_camera_replay(shot)
-            del shots[index]
+            # Same duck-typed getattr container as the events branch above.
+            del shots[index]  # pylint: disable=unsupported-delete-operation
             return True
     return False
 
@@ -3254,6 +3258,7 @@ def _fuse_camera_ball_flight(
             CameraBallGeometry,
             estimate_camera_ball_flight,
             select_camera_assisted_horizontal,
+            select_camera_vertical_launch,
         )
 
         estimate = CameraBallEstimate(status="rejected_no_camera_capture")
@@ -3324,6 +3329,17 @@ def _fuse_camera_ball_flight(
             else f"{decision.status}:{estimate.status}"
         )
         shot.experimental_camera_iwr_delta_deg = decision.camera_iwr_delta_deg
+        # Independent VERTICAL evidence, recorded alongside the shipped launch
+        # angle and deliberately never selected over it. UNVALIDATED AGAINST A
+        # REFERENCE INSTRUMENT, so it informs the D-plane inversion and the
+        # session log, and nothing else.
+        vertical = select_camera_vertical_launch(
+            estimate, lcmf_vertical_deg=shot.launch_angle_vertical
+        )
+        shot.experimental_camera_vertical_launch_deg = vertical.vertical_deg
+        shot.experimental_camera_vertical_launch_status = vertical.status
+        shot.experimental_camera_vertical_launch_confidence = vertical.confidence_tier
+        shot.experimental_camera_vertical_launch_lcmf_delta_deg = vertical.lcmf_delta_deg
         if decision.selected_deg is not None:
             shot.launch_angle_horizontal = decision.selected_deg
             shot.launch_angle_horizontal_confidence = decision.confidence
@@ -3347,6 +3363,206 @@ def _fuse_camera_ball_flight(
             context={"stage": "ball_flight_fusion", "ball_speed_mph": shot.ball_speed_mph},
             exc=error,
         )
+
+
+# The acoustic trigger fires when the impact SOUND reaches the unit, not when
+# the impact happens, so the contact frame is the trigger walked back by the
+# ball-to-unit flight time. The lag belongs to the installation -- it scales
+# with how far the unit sits from the ball -- so the tee range is read from the
+# radar calibration rather than assumed.
+SPEED_OF_SOUND_M_S = 343.0
+
+
+def _contact_frame(pre_trigger_frames: int, tee_range_m: float, fps: float) -> float:
+    """Frame index of ball contact, from the trigger and the sound flight time."""
+    return pre_trigger_frames - tee_range_m / SPEED_OF_SOUND_M_S * fps
+
+
+def _apply_track_metrics(shot: Shot, track) -> None:
+    """Copy an accepted clubhead track onto the shot, or record why there is none."""
+    shot.experimental_track_status = track.status
+    offered = track.status == "ok"
+    shot.experimental_swing_plane_deg = track.swing_plane_deg if offered else None
+    shot.experimental_swing_direction_deg = track.swing_direction_deg if offered else None
+    shot.experimental_track_club_path_deg = track.club_path_deg if offered else None
+    shot.experimental_track_attack_angle_deg = track.attack_angle_deg if offered else None
+    shot.experimental_low_point_mm = track.low_point_mm if offered else None
+    shot.experimental_arc_radius_m = track.arc_radius_m if offered else None
+
+
+def _apply_dplane_metrics(shot: Shot) -> None:
+    """Invert the shot's launch angles against the track's own delivery angles."""
+    from openflight.club_metrics import dplane_from_sources  # noqa: PLC0415
+
+    result = dplane_from_sources(
+        camera_vertical_launch_deg=shot.experimental_camera_vertical_launch_deg,
+        horizontal_launch_deg=shot.launch_angle_horizontal,
+        attack_angle_deg=shot.experimental_track_attack_angle_deg,
+        club_path_deg=shot.experimental_track_club_path_deg,
+        vertical_launch_source="camera_ball_flight",
+        horizontal_launch_source="launch_angle_horizontal",
+        attack_angle_source="clubhead_track",
+        club_path_source="clubhead_track",
+    )
+    shot.experimental_dynamic_loft_deg = result.dynamic_loft_deg
+    shot.experimental_dynamic_loft_status = result.dynamic_loft_status
+    shot.experimental_spin_loft_deg = result.spin_loft_deg
+    shot.experimental_spin_loft_status = result.spin_loft_status
+    # FAIL-CLOSED (2026-09-02, audit finding): a withheld status must never
+    # travel with a numeric value -- a status-ignoring consumer would present
+    # it. This reverses the earlier stored-not-displayed choice, with sign-off.
+    # The inversion stays open to study because its INPUTS (launch angles,
+    # path, attack) are all serialized; recompute from those, never from here.
+    shot.experimental_face_angle_deg = result.face_angle_deg
+    shot.experimental_face_angle_status = result.face_angle_status
+
+
+def _track_metrics_inputs(camera_capture, camera_archive):
+    """(archive, None) when the track can be attempted, else (None, reason)."""
+    if camera_capture is None or not camera_capture.valid or not camera_capture.path:
+        return None, "rejected_no_camera_capture"
+    if iwr6843_runtime is None:
+        return None, "rejected_no_iwr_runtime"
+    if iwr6843_runtime.calibration.tee_range_m is None:
+        return None, "rejected_missing_tee_geometry"
+    archive = (
+        _load_camera_capture_archive(camera_capture)
+        if camera_archive is _CAMERA_ARCHIVE_UNSET
+        else camera_archive
+    )
+    if archive is None or "pre_trigger_count" not in archive:
+        return None, "rejected_missing_camera_frames"
+    return archive, None
+
+
+def _clear_track_club_metrics(shot: Shot) -> None:
+    """Leave no half-populated delivery angles behind a failure."""
+    for name in (
+        "experimental_swing_plane_deg",
+        "experimental_swing_direction_deg",
+        "experimental_track_club_path_deg",
+        "experimental_track_attack_angle_deg",
+        "experimental_low_point_mm",
+        "experimental_arc_radius_m",
+        "experimental_dynamic_loft_deg",
+        "experimental_spin_loft_deg",
+        "experimental_face_angle_deg",
+    ):
+        setattr(shot, name, None)
+
+
+def _fuse_track_club_metrics(
+    shot: Shot,
+    camera_capture,
+    camera_archive=_CAMERA_ARCHIVE_UNSET,
+) -> None:
+    """Swing plane and D-plane delivery angles from the 3-D clubhead track.
+
+    UNVALIDATED AGAINST A REFERENCE INSTRUMENT. Every field written here is
+    experimental and additive: nothing replaces `club_path_deg`, the fused
+    estimator, or a displayed launch angle.
+    """
+    try:
+        import numpy as np  # noqa: PLC0415  pylint: disable=import-outside-toplevel
+
+        from openflight.camera import club_motion  # noqa: PLC0415
+        from openflight.camera.clubpose import head_track as head_track_module  # noqa: PLC0415
+        from openflight.camera.clubpose.fit import measured_camera  # noqa: PLC0415
+        from openflight.camera.clubpose.head_track import HeadTrack  # noqa: PLC0415
+
+        archive, reason = _track_metrics_inputs(camera_capture, camera_archive)
+        if reason is not None:
+            _apply_track_metrics(shot, HeadTrack(status=reason, reason=reason))
+            _apply_dplane_metrics(shot)
+            return
+
+        # The radar owns the depth. With no fitted club range walk there is no
+        # third dimension to lift the centroids into, so nothing is attempted.
+        evidence = shot.iwr6843_club_range_evidence
+        if evidence is None:
+            _apply_track_metrics(
+                shot,
+                HeadTrack(
+                    status="rejected_no_iwr_range_evidence",
+                    reason="the radar fitted no club range walk",
+                ),
+            )
+            _apply_dplane_metrics(shot)
+            return
+        range_rate_ms = float(evidence.track.slope_bins) * float(evidence.geometry.range_res_m)
+
+        frames = archive["frames"]
+        # Operator previews are mirrored; the reconstruction needs the physical
+        # image, or the swing direction comes back on the wrong side.
+        if camera_capture_config.get("mirror_horizontal"):
+            frames = frames[:, :, ::-1]
+        timestamps = np.asarray(archive["host_timestamp_ns"], dtype=np.int64)
+        span_s = float(timestamps[-1] - timestamps[0]) / 1e9
+        fps = (len(timestamps) - 1) / span_s if span_s > 0 else 0.0
+        track = head_track_module.build_head_track(
+            frames,
+            club_motion.detect_reference_ball(frames),
+            measured_camera(frames.shape[2], frames.shape[1]),
+            range_rate_ms=range_rate_ms,
+            f_contact=_contact_frame(
+                int(archive["pre_trigger_count"]),
+                float(iwr6843_runtime.calibration.tee_range_m),
+                fps,
+            ),
+            fps=fps,
+        )
+        _apply_track_metrics(shot, track)
+        _apply_dplane_metrics(shot)
+        logger.info(
+            "[SERVER] Track club metrics: plane %s direction %s path %s attack %s "
+            "loft %s (status=%s, frames=%d)",
+            shot.experimental_swing_plane_deg,
+            shot.experimental_swing_direction_deg,
+            shot.experimental_track_club_path_deg,
+            shot.experimental_track_attack_angle_deg,
+            shot.experimental_dynamic_loft_deg,
+            track.status,
+            track.quality.n_frames,
+        )
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        shot.experimental_track_status = "error"
+        _clear_track_club_metrics(shot)
+        logger.warning("[SERVER] Track club metrics failed: %s", error, exc_info=True)
+        log_session_error(
+            "Track club metrics failed",
+            component="camera_capture",
+            context={"stage": "track_club_metrics", "ball_speed_mph": shot.ball_speed_mph},
+            exc=error,
+        )
+
+
+def _track_metrics_payload(shot: Shot) -> dict:
+    """The experimental track block, for serialisers that take it as one field."""
+    return {
+        "experimental_track_status": shot.experimental_track_status,
+        "experimental_swing_plane_deg": shot.experimental_swing_plane_deg,
+        "experimental_swing_direction_deg": shot.experimental_swing_direction_deg,
+        "experimental_track_club_path_deg": shot.experimental_track_club_path_deg,
+        "experimental_track_attack_angle_deg": shot.experimental_track_attack_angle_deg,
+        "experimental_low_point_mm": shot.experimental_low_point_mm,
+        "experimental_arc_radius_m": shot.experimental_arc_radius_m,
+        "experimental_dynamic_loft_deg": shot.experimental_dynamic_loft_deg,
+        "experimental_dynamic_loft_status": shot.experimental_dynamic_loft_status,
+        "experimental_spin_loft_deg": shot.experimental_spin_loft_deg,
+        "experimental_spin_loft_status": shot.experimental_spin_loft_status,
+        "experimental_face_angle_deg": shot.experimental_face_angle_deg,
+        "experimental_face_angle_status": shot.experimental_face_angle_status,
+        "experimental_camera_vertical_launch_deg": shot.experimental_camera_vertical_launch_deg,
+        "experimental_camera_vertical_launch_status": (
+            shot.experimental_camera_vertical_launch_status
+        ),
+        "experimental_camera_vertical_launch_confidence": (
+            shot.experimental_camera_vertical_launch_confidence
+        ),
+        "experimental_camera_vertical_launch_lcmf_delta_deg": (
+            shot.experimental_camera_vertical_launch_lcmf_delta_deg
+        ),
+    }
 
 
 def _fuse_camera_measurements(shot: Shot, camera_capture) -> None:
@@ -3383,6 +3599,7 @@ def _fuse_camera_measurements(shot: Shot, camera_capture) -> None:
     camera_archive = _load_camera_capture_archive(camera_capture)
     _fuse_camera_ball_flight(shot, camera_capture, camera_archive)
     _fuse_camera_club_delivery(shot, camera_capture, camera_archive)
+    _fuse_track_club_metrics(shot, camera_capture, camera_archive)
 
 
 def _attach_camera_replay(shot: Shot, camera_capture) -> None:
@@ -3936,6 +4153,7 @@ def _finalize_shot_detected(
                 experimental_aoa_offset_source=shot.experimental_aoa_offset_source,
                 iwr6843_horizontal_deg=shot.iwr6843_horizontal_deg,
                 iwr6843_horizontal_confidence=shot.iwr6843_horizontal_confidence,
+                experimental_track_metrics=_track_metrics_payload(shot),
                 experimental_camera_horizontal_deg=shot.experimental_camera_horizontal_deg,
                 experimental_camera_horizontal_confidence=(
                     shot.experimental_camera_horizontal_confidence
@@ -4537,7 +4755,11 @@ def start_monitor(
         if iwr6843_runtime is not None:
             iwr6843_runtime.capture_monitor.arm()
     else:
-        monitor.start(shot_callback=on_shot_detected, live_callback=on_live_reading)
+        # The monitor here is one of several duck-typed implementations;
+        # astroid resolves a variant whose start() it thinks lacks the kwarg.
+        monitor.start(  # pylint: disable=unexpected-keyword-arg
+            shot_callback=on_shot_detected, live_callback=on_live_reading
+        )
 
 
 def _fire_cloud_push(session_logger):

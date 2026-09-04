@@ -7,7 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Attack angle no longer inflated by 1/cos(club path).** The camera club
+  delivery divided vertical speed by the forward component alone instead of the
+  full horizontal speed, overstating attack angle on any shot with club path.
+
 ### Added
+- **Track-derived club metrics, all experimental and all unvalidated against a
+  reference instrument.** A 3-D clubhead track
+  (`camera.clubpose.head_track.build_head_track`) lifts each frame's head mask
+  centroid into world millimetres — one camera ray scaled by one radar range,
+  anchored at the ball's taped range at contact — and fits the swing plane,
+  swing direction, arc radius, the arc's low point relative to the ball, and
+  club path and attack angle at contact from the arc's tangent, with per-field
+  residuals and a leave-one-out spread. It fails closed with a named reason
+  under six frames, on a collinear track, or with no radar range rate.
+  `camera.ball_flight.select_camera_vertical_launch` publishes the vertical
+  half of the existing ball-flight reconstruction as independent launch-angle
+  evidence, gated on the radar's range walk supplying the depth.
+  `openflight.club_metrics` inverts the D-plane relations into dynamic loft,
+  spin loft, face angle and face-to-path, each reporting its coefficient.
+  Reaches shots as `experimental_*` fields and the session log; no UI reads
+  them. Dynamic and spin loft are withheld unless a camera-derived launch angle
+  fed them (`withheld_lcmf_launch_bias`), and the face angle is computed and
+  stored but never offered (`withheld_launch_direction_offset`) because the
+  horizontal launch offset behind it is uncalibrated. Nothing here replaces
+  `launch_angle_vertical`, `club_path_deg`, the IWR club-path estimator or the
+  fused estimator. `scripts/analysis/replay_track_metrics.py` replays a session
+  export against the research figures.
 - **Clubhead-pose geometry (`openflight.camera.clubpose`).** The club mesh and
   its normalization tooling, the calibrated camera model with silhouette
   projection, and sub-pixel location of the teed ball, which anchors the world

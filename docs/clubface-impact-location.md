@@ -466,3 +466,90 @@ The plan, in order:
    happens, the heel–toe reading is a repeatable number whose zero is unknown,
    and the vertical channel is not usable at all (7.7 mm rms against a 10.5 mm
    spread).
+## Track-derived club metrics — promoted (experimental)
+
+Three results from the 2026-08-29 research pass are now library code and
+experimental `Shot` fields. **None of them has been validated against a
+reference instrument.** They were developed on one 21-shot session and checked
+for *consistency* — against each other, against an OPS243 club speed that takes
+no part in the computation, and against the bands a golf swing is expected to
+occupy. A plausible number here is not a correct number.
+
+**1. A 3-D clubhead track** (`camera.clubpose.head_track`). Each frame's head
+mask centroid becomes one camera ray, scaled by one radar range from
+`ranges_from_radar` and anchored at the ball's own taped range at contact.
+Neither sensor can supply the other's part, so the depth costs no free
+parameter. From the track: swing plane to the ground, swing direction, arc
+radius, the arc's low point relative to the ball, and club path and attack
+angle at contact from the fitted arc's tangent. Position and velocity at
+contact are quadratic in time, never linear — the head decelerates onto the
+optical axis, and a straight line through the track is the average of the arc
+rather than the tangent to it.
+
+The reconstruction fails closed, with a named reason, under six segmentable
+frames, on a collinear track, and with no radar range rate; it demotes itself to
+`low_quality` when the plane residual or the leave-one-out spread does not
+support the answer.
+
+**2. A camera-derived vertical launch angle**
+(`camera.ball_flight.select_camera_vertical_launch`). The ball's post-impact
+camera rays, lifted by the IWR6843's ball range walk. This is carried as
+independent evidence *alongside* `launch_angle_vertical` and never replaces it.
+The gate is stricter than the horizontal estimator's: bearing barely depends on
+depth, so that path accepts an apparent-ball-size fallback, but elevation
+depends on depth directly, so a result whose depth did not come from the radar
+is stored and labelled `withheld_no_iwr_range_walk` rather than offered.
+
+**3. The D-plane inversion** (`openflight.club_metrics`). Dynamic loft, spin
+loft, face angle and face-to-path from the published relations, each reporting
+the coefficient that produced it.
+
+### What is withheld, and why
+
+| Field | Status when withheld | Reason |
+| --- | --- | --- |
+| `experimental_dynamic_loft_deg`, `experimental_spin_loft_deg` | `withheld_lcmf_launch_bias` | The inversion weights the vertical launch angle by `1/k_v` and the attack angle by only `-(1/k_v - 1)`, so the loft is very nearly a restatement of the launch angle. Without a camera-derived launch angle it is not computed at all; the shipped launch angle is deliberately not accepted as a substitute. |
+| `experimental_face_angle_deg` | `withheld_launch_direction_offset` (always) | **The value is computed and stored; the status says it must not be displayed.** Centring the development session's face angle on a plausible mean required either +2.3° on the horizontal launch angle or −7.6° on the club path — one unexplained discrepancy read off either instrument, and not accounted for by the known camera-versus-radar horizontal offset. |
+| `experimental_arc_radius_m` | *(offered, but biased)* | On the development session this read ~25 % below the 1.4–1.8 m the `ω = v/r` validator expects, on 17 of 18 shots. Anything downstream that consumes it inherits that bias. |
+
+### Replay of the development session
+
+`scripts/analysis/replay_track_metrics.py --session <export> --out <dir>` runs
+the whole promotion over a session export and prints a per-shot table and its
+checks. On session 20260825_181734, 18 of 21 shots reconstruct and the library
+reproduces the research pass exactly:
+
+| Check | Result |
+| --- | --- |
+| Shots reconstructed | 18 / 21 |
+| Swing plane median | **58.89°** (expected 58.9 ± 1) |
+| Swing direction median | **+4.34°** (expected +4.3 ± 1) |
+| Track attack vs the fused estimator | median **−0.45°**, n = 18 (expected \|median\| ≤ 1) |
+| 7-iron / 9-iron track club path sd | **1.35° / 2.72°** (expected ≤ 3) |
+| Median head-to-ball transverse miss at contact | **~20 mm** — half a ball |
+| 7-iron dynamic loft median | **35.96°** — MISS, expected 29–31 |
+| 9-iron dynamic loft median | **39.05°** — MISS, expected 34–36 |
+
+**The two misses share one cause and are not tuned away.** The dynamic loft is
+`A·(1 − 1/k_v) + V/k_v`, so it is very nearly a restatement of the vertical
+launch angle. The camera reconstruction returns a 7-iron median of **28.0°** and
+a 9-iron median of **30.4°** against LCMF's 18.5° and 22.1° — about 4° higher
+than the ~24° / ~27° the research pass expected, and the loft carries that
+through at `1/k_v ≈ 1.23`.
+
+So substituting the camera launch angle does not land the loft in its plausible
+band; it moves the 7-iron from 23.9° (below the 25–33° band) to 35.9° (above
+it). **Neither instrument is validated, and this promotion does not establish
+that the camera value is the better one** — only that the two disagree by 8–10°
+and that the truth, if it were known, would probably lie between them. Closing
+that gap needs a reference instrument, not a coefficient.
+
+`tests/test_track_metrics_regression.py` pins all of the above, including the
+size of the two misses, and skips cleanly when no export is present.
+
+### What this promotion does not change
+
+The additions are strictly additive. `launch_angle_vertical`,
+`launch_angle_horizontal`, `club_path_deg`, the IWR `estimate_club_path`
+estimator and the fused camera+radar estimator all behave exactly as before, and
+no UI surface reads the new fields.
