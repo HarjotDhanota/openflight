@@ -854,3 +854,123 @@ Verified anchor prices: InnoMaker IMX296 **mono** w/ trigger **$47**; Arducam OV
 4. **Single-view depth/pose ambiguity** is mitigated (shape prior + radar velocity + multi-frame) but not eliminated; stereo is the clean fix.
 5. **MegaPose, not FoundationPose, for monocular RGB** render-and-compare.
 6. **GSPro/E6 may not carry the new metrics** — verify protocol schemas before promising passthrough.
+
+## 1M. UPDATE (2026-09-01) — setup geometry & alignment: how the whole market does it (2-agent verified research pass; supersedes the 1M draft of the same date)
+
+Context: designing OpenFlight's auto-alignment feature. Enclosure-internal geometry is fixed
+(CAD); per-setup unknowns are distance, lateral offset, height, pitch/roll, yaw. Every patent
+assignee below was verified on the Google Patents page itself.
+
+### 1M.1 TrackMan's actual mechanisms [CONFIRMED from patents + primary PDFs]
+
+- **Target line (yaw): US 8,085,188 (+ continuations US 10,473,778 / 10,471,328), Trackman A/S,
+  priority 2004.** The user TAPS THE TARGET POINT ON A CAMERA IMAGE; because camera and radar
+  share known fixed mounting geometry, that pixel becomes a world direction; the radar-measured
+  shot direction is then compared against it. No mechanical aiming; absorbs off-center placement
+  (documented case: unit ~6 in off the center line, fine after calibration in native software).
+  NOTE (inferred, verify before relying): this family's 20-year term from the 2005 filing has
+  likely expired (~mid-2025) — the tap-on-camera-image method may now be free to use.
+- **Radar↔camera registration: US 11,619,708 / 12,517,218, Trackman A/S.** Continuous in-situ
+  calibration from LIVE shot tracks: each sensor builds its own track, tracks are matched on
+  kinematic signatures, only EXTERNAL orientation (tilt/pan) is solved, median across many
+  detections + low-pass filter, fed back with zero downtime. The verified template for our
+  IWR/OPS-boresight-vs-camera registration.
+- **TMiO install (primary-source PDF IN-0024):** coarse geometry by PLUMB LINE + fixed offset
+  table (mount 285–305 cm high, tee-to-mount 102 cm from a table); fine alignment OPTICAL via a
+  two-stage printed calibration board — camera auto-ranges the known-size pattern at the screen,
+  then user aligns a printed cross to an on-screen crosshair at the tee. Two cameras with
+  labelled jobs: alignment camera → screen, main camera → tee.
+- **Leveling:** TrackMan II (2006, FCC manual) had motorized self-leveling legs with end-stop
+  detection. TM4 spec sheet claims "Auto" leveling; NO IMU/inclinometer chip could be confirmed
+  in TM4/TMiO from any reachable source — treat digital tilt sensing as UNCONFIRMED.
+- Tolerances (secondary sources; support site 403s fetchers): ≥6 ft standoff minimum; 2–3° of
+  lateral target-line error reads as a persistent push/pull bias.
+
+### 1M.2 Correction — the alignment stick is FORESIGHT, not TrackMan
+
+**US 9,737,757 assignee = WAWGD, Inc. (d.b.a. Foresight Sports)**, inventor C. Kiraly, 2017 —
+the GC3/GCQuad alignment stick: retroreflective stick in FOV → edge detection → 3-D line fit →
+ground-plane projection → azimuth offset (≤10°, residual target <1°). The 1M draft wrongly
+attributed this to TrackMan. If we ever copy the stick-fiducial approach, it is Foresight IP
+(freedom-to-operate check needed); the tap-a-target-point approach is TrackMan's (and likely
+expired). Same family: US 7,641,565 camera ball-placement detection (also Foresight).
+
+### 1M.3 The rest of the market (one line each; all sourced in the research pass)
+
+- **Garmin R10/R50** (patent US20200398138, Garmin — explicitly NO auto-calibration): aim the
+  housing's printed line; then a ONE-SHOT SOFTWARE TRIM — hit a wedge, compare real flight vs
+  reported direction, nudge an offset up to ±10°. Hitting zone 2×2 ft, ±1 ft lateral drift OK.
+- **Full Swing KIT:** "video alignment" via built-in camera preview; "no leveling calibration"
+  is marketing UX; no self-alignment patent found.
+- **Mevo+ :** user types distance-to-ball/tee-height/target values into the app; tilt/roll
+  displayed (roll <1°); community failure mode = mis-set tilt → inflated launch/spin.
+- **SkyTrak:** live tilt/roll readout UI, user levels to zero; compensation breaks past ~5°;
+  known unit-to-unit boresight offsets users must toe-in around.
+- **Rapsodo MLM2PRO:** accelerometer read at session start as a GATE (warn on bad tilt), not
+  as compensation. **Uneekor:** printed chart aligned to a crosshair in the camera feed.
+- Universal pattern: yaw is ALWAYS one user gesture; ball position is auto-relocated per shot
+  inside a generous box; nobody infers aim from sensors alone.
+
+### 1M.4 Design conclusions for OpenFlight
+
+1. Two-layer model confirmed by the whole market: `RigGeometry` (CAD constants) +
+   `SetupSolution` (solved per session/shot).
+2. Yaw = TrackMan's tap-the-target-point-on-camera-preview gesture (likely-expired patent,
+   verify), NOT the Foresight stick; add Garmin's one-shot trim as verification fallback.
+3. Adopt US 11,619,708's in-situ registration verbatim in spirit: solve radar boresight
+   corrections from live shot tracks (camera angles + radar range), median + low-pass, running
+   quietly forever. Kills mounting-tolerance sensitivity.
+4. LIS3DH = SkyTrak-style live readout + Rapsodo-style hard gate (~5° ceiling); do NOT attempt
+   unlimited tilt compensation (documented fragility at Mevo+/SkyTrak).
+5. Range/lateral/pitch/scale from the ball (already proven in repo); mic distance := solved
+   range, replacing the hardcoded 1.575 m.
+6. Optional indoor absolute check: TMiO-style printed known-size board (auto-ranged by the
+   camera) — cheaper than any extra sensor.
+7. Ship a numeric alignment-confidence score + green/amber setup feedback (no comparator
+   surfaces this well — differentiator). Acceptance targets: yaw residual ≤1–2°, tilt ≤5°,
+   standoff within envelope, camera-vs-radar range agreement.
+8. Implement impact-point 3-D projection (B − r·n̂) against `SetupSolution`, never against one
+   rig's constants.
+
+## 1N. UPDATE (2026-09-03) — in-situ registration measured; the ball's own clock validates the timing chain
+
+Conclusion 1M.4(3) is now code and has numbers. `openflight.registration` (per-axis median /
+MAD spread / standard error, refused by name below 8 shots or above 2° spread; a sliding
+`RegistrationTracker` that flags a bumped unit) and `scripts/analysis/replay_registration.py`
+were run over session 20260825_181734 on the integrated CV branch (19 of 21 shots; 24 and 25
+find no stable ball path). Sign: camera minus radar.
+
+| axis | offset | robust spread | se | status |
+|---|---|---|---|---|
+| elevation (camera vertical − LCMF vertical) | **+6.18°** | 1.15° | 0.33° | registered |
+| azimuth (camera horizontal − IWR horizontal) | **+5.19°** | 0.92° | 0.27° | registered |
+
+**Elevation.** The same datum gap the 2026-09-01 audit reported as +5.34 ± 0.83° on the
+pre-merge estimator, re-measured through the corrected level-boresight extrinsics. Its spread
+says it IS a constant, i.e. the kind of thing a registration fixes — but the pair alone cannot
+say which sensor holds it, and the LCMF's elevation moves ~2× per degree of physical tilt, so
+the correction is still gated on the absolute reference (LIS3DH readout / surveyed boresight).
+Not applied.
+
+**Azimuth — new.** First measurement of the horizontal datum between the sensors. The session
+config carries no yaw correction on either side (camera `horizontal_offset_deg` 0, IWR
+`azimuth_offset_deg` 0, `horizontal_phase_reference` unset), so this is the raw rig: the IWR
+reads every shot a median 5.3° LEFT of where the camera reads it (~−0.3°), consistently to
+under a degree. That constant is exactly why face angle stays withheld ("no common horizontal
+reference", audit item 6). It will be closed from two sides: the enclosure CAD's camera-vs-IWR
+boresight yaw goes into `RigGeometry` and is compared against this number; the tap-target
+gesture then sets the common target line. The 0.92° spread is encouraging on its own — once
+the datum is set, the two horizontal estimators agree shot to shot to well under a degree.
+
+**The ball's own clock.** `_robust_velocity` always fitted the flight line's intercept and
+threw it away; kept, the instant the line passes the tee is the contact time on the camera's
+clock, needing neither the microphone nor the ball speed. Against the acoustic walk-back
+(trigger minus tee-range / 343 m/s): **median −0.01 frames, MAD 0.11 frames (~0.2 ms)** over
+19 shots, range [−0.13, +0.44]. Trigger latency, the sound-flight model and the camera
+timestamps are thereby validated together by an independent clock; the 2.11-frame figure of
+§1L stands. The +0.3–0.44-frame tail (shots 5, 16, 17, 18, 20) is worth a look once exposure
+is logged (shot 20's own clock spread is 0.50 frames — an unstable path).
+
+Everything above is pinned in `tests/test_registration_regression.py`; nothing feeds a shipped
+metric yet. Housekeeping surfaced on the way: `SPEED_OF_SOUND_M_S = 343.0` is defined in four
+modules — the BME280 speed-of-sound work should centralize it.
