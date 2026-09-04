@@ -542,7 +542,14 @@ def build_head_track(  # pylint: disable=too-many-arguments,too-many-positional-
     order = sorted(masks)
     elapsed = np.asarray(order, dtype=float) / fps
     contact_s = f_contact / fps
-    ranges = ranges_from_radar(elapsed, contact_s, range_rate_ms, ball_range_mm=ball_range_mm)
+    # `ranges_from_radar` was changed on the impact-zone/rig-geometry line to
+    # return a `RadarRanges` (array plus the model that produced it); this
+    # consumer arrived from club-metrics against the older bare-array
+    # contract. Take `.ranges_mm`, exactly as `fit.py` does -- the linear
+    # walk, which is what this call (no range_accel_ms2) always produced.
+    ranges = ranges_from_radar(
+        elapsed, contact_s, range_rate_ms, ball_range_mm=ball_range_mm
+    ).ranges_mm
     rotation = np.eye(3) if boresight == "raw" else ball_anchored_rotation(ball, camera)
     points: list[HeadTrackPoint] = []
     for frame, time_s, range_mm in zip(order, elapsed, ranges, strict=True):
