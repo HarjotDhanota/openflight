@@ -81,7 +81,15 @@ def _synthetic_path(
     camera_lateral_offset_m: float = 0.0,
     mirror_horizontal: bool = False,
     vertical_deg: float = 20.0,
+    contact_lead_s: float | None = None,
 ):
+    """A ball launched from the tee, seen by a synthetic camera.
+
+    ``contact_lead_s`` is how long before the trigger the ball left the tee.
+    None means the acoustic model's own value (the sound flight), which is
+    what the old timing contract assumed; a different value models a trigger
+    that fired earlier or later than the sound flight predicts.
+    """
     geometry = CameraBallGeometry(
         camera_height_m=0.20955,
         radar_height_m=0.15875,
@@ -142,8 +150,15 @@ def _synthetic_path(
     # harness equated trigger with impact, which is the very defect the
     # 2026-09-01 audit corrected in production.
     relative_times = np.arange(8, dtype=float) * 0.0035 + 0.007
-    flight_times = relative_times + geometry.trigger_sound_delay_s
-    positions = np.asarray([tee + velocity * time_s for time_s in flight_times])
+    lead = geometry.trigger_sound_delay_s if contact_lead_s is None else contact_lead_s
+    flight_times = relative_times + lead
+    # A real ball falls: 4 mm over the 30 ms window, which the ball clock's
+    # model includes and a gravity-free harness would misread as a slightly
+    # later, steeper launch.
+    gravity = np.array([0.0, 0.0, -0.5 * 9.81])
+    positions = np.asarray(
+        [tee + velocity * time_s + gravity * time_s**2 for time_s in flight_times]
+    )
     timestamps_ns = np.asarray(relative_times * 1e9, dtype=np.int64)
 
     candidates = []
@@ -210,7 +225,9 @@ def test_path_estimate_recovers_known_horizontal_without_iwr_horizontal():
     assert result is not None
     _score, estimate = result
     assert estimate.horizontal_deg == pytest.approx(4.0, abs=0.15)
-    assert estimate.vertical_deg == pytest.approx(20.0, abs=0.25)
+    assert estimate.vertical_deg == pytest.approx(
+        20.0, abs=0.4
+    )  # the velocity fit measures the 30 ms chord, ~0.3 deg under the launch (gravity)
 
 
 def test_path_estimate_recovers_physical_sign_from_mirrored_capture():
@@ -319,7 +336,9 @@ def test_path_estimate_accounts_for_camera_lateral_translation():
     assert result is not None
     _score, estimate = result
     assert estimate.horizontal_deg == pytest.approx(4.0, abs=0.15)
-    assert estimate.vertical_deg == pytest.approx(20.0, abs=0.25)
+    assert estimate.vertical_deg == pytest.approx(
+        20.0, abs=0.4
+    )  # the velocity fit measures the 30 ms chord, ~0.3 deg under the launch (gravity)
 
 
 def test_path_estimate_applies_setup_level_horizontal_offset():
@@ -815,76 +834,146 @@ class TestAuditIntrinsicsAndRangeContract:
 
 
 class TestTheBallClock:
-    """The ball's own contact time, read off its flight line.
+    """The ball's own contact time, fitted from its ray directions.
 
-    The synthetic harness launches the ball from the tee at physical impact,
-    which precedes the acoustic trigger by the sound flight; so on the
-    camera's trigger-relative clock the line must pass the tee at
-    -trigger_sound_delay_s. Nothing about the ball's speed is used to find it.
+    The synthetic harness launches the ball from the tee at physical impact.
+    By default that precedes the acoustic trigger by the sound flight, so on
+    the camera's trigger-relative clock contact sits at
+    -trigger_sound_delay_s; the fit must find it from the rays and the OPS
+    speed alone, and must equally find a contact the acoustic model gets
+    WRONG, because on the August session the trigger did not fire when the
+    sound flight said it would.
     """
 
-    def test_the_flight_line_passes_the_tee_at_minus_the_sound_flight(self):
-        geometry, _anchor, model, candidates, timestamps, evidence, _speed = _synthetic_path()
-
+    @staticmethod
+    def _estimate(
+        candidates, timestamps, evidence, model, geometry, speed_ms, anchor=None, timing="ball_rays"
+    ):
+        # Production passes the anchor ball's own position as the rest point
+        # (its ray at the tee range); the tests do the same when they have it.
+        rest = (
+            ball_flight_module._project(
+                anchor, geometry.tee_range_m, model=model, geometry=geometry
+            )
+            if anchor is not None
+            else None
+        )
         result = _path_estimate(
             path=list(enumerate(candidates)),
             frame_indices=list(range(len(candidates))),
             timestamps_ns=timestamps,
             trigger_ns=0,
             range_evidence=evidence,
-            ops_ball_speed_mph=100.0,
+            ops_ball_speed_mph=speed_ms / 0.44704,
             iwr_vertical_deg=None,
             model=model,
             geometry=geometry,
             thresholds=(100, 12, 5),
+            rest_position=rest,
+            timing=timing,
+        )
+        assert result is not None
+        return result[1]
+
+    def test_contact_is_found_at_minus_the_sound_flight_when_that_is_the_truth(self):
+        geometry, _anchor, model, candidates, timestamps, evidence, speed = _synthetic_path()
+
+        estimate = self._estimate(candidates, timestamps, evidence, model, geometry, speed)
+
+        assert estimate.timing_source == "ball_rays"
+        assert estimate.contact_time_s == pytest.approx(-geometry.trigger_sound_delay_s, abs=1e-4)
+        assert estimate.ray_launch_deg == pytest.approx(20.0, abs=0.05)
+        assert estimate.ray_fit_rms_deg < 0.01
+
+    def test_a_trigger_that_fired_early_is_caught_by_the_ball_not_the_microphone(self):
+        """Contact 1.5 ms before the trigger while the sound flight says 4.4 ms:
+        the ray fit recovers the truth, and because the radar pairing now uses
+        it, the radar-walk vertical stays honest instead of tilting up."""
+        geometry, _anchor, model, candidates, timestamps, evidence, speed = _synthetic_path(
+            contact_lead_s=0.0015
         )
 
-        assert result is not None
-        _score, estimate = result
-        assert estimate.contact_time_s == pytest.approx(-geometry.trigger_sound_delay_s, abs=1e-4)
+        estimate = self._estimate(candidates, timestamps, evidence, model, geometry, speed)
+
+        assert estimate.timing_source == "ball_rays"
+        assert estimate.contact_time_s == pytest.approx(-0.0015, abs=2e-4)
+        assert abs(estimate.contact_time_s + geometry.trigger_sound_delay_s) > 0.0025
+        assert estimate.ray_launch_deg == pytest.approx(20.0, abs=0.1)
+        assert estimate.vertical_deg == pytest.approx(
+            20.0, abs=0.4
+        )  # the velocity fit measures the 30 ms chord, ~0.3 deg under the launch (gravity)
+
+    def test_the_default_keeps_the_acoustic_contract_but_still_reports_the_ball_clock(self):
+        """The shipped pairing does not move until the trigger's latency has
+        been measured; the ball clock rides along as a diagnostic, and its
+        disagreement with the acoustic contract is visible on the estimate."""
+        geometry, _anchor, model, candidates, timestamps, evidence, speed = _synthetic_path(
+            contact_lead_s=0.0015
+        )
+
+        estimate = self._estimate(
+            candidates, timestamps, evidence, model, geometry, speed, timing="acoustic_trigger"
+        )
+
+        assert estimate.timing_source == "acoustic_trigger"
+        assert estimate.contact_time_s == pytest.approx(-geometry.trigger_sound_delay_s)
+        assert estimate.ball_contact_s == pytest.approx(-0.0015, abs=2e-4)
+        # Paired on the wrong instant, the radar walk tilts the vertical up
+        # (the honest chord value is ~19.7, see the gravity note above): the
+        # very defect the ball clock exists to expose.
+        assert estimate.vertical_deg > 20.3
+
+    def test_an_unknown_timing_choice_is_refused(self):
+        geometry, _anchor, model, candidates, timestamps, evidence, speed = _synthetic_path()
+
+        with pytest.raises(ValueError, match="timing"):
+            self._estimate(candidates, timestamps, evidence, model, geometry, speed, timing="guess")
+
+    def test_when_the_ray_fit_fails_the_acoustic_contract_is_the_named_fallback(self, monkeypatch):
+        geometry, _anchor, model, candidates, timestamps, evidence, speed = _synthetic_path()
+        monkeypatch.setattr(ball_flight_module, "fit_launch_from_rays", lambda *a, **k: None)
+
+        estimate = self._estimate(candidates, timestamps, evidence, model, geometry, speed)
+
+        assert estimate.timing_source == "acoustic_trigger"
+        assert estimate.contact_time_s == pytest.approx(-geometry.trigger_sound_delay_s)
+        assert math.isnan(estimate.ray_launch_deg)
+        assert math.isnan(estimate.ball_contact_s)
+        # The pairing falls back to exactly the old contract, so the walk
+        # vertical is what it always was on a ball that left at -delay.
+        assert estimate.vertical_deg == pytest.approx(
+            20.0, abs=0.4
+        )  # the velocity fit measures the 30 ms chord, ~0.3 deg under the launch (gravity)
+
+    def test_fit_launch_from_rays_refuses_without_a_speed_or_enough_frames(self):
+        geometry = _synthetic_path()[0]
+        rays = np.tile([0.0, 0.99, 0.1], (6, 1))
+        times = np.arange(6) * 0.002 + 0.001
+
+        assert ball_flight_module.fit_launch_from_rays(times, rays, geometry, None) is None
+        assert ball_flight_module.fit_launch_from_rays(times, rays, geometry, 0.0) is None
+        assert ball_flight_module.fit_launch_from_rays(times[:3], rays[:3], geometry, 45.0) is None
 
     @pytest.mark.parametrize("vertical_deg", [10.0, 20.0, 35.0])
     @pytest.mark.parametrize("horizontal_deg", [-8.0, 0.0, 6.0])
     def test_the_clock_does_not_depend_on_where_the_ball_went(self, vertical_deg, horizontal_deg):
-        geometry, _anchor, model, candidates, timestamps, evidence, _speed = _synthetic_path(
+        geometry, _anchor, model, candidates, timestamps, evidence, speed = _synthetic_path(
             horizontal_deg=horizontal_deg, vertical_deg=vertical_deg
         )
 
-        _score, estimate = _path_estimate(
-            path=list(enumerate(candidates)),
-            frame_indices=list(range(len(candidates))),
-            timestamps_ns=timestamps,
-            trigger_ns=0,
-            range_evidence=evidence,
-            ops_ball_speed_mph=100.0,
-            iwr_vertical_deg=None,
-            model=model,
-            geometry=geometry,
-            thresholds=(100, 12, 5),
-        )
+        estimate = self._estimate(candidates, timestamps, evidence, model, geometry, speed)
 
         assert estimate.contact_time_s == pytest.approx(-geometry.trigger_sound_delay_s, abs=2e-4)
+        assert estimate.ray_launch_deg == pytest.approx(vertical_deg, abs=0.15)
 
     def test_a_lateral_rest_error_barely_moves_the_clock(self):
-        """The rest point is the NOMINAL tee; a ball 50 mm off the target line
-        projects onto the velocity by sin(launch bearing) and is worth well
-        under a tenth of a frame."""
-        geometry, _anchor, model, candidates, timestamps, evidence, _speed = _synthetic_path(
+        """A ball 50 mm off the target line: the rest point comes from the
+        anchor's own ray, so the clock does not care where the ball sat."""
+        geometry, anchor, model, candidates, timestamps, evidence, speed = _synthetic_path(
             horizontal_deg=6.0, tee_x_m=0.05
         )
 
-        _score, estimate = _path_estimate(
-            path=list(enumerate(candidates)),
-            frame_indices=list(range(len(candidates))),
-            timestamps_ns=timestamps,
-            trigger_ns=0,
-            range_evidence=evidence,
-            ops_ball_speed_mph=100.0,
-            iwr_vertical_deg=None,
-            model=model,
-            geometry=geometry,
-            thresholds=(100, 12, 5),
-        )
+        estimate = self._estimate(candidates, timestamps, evidence, model, geometry, speed, anchor)
 
         frame_s = 1.0 / 467.6
         assert abs(estimate.contact_time_s + geometry.trigger_sound_delay_s) < 0.1 * frame_s
@@ -908,6 +997,12 @@ class TestTheBallClock:
         )
         assert result.ball_clock_contact_mad_s is not None
         assert result.ball_clock_contact_mad_s < 0.25 / 467.6
+        assert result.timing_source == "acoustic_trigger"  # the shipped default
+        assert result.ray_vertical_deg == pytest.approx(20.0, abs=0.5)
+        assert result.ray_fit_rms_deg is not None
 
     def test_no_path_means_no_clock(self):
-        assert CameraBallEstimate("rejected_no_stable_path").ball_clock_contact_s is None
+        empty = CameraBallEstimate("rejected_no_stable_path")
+        assert empty.ball_clock_contact_s is None
+        assert empty.ray_vertical_deg is None
+        assert empty.timing_source is None

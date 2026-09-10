@@ -131,13 +131,20 @@ class CameraBallEstimate:
     # `parameter_mad_deg` above is the horizontal one, and the two do not move
     # together: bearing is nearly independent of depth and elevation is not.
     vertical_parameter_mad_deg: float | None = None
-    # The ball's own clock: when the fitted flight line passes through the
-    # ball's rest position, in seconds on the camera's trigger-relative time
-    # base. Physical contact precedes the acoustic trigger by the sound
-    # flight, so this should read close to -trigger_sound_delay_s; the
-    # difference is an independent check on the whole timing chain.
+    # The ball's own clock: the instant the ball left the tee, in seconds on
+    # the camera's trigger-relative time base, fitted from the ball's RAY
+    # directions alone with the OPS speed as the only depth constraint. It
+    # owes nothing to the microphone or the radar, so its difference from
+    # -trigger_sound_delay_s is the trigger's own error on this shot.
+    # `timing_source` says whether the radar range pairing used it
+    # ("ball_rays") or fell back to the acoustic walk-back ("acoustic_trigger").
     ball_clock_contact_s: float | None = None
     ball_clock_contact_mad_s: float | None = None
+    # The launch angle from the same ray fit -- a vertical launch that never
+    # touched a radar depth -- and how well the straight-line model fit.
+    ray_vertical_deg: float | None = None
+    ray_fit_rms_deg: float | None = None
+    timing_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -193,7 +200,11 @@ class _PathEstimate:
     n_points: int
     first_frame: int
     last_frame: int
-    contact_time_s: float
+    contact_time_s: float  # the contact instant the radar pairing USED
+    ball_contact_s: float  # the ball clock's own answer, NaN when it had none
+    ray_launch_deg: float
+    ray_fit_rms_deg: float
+    timing_source: str
 
 
 def _camera_model(
@@ -405,30 +416,106 @@ def _robust_velocity(times: np.ndarray, positions: np.ndarray) -> tuple[np.ndarr
     return velocity, float(np.median(residual))
 
 
-def _line_intercept(times: np.ndarray, positions: np.ndarray, velocity: np.ndarray) -> np.ndarray:
-    """Where the fitted flight line sits at time zero: the same robust
-    intercept `_robust_velocity` fits, kept rather than discarded."""
-    return np.median(positions - times[:, None] * velocity, axis=0)
-
-
-def _contact_time_s(intercept: np.ndarray, velocity: np.ndarray, rest: np.ndarray) -> float:
-    """The time at which the flight line passes closest to the ball's rest
-    position -- the instant the ball left the tee, on the camera's clock.
-
-    Over the 15 frames the estimator uses, gravity and drag bend the line by
-    millimetres against the metre-plus it travels, and a lateral error in the
-    rest point projects onto the velocity by the sine of a launch angle of a
-    few degrees; both are below a tenth of a frame.
-    """
-    speed_sq = float(velocity @ velocity)
-    if speed_sq <= 0.0:
-        return math.nan
-    return float((rest - intercept) @ velocity) / speed_sq
-
-
 def _rest_position(geometry: CameraBallGeometry) -> np.ndarray:
     """The ball on the tee, in the radar-centred world the flight is fitted in."""
     return np.array([0.0, geometry.ball_forward_m, geometry.ball_height_m])
+
+
+ACOUSTIC_TIMING = "acoustic_trigger"
+BALL_TIMING = "ball_rays"
+GRAVITY_M_S2 = 9.81
+# Contact must precede the first frame the ball is seen in, and not by more
+# than the capture can hold: 30 ms is ~14 frames of pre-roll at 467 fps.
+MAX_CONTACT_LEAD_S = 0.030
+MIN_CONTACT_LEAD_S = 1e-4
+
+
+def fit_launch_from_rays(
+    times_s: np.ndarray,
+    rays: np.ndarray,
+    geometry: CameraBallGeometry,
+    speed_ms: float | None,
+    *,
+    rest: np.ndarray | None = None,
+) -> tuple[float, float, float] | None:
+    """The instant the ball left the tee, and its launch angle, from ray
+    directions alone.
+
+    2026-09-10: the pipeline used to take contact as the acoustic trigger
+    walked back by the sound flight, and paired every camera frame with the
+    radar's range at that assumed instant. On the August session the ball's
+    own motion put contact 0.5-4 ms closer to the trigger than the sound
+    flight says, jittering shot to shot -- and the earlier "ball clock" that
+    intersected the RADAR-anchored flight line with the tee could not see it,
+    because the radar's impact time is itself the range track's tee crossing.
+
+    This fit uses nothing the trigger or the radar produced. A ball leaving
+    the tee at ``speed_ms`` (the OPS ball speed) along a straight line at
+    launch angle L, under gravity, is seen from the camera at an elevation
+    that depends only on L and on how long it has flown. Fitting L and the
+    contact instant to the observed ray elevations pins both: a slower ball
+    leaving earlier and a faster one leaving later would look alike, which is
+    exactly why the OPS speed is held fixed. The launch bearing is fitted
+    too, from the rays' azimuths, so a pull or push does not masquerade as a
+    speed error. The ball's rest point matters: 50 mm of lateral error there
+    is worth 0.4 frames of contact time, so callers pass the anchor ball's
+    OWN position (its ray at the tee range) rather than the nominal tee.
+
+    Args:
+        times_s: Frame times on the camera's trigger-relative clock.
+        rays: Unit rays from the camera origin to the ball, world axes.
+        geometry: The rig; supplies the camera origin and the nominal tee.
+        speed_ms: Ball speed in m/s. None or non-positive means no fit.
+        rest: Where the ball sat before contact, world metres. None falls
+            back to the nominal tee on the target line.
+
+    Returns:
+        ``(contact_s, launch_deg, rms_deg)`` -- contact on the same clock as
+        ``times_s`` (negative = before the trigger), the fitted launch angle,
+        and the residual of the fit in degrees over both angles -- or None
+        when there are fewer than four frames, no speed to constrain the
+        depth, or the solver does not converge.
+    """
+    if speed_ms is None or not math.isfinite(speed_ms) or speed_ms <= 0.0 or len(times_s) < 4:
+        return None
+    from scipy.optimize import least_squares  # noqa: PLC0415
+
+    camera = geometry.camera_origin
+    tee = _rest_position(geometry) if rest is None else np.asarray(rest, dtype=float)
+    observed_elevation = np.arctan2(rays[:, 2], np.hypot(rays[:, 0], rays[:, 1]))
+    observed_azimuth = np.arctan2(rays[:, 0], rays[:, 1])
+    first = float(np.min(times_s))
+
+    def residuals(params: np.ndarray) -> np.ndarray:
+        launch_rad, bearing_rad, contact_s = params
+        flight = times_s - contact_s
+        along = speed_ms * flight
+        points = tee[None, :] + np.stack(
+            [
+                along * math.cos(launch_rad) * math.sin(bearing_rad),
+                along * math.cos(launch_rad) * math.cos(bearing_rad),
+                along * math.sin(launch_rad) - 0.5 * GRAVITY_M_S2 * flight**2,
+            ],
+            axis=1,
+        )
+        delta = points - camera
+        elevation = np.arctan2(delta[:, 2], np.hypot(delta[:, 0], delta[:, 1]))
+        azimuth = np.arctan2(delta[:, 0], delta[:, 1])
+        return np.concatenate([elevation - observed_elevation, azimuth - observed_azimuth])
+
+    result = least_squares(
+        residuals,
+        x0=np.array([math.radians(20.0), 0.0, first - geometry.trigger_sound_delay_s]),
+        bounds=(
+            [math.radians(-5.0), math.radians(-30.0), first - MAX_CONTACT_LEAD_S],
+            [math.radians(60.0), math.radians(30.0), first - MIN_CONTACT_LEAD_S],
+        ),
+    )
+    if not result.success:
+        return None
+    launch_rad, _bearing_rad, contact_s = result.x
+    rms = float(np.sqrt(np.mean(result.fun**2)))
+    return float(contact_s), math.degrees(float(launch_rad)), math.degrees(rms)
 
 
 def _horizontal(velocity: np.ndarray) -> float:
@@ -454,28 +541,78 @@ def _path_estimate(
     model: tuple[float, float, np.ndarray],
     geometry: CameraBallGeometry,
     thresholds: tuple[int, int, int],  # retained for replay/debug provenance
+    rest_position: np.ndarray | None = None,
+    timing: str = ACOUSTIC_TIMING,
 ) -> tuple[float, _PathEstimate] | None:
     del thresholds
+    if timing not in (ACOUSTIC_TIMING, BALL_TIMING):
+        raise ValueError(f"timing must be {ACOUSTIC_TIMING!r} or {BALL_TIMING!r}, got {timing!r}")
     _focal_px, _pitch, _radar_from_camera = model
+    # Rays first: they need no depth, and the ball's own contact instant is
+    # fitted from them before any radar range is looked up.
+    samples: list[tuple[int, float, BallCandidate, np.ndarray]] = []
+    for relative_frame, candidate in path:
+        frame = frame_indices[relative_frame]
+        relative_time = (int(timestamps_ns[frame]) - trigger_ns) / 1e9
+        samples.append(
+            (
+                frame,
+                relative_time,
+                candidate,
+                _camera_ray(candidate, model=model, geometry=geometry),
+            )
+        )
+    if len(samples) < 4:
+        return None
+    speed_ms = (
+        float(ops_ball_speed_mph) / MPH_PER_MS
+        if ops_ball_speed_mph is not None and math.isfinite(ops_ball_speed_mph)
+        else None
+    )
+    ray_fit = fit_launch_from_rays(
+        np.asarray([sample[1] for sample in samples]),
+        np.stack([sample[3] for sample in samples]),
+        geometry,
+        speed_ms,
+        rest=rest_position,
+    )
+    # The ball clock is always fitted and reported; whether it also PAIRS
+    # the frames with the radar is the caller's choice, and the acoustic
+    # contract stays the default until the trigger's own latency has been
+    # measured on the bench (2026-09-10: the two disagree by ~1.9 frames on
+    # the August session, and the two ball-side witnesses disagree with each
+    # other by ~1 frame -- not yet grounds to move a shipped contract).
+    if ray_fit is None:
+        ray_launch_deg = math.nan
+        ray_fit_rms_deg = math.nan
+        ball_contact_s = math.nan
+    else:
+        ball_contact_s, ray_launch_deg, ray_fit_rms_deg = ray_fit
+    if timing == BALL_TIMING and ray_fit is not None:
+        contact_time = ball_contact_s
+        timing_source = BALL_TIMING
+    else:
+        contact_time = -geometry.trigger_sound_delay_s
+        timing_source = ACOUSTIC_TIMING
+
     times: list[float] = []
     positions: list[np.ndarray] = []
     actual_frames: list[int] = []
     used_candidates: list[BallCandidate] = []
-    for relative_frame, candidate in path:
-        frame = frame_indices[relative_frame]
-        relative_time = (int(timestamps_ns[frame]) - trigger_ns) / 1e9
+    for frame, relative_time, candidate, _ray in samples:
         if range_evidence is None:
             position = _project_from_ball_size(candidate, model=model, geometry=geometry)
         else:
-            # Two 2026-09-01 audit corrections, landed together under one
-            # contract: camera times are anchored on the ACOUSTIC trigger
-            # while the radar track is anchored on physical impact, which
-            # precedes the trigger by the sound flight; and the raw track
-            # carries the calibration bias the LCMF strips internally, so the
-            # corrected range is read through the evidence, never the track.
+            # The radar track is anchored on physical impact; the camera on
+            # the trigger. A frame's radar time is impact plus the ball's own
+            # flight time at that frame -- the ball-defined contact when the
+            # ray fit produced one, the acoustic walk-back otherwise. The raw
+            # track carries the calibration bias the LCMF strips internally,
+            # so the corrected range is read through the evidence, never the
+            # track (2026-09-01 audit).
             radar_range = float(
                 range_evidence.true_range_at(
-                    range_evidence.impact_t_s + geometry.trigger_sound_delay_s + relative_time,
+                    range_evidence.impact_t_s + (relative_time - contact_time),
                     range_evidence.geometry.range_res_m,
                 )
             )
@@ -491,11 +628,6 @@ def _path_estimate(
     times_array = np.asarray(times)
     positions_array = np.stack(positions)
     velocity, fit_median = _robust_velocity(times_array, positions_array)
-    contact_time = _contact_time_s(
-        _line_intercept(times_array, positions_array, velocity),
-        velocity,
-        _rest_position(geometry),
-    )
     horizontal = _apply_horizontal_offset(
         _horizontal(velocity),
         geometry.horizontal_offset_deg,
@@ -569,6 +701,10 @@ def _path_estimate(
         first_frame=actual_frames[0],
         last_frame=actual_frames[-1],
         contact_time_s=contact_time,
+        ball_contact_s=ball_contact_s,
+        ray_launch_deg=ray_launch_deg,
+        ray_fit_rms_deg=ray_fit_rms_deg,
+        timing_source=timing_source,
     )
 
 
@@ -592,8 +728,15 @@ def estimate_camera_ball_flight(
     ops_ball_speed_mph: float,
     iwr_vertical_deg: float | None = None,
     ball_tracker=None,
+    timing: str = ACOUSTIC_TIMING,
 ) -> CameraBallEstimate:
-    """Estimate horizontal flight with a frozen detector-consensus sweep."""
+    """Estimate horizontal flight with a frozen detector-consensus sweep.
+
+    ``timing`` chooses what anchors each frame on the radar's clock:
+    `ACOUSTIC_TIMING` (the trigger walked back by the sound flight -- the
+    shipped contract) or `BALL_TIMING` (the ball's own contact instant fitted
+    from its rays). The ball clock is fitted and reported either way.
+    """
     if frames.ndim != 3 or len(frames) < 4 or len(timestamps_ns) != len(frames):
         return CameraBallEstimate("rejected_invalid_camera_frames")
     try:
@@ -611,6 +754,10 @@ def estimate_camera_ball_flight(
         return CameraBallEstimate("rejected_implausible_reference_ball")
 
     model = _camera_model(anchor, geometry)
+    # Where the ball actually sat: its own ray at the tee range. The nominal
+    # tee on the target line stands in only if that ray misses the range
+    # sphere, which a plausible anchor never does.
+    rest_position = _project(anchor, geometry.tee_range_m, model=model, geometry=geometry)
     trigger_frame = int(np.argmin(np.abs(timestamps_ns.astype(np.int64) - trigger_ns)))
     frame_indices = list(range(trigger_frame, min(len(frames), trigger_frame + 15)))
     if len(frame_indices) < 4:
@@ -648,6 +795,8 @@ def estimate_camera_ball_flight(
                                 model=model,
                                 geometry=geometry,
                                 thresholds=(bright, difference, min_area),
+                                rest_position=rest_position,
+                                timing=timing,
                             )
                         )
                         is not None
@@ -697,13 +846,17 @@ def estimate_camera_ball_flight(
     if depth_source == "camera_size" and tier == "high":
         tier = "experimental"
     representative = min(estimates, key=lambda item: abs(item.horizontal_deg - median_horizontal))
-    contact_times = np.asarray(
-        [e.contact_time_s for e in estimates if math.isfinite(e.contact_time_s)]
-    )
+    ray_fitted = [e for e in estimates if math.isfinite(e.ball_contact_s)]
+    contact_times = np.asarray([e.ball_contact_s for e in ray_fitted])
     ball_clock = float(np.median(contact_times)) if len(contact_times) else None
     ball_clock_mad = (
         float(np.median(np.abs(contact_times - ball_clock))) if ball_clock is not None else None
     )
+    ray_vertical = float(np.median([e.ray_launch_deg for e in ray_fitted])) if ray_fitted else None
+    ray_fit_rms = float(np.median([e.ray_fit_rms_deg for e in ray_fitted])) if ray_fitted else None
+    # The sweep's estimates all share one speed, one geometry and one timing
+    # choice, so the pairing they used is the same for all of them.
+    timing_source = representative.timing_source
     return CameraBallEstimate(
         status=(
             "accepted_camera_only"
@@ -728,6 +881,9 @@ def estimate_camera_ball_flight(
         depth_source=depth_source,
         ball_clock_contact_s=ball_clock,
         ball_clock_contact_mad_s=ball_clock_mad,
+        ray_vertical_deg=ray_vertical,
+        ray_fit_rms_deg=ray_fit_rms,
+        timing_source=timing_source,
     )
 
 
@@ -807,11 +963,14 @@ def select_camera_assisted_horizontal(
 
 
 __all__ = [
+    "ACOUSTIC_TIMING",
+    "BALL_TIMING",
     "BallCandidate",
     "CameraBallEstimate",
     "CameraBallGeometry",
     "HorizontalFusionDecision",
     "estimate_camera_ball_flight",
+    "fit_launch_from_rays",
     "select_camera_assisted_horizontal",
 ]
 

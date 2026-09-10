@@ -182,8 +182,14 @@ def analyse_shot(  # pylint: disable=too-many-locals
     config: dict[str, Any] | None,
     calibration,
     ball_to_unit_m: float,
+    contact_source: str = "acoustic_trigger",
 ) -> dict[str, Any]:
-    """Every promoted metric for one shot, or the reasons it has none."""
+    """Every promoted metric for one shot, or the reasons it has none.
+
+    ``contact_source`` anchors the club track: ``"acoustic_trigger"`` (the
+    shipped contract) or ``"ball_rays"`` (the ball's own clock, opt-in until
+    the trigger latency is measured on the bench). Both frames are recorded.
+    """
     number = int(row["shot_number"])
     record: dict[str, Any] = {
         "shot_number": number,
@@ -202,7 +208,48 @@ def analyse_shot(  # pylint: disable=too-many-locals
         timestamps = capture["host_timestamp_ns"]
         trigger_ns = int(capture["trigger_host_timestamp_ns"])
     fps = float(metadata["delivered_fps"])
-    contact = int(metadata["pre_trigger_frames"]) - ball_to_unit_m / SPEED_OF_SOUND_M_S * fps
+    contact_acoustic = (
+        int(metadata["pre_trigger_frames"]) - ball_to_unit_m / SPEED_OF_SOUND_M_S * fps
+    )
+
+    # The ball's own clock comes first: the camera ball-flight estimate fits
+    # the contact instant from the ball's rays (2026-09-10), and the club
+    # track below anchors on it when it exists. The acoustic walk-back is the
+    # named fallback, and both frames are recorded so the trigger's error on
+    # this shot is a number, not an assumption.
+    estimate = CameraBallEstimate(status="skipped_no_rig_config")
+    if config is not None:
+        dump = next(iter(shot_dir.glob("*.l3dump")), None)
+        estimate = estimate_camera_ball_flight(
+            raw_frames,
+            timestamps,
+            trigger_ns=trigger_ns,
+            range_evidence=_ball_range_evidence(dump, row, config, calibration),
+            geometry=camera_geometry(config),
+            ops_ball_speed_mph=_float(row.get("ball_speed_mph")),
+            iwr_vertical_deg=record["lcmf_vertical_deg"],
+        )
+    contact_ball = (
+        int(metadata["pre_trigger_frames"]) + estimate.ball_clock_contact_s * fps
+        if estimate.ball_clock_contact_s is not None
+        else None
+    )
+    if contact_source == "ball_rays" and contact_ball is not None:
+        contact = contact_ball
+        contact_used = "ball_rays"
+    else:
+        contact = contact_acoustic
+        contact_used = "acoustic_trigger"
+    record.update(
+        {
+            "contact_frame_acoustic": contact_acoustic,
+            "contact_frame_ball": contact_ball,
+            "contact_frame_source": contact_used,
+            "ball_clock_minus_acoustic_frames": (
+                contact_ball - contact_acoustic if contact_ball is not None else None
+            ),
+        }
+    )
 
     # The capture is mirrored for the operator preview; the reconstruction
     # needs the physical image.
@@ -239,18 +286,6 @@ def analyse_shot(  # pylint: disable=too-many-locals
         }
     )
 
-    estimate = CameraBallEstimate(status="skipped_no_rig_config")
-    if config is not None:
-        dump = next(iter(shot_dir.glob("*.l3dump")), None)
-        estimate = estimate_camera_ball_flight(
-            raw_frames,
-            timestamps,
-            trigger_ns=trigger_ns,
-            range_evidence=_ball_range_evidence(dump, row, config, calibration),
-            geometry=camera_geometry(config),
-            ops_ball_speed_mph=_float(row.get("ball_speed_mph")),
-            iwr_vertical_deg=record["lcmf_vertical_deg"],
-        )
     launch = select_camera_vertical_launch(estimate, lcmf_vertical_deg=record["lcmf_vertical_deg"])
     record.update(
         {
@@ -261,6 +296,9 @@ def analyse_shot(  # pylint: disable=too-many-locals
             "camera_vertical_lcmf_delta_deg": launch.lcmf_delta_deg,
             "camera_depth_source": estimate.depth_source,
             "camera_support": estimate.support,
+            "camera_ray_vertical_deg": estimate.ray_vertical_deg,
+            "camera_ray_fit_rms_deg": estimate.ray_fit_rms_deg,
+            "camera_timing_source": estimate.timing_source,
         }
     )
 
@@ -525,6 +563,7 @@ def replay_session(
     excluded: tuple[int, ...] = DEFAULT_EXCLUDED,
     calibration_path: str | None = DEFAULT_CALIBRATION,
     ball_to_unit_m: float | None = None,
+    contact_source: str = "acoustic_trigger",
 ) -> list[dict[str, Any]]:
     """Run every shot of one export through the promoted metrics."""
     context = load_session(
@@ -537,6 +576,7 @@ def replay_session(
             config=context.config,
             calibration=context.calibration,
             ball_to_unit_m=context.ball_to_unit_m,
+            contact_source=contact_source,
         )
         for shot_dir, row in context.shots(excluded)
     ]
@@ -556,6 +596,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--iwr-calibration",
         default=DEFAULT_CALIBRATION,
         help="array calibration for the offline LCMF replay that supplies ball range evidence",
+    )
+    parser.add_argument(
+        "--contact-source",
+        choices=("acoustic_trigger", "ball_rays"),
+        default="acoustic_trigger",
+        help="what anchors the club track's contact frame (ball_rays is the opt-in ball clock)",
     )
     parser.add_argument(
         "--ball-to-unit-m",

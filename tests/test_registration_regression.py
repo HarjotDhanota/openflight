@@ -44,11 +44,17 @@ EXPECTED = {
     # horizontal reference exists.
     "azimuth_offset_deg": (5.19, 0.5),
     # The ball's own contact instant against the acoustic walk-back, in
-    # frames at ~467 fps. Median -0.01, MAD 0.11: the whole timing chain
-    # (trigger latency, sound flight, camera timestamps) agrees with an
-    # independent clock to a fifth of a millisecond.
-    "ball_clock_median_frames": (0.0, 0.15),
-    "ball_clock_mad_max_frames": 0.3,
+    # frames at ~467 fps. RE-REGISTERED 2026-09-10: the earlier pin of 0.0
+    # (MAD 0.11) came from intersecting the RADAR-anchored flight line with
+    # the tee, which reaches the tee at -delay by construction -- circular.
+    # The ball clock is now fitted from the ball's ray directions with the
+    # OPS speed as the depth constraint, independent of both the trigger and
+    # the radar, and it puts contact a median 1.89 frames (~4 ms) LATER than
+    # the sound flight says, jittering 0.80 frames MAD shot to shot. Which
+    # clock is right is undecided (a second ball witness disagrees with this
+    # one by ~1 frame); this pin holds the MEASUREMENT still, not a claim.
+    "ball_clock_median_frames": (1.89, 0.5),
+    "ball_clock_mad_max_frames": 1.2,
 }
 
 

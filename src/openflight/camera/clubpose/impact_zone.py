@@ -204,6 +204,25 @@ def contact_frame_from_trigger(
     return (int(trigger_index) + 1) - float(ball_to_unit_m) / float(speed_of_sound_m_s) * rate
 
 
+def contact_frame_from_ball(trigger_index: int, fps: float, ball_contact_s: float) -> float:
+    """The frame at which the ball was struck, from the ball's own clock.
+
+    ``ball_contact_s`` is the contact instant fitted from the ball's flight
+    rays (`camera.ball_flight.fit_launch_from_rays`), on the camera's
+    trigger-relative clock: negative means before the trigger. It replaces
+    the acoustic walk-back of `contact_frame_from_trigger` whenever it
+    exists, because on the 2026-08 session the trigger fired 0.5-4 ms after
+    contact rather than the 4.4 ms the sound flight predicts, and jittered
+    shot to shot -- a frame of error that moves the attack angle by ~3 deg.
+    """
+    rate = float(fps)
+    if not math.isfinite(rate) or rate <= 0.0:
+        raise ValueError(f"frame rate must be a positive number of frames per second, got {fps}")
+    if not math.isfinite(ball_contact_s):
+        raise ValueError(f"ball contact time must be finite, got {ball_contact_s}")
+    return (int(trigger_index) + 1) + float(ball_contact_s) * rate
+
+
 def withheld(reason: str, **extra) -> ImpactZoneResult:
     """A result that carries no numbers, only why it carries none."""
     return ImpactZoneResult(status="withheld", reason=reason, **extra)
