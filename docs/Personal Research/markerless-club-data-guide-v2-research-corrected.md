@@ -974,3 +974,48 @@ is logged (shot 20's own clock spread is 0.50 frames — an unstable path).
 Everything above is pinned in `tests/test_registration_regression.py`; nothing feeds a shipped
 metric yet. Housekeeping surfaced on the way: `SPEED_OF_SOUND_M_S = 343.0` is defined in four
 modules — the BME280 speed-of-sound work should centralize it.
+
+## 1O. UPDATE (2026-09-10) — the August rig was never measured; the enclosure is now known to 0.3 mm; the timing contract is in question
+
+**Retractions.** (1) The August session (20260825) was shot in a *different, unmeasured* enclosure:
+its config's camera 203 mm / radar 165 mm / lateral 60 mm / tilt 10.5° were assumptions (the tee
+range was a software guess from the ball's size). The §1N registration offsets are therefore
+camera-minus-radar *under guessed geometry* and cannot be attributed to the sensors — the radar's
+launch angle moves ~0.045° per mm of antenna height and ~2° per degree of tilt, so unknown geometry
+can own most of the +6.2°. (2) The §1N "ball clock validates the timing chain to 0.01 fr" was
+circular: the radar's impact time is defined as its range track's tee crossing, and the camera walk
+borrows that anchor, so the intercept landed at −4.44 ms by construction.
+
+**The new enclosure is fully known.** Read from the Fusion model (v44) with a read-only bridge and
+TI's own design files for the radar, which is an **IWR6843LEVM (PROC116A)**, not the ISK: lens
+220.7 mm above the floor, 1.0° down, 0 yaw; housing leans back 10.0°; IWR RX-row centre 55.6 mm
+above the floor, 75.05 mm right of the lens, 16.7 mm ahead, board rotated 90° so the four-RX λ/2
+row is *vertical* (fine elevation resolution — matches what the LCMF model assumes); OPS board
+centre 51 mm up; mic capsule 218 mm up, level; LIS3DH parallel to the housing. The antenna patches
+were placed from TI's assembly PDF, STEP placements and the 3D-PDF copper (agreeing to ≤0.1 mm) and
+registered hole-to-hole (the board's eight Ø3.0 mm plated holes from the NC drill file match the
+CAD standoffs to 0.000 mm). The IWR is now an accurate component in the assembly; the constants live
+in `config/enclosure_v42_rig_geometry.json`. The first session shot in this box makes the
+registration replay a *sensor* measurement for the first time.
+
+**The timing contract.** Two ball-only witnesses on the August data put contact 0.5–4 ms before
+the trigger (medians −0.7 and −2.6 ms by two methods) instead of the 4.44 ms sound flight, jittering
+±1.5 ms shot to shot — the same shots late in both. A joint fit of launch angle + time offset to the
+ball's ray directions drops the residual from 1.3° to 0.1° once the offset is free; the alternative
+(a speed error) would need the ball at 60% of the OPS speed. Likely physics: the mic's gate fires on
+a faster path than airborne sound (mat/kickstand-borne shock, early envelope crossing), possibly on
+top of a constant camera-timestamp latency. Consequences: the club-side contact frame is ~1 frame
+early and jitters, and **attack angle moves ~3° per frame of contact-frame error**. A ball-defined
+contact clock (`ball_flight.fit_launch_from_rays`: launch, bearing and contact fitted to the rays
+with the OPS speed fixed, gravity included, rest point from the anchor's own ray) is now fitted on
+every shot and published as a diagnostic, with `contact_frame_from_ball()` beside the acoustic one.
+It is **opt-in, not default**: with it the August club metrics move hard (track attack +5°, 7-iron
+≈ +1° which is atypical; dynamic loft 32.2 → 27.6), and the two ball witnesses disagree by ~1 frame.
+What decides it is a bench test: an LED on the SEN-14262 GATE line (camera stamp latency) and a mic
+waveform capture (airborne wavefront vs floor shock). Pinned as a measurement in
+`test_registration_regression.py` (ball clock 1.89 ± 0.5 frames later than the acoustic contract).
+
+**Also learned:** the camera's ball-size depth mode under-measures forward motion by 24% (bloom) —
+its vertical launch is inflated and correctly stays withheld; the radar-walk mode's 3-D speed
+matches the OPS to 2%. Applying only a constant −3.7 ms moved the radar-walk vertical 26.2 → 25.0°;
+the remaining camera-vs-radar vertical gap on August data is 0–4° depending on the unknown tilt.
