@@ -70,6 +70,27 @@ ASSUMED_FACE_HEIGHT_PROVENANCE = (
     "ASSUMPTION, not a measurement, and it is not resolved per club"
 )
 
+# The sanity band a MEASURED face height must fall in before it is preferred
+# over the assumption above. It is not a published figure either -- nothing
+# publishes face height -- but 35-60 mm brackets every conforming iron from a
+# thin-bladed long iron to a tall game-improvement short iron, so a reading
+# outside it is a segmentation or landmark failure rather than an unusual club.
+# The failure it was written for, 2026-09-11: the labels-built template's
+# BOUNDING BOX measured 67.9-74.1 mm because the outline runs up the hosel
+# neck, which put every sole reading 20-29 mm below the ball's support plane.
+PLAUSIBLE_FACE_HEIGHT_MM = (35.0, 60.0)
+
+# A note that travels on the sole's provenance. The silhouette's BOTTOM at the
+# ball's column is not the sole under the ball: it is the sole's rear edge,
+# which sits nearer the camera than the ball and therefore images lower. It is
+# deliberately NOT used; the sole is derived from the topline minus the leaned
+# face height. Documentation only -- no code reads it.
+SILHOUETTE_BOTTOM_PARALLAX_NOTE = (
+    "the silhouette's own bottom edge is NOT used here: it is the sole's REAR "
+    "edge, nearer the camera than the ball, so it images low by its own "
+    "parallax; the sole is derived from the topline minus the leaned face height"
+)
+
 _MIN_RAY_DOT = 1e-6
 _MIN_SPAN_MM = 1.0
 
@@ -312,7 +333,8 @@ def read_support_plane(
             f"topline above support minus the {height:.1f} mm face height leaned "
             f"by cos({float(projection.loft_deg):.1f} deg) = "
             f"{height * math.cos(loft):.1f} mm; face height from "
-            f"{face_height_source or 'an unstated source'}"
+            f"{face_height_source or 'an unstated source'}; "
+            f"{SILHOUETTE_BOTTOM_PARALLAX_NOTE}"
         )
 
     return SupportPlaneReading(

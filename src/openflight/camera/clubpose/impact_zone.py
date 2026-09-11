@@ -63,6 +63,7 @@ from openflight.camera.clubpose.impact_projection import (
     ASSUMED_FACE_HEIGHT_MM,
     ASSUMED_FACE_HEIGHT_PROVENANCE,
     BALL_RADIUS_MM,
+    PLAUSIBLE_FACE_HEIGHT_MM,
     ImpactProjection,
     project_impact,
     read_support_plane,
@@ -236,6 +237,10 @@ class ImpactZoneResult:
     sole_above_support_source: str = ""
     face_height_mm: float | None = None
     face_height_source: str = ""
+    # Both candidates, so a replay can compare the outline's own measurement
+    # against the named assumption without re-running the extractor.
+    face_height_template_mm: float | None = None
+    face_height_assumed_mm: float | None = None
     support_plane_status: str = "not_run"
     # The mat-geometry gate and what it was allowed to tolerate.
     lie: str = DEFAULT_LIE
@@ -279,6 +284,8 @@ class ImpactZoneResult:
             "sole_above_support_source": self.sole_above_support_source,
             "face_height_mm": self.face_height_mm,
             "face_height_source": self.face_height_source,
+            "face_height_template_mm": self.face_height_template_mm,
+            "face_height_assumed_mm": self.face_height_assumed_mm,
             "support_plane_status": self.support_plane_status,
             "lie": self.lie,
             "sole_tolerance_mm": self.sole_tolerance_mm,
@@ -692,29 +699,121 @@ def projection_fields(swing, carry: Carry, setup, rig, loft_deg, face_angle_deg,
 # ---------------------------------------------------------------------------
 
 
-def template_face_height_mm(template, club: str) -> tuple[float | None, str]:
-    """(face height in mm, where it came from) for one club's template.
+@dataclass(frozen=True)
+class FaceHeight:
+    """Which face height the sole was derived from, and both candidates.
 
-    The template's own topline-to-sole extent is preferred, because it is
-    this club measured on this rig; the named per-club assumption stands in
-    only when the outline has no vertical extent, and says so.
+    ``mm`` is the one used. ``template_mm`` is what the outline measured at
+    the face-centre column (None where it could not), ``assumed_mm`` the named
+    per-club convention. Both travel so a replay can compare them.
     """
-    extent = None
-    if template is not None and hasattr(template, "extent_mm"):
-        height = float(template.extent_mm()[1])
-        if math.isfinite(height) and height > 0.0:
-            extent = height
-    if extent is not None:
-        return extent, (
-            f"template outline's own topline-to-sole extent ({extent:.1f} mm), "
-            "imaged at the ball's range; it is the head's silhouette height, "
-            "which is the face height only insofar as the outline's bottom is "
-            "the leading edge"
-        )
+
+    mm: float | None
+    source: str
+    template_mm: float | None = None
+    assumed_mm: float | None = None
+
+
+def face_centre_column(template) -> float | None:
+    """The template column `CENTRE_CONVENTION` calls the face centre.
+
+    The heel-toe midpoint plus `FACE_CENTRE_TOEWARD_MM` toe-ward, in template
+    pixels. None when the template carries no heel/toe landmarks.
+    """
+    landmarks = getattr(template, "landmarks", None) or {}
+    heel, toe = landmarks.get("heel"), landmarks.get("toe")
+    if heel is None or toe is None:
+        return None
+    heel = np.asarray(heel, dtype=float)
+    toe = np.asarray(toe, dtype=float)
+    span = toe - heel
+    length = float(np.hypot(*span))
+    if length <= 0.0:
+        return None
+    centre = 0.5 * (heel + toe) + (span / length) * (
+        FACE_CENTRE_TOEWARD_MM / template.mm_per_template_px
+    )
+    return float(centre[0])
+
+
+def measured_face_height_mm(template) -> tuple[float | None, str]:
+    """The outline's vertical extent AT THE FACE-CENTRE COLUMN, or why not.
+
+    NOT the bounding box. The data-built outline runs up the hosel neck, so
+    its bounding-box height is head-plus-hosel: on the 2026-08-25 session's
+    labels-built templates that read 67.9-74.1 mm against a ~45 mm face, and
+    it put every sole 20-29 mm below the ball's support plane (the 2026-09-11
+    render). Measuring one column inside the blade's heel-toe span excludes
+    the hosel by construction, twice over: the span check refuses a centre
+    that is not on the blade, and the centre column is nowhere near the neck.
+    """
+    if template is None or not hasattr(template, "outline"):
+        return None, "no template"
+    column = face_centre_column(template)
+    if column is None:
+        return None, "the template carries no heel/toe landmarks"
+    heel = np.asarray(template.landmarks["heel"], dtype=float)
+    toe = np.asarray(template.landmarks["toe"], dtype=float)
+    low, high = sorted((float(heel[0]), float(toe[0])))
+    if not low <= column <= high:
+        return None, "the face centre falls outside the blade's heel-toe span"
+    index = int(round(column))
+    if index < 0 or index >= template.outline.shape[1]:
+        return None, f"the face-centre column {index} is off the template grid"
+    rows = np.flatnonzero(template.outline[:, index])
+    if rows.size == 0:
+        return None, f"the outline has no closed contour at the face-centre column {index}"
+    height = float(rows[-1] - rows[0] + 1) * template.mm_per_template_px
+    return height, (
+        f"outline's topline-to-sole extent at the face-centre column {index}, "
+        "inside the blade's heel-toe span so the hosel neck cannot enter it"
+    )
+
+
+def template_face_height_mm(template, club: str) -> FaceHeight:
+    """Which face height to derive the sole from, measured where possible.
+
+    The outline's extent at the face-centre column is preferred, because it is
+    this club on this rig. It is used only when it falls inside
+    `PLAUSIBLE_FACE_HEIGHT_MM`; outside that band it is a segmentation or
+    landmark failure, not an unusual club, and the named per-club assumption
+    stands in with the measured value still reported beside it.
+    """
     assumed = ASSUMED_FACE_HEIGHT_MM.get(club)
+    measured, how = measured_face_height_mm(template)
+    low, high = PLAUSIBLE_FACE_HEIGHT_MM
+    if measured is not None and math.isfinite(measured) and low <= measured <= high:
+        return FaceHeight(
+            mm=measured,
+            source=f"MEASURED {measured:.1f} mm: {how}",
+            template_mm=measured,
+            assumed_mm=assumed,
+        )
+    if measured is not None:
+        why = (
+            f"the measured {measured:.1f} mm is outside the plausible "
+            f"{low:.0f}-{high:.0f} mm iron face-height band"
+        )
+    else:
+        why = how
     if assumed is None:
-        return None, f"no template extent and no assumed face height for {club or 'unknown_club'}"
-    return assumed, f"ASSUMED {assumed:.1f} mm for {club}: {ASSUMED_FACE_HEIGHT_PROVENANCE}"
+        return FaceHeight(
+            mm=None,
+            source=(
+                f"no usable template extent ({why}) and no assumed face height "
+                f"for {club or 'unknown_club'}"
+            ),
+            template_mm=measured,
+            assumed_mm=None,
+        )
+    return FaceHeight(
+        mm=assumed,
+        source=(
+            f"ASSUMED {assumed:.1f} mm for {club} because {why}: {ASSUMED_FACE_HEIGHT_PROVENANCE}"
+        ),
+        template_mm=measured,
+        assumed_mm=assumed,
+    )
 
 
 def sole_tolerance_for(lie: str) -> tuple[float | None, str]:
@@ -802,19 +901,19 @@ def support_plane_fields(
     ``contact_above_support_mm`` survives the gate because it is built from
     the ball and the loft alone and owes the suspect template nothing.
     """
-    face_height, face_height_source = template_face_height_mm(template, club)
+    face = template_face_height_mm(template, club)
     reading = (
         None
         if projection is None
-        else read_support_plane(
-            projection, face_height_mm=face_height, face_height_source=face_height_source
-        )
+        else read_support_plane(projection, face_height_mm=face.mm, face_height_source=face.source)
     )
     gate_status, gate_detail, tolerance, tolerance_reason = mat_geometry_gate(reading, lie=lie)
     fields = {
         "lie": lie,
-        "face_height_mm": face_height,
-        "face_height_source": face_height_source,
+        "face_height_mm": face.mm,
+        "face_height_source": face.source,
+        "face_height_template_mm": face.template_mm,
+        "face_height_assumed_mm": face.assumed_mm,
         "sole_tolerance_mm": tolerance,
         "sole_tolerance_reason": tolerance_reason,
         "mat_gate_status": gate_status,

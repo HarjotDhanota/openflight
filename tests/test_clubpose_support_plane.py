@@ -205,42 +205,147 @@ class TestEveryNewFieldCarriesItsProvenance:
         assert "moves ONLY with the loft" in reading.contact_above_support_source
 
 
-class TestTheFaceHeightSource:
-    def test_the_templates_own_extent_is_preferred(self):
-        template = outline.bootstrap_outline_from_category("7-iron")
-        height, source = zone.template_face_height_mm(template, "7-iron")
+def _template_with_hosel(blade_mm: float, bbox_mm: float = 70.0):
+    """An outline whose BLADE is `blade_mm` tall and whose bounding box is not.
 
-        assert height == pytest.approx(template.extent_mm()[1], abs=1e-9)
-        assert "template outline's own topline-to-sole extent" in source
+    A hosel spike rises off the heel end, which is what the data-built outline
+    really does: `build_template` cuts across the hosel NECK, so the bounding
+    box is head-plus-hosel and has never been a face height.
+    """
+    template = outline.bootstrap_outline_from_category("7-iron")
+    per_px = template.mm_per_template_px
+    grid = np.zeros_like(template.outline)
+    origin_x, origin_y = outline.TEMPLATE_ORIGIN
+    half_width = 45
+    blade_rows = int(round(blade_mm / per_px))
+    top = origin_y + 6
+    grid[top : top + blade_rows, origin_x - half_width : origin_x + half_width] = True
+    spike_rows = int(round((bbox_mm - blade_mm) / per_px))
+    if spike_rows > 0:
+        # Heel-ward of the heel landmark, exactly where the real hosel lives.
+        grid[max(0, top - spike_rows) : top, origin_x - half_width - 6 : origin_x - half_width] = (
+            True
+        )
+    return outline.ClubOutlineTemplate(
+        club="7-iron",
+        outline=grid,
+        occupancy=grid.astype(float),
+        landmarks={
+            "heel": np.array([float(origin_x - half_width), float(top)]),
+            "toe": np.array([float(origin_x + half_width), float(top)]),
+            "topline": np.array([float(origin_x), float(top)]),
+            "midpoint": np.array([float(origin_x), float(top)]),
+        },
+        mm_per_px=template.mm_per_px,
+        n_samples=0,
+        source="self-built",
+    )
 
-    def test_without_a_template_the_named_per_club_assumption_stands_in(self):
-        height, source = zone.template_face_height_mm(None, "7-iron")
 
-        assert height == proj.ASSUMED_FACE_HEIGHT_MM["7-iron"]
-        assert source.startswith("ASSUMED")
-        assert "unpublished by every official source" in source
+class TestTheFaceHeightIsMeasuredAtTheFaceCentre:
+    def test_the_hosel_spike_is_excluded_and_the_blade_is_measured(self):
+        """Bounding box 70 mm, blade 45 mm -- the blade is what comes back."""
+        template = _template_with_hosel(blade_mm=45.0, bbox_mm=70.0)
 
-    def test_an_outline_with_no_extent_falls_back_to_the_assumption(self):
-        template = outline.bootstrap_outline_from_category("7-iron")
+        assert template.extent_mm()[1] == pytest.approx(70.0, abs=1.5), "the bbox is the trap"
+        face = zone.template_face_height_mm(template, "7-iron")
+
+        assert face.mm == pytest.approx(45.0, abs=1.0)
+        assert face.template_mm == pytest.approx(45.0, abs=1.0)
+        assert face.source.startswith("MEASURED")
+        assert "hosel neck cannot enter it" in face.source
+
+    def test_the_column_measured_is_the_face_centre_convention(self):
+        template = _template_with_hosel(blade_mm=45.0)
+        origin_x, _ = outline.TEMPLATE_ORIGIN
+
+        column = zone.face_centre_column(template)
+
+        assert column == pytest.approx(
+            origin_x + zone.FACE_CENTRE_TOEWARD_MM / template.mm_per_template_px, abs=1e-9
+        )
+
+    def test_a_template_with_no_landmarks_falls_back_by_name(self):
+        template = _template_with_hosel(blade_mm=45.0)
+        bare = outline.ClubOutlineTemplate(
+            club="7-iron",
+            outline=template.outline,
+            occupancy=template.occupancy,
+            landmarks={},
+            mm_per_px=template.mm_per_px,
+            n_samples=0,
+            source="self-built",
+        )
+        face = zone.template_face_height_mm(bare, "7-iron")
+
+        assert face.mm == proj.ASSUMED_FACE_HEIGHT_MM["7-iron"]
+        assert "no heel/toe landmarks" in face.source
+
+    def test_an_empty_column_falls_back_by_name(self):
+        template = _template_with_hosel(blade_mm=45.0)
+        grid = np.zeros_like(template.outline)
         blank = outline.ClubOutlineTemplate(
             club="7-iron",
-            outline=np.zeros_like(template.outline),
-            occupancy=np.zeros_like(template.occupancy),
+            outline=grid,
+            occupancy=grid.astype(float),
             landmarks=template.landmarks,
             mm_per_px=template.mm_per_px,
             n_samples=0,
             source="self-built",
         )
-        height, source = zone.template_face_height_mm(blank, "7-iron")
+        face = zone.template_face_height_mm(blank, "7-iron")
 
-        assert height == proj.ASSUMED_FACE_HEIGHT_MM["7-iron"]
-        assert source.startswith("ASSUMED")
+        assert face.mm == proj.ASSUMED_FACE_HEIGHT_MM["7-iron"]
+        assert "no closed contour at the face-centre column" in face.source
+        assert face.template_mm is None
 
-    def test_an_unknown_club_with_no_template_gets_no_number_and_says_so(self):
-        height, source = zone.template_face_height_mm(None, "putter")
 
-        assert height is None
-        assert source == "no template extent and no assumed face height for putter"
+class TestTheFaceHeightBand:
+    def test_the_band_is_named_with_its_provenance(self):
+        assert proj.PLAUSIBLE_FACE_HEIGHT_MM == (35.0, 60.0)
+
+    @pytest.mark.parametrize("blade_mm", [20.0, 75.0])
+    def test_a_measurement_outside_the_band_is_refused_by_name(self, blade_mm):
+        template = _template_with_hosel(blade_mm=blade_mm, bbox_mm=blade_mm + 10.0)
+        face = zone.template_face_height_mm(template, "7-iron")
+
+        assert face.mm == proj.ASSUMED_FACE_HEIGHT_MM["7-iron"]
+        assert face.source.startswith("ASSUMED")
+        assert "outside the plausible 35-60 mm iron face-height band" in face.source
+        assert face.template_mm == pytest.approx(blade_mm, abs=1.5), (
+            "the refused measurement still travels"
+        )
+
+    @pytest.mark.parametrize("blade_mm", [36.0, 45.0, 58.0])
+    def test_a_measurement_inside_the_band_is_used(self, blade_mm):
+        template = _template_with_hosel(blade_mm=blade_mm, bbox_mm=blade_mm + 20.0)
+        face = zone.template_face_height_mm(template, "7-iron")
+
+        assert face.mm == pytest.approx(blade_mm, abs=1.5)
+        assert face.source.startswith("MEASURED")
+
+    def test_both_candidates_are_always_reported(self):
+        for blade_mm in (20.0, 45.0):
+            face = zone.template_face_height_mm(_template_with_hosel(blade_mm), "7-iron")
+
+            assert face.template_mm is not None
+            assert face.assumed_mm == proj.ASSUMED_FACE_HEIGHT_MM["7-iron"]
+
+    def test_an_unknown_club_with_an_unusable_outline_gets_no_number(self):
+        face = zone.template_face_height_mm(None, "putter")
+
+        assert face.mm is None
+        assert face.assumed_mm is None
+        assert "no assumed face height for putter" in face.source
+
+
+class TestTheSoleNamesTheParallaxItDoesNotUse:
+    def test_the_sole_source_says_the_silhouette_bottom_is_not_used(self):
+        reading, _, _ = _reading(SOLED_TOPLINE_MM)
+
+        assert proj.SILHOUETTE_BOTTOM_PARALLAX_NOTE in reading.sole_above_support_source
+        assert "rear" in proj.SILHOUETTE_BOTTOM_PARALLAX_NOTE.lower()
+        assert "NOT used" in proj.SILHOUETTE_BOTTOM_PARALLAX_NOTE
 
 
 class TestTheLieTolerances:
@@ -497,13 +602,25 @@ class TestTheSupportPlaneFields:
         assert fields["vertical_channel_status"] == "not_run_projection_not_run_no_setup_geometry"
         assert "contact_above_support_mm" not in fields
 
-    def test_the_template_supplies_the_face_height_when_it_has_one(self):
+    def test_the_template_supplies_the_face_height_when_it_is_plausible(self):
         projection, _ = _scene(SOLED_TOPLINE_MM)
-        template = outline.bootstrap_outline_from_category("7-iron")
+        template = _template_with_hosel(blade_mm=45.0, bbox_mm=70.0)
         fields = zone.support_plane_fields(projection, "ok", template, "7-iron")
 
-        assert fields["face_height_mm"] == pytest.approx(template.extent_mm()[1], abs=1e-9)
-        assert "template outline's own" in fields["face_height_source"]
+        assert fields["face_height_mm"] == pytest.approx(45.0, abs=1.0)
+        assert fields["face_height_template_mm"] == pytest.approx(45.0, abs=1.0)
+        assert fields["face_height_assumed_mm"] == proj.ASSUMED_FACE_HEIGHT_MM["7-iron"]
+        assert fields["face_height_source"].startswith("MEASURED")
+
+    def test_both_face_height_candidates_serialise(self):
+        projection, _ = _scene(SOLED_TOPLINE_MM)
+        fields = zone.support_plane_fields(projection, "ok", _template_with_hosel(45.0), "7-iron")
+        payload = json.loads(
+            json.dumps(zone.ImpactZoneResult(status="ok", reason="ok", **fields).as_dict())
+        )
+
+        assert payload["face_height_template_mm"] == pytest.approx(45.0, abs=1.0)
+        assert payload["face_height_assumed_mm"] == proj.ASSUMED_FACE_HEIGHT_MM["7-iron"]
 
 
 class TestTheResultCarriesTheChannel:
@@ -530,6 +647,8 @@ class TestTheResultCarriesTheChannel:
             "sole_above_support_source",
             "face_height_mm",
             "face_height_source",
+            "face_height_template_mm",
+            "face_height_assumed_mm",
             "support_plane_status",
             "lie",
             "sole_tolerance_mm",
