@@ -36,6 +36,33 @@ def pitch_degrees(sample: AccelerationSample) -> float:
     return math.degrees(math.atan2(sample.y_g, math.hypot(sample.x_g, sample.z_g)))
 
 
+def roll_degrees(sample: AccelerationSample) -> float:
+    """Return enclosure roll about the forward axis; positive = right side down.
+
+    SIGN CONVENTION, fixed by the pitch formula above. That formula reads
+    pitch off Y against X and Z, and a level enclosure reads (0, 0, +1g), so
+    the mounting the docs require (`docs/inclinometer/README.md`) puts:
+
+      * +Y along the enclosure's FORWARD/tilt-back direction -- pitch
+        positive = nose up, which is what `pitch_degrees` already means;
+      * +Z UP through the board -- the axis gravity sits on when level;
+      * +X across the board, the remaining LATERAL axis, taken as pointing
+        target-RIGHT.
+
+    An accelerometer at rest reads the UP direction in body axes, so tipping
+    the target-right side DOWN by phi moves that vector onto -X and leaves
+    cos(phi) on +Z: roll = atan2(-x, z). Roll therefore rotates about the
+    same forward axis pitch tilts, and the two are the standard, independent
+    accelerometer pitch/roll pair (pitch against the hypotenuse, roll between
+    the two remaining axes).
+
+    A build whose +X faces target-LEFT reads roll with the opposite sign. As
+    with a reversed pitch axis, the fix is to rotate the board -- an offset
+    corrects bias, never a flipped axis.
+    """
+    return math.degrees(math.atan2(-sample.x_g, sample.z_g))
+
+
 class InclinometerService:
     """Sample, filter, and retain stable enclosure orientations."""
 
@@ -44,6 +71,7 @@ class InclinometerService:
         sensor: Accelerometer,
         *,
         zero_offset_deg: float = 0.0,
+        roll_zero_offset_deg: float = 0.0,
         sample_hz: float = 10.0,
         window_samples: int = 8,
         history_seconds: float = 15.0,
@@ -55,6 +83,12 @@ class InclinometerService:
             raise ValueError("sample_hz must be positive and window_samples must be at least 2")
         self.sensor = sensor
         self.zero_offset_deg = zero_offset_deg
+        # Roll has no calibration ritual yet (the pitch offset is measured
+        # against a phone level in the radar tilt direction). Zero is the
+        # stated assumption "the board is mounted level across the housing",
+        # and the runtime config carries that provenance rather than letting
+        # it look measured.
+        self.roll_zero_offset_deg = roll_zero_offset_deg
         self.sample_hz = sample_hz
         self.window_samples = window_samples
         self.max_snapshot_age_s = max_snapshot_age_s
@@ -125,6 +159,10 @@ class InclinometerService:
                 self._last_unstable_timestamp = sample.timestamp
                 return None
             raw_pitch = statistics.median(pitches)
+            # Roll comes from the same filtered gravity vector the pitch
+            # median is built from, so the two angles always describe one
+            # orientation rather than two differently-smoothed ones.
+            raw_roll = roll_degrees(AccelerationSample(sample.timestamp, x_g, y_g, z_g))
             snapshot = OrientationSnapshot(
                 timestamp=sample.timestamp,
                 x_g=x_g,
@@ -133,6 +171,8 @@ class InclinometerService:
                 gravity_g=gravity_g,
                 raw_pitch_deg=raw_pitch,
                 calibrated_pitch_deg=raw_pitch + self.zero_offset_deg,
+                raw_roll_deg=raw_roll,
+                calibrated_roll_deg=raw_roll + self.roll_zero_offset_deg,
                 pitch_std_deg=pitch_std,
                 sample_count=len(samples),
             )

@@ -191,6 +191,18 @@ export const es: Messages = {
   'shutdown.shutDown': 'Apagar',
   'shutdown.cancel': 'Cancelar',
 
+  'tilt.label': 'Inclinación',
+  'tilt.pitch': 'Cabeceo',
+  'tilt.roll': 'Alabeo',
+  'tilt.ok': 'Bien colocado',
+  'tilt.tiltedPitch': 'Cabeceo desviado',
+  'tilt.tiltedRoll': 'Alabeo desviado',
+  'tilt.tiltedBoth': 'Cabeceo y alabeo desviados',
+  'tilt.noReading': 'Sin lectura',
+  'tilt.notChecked': 'Sin verificar',
+  'tilt.disabled': 'Sin sensor de inclinación',
+  'tilt.summary': 'Inclinación: {verdict}, cabeceo {pitch}, alabeo {roll}',
+
   'power.pluggedIn': 'Enchufado',
   'power.onBattery': 'Con batería',
   'power.label': '{source}, {percent} de batería',

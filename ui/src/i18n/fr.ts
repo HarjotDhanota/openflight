@@ -191,6 +191,18 @@ export const fr: Messages = {
   'shutdown.shutDown': 'Éteindre',
   'shutdown.cancel': 'Annuler',
 
+  'tilt.label': 'Inclinaison',
+  'tilt.pitch': 'Tangage',
+  'tilt.roll': 'Roulis',
+  'tilt.ok': 'Bien posé',
+  'tilt.tiltedPitch': 'Tangage hors tolérance',
+  'tilt.tiltedRoll': 'Roulis hors tolérance',
+  'tilt.tiltedBoth': 'Tangage et roulis hors tolérance',
+  'tilt.noReading': 'Aucune mesure',
+  'tilt.notChecked': 'Non vérifié',
+  'tilt.disabled': 'Pas de capteur d’inclinaison',
+  'tilt.summary': 'Inclinaison : {verdict}, tangage {pitch}, roulis {roll}',
+
   'power.pluggedIn': 'Branché',
   'power.onBattery': 'Sur batterie',
   'power.label': '{source}, {percent} de batterie',

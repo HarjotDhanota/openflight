@@ -189,6 +189,18 @@ export const en = {
   'shutdown.shutDown': 'Shut Down',
   'shutdown.cancel': 'Cancel',
 
+  'tilt.label': 'Tilt',
+  'tilt.pitch': 'Pitch',
+  'tilt.roll': 'Roll',
+  'tilt.ok': 'Placed OK',
+  'tilt.tiltedPitch': 'Pitch off',
+  'tilt.tiltedRoll': 'Roll off',
+  'tilt.tiltedBoth': 'Pitch + roll off',
+  'tilt.noReading': 'No reading',
+  'tilt.notChecked': 'Not checked',
+  'tilt.disabled': 'No tilt sensor',
+  'tilt.summary': 'Tilt: {verdict}, pitch {pitch}, roll {roll}',
+
   'power.pluggedIn': 'Plugged in',
   'power.onBattery': 'On battery',
   'power.label': '{source}, {percent} battery',

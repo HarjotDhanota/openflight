@@ -54,3 +54,41 @@ def test_an_equal_flag_is_not_announced_as_an_override(caplog):
 
 def test_a_missing_flag_takes_the_rig_value_quietly():
     assert server._rig_override("radar tilt", None, 10.0) == 10.0
+
+
+def test_without_a_geometry_file_there_is_no_expected_orientation():
+    server.init_rig_geometry(None)
+
+    expected = server._expected_inclinometer_orientation()
+
+    assert expected["pitch_deg"] is None
+    assert expected["roll_deg"] is None
+    assert expected["missing"] == ["rig_geometry"]
+    assert "--rig-geometry" in expected["provenance"]["pitch_deg"]
+
+
+def test_the_v42_file_supplies_the_orientation_the_placement_gate_judges_against():
+    server.init_rig_geometry("config/enclosure_v42_rig_geometry.json")
+
+    expected = server._expected_inclinometer_orientation()
+
+    assert expected["pitch_deg"] == pytest.approx(10.0)
+    assert expected["roll_deg"] == pytest.approx(0.0)
+    assert expected["missing"] == ["lis3dh_mount_pitch_deg", "lis3dh_mount_roll_deg"]
+    assert "housing_tilt_deg" in expected["provenance"]["pitch_deg"]
+    assert "parallel to the housing" in expected["provenance"]["pitch_deg"]
+    assert "20260825" in expected["rig_provenance"]
+
+
+def test_loading_geometry_after_the_sensor_refreshes_the_expectation(monkeypatch):
+    monkeypatch.setattr(
+        server,
+        "inclinometer_runtime_config",
+        {"enabled": True, "expected_orientation": {"pitch_deg": None, "roll_deg": None}},
+    )
+
+    server.init_rig_geometry("config/enclosure_v42_rig_geometry.json")
+
+    assert server.inclinometer_runtime_config["expected_orientation"]["pitch_deg"] == pytest.approx(
+        10.0
+    )

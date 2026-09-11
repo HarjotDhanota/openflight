@@ -290,3 +290,86 @@ class TestDepthVersusSlant:
         depth = RIG.focal_px * BALL_DIAMETER_MM / 12.6
         assert off_axis.mm_per_px_at_ball == pytest.approx(depth / RIG.focal_px)
         assert off_axis.mm_per_px_at_ball < off_axis.range_to_ball_mm / RIG.focal_px
+
+
+class TestTheExpectedInclinometerOrientation:
+    """What a correctly placed enclosure should read on the LIS3DH."""
+
+    V42 = TestTheEnclosureSetup.V42
+
+    def test_a_file_without_mount_angles_assumes_the_board_is_parallel(self):
+        expected = self.V42.expected_inclinometer_orientation()
+
+        assert expected.pitch_deg == pytest.approx(10.0)
+        assert expected.roll_deg == pytest.approx(0.0)
+        assert set(expected.missing) == {"lis3dh_mount_pitch_deg", "lis3dh_mount_roll_deg"}
+        assert "housing_tilt_deg +10.00 deg from the rig file" in expected.provenance["pitch_deg"]
+        assert "ASSUMED" in expected.provenance["pitch_deg"]
+        assert "ASSUMED" in expected.provenance["roll_deg"]
+        assert expected.rig_provenance == self.V42.provenance
+
+    def test_measured_mount_angles_are_added_and_credited_to_the_file(self):
+        import dataclasses
+
+        rig = dataclasses.replace(self.V42, lis3dh_mount_pitch_deg=1.25, lis3dh_mount_roll_deg=-0.5)
+        expected = rig.expected_inclinometer_orientation()
+
+        assert expected.pitch_deg == pytest.approx(11.25)
+        assert expected.roll_deg == pytest.approx(-0.5)
+        assert expected.missing == ()
+        assert (
+            "lis3dh_mount_pitch_deg +1.25 deg from the rig file"
+            in (expected.provenance["pitch_deg"])
+        )
+        assert "ASSUMED" not in expected.provenance["roll_deg"]
+
+    def test_without_a_housing_tilt_there_is_no_expected_pitch_at_all(self):
+        import dataclasses
+
+        expected = dataclasses.replace(
+            self.V42, housing_tilt_deg=None
+        ).expected_inclinometer_orientation()
+
+        assert expected.pitch_deg is None
+        assert "housing_tilt_deg" in expected.missing
+        assert "unavailable" in expected.provenance["pitch_deg"]
+        # Roll survives: "square" is a statement the enclosure always makes.
+        assert expected.roll_deg == pytest.approx(0.0)
+
+    def test_the_shipped_v42_file_expects_ten_degrees_of_pitch_and_no_roll(self):
+        rig = RigGeometry.from_json("config/enclosure_v42_rig_geometry.json")
+        expected = rig.expected_inclinometer_orientation()
+
+        assert rig.lis3dh_mount_pitch_deg is None
+        assert rig.lis3dh_mount_roll_deg is None
+        assert expected.pitch_deg == pytest.approx(10.0)
+        assert expected.roll_deg == pytest.approx(0.0)
+
+    def test_the_mount_fields_round_trip_and_older_files_still_load(self, tmp_path):
+        import dataclasses
+
+        path = tmp_path / "v42.json"
+        rig = dataclasses.replace(self.V42, lis3dh_mount_pitch_deg=0.75, lis3dh_mount_roll_deg=0.2)
+        rig.to_json(path)
+        assert RigGeometry.from_json(path) == rig
+
+        old = {
+            key: value
+            for key, value in json.loads(path.read_text(encoding="utf-8")).items()
+            if key not in ("lis3dh_mount_pitch_deg", "lis3dh_mount_roll_deg")
+        }
+        path.write_text(json.dumps(old), encoding="utf-8")
+        loaded = RigGeometry.from_json(path)
+        assert loaded.lis3dh_mount_pitch_deg is None
+        assert loaded.expected_inclinometer_orientation().pitch_deg == pytest.approx(10.0)
+
+    def test_as_dict_is_json_safe(self):
+        payload = self.V42.expected_inclinometer_orientation().as_dict()
+        json.dumps(payload)
+
+        assert payload["pitch_deg"] == pytest.approx(10.0)
+        assert payload["missing"] == [
+            "lis3dh_mount_pitch_deg",
+            "lis3dh_mount_roll_deg",
+        ]
+        assert set(payload["provenance"]) == {"pitch_deg", "roll_deg"}

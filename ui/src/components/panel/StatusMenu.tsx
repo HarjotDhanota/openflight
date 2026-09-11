@@ -1,12 +1,19 @@
 import { useLayoutEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useI18n } from '../../i18n/useI18n';
+import { TiltIndicator } from '../TiltIndicator';
+import type { InclinometerStatus } from '../../types/inclinometer';
 
 interface StatusMenuProps {
   connected: boolean;
   radarConnected: boolean;
   ballDetection: string;
   onClose: () => void;
+  /**
+   * Enclosure tilt. Omit to read `useSystemStore`; pass it in tests, where
+   * `renderToString` keeps the store's server snapshot at `null`.
+   */
+  tilt?: InclinometerStatus | null;
 }
 
 function OverlayOnApp({ children }: { children: ReactNode }) {
@@ -30,7 +37,7 @@ function OverlayOnApp({ children }: { children: ReactNode }) {
  * Portaled onto `.panel-app` so the dim uses the same `.panel-scrim` as the
  * footer menu (absolute inset covering the whole kiosk, not just the header).
  */
-export function StatusMenu({ connected, radarConnected, ballDetection, onClose }: StatusMenuProps) {
+export function StatusMenu({ connected, radarConnected, ballDetection, onClose, tilt }: StatusMenuProps) {
   const { t } = useI18n();
   const linkValue = (ok: boolean) => (ok ? t('header.connected') : t('header.disconnected'));
 
@@ -49,6 +56,12 @@ export function StatusMenu({ connected, radarConnected, ballDetection, onClose }
         <div className="panel-header__status-row">
           <span className="panel-header__status-label">{t('menu.ballDetection')}</span>
           <span className="panel-header__status-value">{ballDetection}</span>
+        </div>
+        <div className="panel-header__status-row">
+          <span className="panel-header__status-label">{t('tilt.label')}</span>
+          <span className="panel-header__status-value">
+            <TiltIndicator status={tilt} />
+          </span>
         </div>
       </div>
     </OverlayOnApp>

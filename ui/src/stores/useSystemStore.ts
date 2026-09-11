@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { InclinometerStatus } from '../types/inclinometer';
 import type { PowerStatus } from '../types/power';
 import type { SimShotInfo, SimStatus } from '../types/socket';
 
@@ -13,6 +14,8 @@ interface SystemState {
   serverClub: string | null;
   serverPlayerName: string | null;
   powerStatus: PowerStatus | null;
+  /** Live enclosure tilt + placement verdict; null until the server reports. */
+  inclinometerStatus: InclinometerStatus | null;
   setConnected: (connected: boolean) => void;
   setMockMode: (mockMode: boolean) => void;
   setDebugMode: (debugMode: boolean) => void;
@@ -22,6 +25,7 @@ interface SystemState {
   setServerClub: (club: string | null) => void;
   setServerPlayerName: (playerName: string | null) => void;
   setPowerStatus: (status: PowerStatus) => void;
+  setInclinometerStatus: (status: InclinometerStatus) => void;
 }
 
 export const useSystemStore = create<SystemState>((set) => ({
@@ -35,6 +39,7 @@ export const useSystemStore = create<SystemState>((set) => ({
   serverClub: null,
   serverPlayerName: null,
   powerStatus: null,
+  inclinometerStatus: null,
   setConnected: (connected) => set({ connected }),
   setMockMode: (mockMode) => set({ mockMode }),
   setDebugMode: (debugMode) => set({ debugMode }),
@@ -50,4 +55,5 @@ export const useSystemStore = create<SystemState>((set) => ({
   setServerClub: (serverClub) => set({ serverClub }),
   setServerPlayerName: (serverPlayerName) => set({ serverPlayerName }),
   setPowerStatus: (status) => set({ powerStatus: status }),
+  setInclinometerStatus: (status) => set({ inclinometerStatus: status }),
 }));

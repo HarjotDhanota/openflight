@@ -1,0 +1,64 @@
+/* Compact tilt readout for the status panel. Sized in rem so it follows the
+   kiosk's fluid html font-size on 800- and 1024-wide screens. */
+.tilt-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.tilt-indicator__readout {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.tilt-indicator__axis {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.2rem;
+}
+
+.tilt-indicator__axis-label {
+  color: var(--color-text-muted);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.tilt-indicator__axis-value {
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.tilt-indicator__pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  padding: 0 0.5rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.tilt-indicator--ok .tilt-indicator__pill {
+  color: var(--color-success);
+  background: rgba(74, 222, 128, 0.12);
+}
+
+.tilt-indicator--warn .tilt-indicator__pill {
+  color: var(--color-warning);
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.tilt-indicator--crit .tilt-indicator__pill {
+  color: var(--color-danger);
+  background: rgba(248, 113, 113, 0.12);
+}
