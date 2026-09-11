@@ -465,12 +465,24 @@ For a ball on that plane and an iron of dynamic loft Λ:
 
 New fields, each with a `*_source` provenance string beside it:
 `contact_above_support_mm`, `topline_above_support_mm`, `sole_above_support_mm`
-and `face_height_mm` (the template's own topline-to-sole extent where it has
-one, else `impact_projection.ASSUMED_FACE_HEIGHT_MM` — face height is
-unpublished by every official source checked), plus `support_plane_status`,
-`lie`, `sole_tolerance_mm`, `sole_tolerance_reason`, `mat_gate_status`,
+and `face_height_mm`, plus `face_height_template_mm` / `face_height_assumed_mm`
+(both candidates, so a replay can compare them), `support_plane_status`, `lie`,
+`sole_tolerance_mm`, `sole_tolerance_reason`, `mat_gate_status`,
 `mat_gate_detail`, `vertical_channel_status`. The 2-D `high_low_mm` channel is
 unchanged and still reported alongside.
+
+**Face height is measured at the face-centre column, not from the bounding
+box.** The data-built outline runs up the hosel neck, so its bounding-box
+height is head-plus-hosel: on the 2026-08-25 labels-built templates that read
+67.9–74.1 mm against a ~45 mm face and put *every* sole 20–29 mm below the
+support plane. `measured_face_height_mm` therefore takes the outline's extent
+at the `CENTRE_CONVENTION` column, which lies inside the blade's heel–toe span
+and so excludes the hosel by construction. The reading is used only inside
+`PLAUSIBLE_FACE_HEIGHT_MM` (35–60 mm — a sanity band, not a published figure);
+outside it, `ASSUMED_FACE_HEIGHT_MM[club]` stands in and `face_height_source`
+says which and why. The silhouette's own *bottom* edge is never used: it is the
+sole's rear edge, nearer the camera than the ball, so it images low by its own
+parallax — `sole_above_support_source` states this.
 
 `mat_geometry_gate` is a named impossibility gate on the **vertical channel
 only** — heel–toe always survives it:

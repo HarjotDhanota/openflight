@@ -249,6 +249,9 @@ def main() -> int:
             f"sole_above_support_mm={_fmt(result.sole_above_support_mm, 2)}\t"
             f"contact_above_support_mm={_fmt(result.contact_above_support_mm, 2)}\t"
             f"face_height_mm={_fmt(result.face_height_mm, 2)}\t"
+            f"face_height_template_mm={_fmt(result.face_height_template_mm, 2)}\t"
+            f"face_height_assumed_mm={_fmt(result.face_height_assumed_mm, 2)}\t"
+            f"face_height_source={result.face_height_source}\t"
             f"mm_per_px={swing.plate_mm_per_px:.4f}\t"
             f"detail={result.mat_gate_detail}"
         )
