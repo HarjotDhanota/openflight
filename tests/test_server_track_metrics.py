@@ -189,6 +189,65 @@ def test_the_contact_frame_is_the_trigger_less_the_sound_flight_time(rig, monkey
     assert seen["fps"] == pytest.approx(CAPTURE_FPS, rel=1e-3)
 
 
+class TestTheAcousticWalkBackTakesATemperature:
+    """c = 331.3 + 0.606 T. Omitting the temperature must not move a number."""
+
+    def test_no_temperature_reproduces_the_twenty_celsius_walk_back_exactly(self) -> None:
+        assert server_module._contact_frame(74, 1.575, 467.6) == 74 - 1.575 / 343.0 * 467.6
+
+    def test_a_measured_temperature_is_applied(self) -> None:
+        hot = server_module._contact_frame(74, 1.575, 467.6, temperature_c=35.0)
+
+        assert hot == pytest.approx(74 - 1.575 / (331.3 + 0.606 * 35.0) * 467.6, abs=1e-9)
+
+    def test_the_useful_range_is_about_a_tenth_of_a_frame(self) -> None:
+        cold = server_module._contact_frame(74, 1.575, 467.6, temperature_c=0.0)
+        hot = server_module._contact_frame(74, 1.575, 467.6, temperature_c=35.0)
+
+        assert hot - cold == pytest.approx(0.14, abs=0.04)
+
+    def test_there_is_no_ambient_sensor_on_this_branch(self) -> None:
+        """No BME280 is plumbed here, so nothing assigns the runtime slot."""
+        assert server_module.ambient_environment is None
+        assert server_module._ambient_temperature_c() is None
+
+    def test_a_reading_is_used_when_one_appears(self, monkeypatch) -> None:
+        """The seam is real: assigning the slot is all a sensor has to do."""
+        monkeypatch.setattr(
+            server_module, "ambient_environment", SimpleNamespace(temperature_c=31.5)
+        )
+
+        assert server_module._ambient_temperature_c() == pytest.approx(31.5)
+
+    @pytest.mark.parametrize(
+        "broken",
+        [
+            SimpleNamespace(),  # no attribute at all
+            SimpleNamespace(temperature_c=None),  # sensor read failed upstream
+            SimpleNamespace(temperature_c="warm"),  # garbage payload
+            SimpleNamespace(temperature_c=float("nan")),  # disconnected sensor
+            SimpleNamespace(temperature_c=float("inf")),
+            object(),
+        ],
+    )
+    def test_a_broken_sensor_degrades_to_none_and_never_raises(self, monkeypatch, broken) -> None:
+        """A tenth of a frame is never worth failing a shot over."""
+        monkeypatch.setattr(server_module, "ambient_environment", broken)
+
+        assert server_module._ambient_temperature_c() is None
+
+    def test_the_shot_records_what_the_walk_back_actually_used(self) -> None:
+        """A replay has to be able to see the c that produced the numbers."""
+        assert server_module._acoustic_provenance(None) == {
+            "temperature_c": None,
+            "speed_of_sound_m_s": 343.0,
+        }
+        assert server_module._acoustic_provenance(35.0) == {
+            "temperature_c": 35.0,
+            "speed_of_sound_m_s": pytest.approx(331.3 + 0.606 * 35.0),
+        }
+
+
 def test_the_radar_range_rate_comes_from_the_club_range_evidence(rig, monkeypatch) -> None:
     seen: dict[str, float] = {}
 

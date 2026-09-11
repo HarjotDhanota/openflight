@@ -832,6 +832,29 @@ class TestAuditIntrinsicsAndRangeContract:
             3.048 / 343.0
         )
 
+    def test_no_temperature_reproduces_the_twenty_celsius_number_exactly(self):
+        """Default behaviour cannot move: archived shots were computed at 343.0."""
+        assert self._geometry().temperature_c is None
+        assert self._geometry().trigger_sound_delay_s == 1.524 / 343.0
+
+    def test_a_measured_temperature_moves_the_delay(self):
+        """c = 331.3 + 0.606 T, so hot air shortens the flight to the mic."""
+        hot = self._geometry(temperature_c=35.0)
+
+        assert hot.trigger_sound_delay_s == pytest.approx(1.524 / (331.3 + 0.606 * 35.0), abs=1e-15)
+        assert hot.trigger_sound_delay_s < self._geometry(temperature_c=0.0).trigger_sound_delay_s
+
+    def test_the_zero_to_thirty_five_spread_is_about_a_tenth_of_a_frame(self):
+        """The whole reason temperature is threaded: ~0.13 ms at 1.5 m."""
+        cold = self._geometry(temperature_c=0.0).trigger_sound_delay_s
+        hot = self._geometry(temperature_c=35.0).trigger_sound_delay_s
+
+        assert (cold - hot) * 467.0 == pytest.approx(0.13, abs=0.03)
+
+    def test_an_unbelievable_temperature_is_refused_by_name(self):
+        with pytest.raises(ValueError, match="temperature"):
+            _ = self._geometry(temperature_c=999.0).trigger_sound_delay_s
+
 
 class TestTheBallClock:
     """The ball's own contact time, fitted from its ray directions.

@@ -105,6 +105,34 @@ class TestTheContactInstant:
         with pytest.raises(ValueError):
             zone.contact_frame_from_trigger(TRIGGER_INDEX, 0.0)
 
+    def test_no_temperature_reproduces_the_shipped_walk_back_exactly(self):
+        assert zone.contact_frame_from_trigger(TRIGGER_INDEX, FPS) == (
+            (TRIGGER_INDEX + 1) - 1.575 / 343.0 * FPS
+        )
+
+    def test_a_hot_day_moves_contact_later_by_a_fraction_of_a_frame(self):
+        cold = zone.contact_frame_from_trigger(TRIGGER_INDEX, FPS, temperature_c=0.0)
+        hot = zone.contact_frame_from_trigger(TRIGGER_INDEX, FPS, temperature_c=35.0)
+
+        assert hot == pytest.approx(
+            (TRIGGER_INDEX + 1) - 1.575 / (331.3 + 0.606 * 35.0) * FPS, abs=1e-9
+        )
+        # Sound arrives sooner when it travels faster, so contact sits closer
+        # to the trigger -- about a tenth of a frame across the useful range.
+        assert hot > cold
+        assert hot - cold == pytest.approx(0.14, abs=0.04)
+
+    def test_an_unbelievable_temperature_is_refused_by_name(self):
+        with pytest.raises(ValueError, match="temperature"):
+            zone.contact_frame_from_trigger(TRIGGER_INDEX, FPS, temperature_c=-273.15)
+
+    def test_a_temperature_and_an_explicit_speed_together_are_refused(self):
+        """Two ways to say the same thing, disagreeing, is a caller bug."""
+        with pytest.raises(ValueError, match="temperature_c"):
+            zone.contact_frame_from_trigger(
+                TRIGGER_INDEX, FPS, speed_of_sound_m_s=350.0, temperature_c=20.0
+            )
+
 
 class TestItWithholdsWithoutItsEvidence:
     def test_no_camera_frames_withholds(self):

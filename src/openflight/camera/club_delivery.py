@@ -1450,6 +1450,7 @@ def estimate_impact_zone(
     template_dir,
     mirror_horizontal: bool = False,
     rig=None,
+    temperature_c: float | None = None,
     lie=None,
 ):
     """Read the heel-toe impact zone, or say which piece of evidence was missing.
@@ -1457,6 +1458,9 @@ def estimate_impact_zone(
     ``rig`` is the enclosure's `RigGeometry`; None falls back to the assumed
     2026-08 rig numbers, which is only right for replaying that session.
 
+    ``temperature_c`` is the ambient air temperature, used only for the
+    acoustic walk-back to the contact frame; None uses the conventional 20 C
+    speed of sound and so reproduces the pre-temperature numbers exactly.
     ``lie`` is what the ball rests on, for the mat-geometry gate on the
     vertical channel. It is NOT a user input and nothing detects it yet, so
     None keeps the extractor's own "unknown" default -- the widest tolerance.
@@ -1536,7 +1540,10 @@ def estimate_impact_zone(
         ball=ball,
         fps=float(fps),
         contact_frame=contact_frame_from_trigger(
-            int(trigger_index), float(fps), ball_to_unit_m=ball_to_unit_m
+            int(trigger_index),
+            float(fps),
+            ball_to_unit_m=ball_to_unit_m,
+            temperature_c=temperature_c,
         ),
         range_rate_ms=range_rate_ms,
         club=str(club),
