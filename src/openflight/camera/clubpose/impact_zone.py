@@ -38,6 +38,10 @@ from typing import Mapping, Sequence
 
 import numpy as np
 
+# Imported as a module: `contact_frame_from_trigger` has a parameter named
+# `speed_of_sound_m_s`, which would shadow the function of the same name.
+from openflight import acoustics
+from openflight.acoustics import SPEED_OF_SOUND_20C_M_S
 from openflight.camera.clubpose.head_outline import (
     Alignment,
     ClubOutlineTemplate,
@@ -106,10 +110,15 @@ MAX_CARRY_EXTRAPOLATION_FRAMES = 1.0
 
 # The capture's trigger is the IMPACT SOUND arriving at the microphone, not the
 # ball being hit. On the shipped rig the unit sits 1.575 m from the ball, so the
-# trigger lands 4.59 ms -- 2.15 frames at 468 fps -- after contact. Everything
-# in this module is anchored on contact, so the walk-back happens once, here.
+# trigger lands 4.59 ms -- 2.15 frames at 468 fps -- after contact in 20 C air
+# (+-0.13 ms over 0-35 C; pass `temperature_c` to `contact_frame_from_trigger`
+# to remove it). Everything in this module is anchored on contact, so the
+# walk-back happens once, here.
 BALL_TO_UNIT_M = 1.575
-SPEED_OF_SOUND_M_S = 343.0
+# Re-exported for the modules, scripts and tests that import it from here. The
+# single definition, and the temperature dependence, live in
+# `openflight.acoustics`.
+SPEED_OF_SOUND_M_S = SPEED_OF_SOUND_20C_M_S
 
 CENTRE_CONVENTION = (
     "face centre = heel-toe midpoint of the aligned outline, plus "
@@ -189,7 +198,8 @@ def contact_frame_from_trigger(
     fps: float,
     *,
     ball_to_unit_m: float = BALL_TO_UNIT_M,
-    speed_of_sound_m_s: float = SPEED_OF_SOUND_M_S,
+    speed_of_sound_m_s: float | None = None,
+    temperature_c: float | None = None,
 ) -> float:
     """The frame at which the ball was struck, from the acoustic trigger frame.
 
@@ -197,11 +207,30 @@ def contact_frame_from_trigger(
     the capture archive reports it, so the trigger itself is the frame after
     it. Contact is that instant minus the sound's flight time from the ball to
     the microphone.
+
+    The speed of sound may be given directly (``speed_of_sound_m_s``) or
+    derived from an ambient reading (``temperature_c``, via
+    c = 331.3 + 0.606 T); supplying both is a caller bug and raises. With
+    neither -- the default -- it is the conventional 20 C value, 343.0 m/s,
+    exactly as every shipped and archived number was computed. Temperature is
+    worth carrying because 0-35 C moves c by about 3 percent, which at the
+    shipped 1.575 m is ~0.13 ms, a tenth of a frame at 467 fps.
     """
     rate = float(fps)
     if not math.isfinite(rate) or rate <= 0.0:
         raise ValueError(f"frame rate must be a positive number of frames per second, got {fps}")
-    return (int(trigger_index) + 1) - float(ball_to_unit_m) / float(speed_of_sound_m_s) * rate
+    if speed_of_sound_m_s is not None and temperature_c is not None:
+        raise ValueError(
+            "give either speed_of_sound_m_s or temperature_c, not both "
+            f"(got {speed_of_sound_m_s!r} and {temperature_c!r})"
+        )
+    if speed_of_sound_m_s is None:
+        speed = acoustics.speed_of_sound_m_s(temperature_c)
+    else:
+        speed = float(speed_of_sound_m_s)
+        if not math.isfinite(speed) or speed <= 0.0:
+            raise ValueError(f"speed of sound must be positive m/s, got {speed_of_sound_m_s!r}")
+    return (int(trigger_index) + 1) - float(ball_to_unit_m) / speed * rate
 
 
 def contact_frame_from_ball(trigger_index: int, fps: float, ball_contact_s: float) -> float:

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from openflight.acoustics import SPEED_OF_SOUND_20C_M_S, sound_flight_s
 from openflight.camera.club_motion import (
     BALL_DIAMETER_MM,
     ReferenceBall,
@@ -57,7 +58,10 @@ class BallCandidate:
 # diameter, which swung it 364-452 px and read vertical launch ~3 deg high.
 SHIPPED_FOCAL_PX_AT_320 = 466.6667
 
-SPEED_OF_SOUND_M_S = 343.0
+# Re-exported for the modules, scripts and tests that import it from here.
+# The single definition, and the temperature dependence, live in
+# `openflight.acoustics`.
+SPEED_OF_SOUND_M_S = SPEED_OF_SOUND_20C_M_S
 
 
 @dataclass(frozen=True)
@@ -82,6 +86,11 @@ class CameraBallGeometry:
     # A CALIBRATED focal length, when one exists. None falls back to the
     # shipped-optics nominal scaled to this image width.
     focal_px: float | None = None
+    # Ambient air temperature in degrees C, when a sensor reports one. It only
+    # affects the acoustic walk-back below, by up to about 3 percent over
+    # 0-35 C. None uses the conventional 20 C speed of sound, which is what
+    # every archived shot was computed with.
+    temperature_c: float | None = None
 
     @property
     def nominal_focal_px(self) -> float:
@@ -94,8 +103,12 @@ class CameraBallGeometry:
     def trigger_sound_delay_s(self) -> float:
         """Ball-to-microphone sound flight: physical contact PRECEDES the
         acoustic trigger by this much, so a camera time measured from the
-        trigger sits this much later on the radar's impact-anchored clock."""
-        return float(self.tee_range_m) / SPEED_OF_SOUND_M_S
+        trigger sits this much later on the radar's impact-anchored clock.
+
+        Uses ``temperature_c`` when the rig reports one (c = 331.3 + 0.606 T,
+        a ~3 percent spread over 0-35 C, which is ~0.13 ms at 1.5 m); with
+        None it is the tee range over the 20 C constant, exactly as before."""
+        return sound_flight_s(float(self.tee_range_m), self.temperature_c)
 
     @property
     def ball_forward_m(self) -> float:
