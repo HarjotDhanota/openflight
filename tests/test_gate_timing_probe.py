@@ -1,10 +1,13 @@
-"""What the SEN-14262 GATE actually fires on, proven on chosen waveforms.
+"""GATE timing, proven on waveforms whose instants we chose.
 
-Synthetic audio puts an impact at a known instant; synthetic GATE edges are
-placed deliberately before and after it. The probe has to measure the gap it
-was given, call a gate that leads the acoustic onset a faster-than-airborne
-path, and refuse -- by name -- the inputs that carry no answer. The camera
-fallback (no ADC on the bench) is held to the same standard.
+Two different measurements live here and the tests keep them apart. Against
+the microphone's own AUDIO pin the probe can only measure the board
+comparator's threshold delay -- GATE is derived from that signal, so the
+comparison says nothing about which path the impact took. Against a piezo on
+the mat it measures the real walk-back from contact and classifies it against
+the airborne expectation. Both refuse, by name, the inputs that carry no
+answer; the camera fallback (no ADC on the bench) is held to the same
+standard.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ NOISE = 0.002
 BURST_S = 0.004
 AUDIO_START_NS = 1_000_000_000
 BALL_TO_MIC_M = 1.575
+AIRBORNE_MS = BALL_TO_MIC_M / 343.0 * 1000.0
 
 
 def _waveform(onsets_s, *, amplitude: float = 0.4, seed: int = 3) -> np.ndarray:
@@ -99,23 +103,28 @@ def test_noise_floor_uses_the_quietest_block() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_gate_after_the_onset_is_an_airborne_path() -> None:
-    """An envelope comparator fires a little AFTER the sound arrives."""
+def test_gate_after_our_onset_is_an_ordinary_comparator_delay() -> None:
+    """The board's comparator needs some envelope before it fires."""
     onsets = [0.2, 0.45, 0.7]
     report = probe.gate_vs_audio(
-        _edges_ns([value + 0.0006 for value in onsets]),
+        _edges_ns([value + 0.0003 for value in onsets]),
         _waveform(onsets),
         RATE,
         audio_start_ns=AUDIO_START_NS,
         ball_to_mic_m=BALL_TO_MIC_M,
     )
-    assert report.median_gate_minus_onset_ms == pytest.approx(0.6, abs=0.1)
-    assert report.path == "airborne"
+    assert report.median_gate_minus_onset_ms == pytest.approx(0.3, abs=0.1)
+    assert report.verdict == "comparator_delay"
     assert len(report.impacts) == 3
 
 
-def test_gate_before_the_onset_is_faster_than_air() -> None:
-    """A gate that leads the sound came through something other than air."""
+def test_gate_before_our_onset_means_our_detector_is_the_conservative_one() -> None:
+    """GATE cannot precede the signal it is derived from, so this is us.
+
+    A negative gap says our 8 x noise crossing is later than the board's, NOT
+    that the impact arrived by some faster path: that question needs a
+    reference which is not the microphone.
+    """
     onsets = [0.2, 0.45, 0.7]
     report = probe.gate_vs_audio(
         _edges_ns([value - 0.0012 for value in onsets]),
@@ -125,24 +134,38 @@ def test_gate_before_the_onset_is_faster_than_air() -> None:
         ball_to_mic_m=BALL_TO_MIC_M,
     )
     assert report.median_gate_minus_onset_ms == pytest.approx(-1.2, abs=0.1)
-    assert report.path == "faster_than_air"
+    assert report.verdict == "detector_more_conservative_than_the_board"
 
 
-def test_a_gate_inside_the_noise_is_inconclusive() -> None:
-    """Scatter around zero is reported as scatter, not as a finding."""
+def test_a_slow_comparator_is_named() -> None:
+    """Beyond half a millisecond it is not a threshold difference any more."""
     onsets = [0.2, 0.45, 0.7]
-    offsets = [-0.0001, 0.0001, 0.0]
     report = probe.gate_vs_audio(
-        _edges_ns([value + offset for value, offset in zip(onsets, offsets)]),
+        _edges_ns([value + 0.004 for value in onsets]),
         _waveform(onsets),
         RATE,
         audio_start_ns=AUDIO_START_NS,
         ball_to_mic_m=BALL_TO_MIC_M,
     )
-    assert report.path == "inconclusive"
+    assert report.verdict == "comparator_slower_than_expected"
 
 
-def test_airborne_expectation_comes_from_the_distance() -> None:
+def test_the_audio_report_never_classifies_the_path() -> None:
+    """The airborne figure is context; this report does not test against it."""
+    onsets = [0.2, 0.45]
+    report = probe.gate_vs_audio(
+        _edges_ns([value + 0.0003 for value in onsets]),
+        _waveform(onsets),
+        RATE,
+        audio_start_ns=AUDIO_START_NS,
+        ball_to_mic_m=BALL_TO_MIC_M,
+    )
+    assert report.airborne_flight_ms == pytest.approx(4.592, abs=0.01)
+    assert not hasattr(report, "path")
+    assert report.verdict not in {"airborne", "early", "late"}
+
+
+def test_airborne_expectation_is_carried_as_context() -> None:
     """1.575 m of air is 4.59 ms, and the implied contact is that much earlier."""
     onsets = [0.3]
     edges = _edges_ns([0.3005])
@@ -258,15 +281,15 @@ def test_edge_csv_refuses_an_empty_file(tmp_path: Path) -> None:
         probe.read_edges_csv(path)
 
 
-def test_cli_reports_the_gate_path(tmp_path: Path, capsys) -> None:
-    """The offline CLI prints a row per impact and one verdict."""
+def test_cli_reports_the_comparator_delay(tmp_path: Path, capsys) -> None:
+    """The mic-only CLI prints a row per impact and says what it measured."""
     from scipy.io import wavfile  # pylint: disable=import-outside-toplevel
 
     onsets = [0.2, 0.45, 0.7]
     wav_path = tmp_path / "mic.wav"
     wavfile.write(wav_path, RATE, _waveform(onsets).astype(np.float32))
     edges_path = tmp_path / "edges.csv"
-    probe.write_edges_csv(edges_path, _edges_ns([value - 0.0012 for value in onsets]))
+    probe.write_edges_csv(edges_path, _edges_ns([value + 0.0003 for value in onsets]))
 
     code = probe.main(
         [
@@ -282,9 +305,157 @@ def test_cli_reports_the_gate_path(tmp_path: Path, capsys) -> None:
     )
     out = capsys.readouterr().out
     assert code == 0
-    assert out.count("-1.2") >= 1
-    assert "faster_than_air" in out
+    assert "comparator_delay" in out
+    assert "NOT what the gate fired on" in out
     assert "n=3" in out
+
+
+def test_cli_reports_the_walk_back_from_a_piezo(tmp_path: Path, capsys) -> None:
+    """With --contact-channel the CLI measures the real walk-back."""
+    from scipy.io import wavfile  # pylint: disable=import-outside-toplevel
+
+    contacts = [0.2, 0.45, 0.7]
+    stereo = _stereo(contacts, heard_delay_ms=AIRBORNE_MS, gate_delay_ms=AIRBORNE_MS + 0.3)
+    wav_path = tmp_path / "bench.wav"
+    wavfile.write(wav_path, RATE, stereo["samples"].astype(np.float32))
+    edges_path = tmp_path / "edges.csv"
+    probe.write_edges_csv(edges_path, stereo["edges"])
+
+    code = probe.main(
+        [
+            "--edges",
+            str(edges_path),
+            "--wav",
+            str(wav_path),
+            "--contact-channel",
+            "1",
+            "--audio-start-ns",
+            str(AUDIO_START_NS),
+            "--distance-m",
+            str(BALL_TO_MIC_M),
+        ]
+    )
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "airborne" in out
+    assert "n=3" in out
+
+
+# ---------------------------------------------------------------------------
+# gate versus a contact microphone on the mat
+# ---------------------------------------------------------------------------
+
+
+def _stereo(contacts, *, heard_delay_ms: float, gate_delay_ms: float, seed: int = 5) -> dict:
+    """Channel 0 = the mic (delayed), channel 1 = a piezo AT contact."""
+    piezo = _waveform(contacts, seed=seed)
+    heard = _waveform([value + heard_delay_ms / 1000.0 for value in contacts], seed=seed + 1)
+    return {
+        "samples": np.stack([heard, piezo], axis=1),
+        "edges": _edges_ns([value + gate_delay_ms / 1000.0 for value in contacts]),
+    }
+
+
+def test_piezo_referenced_walk_back_is_airborne_when_it_matches_the_flight_time() -> None:
+    """A gate that trails contact by the flight time IS the airborne path."""
+    contacts = [0.2, 0.45, 0.7]
+    stereo = _stereo(contacts, heard_delay_ms=AIRBORNE_MS, gate_delay_ms=AIRBORNE_MS + 0.2)
+    report = probe.gate_vs_contact(
+        stereo["edges"],
+        stereo["samples"],
+        RATE,
+        audio_start_ns=AUDIO_START_NS,
+        ball_to_mic_m=BALL_TO_MIC_M,
+    )
+    assert report.median_audio_minus_contact_ms == pytest.approx(AIRBORNE_MS, abs=0.15)
+    assert report.median_gate_minus_contact_ms == pytest.approx(AIRBORNE_MS + 0.2, abs=0.15)
+    assert report.classification == "airborne"
+
+
+def test_piezo_referenced_walk_back_names_an_early_gate() -> None:
+    """A gate 2 ms after contact beats airborne sound: not through the air."""
+    contacts = [0.2, 0.45, 0.7]
+    stereo = _stereo(contacts, heard_delay_ms=AIRBORNE_MS, gate_delay_ms=2.0)
+    report = probe.gate_vs_contact(
+        stereo["edges"],
+        stereo["samples"],
+        RATE,
+        audio_start_ns=AUDIO_START_NS,
+        ball_to_mic_m=BALL_TO_MIC_M,
+    )
+    assert report.median_gate_minus_contact_ms == pytest.approx(2.0, abs=0.15)
+    assert report.classification == "early"
+
+
+def test_piezo_referenced_walk_back_names_a_late_gate() -> None:
+    """Well beyond the flight time is late, not airborne."""
+    contacts = [0.3, 0.6]
+    stereo = _stereo(contacts, heard_delay_ms=AIRBORNE_MS, gate_delay_ms=7.0)
+    report = probe.gate_vs_contact(
+        stereo["edges"],
+        stereo["samples"],
+        RATE,
+        audio_start_ns=AUDIO_START_NS,
+        ball_to_mic_m=BALL_TO_MIC_M,
+    )
+    assert report.classification == "late"
+
+
+def test_piezo_report_carries_every_impact() -> None:
+    """Each impact keeps its own three instants, not just the median."""
+    contacts = [0.25, 0.55]
+    stereo = _stereo(contacts, heard_delay_ms=AIRBORNE_MS, gate_delay_ms=AIRBORNE_MS)
+    report = probe.gate_vs_contact(
+        stereo["edges"],
+        stereo["samples"],
+        RATE,
+        audio_start_ns=AUDIO_START_NS,
+        ball_to_mic_m=BALL_TO_MIC_M,
+    )
+    assert len(report.impacts) == 2
+    first = report.impacts[0]
+    assert first.contact_time_ns < first.audio_onset_time_ns
+    assert first.airborne_flight_ms == pytest.approx(AIRBORNE_MS, abs=0.01)
+
+
+def test_piezo_channel_must_exist() -> None:
+    """A mono recording has no contact channel, and says so."""
+    with pytest.raises(ValueError, match="channel_1_requested_from_a_mono_recording"):
+        probe.gate_vs_contact(
+            _edges_ns([0.2]),
+            _waveform([0.2]),
+            RATE,
+            audio_start_ns=AUDIO_START_NS,
+            ball_to_mic_m=BALL_TO_MIC_M,
+        )
+
+
+def test_piezo_report_refuses_no_edges() -> None:
+    """No edges, nothing to time."""
+    contacts = [0.2]
+    stereo = _stereo(contacts, heard_delay_ms=AIRBORNE_MS, gate_delay_ms=AIRBORNE_MS)
+    with pytest.raises(ValueError, match="no_gate_edges"):
+        probe.gate_vs_contact(
+            np.zeros(0, dtype=np.int64),
+            stereo["samples"],
+            RATE,
+            audio_start_ns=AUDIO_START_NS,
+            ball_to_mic_m=BALL_TO_MIC_M,
+        )
+
+
+def test_piezo_report_refuses_when_nothing_pairs() -> None:
+    """Edges with no impact near them are a refusal, not a median of nothing."""
+    contacts = [0.2]
+    stereo = _stereo(contacts, heard_delay_ms=AIRBORNE_MS, gate_delay_ms=AIRBORNE_MS)
+    with pytest.raises(ValueError, match="no_gate_edge_paired_with_a_contact_onset"):
+        probe.gate_vs_contact(
+            _edges_ns([0.9]),
+            stereo["samples"],
+            RATE,
+            audio_start_ns=AUDIO_START_NS,
+            ball_to_mic_m=BALL_TO_MIC_M,
+        )
 
 
 def test_cli_falls_back_to_camera_archives(tmp_path: Path, capsys) -> None:

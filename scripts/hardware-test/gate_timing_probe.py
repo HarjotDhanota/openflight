@@ -1,38 +1,43 @@
 #!/usr/bin/env python3
-"""Decide what the SEN-14262 GATE actually fires on: air, or something faster.
+"""Time the SEN-14262 GATE against an INDEPENDENT reference for contact.
 
 THE QUESTION
 ------------
 The club pipeline walks back from the trigger to contact by the sound's
 flight time from the ball (`camera.clubpose.impact_zone.contact_frame_from_trigger`,
 1.575 m / 343 m/s at 20 C = 4.59 ms). The August session's ball motion says
-the gate
-fires only 0.5-4 ms after contact, jittering +-1.5 ms. If the gate heard the
-impact through the air it cannot beat 4.59 ms, so either the camera's stamps
-lag (see `camera_latency_led.py`) or the gate is being driven by a path that
-is not airborne -- shock through the mat, the kickstand or the enclosure --
-or by an envelope crossing that happens earlier than the audible arrival.
+the gate fires only 0.5-4 ms after contact, jittering +-1.5 ms. Either the
+camera's stamps lag, or the gate is driven by something faster than airborne
+sound -- shock through the mat, the kickstand or the enclosure.
 
-THE MEASUREMENT
----------------
-Record the microphone's own AUDIO pin while logging GATE edges on a Pi GPIO,
-both on the monotonic clock. For each impact compare:
+WHAT THIS CAN AND CANNOT SETTLE
+-------------------------------
+The GATE is the board's own envelope comparator on the AUDIO pin. Comparing
+GATE with the envelope onset of THAT SAME signal therefore cannot test the
+structure-borne hypothesis at all: the two share a signal path, and the gate
+cannot physically precede the waveform it is derived from. `gate_vs_audio`
+measures only the COMPARATOR/THRESHOLD DELAY between our 8 x noise onset
+detector and the board's own crossing -- useful for characterising the
+detector (a negative median means our detector is the conservative one), and
+nothing more.
 
-  * the envelope onset  -- the first sample above k x the noise floor: when
-    the sound actually reached the microphone;
-  * the GATE edge       -- when the comparator fired;
-  * the airborne expectation -- distance / the speed of sound, the flight
-    time the pipeline currently assumes. `--temperature-c` moves that speed
-    off the 20 C default (`openflight.acoustics`); over 0-35 C it is a
-    3 percent, +-0.13 ms effect at this distance.
+Deciding the real question needs a reference for contact that is not the
+microphone:
 
-A GATE that consistently LEADS the acoustic onset did not come through the
-air. A GATE that lags it by a small, repeatable amount is an ordinary
-comparator delay, and the timing error lives elsewhere.
+  * `camera_latency_led.py --shot` -- the ball leaving the tee, on the
+    camera's own clock. One LED, no ADC. This is the primary route.
+  * `gate_vs_contact` here -- a piezo/contact microphone taped under the mat
+    beside the ball, recorded as the SECOND channel of the same stereo
+    recording as the AUDIO pin (`--contact-channel`). Its delay to contact is
+    the speed of sound in rubber over a few centimetres: negligible. Then
+    `audio_onset_minus_contact_ms` should equal the airborne flight time if
+    the microphone really is hearing the ball through the air, and
+    `gate_minus_contact_ms` is the TRUE walk-back the pipeline needs, with
+    its shot-to-shot jitter.
 
-The Pi has no analog input: the AUDIO pin needs a USB sound card or an ADC.
-With neither, the script still logs GATE edges and pairs them with the camera
-archives' `trigger_host_timestamp_ns`, which measures the host's own
+The Pi has no analog input: both AUDIO and the piezo need a USB sound card or
+an ADC. With neither, the script still logs GATE edges and pairs them with the
+camera archives' `trigger_host_timestamp_ns`, which measures the host's own
 edge-to-stamp latency instead.
 
 USAGE
@@ -41,10 +46,13 @@ USAGE
 
     # bench run on the Pi: log edges, and record audio if a device is present
     uv run python $SCRIPT --gpio 27 --seconds 60 --out ~/bench/gate
-    uv run python $SCRIPT --gpio 27 --seconds 60 --audio 1 --out ~/bench/gate
+    uv run python $SCRIPT --gpio 27 --seconds 60 --audio 1 --channels 2 --out ~/bench/gate
 
-    # offline: what did the gate fire on?
-    uv run python $SCRIPT --edges edges.csv --wav mic.wav --distance-m 1.575
+    # offline, stereo (mic + piezo): the true walk-back and its jitter
+    uv run python $SCRIPT --edges edges.csv --wav bench.wav --contact-channel 1
+
+    # offline, mic only: how late is the board's comparator vs our detector?
+    uv run python $SCRIPT --edges edges.csv --wav mic.wav
 
     # offline, no ADC: how late is the host's stamp of the same edge?
     uv run python $SCRIPT --edges edges.csv --archive ~/openflight_sessions
@@ -78,8 +86,16 @@ DEFAULT_NOISE_K = 8.0
 DEFAULT_NOISE_WINDOW_S = 0.02
 # How far either side of a GATE edge to look for its impact.
 DEFAULT_WINDOW_MS = 30.0
-# Below this the median gap is scatter, not a direction.
+# Below this the median comparator gap is scatter, not a direction.
 DEFAULT_TOLERANCE_MS = 0.2
+# The board's comparator needs some envelope to cross; more than this and it
+# is not merely a threshold difference from our own detector.
+COMPARATOR_EXPECTED_MAX_MS = 0.5
+# How far the measured walk-back may sit from the airborne expectation before
+# the shot is called early or late rather than airborne. Kept equal to
+# `camera_latency_led.WALK_BACK_TOLERANCE_MS`, which classifies the same
+# quantity measured through the camera.
+WALK_BACK_TOLERANCE_MS = 0.3
 # Largest gap that still pairs a GATE edge with a camera trigger stamp.
 DEFAULT_MAX_PAIR_MS = 50.0
 
@@ -111,13 +127,44 @@ class ImpactTiming:
 
 @dataclass(frozen=True)
 class GateAudioReport:
-    """What the gate fired on, over a run of impacts."""
+    """The board comparator's delay behind our own onset detector.
+
+    NOT a test of what the gate fired on: GATE is derived from AUDIO, so the
+    two cannot disagree about the path. `airborne_flight_ms` is carried for
+    context only -- nothing here is compared against it.
+    """
 
     impacts: tuple[ImpactTiming, ...]
     median_gate_minus_onset_ms: float
     mad_gate_minus_onset_ms: float
     airborne_flight_ms: float
-    path: str
+    verdict: str
+    unpaired_edges: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class ContactTiming:
+    """One impact timed against a contact microphone on the mat."""
+
+    edge_index: int
+    gate_time_ns: int
+    contact_time_ns: int
+    audio_onset_time_ns: int
+    audio_onset_minus_contact_ms: float
+    gate_minus_contact_ms: float
+    airborne_flight_ms: float
+
+
+@dataclass(frozen=True)
+class GateContactReport:
+    """The TRUE trigger-to-contact walk-back, from an independent reference."""
+
+    impacts: tuple[ContactTiming, ...]
+    median_gate_minus_contact_ms: float
+    mad_gate_minus_contact_ms: float
+    median_audio_minus_contact_ms: float
+    airborne_flight_ms: float
+    classification: str
     unpaired_edges: tuple[int, ...]
 
 
@@ -147,11 +194,15 @@ class GateHostReport:
 # ---------------------------------------------------------------------------
 
 
-def _as_mono(samples) -> np.ndarray:
-    """A 1-D float view of a recording, whatever it was stored as."""
+def _as_mono(samples, channel: int = 0) -> np.ndarray:
+    """A 1-D float view of one channel, whatever the recording was stored as."""
     data = np.asarray(samples)
     if data.ndim > 1:
-        data = data[:, 0]
+        if not 0 <= channel < data.shape[1]:
+            raise ValueError(f"channel_{channel}_not_in_a_{data.shape[1]}_channel_recording")
+        data = data[:, channel]
+    elif channel != 0:
+        raise ValueError(f"channel_{channel}_requested_from_a_mono_recording")
     if np.issubdtype(data.dtype, np.integer):
         scale = float(max(abs(np.iinfo(data.dtype).min), np.iinfo(data.dtype).max))
         return data.astype(np.float64) / scale
@@ -258,13 +309,19 @@ def gate_vs_audio(  # pylint: disable=too-many-arguments,too-many-locals
     noise_window_s: float = DEFAULT_NOISE_WINDOW_S,
     tolerance_ms: float = DEFAULT_TOLERANCE_MS,
 ) -> GateAudioReport:
-    """Time every GATE edge against the acoustic onset of its own impact.
+    """Measure the board comparator's delay behind our own onset detector.
+
+    GATE is the board's envelope comparator on the AUDIO pin, so this compares
+    two detectors reading ONE signal: it characterises the threshold, and
+    cannot say what the gate fired on. Expect 0 to +0.5 ms; a negative median
+    means our 8 x noise crossing is the later of the two. Use `gate_vs_contact`
+    (piezo) or `camera_latency_led.py --shot` for the walk-back itself.
 
     Both clocks are the host's monotonic clock: ``audio_start_ns`` is the
     stamp taken as the recording started, so sample *i* happened at
     ``audio_start_ns + i / rate``. ``speed_of_sound_m_s`` defaults to the
     codebase's 20 C constant; `acoustics.speed_of_sound_m_s(temperature_c)`
-    supplies a measured one.
+    supplies a measured one, and only feeds the context figure.
     """
     edges = np.asarray(gate_edges_ns, dtype=np.int64).reshape(-1)
     if edges.size == 0:
@@ -313,19 +370,132 @@ def gate_vs_audio(  # pylint: disable=too-many-arguments,too-many-locals
         raise ValueError("no_gate_edge_paired_with_an_acoustic_onset")
 
     median, mad = _median_and_mad([impact.gate_minus_onset_ms for impact in impacts])
-    limit = max(tolerance_ms, mad)
-    if median < -limit:
-        path = "faster_than_air"
-    elif median > limit:
-        path = "airborne"
-    else:
-        path = "inconclusive"
     return GateAudioReport(
         impacts=tuple(impacts),
         median_gate_minus_onset_ms=median,
         mad_gate_minus_onset_ms=mad,
         airborne_flight_ms=flight_ms,
-        path=path,
+        verdict=classify_comparator(median, tolerance_ms=max(tolerance_ms, mad)),
+        unpaired_edges=tuple(unpaired),
+    )
+
+
+def classify_comparator(
+    median_gate_minus_onset_ms: float, *, tolerance_ms: float = DEFAULT_TOLERANCE_MS
+) -> str:
+    """Name the gap between the board's comparator and our onset detector."""
+    if median_gate_minus_onset_ms < -tolerance_ms:
+        return "detector_more_conservative_than_the_board"
+    if median_gate_minus_onset_ms > COMPARATOR_EXPECTED_MAX_MS:
+        return "comparator_slower_than_expected"
+    return "comparator_delay"
+
+
+def classify_walk_back(
+    measured_ms: float, expected_ms: float, *, tolerance_ms: float = WALK_BACK_TOLERANCE_MS
+) -> str:
+    """Name the measured walk-back against the airborne expectation.
+
+    Kept identical to `camera_latency_led.classify_walk_back`, which applies
+    it to the camera-referenced measurement of the same quantity.
+    """
+    if measured_ms < expected_ms - tolerance_ms:
+        return "early"
+    if measured_ms > expected_ms + tolerance_ms:
+        return "late"
+    return "airborne"
+
+
+def gate_vs_contact(  # pylint: disable=too-many-arguments,too-many-locals
+    gate_edges_ns,
+    samples,
+    sample_rate_hz: float,
+    *,
+    audio_start_ns: int,
+    contact_channel: int = 1,
+    audio_channel: int = 0,
+    ball_to_mic_m: float = BALL_TO_UNIT_M,
+    speed_of_sound_m_s: float = acoustics.SPEED_OF_SOUND_20C_M_S,
+    window_ms: float = DEFAULT_WINDOW_MS,
+    noise_k: float = DEFAULT_NOISE_K,
+    noise_window_s: float = DEFAULT_NOISE_WINDOW_S,
+    tolerance_ms: float = WALK_BACK_TOLERANCE_MS,
+) -> GateContactReport:
+    """Time GATE and the microphone against a contact mic on the mat.
+
+    The piezo is centimetres from the ball through rubber, so its onset IS
+    contact for this purpose. Two numbers follow per impact: how long the
+    airborne sound took to reach the microphone
+    (``audio_onset_minus_contact_ms``, which should equal the airborne
+    expectation if the microphone is hearing the ball through the air at all),
+    and the walk-back the pipeline actually needs
+    (``gate_minus_contact_ms``), classified against that expectation.
+    """
+    edges = np.asarray(gate_edges_ns, dtype=np.int64).reshape(-1)
+    if edges.size == 0:
+        raise ValueError("no_gate_edges_to_time")
+    contact_data = _as_mono(samples, contact_channel)
+    audio_data = _as_mono(samples, audio_channel)
+    if contact_data.size == 0:
+        raise ValueError("empty_audio")
+    if ball_to_mic_m <= 0 or speed_of_sound_m_s <= 0:
+        raise ValueError("distance_and_speed_of_sound_must_be_positive")
+
+    flight_ms = ball_to_mic_m / speed_of_sound_m_s * 1000.0
+    contact_floor = noise_floor(contact_data, sample_rate_hz, window_s=noise_window_s)
+    audio_floor = noise_floor(audio_data, sample_rate_hz, window_s=noise_window_s)
+    half_window_s = window_ms / 1000.0
+
+    impacts: list[ContactTiming] = []
+    unpaired: list[int] = []
+    for edge_index, edge in enumerate(edges):
+        edge_s = (int(edge) - int(audio_start_ns)) / 1e9
+        try:
+            contact = envelope_onset(
+                contact_data,
+                sample_rate_hz,
+                noise_k=noise_k,
+                floor=contact_floor,
+                search_from_s=edge_s - half_window_s,
+                search_to_s=edge_s + half_window_s,
+            )
+            heard = envelope_onset(
+                audio_data,
+                sample_rate_hz,
+                noise_k=noise_k,
+                floor=audio_floor,
+                search_from_s=edge_s - half_window_s,
+                search_to_s=edge_s + half_window_s,
+            )
+        except ValueError:
+            unpaired.append(edge_index)
+            continue
+        contact_ns = int(audio_start_ns) + int(round(contact.time_s * 1e9))
+        heard_ns = int(audio_start_ns) + int(round(heard.time_s * 1e9))
+        impacts.append(
+            ContactTiming(
+                edge_index=edge_index,
+                gate_time_ns=int(edge),
+                contact_time_ns=contact_ns,
+                audio_onset_time_ns=heard_ns,
+                audio_onset_minus_contact_ms=(heard_ns - contact_ns) / 1e6,
+                gate_minus_contact_ms=(int(edge) - contact_ns) / 1e6,
+                airborne_flight_ms=flight_ms,
+            )
+        )
+
+    if not impacts:
+        raise ValueError("no_gate_edge_paired_with_a_contact_onset")
+
+    median, mad = _median_and_mad([impact.gate_minus_contact_ms for impact in impacts])
+    heard_median, _ = _median_and_mad([impact.audio_onset_minus_contact_ms for impact in impacts])
+    return GateContactReport(
+        impacts=tuple(impacts),
+        median_gate_minus_contact_ms=median,
+        mad_gate_minus_contact_ms=mad,
+        median_audio_minus_contact_ms=heard_median,
+        airborne_flight_ms=flight_ms,
+        classification=classify_walk_back(median, flight_ms, tolerance_ms=tolerance_ms),
         unpaired_edges=tuple(unpaired),
     )
 
@@ -408,9 +578,9 @@ def read_edges_csv(path) -> np.ndarray:
 
 
 def read_wav(path) -> tuple[int, np.ndarray]:
-    """Read a mono or multi-channel recording as float samples."""
+    """Read a recording, keeping its channels: the piezo lives in channel 1."""
     rate, data = wavfile.read(Path(path).expanduser())
-    return int(rate), _as_mono(data)
+    return int(rate), np.asarray(data)
 
 
 def read_trigger_stamps(paths) -> np.ndarray:
@@ -469,12 +639,14 @@ def log_gate_edges(pin: int, *, seconds: float, csv_path: Path, edges: int = 0) 
     return np.asarray(stamps, dtype=np.int64)
 
 
-def start_audio_recording(device, *, seconds: float, sample_rate: int):
-    """Begin a non-blocking recording of the microphone's AUDIO pin.
+def start_audio_recording(device, *, seconds: float, sample_rate: int, channels: int = 1):
+    """Begin a non-blocking recording of the mic's AUDIO pin (and the piezo).
 
-    Needs a USB sound card or an ADC: the Pi has no analog input. Returns the
-    monotonic stamp the recording started at and a callable that waits for it
-    to finish and hands back the samples.
+    Needs a USB sound card or an ADC: the Pi has no analog input. Record two
+    channels to capture the mat's contact microphone alongside AUDIO; they
+    then share one clock and one file. Returns the monotonic stamp the
+    recording started at and a callable that waits for it and hands back the
+    samples with their channels intact.
     """
     import time  # pylint: disable=import-outside-toplevel
 
@@ -482,13 +654,13 @@ def start_audio_recording(device, *, seconds: float, sample_rate: int):
 
     frames = int(seconds * sample_rate)
     recording = sounddevice.rec(
-        frames, samplerate=sample_rate, channels=1, dtype="float32", device=device
+        frames, samplerate=sample_rate, channels=channels, dtype="float32", device=device
     )
     started_ns = time.monotonic_ns()
 
     def finish() -> np.ndarray:
         sounddevice.wait()
-        return _as_mono(recording)
+        return np.asarray(recording)
 
     return started_ns, finish
 
@@ -517,6 +689,18 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument("--edges", type=Path, help="Edge CSV to analyse.")
     parser.add_argument("--wav", type=Path, help="Recording of the mic's AUDIO pin.")
+    parser.add_argument(
+        "--contact-channel",
+        type=int,
+        help="Channel of --wav carrying a piezo/contact mic on the mat. With it, "
+        "the probe measures the TRUE walk-back instead of the comparator delay.",
+    )
+    parser.add_argument(
+        "--audio-channel", type=int, default=0, help="Channel of --wav carrying the AUDIO pin."
+    )
+    parser.add_argument(
+        "--channels", type=int, default=1, help="Channels to record with --audio (2 with a piezo)."
+    )
     parser.add_argument(
         "--audio-start-ns",
         type=int,
@@ -565,11 +749,14 @@ def _run_hardware(args: argparse.Namespace) -> tuple[Path, Path | None, int | No
     finish = None
     if args.audio is not None:
         started_ns, finish = start_audio_recording(
-            args.audio, seconds=args.seconds, sample_rate=args.sample_rate
+            args.audio,
+            seconds=args.seconds,
+            sample_rate=args.sample_rate,
+            channels=args.channels,
         )
     log_gate_edges(args.gpio, seconds=args.seconds, csv_path=csv_path, edges=args.max_edges)
     if finish is not None:
-        wav_path = args.out / "mic.wav"
+        wav_path = args.out / ("bench.wav" if args.channels > 1 else "mic.wav")
         wavfile.write(wav_path, args.sample_rate, finish().astype(np.float32))
         wav_path.with_suffix(wav_path.suffix + ".json").write_text(
             json.dumps({"audio_start_ns": started_ns, "sample_rate": args.sample_rate}) + "\n",
@@ -578,12 +765,53 @@ def _run_hardware(args: argparse.Namespace) -> tuple[Path, Path | None, int | No
     return csv_path, wav_path, started_ns
 
 
+def _report_contact(args: argparse.Namespace, edges: np.ndarray) -> int:
+    """Print the piezo-referenced walk-back table and verdict."""
+    rate, samples = read_wav(args.wav)
+    speed = acoustics.speed_of_sound_m_s(args.temperature_c)
+    report = gate_vs_contact(
+        edges,
+        samples,
+        rate,
+        audio_start_ns=_audio_start_ns(args),
+        contact_channel=args.contact_channel,
+        audio_channel=args.audio_channel,
+        ball_to_mic_m=args.distance_m,
+        speed_of_sound_m_s=speed,
+        window_ms=args.window_ms,
+        noise_k=args.noise_k,
+    )
+    print(f"{'edge':>4}  {'heard-contact_ms':>17}  {'gate-contact_ms':>16}")
+    print(f"{'-' * 4}  {'-' * 17}  {'-' * 16}")
+    for impact in report.impacts:
+        print(
+            f"{impact.edge_index:>4}  "
+            f"{impact.audio_onset_minus_contact_ms:>+17.2f}  "
+            f"{impact.gate_minus_contact_ms:>+16.2f}"
+        )
+    if report.unpaired_edges:
+        print(f"\nunpaired edges (no impact in the search window): {report.unpaired_edges}")
+    print(
+        f"\nairborne expectation for {args.distance_m:.3f} m at {speed:.1f} m/s: "
+        f"{report.airborne_flight_ms:.2f} ms of flight; the microphone heard the "
+        f"impact {report.median_audio_minus_contact_ms:.2f} ms after contact"
+    )
+    print(
+        f"GATE fires {report.median_gate_minus_contact_ms:.2f} ms after contact "
+        f"(MAD {report.mad_gate_minus_contact_ms:.2f}, n={len(report.impacts)}) "
+        f"-> {report.classification}"
+    )
+    if report.classification == "early":
+        print("The trigger beats airborne sound: it is not arriving through the air.")
+    return 0
+
+
 def _report_audio(args: argparse.Namespace, edges: np.ndarray) -> int:
-    """Print the gate-versus-onset table and verdict."""
+    """Print the comparator-delay table and verdict."""
     rate, samples = read_wav(args.wav)
     report = gate_vs_audio(
         edges,
-        samples,
+        _as_mono(samples, args.audio_channel),
         rate,
         audio_start_ns=_audio_start_ns(args),
         ball_to_mic_m=args.distance_m,
@@ -610,12 +838,14 @@ def _report_audio(args: argparse.Namespace, edges: np.ndarray) -> int:
     )
     direction = "leads" if report.median_gate_minus_onset_ms < 0 else "lags"
     print(
-        f"GATE {direction} the acoustic onset by "
+        f"GATE {direction} our envelope onset by "
         f"{abs(report.median_gate_minus_onset_ms):.2f} ms "
-        f"(MAD {report.mad_gate_minus_onset_ms:.2f}, n={len(report.impacts)}) -> {report.path}"
+        f"(MAD {report.mad_gate_minus_onset_ms:.2f}, n={len(report.impacts)}) -> {report.verdict}"
     )
-    if report.path == "faster_than_air":
-        print("The trigger is NOT arriving through the air: the acoustic walk-back is wrong.")
+    print(
+        "This is the comparator threshold, NOT what the gate fired on: GATE is "
+        "derived from AUDIO. Use --contact-channel, or camera_latency_led.py --shot."
+    )
     return 0
 
 
@@ -638,7 +868,7 @@ def _report_archives(args: argparse.Namespace, edges: np.ndarray) -> int:
     return 0
 
 
-def main(argv=None) -> int:
+def main(argv=None) -> int:  # pylint: disable=too-many-return-statements
     """Log or analyse GATE timing and print the verdict."""
     args = parse_args(argv)
     if args.gpio is not None:
@@ -655,6 +885,8 @@ def main(argv=None) -> int:
         return 2
     try:
         edges = read_edges_csv(args.edges)
+        if args.wav is not None and args.contact_channel is not None:
+            return _report_contact(args, edges)
         if args.wav is not None:
             return _report_audio(args, edges)
         if args.archive:
