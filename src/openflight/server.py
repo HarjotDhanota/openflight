@@ -34,6 +34,7 @@ from .ops243 import (
     SpeedReading,
     set_show_raw_readings,
 )
+from .placement import PLACEMENT_TOLERANCE_DEG, assess_placement
 from .power import SUPPORTED_BATTERY_PROVIDERS, PowerMonitor, PowerStatus
 from .rolling_buffer.monitor import estimate_carry_with_spin, get_optimal_spin_for_ball_speed
 from .session_logger import get_session_logger, init_session_logger, log_session_error
@@ -149,6 +150,15 @@ camera_ball_flight_reference_tracker = None
 # Optional LIS3DH enclosure orientation used to compensate TI mount tilt.
 inclinometer_service = None
 inclinometer_runtime_config: dict = {"enabled": False}
+
+# Live tilt readout for the setup screen. The service samples at 10 Hz, but a
+# stationary rig has nothing new to say: the UI gets a slow heartbeat, and
+# only when the reading actually moved or the placement verdict changed.
+INCLINOMETER_STATUS_INTERVAL_S = 2.0
+INCLINOMETER_STATUS_MIN_CHANGE_DEG = 0.1
+_inclinometer_status_thread = None
+_inclinometer_status_stop = threading.Event()
+_last_inclinometer_status: dict | None = None
 
 # Ballistic model toggle. Shot carry comes from the physics simulator whenever
 # a vertical launch angle is available. Operators can explicitly disable it;
@@ -449,6 +459,7 @@ def _cleanup_hardware_for_shutdown() -> bool:
     if kld7_horizontal:
         _run_shutdown_step("K-LD7 horizontal stop", kld7_horizontal.stop)
     if inclinometer_service:
+        _run_shutdown_step("inclinometer status loop stop", _stop_inclinometer_status_loop)
         _run_shutdown_step("inclinometer stop", inclinometer_service.stop)
     if iwr6843_runtime:
         _run_shutdown_step("IWR6843 stop", iwr6843_runtime.stop)
@@ -1143,11 +1154,175 @@ def init_rig_geometry(path) -> None:
         "derived": setup.as_dict(),
     }
     logger.info("[SERVER] Rig geometry loaded from %s: %s", path, setup.as_dict())
+    if inclinometer_runtime_config.get("enabled"):
+        # Loading geometry after the sensor started (tests, and any future
+        # re-load) must not leave the gate judging against a stale
+        # expectation.
+        inclinometer_runtime_config["expected_orientation"] = (
+            rig_geometry.expected_inclinometer_orientation().as_dict()
+        )
     if setup.missing:
         logger.warning(
             "[SERVER] Rig geometry lacks %s; the command-line values stand in for those",
             ", ".join(setup.missing),
         )
+
+
+def _expected_inclinometer_orientation() -> dict:
+    """The orientation this enclosure should read, or a named absence.
+
+    Only the rig geometry file knows how the box is meant to stand, so
+    without ``--rig-geometry`` there is no expectation and the placement gate
+    says so by name instead of comparing the reading against an invented
+    zero.
+    """
+    if rig_geometry is None:
+        return {
+            "pitch_deg": None,
+            "roll_deg": None,
+            "missing": ["rig_geometry"],
+            "provenance": {
+                "pitch_deg": "unavailable: no enclosure geometry file (--rig-geometry)",
+                "roll_deg": "unavailable: no enclosure geometry file (--rig-geometry)",
+            },
+            "rig_provenance": "",
+        }
+    return rig_geometry.expected_inclinometer_orientation().as_dict()
+
+
+def _placement_tolerance_deg() -> float:
+    """The active placement tolerance, defaulting to the documented geometry bound."""
+    tolerance = inclinometer_runtime_config.get("placement_tolerance_deg")
+    return float(tolerance) if tolerance is not None else PLACEMENT_TOLERANCE_DEG
+
+
+def _assess_inclinometer_placement(snapshot) -> dict:
+    """Judge one orientation snapshot against the enclosure's designed pose.
+
+    The CALIBRATED angles are compared, not the raw ones: the zero offsets
+    exist to remove the sensor's own mounting bias, so the calibrated reading
+    is the housing's actual angle -- exactly what ``housing_tilt_deg +
+    lis3dh_mount_*_deg`` describes. With the default zero offsets the two are
+    the same number.
+    """
+    expected = inclinometer_runtime_config.get("expected_orientation") or {}
+    assessment = assess_placement(
+        pitch_deg=getattr(snapshot, "calibrated_pitch_deg", None),
+        roll_deg=getattr(snapshot, "calibrated_roll_deg", None),
+        expected_pitch_deg=expected.get("pitch_deg"),
+        expected_roll_deg=expected.get("roll_deg"),
+        tolerance_deg=_placement_tolerance_deg(),
+    )
+    data = assessment.to_dict()
+    data["expected_pitch_deg"] = expected.get("pitch_deg")
+    data["expected_roll_deg"] = expected.get("roll_deg")
+    data["reading"] = "calibrated"
+    return data
+
+
+def _inclinometer_status_payload() -> dict:
+    """One live tilt readout for the setup screen.
+
+    ``status`` is always a name: the placement verdict when a reading exists,
+    or ``disabled`` when the feature is off. ``reading_status`` is the
+    service's own selection status (``stable``, ``moving``, ``stale``,
+    ``sensor_error``, ``no_stable_preimpact_reading``), so the UI can say why
+    a number is missing rather than showing a blank.
+    """
+    if inclinometer_service is None:
+        placement = _assess_inclinometer_placement(None)
+        return {
+            "enabled": False,
+            "status": "disabled",
+            "reading_status": "disabled",
+            "pitch_deg": None,
+            "roll_deg": None,
+            "raw_pitch_deg": None,
+            "raw_roll_deg": None,
+            "expected_pitch_deg": placement["expected_pitch_deg"],
+            "expected_roll_deg": placement["expected_roll_deg"],
+            "pitch_error_deg": None,
+            "roll_error_deg": None,
+            "tolerance_deg": placement["tolerance_deg"],
+            "reason": "no tilt sensor: the inclinometer is not enabled (--inclinometer)",
+        }
+
+    selection = inclinometer_service.snapshot_for_impact(time.time())
+    snapshot = selection.snapshot
+    placement = _assess_inclinometer_placement(snapshot)
+    return {
+        "enabled": True,
+        "status": placement["status"],
+        "reading_status": selection.status,
+        "pitch_deg": (round(snapshot.calibrated_pitch_deg, 3) if snapshot is not None else None),
+        "roll_deg": round(snapshot.calibrated_roll_deg, 3) if snapshot is not None else None,
+        "raw_pitch_deg": round(snapshot.raw_pitch_deg, 3) if snapshot is not None else None,
+        "raw_roll_deg": round(snapshot.raw_roll_deg, 3) if snapshot is not None else None,
+        "expected_pitch_deg": placement["expected_pitch_deg"],
+        "expected_roll_deg": placement["expected_roll_deg"],
+        "pitch_error_deg": placement["pitch_error_deg"],
+        "roll_error_deg": placement["roll_error_deg"],
+        "tolerance_deg": placement["tolerance_deg"],
+        "reason": placement["reason"],
+    }
+
+
+def _inclinometer_status_changed(new: dict, old: dict | None) -> bool:
+    """True when a readout is worth sending: a new verdict or real movement."""
+    if old is None:
+        return True
+    if any(new.get(key) != old.get(key) for key in ("enabled", "status", "reading_status")):
+        return True
+    for key in ("pitch_deg", "roll_deg", "expected_pitch_deg", "expected_roll_deg"):
+        current, previous = new.get(key), old.get(key)
+        if (current is None) != (previous is None):
+            return True
+        if current is not None and abs(current - previous) > INCLINOMETER_STATUS_MIN_CHANGE_DEG:
+            return True
+    return False
+
+
+def _emit_inclinometer_status(*, force: bool = False) -> dict:
+    """Publish the tilt readout, skipping heartbeats that carry no news."""
+    global _last_inclinometer_status  # pylint: disable=global-statement
+    payload = _inclinometer_status_payload()
+    if force or _inclinometer_status_changed(payload, _last_inclinometer_status):
+        _last_inclinometer_status = payload
+        socketio.emit("inclinometer_status", payload)
+    return payload
+
+
+def _inclinometer_status_loop() -> None:
+    """Heartbeat the tilt readout while the service runs."""
+    while not _inclinometer_status_stop.wait(INCLINOMETER_STATUS_INTERVAL_S):
+        if inclinometer_service is None:
+            return
+        try:
+            _emit_inclinometer_status()
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.debug("Inclinometer status emit failed", exc_info=True)
+
+
+def _start_inclinometer_status_loop() -> None:
+    """Start the slow tilt heartbeat once, without blocking startup."""
+    global _inclinometer_status_thread  # pylint: disable=global-statement
+    if _inclinometer_status_thread is not None and _inclinometer_status_thread.is_alive():
+        return
+    _inclinometer_status_stop.clear()
+    _inclinometer_status_thread = threading.Thread(
+        target=_inclinometer_status_loop,
+        name="openflight-inclinometer-status",
+        daemon=True,
+    )
+    _inclinometer_status_thread.start()
+
+
+def _stop_inclinometer_status_loop() -> None:
+    """Stop the tilt heartbeat during shutdown."""
+    _inclinometer_status_stop.set()
+    thread = _inclinometer_status_thread
+    if thread is not None:
+        thread.join(timeout=INCLINOMETER_STATUS_INTERVAL_S + 0.5)
 
 
 def _rig_override(name: str, flag_value, rig_value):
@@ -1610,18 +1785,48 @@ def init_iwr6843(
         return False
 
 
-def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: int = 0x18) -> bool:
+def _log_startup_placement(placement: dict) -> None:
+    """Say at session start whether the unit is standing as designed.
+
+    A tilted rig never blocks a shot, but it must not be discovered in the
+    log afterwards either: this is the one moment the operator can still move
+    the box before the session's vertical datum is spent.
+    """
+    status = placement.get("status")
+    reason = placement.get("reason", "")
+    if status == "ok":
+        print(f"Placement OK ({reason})")
+        logger.info("[SERVER] Placement gate: %s", reason)
+        return
+    if status in ("no_reading", "no_expected_orientation"):
+        print(f"Placement not checked: {reason}")
+        logger.info("[SERVER] Placement gate not applied: %s", reason)
+        return
+    print(f"WARNING: enclosure placement {status}: {reason}")
+    logger.warning("[SERVER] Placement gate %s: %s", status, reason)
+
+
+def init_inclinometer(  # pylint: disable=too-many-locals
+    *,
+    zero_offset_deg: float,
+    roll_zero_offset_deg: float = 0.0,
+    placement_tolerance_deg: float = PLACEMENT_TOLERANCE_DEG,
+    bus_number: int = 1,
+    address: int = 0x18,
+) -> bool:
     """Start the optional LIS3DH service without risking radar availability."""
     global inclinometer_service  # pylint: disable=global-statement
     global inclinometer_runtime_config  # pylint: disable=global-statement
 
     service = None
+    expected = _expected_inclinometer_orientation()
     try:
         from .inclinometer import LIS3DH, InclinometerService
 
         service = InclinometerService(
             LIS3DH(bus_number=bus_number, address=address),
             zero_offset_deg=zero_offset_deg,
+            roll_zero_offset_deg=roll_zero_offset_deg,
         )
         service.start()
         startup = service.wait_for_stable(timeout_s=2.0)
@@ -1633,8 +1838,22 @@ def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: i
             "i2c_address": f"0x{address:02x}",
             "sample_hz": service.sample_hz,
             "zero_offset_deg": zero_offset_deg,
+            "roll_zero_offset_deg": roll_zero_offset_deg,
+            "roll_zero_offset_provenance": (
+                "measured: --inclinometer-roll-zero-offset-deg"
+                if roll_zero_offset_deg
+                else "assumed level mount"
+            ),
+            "placement_tolerance_deg": placement_tolerance_deg,
+            "expected_orientation": expected,
             "startup": startup.to_dict(),
         }
+        placement = _assess_inclinometer_placement(startup.snapshot)
+        inclinometer_runtime_config["placement"] = placement
+        inclinometer_runtime_config["startup"]["placement"] = placement
+        _start_inclinometer_status_loop()
+        _emit_inclinometer_status(force=True)
+        _log_startup_placement(placement)
         if startup.snapshot is None:
             logger.warning(
                 "[SERVER] LIS3DH initialized but has no stable startup reading (%s)",
@@ -1647,7 +1866,8 @@ def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: i
         print(
             "Inclinometer enabled "
             f"(raw pitch {snapshot.raw_pitch_deg:+.2f}deg, "
-            f"calibrated {snapshot.calibrated_pitch_deg:+.2f}deg)"
+            f"calibrated {snapshot.calibrated_pitch_deg:+.2f}deg, "
+            f"roll {snapshot.calibrated_roll_deg:+.2f}deg)"
         )
         if iwr6843_runtime is not None:
             configured_tilt = math.degrees(iwr6843_runtime.calibration.tilt_rad)
@@ -1678,8 +1898,14 @@ def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: i
             "i2c_bus": bus_number,
             "i2c_address": f"0x{address:02x}",
             "zero_offset_deg": zero_offset_deg,
+            "roll_zero_offset_deg": roll_zero_offset_deg,
+            "placement_tolerance_deg": placement_tolerance_deg,
+            "expected_orientation": expected,
             "error": str(error),
         }
+        # No sensor is not "placed correctly"; it is a reading that does not
+        # exist, and the gate says that by name.
+        inclinometer_runtime_config["placement"] = _assess_inclinometer_placement(None)
         return False
 
 
@@ -2392,6 +2618,7 @@ def handle_connect():
     _emit_sim_snapshot()
     if power_monitor and power_monitor.status:
         socketio.emit("power_status", power_monitor.status.to_dict())
+    socketio.emit("inclinometer_status", _inclinometer_status_payload())
     if monitor:
         socketio.emit("session_state", _session_state_payload(include_runtime_meta=True))
         socketio.emit("trigger_status", _get_trigger_status())
@@ -2407,6 +2634,12 @@ def handle_disconnect():
 def handle_get_trigger_status():
     """Get current trigger/mode status for debug UI."""
     socketio.emit("trigger_status", _get_trigger_status())
+
+
+@socketio.on("get_inclinometer_status")
+def handle_get_inclinometer_status():
+    """Send the current tilt readout on request (the setup screen's refresh)."""
+    _emit_inclinometer_status(force=True)
 
 
 @socketio.on("set_club")
@@ -2923,7 +3156,19 @@ def _snapshot_inclinometer_for_shot(shot: Shot) -> None:
     selection = inclinometer_service.snapshot_for_impact(impact_timestamp)
     data = selection.to_dict()
     data["zero_offset_deg"] = inclinometer_runtime_config.get("zero_offset_deg", 0.0)
+    data["roll_zero_offset_deg"] = inclinometer_runtime_config.get("roll_zero_offset_deg", 0.0)
     snapshot = selection.snapshot
+    # The placement gate rides along with the shot rather than gating it: a
+    # tilted session that is LABELLED tilted can still be re-analysed, while
+    # a refused shot is simply lost.
+    placement = _assess_inclinometer_placement(snapshot)
+    data["placement"] = placement
+    if placement["status"] not in ("ok", "no_reading", "no_expected_orientation"):
+        logger.warning(
+            "[SERVER] Shot kept with a tilted enclosure (%s): %s",
+            placement["status"],
+            placement["reason"],
+        )
     if snapshot is not None and iwr6843_runtime is not None:
         configured_tilt = math.degrees(iwr6843_runtime.calibration.tilt_rad)
         effective_tilt = configured_tilt + snapshot.calibrated_pitch_deg
@@ -5632,6 +5877,24 @@ def main():
         help="Degrees added to raw LIS3DH pitch (default: 0)",
     )
     parser.add_argument(
+        "--inclinometer-roll-zero-offset-deg",
+        type=float,
+        default=0.0,
+        help=(
+            "Degrees added to raw LIS3DH roll, positive = target-right side down "
+            "(default: 0, i.e. the board is assumed level across the housing)"
+        ),
+    )
+    parser.add_argument(
+        "--placement-tolerance-deg",
+        type=float,
+        default=PLACEMENT_TOLERANCE_DEG,
+        help=(
+            "How far the enclosure may sit from its designed pitch/roll before the "
+            f"placement gate reports a tilted rig (default: {PLACEMENT_TOLERANCE_DEG})"
+        ),
+    )
+    parser.add_argument(
         "--iwr6843-port", default=None, help="TI serial port (auto-detect by default)"
     )
     parser.add_argument(
@@ -5933,6 +6196,9 @@ def main():
         parser.error("--iwr6843 and horizontal --kld7 cannot both own club path")
     if args.inclinometer and not args.iwr6843:
         parser.error("--inclinometer requires --iwr6843")
+
+    if args.placement_tolerance_deg <= 0:
+        parser.error("--placement-tolerance-deg must be a positive number of degrees")
     if args.iwr6843 and args.mock:
         parser.error("--iwr6843 cannot be used with --mock")
     if args.camera_capture and args.mock:
@@ -6178,7 +6444,11 @@ def main():
             sys.exit(1)
 
     if args.inclinometer:
-        if not init_inclinometer(zero_offset_deg=args.inclinometer_zero_offset):
+        if not init_inclinometer(
+            zero_offset_deg=args.inclinometer_zero_offset,
+            roll_zero_offset_deg=args.inclinometer_roll_zero_offset_deg,
+            placement_tolerance_deg=args.placement_tolerance_deg,
+        ):
             print("WARNING: Inclinometer unavailable; continuing with configured IWR6843 tilt")
 
     # Initialize K-LD7 angle radars (if enabled)

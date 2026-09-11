@@ -8,6 +8,25 @@ import type { MockSession } from './session.js';
 
 const BALL_DETECTION_INTERVAL_MS = 1500;
 
+/** A v42 enclosure sitting where it should: 10 deg of housing tilt, square. */
+function mockInclinometerStatus() {
+  return {
+    enabled: true,
+    status: 'ok',
+    reading_status: 'stable',
+    pitch_deg: 10.2,
+    roll_deg: -0.3,
+    raw_pitch_deg: 10.2,
+    raw_roll_deg: -0.3,
+    expected_pitch_deg: 10.0,
+    expected_roll_deg: 0.0,
+    pitch_error_deg: 0.2,
+    roll_error_deg: -0.3,
+    tolerance_deg: 5.0,
+    reason: 'placed as designed: pitch +10.20 deg vs expected +10.00 deg',
+  };
+}
+
 export function registerHandlers(io: Server, session: MockSession): void {
   // Shared timer so all connected clients see the same fake detections
   const ballTimer = setInterval(() => {
@@ -38,6 +57,12 @@ export function registerHandlers(io: Server, session: MockSession): void {
       external_power: false,
       updated_at: new Date().toISOString(),
       error: null,
+    });
+
+    socket.emit('inclinometer_status', mockInclinometerStatus());
+
+    socket.on('get_inclinometer_status', () => {
+      socket.emit('inclinometer_status', mockInclinometerStatus());
     });
 
     socket.on('get_session', () => {

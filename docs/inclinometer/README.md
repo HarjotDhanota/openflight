@@ -240,6 +240,114 @@ For each shot, OpenFlight:
    mutated.
 5. Continues with the configured IWR tilt if correction cannot be applied.
 
+## Roll And The Placement Gate
+
+The LIS3DH is bolted to the housing, so it also knows whether the whole unit
+is standing the way the enclosure was designed to stand. OpenFlight checks
+that at session start and again on every shot, because the camera and radar
+maths absorb only about `5` degrees of placement error before a session's
+vertical numbers are poisoned — and that is worth catching before the first
+swing, not in the log afterwards.
+
+### Roll
+
+The service now reports roll alongside pitch, from the same filtered gravity
+vector:
+
+```text
+pitch = atan2(y, hypot(x, z))    positive = nose up (enclosure leaning back)
+roll  = atan2(-x, z)             positive = target-RIGHT side down
+```
+
+The pitch formula fixes the axes: `Y` is the forward/tilt-back direction and
+`Z` points up through the board, so `X` is the lateral axis, taken as pointing
+target-right. A build whose `X` faces target-left reads roll with the opposite
+sign; as with a reversed pitch axis, rotate the board rather than hiding it in
+an offset. Verify it the same way as pitch — `read_lis3dh.py` prints
+`Roll=` — by tipping the target-right side down and confirming the number goes
+positive.
+
+Roll has its own optional calibration bias,
+`--inclinometer-roll-zero-offset-deg`. It defaults to `0.0`, logged with the
+provenance `assumed level mount`.
+
+### Expected Orientation
+
+The expectation comes from the enclosure geometry file (`--rig-geometry`),
+never from a number typed in per session:
+
+```text
+expected pitch = housing_tilt_deg + lis3dh_mount_pitch_deg
+expected roll  =                    lis3dh_mount_roll_deg
+```
+
+`lis3dh_mount_pitch_deg` / `lis3dh_mount_roll_deg` are the sensor board's own
+angles relative to the housing. Both are `null` in
+`config/enclosure_v42_rig_geometry.json`, which the derivation reads as the
+design intent "board parallel to the housing, enclosure square" and says so in
+its provenance. The v42 enclosure leans its housing back `10.0` degrees, so a
+correctly placed unit reads about `+10` degrees of pitch and `0` degrees of
+roll.
+
+Without a geometry file, or without `housing_tilt_deg` in it, there is no
+expectation at all and the gate reports `no_expected_orientation` instead of
+judging the rig against an invented zero.
+
+### The Gate
+
+`openflight.placement.assess_placement` compares the calibrated reading with
+that expectation (the zero offsets remove the sensor's own bias, so the
+calibrated angle is the housing's actual angle) and returns one named status:
+
+| Status | Meaning |
+|--------|---------|
+| `ok` | both axes within the tolerance |
+| `tilted_pitch` | pitch is outside it |
+| `tilted_roll` | roll is outside it |
+| `tilted_both` | both are outside it |
+| `no_reading` | no usable inclinometer reading (disabled, moving, stale, sensor error) |
+| `no_expected_orientation` | the rig geometry cannot say how the unit should stand |
+
+The tolerance is `PLACEMENT_TOLERANCE_DEG = 5.0`, overridable with
+`--placement-tolerance-deg`. It is a bound on the geometry, not a sensor spec:
+at the tee range the IWR's elevation solve and the camera's ball-row height
+solve each stay inside their own error bars over about `±5` degrees of
+placement error, and beyond that they disagree by more than the launch-angle
+budget. An error exactly equal to the tolerance still passes.
+
+**A tilted placement never blocks a shot.** The shot is processed and logged
+with its status attached, because a session labelled tilted can still be
+re-analysed while a refused shot is simply lost.
+
+Where the verdict shows up:
+
+- `session_start` → `inclinometer.placement`, plus
+  `inclinometer.expected_orientation` and `inclinometer.placement_tolerance_deg`.
+- Each `shot_detected` → `inclinometer.placement`.
+- Socket.IO `inclinometer_status`, emitted on client connect, at startup, on
+  request (`get_inclinometer_status`), and every `2` seconds while the service
+  runs — but only when the reading moved more than `0.1` degrees or the status
+  changed. It carries `pitch_deg`, `roll_deg`, the raw pair, the expected pair,
+  the signed errors, the tolerance, `reading_status` (the snapshot selection:
+  `stable`, `moving`, `stale`, `sensor_error`,
+  `no_stable_preimpact_reading`), and a human-readable `reason`. With the
+  inclinometer disabled the event still arrives, with `status: disabled`.
+
+The kiosk shows this as a tilt row in the header status readout: pitch and
+roll, and a green/amber/red pill naming the status.
+
+### Example Startup
+
+```bash
+scripts/start-kiosk.sh \
+  --iwr6843 \
+  --rig-geometry config/enclosure_v42_rig_geometry.json \
+  --inclinometer \
+  --inclinometer-zero-offset 1.5 \
+  --inclinometer-roll-zero-offset-deg 0 \
+  --placement-tolerance-deg 5
+```
+
 ## Session Logging
 
 The `session_start` entry records:
@@ -259,6 +367,9 @@ Each `shot_detected` entry records:
 
 Common statuses are `stable`, `moving`, `stale`, `sensor_error`, and
 `no_stable_preimpact_reading`.
+
+Each entry also carries the placement gate's verdict under `placement` (see
+"Roll And The Placement Gate" above).
 
 ## Troubleshooting
 
@@ -336,6 +447,9 @@ mounting angle into `--inclinometer-zero-offset`.
 ## Current Limitations
 
 - Pitch compensation uses the LIS3DH Y direction.
-- X/roll is logged but not yet applied to full 3D boresight compensation.
+- Roll is reported and gated on, but is not yet applied to full 3D boresight
+  compensation; only pitch corrects the IWR tilt.
+- The roll zero offset has no calibration helper; it is assumed zero unless
+  measured by hand.
 - Sensor bus, address, and calibration are command-line/runtime settings rather
   than a persisted rig configuration file.

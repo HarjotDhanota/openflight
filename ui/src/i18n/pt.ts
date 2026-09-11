@@ -191,6 +191,18 @@ export const pt: Messages = {
   'shutdown.shutDown': 'Desligar',
   'shutdown.cancel': 'Cancelar',
 
+  'tilt.label': 'Inclinação',
+  'tilt.pitch': 'Arfagem',
+  'tilt.roll': 'Rolagem',
+  'tilt.ok': 'Bem posicionado',
+  'tilt.tiltedPitch': 'Arfagem fora',
+  'tilt.tiltedRoll': 'Rolagem fora',
+  'tilt.tiltedBoth': 'Arfagem e rolagem fora',
+  'tilt.noReading': 'Sem leitura',
+  'tilt.notChecked': 'Não verificado',
+  'tilt.disabled': 'Sem sensor de inclinação',
+  'tilt.summary': 'Inclinação: {verdict}, arfagem {pitch}, rolagem {roll}',
+
   'power.pluggedIn': 'Na tomada',
   'power.onBattery': 'Na bateria',
   'power.label': '{source}, {percent} de bateria',

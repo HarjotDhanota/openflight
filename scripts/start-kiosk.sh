@@ -63,6 +63,8 @@ IWR6843_AZIMUTH_OFFSET=""
 IWR6843_HORIZONTAL_PHASE_REFERENCE_RAD=""
 INCLINOMETER=false
 INCLINOMETER_ZERO_OFFSET=""
+INCLINOMETER_ROLL_ZERO_OFFSET_DEG=""
+PLACEMENT_TOLERANCE_DEG=""
 KLD7=false
 KLD7_PORT=""
 KLD7_ANGLE_OFFSET=""
@@ -311,6 +313,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --inclinometer-zero-offset)
             INCLINOMETER_ZERO_OFFSET="$2"
+            shift 2
+            ;;
+        --inclinometer-roll-zero-offset-deg)
+            INCLINOMETER_ROLL_ZERO_OFFSET_DEG="$2"
+            shift 2
+            ;;
+        --placement-tolerance-deg)
+            PLACEMENT_TOLERANCE_DEG="$2"
             shift 2
             ;;
         --kld7)
@@ -749,7 +759,13 @@ fi
 if [ "$INCLINOMETER" = true ]; then
     SERVER_CMD="$SERVER_CMD --inclinometer"
     [ -n "$INCLINOMETER_ZERO_OFFSET" ] && SERVER_CMD="$SERVER_CMD --inclinometer-zero-offset $INCLINOMETER_ZERO_OFFSET"
+    [ -n "$INCLINOMETER_ROLL_ZERO_OFFSET_DEG" ] && SERVER_CMD="$SERVER_CMD --inclinometer-roll-zero-offset-deg $INCLINOMETER_ROLL_ZERO_OFFSET_DEG"
 fi
+
+# The placement gate runs off the inclinometer, but the tolerance is a
+# geometry constant: pass it whenever it is set so a session logs the bound
+# it was actually judged against.
+[ -n "$PLACEMENT_TOLERANCE_DEG" ] && SERVER_CMD="$SERVER_CMD --placement-tolerance-deg $PLACEMENT_TOLERANCE_DEG"
 
 if [ "$EXPERIMENTAL_KLD7_RAW_RADC_LOGGING" = true ]; then
     SERVER_CMD="$SERVER_CMD --kld7-raw-logging"

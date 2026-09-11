@@ -10,7 +10,24 @@ from openflight.inclinometer import (
     InclinometerService,
     LIS3DHIdentityError,
 )
-from openflight.inclinometer.service import pitch_degrees
+from openflight.inclinometer.service import pitch_degrees, roll_degrees
+
+
+def _gravity(pitch_deg: float, roll_deg: float) -> tuple[float, float, float]:
+    """The 1 g vector a level-mounted LIS3DH reads at this pitch and roll.
+
+    Pitch tilts the forward (+Y) axis up, roll drops the target-right side,
+    which moves the sensed up-vector onto -X. The exact inverse of
+    `pitch_degrees` / `roll_degrees`, so the tests below pin both formulas
+    rather than restating one of them.
+    """
+    pitch = math.radians(pitch_deg)
+    roll = math.radians(roll_deg)
+    return (
+        -math.sin(roll) * math.cos(pitch),
+        math.sin(pitch),
+        math.cos(roll) * math.cos(pitch),
+    )
 
 
 def _axis_bytes(value_g: float) -> list[int]:
@@ -67,6 +84,72 @@ def test_pitch_is_positive_when_sensor_y_tilts_back():
     sample = AccelerationSample(1.0, 0.0, math.sin(angle), math.cos(angle))
 
     assert pitch_degrees(sample) == pytest.approx(12.0)
+
+
+def test_pitch_and_roll_read_zero_on_a_level_enclosure():
+    sample = AccelerationSample(1.0, *_gravity(0.0, 0.0))
+
+    assert pitch_degrees(sample) == pytest.approx(0.0, abs=1e-6)
+    assert roll_degrees(sample) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_ten_degrees_of_tilt_back_is_pitch_only():
+    sample = AccelerationSample(1.0, *_gravity(10.0, 0.0))
+
+    assert sample.y_g == pytest.approx(math.sin(math.radians(10.0)), abs=1e-12)
+    assert pitch_degrees(sample) == pytest.approx(10.0, abs=1e-6)
+    assert roll_degrees(sample) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_roll_is_positive_when_the_target_right_side_drops():
+    sample = AccelerationSample(1.0, *_gravity(0.0, 5.0))
+
+    # Right side down puts the sensed up-vector on -X, which is the sign the
+    # roll formula's negation exists for.
+    assert sample.x_g < 0.0
+    assert roll_degrees(sample) == pytest.approx(5.0, abs=1e-6)
+    assert pitch_degrees(sample) == pytest.approx(0.0, abs=1e-6)
+    assert roll_degrees(AccelerationSample(1.0, *_gravity(0.0, -5.0))) == pytest.approx(
+        -5.0, abs=1e-6
+    )
+
+
+def test_pitch_and_roll_stay_separable_when_the_enclosure_has_both():
+    sample = AccelerationSample(1.0, *_gravity(10.0, 5.0))
+
+    assert math.hypot(sample.x_g, sample.y_g, sample.z_g) == pytest.approx(1.0, abs=1e-12)
+    assert pitch_degrees(sample) == pytest.approx(10.0, abs=1e-6)
+    assert roll_degrees(sample) == pytest.approx(5.0, abs=1e-6)
+
+
+def test_service_reports_roll_with_its_own_zero_offset():
+    service = InclinometerService(
+        sensor=None,
+        zero_offset_deg=1.5,
+        roll_zero_offset_deg=-0.25,
+        window_samples=3,
+    )
+    axes = _gravity(10.0, 5.0)
+
+    for timestamp in (1.0, 1.1, 1.2):
+        snapshot = service.add_sample(AccelerationSample(timestamp, *axes))
+
+    assert snapshot.raw_pitch_deg == pytest.approx(10.0, abs=1e-6)
+    assert snapshot.calibrated_pitch_deg == pytest.approx(11.5, abs=1e-6)
+    assert snapshot.raw_roll_deg == pytest.approx(5.0, abs=1e-6)
+    assert snapshot.calibrated_roll_deg == pytest.approx(4.75, abs=1e-6)
+    assert snapshot.to_dict()["calibrated_roll_deg"] == 4.75
+
+
+def test_roll_defaults_to_the_raw_reading_when_no_offset_is_configured():
+    service = InclinometerService(sensor=None, window_samples=3)
+    axes = _gravity(0.0, -3.0)
+
+    for timestamp in (1.0, 1.1, 1.2):
+        snapshot = service.add_sample(AccelerationSample(timestamp, *axes))
+
+    assert snapshot.raw_roll_deg == pytest.approx(-3.0, abs=1e-6)
+    assert snapshot.calibrated_roll_deg == pytest.approx(snapshot.raw_roll_deg, abs=1e-12)
 
 
 def test_service_applies_zero_offset_and_selects_preimpact_snapshot():

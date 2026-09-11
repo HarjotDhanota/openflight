@@ -5,7 +5,7 @@ import argparse
 import time
 
 from openflight.inclinometer import LIS3DH
-from openflight.inclinometer.service import pitch_degrees
+from openflight.inclinometer.service import pitch_degrees, roll_degrees
 
 
 def main() -> None:
@@ -37,10 +37,14 @@ def main() -> None:
             sample = sensor.read()
             raw_pitch = pitch_degrees(sample)
             enclosure_pitch = raw_pitch + args.zero_offset_deg
+            # Roll is printed raw so the mounting check in the docs -- tip the
+            # target-right side down, the number must go positive -- can be
+            # made with the same readout as the pitch check.
+            raw_roll = roll_degrees(sample)
             output = (
                 f"X={sample.x_g:+.3f}g  Y={sample.y_g:+.3f}g  "
                 f"Z={sample.z_g:+.3f}g  Raw={raw_pitch:+.2f}deg  "
-                f"Enclosure={enclosure_pitch:+.2f}deg"
+                f"Enclosure={enclosure_pitch:+.2f}deg  Roll={raw_roll:+.2f}deg"
             )
             if args.iwr6843_tilt_deg is not None:
                 effective_tilt = args.iwr6843_tilt_deg + enclosure_pitch

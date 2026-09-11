@@ -17,7 +17,13 @@ class AccelerationSample:
 
 @dataclass(frozen=True)
 class OrientationSnapshot:
-    """Filtered enclosure orientation produced from a stationary sample window."""
+    """Filtered enclosure orientation produced from a stationary sample window.
+
+    Pitch is positive NOSE UP (the enclosure leaning back), roll is positive
+    TARGET-RIGHT SIDE DOWN; both are derived from one filtered gravity vector
+    by `service.pitch_degrees` / `service.roll_degrees`, which document the
+    axes. The calibrated values add the configured zero offsets.
+    """
 
     timestamp: float
     x_g: float
@@ -26,6 +32,8 @@ class OrientationSnapshot:
     gravity_g: float
     raw_pitch_deg: float
     calibrated_pitch_deg: float
+    raw_roll_deg: float
+    calibrated_roll_deg: float
     pitch_std_deg: float
     sample_count: int
 
@@ -34,7 +42,13 @@ class OrientationSnapshot:
         data = asdict(self)
         for key in ("x_g", "y_g", "z_g", "gravity_g"):
             data[key] = round(data[key], 4)
-        for key in ("raw_pitch_deg", "calibrated_pitch_deg", "pitch_std_deg"):
+        for key in (
+            "raw_pitch_deg",
+            "calibrated_pitch_deg",
+            "raw_roll_deg",
+            "calibrated_roll_deg",
+            "pitch_std_deg",
+        ):
             data[key] = round(data[key], 3)
         data["stable"] = True
         return data

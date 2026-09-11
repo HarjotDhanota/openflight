@@ -21,8 +21,11 @@ What a single teed ball can NOT solve, and where that lives instead:
     the rig's designed boresight (level) and says so. A caller with a taped
     ball height solves the mount instead via
     `projection.camera_pitch_from_ball_row` -- the two calibrations separate.
-  * ROLL is invisible to a point target. It comes from the LIS3DH
-    (roadmap 1.3), never from here.
+  * ROLL is invisible to a point target. The MEASURED roll comes from the
+    LIS3DH (roadmap 1.3), never from here; what this module supplies is the
+    roll the enclosure was DESIGNED to stand at, so the placement gate
+    (`openflight.placement`) has something to compare that measurement
+    against.
   * YAW (aim at the target) is invisible to any static scene. It is the one
     user gesture (roadmap 2.1), never solved here.
 
@@ -100,6 +103,13 @@ class RigGeometry:
     iwr_boresight_pitch_deg: float | None = None
     ops_boresight_pitch_deg: float | None = None
     housing_tilt_deg: float | None = None
+    # The LIS3DH board's own angles RELATIVE TO THE HOUSING it is stuck to,
+    # in the inclinometer's sense (pitch positive nose up, roll positive
+    # target-right side down). None means the file does not say, and the
+    # expected orientation falls back to the stated "parallel to the
+    # housing" assumption rather than to a silent zero.
+    lis3dh_mount_pitch_deg: float | None = None
+    lis3dh_mount_roll_deg: float | None = None
 
     @property
     def principal_point(self) -> tuple[float, float]:
@@ -175,6 +185,76 @@ class RigGeometry:
             provenance=self.provenance,
         )
 
+    def expected_inclinometer_orientation(self) -> "ExpectedOrientation":
+        """What the LIS3DH should read when this enclosure is placed as designed.
+
+        The sensor is fixed to the housing, so a correctly placed unit reads
+        the housing's designed lean plus whatever angle the board itself sits
+        at on the housing::
+
+            expected pitch = housing_tilt_deg + lis3dh_mount_pitch_deg
+            expected roll  =                    lis3dh_mount_roll_deg
+
+        A rig file without the mount angles is treated as the board being
+        PARALLEL to the housing -- the v42 design intent, "LIS3DH parallel to
+        the housing ... reads 10 deg pitch when deployed" -- and every field
+        says in ``provenance`` which half came from the file and which half is
+        that assumption. Without ``housing_tilt_deg`` there is no expectation
+        at all: the pitch is None and named in ``missing``, so the placement
+        gate reports `no_expected_orientation` instead of judging the unit
+        against a zero nobody measured.
+        """
+        missing: list[str] = []
+        provenance: dict[str, str] = {}
+
+        mount_pitch = self.lis3dh_mount_pitch_deg
+        mount_roll = self.lis3dh_mount_roll_deg
+        if mount_pitch is None:
+            missing.append("lis3dh_mount_pitch_deg")
+        if mount_roll is None:
+            missing.append("lis3dh_mount_roll_deg")
+
+        pitch: float | None
+        if self.housing_tilt_deg is None:
+            missing.append("housing_tilt_deg")
+            pitch = None
+            provenance["pitch_deg"] = (
+                "unavailable: the rig file has no housing_tilt_deg, so the designed "
+                "enclosure lean is unknown"
+            )
+        else:
+            pitch = float(self.housing_tilt_deg) + float(mount_pitch or 0.0)
+            mount_part = (
+                f"lis3dh_mount_pitch_deg {float(mount_pitch):+.2f} deg from the rig file"
+                if mount_pitch is not None
+                else (
+                    "an ASSUMED +0.00 deg board pitch (LIS3DH parallel to the housing; "
+                    "lis3dh_mount_pitch_deg absent from the rig file)"
+                )
+            )
+            provenance["pitch_deg"] = (
+                f"housing_tilt_deg {float(self.housing_tilt_deg):+.2f} deg from the rig "
+                f"file plus {mount_part}"
+            )
+
+        roll = float(mount_roll or 0.0)
+        provenance["roll_deg"] = (
+            f"lis3dh_mount_roll_deg {float(mount_roll):+.2f} deg from the rig file"
+            if mount_roll is not None
+            else (
+                "ASSUMED +0.00 deg: the enclosure is designed to stand square, and "
+                "lis3dh_mount_roll_deg is absent from the rig file"
+            )
+        )
+
+        return ExpectedOrientation(
+            pitch_deg=pitch,
+            roll_deg=roll,
+            missing=tuple(missing),
+            provenance=provenance,
+            rig_provenance=self.provenance,
+        )
+
     def to_json(self, path: str | Path) -> None:
         """Write the geometry as JSON -- the file the STEP-derived config becomes."""
         Path(path).write_text(json.dumps(asdict(self), indent=1), encoding="utf-8")
@@ -213,6 +293,34 @@ class EnclosureSetup:
             "iwr_tilt_deg": self.iwr_tilt_deg,
             "missing": list(self.missing),
             "provenance": self.provenance,
+        }
+
+
+@dataclass(frozen=True)
+class ExpectedOrientation:
+    """The orientation a correctly placed enclosure should read, and why.
+
+    ``pitch_deg`` is None when the rig file cannot say (no housing tilt);
+    ``roll_deg`` is always a number, because "square" is a design statement
+    the enclosure always makes -- ``provenance`` says whether the file
+    measured it or the assumption supplied it. ``missing`` names every rig
+    field that was absent.
+    """
+
+    pitch_deg: float | None
+    roll_deg: float | None
+    missing: tuple[str, ...] = ()
+    provenance: Mapping[str, str] = field(default_factory=dict)
+    rig_provenance: str = ""
+
+    def as_dict(self) -> dict:
+        """JSON-safe view for the session log, the shot payload, and the UI."""
+        return {
+            "pitch_deg": self.pitch_deg,
+            "roll_deg": self.roll_deg,
+            "missing": list(self.missing),
+            "provenance": dict(self.provenance),
+            "rig_provenance": self.rig_provenance,
         }
 
 

@@ -11,6 +11,7 @@ import {
   type TriggerStatus,
 } from '../types/shot';
 import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimStatus } from '../types/socket';
+import type { InclinometerStatus } from '../types/inclinometer';
 import type { PowerStatus } from '../types/power';
 import { getServerOrigin } from '../utils/serverOrigin';
 import { handleShotMessage, handleShotUpdate, type ShotMessage, type ShotUpdateMessage } from './handleShotMessage';
@@ -51,6 +52,7 @@ class SocketService {
       this.socket?.emit('get_trigger_status');
       this.socket?.emit('get_radar_config');
       this.socket?.emit('get_camera_capture_settings');
+      this.socket?.emit('get_inclinometer_status');
     });
 
     this.socket.on('disconnect', () => {
@@ -88,6 +90,10 @@ class SocketService {
 
     this.socket.on('power_status', (data: PowerStatus) => {
       useSystemStore.getState().setPowerStatus(data);
+    });
+
+    this.socket.on('inclinometer_status', (data: InclinometerStatus) => {
+      useSystemStore.getState().setInclinometerStatus(data);
     });
 
     this.socket.on('sim_shot', (data: SimShotInfo) => {
