@@ -53,6 +53,12 @@ ui = [
 camera = [
     "opencv-python-headless>=4.8.0",
 ]
+# Bench instrumentation. `sounddevice` records the SEN-14262 AUDIO pin through
+# a USB sound card or ADC for scripts/hardware-test/gate_timing_probe.py; the
+# probe's analysis runs without it.
+bench = [
+    "sounddevice>=0.4.6",
+]
 # Analysis tools for I/Q capture data
 analysis = [
     "numpy>=1.20.0",
