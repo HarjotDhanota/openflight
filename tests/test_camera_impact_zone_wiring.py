@@ -208,6 +208,35 @@ class TestItReadsWhenEverythingIsThere:
         assert payload["status"] in {"ok", "withheld"}
         assert payload["high_low_status"] == "experimental_unvalidated"
 
+    def test_the_support_plane_channel_travels_with_the_reading(self, templates):
+        payload = _estimate(template_dir=templates).as_dict()
+
+        for name in (
+            "contact_above_support_mm",
+            "topline_above_support_mm",
+            "sole_above_support_mm",
+            "support_plane_status",
+            "mat_gate_status",
+            "vertical_channel_status",
+            "sole_tolerance_reason",
+        ):
+            assert name in payload, name
+
+    def test_the_lie_defaults_to_unknown_because_nothing_asks_the_user(self, templates):
+        result = _estimate(template_dir=templates)
+
+        assert result.lie == zone.DEFAULT_LIE == "unknown"
+
+    def test_a_caller_that_knows_the_lie_can_tighten_the_gate(self, templates):
+        result = _estimate(template_dir=templates, lie="mat")
+
+        assert result.lie == "mat"
+        assert zone.sole_tolerance_for(result.lie)[0] == zone.SOLE_NOISE_MARGIN_MM
+
+    def test_an_unrecognised_lie_is_refused_at_the_wiring(self, templates):
+        with pytest.raises(ValueError, match="unknown lie"):
+            _estimate(template_dir=templates, lie="fairway-bunker")
+
 
 class TestTheServerFlag:
     def test_the_feature_is_off_by_default(self):

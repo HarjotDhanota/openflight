@@ -3173,6 +3173,10 @@ def _read_impact_zone(shot: Shot, archive, trigger_index, temperature_c: float |
 
     ``temperature_c`` is the ambient air temperature for the acoustic
     walk-back; None uses the conventional 20 C speed of sound.
+    The whole `ImpactZoneResult.as_dict()` travels, so channels added there
+    (the 3-D projection, the support-plane heights) reach the payload with no
+    change here -- and anything the mat-geometry gate withholds is already
+    None in that dict, so a withheld vertical reading cannot leak as a number.
     """
     from openflight.camera.clubpose.impact_zone import withheld  # noqa: PLC0415
 
