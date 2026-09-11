@@ -1,7 +1,8 @@
 # Bench: what the trigger timing really is
 
 The pipeline walks back from the sound trigger to contact by the sound's flight
-time (1.575 m / 343 m/s = 4.59 ms, `impact_zone.contact_frame_from_trigger`).
+time (1.575 m / 343 m/s at 20 C = 4.59 ms, `impact_zone.contact_frame_from_trigger`;
+`--temperature-c` moves that speed via `openflight.acoustics`).
 The August session's ball motion says the trigger lands only 0.5–4 ms after
 contact and jitters ±1.5 ms — a frame of error, and ~3° of attack angle. Two
 suspects, two bench measurements. **Neither script changes a pipeline default.**

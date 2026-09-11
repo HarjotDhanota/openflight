@@ -5,7 +5,8 @@ THE QUESTION
 ------------
 The club pipeline walks back from the trigger to contact by the sound's
 flight time from the ball (`camera.clubpose.impact_zone.contact_frame_from_trigger`,
-1.575 m / 343 m/s = 4.59 ms). The August session's ball motion says the gate
+1.575 m / 343 m/s at 20 C = 4.59 ms). The August session's ball motion says
+the gate
 fires only 0.5-4 ms after contact, jittering +-1.5 ms. If the gate heard the
 impact through the air it cannot beat 4.59 ms, so either the camera's stamps
 lag (see `camera_latency_led.py`) or the gate is being driven by a path that
@@ -20,8 +21,10 @@ both on the monotonic clock. For each impact compare:
   * the envelope onset  -- the first sample above k x the noise floor: when
     the sound actually reached the microphone;
   * the GATE edge       -- when the comparator fired;
-  * the airborne expectation -- distance / 343 m/s, the flight time the
-    pipeline currently assumes.
+  * the airborne expectation -- distance / the speed of sound, the flight
+    time the pipeline currently assumes. `--temperature-c` moves that speed
+    off the 20 C default (`openflight.acoustics`); over 0-35 C it is a
+    3 percent, +-0.13 ms effect at this distance.
 
 A GATE that consistently LEADS the acoustic onset did not come through the
 air. A GATE that lags it by a small, repeatable amount is an ordinary
@@ -65,7 +68,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
-SPEED_OF_SOUND_M_S = 343.0
+from openflight import acoustics  # noqa: E402  # pylint: disable=wrong-import-position
+
 # The shipped rig's ball-to-unit distance (impact_zone.BALL_TO_UNIT_M).
 BALL_TO_UNIT_M = 1.575
 # Multiples of the noise floor that count as the sound arriving.
@@ -248,7 +252,7 @@ def gate_vs_audio(  # pylint: disable=too-many-arguments,too-many-locals
     *,
     audio_start_ns: int,
     ball_to_mic_m: float = BALL_TO_UNIT_M,
-    speed_of_sound_m_s: float = SPEED_OF_SOUND_M_S,
+    speed_of_sound_m_s: float = acoustics.SPEED_OF_SOUND_20C_M_S,
     window_ms: float = DEFAULT_WINDOW_MS,
     noise_k: float = DEFAULT_NOISE_K,
     noise_window_s: float = DEFAULT_NOISE_WINDOW_S,
@@ -258,7 +262,9 @@ def gate_vs_audio(  # pylint: disable=too-many-arguments,too-many-locals
 
     Both clocks are the host's monotonic clock: ``audio_start_ns`` is the
     stamp taken as the recording started, so sample *i* happened at
-    ``audio_start_ns + i / rate``.
+    ``audio_start_ns + i / rate``. ``speed_of_sound_m_s`` defaults to the
+    codebase's 20 C constant; `acoustics.speed_of_sound_m_s(temperature_c)`
+    supplies a measured one.
     """
     edges = np.asarray(gate_edges_ns, dtype=np.int64).reshape(-1)
     if edges.size == 0:
@@ -523,7 +529,17 @@ def parse_args(argv=None) -> argparse.Namespace:
         metavar="PATH",
         help="Camera capture(s) to pair edges with when there is no audio. Repeatable.",
     )
-    parser.add_argument("--distance-m", type=float, default=BALL_TO_UNIT_M)
+    parser.add_argument(
+        "--distance-m",
+        type=float,
+        default=BALL_TO_UNIT_M,
+        help="Ball-to-microphone distance used for the airborne expectation.",
+    )
+    parser.add_argument(
+        "--temperature-c",
+        type=float,
+        help="Ambient air temperature; omitted uses the 20 C speed of sound (343.0 m/s).",
+    )
     parser.add_argument("--noise-k", type=float, default=DEFAULT_NOISE_K)
     parser.add_argument("--window-ms", type=float, default=DEFAULT_WINDOW_MS)
     parser.add_argument("--max-pair-ms", type=float, default=DEFAULT_MAX_PAIR_MS)
@@ -571,6 +587,7 @@ def _report_audio(args: argparse.Namespace, edges: np.ndarray) -> int:
         rate,
         audio_start_ns=_audio_start_ns(args),
         ball_to_mic_m=args.distance_m,
+        speed_of_sound_m_s=acoustics.speed_of_sound_m_s(args.temperature_c),
         window_ms=args.window_ms,
         noise_k=args.noise_k,
     )
@@ -587,7 +604,8 @@ def _report_audio(args: argparse.Namespace, edges: np.ndarray) -> int:
     if report.unpaired_edges:
         print(f"\nunpaired edges (no impact in the search window): {report.unpaired_edges}")
     print(
-        f"\nairborne expectation for {args.distance_m:.3f} m: "
+        f"\nairborne expectation for {args.distance_m:.3f} m at "
+        f"{acoustics.speed_of_sound_m_s(args.temperature_c):.1f} m/s: "
         f"{report.airborne_flight_ms:.2f} ms of flight"
     )
     direction = "leads" if report.median_gate_minus_onset_ms < 0 else "lags"
