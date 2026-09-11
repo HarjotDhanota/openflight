@@ -57,13 +57,110 @@ class ShaftTrack:
     reason: str
 
 
+# Sub-pixel edge refinement of the resting ball -- an EXPERIMENT, off by
+# default. At 11-13 px a single pixel of diameter is 8-9 percent of the
+# solved range, so the blob's thresholded diameter looked worth improving.
+# The real captures (session 20260825, 2026-09-11) say it cannot be done
+# from these images: the ball is SATURATED (255 out to ~4.5 px of its ~6 px
+# radius) and then falls off softly over ~2.5 px into a bright mat. On a
+# clipped, blurred edge the half-maximum, the steepest slope and the "knee"
+# disagree by about a pixel and nothing in the image says which is the
+# physical edge. The durable fix is upstream: expose the resting ball below
+# saturation so its edge is a real edge, and let the radar's range to the
+# launch point calibrate size-to-range on the first shot. This helper reads
+# the steepest point of the radial profile and is kept for that comparison.
+EDGE_FIT_ANGLES = 64
+EDGE_FIT_MIN_ANGLES = 24
+EDGE_FIT_MIN_CONTRAST = 30.0
+EDGE_FIT_MAX_RMS_PX = 0.5
+
+
+def refine_ball_edge(
+    background: np.ndarray,
+    ball: ReferenceBall,
+    *,
+    angles: int = EDGE_FIT_ANGLES,
+) -> ReferenceBall | None:
+    """Re-measure a detected ball from the steepest point of its edge.
+
+    Radial intensity profiles are sampled around the blob centre; on each the
+    radius of steepest descent (parabolically refined) is one edge point, and
+    a circle fitted to those points gives a sub-pixel centre and diameter.
+    Exact on an unsaturated ball; on a saturated one it is one opinion among
+    several (see the note above), which is why it is opt-in. Returns None
+    when the contrast is too low, too few profiles have a usable edge, or the
+    circle does not fit.
+    """
+    radius0 = ball.diameter_px / 2.0
+    if radius0 < 3.0:
+        return None
+    theta = np.linspace(0.0, 2.0 * np.pi, angles, endpoint=False)
+    radii = np.arange(0.0, 1.6 * radius0, 0.1)
+    xs = ball.x + np.outer(np.cos(theta), radii)
+    ys = ball.y + np.outer(np.sin(theta), radii)
+    height, width = background.shape
+    if xs.min() < 0 or ys.min() < 0 or xs.max() > width - 1 or ys.max() > height - 1:
+        return None
+    profiles = ndimage.map_coordinates(
+        background.astype(float), [ys.ravel(), xs.ravel()], order=1, mode="nearest"
+    ).reshape(angles, len(radii))
+    inner = radii <= 0.5 * radius0
+    outer = radii >= 1.25 * radius0
+    plateau = float(np.median(profiles[:, inner]))
+    ground = float(np.median(profiles[:, outer]))
+    if plateau - ground < EDGE_FIT_MIN_CONTRAST:
+        return None
+    step = float(radii[1] - radii[0])
+    search = (radii >= 0.5 * radius0) & (radii <= 1.5 * radius0)
+    min_slope = -0.25 * (plateau - ground) / radius0  # an edge, not a ripple
+    points = []
+    for profile, cos_t, sin_t in zip(profiles, np.cos(theta), np.sin(theta), strict=True):
+        slope = np.gradient(profile, step)
+        candidates = np.where(search, slope, np.inf)
+        k = int(np.argmin(candidates))
+        if candidates[k] > min_slope or k == 0 or k == len(radii) - 1:
+            continue
+        # Parabolic refinement of the gradient minimum between its neighbours.
+        left, centre, right = slope[k - 1], slope[k], slope[k + 1]
+        denominator = left - 2.0 * centre + right
+        offset = 0.5 * (left - right) / denominator if denominator != 0.0 else 0.0
+        r_edge = radii[k] + max(-1.0, min(1.0, offset)) * step
+        points.append((ball.x + r_edge * cos_t, ball.y + r_edge * sin_t))
+    if len(points) < EDGE_FIT_MIN_ANGLES:
+        return None
+    pts = np.asarray(points)
+    # Algebraic circle fit: x^2 + y^2 + D x + E y + F = 0.
+    design = np.column_stack([pts[:, 0], pts[:, 1], np.ones(len(pts))])
+    target = -(pts[:, 0] ** 2 + pts[:, 1] ** 2)
+    solution, *_ = np.linalg.lstsq(design, target, rcond=None)
+    cx, cy = -solution[0] / 2.0, -solution[1] / 2.0
+    radius_sq = cx**2 + cy**2 - solution[2]
+    if radius_sq <= 0.0:
+        return None
+    radius = math.sqrt(radius_sq)
+    residual = np.hypot(pts[:, 0] - cx, pts[:, 1] - cy) - radius
+    if float(np.sqrt(np.mean(residual**2))) > EDGE_FIT_MAX_RMS_PX:
+        return None
+    if not 0.6 * radius0 <= radius <= 1.4 * radius0:
+        return None
+    return ReferenceBall(x=float(cx), y=float(cy), diameter_px=2.0 * radius, area_px=ball.area_px)
+
+
 def detect_reference_ball(
     frames: np.ndarray,
     *,
     roi: tuple[int, int, int, int] | None = None,
     brightness_threshold: int = 210,
+    refine_edge: bool = False,
 ) -> ReferenceBall:
-    """Find the stationary ball in bright- or dark-on-ground lighting."""
+    """Find the stationary ball in bright- or dark-on-ground lighting.
+
+    ``refine_edge`` (opt-in) re-measures a bright ball from its steepest edge
+    (`refine_ball_edge`) instead of its thresholded blob; the blob stands
+    when the refinement declines. Off by default: on the saturated balls the
+    rig actually captures the two disagree by about a pixel with no ground
+    truth to prefer either.
+    """
     if frames.ndim != 3 or frames.shape[0] < 3:
         raise ValueError("frames must have shape (n, height, width) with n >= 3")
 
@@ -146,7 +243,9 @@ def detect_reference_ball(
             and height * 0.45 <= item[1].y <= height * 0.9
         ]
         if plausible:
-            return min(plausible, key=lambda item: item[0])[1]
+            chosen = min(plausible, key=lambda item: item[0])[1]
+            refined = refine_ball_edge(background, chosen) if refine_edge else None
+            return refined if refined is not None else chosen
 
     # A spotlight can wash the white face of the ball into the turf while its
     # lower silhouette remains dark. Local contrast is more stable than an
