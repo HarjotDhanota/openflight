@@ -49,6 +49,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
+from openflight.acoustics import SPEED_OF_SOUND_20C_M_S  # noqa: E402
 from openflight.camera.ball_flight import (  # noqa: E402
     CameraBallEstimate,
     CameraBallGeometry,
@@ -65,7 +66,10 @@ from openflight.club_metrics import dplane_from_sources  # noqa: E402
 # `tee_slant_range_m` is used when it is present, and the two differ by well
 # under a tenth of a frame on this rig.
 DEFAULT_BALL_TO_UNIT_M = 1.575
-SPEED_OF_SOUND_M_S = 343.0
+# Re-exported for `replay_registration.py`, which reads it from here. The
+# single definition, and the temperature dependence, live in
+# `openflight.acoustics`.
+SPEED_OF_SOUND_M_S = SPEED_OF_SOUND_20C_M_S
 DEFAULT_CALIBRATION = "config/iwr6843_calibration_reference.json"
 # Shot 1 is excluded from every figure the research reported: it is the
 # 99.8 %-clipped capture whose bloomed ball produced the wrong camera range.

@@ -40,6 +40,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Mapping
 
+from openflight.acoustics import SPEED_OF_SOUND_20C_M_S
+
 BALL_DIAMETER_MM = 42.67  # a conforming ball; also head_outline.BALL_DIAMETER_MM
 
 # The shipped OV9281 mode's optics, from the vendor-confirmed lens over the
@@ -64,7 +66,11 @@ MIN_BALL_DIAMETER_PX = 8.0
 # risk of truncation and the scale solve inherits it.
 EDGE_MARGIN_RADII = 1.0
 
-SPEED_OF_SOUND_M_S = 343.0
+# This module only SOLVES the mic-to-ball distance; the walk-back that divides
+# by it happens in `camera.clubpose.impact_zone`. The constant is re-exported
+# here for the callers that read it alongside that distance. The single
+# definition, and the temperature dependence, live in `openflight.acoustics`.
+SPEED_OF_SOUND_M_S = SPEED_OF_SOUND_20C_M_S
 
 
 @dataclass(frozen=True)

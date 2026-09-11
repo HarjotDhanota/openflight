@@ -24,6 +24,7 @@ from flask import Flask, Response, jsonify, request, send_file, send_from_direct
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
+from .acoustics import SPEED_OF_SOUND_20C_M_S, sound_flight_s, speed_of_sound_m_s
 from .ballistics import resolve_launch, simulate
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, ClubType, Shot
 from .ops243 import (
@@ -3161,7 +3162,7 @@ def _load_camera_capture_archive(camera_capture) -> dict[str, object] | None:
         return None
 
 
-def _read_impact_zone(shot: Shot, archive, trigger_index):
+def _read_impact_zone(shot: Shot, archive, trigger_index, temperature_c: float | None = None):
     """The experimental heel-toe impact zone for one shot, or why there is none.
 
     OFF by default, and withheld even when on unless a template exists for the
@@ -3169,6 +3170,9 @@ def _read_impact_zone(shot: Shot, archive, trigger_index):
     because it carries the convention that produced it and that convention is
     not a strike location -- see `impact_zone_settings` and
     docs/clubface-impact-location.md.
+
+    ``temperature_c`` is the ambient air temperature for the acoustic
+    walk-back; None uses the conventional 20 C speed of sound.
     """
     from openflight.camera.clubpose.impact_zone import withheld  # noqa: PLC0415
 
@@ -3187,6 +3191,7 @@ def _read_impact_zone(shot: Shot, archive, trigger_index):
             template_dir=settings["template_dir"],
             mirror_horizontal=bool(camera_capture_config.get("mirror_horizontal")),
             rig=rig_geometry,
+            temperature_c=temperature_c,
         )
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning("[SERVER] Impact zone could not be read: %s", error)
@@ -3272,9 +3277,15 @@ def _fuse_camera_club_delivery(
         shot.experimental_fused_club_path_confidence = fused.path_confidence_tier
         shot.experimental_camera_trace_deg = None
         shot.experimental_aoa_offset_source = "none_chained_3d"
-        shot.experimental_impact_zone = _read_impact_zone(
-            shot, archive_for_zone, trigger_for_zone
+        # The acoustic walk-back's inputs travel WITH the reading, so a replay
+        # can tell a contact frame computed at 343.0 m/s from one computed at
+        # a measured ambient temperature.
+        temperature_c = _ambient_temperature_c()
+        impact_zone = _read_impact_zone(
+            shot, archive_for_zone, trigger_for_zone, temperature_c
         ).as_dict()
+        impact_zone.update(_acoustic_provenance(temperature_c))
+        shot.experimental_impact_zone = impact_zone
         logger.info(
             "[SERVER] Camera/IWR chained club delivery: AoA %s path %s "
             "(status=%s, features=%d, speed_ratio=%s, velocity_mad=%s mph, "
@@ -3360,6 +3371,7 @@ def _fuse_camera_ball_flight(
                                 ),
                                 image_width_px=int(camera_capture_config["width"]),
                                 image_height_px=int(camera_capture_config["height"]),
+                                temperature_c=_ambient_temperature_c(),
                             ),
                             ops_ball_speed_mph=shot.ball_speed_raw_mph or shot.ball_speed_mph,
                             iwr_vertical_deg=shot.launch_angle_vertical,
@@ -3423,13 +3435,69 @@ def _fuse_camera_ball_flight(
 # the impact happens, so the contact frame is the trigger walked back by the
 # ball-to-unit flight time. The lag belongs to the installation -- it scales
 # with how far the unit sits from the ball -- so the tee range is read from the
-# radar calibration rather than assumed.
-SPEED_OF_SOUND_M_S = 343.0
+# radar calibration rather than assumed. Re-exported from
+# `openflight.acoustics`, which owns the single definition and the temperature
+# dependence.
+SPEED_OF_SOUND_M_S = SPEED_OF_SOUND_20C_M_S
 
 
-def _contact_frame(pre_trigger_frames: int, tee_range_m: float, fps: float) -> float:
-    """Frame index of ball contact, from the trigger and the sound flight time."""
-    return pre_trigger_frames - tee_range_m / SPEED_OF_SOUND_M_S * fps
+# Where an ambient-environment reading would live: an object exposing a
+# `temperature_c` in degrees Celsius. NOTHING ASSIGNS IT ON THIS BRANCH -- no
+# BME280 or any other environment sensor is plumbed into the server -- so it
+# stays None, every acoustic walk-back uses the conventional 20 C speed of
+# sound, and no shipped number moves. It exists so the plumbing below is real
+# rather than a literal, and so that landing a sensor is one assignment here.
+ambient_environment = None
+
+
+def _ambient_temperature_c() -> float | None:
+    """Ambient air temperature for the acoustic walk-back, or None.
+
+    Read DEFENSIVELY: a missing, absent-attributed, non-numeric or non-finite
+    reading is None, never an exception. A broken environment sensor is worth
+    at most a tenth of a frame of contact timing and must never fail a shot.
+
+    Returns None on this branch, because nothing assigns `ambient_environment`
+    yet -- see the comment above it. The IWR6843's `temperature_report` is NOT
+    a candidate: that is the radar silicon's die temperature, tens of degrees
+    above the air the impact sound actually travels through.
+    """
+    try:
+        reading = getattr(ambient_environment, "temperature_c", None)
+        if reading is None:
+            return None
+        temperature_c = float(reading)
+    except (TypeError, ValueError):
+        return None
+    return temperature_c if math.isfinite(temperature_c) else None
+
+
+def _acoustic_provenance(temperature_c: float | None) -> dict:
+    """What the acoustic walk-back actually used, for the shot record.
+
+    A replay has to be able to tell a contact frame computed at 343.0 m/s from
+    one computed at a measured temperature, so both the reading (or None) and
+    the resulting speed are logged next to the reading they produced.
+    """
+    return {
+        "temperature_c": None if temperature_c is None else float(temperature_c),
+        "speed_of_sound_m_s": speed_of_sound_m_s(temperature_c),
+    }
+
+
+def _contact_frame(
+    pre_trigger_frames: int,
+    tee_range_m: float,
+    fps: float,
+    temperature_c: float | None = None,
+) -> float:
+    """Frame index of ball contact, from the trigger and the sound flight time.
+
+    ``temperature_c`` of None uses the 20 C constant and so reproduces the
+    shipped number exactly; a measured reading applies c = 331.3 + 0.606 T,
+    worth up to about a tenth of a frame across 0-35 C.
+    """
+    return pre_trigger_frames - sound_flight_s(tee_range_m, temperature_c) * fps
 
 
 def _apply_track_metrics(shot: Shot, track) -> None:
@@ -3562,6 +3630,7 @@ def _fuse_track_club_metrics(
                 int(archive["pre_trigger_count"]),
                 float(iwr6843_runtime.calibration.tee_range_m),
                 fps,
+                _ambient_temperature_c(),
             ),
             fps=fps,
         )
