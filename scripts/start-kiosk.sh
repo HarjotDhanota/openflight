@@ -189,6 +189,10 @@ while [[ $# -gt 0 ]]; do
             RIG_GEOMETRY="$2"
             shift 2
             ;;
+        --camera-capture-ball-saturation-limit-px)
+            CAMERA_CAPTURE_BALL_SATURATION_LIMIT_PX="$2"
+            shift 2
+            ;;
         --camera-capture-mount-height-m)
             CAMERA_CAPTURE_MOUNT_HEIGHT_M="$2"
             shift 2
@@ -652,6 +656,7 @@ if [ "$CAMERA_CAPTURE" = true ]; then
     [ -n "$CAMERA_CAPTURE_EXPOSURE_US" ] && SERVER_CMD="$SERVER_CMD --camera-capture-exposure-us $CAMERA_CAPTURE_EXPOSURE_US"
     [ -n "$CAMERA_CAPTURE_GAIN" ] && SERVER_CMD="$SERVER_CMD --camera-capture-gain $CAMERA_CAPTURE_GAIN"
     [ -n "$RIG_GEOMETRY" ] && SERVER_CMD="$SERVER_CMD --rig-geometry $RIG_GEOMETRY"
+    [ -n "$CAMERA_CAPTURE_BALL_SATURATION_LIMIT_PX" ] && SERVER_CMD="$SERVER_CMD --camera-capture-ball-saturation-limit-px $CAMERA_CAPTURE_BALL_SATURATION_LIMIT_PX"
     [ -n "$CAMERA_CAPTURE_MOUNT_HEIGHT_M" ] && SERVER_CMD="$SERVER_CMD --camera-capture-mount-height-m $CAMERA_CAPTURE_MOUNT_HEIGHT_M"
     [ -n "$CAMERA_CAPTURE_LATERAL_OFFSET_M" ] && SERVER_CMD="$SERVER_CMD --camera-capture-lateral-offset-m $CAMERA_CAPTURE_LATERAL_OFFSET_M"
     [ -n "$CAMERA_CAPTURE_HORIZONTAL_OFFSET_DEG" ] && SERVER_CMD="$SERVER_CMD --camera-capture-horizontal-offset-deg $CAMERA_CAPTURE_HORIZONTAL_OFFSET_DEG"

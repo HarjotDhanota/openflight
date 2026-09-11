@@ -1409,6 +1409,7 @@ def init_camera_capture(
     lateral_offset_m: float,
     horizontal_offset_deg: float,
     use_gpio_trigger: bool,
+    ball_saturation_limit_px: int | None = None,
 ) -> bool:
     """Initialize passive high-speed camera capture for offline alignment."""
     global camera_capture_runtime, camera_capture_config  # pylint: disable=global-statement
@@ -1435,6 +1436,7 @@ def init_camera_capture(
             auto_exposure_state_path=(
                 Path.home() / ".config" / "openflight" / "camera-exposure.json"
             ),
+            ball_saturation_limit_px=ball_saturation_limit_px,
         )
         camera_capture_runtime = CameraCaptureRuntime(
             output_dir=output_dir,
@@ -1467,6 +1469,7 @@ def init_camera_capture(
             "exposure_us": settings.exposure_us,
             "gain": settings.gain,
             "auto_exposure_enabled": settings.auto_exposure,
+            "ball_saturation_limit_px": settings.ball_saturation_limit_px,
             "stream": settings.stream,
             "rotate_180": settings.rotate_180,
             "mirror_horizontal": settings.mirror_horizontal,
@@ -5337,6 +5340,15 @@ def main():
         help="Analogue-gain seed used by the one-time startup calibration.",
     )
     parser.add_argument(
+        "--camera-capture-ball-saturation-limit-px",
+        type=int,
+        default=None,
+        help=(
+            "Opt-in auto-exposure ball rule: go darker when more than this many saturated "
+            "pixels sit in the impact zone (the resting ball; ~40 at 320x200). Default off."
+        ),
+    )
+    parser.add_argument(
         "--rig-geometry",
         default=None,
         help=(
@@ -6017,6 +6029,7 @@ def main():
             mirror_horizontal=args.camera_capture_mirror_horizontal,
             scaler_crop=camera_capture_scaler_crop,
             use_gpio_trigger=not args.iwr6843,
+            ball_saturation_limit_px=args.camera_capture_ball_saturation_limit_px,
         ):
             print("Camera capture unavailable - running without high-speed camera capture")
         else:

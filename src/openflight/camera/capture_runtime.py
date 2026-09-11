@@ -70,6 +70,10 @@ class CameraCaptureSettings:
     match_tolerance_s: float = 0.75
     auto_exposure: bool = True
     auto_exposure_state_path: Path | None = None
+    # Opt-in ball rule for auto-exposure: ask for a darker setting when more
+    # than this many saturated pixels sit in the impact zone (the resting
+    # ball), so its edge stays measurable. None keeps the scene-only rule.
+    ball_saturation_limit_px: int | None = None
 
     @property
     def pre_frames(self) -> int:
@@ -307,7 +311,9 @@ class CameraCaptureRuntime:
         """Rate exposure in the center-lower hitting zone of the latest frame."""
         frame = self._ring.latest_frame
         image = frame.image if frame is not None else np.asarray([])
-        return measure_exposure(image).to_dict()
+        return measure_exposure(
+            image, ball_saturation_limit_px=self.settings.ball_saturation_limit_px
+        ).to_dict()
 
     @property
     def camera_analysis_eligible(self) -> bool:
@@ -582,6 +588,7 @@ class CameraCaptureRuntime:
             frame = self._ring.latest_frame
             observation = measure_exposure(
                 frame.image if frame is not None else np.asarray([]),
+                ball_saturation_limit_px=self.settings.ball_saturation_limit_px,
             )
             decision = self._auto_exposure_policy.evaluate(
                 observation,

@@ -184,3 +184,46 @@ def test_startup_attempt_limit_requires_lighting_change():
 )
 def test_motion_blur_risk(exposure_us, expected):
     assert motion_blur_risk(exposure_us) == expected
+
+
+def _mat_scene_with_ball(ball_value: int, *, mat: int = 140) -> np.ndarray:
+    """A mat-lit impact zone with a 12 px resting ball, as the rig sees it."""
+    image = np.full((200, 320), mat, dtype=np.uint8)
+    image[100:175, 90:230] = np.tile(np.linspace(90, 185, 140, dtype=np.uint8), (75, 1))
+    yy, xx = np.indices(image.shape)
+    image[(xx - 148) ** 2 + (yy - 145) ** 2 <= 6**2] = ball_value
+    return image
+
+
+def test_a_saturated_ball_is_invisible_to_the_scene_rule_but_counted():
+    observation = measure_exposure(_mat_scene_with_ball(255))
+
+    assert observation.status == "good", "one percent of clipped pixels passes the scene rule"
+    assert observation.clipped_px >= 80
+    assert observation.peak_p995 == 255.0
+
+
+def test_the_ball_rule_asks_for_a_darker_setting_when_enabled():
+    observation = measure_exposure(_mat_scene_with_ball(255), ball_saturation_limit_px=40)
+
+    assert observation.status == "marginal"
+    assert observation.recommendation == "darker"
+    assert "ball" in observation.message
+    assert observation.acceptable, "marginal still lets the session run while it converges"
+
+
+def test_an_unsaturated_ball_satisfies_the_ball_rule():
+    observation = measure_exposure(_mat_scene_with_ball(215), ball_saturation_limit_px=40)
+
+    assert observation.status == "good"
+    assert observation.clipped_px == 0
+
+
+def test_the_ball_rule_yields_to_a_dark_scene():
+    """No room to go darker: the club's silhouette matters more than the ball's edge."""
+    image = _mat_scene_with_ball(255, mat=30)
+    image[100:175, 90:230] = 35
+
+    observation = measure_exposure(image, ball_saturation_limit_px=40)
+
+    assert observation.recommendation != "darker"

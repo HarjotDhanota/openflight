@@ -74,6 +74,12 @@ class ExposureObservation:
     contrast: float | None = None
     clipped_pct: float | None = None
     dark_pct: float | None = None
+    # The resting ball is under one percent of the impact area, so a fully
+    # saturated ball never moves `clipped_pct`; these two see it. `clipped_px`
+    # counts the pixels at or above 250 in the zone, `peak_p995` is the zone's
+    # 99.5th-percentile brightness -- the brightest ball-sized patch.
+    clipped_px: int | None = None
+    peak_p995: float | None = None
 
     @property
     def acceptable(self) -> bool:
@@ -125,8 +131,30 @@ def exposure_steps_for_fps(fps: float) -> tuple[ExposureStep, ...]:
     return steps
 
 
-def measure_exposure(image: np.ndarray) -> ExposureObservation:
-    """Rate exposure in the center-lower hitting zone of one grayscale frame."""
+# A regulation ball at the shipped 320x200 mode covers ~80-130 pixels. A
+# saturated patch this large in the impact zone is the ball (or something the
+# ball's size), and its edge is then unmeasurable: session 20260825 exposed
+# the ball at 255 to within a pixel of its edge while the zone median sat at a
+# comfortable 110, which is why `clipped_pct` alone cannot see it.
+DEFAULT_BALL_SATURATION_LIMIT_PX = 40
+# Below this zone median there is no room to go darker without losing the
+# club's silhouette against the mat, so the ball rule yields.
+BALL_RULE_MIN_MEDIAN = 45.0
+
+
+def measure_exposure(
+    image: np.ndarray,
+    *,
+    ball_saturation_limit_px: int | None = None,
+) -> ExposureObservation:
+    """Rate exposure in the center-lower hitting zone of one grayscale frame.
+
+    ``ball_saturation_limit_px`` enables the ball rule: when the zone would
+    otherwise pass but holds more than this many saturated pixels and the
+    median leaves room to go darker, the observation asks for a darker
+    setting so the resting ball keeps a real edge. None (the default) keeps
+    the scene-only behaviour; the saturation fields are reported either way.
+    """
     pixels = np.asarray(image)
     if pixels.ndim != 2 or not pixels.size:
         return ExposureObservation(
@@ -151,6 +179,8 @@ def measure_exposure(image: np.ndarray) -> ExposureObservation:
 
     p10, median, p90 = (float(np.percentile(region, value)) for value in (10, 50, 90))
     clipped_pct = float(np.mean(region >= 250) * 100.0)
+    clipped_px = int(np.count_nonzero(region >= 250))
+    peak_p995 = float(np.percentile(region, 99.5))
     dark_pct = float(np.mean(region <= 12) * 100.0)
     contrast = p90 - p10
 
@@ -174,6 +204,20 @@ def measure_exposure(image: np.ndarray) -> ExposureObservation:
         recommendation = "darker" if clipped_pct > 2.0 or median > 180.0 else "brighter"
         message = f"Exposure is usable; a {recommendation} setting may improve contrast"
 
+    if (
+        ball_saturation_limit_px is not None
+        and status in {"good", "marginal"}
+        and recommendation != "brighter"
+        and clipped_px > ball_saturation_limit_px
+        and median >= BALL_RULE_MIN_MEDIAN
+    ):
+        status = "marginal"
+        recommendation = "darker"
+        message = (
+            f"A saturated patch of {clipped_px} px sits in the impact area (the ball); "
+            "reducing exposure to keep its edge measurable"
+        )
+
     return ExposureObservation(
         sample_available=True,
         status=status,
@@ -185,6 +229,8 @@ def measure_exposure(image: np.ndarray) -> ExposureObservation:
         contrast=round(contrast, 1),
         clipped_pct=round(clipped_pct, 2),
         dark_pct=round(dark_pct, 2),
+        clipped_px=clipped_px,
+        peak_p995=round(peak_p995, 1),
     )
 
 
