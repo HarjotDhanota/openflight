@@ -246,6 +246,14 @@ class TestSolveSetup:
 
 
 class TestTheAcousticSeam:
+    def test_the_speed_of_sound_is_the_shared_one(self):
+        """This module only STORES the mic distance; the constant it exposes
+        is a re-export so nothing here can drift from `openflight.acoustics`."""
+        from openflight.acoustics import SPEED_OF_SOUND_20C_M_S
+        from openflight.rig_geometry import SPEED_OF_SOUND_M_S
+
+        assert SPEED_OF_SOUND_M_S is SPEED_OF_SOUND_20C_M_S
+
     def test_the_solved_mic_distance_feeds_the_contact_walk_back(self):
         """The walk-back moves with the setup: a unit twice as far from the
         ball hears the impact later, and the contact frame walks back more."""
