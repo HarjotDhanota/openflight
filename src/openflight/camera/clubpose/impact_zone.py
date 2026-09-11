@@ -23,6 +23,11 @@ What is supported, and what is not:
     mean anything. The convention is replaced by the address-photo or
     foot-spray calibration in Stage 1, and until then
     `ImpactZoneResult.centre_convention` says so on every result.
+  * **The SUPPORT-PLANE channel is additive and has its own gate.** Every
+    vertical number is additionally expressed against the plane the ball rests
+    on -- its centre lowered by one ball radius, mat or grass or tee alike --
+    and the mat-geometry gate withholds the vertical channel BY NAME when the
+    placement is one no clubhead could produce. See `mat_geometry_gate`.
 
 The USGA gates below are the one part of this that is not a convention: they
 are rules a conforming clubhead obeys, so a placement that violates one is
@@ -51,7 +56,12 @@ from openflight.camera.clubpose.head_outline import (
 )
 from openflight.camera.clubpose.impact_projection import (
     ASSUMED_DYNAMIC_LOFT_DEG,
+    ASSUMED_FACE_HEIGHT_MM,
+    ASSUMED_FACE_HEIGHT_PROVENANCE,
+    BALL_RADIUS_MM,
+    ImpactProjection,
     project_impact,
+    read_support_plane,
 )
 
 # The convention, fixed before any number was read from it.
@@ -90,6 +100,63 @@ ZONE_SHOULDER_MM = 15.0
 MAX_IRON_BLADE_MM = 87.0
 BLADE_GATE_MARGIN_MM = 15.0
 TOE_SIDE_MARGIN_MM = 10.0
+
+# ---------------------------------------------------------------------------
+# the mat-geometry gate, on the SUPPORT-PLANE datum
+# ---------------------------------------------------------------------------
+#
+# The vertical datum is the ball's own support plane -- the ball centre lowered
+# by one radius, whatever the ball sits on. No mat thickness is ever known or
+# asked for. Against it, two things a clubhead cannot do:
+#
+#   1. Put its TOPLINE below the ball's centre. A soled iron's topline sits
+#      face_height*cos(loft) -- 38-40 mm for a 45 mm face -- above the support
+#      plane, and even a head held high off the ground only raises it. A
+#      topline reading below one ball radius is a club buried 20 mm into
+#      whatever the ball rests on, which is impossible on every surface. It is
+#      what the blurred template does when it locks onto the ball's highlight,
+#      and it is the failure this gate was built for.
+#   2. Put its SOLE below the support plane by more than the surface allows.
+#      That one IS lie-dependent, so the tolerance is named per lie and the
+#      DEFAULT is the widest: the lie is not a user input (no setup fields --
+#      see the no-manual-setup-inputs rule), and until an auto-detector exists
+#      "unknown" declines to enforce the sole rule at all rather than guess.
+#
+# Rule 1 is lie-INDEPENDENT and always applies. Rule 2 applies only when the
+# caller can name the lie.
+SOLE_NOISE_MARGIN_MM = 3.0
+GRASS_DIVOT_MM = 15.0
+# No tee height is sensed yet; 40 mm covers the tallest tee a ball sits on.
+UNKNOWN_TEE_HEIGHT_MM = 40.0
+DEFAULT_LIE = "unknown"
+LIE_SOLE_ALLOWANCE_MM: dict[str, float | None] = {
+    "mat": 0.0,
+    "grass": GRASS_DIVOT_MM,
+    "tee": UNKNOWN_TEE_HEIGHT_MM,
+    "unknown": None,
+}
+LIE_TOLERANCE_REASON: dict[str, str] = {
+    "mat": (
+        "a mat has no give: the sole cannot pass below the ball's support "
+        f"plane at all (0 mm), plus the {SOLE_NOISE_MARGIN_MM:.0f} mm "
+        "placement-noise margin"
+    ),
+    "grass": (
+        f"turf takes a divot: the sole may sit up to {GRASS_DIVOT_MM:.0f} mm "
+        f"below the support plane, plus the {SOLE_NOISE_MARGIN_MM:.0f} mm "
+        "placement-noise margin"
+    ),
+    "tee": (
+        "unknown_tee_height: the tee's height is not sensed, so the sole may "
+        f"sit up to {UNKNOWN_TEE_HEIGHT_MM:.0f} mm below the support plane, "
+        f"plus the {SOLE_NOISE_MARGIN_MM:.0f} mm placement-noise margin"
+    ),
+    "unknown": (
+        "lie not sensed and never asked for: the WIDEST tolerance applies, so "
+        "the sole rule is not enforced and only the topline-below-ball-centre "
+        "rule stands"
+    ),
+}
 
 MIN_QUAD_FRAMES = 4
 MIN_AVAILABLE_FRAMES = 4
@@ -147,6 +214,27 @@ class ImpactZoneResult:
     high_low_3d_mm: float | None = None
     projection_status: str = "not_run"
     projection_assumptions: tuple[str, ...] = ()
+    # The SUPPORT-PLANE channel: every vertical number re-expressed against
+    # the plane the ball rests on (its centre lowered by one radius), which is
+    # the only vertical datum this rig can see without being told what the
+    # ball sits on. Additive: it never replaces the 2-D high-low reading, and
+    # its own absence is named rather than silent.
+    contact_above_support_mm: float | None = None
+    contact_above_support_source: str = ""
+    topline_above_support_mm: float | None = None
+    topline_above_support_source: str = ""
+    sole_above_support_mm: float | None = None
+    sole_above_support_source: str = ""
+    face_height_mm: float | None = None
+    face_height_source: str = ""
+    support_plane_status: str = "not_run"
+    # The mat-geometry gate and what it was allowed to tolerate.
+    lie: str = DEFAULT_LIE
+    sole_tolerance_mm: float | None = None
+    sole_tolerance_reason: str = ""
+    mat_gate_status: str = "not_run"
+    mat_gate_detail: str = ""
+    vertical_channel_status: str = "not_run"
     # How far past the last ACCEPTED frame the carry extrapolated to reach
     # the contact instant, in frames. Zero when accepted frames bracket it.
     carry_extrapolation_frames: float | None = None
@@ -174,6 +262,21 @@ class ImpactZoneResult:
             "high_low_3d_mm": self.high_low_3d_mm,
             "projection_status": self.projection_status,
             "projection_assumptions": list(self.projection_assumptions),
+            "contact_above_support_mm": self.contact_above_support_mm,
+            "contact_above_support_source": self.contact_above_support_source,
+            "topline_above_support_mm": self.topline_above_support_mm,
+            "topline_above_support_source": self.topline_above_support_source,
+            "sole_above_support_mm": self.sole_above_support_mm,
+            "sole_above_support_source": self.sole_above_support_source,
+            "face_height_mm": self.face_height_mm,
+            "face_height_source": self.face_height_source,
+            "support_plane_status": self.support_plane_status,
+            "lie": self.lie,
+            "sole_tolerance_mm": self.sole_tolerance_mm,
+            "sole_tolerance_reason": self.sole_tolerance_reason,
+            "mat_gate_status": self.mat_gate_status,
+            "mat_gate_detail": self.mat_gate_detail,
+            "vertical_channel_status": self.vertical_channel_status,
             "carry_extrapolation_frames": self.carry_extrapolation_frames,
             "carry_model": self.carry_model,
             "carry_disagreement_mm": self.carry_disagreement_mm,
@@ -501,19 +604,20 @@ def reading_is_physical(ball_from_toe_mm: float) -> tuple[bool, str]:
     return True, "ok"
 
 
-def projection_fields(swing, carry: Carry, setup, rig, loft_deg, face_angle_deg, club) -> dict:
-    """The 3-D projection channel's fields, or the named reason it did not run.
+def run_projection(
+    swing, carry: Carry, setup, rig, loft_deg, face_angle_deg, club
+) -> tuple[ImpactProjection | None, str]:
+    """(the 3-D projection, its status) -- computed ONCE for both channels.
 
     ``setup`` and ``rig`` are `rig_geometry.SetupSolution` / `RigGeometry`
-    (duck-typed here to keep this module import-light). The channel is
-    additive: its failure populates ``projection_status`` and never withholds
-    the 2-D reading, because the two rest on different assumptions.
+    (duck-typed here to keep this module import-light). None with a named
+    status is the only other outcome; there is no partial projection.
     """
     if setup is None or rig is None:
-        return {"projection_status": "not_run_no_setup_geometry"}
+        return None, "not_run_no_setup_geometry"
     loft = loft_deg if loft_deg is not None else ASSUMED_DYNAMIC_LOFT_DEG.get(club)
     if loft is None:
-        return {"projection_status": f"not_run_no_loft_for_{club or 'unknown_club'}"}
+        return None, f"not_run_no_loft_for_{club or 'unknown_club'}"
     projection = project_impact(
         (swing.ball.x, swing.ball.y),
         (carry.values["heel_x"], carry.values["heel_y"]),
@@ -526,12 +630,190 @@ def projection_fields(swing, carry: Carry, setup, rig, loft_deg, face_angle_deg,
         face_angle_deg=face_angle_deg,
     )
     if not projection.ok:
-        return {"projection_status": projection.reason}
+        return None, projection.reason
+    return projection, "ok"
+
+
+def projection_result_fields(projection: ImpactProjection | None, status: str) -> dict:
+    """The 3-D projection channel's fields, from an already-run projection."""
+    if projection is None:
+        return {"projection_status": status}
     return {
         "projection_status": "ok",
         "ball_from_toe_3d_mm": projection.ball_from_toe_mm,
         "high_low_3d_mm": projection.high_low_mm,
         "projection_assumptions": projection.assumptions,
+    }
+
+
+def projection_fields(swing, carry: Carry, setup, rig, loft_deg, face_angle_deg, club) -> dict:
+    """The 3-D projection channel's fields, or the named reason it did not run.
+
+    The channel is additive: its failure populates ``projection_status`` and
+    never withholds the 2-D reading, because the two rest on different
+    assumptions.
+    """
+    return projection_result_fields(
+        *run_projection(swing, carry, setup, rig, loft_deg, face_angle_deg, club)
+    )
+
+
+# ---------------------------------------------------------------------------
+# the support-plane channel and the mat-geometry gate
+# ---------------------------------------------------------------------------
+
+
+def template_face_height_mm(template, club: str) -> tuple[float | None, str]:
+    """(face height in mm, where it came from) for one club's template.
+
+    The template's own topline-to-sole extent is preferred, because it is
+    this club measured on this rig; the named per-club assumption stands in
+    only when the outline has no vertical extent, and says so.
+    """
+    extent = None
+    if template is not None and hasattr(template, "extent_mm"):
+        height = float(template.extent_mm()[1])
+        if math.isfinite(height) and height > 0.0:
+            extent = height
+    if extent is not None:
+        return extent, (
+            f"template outline's own topline-to-sole extent ({extent:.1f} mm), "
+            "imaged at the ball's range; it is the head's silhouette height, "
+            "which is the face height only insofar as the outline's bottom is "
+            "the leading edge"
+        )
+    assumed = ASSUMED_FACE_HEIGHT_MM.get(club)
+    if assumed is None:
+        return None, f"no template extent and no assumed face height for {club or 'unknown_club'}"
+    return assumed, f"ASSUMED {assumed:.1f} mm for {club}: {ASSUMED_FACE_HEIGHT_PROVENANCE}"
+
+
+def sole_tolerance_for(lie: str) -> tuple[float | None, str]:
+    """(how far below the support plane the sole may sit, why) for one lie.
+
+    None is the WIDEST tolerance: the sole rule is not enforced at all. That
+    is the default, because the lie is never a user input.
+    """
+    if lie not in LIE_SOLE_ALLOWANCE_MM:
+        raise ValueError(f"unknown lie {lie!r}; expected one of {sorted(LIE_SOLE_ALLOWANCE_MM)}")
+    allowance = LIE_SOLE_ALLOWANCE_MM[lie]
+    reason = LIE_TOLERANCE_REASON[lie]
+    if allowance is None:
+        return None, reason
+    return allowance + SOLE_NOISE_MARGIN_MM, reason
+
+
+def mat_geometry_gate(
+    reading,
+    *,
+    lie: str = DEFAULT_LIE,
+    ball_radius_mm: float = BALL_RADIUS_MM,
+) -> tuple[str, str, float | None, str]:
+    """(gate status, the measurement behind it, the tolerance used, its reason).
+
+    The status is "ok" or a NAMED impossibility -- never None and never a
+    silent pass. Two rules, and the first is the one that matters:
+
+      * ``impossible_topline_below_ball_centre`` -- the placed topline sits
+        less than one ball radius above the support plane, i.e. below the
+        ball's own centre. No club on any surface does that; the extractor
+        locked onto the ball's highlight.
+      * ``impossible_sole_below_support_plane`` -- the sole sits further below
+        the plane than the named lie allows. Not enforced at all on the
+        default "unknown" lie.
+    """
+    tolerance, tolerance_reason = sole_tolerance_for(lie)
+    if reading is None or not reading.ok:
+        return (
+            "not_run_no_support_plane_reading",
+            "" if reading is None else reading.reason,
+            tolerance,
+            tolerance_reason,
+        )
+    radius = float(ball_radius_mm)
+    topline = reading.topline_above_support_mm
+    if topline is None:
+        return (
+            "not_run_no_topline_height",
+            reading.topline_above_support_source,
+            tolerance,
+            (tolerance_reason),
+        )
+    detail = f"topline_{topline:.1f}_mm_above_the_support_plane_ball_centre_is_{radius:.1f}_mm"
+    if topline < radius:
+        return "impossible_topline_below_ball_centre", detail, tolerance, tolerance_reason
+    sole = reading.sole_above_support_mm
+    if sole is not None and tolerance is not None and sole < -tolerance:
+        return (
+            "impossible_sole_below_support_plane",
+            (
+                f"sole_{-sole:.1f}_mm_below_the_support_plane_on_a_{lie}_lie_"
+                f"which_allows_{tolerance:.1f}_mm; {detail}"
+            ),
+            tolerance,
+            tolerance_reason,
+        )
+    return "ok", detail, tolerance, tolerance_reason
+
+
+def support_plane_fields(
+    projection: ImpactProjection | None,
+    projection_status: str,
+    template,
+    club: str,
+    *,
+    lie: str = DEFAULT_LIE,
+) -> dict:
+    """The support-plane channel's fields and the mat gate's verdict.
+
+    Additive, like the projection channel: nothing here withholds the
+    heel-toe reading. What it DOES withhold, by name, is the VERTICAL
+    channel -- ``high_low_mm``, ``high_low_3d_mm`` and the template-derived
+    support-plane heights -- when the gate says the placement is impossible.
+    ``contact_above_support_mm`` survives the gate because it is built from
+    the ball and the loft alone and owes the suspect template nothing.
+    """
+    face_height, face_height_source = template_face_height_mm(template, club)
+    reading = (
+        None
+        if projection is None
+        else read_support_plane(
+            projection, face_height_mm=face_height, face_height_source=face_height_source
+        )
+    )
+    gate_status, gate_detail, tolerance, tolerance_reason = mat_geometry_gate(reading, lie=lie)
+    fields = {
+        "lie": lie,
+        "face_height_mm": face_height,
+        "face_height_source": face_height_source,
+        "sole_tolerance_mm": tolerance,
+        "sole_tolerance_reason": tolerance_reason,
+        "mat_gate_status": gate_status,
+        "mat_gate_detail": gate_detail,
+    }
+    if reading is None:
+        return {
+            **fields,
+            "support_plane_status": f"not_run_projection_{projection_status}",
+            "vertical_channel_status": f"not_run_projection_{projection_status}",
+        }
+    if not reading.ok:
+        return {
+            **fields,
+            "support_plane_status": reading.reason,
+            "vertical_channel_status": f"not_run_{reading.reason}",
+        }
+    gated = gate_status.startswith("impossible_")
+    return {
+        **fields,
+        "support_plane_status": "ok",
+        "vertical_channel_status": "ok" if not gated else f"withheld_{gate_status}",
+        "contact_above_support_mm": reading.contact_above_support_mm,
+        "contact_above_support_source": reading.contact_above_support_source,
+        "topline_above_support_mm": None if gated else reading.topline_above_support_mm,
+        "topline_above_support_source": reading.topline_above_support_source,
+        "sole_above_support_mm": None if gated else reading.sole_above_support_mm,
+        "sole_above_support_source": reading.sole_above_support_source,
     }
 
 
@@ -545,6 +827,7 @@ def extract_impact_zone(
     rig=None,
     loft_deg: float | None = None,
     face_angle_deg: float = 0.0,
+    lie: str = DEFAULT_LIE,
 ) -> ImpactZoneResult:
     """Segment, align, gate, carry to contact and read the zone. Fails closed.
 
@@ -557,8 +840,22 @@ def extract_impact_zone(
     point B − r·n̂ in face coordinates (`impact_projection`) -- under its own
     status and named assumptions. ``loft_deg`` defaults to the per-club
     `ASSUMED_DYNAMIC_LOFT_DEG` convention until the D-plane loft ships.
+
+    It then carries the SUPPORT-PLANE channel on top of that: the same
+    vertical numbers referred to the plane the ball rests on, and the
+    mat-geometry gate over them. ``lie`` is NOT a user input -- it defaults to
+    "unknown", which applies the widest tolerance -- and exists so a future
+    lie detector can tighten the sole rule without a setup field.
     """
-    common = {"template_source": template.source, "club": template.club or swing.club}
+    # The lie travels on EVERY exit, withheld ones included, so a reader can
+    # see which tolerance the gate would have used. Validated here so an
+    # unrecognised lie is refused before any work, not silently widened.
+    sole_tolerance_for(lie)
+    common = {
+        "template_source": template.source,
+        "club": template.club or swing.club,
+        "lie": lie,
+    }
     if template.outline.size == 0 or not template.outline.any():
         return withheld("template_outline_is_empty", **common)
 
@@ -602,9 +899,21 @@ def extract_impact_zone(
     physical, physics_reason = reading_is_physical(ball_from_toe_mm)
     if not physical:
         return withheld(physics_reason, rejected_frames=rejected, **common)
-    projected = projection_fields(
+    projection, projection_status = run_projection(
         swing, carry, setup, rig, loft_deg, face_angle_deg, common["club"]
     )
+    projected = projection_result_fields(projection, projection_status)
+    support = support_plane_fields(projection, projection_status, template, common["club"], lie=lie)
+    support.pop("lie")  # already on `common`, which every exit carries
+    gated = support["vertical_channel_status"].startswith("withheld_")
+    if gated:
+        # Fail closed on the VERTICAL channel only: a placement the mat
+        # geometry rules out cannot carry a high-low number, but the heel-toe
+        # reading rests on the span, not on the topline, and survives. The
+        # heel-toe 3-D reading survives with it, so ``projection_status`` is
+        # left alone and ``vertical_channel_status`` carries the withholding.
+        high_low_mm = None
+        projected["high_low_3d_mm"] = None
     return ImpactZoneResult(
         status="ok",
         reason="ok",
@@ -613,6 +922,9 @@ def extract_impact_zone(
         face_width_mm=face_width_mm,
         ball_from_toe_mm=ball_from_toe_mm,
         high_low_mm=high_low_mm,
+        high_low_status=(
+            f"withheld_{support['mat_gate_status']}" if gated else "experimental_unvalidated"
+        ),
         carry_model=carry.model,
         carry_disagreement_mm=(
             None if carry.disagreement_px is None else carry.disagreement_px * mm_per_px
@@ -622,6 +934,7 @@ def extract_impact_zone(
         rejected_frames=rejected,
         carry_extrapolation_frames=extrapolation,
         **projected,
+        **support,
         **common,
     )
 

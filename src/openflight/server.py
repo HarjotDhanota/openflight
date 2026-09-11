@@ -3169,6 +3169,11 @@ def _read_impact_zone(shot: Shot, archive, trigger_index):
     because it carries the convention that produced it and that convention is
     not a strike location -- see `impact_zone_settings` and
     docs/clubface-impact-location.md.
+
+    The whole `ImpactZoneResult.as_dict()` travels, so channels added there
+    (the 3-D projection, the support-plane heights) reach the payload with no
+    change here -- and anything the mat-geometry gate withholds is already
+    None in that dict, so a withheld vertical reading cannot leak as a number.
     """
     from openflight.camera.clubpose.impact_zone import withheld  # noqa: PLC0415
 

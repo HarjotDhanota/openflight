@@ -711,3 +711,184 @@ class TestCarryExtrapolationReporting:
 
         assert "carry_extrapolation_frames" in as_dict
         assert as_dict["carry_extrapolation_frames"] is None
+
+
+# ---------------------------------------------------------------------------
+# the support-plane channel and the mat-geometry gate, end to end
+# ---------------------------------------------------------------------------
+#
+# `test_clubpose_support_plane` pins the datum and the gate on constructed
+# geometry. What is checked here is the WIRING: that the channel is additive,
+# that the gate reaches `extract_impact_zone`, and that the 2-D reading it
+# withholds is the vertical one and nothing else.
+
+
+def _slow_swing(head_below_ball_px: float) -> outline.SwingFrames:
+    """A head creeping onto the ball, sitting a chosen distance below it.
+
+    The drop controls where the template's topline lands against the ball's
+    support plane, which is exactly what the mat gate reads.
+    """
+
+    def where(index: int):
+        if index < 60:
+            return None
+        return (BALL.x - 1.5 * (CONTACT - index), BALL.y + head_below_ball_px)
+
+    return _swing(_frames(where))
+
+
+def _setup_and_rig(swing: outline.SwingFrames):
+    from openflight.rig_geometry import RigGeometry, solve_setup
+
+    rig = RigGeometry.test_rig()
+    return solve_setup(swing.ball, rig), rig
+
+
+TWO_D_FIELDS = ("heel_toe_mm", "zone", "face_width_mm", "ball_from_toe_mm")
+
+
+class TestTheSupportPlaneChannelIsAdditive:
+    def test_the_two_d_reading_is_identical_with_and_without_the_new_channel(self):
+        swing = _slow_swing(6.0)
+        template = outline.bootstrap_outline_from_category("7-iron")
+        setup, rig = _setup_and_rig(swing)
+
+        plain = zone.extract_impact_zone(swing, template)
+        with_channel = zone.extract_impact_zone(swing, template, setup=setup, rig=rig)
+
+        assert plain.status == with_channel.status == "ok"
+        for name in TWO_D_FIELDS:
+            assert getattr(plain, name) == getattr(with_channel, name), name
+        assert plain.high_low_mm == with_channel.high_low_mm
+        assert plain.high_low_status == with_channel.high_low_status
+
+    def test_without_setup_geometry_every_new_field_says_it_did_not_run(self):
+        swing = _slow_swing(6.0)
+        result = zone.extract_impact_zone(swing, outline.bootstrap_outline_from_category("7-iron"))
+
+        assert result.contact_above_support_mm is None
+        assert result.support_plane_status.startswith("not_run_projection_")
+        assert result.vertical_channel_status.startswith("not_run_projection_")
+        assert result.mat_gate_status == "not_run_no_support_plane_reading"
+
+    def test_a_clean_placement_carries_the_support_plane_numbers(self):
+        swing = _slow_swing(6.0)
+        setup, rig = _setup_and_rig(swing)
+
+        result = zone.extract_impact_zone(
+            swing, outline.bootstrap_outline_from_category("7-iron"), setup=setup, rig=rig
+        )
+
+        assert result.mat_gate_status == "ok"
+        assert result.vertical_channel_status == "ok"
+        assert result.contact_above_support_mm == pytest.approx(10.67, abs=0.05)
+        assert result.topline_above_support_mm is not None
+        assert result.sole_above_support_mm is not None
+        assert result.high_low_mm is not None, "the gate passed, so the vertical channel stands"
+
+
+class TestTheMatGateReachesTheReading:
+    def test_a_topline_below_ball_centre_withholds_the_vertical_channel_by_name(self):
+        swing = _slow_swing(14.0)
+        setup, rig = _setup_and_rig(swing)
+
+        result = zone.extract_impact_zone(
+            swing, outline.bootstrap_outline_from_category("7-iron"), setup=setup, rig=rig
+        )
+
+        assert result.status == "ok", "the gate is on the vertical channel, not the whole reading"
+        assert result.mat_gate_status == "impossible_topline_below_ball_centre"
+        assert result.vertical_channel_status == "withheld_impossible_topline_below_ball_centre"
+        assert result.high_low_mm is None
+        assert result.high_low_3d_mm is None
+        assert result.high_low_status == "withheld_impossible_topline_below_ball_centre"
+        assert "ball_centre_is_21.3_mm" in result.mat_gate_detail
+
+    def test_the_heel_toe_channel_survives_the_gate_untouched(self):
+        swing = _slow_swing(14.0)
+        setup, rig = _setup_and_rig(swing)
+        template = outline.bootstrap_outline_from_category("7-iron")
+
+        gated = zone.extract_impact_zone(swing, template, setup=setup, rig=rig)
+        plain = zone.extract_impact_zone(swing, template)
+
+        for name in TWO_D_FIELDS:
+            assert getattr(gated, name) == getattr(plain, name), name
+        assert gated.ball_from_toe_3d_mm is not None
+        assert gated.projection_status == "ok"
+
+    def test_the_contact_height_survives_the_gate(self):
+        swing = _slow_swing(14.0)
+        setup, rig = _setup_and_rig(swing)
+
+        result = zone.extract_impact_zone(
+            swing, outline.bootstrap_outline_from_category("7-iron"), setup=setup, rig=rig
+        )
+
+        assert result.contact_above_support_mm == pytest.approx(10.67, abs=0.05)
+        assert result.topline_above_support_mm is None
+        assert result.sole_above_support_mm is None
+
+    @pytest.mark.parametrize(
+        ("lie", "expected"),
+        [("unknown", "ok"), ("grass", "impossible_sole_below_support_plane")],
+    )
+    def test_the_lie_decides_the_sole_rule_on_the_same_pixels(self, lie, expected):
+        swing = _slow_swing(6.0)
+        setup, rig = _setup_and_rig(swing)
+
+        result = zone.extract_impact_zone(
+            swing,
+            outline.bootstrap_outline_from_category("7-iron"),
+            setup=setup,
+            rig=rig,
+            lie=lie,
+        )
+
+        assert result.lie == lie
+        assert result.mat_gate_status == expected
+        assert result.sole_tolerance_reason == zone.LIE_TOLERANCE_REASON[lie]
+
+    def test_the_default_lie_is_never_asked_for_and_is_the_widest(self):
+        swing = _slow_swing(6.0)
+        setup, rig = _setup_and_rig(swing)
+
+        result = zone.extract_impact_zone(
+            swing, outline.bootstrap_outline_from_category("7-iron"), setup=setup, rig=rig
+        )
+
+        assert result.lie == "unknown"
+        assert result.sole_tolerance_mm is None
+        assert result.mat_gate_status == "ok"
+
+    def test_an_unrecognised_lie_is_refused_rather_than_silently_widened(self):
+        swing = _slow_swing(6.0)
+        setup, rig = _setup_and_rig(swing)
+
+        with pytest.raises(ValueError, match="unknown lie"):
+            zone.extract_impact_zone(
+                swing,
+                outline.bootstrap_outline_from_category("7-iron"),
+                setup=setup,
+                rig=rig,
+                lie="fairway-bunker",
+            )
+
+    def test_a_gated_reading_leaks_no_vertical_number_into_the_payload(self):
+        import json
+
+        swing = _slow_swing(14.0)
+        setup, rig = _setup_and_rig(swing)
+        result = zone.extract_impact_zone(
+            swing, outline.bootstrap_outline_from_category("7-iron"), setup=setup, rig=rig
+        )
+
+        payload = json.loads(json.dumps(result.as_dict()))
+
+        assert payload["high_low_mm"] is None
+        assert payload["high_low_3d_mm"] is None
+        assert payload["topline_above_support_mm"] is None
+        assert payload["sole_above_support_mm"] is None
+        assert payload["mat_gate_status"] == "impossible_topline_below_ball_centre"
+        assert payload["heel_toe_mm"] is not None

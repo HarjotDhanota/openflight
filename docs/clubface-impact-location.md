@@ -449,6 +449,47 @@ camera archive, the IWR range evidence and an outline for the selected club are
 all present; `--experimental-impact-zone-templates` names the outline
 directory, and none ship with the repository. There is no UI.
 
+### The support-plane datum and the mat-geometry gate
+
+The vertical datum is the **ball's own support plane**: the ball's bottom, one
+ball radius (21.335 mm) below its centre, whatever it is sitting on. No mat
+thickness is known, asked for, or assumed — mat, grass and tee share one datum.
+For a ball on that plane and an iron of dynamic loft Λ:
+
+- the face touches the ball at `r·(1 − sin Λ)` above the plane — 10.7 mm for a
+  7-iron at 30°, rising towards the full radius as the club deloafts, which is
+  what a bladed strike looks like as a number;
+- a soled head's topline sits `face_height·cos Λ` above the plane — 39.0 mm for
+  a 45 mm face at 30°, because the face height is measured **along** the
+  leaning face, not vertically.
+
+New fields, each with a `*_source` provenance string beside it:
+`contact_above_support_mm`, `topline_above_support_mm`, `sole_above_support_mm`
+and `face_height_mm` (the template's own topline-to-sole extent where it has
+one, else `impact_projection.ASSUMED_FACE_HEIGHT_MM` — face height is
+unpublished by every official source checked), plus `support_plane_status`,
+`lie`, `sole_tolerance_mm`, `sole_tolerance_reason`, `mat_gate_status`,
+`mat_gate_detail`, `vertical_channel_status`. The 2-D `high_low_mm` channel is
+unchanged and still reported alongside.
+
+`mat_geometry_gate` is a named impossibility gate on the **vertical channel
+only** — heel–toe always survives it:
+
+| status | rule |
+| --- | --- |
+| `impossible_topline_below_ball_centre` | topline less than one ball radius above the support plane. A club buried 20 mm into whatever the ball rests on; in practice the blurred template locked onto the ball's highlight. Lie-independent. |
+| `impossible_sole_below_support_plane` | sole deeper than the lie allows: `mat` 0 mm, `grass` 15 mm (divot), `tee` 40 mm (`unknown_tee_height`, not sensed), each plus a 3 mm placement-noise margin. |
+
+The lie is **not a user input**. It defaults to `lie="unknown"`, the widest
+tolerance, which enforces the topline rule only; the parameter exists so a
+future lie detector can tighten the sole rule without a setup field. When the
+gate fires, `high_low_mm`, `high_low_3d_mm`, `topline_above_support_mm` and
+`sole_above_support_mm` are all None in the payload and
+`vertical_channel_status` names the gate. `contact_above_support_mm` survives,
+because it is built from the ball and the loft and owes the suspect template
+nothing — and for the same reason it moves only with the loft until the D-plane
+dynamic loft ships.
+
 ### Stage 1: the foot-spray calibration that replaces the convention
 
 The convention above is the largest single caveat and the cheapest to remove.

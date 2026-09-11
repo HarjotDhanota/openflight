@@ -1450,11 +1450,16 @@ def estimate_impact_zone(
     template_dir,
     mirror_horizontal: bool = False,
     rig=None,
+    lie=None,
 ):
     """Read the heel-toe impact zone, or say which piece of evidence was missing.
 
     ``rig`` is the enclosure's `RigGeometry`; None falls back to the assumed
     2026-08 rig numbers, which is only right for replaying that session.
+
+    ``lie`` is what the ball rests on, for the mat-geometry gate on the
+    vertical channel. It is NOT a user input and nothing detects it yet, so
+    None keeps the extractor's own "unknown" default -- the widest tolerance.
 
     Every argument is a thing the shot record may or may not have, and each
     absence has its own reason: there is no partial answer and no default
@@ -1471,6 +1476,7 @@ def estimate_impact_zone(
     )
     from openflight.camera.clubpose.impact_zone import (  # noqa: PLC0415
         BALL_TO_UNIT_M,
+        DEFAULT_LIE,
         contact_frame_from_trigger,
         extract_impact_zone,
         withheld,
@@ -1536,4 +1542,6 @@ def estimate_impact_zone(
         club=str(club),
         name="live",
     )
-    return extract_impact_zone(swing, template, setup=setup, rig=rig)
+    return extract_impact_zone(
+        swing, template, setup=setup, rig=rig, lie=DEFAULT_LIE if lie is None else str(lie)
+    )

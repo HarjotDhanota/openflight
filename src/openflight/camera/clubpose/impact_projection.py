@@ -52,6 +52,24 @@ ASSUMED_DYNAMIC_LOFT_DEG: dict[str, float] = {
     "9-iron": 36.0,
 }
 
+# Face height -- leading edge to topline, measured ALONG the leaning face -- is
+# not published by any official source. The 2026-08-29 sweep of Maltby/
+# GolfWorks, Mizuno's irons-comparison chart and Srixon's shape-comparison PDF
+# returned blade LENGTH per club and nothing at all for height, so these are
+# ASSUMPTIONS carrying the 45-50 mm sole-to-crown band that
+# `head_outline.bootstrap_outline_from_category` already seeds with, and every
+# reading that uses one says so. A template that carries its own
+# topline-to-sole extent is always preferred over this table.
+ASSUMED_FACE_HEIGHT_MM: dict[str, float] = {
+    "7-iron": 45.0,
+    "9-iron": 45.0,
+}
+ASSUMED_FACE_HEIGHT_PROVENANCE = (
+    "midpoint of the 45-50 mm mid-iron sole-to-crown band; face height is "
+    "unpublished by every official source checked (2026-08-29), so this is an "
+    "ASSUMPTION, not a measurement, and it is not resolved per club"
+)
+
 _MIN_RAY_DOT = 1e-6
 _MIN_SPAN_MM = 1.0
 
@@ -73,6 +91,13 @@ class ImpactProjection:
     heel_toe_span_mm: float | None = None
     high_low_mm: float | None = None
     contact_camera_mm: tuple[float, float, float] | None = None
+    # The two points the SUPPORT-PLANE datum needs, in the same camera axes:
+    # the back-projected ball centre, and the topline landmark placed on the
+    # face plane. Carried so `read_support_plane` never re-derives them.
+    ball_camera_mm: tuple[float, float, float] | None = None
+    topline_camera_mm: tuple[float, float, float] | None = None
+    loft_deg: float | None = None
+    ball_radius_mm: float = BALL_RADIUS_MM
     assumptions: tuple[str, ...] = ()
 
 
@@ -171,6 +196,10 @@ def project_impact(
         heel_toe_span_mm=span_mm,
         high_low_mm=float((placed["topline"] - contact) @ up_face),
         contact_camera_mm=tuple(float(value) for value in contact),
+        ball_camera_mm=tuple(float(value) for value in ball_centre),
+        topline_camera_mm=tuple(float(value) for value in placed["topline"]),
+        loft_deg=float(loft_deg),
+        ball_radius_mm=float(ball_radius_mm),
         assumptions=(
             f"dynamic_loft_{float(loft_deg):.1f}_deg_assumed_not_measured",
             f"face_angle_{float(face_angle_deg):.1f}_deg"
@@ -179,4 +208,126 @@ def project_impact(
             "silhouette_landmarks_taken_to_lie_on_the_face_plane"
             "_heel_toe_robust_high_low_up_to_15mm_at_20mm_landmark_depth",
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# the support-plane datum
+# ---------------------------------------------------------------------------
+#
+# THE VERTICAL DATUM IS THE BALL'S OWN SUPPORT PLANE: the plane the ball rests
+# on, wherever that is. It sits one ball radius below the ball centre, and it
+# is the same plane whether the ball sits on a mat, on grass, or on a tee --
+# no mat thickness is ever known, asked for, or assumed. In the image it
+# passes through the ball's bottom pixel row at the ball's range; in camera
+# axes it is the ball centre lowered by r along the vertical.
+#
+# For a ball on that plane struck by an iron of dynamic loft L:
+#
+#   * the face touches the ball at r*(1 - sin L) above the plane -- 10.7 mm
+#     for a 7-iron at 30 deg, and rising towards the full radius as the club
+#     deloafts, which is what a thin, bladed strike looks like as a NUMBER;
+#   * a soled head's topline sits face_height * cos(L) above the plane --
+#     39.0 mm for a 45 mm face at 30 deg -- because the face height is
+#     measured ALONG the leaning face, not vertically.
+#
+# Both are exact given their inputs; the inputs that are assumptions say so.
+
+
+@dataclass(frozen=True)
+class SupportPlaneReading:
+    """Heights above the ball's support plane, or the named reason there are none.
+
+    ``contact_above_support_mm`` needs only the ball and the loft, so it
+    exists whenever the projection does. ``topline_above_support_mm`` and
+    ``sole_above_support_mm`` additionally need the template's topline and a
+    face height, and each says where its number came from.
+    """
+
+    ok: bool
+    reason: str
+    contact_above_support_mm: float | None = None
+    topline_above_support_mm: float | None = None
+    sole_above_support_mm: float | None = None
+    face_height_mm: float | None = None
+    contact_above_support_source: str = ""
+    topline_above_support_source: str = ""
+    sole_above_support_source: str = ""
+    face_height_source: str = ""
+
+
+def support_plane_camera_y(ball_camera_mm, ball_radius_mm: float = BALL_RADIUS_MM) -> float:
+    """The support plane's camera-frame row coordinate (+y is image DOWN).
+
+    The ball's bottom: its centre lowered by one radius along the vertical.
+    For the level camera this module already assumes, the vertical is the
+    camera's own −y, so the plane sits at ``ball_y + r``.
+    """
+    return float(ball_camera_mm[1]) + float(ball_radius_mm)
+
+
+def read_support_plane(
+    projection: ImpactProjection,
+    *,
+    face_height_mm: float | None = None,
+    face_height_source: str = "",
+) -> SupportPlaneReading:
+    """Express one projected impact against the ball's support plane.
+
+    ``face_height_mm`` is the leading-edge-to-topline extent measured ALONG
+    the face. Supply the template's own extent where it has one; None leaves
+    the sole unreported by name rather than substituting a guess.
+    """
+    if not projection.ok:
+        return SupportPlaneReading(False, f"projection_{projection.reason}")
+    if projection.ball_camera_mm is None or projection.contact_camera_mm is None:
+        return SupportPlaneReading(False, "projection_carries_no_camera_frame_points")
+    if projection.loft_deg is None:
+        return SupportPlaneReading(False, "projection_carries_no_loft")
+
+    radius = float(projection.ball_radius_mm)
+    plane_y = support_plane_camera_y(projection.ball_camera_mm, radius)
+    loft = math.radians(float(projection.loft_deg))
+    datum = (
+        f"ball centre lowered by one {radius:.3f} mm radius along the vertical "
+        "(the ball's own support plane -- mat, grass or tee alike; no surface "
+        "thickness is known or assumed); camera taken as level"
+    )
+
+    contact_above = plane_y - float(projection.contact_camera_mm[1])
+    topline_above: float | None = None
+    topline_source = "unavailable: the projection placed no topline on the face plane"
+    if projection.topline_camera_mm is not None:
+        topline_above = plane_y - float(projection.topline_camera_mm[1])
+        topline_source = f"topline landmark on the posed face plane, against {datum}"
+
+    sole_above: float | None = None
+    sole_source = "unavailable: no face height, so the sole is not reported"
+    height = None if face_height_mm is None else float(face_height_mm)
+    if height is not None and not math.isfinite(height):
+        height = None
+    if topline_above is not None and height is not None:
+        sole_above = topline_above - height * math.cos(loft)
+        sole_source = (
+            f"topline above support minus the {height:.1f} mm face height leaned "
+            f"by cos({float(projection.loft_deg):.1f} deg) = "
+            f"{height * math.cos(loft):.1f} mm; face height from "
+            f"{face_height_source or 'an unstated source'}"
+        )
+
+    return SupportPlaneReading(
+        ok=True,
+        reason="ok",
+        contact_above_support_mm=contact_above,
+        topline_above_support_mm=topline_above,
+        sole_above_support_mm=sole_above,
+        face_height_mm=height,
+        contact_above_support_source=(
+            f"contact point B - r*n_hat against {datum}; equals "
+            f"r*(1 - sin(dynamic loft {float(projection.loft_deg):.1f} deg)), so it "
+            "moves ONLY with the loft while the loft is the assumed per-club value"
+        ),
+        topline_above_support_source=topline_source,
+        sole_above_support_source=sole_source,
+        face_height_source=face_height_source,
     )
