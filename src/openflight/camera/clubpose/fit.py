@@ -18,9 +18,10 @@ estimated principal point, and no independent fx/fy.
 
 The RANGE was previously 1425 mm, from a 13.97 px ball. That is wrong. Across
 the 21 correctly exposed shots of session 20260825_181734 the teed ball
-measures 12.77 px, and the tape chain -- camera lens 203.2 mm above the floor
-(kiosk log `mount_height_m`), ball centre 40 mm, radar slant tee range 1575 mm,
-camera lateral offset -60.325 mm -- gives 1581 mm. The 13.97 px figure traces
+measures 12.77 px, and the configured rig numbers -- camera lens 203.2 mm above
+the floor (kiosk log `mount_height_m`), ball centre 40 mm, radar slant tee range
+1575 mm, camera lateral offset -60.325 mm; ASSUMED, never measured (2026-09-09),
+see `projection.py` -- give 1581 mm. The 13.97 px figure traces
 to the capture that turned out 99.8 % clipped, where the ball bloomed.
 
 That matters more than a 10 % scale error. Both `range_grid_mm` defaults below

@@ -87,6 +87,13 @@ class RigGeometry:
     iwr_offset_mm: tuple[float, float, float] | None = None
     mic_offset_mm: tuple[float, float, float] | None = None
     provenance: str = ""
+    # The enclosure facts the live pipeline needs beyond the offsets, each
+    # None until the CAD supplies it. Heights are above the FLOOR the unit
+    # stands on (deployed on its kickstand); pitches are positive UP.
+    lens_height_above_floor_mm: float | None = None
+    iwr_boresight_pitch_deg: float | None = None
+    ops_boresight_pitch_deg: float | None = None
+    housing_tilt_deg: float | None = None
 
     @property
     def principal_point(self) -> tuple[float, float]:
@@ -95,16 +102,17 @@ class RigGeometry:
 
     @classmethod
     def test_rig(cls) -> "RigGeometry":
-        """The hand-taped 2026-08 rig, until the enclosure STEP file lands.
+        """The ASSUMED 2026-08 rig numbers, kept only so old sessions replay.
 
-        The tape chain (see `clubpose.projection`): lens 203.2 mm above the
-        floor, 60.325 mm LEFT of the ball line (so the line sits at
-        +60.325 mm in image axes), OPS243 antenna 152.4 mm above the floor on
-        the ball line. The SEN-14262 microphone is mounted at the unit beside
-        the OPS and has never been taped separately, so the OPS position
-        stands in for it -- that is centimetres of proxy error and about a
-        tenth of a millimetre of impact-location error through the timing.
-        The IWR6843's offset was never taped at all and is None.
+        These were never measured. Harjot (2026-09-09): the August session's
+        enclosure had no measurements at all -- the 203.2 mm lens height,
+        the 60.325 mm lateral offset and the 152.4 mm OPS height were guesses
+        (the tee range was a software guess from the ball's size). Earlier
+        docstrings called this a "tape chain"; they were wrong. The numbers
+        stay so that session 20260825_181734 replays as it was captured; a
+        real enclosure comes in through `RigGeometry.from_json` (see
+        `config/enclosure_v42_rig_geometry.json`). The mic position is the
+        OPS position as a stated proxy; the IWR offset is None.
         """
         ops = (60.325, 203.2 - 152.4, 0.0)
         return cls(
@@ -113,10 +121,52 @@ class RigGeometry:
             iwr_offset_mm=None,
             mic_offset_mm=ops,
             provenance=(
-                "hand tape chain, 2026-08-26 session 20260825_181734; "
-                "mic position is the OPS antenna's as a stated proxy; "
-                "IWR offset unmeasured"
+                "ASSUMED, never measured: 2026-08 rig numbers as configured for "
+                "session 20260825_181734 (Harjot 2026-09-09: no measurements existed); "
+                "mic position is the OPS antenna's as a stated proxy; IWR offset unmeasured"
             ),
+        )
+
+    def enclosure_setup(self) -> "EnclosureSetup":
+        """The live pipeline's geometry inputs, derived from the enclosure.
+
+        Every value the server used to take from a typed-in flag (camera
+        mount height, camera lateral offset, radar height, radar tilt) is
+        derived here from the rig's own constants, so a session in this
+        enclosure is born with measured numbers rather than assumptions --
+        the 2026-08 session was shot with assumed ones. Anything the rig does
+        not carry is None and is NAMED in ``missing``, never defaulted.
+
+        Sign conventions match the server's flags: the camera's lateral
+        offset is the camera relative to the IWR antenna, positive target-
+        right; the rig stores the IWR relative to the camera in image axes
+        (+x image-right), so the two are negatives of each other.
+        """
+        missing: list[str] = []
+        camera_height = (
+            self.lens_height_above_floor_mm / 1000.0
+            if self.lens_height_above_floor_mm is not None
+            else None
+        )
+        if camera_height is None:
+            missing.append("lens_height_above_floor_mm")
+        radar_height = None
+        lateral = None
+        if self.iwr_offset_mm is None:
+            missing.append("iwr_offset_mm")
+        else:
+            lateral = -self.iwr_offset_mm[0] / 1000.0
+            if camera_height is not None:
+                radar_height = camera_height - self.iwr_offset_mm[1] / 1000.0
+        if self.iwr_boresight_pitch_deg is None:
+            missing.append("iwr_boresight_pitch_deg")
+        return EnclosureSetup(
+            camera_mount_height_m=camera_height,
+            camera_lateral_offset_m=lateral,
+            radar_height_m=radar_height,
+            iwr_tilt_deg=self.iwr_boresight_pitch_deg,
+            missing=tuple(missing),
+            provenance=self.provenance,
         )
 
     def to_json(self, path: str | Path) -> None:
@@ -131,6 +181,33 @@ class RigGeometry:
             if data.get(key) is not None:
                 data[key] = tuple(float(value) for value in data[key])
         return cls(**data)
+
+
+@dataclass(frozen=True)
+class EnclosureSetup:
+    """What `RigGeometry.enclosure_setup` could derive, and what it could not.
+
+    ``missing`` names the rig fields that were absent; a consumer keeps its
+    own default for those and says so, rather than reading None as zero.
+    """
+
+    camera_mount_height_m: float | None
+    camera_lateral_offset_m: float | None
+    radar_height_m: float | None
+    iwr_tilt_deg: float | None
+    missing: tuple[str, ...] = ()
+    provenance: str = ""
+
+    def as_dict(self) -> dict:
+        """JSON-safe view for the session log."""
+        return {
+            "camera_mount_height_m": self.camera_mount_height_m,
+            "camera_lateral_offset_m": self.camera_lateral_offset_m,
+            "radar_height_m": self.radar_height_m,
+            "iwr_tilt_deg": self.iwr_tilt_deg,
+            "missing": list(self.missing),
+            "provenance": self.provenance,
+        }
 
 
 @dataclass(frozen=True)

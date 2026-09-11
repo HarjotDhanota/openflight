@@ -38,6 +38,12 @@ SESSION_LOCATION=""
 DRY_RUN=false
 # Rolling buffer mode is the only mode (streaming mode removed)
 TRIGGER="sound"  # Default: hardware sound trigger (SEN-14262 → HOST_INT)
+# Enclosure geometry file (RigGeometry JSON). The shipped v42 enclosure's file is the
+# default when it exists, so a session is never again captured with assumed heights.
+RIG_GEOMETRY="${RIG_GEOMETRY:-}"
+if [ -z "$RIG_GEOMETRY" ] && [ -f "$(dirname "$0")/../config/enclosure_v42_rig_geometry.json" ]; then
+    RIG_GEOMETRY="$(dirname "$0")/../config/enclosure_v42_rig_geometry.json"
+fi
 SOUND_PRE_TRIGGER=""
 BUFFER_SPLIT=""
 IWR6843=false
@@ -177,6 +183,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --camera-capture-gain)
             CAMERA_CAPTURE_GAIN="$2"
+            shift 2
+            ;;
+        --rig-geometry)
+            RIG_GEOMETRY="$2"
             shift 2
             ;;
         --camera-capture-mount-height-m)
@@ -641,6 +651,7 @@ if [ "$CAMERA_CAPTURE" = true ]; then
     [ -n "$CAMERA_CAPTURE_POST_MS" ] && SERVER_CMD="$SERVER_CMD --camera-capture-post-ms $CAMERA_CAPTURE_POST_MS"
     [ -n "$CAMERA_CAPTURE_EXPOSURE_US" ] && SERVER_CMD="$SERVER_CMD --camera-capture-exposure-us $CAMERA_CAPTURE_EXPOSURE_US"
     [ -n "$CAMERA_CAPTURE_GAIN" ] && SERVER_CMD="$SERVER_CMD --camera-capture-gain $CAMERA_CAPTURE_GAIN"
+    [ -n "$RIG_GEOMETRY" ] && SERVER_CMD="$SERVER_CMD --rig-geometry $RIG_GEOMETRY"
     [ -n "$CAMERA_CAPTURE_MOUNT_HEIGHT_M" ] && SERVER_CMD="$SERVER_CMD --camera-capture-mount-height-m $CAMERA_CAPTURE_MOUNT_HEIGHT_M"
     [ -n "$CAMERA_CAPTURE_LATERAL_OFFSET_M" ] && SERVER_CMD="$SERVER_CMD --camera-capture-lateral-offset-m $CAMERA_CAPTURE_LATERAL_OFFSET_M"
     [ -n "$CAMERA_CAPTURE_HORIZONTAL_OFFSET_DEG" ] && SERVER_CMD="$SERVER_CMD --camera-capture-horizontal-offset-deg $CAMERA_CAPTURE_HORIZONTAL_OFFSET_DEG"

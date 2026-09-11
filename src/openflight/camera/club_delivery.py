@@ -1449,8 +1449,12 @@ def estimate_impact_zone(
     club,
     template_dir,
     mirror_horizontal: bool = False,
+    rig=None,
 ):
     """Read the heel-toe impact zone, or say which piece of evidence was missing.
+
+    ``rig`` is the enclosure's `RigGeometry`; None falls back to the assumed
+    2026-08 rig numbers, which is only right for replaying that session.
 
     Every argument is a thing the shot record may or may not have, and each
     absence has its own reason: there is no partial answer and no default
@@ -1513,10 +1517,11 @@ def estimate_impact_zone(
     range_rate_ms = float(track.speed_ms_at(float(impact_t_s), float(geometry.range_res_m)))
 
     # The acoustic walk-back uses THIS setup's solved mic-to-ball distance --
-    # the unit sits wherever the user put it -- rather than the test rig's
-    # taped 1.575 m. The constant stands in only when the rig geometry
-    # carries no mic position, and the solution names that by warning.
-    rig = RigGeometry.test_rig()
+    # the unit sits wherever the user put it -- rather than a constant. The
+    # constant stands in only when the rig geometry carries no mic position,
+    # and the solution names that by warning.
+    if rig is None:
+        rig = RigGeometry.test_rig()
     setup = solve_setup(ball, rig)
     ball_to_unit_m = setup.mic_to_ball_m if setup.mic_to_ball_m is not None else BALL_TO_UNIT_M
 

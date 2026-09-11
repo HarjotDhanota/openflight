@@ -12,8 +12,15 @@ from functools import lru_cache
 import cv2
 import numpy as np
 
-# Measured rig geometry (tape chain, 2026-08-26). Two DIFFERENT heights meet
-# here and they were previously the same constant:
+# The 2026-08 rig's geometry AS CONFIGURED for session 20260825_181734. These
+# were ASSUMED, NOT MEASURED: Harjot (2026-09-09) -- "we had no measurements
+# of the enclosure that was used in that session"; the tee range was a
+# software guess from the ball's size. Earlier comments here called them a
+# tape chain; they were wrong. The numbers stay so that the August session
+# replays as it was captured. A real enclosure's constants come in through
+# `rig_geometry.RigGeometry.from_json` (config/enclosure_v42_rig_geometry.json)
+# and override everything below. Two DIFFERENT heights meet here and they
+# were previously the same constant:
 #
 #   * the OV9281 lens sits 203.2 mm above the FLOOR (the kiosk log's
 #     `mount_height_m`), and

@@ -46,10 +46,25 @@ class TestRigGeometry:
         )
 
     def test_the_test_rig_names_its_provenance_and_its_gaps(self):
-        assert "tape" in RIG.provenance
+        # 2026-09-09: these numbers were never measured, and the provenance
+        # must say so rather than call them a tape chain.
+        assert "ASSUMED" in RIG.provenance
+        assert "never measured" in RIG.provenance
         assert "IWR" in RIG.provenance
-        assert RIG.iwr_offset_mm is None, "the IWR was never taped; None must say so"
+        assert RIG.iwr_offset_mm is None, "the IWR position was never known; None must say so"
         assert RIG.mic_offset_mm == RIG.ops_offset_mm, "the OPS stands in for the mic, by name"
+
+    def test_the_test_rig_carries_no_enclosure_facts(self):
+        setup = RIG.enclosure_setup()
+
+        assert setup.camera_mount_height_m is None
+        assert setup.radar_height_m is None
+        assert setup.iwr_tilt_deg is None
+        assert set(setup.missing) == {
+            "lens_height_above_floor_mm",
+            "iwr_offset_mm",
+            "iwr_boresight_pitch_deg",
+        }
 
     def test_json_round_trips_tuples_and_nones(self, tmp_path):
         path = tmp_path / "rig.json"
@@ -60,6 +75,89 @@ class TestRigGeometry:
         assert isinstance(loaded.ops_offset_mm, tuple)
         assert loaded.iwr_offset_mm is None
         assert json.loads(path.read_text(encoding="utf-8"))["focal_px"] == RIG.focal_px
+
+
+class TestTheEnclosureSetup:
+    """The v42 enclosure's file drives the live pipeline's geometry inputs."""
+
+    V42 = RigGeometry(
+        focal_px=466.6667,
+        boresight_pitch_deg=-1.0,
+        iwr_offset_mm=(75.05, 165.06, 16.72),
+        ops_offset_mm=(-27.0, 170.0, 16.0),
+        mic_offset_mm=(-30.0, 3.0, -9.0),
+        lens_height_above_floor_mm=220.65,
+        iwr_boresight_pitch_deg=10.0,
+        ops_boresight_pitch_deg=10.0,
+        housing_tilt_deg=10.0,
+        provenance="Fusion v44 + TI PROC116A, hole-registered",
+    )
+
+    def test_the_live_inputs_are_derived_not_typed(self):
+        setup = self.V42.enclosure_setup()
+
+        assert setup.camera_mount_height_m == pytest.approx(0.22065)
+        # The IWR sits 75.05 mm to the camera's image-right, so the CAMERA is
+        # 75.05 mm target-LEFT of the radar: the server's convention is
+        # camera-relative-to-radar, positive target-right.
+        assert setup.camera_lateral_offset_m == pytest.approx(-0.07505)
+        # Antenna height = lens height minus the antenna's drop below the lens.
+        assert setup.radar_height_m == pytest.approx(0.05559, abs=1e-5)
+        assert setup.iwr_tilt_deg == pytest.approx(10.0)
+        assert setup.missing == ()
+        assert setup.provenance == self.V42.provenance
+
+    def test_the_shipped_v42_file_derives_the_same_numbers(self):
+        rig = RigGeometry.from_json("config/enclosure_v42_rig_geometry.json")
+        setup = rig.enclosure_setup()
+
+        assert setup.missing == ()
+        assert setup.camera_mount_height_m == pytest.approx(0.2207, abs=5e-4)
+        assert setup.radar_height_m == pytest.approx(0.0556, abs=5e-4)
+        assert setup.camera_lateral_offset_m == pytest.approx(-0.0750, abs=5e-4)
+        assert setup.iwr_tilt_deg == pytest.approx(10.0)
+        assert "20260825" in rig.provenance, "the file must say it is not the August rig"
+
+    def test_missing_pieces_are_named_not_defaulted(self):
+        import dataclasses
+
+        no_height = dataclasses.replace(self.V42, lens_height_above_floor_mm=None)
+        setup = no_height.enclosure_setup()
+        assert setup.camera_mount_height_m is None
+        assert setup.radar_height_m is None, "radar height needs the lens height"
+        assert setup.camera_lateral_offset_m == pytest.approx(-0.07505), "lateral does not"
+        assert setup.missing == ("lens_height_above_floor_mm",)
+
+        no_tilt = dataclasses.replace(self.V42, iwr_boresight_pitch_deg=None)
+        assert no_tilt.enclosure_setup().missing == ("iwr_boresight_pitch_deg",)
+
+    def test_the_new_fields_round_trip_and_old_files_still_load(self, tmp_path):
+        path = tmp_path / "v42.json"
+        self.V42.to_json(path)
+        assert RigGeometry.from_json(path) == self.V42
+
+        # A file written before the enclosure fields existed loads with them None.
+        old = {
+            k: v
+            for k, v in json.loads(path.read_text(encoding="utf-8")).items()
+            if k
+            not in (
+                "lens_height_above_floor_mm",
+                "iwr_boresight_pitch_deg",
+                "ops_boresight_pitch_deg",
+                "housing_tilt_deg",
+            )
+        }
+        path.write_text(json.dumps(old), encoding="utf-8")
+        loaded = RigGeometry.from_json(path)
+        assert loaded.lens_height_above_floor_mm is None
+        assert loaded.iwr_offset_mm == self.V42.iwr_offset_mm
+        assert "lens_height_above_floor_mm" in loaded.enclosure_setup().missing
+
+    def test_as_dict_is_json_safe(self):
+        payload = self.V42.enclosure_setup().as_dict()
+        json.dumps(payload)
+        assert payload["missing"] == []
 
 
 class TestSolveSetup:

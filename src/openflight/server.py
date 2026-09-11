@@ -1113,6 +1113,55 @@ def _kld7_radc_tuning_kwargs(args) -> dict:
     }
 
 
+rig_geometry = None  # the enclosure's RigGeometry when --rig-geometry was given
+rig_geometry_config: dict = {"enabled": False}
+
+
+def init_rig_geometry(path) -> None:
+    """Load the enclosure geometry file and derive the live pipeline's inputs.
+
+    The 2026-08 session was shot with typed-in heights that turned out to be
+    assumptions. With a geometry file the camera mount height, the camera's
+    lateral offset from the radar, the radar antenna height and the radar
+    tilt all come from the enclosure's own constants and are logged with
+    their provenance; the matching command-line flags are overridden and the
+    override is logged, so nothing is silently replaced.
+    """
+    global rig_geometry, rig_geometry_config  # pylint: disable=global-statement
+    if path is None:
+        rig_geometry = None
+        rig_geometry_config = {"enabled": False}
+        return
+    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+    rig_geometry = RigGeometry.from_json(path)
+    setup = rig_geometry.enclosure_setup()
+    rig_geometry_config = {
+        "enabled": True,
+        "path": str(Path(path).expanduser()),
+        "derived": setup.as_dict(),
+    }
+    logger.info("[SERVER] Rig geometry loaded from %s: %s", path, setup.as_dict())
+    if setup.missing:
+        logger.warning(
+            "[SERVER] Rig geometry lacks %s; the command-line values stand in for those",
+            ", ".join(setup.missing),
+        )
+
+
+def _rig_override(name: str, flag_value, rig_value):
+    """Prefer the enclosure's measured value over a typed-in flag, and say so."""
+    if rig_value is None:
+        return flag_value
+    if flag_value is not None and not math.isclose(
+        float(flag_value), float(rig_value), abs_tol=1e-9
+    ):
+        logger.info(
+            "[SERVER] %s: rig geometry %s overrides command-line %s", name, rig_value, flag_value
+        )
+    return rig_value
+
+
 def _session_start_config() -> dict:
     """Return session-start config including experimental K-LD7 provenance."""
     config = radar_config.copy()
@@ -1127,6 +1176,7 @@ def _session_start_config() -> dict:
     config["iwr6843"] = dict(iwr6843_runtime_config)
     config["camera_capture"] = dict(camera_capture_config)
     config["inclinometer"] = dict(inclinometer_runtime_config)
+    config["rig_geometry"] = dict(rig_geometry_config)
     config["power"] = {
         "enabled": battery_provider is not None,
         "provider": battery_provider,
@@ -3133,6 +3183,7 @@ def _read_impact_zone(shot: Shot, archive, trigger_index):
             club=getattr(shot.club, "value", None),
             template_dir=settings["template_dir"],
             mirror_horizontal=bool(camera_capture_config.get("mirror_horizontal")),
+            rig=rig_geometry,
         )
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning("[SERVER] Impact zone could not be read: %s", error)
@@ -5286,6 +5337,15 @@ def main():
         help="Analogue-gain seed used by the one-time startup calibration.",
     )
     parser.add_argument(
+        "--rig-geometry",
+        default=None,
+        help=(
+            "Enclosure geometry JSON (RigGeometry.to_json). When given, the camera mount "
+            "height, camera lateral offset, radar height and radar tilt come from it and "
+            "override the flags below (logged)."
+        ),
+    )
+    parser.add_argument(
         "--camera-capture-mount-height-m",
         type=float,
         default=0.20955,
@@ -5912,6 +5972,26 @@ def main():
         "cooldown_ms": args.swing_speed_cooldown_ms,
         "rejected_cooldown_ms": args.swing_speed_rejected_cooldown_ms,
     }
+
+    init_rig_geometry(args.rig_geometry)
+    enclosure = rig_geometry.enclosure_setup() if rig_geometry is not None else None
+    if enclosure is not None:
+        args.camera_capture_mount_height_m = _rig_override(
+            "camera mount height",
+            args.camera_capture_mount_height_m,
+            enclosure.camera_mount_height_m,
+        )
+        args.camera_capture_lateral_offset_m = _rig_override(
+            "camera lateral offset",
+            args.camera_capture_lateral_offset_m,
+            enclosure.camera_lateral_offset_m,
+        )
+        args.iwr6843_radar_height_m = _rig_override(
+            "radar height", args.iwr6843_radar_height_m, enclosure.radar_height_m
+        )
+        args.iwr6843_tilt_deg = _rig_override(
+            "radar tilt", args.iwr6843_tilt_deg, enclosure.iwr_tilt_deg
+        )
 
     if args.camera_capture:
         camera_capture_base = (
