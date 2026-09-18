@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Tester capture pilot.** `scripts/start-tester.sh` serves a local page that
+  runs preflight, checkerboard views, an exposure screen, and paired
+  camera/radar swing capture with pinned settings, then checks whether both
+  sensors saved usable data and packages the result. Requires Cormac's
+  enclosure. See `docs/camera/tester-pilot.md`.
+
 ### Fixed
 - **On-screen keyboard for profile names.** Adding or renaming a profile on the
   Pi kiosk now shows a full-screen keyboard. Chromium in `--kiosk` mode does not
