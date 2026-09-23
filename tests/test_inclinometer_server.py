@@ -194,6 +194,9 @@ def test_init_inclinometer_reads_a_turned_board_in_the_enclosures_axes(monkeypat
     monkeypatch.setattr(
         server, "rig_geometry", RigGeometry(focal_px=466.67, lis3dh_mount_yaw_deg=180.0)
     )
+    # init_inclinometer installs its service for the whole server: put it back after
+    monkeypatch.setattr(server, "inclinometer_service", None)
+    monkeypatch.setattr(server, "inclinometer_runtime_config", {})
 
     assert server.init_inclinometer(zero_offset_deg=0.0) is True
     assert isinstance(made["sensor"], MountedAccelerometer)
