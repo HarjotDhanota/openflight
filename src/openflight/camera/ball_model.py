@@ -17,12 +17,20 @@ import numpy as np
 from scipy import ndimage, optimize
 
 EDGE_BLUR_PX = 0.7  # optics and focus soften the rim by about this much
-MIN_DIFFUSE_DN = 12.0  # a lit ball is at least this much brighter at its brightest
+# The gates are in the picture's own noise, not in DN: a dim room or a low gain
+# leaves a real ball's lit top only 11 DN over its shade, and its contrast
+# rises and falls with the light while the noise sets what can be seen.
+MIN_DIFFUSE_NOISE_MULTIPLE = 5.0  # the lit top stands this far over the shade
 MAX_MISFIT_FRACTION = 0.35  # of the diffuse brightness left unexplained, at most
 # A ball's lit rim steps down to the ground beyond it. A half-lit sphere can
 # otherwise mimic a shadow's straight edge on a wall, where no such step exists.
 MIN_RIM_STEP_FRACTION = 0.2  # of the diffuse brightness
-MIN_RIM_STEP_DN = 6.0
+MIN_RIM_STEP_NOISE_MULTIPLE = 3.0
+# The lit rim's edge lies on the circle of the size the distance gives: within
+# 0.02 to 0.09 of the radius on real balls from 0.6 to 2 m, against 0.09 to
+# 0.6 for a door stop, a streak of light on a storage bin, a door's corner and
+# clipped white.
+MAX_RIM_OFFSET_FRACTION = 0.12
 # Room lights and the sun are above the ball: in image axes (y down) the light
 # comes from the upper half, horizontal-left through overhead to horizontal-right.
 LIGHT_AZIMUTH_DEG = (170.0, 370.0)
@@ -220,10 +228,15 @@ def fit_lit_ball(
     cx, cy, r, azimuth, tilt, shade, diffuse, ground, _gx, _gy = best.x
     misfit = np.abs(_render(best.x, yy, xx) - patch)
     misfit_dn = float(np.median(misfit[use & (np.hypot(xx - cx, yy - cy) <= 1.3 * r)]) * 1.4826)
-    if diffuse < MIN_DIFFUSE_DN or misfit_dn > MAX_MISFIT_FRACTION * diffuse:
+    # no model explains pixels better than their own noise: clipped white
+    # otherwise fits any bright sphere with nothing left over
+    misfit_dn = max(misfit_dn, noise_dn)
+    if diffuse < MIN_DIFFUSE_NOISE_MULTIPLE * noise_dn or misfit_dn > MAX_MISFIT_FRACTION * diffuse:
         return None
     step = _lit_rim_step(patch, cx, cy, r, azimuth)
-    if step < max(MIN_RIM_STEP_DN, MIN_RIM_STEP_FRACTION * diffuse):
+    if step < max(MIN_RIM_STEP_NOISE_MULTIPLE * noise_dn, MIN_RIM_STEP_FRACTION * diffuse):
+        return None
+    if _lit_rim_offset(patch, cx, cy, r, azimuth) > MAX_RIM_OFFSET_FRACTION:
         return None
     return LitBall(
         x=float(cx + left),
@@ -252,3 +265,20 @@ def _lit_rim_step(patch: np.ndarray, cx: float, cy: float, r: float, azimuth: fl
         )
 
     return band(0.7, 0.92) - band(1.15, 1.45)
+
+
+def _lit_rim_offset(patch: np.ndarray, cx: float, cy: float, r: float, azimuth: float) -> float:
+    """How far the lit rim's edge lies from the fitted circle, as a fraction of its radius.
+
+    On each ray across the lit side the edge is where the brightness falls
+    fastest; a ray with no rim on it finds its fall anywhere, far from the circle.
+    """
+    smooth = ndimage.gaussian_filter(patch, EDGE_BLUR_PX)
+    angles = azimuth + np.radians(np.arange(-60.0, 61.0, 6.0))
+    radii = np.arange(0.4 * r, 1.6 * r, 0.25)
+    xs = cx + radii[None, :] * np.cos(angles)[:, None]
+    ys = cy + radii[None, :] * np.sin(angles)[:, None]
+    values = ndimage.map_coordinates(smooth, [ys.ravel(), xs.ravel()], order=1, mode="nearest")
+    falls = -np.gradient(values.reshape(xs.shape), 0.25, axis=1)
+    edges = radii[np.argmax(falls, axis=1)]
+    return float(np.median(np.abs(edges - r)) / r)

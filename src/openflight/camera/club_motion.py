@@ -111,9 +111,20 @@ def _brighter_all_round(
 
 
 BALL_CANDIDATES = 6
+# A ball's shaded underside can sit within a few DN of the carpet it rests on,
+# however bright its top: the ring need only be darker by more than the noise.
+ALL_ROUND_MARGIN_NOISE = 3.0
+# The fits run on the median of the frames, whose noise is a single frame's
+# times sqrt(pi / 2) over the root of their number; 8-bit steps and fixed
+# pattern keep it from reading below about one DN.
+MEDIAN_NOISE_FACTOR = math.sqrt(math.pi / 2.0)
+PICTURE_NOISE_FLOOR_DN = 1.0
 # The unit sits behind the ball looking down the target line, so the ball is
-# near the middle of the picture across; a softly weighted preference.
-LATERAL_SIGMA_FRACTION = 0.2
+# near the middle of the picture across; a softly weighted preference. A
+# frame's width spans about 69 degrees through the 2.8 mm lens at every
+# readout mode, so this is about 10 degrees: a ball 0.35 m off the line at
+# 2 m keeps most of its weight, a door stop 22 degrees off keeps a tenth.
+LATERAL_SIGMA_FRACTION = 0.13
 
 
 def _lit_ball_near_size(  # pylint: disable=too-many-arguments,too-many-locals
@@ -154,7 +165,8 @@ def _lit_ball_near_size(  # pylint: disable=too-many-arguments,too-many-locals
             continue
         # an edge, like a door's foot over the gap beneath it, scores along its
         # whole length; a ball is brighter than its surroundings all round
-        if _brighter_all_round(coarse, row + y0, col + x0, coarse_r, 0.5 * floor):
+        margin = ALL_ROUND_MARGIN_NOISE * noise / factor
+        if _brighter_all_round(coarse, row + y0, col + x0, coarse_r, margin):
             kept.append((row, col))
         if len(kept) == BALL_CANDIDATES:
             break
@@ -165,10 +177,14 @@ def _lit_ball_near_size(  # pylint: disable=too-many-arguments,too-many-locals
             (col + x0 + 0.5) * factor - 0.5,
             (row + y0 + 0.5) * factor - 0.5,
             expected_radius,
-            noise_dn=max(1.5, noise),
+            noise_dn=noise,
             expected_radius=expected_radius,
         )
-        if fit is not None:
+        # a fit can slide off its seed onto something else: above or below the
+        # rows the ball can rest in, it is not the ball
+        if fit is not None and (
+            expected_row is None or abs(fit.y - expected_row[0]) <= expected_row[1]
+        ):
             fits.append(fit)
     if not fits:
         return None
@@ -207,17 +223,20 @@ def _contrast_ball(
     noise = float(np.median(np.std(frames[: min(20, len(frames))], axis=0))) / factor
     floor = max(DISK_MIN_CONTRAST_DN, DISK_MIN_NOISE_MULTIPLE * noise)
     if expected_radius is not None:
-        lit = _lit_ball_near_size(
+        count = min(20, len(frames))
+        picture_noise = max(
+            PICTURE_NOISE_FLOOR_DN, MEDIAN_NOISE_FACTOR * noise * factor / math.sqrt(count)
+        )
+        # the size is known: a search free of it can only find something else
+        return _lit_ball_near_size(
             image,
             coarse,
             (x0, y0, x1, y1),
             factor,
             expected_radius,
-            noise * factor,
+            picture_noise,
             expected_row,
         )
-        if lit is not None:
-            return lit
 
     # 1. where: the best disk over plausible ball sizes, in the binned frame
     radii = np.geomspace(2.5, max(3.0, 0.04 * coarse.shape[1]), num=12)
@@ -410,6 +429,8 @@ def detect_reference_ball(
     is read from the pixels, which a room-lit ball leaves loose by a tenth.
     ``expected_row_px`` (row, band) is where the ball resting on the floor must
     appear, from the same distance, the camera's tilt and the lens height.
+    With the size known, a frame with no such ball raises rather than offering
+    whatever else stands out: too dark, clipped white, or no ball there.
     """
     if frames.ndim != 3 or frames.shape[0] < 3:
         raise ValueError("frames must have shape (n, height, width) with n >= 3")
@@ -524,6 +545,9 @@ def detect_reference_ball(
     )
     if lit is not None:
         return lit
+    if expected_diameter_px is not None:
+        # the dark search below knows neither the size nor where the ball rests
+        raise ValueError("no ball of the size the distance gives, where it has to rest")
 
     # A spotlight can wash the white face of the ball into the turf while its
     # lower silhouette remains dark. Local contrast is more stable than an

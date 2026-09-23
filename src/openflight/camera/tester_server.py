@@ -66,6 +66,10 @@ LIVE_BALL_EVERY_S = 1.0
 # predicts, beyond which the tape or the lens is suspect
 SIZE_CHECK_FRACTION = 0.25
 BALL_DIAMETER_MM = 42.67
+# where a quarter of the rows the ball can rest in is clipped white, a white
+# ball cannot be told from the floor, and the page says so
+CLIPPED_DN = 250
+CLIPPED_FLOOR_FRACTION = 0.25
 
 
 @dataclass(frozen=True)
@@ -677,7 +681,17 @@ def ball_readout(
             frames, expected_diameter_px=expected_diameter_px, expected_row_px=expected_row
         )
     except ValueError as exc:
-        return {"found": False, "reason": str(exc)}
+        reason = str(exc)
+        if expected_row is not None:
+            row, band = expected_row
+            rows = np.median(frames, axis=0)[max(0, int(row - band)) : int(row + band) + 1]
+            clipped = float((rows >= CLIPPED_DN).mean()) if rows.size else 0.0
+            if clipped >= CLIPPED_FLOOR_FRACTION:
+                reason += (
+                    f"; {100 * clipped:.0f}% of the floor there is clipped white, where a "
+                    "white ball cannot show: lower the exposure or the gain"
+                )
+        return {"found": False, "reason": reason}
     image = np.median(frames, axis=0)
     yy, xx = np.indices(image.shape)
     distance = np.hypot(xx - ball.x, yy - ball.y)

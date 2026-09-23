@@ -900,3 +900,14 @@ def test_the_size_route_never_reads_the_tapes_own_size_back():
     cues = ts.distance_cues(ball, ts.ARMS["arm5"], 2051.0, RIG)
     assert cues["from_size_mm"] is None
     assert "from_size_off_pct" not in cues
+
+
+def test_no_ball_on_a_floor_clipped_white_says_to_lower_the_exposure():
+    frames = np.full((5, 800, 1280), 40, dtype=np.uint8)
+    frames[:, 420:, :] = 255
+
+    ball = ts.ball_readout(frames, ts.FOCAL_PX_1X, 19.7, (486.0, 90.0))
+
+    assert ball["found"] is False
+    assert "clipped white" in ball["reason"]
+    assert "lower the exposure" in ball["reason"]
