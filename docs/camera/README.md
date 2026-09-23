@@ -101,6 +101,13 @@ uv sync --extra camera
 
 OpenCV is intentionally not installed for radar-only OpenFlight systems.
 
+The OV9281 is not auto-detected. Enable it in `/boot/firmware/config.txt`
+under `[all]`, using `dtoverlay=ov9281,cam0` when the ribbon is in CAM/DISP 0:
+
+```text
+dtoverlay=ov9281
+```
+
 Reboot after enabling or changing camera hardware:
 
 ```bash
@@ -367,6 +374,8 @@ directory together when copying a session for offline analysis.
 ## Troubleshooting
 
 ### No camera detected
+
+First confirm `/boot/firmware/config.txt` has the `dtoverlay=ov9281` line.
 
 1. Stop OpenFlight.
 2. Power the Pi off.
