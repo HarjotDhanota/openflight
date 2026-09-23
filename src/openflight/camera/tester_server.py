@@ -8,10 +8,13 @@ import json
 import os
 import re
 import shlex
+import struct
 import subprocess
 import sys
 import threading
+import time
 import zipfile
+import zlib
 from collections import Counter, deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -20,7 +23,9 @@ from pathlib import Path
 from typing import Callable
 
 import numpy as np
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, Response, jsonify, request, send_file
+
+from openflight.camera.triggered_buffer import unpack_r8_frame
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TESTER_PAGE = REPO_ROOT / "ui" / "public" / "tester.html"
@@ -50,6 +55,10 @@ GAIN_SCREEN = "2,4,6,8,10,12,14,15.9"  # OV9282 analogue gain caps at 0xFF/16
 # Above ~12x the black floor lifts and column stripes appear: more offset, not
 # more signal. The screen still records the top gains; the pick stops here.
 GAIN_CEILING = 12.0
+# The live view refreshes the page this often; the camera still runs at the
+# arm's frame rate, so each frame is exposed exactly as a capture would be.
+LIVE_FPS = 12.0
+LIVE_EXPOSURE_RANGE_US = (20, 20000)
 
 
 @dataclass(frozen=True)
@@ -584,6 +593,172 @@ class TesterJobManager:
         return True
 
 
+def encode_png(image: np.ndarray) -> bytes:
+    """8-bit greyscale PNG from the standard library: nothing to install on the Pi."""
+    height, width = image.shape
+    rows = np.hstack([np.zeros((height, 1), np.uint8), image]).tobytes()
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(rows, 1))
+        + chunk(b"IEND", b"")
+    )
+
+
+def boost(image: np.ndarray) -> np.ndarray:
+    """Stretch the frame's own range to full scale so a dark frame shows what it holds."""
+    low, high = np.percentile(image, (0.5, 99.9))
+    scale = 255.0 / max(float(high - low), 1.0)
+    return np.clip((image.astype(np.float32) - low) * scale, 0, 255).astype(np.uint8)
+
+
+def live_controls(arm: Arm, exposure_us: int, gain: float) -> dict:
+    """The arm's frame rate, unless the exposure needs a longer frame."""
+    frame_us = max(round(1_000_000 / arm.fps), exposure_us + 200)  # rows of margin
+    return {
+        "AeEnable": False,
+        "ExposureTime": exposure_us,
+        "AnalogueGain": gain,
+        "FrameDurationLimits": (frame_us, frame_us),
+    }
+
+
+class LiveView:
+    """One arm's readout mode streamed to the page; exposure and gain change live."""
+
+    def __init__(self, camera_factory: Callable[[], object] | None = None):
+        self._camera_factory = camera_factory
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._arm: Arm | None = None
+        self._pending: dict | None = None
+        self._requested: dict | None = None
+        self._image: np.ndarray | None = None
+        self._metadata: dict = {}
+        self._error: str | None = None
+        self._black_floor: float | None = None
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(
+        self, arm: Arm, exposure_us: int, gain: float, black_floor: float | None = None
+    ) -> None:
+        """Open the arm's mode, or only change exposure and gain if it is already open."""
+        with self._lock:
+            self._pending = live_controls(arm, exposure_us, gain)
+            self._black_floor = black_floor
+            self._error = None
+            if self.running and self._arm == arm:
+                return
+        self.stop()
+        with self._lock:
+            self._arm = arm
+            self._image = None
+            self._metadata = {}
+            self._stop.clear()
+            self._thread = threading.Thread(
+                target=self._run, args=(arm,), daemon=True, name="tester-live"
+            )
+            self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
+        self._thread = None
+
+    def snapshot(self) -> tuple[np.ndarray | None, dict]:
+        with self._lock:
+            image, metadata = self._image, self._metadata
+            status = {
+                "running": self.running,
+                "arm_id": self._arm.arm_id if self._arm else None,
+                "requested": {
+                    "exposure_us": (self._requested or {}).get("ExposureTime"),
+                    "gain": (self._requested or {}).get("AnalogueGain"),
+                },
+                "applied": {
+                    "exposure_us": metadata.get("ExposureTime"),
+                    "gain": metadata.get("AnalogueGain"),
+                },
+                "error": self._error,
+            }
+            floor = self._black_floor
+        if image is not None:
+            mean = float(image.mean())
+            status["stats"] = {
+                "mean": round(mean, 1),
+                "above_floor": round(mean - floor, 1) if floor is not None else None,
+                "p99": float(np.percentile(image, 99)),
+                "max": int(image.max()),
+                "clipped_pct": round(float(np.mean(image >= 250) * 100.0), 2),
+            }
+        return image, status
+
+    def _open(self):
+        if self._camera_factory is not None:
+            return self._camera_factory()
+        from picamera2 import Picamera2  # noqa: PLC0415  # pylint: disable=import-error
+
+        return Picamera2()
+
+    def _run(self, arm: Arm) -> None:
+        camera = None
+        try:
+            camera = self._open()
+            with self._lock:
+                controls, self._pending = self._pending, None
+                self._requested = controls
+            config = camera.create_video_configuration(
+                main={"size": (arm.width, arm.height), "format": "YUV420"},
+                raw={"size": (arm.width, arm.height), "format": "R8"},
+                controls=controls,
+                buffer_count=4,
+                display=None,
+                encode=None,
+            )
+            camera.configure(config)
+            camera.start()
+            shown = 0.0
+            while not self._stop.is_set():
+                with self._lock:
+                    pending, self._pending = self._pending, None
+                if pending:
+                    camera.set_controls(pending)
+                    with self._lock:
+                        self._requested = pending
+                request_ = camera.capture_request()
+                try:
+                    if time.monotonic() - shown < 1.0 / LIVE_FPS:
+                        continue
+                    shown = time.monotonic()
+                    image = unpack_r8_frame(
+                        request_.make_array("raw"), arm.width, arm.height, False
+                    )
+                    metadata = request_.get_metadata()
+                finally:
+                    request_.release()
+                with self._lock:
+                    self._image, self._metadata = image, metadata
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            with self._lock:
+                self._error = f"{type(exc).__name__}: {exc}"
+        finally:
+            if camera is not None:
+                for close in ("stop", "close"):
+                    try:
+                        getattr(camera, close)()
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        pass
+
+
 def _shot_events(session_dir: Path) -> list[dict]:
     """Every shot-level event in the arm's session JSONL files, in order."""
     events: list[dict] = []
@@ -695,10 +870,12 @@ def create_app(
     rig_geometry: Path = DEFAULT_RIG_GEOMETRY,
     radar_port: str = DEFAULT_RADAR_PORT,
     manager: TesterJobManager | None = None,
+    live_view: LiveView | None = None,
 ) -> Flask:
     """Build the standalone tester service."""
     app = Flask(__name__)
     jobs = manager or TesterJobManager()
+    live = live_view or LiveView()
 
     def parameters() -> TesterParameters:
         source = request.get_json(silent=True) if request.method == "POST" else request.args
@@ -777,12 +954,54 @@ def create_app(
                 if action == "gain"
                 else None
             )
+            live.stop()  # the camera does one thing at a time
             jobs.start(action, commands, log_path, on_finish=on_finish)
             return jsonify({"job": jobs.status(), "arm": arm_progress(sessions_root, params)}), 202
         except RuntimeError as exc:
             return jsonify({"error": str(exc), "job": jobs.status()}), 409
         except ValueError as exc:
             return jsonify({"error": str(exc), "job": jobs.status()}), 400
+
+    @app.post("/api/tester/live")
+    def live_control():
+        payload = request.get_json(silent=True) or {}
+        try:
+            if payload.get("action") == "stop":
+                live.stop()
+                return jsonify(live.snapshot()[1])
+            params = TesterParameters.from_payload(payload)
+            if jobs.status()["state"] == "running":
+                raise RuntimeError("stop the running step before opening the live view")
+            try:
+                exposure_us = int(payload.get("exposure_us") or params.arm.exposure_us)
+                gain = float(payload.get("gain") or 8.0)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("exposure and gain must be numbers") from exc
+            low, high = LIVE_EXPOSURE_RANGE_US
+            if not low <= exposure_us <= high or not 1.0 <= gain <= 15.94:
+                raise ValueError(f"exposure {low}-{high} us and gain 1-15.9 only")
+            state = read_arm_state(sessions_root, params.tester_id, params.arm_id)
+            live.start(params.arm, exposure_us, gain, state.get("black_floor_dn"))
+            return jsonify(live.snapshot()[1])
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 409
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.get("/api/tester/live")
+    def live_status():
+        return jsonify(live.snapshot()[1])
+
+    @app.get("/api/tester/live.png")
+    def live_frame():
+        image, _status = live.snapshot()
+        if image is None:
+            return jsonify({"error": "no live frame yet"}), 503
+        if request.args.get("view") == "boost":
+            image = boost(image)
+        return Response(
+            encode_png(image), mimetype="image/png", headers={"Cache-Control": "no-store"}
+        )
 
     @app.post("/api/tester/stop")
     def stop_action():

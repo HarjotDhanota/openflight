@@ -50,6 +50,10 @@
       .problem { color: var(--bad); font-size: 0.9rem; margin: 4px 0; }
       .light { display: flex; flex-wrap: wrap; gap: 12px 24px; font-size: 0.9rem; margin: 8px 0; }
       .light b { font-variant-numeric: tabular-nums; }
+      .live { margin: 12px 0; }
+      .live figure { margin: 8px 0; }
+      .live img { display: block; width: 100%; image-rendering: pixelated; background: #000; border-radius: 7px; }
+      .live figcaption { font-size: 0.8rem; color: var(--muted); }
     </style>
   </head>
   <body>
@@ -87,6 +91,20 @@
           <strong>Capture swings</strong> and hit until it shows 5 accepted.</p>
         <ul class="arms" id="arms"></ul>
         <div class="light" id="light"></div>
+        <div class="live">
+          <div class="controls">
+            <label>Live exposure<select id="live-exposure"></select></label>
+            <label>Live gain<select id="live-gain"></select></label>
+            <button type="button" id="live-toggle">Start live view</button>
+          </div>
+          <div class="light" id="live-stats"></div>
+          <div id="live-frames" hidden>
+            <figure><img id="live-raw" alt="Live frame as captured" />
+              <figcaption>As captured, at this arm's readout mode</figcaption></figure>
+            <figure><img id="live-boost" alt="Live frame with contrast boosted" />
+              <figcaption>Contrast boosted, to show what a dark frame holds</figcaption></figure>
+          </div>
+        </div>
         <div class="steps">
           <button type="button" data-action="preflight">Preflight</button>
           <button type="button" data-action="gain" id="btn-gain">Find gain for this arm</button>
@@ -113,6 +131,10 @@
       const el = (id) => document.getElementById(id);
       let currentArm = 'arm1';
       let arms = [];
+      const LIVE_EXPOSURES = [87, 175, 300, 500, 1000, 3000, 10000];
+      const LIVE_GAINS = [1, 2, 4, 8, 12, 15.9];
+      let liveOn = false;
+      let liveArm = null;
 
       function payload() {
         return {
@@ -152,10 +174,16 @@
             <span class="t"><span>${a.label}</span>
             <small>${a.isolates} · ${a.exposure_us} µs · ${gainText}${a.lighting_required ? ' · <b>lighting required</b>' : ''}</small></span>
             <span class="p ${progressClass(a)}">${prog}</span>`;
-          li.addEventListener('click', () => { currentArm = a.arm_id; refresh(); });
+          li.addEventListener('click', () => {
+            currentArm = a.arm_id;
+            liveDefaults();
+            if (liveOn) liveStart();
+            refresh();
+          });
           list.append(li);
         }
         const a = arms.find((x) => x.arm_id === currentArm) || {};
+        if (liveArm !== currentArm) liveDefaults();
         el('btn-gain').textContent = `Find gain for arm ${currentArm.replace('arm','')}`;
         el('btn-swings').textContent = `Capture swings for arm ${currentArm.replace('arm','')}`;
         const li = a.light_index;
@@ -197,8 +225,66 @@
         }
       }
 
+      function fillSelect(id, values, unit, chosen) {
+        el(id).innerHTML = values
+          .map((v) => `<option value="${v}"${v === chosen ? ' selected' : ''}>${v}${unit}</option>`)
+          .join('');
+      }
+      function liveDefaults() {
+        const a = arms.find((x) => x.arm_id === currentArm);
+        if (!a) return;
+        fillSelect('live-exposure', LIVE_EXPOSURES, ' µs', a.exposure_us);
+        fillSelect('live-gain', LIVE_GAINS, '×', LIVE_GAINS.includes(a.gain) ? a.gain : 8);
+        liveArm = currentArm;
+      }
+      function liveShown(on) {
+        liveOn = on;
+        el('live-frames').hidden = !on;
+        el('live-toggle').textContent = on ? 'Stop live view' : 'Start live view';
+      }
+      function renderLive(s) {
+        const problem = s.failed || s.error;
+        if (problem) { el('live-stats').innerHTML = `<span class="problem">${problem}</span>`; return; }
+        const st = s.stats;
+        const ap = s.applied || {};
+        if (!st) { el('live-stats').textContent = s.running ? 'Opening the camera…' : ''; return; }
+        el('live-stats').innerHTML =
+          `<span>applied <b>${ap.exposure_us ?? '?'} µs × ${ap.gain != null ? ap.gain.toFixed(2) : '?'}</b></span>` +
+          `<span>mean <b>${st.mean}</b>${st.above_floor != null ? ` (<b>${st.above_floor}</b> above the black floor)` : ''}</span>` +
+          `<span>p99 <b>${st.p99}</b> · brightest <b>${st.max}</b></span>` +
+          `<span>clipped <b>${st.clipped_pct}%</b></span>`;
+      }
+      async function liveStart() {
+        const status = await request('/api/tester/live', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...payload(), exposure_us: Number(el('live-exposure').value), gain: Number(el('live-gain').value),
+          }),
+        });
+        liveShown(!status.failed);
+        renderLive(status);
+      }
+      async function liveStop() {
+        liveShown(false);
+        renderLive(await request('/api/tester/live', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'stop' }),
+        }));
+      }
+      async function liveTick() {
+        if (!liveOn) return;
+        const t = Date.now();
+        el('live-raw').src = `/api/tester/live.png?view=raw&t=${t}`;
+        el('live-boost').src = `/api/tester/live.png?view=boost&t=${t}`;
+        renderLive(await request('/api/tester/live'));
+      }
+      el('live-toggle').addEventListener('click', () => (liveOn ? liveStop() : liveStart()));
+      el('live-exposure').addEventListener('change', () => { if (liveOn) liveStart(); });
+      el('live-gain').addEventListener('change', () => { if (liveOn) liveStart(); });
+      setInterval(liveTick, 350);
+
       for (const button of document.querySelectorAll('[data-action]')) {
         button.addEventListener('click', async () => {
+          liveShown(false);  // the runner closes the live view to free the camera
           render(await request('/api/tester/run', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ...payload(), action: button.dataset.action }),

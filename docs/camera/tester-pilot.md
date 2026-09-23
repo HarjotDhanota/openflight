@@ -66,8 +66,12 @@ minutes; later starts are quick.
    everything you type; the frames carry the light level and any flicker. Keep
    the light the same for the whole session; if it changes, start a new tester
    ID.
-2. **Arms, top to bottom.** For each arm: **Find gain** (a few seconds on the
-   static scene — it picks the gain that lights the frame correctly at that
+2. **Arms, top to bottom.** Select an arm and **Start live view** first: it
+   shows the camera exactly as that arm will capture, with a contrast-boosted
+   copy beneath it, and you can change exposure and gain while it runs. Check
+   the ball is in view before going on. Then, for each arm: **Find gain** (a
+   few seconds on the static scene — it picks the gain that lights the frame
+   correctly at that
    arm's exposure, records the light level, and solves the ball's range from
    the same frame so it can be compared with your tape), then **Capture
    swings**. The club is set to 7-iron for you. Hit until the arm shows **5

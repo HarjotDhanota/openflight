@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import struct
+import time
 import zipfile
+import zlib
 
 import numpy as np
 import pytest
@@ -397,3 +400,197 @@ class TestSolvedRange:
             handle.write(b"P5\n320 200\n255\n" + bytes(320 * 200))
         solved = ts.solved_range(tmp_path, ts.ARMS["arm1"], {"gain": 6.0}, RIG)
         assert solved["solved_range_m"] is None and solved["solved_range_note"]
+
+
+class FakeRequest:
+    def __init__(self, width, height, value):
+        # PiSP hands R8 over as R16: the luminance byte is the high byte
+        self.raw = np.zeros((height, width * 2), np.uint8)
+        self.raw[:, 1::2] = value
+
+    def make_array(self, name):
+        assert name == "raw"
+        return self.raw
+
+    def get_metadata(self):
+        return {"ExposureTime": 280, "AnalogueGain": 4.0}
+
+    def release(self):
+        pass
+
+
+class FakeCamera:
+    opened = 0
+
+    def __init__(self):
+        FakeCamera.opened += 1
+        self.config = None
+        self.controls = []
+        self.closed = False
+
+    def create_video_configuration(self, **kwargs):
+        return kwargs
+
+    def configure(self, config):
+        self.config = config
+
+    def start(self):
+        pass
+
+    def set_controls(self, controls):
+        self.controls.append(controls)
+
+    def capture_request(self):
+        time.sleep(0.002)
+        size = self.config["raw"]["size"]
+        return FakeRequest(size[0], size[1], 40)
+
+    def stop(self):
+        pass
+
+    def close(self):
+        self.closed = True
+
+
+def _wait(predicate, timeout=3.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+class TestLiveView:
+    def setup_method(self):
+        FakeCamera.opened = 0
+        self.cameras = []
+
+        def factory():
+            camera = FakeCamera()
+            self.cameras.append(camera)
+            return camera
+
+        self.live = ts.LiveView(camera_factory=factory)
+
+    def teardown_method(self):
+        self.live.stop()
+
+    def test_it_streams_the_arms_mode_at_the_requested_exposure(self):
+        self.live.start(ts.ARMS["arm1"], 300, 4.0, black_floor=31.7)
+        assert _wait(lambda: self.live.snapshot()[0] is not None)
+        image, status = self.live.snapshot()
+        assert image.shape == (200, 320) and int(image.mean()) == 40
+        config = self.cameras[0].config
+        assert config["raw"] == {"size": (320, 200), "format": "R8"}
+        assert config["controls"]["ExposureTime"] == 300
+        assert config["controls"]["AeEnable"] is False
+        # the arm's own frame rate, so each frame is exposed as a capture would be
+        assert config["controls"]["FrameDurationLimits"] == (2222, 2222)
+        assert status["applied"] == {"exposure_us": 280, "gain": 4.0}
+        assert status["stats"]["above_floor"] == pytest.approx(8.3)
+
+    def test_changing_exposure_does_not_reopen_the_camera(self):
+        self.live.start(ts.ARMS["arm1"], 300, 4.0)
+        assert _wait(lambda: self.live.snapshot()[0] is not None)
+        self.live.start(ts.ARMS["arm1"], 87, 12.0)
+        assert _wait(lambda: self.cameras[0].controls)
+        assert FakeCamera.opened == 1
+        assert self.cameras[0].controls[-1]["ExposureTime"] == 87
+        assert self.cameras[0].controls[-1]["AnalogueGain"] == 12.0
+
+    def test_a_long_look_lengthens_the_frame_not_the_mode(self):
+        controls = ts.live_controls(ts.ARMS["arm1"], 10000, 2.0)
+        assert controls["FrameDurationLimits"] == (10200, 10200)
+
+    def test_another_arm_reopens_in_its_mode_and_stop_releases_the_camera(self):
+        self.live.start(ts.ARMS["arm1"], 300, 4.0)
+        assert _wait(lambda: self.live.snapshot()[0] is not None)
+        self.live.start(ts.ARMS["arm5"], 300, 4.0)
+        assert _wait(lambda: len(self.cameras) == 2 and self.cameras[1].config is not None)
+        assert self.cameras[0].closed
+        assert self.cameras[1].config["raw"]["size"] == (1280, 800)
+        self.live.stop()
+        assert self.cameras[1].closed and not self.live.running
+
+    def test_a_camera_error_is_shown_not_raised(self):
+        def broken():
+            raise IndexError("list index out of range")
+
+        live = ts.LiveView(camera_factory=broken)
+        live.start(ts.ARMS["arm1"], 300, 4.0)
+        assert _wait(lambda: live.snapshot()[1]["error"])
+        assert "IndexError" in live.snapshot()[1]["error"]
+
+
+class TestFrameEncoding:
+    def test_png_holds_the_frame_exactly(self):
+        image = (np.arange(200 * 320) % 251).astype(np.uint8).reshape(200, 320)
+        png = ts.encode_png(image)
+        assert png.startswith(b"\x89PNG\r\n\x1a\n")
+        width, height = struct.unpack(">II", png[16:24])
+        assert (width, height) == (320, 200)
+        idat = png[png.index(b"IDAT") + 4 : png.index(b"IEND") - 8]
+        rows = np.frombuffer(zlib.decompress(idat), np.uint8).reshape(200, 321)
+        assert (rows[:, 0] == 0).all()
+        assert np.array_equal(rows[:, 1:], image)
+
+    def test_boost_spreads_a_dark_frame_over_the_full_range(self):
+        rng = np.random.default_rng(0)
+        dark = (32 + rng.integers(0, 12, (200, 320))).astype(np.uint8)
+        stretched = ts.boost(dark)
+        assert stretched.min() == 0 and stretched.max() == 255
+
+
+class TestLiveEndpoints:
+    def _client(self, tmp_path, manager=None):
+        live = ts.LiveView(camera_factory=FakeCamera)
+        app = ts.create_app(
+            sessions_root=tmp_path, rig_geometry=RIG, manager=manager, live_view=live
+        )
+        return app.test_client(), live
+
+    def test_start_serve_and_stop(self, tmp_path):
+        client, live = self._client(tmp_path)
+        body = {"tester_id": "20260922-name", "arm_id": "arm3", "environment": "indoors"}
+        assert client.post("/api/tester/live", json={**body, "gain": 12}).status_code == 200
+        assert _wait(lambda: live.snapshot()[0] is not None)
+        for view in ("raw", "boost"):
+            frame = client.get(f"/api/tester/live.png?view={view}")
+            assert frame.status_code == 200 and frame.mimetype == "image/png"
+        assert client.get("/api/tester/live").get_json()["requested"]["exposure_us"] == 87
+        client.post("/api/tester/live", json={"action": "stop"})
+        assert not live.running
+
+    def test_no_frame_yet_is_503(self, tmp_path):
+        client, _live = self._client(tmp_path)
+        assert client.get("/api/tester/live.png").status_code == 503
+
+    def test_out_of_range_settings_are_refused(self, tmp_path):
+        client, _live = self._client(tmp_path)
+        body = {"tester_id": "20260922-name", "arm_id": "arm1", "environment": "indoors"}
+        assert client.post("/api/tester/live", json={**body, "exposure_us": 5}).status_code == 400
+        assert client.post("/api/tester/live", json={**body, "gain": 40}).status_code == 400
+
+    def test_a_step_closes_the_live_view_to_free_the_camera(self, tmp_path):
+        class Recorder(ts.TesterJobManager):
+            def start(self, action, commands, log_path, on_finish=None):
+                self.started = action
+
+        manager = Recorder()
+        client, live = self._client(tmp_path, manager)
+        body = {"tester_id": "20260922-name", "arm_id": "arm1", "environment": "indoors"}
+        client.post("/api/tester/live", json=body)
+        assert _wait(lambda: live.running)
+        assert client.post("/api/tester/run", json={**body, "action": "gain"}).status_code == 202
+        assert manager.started == "gain" and not live.running
+
+    def test_the_live_view_waits_for_a_running_step(self, tmp_path):
+        class Busy(ts.TesterJobManager):
+            def status(self):
+                return {"state": "running", "action": "swings", "message": "busy", "output": []}
+
+        client, live = self._client(tmp_path, Busy())
+        body = {"tester_id": "20260922-name", "arm_id": "arm1", "environment": "indoors"}
+        assert client.post("/api/tester/live", json=body).status_code == 409
+        assert not live.running
