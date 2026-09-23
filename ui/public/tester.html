@@ -98,11 +98,13 @@
             <button type="button" id="live-toggle">Start live view</button>
           </div>
           <div class="light" id="live-stats"></div>
+          <div class="light" id="live-ball"></div>
           <div id="live-frames" hidden>
             <figure><img id="live-raw" alt="Live frame as captured" />
               <figcaption>As captured, at this arm's readout mode</figcaption></figure>
             <figure><img id="live-boost" alt="Live frame with contrast boosted" />
-              <figcaption>Contrast boosted, to show what a dark frame holds</figcaption></figure>
+              <figcaption>Contrast boosted, to show what a dark frame holds; the ring is where the ball
+                detector found the ball</figcaption></figure>
           </div>
         </div>
         <div class="steps">
@@ -253,6 +255,12 @@
           `<span>mean <b>${st.mean}</b>${st.above_floor != null ? ` (<b>${st.above_floor}</b> above the black floor)` : ''}</span>` +
           `<span>p99 <b>${st.p99}</b> · brightest <b>${st.max}</b></span>` +
           `<span>clipped <b>${st.clipped_pct}%</b></span>`;
+        const b = s.ball;
+        el('live-ball').innerHTML = !b ? '' : b.found
+          ? `<span>ball found: <b>${b.diameter_px} px</b> across, about <b>${b.range_m} m</b> away</span>` +
+            `<span>ball <b>${b.ball_dn}</b> against <b>${b.around_dn}</b> around it</span>` +
+            `<span>edge <b>${b.edge_dn_per_px}</b> per px</span>`
+          : `<span class="problem">ball not found: ${b.reason}</span>`;
       }
       async function liveStart() {
         const status = await request('/api/tester/live', {

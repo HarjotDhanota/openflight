@@ -25,6 +25,7 @@ from typing import Callable
 import numpy as np
 from flask import Flask, Response, jsonify, request, send_file
 
+from openflight.camera.club_motion import detect_reference_ball
 from openflight.camera.triggered_buffer import unpack_r8_frame
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -59,6 +60,11 @@ GAIN_CEILING = 12.0
 # arm's frame rate, so each frame is exposed exactly as a capture would be.
 LIVE_FPS = 12.0
 LIVE_EXPOSURE_RANGE_US = (20, 20000)
+LIVE_BALL_EVERY_S = 0.5
+BALL_DIAMETER_MM = 42.67
+# detect_reference_ball's bright-ball threshold; below it only a dark
+# silhouette under a spotlight can be found.
+BALL_BRIGHT_DN = 210
 
 
 @dataclass(frozen=True)
@@ -332,9 +338,6 @@ def solved_range(arm_dir: Path, arm: Arm, choice: Mapping, rig_geometry: Path) -
     Recorded beside the tape so the study shows whether the camera solve can
     replace it. Never raises: a missing ball is recorded as a reason.
     """
-    from openflight.camera.club_motion import (  # noqa: PLC0415
-        detect_reference_ball,
-    )
     from openflight.rig_geometry import RigGeometry, solve_setup  # noqa: PLC0415
 
     runs = sorted((arm_dir / "gain").glob("*/results.json"))
@@ -616,6 +619,51 @@ def boost(image: np.ndarray) -> np.ndarray:
     return np.clip((image.astype(np.float32) - low) * scale, 0, 255).astype(np.uint8)
 
 
+def ball_readout(frames: np.ndarray, focal_px: float) -> dict:
+    """What the production ball detector finds in these frames, or why it found nothing."""
+    try:
+        ball = detect_reference_ball(frames)
+    except ValueError as exc:
+        reason = str(exc)
+        brightest = int(frames.max())
+        if brightest < BALL_BRIGHT_DN:
+            reason += (
+                f"; the brightest pixel is {brightest}, below the {BALL_BRIGHT_DN} "
+                "a white ball must reach"
+            )
+        return {"found": False, "reason": reason}
+    image = np.median(frames, axis=0)
+    yy, xx = np.indices(image.shape)
+    distance = np.hypot(xx - ball.x, yy - ball.y)
+    radius = ball.diameter_px / 2.0
+    inside = image[distance <= max(radius - 1.0, 1.0)]
+    around = image[(distance >= radius * 1.5) & (distance <= radius * 2.5)]
+    gy, gx = np.gradient(image.astype(np.float32))
+    edge = np.hypot(gx, gy)[np.abs(distance - radius) <= 1.0]
+    return {
+        "found": True,
+        "x": round(ball.x, 1),
+        "y": round(ball.y, 1),
+        "diameter_px": round(ball.diameter_px, 1),
+        "range_m": round(focal_px * BALL_DIAMETER_MM / ball.diameter_px / 1000.0, 2),
+        "ball_dn": round(float(np.median(inside)), 1),
+        "around_dn": round(float(np.median(around)), 1) if around.size else None,
+        "edge_dn_per_px": round(float(edge.mean()), 1) if edge.size else None,
+    }
+
+
+def mark_ball(image: np.ndarray, ball: Mapping) -> np.ndarray:
+    """A one-pixel ring just outside the ball the detector found."""
+    marked = image.copy()
+    radius = ball["diameter_px"] / 2.0 + 2.0
+    angles = np.linspace(0.0, 2.0 * np.pi, 360, endpoint=False)
+    xs = np.round(ball["x"] + radius * np.cos(angles)).astype(int)
+    ys = np.round(ball["y"] + radius * np.sin(angles)).astype(int)
+    keep = (xs >= 0) & (xs < image.shape[1]) & (ys >= 0) & (ys < image.shape[0])
+    marked[ys[keep], xs[keep]] = 255
+    return marked
+
+
 def live_controls(arm: Arm, exposure_us: int, gain: float) -> dict:
     """The arm's frame rate, unless the exposure needs a longer frame."""
     frame_us = max(round(1_000_000 / arm.fps), exposure_us + 200)  # rows of margin
@@ -642,6 +690,8 @@ class LiveView:
         self._metadata: dict = {}
         self._error: str | None = None
         self._black_floor: float | None = None
+        self._recent: deque[np.ndarray] = deque(maxlen=5)
+        self._ball: dict | None = None
 
     @property
     def running(self) -> bool:
@@ -662,6 +712,8 @@ class LiveView:
             self._arm = arm
             self._image = None
             self._metadata = {}
+            self._recent.clear()
+            self._ball = None
             self._stop.clear()
             self._thread = threading.Thread(
                 target=self._run, args=(arm,), daemon=True, name="tester-live"
@@ -689,6 +741,7 @@ class LiveView:
                     "gain": metadata.get("AnalogueGain"),
                 },
                 "error": self._error,
+                "ball": self._ball,
             }
             floor = self._black_floor
         if image is not None:
@@ -726,7 +779,8 @@ class LiveView:
             )
             camera.configure(config)
             camera.start()
-            shown = 0.0
+            focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
+            shown = looked = 0.0
             while not self._stop.is_set():
                 with self._lock:
                     pending, self._pending = self._pending, None
@@ -747,6 +801,13 @@ class LiveView:
                     request_.release()
                 with self._lock:
                     self._image, self._metadata = image, metadata
+                    self._recent.append(image)
+                    recent = list(self._recent)
+                if len(recent) >= 3 and shown - looked >= LIVE_BALL_EVERY_S:
+                    looked = shown
+                    ball = ball_readout(np.stack(recent), focal)
+                    with self._lock:
+                        self._ball = ball
         except Exception as exc:  # pylint: disable=broad-exception-caught
             with self._lock:
                 self._error = f"{type(exc).__name__}: {exc}"
@@ -994,11 +1055,13 @@ def create_app(
 
     @app.get("/api/tester/live.png")
     def live_frame():
-        image, _status = live.snapshot()
+        image, status = live.snapshot()
         if image is None:
             return jsonify({"error": "no live frame yet"}), 503
         if request.args.get("view") == "boost":
             image = boost(image)
+            if (status.get("ball") or {}).get("found"):
+                image = mark_ball(image, status["ball"])
         return Response(
             encode_png(image), mimetype="image/png", headers={"Cache-Control": "no-store"}
         )

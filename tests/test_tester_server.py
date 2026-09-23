@@ -594,3 +594,44 @@ class TestLiveEndpoints:
         body = {"tester_id": "20260922-name", "arm_id": "arm1", "environment": "indoors"}
         assert client.post("/api/tester/live", json=body).status_code == 409
         assert not live.running
+
+
+def _ball_frames(ground, ball, n=5, width=320, height=200, diameter=12.0):
+    frames = np.full((n, height, width), ground, np.uint8)
+    yy, xx = np.mgrid[0:height, 0:width]
+    frames[:, np.hypot(xx - width * 0.5, yy - height * 0.72) <= diameter / 2] = ball
+    return frames
+
+
+class TestLiveBall:
+    def test_a_well_lit_ball_is_found_with_its_size_and_range(self):
+        readout = ts.ball_readout(_ball_frames(110, 230), ts.FOCAL_PX_2X)
+        assert readout["found"] is True
+        assert readout["diameter_px"] == pytest.approx(12.0, abs=1.0)
+        # 466.67 px x 42.67 mm / 12 px
+        assert readout["range_m"] == pytest.approx(1.66, abs=0.15)
+        assert readout["ball_dn"] == 230 and readout["around_dn"] == 110
+        assert readout["edge_dn_per_px"] > 0
+
+    def test_a_dim_ball_says_why_it_was_not_found(self):
+        readout = ts.ball_readout(_ball_frames(40, 70), ts.FOCAL_PX_2X)
+        assert readout["found"] is False
+        assert "brightest pixel is 70, below the 210" in readout["reason"]
+
+    def test_the_ring_sits_just_outside_the_ball(self):
+        marked = ts.mark_ball(
+            np.zeros((200, 320), np.uint8), {"x": 160.0, "y": 144.0, "diameter_px": 12.0}
+        )
+        assert marked[144, 168] == 255
+        assert marked[144, 160] == 0
+
+    def test_the_live_view_reports_the_detector_verdict(self):
+        live = ts.LiveView(camera_factory=FakeCamera)
+        live.start(ts.ARMS["arm1"], 300, 4.0)
+        try:
+            assert _wait(lambda: live.snapshot()[1]["ball"] is not None)
+            ball = live.snapshot()[1]["ball"]
+            # the fake camera's frame is a flat 40: nothing to find, and it says so
+            assert ball["found"] is False and "below the 210" in ball["reason"]
+        finally:
+            live.stop()
