@@ -36,7 +36,7 @@ class TestTheGeometryReplacesTheFlags:
         assert block["path"].endswith("enclosure_v3_rig_geometry.json")
         # first_look decides whether numbers may be attributed to sensors by
         # the presence of exactly this block, so the derived values ride in it.
-        assert block["derived"]["radar_height_m"] == pytest.approx(0.051, abs=5e-4)
+        assert block["derived"]["radar_height_m"] == pytest.approx(0.0595, abs=5e-4)
         assert block["derived"]["provenance"]
 
     def test_a_measured_value_beats_a_typed_flag(self):

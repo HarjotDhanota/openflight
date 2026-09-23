@@ -17,6 +17,16 @@ from openflight.camera import tester_server as ts
 RIG = ts.DEFAULT_RIG_GEOMETRY
 
 
+@pytest.fixture(name="rig_95", scope="module")
+def fixture_rig_95(tmp_path_factory):
+    """The v3 rig file with the lens 95 mm up, the height these cases were worked at."""
+    data = json.loads(RIG.read_text(encoding="utf-8"))
+    data["lens_height_above_floor_mm"] = 95.0
+    path = tmp_path_factory.mktemp("rig") / "rig.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
 def params(**overrides):
     payload = {
         "tester_id": "20260922-name",
@@ -663,7 +673,7 @@ class TestTheTapeGivesTheBallsSize:
 
 
 class TestTheCameraSaysHowFar:
-    def test_both_routes_agree_with_the_tape_on_a_level_camera(self):
+    def test_both_routes_agree_with_the_tape_on_a_level_camera(self, rig_95):
         # a ball 1041 mm from the lens, on the floor, centred: where a level
         # 2.8 mm camera 95 mm up would see it
         focal, drop = ts.FOCAL_PX_1X, 95.0 - ts.BALL_DIAMETER_MM / 2
@@ -673,15 +683,15 @@ class TestTheCameraSaysHowFar:
             "y": 400.0 + focal * drop / along,
             "diameter_px": focal * ts.BALL_DIAMETER_MM / 1041.0,
         }
-        cues = ts.distance_cues(ball, ts.ARMS["arm5"], 1071.0, RIG)
+        cues = ts.distance_cues(ball, ts.ARMS["arm5"], 1071.0, rig_95)
         assert cues["tape_mm"] == 1041
         assert cues["from_size_mm"] == pytest.approx(1041, abs=2)
         assert cues["from_floor_mm"] == pytest.approx(1041, abs=2)
         assert cues["pitch_needed_deg"] == pytest.approx(0.0, abs=0.05)
 
-    def test_a_ball_seen_too_low_names_the_pitch_that_explains_it(self):
+    def test_a_ball_seen_too_low_names_the_pitch_that_explains_it(self, rig_95):
         ball = {"x": 640.0, "y": 522.7, "diameter_px": 32.0}
-        cues = ts.distance_cues(ball, ts.ARMS["arm5"], 1121.0, RIG)
+        cues = ts.distance_cues(ball, ts.ARMS["arm5"], 1121.0, rig_95)
         assert cues["from_floor_off_pct"] < -40
         assert cues["from_size_off_pct"] > 10
         # seen further below the axis than it lies below the horizon: the
@@ -768,14 +778,16 @@ class TestTheInclinometerRunsBesideThePage:
         tilt.start()
         assert tilt.reading() == {"status": "off", "error": "OSError: no I2C bus"}
 
-    def test_the_floor_agrees_with_the_tape_once_the_measured_pitch_is_applied(self):
+    def test_the_floor_agrees_with_the_tape_once_the_measured_pitch_is_applied(self, rig_95):
         # where a camera pitched 3.5 deg up, 95 mm high, sees a ball 1041 mm away
         focal, drop, pitch = ts.FOCAL_PX_1X, 95.0 - ts.BALL_DIAMETER_MM / 2, math.radians(3.5)
         along = (1041.0**2 - drop**2) ** 0.5
         ball = {"x": 640.0, "y": 400.0 + focal * math.tan(pitch + math.atan(drop / along))}
         ball["diameter_px"] = focal * ts.BALL_DIAMETER_MM / 1041.0
-        level = ts.distance_cues(ball, ts.ARMS["arm5"], 1071.0, RIG)
-        measured = ts.distance_cues(ball, ts.ARMS["arm5"], 1071.0, RIG, {"camera_pitch_deg": 3.5})
+        level = ts.distance_cues(ball, ts.ARMS["arm5"], 1071.0, rig_95)
+        measured = ts.distance_cues(
+            ball, ts.ARMS["arm5"], 1071.0, rig_95, {"camera_pitch_deg": 3.5}
+        )
         assert level["from_floor_off_pct"] < -40
         assert measured["from_floor_mm"] == pytest.approx(1041, abs=3)
         assert measured["pitch_unexplained_deg"] == pytest.approx(0.0, abs=0.05)
@@ -881,9 +893,11 @@ class TestEachPlacementUsesTheDistanceInTheBox:
 
 
 class TestTheRowTheFloorPredicts:
-    def test_it_follows_distance_and_tilt(self):
+    def test_it_follows_distance_and_tilt(self, rig_95):
         # 2021 mm from the lens, lens 95 mm up, camera pitched 3.4 deg up
-        row, band = ts.expected_ball_row_px(ts.ARMS["arm5"], 2051.0, RIG, {"camera_pitch_deg": 3.4})
+        row, band = ts.expected_ball_row_px(
+            ts.ARMS["arm5"], 2051.0, rig_95, {"camera_pitch_deg": 3.4}
+        )
         assert row == pytest.approx(489.7, abs=0.5)
         assert band == pytest.approx(90.0)
 
