@@ -18,7 +18,8 @@ if [ ! -x .venv/bin/python ] || ! .venv/bin/python -c "import picamera2" >/dev/n
   uv venv --clear --system-site-packages --python /usr/bin/python3
 fi
 # lgpio (Pi 5 GPIO) builds from source and needs SWIG and its C header.
-if ! ls .venv/lib/python3*/site-packages/lgpio* >/dev/null 2>&1 \n  && { ! command -v swig >/dev/null 2>&1 || [ ! -f /usr/include/lgpio.h ]; }; then
+if ! ls .venv/lib/python3*/site-packages/lgpio* >/dev/null 2>&1 \
+  && { ! command -v swig >/dev/null 2>&1 || [ ! -f /usr/include/lgpio.h ]; }; then
   echo "Missing build tools for lgpio. Run once, then start again:" >&2
   echo "  sudo apt update && sudo apt install -y swig liblgpio-dev python3-dev" >&2
   exit 1
