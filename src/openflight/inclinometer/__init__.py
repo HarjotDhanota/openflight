@@ -2,6 +2,7 @@
 
 from .lis3dh import LIS3DH, LIS3DHIdentityError
 from .models import AccelerationSample, OrientationSnapshot, SnapshotSelection
+from .mounting import MountedAccelerometer
 from .service import InclinometerService
 
 __all__ = [
@@ -9,6 +10,7 @@ __all__ = [
     "InclinometerService",
     "LIS3DH",
     "LIS3DHIdentityError",
+    "MountedAccelerometer",
     "OrientationSnapshot",
     "SnapshotSelection",
 ]

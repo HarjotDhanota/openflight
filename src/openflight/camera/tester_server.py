@@ -710,12 +710,15 @@ class EnclosureTilt:
         from openflight.inclinometer import (  # noqa: PLC0415
             LIS3DH,
             InclinometerService,
+            MountedAccelerometer,
         )
+        from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
 
-        return InclinometerService(
-            LIS3DH(bus_number=self.bus, address=self.address),
-            zero_offset_deg=self.zero_offset_deg,
-        )
+        sensor = LIS3DH(bus_number=self.bus, address=self.address)
+        mount_yaw = RigGeometry.from_json(self.rig_geometry).lis3dh_mount_yaw_deg
+        if mount_yaw:
+            sensor = MountedAccelerometer(sensor, mount_yaw)
+        return InclinometerService(sensor, zero_offset_deg=self.zero_offset_deg)
 
     def start(self) -> None:
         if self._service is not None:

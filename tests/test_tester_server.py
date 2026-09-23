@@ -805,3 +805,25 @@ class TestTheInclinometerRunsBesideThePage:
         assert fake.running is True
         status = client.post("/api/tester/status", json=body).get_json()
         assert status["inclinometer"]["status"] == "stable"
+
+
+def test_the_page_reads_a_turned_board_the_way_the_kiosk_does(monkeypatch):
+    from openflight.inclinometer import MountedAccelerometer
+
+    made = {}
+
+    class Board:
+        def __init__(self, **_kwargs):
+            pass
+
+    class Service:
+        def __init__(self, sensor, **_kwargs):
+            made["sensor"] = sensor
+
+    monkeypatch.setattr("openflight.inclinometer.LIS3DH", Board)
+    monkeypatch.setattr("openflight.inclinometer.InclinometerService", Service)
+
+    ts.EnclosureTilt(RIG)._make()
+
+    assert isinstance(made["sensor"], MountedAccelerometer)
+    assert made["sensor"].yaw_deg == 180.0

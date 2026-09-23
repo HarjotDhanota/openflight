@@ -9,6 +9,7 @@ from openflight.inclinometer import (
     AccelerationSample,
     InclinometerService,
     LIS3DHIdentityError,
+    MountedAccelerometer,
 )
 from openflight.inclinometer.service import pitch_degrees
 
@@ -133,3 +134,55 @@ def test_service_does_not_reuse_old_position_after_movement():
     selection = service.snapshot_for_impact(1.35)
     assert selection.status == "moving"
     assert selection.snapshot is None
+
+
+class _Board:
+    """A sensor that reads one fixed sample and remembers what was asked of it."""
+
+    def __init__(self, sample):
+        self.sample = sample
+        self.calls = []
+
+    def initialize(self):
+        self.calls.append("initialize")
+
+    def read(self, *, timestamp=None):
+        self.calls.append(("read", timestamp))
+        return self.sample
+
+    def close(self):
+        self.calls.append("close")
+
+
+def test_a_board_turned_round_reads_the_front_tipped_up_as_up():
+    # the enclosure's front tipped up 3.3 deg, read by a board whose +Y
+    # arrow points back: the board sees its Y negative
+    angle = math.radians(3.3)
+    board = _Board(AccelerationSample(1.0, 0.05, -math.sin(angle), math.cos(angle)))
+
+    mounted = MountedAccelerometer(board, 180.0)
+    sample = mounted.read(timestamp=2.0)
+
+    assert pitch_degrees(sample) == pytest.approx(3.3, abs=0.01)
+    assert sample.x_g == pytest.approx(-0.05)
+    assert sample.z_g == pytest.approx(math.cos(angle))
+    assert board.calls == [("read", 2.0)]
+
+
+def test_a_quarter_turn_moves_the_boards_x_into_the_enclosures_y():
+    board = _Board(AccelerationSample(0.0, 0.1, 0.0, 0.99))
+
+    sample = MountedAccelerometer(board, 90.0).read()
+
+    assert sample.x_g == pytest.approx(0.0, abs=1e-12)
+    assert sample.y_g == pytest.approx(0.1)
+
+
+def test_the_mounting_passes_start_and_stop_through():
+    board = _Board(AccelerationSample(0.0, 0.0, 0.0, 1.0))
+    mounted = MountedAccelerometer(board, 180.0)
+
+    mounted.initialize()
+    mounted.close()
+
+    assert board.calls == ["initialize", "close"]

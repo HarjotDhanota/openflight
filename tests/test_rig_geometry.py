@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import math
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -198,3 +199,13 @@ class TestTheExpectedInclinometerOrientation:
 
     def test_as_dict_is_json_safe(self):
         json.dumps(rig().expected_inclinometer_orientation().as_dict())
+
+
+def test_the_v3_unit_declares_its_turned_lis3dh():
+    rig = RigGeometry.from_json(
+        Path(__file__).resolve().parents[1] / "config" / "enclosure_v3_rig_geometry.json"
+    )
+
+    assert rig.lis3dh_mount_yaw_deg == 180.0
+    # the expectation is in the enclosure's axes, so the turn does not move it
+    assert rig.expected_inclinometer_orientation().pitch_deg == 0.0

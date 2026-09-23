@@ -163,3 +163,39 @@ def test_session_log_records_orientation_used_for_shot(tmp_path):
     assert entry["type"] == "shot_detected"
     assert entry["inclinometer"] == orientation
     logger.end_session()
+
+
+def test_init_inclinometer_reads_a_turned_board_in_the_enclosures_axes(monkeypatch):
+    from openflight.inclinometer import MountedAccelerometer
+    from openflight.rig_geometry import RigGeometry
+
+    made = {}
+
+    class Board:
+        def __init__(self, **_kwargs):
+            pass
+
+    class Service:
+        sample_hz = 10.0
+
+        def __init__(self, sensor, **_kwargs):
+            made["sensor"] = sensor
+
+        def start(self):
+            pass
+
+        def wait_for_stable(self, timeout_s):
+            from openflight.inclinometer import SnapshotSelection
+
+            return SnapshotSelection(snapshot=None, status="no_stable_preimpact_reading")
+
+    monkeypatch.setattr("openflight.inclinometer.LIS3DH", Board)
+    monkeypatch.setattr("openflight.inclinometer.InclinometerService", Service)
+    monkeypatch.setattr(
+        server, "rig_geometry", RigGeometry(focal_px=466.67, lis3dh_mount_yaw_deg=180.0)
+    )
+
+    assert server.init_inclinometer(zero_offset_deg=0.0) is True
+    assert isinstance(made["sensor"], MountedAccelerometer)
+    assert made["sensor"].yaw_deg == 180.0
+    assert server.inclinometer_runtime_config["mount_yaw_deg"] == 180.0

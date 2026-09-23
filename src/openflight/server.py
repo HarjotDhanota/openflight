@@ -1261,12 +1261,14 @@ def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: i
 
     service = None
     try:
-        from .inclinometer import LIS3DH, InclinometerService
+        from .inclinometer import LIS3DH, InclinometerService, MountedAccelerometer
 
-        service = InclinometerService(
-            LIS3DH(bus_number=bus_number, address=address),
-            zero_offset_deg=zero_offset_deg,
-        )
+        sensor = LIS3DH(bus_number=bus_number, address=address)
+        mount_yaw = rig_geometry.lis3dh_mount_yaw_deg if rig_geometry is not None else None
+        if mount_yaw:
+            # a board turned in the housing reads the housing's tilt turned with it
+            sensor = MountedAccelerometer(sensor, mount_yaw)
+        service = InclinometerService(sensor, zero_offset_deg=zero_offset_deg)
         service.start()
         startup = service.wait_for_stable(timeout_s=2.0)
         inclinometer_service = service
@@ -1277,6 +1279,7 @@ def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: i
             "i2c_address": f"0x{address:02x}",
             "sample_hz": service.sample_hz,
             "zero_offset_deg": zero_offset_deg,
+            "mount_yaw_deg": mount_yaw,
             "startup": startup.to_dict(),
         }
         if startup.snapshot is None:

@@ -48,6 +48,10 @@ class RigGeometry:
     # the file does not say, and the expectation falls back to "parallel".
     lis3dh_mount_pitch_deg: float | None = None
     lis3dh_mount_roll_deg: float | None = None
+    # The board's turn about the vertical, counter-clockwise seen from above,
+    # from the design's +Y arrow toward the enclosure's front. 180 means the
+    # arrow points back and X and Y read reversed; None means as designed.
+    lis3dh_mount_yaw_deg: float | None = None
 
     @property
     def principal_point(self) -> tuple[float, float]:
