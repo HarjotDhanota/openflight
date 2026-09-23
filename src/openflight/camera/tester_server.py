@@ -633,8 +633,38 @@ def expected_ball_diameter_px(arm: Arm, tee_mm: float | None, rig_geometry: Path
     return focal * BALL_DIAMETER_MM / camera_mm
 
 
+def expected_ball_row_px(
+    arm: Arm, tee_mm: float | None, rig_geometry: Path, tilt: Mapping | None = None
+) -> tuple[float, float] | None:
+    """The row a ball resting on the floor at the taped distance must sit in, and a band.
+
+    From the lens height, the ball's radius and the camera's pitch - the
+    inclinometer's, applied the kiosk's way, or the rig file's. The band
+    allows for what the pitch does not explain: narrower with a measured one.
+    """
+    if tee_mm is None:
+        return None
+    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+    rig = RigGeometry.from_json(rig_geometry)
+    if rig.lens_height_above_floor_mm is None:
+        return None
+    focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
+    camera_mm = tee_mm + (rig.iwr_offset_mm[2] if rig.iwr_offset_mm else 0.0)
+    drop = rig.lens_height_above_floor_mm - BALL_DIAMETER_MM / 2.0
+    along = math.sqrt(max(camera_mm**2 - drop**2, 1.0))
+    measured = (tilt or {}).get("camera_pitch_deg")
+    pitch = rig.boresight_pitch_deg if measured is None else measured
+    row = arm.height / 2.0 + focal * math.tan(math.radians(pitch) + math.atan(drop / along))
+    band = (90.0 if measured is not None else 150.0) * focal / FOCAL_PX_1X
+    return row, band
+
+
 def ball_readout(
-    frames: np.ndarray, focal_px: float, expected_diameter_px: float | None = None
+    frames: np.ndarray,
+    focal_px: float,
+    expected_diameter_px: float | None = None,
+    expected_row: tuple[float, float] | None = None,
 ) -> dict:
     """What the production ball detector finds, or why it found nothing.
 
@@ -643,7 +673,9 @@ def ball_readout(
     beside it, and a large gap names the tape or the lens.
     """
     try:
-        ball = detect_reference_ball(frames, expected_diameter_px=expected_diameter_px)
+        ball = detect_reference_ball(
+            frames, expected_diameter_px=expected_diameter_px, expected_row_px=expected_row
+        )
     except ValueError as exc:
         return {"found": False, "reason": str(exc)}
     image = np.median(frames, axis=0)
@@ -666,12 +698,20 @@ def ball_readout(
     }
     if expected_diameter_px is not None:
         try:
-            image_only = detect_reference_ball(frames).diameter_px
+            alone = detect_reference_ball(frames)
         except ValueError:
-            image_only = None
+            alone = None
+        # the picture's own size only means something where it found the same ball
+        same = alone is not None and math.hypot(alone.x - ball.x, alone.y - ball.y) <= radius
+        image_only = alone.diameter_px if same else None
         readout["expected_diameter_px"] = round(expected_diameter_px, 1)
         readout["image_only_diameter_px"] = round(image_only, 1) if image_only else None
-        if image_only and abs(image_only / expected_diameter_px - 1.0) > SIZE_CHECK_FRACTION:
+        if alone is not None and not same:
+            readout["size_check"] = (
+                f"the picture alone picked something else, at ({alone.x:.0f}, {alone.y:.0f}); "
+                "the ring is where your tape and the tilt put the ball"
+            )
+        elif image_only and abs(image_only / expected_diameter_px - 1.0) > SIZE_CHECK_FRACTION:
             readout["size_check"] = (
                 f"the picture alone reads {image_only:.0f} px against the "
                 f"{expected_diameter_px:.0f} px your tape predicts: check the tape "
@@ -906,6 +946,7 @@ class LiveView:
         self._recent: deque[np.ndarray] = deque(maxlen=5)
         self._ball: dict | None = None
         self._expected: float | None = None
+        self._expected_row: tuple[float, float] | None = None
         self._cues: Callable[[Mapping], dict] | None = None
         self._looker: threading.Thread | None = None
 
@@ -921,12 +962,14 @@ class LiveView:
         black_floor: float | None = None,
         expected_diameter_px: float | None = None,
         cues: Callable[[Mapping], dict] | None = None,
+        expected_row: tuple[float, float] | None = None,
     ) -> None:
         """Open the arm's mode, or only change exposure and gain if it is already open."""
         with self._lock:
             self._pending = live_controls(arm, exposure_us, gain)
             self._black_floor = black_floor
             self._expected = expected_diameter_px
+            self._expected_row = expected_row
             self._cues = cues
             self._error = None
             if self.running and self._arm == arm:
@@ -962,9 +1005,10 @@ class LiveView:
         while not self._stop.wait(LIVE_BALL_EVERY_S):
             with self._lock:
                 recent, expected, cues = list(self._recent), self._expected, self._cues
+                expected_row = self._expected_row
             if len(recent) < 3:
                 continue
-            ball = ball_readout(np.stack(recent), focal, expected)
+            ball = ball_readout(np.stack(recent), focal, expected, expected_row)
             if ball.get("found") and cues is not None:
                 ball["camera_says"] = cues(ball)
             with self._lock:
@@ -1301,6 +1345,7 @@ def create_app(
                 lambda ball: distance_cues(
                     ball, params.arm, params.tee_mm, rig_geometry, enclosure.reading()
                 ),
+                expected_ball_row_px(params.arm, params.tee_mm, rig_geometry, enclosure.reading()),
             )
             return jsonify(live.snapshot()[1])
         except RuntimeError as exc:
@@ -1324,7 +1369,10 @@ def create_app(
             tilt = enclosure.reading()
             focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
             ball = ball_readout(
-                frames, focal, expected_ball_diameter_px(arm, params.tee_mm, rig_geometry)
+                frames,
+                focal,
+                expected_ball_diameter_px(arm, params.tee_mm, rig_geometry),
+                expected_ball_row_px(arm, params.tee_mm, rig_geometry, tilt),
             )
             if not ball.get("found"):
                 raise RuntimeError(f"no ball in the live view: {ball.get('reason')}")

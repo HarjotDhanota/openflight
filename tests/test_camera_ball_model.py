@@ -95,3 +95,44 @@ def test_the_detector_takes_the_ball_not_the_door_when_it_knows_the_size():
     assert ball.x == pytest.approx(320.0, abs=1.0)
     assert ball.y == pytest.approx(262.0, abs=1.0)
     assert ball.diameter_px == pytest.approx(38.0, rel=0.02)
+
+
+def _two_balls(first, second, height=400, width=640, seed=5):
+    """Two lit spheres on textured ground: (cx, cy, radius, brightness) each."""
+    rng = np.random.default_rng(seed)
+    yy, xx = np.indices((height, width)).astype(np.float64)
+    image = 60 + rng.normal(0, 3, (height, width))
+    for cx, cy, radius, gain in (first, second):
+        dx, dy = xx - cx, yy - cy
+        inside = dx**2 + dy**2 <= radius**2
+        nz = np.sqrt(np.clip(radius**2 - dx**2 - dy**2, 0, None)) / radius
+        shade = np.clip(
+            dx / radius * LIGHT_UPPER_LEFT[0]
+            + dy / radius * LIGHT_UPPER_LEFT[1]
+            + nz * LIGHT_UPPER_LEFT[2],
+            0,
+            None,
+        )
+        image[inside] = 50 + gain * shade[inside]
+    noise = rng.normal(0, 2, (5, height, width))
+    return np.clip(image[None] + noise, 0, 255).astype(np.uint8)
+
+
+def test_a_bright_door_stop_off_to_the_side_loses_to_a_dim_ball_ahead():
+    # proportions from a real room: the door stop's white tip fitted 1.6 times
+    # better than the ball, 31% of the frame's width off to the side
+    frames = _two_balls((122.0, 262.0, 10.0, 75.0), (340.0, 250.0, 10.0, 45.0))
+
+    ball = detect_reference_ball(frames, expected_diameter_px=20.0)
+
+    assert ball.x == pytest.approx(340.0, abs=1.0)
+    assert ball.y == pytest.approx(250.0, abs=1.0)
+
+
+def test_the_row_the_floor_predicts_picks_the_ball_that_rests_there():
+    # two equal balls ahead; only one sits where the distance and tilt put it
+    frames = _two_balls((300.0, 200.0, 10.0, 80.0), (340.0, 300.0, 10.0, 80.0))
+
+    ball = detect_reference_ball(frames, expected_diameter_px=20.0, expected_row_px=(296.0, 40.0))
+
+    assert ball.y == pytest.approx(300.0, abs=1.0)

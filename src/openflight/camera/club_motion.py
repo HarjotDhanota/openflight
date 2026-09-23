@@ -110,21 +110,36 @@ def _brighter_all_round(
     return checked >= 4 and darker >= 0.75 * checked
 
 
-def _lit_ball_near_size(
+BALL_CANDIDATES = 6
+# The unit sits behind the ball looking down the target line, so the ball is
+# near the middle of the picture across; a softly weighted preference.
+LATERAL_SIGMA_FRACTION = 0.2
+
+
+def _lit_ball_near_size(  # pylint: disable=too-many-arguments,too-many-locals
     image: np.ndarray,
     coarse: np.ndarray,
     window: tuple[int, int, int, int],
     factor: int,
     expected_radius: float,
     noise: float,
+    expected_row: tuple[float, float] | None = None,
 ) -> ReferenceBall | None:
     """The lit ball among the round candidates of the size the distance predicts.
 
     A door panel over the dark gap beneath it, or a bright patch of carpet, can
-    stand out as much as the ball; none of them looks like a lit sphere, so the
-    one the model explains best is the ball.
+    stand out as much as the ball; none of them looks like a lit sphere. A door
+    stop's white tip can, so the fit is weighed by where the ball has to be:
+    near the middle across, and, given ``expected_row`` (row, band), at the row
+    its distance, the camera's tilt and the lens height put it on the floor.
     """
     x0, y0, x1, y1 = window
+    if expected_row is not None:
+        row, band = expected_row
+        y0 = max(y0, int((row - band) / factor))
+        y1 = min(y1, int(math.ceil((row + band) / factor)) + 1)
+        if y1 <= y0:
+            return None
     coarse_r = expected_radius / factor
     # only noise is ruled out here: a dim ball can sit below the contrast a
     # size-free search needs, and the lit-sphere fit is the real test
@@ -141,7 +156,7 @@ def _lit_ball_near_size(
         # whole length; a ball is brighter than its surroundings all round
         if _brighter_all_round(coarse, row + y0, col + x0, coarse_r, 0.5 * floor):
             kept.append((row, col))
-        if len(kept) == 3:
+        if len(kept) == BALL_CANDIDATES:
             break
     fits = []
     for row, col in kept:
@@ -157,7 +172,14 @@ def _lit_ball_near_size(
             fits.append(fit)
     if not fits:
         return None
-    best = max(fits, key=lambda fit: fit.quality)
+    width = image.shape[1]
+
+    def weight(fit) -> float:
+        across = (fit.x - width / 2.0) / (LATERAL_SIGMA_FRACTION * width)
+        down = (fit.y - expected_row[0]) / (expected_row[1] / 2.0) if expected_row else 0.0
+        return fit.quality * math.exp(-0.5 * (across**2 + down**2))
+
+    best = max(fits, key=weight)
     return ReferenceBall(
         x=best.x,
         y=best.y,
@@ -171,6 +193,7 @@ def _contrast_ball(
     frames: np.ndarray,
     roi: tuple[int, int, int, int] | None,
     expected_radius: float | None = None,
+    expected_row: tuple[float, float] | None = None,
 ) -> ReferenceBall | None:
     """The disk that stands out most from its surroundings, if it clearly does."""
     height, width = background.shape
@@ -185,7 +208,13 @@ def _contrast_ball(
     floor = max(DISK_MIN_CONTRAST_DN, DISK_MIN_NOISE_MULTIPLE * noise)
     if expected_radius is not None:
         lit = _lit_ball_near_size(
-            image, coarse, (x0, y0, x1, y1), factor, expected_radius, noise * factor
+            image,
+            coarse,
+            (x0, y0, x1, y1),
+            factor,
+            expected_radius,
+            noise * factor,
+            expected_row,
         )
         if lit is not None:
             return lit
@@ -370,6 +399,7 @@ def detect_reference_ball(
     roi: tuple[int, int, int, int] | None = None,
     brightness_threshold: int = 210,
     expected_diameter_px: float | None = None,
+    expected_row_px: tuple[float, float] | None = None,
 ) -> ReferenceBall:
     """Find the stationary ball in bright- or dark-on-ground lighting.
 
@@ -378,6 +408,8 @@ def detect_reference_ball(
     is the lit sphere of that size, placed by its lit rim and shading, so its
     centre holds when grass or carpet hides its underside. Without it, the size
     is read from the pixels, which a room-lit ball leaves loose by a tenth.
+    ``expected_row_px`` (row, band) is where the ball resting on the floor must
+    appear, from the same distance, the camera's tilt and the lens height.
     """
     if frames.ndim != 3 or frames.shape[0] < 3:
         raise ValueError("frames must have shape (n, height, width) with n >= 3")
@@ -488,6 +520,7 @@ def detect_reference_ball(
         frames,
         roi,
         expected_diameter_px / 2.0 if expected_diameter_px is not None else None,
+        expected_row_px,
     )
     if lit is not None:
         return lit

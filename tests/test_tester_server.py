@@ -876,3 +876,16 @@ class TestEachPlacementUsesTheDistanceInTheBox:
             live.stop()
         assert response.status_code == 409
         assert "another arm" in response.get_json()["error"]
+
+
+class TestTheRowTheFloorPredicts:
+    def test_it_follows_distance_and_tilt(self):
+        # 2021 mm from the lens, lens 95 mm up, camera pitched 3.4 deg up
+        row, band = ts.expected_ball_row_px(ts.ARMS["arm5"], 2051.0, RIG, {"camera_pitch_deg": 3.4})
+        assert row == pytest.approx(489.7, abs=0.5)
+        assert band == pytest.approx(90.0)
+
+    def test_without_a_measured_tilt_the_band_is_wider(self):
+        _row, band = ts.expected_ball_row_px(ts.ARMS["arm5"], 2051.0, RIG, {"status": "off"})
+        assert band == pytest.approx(150.0)
+        assert ts.expected_ball_row_px(ts.ARMS["arm5"], None, RIG) is None
