@@ -898,15 +898,7 @@ def _kld7_angle_log_payload(
 
 
 def init_rig_geometry(path) -> None:
-    """Load the enclosure geometry file and derive the live pipeline's inputs.
-
-    The 2026-08 session was shot with typed-in heights that turned out to be
-    assumptions. With a geometry file the camera mount height, the camera's
-    lateral offset from the radar, the radar antenna height and the radar tilt
-    all come from the enclosure's own constants and are logged with their
-    provenance; the matching command-line flags are overridden and the override
-    is logged, so nothing is silently replaced.
-    """
+    """Load the enclosure file; its constants override the typed geometry flags, logged."""
     global rig_geometry, rig_geometry_config  # pylint: disable=global-statement
     if path is None:
         rig_geometry = None
@@ -943,12 +935,7 @@ def _rig_override(name: str, flag_value, rig_value):
 
 
 def _expected_inclinometer_orientation() -> dict:
-    """The orientation this enclosure should read, or a named absence.
-
-    Only the rig geometry file knows how the box is meant to stand, so without
-    ``--rig-geometry`` there is no expectation and the caller must say so
-    rather than judge the unit against a zero nobody measured.
-    """
+    """What the enclosure should read when placed as designed, or a named absence."""
     if rig_geometry is None:
         return {
             "pitch_deg": None,
@@ -2427,12 +2414,8 @@ def _snapshot_inclinometer_for_shot(shot: Shot) -> None:
     snapshot = selection.snapshot
     if snapshot is not None and iwr6843_runtime is not None:
         configured_tilt = math.degrees(iwr6843_runtime.calibration.tilt_rad)
-        # The configured tilt is the enclosure's DESIGNED antenna-face angle
-        # relative to the housing. The inclinometer reports the housing's
-        # actual pitch, which already includes the pitch the design expects to
-        # read, so only the DEPARTURE from that expectation is a correction.
-        # Summing the raw reading instead double-counts on any enclosure whose
-        # housing itself leans (v42 reads +10 by design: 10 + 10 = 20).
+        # Only the departure from the expected placement pitch corrects the designed
+        # tilt; summing the raw reading double-counts on a housing that leans.
         expected_pitch = (_expected_inclinometer_orientation() or {}).get("pitch_deg") or 0.0
         effective_tilt = configured_tilt + (snapshot.calibrated_pitch_deg - expected_pitch)
         data.update(

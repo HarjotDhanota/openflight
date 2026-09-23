@@ -1,29 +1,14 @@
 #!/usr/bin/env python3
-"""Check the enclosure's solved geometry against a tape measure.
+"""Check the solved enclosure geometry against a tape measure before a session.
 
-Every camera-derived number starts at the resting ball: its pixel diameter sets
-the range and the plate scale, its column sets the camera's lateral offset from
-the ball line, and its row sets the height. If that solve is wrong, club path,
-attack angle and the impact zone are all wrong together and nothing downstream
-says so. This is the cross-check that catches it, before a session rather than
-after -- `SetupSolution.range_disagreement_mm` exists for exactly this and has
-had no caller outside a unit test.
+Every camera-derived number starts at the resting ball: diameter sets range and
+scale, column sets lateral offset, row sets height. This solves them, prints
+each against the tape you typed, reads the inclinometer against what the rig
+file expects, and names what it could not establish. A setup check, not an
+accuracy measurement.
 
-It also reads the inclinometer, if one is running, and compares it against the
-orientation the enclosure file says a correctly placed unit should report.
-
-    # live, on the Pi
-    uv run python scripts/hardware-test/verify_geometry.py \
-        --rig-geometry config/enclosure_v3_rig_geometry.json \
-        --tape-range-mm 1524
-
-    # offline, against a capture that already exists
-    uv run python scripts/hardware-test/verify_geometry.py \
-        --rig-geometry config/enclosure_v3_rig_geometry.json \
-        --frames ~/openflight_sessions/.../frames.npz --tape-range-mm 1524
-
-Nothing here is a measurement of accuracy. It reports this setup's own numbers
-against the tape you typed, and names what it could not establish.
+    uv run python scripts/hardware-test/verify_geometry.py         --rig-geometry config/enclosure_v3_rig_geometry.json --tape-range-mm 1524
+    # or offline: add --frames path/to/frames.npz
 """
 
 from __future__ import annotations
@@ -127,12 +112,7 @@ def _line(label: str, solved: float, tape: float | None, unit: str, tolerance: f
 
 
 def read_inclinometer(bus_number: int = 1, address: int = 0x18):
-    """Read the LIS3DH once, or say why not. Never fabricates an orientation.
-
-    Pitch only: this branch's OrientationSnapshot carries no roll, so a
-    side-to-side tilt is invisible here and the report says so rather than
-    printing a zero nobody measured.
-    """
+    """Read the LIS3DH once, or say why not. Pitch only on this branch."""
     service = None
     try:
         from openflight.inclinometer import LIS3DH, InclinometerService  # noqa: PLC0415

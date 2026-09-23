@@ -1,11 +1,4 @@
-"""The seam between an enclosure geometry file and the live server.
-
-Two things are pinned here. First, that a geometry file actually replaces the
-typed-in flags -- the 2026-08 session was captured with heights nobody had
-measured, and the whole point of the file is that a session is born with
-measured numbers instead. Second, the tilt arithmetic, which has a failure mode
-that looks correct on one enclosure and doubles on another.
-"""
+"""Enclosure geometry file <-> live server: flag overrides and the tilt arithmetic."""
 
 from __future__ import annotations
 
@@ -74,12 +67,7 @@ class TestTheExpectedOrientation:
 
 
 class TestTheTiltArithmetic:
-    """`effective = configured + (measured - expected)`.
-
-    The naive `configured + measured` agrees with this on an enclosure that
-    stands level, which is why the defect survived: it is only wrong where the
-    housing itself leans, and there it doubles.
-    """
+    """effective = configured + (measured - expected); the raw sum doubles on a leaning housing."""
 
     @staticmethod
     def _effective(configured_deg: float, measured_deg: float, expected_deg: float) -> float:

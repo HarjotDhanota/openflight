@@ -1,11 +1,5 @@
-"""Local capture runner for the camera mode study.
-
-A tester works through four arms with a 7-iron, five swings each. Exposure per
-arm is computed from the blur ceiling, not swept; gain comes from a short
-static screen at that exposure; the light level is recorded, never typed.
-Analysis and any production setting change happen off-device against
-``docs/camera/mode-study-analysis.md``.
-"""
+"""Local capture runner for the camera mode study: four arms, a 7-iron, five swings each.
+Exposure is computed from the blur ceiling, gain from a static screen, light recorded."""
 
 from __future__ import annotations
 
@@ -46,9 +40,7 @@ HEAD_SPEED_MM_PER_US = 130 * 0.44704 / 1000.0  # 130 mph
 WORKING_RANGE_MM = 1580.0
 FOCAL_PX_2X = 466.6667
 FOCAL_PX_1X = 933.3333
-# OV9282 analogue gain tops out at 0xFF/16; anything higher is clamped.
-GAIN_SCREEN = "2,4,6,8,10,12,14,15.9"
-GAIN_CAP = 15.9
+GAIN_SCREEN = "2,4,6,8,10,12,14,15.9"  # OV9282 analogue gain caps at 0xFF/16
 
 
 def exposure_ceiling_us(width: int) -> int:
@@ -213,12 +205,7 @@ def choose_gain(
     mean_high: float = 150.0,
     max_clipped_pct: float = 1.0,
 ) -> dict:
-    """Pick the lowest gain that lands the scene in band without clipping.
-
-    Mirrors calibrate_camera_exposure.py's acceptance test. When nothing is
-    acceptable the highest tested gain is returned with ``lighting_required``
-    set, so the page can say so rather than silently pinning a dark setting.
-    """
+    """Lowest gain in band without clipping; ``lighting_required`` when none is."""
     usable = [r for r in results if "gain" in r and "mean" in r]
     if not usable:
         raise ValueError("gain screen produced no results")
@@ -256,11 +243,7 @@ def latest_gain_results(arm_dir: Path) -> list[dict] | None:
 
 
 def light_index(results: Sequence[Mapping], exposure_us: int) -> float | None:
-    """Scene brightness normalised to unit exposure and gain: the pooling key.
-
-    Same sensor and lens on every unit, so this is comparable across testers
-    without a lux meter. The maintainer maps it to lux once, on the bench.
-    """
+    """Scene mean over exposure x gain: comparable across units without a lux meter."""
     candidates = [
         r for r in results if float(r.get("exposure_us", 0)) == exposure_us and r.get("gain")
     ]
@@ -523,11 +506,7 @@ def _fused_status(event: dict) -> str | None:
 
 
 def arm_progress(sessions_root: Path, params: TesterParameters) -> dict:
-    """Swings attempted and accepted for one arm, from what is actually on disk.
-
-    The JSONL is the only unambiguous join between a camera capture and a radar
-    dump; file counts alone say nothing about pairing.
-    """
+    """Attempted and accepted swings for one arm; the JSONL is the only real join."""
     root = arm_directory(sessions_root, params)
     paired = root / "paired"
     camera = sorted((paired / params.arm_id / "camera").glob("camera_*/frames.npz"))
