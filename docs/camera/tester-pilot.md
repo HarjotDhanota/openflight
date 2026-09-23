@@ -71,12 +71,10 @@ minutes; later starts are quick.
    copy beneath it, and you can change exposure and gain while it runs. At
    10000 µs, check the ball is in view and its edge is crisp; if the whole
    image is soft, turn the lens barrel until it is. Then, for each arm:
-   **Find gain** (a
-   few seconds on the static scene — it picks the gain that lights the frame
-   correctly at that
-   arm's exposure, records the light level, and solves the ball's range from
-   the same frame so it can be compared with your tape), then **Capture
-   swings**. The club is set to 7-iron for you. Hit until the arm shows **5
+   **Find gain** (a few seconds on the static scene — it picks the gain that
+   lights the frame correctly at that arm's exposure, records the light level,
+   and solves the ball's range from the same frame so it can be compared with
+   your tape), then **Capture swings**. The club is set to 7-iron for you. Hit until the arm shows **5
    accepted**, then press **Stop**. Stopping and starting again is fine: each
    capture run is kept separately and counted together.
    - If an arm says **lighting required**, hit its five swings anyway. Its
