@@ -139,6 +139,8 @@ camera_ball_flight_reference_tracker = None
 # Optional LIS3DH enclosure orientation used to compensate TI mount tilt.
 inclinometer_service = None
 inclinometer_runtime_config: dict = {"enabled": False}
+rig_geometry = None  # the enclosure's RigGeometry when --rig-geometry was given
+rig_geometry_config: dict = {"enabled": False}
 
 # Ballistic model toggle. Shot carry comes from the physics simulator whenever
 # a vertical launch angle is available. Operators can explicitly disable it;
@@ -895,12 +897,79 @@ def _kld7_angle_log_payload(
     return payload
 
 
+def init_rig_geometry(path) -> None:
+    """Load the enclosure geometry file and derive the live pipeline's inputs.
+
+    The 2026-08 session was shot with typed-in heights that turned out to be
+    assumptions. With a geometry file the camera mount height, the camera's
+    lateral offset from the radar, the radar antenna height and the radar tilt
+    all come from the enclosure's own constants and are logged with their
+    provenance; the matching command-line flags are overridden and the override
+    is logged, so nothing is silently replaced.
+    """
+    global rig_geometry, rig_geometry_config  # pylint: disable=global-statement
+    if path is None:
+        rig_geometry = None
+        rig_geometry_config = {"enabled": False}
+        return
+    from .rig_geometry import RigGeometry  # noqa: PLC0415
+
+    rig_geometry = RigGeometry.from_json(path)
+    setup = rig_geometry.enclosure_setup()
+    rig_geometry_config = {
+        "enabled": True,
+        "path": str(Path(path).expanduser()),
+        "derived": setup.as_dict(),
+    }
+    logger.info("[SERVER] Rig geometry loaded from %s: %s", path, setup.as_dict())
+    if setup.missing:
+        logger.warning(
+            "[SERVER] Rig geometry lacks %s; the command-line values stand in for those",
+            ", ".join(setup.missing),
+        )
+
+
+def _rig_override(name: str, flag_value, rig_value):
+    """Prefer the enclosure's measured value over a typed-in flag, and say so."""
+    if rig_value is None:
+        return flag_value
+    if flag_value is not None and not math.isclose(
+        float(flag_value), float(rig_value), abs_tol=1e-9
+    ):
+        logger.info(
+            "[SERVER] %s: rig geometry %s overrides command-line %s", name, rig_value, flag_value
+        )
+    return rig_value
+
+
+def _expected_inclinometer_orientation() -> dict:
+    """The orientation this enclosure should read, or a named absence.
+
+    Only the rig geometry file knows how the box is meant to stand, so without
+    ``--rig-geometry`` there is no expectation and the caller must say so
+    rather than judge the unit against a zero nobody measured.
+    """
+    if rig_geometry is None:
+        return {
+            "pitch_deg": None,
+            "roll_deg": None,
+            "missing": ["rig_geometry"],
+            "provenance": {
+                "pitch_deg": "unavailable: no enclosure geometry file (--rig-geometry)",
+                "roll_deg": "unavailable: no enclosure geometry file (--rig-geometry)",
+            },
+            "rig_provenance": "",
+        }
+    return rig_geometry.expected_inclinometer_orientation().as_dict()
+
+
 def _session_start_config() -> dict:
     """Return hardware configuration recorded at session start."""
     config = radar_config.copy()
     config["iwr6843"] = dict(iwr6843_runtime_config)
     config["camera_capture"] = dict(camera_capture_config)
     config["inclinometer"] = dict(inclinometer_runtime_config)
+    config["rig_geometry"] = dict(rig_geometry_config)
     config["power"] = {
         "enabled": battery_provider is not None,
         "provider": battery_provider,
@@ -1237,7 +1306,8 @@ def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: i
         )
         if iwr6843_runtime is not None:
             configured_tilt = math.degrees(iwr6843_runtime.calibration.tilt_rad)
-            effective_tilt = configured_tilt + snapshot.calibrated_pitch_deg
+            expected_pitch = (_expected_inclinometer_orientation() or {}).get("pitch_deg") or 0.0
+            effective_tilt = configured_tilt + (snapshot.calibrated_pitch_deg - expected_pitch)
             print(
                 f"IWR6843 tilt: configured {configured_tilt:.2f}deg, "
                 f"effective {effective_tilt:.2f}deg"
@@ -2357,7 +2427,14 @@ def _snapshot_inclinometer_for_shot(shot: Shot) -> None:
     snapshot = selection.snapshot
     if snapshot is not None and iwr6843_runtime is not None:
         configured_tilt = math.degrees(iwr6843_runtime.calibration.tilt_rad)
-        effective_tilt = configured_tilt + snapshot.calibrated_pitch_deg
+        # The configured tilt is the enclosure's DESIGNED antenna-face angle
+        # relative to the housing. The inclinometer reports the housing's
+        # actual pitch, which already includes the pitch the design expects to
+        # read, so only the DEPARTURE from that expectation is a correction.
+        # Summing the raw reading instead double-counts on any enclosure whose
+        # housing itself leans (v42 reads +10 by design: 10 + 10 = 20).
+        expected_pitch = (_expected_inclinometer_orientation() or {}).get("pitch_deg") or 0.0
+        effective_tilt = configured_tilt + (snapshot.calibrated_pitch_deg - expected_pitch)
         data.update(
             {
                 "applied": True,
@@ -4461,6 +4538,15 @@ def main():
         help="Enable TI IWR6843 L3 capture and LCMF-v1 vertical launch angle",
     )
     parser.add_argument(
+        "--rig-geometry",
+        default=None,
+        help=(
+            "Enclosure geometry JSON (RigGeometry.to_json). When given, the camera mount "
+            "height, camera lateral offset, radar height and radar tilt come from it and "
+            "override the flags below (logged)."
+        ),
+    )
+    parser.add_argument(
         "--inclinometer",
         action="store_true",
         help="Enable LIS3DH enclosure pitch compensation for IWR6843 tilt",
@@ -4679,6 +4765,26 @@ def main():
         parser.error("--camera-capture cannot be used with --mock")
     if args.iwr6843 and (args.iwr6843_tee_m <= 0 or args.iwr6843_net_m <= 0):
         parser.error("--iwr6843-tee-m and --iwr6843-net-m must be positive")
+    init_rig_geometry(args.rig_geometry)
+    enclosure = rig_geometry.enclosure_setup() if rig_geometry is not None else None
+    if enclosure is not None:
+        args.camera_capture_mount_height_m = _rig_override(
+            "camera mount height",
+            args.camera_capture_mount_height_m,
+            enclosure.camera_mount_height_m,
+        )
+        args.camera_capture_lateral_offset_m = _rig_override(
+            "camera lateral offset",
+            args.camera_capture_lateral_offset_m,
+            enclosure.camera_lateral_offset_m,
+        )
+        args.iwr6843_radar_height_m = _rig_override(
+            "radar height", args.iwr6843_radar_height_m, enclosure.radar_height_m
+        )
+        args.iwr6843_tilt_deg = _rig_override(
+            "radar tilt", args.iwr6843_tilt_deg, enclosure.iwr_tilt_deg
+        )
+
     if args.camera_capture and (
         args.camera_capture_width <= 0
         or args.camera_capture_height <= 0
