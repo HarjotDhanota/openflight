@@ -92,11 +92,19 @@ sets lateral offset, row sets height.
 
 ## Aggregation
 
-Per **arm × light bin**. Light bins are on the camera light index, assembled
-across testers; each tester contributes one bin. For each cell: availability
-(fraction `ok`), the status histogram, and the median and MAD of every metric
-above. A cell with fewer than three accepted swings reports its histogram and is
-otherwise marked insufficient, not averaged.
+Arms are compared **within a tester**: the same room, setup, light and golfer,
+so the only thing that changes between arms is the mode. Every capture run of
+an arm is merged. Testers are then grouped by light bin (octaves of the camera
+light index) to assemble the per-light-level table; no tester's arm replaces
+another's. For each cell: availability (fraction accepted), the status
+histogram, and the median and MAD of every metric above. A cell with fewer than
+three accepted swings reports its histogram and is otherwise marked
+insufficient, not averaged.
+
+Setup is recorded beside every arm: the taped radar-to-ball distance the kiosk
+used, and the range the camera solved from the resting ball in the gain-screen
+frame. Their disagreement across testers is the evidence for whether the solve
+can replace the tape.
 
 ## Pre-registered hypotheses
 

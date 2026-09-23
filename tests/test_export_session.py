@@ -18,9 +18,9 @@ sys.modules[spec.name] = export_session  # dataclass resolves the module by name
 spec.loader.exec_module(export_session)
 
 
-def _capture_tree(root: Path, shots: list[dict]) -> Path:
+def _capture_tree(root: Path, shots: list[dict], run: str | None = None) -> Path:
     """A kiosk log dir: JSONL, raw log, camera dirs and dumps, as the server writes them."""
-    src = root / "paired"
+    src = root / "paired" / run if run else root / "paired"
     camera_root = src / "arm1" / "camera"
     dump_root = src / "iwr6843"
     camera_root.mkdir(parents=True)
@@ -228,7 +228,8 @@ class TestManifest:
         prov = json.loads((tmp_path / "out" / "manifest.json").read_text())["provenance"]
         assert prov["radar_height_m"] == {"value": 0.051, "source": "cad_file"}
         assert prov["iwr_tilt_deg"]["source"] == "cad_file"
-        assert prov["tee_slant_range_m"]["source"] == "flag"
+        # no arm state: the flag value is a default, not a measurement
+        assert prov["tee_slant_range_m"]["source"] == "default"
 
     def test_geometry_provenance_says_default_without_the_rig_block(self, tmp_path):
         src = _capture_tree(tmp_path, [{"n": 1}])
@@ -274,13 +275,13 @@ class TestTesterRoot:
         tester = tmp_path / "t1"
         for arm in ("arm1", "arm2"):
             arm_dir = tester / arm
-            _capture_tree(arm_dir, [{"n": 1}])
+            _capture_tree(arm_dir, [{"n": 1}], run="run-01")
             (arm_dir / "arm.json").write_text(
                 json.dumps({"tester_id": "t1", "arm_id": arm, "club": "7-iron", "light_index": 0.3})
             )
         reports = export_session.export_tester_root(tester, tmp_path / "out")
-        assert [r.out.name for r in reports] == ["arm1", "arm2"]
-        m = json.loads((tmp_path / "out" / "arm2" / "manifest.json").read_text())
+        assert [r.out.parent.name for r in reports] == ["arm1", "arm2"]
+        m = json.loads((tmp_path / "out" / "arm2" / "run-01" / "manifest.json").read_text())
         assert m["arm"]["arm_id"] == "arm2" and m["environment"]["light_index"] == 0.3
 
     def test_cli_exports_and_reports(self, tmp_path, capsys):
@@ -300,3 +301,34 @@ class TestTesterRoot:
 def test_accepted_follows_the_estimator_status(status, accepted):
     shot = {"experimental_fused_status": status} if status else {}
     assert (export_session.fused_status(shot) in export_session.ACCEPTED_STATUSES) is accepted
+
+
+class TestTapeAndRuns:
+    def test_a_taped_distance_is_recorded_as_measured_with_the_solve_beside_it(self, tmp_path):
+        src = _capture_tree(tmp_path, [{"n": 1}])
+        arm = {
+            "tester_id": "t1",
+            "arm_id": "arm1",
+            "tee_range_m": 1.524,
+            "tee_range_source": "tape",
+            "solved_range_m": 1.561,
+            "solved_range_note": "clean",
+        }
+        export_session.export_session(src, tmp_path / "out", arm_state=arm)
+        manifest = json.loads((tmp_path / "out" / "manifest.json").read_text())
+        assert manifest["provenance"]["tee_slant_range_m"]["source"] == "measured_tape"
+        assert manifest["setup"]["tee_range_m"] == 1.524
+        assert manifest["setup"]["solved_range_m"] == 1.561
+
+    def test_two_runs_of_one_arm_export_separately_and_both_validate(self, tmp_path):
+        arm_dir = tmp_path / "t1" / "arm1"
+        _capture_tree(arm_dir, [{"n": 1}, {"n": 2}], run="run-01")
+        _capture_tree(arm_dir, [{"n": 1}], run="run-02")  # a restart: numbering starts over
+        (arm_dir / "arm.json").write_text(json.dumps({"tester_id": "t1", "arm_id": "arm1"}))
+        reports = export_session.export_tester_root(tmp_path / "t1", tmp_path / "out")
+        assert [r.out.name for r in reports] == ["run-01", "run-02"]
+        assert [r.included for r in reports] == [[1, 2], [1]]
+        for report in reports:
+            assert export_session.validate_export(report.out) == []
+        manifest = json.loads((tmp_path / "out" / "arm1" / "run-02" / "manifest.json").read_text())
+        assert manifest["run"] == "run-02"

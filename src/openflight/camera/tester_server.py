@@ -14,11 +14,12 @@ import threading
 import zipfile
 from collections import Counter, deque
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+import numpy as np
 from flask import Flask, jsonify, request, send_file
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -26,6 +27,10 @@ TESTER_PAGE = REPO_ROOT / "ui" / "public" / "tester.html"
 DEFAULT_SESSIONS_ROOT = Path.home() / "openflight_sessions" / "tester_pilot"
 DEFAULT_RIG_GEOMETRY = REPO_ROOT / "config" / "enclosure_v3_rig_geometry.json"
 SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
+# The documented build moves the OPS243 to the GPIO UART; auto-detect only
+# finds USB, so the runner names it.
+DEFAULT_RADAR_PORT = "/dev/ttyAMA0"
+TEE_RANGE_MM = (500.0, 4000.0)
 MAX_LOG_LINES = 400
 
 CLUB = "7-iron"
@@ -129,6 +134,7 @@ class TesterParameters:
     tester_id: str
     arm_id: str
     environment: str
+    tee_mm: float | None = None
 
     @property
     def arm(self) -> Arm:
@@ -149,7 +155,17 @@ class TesterParameters:
         environment = str(payload.get("environment", "")).strip().lower()
         if environment not in ("indoors", "outdoors"):
             raise ValueError("environment must be indoors or outdoors")
-        return cls(tester_id=tester_id, arm_id=arm_id, environment=environment)
+        tee_mm = None
+        if payload.get("tee_mm") not in (None, ""):
+            try:
+                tee_mm = float(payload["tee_mm"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("radar-to-ball distance must be a number of mm") from exc
+            if not TEE_RANGE_MM[0] <= tee_mm <= TEE_RANGE_MM[1]:
+                raise ValueError(
+                    f"radar-to-ball distance must be {TEE_RANGE_MM[0]:.0f}-{TEE_RANGE_MM[1]:.0f} mm"
+                )
+        return cls(tester_id=tester_id, arm_id=arm_id, environment=environment, tee_mm=tee_mm)
 
 
 def tester_root(sessions_root: Path, tester_id: str) -> Path:
@@ -253,6 +269,55 @@ def light_index(results: Sequence[Mapping], exposure_us: int) -> float | None:
     return float(r["mean"]) / (exposure_us * float(r["gain"]))
 
 
+def _read_pgm(path: Path) -> np.ndarray:
+    data = path.read_bytes()
+    header, offset, fields = [], 0, 0
+    while fields < 4:
+        end = data.index(b"\n", offset)
+        header.extend(data[offset:end].split())
+        offset = end + 1
+        fields = len(header)
+    width, height = int(header[1]), int(header[2])
+    return np.frombuffer(data, dtype=np.uint8, count=width * height, offset=offset).reshape(
+        height, width
+    )
+
+
+def solved_range(arm_dir: Path, arm: Arm, choice: Mapping, rig_geometry: Path) -> dict:
+    """Range to the ball solved from the gain screen's own frame at the chosen gain.
+
+    Recorded beside the tape so the study shows whether the camera solve can
+    replace it. Never raises: a missing ball is recorded as a reason.
+    """
+    from openflight.camera.club_motion import (  # noqa: PLC0415
+        detect_reference_ball,
+    )
+    from openflight.rig_geometry import RigGeometry, solve_setup  # noqa: PLC0415
+
+    runs = sorted((arm_dir / "gain").glob("*/results.json"))
+    if not runs:
+        return {"solved_range_m": None, "solved_range_note": "no gain screen"}
+    stem = f"exp{arm.exposure_us:04d}_gain{float(choice['gain']):g}".replace(".", "p")
+    pgm = runs[-1].parent / f"{stem}_median.pgm"
+    try:
+        image = _read_pgm(pgm)
+        ball = detect_reference_ball(np.stack([image] * 3))
+        rig = replace(
+            RigGeometry.from_json(rig_geometry),
+            focal_px=FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X,
+            image_width=arm.width,
+            image_height=arm.height,
+        )
+        solution = solve_setup(ball, rig)
+    except (OSError, ValueError, RuntimeError) as exc:
+        return {"solved_range_m": None, "solved_range_note": str(exc)}
+    return {
+        "solved_range_m": round(solution.range_to_ball_mm / 1000.0, 4),
+        "solved_ball_diameter_px": round(float(ball.diameter_px), 2),
+        "solved_range_note": "; ".join(solution.warnings) or "clean",
+    }
+
+
 def resolve_gain(sessions_root: Path, params: TesterParameters) -> tuple[float, int, str]:
     """The exposure and gain this arm captures at, and where they came from."""
     arm = params.arm
@@ -274,8 +339,18 @@ def resolve_gain(sessions_root: Path, params: TesterParameters) -> tuple[float, 
     return float(state["gain"]), arm.exposure_us, "gain screen"
 
 
+def next_run_directory(arm_dir: Path) -> Path:
+    """Each capture run gets its own folder: a new kiosk is a new session."""
+    existing = sorted((arm_dir / "paired").glob("run-*"))
+    return arm_dir / "paired" / f"run-{len(existing) + 1:02d}"
+
+
 def action_commands(
-    action: str, params: TesterParameters, sessions_root: Path, rig_geometry: Path
+    action: str,
+    params: TesterParameters,
+    sessions_root: Path,
+    rig_geometry: Path,
+    radar_port: str = DEFAULT_RADAR_PORT,
 ) -> tuple[list[list[str]], Path]:
     """Build an allowlisted command sequence and its log path."""
     if action not in ACTION_LABELS:
@@ -312,10 +387,19 @@ def action_commands(
         ]
     else:
         gain, exposure_us, _source = resolve_gain(sessions_root, params)
+        if params.tee_mm is None:
+            raise ValueError("measure the radar window to the ball centre first")
         commands = [
             [
                 "bash",
                 str(REPO_ROOT / "scripts" / "start-kiosk.sh"),
+                "--radar-port",
+                radar_port,
+                "--club",
+                CLUB,
+                "--iwr6843-tee-m",
+                f"{params.tee_mm / 1000.0:.3f}",
+                "--camera-capture-manual-exposure",
                 "--debug",
                 "--iwr6843",
                 "--inclinometer",
@@ -333,7 +417,7 @@ def action_commands(
                 "--camera-capture-gain",
                 str(gain),
                 "--log-dir",
-                str(root / "paired"),
+                str(next_run_directory(root)),
                 "--session-location",
                 params.arm_id,
             ]
@@ -508,10 +592,12 @@ def _fused_status(event: dict) -> str | None:
 def arm_progress(sessions_root: Path, params: TesterParameters) -> dict:
     """Attempted and accepted swings for one arm; the JSONL is the only real join."""
     root = arm_directory(sessions_root, params)
-    paired = root / "paired"
-    camera = sorted((paired / params.arm_id / "camera").glob("camera_*/frames.npz"))
-    dumps = sorted((paired / "iwr6843").glob("*.l3dump"))
-    events = _shot_events(paired)
+    runs = sorted((root / "paired").glob("run-*"))
+    camera = [
+        f for run in runs for f in (run / params.arm_id / "camera").glob("camera_*/frames.npz")
+    ]
+    dumps = [f for run in runs for f in (run / "iwr6843").glob("*.l3dump")]
+    events = [event for run in runs for event in _shot_events(run)]
     shots = [e for e in events if e.get("type") in ("shot_detected", "shot")]
     statuses = Counter()
     for event in shots:
@@ -533,6 +619,7 @@ def arm_progress(sessions_root: Path, params: TesterParameters) -> dict:
         "camera_captures": len(camera),
         "radar_dumps": len(dumps),
         "status_histogram": dict(statuses),
+        "runs": len(runs),
         "problems": problems,
     }
 
@@ -555,6 +642,8 @@ def study_overview(sessions_root: Path, tester_id: str) -> dict:
                 "gain_source": state.get("gain_source"),
                 "lighting_required": state.get("lighting_required"),
                 "light_index": state.get("light_index"),
+                "solved_range_m": state.get("solved_range_m"),
+                "tee_range_m": state.get("tee_range_m"),
                 **progress,
             }
         )
@@ -584,6 +673,7 @@ def create_app(
     *,
     sessions_root: Path = DEFAULT_SESSIONS_ROOT,
     rig_geometry: Path = DEFAULT_RIG_GEOMETRY,
+    radar_port: str = DEFAULT_RADAR_PORT,
     manager: TesterJobManager | None = None,
 ) -> Flask:
     """Build the standalone tester service."""
@@ -608,6 +698,7 @@ def create_app(
             gain_clipped_pct=choice["clipped_pct"],
             lighting_required=choice["lighting_required"],
             light_index=light_index(results, params.arm.exposure_us),
+            **solved_range(arm_directory(sessions_root, params), params.arm, choice, rig_geometry),
         )
 
     @app.get("/")
@@ -646,7 +737,9 @@ def create_app(
         try:
             params = TesterParameters.from_payload(payload)
             action = str((payload or {}).get("action", ""))
-            commands, log_path = action_commands(action, params, sessions_root, rig_geometry)
+            commands, log_path = action_commands(
+                action, params, sessions_root, rig_geometry, radar_port
+            )
             write_arm_state(sessions_root, params)
             if action == "swings":
                 gain, exposure_us, source = resolve_gain(sessions_root, params)
@@ -656,6 +749,8 @@ def create_app(
                     capture_gain=gain,
                     capture_exposure_us=exposure_us,
                     gain_source=source,
+                    tee_range_m=params.tee_mm / 1000.0,
+                    tee_range_source="tape",
                 )
             on_finish = (
                 (lambda _a, rc: record_gain(params) if rc == 0 else None)
@@ -701,16 +796,19 @@ def create_app(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Serve the tester page on the loopback interface."""
+    """Serve the tester page; loopback only unless --host says otherwise."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--sessions-root", type=Path, default=DEFAULT_SESSIONS_ROOT)
     parser.add_argument("--rig-geometry", type=Path, default=DEFAULT_RIG_GEOMETRY)
+    parser.add_argument("--radar-port", default=DEFAULT_RADAR_PORT, help="OPS243 serial port")
     args = parser.parse_args(argv)
-    create_app(sessions_root=args.sessions_root, rig_geometry=args.rig_geometry).run(
-        host=args.host, port=args.port
-    )
+    create_app(
+        sessions_root=args.sessions_root,
+        rig_geometry=args.rig_geometry,
+        radar_port=args.radar_port,
+    ).run(host=args.host, port=args.port)
     return 0
 
 

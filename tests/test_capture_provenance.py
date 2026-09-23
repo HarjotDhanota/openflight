@@ -103,3 +103,37 @@ class TestBallSpeedContract:
         assert shot.ball_speed_contract is None
         shot.ball_speed_contract = "radial"
         assert shot.to_dict()["ball_speed_contract"] == "radial"
+
+
+class TestManualExposureIsHonoured:
+    """The kiosk restores the last auto-exposure state at startup; the study must not."""
+
+    @staticmethod
+    def _state(tmp_path):
+        path = tmp_path / "camera-exposure.json"
+        path.write_text(
+            '{"version": 1, "width": 320, "height": 200, "fps": 450.0, "exposure_us": 500, "gain": 12.0}'
+        )
+        return path
+
+    def _runtime(self, tmp_path, *, auto):
+        from openflight.camera.capture_runtime import CameraCaptureRuntime, CameraCaptureSettings
+
+        settings = CameraCaptureSettings(
+            width=320,
+            height=200,
+            fps=450.0,
+            exposure_us=87,
+            gain=6.0,
+            auto_exposure=auto,
+            auto_exposure_state_path=self._state(tmp_path),
+        )
+        return CameraCaptureRuntime(output_dir=tmp_path / "out", settings=settings)
+
+    def test_auto_exposure_replaces_the_pinned_values(self, tmp_path):
+        runtime = self._runtime(tmp_path, auto=True)
+        assert (runtime.settings.exposure_us, runtime.settings.gain) == (500, 12.0)
+
+    def test_manual_exposure_keeps_the_pinned_values(self, tmp_path):
+        runtime = self._runtime(tmp_path, auto=False)
+        assert (runtime.settings.exposure_us, runtime.settings.gain) == (87, 6.0)

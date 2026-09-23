@@ -63,6 +63,7 @@ class ShotMetrics:
 @dataclass
 class ArmScore:
     arm_id: str
+    tester_id: str | None
     label: str
     width: int | None
     fps: float | None
@@ -106,8 +107,8 @@ def light_bin(light_index: float | None) -> str:
     return f"2^{math.floor(math.log2(light_index))}"
 
 
-def ball_metrics(frames: np.ndarray, pre_trigger: int) -> dict:
-    """Resting-ball quality from the pre-swing frames; None by name when absent."""
+def ball_metrics(frames: np.ndarray, pre_trigger: int) -> tuple[dict, tuple[float, float] | None]:
+    """Resting-ball quality from the pre-swing frames, and where the ball sits."""
     n = max(1, min(pre_trigger, len(frames)))
     quiet = frames[: max(1, n // 2)]
     out = {
@@ -121,7 +122,7 @@ def ball_metrics(frames: np.ndarray, pre_trigger: int) -> dict:
     try:
         ball = detect_reference_ball(quiet)
     except (ValueError, RuntimeError):
-        return out
+        return out, None
     out["ball_detected"] = True
     out["ball_diameter_px"] = float(ball.diameter_px)
     # jitter: the detector medians a stack and needs three frames, so measure it
@@ -148,7 +149,7 @@ def ball_metrics(frames: np.ndarray, pre_trigger: int) -> dict:
     annulus = (dist >= 0.7 * r) & (dist <= 1.3 * r)
     if annulus.any():
         out["ball_edge_gradient"] = float(np.hypot(gx, gy)[annulus].mean())
-    return out
+    return out, (float(ball.x), float(ball.y))
 
 
 def pre_impact_head_frames(
@@ -190,14 +191,7 @@ def score_shot(export: Path, row: dict) -> ShotMetrics:
             if "pre_trigger_count" in bundle
             else int(metadata.get("pre_trigger_frames") or len(frames) // 2)
         )
-    ball = ball_metrics(frames, pre_trigger)
-    ball_xy = None
-    if ball["ball_detected"]:
-        try:
-            found = detect_reference_ball(frames[: max(1, pre_trigger // 2)])
-            ball_xy = (float(found.x), float(found.y))
-        except (ValueError, RuntimeError):
-            ball_xy = None
+    ball, ball_xy = ball_metrics(frames, pre_trigger)
     status = row.get("fused_status") or None
     return ShotMetrics(
         shot_number=int(row["shot_number"]),
@@ -217,22 +211,43 @@ def score_shot(export: Path, row: dict) -> ShotMetrics:
     )
 
 
-def score_export(export: Path) -> tuple[ArmScore, list[ShotMetrics]]:
+METRIC_KEYS = (
+    "delivered_fps",
+    "gap_count",
+    "exposure_us",
+    "gain",
+    "ball_diameter_px",
+    "ball_diameter_jitter_px",
+    "ball_clipped_pct",
+    "ball_peak_dn",
+    "ball_edge_gradient",
+    "pre_impact_head_frames",
+    "club_path_deg",
+    "attack_angle_deg",
+)
+
+
+def load_export(export: Path) -> tuple[dict, list[ShotMetrics]]:
     manifest = json.loads((export / "manifest.json").read_text(encoding="utf-8"))
-    arm = manifest.get("arm") or {}
     with (export / "shots.csv").open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
-    shots = [score_shot(export, row) for row in rows]
-    excluded = len(manifest.get("excluded_shots") or [])
-    attempted = len(shots) + excluded
+    return manifest, [score_shot(export, row) for row in rows]
+
+
+def build_score(manifests: list[dict], shots: list[ShotMetrics], fallback_id: str) -> ArmScore:
+    """One arm for one tester, from every run of it."""
+    arm = manifests[0].get("arm") or {}
+    excluded = [e for m in manifests for e in (m.get("excluded_shots") or [])]
+    attempted = len(shots) + len(excluded)
     accepted = sum(1 for s in shots if s.accepted)
     histogram = Counter(s.fused_status or "unscored" for s in shots)
-    for entry in manifest.get("excluded_shots") or []:
+    for entry in excluded:
         histogram["excluded:" + (entry.get("reasons") or ["?"])[0].split(" ")[0]] += 1
-    light = (manifest.get("environment") or {}).get("light_index")
+    light = _median([(m.get("environment") or {}).get("light_index") for m in manifests])
     score = ArmScore(
-        arm_id=arm.get("arm_id") or export.name,
-        label=arm.get("label") or export.name,
+        arm_id=arm.get("arm_id") or fallback_id,
+        tester_id=manifests[0].get("tester_id"),
+        label=arm.get("label") or fallback_id,
         width=arm.get("width"),
         fps=arm.get("fps"),
         light_index=light,
@@ -243,24 +258,35 @@ def score_export(export: Path) -> tuple[ArmScore, list[ShotMetrics]]:
         status_histogram=dict(histogram),
         insufficient=accepted < MIN_CELL_ACCEPTED,
     )
-    for key in (
-        "delivered_fps",
-        "gap_count",
-        "exposure_us",
-        "gain",
-        "ball_diameter_px",
-        "ball_diameter_jitter_px",
-        "ball_clipped_pct",
-        "ball_peak_dn",
-        "ball_edge_gradient",
-        "pre_impact_head_frames",
-        "club_path_deg",
-        "attack_angle_deg",
-    ):
+    for key in METRIC_KEYS:
         values = [getattr(s, key) for s in shots]
         score.medians[key] = _median(values)
         score.mads[key] = _mad(values)
-    return score, shots
+    return score
+
+
+def score_export(export: Path) -> tuple[ArmScore, list[ShotMetrics]]:
+    manifest, shots = load_export(export)
+    return build_score([manifest], shots, export.name), shots
+
+
+def score_exports(exports: list[Path]) -> dict[str, dict[str, tuple[ArmScore, list[ShotMetrics]]]]:
+    """Group exports by tester and arm; runs of the same arm merge, testers never collide."""
+    grouped: dict[tuple[str, str], tuple[list[dict], list[ShotMetrics]]] = defaultdict(
+        lambda: ([], [])
+    )
+    for export in exports:
+        manifest, shots = load_export(export)
+        key = (
+            str(manifest.get("tester_id") or "unknown"),
+            str((manifest.get("arm") or {}).get("arm_id") or export.name),
+        )
+        grouped[key][0].append(manifest)
+        grouped[key][1].extend(shots)
+    testers: dict[str, dict[str, tuple[ArmScore, list[ShotMetrics]]]] = defaultdict(dict)
+    for (tester, arm_id), (manifests, shots) in sorted(grouped.items()):
+        testers[tester][arm_id] = (build_score(manifests, shots, arm_id), shots)
+    return dict(testers)
 
 
 def test_hypotheses(arms: dict[str, ArmScore]) -> dict:
@@ -325,7 +351,7 @@ def test_hypotheses(arms: dict[str, ArmScore]) -> dict:
 
 
 def decide(arms: dict[str, ArmScore]) -> dict:
-    """The decision rule per arm against the reference, at the same light bin."""
+    """The decision rule per arm against the reference arm of the same tester."""
     ref = arms.get(REFERENCE_ARM)
     verdicts: dict[str, dict] = {}
     for arm_id, s in arms.items():
@@ -336,12 +362,6 @@ def decide(arms: dict[str, ArmScore]) -> dict:
             verdicts[arm_id] = {
                 "preferred": False,
                 "reason": "insufficient accepted swings to compare",
-            }
-            continue
-        if s.light_bin != ref.light_bin:
-            verdicts[arm_id] = {
-                "preferred": False,
-                "reason": f"different light bin ({s.light_bin} vs {ref.light_bin}); compare across testers",
             }
             continue
         reasons = []
@@ -373,13 +393,11 @@ def decide(arms: dict[str, ArmScore]) -> dict:
     return verdicts
 
 
-def write_markdown(out: Path, arms: dict[str, ArmScore], hyps: dict, verdicts: dict) -> None:
-    lines = [
-        "# Mode study — scored",
-        "",
-        "Consistency only: the rig's own data read back. Not accuracy.",
-        "",
-    ]
+def markdown_section(
+    tester: str, arms: dict[str, ArmScore], hyps: dict, verdicts: dict
+) -> list[str]:
+    ref = arms.get(REFERENCE_ARM)
+    lines = [f"## Tester {tester} — light bin {ref.light_bin if ref else 'unknown'}", ""]
     lines.append(
         "| arm | mode | light bin | attempted | accepted | availability | ball px | jitter px | clipped % | edge grad | head frames (approx) | path MAD | AoA MAD | verdict |"
     )
@@ -417,23 +435,19 @@ def write_markdown(out: Path, arms: dict[str, ArmScore], hyps: dict, verdicts: d
             )
             + " |"
         )
-    lines += ["", "## Status histogram", ""]
+    lines += ["", "### Status histogram", ""]
     for arm_id, s in arms.items():
         lines.append(
             f"- **{arm_id}**: "
             + ", ".join(f"{k} {n}" for k, n in sorted(s.status_histogram.items()))
         )
-    lines += ["", "## Hypotheses", ""]
+    lines += ["", "### Hypotheses", ""]
     for name, h in hyps.items():
         lines.append(f"- **{name}** — {h['verdict']}: {h['evidence']}")
-    lines += ["", "## Decision", ""]
+    lines += ["", "### Decision", ""]
     for arm_id, v in verdicts.items():
         lines.append(f"- **{arm_id}** — {v['reason']}")
-    lines += [
-        "",
-        "Head-frame counts are an approximation from a motion mask, not a clubhead detector; blur in mm and local contrast are not computed here.",
-    ]
-    (out / "mode_study.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return lines + [""]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -445,29 +459,39 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     args.out.mkdir(parents=True, exist_ok=True)
 
-    arms: dict[str, ArmScore] = {}
-    per_shot: dict[str, list[dict]] = defaultdict(list)
-    for export in args.export:
-        score, shots = score_export(export)
-        arms[score.arm_id] = score
-        per_shot[score.arm_id] = [asdict(s) for s in shots]
-    hyps = test_hypotheses(arms)
-    verdicts = decide(arms)
-    (args.out / "mode_study.json").write_text(
-        json.dumps(
-            {
-                "arms": {k: asdict(v) for k, v in arms.items()},
-                "shots": per_shot,
-                "hypotheses": hyps,
-                "decision": verdicts,
-            },
-            indent=2,
-            default=str,
+    testers = score_exports(args.export)
+    report: dict[str, dict] = {}
+    sections: list[tuple[str, list[str]]] = []
+    for tester, cells in testers.items():
+        arms = {arm_id: score for arm_id, (score, _shots) in cells.items()}
+        hyps = test_hypotheses(arms)
+        verdicts = decide(arms)
+        ref = arms.get(REFERENCE_ARM)
+        report[tester] = {
+            "light_bin": ref.light_bin if ref else "unknown",
+            "arms": {k: asdict(v) for k, v in arms.items()},
+            "shots": {k: [asdict(s) for s in shots] for k, (_score, shots) in cells.items()},
+            "hypotheses": hyps,
+            "decision": verdicts,
+        }
+        sections.append(
+            (report[tester]["light_bin"], markdown_section(tester, arms, hyps, verdicts))
         )
-        + "\n",
-        encoding="utf-8",
+    (args.out / "mode_study.json").write_text(
+        json.dumps({"testers": report}, indent=2, default=str) + "\n", encoding="utf-8"
     )
-    write_markdown(args.out, arms, hyps, verdicts)
+    lines = [
+        "# Mode study — scored",
+        "",
+        "Consistency only: the rig's own data read back. Not accuracy.",
+        "Arms are compared within a tester (same room, setup and golfer); testers are",
+        "ordered by light bin. Head-frame counts are a motion-mask approximation;",
+        "blur in mm and local contrast are not computed here.",
+        "",
+    ]
+    for _bin, section in sorted(sections, key=lambda item: item[0]):
+        lines += section
+    (args.out / "mode_study.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print((args.out / "mode_study.md").read_text(encoding="utf-8"))
     return 0
 

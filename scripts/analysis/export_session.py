@@ -69,15 +69,15 @@ def _by_shot(events: list[dict], kind: str) -> dict[int, dict]:
     return out
 
 
-def _locate(source: Path, recorded_path: str | None, pattern: str) -> Path | None:
-    """Find a capture by its basename; the recorded path is from another machine."""
-    if not recorded_path:
-        return None
-    name = Path(recorded_path).name
-    for candidate in source.rglob(name):
-        if candidate.match(pattern):
-            return candidate
-    return None
+def _index(source: Path) -> dict[str, Path]:
+    """Every capture under the run by basename; the recorded paths belong to the Pi."""
+    return {
+        path.name: path for pattern in ("camera_*", "*.l3dump") for path in source.rglob(pattern)
+    }
+
+
+def _locate(index: dict[str, Path], recorded_path: str | None) -> Path | None:
+    return index.get(Path(recorded_path).name) if recorded_path else None
 
 
 def fused_status(shot: dict) -> str | None:
@@ -107,7 +107,7 @@ def _shot_row(number: int, shot: dict, camera_event: dict, metadata: dict, direc
     return row
 
 
-def _geometry_provenance(config: dict) -> dict:
+def _geometry_provenance(config: dict, arm: dict) -> dict:
     rig = config.get("rig_geometry") or {}
     derived = rig.get("derived") or {}
     camera = config.get("camera_capture") or {}
@@ -124,7 +124,10 @@ def _geometry_provenance(config: dict) -> dict:
     for key in GEOMETRY_KEYS:
         value = values.get(key)
         if key == "tee_slant_range_m":
-            source = "flag" if value is not None else "missing"
+            if arm.get("tee_range_source") == "tape":
+                source = "measured_tape"
+            else:
+                source = "default" if value is not None else "missing"
         elif measured and derived.get(key) is not None:
             source = "cad_file"
         elif value is not None:
@@ -168,6 +171,7 @@ def export_session(
     if rig_path and Path(rig_path).is_file():
         shutil.copy2(rig_path, out / "rig_geometry.json")
 
+    index = _index(source)
     rows: list[dict] = []
     manifest_shots: list[dict] = []
     for number in sorted(set(shots) | set(cameras) | set(dumps)):
@@ -185,14 +189,8 @@ def export_session(
             reasons.append("no_radar_capture_event")
         elif dump.get("capture_error"):
             reasons.append(f"radar_capture_error ({dump['capture_error']})")
-        cam_dir = (
-            _locate(source, cam.get("capture_path") if cam else None, "camera_*") if cam else None
-        )
-        dump_file = (
-            _locate(source, dump.get("capture_path") if dump else None, "*.l3dump")
-            if dump
-            else None
-        )
+        cam_dir = _locate(index, cam.get("capture_path")) if cam else None
+        dump_file = _locate(index, dump.get("capture_path")) if dump else None
         if cam and not reasons and (cam_dir is None or not (cam_dir / "frames.npz").is_file()):
             reasons.append("camera_frames_missing_on_disk")
         if dump and not reasons and dump_file is None:
@@ -262,6 +260,7 @@ def export_session(
         "app_version": start.get("app_version"),
         "git_commit": git_commit,
         "tester_id": arm.get("tester_id"),
+        "run": arm.get("run"),
         "arm": {
             k: arm.get(k)
             for k in ("arm_id", "label", "width", "height", "fps", "exposure_us", "inherits_from")
@@ -290,11 +289,17 @@ def export_session(
             "light_index": arm.get("light_index"),
             "lighting_required": arm.get("lighting_required"),
         },
+        "setup": {
+            "tee_range_m": arm.get("tee_range_m"),
+            "tee_range_source": arm.get("tee_range_source"),
+            "solved_range_m": arm.get("solved_range_m"),
+            "solved_range_note": arm.get("solved_range_note"),
+        },
         "shots": manifest_shots,
         "excluded_shots": [
             {"shot_number": n, "reasons": r} for n, r in sorted(report.excluded.items())
         ],
-        "provenance": _geometry_provenance(config),
+        "provenance": _geometry_provenance(config, arm),
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return report
@@ -351,7 +356,7 @@ def read_events_file(path: Path) -> list[dict]:
 
 
 def export_tester_root(root: Path, out: Path) -> list[ExportReport]:
-    """One export per arm under a tester's directory."""
+    """One export per capture run of every arm; each run is one kiosk session."""
     reports = []
     for arm_dir in sorted(
         p for p in root.expanduser().iterdir() if p.is_dir() and (p / "paired").is_dir()
@@ -359,14 +364,15 @@ def export_tester_root(root: Path, out: Path) -> list[ExportReport]:
         state_path = arm_dir / "arm.json"
         state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.is_file() else {}
         preflight = arm_dir / "logs" / "preflight.log"
-        reports.append(
-            export_session(
-                arm_dir / "paired",
-                out / arm_dir.name,
-                arm_state=state,
-                preflight_log=preflight if preflight.is_file() else None,
+        for run in sorted(p for p in (arm_dir / "paired").glob("run-*") if p.is_dir()):
+            reports.append(
+                export_session(
+                    run,
+                    out / arm_dir.name / run.name,
+                    arm_state={**state, "run": run.name},
+                    preflight_log=preflight if preflight.is_file() else None,
+                )
             )
-        )
     return reports
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import zipfile
 
+import numpy as np
 import pytest
 
 from openflight.camera import tester_server as ts
@@ -124,7 +125,7 @@ class TestCommands:
             ts.action_commands("swings", params(), tmp_path, RIG)
 
     def test_swings_drive_the_kiosk_with_rig_geometry_and_inclinometer(self, tmp_path):
-        p = params(arm_id="arm2")
+        p = params(arm_id="arm2", tee_mm=1524)
         ts.write_arm_state(tmp_path, p, gain=6.0)
         commands, _ = ts.action_commands("swings", p, tmp_path, RIG)
         command = commands[0]
@@ -136,10 +137,18 @@ class TestCommands:
         assert command[command.index("--camera-capture-gain") + 1] == "6.0"
         assert command[command.index("--camera-capture-width") + 1] == "640"
         assert command[command.index("--session-location") + 1] == "arm2"
+        # the fixes the first run would otherwise have tripped on
+        assert "--camera-capture-manual-exposure" in command
+        assert command[command.index("--radar-port") + 1] == "/dev/ttyAMA0"
+        assert command[command.index("--club") + 1] == "7-iron"
+        assert command[command.index("--iwr6843-tee-m") + 1] == "1.524"
+        assert command[command.index("--log-dir") + 1].endswith("run-01")
 
     def test_arm3_inherits_arm2_exposure_and_gain_exactly(self, tmp_path):
         ts.write_arm_state(tmp_path, params(arm_id="arm2"), gain=6.0)
-        commands, _ = ts.action_commands("swings", params(arm_id="arm3"), tmp_path, RIG)
+        commands, _ = ts.action_commands(
+            "swings", params(arm_id="arm3", tee_mm=1524), tmp_path, RIG
+        )
         command = commands[0]
         # 1:1 at arm 2's light: the 2x ceiling (87), not its own (44)
         assert command[command.index("--camera-capture-exposure-us") + 1] == "87"
@@ -151,8 +160,8 @@ class TestCommands:
             ts.action_commands("swings", params(arm_id="arm3"), tmp_path, RIG)
 
 
-def _write_session(root, arm_id, statuses, dumps=None):
-    paired = root / arm_id / "paired"
+def _write_session(root, arm_id, statuses, dumps=None, run="run-01"):
+    paired = root / arm_id / "paired" / run
     camera = paired / arm_id / "camera"
     camera.mkdir(parents=True)
     (paired / "iwr6843").mkdir()
@@ -288,3 +297,64 @@ class TestApp:
             },
         )
         assert response.status_code == 409
+
+
+class TestRunsAndTape:
+    def test_swings_refuse_without_the_taped_distance(self, tmp_path):
+        ts.write_arm_state(tmp_path, params(), gain=6.0)
+        with pytest.raises(ValueError, match="radar window"):
+            ts.action_commands("swings", params(), tmp_path, RIG)
+
+    def test_a_distance_outside_the_room_is_refused(self):
+        with pytest.raises(ValueError, match="radar-to-ball"):
+            params(tee_mm=120)
+
+    def test_each_capture_run_gets_its_own_folder(self, tmp_path):
+        p = params(tee_mm=1524)
+        ts.write_arm_state(tmp_path, p, gain=6.0)
+        root = ts.arm_directory(tmp_path, p)
+        (root / "paired" / "run-01").mkdir(parents=True)
+        commands, _ = ts.action_commands("swings", p, tmp_path, RIG)
+        assert commands[0][commands[0].index("--log-dir") + 1].endswith("run-02")
+
+    def test_progress_sums_every_run(self, tmp_path):
+        root = ts.tester_root(tmp_path, "20260922-name")
+        _write_session(root, "arm1", ["ok", "ok", "low_light"], run="run-01")
+        _write_session(root, "arm1", ["ok", "ok", "ok"], run="run-02")
+        progress = ts.arm_progress(tmp_path, params())
+        assert progress["runs"] == 2
+        assert progress["attempted"] == 6 and progress["accepted"] == 5
+        assert progress["complete"] is True
+
+    def test_the_radar_port_can_be_overridden_per_unit(self, tmp_path):
+        p = params(tee_mm=1524)
+        ts.write_arm_state(tmp_path, p, gain=6.0)
+        commands, _ = ts.action_commands("swings", p, tmp_path, RIG, radar_port="/dev/ttyACM0")
+        assert commands[0][commands[0].index("--radar-port") + 1] == "/dev/ttyACM0"
+
+
+class TestSolvedRange:
+    def test_the_gain_screen_frame_solves_range_beside_the_tape(self, tmp_path):
+        arm = ts.ARMS["arm1"]
+        run = tmp_path / "gain" / "20260922_120000"
+        run.mkdir(parents=True)
+        (run / "results.json").write_text("[]")
+        image = np.full((200, 320), 110, dtype=np.uint8)
+        yy, xx = np.mgrid[0:200, 0:320]
+        image[np.hypot(xx - 160, yy - 144) <= 6.0] = 230
+        with (run / "exp0087_gain6_median.pgm").open("wb") as handle:
+            handle.write(b"P5\n320 200\n255\n")
+            handle.write(image.tobytes())
+        solved = ts.solved_range(tmp_path, arm, {"gain": 6.0}, RIG)
+        # 466.67 px focal x 42.67 mm over a ~12 px ball, slightly off-axis
+        assert solved["solved_range_m"] == pytest.approx(1.66, abs=0.05)
+        assert solved["solved_ball_diameter_px"] == pytest.approx(12.0, abs=0.5)
+
+    def test_no_ball_is_a_reason_not_an_exception(self, tmp_path):
+        run = tmp_path / "gain" / "20260922_120000"
+        run.mkdir(parents=True)
+        (run / "results.json").write_text("[]")
+        with (run / "exp0087_gain6_median.pgm").open("wb") as handle:
+            handle.write(b"P5\n320 200\n255\n" + bytes(320 * 200))
+        solved = ts.solved_range(tmp_path, ts.ARMS["arm1"], {"gain": 6.0}, RIG)
+        assert solved["solved_range_m"] is None and solved["solved_range_note"]

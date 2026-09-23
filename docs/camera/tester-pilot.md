@@ -23,16 +23,23 @@ sudo apt install -y swig liblgpio-dev python3-dev   # once, if uv sync fails on 
 bash scripts/start-tester.sh
 ```
 
-Open `http://127.0.0.1:8765` on the Pi.
+Open `http://127.0.0.1:8765` on the Pi. The runner holds each arm's exposure
+and gain fixed for the whole run; auto-exposure is off by design. The OPS243
+is expected on the GPIO UART (`/dev/ttyAMA0`); pass `--radar-port` to
+`start-tester.sh` if yours is elsewhere.
 
-1. **Who and where.** A tester ID and indoors or outdoors. That is everything
-   you type; the frames carry the light level and any flicker. Keep the light the same for the whole session; if it
-   changes, start a new tester ID.
+1. **Who and where.** A tester ID, indoors or outdoors, and one tape
+   measurement: the radar window to the centre of the ball, in mm. That is
+   everything you type; the frames carry the light level and any flicker. Keep
+   the light the same for the whole session; if it changes, start a new tester
+   ID.
 2. **Arms, top to bottom.** For each arm: **Find gain** (a few seconds on the
    static scene — it picks the gain that lights the frame correctly at that
-   arm's exposure and records the light level), then **Capture swings**. The
-   kiosk opens; select **7-iron once**, it stays selected; hit until the arm
-   shows **5 accepted**; press **Stop**.
+   arm's exposure, records the light level, and solves the ball's range from
+   the same frame so it can be compared with your tape), then **Capture
+   swings**. The club is set to 7-iron for you. Hit until the arm shows **5
+   accepted**, then press **Stop**. Stopping and starting again is fine: each
+   capture run is kept separately and counted together.
    - Arm 3 has no gain step. It deliberately reuses arm 2's exposure and gain
      so the only difference between them is the readout.
    - If an arm says **lighting required**, hit its five swings anyway. Its

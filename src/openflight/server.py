@@ -1047,6 +1047,7 @@ def init_camera_capture(
     lateral_offset_m: float,
     horizontal_offset_deg: float,
     use_gpio_trigger: bool,
+    auto_exposure: bool = True,
 ) -> bool:
     """Initialize passive high-speed camera capture for offline alignment."""
     global camera_capture_runtime, camera_capture_config  # pylint: disable=global-statement
@@ -1070,6 +1071,7 @@ def init_camera_capture(
             roll_correction_deg=roll_correction_deg,
             scaler_crop=scaler_crop,
             gpio_pin=gpio_pin,
+            auto_exposure=auto_exposure,
             auto_exposure_state_path=(
                 Path.home() / ".config" / "openflight" / "camera-exposure.json"
             ),
@@ -4349,6 +4351,19 @@ def main():
     parser.add_argument("--camera-capture-height", type=int, default=400)
     parser.add_argument("--camera-capture-fps", type=float, default=300.0)
     parser.add_argument("--camera-capture-pre-ms", type=float, default=150.0)
+    parser.add_argument(
+        "--camera-capture-manual-exposure",
+        action="store_true",
+        help=(
+            "Hold --camera-capture-exposure-us and --camera-capture-gain for the whole "
+            "session instead of converging auto-exposure at startup"
+        ),
+    )
+    parser.add_argument(
+        "--club",
+        choices=[club.value for club in ClubType],
+        help="Club selected at startup (default: the monitor's own default)",
+    )
     parser.add_argument("--camera-capture-post-ms", type=float, default=50.0)
     parser.add_argument(
         "--camera-capture-exposure-us",
@@ -4913,6 +4928,7 @@ def main():
             mirror_horizontal=args.camera_capture_mirror_horizontal,
             scaler_crop=camera_capture_scaler_crop,
             use_gpio_trigger=not args.iwr6843,
+            auto_exposure=not args.camera_capture_manual_exposure,
         ):
             print("Camera capture unavailable - running without high-speed camera capture")
             startup_status.skip("camera", "High-speed camera unavailable; continuing")
@@ -5046,6 +5062,8 @@ def main():
             swing_speed_kwargs=swing_speed_kwargs,
             ops_baud=args.ops_baud,
         )
+        if args.club:
+            monitor.set_club(ClubType(args.club))
     except Exception:
         monitor_recovery = (
             "Relaunch OpenFlight and check the terminal log."

@@ -47,8 +47,10 @@ def _export(
     *,
     light_index=0.25,
     clip_ball=False,
+    tester_id="t1",
+    run="run-01",
 ) -> Path:
-    out = root / arm_id
+    out = root / tester_id / arm_id / run
     (out / "shots").mkdir(parents=True)
     rows = []
     shots = []
@@ -93,6 +95,7 @@ def _export(
             {
                 "contract_version": 1,
                 "session_uuid": "u",
+                "tester_id": tester_id,
                 "arm": {
                     "arm_id": arm_id,
                     "label": f"{width}x{height} @{fps:.0f}",
@@ -222,15 +225,19 @@ class TestDecision:
         v = scorer.decide(arms)["arm4"]
         assert v["preferred"] is False and "availability" in v["reason"]
 
-    def test_different_light_bins_are_not_compared_within_one_tester(self, tmp_path):
-        arms = {}
-        arms["arm1"], _ = scorer.score_export(
-            _export(tmp_path, "arm1", 320, 200, 450.0, 12.0, ["ok"] * 5, light_index=0.25)
-        )
-        arms["arm2"], _ = scorer.score_export(
-            _export(tmp_path, "arm2", 640, 400, 120.0, 12.0, ["ok"] * 5, light_index=1.0)
-        )
-        assert "light bin" in scorer.decide(arms)["arm2"]["reason"]
+    def test_runs_of_the_same_arm_merge(self, tmp_path):
+        a = _export(tmp_path, "arm1", 320, 200, 450.0, 12.0, ["ok", "ok"], run="run-01")
+        b = _export(tmp_path, "arm1", 320, 200, 450.0, 12.0, ["ok", "low_light"], run="run-02")
+        testers = scorer.score_exports([a, b])
+        score, shots = testers["t1"]["arm1"]
+        assert score.attempted == 4 and score.accepted == 3 and len(shots) == 4
+
+    def test_two_testers_never_overwrite_each_other(self, tmp_path):
+        a = _export(tmp_path, "arm1", 320, 200, 450.0, 12.0, ["ok"] * 5, tester_id="t1")
+        b = _export(tmp_path, "arm1", 320, 200, 450.0, 12.0, ["low_light"] * 5, tester_id="t2")
+        testers = scorer.score_exports([a, b])
+        assert testers["t1"]["arm1"][0].accepted == 5
+        assert testers["t2"]["arm1"][0].accepted == 0
 
     def test_insufficient_cells_are_not_promoted(self, tmp_path):
         arms = {}
@@ -249,7 +256,14 @@ class TestOutputs:
         b = _export(tmp_path, "arm2", 640, 400, 120.0, 12.0, ["ok"] * 5)
         assert scorer.main(["--export", str(a), str(b), "--out", str(tmp_path / "study")]) == 0
         data = json.loads((tmp_path / "study" / "mode_study.json").read_text())
-        assert set(data) == {"arms", "shots", "hypotheses", "decision"}
+        assert set(data) == {"testers"}
+        assert set(data["testers"]["t1"]) == {
+            "light_bin",
+            "arms",
+            "shots",
+            "hypotheses",
+            "decision",
+        }
         md = (tmp_path / "study" / "mode_study.md").read_text()
-        assert "Consistency only" in md and "| arm1 |" in md
+        assert "Consistency only" in md and "## Tester t1" in md and "| arm1 |" in md
         assert "approximation" in md

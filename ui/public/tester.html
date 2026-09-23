@@ -65,7 +65,7 @@
         <h2>Before you start</h2>
         <ul>
           <li>Ball at address, unit placed the way you'll hit. The enclosure geometry comes from the checked-in file.</li>
-          <li>In the kiosk that opens for swing capture, <strong>select 7-iron once</strong>. It stays selected.</li>
+          <li>Tape the distance from the radar window to the centre of the ball once, and enter it below. The club is set to 7-iron for you.</li>
           <li>Keep the light the same for the whole session. If you change it, start a new tester ID.</li>
         </ul>
       </section>
@@ -77,6 +77,7 @@
           <label>Where<select id="environment">
             <option value="indoors">Indoors</option><option value="outdoors">Outdoors</option>
           </select></label>
+          <label>Radar window → ball centre (mm)<input id="tee-mm" type="number" min="500" max="4000" step="1" inputmode="numeric" /></label>
         </form>
       </section>
 
@@ -118,6 +119,7 @@
           tester_id: el('tester-id').value.trim(),
           arm_id: currentArm,
           environment: el('environment').value,
+          ...(el('tee-mm').value ? { tee_mm: Number(el('tee-mm').value) } : {}),
         };
       }
       function query() { return new URLSearchParams(payload()).toString(); }
@@ -161,6 +163,9 @@
         el('light').innerHTML = li != null
           ? `<span>light index <b>${li.toExponential(2)}</b></span><span>${a.lighting_required ? 'This arm needs more light than you have; its swings will still be recorded as evidence.' : 'Light is sufficient for this arm.'}</span>`
           : '';
+        if (a.solved_range_m != null) {
+          el('light').innerHTML += `<span>camera-solved range <b>${Math.round(a.solved_range_m * 1000)} mm</b></span>`;
+        }
       }
 
       function render(body) {
