@@ -68,8 +68,10 @@ minutes; later starts are quick.
    ID.
 2. **Arms, top to bottom.** Select an arm and **Start live view** first: it
    shows the camera exactly as that arm will capture, with a contrast-boosted
-   copy beneath it, and you can change exposure and gain while it runs. Check
-   the ball is in view before going on. Then, for each arm: **Find gain** (a
+   copy beneath it, and you can change exposure and gain while it runs. At
+   10000 µs, check the ball is in view and its edge is crisp; if the whole
+   image is soft, turn the lens barrel until it is. Then, for each arm:
+   **Find gain** (a
    few seconds on the static scene — it picks the gain that lights the frame
    correctly at that
    arm's exposure, records the light level, and solves the ball's range from
@@ -129,6 +131,7 @@ check, not proof of absolute accuracy.
 | `fatal: ambiguous argument 'origin/feat/tester-capture-pilot'` | `origin` is the upstream repository; the study branch is on the fork | Add the fork as shown in *Before your first run* |
 | `Failed to build lgpio` … `swig: No such file or directory` | Build tools missing | `sudo apt install -y swig liblgpio-dev python3-dev`, then start again |
 | Find gain fails with `IndexError: list index out of range` in `Picamera2()`, or `rpicam-hello --list-cameras` has no `320x200` | The camera or its high-speed driver is not set up on this Pi | Follow the [camera README](README.md#raspberry-pi-packages) setup, then reboot |
+| The live view is soft or fuzzy even at 10000 µs | The lens is out of focus; fitting the camera into the enclosure can turn it | Turn the lens barrel until the ball's edge is crisp, then run **Find gain** again |
 | `Creating virtual environment at: .venv` on a Pi that ran OpenFlight before | The runner rebuilds the environment when it cannot import `picamera2`; lgpio compiles again | Expected once; needs the build tools above |
 | Every swing rejected with no ball speed | The OPS243 was not found | Pass `--radar-port` with your port (`/dev/ttyAMA0` for the GPIO UART, `/dev/ttyACM0` for USB) |
 | An arm's counter stays at 0 while swings save | The estimator rejected them; the status histogram in the archive says why | Hit the five anyway if it reads `lighting required`; its acceptance rate is part of the result |
