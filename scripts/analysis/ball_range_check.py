@@ -43,6 +43,7 @@ from openflight.rig_geometry import RigGeometry  # noqa: E402
 BALL_DIAMETER_MM = 42.67
 FOCAL_PX_2X = 466.6667
 FOCAL_PX_1X = 933.3333
+LATERAL_SPREAD_FRACTION = 0.1  # of the frame's width, before a roll is fitted
 
 
 @dataclass(frozen=True)
@@ -91,7 +92,15 @@ def load(path: Path, rig: RigGeometry) -> list[Placement]:
 
 def fit_floor(group: list[Placement], drop_mm: float) -> dict:
     """Pitch (up +, with any lens-centre offset), lens height and roll that explain the rows."""
-    free = ["pitch"] + (["drop"] if len(group) >= 3 else []) + (["roll"] if len(group) >= 4 else [])
+    # a roll only shows as the ball moves sideways: placements along the
+    # centreline leave it unknowable, so it is held at zero there
+    spread = max(p.x for p in group) - min(p.x for p in group)
+    sideways = spread >= LATERAL_SPREAD_FRACTION * group[0].width
+    free = (
+        ["pitch"]
+        + (["drop"] if len(group) >= 3 else [])
+        + (["roll"] if len(group) >= 4 and sideways else [])
+    )
 
     def unpack(params):
         values = dict(zip(free, params))
@@ -188,7 +197,9 @@ def report(placements: list[Placement], rig: RigGeometry) -> list[str]:
         lines += [
             f"- lens {floor['drop_mm'] + BALL_DIAMETER_MM / 2:.0f} mm above the floor "
             f"(rig file {rig.lens_height_above_floor_mm:.0f})",
-            f"- roll {_num(floor['roll_deg'])} deg",
+            f"- roll {_num(floor['roll_deg'])} deg"
+            if "roll" in floor["fitted"]
+            else "- roll not fitted: the placements do not spread sideways enough to show it",
             f"- rows left over: {floor['residual_px']} px, i.e. {floor['residual_mm']} mm of distance",
             "",
         ]

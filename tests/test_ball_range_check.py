@@ -19,13 +19,14 @@ RIG = check.RigGeometry.from_json(
 )
 
 
-def _placements(pitch_deg, drop_mm, roll_deg, size_scale=1.0, measured_pitch=None):
+SPOTS = [(800, 560), (800, 760), (1200, 600), (1200, 700), (1800, 620), (1800, 680)]
+
+
+def _placements(pitch_deg, drop_mm, roll_deg, size_scale=1.0, measured_pitch=None, spots=SPOTS):
     """Where a 1280x800 camera would see the ball at taped spots on a flat floor."""
     focal, cx, cy = check.FOCAL_PX_1X, 640.0, 400.0
     rows = []
-    for number, (tape, x) in enumerate(
-        [(800, 560), (800, 760), (1200, 600), (1200, 700), (1800, 620), (1800, 680)], start=1
-    ):
+    for number, (tape, x) in enumerate(spots, start=1):
         aside = tape * (x - cx) / focal
         along = math.sqrt(tape**2 - drop_mm**2 - aside**2)
         # a camera pitched up sees the floor further below its axis
@@ -78,3 +79,21 @@ def test_what_the_inclinometer_leaves_is_named(tmp_path):
     lines = check.report(check.load(log, RIG), RIG)
 
     assert any("inclinometer says 3.30 deg up, leaving 0.10 deg" in line for line in lines)
+
+
+def test_a_centreline_walk_fits_pitch_and_height_and_leaves_roll(tmp_path):
+    # front and back only: six distances, every ball within a few pixels of the middle
+    spots = [(600, 636), (800, 640), (1000, 644), (1300, 638), (1600, 642), (2000, 640)]
+    log = tmp_path / "placements.jsonl"
+    log.write_text(
+        "\n".join(json.dumps(r) for r in _placements(3.4, 80.0, 2.0, spots=spots)) + "\n"
+    )
+
+    placements = check.load(log, RIG)
+    floor = check.fit_floor(placements, 73.665)
+    lines = check.report(placements, RIG)
+
+    assert "roll" not in floor["fitted"]
+    assert floor["pitch_up_deg"] == pytest.approx(3.4, abs=0.05)
+    assert floor["drop_mm"] == pytest.approx(80.0, abs=1.0)
+    assert any("roll not fitted" in line for line in lines)
