@@ -5740,3 +5740,86 @@ class TestShotCarryLogText:
         text = server_module._carry_log_text(shot, None)
 
         assert text == f"carry shown={shot.estimated_carry_yards:.0f} yds (table estimate)"
+
+
+class TestBallisticCarryPrecedence:
+    """The RK4 simulator must own carry whenever it can run.
+
+    RollingBufferMonitor pre-fills carry_spin_adjusted with the spin-table
+    estimate for any non-rejected spin reading. Finalization used to run the
+    simulator only when that field was still None, so every shot with a
+    measured spin skipped the physics model and kept the table number.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_finalization(self, monkeypatch):
+        server_module._reset_shot_sequence()
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "kld7_vertical", None)
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+        monkeypatch.setattr(server_module, "camera_capture_runtime", None)
+        monkeypatch.setattr(server_module, "ball_speed_correction_enabled", False)
+        monkeypatch.setattr(server_module, "calculated_spin_enabled", False)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        monkeypatch.setattr(server_module, "sim_connectors", [])
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *_args, **_kwargs: None)
+        yield
+        _wait_for_shot_finalization_idle()
+
+    @staticmethod
+    def _shot(*, launch_angle: float | None, prefilled_carry: float | None) -> Shot:
+        # Field report, 2026-09-23: a 7-iron where the kiosk showed the 119 yd
+        # spin-table number while the simulator and a commercial launch
+        # monitor both landed near 143 yd.
+        return Shot(
+            ball_speed_mph=104.2,
+            club_speed_mph=83.7,
+            timestamp=datetime(2026, 9, 23, 12, 0, 0),
+            impact_timestamp=100.0,
+            club=ClubType.IRON_7,
+            spin_rpm=5164.0,
+            spin_confidence=0.9,
+            launch_angle_vertical=launch_angle,
+            launch_angle_confidence=0.9 if launch_angle is not None else None,
+            carry_spin_adjusted=prefilled_carry,
+            mode="rolling-buffer",
+        )
+
+    def test_simulator_overrides_prefilled_table_carry(self, monkeypatch):
+        monkeypatch.setattr(server_module, "ballistics_enabled", True)
+        shot = self._shot(launch_angle=19.1, prefilled_carry=119.2)
+
+        server_module._finalize_shot_detected(shot, emit_event="shot")
+
+        expected = server_module.simulate(server_module.resolve_launch(shot)).carry_yards
+        assert shot.carry_spin_adjusted == pytest.approx(expected)
+        assert shot.carry_spin_adjusted != pytest.approx(119.2)
+        assert shot.carry_spin_adjusted > 135.0
+
+    def test_prefilled_carry_survives_when_ballistics_disabled(self, monkeypatch):
+        monkeypatch.setattr(server_module, "ballistics_enabled", False)
+        shot = self._shot(launch_angle=19.1, prefilled_carry=119.2)
+
+        server_module._finalize_shot_detected(shot, emit_event="shot")
+
+        assert shot.carry_spin_adjusted == pytest.approx(119.2)
+
+    def test_prefilled_carry_survives_without_launch_angle(self, monkeypatch):
+        monkeypatch.setattr(server_module, "ballistics_enabled", True)
+        monkeypatch.setattr(server_module, "_ensure_user_facing_launch_angles", lambda _shot: None)
+        shot = self._shot(launch_angle=None, prefilled_carry=119.2)
+
+        server_module._finalize_shot_detected(shot, emit_event="shot")
+
+        assert shot.carry_spin_adjusted == pytest.approx(119.2)
+
+    def test_table_fallback_still_fills_empty_carry(self, monkeypatch):
+        monkeypatch.setattr(server_module, "ballistics_enabled", False)
+        shot = self._shot(launch_angle=19.1, prefilled_carry=None)
+
+        server_module._finalize_shot_detected(shot, emit_event="shot")
+
+        assert shot.carry_spin_adjusted is not None
+        assert shot.carry_spin_adjusted > 0

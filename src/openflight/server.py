@@ -4766,13 +4766,20 @@ def _finalize_shot_detected(
     # ballistics is enabled and a vertical launch angle is available; fall
     # back to the table estimator otherwise (either ballistics disabled or
     # angle missing → resolve_launch returns None).
+    #
+    # The simulator overwrites any carry already on the shot: the rolling
+    # buffer monitor pre-fills carry_spin_adjusted from the spin table, which
+    # never sees the launch angle, so that value only stands when the
+    # simulator cannot run.
     _MIN_RELIABLE_SPIN_CONF = 0.6
     carry_source = None
     fusion = _fusion_unit()
-    if shot.carry_spin_adjusted is None and shot.mode != "mock":
+    if shot.mode != "mock":
         conditions = resolve_launch(shot, substitutes=not fusion) if ballistics_enabled else None
         if conditions is None and fusion:
-            # a fusion unit builds carry only from measured inputs (D17)
+            # a fusion unit builds carry only from measured inputs (D17): a
+            # pre-filled table carry does not stand in for the simulator
+            shot.carry_spin_adjusted = None
             logger.info("[SERVER] Carry not measured: launch, spin or spin axis not measured")
         elif conditions is not None:
             trajectory = simulate(conditions)
@@ -4784,7 +4791,7 @@ def _finalize_shot_detected(
                 conditions.spin_rpm,
                 conditions.spin_source,
             )
-        else:
+        elif shot.carry_spin_adjusted is None:
             has_reliable_spin = (
                 shot.spin_rpm
                 and shot.spin_rpm > 0
