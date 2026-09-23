@@ -41,3 +41,12 @@ def test_installer_uses_running_kernel_headers_without_full_kernel_build():
     assert 'KERNEL_BUILD="/lib/modules/$KERNEL_RELEASE/build"' in installer
     assert 'git apply --recount "$PATCH_FILE"' in installer
     assert 'make -C "$SOURCE_DIR" -j"$JOBS"' not in installer
+
+
+def test_installer_falls_back_to_the_kernel_branch_without_a_source_package():
+    installer = (
+        Path(__file__).parents[1] / "scripts/setup/install_ov9281_high_speed_driver.sh"
+    ).read_text()
+
+    assert "raspberrypi/linux/rpi-$KERNEL_SERIES.y/drivers/media/i2c/ov9282.c" in installer
+    assert "OPENFLIGHT_KERNEL_SOURCE" not in installer

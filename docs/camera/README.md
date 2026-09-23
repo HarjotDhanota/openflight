@@ -148,7 +148,9 @@ sudo reboot
 ```
 
 The installer resolves the stock driver source matching the running Raspberry
-Pi kernel, builds only the `ov9282` module against the installed kernel headers,
+Pi kernel (from Raspberry Pi's `linux-source` package, or from its kernel branch
+on GitHub when that package is not yet published), builds only the `ov9282`
+module against the installed kernel headers,
 backs up the stock module, installs the patched module, and runs `depmod`. It
 also grants members of the `video` group access to the live vertical sensor
 position control. Kernel upgrades require rebuilding the module for the new

@@ -104,7 +104,7 @@ echo "  Module:  $module_path"
 
 sudo apt-get update
 sudo apt-get install -y \
-    build-essential git patch xz-utils
+    build-essential curl git patch xz-utils
 
 if [[ ! -f "$KERNEL_BUILD/Makefile" || ! -f "$KERNEL_BUILD/Module.symvers" ]]; then
     echo "Installing headers for $KERNEL_RELEASE..."
@@ -114,6 +114,19 @@ if [[ ! -f "$KERNEL_BUILD/Makefile" || ! -f "$KERNEL_BUILD/Module.symvers" ]]; t
     echo "Matching kernel headers are unavailable at $KERNEL_BUILD." >&2
     exit 1
 fi
+
+fetch_driver_from_github() {
+    local url="https://raw.githubusercontent.com/raspberrypi/linux/rpi-$KERNEL_SERIES.y/drivers/media/i2c/ov9282.c"
+
+    echo "No $SOURCE_PACKAGE package matches kernel $KERNEL_VERSION; using rpi-$KERNEL_SERIES.y from GitHub."
+    rm -rf "$MODULE_ROOT"
+    mkdir -p "$MODULE_DIR"
+    if ! curl -fsSL "$url" -o "$MODULE_DIR/ov9282.c"; then
+        echo "Could not download $url" >&2
+        exit 1
+    fi
+    echo 'obj-m += ov9282.o' >"$MODULE_DIR/Makefile"
+}
 
 prepare_driver_source() {
     local package_version
@@ -133,9 +146,9 @@ prepare_driver_source() {
             '
     )"
     if [[ -z "$package_version" ]]; then
-        echo "No Raspberry Pi $SOURCE_PACKAGE package matches kernel $KERNEL_VERSION." >&2
-        echo "Update apt metadata or provide OPENFLIGHT_KERNEL_SOURCE." >&2
-        exit 1
+        # Raspberry Pi does not always publish linux-source for the newest kernel.
+        fetch_driver_from_github
+        return
     fi
 
     echo "Downloading $SOURCE_PACKAGE=$package_version..."
