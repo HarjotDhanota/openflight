@@ -98,6 +98,30 @@ def test_a_room_lit_ball_is_found_in_the_compact_crop():
     assert ball.diameter_px == pytest.approx(14.0, rel=0.1)
 
 
+def test_a_side_lit_ball_is_measured_to_its_shaded_rim():
+    # a Lambertian sphere lit from the upper left: its far side fades to the
+    # ground's level beside its cast shadow, but the circle is the whole ball
+    height, width, radius, cx, cy = 400, 640, 16.0, 300.3, 260.6
+    yy, xx = np.indices((height, width)).astype(np.float64)
+    dx, dy = xx - cx, yy - cy
+    inside = dx**2 + dy**2 <= radius**2
+    nz = np.sqrt(np.clip(radius**2 - dx**2 - dy**2, 0, None)) / radius
+    light = np.array([-0.55, -0.55, 0.63]) / np.linalg.norm([-0.55, -0.55, 0.63])
+    shade = np.clip(dx / radius * light[0] + dy / radius * light[1] + nz * light[2], 0, None)
+    image = 48 + np.random.default_rng(3).normal(0, 3, (height, width))
+    shadow = np.hypot(xx - (cx + 0.7 * radius), yy - (cy + 0.9 * radius)) <= 0.9 * radius
+    image[shadow & ~inside] -= 7
+    image[inside] = 38 + 60 * shade[inside]
+    noise = np.random.default_rng(4).normal(0, 2, (5, height, width))
+    frames = np.clip(image[None] + noise, 0, 255).astype(np.uint8)
+
+    ball = detect_reference_ball(frames)
+
+    assert ball.x == pytest.approx(cx, abs=0.7)
+    assert ball.y == pytest.approx(cy, abs=0.7)
+    assert ball.diameter_px == pytest.approx(2 * radius, rel=0.05)
+
+
 def test_ground_without_a_ball_gives_the_contrast_path_nothing():
     frames = _room_scene(400, 640, (0.0, 0.0), 0.0, with_ball=False)
     background = np.median(frames, axis=0)

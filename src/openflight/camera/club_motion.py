@@ -164,14 +164,17 @@ def _fit_disk(image: np.ndarray, x: float, y: float, radius: float) -> tuple[flo
 
 
 BALL_EDGE_FRACTION = 0.25  # of the ball's contrast over the ground around it
+RIM_RAY_STEP_DEG = 4.0
+RIM_HALF_ARC_DEG = 80.0
 
 
 def _measure_ball(image: np.ndarray, x: float, y: float, radius: float) -> ReferenceBall | None:
-    """The patch brighter than the surrounding ground by a quarter of the ball's contrast.
+    """The whole ball, from the rim on its lit side.
 
-    A ball lit from one side stays above the ground on its dim side, so the
-    patch keeps it; a logo's dark marks are filled in. Size is the patch's
-    area as a disk, centre its centroid.
+    A ball lit from one side has a sharp rim facing the light and a shaded
+    side that fades to the ground's own level, often beside its cast shadow.
+    The bright patch finds the lit part and which way the light comes from; a
+    circle through the lit half of the rim then gives the whole ball.
     """
     height, width = image.shape
     reach = int(np.ceil(3.0 * radius)) + 2
@@ -190,17 +193,87 @@ def _measure_ball(image: np.ndarray, x: float, y: float, radius: float) -> Refer
     if not inside.size:
         return None
     blob = labels == np.bincount(inside).argmax()
-    area = int(blob.sum())
     ys, xs = np.nonzero(blob)
-    diameter = 2.0 * math.sqrt(area / math.pi)
-    if not 1.2 * radius <= diameter <= 3.5 * radius:
+    lit_r = math.sqrt(len(xs) / math.pi)
+    if not 0.6 * radius <= lit_r <= 1.75 * radius:
         return None  # it ran into the ground, or found only a speck
-    return ReferenceBall(
-        x=float(xs.mean() + left),
-        y=float(ys.mean() + top),
-        diameter_px=diameter,
-        area_px=area,
+    bx, by = float(xs.mean()), float(ys.mean())
+    weight = patch[ys, xs] - ground
+    toward_light = np.array(
+        [
+            float((weight * xs).sum() / weight.sum()) - bx,
+            float((weight * ys).sum() / weight.sum()) - by,
+        ]
     )
+    fitted = _fit_lit_rim(patch, bx, by, lit_r, toward_light, ball - ground)
+    cx, cy, r = fitted if fitted is not None else (bx, by, lit_r)
+    return ReferenceBall(
+        x=cx + left, y=cy + top, diameter_px=2.0 * r, area_px=int(round(math.pi * r * r))
+    )
+
+
+def _fit_lit_rim(
+    patch: np.ndarray,
+    x: float,
+    y: float,
+    radius: float,
+    toward_light: np.ndarray,
+    contrast: float,
+) -> tuple[float, float, float] | None:
+    """A circle through the rim's sharp, lit side.
+
+    Rays leave the lit patch's centre across the half facing the light (all
+    the way round when the light is square on); on each, the rim is the
+    outermost strong fall in brightness, so a logo or the highlight's own edge
+    inside the ball is passed over.
+    """
+    smooth = ndimage.gaussian_filter(patch, 0.7)
+    lean = float(np.hypot(*toward_light))
+    if lean >= 0.08 * radius:
+        facing = math.atan2(float(toward_light[1]), float(toward_light[0]))
+        half = math.radians(RIM_HALF_ARC_DEG)
+    else:
+        facing, half = 0.0, math.pi
+    angles = facing + np.arange(-half, half + 1e-9, math.radians(RIM_RAY_STEP_DEG))
+    steps = np.arange(0.5 * radius, 2.0 * radius, 0.25)
+    xs = x + steps[None, :] * np.cos(angles)[:, None]
+    ys = y + steps[None, :] * np.sin(angles)[:, None]
+    values = ndimage.map_coordinates(smooth, [ys.ravel(), xs.ravel()], order=1, mode="nearest")
+    falls = -np.gradient(values.reshape(xs.shape), 0.25, axis=1)
+    points = []
+    for ray, fall in enumerate(falls):
+        strongest = float(fall.max())
+        if strongest < 0.1 * contrast:
+            continue  # no rim on this ray: occluded, or it runs along the shadow
+        peaks = [
+            i
+            for i in range(1, len(fall) - 1)
+            if fall[i] >= 0.6 * strongest and fall[i] >= fall[i - 1] and fall[i] >= fall[i + 1]
+        ]
+        i = max(peaks) if peaks else int(np.argmax(fall))
+        left_fall, here, right_fall = fall[i - 1], fall[i], fall[min(i + 1, len(fall) - 1)]
+        curvature = left_fall - 2.0 * here + right_fall
+        offset = 0.5 * (left_fall - right_fall) / curvature if curvature < 0 else 0.0
+        s = steps[i] + 0.25 * offset
+        points.append((x + s * math.cos(angles[ray]), y + s * math.sin(angles[ray])))
+    if len(points) < 12:
+        return None
+    pts = np.asarray(points)
+    for _round in range(2):
+        # algebraic circle fit, then again without the rays it cannot explain
+        a = np.column_stack([pts[:, 0], pts[:, 1], np.ones(len(pts))])
+        b = -(pts[:, 0] ** 2 + pts[:, 1] ** 2)
+        d, e, f = np.linalg.lstsq(a, b, rcond=None)[0]
+        cx, cy = -d / 2.0, -e / 2.0
+        r = math.sqrt(max(cx * cx + cy * cy - f, 0.0))
+        residual = np.abs(np.hypot(pts[:, 0] - cx, pts[:, 1] - cy) - r)
+        keep = residual <= max(1.0, 2.5 * float(np.median(residual)))
+        if keep.all() or keep.sum() < 12:
+            break
+        pts = pts[keep]
+    if not 0.8 * radius <= r <= 1.8 * radius:
+        return None
+    return float(cx), float(cy), float(r)
 
 
 def detect_reference_ball(
