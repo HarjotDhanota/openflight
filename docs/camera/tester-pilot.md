@@ -14,19 +14,50 @@ paired data, and how many of the five each mode has accepted.
   inclinometer runs on every session; it is how ball height is solved.
 - A 7-iron. Nothing else for this study.
 
-## Running it
+## Before your first run
 
-Stop the normal kiosk, then from the repository root:
+Once per Pi:
 
 ```bash
-sudo apt install -y swig liblgpio-dev python3-dev   # once, if uv sync fails on lgpio
+sudo apt update && sudo apt install -y swig liblgpio-dev python3-dev
+```
+
+`lgpio`, the Pi 5 GPIO library OpenFlight uses for the sound trigger, is
+compiled from source and needs SWIG (a build-time code generator from the
+Raspberry Pi OS repositories; it runs only during that build) and the lgpio
+and Python headers. `start-tester.sh` checks for them and prints this line if
+they are missing.
+
+Getting the study branch before it is merged: your clone's `origin` is the
+upstream repository, which does not have it. Add the fork once:
+
+```bash
+git remote add fork https://github.com/HarjotDhanota/openflight.git
+git fetch fork
+git checkout -B feat/tester-capture-pilot fork/feat/tester-capture-pilot
+```
+
+To update later: `git fetch fork && git reset --hard fork/feat/tester-capture-pilot`.
+
+## Running it
+
+Stop the normal kiosk (it holds the camera and radars), then from the
+repository root:
+
+```bash
 bash scripts/start-tester.sh
 ```
 
-Open `http://127.0.0.1:8765` on the Pi. The runner holds each arm's exposure
-and gain fixed for the whole run; auto-exposure is off by design. The OPS243
-is expected on the GPIO UART (`/dev/ttyAMA0`); pass `--radar-port` to
-`start-tester.sh` if yours is elsewhere.
+Open `http://127.0.0.1:8765` on the Pi. To use your phone instead, start it
+with `--host 0.0.0.0`, find the Pi's address with `hostname -I`, and open
+`http://<that address>:8765` on a phone on the same Wi-Fi. Anyone on that
+network can then reach the page, which only runs the fixed study actions.
+
+The runner holds each arm's exposure and gain fixed for the whole run;
+auto-exposure is off by design. The OPS243 is expected on the GPIO UART
+(`/dev/ttyAMA0`); pass `--radar-port <port>` to `start-tester.sh` if yours is
+elsewhere. The first `start-tester.sh` builds the environment and takes a few
+minutes; later starts are quick.
 
 1. **Who and where.** A tester ID, indoors or outdoors, and one tape
    measurement: the radar window to the centre of the ball, in mm. That is
@@ -86,3 +117,16 @@ It changes no production camera default, driver table, geometry, calibration
 constant, threshold, or fusion behaviour. Each of those is a separate
 maintainer-approved pull request. Camera/radar agreement is a consistency
 check, not proof of absolute accuracy.
+
+## Troubleshooting
+
+| What you see | Cause | Fix |
+| --- | --- | --- |
+| `fatal: ambiguous argument 'origin/feat/tester-capture-pilot'` | `origin` is the upstream repository; the study branch is on the fork | Add the fork as shown in *Before your first run* |
+| `Failed to build lgpio` … `swig: No such file or directory` | Build tools missing | `sudo apt install -y swig liblgpio-dev python3-dev`, then start again |
+| `Creating virtual environment at: .venv` on a Pi that ran OpenFlight before | The runner rebuilds the environment when it cannot import `picamera2`; lgpio compiles again | Expected once; needs the build tools above |
+| Page does not load on the phone | Runner started without `--host 0.0.0.0`, or the phone is on another network | Restart with `--host 0.0.0.0`; check `hostname -I` |
+| Every swing rejected with no ball speed | The OPS243 was not found | Pass `--radar-port` with your port (`/dev/ttyAMA0` for the GPIO UART, `/dev/ttyACM0` for USB) |
+| An arm's counter stays at 0 while swings save | The estimator rejected them; the status histogram in the archive says why | Hit the five anyway if it reads `lighting required`; its acceptance rate is part of the result |
+| Stopped mid-arm | Nothing is lost | Press **Capture swings** again; runs are kept separately and counted together |
+
