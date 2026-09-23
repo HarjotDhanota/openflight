@@ -28,6 +28,26 @@ Raspberry Pi OS repositories; it runs only during that build) and the lgpio
 and Python headers. `start-tester.sh` checks for them and prints this line if
 they are missing.
 
+The OV9281 is not one of the cameras the Pi detects on its own. Once per Pi,
+tell it the camera is there, then install OpenFlight's high-speed camera driver
+(it adds the 320×200 mode) and reboot after each step:
+
+```bash
+# ribbon in CAM/DISP 1; use dtoverlay=ov9281,cam0 if it is in CAM/DISP 0
+printf '
+[all]
+dtoverlay=ov9281
+' | sudo tee -a /boot/firmware/config.txt
+sudo reboot
+rpicam-hello --list-cameras          # lists the OV9281: 1280x800, 1280x720, 640x400
+bash scripts/setup/install_ov9281_high_speed_driver.sh
+sudo reboot
+rpicam-hello --list-cameras          # now also 640x200, 640x100, 320x200
+```
+
+The driver is built for the running kernel; run the installer again after a
+kernel update.
+
 Getting the study branch before it is merged: your clone's `origin` is the
 upstream repository, which does not have it. Add the fork once:
 
@@ -121,6 +141,8 @@ check, not proof of absolute accuracy.
 | --- | --- | --- |
 | `fatal: ambiguous argument 'origin/feat/tester-capture-pilot'` | `origin` is the upstream repository; the study branch is on the fork | Add the fork as shown in *Before your first run* |
 | `Failed to build lgpio` … `swig: No such file or directory` | Build tools missing | `sudo apt install -y swig liblgpio-dev python3-dev`, then start again |
+| `rpicam-hello --list-cameras` says `No cameras available!`; Find gain fails with `IndexError: list index out of range` in `Picamera2()` | The Pi was never told about the OV9281 (`camera_auto_detect` does not cover it), or the ribbon is loose | Add `dtoverlay=ov9281` (`,cam0` for CAM/DISP 0) and reboot; if still missing, power off and reseat the ribbon |
+| The camera is listed but without `320x200` | The OpenFlight high-speed driver is not installed, or the kernel updated since it was | Run `scripts/setup/install_ov9281_high_speed_driver.sh` and reboot |
 | `Creating virtual environment at: .venv` on a Pi that ran OpenFlight before | The runner rebuilds the environment when it cannot import `picamera2`; lgpio compiles again | Expected once; needs the build tools above |
 | Every swing rejected with no ball speed | The OPS243 was not found | Pass `--radar-port` with your port (`/dev/ttyAMA0` for the GPIO UART, `/dev/ttyACM0` for USB) |
 | An arm's counter stays at 0 while swings save | The estimator rejected them; the status histogram in the archive says why | Hit the five anyway if it reads `lighting required`; its acceptance rate is part of the result |
