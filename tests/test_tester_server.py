@@ -613,10 +613,15 @@ class TestLiveBall:
         assert readout["ball_dn"] == 230 and readout["around_dn"] == 110
         assert readout["edge_dn_per_px"] > 0
 
-    def test_a_dim_ball_says_why_it_was_not_found(self):
+    def test_a_dim_ball_is_found_by_its_contrast(self):
+        # nowhere near saturation, but it stands out from the ground
         readout = ts.ball_readout(_ball_frames(40, 70), ts.FOCAL_PX_2X)
-        assert readout["found"] is False
-        assert "brightest pixel is 70, below the 210" in readout["reason"]
+        assert readout["found"] is True
+        assert readout["diameter_px"] == pytest.approx(12.0, abs=1.5)
+
+    def test_no_ball_says_why(self):
+        readout = ts.ball_readout(_ball_frames(40, 40), ts.FOCAL_PX_2X)
+        assert readout["found"] is False and readout["reason"]
 
     def test_the_ring_sits_just_outside_the_ball(self):
         marked = ts.mark_ball(
@@ -632,6 +637,6 @@ class TestLiveBall:
             assert _wait(lambda: live.snapshot()[1]["ball"] is not None)
             ball = live.snapshot()[1]["ball"]
             # the fake camera's frame is a flat 40: nothing to find, and it says so
-            assert ball["found"] is False and "below the 210" in ball["reason"]
+            assert ball["found"] is False and ball["reason"]
         finally:
             live.stop()

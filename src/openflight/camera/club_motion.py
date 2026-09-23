@@ -57,6 +57,152 @@ class ShaftTrack:
     reason: str
 
 
+# A room-lit ball is brighter than what surrounds it but rarely saturates: a
+# ceiling light leaves a small highlight on top and a face near the mat's own
+# level. It is found as the disk that stands out most from the ring around it,
+# within the hitting zone, and only when it clearly beats every other disk.
+DISK_MIN_CONTRAST_DN = 20.0
+DISK_MIN_NOISE_MULTIPLE = 6.0
+DISK_MIN_MARGIN = 1.25
+DISK_ZONE = (0.15, 0.40, 0.85, 0.92)  # x0, y0, x1, y1 as fractions of the frame
+DISK_SEARCH_WIDTH_PX = 320  # larger frames are searched binned to this width
+
+
+def _box_mean(image: np.ndarray, side: float) -> np.ndarray:
+    return ndimage.uniform_filter(image, size=max(1, int(round(side))), mode="nearest")
+
+
+def _disk_contrast(image: np.ndarray, radius: float) -> np.ndarray:
+    """Inscribed square of a disk of this radius against the square ring just outside it."""
+    inner = _box_mean(image, 1.4 * radius)
+    mid_side, out_side = 2.6 * radius, 4.0 * radius
+    mid, out = _box_mean(image, mid_side), _box_mean(image, out_side)
+    ring = (out * out_side**2 - mid * mid_side**2) / (out_side**2 - mid_side**2)
+    return inner - ring
+
+
+def _bin(image: np.ndarray, factor: int) -> np.ndarray:
+    height, width = (image.shape[0] // factor) * factor, (image.shape[1] // factor) * factor
+    blocks = image[:height, :width].reshape(height // factor, factor, width // factor, factor)
+    return blocks.mean(axis=(1, 3))
+
+
+def _contrast_ball(
+    background: np.ndarray, frames: np.ndarray, roi: tuple[int, int, int, int] | None
+) -> ReferenceBall | None:
+    """The disk that stands out most from its surroundings, if it clearly does."""
+    height, width = background.shape
+    if roi is None:
+        fx0, fy0, fx1, fy1 = DISK_ZONE
+        roi = (int(width * fx0), int(height * fy0), int(width * fx1), int(height * fy1))
+    factor = max(1, round(width / DISK_SEARCH_WIDTH_PX))
+    image = background.astype(np.float32)
+    coarse = _bin(image, factor)
+    x0, y0, x1, y1 = (value // factor for value in roi)
+    noise = float(np.median(np.std(frames[: min(20, len(frames))], axis=0))) / factor
+    floor = max(DISK_MIN_CONTRAST_DN, DISK_MIN_NOISE_MULTIPLE * noise)
+
+    # 1. where: the best disk over plausible ball sizes, in the binned frame
+    radii = np.geomspace(2.5, max(3.0, 0.04 * coarse.shape[1]), num=12)
+    maps = [_disk_contrast(coarse, float(radius))[y0:y1, x0:x1] for radius in radii]
+    peaks = [np.unravel_index(int(np.argmax(score)), score.shape) for score in maps]
+    best = max(range(len(radii)), key=lambda i: maps[i][peaks[i]])
+    contrast = float(maps[best][peaks[best]])
+    if contrast < floor:
+        return None
+    row, col = peaks[best]
+    # the largest scale still scoring near the best keeps the inner square
+    # inside the ball, so it sits at the ball's own radius
+    radius = max(
+        float(r)
+        for r, score in zip(radii, maps)
+        if r >= radii[best] and score[row, col] >= 0.9 * contrast
+    )
+    yy, xx = np.indices(maps[0].shape)
+    elsewhere = np.hypot(xx - col, yy - row) > 3.0 * radius
+    if elsewhere.any():
+        rival = max(float(score[elsewhere].max()) for score in maps)
+        if rival > 0 and contrast / rival < DISK_MIN_MARGIN:
+            return None
+
+    # 2. how big and exactly where: the lit part places it on the binned frame;
+    # the whole ball is then measured at full resolution
+    cx, cy, r = _fit_disk(coarse, float(col + x0), float(row + y0), radius)
+    return _measure_ball(image, (cx + 0.5) * factor - 0.5, (cy + 0.5) * factor - 0.5, r * factor)
+
+
+def _disk_score(image: np.ndarray, cx: float, cy: float, r: float) -> float:
+    """A disk's mean against the thin ring just outside its rim."""
+    reach = int(np.ceil(1.4 * r)) + 2
+    top, left = max(0, int(cy) - reach), max(0, int(cx) - reach)
+    patch = image[top : int(cy) + reach + 1, left : int(cx) + reach + 1]
+    yy, xx = np.indices(patch.shape, dtype=np.float32)
+    distance = np.hypot(xx - (cx - left), yy - (cy - top))
+    disk = np.clip(r + 0.5 - distance, 0.0, 1.0)
+    ring = np.clip(1.4 * r + 0.5 - distance, 0.0, 1.0) - disk
+    return float((patch * disk).sum() / disk.sum() - (patch * ring).sum() / ring.sum())
+
+
+def _fit_disk(image: np.ndarray, x: float, y: float, radius: float) -> tuple[float, float, float]:
+    """Every radius against every nearby centre: the disk that stands out most.
+
+    Searched jointly because fitting centre and size in turns can settle on a
+    highlight's small disk. On a ball lit from one side this is the lit part,
+    so it places the measurement rather than making it.
+    """
+    step = max(0.5, 0.1 * radius)
+    span = max(2.0, 0.6 * radius)
+    offsets = np.arange(-span, span + step / 2, step)
+    radii = np.geomspace(max(2.0, 0.5 * radius), max(4.0, 4.0 * radius), 30)
+    _, x, y, radius = max(
+        (_disk_score(image, x + dx, y + dy, r), x + dx, y + dy, float(r))
+        for r in radii
+        for dx in offsets
+        for dy in offsets
+    )
+    return x, y, radius
+
+
+BALL_EDGE_FRACTION = 0.25  # of the ball's contrast over the ground around it
+
+
+def _measure_ball(image: np.ndarray, x: float, y: float, radius: float) -> ReferenceBall | None:
+    """The patch brighter than the surrounding ground by a quarter of the ball's contrast.
+
+    A ball lit from one side stays above the ground on its dim side, so the
+    patch keeps it; a logo's dark marks are filled in. Size is the patch's
+    area as a disk, centre its centroid.
+    """
+    height, width = image.shape
+    reach = int(np.ceil(3.0 * radius)) + 2
+    top, left = max(0, int(y) - reach), max(0, int(x) - reach)
+    patch = image[top : min(height, int(y) + reach + 1), left : min(width, int(x) + reach + 1)]
+    yy, xx = np.indices(patch.shape, dtype=np.float32)
+    distance = np.hypot(xx - (x - left), yy - (y - top))
+    ground = float(np.median(patch[(distance >= 1.8 * radius) & (distance <= 2.8 * radius)]))
+    ball = float(np.percentile(patch[distance <= radius], 90))
+    if ball <= ground:
+        return None
+    mask = ndimage.binary_fill_holes(patch > ground + BALL_EDGE_FRACTION * (ball - ground))
+    labels, _count = ndimage.label(mask)
+    inside = labels[distance <= radius]
+    inside = inside[inside > 0]
+    if not inside.size:
+        return None
+    blob = labels == np.bincount(inside).argmax()
+    area = int(blob.sum())
+    ys, xs = np.nonzero(blob)
+    diameter = 2.0 * math.sqrt(area / math.pi)
+    if not 1.2 * radius <= diameter <= 3.5 * radius:
+        return None  # it ran into the ground, or found only a speck
+    return ReferenceBall(
+        x=float(xs.mean() + left),
+        y=float(ys.mean() + top),
+        diameter_px=diameter,
+        area_px=area,
+    )
+
+
 def detect_reference_ball(
     frames: np.ndarray,
     *,
@@ -84,10 +230,13 @@ def detect_reference_ball(
         diameter_from_extent: bool = False,
         contrast: np.ndarray | None = None,
     ) -> list[tuple[float, ReferenceBall]]:
-        labels, count = ndimage.label(mask)
+        labels, _count = ndimage.label(mask)
         found: list[tuple[float, ReferenceBall]] = []
-        for label in range(1, count + 1):
-            ys, xs = np.where(labels == label)
+        for label, box in enumerate(ndimage.find_objects(labels), start=1):
+            if box is None:
+                continue
+            ys, xs = np.nonzero(labels[box] == label)
+            ys, xs = ys + box[0].start, xs + box[1].start
             area = len(xs)
             if not min_area <= area <= 600:
                 continue
@@ -147,6 +296,10 @@ def detect_reference_ball(
         ]
         if plausible:
             return min(plausible, key=lambda item: item[0])[1]
+
+    lit = _contrast_ball(background, frames, roi)
+    if lit is not None:
+        return lit
 
     # A spotlight can wash the white face of the ball into the turf while its
     # lower silhouette remains dark. Local contrast is more stable than an

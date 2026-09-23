@@ -5,6 +5,7 @@ import math
 import numpy as np
 import pytest
 
+from openflight.camera import club_motion
 from openflight.camera.club_motion import (
     BALL_DIAMETER_MM,
     ImagePoint,
@@ -54,6 +55,54 @@ def test_compact_capture_ignores_saturated_clutter_above_hitting_zone():
     assert ball.x == pytest.approx(148.0, abs=1.0)
     assert ball.y == pytest.approx(130.0, abs=1.0)
     assert 10.0 <= ball.diameter_px <= 18.0
+
+
+def _room_scene(height, width, ball_xy, diameter, *, with_ball=True, seed=0):
+    """Carpet-like ground, a ceiling-lit ball and a door hinge, as a room gives them.
+
+    The ball is brighter than the ground but nowhere near saturation: bright
+    towards the light, dim on its far side. The hinge is a dark vertical strip
+    inside the dark-silhouette path's search zone.
+    """
+    rng = np.random.default_rng(seed)
+    yy, xx = np.indices((height, width))
+    image = 115 + rng.normal(0, 5, (height, width))
+    if with_ball:
+        cx, cy = ball_xy
+        body = np.clip(diameter / 2 + 0.5 - np.hypot(xx - cx, yy - cy), 0, 1)
+        lit = 60 - 35 * ((xx - cx) + (yy - cy)) / diameter
+        image = image + body * lit
+    hinge_x = int(width * 0.46)
+    image[int(height * 0.32) : int(height * 0.40), hinge_x : hinge_x + 3] = 35
+    frames = image[None] + rng.normal(0, 2, (5, height, width))
+    return np.clip(frames, 0, 255).astype(np.uint8)
+
+
+def test_a_room_lit_ball_is_found_not_the_hinge_at_full_resolution():
+    frames = _room_scene(400, 640, (290.0, 260.0), 28.0)
+
+    ball = detect_reference_ball(frames)
+
+    assert ball.x == pytest.approx(290.0, abs=1.0)
+    assert ball.y == pytest.approx(260.0, abs=1.0)
+    assert ball.diameter_px == pytest.approx(28.0, rel=0.08)
+
+
+def test_a_room_lit_ball_is_found_in_the_compact_crop():
+    frames = _room_scene(200, 320, (125.0, 150.0), 14.0)
+
+    ball = detect_reference_ball(frames)
+
+    assert ball.x == pytest.approx(125.0, abs=1.0)
+    assert ball.y == pytest.approx(150.0, abs=1.0)
+    assert ball.diameter_px == pytest.approx(14.0, rel=0.1)
+
+
+def test_ground_without_a_ball_gives_the_contrast_path_nothing():
+    frames = _room_scene(400, 640, (0.0, 0.0), 0.0, with_ball=False)
+    background = np.median(frames, axis=0)
+
+    assert club_motion._contrast_ball(background, frames, None) is None
 
 
 def test_image_plane_motion_uses_terminal_interval_and_ball_scale():

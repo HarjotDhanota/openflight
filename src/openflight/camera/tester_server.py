@@ -62,9 +62,6 @@ LIVE_FPS = 12.0
 LIVE_EXPOSURE_RANGE_US = (20, 20000)
 LIVE_BALL_EVERY_S = 0.5
 BALL_DIAMETER_MM = 42.67
-# detect_reference_ball's bright-ball threshold; below it only a dark
-# silhouette under a spotlight can be found.
-BALL_BRIGHT_DN = 210
 
 
 @dataclass(frozen=True)
@@ -624,14 +621,7 @@ def ball_readout(frames: np.ndarray, focal_px: float) -> dict:
     try:
         ball = detect_reference_ball(frames)
     except ValueError as exc:
-        reason = str(exc)
-        brightest = int(frames.max())
-        if brightest < BALL_BRIGHT_DN:
-            reason += (
-                f"; the brightest pixel is {brightest}, below the {BALL_BRIGHT_DN} "
-                "a white ball must reach"
-            )
-        return {"found": False, "reason": reason}
+        return {"found": False, "reason": str(exc)}
     image = np.median(frames, axis=0)
     yy, xx = np.indices(image.shape)
     distance = np.hypot(xx - ball.x, yy - ball.y)
