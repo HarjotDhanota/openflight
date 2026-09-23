@@ -5743,12 +5743,10 @@ class TestShotCarryLogText:
 
 
 class TestBallisticCarryPrecedence:
-    """The RK4 simulator must own carry whenever it can run.
+    """Finalization is the single writer of carry_spin_adjusted.
 
-    RollingBufferMonitor pre-fills carry_spin_adjusted with the spin-table
-    estimate for any non-rejected spin reading. Finalization used to run the
-    simulator only when that field was still None, so every shot with a
-    measured spin skipped the physics model and kept the table number.
+    The simulator owns carry whenever it can run; the spin table owns it
+    otherwise. Anything already on the shot is replaced either way.
     """
 
     @pytest.fixture(autouse=True)
@@ -5798,24 +5796,29 @@ class TestBallisticCarryPrecedence:
         assert shot.carry_spin_adjusted != pytest.approx(119.2)
         assert shot.carry_spin_adjusted > 135.0
 
-    def test_prefilled_carry_survives_when_ballistics_disabled(self, monkeypatch):
+    def test_table_fallback_replaces_prefilled_carry_when_ballistics_disabled(self, monkeypatch):
         monkeypatch.setattr(server_module, "ballistics_enabled", False)
-        shot = self._shot(launch_angle=19.1, prefilled_carry=119.2)
+        shot = self._shot(launch_angle=19.1, prefilled_carry=999.0)
 
         server_module._finalize_shot_detected(shot, emit_event="shot")
 
-        assert shot.carry_spin_adjusted == pytest.approx(119.2)
+        expected = server_module.estimate_carry_with_spin(
+            104.2, 5164.0, ClubType.IRON_7, club_speed_mph=83.7
+        )
+        assert shot.carry_spin_adjusted == pytest.approx(expected)
 
-    def test_prefilled_carry_survives_without_launch_angle(self, monkeypatch):
+    def test_table_fallback_replaces_prefilled_carry_without_launch_angle(self, monkeypatch):
         monkeypatch.setattr(server_module, "ballistics_enabled", True)
         monkeypatch.setattr(server_module, "_ensure_user_facing_launch_angles", lambda _shot: None)
-        shot = self._shot(launch_angle=None, prefilled_carry=119.2)
+        shot = self._shot(launch_angle=None, prefilled_carry=999.0)
 
         server_module._finalize_shot_detected(shot, emit_event="shot")
 
-        assert shot.carry_spin_adjusted == pytest.approx(119.2)
+        assert shot.carry_spin_adjusted is not None
+        assert shot.carry_spin_adjusted != pytest.approx(999.0)
+        assert 0 < shot.carry_spin_adjusted < 200
 
-    def test_table_fallback_still_fills_empty_carry(self, monkeypatch):
+    def test_table_fallback_fills_empty_carry(self, monkeypatch):
         monkeypatch.setattr(server_module, "ballistics_enabled", False)
         shot = self._shot(launch_angle=19.1, prefilled_carry=None)
 
@@ -5823,3 +5826,16 @@ class TestBallisticCarryPrecedence:
 
         assert shot.carry_spin_adjusted is not None
         assert shot.carry_spin_adjusted > 0
+
+    def test_simulator_carry_reaches_sim_connectors(self, monkeypatch):
+        monkeypatch.setattr(server_module, "ballistics_enabled", True)
+        forwarded = []
+        monkeypatch.setattr(server_module, "_forward_shot_to_simulators", forwarded.append)
+        shot = self._shot(launch_angle=19.1, prefilled_carry=None)
+
+        server_module._finalize_shot_detected(shot, emit_event="shot")
+
+        assert forwarded == [shot]
+        resolved = server_module.resolve_shot(forwarded[0], server_module.SimPlayerState())
+        assert resolved.carry_yards == pytest.approx(shot.carry_spin_adjusted)
+        assert resolved.carry_yards > 135.0

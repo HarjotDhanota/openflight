@@ -4765,12 +4765,8 @@ def _finalize_shot_detected(
     # Compute carry. Prefer the physics simulator (drag + Magnus, RK4) when
     # ballistics is enabled and a vertical launch angle is available; fall
     # back to the table estimator otherwise (either ballistics disabled or
-    # angle missing → resolve_launch returns None).
-    #
-    # The simulator overwrites any carry already on the shot: the rolling
-    # buffer monitor pre-fills carry_spin_adjusted from the spin table, which
-    # never sees the launch angle, so that value only stands when the
-    # simulator cannot run.
+    # angle missing → resolve_launch returns None). This is the only place
+    # that writes carry_spin_adjusted for a live shot.
     _MIN_RELIABLE_SPIN_CONF = 0.6
     carry_source = None
     fusion = _fusion_unit()
@@ -4791,7 +4787,7 @@ def _finalize_shot_detected(
                 conditions.spin_rpm,
                 conditions.spin_source,
             )
-        elif shot.carry_spin_adjusted is None:
+        else:
             has_reliable_spin = (
                 shot.spin_rpm
                 and shot.spin_rpm > 0
