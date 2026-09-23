@@ -15,9 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the departure from the enclosure's expected pitch rather than the raw
   reading. `config/enclosure_v3_rig_geometry.json` ships measured.
 - **Camera mode study runner.** `scripts/start-tester.sh` serves a local page
-  that walks a tester through four camera modes with a 7-iron, five accepted
-  swings each: exposure computed from the blur ceiling, gain from a static
-  screen, paired camera/radar capture, and one archive. See
+  that walks a tester through five camera arms with a 7-iron, five accepted
+  swings each: three exposures at 320×200 and two further readout modes,
+  exposure from a millimetre smear budget, gain from a static screen, paired
+  camera/radar capture, and one archive. See
   `docs/camera/tester-pilot.md` and `docs/camera/mode-study-analysis.md`.
 
 ### Fixed

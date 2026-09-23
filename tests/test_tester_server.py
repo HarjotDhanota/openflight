@@ -23,26 +23,32 @@ def params(**overrides):
     return ts.TesterParameters.from_payload(payload)
 
 
-class TestTheArmsAreThePlan:
-    def test_the_four_core_arms_exist_in_order(self):
-        assert ts.ARM_ORDER[:4] == ("arm1", "arm2", "arm3", "arm4")
-        assert ts.ARMS["arm1"].width == 320 and ts.ARMS["arm1"].fps == 450.0
-        assert ts.ARMS["arm2"].width == 640 and ts.ARMS["arm2"].fps == 120.0
-        assert ts.ARMS["arm3"].width == 1280 and ts.ARMS["arm3"].inherits_from == "arm2"
-        assert ts.ARMS["arm4"].width == 1280 and ts.ARMS["arm4"].inherits_from is None
+def screened(root, p, gain=6.0):
+    """An arm whose gain step ran at its own exposure."""
+    ts.write_arm_state(root, p, gain=gain, gain_exposure_us=p.arm.exposure_us)
 
-    def test_exposure_is_the_blur_ceiling_not_a_choice(self):
-        # 1.5 px for a 130 mph head: 87 us at 2x decimation, 44 us at 1:1.
-        assert ts.exposure_ceiling_us(320) == 87
-        assert ts.exposure_ceiling_us(640) == 87
-        assert ts.exposure_ceiling_us(1280) == 44
+
+class TestTheArmsAreThePlan:
+    def test_the_five_arms_exist_in_order(self):
+        assert ts.ARM_ORDER == ("arm1", "arm2", "arm3", "arm4", "arm5")
+        shape = {a: (x.width, x.fps, x.exposure_us) for a, x in ts.ARMS.items()}
+        assert shape == {
+            "arm1": (320, 450.0, 300),
+            "arm2": (320, 450.0, 175),
+            "arm3": (320, 450.0, 87),
+            "arm4": (640, 120.0, 300),
+            "arm5": (1280, 120.0, 300),
+        }
+
+    def test_the_ceiling_is_a_millimetre_budget_the_same_in_every_mode(self):
+        # 4 mm of smear at the 7-iron's measured 13.6 m/s across the image
+        assert ts.EXPOSURE_CEILING_US * 13.6 / 1000 == pytest.approx(4.0, abs=0.1)
+        for arm_id in ("arm1", "arm4", "arm5"):
+            assert ts.ARMS[arm_id].exposure_us == ts.EXPOSURE_CEILING_US
 
     def test_it_is_a_seven_iron_study_of_five_swings(self):
         assert ts.CLUB == "7-iron"
         assert ts.SWINGS_PER_ARM == 5
-
-    def test_the_optional_arm_is_marked(self):
-        assert ts.ARMS["arm5"].optional is True
 
 
 class TestParameters:
@@ -82,25 +88,60 @@ class TestGainChoice:
         ]
         assert ts.choose_gain(results)["gain"] == 8.0
 
-    def test_nothing_acceptable_says_lighting_required_not_silence(self):
+    def test_nothing_acceptable_says_lighting_required_at_the_ceiling(self):
         results = [
             {"gain": 8.0, "mean": 30.0, "clipped_pct": 0.0},
+            {"gain": 12.0, "mean": 40.0, "clipped_pct": 0.0},
             {"gain": 15.9, "mean": 60.0, "clipped_pct": 0.0},
         ]
         choice = ts.choose_gain(results)
         assert choice["lighting_required"] is True
-        assert choice["gain"] == 15.9
+        assert choice["gain"] == 12.0
+
+    def test_a_gain_above_the_ceiling_is_never_picked_even_in_band(self):
+        # above ~12x the floor lifts: brighter frames, no more signal
+        results = [
+            {"gain": 12.0, "mean": 70.0, "clipped_pct": 0.0},
+            {"gain": 14.0, "mean": 90.0, "clipped_pct": 0.0},
+        ]
+        choice = ts.choose_gain(results)
+        assert choice["gain"] == 12.0 and choice["lighting_required"] is True
 
     def test_empty_screen_is_an_error(self):
         with pytest.raises(ValueError):
             ts.choose_gain([])
 
-    def test_light_index_normalises_to_unit_exposure_and_gain(self):
+    def test_light_index_is_the_slope_above_the_floor_at_the_applied_exposure(self):
+        # the first real screen: 87 us requested, 80 applied, floor 31.7; the
+        # top gains lift the floor and must not bend the fit
         results = [
-            {"exposure_us": 87, "gain": 2.0, "mean": 34.8},
-            {"exposure_us": 87, "gain": 4.0, "mean": 69.6},
+            {
+                "exposure_us": 87,
+                "metadata_exposure_us": 80,
+                "gain": g,
+                "metadata_gain": g,
+                "mean": 31.66 + 0.57 * g,
+            }
+            for g in (2.0, 4.0, 6.0, 8.0, 10.0, 12.0)
+        ] + [
+            {"exposure_us": 87, "metadata_exposure_us": 80, "gain": 14.0, "mean": 44.9},
+            {"exposure_us": 87, "metadata_exposure_us": 80, "gain": 15.9, "mean": 60.7},
         ]
-        assert ts.light_index(results, 87) == pytest.approx(34.8 / (87 * 2.0))
+        light = ts.light_index(results)
+        assert light["light_index"] == pytest.approx(0.57 / 80)
+        assert light["black_floor_dn"] == pytest.approx(31.66)
+
+    def test_light_index_is_the_same_whatever_gain_is_picked(self):
+        results = [
+            {"exposure_us": 300, "gain": g, "mean": 16.0 + 2.1 * g} for g in (2.0, 6.0, 10.0)
+        ]
+        assert ts.light_index(results)["light_index"] == pytest.approx(2.1 / 300)
+
+    def test_one_gain_cannot_separate_light_from_floor(self):
+        assert ts.light_index([{"exposure_us": 300, "gain": 4.0, "mean": 50.0}]) == {
+            "light_index": None,
+            "black_floor_dn": None,
+        }
 
 
 class TestCommands:
@@ -108,35 +149,41 @@ class TestCommands:
         with pytest.raises(ValueError, match="unknown tester action"):
             ts.action_commands("rm -rf /", params(), tmp_path, RIG)
 
-    def test_gain_step_screens_gain_at_the_arms_ceiling(self, tmp_path):
-        commands, log_path = ts.action_commands("gain", params(arm_id="arm4"), tmp_path, RIG)
+    def test_gain_step_screens_gain_at_the_arms_exposure(self, tmp_path):
+        commands, log_path = ts.action_commands("gain", params(arm_id="arm5"), tmp_path, RIG)
         command = commands[0]
-        assert command[command.index("--exposures-us") + 1] == "44"
+        assert command[command.index("--exposures-us") + 1] == "300"
         assert command[command.index("--gains") + 1] == ts.GAIN_SCREEN
         assert "--no-prompt" in command
         assert log_path.name == "gain.log"
 
-    def test_arm3_has_no_gain_step(self, tmp_path):
-        with pytest.raises(ValueError, match="inherits"):
-            ts.action_commands("gain", params(arm_id="arm3"), tmp_path, RIG)
+    def test_every_arm_screens_its_own_gain(self, tmp_path):
+        commands, _ = ts.action_commands("gain", params(arm_id="arm3"), tmp_path, RIG)
+        assert commands[0][commands[0].index("--exposures-us") + 1] == "87"
+
+    def test_a_gain_screened_at_another_exposure_is_stale(self, tmp_path):
+        p = params(tee_mm=1524)
+        ts.write_arm_state(tmp_path, p, gain=15.9, gain_exposure_us=87)
+        with pytest.raises(RuntimeError, match="gain step"):
+            ts.action_commands("swings", p, tmp_path, RIG)
 
     def test_swings_refuse_to_run_before_the_gain_is_known(self, tmp_path):
         with pytest.raises(RuntimeError, match="gain step"):
             ts.action_commands("swings", params(), tmp_path, RIG)
 
     def test_swings_drive_the_kiosk_with_rig_geometry_and_inclinometer(self, tmp_path):
-        p = params(arm_id="arm2", tee_mm=1524)
-        ts.write_arm_state(tmp_path, p, gain=6.0)
+        p = params(arm_id="arm4", tee_mm=1524)
+        screened(tmp_path, p)
         commands, _ = ts.action_commands("swings", p, tmp_path, RIG)
         command = commands[0]
         assert command[1].endswith("start-kiosk.sh")
         for flag in ("--debug", "--iwr6843", "--inclinometer", "--camera-capture"):
             assert flag in command
         assert command[command.index("--rig-geometry") + 1] == str(RIG)
-        assert command[command.index("--camera-capture-exposure-us") + 1] == "87"
+        assert command[command.index("--camera-capture-exposure-us") + 1] == "300"
         assert command[command.index("--camera-capture-gain") + 1] == "6.0"
         assert command[command.index("--camera-capture-width") + 1] == "640"
-        assert command[command.index("--session-location") + 1] == "arm2"
+        assert command[command.index("--session-location") + 1] == "arm4"
         # the fixes the first run would otherwise have tripped on
         assert "--camera-capture-manual-exposure" in command
         assert command[command.index("--radar-port") + 1] == "/dev/ttyAMA0"
@@ -144,20 +191,13 @@ class TestCommands:
         assert command[command.index("--iwr6843-tee-m") + 1] == "1.524"
         assert command[command.index("--log-dir") + 1].endswith("run-01")
 
-    def test_arm3_inherits_arm2_exposure_and_gain_exactly(self, tmp_path):
-        ts.write_arm_state(tmp_path, params(arm_id="arm2"), gain=6.0)
-        commands, _ = ts.action_commands(
-            "swings", params(arm_id="arm3", tee_mm=1524), tmp_path, RIG
-        )
-        command = commands[0]
-        # 1:1 at arm 2's light: the 2x ceiling (87), not its own (44)
-        assert command[command.index("--camera-capture-exposure-us") + 1] == "87"
-        assert command[command.index("--camera-capture-gain") + 1] == "6.0"
-        assert command[command.index("--camera-capture-width") + 1] == "1280"
-
-    def test_arm3_before_arm2_is_refused_by_name(self, tmp_path):
-        with pytest.raises(RuntimeError, match="gain step first"):
-            ts.action_commands("swings", params(arm_id="arm3"), tmp_path, RIG)
+    def test_the_exposure_arms_share_arm_1s_mode(self, tmp_path):
+        p = params(arm_id="arm2", tee_mm=1524)
+        screened(tmp_path, p)
+        command = ts.action_commands("swings", p, tmp_path, RIG)[0][0]
+        assert command[command.index("--camera-capture-exposure-us") + 1] == "175"
+        assert command[command.index("--camera-capture-width") + 1] == "320"
+        assert command[command.index("--camera-capture-fps") + 1] == "450.0"
 
 
 def _write_session(root, arm_id, statuses, dumps=None, run="run-01"):
@@ -221,7 +261,6 @@ class TestProgressCountsAcceptedNotFiles:
         assert overview["club"] == "7-iron"
         assert by_id["arm2"]["gain"] == 6.0 and by_id["arm2"]["light_index"] == 0.2
         assert by_id["arm1"]["gain"] is None
-        assert by_id["arm3"]["inherits_from"] == "arm2"
 
 
 class TestPackage:
@@ -235,7 +274,7 @@ class TestPackage:
             saved = json.loads(bundle.read(next(n for n in names if n.endswith("arm2/arm.json"))))
         assert saved["gain"] == 6.0
         assert saved["club"] == "7-iron"
-        assert saved["exposure_us"] == 87
+        assert saved["exposure_us"] == 175
 
 
 class TestApp:
@@ -243,7 +282,7 @@ class TestApp:
         client = ts.create_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
         assert client.get("/").status_code == 200
         arms = client.get("/api/tester/arms").get_json()
-        assert [a["arm_id"] for a in arms["arms"]][:4] == ["arm1", "arm2", "arm3", "arm4"]
+        assert [a["arm_id"] for a in arms["arms"]] == ["arm1", "arm2", "arm3", "arm4", "arm5"]
         response = client.post(
             "/api/tester/status",
             json={
@@ -301,7 +340,7 @@ class TestApp:
 
 class TestRunsAndTape:
     def test_swings_refuse_without_the_taped_distance(self, tmp_path):
-        ts.write_arm_state(tmp_path, params(), gain=6.0)
+        screened(tmp_path, params())
         with pytest.raises(ValueError, match="radar window"):
             ts.action_commands("swings", params(), tmp_path, RIG)
 
@@ -311,7 +350,7 @@ class TestRunsAndTape:
 
     def test_each_capture_run_gets_its_own_folder(self, tmp_path):
         p = params(tee_mm=1524)
-        ts.write_arm_state(tmp_path, p, gain=6.0)
+        screened(tmp_path, p)
         root = ts.arm_directory(tmp_path, p)
         (root / "paired" / "run-01").mkdir(parents=True)
         commands, _ = ts.action_commands("swings", p, tmp_path, RIG)
@@ -328,7 +367,7 @@ class TestRunsAndTape:
 
     def test_the_radar_port_can_be_overridden_per_unit(self, tmp_path):
         p = params(tee_mm=1524)
-        ts.write_arm_state(tmp_path, p, gain=6.0)
+        screened(tmp_path, p)
         commands, _ = ts.action_commands("swings", p, tmp_path, RIG, radar_port="/dev/ttyACM0")
         assert commands[0][commands[0].index("--radar-port") + 1] == "/dev/ttyACM0"
 
@@ -342,7 +381,7 @@ class TestSolvedRange:
         image = np.full((200, 320), 110, dtype=np.uint8)
         yy, xx = np.mgrid[0:200, 0:320]
         image[np.hypot(xx - 160, yy - 144) <= 6.0] = 230
-        with (run / "exp0087_gain6_median.pgm").open("wb") as handle:
+        with (run / "exp0300_gain6_median.pgm").open("wb") as handle:
             handle.write(b"P5\n320 200\n255\n")
             handle.write(image.tobytes())
         solved = ts.solved_range(tmp_path, arm, {"gain": 6.0}, RIG)
@@ -354,7 +393,7 @@ class TestSolvedRange:
         run = tmp_path / "gain" / "20260922_120000"
         run.mkdir(parents=True)
         (run / "results.json").write_text("[]")
-        with (run / "exp0087_gain6_median.pgm").open("wb") as handle:
+        with (run / "exp0300_gain6_median.pgm").open("wb") as handle:
             handle.write(b"P5\n320 200\n255\n" + bytes(320 * 200))
         solved = ts.solved_range(tmp_path, ts.ARMS["arm1"], {"gain": 6.0}, RIG)
         assert solved["solved_range_m"] is None and solved["solved_range_note"]

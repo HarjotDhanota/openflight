@@ -1,9 +1,10 @@
 # Camera mode study — tester guide
 
-You collect paired camera and radar recordings across four camera modes with a
-7-iron. We analyse them against `mode-study-analysis.md`. The page never shows
-estimated club or ball numbers; it shows whether each swing saved usable,
-paired data, and how many of the five each mode has accepted.
+You collect paired camera and radar recordings across five camera arms (three
+exposures at 320×200, then two further readout modes) with a 7-iron. We analyse
+them against `mode-study-analysis.md`. The page never shows estimated club or
+ball numbers; it shows whether each swing saved usable, paired data, and how
+many of the five each arm has accepted.
 
 ## Requirements
 
@@ -72,8 +73,6 @@ minutes; later starts are quick.
    swings**. The club is set to 7-iron for you. Hit until the arm shows **5
    accepted**, then press **Stop**. Stopping and starting again is fine: each
    capture run is kept separately and counted together.
-   - Arm 3 has no gain step. It deliberately reuses arm 2's exposure and gain
-     so the only difference between them is the readout.
    - If an arm says **lighting required**, hit its five swings anyway. Its
      acceptance rate at your light level is part of the answer.
 3. **Package everything** and send the archive through the agreed channel. Raw
@@ -83,17 +82,17 @@ minutes; later starts are quick.
 
 | Arm | Mode | Exposure | Why it exists |
 | --- | --- | --- | --- |
-| 1 | 320×200 @ 450 | 87 µs | reference: 2× sampling, high frame rate |
-| 2 | 640×400 @ 120 | 87 µs | 2× sampling at 1:1's frame rate — the control |
-| 3 | 1280×800 @ 120 | arm 2's | 1:1 with light held equal → pixels alone |
-| 4 | 1280×800 @ 120 | 44 µs | 1:1 at its own ceiling → as it would ship |
-| 5 (optional) | 640×400 @ 250 | 87 µs | middle of the frame-rate curve |
+| 1 | 320×200 @ 450 | 300 µs | reference: 2× sampling, high frame rate |
+| 2 | 320×200 @ 450 | 175 µs | arm 1 at a shorter exposure → blur against noise |
+| 3 | 320×200 @ 450 | 87 µs | 1.5 px at the full 130 mph head speed → blur against noise |
+| 4 | 640×400 @ 120 | 300 µs | arm 1 at 1:1's frame rate → frame rate alone |
+| 5 | 1280×800 @ 120 | 300 µs | arm 4 at 1:1 sampling → pixels alone |
 
-Exposure is not a setting you choose. It is the longest exposure that keeps a
-130 mph clubhead under 1.5 px of smear at that mode's plate scale. Gain is
-found per arm from a static screen; the sensor's analogue gain tops out at
-15.9×, and an arm that needs more than that at your light is telling you its
-floor.
+Exposure is not a setting you choose. 300 µs keeps a 7-iron's smear under
+4 mm on the frames the estimators use; arms 2 and 3 are deliberately shorter
+so the data shows what exposure costs. Gain is found per arm from a static
+screen and stops at 12×, above which the sensor adds offset rather than
+signal; an arm that needs more at your light is telling you its floor.
 
 ## What counts as accepted
 

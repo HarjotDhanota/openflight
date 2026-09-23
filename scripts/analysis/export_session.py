@@ -263,7 +263,7 @@ def export_session(
         "run": arm.get("run"),
         "arm": {
             k: arm.get(k)
-            for k in ("arm_id", "label", "width", "height", "fps", "exposure_us", "inherits_from")
+            for k in ("arm_id", "label", "width", "height", "fps", "exposure_us")
             if k in arm
         },
         "club": arm.get("club"),
@@ -287,6 +287,7 @@ def export_session(
         "environment": {
             "setting": arm.get("environment"),
             "light_index": arm.get("light_index"),
+            "black_floor_dn": arm.get("black_floor_dn"),
             "lighting_required": arm.get("lighting_required"),
         },
         "setup": {

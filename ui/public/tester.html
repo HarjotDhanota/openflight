@@ -56,7 +56,7 @@
     <main>
       <h1>OpenFlight camera mode study</h1>
       <p class="lede">
-        Four camera modes, a 7-iron, five swings each. You collect; we analyse. This page never
+        Five camera arms, a 7-iron, five swings each. You collect; we analyse. This page never
         shows estimated club or ball numbers — only whether each swing saved usable, paired data.
         Exposure is set for you from physics; the gain step finds the light.
       </p>
@@ -84,7 +84,7 @@
       <section>
         <h2>2. Arms</h2>
         <p class="note">Work top to bottom. Each arm: <strong>Find gain</strong> (a few seconds, static), then
-          <strong>Capture swings</strong> and hit until it shows 5 accepted. Arm 3 borrows arm 2's light, so it has no gain step.</p>
+          <strong>Capture swings</strong> and hit until it shows 5 accepted.</p>
         <ul class="arms" id="arms"></ul>
         <div class="light" id="light"></div>
         <div class="steps">
@@ -146,18 +146,17 @@
           const li = document.createElement('li');
           li.className = (a.arm_id === currentArm ? 'active ' : '') + (a.complete ? 'done' : '');
           li.dataset.arm = a.arm_id;
-          const gainText = a.gain != null ? `gain ${a.gain}` : (a.inherits_from ? `light from ${a.inherits_from}` : 'gain not found yet');
+          const gainText = a.gain != null ? `gain ${a.gain}` : 'gain not found yet';
           const prog = a.attempted ? `${a.accepted} / ${a.target} accepted · ${a.attempted} hit` : `0 / ${a.target}`;
           li.innerHTML = `<span class="n">${a.arm_id.replace('arm','')}</span>
-            <span class="t"><span>${a.label}${a.optional ? ' <small>(optional)</small>' : ''}</span>
+            <span class="t"><span>${a.label}</span>
             <small>${a.isolates} · ${a.exposure_us} µs · ${gainText}${a.lighting_required ? ' · <b>lighting required</b>' : ''}</small></span>
             <span class="p ${progressClass(a)}">${prog}</span>`;
           li.addEventListener('click', () => { currentArm = a.arm_id; refresh(); });
           list.append(li);
         }
         const a = arms.find((x) => x.arm_id === currentArm) || {};
-        el('btn-gain').disabled = !!a.inherits_from;
-        el('btn-gain').textContent = a.inherits_from ? `Arm ${currentArm.replace('arm','')} borrows arm ${a.inherits_from.replace('arm','')}'s light` : `Find gain for arm ${currentArm.replace('arm','')}`;
+        el('btn-gain').textContent = `Find gain for arm ${currentArm.replace('arm','')}`;
         el('btn-swings').textContent = `Capture swings for arm ${currentArm.replace('arm','')}`;
         const li = a.light_index;
         el('light').innerHTML = li != null

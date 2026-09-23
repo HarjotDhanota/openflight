@@ -13,27 +13,34 @@ not by how a frame looks.
 
 ## The arms
 
-Four arms, 7-iron only, five swings each, every tester at their own light level.
-Exposure per arm is computed, not swept: the blur ceiling for a 130 mph clubhead
-at 1.5 px (87 µs at 2× decimation, 44 µs at 1:1). Gain is set automatically to
-the target brightness; the camera light index records what light there was.
+Five arms, 7-iron only, five swings each, every tester at their own light level.
+Exposure is a smear budget in millimetres, not a pixel ceiling: 4 mm on the
+approach frames the path and attack-angle estimators use, at the 7-iron toe
+edge's measured speed across the image (13.6 m/s; from behind the ball the head
+moves mostly in depth). That is ~300 µs, the same in every mode. Gain is set
+automatically to the target brightness and never above 12×, where the sensor
+starts adding offset instead of signal; the light index records what light
+there was.
 
 | Arm | Mode | Exposure | Isolates |
 | --- | --- | --- | --- |
-| 1 | 320×200 @ 450 | ceiling, auto-gain | reference: 2× sampling, high frame rate |
-| 2 | 640×400 @ 120 | ceiling, auto-gain | 2× sampling at 1:1's frame rate — the control |
-| 3 | 1280×800 @ 120 | **arm 2's exposure and gain** | 1:1 with light held equal → pixels alone |
-| 4 | 1280×800 @ 120 | own ceiling, auto-gain | 1:1 as it would ship |
+| 1 | 320×200 @ 450 | 300 µs | reference: 2× sampling, high frame rate |
+| 2 | 320×200 @ 450 | 175 µs | arm 1 at a shorter exposure → blur against noise |
+| 3 | 320×200 @ 450 | 87 µs | 1.5 px at the full 130 mph head speed → blur against noise |
+| 4 | 640×400 @ 120 | 300 µs | arm 1 at 1:1's frame rate → frame rate alone |
+| 5 | 1280×800 @ 120 | 300 µs | arm 4 at 1:1 sampling → pixels alone |
 
-Arm 1 vs 2 is the frame-rate question. Arm 2 vs 3 is the pixel question with
-light held constant. Arm 3 vs 4 is the light question. Optional arm 5:
-640×400 @ 250 for the middle of the frame-rate curve; and 1280×200 @ ~450 if
-the bench proves the sensor runs a 1:1 strip.
+Arms 1–3 are the exposure question: one mode at three exposures, so blur and
+noise trade against each other in each tester's own light. Arm 1 vs 4 is the
+frame-rate question. Arm 4 vs 5 is the pixel question; at equal exposure the
+photons per millimetre are equal and gain only rescales brightness. A
+1280×200 @ ~450 strip joins if the bench proves the sensor runs one.
 
 The 2× decimated modes all share one angular sampling (each output pixel spans
-6 µm), so "pixels" has exactly two levels. Whether those modes bin or skip is
-decided once on the bench with a grey card, not by testers; it scales the light
-interpretation of arms 3–4 by up to 4× and nothing else.
+6 µm), so "pixels" has exactly two levels. Whether those modes average or sum
+the pixels they combine is decided once on the bench with a grey card, not by
+testers; it scales the light interpretation of arm 5 by up to 4× and nothing
+else.
 
 ## Metrics, per shot
 
@@ -47,10 +54,10 @@ to look at a frame. Grouped by what consumes them.
 | --- | --- | --- |
 | resolved mode (width, height, sensor crop, format) | `metadata.json` → `resolved`, read back from libcamera after configure | An arm that ran a different readout than requested is not that arm |
 | delivered fps, gap count, max gap | `sensor_timestamp_ns` via `timing_summary` | Frame-rate arms are only comparable at their delivered rate; a gap in the pre-impact window loses the clubhead |
-| exposure_us, analogue_gain, per frame | `frames.npz` arrays | Confirms the ceiling was held; the config block records only the startup value |
-| camera light index | scene median DN at known exposure × gain, taken by the gain screen | The pooling key across testers |
+| exposure_us, analogue_gain, per frame | `frames.npz` arrays | Confirms the arm's exposure was held. The camera applies exposure in whole rows (87 µs requested runs at 80), and the config block records only the startup value |
+| camera light index | signal per µs per unit gain above the black floor: the slope of a line through the gain screen's unclipped gains up to 12×, at the applied exposure; the intercept is the black floor, recorded beside it | The pooling key across testers, independent of the gain each arm picked |
 | flicker | periodicity and swing of per-frame mean brightness within a capture | Mains-driven LED and fluorescent light pulses at 100/120 Hz; at sub-millisecond exposures that is frame-to-frame banding. Measured from the frames, never asked of the tester |
-| resting-ball diameter, px | `detect_reference_ball` on the pre-swing frames | **Falsifier H1**: equal across arms 1–2, 2× in arms 3–4. Any other pattern means mode substitution or a software rescale |
+| resting-ball diameter, px | `detect_reference_ball` on the pre-swing frames | **Falsifier H1**: equal across arms 1–4, 2× in arm 5. Any other pattern means mode substitution or a software rescale |
 
 ### B. Resting ball — the geometry anchor
 
@@ -70,7 +77,7 @@ sets lateral offset, row sets height.
 | Metric | From | Why |
 | --- | --- | --- |
 | pre-impact frames with the head in view | frames between head entry and the impact index | Path and attack angle are velocities: two positions minimum, three to five to be robust. This is the cost of a 120 fps arm |
-| head blur, px and **mm** | edge-spread width on the leading edge; mm = px / plate scale | mm is invariant to readout mode — it checks the exposure ceiling was held. px shows what sampling did with it |
+| head blur, px and **mm** | edge-spread width on the leading edge; mm = px / plate scale | mm is invariant to readout mode and proportional to exposure: across arms 1–3 its slope is the head's speed across the image, the number the exposure budget rests on. px shows what sampling did with it |
 | head local contrast | head mean minus background mean, over background noise σ | The extractor's `\|diff\| > max(4σ, 18)` gate in physical terms; gain raises σ |
 | head mask area consistency | std of mask area across the used frames | A mask that breathes frame to frame is not a stable landmark |
 
@@ -112,16 +119,17 @@ Stated before collection; each has a metric that decides it.
 
 | | Hypothesis | Decided by |
 | --- | --- | --- |
-| H1 | Each arm ran the readout it claims | Resting-ball diameter equal in arms 1–2 and 2× in 3–4, and the resolved mode matches |
-| H2 | Blur in millimetres is equal across arms at matched exposure | Head blur, mm — this is a physics check on the capture, and it fails if the ceiling was not held |
-| H3 | Finer sampling improves edge quality at equal light | Arm 3 vs 2: lower diameter jitter, higher edge gradient, lower head-blur px for the same mm |
-| H4 | The light cost of 1:1 is what the bench predicted | Arm 4 vs 3: availability and `low_light` rate versus the light index; the floor where arm 4's availability drops |
-| H5 | Frame rate governs clubhead observability | Arm 1 vs 2: pre-impact head frames, and the `rejected_insufficient_features` rate |
+| H1 | Each arm ran the readout it claims | Resting-ball diameter equal in arms 1–4 and 2× in 5, and the resolved mode matches |
+| H2 | Blur in millimetres grows with exposure and is equal across modes at the same exposure | Head blur, mm: its slope over arms 1–3 is the head's speed across the image, which the budget took as 13.6 m/s on approach; arms 1, 4 and 5 agree |
+| H3 | Finer sampling improves edge quality at equal light | Arm 5 vs 4: lower diameter jitter, higher edge gradient, lower head-blur px for the same mm |
+| H4 | The light cost of 1:1 is what the bench predicted | Arm 5: availability and `low_light` rate versus the light index; the floor where its availability drops |
+| H5 | Frame rate governs clubhead observability | Arm 1 vs 4: pre-impact head frames, and the `rejected_insufficient_features` rate |
 | H6 | Availability is the binding constraint, not image quality | If any arm's availability falls below the reference at a light level where the reference holds, that arm loses there regardless of its edge metrics |
+| H7 | Up to the budget, a longer exposure costs the estimators nothing | Arms 1–3: availability, resting-ball jitter and path/attack-angle spread against exposure at each tester's light. If the decision rule prefers arm 2 or 3 over arm 1, blur is costing more than the budget allows and the exposure comes down |
 
 ## Decision rule
 
-A mode is preferred over the reference (arm 1) at a given light level only if
+An arm is preferred over the reference (arm 1) at a given light level only if
 **all** of:
 
 1. Its availability is not lower than the reference's at that light level.
@@ -130,15 +138,15 @@ A mode is preferred over the reference (arm 1) at a given light level only if
 3. It improves at least one delivery endpoint with the others no worse:
    pre-impact head frames, head local contrast, or the speed-ratio spread.
 
-The output is not one winner. It is a table: per light level, which mode meets
-the rule, and each mode's lux floor — the light index below which its
+The output is not one winner. It is a table: per light level, which arm meets
+the rule, and each arm's lux floor — the light index below which its
 availability drops under the reference's. That table is the exposure policy the
-product ships: mode, ceiling exposure, gain range, and the floor it states to
-the user.
+product ships: mode, exposure, gain range, and the floor it states to the
+user.
 
-If the result depends on an unmeasured input — the bin/skip factor, the true
-blur velocity, the gain at which the extractor degrades — the plan says so and
-no mode is promoted until the bench closes it.
+If the result depends on an unmeasured input — the average/sum factor, the
+head's speed across the image, the gain at which the extractor degrades — the
+plan says so and no arm is promoted until the bench closes it.
 
 ## What this cannot certify
 
@@ -156,10 +164,10 @@ validation with a separate label.
   and light index per shot.
 - **Scoring:** `scripts/analysis/score_mode_study.py` — reads one or more
   exported sessions, computes metrics A–E per shot, aggregates per arm × light
-  bin, tests H1–H6, applies the decision rule, and writes `mode_study.json` and
-  a one-page `mode_study.md`. This script does not exist yet; it is built
-  against this document.
-- **Bench, once, on the maintainer's unit:** grey-card bin/skip factor, 1:1
+  bin, tests H1 and H4–H7, applies the decision rule, and writes
+  `mode_study.json` and a one-page `mode_study.md`. H2 and H3 need head blur
+  and local contrast, which it does not measure yet.
+- **Bench, once, on the maintainer's unit:** grey-card average/sum factor, 1:1
   delivered cadence, a single lux reading to map the light index to lux, gain
-  degradation on the outline extractor, and the moving-club check that the
-  computed ceilings hold.
+  degradation on the outline extractor, and a moving-club measurement of the
+  head's speed across the image.

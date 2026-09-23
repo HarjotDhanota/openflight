@@ -7,7 +7,7 @@ bin, tests the pre-registered hypotheses that the data can decide, applies the
 decision rule, and writes mode_study.json and mode_study.md. Nothing here is a
 measurement of accuracy: every figure is the rig's own data read back.
 
-    uv run python scripts/analysis/score_mode_study.py --export out/arm1 out/arm2 out/arm3 out/arm4 --out study/
+    uv run python scripts/analysis/score_mode_study.py --export out/*/run-* --out study/
 """
 
 from __future__ import annotations
@@ -32,6 +32,8 @@ from openflight.camera.club_motion import detect_reference_ball  # noqa: E402
 
 ACCEPTED_STATUSES = frozenset({"ok", "fused", "chained_high", "approach_high"})
 REFERENCE_ARM = "arm1"
+# Same mode and exposure, 450 against 120 fps: the frame-rate question.
+FRAME_RATE_PAIR = ("arm1", "arm4")
 MIN_CELL_ACCEPTED = 3
 # Motion mask: the extractor's own rule, |diff| > max(4 sigma, 18).
 MOTION_SIGMA_MULT = 4.0
@@ -320,8 +322,8 @@ def test_hypotheses(arms: dict[str, ArmScore]) -> dict:
             if s.availability is not None
         ]
         out["H4"] = {"verdict": "reported", "evidence": "; ".join(parts) or "no 1:1 arm scored"}
-    # H5: frame rate vs pre-impact head frames (arm1 vs arm2)
-    a1, a2 = arms.get("arm1"), arms.get("arm2")
+    # H5: frame rate vs pre-impact head frames
+    a1, a2 = (arms.get(a) for a in FRAME_RATE_PAIR)
     if (
         a1
         and a2
@@ -331,8 +333,13 @@ def test_hypotheses(arms: dict[str, ArmScore]) -> dict:
         h1, h2 = a1.medians["pre_impact_head_frames"], a2.medians["pre_impact_head_frames"]
         out["H5"] = {
             "verdict": "pass" if h1 >= h2 else "FAIL",
-            "evidence": f"pre-impact head frames (approx) arm1 {h1:.1f} vs arm2 {h2:.1f}",
+            "evidence": f"pre-impact head frames (approx) {FRAME_RATE_PAIR[0]} {h1:.1f} "
+            f"vs {FRAME_RATE_PAIR[1]} {h2:.1f}",
         }
+    # H7: what exposure costs, within one mode
+    series = exposure_series(arms)
+    if series:
+        out["H7"] = {"verdict": "reported", "evidence": series}
     # H6: availability is binding
     if ref and ref.availability is not None:
         losers = [
@@ -348,6 +355,31 @@ def test_hypotheses(arms: dict[str, ArmScore]) -> dict:
             "evidence": f"arms below the reference's availability at its light bin: {losers or 'none'}",
         }
     return out
+
+
+def exposure_series(arms: dict[str, ArmScore]) -> str | None:
+    """Arms sharing a mode at different exposures, longest first, with what each kept."""
+    modes: dict[tuple, list[tuple[float, str, ArmScore]]] = defaultdict(list)
+    for arm_id, score in arms.items():
+        exposure = score.medians.get("exposure_us")
+        if exposure is not None:
+            modes[(score.width, score.fps)].append((exposure, arm_id, score))
+    parts = []
+    for members in modes.values():
+        if len({exposure for exposure, _, _ in members}) < 2:
+            continue
+        for exposure, arm_id, score in sorted(members, key=lambda m: m[0], reverse=True):
+            parts.append(
+                f"{arm_id} {exposure:.0f} us: availability {_fmt(score.availability)}, "
+                f"ball jitter {_fmt(score.medians.get('ball_diameter_jitter_px'))} px, "
+                f"path MAD {_fmt(score.mads.get('club_path_deg'))} deg, "
+                f"AoA MAD {_fmt(score.mads.get('attack_angle_deg'))} deg"
+            )
+    return "; ".join(parts) or None
+
+
+def _fmt(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.2f}"
 
 
 def decide(arms: dict[str, ArmScore]) -> dict:

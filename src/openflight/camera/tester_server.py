@@ -1,5 +1,5 @@
-"""Local capture runner for the camera mode study: four arms, a 7-iron, five swings each.
-Exposure is computed from the blur ceiling, gain from a static screen, light recorded."""
+"""Local capture runner for the camera mode study: five arms, a 7-iron, five swings each.
+Exposure is set per arm from a smear budget, gain from a static screen, light recorded."""
 
 from __future__ import annotations
 
@@ -36,23 +36,20 @@ MAX_LOG_LINES = 400
 CLUB = "7-iron"
 SWINGS_PER_ARM = 5
 
-# The exposure ceiling holds clubhead smear at BLUR_TARGET_PX for the fastest
-# head the product will see. Plate scale is the nominal focal over the working
-# range; the 2x-decimated modes share one focal because each output pixel spans
-# the same 6 um, and 1:1 doubles it.
-BLUR_TARGET_PX = 1.5
-HEAD_SPEED_MM_PER_US = 130 * 0.44704 / 1000.0  # 130 mph
-WORKING_RANGE_MM = 1580.0
+# Exposure is a smear budget in millimetres on the approach frames the path and
+# attack-angle estimators use: 4 mm at the 7-iron toe edge's measured speed
+# across the image, 13.6 m/s. From behind the ball the head moves mostly in
+# depth, so that is about a third of head speed. The budget is in millimetres,
+# so the exposure is the same in every mode.
+EXPOSURE_CEILING_US = 300
+# The 2x-decimated modes share one focal because each output pixel spans the
+# same 6 um; 1:1 doubles it.
 FOCAL_PX_2X = 466.6667
 FOCAL_PX_1X = 933.3333
 GAIN_SCREEN = "2,4,6,8,10,12,14,15.9"  # OV9282 analogue gain caps at 0xFF/16
-
-
-def exposure_ceiling_us(width: int) -> int:
-    """Longest exposure that keeps a 130 mph head under the blur target."""
-    focal = FOCAL_PX_1X if width >= 1280 else FOCAL_PX_2X
-    plate_px_per_mm = focal / WORKING_RANGE_MM
-    return int(round(BLUR_TARGET_PX / (HEAD_SPEED_MM_PER_US * plate_px_per_mm)))
+# Above ~12x the black floor lifts and column stripes appear: more offset, not
+# more signal. The screen still records the top gains; the pick stops here.
+GAIN_CEILING = 12.0
 
 
 @dataclass(frozen=True)
@@ -64,13 +61,8 @@ class Arm:
     width: int
     height: int
     fps: float
+    exposure_us: int
     isolates: str
-    inherits_from: str | None = None
-    optional: bool = False
-
-    @property
-    def exposure_us(self) -> int:
-        return exposure_ceiling_us(self.width)
 
     def as_dict(self) -> dict:
         return {
@@ -81,8 +73,6 @@ class Arm:
             "fps": self.fps,
             "exposure_us": self.exposure_us,
             "isolates": self.isolates,
-            "inherits_from": self.inherits_from,
-            "optional": self.optional,
             "swings": SWINGS_PER_ARM,
         }
 
@@ -90,28 +80,50 @@ class Arm:
 ARMS: dict[str, Arm] = {
     arm.arm_id: arm
     for arm in (
-        Arm("arm1", "320×200 @450", 320, 200, 450.0, "reference: 2× sampling, high frame rate"),
         Arm(
-            "arm2", "640×400 @120", 640, 400, 120.0, "2× sampling at 1:1's frame rate — the control"
+            "arm1",
+            "320×200 @450",
+            320,
+            200,
+            450.0,
+            EXPOSURE_CEILING_US,
+            "reference: 2× sampling, high frame rate",
+        ),
+        Arm(
+            "arm2",
+            "320×200 @450, 175 µs",
+            320,
+            200,
+            450.0,
+            175,
+            "arm 1 at a shorter exposure → blur against noise",
         ),
         Arm(
             "arm3",
-            "1280×800 @120, arm 2's light",
+            "320×200 @450, 87 µs",
+            320,
+            200,
+            450.0,
+            87,
+            "1.5 px at the full 130 mph head speed → blur against noise",
+        ),
+        Arm(
+            "arm4",
+            "640×400 @120",
+            640,
+            400,
+            120.0,
+            EXPOSURE_CEILING_US,
+            "arm 1 at 1:1's frame rate → frame rate alone",
+        ),
+        Arm(
+            "arm5",
+            "1280×800 @120",
             1280,
             800,
             120.0,
-            "1:1 with exposure and gain held at arm 2's → pixels alone",
-            inherits_from="arm2",
-        ),
-        Arm("arm4", "1280×800 @120", 1280, 800, 120.0, "1:1 at its own ceiling → as it would ship"),
-        Arm(
-            "arm5",
-            "640×400 @250",
-            640,
-            400,
-            250.0,
-            "middle of the frame-rate curve",
-            optional=True,
+            EXPOSURE_CEILING_US,
+            "arm 4 at 1:1 sampling → pixels alone",
         ),
     )
 }
@@ -220,9 +232,12 @@ def choose_gain(
     mean_low: float = 80.0,
     mean_high: float = 150.0,
     max_clipped_pct: float = 0.1,
+    gain_ceiling: float = GAIN_CEILING,
 ) -> dict:
-    """Lowest gain in band without clipping; ``lighting_required`` when none is."""
-    usable = [r for r in results if "gain" in r and "mean" in r]
+    """Lowest gain in band without clipping, up to the ceiling; else ``lighting_required``."""
+    usable = [
+        r for r in results if "gain" in r and "mean" in r and float(r["gain"]) <= gain_ceiling
+    ]
     if not usable:
         raise ValueError("gain screen produced no results")
     acceptable = sorted(
@@ -258,15 +273,34 @@ def latest_gain_results(arm_dir: Path) -> list[dict] | None:
     return json.loads(runs[-1].read_text(encoding="utf-8"))
 
 
-def light_index(results: Sequence[Mapping], exposure_us: int) -> float | None:
-    """Scene mean over exposure x gain: comparable across units without a lux meter."""
-    candidates = [
-        r for r in results if float(r.get("exposure_us", 0)) == exposure_us and r.get("gain")
+def light_index(results: Sequence[Mapping]) -> dict:
+    """Scene signal per microsecond per unit gain, above the black floor.
+
+    A line through the screen's unclipped gains up to the ceiling: the slope is
+    the light, the intercept the floor, so neither depends on the gain picked.
+    The camera applies exposure in whole rows and gain in 1/16 steps, so the
+    applied values are used, not the requested ones.
+    """
+    points = [
+        (
+            float(r.get("metadata_gain", r["gain"])),
+            float(r["mean"]),
+            float(r.get("metadata_exposure_us", r.get("exposure_us", 0))),
+        )
+        for r in results
+        if "gain" in r
+        and "mean" in r
+        and float(r["gain"]) <= GAIN_CEILING
+        and float(r.get("clipped_pct", 0.0)) <= 1.0
     ]
-    if not candidates:
-        return None
-    r = min(candidates, key=lambda r: float(r["gain"]))
-    return float(r["mean"]) / (exposure_us * float(r["gain"]))
+    if len({gain for gain, _, _ in points}) < 2:
+        return {"light_index": None, "black_floor_dn": None}
+    gains, means, exposures = (np.array(column) for column in zip(*points))
+    slope, floor = np.polyfit(gains, means, 1)
+    return {
+        "light_index": float(slope / np.median(exposures)),
+        "black_floor_dn": round(float(floor), 2),
+    }
 
 
 def _read_pgm(path: Path) -> np.ndarray:
@@ -318,25 +352,13 @@ def solved_range(arm_dir: Path, arm: Arm, choice: Mapping, rig_geometry: Path) -
     }
 
 
-def resolve_gain(sessions_root: Path, params: TesterParameters) -> tuple[float, int, str]:
-    """The exposure and gain this arm captures at, and where they came from."""
+def resolve_gain(sessions_root: Path, params: TesterParameters) -> tuple[float, int]:
+    """The gain and exposure this arm captures at; a screen at another exposure is stale."""
     arm = params.arm
-    if arm.inherits_from:
-        parent = read_arm_state(sessions_root, params.tester_id, arm.inherits_from)
-        if "gain" not in parent:
-            raise RuntimeError(
-                f"{arm.label} takes its light from {ARMS[arm.inherits_from].label}; "
-                f"run that arm's gain step first"
-            )
-        return (
-            float(parent["gain"]),
-            int(parent["exposure_us"]),
-            f"inherited from {arm.inherits_from}",
-        )
     state = read_arm_state(sessions_root, params.tester_id, params.arm_id)
-    if "gain" not in state:
+    if "gain" not in state or state.get("gain_exposure_us") != arm.exposure_us:
         raise RuntimeError("run this arm's gain step before capturing swings")
-    return float(state["gain"]), arm.exposure_us, "gain screen"
+    return float(state["gain"]), arm.exposure_us
 
 
 def next_run_directory(arm_dir: Path) -> Path:
@@ -365,8 +387,6 @@ def action_commands(
             ["vcgencmd", "get_throttled"],
         ]
     elif action == "gain":
-        if arm.inherits_from:
-            raise ValueError(f"{arm.label} inherits its gain; there is nothing to screen")
         commands = [
             _python_command(
                 "scripts/hardware-test/calibrate_camera_exposure.py",
@@ -386,7 +406,7 @@ def action_commands(
             )
         ]
     else:
-        gain, exposure_us, _source = resolve_gain(sessions_root, params)
+        gain, exposure_us = resolve_gain(sessions_root, params)
         if params.tee_mm is None:
             raise ValueError("measure the radar window to the ball centre first")
         commands = [
@@ -694,10 +714,11 @@ def create_app(
             params,
             gain=choice["gain"],
             gain_source="gain screen",
+            gain_exposure_us=params.arm.exposure_us,
             gain_mean=choice["mean"],
             gain_clipped_pct=choice["clipped_pct"],
             lighting_required=choice["lighting_required"],
-            light_index=light_index(results, params.arm.exposure_us),
+            **light_index(results),
             **solved_range(arm_directory(sessions_root, params), params.arm, choice, rig_geometry),
         )
 
@@ -742,13 +763,12 @@ def create_app(
             )
             write_arm_state(sessions_root, params)
             if action == "swings":
-                gain, exposure_us, source = resolve_gain(sessions_root, params)
+                gain, exposure_us = resolve_gain(sessions_root, params)
                 write_arm_state(
                     sessions_root,
                     params,
                     capture_gain=gain,
                     capture_exposure_us=exposure_us,
-                    gain_source=source,
                     tee_range_m=params.tee_mm / 1000.0,
                     tee_range_source="tape",
                 )

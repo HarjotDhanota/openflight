@@ -47,6 +47,7 @@ def _export(
     *,
     light_index=0.25,
     clip_ball=False,
+    exposure_us=300,
     tester_id="t1",
     run="run-01",
 ) -> Path:
@@ -60,7 +61,7 @@ def _export(
         np.savez(
             out / d / "frames.npz",
             frames=_frames(width, height, ball_px, clip_ball=clip_ball),
-            exposure_us=np.full(40, 87, np.int32),
+            exposure_us=np.full(40, exposure_us, np.int32),
             analogue_gain=np.full(40, 6.0, np.float32),
             pre_trigger_count=np.int32(30),
         )
@@ -119,7 +120,7 @@ class TestPerShot:
         s = shots[0]
         assert s.ball_detected and 10.0 <= s.ball_diameter_px <= 14.0
         assert s.ball_clipped_pct == 0.0
-        assert s.exposure_us == 87 and s.gain == 6.0
+        assert s.exposure_us == 300 and s.gain == 6.0
         assert s.delivered_fps == 450.0
         assert s.resolved_mode["raw"]["size"] == [320, 200]
         assert s.accepted is True
@@ -267,3 +268,36 @@ class TestOutputs:
         md = (tmp_path / "study" / "mode_study.md").read_text()
         assert "Consistency only" in md and "## Tester t1" in md and "| arm1 |" in md
         assert "approximation" in md
+
+
+class TestTheExposureAndFrameRateQuestions:
+    def test_h7_reports_the_exposure_series_longest_first(self, tmp_path):
+        arms = {}
+        for arm_id, exposure in (("arm1", 300), ("arm2", 175), ("arm3", 87)):
+            arms[arm_id], _ = scorer.score_export(
+                _export(
+                    tmp_path,
+                    arm_id,
+                    320,
+                    200,
+                    450.0,
+                    12.0,
+                    ["ok"] * 5,
+                    exposure_us=exposure,
+                )
+            )
+        evidence = scorer.test_hypotheses(arms)["H7"]["evidence"]
+        assert evidence.index("arm1 300 us") < evidence.index("arm2 175 us")
+        assert evidence.index("arm2 175 us") < evidence.index("arm3 87 us")
+
+    def test_one_exposure_per_mode_is_not_a_series(self, tmp_path):
+        arms = {}
+        arms["arm1"], _ = scorer.score_export(
+            _export(tmp_path, "arm1", 320, 200, 450.0, 12.0, ["ok"] * 5)
+        )
+        arms["arm4"], _ = scorer.score_export(
+            _export(tmp_path, "arm4", 640, 400, 120.0, 12.0, ["ok"] * 5)
+        )
+        hyps = scorer.test_hypotheses(arms)
+        assert "H7" not in hyps
+        assert "arm1" in hyps["H5"]["evidence"] and "arm4" in hyps["H5"]["evidence"]
