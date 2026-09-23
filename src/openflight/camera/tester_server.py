@@ -27,6 +27,7 @@ import numpy as np
 from flask import Flask, Response, jsonify, request, send_file
 
 from openflight.camera.club_motion import detect_reference_ball
+from openflight.camera.resting_ball import RestingBallTracker
 from openflight.camera.triggered_buffer import unpack_r8_frame
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -664,22 +665,28 @@ def expected_ball_row_px(
     return row, band
 
 
-def ball_readout(
+def ball_readout(  # pylint: disable=too-many-arguments,too-many-locals
     frames: np.ndarray,
     focal_px: float,
     expected_diameter_px: float | None = None,
     expected_row: tuple[float, float] | None = None,
+    *,
+    trackers: tuple[RestingBallTracker, RestingBallTracker] | None = None,
 ) -> dict:
     """What the production ball detector finds, or why it found nothing.
 
     With the size the tape predicts, the detector holds the ball to it and the
     picture places it; the picture's own reading of the size is reported
-    beside it, and a large gap names the tape or the lens.
+    beside it, and a large gap names the tape or the lens. ``trackers`` (held,
+    alone) watch a still scene between looks instead of searching it again.
     """
+    held, alone_search = (
+        (trackers[0].look, trackers[1].look)
+        if trackers is not None
+        else (detect_reference_ball, detect_reference_ball)
+    )
     try:
-        ball = detect_reference_ball(
-            frames, expected_diameter_px=expected_diameter_px, expected_row_px=expected_row
-        )
+        ball = held(frames, expected_diameter_px=expected_diameter_px, expected_row_px=expected_row)
     except ValueError as exc:
         reason = str(exc)
         if expected_row is not None:
@@ -692,10 +699,15 @@ def ball_readout(
                     "white ball cannot show: lower the exposure or the gain"
                 )
         return {"found": False, "reason": reason}
-    image = np.median(frames, axis=0)
-    yy, xx = np.indices(image.shape)
-    distance = np.hypot(xx - ball.x, yy - ball.y)
     radius = ball.diameter_px / 2.0
+    # only the ball and the ground around it are read: a patch, not the frame
+    reach = int(math.ceil(3.0 * radius)) + 2
+    top, left = max(0, int(ball.y) - reach), max(0, int(ball.x) - reach)
+    image = np.median(
+        frames[:, top : int(ball.y) + reach + 1, left : int(ball.x) + reach + 1], axis=0
+    )
+    yy, xx = np.indices(image.shape)
+    distance = np.hypot(xx - (ball.x - left), yy - (ball.y - top))
     inside = image[distance <= max(radius - 1.0, 1.0)]
     around = image[(distance >= radius * 1.5) & (distance <= radius * 2.5)]
     gy, gx = np.gradient(image.astype(np.float32))
@@ -712,7 +724,7 @@ def ball_readout(
     }
     if expected_diameter_px is not None:
         try:
-            alone = detect_reference_ball(frames)
+            alone = alone_search(frames)
         except ValueError:
             alone = None
         # the picture's own size only means something where it found the same ball
@@ -970,6 +982,8 @@ class LiveView:
         self._expected_row: tuple[float, float] | None = None
         self._cues: Callable[[Mapping], dict] | None = None
         self._looker: threading.Thread | None = None
+        # a still ball is searched for once and then watched, in both readings
+        self._trackers = (RestingBallTracker(), RestingBallTracker())
 
     @property
     def running(self) -> bool:
@@ -1029,7 +1043,16 @@ class LiveView:
                 expected_row = self._expected_row
             if len(recent) < 3:
                 continue
-            ball = ball_readout(np.stack(recent), focal, expected, expected_row)
+            searches = sum(tracker.searches for tracker in self._trackers)
+            started = time.perf_counter()
+            ball = ball_readout(
+                np.stack(recent), focal, expected, expected_row, trackers=self._trackers
+            )
+            # what this look cost, and whether it searched or only watched a still ball
+            ball["look"] = {
+                "ms": round(1000.0 * (time.perf_counter() - started)),
+                "searched": sum(tracker.searches for tracker in self._trackers) > searches,
+            }
             if ball.get("found") and cues is not None:
                 ball["camera_says"] = cues(ball)
             with self._lock:

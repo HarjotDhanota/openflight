@@ -841,6 +841,26 @@ class BallCamera(FakeCamera):
         return request_
 
 
+class TestAStillBallIsWatched:
+    def test_the_live_view_searches_once_then_watches(self, monkeypatch):
+        monkeypatch.setattr(ts, "LIVE_BALL_EVERY_S", 0.05)
+        live = ts.LiveView(camera_factory=BallCamera)
+        live.start(ts.ARMS["arm1"], 300, 4.0)
+        try:
+            assert _wait(
+                lambda: (
+                    ((live.snapshot()[1]["ball"] or {}).get("look") or {}).get("searched") is False
+                ),
+                timeout=10.0,
+            )
+            ball = live.snapshot()[1]["ball"]
+            assert ball["found"] is True
+            assert ball["look"]["ms"] >= 0
+            assert live._trackers[0].searches == 1  # pylint: disable=protected-access
+        finally:
+            live.stop()
+
+
 class TestEachPlacementUsesTheDistanceInTheBox:
     body = {"tester_id": "20260922-name", "arm_id": "arm1", "environment": "indoors"}
 
