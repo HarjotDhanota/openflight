@@ -970,11 +970,11 @@ class LiveView:
             with self._lock:
                 self._ball = ball
 
-    def recent_median(self) -> np.ndarray | None:
-        """The frame the ball was looked for in: the median of the latest few."""
+    def recent_frames(self) -> tuple[Arm | None, np.ndarray | None]:
+        """The arm on screen and its latest few frames, if there are enough to look in."""
         with self._lock:
-            recent = list(self._recent)
-        return np.median(np.stack(recent), axis=0) if len(recent) >= 3 else None
+            arm, recent = self._arm, list(self._recent)
+        return arm, (np.stack(recent) if len(recent) >= 3 else None)
 
     def snapshot(self) -> tuple[np.ndarray | None, dict]:
         with self._lock:
@@ -1314,10 +1314,24 @@ def create_app(
             params = TesterParameters.from_payload(request.get_json(silent=True))
             if params.tee_mm is None:
                 raise ValueError("enter the radar-to-ball distance first")
-            frame, status = live.recent_median(), live.snapshot()[1]
-            if frame is None or not (status.get("ball") or {}).get("found"):
-                raise RuntimeError("start the live view and wait until it finds the ball")
-            count = record_placement(sessions_root, params, status, frame, enclosure.reading())
+            arm, frames = live.recent_frames()
+            if frames is None:
+                raise RuntimeError("start the live view first")
+            if arm != params.arm:
+                raise RuntimeError("the live view is showing another arm; select it first")
+            # measured now, at the distance in the box now: the live view's last
+            # look may predate a new tape reading
+            tilt = enclosure.reading()
+            focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
+            ball = ball_readout(
+                frames, focal, expected_ball_diameter_px(arm, params.tee_mm, rig_geometry)
+            )
+            if not ball.get("found"):
+                raise RuntimeError(f"no ball in the live view: {ball.get('reason')}")
+            ball["camera_says"] = distance_cues(ball, arm, params.tee_mm, rig_geometry, tilt)
+            status = {**live.snapshot()[1], "ball": ball}
+            frame = np.median(frames, axis=0)
+            count = record_placement(sessions_root, params, status, frame, tilt)
             return jsonify({"placements": count})
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 409

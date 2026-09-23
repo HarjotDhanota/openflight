@@ -827,3 +827,52 @@ def test_the_page_reads_a_turned_board_the_way_the_kiosk_does(monkeypatch):
 
     assert isinstance(made["sensor"], MountedAccelerometer)
     assert made["sensor"].yaw_deg == 180.0
+
+
+class BallCamera(FakeCamera):
+    """The fake camera, looking at a well-lit resting ball in the 320x200 mode."""
+
+    def capture_request(self):
+        time.sleep(0.002)
+        request_ = FakeRequest(320, 200, 0)
+        request_.raw[:, 1::2] = _ball_frames(110, 230, n=1)[0]
+        return request_
+
+
+class TestEachPlacementUsesTheDistanceInTheBox:
+    body = {"tester_id": "20260922-name", "arm_id": "arm1", "environment": "indoors"}
+
+    def _client(self, tmp_path):
+        live = ts.LiveView(camera_factory=BallCamera)
+        app = ts.create_app(sessions_root=tmp_path, rig_geometry=RIG, live_view=live)
+        return app.test_client(), live
+
+    def test_a_new_distance_needs_no_restart(self, tmp_path):
+        client, live = self._client(tmp_path)
+        try:
+            client.post("/api/tester/live", json={**self.body, "tee_mm": 1661})
+            assert _wait(lambda: live.recent_frames()[1] is not None)
+            for tee in (1661, 1261):
+                response = client.post("/api/tester/placement", json={**self.body, "tee_mm": tee})
+                assert response.status_code == 200, response.get_json()
+        finally:
+            live.stop()
+        query = "&".join(f"{k}={v}" for k, v in self.body.items())
+        rows = client.get(f"/api/tester/placements?{query}").get_json()["placements"]
+        assert [r["ball"]["camera_says"]["tape_mm"] for r in rows] == [1631, 1231]
+        assert rows[1]["ball"]["expected_diameter_px"] == pytest.approx(
+            ts.FOCAL_PX_2X * ts.BALL_DIAMETER_MM / 1231, abs=0.1
+        )
+
+    def test_a_placement_for_another_arm_is_refused(self, tmp_path):
+        client, live = self._client(tmp_path)
+        try:
+            client.post("/api/tester/live", json={**self.body, "tee_mm": 1661})
+            assert _wait(lambda: live.recent_frames()[1] is not None)
+            response = client.post(
+                "/api/tester/placement", json={**self.body, "arm_id": "arm5", "tee_mm": 1661}
+            )
+        finally:
+            live.stop()
+        assert response.status_code == 409
+        assert "another arm" in response.get_json()["error"]

@@ -329,6 +329,12 @@
       el('live-toggle').addEventListener('click', () => (liveOn ? liveStop() : liveStart()));
       el('record-placement').addEventListener('click', recordPlacement);
       el('live-exposure').addEventListener('change', () => { if (liveOn) liveStart(); });
+      // a new tape distance reaches the live view without reopening the camera
+      let teeTimer = null;
+      el('tee-mm').addEventListener('input', () => {
+        clearTimeout(teeTimer);
+        teeTimer = setTimeout(() => { if (liveOn) liveStart(); }, 600);
+      });
       el('live-gain').addEventListener('change', () => { if (liveOn) liveStart(); });
       setInterval(liveTick, 350);
 
