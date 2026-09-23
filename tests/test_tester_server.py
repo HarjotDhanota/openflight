@@ -640,3 +640,22 @@ class TestLiveBall:
             assert ball["found"] is False and ball["reason"]
         finally:
             live.stop()
+
+
+class TestTheTapeGivesTheBallsSize:
+    def test_the_tape_runs_from_the_radar_window_behind_the_lens(self):
+        # 1071 mm from the radar window is 1041 mm from the lens in the v3 rig
+        expected = ts.expected_ball_diameter_px(ts.ARMS["arm5"], 1071.0, RIG)
+        assert expected == pytest.approx(ts.FOCAL_PX_1X * ts.BALL_DIAMETER_MM / 1041.0)
+        assert ts.expected_ball_diameter_px(ts.ARMS["arm5"], None, RIG) is None
+
+    def test_the_readout_puts_the_tape_beside_the_picture(self):
+        readout = ts.ball_readout(_ball_frames(110, 230), ts.FOCAL_PX_2X, 12.0)
+        assert readout["found"] is True
+        assert readout["expected_diameter_px"] == 12.0
+        assert readout["image_only_diameter_px"] == pytest.approx(12.0, abs=1.5)
+        assert "size_check" not in readout
+
+    def test_a_tape_far_from_the_picture_names_the_suspects(self):
+        readout = ts.ball_readout(_ball_frames(110, 230), ts.FOCAL_PX_2X, 24.0)
+        assert "check the tape" in readout.get("size_check", "")

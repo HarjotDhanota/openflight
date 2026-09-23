@@ -60,7 +60,10 @@ GAIN_CEILING = 12.0
 # arm's frame rate, so each frame is exposed exactly as a capture would be.
 LIVE_FPS = 12.0
 LIVE_EXPOSURE_RANGE_US = (20, 20000)
-LIVE_BALL_EVERY_S = 0.5
+LIVE_BALL_EVERY_S = 1.0
+# the picture's own reading of the ball's size, against the size the tape
+# predicts, beyond which the tape or the lens is suspect
+SIZE_CHECK_FRACTION = 0.25
 BALL_DIAMETER_MM = 42.67
 
 
@@ -616,10 +619,30 @@ def boost(image: np.ndarray) -> np.ndarray:
     return np.clip((image.astype(np.float32) - low) * scale, 0, 255).astype(np.uint8)
 
 
-def ball_readout(frames: np.ndarray, focal_px: float) -> dict:
-    """What the production ball detector finds in these frames, or why it found nothing."""
+def expected_ball_diameter_px(arm: Arm, tee_mm: float | None, rig_geometry: Path) -> float | None:
+    """The size the ball must have at the taped distance, through the lens."""
+    if tee_mm is None:
+        return None
+    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+    offset = RigGeometry.from_json(rig_geometry).iwr_offset_mm
+    # the tape runs from the radar window, which sits this far behind the lens
+    camera_mm = tee_mm + (offset[2] if offset else 0.0)
+    focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
+    return focal * BALL_DIAMETER_MM / camera_mm
+
+
+def ball_readout(
+    frames: np.ndarray, focal_px: float, expected_diameter_px: float | None = None
+) -> dict:
+    """What the production ball detector finds, or why it found nothing.
+
+    With the size the tape predicts, the detector holds the ball to it and the
+    picture places it; the picture's own reading of the size is reported
+    beside it, and a large gap names the tape or the lens.
+    """
     try:
-        ball = detect_reference_ball(frames)
+        ball = detect_reference_ball(frames, expected_diameter_px=expected_diameter_px)
     except ValueError as exc:
         return {"found": False, "reason": str(exc)}
     image = np.median(frames, axis=0)
@@ -630,7 +653,7 @@ def ball_readout(frames: np.ndarray, focal_px: float) -> dict:
     around = image[(distance >= radius * 1.5) & (distance <= radius * 2.5)]
     gy, gx = np.gradient(image.astype(np.float32))
     edge = np.hypot(gx, gy)[np.abs(distance - radius) <= 1.0]
-    return {
+    readout = {
         "found": True,
         "x": round(ball.x, 1),
         "y": round(ball.y, 1),
@@ -640,6 +663,20 @@ def ball_readout(frames: np.ndarray, focal_px: float) -> dict:
         "around_dn": round(float(np.median(around)), 1) if around.size else None,
         "edge_dn_per_px": round(float(edge.mean()), 1) if edge.size else None,
     }
+    if expected_diameter_px is not None:
+        try:
+            image_only = detect_reference_ball(frames).diameter_px
+        except ValueError:
+            image_only = None
+        readout["expected_diameter_px"] = round(expected_diameter_px, 1)
+        readout["image_only_diameter_px"] = round(image_only, 1) if image_only else None
+        if image_only and abs(image_only / expected_diameter_px - 1.0) > SIZE_CHECK_FRACTION:
+            readout["size_check"] = (
+                f"the picture alone reads {image_only:.0f} px against the "
+                f"{expected_diameter_px:.0f} px your tape predicts: check the tape "
+                "distance, or whether this camera has the 2.8 mm lens"
+            )
+    return readout
 
 
 def mark_ball(image: np.ndarray, ball: Mapping) -> np.ndarray:
@@ -682,18 +719,26 @@ class LiveView:
         self._black_floor: float | None = None
         self._recent: deque[np.ndarray] = deque(maxlen=5)
         self._ball: dict | None = None
+        self._expected: float | None = None
+        self._looker: threading.Thread | None = None
 
     @property
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
-    def start(
-        self, arm: Arm, exposure_us: int, gain: float, black_floor: float | None = None
+    def start(  # pylint: disable=too-many-arguments
+        self,
+        arm: Arm,
+        exposure_us: int,
+        gain: float,
+        black_floor: float | None = None,
+        expected_diameter_px: float | None = None,
     ) -> None:
         """Open the arm's mode, or only change exposure and gain if it is already open."""
         with self._lock:
             self._pending = live_controls(arm, exposure_us, gain)
             self._black_floor = black_floor
+            self._expected = expected_diameter_px
             self._error = None
             if self.running and self._arm == arm:
                 return
@@ -709,12 +754,30 @@ class LiveView:
                 target=self._run, args=(arm,), daemon=True, name="tester-live"
             )
             self._thread.start()
+            # the ball is looked for on its own thread: a fit can take a few
+            # tenths of a second, and the picture should not wait for it
+            self._looker = threading.Thread(
+                target=self._look, args=(arm,), daemon=True, name="tester-live-ball"
+            )
+            self._looker.start()
 
     def stop(self) -> None:
         self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=5.0)
-        self._thread = None
+        for thread in (self._thread, self._looker):
+            if thread is not None:
+                thread.join(timeout=5.0)
+        self._thread = self._looker = None
+
+    def _look(self, arm: Arm) -> None:
+        focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
+        while not self._stop.wait(LIVE_BALL_EVERY_S):
+            with self._lock:
+                recent, expected = list(self._recent), self._expected
+            if len(recent) < 3:
+                continue
+            ball = ball_readout(np.stack(recent), focal, expected)
+            with self._lock:
+                self._ball = ball
 
     def snapshot(self) -> tuple[np.ndarray | None, dict]:
         with self._lock:
@@ -769,8 +832,7 @@ class LiveView:
             )
             camera.configure(config)
             camera.start()
-            focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
-            shown = looked = 0.0
+            shown = 0.0
             while not self._stop.is_set():
                 with self._lock:
                     pending, self._pending = self._pending, None
@@ -792,12 +854,6 @@ class LiveView:
                 with self._lock:
                     self._image, self._metadata = image, metadata
                     self._recent.append(image)
-                    recent = list(self._recent)
-                if len(recent) >= 3 and shown - looked >= LIVE_BALL_EVERY_S:
-                    looked = shown
-                    ball = ball_readout(np.stack(recent), focal)
-                    with self._lock:
-                        self._ball = ball
         except Exception as exc:  # pylint: disable=broad-exception-caught
             with self._lock:
                 self._error = f"{type(exc).__name__}: {exc}"
@@ -1032,7 +1088,13 @@ def create_app(
             if not low <= exposure_us <= high or not 1.0 <= gain <= 15.94:
                 raise ValueError(f"exposure {low}-{high} us and gain 1-15.9 only")
             state = read_arm_state(sessions_root, params.tester_id, params.arm_id)
-            live.start(params.arm, exposure_us, gain, state.get("black_floor_dn"))
+            live.start(
+                params.arm,
+                exposure_us,
+                gain,
+                state.get("black_floor_dn"),
+                expected_ball_diameter_px(params.arm, params.tee_mm, rig_geometry),
+            )
             return jsonify(live.snapshot()[1])
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 409

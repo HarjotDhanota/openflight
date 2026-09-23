@@ -258,6 +258,10 @@
         const b = s.ball;
         el('live-ball').innerHTML = !b ? '' : b.found
           ? `<span>ball found: <b>${b.diameter_px} px</b> across, about <b>${b.range_m} m</b> away</span>` +
+            (b.expected_diameter_px != null
+              ? `<span>your tape says <b>${b.expected_diameter_px} px</b>; the picture alone reads <b>${b.image_only_diameter_px ?? '?'} px</b></span>`
+              : '<span>enter the radar-to-ball distance so the ball\'s size is known</span>') +
+            (b.size_check ? `<span class="problem">${b.size_check}</span>` : '') +
             `<span>ball <b>${b.ball_dn}</b> against <b>${b.around_dn}</b> around it</span>` +
             `<span>edge <b>${b.edge_dn_per_px}</b> per px</span>`
           : `<span class="problem">ball not found: ${b.reason}</span>`;

@@ -70,13 +70,16 @@ minutes; later starts are quick.
    shows the camera exactly as that arm will capture, with a contrast-boosted
    copy beneath it, and you can change exposure and gain while it runs. At
    10000 µs, check the ball is in view and its edge is crisp; if the whole
-   image is soft, turn the lens barrel until it is. Then, for each arm:
-   **Find gain** (a few seconds on the static scene — it picks the gain that
-   lights the frame correctly at that arm's exposure, records the light level,
-   and solves the ball's range from the same frame so it can be compared with
-   your tape), then **Capture swings**. The club is set to 7-iron for you. Hit until the arm shows **5
-   accepted**, then press **Stop**. Stopping and starting again is fine: each
-   capture run is kept separately and counted together.
+   image is soft, turn the lens barrel until it is. With your tape distance
+   entered, the ring is the ball at the size that distance gives, and the
+   page warns if the picture alone disagrees by more than a quarter. Then,
+   for each arm: **Find gain** (a few seconds on the static scene — it picks
+   the gain that lights the frame correctly at that arm's exposure, records
+   the light level, and solves the ball's range from the same frame so it can
+   be compared with your tape), then **Capture swings**. The club is set to
+   7-iron for you. Hit until the arm shows **5 accepted**, then press
+   **Stop**. Stopping and starting again is fine: each capture run is kept
+   separately and counted together.
    - If an arm says **lighting required**, hit its five swings anyway. Its
      acceptance rate at your light level is part of the answer.
 3. **Package everything** and send the archive through the agreed channel. Raw
@@ -117,9 +120,10 @@ derived. No driver or wedge yet; no second camera; no fusion output on screen.
 
 ## What this pilot does not do
 
-It changes no production camera default, driver table, geometry, calibration
-constant, threshold, or fusion behaviour. Each of those is a separate
-maintainer-approved pull request. Camera/radar agreement is a consistency
+Apart from finding a room-lit resting ball, which goes upstream as its own
+pull request, it changes no production camera default, driver table,
+geometry, calibration constant, threshold, or fusion behaviour. Each of those
+is a separate maintainer-approved pull request. Camera/radar agreement is a consistency
 check, not proof of absolute accuracy.
 
 ## Troubleshooting

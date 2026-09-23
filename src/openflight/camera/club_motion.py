@@ -14,6 +14,8 @@ from typing import Sequence
 import numpy as np
 from scipy import ndimage
 
+from openflight.camera.ball_model import fit_lit_ball
+
 BALL_DIAMETER_MM = 42.67
 
 
@@ -87,8 +89,88 @@ def _bin(image: np.ndarray, factor: int) -> np.ndarray:
     return blocks.mean(axis=(1, 3))
 
 
+def _brighter_all_round(
+    image: np.ndarray, row: int, col: int, radius: float, margin: float
+) -> bool:
+    """Whether the middle outshines the ring around it in at least six of eight directions."""
+    yy, xx = np.indices(image.shape)
+    distance = np.hypot(xx - col, yy - row)
+    middle = image[distance <= 0.7 * radius]
+    if not middle.size:
+        return False
+    level = float(middle.mean()) - margin
+    sector = ((np.arctan2(yy - row, xx - col) + np.pi) / (2 * np.pi) * 8).astype(int) % 8
+    ring = (distance >= 1.6 * radius) & (distance <= 2.3 * radius)
+    darker = checked = 0
+    for index in range(8):
+        values = image[ring & (sector == index)]
+        if values.size:
+            checked += 1
+            darker += int(values.mean() <= level)
+    return checked >= 4 and darker >= 0.75 * checked
+
+
+def _lit_ball_near_size(
+    image: np.ndarray,
+    coarse: np.ndarray,
+    window: tuple[int, int, int, int],
+    factor: int,
+    expected_radius: float,
+    noise: float,
+) -> ReferenceBall | None:
+    """The lit ball among the round candidates of the size the distance predicts.
+
+    A door panel over the dark gap beneath it, or a bright patch of carpet, can
+    stand out as much as the ball; none of them looks like a lit sphere, so the
+    one the model explains best is the ball.
+    """
+    x0, y0, x1, y1 = window
+    coarse_r = expected_radius / factor
+    # only noise is ruled out here: a dim ball can sit below the contrast a
+    # size-free search needs, and the lit-sphere fit is the real test
+    floor = max(8.0, 3.0 * noise / factor)
+    score = _disk_contrast(coarse, coarse_r)[y0:y1, x0:x1]
+    peaks = (score == ndimage.maximum_filter(score, size=max(3, int(coarse_r)))) & (score >= floor)
+    rows, cols = np.nonzero(peaks)
+    kept: list[tuple[int, int]] = []
+    for i in np.argsort(score[rows, cols])[::-1]:
+        row, col = int(rows[i]), int(cols[i])
+        if not all(math.hypot(col - c, row - r) > coarse_r for r, c in kept):
+            continue
+        # an edge, like a door's foot over the gap beneath it, scores along its
+        # whole length; a ball is brighter than its surroundings all round
+        if _brighter_all_round(coarse, row + y0, col + x0, coarse_r, 0.5 * floor):
+            kept.append((row, col))
+        if len(kept) == 3:
+            break
+    fits = []
+    for row, col in kept:
+        fit = fit_lit_ball(
+            image,
+            (col + x0 + 0.5) * factor - 0.5,
+            (row + y0 + 0.5) * factor - 0.5,
+            expected_radius,
+            noise_dn=max(1.5, noise),
+            expected_radius=expected_radius,
+        )
+        if fit is not None:
+            fits.append(fit)
+    if not fits:
+        return None
+    best = max(fits, key=lambda fit: fit.quality)
+    return ReferenceBall(
+        x=best.x,
+        y=best.y,
+        diameter_px=best.diameter_px,
+        area_px=int(round(math.pi * best.radius_px**2)),
+    )
+
+
 def _contrast_ball(
-    background: np.ndarray, frames: np.ndarray, roi: tuple[int, int, int, int] | None
+    background: np.ndarray,
+    frames: np.ndarray,
+    roi: tuple[int, int, int, int] | None,
+    expected_radius: float | None = None,
 ) -> ReferenceBall | None:
     """The disk that stands out most from its surroundings, if it clearly does."""
     height, width = background.shape
@@ -101,6 +183,12 @@ def _contrast_ball(
     x0, y0, x1, y1 = (value // factor for value in roi)
     noise = float(np.median(np.std(frames[: min(20, len(frames))], axis=0))) / factor
     floor = max(DISK_MIN_CONTRAST_DN, DISK_MIN_NOISE_MULTIPLE * noise)
+    if expected_radius is not None:
+        lit = _lit_ball_near_size(
+            image, coarse, (x0, y0, x1, y1), factor, expected_radius, noise * factor
+        )
+        if lit is not None:
+            return lit
 
     # 1. where: the best disk over plausible ball sizes, in the binned frame
     radii = np.geomspace(2.5, max(3.0, 0.04 * coarse.shape[1]), num=12)
@@ -281,8 +369,16 @@ def detect_reference_ball(
     *,
     roi: tuple[int, int, int, int] | None = None,
     brightness_threshold: int = 210,
+    expected_diameter_px: float | None = None,
 ) -> ReferenceBall:
-    """Find the stationary ball in bright- or dark-on-ground lighting."""
+    """Find the stationary ball in bright- or dark-on-ground lighting.
+
+    ``expected_diameter_px`` is the size the ball must have at the distance the
+    radar or the tape gives, through the lens's focal length. With it, the ball
+    is the lit sphere of that size, placed by its lit rim and shading, so its
+    centre holds when grass or carpet hides its underside. Without it, the size
+    is read from the pixels, which a room-lit ball leaves loose by a tenth.
+    """
     if frames.ndim != 3 or frames.shape[0] < 3:
         raise ValueError("frames must have shape (n, height, width) with n >= 3")
 
@@ -368,9 +464,31 @@ def detect_reference_ball(
             and height * 0.45 <= item[1].y <= height * 0.9
         ]
         if plausible:
-            return min(plausible, key=lambda item: item[0])[1]
+            found = min(plausible, key=lambda item: item[0])[1]
+            if expected_diameter_px is None:
+                return found
+            fit = fit_lit_ball(
+                background.astype(np.float32),
+                found.x,
+                found.y,
+                expected_diameter_px / 2.0,
+                expected_radius=expected_diameter_px / 2.0,
+            )
+            if fit is None:
+                return found
+            return ReferenceBall(
+                x=fit.x,
+                y=fit.y,
+                diameter_px=fit.diameter_px,
+                area_px=int(round(math.pi * fit.radius_px**2)),
+            )
 
-    lit = _contrast_ball(background, frames, roi)
+    lit = _contrast_ball(
+        background,
+        frames,
+        roi,
+        expected_diameter_px / 2.0 if expected_diameter_px is not None else None,
+    )
     if lit is not None:
         return lit
 
