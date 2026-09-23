@@ -48,10 +48,7 @@ repository root:
 bash scripts/start-tester.sh
 ```
 
-Open `http://127.0.0.1:8765` on the Pi. To use your phone instead, start it
-with `--host 0.0.0.0`, find the Pi's address with `hostname -I`, and open
-`http://<that address>:8765` on a phone on the same Wi-Fi. Anyone on that
-network can then reach the page, which only runs the fixed study actions.
+Open `http://127.0.0.1:8765` in the browser on the Pi's screen.
 
 The runner holds each arm's exposure and gain fixed for the whole run;
 auto-exposure is off by design. The OPS243 is expected on the GPIO UART
@@ -125,7 +122,6 @@ check, not proof of absolute accuracy.
 | `fatal: ambiguous argument 'origin/feat/tester-capture-pilot'` | `origin` is the upstream repository; the study branch is on the fork | Add the fork as shown in *Before your first run* |
 | `Failed to build lgpio` … `swig: No such file or directory` | Build tools missing | `sudo apt install -y swig liblgpio-dev python3-dev`, then start again |
 | `Creating virtual environment at: .venv` on a Pi that ran OpenFlight before | The runner rebuilds the environment when it cannot import `picamera2`; lgpio compiles again | Expected once; needs the build tools above |
-| Page does not load on the phone | Runner started without `--host 0.0.0.0`, or the phone is on another network | Restart with `--host 0.0.0.0`; check `hostname -I` |
 | Every swing rejected with no ball speed | The OPS243 was not found | Pass `--radar-port` with your port (`/dev/ttyAMA0` for the GPIO UART, `/dev/ttyACM0` for USB) |
 | An arm's counter stays at 0 while swings save | The estimator rejected them; the status histogram in the archive says why | Hit the five anyway if it reads `lighting required`; its acceptance rate is part of the result |
 | Stopped mid-arm | Nothing is lost | Press **Capture swings** again; runs are kept separately and counted together |
