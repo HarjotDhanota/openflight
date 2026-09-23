@@ -757,6 +757,8 @@ class TestTheInclinometerRunsBesideThePage:
         assert reading["expected_pitch_deg"] == 0.0
         assert reading["camera_pitch_deg"] == pytest.approx(3.3)
         assert reading["roll_deg"] == pytest.approx(math.degrees(math.atan2(0.052, 1.0)), abs=0.05)
+        # the page shows which way round the rig file says the board is
+        assert reading["mount_yaw_deg"] == 180.0
 
     def test_without_a_sensor_it_says_so(self):
         def broken():

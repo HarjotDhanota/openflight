@@ -809,6 +809,7 @@ class EnclosureTilt:
                 "expected_pitch_deg": round(expected, 2),
                 "camera_pitch_deg": round(rig.boresight_pitch_deg + departure, 2),
                 "gravity_g": round(snapshot.gravity_g, 3),
+                "mount_yaw_deg": rig.lis3dh_mount_yaw_deg,
             }
         )
         return data

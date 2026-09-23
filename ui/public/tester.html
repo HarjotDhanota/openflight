@@ -277,7 +277,8 @@
           ? `<span>inclinometer: <b>${t.status}</b>${t.error ? ` — ${t.error}` : ''}</span>`
           : `<span>inclinometer: enclosure front <b>${updown(t.pitch_deg)}</b>` +
             ` (expected ${updown(t.expected_pitch_deg)}), leaning <b>${Math.abs(t.roll_deg).toFixed(1)}°</b></span>` +
-            `<span>so the camera points <b>${updown(t.camera_pitch_deg)}</b> (${t.status})</span>`;
+            `<span>so the camera points <b>${updown(t.camera_pitch_deg)}</b> (${t.status})</span>` +
+            `<span>LIS3DH board ${t.mount_yaw_deg ? `turned ${t.mount_yaw_deg}°` : 'as designed'} (rig file)</span>`;
       }
       const updown = (v) => `${Math.abs(v).toFixed(2)}° ${v >= 0 ? 'up' : 'down'}`;
       function renderDistance(b) {
