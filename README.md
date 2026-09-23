@@ -307,7 +307,7 @@ Areas of interest:
 
 - **Better spin detection**: A dechirped Doppler-sideband estimator is in development (`scripts/analysis/replay_spin_dechirp.py`) — help validating it against launch-monitor truth data is especially welcome
 - **Mobile app**: Bluetooth connection to phone
-- **Camera/radar test captures**: if you have Cormac's enclosure and the full sensor set, the [tester capture pilot](docs/camera/tester-pilot.md) walks you through collecting a paired dataset
+- **Camera/radar test captures**: if you have the v3 enclosure and the full sensor set, the [camera mode study](docs/camera/tester-pilot.md) walks you through collecting a paired dataset
 
 ### Running Tests
 

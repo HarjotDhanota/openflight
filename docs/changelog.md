@@ -8,11 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Tester capture pilot.** `scripts/start-tester.sh` serves a local page that
-  runs preflight, checkerboard views, an exposure screen, and paired
-  camera/radar swing capture with pinned settings, then checks whether both
-  sensors saved usable data and packages the result. Requires Cormac's
-  enclosure. See `docs/camera/tester-pilot.md`.
+- **Enclosure geometry file.** `--rig-geometry` derives camera mount height,
+  camera lateral offset, radar height and radar tilt from a measured enclosure
+  file and records them in `session_start`, so a session is born with measured
+  numbers instead of typed flags. The inclinometer tilt correction now applies
+  the departure from the enclosure's expected pitch rather than the raw
+  reading. `config/enclosure_v3_rig_geometry.json` ships measured.
+- **Camera mode study runner.** `scripts/start-tester.sh` serves a local page
+  that walks a tester through four camera modes with a 7-iron, five accepted
+  swings each: exposure computed from the blur ceiling, gain from a static
+  screen, paired camera/radar capture, and one archive. See
+  `docs/camera/tester-pilot.md` and `docs/camera/mode-study-analysis.md`.
 
 ### Fixed
 - **On-screen keyboard for profile names.** Adding or renaming a profile on the

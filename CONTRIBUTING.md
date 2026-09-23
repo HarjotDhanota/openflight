@@ -59,8 +59,8 @@ cd ui && npm run dev
 
 ## Contributing test captures
 
-If you have Cormac's enclosure plus the OV9281 camera, OPS243, and IWR6843, you
-can contribute a paired camera/radar dataset without writing code. See the
+If you have the v3 enclosure with the OV9281 camera, OPS243, IWR6843 and LIS3DH,
+you can contribute a paired camera/radar dataset without writing code. See the
 [tester capture pilot](docs/camera/tester-pilot.md). Raw recordings stay out of
 Git; send the packaged archive through the agreed channel.
 
