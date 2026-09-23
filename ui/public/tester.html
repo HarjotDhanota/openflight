@@ -91,6 +91,7 @@
           <strong>Capture swings</strong> and hit until it shows 5 accepted.</p>
         <ul class="arms" id="arms"></ul>
         <div class="light" id="light"></div>
+        <div class="light" id="enclosure"></div>
         <div class="live">
           <div class="controls">
             <label>Live exposure<select id="live-exposure"></select></label>
@@ -212,6 +213,7 @@
           }
         }
         renderArms(body.study);
+        renderEnclosure(body.inclinometer);
         const problems = (body.arm && body.arm.problems) || [];
         el('problems').innerHTML = problems.map((p) => `<div class="problem">${p}</div>`).join('');
         el('download').hidden = !body.package_ready;
@@ -269,6 +271,15 @@
             `<span>edge <b>${b.edge_dn_per_px}</b> per px</span>`
           : `<span class="problem">ball not found: ${b.reason}</span>`;
       }
+      function renderEnclosure(t) {
+        if (!t) return;
+        el('enclosure').innerHTML = t.pitch_deg == null
+          ? `<span>inclinometer: <b>${t.status}</b>${t.error ? ` — ${t.error}` : ''}</span>`
+          : `<span>inclinometer: enclosure front <b>${updown(t.pitch_deg)}</b>` +
+            ` (expected ${updown(t.expected_pitch_deg)}), leaning <b>${Math.abs(t.roll_deg).toFixed(1)}°</b></span>` +
+            `<span>so the camera points <b>${updown(t.camera_pitch_deg)}</b> (${t.status})</span>`;
+      }
+      const updown = (v) => `${Math.abs(v).toFixed(2)}° ${v >= 0 ? 'up' : 'down'}`;
       function renderDistance(b) {
         const c = b && b.camera_says;
         if (!c) { el('live-distance').innerHTML = ''; return; }
@@ -278,8 +289,9 @@
           `<span>the camera says <b>${mm(c.from_size_mm)}</b>${off(c.from_size_off_pct)} from the ball's size</span>` +
           `<span>and <b>${mm(c.from_floor_mm)}</b>${off(c.from_floor_off_pct)} from where it sits on the floor</span>` +
           (c.tape_mm != null ? `<span>your tape: <b>${mm(c.tape_mm)}</b> from the lens</span>` : '') +
-          (c.tilt_down_needed_deg != null
-            ? `<span>the floor agrees with the tape if the camera tilts <b>${c.tilt_down_needed_deg}°</b> down (or the lens sits ${c.lens_offset_equivalent_px} px off centre)</span>`
+          (c.pitch_needed_deg != null
+            ? `<span>the floor agrees with the tape if the camera points <b>${updown(c.pitch_needed_deg)}</b>; the ${c.camera_pitch_source} says ` +
+              `<b>${updown(c.camera_pitch_deg)}</b>, leaving <b>${updown(c.pitch_unexplained_deg)}</b> (a lens centre ${c.lens_offset_equivalent_px} px low) for the lens or its mount</span>`
             : '');
       }
       async function recordPlacement() {

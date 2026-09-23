@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import struct
 import time
 import zipfile
@@ -676,14 +677,16 @@ class TestTheCameraSaysHowFar:
         assert cues["tape_mm"] == 1041
         assert cues["from_size_mm"] == pytest.approx(1041, abs=2)
         assert cues["from_floor_mm"] == pytest.approx(1041, abs=2)
-        assert cues["tilt_down_needed_deg"] == pytest.approx(0.0, abs=0.05)
+        assert cues["pitch_needed_deg"] == pytest.approx(0.0, abs=0.05)
 
-    def test_a_ball_seen_too_low_names_the_tilt_that_explains_it(self):
+    def test_a_ball_seen_too_low_names_the_pitch_that_explains_it(self):
         ball = {"x": 640.0, "y": 522.7, "diameter_px": 32.0}
         cues = ts.distance_cues(ball, ts.ARMS["arm5"], 1121.0, RIG)
         assert cues["from_floor_off_pct"] < -40
         assert cues["from_size_off_pct"] > 10
-        assert cues["tilt_down_needed_deg"] == pytest.approx(3.7, abs=0.2)
+        # seen further below the axis than it lies below the horizon: the
+        # camera points up
+        assert cues["pitch_needed_deg"] == pytest.approx(3.7, abs=0.2)
 
     def test_a_placement_is_kept_with_its_frame(self, tmp_path):
         p = params(arm_id="arm5", tee_mm=1071)
@@ -708,3 +711,97 @@ class TestTheCameraSaysHowFar:
             "/api/tester/placements?" + "&".join(f"{k}={v}" for k, v in body.items())
         )
         assert listed.get_json() == {"placements": []}
+
+
+class FakeTiltService:
+    """The inclinometer service's surface, holding one still reading."""
+
+    last_error = None
+
+    def __init__(self, pitch_deg, x_g=0.0):
+        from openflight.inclinometer.models import OrientationSnapshot
+
+        y_g = math.sin(math.radians(pitch_deg))
+        self.snapshot = OrientationSnapshot(
+            timestamp=0.0,
+            x_g=x_g,
+            y_g=y_g,
+            z_g=math.cos(math.radians(pitch_deg)),
+            gravity_g=1.0,
+            raw_pitch_deg=pitch_deg,
+            calibrated_pitch_deg=pitch_deg,
+            pitch_std_deg=0.1,
+            sample_count=8,
+        )
+        self.running = False
+
+    def start(self):
+        self.running = True
+
+    def stop(self):
+        self.running = False
+
+    def snapshot_for_impact(self, _timestamp):
+        from openflight.inclinometer.models import SnapshotSelection
+
+        return SnapshotSelection(snapshot=self.snapshot, status="stable", age_s=0.1)
+
+
+class TestTheInclinometerRunsBesideThePage:
+    def test_its_reading_becomes_the_cameras_pitch_the_kiosks_way(self):
+        tilt = ts.EnclosureTilt(RIG, service_factory=lambda: FakeTiltService(3.3, x_g=0.052))
+        tilt.start()
+        reading = tilt.reading()
+        # v3: the camera is level in a housing expected to sit level
+        assert reading["pitch_deg"] == pytest.approx(3.3)
+        assert reading["expected_pitch_deg"] == 0.0
+        assert reading["camera_pitch_deg"] == pytest.approx(3.3)
+        assert reading["roll_deg"] == pytest.approx(math.degrees(math.atan2(0.052, 1.0)), abs=0.05)
+
+    def test_without_a_sensor_it_says_so(self):
+        def broken():
+            raise OSError("no I2C bus")
+
+        tilt = ts.EnclosureTilt(RIG, service_factory=broken)
+        tilt.start()
+        assert tilt.reading() == {"status": "off", "error": "OSError: no I2C bus"}
+
+    def test_the_floor_agrees_with_the_tape_once_the_measured_pitch_is_applied(self):
+        # where a camera pitched 3.5 deg up, 95 mm high, sees a ball 1041 mm away
+        focal, drop, pitch = ts.FOCAL_PX_1X, 95.0 - ts.BALL_DIAMETER_MM / 2, math.radians(3.5)
+        along = (1041.0**2 - drop**2) ** 0.5
+        ball = {"x": 640.0, "y": 400.0 + focal * math.tan(pitch + math.atan(drop / along))}
+        ball["diameter_px"] = focal * ts.BALL_DIAMETER_MM / 1041.0
+        level = ts.distance_cues(ball, ts.ARMS["arm5"], 1071.0, RIG)
+        measured = ts.distance_cues(ball, ts.ARMS["arm5"], 1071.0, RIG, {"camera_pitch_deg": 3.5})
+        assert level["from_floor_off_pct"] < -40
+        assert measured["from_floor_mm"] == pytest.approx(1041, abs=3)
+        assert measured["pitch_unexplained_deg"] == pytest.approx(0.0, abs=0.05)
+        assert measured["camera_pitch_source"] == "inclinometer"
+
+    def test_the_swings_hand_the_sensor_to_the_kiosk_and_take_it_back(self, tmp_path):
+        class Recorder(ts.TesterJobManager):
+            def start(self, action, commands, log_path, on_finish=None):
+                self.finish = on_finish
+
+        fake = FakeTiltService(0.0)
+        tilt = ts.EnclosureTilt(RIG, service_factory=lambda: fake)
+        tilt.start()
+        manager = Recorder()
+        client = ts.create_app(
+            sessions_root=tmp_path,
+            rig_geometry=RIG,
+            manager=manager,
+            live_view=ts.LiveView(camera_factory=FakeCamera),
+            tilt=tilt,
+        ).test_client()
+        p = params(tee_mm=1524)
+        screened(tmp_path, p)
+        body = {"tester_id": "20260922-name", "arm_id": "arm1", "environment": "indoors"}
+        response = client.post("/api/tester/run", json={**body, "tee_mm": 1524, "action": "swings"})
+        assert response.status_code == 202
+        assert fake.running is False
+        manager.finish("swings", 0)
+        assert fake.running is True
+        status = client.post("/api/tester/status", json=body).get_json()
+        assert status["inclinometer"]["status"] == "stable"

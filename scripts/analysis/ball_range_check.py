@@ -9,9 +9,13 @@ camera judges distance two ways, and each is wrong for its own reasons:
   what the lens says, or a ball read small because its shaded side merges with
   the ground, scale every placement by the same factor;
 - from where the ball sits on the floor, through the lens height and the
-  camera's tilt: a tilt, or a lens mounted off the sensor's centre, is a
+  camera's pitch: a pitch, or a lens mounted off the sensor's centre, is a
   constant angle; a wrong lens height grows with distance; a camera rolled
   about its axis shifts the ball with its sideways position.
+
+Pitch is positive up, as in the rig file and the kiosk. Where a placement
+carries the inclinometer's reading, the pitch it measured is set beside the
+fitted one; what is left is the lens's centre or the camera's mount.
 
 Fitting those against the tape says which it is, per camera mode.
 
@@ -50,6 +54,7 @@ class Placement:
     y: float
     diameter_px: float
     tape_mm: float  # lens to ball centre
+    measured_pitch_deg: float | None = None  # the inclinometer's, applied the kiosk's way
 
     @property
     def focal(self) -> float:
@@ -78,36 +83,38 @@ def load(path: Path, rig: RigGeometry) -> list[Placement]:
                 y=float(ball["y"]),
                 diameter_px=float(ball.get("image_only_diameter_px") or ball["diameter_px"]),
                 tape_mm=float(row["tee_mm"]) + offset,
+                measured_pitch_deg=(row.get("inclinometer") or {}).get("camera_pitch_deg"),
             )
         )
     return placements
 
 
 def fit_floor(group: list[Placement], drop_mm: float) -> dict:
-    """Tilt (with any lens-centre offset), lens height and roll that best explain the rows."""
-    free = ["tilt"] + (["drop"] if len(group) >= 3 else []) + (["roll"] if len(group) >= 4 else [])
+    """Pitch (up +, with any lens-centre offset), lens height and roll that explain the rows."""
+    free = ["pitch"] + (["drop"] if len(group) >= 3 else []) + (["roll"] if len(group) >= 4 else [])
 
     def unpack(params):
         values = dict(zip(free, params))
-        return values["tilt"], values.get("drop", drop_mm), values.get("roll", 0.0)
+        return values["pitch"], values.get("drop", drop_mm), values.get("roll", 0.0)
 
     def predicted_rows(params):
-        tilt, drop, roll = unpack(params)
+        pitch, drop, roll = unpack(params)
         rows = []
         for p in group:
             cx, cy = p.width / 2.0, p.height / 2.0
             aside = p.tape_mm * (p.x - cx) / p.focal
             along = math.sqrt(max(p.tape_mm**2 - drop**2 - aside**2, 1.0))
-            below = tilt + math.atan(drop / along)
+            # a camera pitched up sees the floor further below its axis
+            below = pitch + math.atan(drop / along)
             rows.append(cy + p.focal * math.tan(below) + (p.x - cx) * math.tan(roll))
         return np.array(rows)
 
     observed = np.array([p.y for p in group])
-    start = {"tilt": math.radians(3.0), "drop": drop_mm, "roll": 0.0}
+    start = {"pitch": 0.0, "drop": drop_mm, "roll": 0.0}
     result = optimize.least_squares(
         lambda params: predicted_rows(params) - observed, [start[name] for name in free]
     )
-    tilt, drop, roll = unpack(result.x)
+    pitch, drop, roll = unpack(result.x)
     residual_px = predicted_rows(result.x) - observed
     # a row error, in millimetres of distance along the floor at each placement
     residual_mm = [
@@ -116,8 +123,8 @@ def fit_floor(group: list[Placement], drop_mm: float) -> dict:
     focal = group[0].focal
     return {
         "fitted": free,
-        "tilt_down_deg": math.degrees(tilt),
-        "lens_offset_equivalent_px": focal * math.tan(tilt),
+        "pitch_up_deg": math.degrees(pitch),
+        "lens_offset_equivalent_px": focal * math.tan(pitch),
         "drop_mm": drop,
         "roll_deg": math.degrees(roll),
         "residual_px": [round(float(r), 1) + 0.0 for r in residual_px],
@@ -164,11 +171,21 @@ def report(placements: list[Placement], rig: RigGeometry) -> list[str]:
             lines += ["Floor: the rig file has no lens height.", ""]
             continue
         floor = fit_floor(group, drop_mm)
+        measured = [p.measured_pitch_deg for p in group if p.measured_pitch_deg is not None]
         lines += [
             f"Floor: fitted {', '.join(floor['fitted'])} from {len(group)} placements.",
-            f"- tilt down {_num(floor['tilt_down_deg'])} deg (rig file "
-            f"{_num(-rig.boresight_pitch_deg)}), or the lens centre "
+            f"- the camera points {_num(floor['pitch_up_deg'])} deg up (rig file "
+            f"{_num(rig.boresight_pitch_deg)}), or the lens centre sits "
             f"{_num(floor['lens_offset_equivalent_px'], 0)} px low: one angle, not separable here",
+        ]
+        if measured:
+            inclinometer = float(np.median(measured))
+            lines.append(
+                f"- the inclinometer says {_num(inclinometer)} deg up, leaving "
+                f"{_num(floor['pitch_up_deg'] - inclinometer)} deg for the lens's centre or "
+                "the camera's mount"
+            )
+        lines += [
             f"- lens {floor['drop_mm'] + BALL_DIAMETER_MM / 2:.0f} mm above the floor "
             f"(rig file {rig.lens_height_above_floor_mm:.0f})",
             f"- roll {_num(floor['roll_deg'])} deg",

@@ -680,14 +680,112 @@ def ball_readout(
     return readout
 
 
-def distance_cues(ball: Mapping, arm: Arm, tee_mm: float | None, rig_geometry: Path) -> dict:
+class EnclosureTilt:
+    """The kiosk's inclinometer service, run the same way beside the study page.
+
+    The LIS3DH is read ten times a second and only a still enclosure gives a
+    reading. Its departure from the rig file's expected placement moves every
+    sensor fixed to the housing, the camera as much as the radar, which is how
+    the kiosk corrects the radar's tilt; the same correction gives the camera's.
+    """
+
+    def __init__(
+        self,
+        rig_geometry: Path,
+        *,
+        bus: int = 1,
+        address: int = 0x18,
+        zero_offset_deg: float = 0.0,
+        service_factory: Callable[[], object] | None = None,
+    ):
+        self.rig_geometry = rig_geometry
+        self.bus, self.address, self.zero_offset_deg = bus, address, zero_offset_deg
+        self._factory = service_factory
+        self._service = None
+        self._error: str | None = None
+
+    def _make(self):
+        if self._factory is not None:
+            return self._factory()
+        from openflight.inclinometer import (  # noqa: PLC0415
+            LIS3DH,
+            InclinometerService,
+        )
+
+        return InclinometerService(
+            LIS3DH(bus_number=self.bus, address=self.address),
+            zero_offset_deg=self.zero_offset_deg,
+        )
+
+    def start(self) -> None:
+        if self._service is not None:
+            return
+        try:
+            service = self._make()
+            service.start()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._error = f"{type(exc).__name__}: {exc}"
+            return
+        self._service, self._error = service, None
+
+    def stop(self) -> None:
+        """Release the I2C bus, as the kiosk takes it for the swings."""
+        service, self._service = self._service, None
+        if service is not None:
+            try:
+                service.stop()
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+
+    def reading(self) -> dict:
+        from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+        if self._service is None:
+            return {"status": "off", "error": self._error}
+        selection = self._service.snapshot_for_impact(time.time())
+        data = {
+            "status": selection.status,
+            "error": self._service.last_error,
+            "zero_offset_deg": self.zero_offset_deg,
+        }
+        snapshot = selection.snapshot
+        if snapshot is None:
+            return data
+        rig = RigGeometry.from_json(self.rig_geometry)
+        expected = rig.expected_inclinometer_orientation().as_dict().get("pitch_deg") or 0.0
+        departure = snapshot.calibrated_pitch_deg - expected
+        data.update(
+            {
+                "pitch_deg": round(snapshot.calibrated_pitch_deg, 2),
+                # the service keeps pitch only; the lean across is from the same
+                # still window, about the sensor's x axis
+                "roll_deg": round(
+                    math.degrees(math.atan2(snapshot.x_g, math.hypot(snapshot.y_g, snapshot.z_g))),
+                    2,
+                ),
+                "expected_pitch_deg": round(expected, 2),
+                "camera_pitch_deg": round(rig.boresight_pitch_deg + departure, 2),
+                "gravity_g": round(snapshot.gravity_g, 3),
+            }
+        )
+        return data
+
+
+def distance_cues(
+    ball: Mapping,
+    arm: Arm,
+    tee_mm: float | None,
+    rig_geometry: Path,
+    tilt: Mapping | None = None,
+) -> dict:
     """How far the camera thinks the ball is, two ways, beside the tape.
 
     From its size: the focal length over the ball's width in the picture
     alone. From its place on the floor: the lens height over how far below
     the horizon the ball sits, which rests on the camera's tilt and the
-    lens's centre - the rig file's values until a calibration replaces them.
-    Each fails for its own reasons, which is what makes the tape useful.
+    lens's centre. The tilt is the inclinometer's, applied as the kiosk
+    applies it, when it has a still reading; the rig file's otherwise. Each
+    route fails for its own reasons, which is what makes the tape useful.
     """
     from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
 
@@ -700,8 +798,12 @@ def distance_cues(ball: Mapping, arm: Arm, tee_mm: float | None, rig_geometry: P
     drop = None
     if rig.lens_height_above_floor_mm is not None:
         drop = rig.lens_height_above_floor_mm - BALL_DIAMETER_MM / 2.0
+        measured = (tilt or {}).get("camera_pitch_deg")
+        pitch = rig.boresight_pitch_deg if measured is None else measured
+        cues["camera_pitch_deg"] = pitch
+        cues["camera_pitch_source"] = "rig file" if measured is None else "inclinometer"
         # a camera tilted up (+) sees the floor further below its axis
-        below = below_axis - math.radians(rig.boresight_pitch_deg)
+        below = below_axis - math.radians(pitch)
         if below > 0:
             along = drop / math.tan(below)
             aside = along * (ball["x"] - cx) / focal
@@ -716,15 +818,25 @@ def distance_cues(ball: Mapping, arm: Arm, tee_mm: float | None, rig_geometry: P
             if cues.get(key):
                 cues[key.replace("_mm", "_off_pct")] = round(100.0 * (cues[key] / tape - 1.0))
         if drop is not None and tape > drop:
-            # the downward tilt that would put the ball where the tape says
-            needed = below_axis - math.atan(drop / math.sqrt(tape**2 - drop**2))
-            cues["tilt_down_needed_deg"] = round(math.degrees(needed) + rig.boresight_pitch_deg, 2)
-            cues["lens_offset_equivalent_px"] = round(focal * math.tan(needed))
+            # the camera pitch (up +) that puts the ball where the tape says: a
+            # ball seen further below the axis than it lies below the horizon
+            # means the axis points up
+            needed = math.degrees(below_axis - math.atan(drop / math.sqrt(tape**2 - drop**2)))
+            cues["pitch_needed_deg"] = round(needed, 2)
+            # what the camera's own pitch leaves for the lens or its mount; a lens
+            # whose centre sits this far below the image's middle does the same
+            unexplained = needed - pitch
+            cues["pitch_unexplained_deg"] = round(unexplained, 2)
+            cues["lens_offset_equivalent_px"] = round(focal * math.tan(math.radians(unexplained)))
     return cues
 
 
 def record_placement(
-    sessions_root: Path, params: TesterParameters, status: Mapping, frame: np.ndarray
+    sessions_root: Path,
+    params: TesterParameters,
+    status: Mapping,
+    frame: np.ndarray,
+    tilt: Mapping | None = None,
 ) -> int:
     """Keep one taped placement: what the camera saw, its frame, and the tape."""
     folder = tester_root(sessions_root, params.tester_id) / "calibration"
@@ -742,6 +854,7 @@ def record_placement(
         "tee_mm": params.tee_mm,
         "applied": status.get("applied"),
         "ball": status.get("ball"),
+        "inclinometer": dict(tilt or {}),
         "frame": name,
     }
     with log.open("a", encoding="utf-8") as handle:
@@ -1059,11 +1172,13 @@ def create_app(
     radar_port: str = DEFAULT_RADAR_PORT,
     manager: TesterJobManager | None = None,
     live_view: LiveView | None = None,
+    tilt: EnclosureTilt | None = None,
 ) -> Flask:
     """Build the standalone tester service."""
     app = Flask(__name__)
     jobs = manager or TesterJobManager()
     live = live_view or LiveView()
+    enclosure = tilt or EnclosureTilt(rig_geometry)
 
     def parameters() -> TesterParameters:
         source = request.get_json(silent=True) if request.method == "POST" else request.args
@@ -1080,6 +1195,7 @@ def create_app(
             gain=choice["gain"],
             gain_source="gain screen",
             gain_exposure_us=params.arm.exposure_us,
+            gain_inclinometer=enclosure.reading(),
             gain_mean=choice["mean"],
             gain_clipped_pct=choice["clipped_pct"],
             lighting_required=choice["lighting_required"],
@@ -1111,6 +1227,7 @@ def create_app(
                     "job": jobs.status(),
                     "arm": arm_progress(sessions_root, params),
                     "study": study_overview(sessions_root, params.tester_id),
+                    "inclinometer": enclosure.reading(),
                     "package_ready": _package_path(sessions_root, params.tester_id).is_file(),
                 }
             )
@@ -1137,11 +1254,14 @@ def create_app(
                     tee_range_m=params.tee_mm / 1000.0,
                     tee_range_source="tape",
                 )
-            on_finish = (
-                (lambda _a, rc: record_gain(params) if rc == 0 else None)
-                if action == "gain"
-                else None
-            )
+            if action == "gain":
+                on_finish = lambda _a, rc: record_gain(params) if rc == 0 else None  # noqa: E731
+            elif action == "swings":
+                # the kiosk runs its own inclinometer service for the swings
+                enclosure.stop()
+                on_finish = lambda _a, _rc: enclosure.start()  # noqa: E731
+            else:
+                on_finish = None
             live.stop()  # the camera does one thing at a time
             jobs.start(action, commands, log_path, on_finish=on_finish)
             return jsonify({"job": jobs.status(), "arm": arm_progress(sessions_root, params)}), 202
@@ -1175,7 +1295,9 @@ def create_app(
                 gain,
                 state.get("black_floor_dn"),
                 expected_ball_diameter_px(params.arm, params.tee_mm, rig_geometry),
-                lambda ball: distance_cues(ball, params.arm, params.tee_mm, rig_geometry),
+                lambda ball: distance_cues(
+                    ball, params.arm, params.tee_mm, rig_geometry, enclosure.reading()
+                ),
             )
             return jsonify(live.snapshot()[1])
         except RuntimeError as exc:
@@ -1192,7 +1314,7 @@ def create_app(
             frame, status = live.recent_median(), live.snapshot()[1]
             if frame is None or not (status.get("ball") or {}).get("found"):
                 raise RuntimeError("start the live view and wait until it finds the ball")
-            count = record_placement(sessions_root, params, status, frame)
+            count = record_placement(sessions_root, params, status, frame, enclosure.reading())
             return jsonify({"placements": count})
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 409
@@ -1269,12 +1391,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--sessions-root", type=Path, default=DEFAULT_SESSIONS_ROOT)
     parser.add_argument("--rig-geometry", type=Path, default=DEFAULT_RIG_GEOMETRY)
     parser.add_argument("--radar-port", default=DEFAULT_RADAR_PORT, help="OPS243 serial port")
+    parser.add_argument(
+        "--no-inclinometer", action="store_true", help="Leave the LIS3DH unread (not on a Pi)"
+    )
+    parser.add_argument("--inclinometer-address", type=lambda value: int(value, 0), default=0x18)
+    parser.add_argument("--inclinometer-zero-offset-deg", type=float, default=0.0)
     args = parser.parse_args(argv)
-    create_app(
-        sessions_root=args.sessions_root,
-        rig_geometry=args.rig_geometry,
-        radar_port=args.radar_port,
-    ).run(host=args.host, port=args.port)
+    enclosure = EnclosureTilt(
+        args.rig_geometry,
+        address=args.inclinometer_address,
+        zero_offset_deg=args.inclinometer_zero_offset_deg,
+    )
+    if not args.no_inclinometer:
+        enclosure.start()
+    try:
+        create_app(
+            sessions_root=args.sessions_root,
+            rig_geometry=args.rig_geometry,
+            radar_port=args.radar_port,
+            tilt=enclosure,
+        ).run(host=args.host, port=args.port)
+    finally:
+        enclosure.stop()
     return 0
 
 

@@ -56,7 +56,10 @@ bash scripts/start-tester.sh
 Open `http://127.0.0.1:8765` in the browser on the Pi's screen.
 
 The runner holds each arm's exposure and gain fixed for the whole run;
-auto-exposure is off by design. The OPS243 is expected on the GPIO UART
+auto-exposure is off by design. It reads the enclosure's inclinometer the
+whole time, with the service the kiosk runs, shows the enclosure's tilt, and
+applies it to the camera the kiosk's way; during **Capture swings** it hands
+the sensor to the kiosk and takes it back afterwards. The OPS243 is expected on the GPIO UART
 (`/dev/ttyAMA0`); pass `--radar-port <port>` to `start-tester.sh` if yours is
 elsewhere. The first `start-tester.sh` builds the environment and takes a few
 minutes; later starts are quick.
