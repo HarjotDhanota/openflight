@@ -49,6 +49,7 @@ to look at a frame. Grouped by what consumes them.
 | delivered fps, gap count, max gap | `sensor_timestamp_ns` via `timing_summary` | Frame-rate arms are only comparable at their delivered rate; a gap in the pre-impact window loses the clubhead |
 | exposure_us, analogue_gain, per frame | `frames.npz` arrays | Confirms the ceiling was held; the config block records only the startup value |
 | camera light index | scene median DN at known exposure × gain, taken by the gain screen | The pooling key across testers |
+| flicker | periodicity and swing of per-frame mean brightness within a capture | Mains-driven LED and fluorescent light pulses at 100/120 Hz; at sub-millisecond exposures that is frame-to-frame banding. Measured from the frames, never asked of the tester |
 | resting-ball diameter, px | `detect_reference_ball` on the pre-swing frames | **Falsifier H1**: equal across arms 1–2, 2× in arms 3–4. Any other pattern means mode substitution or a software rescale |
 
 ### B. Resting ball — the geometry anchor

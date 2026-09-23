@@ -137,7 +137,6 @@ class TesterParameters:
     tester_id: str
     arm_id: str
     environment: str
-    light_type: str
 
     @property
     def arm(self) -> Arm:
@@ -158,10 +157,7 @@ class TesterParameters:
         environment = str(payload.get("environment", "")).strip().lower()
         if environment not in ("indoors", "outdoors"):
             raise ValueError("environment must be indoors or outdoors")
-        light_type = str(payload.get("light_type", "")).strip().lower()[:40]
-        return cls(
-            tester_id=tester_id, arm_id=arm_id, environment=environment, light_type=light_type
-        )
+        return cls(tester_id=tester_id, arm_id=arm_id, environment=environment)
 
 
 def tester_root(sessions_root: Path, tester_id: str) -> Path:
@@ -202,7 +198,6 @@ def write_arm_state(sessions_root: Path, params: TesterParameters, **updates: ob
             "tester_id": params.tester_id,
             "club": CLUB,
             "environment": params.environment,
-            "light_type": params.light_type,
             "updated_at": datetime.now(timezone.utc).isoformat(),
             **updates,
         }
@@ -570,7 +565,7 @@ def study_overview(sessions_root: Path, tester_id: str) -> dict:
         arm = ARMS[arm_id]
         state = read_arm_state(sessions_root, tester_id, arm_id)
         try:
-            probe = TesterParameters(tester_id, arm_id, "indoors", "")
+            probe = TesterParameters(tester_id, arm_id, "indoors")
             progress = arm_progress(sessions_root, probe)
         except ValueError:
             progress = {}

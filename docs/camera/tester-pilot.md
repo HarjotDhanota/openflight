@@ -25,8 +25,8 @@ bash scripts/start-tester.sh
 
 Open `http://127.0.0.1:8765` on the Pi.
 
-1. **Who and where.** A tester ID, indoors or outdoors, and the light type. That
-   is everything you type. Keep the light the same for the whole session; if it
+1. **Who and where.** A tester ID and indoors or outdoors. That is everything
+   you type; the frames carry the light level and any flicker. Keep the light the same for the whole session; if it
    changes, start a new tester ID.
 2. **Arms, top to bottom.** For each arm: **Find gain** (a few seconds on the
    static scene — it picks the gain that lights the frame correctly at that

@@ -17,7 +17,6 @@ def params(**overrides):
         "tester_id": "20260922-name",
         "arm_id": "arm1",
         "environment": "indoors",
-        "light_type": "led",
     }
     payload.update(overrides)
     return ts.TesterParameters.from_payload(payload)
@@ -242,7 +241,6 @@ class TestApp:
                 "tester_id": "20260922-name",
                 "arm_id": "arm1",
                 "environment": "indoors",
-                "light_type": "led",
             },
         )
         assert response.status_code == 200
@@ -258,7 +256,6 @@ class TestApp:
                 "tester_id": "20260922-name",
                 "arm_id": "arm1",
                 "environment": "indoors",
-                "light_type": "led",
                 "action": "swings",
             },
         )
@@ -287,7 +284,6 @@ class TestApp:
                 "tester_id": "20260922-name",
                 "arm_id": "arm1",
                 "environment": "indoors",
-                "light_type": "led",
                 "action": "preflight",
             },
         )

@@ -77,11 +77,6 @@
           <label>Where<select id="environment">
             <option value="indoors">Indoors</option><option value="outdoors">Outdoors</option>
           </select></label>
-          <label id="light-label">Light type<select id="light-type">
-            <option value="led">LED</option><option value="fluorescent">Fluorescent</option>
-            <option value="incandescent">Incandescent</option><option value="window">Daylight through windows</option>
-            <option value="sun">Direct sun</option><option value="overcast">Overcast</option><option value="shade">Shade</option>
-          </select></label>
         </form>
       </section>
 
@@ -123,7 +118,6 @@
           tester_id: el('tester-id').value.trim(),
           arm_id: currentArm,
           environment: el('environment').value,
-          light_type: el('light-type').value,
         };
       }
       function query() { return new URLSearchParams(payload()).toString(); }
@@ -212,14 +206,6 @@
         render(await request('/api/tester/package', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload()),
         }));
-      });
-      el('environment').addEventListener('change', () => {
-        const outdoors = el('environment').value === 'outdoors';
-        for (const opt of el('light-type').options) {
-          const isOut = ['sun', 'overcast', 'shade'].includes(opt.value);
-          opt.hidden = outdoors ? !isOut : isOut;
-        }
-        el('light-type').value = outdoors ? 'overcast' : 'led';
       });
 
       refresh();
