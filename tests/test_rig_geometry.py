@@ -63,8 +63,8 @@ class TestTheFile:
     def test_the_shipped_v3_file_derives_the_measured_numbers(self):
         setup = RigGeometry.from_json(V3).enclosure_setup()
         assert setup.missing == ()
-        assert setup.camera_mount_height_m == pytest.approx(0.1035, abs=5e-4)
-        assert setup.radar_height_m == pytest.approx(0.0595, abs=5e-4)  # lens 103.5, RX 44 below
+        assert setup.camera_mount_height_m == pytest.approx(0.095, abs=5e-4)
+        assert setup.radar_height_m == pytest.approx(0.051, abs=5e-4)  # lens 95, RX 44 below
         assert setup.camera_lateral_offset_m == pytest.approx(0.0, abs=5e-4)
         assert setup.iwr_tilt_deg == pytest.approx(10.0)
 
