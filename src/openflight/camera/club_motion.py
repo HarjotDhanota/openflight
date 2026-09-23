@@ -125,6 +125,10 @@ PICTURE_NOISE_FLOOR_DN = 1.0
 # readout mode, so this is about 10 degrees: a ball 0.35 m off the line at
 # 2 m keeps most of its weight, a door stop 22 degrees off keeps a tenth.
 LATERAL_SIGMA_FRACTION = 0.13
+# The best fit quality a real ball has reached, with room to spare (0.65 to
+# 2 m, room light: 3.5 to 19.8). A candidate whose position leaves it needing
+# more than this to win is not fitted: the fits are nearly all the time spent.
+MAX_BALL_QUALITY = 40.0
 
 
 def _lit_ball_near_size(  # pylint: disable=too-many-arguments,too-many-locals
@@ -170,32 +174,37 @@ def _lit_ball_near_size(  # pylint: disable=too-many-arguments,too-many-locals
             kept.append((row, col))
         if len(kept) == BALL_CANDIDATES:
             break
-    fits = []
-    for row, col in kept:
+    width = image.shape[1]
+
+    def prior(x: float, y: float) -> float:
+        across = (x - width / 2.0) / (LATERAL_SIGMA_FRACTION * width)
+        down = (y - expected_row[0]) / (expected_row[1] / 2.0) if expected_row else 0.0
+        return math.exp(-0.5 * (across**2 + down**2))
+
+    seeds = [
+        ((col + x0 + 0.5) * factor - 0.5, (row + y0 + 0.5) * factor - 0.5, float(score[row, col]))
+        for row, col in kept
+    ]
+    # the likeliest first: the most contrast where the ball has to be
+    seeds.sort(key=lambda seed: seed[2] * prior(seed[0], seed[1]), reverse=True)
+    best, best_value = None, 0.0
+    for x, y, _contrast in seeds:
+        if best is not None and MAX_BALL_QUALITY * prior(x, y) < best_value:
+            continue  # from here even the best fit a ball gets could not win
         fit = fit_lit_ball(
-            image,
-            (col + x0 + 0.5) * factor - 0.5,
-            (row + y0 + 0.5) * factor - 0.5,
-            expected_radius,
-            noise_dn=noise,
-            expected_radius=expected_radius,
+            image, x, y, expected_radius, noise_dn=noise, expected_radius=expected_radius
         )
         # a fit can slide off its seed onto something else: above or below the
         # rows the ball can rest in, it is not the ball
-        if fit is not None and (
-            expected_row is None or abs(fit.y - expected_row[0]) <= expected_row[1]
+        if fit is None or (
+            expected_row is not None and abs(fit.y - expected_row[0]) > expected_row[1]
         ):
-            fits.append(fit)
-    if not fits:
+            continue
+        value = fit.quality * prior(fit.x, fit.y)
+        if value > best_value:
+            best, best_value = fit, value
+    if best is None:
         return None
-    width = image.shape[1]
-
-    def weight(fit) -> float:
-        across = (fit.x - width / 2.0) / (LATERAL_SIGMA_FRACTION * width)
-        down = (fit.y - expected_row[0]) / (expected_row[1] / 2.0) if expected_row else 0.0
-        return fit.quality * math.exp(-0.5 * (across**2 + down**2))
-
-    best = max(fits, key=weight)
     return ReferenceBall(
         x=best.x,
         y=best.y,

@@ -61,17 +61,35 @@ class LitBall:
         return self.diffuse_dn / max(self.misfit_dn, 1e-6)
 
 
+def _gaussian_weights(sigma: float) -> np.ndarray:
+    """The kernel ``ndimage.gaussian_filter`` uses, made once rather than on every call."""
+    reach = int(4.0 * sigma + 0.5)
+    offsets = np.arange(-reach, reach + 1, dtype=np.float64)
+    weights = np.exp(-0.5 * offsets * offsets / (sigma * sigma))
+    return weights / weights.sum()
+
+
+EDGE_BLUR_WEIGHTS = _gaussian_weights(EDGE_BLUR_PX)
+
+
 def _render(params: np.ndarray, yy: np.ndarray, xx: np.ndarray) -> np.ndarray:
+    """The lit ball on its ground; ``yy`` a column of rows and ``xx`` a row of columns.
+
+    The fit draws this a few hundred times per start, so the pieces that do not
+    change with the parameters stay as vectors and the blur's kernel is made once.
+    """
     cx, cy, radius, azimuth, tilt, shade, diffuse, ground, ground_x, ground_y = params
     dx, dy = xx - cx, yy - cy
-    rho2 = (dx * dx + dy * dy) / (radius * radius)
-    nz = np.sqrt(np.clip(1.0 - rho2, 0.0, None))
+    distance2 = dx * dx + dy * dy
+    nz = np.sqrt(np.clip(1.0 - distance2 / (radius * radius), 0.0, None))
     light = (math.sin(tilt) * math.cos(azimuth), math.sin(tilt) * math.sin(azimuth), math.cos(tilt))
     lit = np.clip(dx / radius * light[0] + dy / radius * light[1] + nz * light[2], 0.0, None)
     ball = shade + diffuse * lit
-    cover = np.clip(radius + 0.5 - np.sqrt(dx * dx + dy * dy), 0.0, 1.0)
+    cover = np.clip(radius + 0.5 - np.sqrt(distance2), 0.0, 1.0)
     floor = ground + ground_x * (xx - xx.mean()) + ground_y * (yy - yy.mean())
-    picture = ndimage.gaussian_filter(cover * ball + (1.0 - cover) * floor, EDGE_BLUR_PX)
+    picture = cover * ball + (1.0 - cover) * floor
+    for axis in (0, 1):
+        picture = ndimage.correlate1d(picture, EDGE_BLUR_WEIGHTS, axis=axis, mode="reflect")
     return np.clip(picture, 0.0, 255.0)
 
 
@@ -139,7 +157,8 @@ def fit_lit_ball(
     patch = image[top:bottom, left:right].astype(np.float64)
     if patch.shape[0] < 8 or patch.shape[1] < 8:
         return None
-    yy, xx = np.indices(patch.shape, dtype=np.float64)
+    yy = np.arange(patch.shape[0], dtype=np.float64)[:, None]
+    xx = np.arange(patch.shape[1], dtype=np.float64)[None, :]
     px, py = x - left, y - top
     distance = np.hypot(xx - px, yy - py)
     ring = patch[(distance >= 1.6 * guess) & (distance <= 2.3 * guess)]
