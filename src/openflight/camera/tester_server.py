@@ -836,8 +836,14 @@ def distance_cues(
     rig = RigGeometry.from_json(rig_geometry)
     focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
     cx, cy = arm.width / 2.0, arm.height / 2.0
-    size_px = ball.get("image_only_diameter_px") or ball["diameter_px"]
-    cues: dict = {"from_size_mm": round(focal * BALL_DIAMETER_MM / size_px)}
+    # with a tape, the ring's size IS the tape's: only the picture's own reading
+    # of the same ball is an independent estimate, and without one there is none
+    size_px = (
+        ball.get("image_only_diameter_px")
+        if "expected_diameter_px" in ball
+        else ball.get("diameter_px")
+    )
+    cues: dict = {"from_size_mm": round(focal * BALL_DIAMETER_MM / size_px) if size_px else None}
     below_axis = math.atan((ball["y"] - cy) / focal)
     drop = None
     if rig.lens_height_above_floor_mm is not None:

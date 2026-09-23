@@ -891,3 +891,12 @@ class TestTheRowTheFloorPredicts:
         _row, band = ts.expected_ball_row_px(ts.ARMS["arm5"], 2051.0, RIG, {"status": "off"})
         assert band == pytest.approx(150.0)
         assert ts.expected_ball_row_px(ts.ARMS["arm5"], None, RIG) is None
+
+
+def test_the_size_route_never_reads_the_tapes_own_size_back():
+    # the picture alone found something else: the ring's size is the tape's
+    ball = {"x": 748.6, "y": 505.8, "diameter_px": 19.9, "expected_diameter_px": 19.7}
+    ball["image_only_diameter_px"] = None
+    cues = ts.distance_cues(ball, ts.ARMS["arm5"], 2051.0, RIG)
+    assert cues["from_size_mm"] is None
+    assert "from_size_off_pct" not in cues
