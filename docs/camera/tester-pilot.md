@@ -1,74 +1,81 @@
-# Tester capture pilot
+# Camera mode study — tester guide
 
-Testers collect paired camera and radar recordings. Maintainers analyse them.
-This pilot deliberately ships no estimated club or ball output to the tester:
-the page reports whether a capture saved usable data, nothing more.
+You collect paired camera and radar recordings across four camera modes with a
+7-iron. We analyse them against `mode-study-analysis.md`. The page never shows
+estimated club or ball numbers; it shows whether each swing saved usable,
+paired data, and how many of the five each mode has accepted.
 
 ## Requirements
 
-- **Cormac's enclosure.** The pilot validates one enclosure design first.
-  Results from other enclosures cannot be pooled with it.
-- Raspberry Pi 5, OV9281 global-shutter camera, OPS243 Doppler radar,
-  IWR6843LEVM, and a working sound trigger.
-- The camera and radar must both be present. A camera-only session is not
-  paired data and cannot answer the questions this pilot asks.
+- The v3 enclosure (`config/enclosure_v3_rig_geometry.json`), on its static
+  feet. The geometry comes from that file; you measure nothing.
+- Raspberry Pi 5, OV9281 with the OpenFlight high-speed driver installed,
+  OPS243, IWR6843LEVM, sound trigger, and the LIS3DH connected. The
+  inclinometer runs on every session; it is how ball height is solved.
+- A 7-iron. Nothing else for this study.
 
 ## Running it
 
-Stop the normal kiosk first, then from the repository root:
+Stop the normal kiosk, then from the repository root:
 
 ```bash
+sudo apt install -y swig liblgpio-dev python3-dev   # once, if uv sync fails on lgpio
 bash scripts/start-tester.sh
 ```
 
-Open `http://127.0.0.1:8765` on the Pi. The page runs four steps in order:
+Open `http://127.0.0.1:8765` on the Pi.
 
-| Step | What it does |
-| --- | --- |
-| Preflight | Records commit, kernel, detected camera modes, and throttling state. |
-| Checkerboard views | Auto-triggers 12 captures while you reposition a printed checkerboard. |
-| Exposure screen | Sweeps exposure and gain on a static scene and scores brightness and clipping. |
-| Capture paired swings | Starts the normal kiosk with pinned settings and keeps running while you hit shots. Press **Stop** when done. |
+1. **Who and where.** A tester ID, indoors or outdoors, and the light type. That
+   is everything you type. Keep the light the same for the whole session; if it
+   changes, start a new tester ID.
+2. **Arms, top to bottom.** For each arm: **Find gain** (a few seconds on the
+   static scene — it picks the gain that lights the frame correctly at that
+   arm's exposure and records the light level), then **Capture swings**. The
+   kiosk opens; select **7-iron once**, it stays selected; hit until the arm
+   shows **5 accepted**; press **Stop**.
+   - Arm 3 has no gain step. It deliberately reuses arm 2's exposure and gain
+     so the only difference between them is the readout.
+   - If an arm says **lighting required**, hit its five swings anyway. Its
+     acceptance rate at your light level is part of the answer.
+3. **Package everything** and send the archive through the agreed channel. Raw
+   data stays out of Git.
 
-**Capture paired swings** runs `scripts/start-kiosk.sh` with `--debug`,
-`--iwr6843`, and `--camera-capture`. `--debug` is what retains the raw IWR
-`.l3dump` files; without it the radar side of the pairing is lost.
+## The arms
 
-The service exposes only these fixed actions. It does not accept arbitrary
-commands from the browser.
+| Arm | Mode | Exposure | Why it exists |
+| --- | --- | --- | --- |
+| 1 | 320×200 @ 450 | 87 µs | reference: 2× sampling, high frame rate |
+| 2 | 640×400 @ 120 | 87 µs | 2× sampling at 1:1's frame rate — the control |
+| 3 | 1280×800 @ 120 | arm 2's | 1:1 with light held equal → pixels alone |
+| 4 | 1280×800 @ 120 | 44 µs | 1:1 at its own ceiling → as it would ship |
+| 5 (optional) | 640×400 @ 250 | 87 µs | middle of the frame-rate curve |
 
-## Measurements
+Exposure is not a setting you choose. It is the longest exposure that keeps a
+130 mph clubhead under 1.5 px of smear at that mode's plate scale. Gain is
+found per arm from a static screen; the sensor's analogue gain tops out at
+15.9×, and an arm that needs more than that at your light is telling you its
+floor.
 
-Enter the measured camera-lens-optical-centre to RX-midpoint vector, the camera
-and radar heights, and the ball-to-antenna distance. They are written into
-`tester.json` and shipped with the archive.
+## What counts as accepted
 
-The pilot records these numbers; it does not solve geometry from them and it
-does not ship enclosure constants. The previous v42 enclosure geometry is
-invalid for this build. Camera intrinsics are solved off-device from the
-checkerboard views, so intrinsics are per-mode: recapture them if you change
-camera mode or refocus.
+The delivery estimator reports a named status for every swing. **Accepted**
+means it produced a club delivery (`ok`, `fused`, `chained_high`,
+`approach_high`). Everything else — `low_light`, `overexposed`,
+`rejected_insufficient_features`, `no_impact`, … — is recorded with its reason
+and counted against the arm. The page also names pairing problems: camera
+frames without radar dumps, or counts that do not line up.
 
-## Checking and sending
+## What is deliberately absent
 
-**Check and send** reports camera captures holding frames, radar dumps,
-checkerboard views, and exposure runs, plus any problems — missing dumps,
-captures that saved no `frames.npz`, camera and radar counts that do not pair
-up, or measurements that were never recorded.
-
-**Package data** writes one uncompressed archive. Send the whole archive, not
-just video: it carries settings, measurements, camera frames, radar dumps, and
-logs. Raw recordings stay out of Git.
+No checkerboard: focal length is a property of the camera module, lens and
+mode, calibrated once by the maintainer and shared. No enclosure measurements:
+the rig file carries them. No lux meter: the gain screen records a light index
+that is comparable across every unit. No exposure or gain fields: both are
+derived. No driver or wedge yet; no second camera; no fusion output on screen.
 
 ## What this pilot does not do
 
-- It does not change production camera defaults, driver tables, enclosure
-  geometry, calibration constants, thresholds, or fusion behaviour. Each of
-  those is a separate maintainer-approved pull request.
-- It does not show estimated impact location, face angle, club path, or any
-  other fusion output.
-- Camera/radar agreement is a consistency check, not proof of absolute
-  accuracy.
-
-Disclose substantive AI assistance under `AI-POLICY.md`. Never describe replay
-or simulation as hardware validation.
+It changes no production camera default, driver table, geometry, calibration
+constant, threshold, or fusion behaviour. Each of those is a separate
+maintainer-approved pull request. Camera/radar agreement is a consistency
+check, not proof of absolute accuracy.
