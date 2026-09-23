@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shlex
@@ -679,6 +680,75 @@ def ball_readout(
     return readout
 
 
+def distance_cues(ball: Mapping, arm: Arm, tee_mm: float | None, rig_geometry: Path) -> dict:
+    """How far the camera thinks the ball is, two ways, beside the tape.
+
+    From its size: the focal length over the ball's width in the picture
+    alone. From its place on the floor: the lens height over how far below
+    the horizon the ball sits, which rests on the camera's tilt and the
+    lens's centre - the rig file's values until a calibration replaces them.
+    Each fails for its own reasons, which is what makes the tape useful.
+    """
+    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+    rig = RigGeometry.from_json(rig_geometry)
+    focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
+    cx, cy = arm.width / 2.0, arm.height / 2.0
+    size_px = ball.get("image_only_diameter_px") or ball["diameter_px"]
+    cues: dict = {"from_size_mm": round(focal * BALL_DIAMETER_MM / size_px)}
+    below_axis = math.atan((ball["y"] - cy) / focal)
+    drop = None
+    if rig.lens_height_above_floor_mm is not None:
+        drop = rig.lens_height_above_floor_mm - BALL_DIAMETER_MM / 2.0
+        # a camera tilted up (+) sees the floor further below its axis
+        below = below_axis - math.radians(rig.boresight_pitch_deg)
+        if below > 0:
+            along = drop / math.tan(below)
+            aside = along * (ball["x"] - cx) / focal
+            cues["from_floor_mm"] = round(math.sqrt(along**2 + aside**2 + drop**2))
+        else:
+            cues["from_floor_mm"] = None
+    if tee_mm is not None:
+        offset = rig.iwr_offset_mm[2] if rig.iwr_offset_mm else 0.0
+        tape = tee_mm + offset
+        cues["tape_mm"] = round(tape)
+        for key in ("from_size_mm", "from_floor_mm"):
+            if cues.get(key):
+                cues[key.replace("_mm", "_off_pct")] = round(100.0 * (cues[key] / tape - 1.0))
+        if drop is not None and tape > drop:
+            # the downward tilt that would put the ball where the tape says
+            needed = below_axis - math.atan(drop / math.sqrt(tape**2 - drop**2))
+            cues["tilt_down_needed_deg"] = round(math.degrees(needed) + rig.boresight_pitch_deg, 2)
+            cues["lens_offset_equivalent_px"] = round(focal * math.tan(needed))
+    return cues
+
+
+def record_placement(
+    sessions_root: Path, params: TesterParameters, status: Mapping, frame: np.ndarray
+) -> int:
+    """Keep one taped placement: what the camera saw, its frame, and the tape."""
+    folder = tester_root(sessions_root, params.tester_id) / "calibration"
+    folder.mkdir(parents=True, exist_ok=True)
+    log = folder / "placements.jsonl"
+    count = sum(1 for _ in log.open(encoding="utf-8")) if log.is_file() else 0
+    name = f"placement-{count + 1:02d}-{params.arm_id}.pgm"
+    with (folder / name).open("wb") as handle:
+        handle.write(f"P5\n{frame.shape[1]} {frame.shape[0]}\n255\n".encode("ascii"))
+        handle.write(frame.astype(np.uint8).tobytes())
+    entry = {
+        "placement": count + 1,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "arm": params.arm.as_dict(),
+        "tee_mm": params.tee_mm,
+        "applied": status.get("applied"),
+        "ball": status.get("ball"),
+        "frame": name,
+    }
+    with log.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry) + "\n")
+    return count + 1
+
+
 def mark_ball(image: np.ndarray, ball: Mapping) -> np.ndarray:
     """A one-pixel ring just outside the ball the detector found."""
     marked = image.copy()
@@ -720,6 +790,7 @@ class LiveView:
         self._recent: deque[np.ndarray] = deque(maxlen=5)
         self._ball: dict | None = None
         self._expected: float | None = None
+        self._cues: Callable[[Mapping], dict] | None = None
         self._looker: threading.Thread | None = None
 
     @property
@@ -733,12 +804,14 @@ class LiveView:
         gain: float,
         black_floor: float | None = None,
         expected_diameter_px: float | None = None,
+        cues: Callable[[Mapping], dict] | None = None,
     ) -> None:
         """Open the arm's mode, or only change exposure and gain if it is already open."""
         with self._lock:
             self._pending = live_controls(arm, exposure_us, gain)
             self._black_floor = black_floor
             self._expected = expected_diameter_px
+            self._cues = cues
             self._error = None
             if self.running and self._arm == arm:
                 return
@@ -772,12 +845,20 @@ class LiveView:
         focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
         while not self._stop.wait(LIVE_BALL_EVERY_S):
             with self._lock:
-                recent, expected = list(self._recent), self._expected
+                recent, expected, cues = list(self._recent), self._expected, self._cues
             if len(recent) < 3:
                 continue
             ball = ball_readout(np.stack(recent), focal, expected)
+            if ball.get("found") and cues is not None:
+                ball["camera_says"] = cues(ball)
             with self._lock:
                 self._ball = ball
+
+    def recent_median(self) -> np.ndarray | None:
+        """The frame the ball was looked for in: the median of the latest few."""
+        with self._lock:
+            recent = list(self._recent)
+        return np.median(np.stack(recent), axis=0) if len(recent) >= 3 else None
 
     def snapshot(self) -> tuple[np.ndarray | None, dict]:
         with self._lock:
@@ -1094,12 +1175,43 @@ def create_app(
                 gain,
                 state.get("black_floor_dn"),
                 expected_ball_diameter_px(params.arm, params.tee_mm, rig_geometry),
+                lambda ball: distance_cues(ball, params.arm, params.tee_mm, rig_geometry),
             )
             return jsonify(live.snapshot()[1])
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 409
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
+
+    @app.post("/api/tester/placement")
+    def placement():
+        try:
+            params = TesterParameters.from_payload(request.get_json(silent=True))
+            if params.tee_mm is None:
+                raise ValueError("enter the radar-to-ball distance first")
+            frame, status = live.recent_median(), live.snapshot()[1]
+            if frame is None or not (status.get("ball") or {}).get("found"):
+                raise RuntimeError("start the live view and wait until it finds the ball")
+            count = record_placement(sessions_root, params, status, frame)
+            return jsonify({"placements": count})
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 409
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.get("/api/tester/placements")
+    def placements():
+        try:
+            params = parameters()
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        log = tester_root(sessions_root, params.tester_id) / "calibration" / "placements.jsonl"
+        rows = (
+            [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line]
+            if log.is_file()
+            else []
+        )
+        return jsonify({"placements": rows})
 
     @app.get("/api/tester/live")
     def live_status():

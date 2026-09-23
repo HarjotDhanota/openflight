@@ -96,9 +96,11 @@
             <label>Live exposure<select id="live-exposure"></select></label>
             <label>Live gain<select id="live-gain"></select></label>
             <button type="button" id="live-toggle">Start live view</button>
+            <button type="button" id="record-placement" disabled>Record this placement</button>
           </div>
           <div class="light" id="live-stats"></div>
           <div class="light" id="live-ball"></div>
+          <div class="light" id="live-distance"></div>
           <div id="live-frames" hidden>
             <figure><img id="live-raw" alt="Live frame as captured" />
               <figcaption>As captured, at this arm's readout mode</figcaption></figure>
@@ -243,6 +245,7 @@
         liveOn = on;
         el('live-frames').hidden = !on;
         el('live-toggle').textContent = on ? 'Stop live view' : 'Start live view';
+        el('record-placement').disabled = !on;
       }
       function renderLive(s) {
         const problem = s.failed || s.error;
@@ -266,6 +269,26 @@
             `<span>edge <b>${b.edge_dn_per_px}</b> per px</span>`
           : `<span class="problem">ball not found: ${b.reason}</span>`;
       }
+      function renderDistance(b) {
+        const c = b && b.camera_says;
+        if (!c) { el('live-distance').innerHTML = ''; return; }
+        const mm = (v) => (v == null ? '?' : `${(v / 1000).toFixed(2)} m`);
+        const off = (v) => (v == null ? '' : ` (${v > 0 ? '+' : ''}${v}%)`);
+        el('live-distance').innerHTML =
+          `<span>the camera says <b>${mm(c.from_size_mm)}</b>${off(c.from_size_off_pct)} from the ball's size</span>` +
+          `<span>and <b>${mm(c.from_floor_mm)}</b>${off(c.from_floor_off_pct)} from where it sits on the floor</span>` +
+          (c.tape_mm != null ? `<span>your tape: <b>${mm(c.tape_mm)}</b> from the lens</span>` : '') +
+          (c.tilt_down_needed_deg != null
+            ? `<span>the floor agrees with the tape if the camera tilts <b>${c.tilt_down_needed_deg}°</b> down (or the lens sits ${c.lens_offset_equivalent_px} px off centre)</span>`
+            : '');
+      }
+      async function recordPlacement() {
+        const r = await request('/api/tester/placement', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload()),
+        });
+        el('record-placement').textContent = r.failed ? 'Record this placement' : `Recorded ${r.placements} — move the ball and record again`;
+        if (r.failed) el('live-distance').innerHTML += `<span class="problem">${r.failed}</span>`;
+      }
       async function liveStart() {
         const status = await request('/api/tester/live', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -287,9 +310,12 @@
         const t = Date.now();
         el('live-raw').src = `/api/tester/live.png?view=raw&t=${t}`;
         el('live-boost').src = `/api/tester/live.png?view=boost&t=${t}`;
-        renderLive(await request('/api/tester/live'));
+        const status = await request('/api/tester/live');
+        renderLive(status);
+        renderDistance(status.ball);
       }
       el('live-toggle').addEventListener('click', () => (liveOn ? liveStop() : liveStart()));
+      el('record-placement').addEventListener('click', recordPlacement);
       el('live-exposure').addEventListener('change', () => { if (liveOn) liveStart(); });
       el('live-gain').addEventListener('change', () => { if (liveOn) liveStart(); });
       setInterval(liveTick, 350);

@@ -659,3 +659,52 @@ class TestTheTapeGivesTheBallsSize:
     def test_a_tape_far_from_the_picture_names_the_suspects(self):
         readout = ts.ball_readout(_ball_frames(110, 230), ts.FOCAL_PX_2X, 24.0)
         assert "check the tape" in readout.get("size_check", "")
+
+
+class TestTheCameraSaysHowFar:
+    def test_both_routes_agree_with_the_tape_on_a_level_camera(self):
+        # a ball 1041 mm from the lens, on the floor, centred: where a level
+        # 2.8 mm camera 95 mm up would see it
+        focal, drop = ts.FOCAL_PX_1X, 95.0 - ts.BALL_DIAMETER_MM / 2
+        along = (1041.0**2 - drop**2) ** 0.5
+        ball = {
+            "x": 640.0,
+            "y": 400.0 + focal * drop / along,
+            "diameter_px": focal * ts.BALL_DIAMETER_MM / 1041.0,
+        }
+        cues = ts.distance_cues(ball, ts.ARMS["arm5"], 1071.0, RIG)
+        assert cues["tape_mm"] == 1041
+        assert cues["from_size_mm"] == pytest.approx(1041, abs=2)
+        assert cues["from_floor_mm"] == pytest.approx(1041, abs=2)
+        assert cues["tilt_down_needed_deg"] == pytest.approx(0.0, abs=0.05)
+
+    def test_a_ball_seen_too_low_names_the_tilt_that_explains_it(self):
+        ball = {"x": 640.0, "y": 522.7, "diameter_px": 32.0}
+        cues = ts.distance_cues(ball, ts.ARMS["arm5"], 1121.0, RIG)
+        assert cues["from_floor_off_pct"] < -40
+        assert cues["from_size_off_pct"] > 10
+        assert cues["tilt_down_needed_deg"] == pytest.approx(3.7, abs=0.2)
+
+    def test_a_placement_is_kept_with_its_frame(self, tmp_path):
+        p = params(arm_id="arm5", tee_mm=1071)
+        status = {"applied": {"exposure_us": 296, "gain": 8.0}, "ball": {"found": True, "x": 1.0}}
+        frame = np.full((800, 1280), 60, np.uint8)
+        assert ts.record_placement(tmp_path, p, status, frame) == 1
+        assert ts.record_placement(tmp_path, p, status, frame) == 2
+        folder = ts.tester_root(tmp_path, "20260922-name") / "calibration"
+        rows = [json.loads(line) for line in (folder / "placements.jsonl").read_text().splitlines()]
+        assert [r["placement"] for r in rows] == [1, 2]
+        assert rows[0]["tee_mm"] == 1071 and rows[0]["arm"]["width"] == 1280
+        assert (folder / rows[1]["frame"]).stat().st_size > 1280 * 800
+
+    def test_recording_needs_the_tape_and_a_found_ball(self, tmp_path):
+        client, _live = TestLiveEndpoints()._client(tmp_path)
+        body = {"tester_id": "20260922-name", "arm_id": "arm5", "environment": "indoors"}
+        assert client.post("/api/tester/placement", json=body).status_code == 400
+        assert (
+            client.post("/api/tester/placement", json={**body, "tee_mm": 1071}).status_code == 409
+        )
+        listed = client.get(
+            "/api/tester/placements?" + "&".join(f"{k}={v}" for k, v in body.items())
+        )
+        assert listed.get_json() == {"placements": []}
