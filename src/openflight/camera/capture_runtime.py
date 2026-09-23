@@ -133,6 +133,36 @@ def ensure_picamera2_import_path() -> bool:
     return True
 
 
+def resolved_camera_config(camera) -> dict | None:
+    """What libcamera actually configured, as JSON-safe values.
+
+    The requested size and frame rate are not evidence that the sensor ran that
+    readout; a mode study needs the resolved configuration on every capture.
+    Never raises: a camera that cannot report it yields None, and the absence is
+    itself recorded.
+    """
+    try:
+        config = camera.camera_configuration() or {}
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+    out: dict = {}
+    for stream in ("main", "raw"):
+        block = config.get(stream) or {}
+        out[stream] = {"size": list(block.get("size") or ()), "format": block.get("format")}
+    sensor = config.get("sensor") or {}
+    out["sensor"] = {
+        "output_size": list(sensor.get("output_size") or ()),
+        "bit_depth": sensor.get("bit_depth"),
+    }
+    controls = config.get("controls") or {}
+    out["controls"] = {
+        key: (list(value) if isinstance(value, (tuple, list)) else value)
+        for key, value in controls.items()
+        if key in ("ExposureTime", "AnalogueGain", "FrameDurationLimits", "ScalerCrop")
+    }
+    return out
+
+
 class CameraCaptureRuntime:
     """Maintain a high-speed camera ring and save clips on sound-trigger edges."""
 
@@ -158,6 +188,7 @@ class CameraCaptureRuntime:
         self._last_persisted_controls: tuple[int, float] | None = None
         self._restore_auto_exposure_controls()
         self._camera = None
+        self._resolved_config: dict | None = None
         self._button = None
         self._ring = TriggeredFrameBuffer(self.settings.pre_frames, self.settings.post_frames)
         self._running = False
@@ -217,6 +248,7 @@ class CameraCaptureRuntime:
             encode=None,
         )
         self._camera.configure(config)
+        self._resolved_config = resolved_camera_config(self._camera)
         if self.settings.scaler_crop is not None:
             self._camera.set_controls({"ScalerCrop": self.settings.scaler_crop})
         self._camera.post_callback = self._on_frame
@@ -800,6 +832,7 @@ class CameraCaptureRuntime:
                 "storage_format": "npz_uncompressed",
                 "npz_bytes": (shot_dir / "frames.npz").stat().st_size,
                 "save_time_ms": (time.monotonic() - started) * 1000.0,
+                "resolved": self._resolved_config,
                 "settings": {
                     "width": self.settings.width,
                     "height": self.settings.height,

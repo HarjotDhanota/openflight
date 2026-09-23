@@ -219,7 +219,7 @@ class TestManifest:
         assert manifest["excluded_shots"] == [
             {"shot_number": 2, "reasons": ["no_camera_capture_event"]}
         ]
-        assert manifest["capture"]["resolved"] is None
+        assert manifest["capture"]["resolved"] is None  # the fixture metadata has none
         assert manifest["capture"]["resolved_missing_reason"]
 
     def test_geometry_provenance_says_cad_file_when_the_rig_block_rode_in(self, tmp_path):

@@ -45,7 +45,7 @@ to look at a frame. Grouped by what consumes them.
 
 | Metric | From | Why |
 | --- | --- | --- |
-| resolved mode (width, height, sensor crop, format) | `metadata.json` (after Phase 0.2) | An arm that ran a different readout than requested is not that arm |
+| resolved mode (width, height, sensor crop, format) | `metadata.json` → `resolved`, read back from libcamera after configure | An arm that ran a different readout than requested is not that arm |
 | delivered fps, gap count, max gap | `sensor_timestamp_ns` via `timing_summary` | Frame-rate arms are only comparable at their delivered rate; a gap in the pre-impact window loses the clubhead |
 | exposure_us, analogue_gain, per frame | `frames.npz` arrays | Confirms the ceiling was held; the config block records only the startup value |
 | camera light index | scene median DN at known exposure × gain, taken by the gain screen | The pooling key across testers |

@@ -3218,9 +3218,11 @@ def _finalize_shot_detected(
     # Ball-speed cosine correction: the OPS reads the radial component of
     # a ball departing at the launch angle. Applied AFTER the K-LD7 (which
     # must anchor to the radial speed) and BEFORE carry/ballistics.
+    shot.ball_speed_contract = "radial"
     if ball_speed_correction_enabled and shot.launch_angle_vertical is not None:
         raw_speed = shot.ball_speed_mph
         shot.ball_speed_raw_mph = raw_speed
+        shot.ball_speed_contract = "total_cosine_corrected"
         shot.ball_speed_mph = correct_ball_speed(
             raw_speed,
             shot.launch_angle_vertical,

@@ -114,6 +114,12 @@ class AutoExposureDecision:
         return payload
 
 
+# The resting ball is ~0.4 % of a 320x200 frame, so a fully saturated ball
+# clears a 2 % clip gate and its edge is gone. Its diameter sets range,
+# scale and height; keep the brightest ball-sized patch off the rail.
+BALL_CLIP_PCT = 0.1
+
+
 def exposure_steps_for_fps(fps: float) -> tuple[ExposureStep, ...]:
     """Return ladder entries that fit inside the requested frame period."""
     if fps <= 0:
@@ -165,14 +171,18 @@ def measure_exposure(image: np.ndarray) -> ExposureObservation:
             message = "Camera view is nearly black; check lighting and the lens cover"
         else:
             message = "Club contrast is low; increasing exposure"
-    elif clipped_pct <= 2.0 and 45.0 <= median <= 180.0 and p90 >= 100.0:
+    elif clipped_pct <= BALL_CLIP_PCT and 45.0 <= median <= 180.0 and p90 >= 100.0:
         status = "good"
         recommendation = "hold"
         message = "Impact-area exposure and contrast look good"
     else:
         status = "marginal"
-        recommendation = "darker" if clipped_pct > 2.0 or median > 180.0 else "brighter"
-        message = f"Exposure is usable; a {recommendation} setting may improve contrast"
+        recommendation = "darker" if clipped_pct > BALL_CLIP_PCT or median > 180.0 else "brighter"
+        message = (
+            "A ball-sized highlight is clipping; reducing exposure"
+            if BALL_CLIP_PCT < clipped_pct <= 2.0
+            else f"Exposure is usable; a {recommendation} setting may improve contrast"
+        )
 
     return ExposureObservation(
         sample_available=True,

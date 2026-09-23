@@ -68,7 +68,7 @@ class TestGainChoice:
         results = [
             {"gain": 2.0, "mean": 40.0, "clipped_pct": 0.0},
             {"gain": 6.0, "mean": 95.0, "clipped_pct": 0.1},
-            {"gain": 10.0, "mean": 140.0, "clipped_pct": 0.4},
+            {"gain": 10.0, "mean": 140.0, "clipped_pct": 0.08},
         ]
         choice = ts.choose_gain(results)
         assert choice["gain"] == 6.0
@@ -77,7 +77,7 @@ class TestGainChoice:
     def test_clipping_disqualifies_even_when_the_mean_is_in_band(self):
         results = [
             {"gain": 4.0, "mean": 120.0, "clipped_pct": 3.0},
-            {"gain": 8.0, "mean": 130.0, "clipped_pct": 0.2},
+            {"gain": 8.0, "mean": 130.0, "clipped_pct": 0.05},
         ]
         assert ts.choose_gain(results)["gain"] == 8.0
 

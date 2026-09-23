@@ -203,7 +203,7 @@ def choose_gain(
     *,
     mean_low: float = 80.0,
     mean_high: float = 150.0,
-    max_clipped_pct: float = 1.0,
+    max_clipped_pct: float = 0.1,
 ) -> dict:
     """Lowest gain in band without clipping; ``lighting_required`` when none is."""
     usable = [r for r in results if "gain" in r and "mean" in r]

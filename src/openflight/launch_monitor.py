@@ -205,6 +205,10 @@ class Shot:
     # Raw OPS radial ball speed, kept when the cosine correction rewrites
     # ball_speed_mph (radar bin anchoring must keep using the radial value)
     ball_speed_raw_mph: Optional[float] = None
+    # Which speed ball_speed_mph IS: the OPS radial reading, or the
+    # cosine-corrected total. Two sessions with different radars attached
+    # are otherwise indistinguishable after the fact.
+    ball_speed_contract: Optional[str] = None
     peak_magnitude: Optional[float] = None
     readings: List[SpeedReading] = field(default_factory=list)
     club: ClubType = ClubType.DRIVER
@@ -375,6 +379,7 @@ class Shot:
             "shot_number": self.shot_number,
             "ball_speed_mph": self.ball_speed_mph,
             "ball_speed_raw_mph": self.ball_speed_raw_mph,
+            "ball_speed_contract": self.ball_speed_contract,
             "club_speed_mph": self.club_speed_mph,
             "smash_factor": self.smash_factor,
             "estimated_carry_yards": self.estimated_carry_yards,

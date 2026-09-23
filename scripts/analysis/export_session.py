@@ -241,6 +241,15 @@ def export_session(
 
     config = start.get("config") or {}
     camera_cfg = config.get("camera_capture") or {}
+    resolved = next(
+        (
+            json.loads((out / r["dir"] / "camera_metadata.json").read_text(encoding="utf-8")).get(
+                "resolved"
+            )
+            for r in manifest_shots
+        ),
+        None,
+    )
     arm = arm_state or {}
     git_commit = None
     if preflight_log and preflight_log.is_file():
@@ -271,8 +280,10 @@ def export_session(
             "capture_exposure_us": arm.get("capture_exposure_us"),
             "capture_gain": arm.get("capture_gain"),
             "gain_source": arm.get("gain_source"),
-            "resolved": None,
-            "resolved_missing_reason": "resolved Picamera2 configuration is not recorded yet",
+            "resolved": resolved,
+            "resolved_missing_reason": None
+            if resolved
+            else "capture metadata carries no resolved configuration",
         },
         "environment": {
             "setting": arm.get("environment"),
