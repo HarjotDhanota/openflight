@@ -5818,6 +5818,43 @@ class TestBallisticCarryPrecedence:
         assert shot.carry_spin_adjusted != pytest.approx(999.0)
         assert 0 < shot.carry_spin_adjusted < 200
 
+    @pytest.mark.parametrize(
+        ("confidence", "uses_measured_spin"),
+        [
+            (server_module.SPIN_CONFIDENCE_RELIABLE, True),
+            (server_module.SPIN_CONFIDENCE_RELIABLE - 0.01, False),
+        ],
+    )
+    def test_table_fallback_spin_gate_matches_monitor_reliability(
+        self, monkeypatch, confidence, uses_measured_spin
+    ):
+        """The fallback trusts measured spin on the same floor SpinResult.is_reliable uses."""
+        from openflight.rolling_buffer.types import SpinResult
+
+        assert (
+            SpinResult(spin_rpm=5164, confidence=confidence, snr=10.0, quality="medium").is_reliable
+            is uses_measured_spin
+        )
+
+        monkeypatch.setattr(server_module, "ballistics_enabled", False)
+        shot = self._shot(launch_angle=19.1, prefilled_carry=None)
+        shot.spin_confidence = confidence
+
+        server_module._finalize_shot_detected(shot, emit_event="shot")
+
+        measured = server_module.estimate_carry_with_spin(
+            104.2, 5164.0, ClubType.IRON_7, club_speed_mph=83.7
+        )
+        optimal = server_module.estimate_carry_with_spin(
+            104.2,
+            server_module.get_optimal_spin_for_ball_speed(104.2, ClubType.IRON_7),
+            ClubType.IRON_7,
+            club_speed_mph=83.7,
+        )
+        assert measured != pytest.approx(optimal)
+        expected = measured if uses_measured_spin else optimal
+        assert shot.carry_spin_adjusted == pytest.approx(expected)
+
     def test_table_fallback_fills_empty_carry(self, monkeypatch):
         monkeypatch.setattr(server_module, "ballistics_enabled", False)
         shot = self._shot(launch_angle=19.1, prefilled_carry=None)
