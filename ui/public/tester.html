@@ -60,16 +60,18 @@
     <main>
       <h1>OpenFlight camera mode study</h1>
       <p class="lede">
-        Five camera arms, a 7-iron, five swings each. You collect; we analyse. This page never
-        shows estimated club or ball numbers — only whether each swing saved usable, paired data.
-        Exposure is set for you from physics; the gain step finds the light.
+        The test suite finds the shortest exposure that still works at full resolution, and
+        compares 640×400. A 7-iron, five good swings per exposure; the page sets each exposure
+        itself, says after every swing whether it saved usable data, and skips exposures your
+        light cannot support. You collect; we analyse.
       </p>
 
       <section>
         <h2>Before you start</h2>
         <ul>
           <li>Ball at address, unit placed the way you'll hit. The enclosure geometry comes from the checked-in file.</li>
-          <li>Tape the distance from the radar window to the centre of the ball once, and enter it below. The club is set to 7-iron for you.</li>
+          <li>Nothing is measured and nothing is typed except your tester ID. The club is set to 7-iron for you.</li>
+          <li>For the 1280×800 exposures: foot powder spray and a cloth, for the impact photos.</li>
           <li>Keep the light the same for the whole session. If you change it, start a new tester ID.</li>
         </ul>
       </section>
@@ -85,8 +87,29 @@
         </form>
       </section>
 
+      <section id="suite">
+        <h2>2. Test suite</h2>
+        <ol class="suite-steps">
+          <li><button type="button" id="step-check">A. Check the hardware</button>
+            <span id="check-verdict"></span></li>
+          <li><button type="button" id="step-light">B. Measure the light (both modes)</button>
+            <span id="light-verdict"></span></li>
+          <li><button type="button" id="step-ladder">C. Start the exposure ladder</button>
+            <div class="light" id="ladder-panel"></div>
+            <div id="face-guide" hidden style="position:relative;width:640px;max-width:100%">
+              <img id="face-preview" alt="Camera preview" style="width:100%;display:block">
+              <div style="position:absolute;left:45%;top:35%;width:10%;height:22%;border:2px dashed #ffd400"></div>
+            </div>
+            <div><button type="button" id="step-photo" hidden>Photograph face</button></div>
+            <p class="note">Before each 1280×800 swing, spray the face. After it, hold the face about
+              0.5 m from the lens inside the dashed box, press <strong>Photograph face</strong>, then wipe it.</p></li>
+          <li><button type="button" id="step-package">D. Package the data</button>
+            <label>Comparator export (optional) <input type="file" id="comparator-file"></label></li>
+        </ol>
+      </section>
+
       <section>
-        <h2>2. Arms</h2>
+        <h2>Single arm (advanced)</h2>
         <p class="note">Work top to bottom. Each arm: <strong>Find gain</strong> (a few seconds, static), then
           <strong>Capture swings</strong> and hit until it shows 5 accepted.</p>
         <ul class="arms" id="arms"></ul>
@@ -122,7 +145,7 @@
       </section>
 
       <section>
-        <h2>3. Send</h2>
+        <h2>Send (single arm)</h2>
         <div class="steps">
           <button type="button" id="package">Package everything</button>
           <a id="download" href="#" hidden>Download archive</a>
@@ -353,6 +376,93 @@
         render(await request('/api/tester/package', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload()),
         }));
+      });
+
+      // --- test suite ---
+      const suiteBody = (arm) => ({
+        tester_id: el('tester-id').value.trim(), arm_id: arm, environment: el('environment').value,
+      });
+      async function post(path, body) {
+        const r = await fetch(path, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || `request failed (${r.status})`);
+        return j;
+      }
+      async function waitJob() {
+        for (;;) {
+          const s = await (await fetch('/api/tester/status?' + new URLSearchParams(suiteBody('arm5')))).json();
+          if (!s.job || s.job.state !== 'running') return s.job || { state: 'error', message: 'no job' };
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      }
+      el('step-check').addEventListener('click', async () => {
+        el('check-verdict').textContent = 'checking…';
+        try {
+          await post('/api/tester/run', { ...suiteBody('arm5'), action: 'preflight' });
+          const job = await waitJob();
+          el('check-verdict').textContent = job.state === 'complete' ? 'ready' : `failed: ${job.message}`;
+        } catch (e) { el('check-verdict').textContent = e.message; }
+      });
+      el('step-light').addEventListener('click', async () => {
+        try {
+          for (const arm of ['arm5', 'arm6']) {
+            el('light-verdict').textContent = `measuring ${arm === 'arm5' ? '1280×800' : '640×400'}…`;
+            await post('/api/tester/run', { ...suiteBody(arm), action: 'gain' });
+            const job = await waitJob();
+            if (job.state !== 'complete') throw new Error(job.message);
+          }
+          el('light-verdict').textContent = 'done for both modes';
+        } catch (e) { el('light-verdict').textContent = `failed: ${e.message}`; }
+      });
+      function renderLadder(s) {
+        const l = s.ladder, v = s.last_verdict;
+        const rows = Object.entries(l.rungs).map(([id, r]) => {
+          const ok = r.swings.filter((w) => w.color !== 'red').length;
+          return `<span>${id}: <b>${r.status}</b> ${ok}/5${r.reason ? ` — ${r.reason}` : ''}</span>`;
+        }).join('');
+        const last = v
+          ? `<span class="${v.color === 'red' ? 'problem' : ''}">last swing: <b>${v.color}</b> ${(v.reasons || []).join('; ')}</span>`
+          : '';
+        el('ladder-panel').innerHTML = `<span>now: <b>${l.current || 'finished'}</b></span>${rows}${last}`;
+        const full = (l.current || '').startsWith('full-');
+        el('step-photo').hidden = !full;
+        el('face-guide').hidden = !full;
+        // the kiosk owns the camera during the ladder: show its preview with the face guide
+        if (full) el('face-preview').src = `http://${location.hostname}:8080/api/camera/preview.jpg?t=${Date.now()}`;
+      }
+      let ladderTimer = null;
+      async function ladderTick() {
+        const query = new URLSearchParams({ tester_id: el('tester-id').value.trim() });
+        renderLadder(await (await fetch('/api/tester/ladder?' + query)).json());
+      }
+      el('step-ladder').addEventListener('click', async () => {
+        try {
+          liveShown(false);  // the kiosk takes the camera
+          renderLadder(await post('/api/tester/ladder/start', suiteBody('arm5')));
+          clearInterval(ladderTimer);
+          ladderTimer = setInterval(ladderTick, 1500);
+        } catch (e) { el('ladder-panel').textContent = e.message; }
+      });
+      el('step-photo').addEventListener('click', async () => {
+        try {
+          const j = await post('/api/tester/ladder/photo', { tester_id: el('tester-id').value.trim() });
+          el('step-photo').textContent = `Photograph face (saved ${j.photo})`;
+        } catch (e) { el('step-photo').textContent = `Photograph face — ${e.message}`; }
+      });
+      el('step-package').addEventListener('click', async () => {
+        try {
+          const file = el('comparator-file').files[0];
+          if (file) {
+            const form = new FormData();
+            form.append('tester_id', el('tester-id').value.trim());
+            form.append('file', file);
+            await fetch('/api/tester/comparator', { method: 'POST', body: form });
+          }
+          await post('/api/tester/package', suiteBody('arm5'));
+          window.location = '/api/tester/package?' + new URLSearchParams(suiteBody('arm5'));
+        } catch (e) { el('step-package').textContent = `D. Package the data — ${e.message}`; }
       });
 
       refresh();
