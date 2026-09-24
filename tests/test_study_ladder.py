@@ -155,3 +155,97 @@ def test_the_end_of_the_ladder_has_no_current_rung(tmp_path):
         if state.current is None:
             break
     assert state.current is None
+
+
+class FakeKiosk:
+    def __init__(self, level=60.0, ready_after=0):
+        self.level = level
+        self.calls = []
+        self._ready_after = ready_after
+
+    def ready(self):
+        self._ready_after -= 1
+        return self._ready_after < 0
+
+    def set_controls(self, exposure_us, gain):
+        self.calls.append((exposure_us, gain))
+        return {"exposure_us": exposure_us, "gain": gain}
+
+    def frames(self, count):
+        rng = np.random.default_rng(len(self.calls))
+        noisy = self.level + rng.normal(0, 1.0, (count, 800, 1280))
+        return np.clip(noisy, 0, 255).astype(np.uint8)
+
+
+def _runner(tmp_path, kiosk, run_dir=None, done=None):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    return sl.LadderRunner(
+        state,
+        kiosk,
+        run_dir=lambda: run_dir,
+        black_floor=lambda arm: 18.0,
+        gain_at_300=lambda arm: 3.0,
+        light_index=lambda arm: 0.05,
+        photo_dir=tmp_path / "impact",
+        on_mode_done=(done.append if done is not None else (lambda arm: None)),
+        ready_timeout_s=1.0,
+    )
+
+
+def test_the_runner_waits_for_the_kiosk_then_sets_the_rung(tmp_path):
+    kiosk = FakeKiosk(ready_after=3)
+    runner = _runner(tmp_path, kiosk)
+    runner.start_rung()
+    assert kiosk.calls == [(300, 3.0)]
+    assert runner.state.to_dict()["rungs"]["full-300"]["status"] == "active"
+
+
+def test_new_captures_get_a_verdict_and_half_written_ones_wait(tmp_path):
+    run = tmp_path / "run-01" / "arm5" / "camera"
+    run.mkdir(parents=True)
+    kiosk = FakeKiosk()
+    runner = _runner(tmp_path, kiosk, run_dir=tmp_path / "run-01")
+    runner.start_rung()
+    _capture(run, exposure=300, gain=3.0, name="camera_a")
+    (run / "camera_b").mkdir()  # still being written: no metadata yet
+    verdicts = runner.poll_once()
+    assert [v["capture"] for v in verdicts] == ["camera_a"]
+    assert runner.poll_once() == []  # camera_a is not counted twice
+
+
+def test_a_photo_restores_the_rung_even_when_it_fails(tmp_path):
+    kiosk = FakeKiosk()
+    runner = _runner(tmp_path, kiosk)
+    runner.start_rung()
+
+    def broken(count):
+        raise OSError(f"kiosk went away asking for {count}")
+
+    kiosk.frames = broken
+    with pytest.raises(OSError):
+        runner.photograph()
+    assert kiosk.calls[-1] == (300, 3.0)
+
+
+def test_a_photo_is_saved_against_the_last_swing(tmp_path):
+    run = tmp_path / "run-01" / "arm5" / "camera"
+    run.mkdir(parents=True)
+    kiosk = FakeKiosk()
+    runner = _runner(tmp_path, kiosk, run_dir=tmp_path / "run-01")
+    runner.start_rung()
+    _capture(run, exposure=300, gain=3.0, name="camera_a")
+    runner.poll_once()
+    path = runner.photograph()
+    assert path.name == "camera_a.pgm" and path.is_file()
+    assert kiosk.calls[-2] == (820, 2.0)  # the still: (100 - 18) / (0.05 x 2), then back
+    assert kiosk.calls[-1] == (300, 3.0)
+    assert runner.state.to_dict()["photos"]["camera_a"].endswith("camera_a.pgm")
+
+
+def test_finishing_a_mode_hands_over_to_the_next(tmp_path):
+    done = []
+    kiosk = FakeKiosk(level=24.0)  # 6 DN above black: even the first rung is too dark
+    runner = _runner(tmp_path, kiosk, done=done)
+    runner.start_rung()
+    assert done == ["arm5"]
+    assert runner.state.current.rung_id == "half-300"
