@@ -31,9 +31,11 @@ the way. Face angle and the other club metrics depend on those pixels.
 
 ## Flow
 
-**A. Check.** Camera modes present, OPS, IWR6843, LIS3DH and sound trigger found,
-and a short camera stream test that must deliver frames at the mode's rate with no
-gaps. One green/red verdict with the failing item named.
+**A. Check.** The existing preflight (git revision, kernel, camera modes listed,
+power throttling), one green/red verdict. In this version step B is the stream
+test: its light screen opens each mode and captures, and fails if the mode cannot
+stream. Separate OPS, IWR6843, LIS3DH and sound-trigger checks are a follow-up; a
+missing device shows as the ladder's kiosk failing to start.
 
 **B. Light.** The existing gain screen, once per mode, run automatically. It
 records the light index (DN per unit gain per microsecond) and the black floor,
@@ -90,8 +92,8 @@ so a rung change inside one run is recorded per swing.
   and the package both read it.
 - It watches the run's log directory for new `camera_*` capture folders; each new
   capture gets a verdict and counts toward its rung.
-- The runner fixes owed from the pilot are part of this: a job timeout with a
-  process-group kill, and the stream test in A.
+- The runner fixes owed from the pilot are part of this: a job timeout and a
+  process-group kill.
 
 ### 3. Verdict (per swing, picture grounds only)
 
@@ -108,8 +110,8 @@ in a different place from the rung's other swings. With no size known the detect
 runs its size-free search, which can pick a door stop, so it informs and never
 fails a swing.
 
-The live club pipeline's results are recorded beside the verdict as information,
-never as a reason to fail.
+The live club pipeline's results stay in the kiosk's session log, joined to the
+verdict by capture id offline; they are never a reason to fail.
 
 ### 4. Impact photos
 
