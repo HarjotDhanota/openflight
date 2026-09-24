@@ -249,3 +249,48 @@ def test_finishing_a_mode_hands_over_to_the_next(tmp_path):
     runner.start_rung()
     assert done == ["arm5"]
     assert runner.state.current.rung_id == "half-300"
+
+
+def test_a_capture_before_the_rung_is_set_waits_instead_of_killing_the_runner(tmp_path):
+    run = tmp_path / "run-01" / "arm5" / "camera"
+    run.mkdir(parents=True)
+    kiosk = FakeKiosk()
+    runner = _runner(tmp_path, kiosk, run_dir=tmp_path / "run-01")
+    _capture(run, exposure=300, gain=3.0, name="camera_a")
+    assert runner.poll_once() == []  # the rung is not set yet: nothing is verdicted
+    runner.start_rung()
+    assert [v["capture"] for v in runner.poll_once()] == ["camera_a"]
+
+
+def test_the_runner_retries_a_kiosk_that_was_slow_to_come_up(tmp_path):
+    kiosk = FakeKiosk(ready_after=100)
+    runner = _runner(tmp_path, kiosk)
+    runner.tick()
+    assert "did not come up" in runner.last_verdict["reasons"][0]
+    kiosk._ready_after = 0  # pylint: disable=protected-access
+    runner.tick()
+    assert runner.state.to_dict()["rungs"]["full-300"]["status"] == "active"
+
+
+def test_an_unexpected_error_is_shown_not_fatal(tmp_path):
+    kiosk = FakeKiosk()
+    runner = _runner(tmp_path, kiosk)
+
+    def broken():
+        raise KeyError("something unforeseen")
+
+    runner._run_dir = broken  # pylint: disable=protected-access
+    runner.start_rung()
+    runner.tick()
+    assert "something unforeseen" in runner.last_verdict["reasons"][0]
+
+
+def test_nothing_is_set_on_a_kiosk_that_is_between_modes(tmp_path):
+    kiosk = FakeKiosk()
+    runner = _runner(tmp_path, kiosk)
+    runner.mode = "between modes"
+    assert runner.start_rung() is None
+    assert kiosk.calls == []
+    runner.mode = "arm5"
+    runner.start_rung()
+    assert kiosk.calls == [(300, 3.0)]

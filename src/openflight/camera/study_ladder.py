@@ -318,6 +318,9 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
         self._on_mode_done = on_mode_done
         self.ready_timeout_s = ready_timeout_s
         self.last_verdict: dict | None = None
+        # the mode whose kiosk is running; None means any (a lone runner in tests).
+        # Between modes it names no rung, so nothing is set on a kiosk shutting down.
+        self.mode: str | None = None
         self._last_capture: str | None = None
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -339,7 +342,7 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
             self._wait_ready()
             while True:
                 rung = self.state.current
-                if rung is None:
+                if rung is None or self.mode not in (None, rung.arm_id):
                     return None
                 if self._status(rung) == "active":
                     self.client.set_controls(rung.exposure_us, self.state.gain(rung.rung_id))
@@ -359,7 +362,11 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
     def poll_once(self) -> list[dict]:
         """Verdict every complete capture not yet seen, and move on when a rung finishes."""
         run_dir = self._run_dir()
-        if run_dir is None or self.state.current is None or not run_dir.exists():
+        current = self.state.current
+        # a swing only counts against a rung whose exposure is set
+        if current is None or self._status(current) != "active":
+            return []
+        if run_dir is None or not run_dir.exists():
             return []
         seen = self.state.seen_captures()
         verdicts = []
@@ -368,7 +375,7 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
             if folder.name in seen or not (folder / "frames.npz").is_file():
                 continue
             rung = self.state.current
-            if rung is None:
+            if rung is None or self._status(rung) != "active":
                 break
             rungs = self.state.to_dict()["rungs"]
             previous = [s["ball"] for s in rungs[rung.rung_id]["swings"] if s.get("ball")]
@@ -427,13 +434,21 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
         if self._thread is not None:
             self._thread.join(timeout=3)
 
-    def _loop(self) -> None:
+    def tick(self) -> None:
+        """One step: set the rung if it is not set yet (a slow kiosk is retried), else verdict."""
         try:
-            self.start_rung()
-        except (OSError, RuntimeError, ValueError) as exc:
-            self.last_verdict = {"color": "red", "reasons": [f"ladder: {exc}"], "capture": None}
-        while not self._stop.wait(1.0):
-            try:
+            rung = self.state.current
+            if rung is None:
+                return
+            if self._status(rung) != "active":
+                self.start_rung()
+            else:
                 self.poll_once()
-            except (OSError, RuntimeError, ValueError) as exc:
-                self.last_verdict = {"color": "red", "reasons": [f"ladder: {exc}"], "capture": None}
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # nobody watches the logs on the Pi: every failure reaches the page
+            self.last_verdict = {"color": "red", "reasons": [f"ladder: {exc}"], "capture": None}
+
+    def _loop(self) -> None:
+        self.tick()
+        while not self._stop.wait(1.0):
+            self.tick()

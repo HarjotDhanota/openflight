@@ -458,7 +458,9 @@
             const form = new FormData();
             form.append('tester_id', el('tester-id').value.trim());
             form.append('file', file);
-            await fetch('/api/tester/comparator', { method: 'POST', body: form });
+            const up = await fetch('/api/tester/comparator', { method: 'POST', body: form });
+            const saved = await up.json().catch(() => ({}));
+            if (!up.ok) throw new Error(`comparator export not saved: ${saved.error || up.status}`);
           }
           await post('/api/tester/package', suiteBody('arm5'));
           window.location = '/api/tester/package?' + new URLSearchParams(suiteBody('arm5'));

@@ -168,6 +168,9 @@ ACTION_LABELS = {
 }
 # a hardware step that hangs is stopped; the ladder runs as long as the tester swings
 ACTION_TIMEOUT_S = {"preflight": 120.0, "gain": 900.0}
+# a stopped job first gets start-kiosk.sh's own shutdown, which closes the radars
+# and the camera; whatever of its process group is left after this is ended
+KILL_GRACE_S = 8.0
 
 # Chained-delivery statuses that mean the estimator produced a delivery.
 ACCEPTED_STATUSES = frozenset({"ok", "fused", "chained_high", "approach_high"})
@@ -656,13 +659,22 @@ class TesterJobManager:
             self._cancel_requested = True
             process = self._process
         if process is not None:
-            try:
-                # start-kiosk.sh runs the server as a child: end the whole group,
-                # or the camera stays held for the next mode
-                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-            except (AttributeError, OSError):
-                process.terminate()
+            process.terminate()
+            ender = threading.Timer(KILL_GRACE_S, self._end_group, args=(process,))
+            ender.daemon = True
+            ender.start()
         return True
+
+    @staticmethod
+    def _end_group(process) -> None:
+        """End what is left of a stopped job's process group, so the camera is free."""
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+        except (AttributeError, OSError):
+            try:
+                process.kill()
+            except (AttributeError, OSError):
+                pass
 
 
 def encode_png(image: np.ndarray) -> bytes:
@@ -1531,6 +1543,7 @@ def create_app(
             return jsonify({"error": str(exc)}), 404
 
     ladder_runners: dict[str, study_ladder.LadderRunner] = {}
+    ladder_runs: dict[str, Path] = {}  # the run folder each tester's ladder is writing
 
     def ladder_state(tester_id: str) -> study_ladder.LadderState:
         return study_ladder.LadderState(tester_root(sessions_root, tester_id) / "ladder.json")
@@ -1541,14 +1554,17 @@ def create_app(
         gain, _exposure = resolve_gain(sessions_root, params_for_arm)
         return {"gain": gain, **facts}
 
-    def start_mode(tester_id: str, environment: str, arm_id: str) -> None:
+    def start_mode(tester_id: str, environment: str, arm_id: str) -> Path:
+        """Start the ladder's kiosk for one mode; return the run folder it writes."""
         params_for_arm = TesterParameters(tester_id, arm_id, environment)
         live.stop()
         enclosure.stop()  # the kiosk reads the LIS3DH itself during the ladder
         commands, log_path = action_commands(
             "ladder", params_for_arm, sessions_root, rig_geometry, radar_port
         )
+        run = Path(commands[0][commands[0].index("--log-dir") + 1])
         jobs.start("ladder", commands, log_path)
+        return run
 
     @app.post("/api/tester/ladder/start")
     def ladder_start():  # pylint: disable=too-many-locals
@@ -1562,6 +1578,18 @@ def create_app(
             return jsonify({"error": f"run the gain step for both modes first ({exc})"}), 409
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
+        existing = ladder_runners.get(params.tester_id)
+        job = jobs.status()
+        if existing is not None and job["state"] == "running" and job["action"] == "ladder":
+            # already walking: pressing C again only shows where it is
+            run = ladder_runs.get(params.tester_id)
+            return jsonify(
+                {
+                    "ladder": existing.state.to_dict(),
+                    "job": job,
+                    "run_dir": str(run) if run else None,
+                }
+            )
         state = ladder_state(params.tester_id)
         rung = state.current
         if rung is None:
@@ -1569,14 +1597,12 @@ def create_app(
         root = tester_root(sessions_root, params.tester_id)
 
         def run_dir() -> Path | None:
-            current = state.current
-            if current is None:
-                return None
-            runs = sorted((root / current.arm_id / "paired").glob("run-*"))
-            return runs[-1] if runs else None
+            # only the run this ladder started: an earlier one's captures are not its swings
+            return ladder_runs.get(params.tester_id)
 
         def mode_done(_arm_id: str) -> None:
             following = state.current
+            runner.mode = "between modes"  # nothing is set on a kiosk shutting down
             jobs.cancel()
             if following is None:
                 return
@@ -1585,8 +1611,11 @@ def create_app(
                 deadline = time.monotonic() + 30
                 while jobs.status()["state"] == "running" and time.monotonic() < deadline:
                     time.sleep(0.5)
-                start_mode(params.tester_id, params.environment, following.arm_id)
-                runner.start_rung()
+                ladder_runs[params.tester_id] = start_mode(
+                    params.tester_id, params.environment, following.arm_id
+                )
+                runner.mode = following.arm_id
+                runner.tick()
 
             threading.Thread(target=restart, daemon=True, name="ladder-next-mode").start()
 
@@ -1600,16 +1629,18 @@ def create_app(
             photo_dir=root / "impact",
             on_mode_done=mode_done,
         )
+        try:
+            run = start_mode(params.tester_id, params.environment, rung.arm_id)
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 409
         previous = ladder_runners.pop(params.tester_id, None)
         if previous is not None:
             previous.stop()
-        try:
-            start_mode(params.tester_id, params.environment, rung.arm_id)
-        except RuntimeError as exc:
-            return jsonify({"error": str(exc)}), 409
+        ladder_runs[params.tester_id] = run
+        runner.mode = rung.arm_id
         ladder_runners[params.tester_id] = runner
         runner.start()
-        return jsonify({"ladder": state.to_dict(), "job": jobs.status()})
+        return jsonify({"ladder": state.to_dict(), "job": jobs.status(), "run_dir": str(run)})
 
     @app.get("/api/tester/ladder")
     def ladder_status():
@@ -1618,11 +1649,13 @@ def create_app(
             return jsonify({"error": "unknown tester"}), 400
         runner = ladder_runners.get(tester_id)
         state = runner.state if runner else ladder_state(tester_id)
+        run = ladder_runs.get(tester_id)
         return jsonify(
             {
                 "ladder": state.to_dict(),
                 "last_verdict": runner.last_verdict if runner else None,
                 "job": jobs.status(),
+                "run_dir": str(run) if run else None,
             }
         )
 
@@ -1644,9 +1677,9 @@ def create_app(
         upload = request.files.get("file")
         if not SAFE_SEGMENT.fullmatch(tester_id) or upload is None:
             return jsonify({"error": "choose a tester and a file"}), 400
-        name = Path(upload.filename or "export").name
-        if not SAFE_SEGMENT.fullmatch(name):
-            return jsonify({"error": "rename the file to letters, numbers, dot, dash"}), 400
+        # exports arrive named like "Mevo Export (1).csv": keep them, with a safe name
+        name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(upload.filename or "").name).strip("._-")
+        name = name[:80] or "comparator-export"
         folder = tester_root(sessions_root, tester_id) / "comparator"
         folder.mkdir(parents=True, exist_ok=True)
         upload.save(folder / name)

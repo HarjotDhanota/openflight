@@ -964,17 +964,30 @@ class TestTheLadder:
         saved = tmp_path / "20260922-name" / "comparator" / "tm4.csv"
         assert saved.read_bytes().startswith(b"shot")
 
-    def test_stopping_a_job_kills_its_whole_process_group(self, monkeypatch):
-        killed = []
+    def test_stopping_a_job_asks_first_then_ends_the_whole_group(self, monkeypatch):
+        monkeypatch.setattr(ts, "KILL_GRACE_S", 0.05)
+        killed, asked = [], []
         monkeypatch.setattr(ts.os, "getpgid", lambda pid: pid, raising=False)
         monkeypatch.setattr(
             ts.os, "killpg", lambda pgid, sig: killed.append((pgid, sig)), raising=False
         )
         manager = ts.TesterJobManager()
         manager._state["state"] = "running"  # pylint: disable=protected-access
-        process = type("P", (), {"pid": 4321, "terminate": lambda self: None})()
+        process = type(
+            "P",
+            (),
+            {
+                "pid": 4321,
+                "terminate": lambda self: asked.append("terminate"),
+                "poll": lambda self: None,
+            },
+        )()
         manager._process = process  # pylint: disable=protected-access
         assert manager.cancel() is True
+        # the kiosk's own shutdown closes the radars and camera first
+        assert asked == ["terminate"] and killed == []
+        time.sleep(0.4)
+        # a group still alive after the grace period is ended
         assert killed == [(4321, ts.signal.SIGTERM)]
 
     def test_a_stuck_gain_screen_is_stopped_by_its_timeout(self, monkeypatch, tmp_path):
@@ -1010,3 +1023,95 @@ class TestTheLadder:
         while manager.status()["state"] == "running" and time.monotonic() < deadline:
             time.sleep(0.05)
         assert manager.status()["state"] == "stopped"
+
+
+class _Forever:
+    """A job that runs until it is stopped."""
+
+    pid = 7
+
+    def __init__(self, *args, **kwargs):
+        del args, kwargs
+        import threading as _threading  # pylint: disable=import-outside-toplevel
+
+        self._released = _threading.Event()
+        self.stdout = self
+
+    def __iter__(self):
+        self._released.wait(10)
+        return iter(())
+
+    def wait(self):
+        return -15
+
+    def poll(self):
+        return -15 if self._released.is_set() else None
+
+    def terminate(self):
+        self._released.set()
+
+
+class _LitKiosk:
+    def ready(self):
+        return True
+
+    def set_controls(self, exposure_us, gain):
+        return {"exposure_us": exposure_us, "gain": gain}
+
+    def frames(self, count):
+        return np.full((count, 800, 1280), 60, np.uint8)
+
+
+class TestTheLadderHoldsUp:
+    body = {"tester_id": "20260922-name", "arm_id": "arm5", "environment": "indoors"}
+
+    def _client(self, tmp_path, monkeypatch):
+        for arm in ("arm5", "arm6"):
+            ts.write_arm_state(
+                tmp_path,
+                ts.TesterParameters("20260922-name", arm, "indoors"),
+                gain=3.0,
+                gain_exposure_us=300,
+            )
+        monkeypatch.setattr(ts.study_ladder, "KioskClient", _LitKiosk)
+        monkeypatch.setattr(ts, "KILL_GRACE_S", 0.05, raising=False)
+        manager = ts.TesterJobManager(popen=_Forever)
+        app = ts.create_app(sessions_root=tmp_path, rig_geometry=RIG, manager=manager)
+        return app.test_client(), manager
+
+    def test_pressing_start_again_while_the_ladder_runs_keeps_it(self, tmp_path, monkeypatch):
+        client, manager = self._client(tmp_path, monkeypatch)
+        try:
+            assert client.post("/api/tester/ladder/start", json=self.body).status_code == 200
+            again = client.post("/api/tester/ladder/start", json=self.body)
+            assert again.status_code == 200
+            assert manager.status()["state"] == "running"
+        finally:
+            manager.cancel()
+
+    def test_the_ladder_reads_only_the_run_it_started(self, tmp_path, monkeypatch):
+        old = tmp_path / "20260922-name" / "arm5" / "paired" / "run-01"
+        old.mkdir(parents=True)
+        client, manager = self._client(tmp_path, monkeypatch)
+        try:
+            client.post("/api/tester/ladder/start", json=self.body)
+            status = client.get("/api/tester/ladder", query_string=self.body).get_json()
+            assert status["run_dir"].endswith("run-02")
+        finally:
+            manager.cancel()
+
+    def test_a_comparator_export_with_spaces_in_its_name_is_kept(self, tmp_path):
+        import io as _io  # pylint: disable=import-outside-toplevel
+
+        client = ts.create_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
+        response = client.post(
+            "/api/tester/comparator",
+            data={
+                "tester_id": "20260922-name",
+                "file": (_io.BytesIO(b"shot,speed\n"), "Mevo Export (1).csv"),
+            },
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 200
+        saved = response.get_json()["saved"]
+        assert (tmp_path / "20260922-name" / "comparator" / saved).is_file()
