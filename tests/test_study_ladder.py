@@ -96,3 +96,62 @@ def test_no_resting_ball_is_only_amber(tmp_path):
     verdict = sl.swing_verdict(_capture(tmp_path, ball=False), rung, 8.0, 18.0, [])
     assert verdict["color"] == "amber"
     assert any("resting ball" in reason for reason in verdict["reasons"])
+
+
+def _verdict(color, name):
+    return {"capture": name, "color": color, "reasons": [], "ball": None}
+
+
+def test_five_accepted_swings_finish_a_rung_and_the_next_begins(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    assert state.current.rung_id == "full-300"
+    state.begin("full-300", 3.0, {"ok": True})
+    for i in range(4):
+        assert state.record_swing(_verdict("green" if i % 2 else "amber", f"c{i}")) == "active"
+    assert state.record_swing(_verdict("green", "c4")) == "done"
+    assert state.current.rung_id == "full-200"
+
+
+def test_a_dark_rung_skips_itself_and_the_shorter_ones_in_its_mode(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.begin("full-300", 3.0, {"ok": True})
+    for i in range(5):
+        state.record_swing(_verdict("green", f"a{i}"))
+    state.begin("full-200", 4.5, {"ok": False, "reason": "too dark"})
+    rungs = state.to_dict()["rungs"]
+    statuses = [rungs[r]["status"] for r in ("full-200", "full-150", "full-100", "full-75")]
+    assert statuses == ["skipped"] * 4
+    assert state.current.rung_id == "half-300"
+
+
+def test_two_reds_in_the_first_three_fail_the_rung(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.begin("full-300", 3.0, {"ok": True})
+    state.record_swing(_verdict("red", "r0"))
+    state.record_swing(_verdict("green", "r1"))
+    assert state.record_swing(_verdict("red", "r2")) == "failed"
+    rungs = state.to_dict()["rungs"]
+    assert rungs["full-300"]["status"] == "failed"
+    assert rungs["full-75"]["status"] == "skipped"
+    assert state.current.rung_id == "half-300"
+
+
+def test_the_ladder_survives_a_reload_and_never_counts_a_capture_twice(tmp_path):
+    path = tmp_path / "ladder.json"
+    state = sl.LadderState(path)
+    state.begin("full-300", 3.0, {"ok": True})
+    state.record_swing(_verdict("green", "c0"))
+    again = sl.LadderState(path)
+    assert again.current.rung_id == "full-300"
+    assert again.seen_captures() == {"c0"}
+    assert again.record_swing(_verdict("green", "c0")) == "active"
+    assert again.accepted("full-300") == 1
+
+
+def test_the_end_of_the_ladder_has_no_current_rung(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    for rung in sl.LADDER:
+        state.begin(rung.rung_id, 2.0, {"ok": False, "reason": "too dark"})
+        if state.current is None:
+            break
+    assert state.current is None

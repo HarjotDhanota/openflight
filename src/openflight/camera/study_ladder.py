@@ -153,3 +153,99 @@ def swing_verdict(  # pylint: disable=too-many-locals
         "clipped_pct": stats["clipped_pct"],
         "ball": ball,
     }
+
+
+class LadderState:
+    """The ladder's progress for one tester, kept in ``ladder.json`` so a reload resumes it."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        if path.is_file():
+            self._data = json.loads(path.read_text(encoding="utf-8"))
+        else:
+            self._data = {
+                "rungs": {
+                    rung.rung_id: {
+                        "arm_id": rung.arm_id,
+                        "exposure_us": rung.exposure_us,
+                        "status": "pending",
+                        "gain": None,
+                        "pre_check": None,
+                        "reason": None,
+                        "swings": [],
+                    }
+                    for rung in LADDER
+                },
+                "photos": {},
+            }
+            self._save()
+
+    def _save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(self._data, indent=2) + "\n", encoding="utf-8")
+
+    @property
+    def current(self) -> Rung | None:
+        """The active rung, else the next pending one, else None at the end."""
+        for status in ("active", "pending"):
+            for rung in LADDER:
+                if self._data["rungs"][rung.rung_id]["status"] == status:
+                    return rung
+        return None
+
+    def gain(self, rung_id: str) -> float | None:
+        return self._data["rungs"][rung_id]["gain"]
+
+    def accepted(self, rung_id: str) -> int:
+        swings = self._data["rungs"][rung_id]["swings"]
+        return sum(1 for swing in swings if swing["color"] in ("green", "amber"))
+
+    def seen_captures(self) -> set[str]:
+        rungs = self._data["rungs"].values()
+        return {swing["capture"] for rung in rungs for swing in rung["swings"]}
+
+    def _skip_from(self, rung: Rung, status: str, reason: str) -> None:
+        """This rung, and every shorter rung of its mode after it, will not be captured."""
+        entries = self._data["rungs"]
+        entries[rung.rung_id]["status"] = status
+        entries[rung.rung_id]["reason"] = reason
+        for other in LADDER[LADDER.index(rung) + 1 :]:
+            if other.arm_id == rung.arm_id and entries[other.rung_id]["status"] == "pending":
+                entries[other.rung_id]["status"] = "skipped"
+                entries[other.rung_id]["reason"] = f"{rung.rung_id} {status}: {reason}"
+
+    def begin(self, rung_id: str, gain: float, check: dict) -> None:
+        rung = next(r for r in LADDER if r.rung_id == rung_id)
+        entry = self._data["rungs"][rung_id]
+        entry["gain"] = gain
+        entry["pre_check"] = check
+        if check.get("ok"):
+            entry["status"] = "active"
+        else:
+            self._skip_from(rung, "skipped", check.get("reason") or "failed the pre-rung check")
+        self._save()
+
+    def record_swing(self, verdict: dict) -> str:
+        rung = self.current
+        if rung is None:
+            return "done"
+        entry = self._data["rungs"][rung.rung_id]
+        if verdict["capture"] in self.seen_captures():
+            return entry["status"]
+        entry["swings"].append(verdict)
+        first = entry["swings"][:EARLY_EXIT_SWINGS]
+        reds = sum(1 for swing in first if swing["color"] == "red")
+        if reds >= EARLY_EXIT_REDS:
+            self._skip_from(rung, "failed", f"{reds} of the first {len(first)} swings red")
+        elif self.accepted(rung.rung_id) >= SWINGS_PER_RUNG:
+            entry["status"] = "done"
+        self._save()
+        return entry["status"]
+
+    def record_photo(self, capture: str, path: str) -> None:
+        self._data["photos"][capture] = path
+        self._save()
+
+    def to_dict(self) -> dict:
+        current = self.current
+        return {**self._data, "current": current.rung_id if current else None}
