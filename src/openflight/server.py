@@ -131,6 +131,9 @@ kld7_horizontal = None
 iwr6843_runtime = None
 iwr6843_runtime_config: dict = {"enabled": False}
 camera_capture_runtime = None
+# The tester study page may set exposure and gain and read raw frames only when
+# the kiosk is started with --study-mode; production never exposes either.
+study_mode_enabled = False
 camera_capture_config: dict = {"enabled": False}
 camera_replay_manager = None
 camera_reference_ball_tracker = None
@@ -1419,6 +1422,72 @@ def camera_capture_exposure_quality():
     quality = camera_capture_runtime.exposure_quality()
     quality["auto_exposure"] = camera_capture_runtime.auto_exposure_status()
     return jsonify(quality)
+
+
+def _study_runtime():
+    """The capture runtime the study page may drive, or the response refusing it."""
+    if not study_mode_enabled:
+        return None, (jsonify({"error": "study mode is off"}), 404)
+    if camera_capture_runtime is None:
+        return None, (jsonify({"error": "camera capture is not running"}), 409)
+    if camera_capture_runtime.settings.auto_exposure:
+        return None, (
+            jsonify({"error": "exposure is automatic; start with manual exposure"}),
+            409,
+        )
+    return camera_capture_runtime, None
+
+
+@app.route("/api/camera/study/controls", methods=["POST"])
+def study_camera_controls():
+    """Set exposure and gain live, without restarting the rolling buffer."""
+    runtime, refusal = _study_runtime()
+    if refusal is not None:
+        return refusal
+    body = request.get_json(silent=True) or {}
+    try:
+        applied = runtime.update_image_controls(
+            exposure_us=int(body["exposure_us"]), gain=float(body["gain"])
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        return jsonify({"error": str(error)}), 400
+    except RuntimeError as error:
+        return jsonify({"error": str(error)}), 409
+    return jsonify(applied)
+
+
+@app.route("/api/camera/study/frames")
+def study_camera_frames():
+    """The next few raw frames, with the exposure and gain each was taken at."""
+    import io  # pylint: disable=import-outside-toplevel
+
+    import numpy as np  # pylint: disable=import-outside-toplevel
+
+    runtime, refusal = _study_runtime()
+    if refusal is not None:
+        return refusal
+    try:
+        count = max(1, min(20, int(request.args.get("n", 5))))
+    except ValueError:
+        return jsonify({"error": "n must be a whole number"}), 400
+    frames = runtime.recent_frames(count, timeout_s=2.0)
+    if len(frames) < count:
+        return jsonify({"error": "the camera did not deliver frames"}), 503
+    buffer = io.BytesIO()
+    np.savez(
+        buffer,
+        frames=np.stack([frame.image for frame in frames]),
+        exposure_us=np.asarray([frame.exposure_us for frame in frames], dtype=np.int32),
+        analogue_gain=np.asarray([frame.analogue_gain for frame in frames], dtype=np.float32),
+        sensor_timestamp_ns=np.asarray(
+            [frame.sensor_timestamp_ns for frame in frames], dtype=np.int64
+        ),
+    )
+    return Response(
+        buffer.getvalue(),
+        mimetype="application/octet-stream",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.route("/api/camera/replays/<replay_id>/prepare", methods=["GET", "POST"])
@@ -4332,6 +4401,11 @@ def main():
         "--web-port", type=int, default=8080, help="Web server port (default: 8080)"
     )
     parser.add_argument(
+        "--study-mode",
+        action="store_true",
+        help="Let the tester study page set camera exposure and gain and read raw frames",
+    )
+    parser.add_argument(
         "--startup-status-file",
         default=None,
         help="Write structured initialization progress for the optional kiosk splash",
@@ -4817,6 +4891,8 @@ def main():
     global ballistics_enabled
     global battery_provider
     global profile_store
+    global study_mode_enabled
+    study_mode_enabled = bool(args.study_mode)
     global ball_speed_correction_enabled
     global ball_speed_correction_distance_ft
     global ball_speed_correction_ball_above_radar_ft

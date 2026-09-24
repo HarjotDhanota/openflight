@@ -400,6 +400,20 @@ class CameraCaptureRuntime:
         )
         return {"exposure_us": exposure_us, "gain": gain}
 
+    def recent_frames(self, count: int, *, timeout_s: float = 2.0) -> list:
+        """The next ``count`` distinct frames the rolling buffer receives."""
+        frames: list = []
+        seen: set[int] = set()
+        deadline = time.monotonic() + timeout_s
+        while len(frames) < count and time.monotonic() < deadline:
+            frame = self._ring.latest_frame
+            if frame is not None and frame.sensor_timestamp_ns not in seen:
+                seen.add(frame.sensor_timestamp_ns)
+                frames.append(frame)
+            else:
+                time.sleep(0.002)
+        return frames
+
     def vertical_crop_status(self) -> dict:
         """Describe the live sensor-window adjustment available to the UI."""
         limits = vertical_crop_limits(self.settings.width, self.settings.height)
