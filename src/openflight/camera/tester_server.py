@@ -9,6 +9,7 @@ import math
 import os
 import re
 import shlex
+import signal
 import struct
 import subprocess
 import sys
@@ -26,6 +27,7 @@ from typing import Callable
 import numpy as np
 from flask import Flask, Response, jsonify, request, send_file
 
+from openflight.camera import study_ladder
 from openflight.camera.club_motion import detect_reference_ball
 from openflight.camera.triggered_buffer import unpack_r8_frame
 
@@ -145,6 +147,15 @@ ARMS: dict[str, Arm] = {
             EXPOSURE_CEILING_US,
             "arm 4 at 1:1 sampling → pixels alone",
         ),
+        Arm(
+            "arm6",
+            "640×400 @288",
+            640,
+            400,
+            288.0,
+            EXPOSURE_CEILING_US,
+            "the ladder's frame-rate comparison: 2x-reduced at 2.4x the frames",
+        ),
     )
 }
 ARM_ORDER = tuple(ARMS)
@@ -153,7 +164,10 @@ ACTION_LABELS = {
     "preflight": "Hardware and software preflight",
     "gain": "Find the gain for this arm",
     "swings": "Capture paired swings for this arm",
+    "ladder": "Exposure ladder for this mode",
 }
+# a hardware step that hangs is stopped; the ladder runs as long as the tester swings
+ACTION_TIMEOUT_S = {"preflight": 120.0, "gain": 900.0}
 
 # Chained-delivery statuses that mean the estimator produced a delivery.
 ACCEPTED_STATUSES = frozenset({"ok", "fused", "chained_high", "approach_high"})
@@ -422,6 +436,42 @@ def action_commands(
                 root / "gain",
             )
         ]
+    elif action == "ladder":
+        # no tape: the ladder's kiosk falls back to its default distance, and the
+        # raw radar dumps let every radar number be recomputed later
+        gain, exposure_us = resolve_gain(sessions_root, params)
+        commands = [
+            [
+                "bash",
+                str(REPO_ROOT / "scripts" / "start-kiosk.sh"),
+                "--radar-port",
+                radar_port,
+                "--club",
+                CLUB,
+                "--study-mode",
+                "--camera-capture-manual-exposure",
+                "--debug",
+                "--iwr6843",
+                "--inclinometer",
+                "--rig-geometry",
+                str(rig_geometry),
+                "--camera-capture",
+                "--camera-capture-width",
+                str(arm.width),
+                "--camera-capture-height",
+                str(arm.height),
+                "--camera-capture-fps",
+                str(arm.fps),
+                "--camera-capture-exposure-us",
+                str(exposure_us),
+                "--camera-capture-gain",
+                str(gain),
+                "--log-dir",
+                str(next_run_directory(root)),
+                "--session-location",
+                params.arm_id,
+            ]
+        ]
     else:
         gain, exposure_us = resolve_gain(sessions_root, params)
         if params.tee_mm is None:
@@ -478,6 +528,7 @@ class TesterJobManager:
         self._thread: threading.Thread | None = None
         self._cancel_requested = False
         self._on_finish: Callable[[str, int], None] | None = None
+        self._timer: threading.Timer | None = None
         self._state: dict[str, object] = {
             "state": "idle",
             "action": None,
@@ -520,6 +571,11 @@ class TesterJobManager:
                 name="tester-job",
             )
             self._thread.start()
+            timeout = ACTION_TIMEOUT_S.get(action)
+            self._timer = threading.Timer(timeout, self.cancel) if timeout else None
+            if self._timer is not None:
+                self._timer.daemon = True
+                self._timer.start()
 
     def _append(self, line: str, handle) -> None:
         clean = line.rstrip("\r\n")
@@ -545,6 +601,7 @@ class TesterJobManager:
                         encoding="utf-8",
                         errors="replace",
                         bufsize=1,
+                        start_new_session=True,
                     )
                     with self._lock:
                         self._process = process
@@ -584,6 +641,8 @@ class TesterJobManager:
                     "finished_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
+        if self._timer is not None:
+            self._timer.cancel()
         if on_finish is not None:
             try:
                 on_finish(action, returncode)
@@ -597,7 +656,12 @@ class TesterJobManager:
             self._cancel_requested = True
             process = self._process
         if process is not None:
-            process.terminate()
+            try:
+                # start-kiosk.sh runs the server as a child: end the whole group,
+                # or the camera stays held for the next mode
+                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            except (AttributeError, OSError):
+                process.terminate()
         return True
 
 
@@ -1465,6 +1529,128 @@ def create_app(
             return send_file(path, as_attachment=True, download_name=path.name)
         except (FileNotFoundError, ValueError) as exc:
             return jsonify({"error": str(exc)}), 404
+
+    ladder_runners: dict[str, study_ladder.LadderRunner] = {}
+
+    def ladder_state(tester_id: str) -> study_ladder.LadderState:
+        return study_ladder.LadderState(tester_root(sessions_root, tester_id) / "ladder.json")
+
+    def gain_facts(params_for_arm: TesterParameters) -> dict:
+        results = latest_gain_results(arm_directory(sessions_root, params_for_arm)) or []
+        facts = light_index(results) if results else {}
+        gain, _exposure = resolve_gain(sessions_root, params_for_arm)
+        return {"gain": gain, **facts}
+
+    def start_mode(tester_id: str, environment: str, arm_id: str) -> None:
+        params_for_arm = TesterParameters(tester_id, arm_id, environment)
+        live.stop()
+        enclosure.stop()  # the kiosk reads the LIS3DH itself during the ladder
+        commands, log_path = action_commands(
+            "ladder", params_for_arm, sessions_root, rig_geometry, radar_port
+        )
+        jobs.start("ladder", commands, log_path)
+
+    @app.post("/api/tester/ladder/start")
+    def ladder_start():  # pylint: disable=too-many-locals
+        try:
+            params = TesterParameters.from_payload(request.get_json(silent=True))
+            facts = {
+                arm_id: gain_facts(TesterParameters(params.tester_id, arm_id, params.environment))
+                for arm_id in ("arm5", "arm6")
+            }
+        except RuntimeError as exc:
+            return jsonify({"error": f"run the gain step for both modes first ({exc})"}), 409
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        state = ladder_state(params.tester_id)
+        rung = state.current
+        if rung is None:
+            return jsonify({"error": "the ladder is finished; package it"}), 409
+        root = tester_root(sessions_root, params.tester_id)
+
+        def run_dir() -> Path | None:
+            current = state.current
+            if current is None:
+                return None
+            runs = sorted((root / current.arm_id / "paired").glob("run-*"))
+            return runs[-1] if runs else None
+
+        def mode_done(_arm_id: str) -> None:
+            following = state.current
+            jobs.cancel()
+            if following is None:
+                return
+
+            def restart() -> None:
+                deadline = time.monotonic() + 30
+                while jobs.status()["state"] == "running" and time.monotonic() < deadline:
+                    time.sleep(0.5)
+                start_mode(params.tester_id, params.environment, following.arm_id)
+                runner.start_rung()
+
+            threading.Thread(target=restart, daemon=True, name="ladder-next-mode").start()
+
+        runner = study_ladder.LadderRunner(
+            state,
+            study_ladder.KioskClient(),
+            run_dir=run_dir,
+            black_floor=lambda arm_id: float(facts[arm_id].get("black_floor_dn") or 0.0),
+            gain_at_300=lambda arm_id: float(facts[arm_id]["gain"]),
+            light_index=lambda arm_id: float(facts[arm_id].get("light_index") or 0.05),
+            photo_dir=root / "impact",
+            on_mode_done=mode_done,
+        )
+        previous = ladder_runners.pop(params.tester_id, None)
+        if previous is not None:
+            previous.stop()
+        try:
+            start_mode(params.tester_id, params.environment, rung.arm_id)
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 409
+        ladder_runners[params.tester_id] = runner
+        runner.start()
+        return jsonify({"ladder": state.to_dict(), "job": jobs.status()})
+
+    @app.get("/api/tester/ladder")
+    def ladder_status():
+        tester_id = str(request.args.get("tester_id", ""))
+        if not SAFE_SEGMENT.fullmatch(tester_id):
+            return jsonify({"error": "unknown tester"}), 400
+        runner = ladder_runners.get(tester_id)
+        state = runner.state if runner else ladder_state(tester_id)
+        return jsonify(
+            {
+                "ladder": state.to_dict(),
+                "last_verdict": runner.last_verdict if runner else None,
+                "job": jobs.status(),
+            }
+        )
+
+    @app.post("/api/tester/ladder/photo")
+    def ladder_photo():
+        tester_id = str((request.get_json(silent=True) or {}).get("tester_id", ""))
+        runner = ladder_runners.get(tester_id)
+        if runner is None:
+            return jsonify({"error": "start the ladder first"}), 409
+        try:
+            path = runner.photograph()
+        except (OSError, RuntimeError) as exc:
+            return jsonify({"error": str(exc)}), 409
+        return jsonify({"photo": path.name})
+
+    @app.post("/api/tester/comparator")
+    def comparator_upload():
+        tester_id = str(request.form.get("tester_id", ""))
+        upload = request.files.get("file")
+        if not SAFE_SEGMENT.fullmatch(tester_id) or upload is None:
+            return jsonify({"error": "choose a tester and a file"}), 400
+        name = Path(upload.filename or "export").name
+        if not SAFE_SEGMENT.fullmatch(name):
+            return jsonify({"error": "rename the file to letters, numbers, dot, dash"}), 400
+        folder = tester_root(sessions_root, tester_id) / "comparator"
+        folder.mkdir(parents=True, exist_ok=True)
+        upload.save(folder / name)
+        return jsonify({"saved": name})
 
     return app
 

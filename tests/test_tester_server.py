@@ -34,8 +34,8 @@ def screened(root, p, gain=6.0):
 
 class TestTheArmsAreThePlan:
     def test_the_five_arms_exist_in_order(self):
-        assert ts.ARM_ORDER == ("arm1", "arm2", "arm3", "arm4", "arm5")
-        shape = {a: (x.width, x.fps, x.exposure_us) for a, x in ts.ARMS.items()}
+        assert ts.ARM_ORDER == ("arm1", "arm2", "arm3", "arm4", "arm5", "arm6")
+        shape = {a: (x.width, x.fps, x.exposure_us) for a, x in ts.ARMS.items() if a != "arm6"}
         assert shape == {
             "arm1": (320, 450.0, 300),
             "arm2": (320, 450.0, 175),
@@ -286,7 +286,14 @@ class TestApp:
         client = ts.create_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
         assert client.get("/").status_code == 200
         arms = client.get("/api/tester/arms").get_json()
-        assert [a["arm_id"] for a in arms["arms"]] == ["arm1", "arm2", "arm3", "arm4", "arm5"]
+        assert [a["arm_id"] for a in arms["arms"]] == [
+            "arm1",
+            "arm2",
+            "arm3",
+            "arm4",
+            "arm5",
+            "arm6",
+        ]
         response = client.post(
             "/api/tester/status",
             json={
@@ -911,3 +918,95 @@ def test_no_ball_on_a_floor_clipped_white_says_to_lower_the_exposure():
     assert ball["found"] is False
     assert "clipped white" in ball["reason"]
     assert "lower the exposure" in ball["reason"]
+
+
+class TestTheLadder:
+    body = {"tester_id": "20260922-name", "arm_id": "arm5", "environment": "indoors"}
+
+    def test_the_second_mode_is_640x400_at_288(self):
+        arm = ts.ARMS["arm6"]
+        assert (arm.width, arm.height, arm.fps, arm.exposure_us) == (640, 400, 288.0, 300)
+
+    def test_a_ladder_run_starts_the_kiosk_in_study_mode_without_a_tape(self, tmp_path):
+        params = ts.TesterParameters("20260922-name", "arm5", "indoors")
+        ts.write_arm_state(tmp_path, params, gain=3.0, gain_exposure_us=300)
+        commands, _log = ts.action_commands("ladder", params, tmp_path, RIG, "/dev/ttyAMA0")
+        command = commands[0]
+        assert "--study-mode" in command
+        assert "--iwr6843-tee-m" not in command
+        assert command[command.index("--camera-capture-exposure-us") + 1] == "300"
+
+    def test_the_ladder_needs_both_gain_screens_first(self, tmp_path):
+        client = ts.create_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
+        response = client.post("/api/tester/ladder/start", json=self.body)
+        assert response.status_code == 409
+        assert "gain" in response.get_json()["error"]
+
+    def test_the_ladder_state_is_read_back(self, tmp_path):
+        client = ts.create_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
+        response = client.get("/api/tester/ladder", query_string=self.body)
+        assert response.status_code == 200
+        assert response.get_json()["ladder"]["current"] == "full-300"
+
+    def test_a_comparator_export_is_kept_in_the_package(self, tmp_path):
+        import io as _io  # pylint: disable=import-outside-toplevel
+
+        client = ts.create_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
+        response = client.post(
+            "/api/tester/comparator",
+            data={
+                "tester_id": "20260922-name",
+                "file": (_io.BytesIO(b"shot,speed\n1,120\n"), "tm4.csv"),
+            },
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 200
+        saved = tmp_path / "20260922-name" / "comparator" / "tm4.csv"
+        assert saved.read_bytes().startswith(b"shot")
+
+    def test_stopping_a_job_kills_its_whole_process_group(self, monkeypatch):
+        killed = []
+        monkeypatch.setattr(ts.os, "getpgid", lambda pid: pid, raising=False)
+        monkeypatch.setattr(
+            ts.os, "killpg", lambda pgid, sig: killed.append((pgid, sig)), raising=False
+        )
+        manager = ts.TesterJobManager()
+        manager._state["state"] = "running"  # pylint: disable=protected-access
+        process = type("P", (), {"pid": 4321, "terminate": lambda self: None})()
+        manager._process = process  # pylint: disable=protected-access
+        assert manager.cancel() is True
+        assert killed == [(4321, ts.signal.SIGTERM)]
+
+    def test_a_stuck_gain_screen_is_stopped_by_its_timeout(self, monkeypatch, tmp_path):
+        import threading as _threading  # pylint: disable=import-outside-toplevel
+
+        monkeypatch.setitem(ts.ACTION_TIMEOUT_S, "gain", 0.2)
+        released = _threading.Event()
+
+        class Stuck:
+            pid = 99
+
+            def __init__(self, *args, **kwargs):
+                del args, kwargs
+                self.stdout = self
+
+            def __iter__(self):
+                released.wait(5)
+                return iter(())
+
+            def wait(self):
+                return -15
+
+            def terminate(self):
+                released.set()
+
+        def no_group(pid):
+            raise OSError(f"no process group for {pid}")
+
+        monkeypatch.setattr(ts.os, "getpgid", no_group, raising=False)
+        manager = ts.TesterJobManager(popen=Stuck)
+        manager.start("gain", [["calibrate"]], tmp_path / "gain.log")
+        deadline = time.monotonic() + 3
+        while manager.status()["state"] == "running" and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert manager.status()["state"] == "stopped"
