@@ -1,10 +1,11 @@
 # Camera mode study — tester guide
 
-You collect paired camera and radar recordings across five camera arms (three
-exposures at 320×200, then two further readout modes) with a 7-iron. We analyse
-them against `mode-study-analysis.md`. The page never shows estimated club or
-ball numbers; it shows whether each swing saved usable, paired data, and how
-many of the five each arm has accepted.
+The test suite finds the shortest camera exposure that still works at full
+resolution (1280×800), and compares it with 640×400, while recording everything
+the camera and both radars see. You hit a 7-iron; the page sets each exposure
+itself, gives a verdict after every swing, skips exposures your light cannot
+support, and takes a photo of the club face after each full-resolution swing.
+The page never shows estimated club or ball numbers.
 
 ## Requirements
 
@@ -13,7 +14,8 @@ many of the five each arm has accepted.
 - Raspberry Pi 5, OV9281 with the OpenFlight high-speed driver installed,
   OPS243, IWR6843LEVM, sound trigger, and the LIS3DH connected. The
   inclinometer runs on every session; it is how ball height is solved.
-- A 7-iron. Nothing else for this study.
+- A 7-iron, balls, foot powder spray, and a cloth. Nothing is measured and
+  nothing is typed except your tester ID.
 
 ## Before your first run
 
@@ -88,7 +90,31 @@ minutes; later starts are quick.
 3. **Package everything** and send the archive through the agreed channel. Raw
    data stays out of Git.
 
+## Test suite
+
+On the study page, fill in **Who and where**, then work down **Test suite**:
+
+1. **A. Check the hardware.** Ready means the software and camera answered.
+2. **B. Measure the light.** Runs the camera's light screen at both modes, about
+   a minute each. Keep the room as you will hit in; it also proves each camera
+   mode streams.
+3. **C. Start the exposure ladder.** The page sets each exposure itself and shows
+   which one you are on. Hit a normal shot, wait for the verdict, repeat. It moves
+   on after 5 good swings, and skips exposures your light cannot support.
+   On the 1280×800 exposures: spray the face before each swing; after it, hold
+   the face about 0.5 m from the lens inside the dashed box, press
+   **Photograph face**, then wipe it. Between the two modes the kiosk restarts
+   by itself (about 20 s).
+4. **D. Package the data.** If you have a TM4, Full Swing KIT or Mevo Gen 2
+   export, choose it first. Copy the archive off the Pi on a USB stick; it can be
+   about 1 GB.
+
+If the page is reloaded or the ladder stopped, press **C** again: it carries on
+from where it was.
+
 ## The arms
+
+The single-arm controls below the suite are for investigating one mode by hand.
 
 | Arm | Mode | Exposure | Why it exists |
 | --- | --- | --- | --- |
@@ -144,4 +170,10 @@ check, not proof of absolute accuracy.
 | Every swing rejected with no ball speed | The OPS243 was not found | Pass `--radar-port` with your port (`/dev/ttyAMA0` for the GPIO UART, `/dev/ttyACM0` for USB) |
 | An arm's counter stays at 0 while swings save | The estimator rejected them; the status histogram in the archive says why | Hit the five anyway if it reads `lighting required`; its acceptance rate is part of the result |
 | Stopped mid-arm | Nothing is lost | Press **Capture swings** again; runs are kept separately and counted together |
+| Ladder verdict red: `frames: ... fps delivered` or `gap(s)` | The Pi could not keep up with the camera mode | Close other programs, check the power supply, run **A** again |
+| Ladder verdict red: `controls: exposure ...` or `gain ...` | The camera did not take the exposure's setting | Press **C** again; the ladder carries on where it stopped |
+| Ladder verdict red: `light: too dark` | This exposure is below what your light supports | Expected on the shortest exposures; the ladder skips the rest |
+| Ladder verdict red: `light: ... clipped` | The ball area is washed out | Dim or move the light; this exposure will fail |
+| Ladder verdict amber: `resting ball not found` | The camera could not pick the ball out without knowing its distance | The swing still counts; keep placing the ball in the same spot |
+| `run the gain step for both modes first` | Step **B** did not finish for both modes | Run **B** again |
 
