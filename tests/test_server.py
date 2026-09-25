@@ -755,6 +755,50 @@ class TestIWR6843ShotIntegration:
         # a hardcoded 0.95 -- see openflight.server.horizontal_confidence_from.
         assert shot.launch_angle_horizontal_confidence == pytest.approx(0.63)
 
+    def test_unresolved_tee_range_is_reported_as_withheld_without_publishing_angle(
+        self, monkeypatch
+    ):
+        emitted = []
+        capture = SimpleNamespace(
+            trigger_timestamp=100.01,
+            path=Path("/tmp/test.l3dump"),
+            raw=b"raw",
+            dump_duration_s=4.5,
+            error=None,
+            valid=True,
+            sequence=1,
+        )
+        runtime = SimpleNamespace(
+            process_shot=lambda **kwargs: SimpleNamespace(
+                capture=capture,
+                measurement=None,
+                club_path=None,
+                withheld_reason="tee_range_unresolved",
+            )
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
+        shot = Shot(
+            ball_speed_mph=100.0,
+            club_speed_mph=80.0,
+            timestamp=datetime.now(),
+            impact_timestamp=100.0,
+            club=ClubType.IRON_9,
+        )
+
+        server_module._process_iwr6843_angle(shot)
+
+        assert shot.launch_angle_vertical is None
+        assert emitted[-1][1]["iwr6843"] == {
+            "state": "withheld",
+            "reason": "tee_range_unresolved",
+        }
+
     def test_debug_mode_exposes_rejected_club_candidates_without_promoting_them(self, monkeypatch):
         measurement = SimpleNamespace(
             accepted=False,

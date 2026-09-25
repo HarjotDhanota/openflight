@@ -390,8 +390,32 @@ def test_no_club_speed_skips_the_estimate():
     assert result.club_path is None
 
 
+def test_unresolved_tee_range_preserves_capture_and_withholds_estimators():
+    calibration = Calibration.identity()
+    calibration.tee_range_m = None
+    runtime = IWR6843Runtime(
+        capture_monitor=FakeMonitor(),
+        calibration=calibration,
+        net_range_m=4.064,
+    )
+
+    with patch("openflight.iwr6843.runtime.process_raw_capture") as process:
+        result = runtime.process_shot(
+            impact_timestamp=1.0,
+            ball_speed_mph=100.0,
+            club="7i",
+            club_speed_mph=74.0,
+        )
+
+    assert result.capture is not None and result.capture.valid
+    assert result.measurement is None
+    assert result.club_path is None
+    process.assert_not_called()
+
+
 def test_per_shot_tilt_uses_a_calibration_copy_without_mutating_runtime():
     calibration = Calibration.identity()
+    calibration.tee_range_m = 1.575
     runtime = IWR6843Runtime(
         capture_monitor=FakeMonitor(),
         calibration=calibration,

@@ -235,7 +235,7 @@ def replay_capture(
 def build_replay_calibration(
     calibration_path: str | Path,
     *,
-    tee_range_m: float,
+    tee_range_m: float | None,
     tilt_deg: float | None,
     radar_height_m: float | None,
     ball_height_m: float,

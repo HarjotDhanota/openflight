@@ -28,7 +28,7 @@ from typing import Callable
 import numpy as np
 from flask import Flask, Response, g, jsonify, request, send_file
 
-from openflight import session_bundle
+from openflight import session_bundle, tee_range
 from openflight.camera import attempt_ledger, session_review_routes as review_routes, study_ladder
 from openflight.camera.club_motion import detect_reference_ball
 from openflight.camera.fusion_diagnostics import register_fusion_diagnostics
@@ -480,8 +480,6 @@ def action_commands(
             )
         ]
     elif action == "ladder":
-        # no tape: the ladder's kiosk falls back to its default distance, and the
-        # raw radar dumps let every radar number be recomputed later
         gain, exposure_us = resolve_gain(sessions_root, params)
         commands = [
             [
@@ -495,6 +493,7 @@ def action_commands(
                 "--camera-capture-manual-exposure",
                 "--debug",
                 "--iwr6843",
+                "--iwr6843-tee-range-pending",
                 "--inclinometer",
                 "--rig-geometry",
                 str(rig_geometry),
@@ -517,8 +516,6 @@ def action_commands(
         ]
     else:
         gain, exposure_us = resolve_gain(sessions_root, params)
-        if params.tee_mm is None:
-            raise ValueError("measure the radar window to the ball centre first")
         commands = [
             [
                 "bash",
@@ -527,11 +524,10 @@ def action_commands(
                 radar_port,
                 "--club",
                 CLUB,
-                "--iwr6843-tee-m",
-                f"{params.tee_mm / 1000.0:.3f}",
                 "--camera-capture-manual-exposure",
                 "--debug",
                 "--iwr6843",
+                "--iwr6843-tee-range-pending",
                 "--inclinometer",
                 "--rig-geometry",
                 str(rig_geometry),
@@ -1881,13 +1877,31 @@ def create_app(
             write_arm_state(sessions_root, params)
             if action == "swings":
                 gain, exposure_us = resolve_gain(sessions_root, params)
+                candidates = (
+                    [
+                        tee_range.manual_truth_candidate(
+                            params.tee_mm / 1000.0,
+                            evidence={"method": "operator_tape", "reported_unit": "mm"},
+                        )
+                    ]
+                    if params.tee_mm is not None
+                    else []
+                )
+                solution = tee_range.TeeRangeSolution.unresolved(
+                    candidates,
+                    reason="automatic_range_not_yet_qualified",
+                )
                 write_arm_state(
                     sessions_root,
                     params,
                     capture_gain=gain,
                     capture_exposure_us=exposure_us,
-                    tee_range_m=params.tee_mm / 1000.0,
-                    tee_range_source="tape",
+                    tee_range_m=None,
+                    tee_range_source="unresolved",
+                    tee_range_validation_truth_m=(
+                        params.tee_mm / 1000.0 if params.tee_mm is not None else None
+                    ),
+                    tee_range_solution=solution.to_dict(),
                 )
             if action == "gain":
                 on_finish = lambda _a, rc: record_gain(params) if rc == 0 else None  # noqa: E731
@@ -1906,6 +1920,7 @@ def create_app(
                 active_setup_tester["tester_id"] = params.tester_id
                 run_dir = Path(commands[0][commands[0].index("--log-dir") + 1])
                 write_setup_admission(run_dir, params.tester_id, eligibility)
+                tee_range.write_solution(run_dir / "tee_range.json", solution)
                 active_runtime_dir["path"] = run_dir
             try:
                 jobs.start(action, commands, log_path, on_finish=on_finish)
@@ -2132,6 +2147,10 @@ def create_app(
         )
         run = Path(commands[0][commands[0].index("--log-dir") + 1])
         write_setup_admission(run, tester_id, admitted_setup[tester_id])
+        tee_range.write_solution(
+            run / "tee_range.json",
+            tee_range.TeeRangeSolution.unresolved(reason="automatic_range_not_yet_qualified"),
+        )
 
         def ladder_finished(_action, _return_code):
             if active_runtime_dir["path"] == run:

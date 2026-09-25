@@ -11,6 +11,8 @@ from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from openflight.accuracy_benchmark import build_accuracy_report
 from scripts.analysis import benchmark_accuracy as benchmark_cli, replay_raw_fusion as cli
 
@@ -598,3 +600,82 @@ def test_recorded_iwr_snapshot_restores_base_tilt_and_base64_config(tmp_path, mo
     assert result["stages"]["iwr6843"]["runtime_config_source"] == "recorded_per_shot_snapshot"
     assert seen["tilt_deg"] == 12.5
     assert result["stages"]["iwr6843"]["config_sha256"] == hashlib.sha256(radar_bytes).hexdigest()
+
+
+def test_recorded_unresolved_range_preserves_raw_capture_without_estimating(tmp_path, monkeypatch):
+    session = _session(tmp_path)
+    raw = tmp_path / "iwr.bin"
+    raw.write_bytes(b"raw")
+    radar_bytes = b"cfg"
+    runtime = {
+        "tee_range_status": "unresolved",
+        "net_range_m": 4.0,
+        "tdm_sign_policy": "positive",
+        "azimuth_offset_deg": 0.0,
+        "horizontal_phase_reference_rad": None,
+        "club_window_policy": {},
+        "club_impact_correction_s": 0.0,
+        "recovery_observations": [],
+        "calibration": {
+            "source_payload": {"elem_phase_rad": [0] * 8, "elem_gain": [1] * 8},
+            "source_sha256": "source-file-hash",
+            "effective": {
+                "tilt_deg": 12.5,
+                "tee_slant_range_m": None,
+                "radar_height_m": 0.05,
+                "ball_height_m": 0.04,
+            },
+        },
+        "radar_config": {
+            "source_text": radar_bytes.decode(),
+            "source_sha256": hashlib.sha256(radar_bytes).hexdigest(),
+        },
+        "per_shot_inputs": {
+            "ball_speed_mph": 101.0,
+            "club": "7-iron",
+            "club_speed_mph": 77.0,
+            "effective_tilt_deg": None,
+        },
+    }
+    runtime_hash = hashlib.sha256(
+        json.dumps(runtime, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    runtime["sha256"] = runtime_hash
+    with session.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "type": "iwr6843_capture",
+                    "shot_number": 1,
+                    "capture_path": str(raw),
+                    "capture_bytes": 3,
+                    "runtime_config": runtime,
+                    "runtime_config_sha256": runtime_hash,
+                }
+            )
+            + "\n"
+        )
+    monkeypatch.setattr(
+        cli,
+        "replay_ops_capture",
+        lambda *_args, **_kwargs: {
+            "status": "ok",
+            "canonical_capture_payload_sha256": "c" * 64,
+            "result": {"ball_speed_mph": 101.0, "club_speed_mph": 77.0},
+            "overlapping_readings": [],
+        },
+    )
+    monkeypatch.setattr(cli, "build_replay_calibration", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(cli, "tx_order_from_config", lambda _path: "normal")
+    monkeypatch.setattr(
+        cli,
+        "replay_iwr_capture_bytes",
+        lambda *_args, **_kwargs: pytest.fail("range-dependent estimator ran"),
+    )
+
+    result = cli.replay(_args(tmp_path, session, iwr=True))
+
+    stage = result["stages"]["iwr6843"]
+    assert stage["status"] == "withheld"
+    assert stage["reason"] == "tee_range_unresolved"
+    assert stage["capture_sha256"] == hashlib.sha256(b"raw").hexdigest()

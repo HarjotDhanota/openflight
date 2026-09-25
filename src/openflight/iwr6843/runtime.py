@@ -193,6 +193,7 @@ class IWR6843ShotResult:
     capture: IWR6843Capture | None
     measurement: LCMFResult | None
     club_path: ClubPathResult | None = None
+    withheld_reason: str | None = None
 
 
 def process_raw_capture(  # pylint: disable=too-many-arguments,too-many-locals
@@ -322,6 +323,11 @@ class IWR6843Runtime:
         """Freeze every primitive needed by the hardware-free estimator."""
         payload = {
             "schema_version": 1,
+            "tee_range_status": (
+                "unresolved"
+                if getattr(self.calibration, "tee_range_m", None) is None
+                else "configured"
+            ),
             "net_range_m": self.net_range_m,
             "tx_order": self.tx_order,
             "tdm_sign_policy": self.tdm_sign_policy,
@@ -428,6 +434,12 @@ class IWR6843Runtime:
         shot_calibration = self.calibration
         if tilt_deg is not None:
             shot_calibration = replace(self.calibration, tilt_rad=math.radians(tilt_deg))
+        if getattr(shot_calibration, "tee_range_m", 1.0) is None:
+            return IWR6843ShotResult(
+                capture=capture,
+                measurement=None,
+                withheld_reason="tee_range_unresolved",
+            )
         measurement, club_path = process_raw_capture(
             capture.raw,
             shot_calibration,

@@ -232,7 +232,8 @@ class TestCommands:
         assert "--camera-capture-manual-exposure" in command
         assert command[command.index("--radar-port") + 1] == "/dev/ttyAMA0"
         assert command[command.index("--club") + 1] == "7-iron"
-        assert command[command.index("--iwr6843-tee-m") + 1] == "1.524"
+        assert "--iwr6843-tee-m" not in command
+        assert "--iwr6843-tee-range-pending" in command
         assert command[command.index("--log-dir") + 1].endswith("run-01")
 
     def test_the_exposure_arms_share_arm_1s_mode(self, tmp_path):
@@ -567,10 +568,20 @@ class TestApp:
 
 
 class TestRunsAndTape:
-    def test_swings_refuse_without_the_taped_distance(self, tmp_path):
+    def test_swings_collect_raw_evidence_without_a_taped_distance(self, tmp_path):
         screened(tmp_path, params())
-        with pytest.raises(ValueError, match="radar window"):
-            ts.action_commands("swings", params(), tmp_path, RIG)
+        command = ts.action_commands("swings", params(), tmp_path, RIG, tester_setup=TESTER_SETUP)[
+            0
+        ][0]
+        assert "--iwr6843-tee-range-pending" in command
+        assert "--iwr6843-tee-m" not in command
+
+    def test_optional_tape_is_validation_truth_not_a_runtime_override(self, tmp_path):
+        p = params(tee_mm=1524)
+        screened(tmp_path, p)
+        command = ts.action_commands("swings", p, tmp_path, RIG, tester_setup=TESTER_SETUP)[0][0]
+        assert "--iwr6843-tee-range-pending" in command
+        assert "--iwr6843-tee-m" not in command
 
     def test_a_distance_outside_the_room_is_refused(self):
         with pytest.raises(ValueError, match="radar-to-ball"):
@@ -1046,6 +1057,17 @@ class TestTheInclinometerRunsBesideThePage:
         response = client.post("/api/tester/run", json={**body, "tee_mm": 1524, "action": "swings"})
         assert response.status_code == 202
         assert fake.running is False
+        range_record = json.loads(
+            (
+                tmp_path / "20260922-name" / "arm1" / "paired" / "run-01" / "tee_range.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert range_record["status"] == "unresolved"
+        assert range_record["selected_range_m"] is None
+        assert range_record["candidates"][0]["source_group"] == "manual_truth"
+        arm_state = ts.read_arm_state(tmp_path, "20260922-name", "arm1")
+        assert arm_state["tee_range_m"] is None
+        assert arm_state["tee_range_validation_truth_m"] == pytest.approx(1.524)
         manager.finish("swings", 0)
         assert fake.running is True
         status = client.post("/api/tester/status", json=body).get_json()
@@ -1172,6 +1194,7 @@ class TestTheLadder:
         command = commands[0]
         assert "--study-mode" in command
         assert "--iwr6843-tee-m" not in command
+        assert "--iwr6843-tee-range-pending" in command
         assert command[command.index("--tester-config-hash") + 1] == "test-config"
         assert command[command.index("--inclinometer-address") + 1] == "0x18"
         assert command[command.index("--camera-capture-exposure-us") + 1] == "300"

@@ -473,27 +473,7 @@ def replay(args, *, frozen_session=None) -> dict:
                 raise ValueError(
                     "replayed OPS/club inputs differ from recorded IWR per-shot inputs"
                 )
-            measurement, club_path = replay_iwr_capture_bytes(
-                raw,
-                calibration,
-                ball_speed_mph=float(ball_speed),
-                club=club,
-                club_speed_mph=club_speed,
-                net_range_m=runtime_config.get("net_range_m"),
-                tx_order=tx_order,
-                tdm_sign_policy=runtime_config["tdm_sign_policy"],
-                azimuth_offset_deg=float(runtime_config["azimuth_offset_deg"]),
-                horizontal_phase_reference_rad=runtime_config.get("horizontal_phase_reference_rad"),
-                club_window_policy=ClubWindowPolicy(**runtime_config["club_window_policy"]),
-                club_impact_correction_s=float(runtime_config["club_impact_correction_s"]),
-                recovery_observations=[
-                    tuple(item) for item in runtime_config.get("recovery_observations", [])
-                ],
-            )
-            iwr_measurement, iwr_club_path = measurement, club_path
-            report["stages"]["iwr6843"] = {
-                **measurement.to_dict(),
-                "club_path": club_path.to_dict() if club_path is not None else None,
+            capture_evidence = {
                 "capture_path": _portable(capture_path, path_root),
                 "capture_path_resolution": capture_resolution,
                 "capture_sha256": hashlib.sha256(raw).hexdigest(),
@@ -508,8 +488,44 @@ def replay(args, *, frozen_session=None) -> dict:
                 "config_sha256": hashlib.sha256(radar_config_bytes).hexdigest(),
                 "runtime_config_sha256": canonical_runtime_hash,
                 "runtime_config_source": runtime_config_source,
-                "equivalence_status": "production_pipeline_replayed_caller_config_source_revision_not_proven",
             }
+            if tee_range_m is None:
+                report["stages"]["iwr6843"] = {
+                    "status": "withheld",
+                    "reason": "tee_range_unresolved",
+                    "club_path": None,
+                    **capture_evidence,
+                    "equivalence_status": "raw_evidence_preserved_estimator_not_run",
+                }
+            else:
+                measurement, club_path = replay_iwr_capture_bytes(
+                    raw,
+                    calibration,
+                    ball_speed_mph=float(ball_speed),
+                    club=club,
+                    club_speed_mph=club_speed,
+                    net_range_m=runtime_config.get("net_range_m"),
+                    tx_order=tx_order,
+                    tdm_sign_policy=runtime_config["tdm_sign_policy"],
+                    azimuth_offset_deg=float(runtime_config["azimuth_offset_deg"]),
+                    horizontal_phase_reference_rad=runtime_config.get(
+                        "horizontal_phase_reference_rad"
+                    ),
+                    club_window_policy=ClubWindowPolicy(**runtime_config["club_window_policy"]),
+                    club_impact_correction_s=float(runtime_config["club_impact_correction_s"]),
+                    recovery_observations=[
+                        tuple(item) for item in runtime_config.get("recovery_observations", [])
+                    ],
+                )
+                iwr_measurement, iwr_club_path = measurement, club_path
+                report["stages"]["iwr6843"] = {
+                    **measurement.to_dict(),
+                    "club_path": club_path.to_dict() if club_path is not None else None,
+                    **capture_evidence,
+                    "equivalence_status": (
+                        "production_pipeline_replayed_caller_config_source_revision_not_proven"
+                    ),
+                }
         except Exception as error:  # stage failures belong in the artifact
             report["stages"]["iwr6843"] = {
                 "status": "error",
@@ -530,7 +546,7 @@ def replay(args, *, frozen_session=None) -> dict:
             frozen["capture_path"] = _portable(frozen["capture_path"], path_root)
             camera_stage = {"recorded_context": frozen}
             iwr_stage = report["stages"].get("iwr6843", {})
-            if iwr_stage.get("status") == "error" or "capture_path" not in iwr_stage:
+            if iwr_stage.get("status") in {"error", "withheld"} or "capture_path" not in iwr_stage:
                 camera_stage["recomputed_radar_context"] = {
                     "status": "withheld",
                     "reason": "complete replayed IWR evidence is unavailable",

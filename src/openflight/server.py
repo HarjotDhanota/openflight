@@ -1322,7 +1322,7 @@ def init_iwr6843(
     calibration_path: str,
     output_dir: str | Path,
     trigger_pin: int,
-    tee_range_m: float,
+    tee_range_m: float | None,
     net_range_m: float | None,
     tx_order: str,
     capture_timeout_s: float,
@@ -1422,6 +1422,7 @@ def init_iwr6843(
         iwr6843_runtime_config = {
             "enabled": True,
             "estimator": "lcmf_v1",
+            "tee_range_status": "unresolved" if tee_range_m is None else "configured",
             "port": capture_monitor.port,
             "config": str(config_path),
             "calibration": str(calibration_path),
@@ -3045,11 +3046,13 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 reason=capture.error or "invalid IWR6843 capture",
             )
         elif measurement is None:
-            logger.warning("[SERVER] IWR6843 capture had no LCMF measurement")
+            withheld_reason = getattr(shot_result, "withheld_reason", None)
+            reason = withheld_reason or "no LCMF measurement"
+            logger.warning("[SERVER] IWR6843 capture had no LCMF measurement: %s", reason)
             _emit_iwr6843_trigger_status(
                 shot,
-                state="rejected",
-                reason="no LCMF measurement",
+                state="withheld" if withheld_reason else "rejected",
+                reason=reason,
             )
         elif measurement.accepted:
             shot.launch_angle_vertical = measurement.angle_deg
@@ -5467,6 +5470,14 @@ def main():
         help="Antenna-center to tee slant range in metres (default: 1.575)",
     )
     parser.add_argument(
+        "--iwr6843-tee-range-pending",
+        action="store_true",
+        help=(
+            "Capture raw TI evidence without a resolved tee range; withhold "
+            "range-dependent launch and club metrics"
+        ),
+    )
+    parser.add_argument(
         "--iwr6843-net-m",
         type=float,
         default=4.6,
@@ -5624,6 +5635,8 @@ def main():
     )
     args = parser.parse_args()
     _apply_kld7_device_defaults(args)
+    if args.iwr6843_tee_range_pending:
+        args.iwr6843_tee_m = None
 
     if args.trigger_threshold is not None and (
         not math.isfinite(args.trigger_threshold) or args.trigger_threshold < 0
@@ -5666,7 +5679,9 @@ def main():
         parser.error("--camera-capture cannot be used with --mock")
     if args.tester_setup_required and not args.tester_config_hash:
         parser.error("--tester-setup-required requires --tester-config-hash")
-    if args.iwr6843 and (args.iwr6843_tee_m <= 0 or args.iwr6843_net_m <= 0):
+    if args.iwr6843 and (
+        (args.iwr6843_tee_m is not None and args.iwr6843_tee_m <= 0) or args.iwr6843_net_m <= 0
+    ):
         parser.error("--iwr6843-tee-m and --iwr6843-net-m must be positive")
     init_rig_geometry(args.rig_geometry)
     try:
@@ -5738,7 +5753,7 @@ def main():
     global ball_speed_correction_ball_above_radar_ft
     # Cosine correction rides on whichever vertical radar supplies launch.
     # LCMF itself always receives the original OPS radial speed first.
-    ball_speed_correction_enabled = args.kld7 or args.iwr6843
+    ball_speed_correction_enabled = args.kld7 or (args.iwr6843 and args.iwr6843_tee_m is not None)
     ball_speed_correction_distance_ft = args.kld7_ball_distance
     ball_speed_correction_ball_above_radar_ft = -args.kld7_radar_height_inches / 12.0
     global _VERTICAL_RADAR_GATE_BYPASS
@@ -5901,14 +5916,17 @@ def main():
             save_dumps=args.debug,
         ):
             calibration = iwr6843_runtime.calibration
-            ball_speed_correction_distance_ft = args.iwr6843_tee_m * 3.28084
-            ball_speed_correction_ball_above_radar_ft = (
-                calibration.tee_ball_height_m - calibration.radar_height_m
-            ) * 3.28084
+            if args.iwr6843_tee_m is not None:
+                ball_speed_correction_distance_ft = args.iwr6843_tee_m * 3.28084
+                ball_speed_correction_ball_above_radar_ft = (
+                    calibration.tee_ball_height_m - calibration.radar_height_m
+                ) * 3.28084
             print(
                 "IWR6843 enabled (LCMF-v1 launch angle, "
                 f"BCM{args.iwr6843_trigger_pin}, {iwr6843_runtime.tx_order} TX order)"
             )
+            if args.iwr6843_tee_m is None:
+                print("IWR6843 tee range unresolved; saving raw captures only")
             if args.debug:
                 print(f"IWR6843 raw dumps enabled: {iwr_output_dir}")
             startup_status.ready("ti", "TI radar connected")
