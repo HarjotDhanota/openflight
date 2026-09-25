@@ -10,12 +10,16 @@ Gotchas baked in (each cost a debugging session):
 - One serial handle only — two handles on one tty steal each other's bytes.
 - The CP2105 can stall a stream for seconds (cp210x -110 control timeouts)
   and resume; the reader waits out gaps up to ``stall_tolerance_s``.
+- Linux raises DTR/RTS on every tty open before pyserial can clear them, so
+  auto-detection never opens the CP2105 Standard interface: the CLI is only
+  on Enhanced/UARTA (interface 00) and that probe would be a blind line pulse.
 """
 
 from __future__ import annotations
 
 import glob
 import logging
+import os
 import time
 
 import serial
@@ -25,6 +29,11 @@ from openflight.iwr6843.dump import HEADER, MAGIC, parse_header, payload_nbytes
 
 BAUD = 1_041_667
 _PORT_GLOBS = ("/dev/ttyUSB*", "/dev/tty.SLAB_USBtoUART*")
+_SYSFS_TTY = "/sys/class/tty"
+_CP2105_USB_ID = ("10c4", "ea70")
+_CP2105_INTERFACE_NAMES = {0: "CP2105 Enhanced if00", 1: "CP2105 Standard if01"}
+_CP2105_STANDARD_INTERFACE = 1
+_PROBE_WINDOW_S = 1.5
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +44,37 @@ class IWR6843DumpRecoveryError(RuntimeError):
     def __init__(self, message: str, raw: bytes):
         super().__init__(message)
         self.raw = raw
+
+
+def _read_sysfs(directory: str, name: str) -> str:
+    with open(os.path.join(directory, name), encoding="ascii") as handle:
+        return handle.read().strip()
+
+
+def _usb_serial_identity(port: str) -> tuple[str, str, int] | None:
+    """(vendor, product, interface number) of a Linux USB tty, else None."""
+    name = os.path.basename(os.path.realpath(port))
+    interface_dir = os.path.realpath(os.path.join(_SYSFS_TTY, name, "device", os.pardir))
+    try:
+        interface = int(_read_sysfs(interface_dir, "bInterfaceNumber"), 16)
+        usb_dir = os.path.dirname(interface_dir)
+        vendor = _read_sysfs(usb_dir, "idVendor").lower()
+        product = _read_sysfs(usb_dir, "idProduct").lower()
+    except (OSError, ValueError):
+        return None
+    return vendor, product, interface
+
+
+def _cp2105_interface(identity: tuple[str, str, int] | None) -> int | None:
+    if identity is None or identity[:2] != _CP2105_USB_ID:
+        return None
+    return identity[2]
+
+
+def _describe_probe_reply(response: bytes) -> str:
+    if not response:
+        return f"no reply to help within {_PROBE_WINDOW_S:g} s"
+    return f"{len(response)} bytes without the CLI help (starts {response[:24]!r})"
 
 
 def open_port(port: str, baud: int = BAUD, timeout: float = 0.3) -> serial.Serial:
@@ -52,9 +92,12 @@ class IWR6843Radar:
 
     def __init__(self, port: str | None = None, baud: int = BAUD):
         if port is None:
-            port = self.detect_port(baud)
+            port, probes = self.probe_ports(baud)
             if port is None:
-                raise RuntimeError("no IWR6843 CLI found — board on, flashed, single-port fw?")
+                detail = "; ".join(probes) or "no serial candidates"
+                raise RuntimeError(
+                    f"no IWR6843 CLI found — board on, flashed, single-port fw? Probes: {detail}"
+                )
         self.port = port
         self._device_lock = IWR6843DeviceLock(port)
         self._device_lock.acquire()
@@ -67,38 +110,56 @@ class IWR6843Radar:
     @staticmethod
     def detect_port(baud: int = BAUD) -> str | None:
         """First serial port whose CLI answers `help` with our commands."""
+        return IWR6843Radar.probe_ports(baud)[0]
+
+    @staticmethod
+    def probe_ports(baud: int = BAUD) -> tuple[str | None, list[str]]:
+        """Probe candidates, CP2105 Enhanced first; also return what each one did."""
         candidates: list[str] = []
-        busy_ports: list[str] = []
         for pattern in _PORT_GLOBS:
             candidates.extend(sorted(glob.glob(pattern)))
-        for cand in dict.fromkeys(candidates):
+        identities = {cand: _usb_serial_identity(cand) for cand in dict.fromkeys(candidates)}
+        ordered = sorted(identities, key=lambda cand: _cp2105_interface(identities[cand]) != 0)
+        probes: list[str] = []
+        busy_ports: list[str] = []
+        for cand in ordered:
+            interface = _cp2105_interface(identities[cand])
+            label = (
+                f"{cand} ({_CP2105_INTERFACE_NAMES[interface]})" if interface in (0, 1) else cand
+            )
+            if interface == _CP2105_STANDARD_INTERFACE:
+                probes.append(f"{label}: not probed; the CLI is on the Enhanced interface")
+                continue
             device_lock = IWR6843DeviceLock(cand)
             try:
                 device_lock.acquire()
             except IWR6843DeviceBusyError:
                 busy_ports.append(cand)
+                probes.append(f"{label}: busy")
                 continue
             try:
                 try:
                     ser = open_port(cand, baud)
-                except (OSError, serial.SerialException):
+                except (OSError, serial.SerialException) as error:
+                    probes.append(f"{label}: could not open ({error})")
                     continue
                 try:
                     ser.reset_input_buffer()
                     ser.write(b"help\n")
                     resp = b""
-                    deadline = time.time() + 1.5
+                    deadline = time.time() + _PROBE_WINDOW_S
                     while time.time() < deadline and b"sensorStart" not in resp:
                         resp += ser.read(512)
                 finally:
                     ser.close()
                 if b"sensorStart" in resp:
-                    return cand
+                    return cand, probes
+                probes.append(f"{label}: {_describe_probe_reply(resp)}")
             finally:
                 device_lock.release()
         if busy_ports:
             raise IWR6843DeviceBusyError(", ".join(busy_ports))
-        return None
+        return None, probes
 
     def cmd(self, line: str, window: float = 1.5) -> str:
         """Send one CLI line; collect the response until Done/Error/timeout."""
@@ -215,6 +276,8 @@ class IWR6843Radar:
                 break
             if expected is None:
                 idx = buf.find(MAGIC)
+                if idx < 0 and b"Error" in buf:
+                    break
                 if idx >= 0 and len(buf) - idx >= HEADER.size:
                     del buf[:idx]
                     try:
@@ -225,6 +288,12 @@ class IWR6843Radar:
             elif len(buf) >= expected:
                 break
         if expected is None:
+            if MAGIC not in buf and b"Error" in buf:
+                # The handler refused before any payload (e.g. capture inactive
+                # after a board reset); the CLI answered, so its state is known.
+                raise RuntimeError(
+                    f"IWR6843 rejected l3dump: {bytes(buf).decode(errors='replace').strip()[:200]}"
+                )
             raise IWR6843DumpRecoveryError(
                 "IWR6843 did not return a complete dump header before the capture timeout",
                 bytes(buf),

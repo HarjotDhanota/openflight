@@ -8,6 +8,7 @@ import pytest
 from openflight.iwr6843.device_lock import IWR6843DeviceBusyError
 from openflight.iwr6843.driver import IWR6843DumpRecoveryError, IWR6843Radar
 from openflight.iwr6843.dump import TEMP_REPORT_KEYS, pack_dump
+from tests.iwr6843_firmware_fake import FakeClock, FakePort, FirmwareModel, NoLock, SilentPort
 
 
 def test_send_config_rejects_missing_cli_acknowledgement(tmp_path, monkeypatch):
@@ -382,3 +383,182 @@ def test_read_dump_sizes_v5_header_extension():
 
     assert dump == raw
     assert serial.writes == [b"l3dump\n"]
+
+
+def _simulated_radar(monkeypatch, firmware, clock):
+    from openflight.iwr6843 import driver
+
+    monkeypatch.setattr(driver, "time", clock.module())
+    monkeypatch.setattr(driver, "IWR6843DeviceLock", NoLock)
+    monkeypatch.setattr(driver, "open_port", lambda *_args, **_kwargs: FakePort(firmware))
+    return IWR6843Radar(port="/dev/serial/by-id/iwr-if00-port0")
+
+
+def _active_dump() -> bytes:
+    return pack_dump(np.ones((2, 6, 4, 7), dtype=complex), n_tx=3, version=3)
+
+
+def test_dump_waits_through_a_multi_second_stall_for_done_before_stopping(monkeypatch):
+    """A complete payload is not a returned handler: commands sent before Done are lost."""
+    clock = FakeClock()
+    firmware = FirmwareModel(_active_dump(), clock, restart_s=2.5)
+    firmware.active = True
+    radar = _simulated_radar(monkeypatch, firmware, clock)
+
+    assert radar.read_dump() == firmware.raw
+    radar.verify_post_dump_cli()
+    radar.stop_sensor()
+    radar.close()
+
+    assert firmware.lost_writes == []
+    assert firmware.commands == ["l3dump", "stats", "sensorStop", "stats"]
+    assert firmware.active is False
+
+
+def test_dump_without_trailing_done_fails_without_sending_another_command(monkeypatch):
+    clock = FakeClock()
+    firmware = FirmwareModel(_active_dump(), clock, restart_s=1_000.0)
+    firmware.active = True
+    radar = _simulated_radar(monkeypatch, firmware, clock)
+
+    with pytest.raises(IWR6843DumpRecoveryError, match="did not return to its CLI") as raised:
+        radar.read_dump(timeout_s=40.0)
+
+    assert raised.value.raw == firmware.raw
+    assert firmware.commands == ["l3dump"]
+    assert firmware.lost_writes == []
+
+
+def test_dump_restart_error_after_payload_preserves_the_payload(monkeypatch):
+    clock = FakeClock()
+    firmware = FirmwareModel(
+        _active_dump(), clock, restart_s=0.5, trailer=b"Error: RF restart failed\r\nError -1"
+    )
+    firmware.active = True
+    radar = _simulated_radar(monkeypatch, firmware, clock)
+
+    with pytest.raises(IWR6843DumpRecoveryError, match="RF restart failed") as raised:
+        radar.read_dump()
+
+    assert raised.value.raw == firmware.raw
+
+
+def test_dump_rejected_by_an_idle_cli_is_an_ordinary_error_not_raw_evidence(monkeypatch):
+    """`l3dump` on a reset/idle board answers Error with no header; the CLI is responsive."""
+    clock = FakeClock()
+    firmware = FirmwareModel(_active_dump(), clock)
+    radar = _simulated_radar(monkeypatch, firmware, clock)
+    started = clock.now
+
+    with pytest.raises(RuntimeError, match="rejected l3dump") as raised:
+        radar.read_dump()
+
+    assert not isinstance(raised.value, IWR6843DumpRecoveryError)
+    assert "Error -1" in str(raised.value)
+    assert clock.now - started < 2.0
+
+
+def _probe_fixture(monkeypatch, ports, identities):
+    """Auto-detection over named fake handles; returns the list of opened ports."""
+    from openflight.iwr6843 import driver
+
+    opened = []
+
+    def open_probe(port, *_args, **_kwargs):
+        opened.append(port)
+        handle = ports[port]
+        if isinstance(handle, Exception):
+            raise handle
+        return handle
+
+    monkeypatch.setattr(
+        driver.glob, "glob", lambda pattern: list(ports) if "USB" in pattern else []
+    )
+    monkeypatch.setattr(driver, "_usb_serial_identity", identities.get)
+    monkeypatch.setattr(driver, "IWR6843DeviceLock", NoLock)
+    monkeypatch.setattr(driver, "open_port", open_probe)
+    return opened
+
+
+CP2105_ENHANCED = ("10c4", "ea70", 0)
+CP2105_STANDARD = ("10c4", "ea70", 1)
+
+
+def test_auto_detection_never_opens_the_cp2105_standard_interface(monkeypatch):
+    """Opening a tty raises DTR/RTS; the Standard interface carries no CLI to find."""
+    from openflight.iwr6843 import driver
+
+    clock = FakeClock()
+    monkeypatch.setattr(driver, "time", clock.module())
+    firmware = FirmwareModel(b"", clock)
+    opened = _probe_fixture(
+        monkeypatch,
+        {"/dev/ttyUSB0": SilentPort(clock), "/dev/ttyUSB1": FakePort(firmware)},
+        {"/dev/ttyUSB0": CP2105_STANDARD, "/dev/ttyUSB1": CP2105_ENHANCED},
+    )
+
+    assert IWR6843Radar.detect_port() == "/dev/ttyUSB1"
+    assert opened == ["/dev/ttyUSB1"]
+
+
+def test_auto_detection_probes_the_cp2105_enhanced_interface_before_unknown_ports(monkeypatch):
+    from openflight.iwr6843 import driver
+
+    clock = FakeClock()
+    monkeypatch.setattr(driver, "time", clock.module())
+    firmware = FirmwareModel(b"", clock)
+    opened = _probe_fixture(
+        monkeypatch,
+        {"/dev/ttyUSB0": SilentPort(clock), "/dev/ttyUSB1": FakePort(firmware)},
+        {"/dev/ttyUSB1": CP2105_ENHANCED},
+    )
+
+    assert IWR6843Radar.detect_port() == "/dev/ttyUSB1"
+    assert opened == ["/dev/ttyUSB1"]
+
+
+def test_missing_cli_reports_what_each_candidate_did(monkeypatch):
+    """`no CLI found` must distinguish silence, foreign bytes, open failures and skips."""
+    from openflight.iwr6843 import driver
+
+    clock = FakeClock()
+    monkeypatch.setattr(driver, "time", clock.module())
+    streaming = FirmwareModel(b"", clock)
+    streaming.stream += b"\x00\x7f" * 40
+    streaming.handler_returns_at = clock.now + 60.0  # an abandoned dump is still streaming
+    _probe_fixture(
+        monkeypatch,
+        {
+            "/dev/ttyUSB0": SilentPort(clock),
+            "/dev/ttyUSB1": PermissionError(13, "Permission denied"),
+            "/dev/ttyUSB2": FakePort(streaming),
+            "/dev/ttyUSB3": SilentPort(clock),
+        },
+        {"/dev/ttyUSB0": CP2105_ENHANCED, "/dev/ttyUSB3": CP2105_STANDARD},
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        IWR6843Radar()
+
+    message = str(raised.value)
+    assert message.startswith("no IWR6843 CLI found")
+    assert "/dev/ttyUSB0 (CP2105 Enhanced if00): no reply to help" in message
+    assert "/dev/ttyUSB1: could not open (" in message and "Permission denied" in message
+    assert "/dev/ttyUSB2: 80 bytes without the CLI help" in message
+    assert "/dev/ttyUSB3 (CP2105 Standard if01): not probed" in message
+
+
+def test_usb_serial_identity_reads_linux_sysfs(tmp_path, monkeypatch):
+    from openflight.iwr6843 import driver
+
+    (tmp_path / "idVendor").write_text("10C4\n", encoding="ascii")
+    (tmp_path / "idProduct").write_text("ea70\n", encoding="ascii")
+    for name, number in (("ttyUSB0", "00"), ("ttyUSB1", "01")):
+        interface = tmp_path / name
+        (interface / "device").mkdir(parents=True)
+        (interface / "bInterfaceNumber").write_text(f"{number}\n", encoding="ascii")
+    monkeypatch.setattr(driver, "_SYSFS_TTY", str(tmp_path))
+
+    assert driver._usb_serial_identity("/dev/ttyUSB0") == CP2105_ENHANCED
+    assert driver._usb_serial_identity("/dev/ttyUSB1") == CP2105_STANDARD
+    assert driver._usb_serial_identity("/dev/ttyACM0") is None

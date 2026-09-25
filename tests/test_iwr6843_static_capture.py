@@ -16,6 +16,7 @@ from openflight.iwr6843.static_capture import (
     StaticCaptureInputs,
     capture_static_range,
 )
+from tests.iwr6843_firmware_fake import FakeClock, FakePort, FirmwareModel, NoLock
 
 
 class FakeRadar:
@@ -400,3 +401,145 @@ def test_rejects_capture_id_path_traversal_before_creating_output(tmp_path):
         raise AssertionError("path traversal capture_id was accepted")
 
     assert not inputs.output_dir.exists()
+
+
+def test_success_labels_the_saved_raw_as_a_complete_dump(tmp_path):
+    inputs = _inputs(tmp_path)
+    raw = _raw_dump()
+
+    result = capture_static_range(
+        inputs,
+        radar_factory=_factory(FakeRadar(raw)),
+        wait_for_settle=lambda *_args: False,
+    )
+
+    assert result["artifacts"]["raw"]["complete"] is True
+    assert result["artifacts"]["raw"]["expected_size_bytes"] == len(raw)
+
+
+def test_truncated_transfer_is_saved_as_incomplete_and_attributed_to_the_dump(tmp_path):
+    inputs = _inputs(tmp_path)
+    raw = _raw_dump()
+    partial = raw[: len(raw) // 2]
+    failure = IWR6843DumpRecoveryError("IWR6843 dump ended early", partial)
+    fake = FakeRadar(raw, read_error=failure)
+
+    result = capture_static_range(
+        inputs,
+        radar_factory=_factory(fake),
+        wait_for_settle=lambda *_args: False,
+    )
+
+    assert result["usable"] is False
+    assert result["error"]["stage"] == "read_dump"
+    assert (inputs.output_dir / "empty-001.l3dump").read_bytes() == partial
+    assert result["artifacts"]["raw"] == {
+        "path": "empty-001.l3dump",
+        "size_bytes": len(partial),
+        "sha256": hashlib.sha256(partial).hexdigest(),
+        "complete": False,
+        "expected_size_bytes": len(raw),
+    }
+    assert result["raw_evidence_sha256"] is None
+    assert fake.calls == ["send_config", "read_dump", "close"]
+
+
+def test_complete_payload_without_cli_recovery_is_labelled_complete(tmp_path):
+    inputs = _inputs(tmp_path)
+    raw = _raw_dump()
+    failure = IWR6843DumpRecoveryError("firmware did not return to its CLI", raw)
+
+    result = capture_static_range(
+        inputs,
+        radar_factory=_factory(FakeRadar(raw, read_error=failure)),
+        wait_for_settle=lambda *_args: False,
+    )
+
+    assert result["error"]["stage"] == "post_dump_cli_health"
+    assert result["artifacts"]["raw"]["complete"] is True
+    assert result["raw_evidence_sha256"] == hashlib.sha256(raw).hexdigest()
+
+
+def test_dump_failure_before_any_byte_writes_no_empty_raw_file(tmp_path):
+    inputs = _inputs(tmp_path)
+    failure = IWR6843DumpRecoveryError("no complete dump header", b"")
+    fake = FakeRadar(b"", read_error=failure)
+
+    result = capture_static_range(
+        inputs,
+        radar_factory=_factory(fake),
+        wait_for_settle=lambda *_args: False,
+    )
+
+    assert result["error"]["stage"] == "read_dump"
+    assert result["artifacts"]["raw"] is None
+    assert not (inputs.output_dir / "empty-001.l3dump").exists()
+    assert fake.calls == ["send_config", "read_dump", "close"]
+
+
+def test_cli_rejected_dump_still_stops_the_responsive_sensor(tmp_path):
+    inputs = _inputs(tmp_path)
+    fake = FakeRadar(b"", read_error=RuntimeError("IWR6843 rejected l3dump: Error -1"))
+
+    result = capture_static_range(
+        inputs,
+        radar_factory=_factory(fake),
+        wait_for_settle=lambda *_args: False,
+    )
+
+    assert result["error"]["stage"] == "read_dump"
+    assert result["artifacts"]["raw"] is None
+    assert fake.calls == ["send_config", "read_dump", "stop_sensor", "close"]
+
+
+def test_back_to_back_captures_through_the_driver_lose_no_command(tmp_path, monkeypatch):
+    """Explicit-port then auto-detected capture on one board with a slow post-dump restart."""
+    from openflight.iwr6843 import driver
+
+    clock = FakeClock()
+    firmware = FirmwareModel(_raw_dump(), clock, restart_s=2.5)
+    opened = []
+
+    def open_board(port, *_args, **_kwargs):
+        opened.append(port)
+        return FakePort(firmware)
+
+    monkeypatch.setattr(driver, "time", clock.module())
+    monkeypatch.setattr(driver, "IWR6843DeviceLock", NoLock)
+    monkeypatch.setattr(driver, "open_port", open_board)
+    monkeypatch.setattr(
+        driver.glob,
+        "glob",
+        lambda pattern: ["/dev/ttyUSB0", "/dev/ttyUSB1"] if "USB" in pattern else [],
+    )
+    identities = {"/dev/ttyUSB0": ("10c4", "ea70", 0), "/dev/ttyUSB1": ("10c4", "ea70", 1)}
+    monkeypatch.setattr(driver, "_usb_serial_identity", identities.get)
+    first_inputs = replace(_inputs(tmp_path, capture_id="empty-001"), port="/dev/ttyUSB0")
+    second_inputs = replace(
+        first_inputs, capture_id="ball-002", capture_kind="ball_present", port=None
+    )
+
+    first = capture_static_range(first_inputs, wait_for_settle=lambda *_args: False)
+    second = capture_static_range(second_inputs, wait_for_settle=lambda *_args: False)
+
+    for result in (first, second):
+        assert result["usable"] is True, result["error"]
+        assert result["cleanup_errors"] == []
+        assert result["artifacts"]["raw"]["complete"] is True
+    assert second["port"] == "auto"
+    assert "/dev/ttyUSB1" not in opened
+    assert firmware.lost_writes == []
+    assert firmware.dumps == 2
+    assert firmware.active is False
+    one_capture = [
+        "sensorStop",
+        "flushCfg",
+        "profileCfg exact bytes",
+        "sensorStart",
+        "stats",
+        "l3dump",
+        "stats",
+        "sensorStop",
+        "stats",
+    ]
+    assert firmware.commands == one_capture + ["help"] + one_capture
