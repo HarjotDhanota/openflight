@@ -10,7 +10,9 @@ import os
 import platform
 import struct
 import tempfile
+import threading
 import zipfile
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +25,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 MAX_COMPARE_BYTES = 8 * 1024 * 1024
 HASH_CHUNK_BYTES = 1024 * 1024
 MAX_ANNOTATION_BYTES = 1024 * 1024
+CAPTURE_CACHE_ENTRIES = 16
 ANNOTATION_SCHEMA = "openflight.track_annotation.v1"
 _CAPTURE_PREFIX = "camera_"
 _DIGEST_CHARS = frozenset("0123456789abcdef")
@@ -141,9 +144,10 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _stamp(path: Path) -> tuple[int, int]:
+def _stamp(path: Path) -> tuple[int, ...]:
+    """File identity without reading it: a rewrite changes at least one of these."""
     stat = path.stat()
-    return stat.st_size, stat.st_mtime_ns
+    return stat.st_size, stat.st_mtime_ns, stat.st_ino, stat.st_dev, stat.st_ctime_ns
 
 
 class _Capture:
@@ -153,9 +157,13 @@ class _Capture:
         self.identifier, self.frames_path, self.metadata_path = _capture_paths(
             run, arm_id, capture_id
         )
-        self._stamps = (_stamp(self.frames_path), _stamp(self.metadata_path))
+        self.stamps = (_stamp(self.frames_path), _stamp(self.metadata_path))
         self.frames_sha256 = _file_sha256(self.frames_path)
         self.metadata_sha256 = _file_sha256(self.metadata_path)
+        if self.current_stamps() != self.stamps:
+            raise StaleCaptureError(
+                "capture files changed while they were read; reload the capture"
+            )
         try:
             metadata = json.loads(self.metadata_path.read_bytes())
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -175,6 +183,10 @@ class _Capture:
             if timestamps.dtype.kind not in "iu" or timestamps.shape != (self.shape[0],):
                 raise ReviewError(f"capture {name} must be an integer array aligned to frames")
         self.sensor, self.host = sensor, host
+
+    def current_stamps(self) -> tuple[tuple[int, ...], tuple[int, ...]]:
+        """The files' identity now, to compare with the identity that was hashed."""
+        return _stamp(self.frames_path), _stamp(self.metadata_path)
 
     def check(self, payload: Mapping[str, Any]) -> None:
         expected = (
@@ -197,9 +209,43 @@ class _Capture:
         else:
             with np.load(self.frames_path, allow_pickle=False) as bundle:
                 image = np.asarray(bundle["frames"][index])
-        if (_stamp(self.frames_path), _stamp(self.metadata_path)) != self._stamps:
+        if self.current_stamps() != self.stamps:
             raise StaleCaptureError("capture files changed; reload the capture")
         return image
+
+
+class CaptureCache:
+    """Recently reviewed captures, reused only while their files are byte-for-byte unchanged.
+
+    Hashing a full-resolution archive reads tens of megabytes; a reviewer stepping
+    through frames would otherwise repeat that read for every frame.
+    """
+
+    def __init__(self, max_entries: int = CAPTURE_CACHE_ENTRIES):
+        self.max_entries = max_entries
+        self._entries: OrderedDict[tuple[Path, Path], _Capture] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def get(self, run: Path, arm_id: str, capture_id: Any) -> _Capture:
+        """The capture's identity, rebuilt whenever either file's identity changed."""
+        _identifier, frames_path, metadata_path = _capture_paths(run, arm_id, capture_id)
+        key = (frames_path.resolve(), metadata_path.resolve())
+        with self._lock:
+            cached = self._entries.get(key)
+        if cached is not None and cached.current_stamps() == cached.stamps:
+            with self._lock:
+                self._entries.move_to_end(key)
+            return cached
+        capture = _Capture(run, arm_id, capture_id)
+        with self._lock:
+            self._entries[key] = capture
+            self._entries.move_to_end(key)
+            while len(self._entries) > self.max_entries:
+                self._entries.popitem(last=False)
+        return capture
 
 
 def annotation_path(tester: Path, arm_id: str, run: str, capture_id: str) -> Path:
@@ -304,6 +350,7 @@ def register_track_review(
     page_path: Path,
 ) -> None:
     """Register bounded read-only annotation and comparison endpoints."""
+    captures = CaptureCache()
 
     @app.get("/track-review.html")
     def track_review_page():
@@ -338,7 +385,7 @@ def register_track_review(
     def review_capture():
         try:
             scope, run = resolve_scope(request.args)
-            capture = _Capture(run, scope["arm_id"], request.args.get("capture_id"))
+            capture = captures.get(run, scope["arm_id"], request.args.get("capture_id"))
             count, height, width = capture.shape
             return _response(
                 {
@@ -361,7 +408,7 @@ def register_track_review(
     def review_frame():
         try:
             scope, run = resolve_scope(request.args)
-            capture = _Capture(run, scope["arm_id"], request.args.get("capture_id"))
+            capture = captures.get(run, scope["arm_id"], request.args.get("capture_id"))
             capture.check(request.args)
             try:
                 frame_index = int(request.args.get("frame_index", ""))
@@ -396,7 +443,7 @@ def register_track_review(
             if not isinstance(payload, dict):
                 raise ReviewError("request body must be a JSON object")
             scope, run = resolve_scope(payload)
-            capture = _Capture(run, scope["arm_id"], payload.get("capture_id"))
+            capture = captures.get(run, scope["arm_id"], payload.get("capture_id"))
             capture.check(payload)
             manifest, manifest_bytes = _document(payload, "tracks_json")
             if (manifest.get("capture_npz_sha256"), manifest.get("metadata_sha256")) != (

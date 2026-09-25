@@ -521,3 +521,85 @@ def test_saved_tracks_join_the_session_and_its_bundle(review, tmp_path):
     built = session_bundle.build_bundle(tmp_path, "tester", viewer=None, provenance={})
     roles = {e["path"]: e["role"] for e in session_bundle.validate_bundle(built["path"])["entries"]}
     assert roles[relative] == "annotation"
+
+
+def _count_archive_hashes(monkeypatch):
+    from openflight.camera import track_review  # pylint: disable=import-outside-toplevel
+
+    reads = []
+    real = track_review._file_sha256  # pylint: disable=protected-access
+
+    def counting(path):
+        if path.name == "frames.npz":
+            reads.append(path.parent.name)
+        return real(path)
+
+    monkeypatch.setattr(track_review, "_file_sha256", counting)
+    return reads
+
+
+def test_stepping_through_frames_hashes_the_archive_once(review, monkeypatch):
+    client, run, _capture_path, scope = review
+    _large_capture(run, "camera_big")
+    reads = _count_archive_hashes(monkeypatch)
+    query = _frame_query(client, scope, "camera_big", 0)
+    for index in range(8):
+        response = client.get(
+            "/api/tester/review/frame", query_string={**query, "frame_index": index}
+        )
+        assert response.status_code == 200
+    assert reads == ["camera_big"]
+
+
+def test_a_rewritten_capture_is_rehashed_and_old_hashes_are_refused(review, monkeypatch):
+    client, run, _capture_path, scope = review
+    folder = _large_capture(run, "camera_big")
+    reads = _count_archive_hashes(monkeypatch)
+    query = _frame_query(client, scope, "camera_big", 7)
+    assert client.get("/api/tester/review/frame", query_string=query).status_code == 200
+    frames = np.full((40, 800, 1280), 9, dtype=np.uint8)
+    np.savez(
+        folder / "frames.npz",
+        frames=frames,
+        sensor_timestamp_ns=np.arange(40, dtype=np.int64),
+        host_timestamp_ns=np.arange(40, dtype=np.int64),
+    )
+    stale = client.get("/api/tester/review/frame", query_string=query)
+    assert stale.status_code == 409
+    assert reads == ["camera_big", "camera_big"]
+    fresh = client.get(
+        "/api/tester/review/frame", query_string=_frame_query(client, scope, "camera_big", 7)
+    )
+    assert fresh.status_code == 200
+    assert reads == ["camera_big", "camera_big"]
+
+
+def test_a_capture_that_changes_while_it_is_hashed_is_not_cached(review, monkeypatch):
+    from openflight.camera import track_review  # pylint: disable=import-outside-toplevel
+
+    _client, run, capture_path, _scope = review
+    real = track_review._file_sha256  # pylint: disable=protected-access
+
+    def rewrite_during_hash(path):
+        digest = real(path)
+        if path.name == "frames.npz":
+            path.write_bytes(path.read_bytes() + b"\0")
+        return digest
+
+    monkeypatch.setattr(track_review, "_file_sha256", rewrite_during_hash)
+    cache = track_review.CaptureCache()
+    with pytest.raises(track_review.StaleCaptureError):
+        cache.get(run, "arm1", "camera_001")
+    assert len(cache) == 0
+    assert capture_path.is_dir()
+
+
+def test_the_capture_cache_is_bounded(review):
+    from openflight.camera import track_review  # pylint: disable=import-outside-toplevel
+
+    _client, run, _capture_path, _scope = review
+    cache = track_review.CaptureCache(max_entries=3)
+    for index in range(6):
+        _capture(run, f"camera_1{index}")
+        cache.get(run, "arm1", f"camera_1{index}")
+    assert len(cache) == 3
