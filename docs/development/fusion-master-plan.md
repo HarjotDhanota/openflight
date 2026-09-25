@@ -1071,3 +1071,14 @@ product acceptance limits. Promotion remains gated on that independent evidence.
   implementation does not alter tee-range estimation or promotion policy.
   Automated software checks do not establish that the Pi board is powered,
   enumerated or flashed.
+- Guided camera association correction (M1/M2, TB01/TB07/TB10): the automatic
+  range preview and Save path now share the same independent camera floor-plane
+  estimator with one frozen arm, calibrated model, rig identity and LIS3DH pose.
+  The live result retains every camera candidate and rejection, draws a ring only
+  for a selected candidate on the exact analyzed median, and requires three
+  consistent analyses spanning at least one second before Save. Save reruns the
+  estimator on the exact recent frames and preserves a withheld attempt if that
+  result is no longer safe. Generic study/tape previews retain their existing
+  detector. No IWR range, tape value, prior canonical range, promotion rule or
+  estimator threshold participates in this camera association. Software tests
+  do not establish Pi frame-rate cost or camera-range accuracy.

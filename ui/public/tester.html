@@ -709,6 +709,7 @@
       let guidedCameraPreviewVersion = 0;
       let guidedCameraRequestRunning = false;
       let guidedCameraFrameLoading = false;
+      let guidedCameraAssociation = null;
       const REQUEST_TIMEOUT_MS = 5000;
       const ACTION_TIMEOUT_MS = 15000;
       const PACKAGE_TIMEOUT_MS = 300000;
@@ -1430,6 +1431,7 @@
           if (guidedCameraPreviewKey !== null) guidedCameraPreviewVersion += 1;
           guidedCameraPreviewKey = null;
           guidedCameraFrameLoading = false;
+          guidedCameraAssociation = null;
           preview.hidden = true;
           frame.hidden = true;
           frame.removeAttribute('src');
@@ -1441,6 +1443,7 @@
         guidedCameraPreviewKey = context.key;
         guidedCameraPreviewVersion += 1;
         guidedCameraFrameLoading = false;
+        guidedCameraAssociation = null;
         frame.hidden = true;
         frame.removeAttribute('src');
         frame.dataset.previewKey = context.key;
@@ -1457,22 +1460,31 @@
         status.textContent = message;
       }
 
-      function guidedCameraDetectorStatus(ball, frameReady) {
+      function guidedCameraDetectorStatus(association, frameReady) {
         const detector = el('tee-range-camera-detector');
         detector.className = 'note';
-        if (!ball) {
-          detector.textContent = frameReady ? 'Looking for the ball…' : 'Ball detector is warming up…';
+        if (!association) {
+          detector.textContent = frameReady ? 'Camera-only association is warming up…' : 'Ball detector is warming up…';
           return;
         }
-        if (!ball.found) {
-          detector.textContent = `Ball not detected: ${ball.reason || 'no candidate passed the detector checks'}`;
+        if (association.status !== 'selected' || !association.selected) {
+          const labels = {
+            ambiguous: 'Multiple camera-only candidates remain plausible',
+            not_found: 'No reference ball was found',
+            no_consistent_candidate: 'Visible candidates do not agree with the floor and apparent-size geometry',
+          };
+          detector.textContent = `${labels[association.status] || association.readiness_reason || 'Camera-only association is not ready'}. Save remains disabled.`;
           return;
         }
+        const ball = association.selected;
         const numeric = (value) => value != null && Number.isFinite(Number(value));
         const coordinate = (value) => numeric(value) ? Number(value).toFixed(1) : '?';
         const diameter = numeric(ball.diameter_px) ? `${Number(ball.diameter_px).toFixed(1)} px` : 'unavailable';
-        const range = numeric(ball.range_m) ? ` · range ${Number(ball.range_m).toFixed(3)} m` : '';
-        detector.textContent = `Ball detected · x ${coordinate(ball.x)} · y ${coordinate(ball.y)} · diameter ${diameter}${range}`;
+        const range = numeric(ball.floor_radar_range_m) ? ` · range ${Number(ball.floor_radar_range_m).toFixed(3)} m` : '';
+        const readiness = association.save_eligible
+          ? ' · stable and ready to save'
+          : ` · stabilizing ${association.stable_count || 0}/3`;
+        detector.textContent = `Camera-only ball selected · x ${coordinate(ball.x_px)} · y ${coordinate(ball.y_px)} · diameter ${diameter}${range}${readiness}`;
       }
 
       function loadGuidedCameraFrame(context, version) {
@@ -1503,7 +1515,8 @@
             guidedCameraStatus('Camera is live. Waiting for the first frame to become available…');
           }
         });
-        frame.src = `/api/tester/live.png?view=overlay&t=${Date.now()}`;
+        const sequence = guidedCameraAssociation?.frame_sequence ?? Date.now();
+        frame.src = `/api/tester/live.png?view=overlay&sequence=${sequence}`;
       }
 
       async function guidedCameraTick() {
@@ -1527,20 +1540,28 @@
             owner?.epoch_id !== context.epochId ||
             owner?.arm_id !== context.armId
           ) {
+            guidedCameraAssociation = null;
+            renderTeeRange();
             guidedCameraStatus('The guided camera is no longer owned by this range step. Retry or start over.', true);
             return;
           }
           if (status.error || status.failed) {
+            guidedCameraAssociation = null;
+            renderTeeRange();
             guidedCameraStatus(`Camera error: ${status.error || status.failed}`, true);
             guidedCameraDetectorStatus(null, false);
             return;
           }
           if (!status.running) {
+            guidedCameraAssociation = null;
+            renderTeeRange();
             guidedCameraStatus('The guided camera stopped before evaluation. Retry this camera step.', true);
             guidedCameraDetectorStatus(null, false);
             return;
           }
-          guidedCameraDetectorStatus(status.ball, Boolean(status.stats));
+          guidedCameraAssociation = status.association || null;
+          guidedCameraDetectorStatus(guidedCameraAssociation, Boolean(status.stats));
+          renderTeeRange();
           if (!status.stats) {
             guidedCameraStatus('Camera is warming up. Waiting for the first frame…');
             return;
@@ -1551,6 +1572,8 @@
         } catch (error) {
           const current = guidedCameraContext();
           if (version === guidedCameraPreviewVersion && current?.key === context.key) {
+            guidedCameraAssociation = null;
+            renderTeeRange();
             guidedCameraStatus(`Live camera status unavailable: ${error.message}`, true);
           }
         } finally {
@@ -1563,11 +1586,13 @@
         const phase = state?.phase;
         const step = state ? TEE_RANGE_STEPS[phase] : null;
         const startOverRequired = phase === 'retryable_failure' && !state?.retry_phase;
+        const guidedSaveBlocked = ['camera_arm5_capturing', 'camera_arm6_capturing'].includes(phase)
+          && !guidedCameraAssociation?.save_eligible;
         const action = el('tee-range-action');
         el('automatic-range').dataset.ready = String(teeRangeComplete());
         el('tee-range-restart').hidden = !state;
         action.textContent = startOverRequired ? 'Start over required' : (step?.label || 'Start automatic range');
-        action.disabled = teeRangeRequestRunning || startOverRequired || Boolean(state && !step?.action);
+        action.disabled = teeRangeRequestRunning || startOverRequired || guidedSaveBlocked || Boolean(state && !step?.action);
         action.dataset.action = startOverRequired ? '' : (step?.action || 'start');
         el('automatic-range-summary').className = phase === 'retryable_failure' ? 'problem' : 'note';
         el('automatic-range-summary').textContent = teeRangeActionError || teeRangeFailureSummary(state) || (state

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -61,11 +62,17 @@ class FakeLive:
         self.start_count = 0
         self.stop_count = 0
         self.error = None
+        self.analyzer = None
 
-    def start(self, arm, *_args):
+    def start(self, arm, *_args, analyzer=None):
         self.running = True
         self.arm = arm
+        self.analyzer = analyzer
         self.start_count += 1
+        if analyzer is not None:
+            frames = self.recent_frames()[1]
+            for observed_at in (1.0, 1.5, 2.0):
+                analyzer.observe(frames, observed_at=observed_at)
 
     def stop(self):
         self.running = False
@@ -76,7 +83,11 @@ class FakeLive:
         return self.arm, frames
 
     def snapshot(self):
-        return None, {"running": self.running, "error": self.error}
+        return None, {
+            "running": self.running,
+            "error": self.error,
+            "association": self.analyzer.snapshot() if self.analyzer is not None else None,
+        }
 
 
 class ChangingFakeLive(FakeLive):
@@ -84,13 +95,21 @@ class ChangingFakeLive(FakeLive):
         super().__init__()
         self.value = 79
 
-    def start(self, arm, *_args):
-        super().start(arm, *_args)
+    def start(self, arm, *_args, **kwargs):
+        super().start(arm, *_args, **kwargs)
         self.value += 1
 
     def recent_frames(self):
         frames = np.full((3, self.arm.height, self.arm.width), self.value, dtype=np.uint8)
         return self.arm, frames
+
+
+class UnreadyFakeLive(FakeLive):
+    def start(self, arm, *_args, analyzer=None):
+        self.running = True
+        self.arm = arm
+        self.analyzer = analyzer
+        self.start_count += 1
 
 
 class IneligibleSetup(EligibleSetup):
@@ -411,11 +430,22 @@ def test_guided_flow_resolves_and_survives_reload(tmp_path, inputs, monkeypatch)
     assert state["solution"]["selected_range_m"] == pytest.approx(1.2)
     assert "tee_mm" not in json.dumps(state)
     identity = state["evidence"]["camera_arm5_candidate"]["evidence"]["capture_identity"]
+    camera_evidence = state["evidence"]["camera_arm5_candidate"]["evidence"]
     assert identity["saved_frame_sha256"]
     assert identity["rig_geometry"]["sha256"] == file_hash(inputs["rig"])
     assert identity["optical_calibration"]["sha256"] == file_hash(inputs["camera"])
     assert identity["camera_placement"]["sha256"] == file_hash(inputs["placement"])
     assert identity["mode"]["arm"]["arm_id"] == "arm5"
+    assert camera_evidence["live_readiness"]["save_eligible"] is True
+    assert camera_evidence["save_camera_only_analysis"]["dependency_facts"] == {
+        "iwr_range_used": False,
+        "manual_range_used": False,
+        "prior_canonical_range_used": False,
+    }
+    assert (
+        camera_evidence["live_readiness"]["selected"]
+        == camera_evidence["save_camera_only_analysis"]["selected"]
+    )
     iwr = state["evidence"]["iwr_candidate"]
     assert iwr["evidence"]["bias_uncertainty"] == {
         "value_m": 0.01,
@@ -448,6 +478,53 @@ def test_start_over_stops_only_the_guided_camera_owner(tmp_path, inputs, monkeyp
     assert live.running is False
     assert live.stop_count == 1
     assert client.get("/api/tester/live").get_json()["owner"] is None
+
+
+def test_backend_refuses_save_before_camera_only_selection_is_stable(tmp_path, inputs, monkeypatch):
+    live = UnreadyFakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    for index, action in enumerate(("start", "capture_empty", "capture_ball", "start_camera_arm5")):
+        assert post(client, tester, action, f"request-{index}").status_code == 200
+
+    response = post(client, tester, "evaluate_camera_arm5", "too-early")
+
+    assert response.status_code == 409
+    assert "not ready to save" in response.get_json()["error"]
+    assert phase(client, tester)["phase"] == "camera_arm5_capturing"
+    assert live.running is True
+
+
+def test_latest_ambiguous_frames_are_preserved_and_withheld_after_live_readiness(
+    tmp_path, inputs, monkeypatch
+):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    for index, action in enumerate(("start", "capture_empty", "capture_ball", "start_camera_arm5")):
+        assert post(client, tester, action, f"request-{index}").status_code == 200
+    first = camera_result(1.2).candidates[0]
+    second = replace(first, x_px=700.0)
+    monkeypatch.setattr(
+        ts,
+        "estimate_reference_ball_range",
+        lambda *_args, **_kwargs: ReferenceBallRangeResult(
+            "ambiguous", "withheld", None, (first, second), {"plausible_candidate_count": 2}
+        ),
+    )
+
+    response = post(client, tester, "evaluate_camera_arm5", "became-ambiguous")
+
+    assert response.status_code == 200
+    state = response.get_json()["state"]
+    assert state["phase"] == "retryable_failure"
+    assert state["retry_phase"] == "needs_camera_arm5"
+    attempt = next(
+        value for key, value in state["evidence"].items() if key.startswith("camera_arm5_attempt_")
+    )
+    assert attempt["status"] == "association_withheld"
+    assert attempt["frame_sha256"]
+    assert attempt["camera_only_analysis"]["status"] == "ambiguous"
+    assert state["evidence"]["camera_capture_failure"]["stage"] == "camera-only association"
 
 
 def test_new_flow_does_not_stop_an_unrelated_standalone_live_view(tmp_path, inputs, monkeypatch):
@@ -888,10 +965,10 @@ def test_camera_evaluation_retry_uses_a_new_immutable_frame_attempt(tmp_path, in
         post(client, tester, "retry", "retry-camera").get_json()["state"]["phase"]
         == "needs_camera_arm5"
     )
-    assert post(client, tester, "start_camera_arm5", "new-camera").status_code == 200
     monkeypatch.setattr(
         ts, "estimate_reference_ball_range", lambda *_args, **_kwargs: camera_result(1.2)
     )
+    assert post(client, tester, "start_camera_arm5", "new-camera").status_code == 200
 
     retried = post(client, tester, "evaluate_camera_arm5", "good-evaluation")
 

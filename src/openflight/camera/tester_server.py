@@ -98,6 +98,8 @@ GAIN_CEILING = 12.0
 LIVE_FPS = 12.0
 LIVE_EXPOSURE_RANGE_US = (20, 20000)
 LIVE_BALL_EVERY_S = 1.0
+GUIDED_RANGE_STABLE_COUNT = 3
+GUIDED_RANGE_STABLE_SPAN_S = 1.0
 # the picture's own reading of the ball's size, against the size the tape
 # predicts, beyond which the tape or the lens is suspect
 SIZE_CHECK_FRACTION = 0.25
@@ -1325,6 +1327,189 @@ def _camera_range_evidence(result: ReferenceBallRangeResult) -> dict:
     }
 
 
+def _guided_camera_analysis(
+    frames: np.ndarray, camera: BallPlaneCamera
+) -> tuple[ReferenceBallRangeResult, dict]:
+    """Run the camera-only physical association shared by live guidance and Save."""
+    result = estimate_reference_ball_range(
+        frames,
+        camera,
+        ball_center_height_m=BALL_DIAMETER_MM / 2000.0,
+        plausible_radar_range_m=(TEE_RANGE_MM[0] / 1000.0, TEE_RANGE_MM[1] / 1000.0),
+    )
+    return result, {
+        **_camera_range_evidence(result),
+        "method": "camera_floor_plane_v1",
+        "independent": True,
+        "dependency_facts": {
+            "iwr_range_used": False,
+            "manual_range_used": False,
+            "prior_canonical_range_used": False,
+        },
+        "support_interval_m": [TEE_RANGE_MM[0] / 1000.0, TEE_RANGE_MM[1] / 1000.0],
+        "stable_count": 0,
+        "stable_span_s": 0.0,
+        "save_eligible": False,
+    }
+
+
+def _same_guided_candidate(first: Mapping, second: Mapping) -> bool:
+    """Whether two independent analyses describe the same physical image object."""
+    try:
+        diameter = max(float(first["diameter_px"]), float(second["diameter_px"]), 1.0)
+        center_delta = math.hypot(
+            float(first["x_px"]) - float(second["x_px"]),
+            float(first["y_px"]) - float(second["y_px"]),
+        )
+        diameter_delta = abs(float(first["diameter_px"]) - float(second["diameter_px"]))
+        range_delta = abs(
+            float(first["floor_radar_range_m"]) - float(second["floor_radar_range_m"])
+        )
+        first_uncertainty = float(first.get("floor_range_uncertainty_m") or 0.0)
+        second_uncertainty = float(second.get("floor_range_uncertainty_m") or 0.0)
+    except (KeyError, TypeError, ValueError):
+        return False
+    return bool(
+        center_delta <= max(3.0, 0.2 * diameter)
+        and diameter_delta <= max(2.0, 0.15 * diameter)
+        and range_delta <= max(0.05, 2.0 * math.hypot(first_uncertainty, second_uncertainty))
+    )
+
+
+class GuidedRangeAnalyzer:
+    """Camera-only live association and temporal readiness for one frozen capture."""
+
+    def __init__(
+        self,
+        camera: BallPlaneCamera,
+        orientation: Mapping,
+        orientation_reader: Callable[[], Mapping],
+    ):
+        self.camera = camera
+        self.orientation = dict(orientation)
+        self._orientation_reader = orientation_reader
+        self._lock = threading.Lock()
+        self._last: dict | None = None
+        self._stable_selected: dict | None = None
+        self._stable_count = 0
+        self._stable_started_at: float | None = None
+
+    def _orientation_problem(self) -> str | None:
+        current = self._orientation_reader()
+        if current.get("status") != "stable":
+            return "waiting for a stable LIS3DH reading"
+        for name in ("camera_pitch_deg", "roll_deg"):
+            try:
+                frozen = float(self.orientation[name])
+                observed = float(current[name])
+            except (KeyError, TypeError, ValueError):
+                return f"LIS3DH {name} is unavailable"
+            if not math.isfinite(frozen) or not math.isfinite(observed):
+                return f"LIS3DH {name} is invalid"
+            if abs(observed - frozen) > TEE_RANGE_ORIENTATION_DRIFT_DEG:
+                return f"rig pose changed ({name}); start this camera step again"
+        return None
+
+    @staticmethod
+    def _readiness_reason(analysis: Mapping) -> str:
+        status = analysis.get("status")
+        if status == "ambiguous":
+            return "multiple camera-only candidates remain plausible"
+        if status == "not_found":
+            return "no reference ball was found by the camera-only estimator"
+        if status == "no_consistent_candidate":
+            return "visible candidates do not agree with the floor and apparent-size geometry"
+        if status != "selected":
+            return f"camera-only association is {status or 'not ready'}"
+        return "camera-only selection is still stabilizing"
+
+    def observe(self, frames: np.ndarray, *, observed_at: float | None = None) -> dict:
+        """Analyze one recent frame window and update the independent stability streak."""
+        now = time.monotonic() if observed_at is None else float(observed_at)
+        problem = self._orientation_problem()
+        _result, analysis = _guided_camera_analysis(frames, self.camera)
+        if problem:
+            analysis["estimator_status"] = analysis["status"]
+            analysis["status"] = "pose_changed"
+            analysis["selected"] = None
+        selected = analysis.get("selected")
+        with self._lock:
+            if problem or not isinstance(selected, Mapping) or analysis["status"] != "selected":
+                self._stable_selected = None
+                self._stable_count = 0
+                self._stable_started_at = None
+            elif self._stable_selected is None or not _same_guided_candidate(
+                self._stable_selected, selected
+            ):
+                self._stable_selected = dict(selected)
+                self._stable_count = 1
+                self._stable_started_at = now
+            else:
+                self._stable_selected = dict(selected)
+                self._stable_count += 1
+            span = (
+                max(0.0, now - self._stable_started_at)
+                if self._stable_started_at is not None
+                else 0.0
+            )
+            eligible = bool(
+                not problem
+                and self._stable_count >= GUIDED_RANGE_STABLE_COUNT
+                and span >= GUIDED_RANGE_STABLE_SPAN_S
+            )
+            analysis.update(
+                {
+                    "stable_count": self._stable_count,
+                    "stable_span_s": round(span, 3),
+                    "save_eligible": eligible,
+                    "readiness_reason": problem
+                    or (None if eligible else self._readiness_reason(analysis)),
+                }
+            )
+            self._last = dict(analysis)
+            return dict(analysis)
+
+    def __call__(self, frames: np.ndarray) -> dict:
+        return self.observe(frames)
+
+    def snapshot(self) -> dict | None:
+        """Return the latest live association without exposing mutable tracker state."""
+        with self._lock:
+            return dict(self._last) if self._last is not None else None
+
+    def analyze_for_save(
+        self, frames: np.ndarray
+    ) -> tuple[ReferenceBallRangeResult, dict, str | None]:
+        """Re-run the estimator on exact Save frames and compare with stable live readiness."""
+        result, analysis = _guided_camera_analysis(frames, self.camera)
+        with self._lock:
+            prior = dict(self._last) if self._last is not None else None
+            stable = dict(self._stable_selected) if self._stable_selected is not None else None
+        if not prior or not prior.get("save_eligible"):
+            return result, analysis, "camera-only selection is not temporally stable"
+        problem = self._orientation_problem()
+        if problem:
+            return result, analysis, problem
+        selected = analysis.get("selected")
+        if analysis.get("status") != "selected" or not isinstance(selected, Mapping):
+            return result, analysis, self._readiness_reason(analysis)
+        if stable is None or not _same_guided_candidate(stable, selected):
+            return (
+                result,
+                analysis,
+                "latest frames no longer match the stable camera-only selection",
+            )
+        analysis.update(
+            {
+                "stable_count": prior["stable_count"],
+                "stable_span_s": prior["stable_span_s"],
+                "save_eligible": True,
+                "readiness_reason": None,
+            }
+        )
+        return result, analysis, None
+
+
 def _camera_tee_candidates(
     result: ReferenceBallRangeResult, placement: int
 ) -> list[tee_range.TeeRangeCandidate]:
@@ -1788,9 +1973,14 @@ class LiveView:
         self._black_floor: float | None = None
         self._recent: deque[np.ndarray] = deque(maxlen=5)
         self._ball: dict | None = None
+        self._association: dict | None = None
+        self._analysis_image: np.ndarray | None = None
+        self._analysis_frame_sequence: int | None = None
+        self._frame_sequence = 0
         self._expected: float | None = None
         self._expected_row: tuple[float, float] | None = None
         self._cues: Callable[[Mapping], dict] | None = None
+        self._analyzer: Callable[[np.ndarray], Mapping] | None = None
         self._looker: threading.Thread | None = None
 
     @property
@@ -1806,15 +1996,30 @@ class LiveView:
         expected_diameter_px: float | None = None,
         cues: Callable[[Mapping], dict] | None = None,
         expected_row: tuple[float, float] | None = None,
+        analyzer: Callable[[np.ndarray], Mapping] | None = None,
     ) -> None:
         """Open the arm's mode, or only change exposure and gain if it is already open."""
+        controls = live_controls(arm, exposure_us, gain)
         with self._lock:
-            self._pending = live_controls(arm, exposure_us, gain)
+            prior_controls = self._pending or self._requested
+            context_changed = (
+                self._arm != arm
+                or self._analyzer is not analyzer
+                or (prior_controls is not None and prior_controls != controls)
+            )
+            self._pending = controls
             self._black_floor = black_floor
             self._expected = expected_diameter_px
             self._expected_row = expected_row
             self._cues = cues
+            self._analyzer = analyzer
             self._error = None
+            if context_changed:
+                self._recent.clear()
+                self._ball = None
+                self._association = None
+                self._analysis_image = None
+                self._analysis_frame_sequence = None
             if self.running and self._arm == arm:
                 return
         self.stop()
@@ -1824,6 +2029,10 @@ class LiveView:
             self._metadata = {}
             self._recent.clear()
             self._ball = None
+            self._association = None
+            self._analysis_image = None
+            self._analysis_frame_sequence = None
+            self._frame_sequence = 0
             self._stop.clear()
             self._thread = threading.Thread(
                 target=self._run, args=(arm,), daemon=True, name="tester-live"
@@ -1849,9 +2058,35 @@ class LiveView:
             with self._lock:
                 recent, expected, cues = list(self._recent), self._expected, self._cues
                 expected_row = self._expected_row
+                analyzer = self._analyzer
+                frame_sequence = self._frame_sequence
             if len(recent) < 3:
                 continue
-            ball = ball_readout(np.stack(recent), focal, expected, expected_row)
+            frames = np.stack(recent)
+            if analyzer is not None:
+                try:
+                    association = dict(analyzer(frames))
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    association = {
+                        "status": "analysis_error",
+                        "confidence": "withheld",
+                        "selected": None,
+                        "candidates": [],
+                        "diagnostics": {},
+                        "stable_count": 0,
+                        "stable_span_s": 0.0,
+                        "save_eligible": False,
+                        "readiness_reason": f"{type(exc).__name__}: {exc}",
+                    }
+                association["frame_sequence"] = frame_sequence
+                analysis_image = np.median(frames, axis=0).astype(np.uint8)
+                with self._lock:
+                    self._association = association
+                    self._analysis_image = analysis_image
+                    self._analysis_frame_sequence = frame_sequence
+                    self._ball = None
+                continue
+            ball = ball_readout(frames, focal, expected, expected_row)
             if ball.get("found") and cues is not None:
                 ball["camera_says"] = cues(ball)
             with self._lock:
@@ -1862,6 +2097,13 @@ class LiveView:
         with self._lock:
             arm, recent = self._arm, list(self._recent)
         return arm, (np.stack(recent) if len(recent) >= 3 else None)
+
+    def analyzed_snapshot(self) -> tuple[np.ndarray | None, dict | None]:
+        """Return the median frame and association produced in the same analyzer call."""
+        with self._lock:
+            image = self._analysis_image
+            association = self._association
+        return image, (dict(association) if association is not None else None)
 
     def snapshot(self) -> tuple[np.ndarray | None, dict]:
         with self._lock:
@@ -1879,6 +2121,7 @@ class LiveView:
                 },
                 "error": self._error,
                 "ball": self._ball,
+                "association": self._association,
             }
             floor = self._black_floor
         if image is not None:
@@ -1938,6 +2181,7 @@ class LiveView:
                 with self._lock:
                     self._image, self._metadata = image, metadata
                     self._recent.append(image)
+                    self._frame_sequence += 1
         except Exception as exc:  # pylint: disable=broad-exception-caught
             with self._lock:
                 self._error = f"{type(exc).__name__}: {exc}"
@@ -2181,6 +2425,7 @@ def create_app(
     tee_range_lock = threading.RLock()
     live_owner_lock = threading.RLock()
     live_owner: dict[str, dict[str, str] | None] = {"guided": None}
+    guided_analyzer: dict[str, GuidedRangeAnalyzer | None] = {"value": None}
     iwr_preflight: dict[str, bool] = {}
 
     def live_owner_snapshot() -> dict[str, str] | None:
@@ -2201,6 +2446,7 @@ def create_app(
         with live_owner_lock:
             live.stop()
             live_owner["guided"] = None
+            guided_analyzer["value"] = None
 
     def stop_guided_live(
         tester_id: str, epoch_id: str | None = None, arm_id: str | None = None
@@ -2217,11 +2463,19 @@ def create_app(
                 return False
             live.stop()
             live_owner["guided"] = None
+            guided_analyzer["value"] = None
             return True
 
-    def start_guided_live(tester_id: str, epoch_id: str, arm_id: str, *args) -> None:
+    def start_guided_live(
+        tester_id: str,
+        epoch_id: str,
+        arm_id: str,
+        *args,
+        analyzer: GuidedRangeAnalyzer,
+    ) -> None:
         with live_owner_lock:
-            live.start(*args)
+            live.start(*args, analyzer=analyzer)
+            guided_analyzer["value"] = analyzer
             live_owner["guided"] = {
                 "kind": "guided_tee_range",
                 "tester_id": tester_id,
@@ -2835,6 +3089,14 @@ def create_app(
         params = TesterParameters(tester_id, arm_id, "indoors")
         gain, exposure_us = resolve_gain(sessions_root, params)
         tilt_snapshot = enclosure.reading()
+        model = _reference_ball_camera(
+            params.arm,
+            rig_geometry,
+            tilt_snapshot,
+            optical_calibration,
+            camera_placement,
+        )
+        analyzer = GuidedRangeAnalyzer(model, tilt_snapshot, enclosure.reading)
         capture_id = f"{arm_id}-{state.sequence + 1:06d}"
         state = store.transition(
             state,
@@ -2860,8 +3122,9 @@ def create_app(
             gain,
             read_arm_state(sessions_root, tester_id, arm_id).get("black_floor_dn"),
             None,
-            lambda ball: distance_cues(ball, params.arm, None, rig_geometry, enclosure.reading()),
             None,
+            None,
+            analyzer=analyzer,
         )
         return state
 
@@ -2875,6 +3138,14 @@ def create_app(
             return state
         if not guided_live_matches(tester_id, state.epoch_id, arm_id):
             raise RuntimeError(f"camera {arm_id} is no longer owned by this guided range capture")
+        with live_owner_lock:
+            analyzer = guided_analyzer["value"]
+        if analyzer is None:
+            raise RuntimeError(f"camera {arm_id} has no guided camera-only analyzer")
+        readiness = analyzer.snapshot()
+        if not readiness or not readiness.get("save_eligible"):
+            reason = (readiness or {}).get("readiness_reason") or "camera analysis is warming up"
+            raise RuntimeError(f"camera {arm_id} is not ready to save: {reason}")
         shown_arm, frames = live.recent_frames()
         if shown_arm != ARMS[arm_id] or frames is None:
             raise RuntimeError(f"camera {arm_id} does not have a stable frame yet")
@@ -2899,20 +3170,31 @@ def create_app(
             if not frame_path.exists():
                 atomic_write(frame_path, frame_bytes)
             frame_sha256 = hashlib.sha256(frame_bytes).hexdigest()
-            tilt_snapshot = enclosure.reading()
-            model = _reference_ball_camera(
-                ARMS[arm_id],
-                rig_geometry,
-                tilt_snapshot,
-                optical_calibration,
-                camera_placement,
-            )
-            result = estimate_reference_ball_range(
-                frames,
-                model,
-                ball_center_height_m=BALL_DIAMETER_MM / 2000.0,
-                plausible_radar_range_m=(TEE_RANGE_MM[0] / 1000.0, TEE_RANGE_MM[1] / 1000.0),
-            )
+            result, save_analysis, unsafe_reason = analyzer.analyze_for_save(frames)
+            if unsafe_reason:
+                return store.transition(
+                    state,
+                    phase="retryable_failure",
+                    reason=f"camera_{arm_id}_association_withheld",
+                    evidence={
+                        attempt_key: {
+                            "capture_id": capture_id,
+                            "status": "association_withheld",
+                            "frame": frame_path.name,
+                            "frame_sha256": frame_sha256,
+                            "reason": unsafe_reason,
+                            "camera_only_analysis": save_analysis,
+                        },
+                        "camera_capture_failure": {
+                            "arm_id": arm_id,
+                            "stage": "camera-only association",
+                            "message": unsafe_reason,
+                            "remedy": "Keep the ball and rig still, then retry this camera step.",
+                        },
+                    },
+                    retry_phase=f"needs_camera_{arm_id}",
+                )
+            model = analyzer.camera
             candidate = _guided_camera_candidate(
                 result,
                 epoch_id=state.epoch_id,
@@ -2923,10 +3205,19 @@ def create_app(
                 camera_model=model,
                 capture_controls={
                     **capture_setup,
-                    "orientation_at_evaluation": tilt_snapshot,
+                    "orientation_frozen_for_association": analyzer.orientation,
+                    "orientation_at_evaluation": enclosure.reading(),
                 },
                 frame_sha256=frame_sha256,
                 qualification=qualification,
+            )
+            candidate = replace(
+                candidate,
+                evidence={
+                    **candidate.evidence,
+                    "live_readiness": readiness,
+                    "save_camera_only_analysis": save_analysis,
+                },
             )
         except (OSError, RuntimeError, TypeError, ValueError) as exc:
             return store.transition(
@@ -3421,13 +3712,28 @@ def create_app(
     @app.get("/api/tester/live.png")
     def live_frame():
         image, status = live.snapshot()
+        association = status.get("association")
+        if view := request.args.get("view"):
+            if view == "overlay" and association is not None and hasattr(live, "analyzed_snapshot"):
+                analyzed_image, analyzed_association = live.analyzed_snapshot()
+                if analyzed_image is not None and analyzed_association is not None:
+                    image, association = analyzed_image, analyzed_association
         if image is None:
             return jsonify({"error": "no live frame yet"}), 503
-        view = request.args.get("view")
         if view == "boost":
             image = boost(image)
-        if view in {"boost", "overlay"} and (status.get("ball") or {}).get("found"):
-            image = mark_ball(image, status["ball"])
+        marker = None
+        if association is not None and association.get("status") == "selected":
+            marker = association.get("selected")
+        elif association is None and (status.get("ball") or {}).get("found"):
+            marker = status["ball"]
+        if view in {"boost", "overlay"} and marker:
+            marker = {
+                "x": marker.get("x", marker.get("x_px")),
+                "y": marker.get("y", marker.get("y_px")),
+                "diameter_px": marker["diameter_px"],
+            }
+            image = mark_ball(image, marker)
         return Response(
             encode_png(image), mimetype="image/png", headers={"Cache-Control": "no-store"}
         )

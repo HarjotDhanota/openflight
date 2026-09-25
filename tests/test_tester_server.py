@@ -18,6 +18,11 @@ import pytest
 
 from openflight import session_bundle
 from openflight.camera import session_review_routes as review_routes, tester_server as ts
+from openflight.camera.reference_ball_range import (
+    BallPlaneCamera,
+    ReferenceBallRangeCandidate,
+    ReferenceBallRangeResult,
+)
 from tests.session_fixtures import TESTER, capture_tree
 
 RIG = ts.DEFAULT_RIG_GEOMETRY
@@ -910,6 +915,54 @@ class TestLiveEndpoints:
         assert overlay[20, 38] == 255
         assert np.count_nonzero(overlay) > 0
 
+    def test_guided_ambiguous_association_draws_no_legacy_confident_ring(self, tmp_path):
+        image = np.zeros((40, 60), dtype=np.uint8)
+
+        class StaticLive:
+            running = True
+
+            @staticmethod
+            def snapshot():
+                return image, {
+                    "association": {"status": "ambiguous", "selected": None},
+                    "ball": {"found": True, "x": 30.0, "y": 20.0, "diameter_px": 12.0},
+                }
+
+        app = eligible_app(sessions_root=tmp_path, rig_geometry=RIG, live_view=StaticLive())
+        response = app.test_client().get("/api/tester/live.png?view=overlay")
+
+        idat = response.data[response.data.index(b"IDAT") + 4 : response.data.index(b"IEND") - 8]
+        rows = np.frombuffer(zlib.decompress(idat), np.uint8).reshape(40, 61)
+        assert np.count_nonzero(rows[:, 1:]) == 0
+
+    def test_guided_overlay_marks_the_exact_analyzed_median_not_a_newer_raw_frame(self, tmp_path):
+        raw = np.full((40, 60), 100, dtype=np.uint8)
+        analyzed = np.full((40, 60), 20, dtype=np.uint8)
+        association = {
+            "status": "selected",
+            "selected": {"x_px": 30.0, "y_px": 20.0, "diameter_px": 12.0},
+        }
+
+        class StaticLive:
+            running = True
+
+            @staticmethod
+            def snapshot():
+                return raw, {"association": association, "ball": None}
+
+            @staticmethod
+            def analyzed_snapshot():
+                return analyzed, association
+
+        app = eligible_app(sessions_root=tmp_path, rig_geometry=RIG, live_view=StaticLive())
+        response = app.test_client().get("/api/tester/live.png?view=overlay")
+
+        idat = response.data[response.data.index(b"IDAT") + 4 : response.data.index(b"IEND") - 8]
+        rows = np.frombuffer(zlib.decompress(idat), np.uint8).reshape(40, 61)
+        overlay = rows[:, 1:]
+        assert overlay[20, 30] == 20
+        assert overlay[20, 38] == 255
+
     def test_general_stop_closes_a_standalone_live_view(self, tmp_path):
         client, live = self._client(tmp_path)
         body = {"tester_id": "20260922-name", "arm_id": "arm1", "environment": "indoors"}
@@ -996,6 +1049,131 @@ class TestLiveBall:
             assert ball["found"] is False and ball["reason"]
         finally:
             live.stop()
+
+
+def _guided_result(*, status="selected", x=160.0, y=140.0, diameter=14.0, range_m=1.5):
+    candidate = ReferenceBallRangeCandidate(
+        x_px=x,
+        y_px=y,
+        diameter_px=diameter,
+        area_px=150,
+        floor_point_lfu_m=(0.0, range_m, ts.BALL_DIAMETER_MM / 2000.0),
+        floor_radar_range_m=range_m,
+        floor_camera_range_m=range_m,
+        size_camera_range_m=range_m,
+        floor_range_uncertainty_m=0.02,
+        size_range_uncertainty_m=0.03,
+        range_disagreement_m=0.0,
+        consistency_sigma=0.0,
+        source="calibrated_qualified",
+        confidence="high",
+        score=0.0,
+        rejection_reason=None,
+    )
+    selected = candidate if status == "selected" else None
+    candidates = (candidate,) if status != "not_found" else ()
+    return ReferenceBallRangeResult(
+        status, "high" if selected else "withheld", selected, candidates, {}
+    )
+
+
+def _guided_camera():
+    return BallPlaneCamera.nominal(
+        focal_px=466.6667,
+        image_width_px=320,
+        image_height_px=200,
+        pitch_deg=0.0,
+        roll_correction_deg=0.0,
+        mirror_horizontal=False,
+        camera_origin_lfu=(0.0, 0.0, 0.095),
+        radar_origin_lfu=(0.0, -0.03, 0.051),
+        angular_uncertainty_deg=0.1,
+        focal_relative_uncertainty=0.01,
+    )
+
+
+class TestGuidedRangeAnalyzer:
+    def test_shared_camera_only_analysis_has_no_range_prior_dependency(self, monkeypatch):
+        calls = []
+
+        def estimate(frames, camera, **kwargs):
+            calls.append((frames.copy(), camera, kwargs))
+            return _guided_result()
+
+        monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
+        frames = np.full((5, 200, 320), 70, dtype=np.uint8)
+
+        result, analysis = ts._guided_camera_analysis(frames, _guided_camera())
+
+        assert result.status == "selected"
+        assert len(calls) == 1
+        assert calls[0][2] == {
+            "ball_center_height_m": ts.BALL_DIAMETER_MM / 2000.0,
+            "plausible_radar_range_m": (0.5, 4.0),
+        }
+        assert analysis["dependency_facts"] == {
+            "iwr_range_used": False,
+            "manual_range_used": False,
+            "prior_canonical_range_used": False,
+        }
+
+    def test_three_matching_analyses_over_one_second_enable_save_and_a_switch_resets(
+        self, monkeypatch
+    ):
+        current = {"result": _guided_result()}
+        monkeypatch.setattr(
+            ts, "estimate_reference_ball_range", lambda *_args, **_kwargs: current["result"]
+        )
+        orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
+        analyzer = ts.GuidedRangeAnalyzer(_guided_camera(), orientation, lambda: orientation)
+        frames = np.full((5, 200, 320), 70, dtype=np.uint8)
+
+        assert analyzer.observe(frames, observed_at=4.0)["stable_count"] == 1
+        assert analyzer.observe(frames, observed_at=4.5)["save_eligible"] is False
+        ready = analyzer.observe(frames, observed_at=5.0)
+        assert ready["stable_count"] == 3
+        assert ready["stable_span_s"] == 1.0
+        assert ready["save_eligible"] is True
+
+        current["result"] = _guided_result(x=200.0)
+        reset = analyzer.observe(frames, observed_at=6.0)
+        assert reset["stable_count"] == 1
+        assert reset["save_eligible"] is False
+
+    @pytest.mark.parametrize("status", ["ambiguous", "not_found", "no_consistent_candidate"])
+    def test_unsafe_association_never_draws_or_enables_save(self, monkeypatch, status):
+        monkeypatch.setattr(
+            ts,
+            "estimate_reference_ball_range",
+            lambda *_args, **_kwargs: _guided_result(status=status),
+        )
+        orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
+        analyzer = ts.GuidedRangeAnalyzer(_guided_camera(), orientation, lambda: orientation)
+        frames = np.full((5, 200, 320), 70, dtype=np.uint8)
+
+        association = analyzer.observe(frames, observed_at=1.0)
+
+        assert association["status"] == status
+        assert association["selected"] is None
+        assert association["save_eligible"] is False
+        assert association["stable_count"] == 0
+
+    def test_pose_change_resets_readiness(self, monkeypatch):
+        monkeypatch.setattr(
+            ts, "estimate_reference_ball_range", lambda *_args, **_kwargs: _guided_result()
+        )
+        orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
+        analyzer = ts.GuidedRangeAnalyzer(_guided_camera(), orientation, lambda: orientation)
+        frames = np.full((5, 200, 320), 70, dtype=np.uint8)
+        for observed_at in (1.0, 1.5, 2.0):
+            assert analyzer.observe(frames, observed_at=observed_at)["status"] == "selected"
+        orientation["camera_pitch_deg"] = 1.0
+
+        reset = analyzer.observe(frames, observed_at=3.0)
+
+        assert reset["save_eligible"] is False
+        assert reset["stable_count"] == 0
+        assert "pose changed" in reset["readiness_reason"]
 
 
 class TestTheTapeGivesTheBallsSize:

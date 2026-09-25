@@ -186,7 +186,7 @@ def test_mode_aware_search_recovers_range_without_a_tape(width, height, focal_px
     assert result.diagnostics["capture_mode"] == f"{width}x{height}"
 
 
-def test_physical_floor_and_size_consistency_reject_a_false_round_blob():
+def test_physical_floor_and_size_consistency_rejects_high_hinge_and_selects_floor_ball():
     camera = _camera(640, 400, 466.6667)
     point = np.asarray([0.0, 1.55, 0.021335])
     pixel = _project_nominal(camera, point)
@@ -217,6 +217,19 @@ def test_physical_floor_and_size_consistency_reject_a_false_round_blob():
         item.rejection_reason is not None and item.size_camera_range_m is not None
         for item in result.candidates
     )
+
+
+def test_high_hinge_alone_is_not_selected_as_a_floor_ball():
+    camera = _camera(640, 400, 466.6667)
+    frames = _lit_spheres(400, 640, [(410.0, 75.0, 7.0, 150.0)])
+
+    result = estimate_reference_ball_range(
+        frames, camera, ball_center_height_m=0.021335, plausible_radar_range_m=(0.6, 3.5)
+    )
+
+    assert result.status in {"not_found", "no_consistent_candidate"}
+    assert result.selected is None
+    assert all(candidate.rejection_reason is not None for candidate in result.candidates)
 
 
 def test_two_equally_plausible_floor_balls_are_withheld_as_ambiguous():

@@ -70,6 +70,22 @@ async function base(page: Page, initial: FlowState | null = null) {
           }
         : null,
       stats: armId ? { mean: 70, p99: 140, max: 180, clipped_pct: 0 } : null,
+      association: armId
+        ? {
+            status: 'selected',
+            selected: {
+              x_px: 641.2,
+              y_px: 502.7,
+              diameter_px: 24.4,
+              floor_radar_range_m: 1.527,
+            },
+            candidates: [],
+            stable_count: 3,
+            stable_span_s: 1,
+            save_eligible: true,
+            frame_sequence: 12,
+          }
+        : null,
     });
   });
   await page.route('**/api/tester/live.png?**', (route) =>
@@ -164,8 +180,21 @@ test('shows the server-owned guided camera frame without starting another live v
         arm_id: 'arm5',
       },
       stats: statusPolls > 1 ? { mean: 72.1, p99: 140, max: 181, clipped_pct: 0 } : null,
-      ball: statusPolls > 1
-        ? { found: true, x: 641.2, y: 502.7, diameter_px: 24.4, range_m: 1.527 }
+      association: statusPolls > 1
+        ? {
+            status: 'selected',
+            selected: {
+              x_px: 641.2,
+              y_px: 502.7,
+              diameter_px: 24.4,
+              floor_radar_range_m: 1.527,
+            },
+            candidates: [],
+            stable_count: 3,
+            stable_span_s: 1,
+            save_eligible: true,
+            frame_sequence: 12,
+          }
         : null,
     });
   });
@@ -186,7 +215,7 @@ test('shows the server-owned guided camera frame without starting another live v
   await expect(page.locator('#automatic-range-summary')).toContainText('The reference camera is live');
   await expect(page.locator('#tee-range-camera-status')).toContainText('Live 1280×800 frame ready');
   await expect(page.locator('#tee-range-camera-detector')).toContainText(
-    'Ball detected · x 641.2 · y 502.7 · diameter 24.4 px · range 1.527 m'
+    'Camera-only ball selected · x 641.2 · y 502.7 · diameter 24.4 px · range 1.527 m · stable and ready to save'
   );
   await expect(page.locator('#tee-range-camera-frame')).toHaveAttribute('src', /view=overlay/);
   expect(statusPolls).toBeGreaterThan(1);
@@ -217,19 +246,67 @@ test('reports the live detector reason without treating it as a camera failure',
         arm_id: 'arm5',
       },
       stats: { mean: 71, p99: 139, max: 178, clipped_pct: 0 },
-      ball: { found: false, reason: 'no round bright object passed the contrast gate' },
+      association: {
+        status: 'not_found',
+        selected: null,
+        candidates: [],
+        stable_count: 0,
+        stable_span_s: 0,
+        save_eligible: false,
+        readiness_reason: 'no reference ball was found by the camera-only estimator',
+      },
     })
   );
   await page.goto('/tester.html');
 
   const detector = page.locator('#tee-range-camera-detector');
   await expect(detector).toContainText(
-    'Ball not detected: no round bright object passed the contrast gate'
+    'No reference ball was found. Save remains disabled.'
   );
   await expect(detector).toHaveClass(/note/);
   await expect(detector).not.toHaveClass(/problem/);
   await expect(page.locator('#automatic-range-summary')).toContainText('The reference camera is live');
   await expect(page.locator('#tee-range-action')).toHaveText('Save 1280×800 observation');
+  await expect(page.locator('#tee-range-action')).toBeDisabled();
+});
+
+test('withholds Save and a confident verdict when camera-only association is ambiguous', async ({ page }) => {
+  await base(page, {
+    epoch_id: 'epoch-ambiguous',
+    phase: 'camera_arm5_capturing',
+    reason: 'camera_arm5_warming',
+    evidence: {},
+    solution: null,
+  });
+  await page.route('**/api/tester/live', (route) =>
+    json(route, {
+      running: true,
+      arm_id: 'arm5',
+      owner: {
+        kind: 'guided_tee_range',
+        tester_id: '20260922-name',
+        epoch_id: 'epoch-ambiguous',
+        arm_id: 'arm5',
+      },
+      stats: { mean: 71, p99: 139, max: 178, clipped_pct: 0 },
+      association: {
+        status: 'ambiguous',
+        selected: null,
+        candidates: [{ x_px: 600 }, { x_px: 700 }],
+        stable_count: 0,
+        stable_span_s: 0,
+        save_eligible: false,
+        readiness_reason: 'multiple camera-only candidates remain plausible',
+      },
+    })
+  );
+  await page.goto('/tester.html');
+
+  await expect(page.locator('#tee-range-camera-detector')).toContainText(
+    'Multiple camera-only candidates remain plausible. Save remains disabled.'
+  );
+  await expect(page.locator('#tee-range-action')).toBeDisabled();
+  await expect(page.locator('#automatic-range-summary')).toContainText('The reference camera is live');
 });
 
 test('guided camera errors stay beside the preview and stale tester polls are ignored', async ({ page }) => {
@@ -275,6 +352,7 @@ test('guided camera errors stay beside the preview and stale tester polls are ig
   await page.goto('/tester.html');
   await expect(page.locator('#tee-range-camera-preview')).toBeVisible();
   await expect(page.locator('#tee-range-camera-status')).toContainText('Camera error: camera cable disconnected');
+  await expect(page.locator('#tee-range-action')).toBeDisabled();
   await expect(page.locator('#automatic-range-summary')).toContainText('The second camera mode is live');
   await expect(page.locator('#automatic-range-summary')).not.toContainText('camera cable disconnected');
   await expect.poll(() => releaseStatus !== null).toBe(true);
