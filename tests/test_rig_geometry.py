@@ -98,6 +98,13 @@ class TestTheEnclosureSetup:
         setup = rig(iwr_offset_mm=(75.0, 44.0, 0.0)).enclosure_setup()
         assert setup.camera_lateral_offset_m == pytest.approx(-0.075)
 
+    def test_camera_rdf_offset_has_explicit_target_lfu_axes(self):
+        from openflight.rig_geometry import camera_rdf_offset_to_target_lfu
+
+        assert camera_rdf_offset_to_target_lfu((0.0, 44.0, -30.0)) == pytest.approx(
+            (0.0, -0.030, -0.044)
+        )
+
     def test_missing_pieces_are_named_not_defaulted(self):
         setup = rig(lens_height_above_floor_mm=None, iwr_boresight_pitch_deg=None).enclosure_setup()
         assert setup.camera_mount_height_m is None

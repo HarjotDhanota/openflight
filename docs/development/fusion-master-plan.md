@@ -1,6 +1,6 @@
 # Radar-camera fusion master plan
 
-Updated: 2026-09-24. Owner: Harjot. Status: active; M0 complete, M1 in progress.
+Updated: 2026-09-25. Owner: Harjot. Status: active; M0 complete, M1 in progress.
 
 ## Current Pi commissioning checkpoint
 
@@ -990,6 +990,11 @@ product acceptance limits. Promotion remains gated on that independent evidence.
   value and camera remains an agreement check. Focused contract and regression
   validation passed 229 tests with one existing skip on Windows. No setup is
   accuracy-qualified by this software change and no Pi hardware was exercised.
+- Guided tee-range integration (M1/M2, TB01/TB07/TB10): the main tester now
+  persists IWR and both camera steps as a restart-safe epoch, centrally
+  revalidates its digest-bound solution and freezes one command for both modes.
+  Missing qualification or disagreement stays raw-only; tape remains Advanced
+  validation. Software tests do not establish Pi operation or range accuracy.
 - Moving-range replay diagnostics (M1/M2, TB07/TB10/TB12): raw replay now
   preserves the tee-independent IWR fit as a full fitted range/time series and
   records a structured withheld result unless impact timing proves independence

@@ -26,6 +26,12 @@ MIN_BALL_DIAMETER_PX = 8.0
 EDGE_MARGIN_RADII = 1.0
 
 
+def camera_rdf_offset_to_target_lfu(offset_mm) -> tuple[float, float, float]:
+    """Convert a camera-relative right/down/forward offset to target left/forward/up."""
+    right, down, forward = (float(value) / 1000.0 for value in offset_mm)
+    return (-right, forward, -down)
+
+
 def geometry_fingerprint(parameters: Mapping) -> str:
     """SHA-256 of loaded parameters as sorted, compact, ASCII-escaped JSON."""
     payload = json.dumps(parameters, sort_keys=True, separators=(",", ":"), allow_nan=False)

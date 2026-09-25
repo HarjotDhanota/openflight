@@ -4,6 +4,7 @@ Exposure is set per arm from a smear budget, gain from a static screen, light re
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import math
@@ -28,7 +29,7 @@ from typing import Callable
 import numpy as np
 from flask import Flask, Response, g, jsonify, request, send_file
 
-from openflight import session_bundle, tee_range
+from openflight import session_bundle, tee_range, tee_range_setup
 from openflight.camera import attempt_ledger, session_review_routes as review_routes, study_ladder
 from openflight.camera.club_motion import detect_reference_ball
 from openflight.camera.fusion_diagnostics import register_fusion_diagnostics
@@ -39,8 +40,19 @@ from openflight.camera.reference_ball_range import (
     estimate_reference_ball_range,
 )
 from openflight.camera.setup_eligibility import SetupEligibility
+from openflight.camera.tee_range_flow import (
+    CAPTURE_PHASES,
+    TERMINAL_PHASES,
+    FlowStore,
+    atomic_write,
+)
 from openflight.camera.track_review import register_track_review
 from openflight.camera.triggered_buffer import unpack_r8_frame
+from openflight.iwr6843.range_evidence import (
+    StaticRangeProfile,
+    build_static_profile_candidate,
+    compare_static_range_profiles,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TESTER_PAGE = REPO_ROOT / "ui" / "public" / "tester.html"
@@ -49,6 +61,11 @@ FUSION_DIAGNOSTICS_PAGE = REPO_ROOT / "ui" / "public" / "fusion-diagnostics.html
 SESSION_REVIEW_PAGE = REPO_ROOT / "ui" / "public" / "session-review.html"
 DEFAULT_SESSIONS_ROOT = Path.home() / "openflight_sessions" / "tester_pilot"
 DEFAULT_RIG_GEOMETRY = REPO_ROOT / "config" / "enclosure_v3_rig_geometry.json"
+DEFAULT_IWR_STATIC_CONFIG = REPO_ROOT / "config" / "iwr6843_static_range_24f3ms_53bin_iq16.cfg"
+DEFAULT_IWR_CALIBRATION = REPO_ROOT / "config" / "iwr6843_calibration_reference.json"
+DEFAULT_IWR_FIRMWARE = (
+    REPO_ROOT / "firmware" / "releases" / "l3_dump_configurable_capture_20260818.bin"
+)
 SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 # The documented build moves the OPS243 to the GPIO UART; auto-detect only
 # finds USB, so the runner names it.
@@ -183,9 +200,10 @@ ACTION_LABELS = {
     "swings": "Capture paired swings for this arm",
     "ladder": "Exposure ladder for this mode",
     "analyze": "Analyse, review and package the session",
+    "tee_range": "Capture automatic tee-range evidence",
 }
 # a hardware step that hangs is stopped; the ladder runs as long as the tester swings
-ACTION_TIMEOUT_S = {"preflight": 120.0, "gain": 900.0}
+ACTION_TIMEOUT_S = {"preflight": 120.0, "gain": 900.0, "tee_range": 120.0}
 # a stopped job first gets start-kiosk.sh's own shutdown, which closes the radars
 # and the camera; whatever of its process group is left after this is ended
 KILL_GRACE_S = 8.0
@@ -264,7 +282,19 @@ def read_arm_state(sessions_root: Path, tester_id: str, arm_id: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def write_arm_state(sessions_root: Path, params: TesterParameters, **updates: object) -> dict:
+def write_arm_state(
+    sessions_root: Path,
+    params: TesterParameters,
+    *,
+    _snapshot_locked: bool = False,
+    **updates: object,
+) -> dict:
+    if not _snapshot_locked:
+        with session_bundle.snapshot_lock(
+            tester_root(sessions_root, params.tester_id),
+            timeout_s=session_bundle.WRITER_WAIT_S,
+        ):
+            return write_arm_state(sessions_root, params, _snapshot_locked=True, **updates)
     path = _arm_state_path(sessions_root, params.tester_id, params.arm_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     state = read_arm_state(sessions_root, params.tester_id, params.arm_id)
@@ -278,14 +308,21 @@ def write_arm_state(sessions_root: Path, params: TesterParameters, **updates: ob
             **updates,
         }
     )
-    path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    atomic_write(path, (json.dumps(state, indent=2) + "\n").encode("utf-8"))
     return state
 
 
 def pending_tee_range_solution(
     sessions_root: Path, params: TesterParameters
 ) -> tee_range.TeeRangeSolution:
-    """Freeze camera evidence and optional manual truth without selecting either."""
+    """Load the setup-level frozen solution, or retain legacy arm evidence."""
+    setup_root = tester_root(sessions_root, params.tester_id)
+    try:
+        epoch = tee_range_setup.load_current_epoch(setup_root)
+    except (OSError, ValueError, json.JSONDecodeError):
+        epoch = None
+    if epoch is not None:
+        return tee_range_setup.validate_epoch_solution(epoch)
     state = read_arm_state(sessions_root, params.tester_id, params.arm_id)
     candidates = [
         tee_range.TeeRangeCandidate.from_dict(item)
@@ -306,6 +343,12 @@ def pending_tee_range_solution(
     return tee_range.TeeRangeSolution.unresolved(
         candidates, reason="pending_independent_cross_sensor_verification"
     )
+
+
+def _tee_range_cli_args(solution: tee_range.TeeRangeSolution | None) -> list[str]:
+    if solution is not None and solution.status == "resolved":
+        return ["--iwr6843-tee-m", f"{solution.selected_range_m:.9g}"]
+    return ["--iwr6843-tee-range-pending"]
 
 
 def choose_gain(
@@ -451,6 +494,7 @@ def write_setup_admission(
     tester_id: str,
     eligibility: Mapping,
     tee_range_solution: tee_range.TeeRangeSolution | None = None,
+    tee_range_reference: tee_range_setup.TeeRangeEpochReference | None = None,
 ) -> None:
     """Bind the server-lifetime operator admission to one capture run."""
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -465,6 +509,20 @@ def write_setup_admission(
         "blockers": eligibility["blockers"],
         "warnings": eligibility.get("warnings", []),
         "tee_range": tee_range_solution.to_dict() if tee_range_solution is not None else None,
+        "tee_range_epoch": tee_range_reference.to_dict() if tee_range_reference else None,
+        "tee_range_solution_sha256": (
+            hashlib.sha256(
+                json.dumps(
+                    tee_range_solution.to_dict(),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            if tee_range_solution is not None
+            else None
+        ),
+        "tee_range_status": tee_range_solution.status if tee_range_solution else None,
+        "tee_range_policy_sha256": tee_range_solution.policy_sha256 if tee_range_solution else None,
     }
     temporary = run_dir / ".setup_admission.json.tmp"
     temporary.write_text(
@@ -482,6 +540,7 @@ def action_commands(
     tester_setup: Mapping | None = None,
     optical_calibration: Path | None = None,
     camera_placement: Path | None = None,
+    tee_range_solution: tee_range.TeeRangeSolution | None = None,
 ) -> tuple[list[list[str]], Path]:
     """Build an allowlisted command sequence and its log path."""
     if action not in ACTION_LABELS:
@@ -530,7 +589,7 @@ def action_commands(
                 "--camera-capture-manual-exposure",
                 "--debug",
                 "--iwr6843",
-                "--iwr6843-tee-range-pending",
+                *_tee_range_cli_args(tee_range_solution),
                 "--inclinometer",
                 "--rig-geometry",
                 str(rig_geometry),
@@ -564,7 +623,7 @@ def action_commands(
                 "--camera-capture-manual-exposure",
                 "--debug",
                 "--iwr6843",
-                "--iwr6843-tee-range-pending",
+                *_tee_range_cli_args(tee_range_solution),
                 "--inclinometer",
                 "--rig-geometry",
                 str(rig_geometry),
@@ -1136,16 +1195,36 @@ def record_placement(
     frame: np.ndarray,
     tilt: Mapping | None = None,
     automatic_range: Mapping | None = None,
+    capture_identity: Mapping | None = None,
+    *,
+    _snapshot_locked: bool = False,
 ) -> int:
     """Keep one placement with its frame, automatic evidence, and optional tape truth."""
+    if not _snapshot_locked:
+        with session_bundle.snapshot_lock(
+            tester_root(sessions_root, params.tester_id),
+            timeout_s=session_bundle.WRITER_WAIT_S,
+        ):
+            return record_placement(
+                sessions_root,
+                params,
+                status,
+                frame,
+                tilt,
+                automatic_range,
+                capture_identity,
+                _snapshot_locked=True,
+            )
     folder = tester_root(sessions_root, params.tester_id) / "calibration"
     folder.mkdir(parents=True, exist_ok=True)
     log = folder / "placements.jsonl"
     count = sum(1 for _ in log.open(encoding="utf-8")) if log.is_file() else 0
     name = f"placement-{count + 1:02d}-{params.arm_id}.pgm"
-    with (folder / name).open("wb") as handle:
-        handle.write(f"P5\n{frame.shape[1]} {frame.shape[0]}\n255\n".encode("ascii"))
-        handle.write(frame.astype(np.uint8).tobytes())
+    frame_bytes = (
+        f"P5\n{frame.shape[1]} {frame.shape[0]}\n255\n".encode("ascii")
+        + frame.astype(np.uint8).tobytes()
+    )
+    atomic_write(folder / name, frame_bytes)
     entry = {
         "placement": count + 1,
         "recorded_at": datetime.now(timezone.utc).isoformat(),
@@ -1156,9 +1235,13 @@ def record_placement(
         "automatic_range": dict(automatic_range or {}),
         "inclinometer": dict(tilt or {}),
         "frame": name,
+        "frame_sha256": hashlib.sha256(frame_bytes).hexdigest(),
+        "capture_identity": dict(capture_identity or {}),
     }
     with log.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
     return count + 1
 
 
@@ -1170,7 +1253,10 @@ def _reference_ball_camera(
     camera_placement: Path | None,
 ) -> BallPlaneCamera:
     """Build the active saved-image camera model without claiming qualification."""
-    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+    from openflight.rig_geometry import (  # noqa: PLC0415
+        RigGeometry,
+        camera_rdf_offset_to_target_lfu,
+    )
 
     if optical_calibration is not None and camera_placement is not None:
         from openflight.camera.calibrated_projection import (  # noqa: PLC0415
@@ -1193,7 +1279,7 @@ def _reference_ball_camera(
     if rig.lens_height_above_floor_mm is None:
         raise ValueError("rig geometry lacks the measured lens height")
     camera = np.asarray((0.0, 0.0, rig.lens_height_above_floor_mm / 1000.0))
-    offset = np.asarray(rig.iwr_offset_mm or (0.0, 0.0, 0.0)) / 1000.0
+    offset = np.asarray(camera_rdf_offset_to_target_lfu(rig.iwr_offset_mm or (0.0, 0.0, 0.0)))
     return BallPlaneCamera.nominal(
         focal_px=FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X,
         image_width_px=arm.width,
@@ -1259,6 +1345,217 @@ def _camera_tee_candidates(
             )
         )
     return candidates
+
+
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _json_identity(path: Path | None) -> dict | None:
+    if path is None:
+        return None
+    raw = path.read_bytes()
+    return {
+        "path": str(path.resolve()),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "snapshot": json.loads(raw),
+    }
+
+
+def _load_tee_range_qualification(path: Path | None) -> tee_range.TeeRangeQualification | None:
+    if path is None:
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ValueError("tee-range qualification artifact must be a JSON object")
+    return tee_range.TeeRangeQualification.from_dict(payload)
+
+
+def _guided_camera_candidate(
+    result: ReferenceBallRangeResult,
+    *,
+    epoch_id: str,
+    arm: Arm,
+    rig_geometry: Path,
+    optical_calibration: Path | None,
+    camera_placement: Path | None,
+    camera_model: BallPlaneCamera,
+    capture_controls: Mapping,
+    frame_sha256: str,
+    qualification: tee_range.TeeRangeQualification | None,
+) -> tee_range.TeeRangeCandidate:
+    selected = result.selected
+    accepted = selected is not None and selected.floor_radar_range_m is not None
+    rig_sha = _file_sha256(rig_geometry)
+    camera_sha = _file_sha256(optical_calibration) if optical_calibration else None
+    placement_sha = _file_sha256(camera_placement) if camera_placement else None
+    mode_snapshot = {
+        "arm": arm.as_dict(),
+        "controls": dict(capture_controls),
+        "camera_model": {
+            "source": camera_model.source,
+            "accuracy_qualified": camera_model.accuracy_qualified,
+            "camera_origin_lfu": list(camera_model.camera_origin_lfu),
+            "radar_origin_lfu": list(camera_model.radar_origin_lfu),
+            "focal_size_px": camera_model.focal_size_px,
+            "image_width_px": camera_model.image_width_px,
+            "image_height_px": camera_model.image_height_px,
+            "angular_uncertainty_deg": camera_model.angular_uncertainty_deg,
+            "focal_relative_uncertainty": camera_model.focal_relative_uncertainty,
+        },
+    }
+    mode_sha = hashlib.sha256(
+        json.dumps(mode_snapshot, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    identity_matches = bool(
+        qualification is not None
+        and qualification.camera_arm_id == "arm5"
+        and arm.arm_id == "arm5"
+        and qualification.rig_geometry_sha256 == rig_sha
+        and camera_sha is not None
+        and qualification.camera_calibration_sha256 == camera_sha
+    )
+    facts = {
+        "epoch_id": epoch_id,
+        "status": "accepted" if accepted and identity_matches else "rejected",
+        "accuracy_qualified": bool(
+            identity_matches and qualification and qualification.accuracy_qualified
+        ),
+        "rig_geometry_sha256": rig_sha,
+        "camera_calibration_sha256": camera_sha,
+        "camera_placement_sha256": placement_sha,
+        "camera_mode_sha256": mode_sha,
+        "saved_frame_sha256": frame_sha256,
+        "camera_arm_id": arm.arm_id,
+        "scope": qualification.scope if qualification else "tester_setup",
+        "manual_range_used": False,
+        "iwr_range_used": False,
+        "moving_iwr_used": False,
+        "dependencies": ["rig_geometry", "camera_calibration", "saved_frame"],
+    }
+    uncertainty = None
+    value = None
+    if selected is not None and selected.floor_radar_range_m is not None:
+        value = float(selected.floor_radar_range_m)
+        uncertainty = max(float(selected.floor_range_uncertainty_m or 0.001), 0.001)
+    return tee_range.TeeRangeCandidate(
+        candidate_id=f"camera-{epoch_id}-{arm.arm_id}",
+        source="camera_reference_ball_floor_plane",
+        source_group="camera",
+        radar_slant_range_m=value,
+        uncertainty_m=uncertainty,
+        selectable=False,
+        evidence={
+            "result": _camera_range_evidence(result),
+            "frame_sha256": frame_sha256,
+            "capture_identity": {
+                "epoch_id": epoch_id,
+                "saved_frame_sha256": frame_sha256,
+                "rig_geometry": _json_identity(rig_geometry),
+                "optical_calibration": _json_identity(optical_calibration),
+                "camera_placement": _json_identity(camera_placement),
+                "mode_sha256": mode_sha,
+                "mode": mode_snapshot,
+            },
+            "qualification": facts,
+        },
+    )
+
+
+def _static_profile(result: Mapping) -> StaticRangeProfile:
+    profile = result.get("profile")
+    if not isinstance(profile, Mapping):
+        raise ValueError("static capture has no derived range profile")
+    return StaticRangeProfile(**dict(profile))
+
+
+def _guided_iwr_candidate(
+    empty_record: Mapping,
+    present_record: Mapping,
+    *,
+    epoch_id: str,
+    calibration_path: Path,
+    qualification: tee_range.TeeRangeQualification | None,
+) -> tee_range.TeeRangeCandidate:
+    empty = _static_profile(empty_record)
+    present = _static_profile(present_record)
+    result = compare_static_range_profiles(empty, present)
+    calibration_sha = _file_sha256(calibration_path)
+    calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
+    bias_m = float(calibration.get("range_bias_const_m", calibration.get("range_offset_m", 0.0)))
+    firmware_sha = str(present_record["inputs"]["firmware"]["sha256"])
+    config_sha = str(present_record["inputs"]["radar_config"]["sha256"])
+    rig_sha = str(present_record["inputs"]["rig_geometry"]["sha256"])
+    identity_matches = bool(
+        qualification is not None
+        and qualification.rig_geometry_sha256 == rig_sha
+        and qualification.iwr_firmware_sha256 == firmware_sha
+        and qualification.iwr_capture_config_sha256 == config_sha
+        and qualification.iwr_profile_sha256 == result.capture_config_sha256
+        and qualification.iwr_range_calibration_sha256 == calibration_sha
+    )
+    qualified = bool(identity_matches and qualification and qualification.accuracy_qualified)
+    if result.status == "accepted" and result.apparent_range_m is not None:
+        qualified_result = replace(result, radar_profile_qualified=qualified)
+        if qualified:
+            candidate = build_static_profile_candidate(
+                qualified_result,
+                range_bias_m=bias_m,
+                range_bias_uncertainty_m=0.0,
+                calibration_sha256=calibration_sha,
+            )
+            value = candidate.radar_slant_range_m
+            uncertainty = candidate.uncertainty_m
+            evidence = dict(candidate.evidence)
+        else:
+            value = result.apparent_range_m - bias_m
+            uncertainty = max(
+                float(result.range_bin_uncertainty_m or empty.range_resolution_m), 0.001
+            )
+            evidence = {"method": "pre_mti_empty_vs_ball_present"}
+    else:
+        value = (
+            result.apparent_range_m - bias_m
+            if result.apparent_range_m is not None and result.apparent_range_m > bias_m
+            else None
+        )
+        uncertainty = (
+            max(float(result.range_bin_uncertainty_m or empty.range_resolution_m), 0.001)
+            if value is not None
+            else None
+        )
+        evidence = {"method": "pre_mti_empty_vs_ball_present"}
+    evidence.update(
+        {
+            "difference": asdict(result),
+            "empty_result": dict(empty_record),
+            "present_result": dict(present_record),
+            "qualification": {
+                "epoch_id": epoch_id,
+                "status": "accepted" if result.status == "accepted" and qualified else "rejected",
+                "accuracy_qualified": qualified,
+                "rig_geometry_sha256": rig_sha,
+                "iwr_firmware_sha256": firmware_sha,
+                "iwr_capture_config_sha256": config_sha,
+                "iwr_profile_sha256": result.capture_config_sha256,
+                "iwr_range_calibration_sha256": calibration_sha,
+                "scope": qualification.scope if qualification else "tester_setup",
+                "manual_range_used": False,
+                "camera_range_used": False,
+                "moving_iwr_used": False,
+            },
+            "bias_uncertainty": "unavailable",
+        }
+    )
+    return tee_range.TeeRangeCandidate(
+        candidate_id=f"iwr-static-{epoch_id}",
+        source="iwr_static_profile_difference",
+        source_group="iwr",
+        radar_slant_range_m=value,
+        uncertainty_m=uncertainty,
+        selectable=False,
+        evidence=evidence,
+    )
 
 
 def mark_ball(image: np.ndarray, ball: Mapping) -> np.ndarray:
@@ -1661,6 +1958,11 @@ def create_app(
     setup_policy: SetupEligibility | None = None,
     optical_calibration: Path | None = None,
     camera_placement: Path | None = None,
+    iwr_static_config: Path = DEFAULT_IWR_STATIC_CONFIG,
+    iwr_firmware: Path = DEFAULT_IWR_FIRMWARE,
+    iwr_calibration: Path = DEFAULT_IWR_CALIBRATION,
+    tee_range_qualification: Path | None = None,
+    require_tee_range_flow: bool = False,
 ) -> Flask:
     """Build the standalone tester service."""
     if (optical_calibration is None) != (camera_placement is None):
@@ -1680,6 +1982,11 @@ def create_app(
     active_setup_tester: dict[str, str | None] = {"tester_id": None}
     active_runtime_dir: dict[str, Path | None] = {"path": None}
     admitted_setup: dict[str, dict] = {}
+    admitted_tee_range: dict[
+        str, tuple[tee_range.TeeRangeSolution, tee_range_setup.TeeRangeEpochReference | None]
+    ] = {}
+    qualification = _load_tee_range_qualification(tee_range_qualification)
+    tee_range_lock = threading.RLock()
 
     @app.before_request
     def start_request_timer():
@@ -1785,6 +2092,26 @@ def create_app(
 
     def blocked_setup(result: dict):
         return jsonify({"error": "tester setup is not eligible", "setup_eligibility": result}), 409
+
+    def admitted_range(tester_id: str):
+        if require_tee_range_flow:
+            flow = _range_state(tester_id)
+            if flow is None or flow.phase not in TERMINAL_PHASES:
+                phase = flow.phase if flow else "not_started"
+                raise RuntimeError(f"finish automatic tee range before capture ({phase})")
+        root = tester_root(sessions_root, tester_id)
+        reference = tee_range_setup.load_current_reference(root)
+        if reference is not None:
+            epoch = tee_range_setup.load_epoch(root, reference)
+            return (
+                tee_range_setup.validate_epoch_solution(
+                    epoch, required_qualification=qualification
+                ),
+                reference,
+            )
+        return tee_range.TeeRangeSolution.unresolved(
+            reason="automatic_tee_range_not_completed"
+        ), None
 
     def parameters() -> TesterParameters:
         source = request.get_json(silent=True) if request.method == "POST" else request.args
@@ -1931,6 +2258,385 @@ def create_app(
                 {"error": str(exc), "setup_eligibility": setup.evaluate(tester_id, reading)}
             ), 400
 
+    def range_store(tester_id: str) -> FlowStore:
+        return FlowStore(tester_root(sessions_root, tester_id))
+
+    def _range_state(tester_id: str, *, reconcile: bool = True):
+        store = range_store(tester_id)
+        state = store.load()
+        if state is None or not reconcile:
+            return state
+        if state.phase == "evaluating":
+            return _finalize_range_state(store, state)
+        if state.phase.startswith("camera_") and state.phase.endswith("_evaluating"):
+            arm_id = "arm5" if "arm5" in state.phase else "arm6"
+            return store.transition(
+                state,
+                phase="retryable_failure",
+                reason=f"camera_{arm_id}_evaluation_interrupted",
+                retry_phase=f"needs_camera_{arm_id}",
+            )
+        if state.phase.startswith("camera_") and state.phase.endswith("_capturing"):
+            if live.running:
+                return state
+            arm_id = "arm5" if "arm5" in state.phase else "arm6"
+            return store.transition(
+                state,
+                phase="retryable_failure",
+                reason=f"camera_{arm_id}_capture_interrupted",
+                retry_phase=f"needs_camera_{arm_id}",
+            )
+        if state.phase not in CAPTURE_PHASES:
+            return state
+        kind = "empty" if state.phase == "empty_capturing" else "ball_present"
+        capture_id = state.evidence.get(f"{kind}_capture_id")
+        if not isinstance(capture_id, str):
+            return store.transition(
+                state,
+                phase="retryable_failure",
+                reason=f"{kind}_capture_identity_missing",
+                retry_phase="needs_empty" if kind == "empty" else "needs_ball",
+            )
+        result_path = store.epoch_dir(state.epoch_id) / "iwr" / f"{capture_id}.json"
+        if result_path.is_file():
+            return _finish_static_capture(tester_id, state.epoch_id, kind, capture_id)
+        job = jobs.status()
+        if job.get("state") == "running" and job.get("action") == "tee_range":
+            return state
+        return store.transition(
+            state,
+            phase="retryable_failure",
+            reason=f"{kind}_capture_interrupted_before_usable_result",
+            retry_phase="needs_empty" if kind == "empty" else "needs_ball",
+        )
+
+    def _finish_static_capture(tester_id: str, epoch_id: str, kind: str, capture_id: str):
+        with tee_range_lock:
+            store = range_store(tester_id)
+            state = store.load()
+            if state is None or state.epoch_id != epoch_id:
+                return state
+            key = "empty" if kind == "empty" else "ball_present"
+            result_path = store.epoch_dir(epoch_id) / "iwr" / f"{capture_id}.json"
+            if not result_path.is_file():
+                return store.transition(
+                    state,
+                    phase="retryable_failure",
+                    reason=f"{key}_capture_produced_no_result",
+                    retry_phase="needs_empty" if key == "empty" else "needs_ball",
+                )
+            record = json.loads(result_path.read_text(encoding="utf-8"))
+            evidence = {f"{key}_capture": record}
+            if not record.get("usable"):
+                return store.transition(
+                    state,
+                    phase="retryable_failure",
+                    reason=f"{key}_capture_unusable",
+                    evidence=evidence,
+                    retry_phase="needs_empty" if key == "empty" else "needs_ball",
+                )
+            if key == "empty":
+                return store.transition(
+                    state,
+                    phase="needs_ball",
+                    reason="place_ball_at_address_without_moving_rig",
+                    evidence=evidence,
+                )
+            try:
+                candidate = _guided_iwr_candidate(
+                    state.evidence["empty_capture"],
+                    record,
+                    epoch_id=epoch_id,
+                    calibration_path=iwr_calibration,
+                    qualification=qualification,
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                return store.transition(
+                    state,
+                    phase="retryable_failure",
+                    reason=f"static_profile_comparison_failed: {exc}",
+                    evidence=evidence,
+                    retry_phase="needs_empty",
+                )
+            return store.transition(
+                state,
+                phase="needs_camera_arm5",
+                reason="capture_reference_camera_mode_arm5",
+                evidence={**evidence, "iwr_candidate": candidate.to_dict()},
+            )
+
+    def _finalize_range_state(store: FlowStore, state):
+        try:
+            candidates = [
+                tee_range.TeeRangeCandidate.from_dict(state.evidence["iwr_candidate"]),
+                tee_range.TeeRangeCandidate.from_dict(state.evidence["camera_arm5_candidate"]),
+                tee_range.TeeRangeCandidate.from_dict(state.evidence["camera_arm6_candidate"]),
+            ]
+        except (KeyError, TypeError, ValueError) as exc:
+            return store.transition(
+                state,
+                phase="retryable_failure",
+                reason=f"cross_sensor_evidence_incomplete: {exc}",
+                retry_phase="needs_camera_arm6",
+            )
+        solution = (
+            tee_range.resolve_qualified_tee_range(state.epoch_id, candidates, qualification)
+            if qualification is not None
+            else tee_range.TeeRangeSolution.unresolved(
+                candidates, reason="qualification_artifact_missing"
+            )
+        )
+        return store.finalize(state, solution, qualification)
+
+    def _range_resources_busy() -> str | None:
+        job = jobs.status()
+        if job.get("state") == "running":
+            return f"the {job.get('action')} job owns the hardware"
+        if live.running:
+            return "the live camera owns the hardware"
+        if review_routes.analysis_running(sessions_root) is not None:
+            return "session analysis is running"
+        if any(not runner.stopped for runner in ladder_runners.values()):
+            return "the ladder owns the hardware"
+        return None
+
+    def _start_static_capture(tester_id: str, kind: str, request_id: str):
+        store = range_store(tester_id)
+        state = _range_state(tester_id)
+        expected = "needs_empty" if kind == "empty" else "needs_ball"
+        if state is None or state.phase != expected:
+            raise RuntimeError(f"tee-range setup is {state.phase if state else 'not_started'}")
+        if request_id in state.request_ids:
+            return state
+        busy = _range_resources_busy()
+        if busy:
+            raise RuntimeError(busy)
+        for required in (iwr_static_config, iwr_firmware, iwr_calibration, rig_geometry):
+            if not required.is_file():
+                raise ValueError(f"required tee-range input is missing: {required}")
+        capture_id = f"{kind}-{state.sequence + 1:06d}"
+        phase = "empty_capturing" if kind == "empty" else "ball_capturing"
+        state = store.transition(
+            state,
+            phase=phase,
+            reason=f"capturing_{kind}",
+            request_id=request_id,
+            evidence={f"{kind}_capture_id": capture_id},
+        )
+        output = store.epoch_dir(state.epoch_id) / "iwr"
+        command = _python_command(
+            "scripts/iwr6843/capture_static_range.py",
+            "--capture-id",
+            capture_id,
+            "--kind",
+            kind,
+            "--output-dir",
+            output,
+            "--config",
+            iwr_static_config,
+            "--firmware",
+            iwr_firmware,
+            "--rig-geometry",
+            rig_geometry,
+            "--calibration",
+            iwr_calibration,
+        )
+
+        def finished(_action, _return_code):
+            _finish_static_capture(tester_id, state.epoch_id, kind, capture_id)
+
+        try:
+            jobs.start(
+                "tee_range",
+                [command],
+                output / f"{capture_id}.log",
+                on_finish=finished,
+                output_to_log=True,
+            )
+        except (RuntimeError, SpawnError) as exc:
+            state = store.transition(
+                state,
+                phase="retryable_failure",
+                reason=f"{kind}_capture_spawn_failed: {exc}",
+                retry_phase=expected,
+            )
+        return state
+
+    def _start_camera_range(tester_id: str, arm_id: str, request_id: str):
+        store = range_store(tester_id)
+        state = _range_state(tester_id)
+        expected = f"needs_camera_{arm_id}"
+        if state is None or state.phase != expected:
+            raise RuntimeError(f"tee-range setup is {state.phase if state else 'not_started'}")
+        if request_id in state.request_ids:
+            return state
+        busy = _range_resources_busy()
+        if busy:
+            raise RuntimeError(busy)
+        params = TesterParameters(tester_id, arm_id, "indoors")
+        gain, exposure_us = resolve_gain(sessions_root, params)
+        tilt_snapshot = enclosure.reading()
+        state = store.transition(
+            state,
+            phase=f"camera_{arm_id}_capturing",
+            reason=f"camera_{arm_id}_warming",
+            request_id=request_id,
+            evidence={
+                f"camera_{arm_id}_capture_setup": {
+                    "gain": gain,
+                    "exposure_us": exposure_us,
+                    "arm": params.arm.as_dict(),
+                    "orientation_at_start": tilt_snapshot,
+                }
+            },
+        )
+        live.start(
+            params.arm,
+            exposure_us,
+            gain,
+            read_arm_state(sessions_root, tester_id, arm_id).get("black_floor_dn"),
+            None,
+            lambda ball: distance_cues(ball, params.arm, None, rig_geometry, enclosure.reading()),
+            None,
+        )
+        return state
+
+    def _evaluate_camera_range(tester_id: str, arm_id: str, request_id: str):
+        store = range_store(tester_id)
+        state = _range_state(tester_id)
+        expected = f"camera_{arm_id}_capturing"
+        if state is None or state.phase != expected:
+            raise RuntimeError(f"tee-range setup is {state.phase if state else 'not_started'}")
+        if request_id in state.request_ids:
+            return state
+        shown_arm, frames = live.recent_frames()
+        if shown_arm != ARMS[arm_id] or frames is None:
+            raise RuntimeError(f"camera {arm_id} does not have a stable frame yet")
+        state = store.transition(
+            state,
+            phase=f"camera_{arm_id}_evaluating",
+            reason=f"evaluating_camera_{arm_id}",
+            request_id=request_id,
+        )
+        try:
+            frame = np.median(frames, axis=0).astype(np.uint8)
+            frame_bytes = (
+                f"P5\n{frame.shape[1]} {frame.shape[0]}\n255\n".encode("ascii") + frame.tobytes()
+            )
+            frame_path = store.epoch_dir(state.epoch_id) / f"camera-{arm_id}.pgm"
+            if frame_path.exists() and frame_path.read_bytes() != frame_bytes:
+                raise FileExistsError(f"camera evidence already exists for {arm_id}")
+            if not frame_path.exists():
+                atomic_write(frame_path, frame_bytes)
+            tilt_snapshot = enclosure.reading()
+            model = _reference_ball_camera(
+                ARMS[arm_id],
+                rig_geometry,
+                tilt_snapshot,
+                optical_calibration,
+                camera_placement,
+            )
+            result = estimate_reference_ball_range(
+                frames,
+                model,
+                ball_center_height_m=BALL_DIAMETER_MM / 2000.0,
+                plausible_radar_range_m=(TEE_RANGE_MM[0] / 1000.0, TEE_RANGE_MM[1] / 1000.0),
+            )
+            candidate = _guided_camera_candidate(
+                result,
+                epoch_id=state.epoch_id,
+                arm=ARMS[arm_id],
+                rig_geometry=rig_geometry,
+                optical_calibration=optical_calibration,
+                camera_placement=camera_placement,
+                camera_model=model,
+                capture_controls={
+                    **dict(state.evidence[f"camera_{arm_id}_capture_setup"]),
+                    "orientation_at_evaluation": tilt_snapshot,
+                },
+                frame_sha256=hashlib.sha256(frame_bytes).hexdigest(),
+                qualification=qualification,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            return store.transition(
+                state,
+                phase="retryable_failure",
+                reason=f"camera_{arm_id}_evaluation_failed: {exc}",
+                retry_phase=f"needs_camera_{arm_id}",
+            )
+        finally:
+            live.stop()
+        evidence = {f"camera_{arm_id}_candidate": candidate.to_dict()}
+        if arm_id == "arm5":
+            return store.transition(
+                state,
+                phase="needs_camera_arm6",
+                reason="validate_shared_range_in_camera_arm6",
+                evidence=evidence,
+            )
+        completed = store.transition(
+            state,
+            phase="evaluating",
+            reason="evaluating_cross_sensor_policy",
+            evidence=evidence,
+        )
+        return _finalize_range_state(store, completed)
+
+    @app.route("/api/tester/tee-range", methods=["GET", "POST"])
+    def guided_tee_range():
+        payload = request.get_json(silent=True) if request.method == "POST" else request.args
+        payload = payload or {}
+        if not isinstance(payload, Mapping):
+            return jsonify({"error": "request body must be an object"}), 400
+        tester_id = str(payload.get("tester_id", "")).strip()
+        if not SAFE_SEGMENT.fullmatch(tester_id):
+            return jsonify({"error": "unknown tester"}), 400
+        try:
+            with tee_range_lock:
+                if request.method == "GET":
+                    state = _range_state(tester_id)
+                    return jsonify(
+                        {
+                            "state": state.to_dict() if state else None,
+                            "qualification_available": qualification is not None,
+                            "flow_required": require_tee_range_flow,
+                        }
+                    )
+                action = str(payload.get("action", ""))
+                request_id = str(payload.get("request_id", "")).strip()
+                if not request_id or len(request_id) > 128:
+                    raise ValueError("request_id is required and must be at most 128 characters")
+                store = range_store(tester_id)
+                state = store.load()
+                if state is not None and request_id in state.request_ids:
+                    return jsonify({"state": state.to_dict(), "idempotent": True})
+                if action in {"start", "start_over", "ball_moved"}:
+                    state = store.start(request_id)
+                elif action == "capture_empty":
+                    state = _start_static_capture(tester_id, "empty", request_id)
+                elif action == "capture_ball":
+                    state = _start_static_capture(tester_id, "ball_present", request_id)
+                elif action in {"start_camera_arm5", "start_camera_arm6"}:
+                    state = _start_camera_range(tester_id, action[-4:], request_id)
+                elif action in {"evaluate_camera_arm5", "evaluate_camera_arm6"}:
+                    state = _evaluate_camera_range(tester_id, action[-4:], request_id)
+                elif action == "retry":
+                    if state is None or state.phase != "retryable_failure" or not state.retry_phase:
+                        raise RuntimeError("there is no retryable tee-range step")
+                    state = store.transition(
+                        state,
+                        phase=state.retry_phase,
+                        reason="retry_requested",
+                        request_id=request_id,
+                    )
+                else:
+                    raise ValueError("unknown tee-range action")
+                return jsonify({"state": state.to_dict()})
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 409
+        except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError) as exc:
+            return jsonify({"error": str(exc)}), 400
+
     @app.route("/api/tester/status", methods=["GET", "POST"])
     def status():
         try:
@@ -2004,6 +2710,12 @@ def create_app(
                 eligibility = setup.require(params.tester_id, enclosure.reading(), action)
                 if not eligibility["eligible"]:
                     return blocked_setup(eligibility)
+            solution = None
+            reference = None
+            if action == "swings":
+                solution, reference = admitted_range(params.tester_id)
+                if reference is None and not require_tee_range_flow:
+                    solution = pending_tee_range_solution(sessions_root, params)
             commands, log_path = action_commands(
                 action,
                 params,
@@ -2013,18 +2725,22 @@ def create_app(
                 setup_command_config(eligibility) if action == "swings" else None,
                 optical_calibration,
                 camera_placement,
+                solution,
             )
             write_arm_state(sessions_root, params)
             if action == "swings":
                 gain, exposure_us = resolve_gain(sessions_root, params)
-                solution = pending_tee_range_solution(sessions_root, params)
                 write_arm_state(
                     sessions_root,
                     params,
                     capture_gain=gain,
                     capture_exposure_us=exposure_us,
-                    tee_range_m=None,
-                    tee_range_source="unresolved",
+                    tee_range_m=solution.selected_range_m,
+                    tee_range_source=(
+                        solution.selected_candidate_id
+                        if solution.status == "resolved"
+                        else "unresolved"
+                    ),
                     tee_range_validation_truth_m=(
                         params.tee_mm / 1000.0 if params.tee_mm is not None else None
                     ),
@@ -2046,8 +2762,14 @@ def create_app(
             if action == "swings":
                 active_setup_tester["tester_id"] = params.tester_id
                 run_dir = Path(commands[0][commands[0].index("--log-dir") + 1])
-                write_setup_admission(run_dir, params.tester_id, eligibility, solution)
-                tee_range.write_solution(run_dir / "tee_range.json", solution)
+                with session_bundle.snapshot_lock(
+                    tester_root(sessions_root, params.tester_id),
+                    timeout_s=session_bundle.WRITER_WAIT_S,
+                ):
+                    write_setup_admission(
+                        run_dir, params.tester_id, eligibility, solution, reference
+                    )
+                    tee_range.write_solution(run_dir / "tee_range.json", solution)
                 active_runtime_dir["path"] = run_dir
             try:
                 jobs.start(action, commands, log_path, on_finish=on_finish)
@@ -2142,33 +2864,67 @@ def create_app(
             )
             status = {**live.snapshot()[1], "ball": ball}
             frame = np.median(frames, axis=0)
-            count = record_placement(
-                sessions_root, params, status, frame, tilt, automatic_range=evidence
-            )
-            new_candidates = _camera_tee_candidates(result, count)
-            state = read_arm_state(sessions_root, params.tester_id, params.arm_id)
-            prior = [
-                tee_range.TeeRangeCandidate.from_dict(item)
-                for item in state.get("tee_range_camera_candidates", [])
-            ]
-            solution = tee_range.TeeRangeSolution.unresolved(
-                [*prior, *new_candidates],
-                reason=f"camera_{result.status}_pending_cross_sensor_verification",
-            )
-            write_arm_state(
-                sessions_root,
-                params,
-                tee_range_m=None,
-                tee_range_source="unresolved",
-                tee_range_camera_evidence=evidence,
-                tee_range_camera_candidates=[item.to_dict() for item in solution.candidates],
-                tee_range_validation_truth_m=(
-                    params.tee_mm / 1000.0
-                    if params.tee_mm is not None
-                    else state.get("tee_range_validation_truth_m")
-                ),
-                tee_range_solution=solution.to_dict(),
-            )
+            flow = range_store(params.tester_id).load()
+            mode = {
+                "arm": arm.as_dict(),
+                "applied": status.get("applied"),
+                "camera_model": {
+                    "source": camera.source,
+                    "accuracy_qualified": camera.accuracy_qualified,
+                    "camera_origin_lfu": list(camera.camera_origin_lfu),
+                    "radar_origin_lfu": list(camera.radar_origin_lfu),
+                    "focal_size_px": camera.focal_size_px,
+                },
+            }
+            identity = {
+                "epoch_id": flow.epoch_id if flow else None,
+                "rig_geometry": _json_identity(rig_geometry),
+                "optical_calibration": _json_identity(optical_calibration),
+                "camera_placement": _json_identity(camera_placement),
+                "mode": mode,
+                "mode_sha256": hashlib.sha256(
+                    json.dumps(mode, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                ).hexdigest(),
+            }
+            with session_bundle.snapshot_lock(
+                tester_root(sessions_root, params.tester_id),
+                timeout_s=session_bundle.WRITER_WAIT_S,
+            ):
+                count = record_placement(
+                    sessions_root,
+                    params,
+                    status,
+                    frame,
+                    tilt,
+                    automatic_range=evidence,
+                    capture_identity=identity,
+                    _snapshot_locked=True,
+                )
+                new_candidates = _camera_tee_candidates(result, count)
+                state = read_arm_state(sessions_root, params.tester_id, params.arm_id)
+                prior = [
+                    tee_range.TeeRangeCandidate.from_dict(item)
+                    for item in state.get("tee_range_camera_candidates", [])
+                ]
+                solution = tee_range.TeeRangeSolution.unresolved(
+                    [*prior, *new_candidates],
+                    reason=f"camera_{result.status}_pending_cross_sensor_verification",
+                )
+                write_arm_state(
+                    sessions_root,
+                    params,
+                    _snapshot_locked=True,
+                    tee_range_m=None,
+                    tee_range_source="unresolved",
+                    tee_range_camera_evidence=evidence,
+                    tee_range_camera_candidates=[item.to_dict() for item in solution.candidates],
+                    tee_range_validation_truth_m=(
+                        params.tee_mm / 1000.0
+                        if params.tee_mm is not None
+                        else state.get("tee_range_validation_truth_m")
+                    ),
+                    tee_range_solution=solution.to_dict(),
+                )
             return jsonify(
                 {"placements": count, "tee_range": solution.to_dict(), "automatic_range": evidence}
             )
@@ -2306,6 +3062,9 @@ def create_app(
         config_hash = setup.current_config_hash()
         if not config_hash or not setup.confirmation_valid(tester_id):
             raise RuntimeError("tester setup confirmation is no longer valid")
+        if tester_id not in admitted_tee_range:
+            raise RuntimeError("automatic tee-range admission was not frozen")
+        solution, reference = admitted_tee_range[tester_id]
         enclosure.stop()  # the kiosk reads the LIS3DH itself during the ladder
         commands, log_path = action_commands(
             "ladder",
@@ -2316,14 +3075,18 @@ def create_app(
             setup_command_config({"config_hash": config_hash}),
             optical_calibration,
             camera_placement,
-        )
-        run = Path(commands[0][commands[0].index("--log-dir") + 1])
-        solution = pending_tee_range_solution(sessions_root, params_for_arm)
-        write_setup_admission(run, tester_id, admitted_setup[tester_id], solution)
-        tee_range.write_solution(
-            run / "tee_range.json",
             solution,
         )
+        run = Path(commands[0][commands[0].index("--log-dir") + 1])
+        with session_bundle.snapshot_lock(
+            tester_root(sessions_root, tester_id),
+            timeout_s=session_bundle.WRITER_WAIT_S,
+        ):
+            write_setup_admission(run, tester_id, admitted_setup[tester_id], solution, reference)
+            tee_range.write_solution(
+                run / "tee_range.json",
+                solution,
+            )
 
         def ladder_finished(_action, _return_code):
             if active_runtime_dir["path"] == run:
@@ -2391,6 +3154,10 @@ def create_app(
         if not eligibility["eligible"]:
             return blocked_setup(eligibility)
         admitted_setup[params.tester_id] = eligibility
+        try:
+            admitted_tee_range[params.tester_id] = admitted_range(params.tester_id)
+        except (OSError, RuntimeError, ValueError) as exc:
+            return jsonify({"error": str(exc)}), 409
         if job["state"] == "running":
             return jsonify({"error": "stop the active capture before starting the ladder"}), 409
         for previous in ladder_runners.values():
@@ -2398,6 +3165,27 @@ def create_app(
         state = ladder_state(params.tester_id)
         rung = state.current
         pending_photo = state.to_dict().get("pending_photo")
+        _solution, frozen_reference = admitted_tee_range[params.tester_id]
+        continuing = pending_photo is not None or (
+            rung is not None and rung.rung_id != study_ladder.LADDER[0].rung_id
+        )
+        if continuing and frozen_reference is not None:
+            admissions = sorted(
+                tester_root(sessions_root, params.tester_id).glob(
+                    "arm*/paired/run-*/setup_admission.json"
+                )
+            )
+            if admissions:
+                prior = json.loads(admissions[-1].read_text(encoding="utf-8"))
+                if prior.get("tee_range_epoch") != frozen_reference.to_dict():
+                    return jsonify(
+                        {
+                            "error": (
+                                "automatic tee-range setup changed during the ladder; "
+                                "start a new ladder instead of continuing canonical capture"
+                            )
+                        }
+                    ), 409
         if rung is None and pending_photo is None:
             return jsonify({"error": "the ladder is finished; package it"}), 409
         start_rung = (
@@ -2564,6 +3352,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--rig-geometry", type=Path, default=DEFAULT_RIG_GEOMETRY)
     parser.add_argument("--camera-optical-calibration", type=Path, default=None)
     parser.add_argument("--camera-placement", type=Path, default=None)
+    parser.add_argument("--iwr-static-config", type=Path, default=DEFAULT_IWR_STATIC_CONFIG)
+    parser.add_argument("--iwr-firmware", type=Path, default=DEFAULT_IWR_FIRMWARE)
+    parser.add_argument("--iwr-calibration", type=Path, default=DEFAULT_IWR_CALIBRATION)
+    parser.add_argument("--tee-range-qualification", type=Path, default=None)
     parser.add_argument("--radar-port", default=DEFAULT_RADAR_PORT, help="OPS243 serial port")
     parser.add_argument(
         "--no-inclinometer", action="store_true", help="Leave the LIS3DH unread (not on a Pi)"
@@ -2609,6 +3401,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             tilt=enclosure,
             optical_calibration=args.camera_optical_calibration,
             camera_placement=args.camera_placement,
+            iwr_static_config=args.iwr_static_config,
+            iwr_firmware=args.iwr_firmware,
+            iwr_calibration=args.iwr_calibration,
+            tee_range_qualification=args.tee_range_qualification,
+            require_tee_range_flow=True,
         ).run(host=args.host, port=args.port)
     except Exception:  # pylint: disable=broad-exception-caught
         logger.exception("Tester server stopped unexpectedly")

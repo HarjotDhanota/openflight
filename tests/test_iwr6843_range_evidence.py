@@ -229,7 +229,8 @@ def test_static_difference_rejects_no_ball_ambiguity_and_clutter(empty, present,
     )
 
     assert result.status == status
-    assert result.apparent_range_m is None
+    assert result.apparent_range_m is not None
+    assert result.peak_bin is not None
 
 
 @pytest.mark.parametrize(

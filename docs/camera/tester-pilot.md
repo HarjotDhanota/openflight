@@ -89,8 +89,8 @@ elsewhere. The first `start-tester.sh` builds the environment and takes a few
 minutes; later starts are quick.
 
 Use the numbered test suite for a normal collection: **1. Set up the rig**,
-**2. Check hardware and light**, **3. Capture the exposure ladder**, then
-**4. Review and package**. **Advanced: manual single-arm tools** is for a
+**2. Check hardware and light**, **3. Automatic ball range**, **4. Capture the
+exposure ladder**, then **5. Review and package**. **Advanced: manual single-arm tools** is for a
 maintainer-directed investigation of one mode; it is not the normal pilot and
 does not replace the ladder.
 
@@ -226,15 +226,12 @@ check, not proof of absolute accuracy.
 
 ### Automatic ball range
 
-The normal setup no longer asks for a radar-to-ball tape measurement. In the
-Advanced live view, record the stationary ball placement. The tester preserves
-the floor-plane and apparent-size estimates, their uncertainty, disagreement,
-confidence, every rejected or ambiguous candidate, the active camera mode and
-the current inclination evidence. Camera-only evidence remains unresolved and
-does not enable canonical range-dependent metrics. An optional tape value under
-Advanced is validation truth only; it neither guides detection nor becomes the
-runtime range. Raw captures remain useful while cross-sensor verification is
-pending.
+The main workflow asks for empty/ball IWR captures, an Arm 5 reference frame and
+an Arm 6 validation frame. Each setup epoch is immutable; **Start over / ball
+moved** preserves it and creates a new one, while refresh resumes the saved step.
+Missing qualification or disagreement ends in raw-only mode: the ladder remains
+available but range metrics stay withheld. A qualified Arm 5/IWR pair freezes
+one range for both modes; Arm 6 cannot change it. Advanced tape is validation only.
 
 | What you see | Cause | Fix |
 | --- | --- | --- |

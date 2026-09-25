@@ -930,7 +930,7 @@ class TestTheCameraSaysHowFar:
         assert camera.ray_model.pitch_rad == pytest.approx(math.radians(3.25))
         assert camera.ray_model.roll_correction_deg == pytest.approx(-2.5)
         assert camera.camera_origin_lfu == pytest.approx((0.0, 0.0, 0.095))
-        assert camera.radar_origin_lfu == pytest.approx((0.0, 0.044, 0.065))
+        assert camera.radar_origin_lfu == pytest.approx((0.0, -0.030, 0.051))
         assert camera.source == "nominal_uncalibrated"
         assert camera.accuracy_qualified is False
 

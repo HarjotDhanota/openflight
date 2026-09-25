@@ -386,13 +386,9 @@ def _static_result(  # pylint: disable=too-many-arguments
     return StaticRangeDifferenceResult(
         status=status,
         reason=reason,
-        apparent_range_m=(
-            peak_bin * empty.range_resolution_m
-            if status == "accepted" and peak_bin is not None
-            else None
-        ),
-        peak_bin=peak_bin if status == "accepted" else None,
-        range_bin_uncertainty_m=(range_bin_uncertainty_m if status == "accepted" else None),
+        apparent_range_m=(peak_bin * empty.range_resolution_m if peak_bin is not None else None),
+        peak_bin=peak_bin,
+        range_bin_uncertainty_m=range_bin_uncertainty_m,
         peak_score=peak_score,
         secondary_peak_score=secondary_peak_score,
         changed_fraction=changed_fraction,
@@ -446,6 +442,8 @@ def compare_static_range_profiles(
             present,
             changed_fraction=changed_fraction,
             peak_score=peak_score,
+            peak_bin=float(peak_index + empty.range_bin_start),
+            range_bin_uncertainty_m=empty.range_resolution_m,
         )
     if changed_fraction > _STATIC_MAX_CHANGED_FRACTION:
         return _static_result(
@@ -455,6 +453,8 @@ def compare_static_range_profiles(
             present,
             changed_fraction=changed_fraction,
             peak_score=peak_score,
+            peak_bin=float(peak_index + empty.range_bin_start),
+            range_bin_uncertainty_m=empty.range_resolution_m,
         )
     width_threshold = max(_STATIC_CLUTTER_SCORE, 0.25 * peak_score)
     left = peak_index
@@ -473,6 +473,8 @@ def compare_static_range_profiles(
             changed_fraction=changed_fraction,
             peak_score=peak_score,
             peak_width_bins=width,
+            peak_bin=float(peak_index + empty.range_bin_start),
+            range_bin_uncertainty_m=max(0.5, width / 2.0) * empty.range_resolution_m,
         )
     local_maxima = [
         index
@@ -492,6 +494,8 @@ def compare_static_range_profiles(
             peak_score=peak_score,
             secondary_peak_score=secondary_score,
             peak_width_bins=width,
+            peak_bin=float(peak_index + empty.range_bin_start),
+            range_bin_uncertainty_m=max(0.5, width / 2.0) * empty.range_resolution_m,
         )
     weights = np.maximum(delta[left : right + 1] - center, 0.0)
     local_bins = np.arange(left, right + 1, dtype=float) + empty.range_bin_start
