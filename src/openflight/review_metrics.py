@@ -594,7 +594,14 @@ def review_replay(report: Mapping[str, Any] | None, live: Mapping[str, Any]) -> 
         *camera_metrics,
     ]
     stage_states = {}
-    for name in ("ops", "iwr6843", "camera", "measured_total_speed_candidate"):
+    for name in (
+        "ops",
+        "iwr6843",
+        "camera",
+        "measured_total_speed_candidate",
+        "moving_iwr_range",
+        "moving_camera_iwr_anchor",
+    ):
         stage = mapping(stages.get(name))
         stage_states[name] = {
             "status": stage.get("status") or ("replayed" if stage else "absent"),
@@ -607,4 +614,8 @@ def review_replay(report: Mapping[str, Any] | None, live: Mapping[str, Any]) -> 
         "stages": stage_states,
         "overlay": overlay(camera_result),
         "agreements": _agreements(report, live, camera_result),
+        "moving_range_diagnostics": {
+            "iwr_range": dict(mapping(stages.get("moving_iwr_range"))),
+            "camera_iwr_anchor": dict(mapping(stages.get("moving_camera_iwr_anchor"))),
+        },
     }

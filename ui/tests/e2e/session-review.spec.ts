@@ -111,6 +111,32 @@ const review = {
           note: 'independent sensors; neither is a reference',
         },
       ],
+      moving_range_diagnostics: {
+        iwr_range: {
+          status: 'candidate',
+          promotion_allowed: false,
+          prerequisites: [
+            { id: 'moving_iwr_track', status: 'ready', reason: 'tee-independent track selected' },
+            { id: 'independent_impact_time', status: 'ready', reason: 'qualified contact timing' },
+          ],
+          track: { series: { times_s: [0.01, 0.02, 0.03], ranges_m: [1.45, 1.8, 2.15] } },
+          tee_range_candidate: { radar_slant_range_m: 1.45, uncertainty_m: 0.03, selectable: false },
+        },
+        camera_iwr_anchor: {
+          status: 'withheld_ambiguous_paths',
+          reason: 'withheld_ambiguous_paths',
+          promotion_allowed: false,
+          independent_camera_support: false,
+          prerequisites: [{ id: 'qualified_camera_model', status: 'ready', reason: 'qualified' }],
+          result: {
+            selected_path_id: null,
+            candidates: [
+              { path_id: 'path-1', score: 1.2, rejection_reasons: [] },
+              { path_id: 'path-2', score: 1.5, rejection_reasons: ['ops_speed_mismatch'] },
+            ],
+          },
+        },
+      },
       metrics: [
         metric('ball_speed_mph', 'Ball speed (OPS radial)', 'accepted', { value: 72.1 }),
         metric('spin_rpm', 'Spin (OPS)', 'experimental', {
@@ -245,6 +271,14 @@ test('live review starts the analysis, survives a reload and shows every status'
   await expect(orientation).toContainText('differs from the session setting (rotate ON, mirror off)');
   await expect(orientation).toContainText('Ball gate accepts rows 320–760; detectors found scene y=245');
   await expect(orientation).toContainText('pitch at trigger 3.3°');
+  await card.getByText('Moving range and camera↔IWR diagnostics').click();
+  await expect(card.locator('[data-moving-range]')).toContainText('candidate · 1.45 m ± 0.03 m · 3 fitted');
+  await expect(card.locator('[data-moving-range]')).toContainText('withheld_ambiguous_paths');
+  await expect(card.locator('[data-moving-range]')).toContainText('path-2');
+  await expect(card.locator('[data-moving-range]')).toContainText('ops_speed_mismatch');
+  await expect(card.locator('[data-moving-prerequisite="independent_impact_time"]')).toContainText(
+    'qualified contact timing'
+  );
   await card.getByText('Camera capture facts').click();
   await expect(card).toContainText('delivered_fps');
   await expect(card).toContainText('115.2');

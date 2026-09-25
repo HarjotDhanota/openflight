@@ -474,6 +474,7 @@ live/replay equivalence claim or independent calibration.
 | 2026-09-25 | The user rejected routine radar-to-ball measurement, while audit found that the tester still requires tape for manual swings and otherwise silently inherits the server's 1.575 m default; current camera optics and IWR impact timing are not qualified to replace it accurately | Introduce a versioned tee-range evidence contract and an explicit unresolved/raw-only acquisition path. Preserve optional tape as validation truth that is never silently selected, require independent source groups before an automatic solution can be selected, and withhold range-dependent canonical fusion until a qualified solution exists. Add camera and IWR candidates to the test bench before promotion; do not change estimator acceptance gates |
 | 2026-09-25 | Static IWR range differencing needs two matched pre-MTI captures, but production shot profiles move their range windows and concurrent setup capture could steal the runtime's single UART | Add a fixed-window diagnostic profile, raw-first setup capture with exact input hashes, and one interprocess lock shared by auto-detection and runtime ownership. Preserve failures as unusable evidence, keep firmware identity declared rather than read-back verified, and do not select or promote an IWR tee-range candidate in this slice |
 | 2026-09-25 | Camera floor/size cues are one dependent optical source, moving-IWR impact range can reuse the range it is meant to establish, and arm-local copies can drift after setup | Keep estimator candidates non-selectable and centralize promotion in a versioned policy. Resolve only same-epoch qualified Arm 5 camera plus static empty/present IWR evidence with exact calibration/config hashes and independent inputs; select static IWR without averaging after absolute and normalized agreement gates. Store immutable setup epochs under `calibration/tee-range` and put only epoch ID/digest references in arms and sessions |
+| 2026-09-25 | Moving IWR range and camera↔IWR path association are useful offline diagnostics, but impact extrapolation can be circular and the camera association consumes the same IWR ranges | Preserve the full tee-independent moving range series in replay. Build a non-selectable candidate only from explicitly independent qualified impact timing and matching qualified range calibration. Run the camera association only with saved, qualified camera/range/clock/OPS inputs, retain all alternatives and rejections, and prohibit both diagnostics from tee-range promotion or independent-source counting |
 
 ## Soundless trigger architecture
 
@@ -989,3 +990,15 @@ product acceptance limits. Promotion remains gated on that independent evidence.
   value and camera remains an agreement check. Focused contract and regression
   validation passed 229 tests with one existing skip on Windows. No setup is
   accuracy-qualified by this software change and no Pi hardware was exercised.
+- Moving-range replay diagnostics (M1/M2, TB07/TB10/TB12): raw replay now
+  preserves the tee-independent IWR fit as a full fitted range/time series and
+  records a structured withheld result unless impact timing proves independence
+  from IWR range and the matching range-bias calibration is qualified. The
+  camera↔IWR anchor runs only with saved qualified camera, clock, OPS and IWR
+  inputs, retaining alternatives, rejection reasons and prerequisites in the
+  session review. Both paths are explicitly non-promoting and the camera result
+  is marked dependent on the same IWR series. Trigger/capture containment,
+  two-frame timed-support and extrapolation limits, and image-bound impact
+  checks prevent a selected anchor from relying on unbounded back-projection.
+  Synthetic validation does not qualify the Pi optics, sensor clocks, radar
+  calibration or automatic range.

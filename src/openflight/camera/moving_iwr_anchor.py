@@ -18,6 +18,7 @@ MPH_PER_MS = 2.23694
 MIN_PATH_POINTS = 5
 MAX_CLOCK_UNCERTAINTY_S = 0.005
 AMBIGUITY_SCORE_MARGIN = 0.75
+MAX_IMPACT_EXTRAPOLATION_FRAMES = 2.0
 
 
 def _finite(value: Any, name: str) -> float:
@@ -322,6 +323,7 @@ def _score_path(  # pylint: disable=too-many-arguments,too-many-locals
     clock: CameraIwrClockMapping,
     iwr: TimedIwrRangeSeries,
     ops_speed_mph: float,
+    frame_interval_s: float,
 ) -> MovingBallPathEvidence:
     radar_origin = np.asarray(camera.radar_origin_lfu)
     camera_origin = np.asarray(camera.camera_origin_lfu)
@@ -364,6 +366,14 @@ def _score_path(  # pylint: disable=too-many-arguments,too-many-locals
         return _unscored_path(path_id, observations, "insufficient_timed_iwr_support")
 
     times_array = np.asarray(times)
+    impact_extrapolation_s = max(
+        0.0,
+        float(times_array[0]),
+        -float(times_array[-1]),
+    )
+    maximum_extrapolation_s = MAX_IMPACT_EXTRAPOLATION_FRAMES * frame_interval_s
+    if impact_extrapolation_s > maximum_extrapolation_s:
+        return _unscored_path(path_id, observations, "impact_extrapolation_exceeds_cap")
     positions_array = np.stack(positions)
     velocity, intercept = _linear_fit(times_array, positions_array)
     fitted = intercept + times_array[:, None] * velocity
@@ -398,6 +408,11 @@ def _score_path(  # pylint: disable=too-many-arguments,too-many-locals
         reasons.append("ops_speed_mismatch")
     if disagreement_m > 0.30 and consistency_sigma > 4.0:
         reasons.append("camera_iwr_range_disagreement")
+    if not (
+        0.0 <= float(impact_pixel[0]) < camera.image_width_px
+        and 0.0 <= float(impact_pixel[1]) < camera.image_height_px
+    ):
+        reasons.append("impact_pixel_outside_image")
     if (
         velocity[1] <= 0.0
         or not -5.0
@@ -470,11 +485,8 @@ def estimate_moving_ball_impact_anchor(  # pylint: disable=too-many-arguments,to
         raise ValueError("camera timestamps must be one integer nanosecond value per frame")
     if np.any(np.diff(timestamps.astype(np.int64)) <= 0):
         raise ValueError("camera timestamps must be strictly increasing")
-    speed = _finite(ops_ball_speed_mph, "OPS ball speed")
-    if speed <= 0.0:
-        raise ValueError("OPS ball speed must be positive")
-    trigger_frame = int(np.argmin(np.abs(timestamps.astype(np.int64) - int(trigger_ns))))
-    paths = _enumerate_paths(frames, timestamps.astype(np.int64), trigger_frame)
+    timestamps_i64 = timestamps.astype(np.int64)
+    trigger = int(trigger_ns)
     diagnostics = {
         "capture_mode": f"{camera.image_width_px}x{camera.image_height_px}",
         "camera_source": camera.source,
@@ -483,9 +495,33 @@ def estimate_moving_ball_impact_anchor(  # pylint: disable=too-many-arguments,to
         "clock_uncertainty_s": (clock_mapping.uncertainty_s if clock_mapping is not None else None),
         "iwr_source": iwr_ranges.source,
         "iwr_qualified": iwr_ranges.qualified,
-        "ops_ball_speed_mph": speed,
-        "enumerated_path_count": len(paths),
+        "ops_ball_speed_mph": _finite(ops_ball_speed_mph, "OPS ball speed"),
+        "camera_timestamp_support_ns": [int(timestamps_i64[0]), int(timestamps_i64[-1])],
+        "trigger_ns": trigger,
+        "maximum_impact_extrapolation_frames": MAX_IMPACT_EXTRAPOLATION_FRAMES,
     }
+    if not int(timestamps_i64[0]) <= trigger <= int(timestamps_i64[-1]):
+        diagnostics["enumerated_path_count"] = 0
+        return MovingIwrAnchorResult(
+            "withheld_trigger_outside_camera_capture",
+            "withheld",
+            None,
+            None,
+            None,
+            (),
+            diagnostics,
+        )
+    speed = _finite(ops_ball_speed_mph, "OPS ball speed")
+    if speed <= 0.0:
+        raise ValueError("OPS ball speed must be positive")
+    frame_interval_s = float(np.median(np.diff(timestamps_i64))) / 1e9
+    diagnostics["median_frame_interval_s"] = frame_interval_s
+    diagnostics["maximum_impact_extrapolation_s"] = (
+        MAX_IMPACT_EXTRAPOLATION_FRAMES * frame_interval_s
+    )
+    trigger_frame = int(np.argmin(np.abs(timestamps_i64 - trigger)))
+    paths = _enumerate_paths(frames, timestamps_i64, trigger_frame)
+    diagnostics["enumerated_path_count"] = len(paths)
     if not paths:
         return MovingIwrAnchorResult(
             "withheld_weak_camera_support", "withheld", None, None, None, (), diagnostics
@@ -513,6 +549,7 @@ def estimate_moving_ball_impact_anchor(  # pylint: disable=too-many-arguments,to
             clock=clock_mapping,
             iwr=iwr_ranges,
             ops_speed_mph=speed,
+            frame_interval_s=frame_interval_s,
         )
         for index, path in enumerate(paths)
     ]

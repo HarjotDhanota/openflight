@@ -818,6 +818,55 @@
         )}°${warning}<br />Ball gate accepts rows ${esc(rows)}${found ? `; detectors found ${esc(found)}` : ''}</p>`;
       }
 
+      function movingRangeDiagnostic(value) {
+        const diagnostics = value || {};
+        const iwr = diagnostics.iwr_range || {};
+        const anchor = diagnostics.camera_iwr_anchor || {};
+        if (!Object.keys(iwr).length && !Object.keys(anchor).length) return '';
+        const prerequisites = (stage) =>
+          (stage.prerequisites || [])
+            .map(
+              (item) =>
+                `<li data-moving-prerequisite="${esc(item.id)}"><b>${esc(item.id)}</b>: ${esc(item.status)} — ${esc(
+                  item.reason || ''
+                )}${item.source ? ` <span class="muted">(${esc(item.source)})</span>` : ''}</li>`
+            )
+            .join('');
+        const candidate = iwr.tee_range_candidate;
+        const series = iwr.track?.series || {};
+        const range = candidate
+          ? `${fmt(candidate.radar_slant_range_m)} m ± ${fmt(candidate.uncertainty_m)} m`
+          : 'withheld';
+        const result = anchor.result || {};
+        const alternatives = (result.candidates || [])
+          .map(
+            (item) =>
+              `<tr><td>${esc(item.path_id)}</td><td>${item.path_id === result.selected_path_id ? 'selected' : 'alternative'}</td><td>${esc(
+                (item.rejection_reasons || []).join(', ') || 'none'
+              )}</td><td>${item.score == null ? '—' : fmt(item.score)}</td></tr>`
+          )
+          .join('');
+        return `<details data-moving-range><summary>Moving range and camera↔IWR diagnostics</summary>
+          <p><b>Moving IWR tee range:</b> ${esc(iwr.status || 'absent')} · ${esc(range)} · ${esc(
+            (series.times_s || []).length
+          )} fitted range/time samples</p>
+          ${iwr.reason ? `<p class="error">${esc(iwr.reason)}</p>` : ''}
+          <p class="muted">Diagnostic only. It cannot promote tee range or count as independent IWR support.</p>
+          <ul>${prerequisites(iwr)}</ul>
+          <p><b>Moving camera↔IWR anchor:</b> ${esc(anchor.status || 'absent')}${
+            result.selected_path_id ? ` · ${esc(result.selected_path_id)}` : ''
+          }</p>
+          ${anchor.reason ? `<p class="error">${esc(anchor.reason)}</p>` : ''}
+          <p class="muted">This result uses the same IWR range series and cannot be recycled as independent camera range evidence.</p>
+          <ul>${prerequisites(anchor)}</ul>
+          ${
+            alternatives
+              ? `<div class="table-wrap"><table><thead><tr><th>Path</th><th>Outcome</th><th>Rejections</th><th>Score</th></tr></thead><tbody>${alternatives}</tbody></table></div>`
+              : ''
+          }
+        </details>`;
+      }
+
       function attemptCard(a) {
         const title = a.shot_number != null ? `Shot ${a.shot_number}` : 'Camera trigger without a shot';
         const verdict = a.picture_verdict
@@ -858,6 +907,7 @@
           ${a.camera ? `<details><summary>Camera capture facts</summary>${definitionList(a.camera)}</details>` : ''}
           ${metricsTable(a.metrics || [])}
           ${agreementsTable(a.agreements || [])}
+          ${movingRangeDiagnostic(a.moving_range_diagnostics)}
           <details><summary>Identity and provenance</summary>${definitionList(a.identity, a.identity_evidence)}</details>
           <details><summary>Stages and evidence files</summary>${definitionList(a.stages)}${definitionList(a.evidence)}</details>
         </article>`;
