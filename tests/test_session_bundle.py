@@ -4,96 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import shutil
 import tracemalloc
 import zipfile
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from openflight import session_bundle
 from scripts.analysis import analyze_tester_session as runner
-
-TESTER = "pilot-1"
-PI_RUN = f"/home/pi/openflight_sessions/tester_pilot/{TESTER}/arm5/paired/run-01"
-
-
-def _ops_capture(shot: int) -> dict:
-    return {
-        "type": "rolling_buffer_capture",
-        "shot_number": shot,
-        "sample_time": 10.0,
-        "trigger_time": 10.1,
-        "processor_config": {"sample_rate_hz": 30_000, "club_type": "7-iron"},
-        "i_samples": [
-            2048 + int(500 * math.cos(2 * math.pi * 4000.0 * i / 30_000)) for i in range(4096)
-        ],
-        "q_samples": [
-            2048 + int(500 * math.sin(2 * math.pi * 4000.0 * i / 30_000)) for i in range(4096)
-        ],
-    }
-
-
-def _pgm(path: Path) -> None:
-    path.write_bytes(b"P5\n8 4\n255\n" + bytes(range(32)))
-
-
-def _capture_tree(root: Path, shots=(1, 2)) -> Path:
-    run = root / TESTER / "arm5" / "paired" / "run-01"
-    (run / "iwr6843").mkdir(parents=True)
-    events = [
-        {
-            "type": "session_start",
-            "session_uuid": "session-bundle",
-            "config": {"camera_capture": {"output_dir": f"{PI_RUN}/arm5/camera"}},
-        }
-    ]
-    for shot in shots:
-        capture = run / "arm5" / "camera" / f"camera_00{shot}"
-        capture.mkdir(parents=True)
-        np.savez(
-            capture / "frames.npz",
-            frames=np.zeros((3, 4, 8), np.uint8),
-            sensor_timestamp_ns=np.arange(3, dtype=np.int64),
-            host_timestamp_ns=np.arange(3, dtype=np.int64),
-            exposure_us=np.full(3, 300, np.int32),
-            analogue_gain=np.full(3, 4.0, np.float32),
-        )
-        (capture / "metadata.json").write_text("{}", encoding="utf-8")
-        for label in ("first", "trigger", "last"):
-            _pgm(capture / f"{label}.pgm")
-        (run / "iwr6843" / f"iwr_00{shot}.l3dump").write_bytes(b"raw-dump")
-        events += [
-            _ops_capture(shot),
-            {"type": "shot_detected", "shot_number": shot, "ball_speed_mph": 70.0},
-            {
-                "type": "camera_capture",
-                "shot_number": shot,
-                "capture_path": f"{PI_RUN}/arm5/camera/camera_00{shot}",
-            },
-            {
-                "type": "iwr6843_capture",
-                "shot_number": shot,
-                "capture_path": f"{PI_RUN}/iwr6843/iwr_00{shot}.l3dump",
-            },
-        ]
-    (run / "session_20260924_185002_arm5.jsonl").write_text(
-        "".join(json.dumps(event) + "\n" for event in events), encoding="utf-8"
-    )
-    (root / TESTER / "arm5" / "arm.json").write_text('{"gain": 6.0}\n', encoding="utf-8")
-    (root / TESTER / "impact").mkdir()
-    _pgm(root / TESTER / "impact" / "camera_001.pgm")
-    (root / TESTER / "ladder.json").write_text(
-        json.dumps(
-            {"rungs": {}, "photos": {"camera_001": f"/home/pi/x/{TESTER}/impact/camera_001.pgm"}}
-        ),
-        encoding="utf-8",
-    )
-    (root / "tester-server.log").write_bytes(b"tester alive\n")
-    (root / "tester-server.log.1").write_bytes(b"prior run\n")
-    return root
+from tests.session_fixtures import TESTER, capture_tree
 
 
 @pytest.fixture(name="viewer")
@@ -109,7 +29,7 @@ def _analyze(root: Path, viewer: Path) -> dict:
 
 
 def test_one_action_replays_reviews_and_bundles_every_shot(tmp_path, viewer):
-    root = _capture_tree(tmp_path / "pi")
+    root = capture_tree(tmp_path / "pi")
     job = _analyze(root, viewer)
     assert job["state"] == "complete" and job["phase"] == "finished"
     assert job["shots_total"] == 2
@@ -158,7 +78,7 @@ def test_one_action_replays_reviews_and_bundles_every_shot(tmp_path, viewer):
 
 
 def test_a_rerun_reuses_replays_and_never_overwrites_a_bundle(tmp_path, viewer):
-    root = _capture_tree(tmp_path / "pi")
+    root = capture_tree(tmp_path / "pi")
     first = _analyze(root, viewer)
     first_path = Path(first["bundle"]["path"])
     first_bytes = first_path.read_bytes()
@@ -173,7 +93,7 @@ def test_a_rerun_reuses_replays_and_never_overwrites_a_bundle(tmp_path, viewer):
 
 
 def test_bundle_reproduces_on_another_machine(tmp_path, viewer):
-    root = _capture_tree(tmp_path / "pi")
+    root = capture_tree(tmp_path / "pi")
     bundle = Path(_analyze(root, viewer)["bundle"]["path"])
     elsewhere = tmp_path / "laptop" / "downloads"
     elsewhere.mkdir(parents=True)
@@ -188,7 +108,7 @@ def test_bundle_reproduces_on_another_machine(tmp_path, viewer):
 
 
 def test_tampered_or_padded_bundles_are_rejected(tmp_path, viewer):
-    root = _capture_tree(tmp_path / "pi")
+    root = capture_tree(tmp_path / "pi")
     bundle = Path(_analyze(root, viewer)["bundle"]["path"])
     with pytest.raises(ValueError, match="checksum does not match"):
         tampered = tmp_path / "tampered" / bundle.name
@@ -209,7 +129,7 @@ def test_tampered_or_padded_bundles_are_rejected(tmp_path, viewer):
 
 
 def test_no_space_fails_the_job_with_a_reason_and_leaves_no_partial(tmp_path, viewer, monkeypatch):
-    root = _capture_tree(tmp_path / "pi")
+    root = capture_tree(tmp_path / "pi")
     monkeypatch.setattr(
         session_bundle.shutil,
         "disk_usage",
@@ -240,9 +160,33 @@ def test_packaging_streams_large_captures_in_bounded_memory(tmp_path):
 
 
 def test_bundle_names_outside_the_tester_are_refused(tmp_path, viewer):
-    root = _capture_tree(tmp_path / "pi")
+    root = capture_tree(tmp_path / "pi")
     name = _analyze(root, viewer)["bundle"]["name"]
     assert session_bundle.bundle_path(root, TESTER, name).is_file()
     for bad in ("../x.zip", f"other-{name}", name.replace(".zip", ".zip.sha256")):
         with pytest.raises((ValueError, FileNotFoundError)):
             session_bundle.bundle_path(root, TESTER, bad)
+
+
+def test_a_stop_is_recorded_and_the_next_run_resumes(tmp_path, viewer, monkeypatch):
+    root = capture_tree(tmp_path / "pi")
+    real = runner.replay
+    calls = []
+
+    def stop_on_second(args, **kwargs):
+        calls.append(args.shot)
+        if len(calls) == 2:
+            raise KeyboardInterrupt
+        return real(args, **kwargs)
+
+    monkeypatch.setattr(runner, "replay", stop_on_second)
+    assert runner.analyze(root, TESTER, package=True, viewer=viewer) == 130
+    job = json.loads((root / TESTER / "analysis" / "job.json").read_text(encoding="utf-8"))
+    assert (job["state"], job["replayed"]) == ("stopped", 1)
+    assert "stopped by the operator" in job["errors"][-1]
+    assert not session_bundle.list_bundles(root, TESTER)
+
+    monkeypatch.setattr(runner, "replay", real)
+    resumed = _analyze(root, viewer)
+    assert (resumed["reused"], resumed["replayed"]) == (1, 1)
+    assert resumed["bundle"] is not None

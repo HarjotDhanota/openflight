@@ -251,7 +251,7 @@ def test_a_photo_is_saved_against_the_last_swing(tmp_path):
     assert path.name == "camera_a.pgm" and path.is_file()
     assert kiosk.calls[-2] == (820, 2.0)  # the still: (100 - 18) / (0.05 x 2), then back
     assert kiosk.calls[-1] == (300, 3.0)
-    assert runner.state.to_dict()["photos"]["camera_a"].endswith("camera_a.pgm")
+    assert runner.state.to_dict()["photos"]["camera_a"] == "impact/camera_a.pgm"
 
 
 def test_photo_after_same_mode_advance_restores_the_new_rung(tmp_path):

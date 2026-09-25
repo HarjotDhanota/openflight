@@ -16,7 +16,6 @@ import subprocess
 import sys
 import threading
 import time
-import zipfile
 import zlib
 from collections import Counter, deque
 from collections.abc import Mapping, Sequence
@@ -29,7 +28,8 @@ from typing import Callable
 import numpy as np
 from flask import Flask, Response, g, jsonify, request, send_file
 
-from openflight.camera import attempt_ledger, study_ladder
+from openflight import session_bundle
+from openflight.camera import attempt_ledger, session_review_routes as review_routes, study_ladder
 from openflight.camera.club_motion import detect_reference_ball
 from openflight.camera.fusion_diagnostics import register_fusion_diagnostics
 from openflight.camera.paired_eligibility import evaluate_paired_capture
@@ -41,6 +41,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 TESTER_PAGE = REPO_ROOT / "ui" / "public" / "tester.html"
 TRACK_REVIEW_PAGE = REPO_ROOT / "ui" / "public" / "track-review.html"
 FUSION_DIAGNOSTICS_PAGE = REPO_ROOT / "ui" / "public" / "fusion-diagnostics.html"
+SESSION_REVIEW_PAGE = REPO_ROOT / "ui" / "public" / "session-review.html"
 DEFAULT_SESSIONS_ROOT = Path.home() / "openflight_sessions" / "tester_pilot"
 DEFAULT_RIG_GEOMETRY = REPO_ROOT / "config" / "enclosure_v3_rig_geometry.json"
 SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
@@ -176,6 +177,7 @@ ACTION_LABELS = {
     "gain": "Find the gain for this arm",
     "swings": "Capture paired swings for this arm",
     "ladder": "Exposure ladder for this mode",
+    "analyze": "Analyse, review and package the session",
 }
 # a hardware step that hangs is stopped; the ladder runs as long as the tester swings
 ACTION_TIMEOUT_S = {"preflight": 120.0, "gain": 900.0}
@@ -1469,29 +1471,6 @@ def study_overview(sessions_root: Path, tester_id: str) -> dict:
     return {"tester_id": tester_id, "club": CLUB, "arms": arms}
 
 
-def _package_path(sessions_root: Path, tester_id: str) -> Path:
-    return sessions_root.expanduser().resolve() / f"{tester_id}-openflight-mode-study.zip"
-
-
-def package_study(sessions_root: Path, tester_id: str) -> Path:
-    """Create a portable archive of every arm without following symlinks."""
-    root = tester_root(sessions_root, tester_id)
-    if not root.is_dir():
-        raise FileNotFoundError("there is no saved data yet")
-    destination = _package_path(sessions_root, tester_id)
-    temporary = destination.with_suffix(".zip.tmp")
-    with attempt_ledger.snapshot_lock():
-        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_STORED) as bundle:
-            for path in sorted(root.rglob("*")):
-                if path.is_file() and not path.is_symlink():
-                    bundle.write(path, path.relative_to(root.parent))
-            for path in sorted(sessions_root.glob(f"{SERVER_LOG_NAME}*")):
-                if path.is_file() and not path.is_symlink():
-                    bundle.write(path, Path(root.name) / "diagnostics" / path.name)
-    os.replace(temporary, destination)
-    return destination
-
-
 def create_app(
     *,
     sessions_root: Path = DEFAULT_SESSIONS_ROOT,
@@ -1678,6 +1657,19 @@ def create_app(
 
     register_track_review(app, resolve_attempt_scope, encode_png, TRACK_REVIEW_PAGE)
     register_fusion_diagnostics(app, resolve_attempt_scope, FUSION_DIAGNOSTICS_PAGE)
+    review_routes.register_session_review(
+        app,
+        sessions_root=sessions_root,
+        valid_tester=lambda value: bool(SAFE_SEGMENT.fullmatch(value)),
+        page_path=SESSION_REVIEW_PAGE,
+    )
+
+    def refuse_while_analysing() -> None:
+        tester = review_routes.analysis_running(sessions_root)
+        if tester is not None:
+            raise RuntimeError(
+                f"the analysis for {tester} is still running; wait for it or press Stop"
+            )
 
     def current_capture_scope(tester_id: str) -> dict | None:
         run = ladder_runs.get(tester_id)
@@ -1771,7 +1763,7 @@ def create_app(
                     "arm": arm_progress(sessions_root, params),
                     "study": study_overview(sessions_root, params.tester_id),
                     "inclinometer": enclosure.reading(),
-                    "package_ready": _package_path(sessions_root, params.tester_id).is_file(),
+                    "analysis": review_routes.read_analysis(sessions_root, params.tester_id),
                     "saved_attempt_scopes": attempt_scopes(sessions_root, params.tester_id),
                 }
             )
@@ -1821,6 +1813,7 @@ def create_app(
         try:
             params = TesterParameters.from_payload(payload)
             action = str((payload or {}).get("action", ""))
+            refuse_while_analysing()
             eligibility = None
             if action in {"gain", "swings"}:
                 eligibility = setup.require(params.tester_id, enclosure.reading(), action)
@@ -1989,46 +1982,66 @@ def create_app(
             for runner in runners:
                 runner.stop(wait=False)
             stopped = jobs.cancel() or stopped
+        stopped = review_routes.stop_detached_analysis(sessions_root) or stopped
         for runner in runners:
             runner.stop()
         return jsonify({"stopped": stopped, "job": jobs.status()})
 
     @app.post("/api/tester/package")
-    def create_package():
+    @app.post("/api/tester/analysis")
+    def start_analysis():
+        """Analyse, review and package in the background; the page polls its progress."""
+        payload = request.get_json(silent=True) or {}
+        tester_id = str(payload.get("tester_id", "")) if isinstance(payload, Mapping) else ""
         try:
-            params = parameters()
+            if not SAFE_SEGMENT.fullmatch(tester_id):
+                raise ValueError("unknown tester")
+            if not tester_root(sessions_root, tester_id).is_dir():
+                raise FileNotFoundError("there is no saved data yet")
             if jobs.status()["state"] == "running":
-                raise RuntimeError("stop the active capture before packaging")
-            awaited_runner = ladder_runners.get(params.tester_id)
+                raise RuntimeError("stop the active capture before analysing")
+            awaited_runner = ladder_runners.get(tester_id)
             if awaited_runner is not None:
                 if not awaited_runner.stopped:
-                    raise RuntimeError("stop the ladder before packaging")
+                    raise RuntimeError("stop the ladder before analysing")
                 awaited_runner.wait_for_photo_action()
             with ladder_lock:
-                runner = ladder_runners.get(params.tester_id)
+                runner = ladder_runners.get(tester_id)
                 if runner is not awaited_runner:
-                    raise RuntimeError("the ladder changed while packaging")
-                if jobs.status()["state"] == "running" or (
-                    runner is not None and not runner.stopped
-                ):
-                    raise RuntimeError("stop the active capture before packaging")
-                path = package_study(sessions_root, params.tester_id)
-            return jsonify({"package": path.name, "job": jobs.status(), "package_ready": True})
+                    raise RuntimeError("the ladder changed while starting the analysis")
+                if runner is not None and not runner.stopped:
+                    raise RuntimeError("stop the active capture before analysing")
+                refuse_while_analysing()
+                live.stop()
+                log_path = review_routes.analysis_log(sessions_root, tester_id)
+                jobs.start(
+                    "analyze",
+                    [review_routes.analysis_command(sessions_root, tester_id)],
+                    log_path,
+                )
+            return jsonify(
+                {
+                    "job": jobs.status(),
+                    "analysis": review_routes.read_analysis(sessions_root, tester_id),
+                }
+            ), 202
         except FileNotFoundError as exc:
             return jsonify({"error": str(exc)}), 404
-        except (RuntimeError, ValueError) as exc:
-            return jsonify({"error": str(exc)}), 409
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc), "job": jobs.status()}), 409
 
     @app.get("/api/tester/package")
     def download_package():
-        try:
-            params = parameters()
-            path = _package_path(sessions_root, params.tester_id)
-            if not path.is_file():
-                raise FileNotFoundError("create the data package first")
-            return send_file(path, as_attachment=True, download_name=path.name)
-        except (FileNotFoundError, ValueError) as exc:
-            return jsonify({"error": str(exc)}), 404
+        tester_id = str(request.args.get("tester_id", ""))
+        if not SAFE_SEGMENT.fullmatch(tester_id):
+            return jsonify({"error": "unknown tester"}), 400
+        latest = review_routes.read_analysis(sessions_root, tester_id)["latest_bundle"]
+        if latest is None:
+            return jsonify({"error": "analyse and package the session first"}), 404
+        path = session_bundle.bundle_path(sessions_root, tester_id, latest["name"])
+        return send_file(path, as_attachment=True, download_name=path.name)
 
     ladder_runners: dict[str, study_ladder.LadderRunner] = {}
     ladder_runs: dict[str, Path] = {}  # the run folder each tester's ladder is writing
@@ -2097,6 +2110,10 @@ def create_app(
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         with ladder_lock:
+            try:
+                refuse_while_analysing()
+            except RuntimeError as exc:
+                return jsonify({"error": str(exc)}), 409
             return start_ladder(params, facts)
 
     def start_ladder(params: TesterParameters, facts: dict):

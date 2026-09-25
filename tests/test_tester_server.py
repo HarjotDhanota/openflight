@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import struct
+import sys
 import threading
 import time
 import zipfile
 import zlib
+from datetime import datetime, timezone
 
 import numpy as np
 import pytest
 
-from openflight.camera import tester_server as ts
+from openflight import session_bundle
+from openflight.camera import session_review_routes as review_routes, tester_server as ts
+from tests.session_fixtures import TESTER, capture_tree
 
 RIG = ts.DEFAULT_RIG_GEOMETRY
 TESTER_SETUP = {
@@ -332,11 +337,11 @@ class TestProgressCountsAcceptedNotFiles:
 
 
 class TestPackage:
-    def test_archive_carries_every_arm_state(self, tmp_path):
+    def test_bundle_carries_every_arm_state(self, tmp_path):
         ts.write_arm_state(tmp_path, params(arm_id="arm1"), gain=4.0)
         ts.write_arm_state(tmp_path, params(arm_id="arm2"), gain=6.0)
-        archive = ts.package_study(tmp_path, "20260922-name")
-        with zipfile.ZipFile(archive) as bundle:
+        built = session_bundle.build_bundle(tmp_path, "20260922-name", viewer=None, provenance={})
+        with zipfile.ZipFile(built["path"]) as bundle:
             names = bundle.namelist()
             assert any(n.endswith("arm1/arm.json") for n in names)
             saved = json.loads(bundle.read(next(n for n in names if n.endswith("arm2/arm.json"))))
@@ -344,19 +349,144 @@ class TestPackage:
         assert saved["club"] == "7-iron"
         assert saved["exposure_us"] == 175
 
-    def test_archive_carries_rotating_tester_server_diagnostics(self, tmp_path):
+    def test_bundle_carries_rotating_tester_server_diagnostics(self, tmp_path):
         ts.write_arm_state(tmp_path, params(arm_id="arm1"), gain=4.0)
         (tmp_path / ts.SERVER_LOG_NAME).write_bytes(b"tester alive\n")
         (tmp_path / f"{ts.SERVER_LOG_NAME}.1").write_bytes(b"prior run\n")
 
-        archive = ts.package_study(tmp_path, "20260922-name")
+        built = session_bundle.build_bundle(tmp_path, "20260922-name", viewer=None, provenance={})
 
-        with zipfile.ZipFile(archive) as bundle:
+        with zipfile.ZipFile(built["path"]) as bundle:
             names = bundle.namelist()
             current = next(name for name in names if name.endswith("diagnostics/tester-server.log"))
             prior = next(name for name in names if name.endswith("diagnostics/tester-server.log.1"))
             assert bundle.read(current) == b"tester alive\n"
             assert bundle.read(prior) == b"prior run\n"
+
+
+def _job(root, tester, **fields):
+    path = review_routes.job_path(root, tester)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    job = {"state": "running", "updated_at": datetime.now(timezone.utc).isoformat(), "pid": 1}
+    job.update(fields)
+    path.write_text(json.dumps(job), encoding="utf-8")
+
+
+class TestSessionReviewWorkflow:
+    """Capture tree -> one click -> background analysis -> review -> bundle, across a restart."""
+
+    def _wait_for(self, client, tester, deadline_s=180.0):
+        deadline = time.monotonic() + deadline_s
+        while time.monotonic() < deadline:
+            body = client.get(f"/api/tester/analysis?tester_id={tester}").get_json()
+            if body["state"] not in ("running", "never_run"):
+                return body
+            time.sleep(0.25)
+        raise AssertionError("analysis did not finish")
+
+    def test_one_click_analysis_runs_in_the_background_and_survives_a_new_server(self, tmp_path):
+        root = capture_tree(tmp_path)
+        first = eligible_app(sessions_root=root, rig_geometry=RIG).test_client()
+        started = time.monotonic()
+        response = first.post("/api/tester/analysis", json={"tester_id": TESTER})
+        assert response.status_code == 202, response.get_json()
+        assert time.monotonic() - started < 2.0
+        assert response.get_json()["job"]["action"] == "analyze"
+
+        reconnected = eligible_app(sessions_root=root, rig_geometry=RIG).test_client()
+        seen = reconnected.get(f"/api/tester/analysis?tester_id={TESTER}").get_json()
+        assert seen["state"] in ("running", "complete", "never_run")
+        finished = self._wait_for(reconnected, TESTER)
+        assert finished["state"] == "complete", finished
+        assert finished["job"]["shots_total"] == 2
+        assert finished["review_ready"] is True
+
+        review = reconnected.get(f"/api/tester/session-review?tester_id={TESTER}").get_json()
+        attempt = review["attempts"][0]
+        preview = attempt["evidence"]["preview_frames"]["trigger"]
+        frame = reconnected.get(
+            f"/api/tester/session-review/file?tester_id={TESTER}&path={preview}"
+        )
+        assert frame.status_code == 200 and frame.data.startswith(b"P5")
+        photo = attempt["evidence"]["impact_photo"]
+        assert reconnected.get(
+            f"/api/tester/session-review/file?tester_id={TESTER}&path={photo}"
+        ).data.startswith(b"P5")
+
+        download = reconnected.get(f"/api/tester/package?tester_id={TESTER}")
+        assert download.status_code == 200
+        bundle = tmp_path / "downloaded.zip"
+        bundle.write_bytes(download.data)
+        manifest = session_bundle.validate_bundle(bundle)
+        assert manifest["tester_id"] == TESTER
+        assert finished["latest_bundle"]["sha256"] == hashlib.sha256(download.data).hexdigest()
+        status = reconnected.get(
+            f"/api/tester/status?tester_id={TESTER}&arm_id=arm5&environment=indoors"
+        ).get_json()
+        assert status["analysis"]["latest_bundle"]["name"] == finished["latest_bundle"]["name"]
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "../secret.json",
+            "pilot-1/../other/x.json",
+            "other-tester/analysis/session_review.json",
+            "pilot-1/arm5/paired/run-01/iwr6843/iwr_001.l3dump",
+            "/pilot-1/impact/camera_001.pgm",
+            "pilot-1\\impact\\camera_001.pgm",
+        ],
+    )
+    def test_review_files_are_confined_to_the_tester_and_to_review_types(self, tmp_path, path):
+        root = capture_tree(tmp_path)
+        client = eligible_app(sessions_root=root, rig_geometry=RIG).test_client()
+        response = client.get(
+            "/api/tester/session-review/file", query_string={"tester_id": TESTER, "path": path}
+        )
+        assert response.status_code in (400, 404)
+
+    def test_capture_is_refused_while_an_analysis_is_alive(self, tmp_path):
+        root = capture_tree(tmp_path)
+        _job(root, TESTER)
+        client = eligible_app(sessions_root=root, rig_geometry=RIG).test_client()
+        run = client.post(
+            "/api/tester/run",
+            json={
+                "tester_id": TESTER,
+                "arm_id": "arm5",
+                "environment": "indoors",
+                "action": "preflight",
+            },
+        )
+        assert run.status_code == 409
+        assert "analysis" in run.get_json()["error"]
+        again = client.post("/api/tester/analysis", json={"tester_id": TESTER})
+        assert again.status_code == 409
+
+    def test_a_job_without_a_heartbeat_reads_as_interrupted_and_can_resume(self, tmp_path):
+        root = capture_tree(tmp_path)
+        _job(root, TESTER, updated_at="2026-09-24T00:00:00+00:00")
+        client = eligible_app(sessions_root=root, rig_geometry=RIG).test_client()
+        body = client.get(f"/api/tester/analysis?tester_id={TESTER}").get_json()
+        assert body["state"] == "interrupted"
+        assert "finished shots are reused" in body["reason"]
+        assert review_routes.analysis_running(root) is None
+
+    def test_analysis_is_refused_while_a_capture_runs(self, tmp_path):
+        class BusyManager(ts.TesterJobManager):
+            def status(self):
+                return {"state": "running", "action": "ladder", "message": "busy", "output": []}
+
+        root = capture_tree(tmp_path)
+        client = eligible_app(sessions_root=root, rig_geometry=RIG, manager=BusyManager())
+        response = client.test_client().post("/api/tester/analysis", json={"tester_id": TESTER})
+        assert response.status_code == 409
+        assert not review_routes.job_path(root, TESTER).exists()
+
+    def test_unknown_or_empty_testers_are_refused(self, tmp_path):
+        client = eligible_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
+        assert client.post("/api/tester/analysis", json={"tester_id": "../x"}).status_code == 400
+        assert client.post("/api/tester/analysis", json={"tester_id": "nobody"}).status_code == 404
+        assert client.get("/api/tester/package?tester_id=nobody").status_code == 404
 
 
 class TestApp:
@@ -1498,14 +1628,12 @@ class TestTheLadderHoldsUp:
         )
         client, manager = self._client(tmp_path, monkeypatch)
         called = threading.Event()
-        archive = tmp_path / "package.zip"
-        archive.write_bytes(b"zip")
 
-        def package(*_args):
+        def command(*_args):
             called.set()
-            return archive
+            return [sys.executable, "-c", "pass"]
 
-        monkeypatch.setattr(ts, "package_study", package)
+        monkeypatch.setattr(ts.review_routes, "analysis_command", command)
         held = False
         try:
             client.post("/api/tester/ladder/start", json=self.body)
@@ -1534,7 +1662,7 @@ class TestTheLadderHoldsUp:
             held = False
             worker.join(3)
             assert called.is_set()
-            assert result[0][0] == 200, result
+            assert result[0][0] == 202, result
         finally:
             if held:
                 runner._lock.release()  # pylint: disable=protected-access

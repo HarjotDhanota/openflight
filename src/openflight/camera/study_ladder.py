@@ -743,12 +743,14 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                     raise RuntimeError("the ladder is stopped")
                 os.replace(temporary, path)
                 temporary = None
+                # relative to the tester folder, so ladder.json stays valid off the Pi
+                recorded = path.relative_to(self.photo_dir.parent).as_posix()
                 pending = self._pending_photo() is not None
                 if pending:
-                    self.state.finish_photo(name, rung_id, str(path))
+                    self.state.finish_photo(name, rung_id, recorded)
                     self._on_mode_done(rung.arm_id)
                 else:
-                    self.state.record_photo(name, rung_id, str(path))
+                    self.state.record_photo(name, rung_id, recorded)
                 return path
             finally:
                 if temporary is not None:

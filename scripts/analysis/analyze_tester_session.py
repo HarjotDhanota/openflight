@@ -19,9 +19,11 @@ import argparse
 import gc
 import json
 import os
+import signal
 import sys
 import tempfile
 import threading
+import time
 import traceback
 from argparse import Namespace
 from datetime import datetime, timezone
@@ -50,10 +52,23 @@ VIEWER = REPO_ROOT / "ui" / "public" / "session-review.html"
 JOB_SCHEMA = "openflight.analysis_job.v1"
 HEARTBEAT_S = 5.0
 ANALYSER = "analyze_tester_session.v1"
+REPLACE_ATTEMPTS = 50
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _replace(temporary: Path, path: Path) -> None:
+    # Windows refuses to replace a file a reader has open; the page's reads are brief.
+    for attempt in range(REPLACE_ATTEMPTS):
+        try:
+            os.replace(temporary, path)
+            return
+        except PermissionError:
+            if attempt == REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(0.02)
 
 
 def write_json_atomic(path: Path, value: Any) -> None:
@@ -67,7 +82,7 @@ def write_json_atomic(path: Path, value: Any) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     try:
-        os.replace(temporary, path)
+        _replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -79,7 +94,7 @@ def _write_text_atomic(path: Path, text: str) -> None:
         temporary = Path(handle.name)
         handle.write(text)
     try:
-        os.replace(temporary, path)
+        _replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -308,6 +323,10 @@ def analyze(sessions_root: Path, tester_id: str, *, package: bool, viewer: Path 
                     ),
                 )
             )
+    except KeyboardInterrupt:
+        job.error("stopped by the operator before it finished")
+        job.finish("stopped")
+        return 130
     except Exception as error:  # the page must learn why, not just that it stopped
         job.error(f"{type(error).__name__}: {error}")
         job.finish("failed")
@@ -388,6 +407,10 @@ def verify(bundle: Path, work_dir: Path | None) -> dict[str, Any]:
     }
 
 
+def _stop_requested(_signum, _frame) -> None:
+    raise KeyboardInterrupt
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -409,6 +432,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result["status"] == "reproduced" else 1
     if not args.sessions_root or not args.tester_id:
         parser.error("--sessions-root and --tester-id are required unless --verify is given")
+    signal.signal(signal.SIGTERM, _stop_requested)
     return analyze(args.sessions_root, args.tester_id, package=args.package, viewer=args.viewer)
 
 
