@@ -413,3 +413,4 @@ def test_refused_camera_triggers_are_counted_by_reason_even_without_a_shot(tmp_p
     assert len(rejections["recent"]) == 3
     attempt = next(a for a in review["attempts"] if a["attempt_id"] == "session-one:1")
     assert attempt["evidence"]["camera_outcome"]["category"] == "captured"
+    assert "camera refused triggers: 2 ring_busy, 1 save_backlog_full" in report_markdown(review)

@@ -515,6 +515,10 @@ def report_markdown(review: Mapping[str, Any]) -> str:
             lines.append(
                 f"- {run['rejected_trigger_count']} triggers rejected before a shot was logged"
             )
+        refused = (run.get("camera_trigger_rejections") or {}).get("counts") or {}
+        if refused:
+            listed = ", ".join(f"{count} {reason}" for reason, count in sorted(refused.items()))
+            lines.append(f"- camera refused triggers: {listed}")
         lines.append("")
         for attempt in review.get("attempts") or []:
             if attempt["arm_id"] != run["arm_id"] or attempt["run"] != run["run"]:
@@ -533,6 +537,10 @@ def report_markdown(review: Mapping[str, Any]) -> str:
                 )
             if attempt.get("rejection"):
                 lines.append(f"Not a shot: {attempt['rejection']['reason']}")
+            outcome = attempt["evidence"].get("camera_outcome") or {}
+            if outcome and outcome.get("category") != "captured":
+                detail = f" ({outcome['detail']})" if outcome.get("detail") else ""
+                lines.append(f"Camera: {outcome['label']}{detail}")
             if attempt["evidence"].get("impact_photo"):
                 lines.append(f"Impact photo: {attempt['evidence']['impact_photo']}")
             if attempt.get("metrics"):
