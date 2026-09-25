@@ -472,6 +472,7 @@ live/replay equivalence claim or independent calibration.
 | 2026-09-24 | Session 1 review needed five terminal replays; replay cannot run from an extracted archive (absolute capture paths), drops recorded provenance, hides experimental spin, and the package has no manifest or derived results ([audit](../camera/session-review-workflow.md)) | Replace package + terminal replay with one background analyze-review-package job producing an immutable hash-inventoried session bundle with relative paths, per-attempt statuses and a review page that imports the bundle anywhere. Estimator thresholds unchanged; the camera gate question stays blocked on frames |
 | 2026-09-24 | M1 recovery and usability review found duplicate normal and advanced acquisition/export paths that can send a real tester into an incomplete single-arm run or package the wrong scope | Make the guided setup, hardware, light, exposure-ladder, review and package sequence the normal workflow; keep manual single-arm controls as a collapsed advanced investigation path. Preserve rig/readiness gates, raw evidence schemas and diagnostic truth, and do not treat this navigation change as hardware or accuracy validation |
 | 2026-09-25 | The user rejected routine radar-to-ball measurement, while audit found that the tester still requires tape for manual swings and otherwise silently inherits the server's 1.575 m default; current camera optics and IWR impact timing are not qualified to replace it accurately | Introduce a versioned tee-range evidence contract and an explicit unresolved/raw-only acquisition path. Preserve optional tape as validation truth that is never silently selected, require independent source groups before an automatic solution can be selected, and withhold range-dependent canonical fusion until a qualified solution exists. Add camera and IWR candidates to the test bench before promotion; do not change estimator acceptance gates |
+| 2026-09-25 | Camera floor/size cues are one dependent optical source, moving-IWR impact range can reuse the range it is meant to establish, and arm-local copies can drift after setup | Keep estimator candidates non-selectable and centralize promotion in a versioned policy. Resolve only same-epoch qualified Arm 5 camera plus static empty/present IWR evidence with exact calibration/config hashes and independent inputs; select static IWR without averaging after absolute and normalized agreement gates. Store immutable setup epochs under `calibration/tee-range` and put only epoch ID/digest references in arms and sessions |
 
 ## Soundless trigger architecture
 
@@ -970,3 +971,13 @@ product acceptance limits. Promotion remains gated on that independent evidence.
   Camera candidates remain non-selectable and the solution remains unresolved;
   optional tape is validation truth only. Software checks do not qualify optics,
   automatic range, or range-dependent fusion.
+- Tee-range promotion boundary (M1/M2, TB01/TB07/TB10): immutable setup epochs,
+  digest-checked current/arm/session references and a single qualification-gated
+  resolver are implemented. The resolver requires exact rig, Arm 5 calibration,
+  IWR firmware/config/profile/range-calibration and scope identities; accepted
+  independent camera/static-IWR evidence from one epoch; uncertainty and plausible
+  interval limits; and both absolute and normalized residual limits. Manual and
+  moving-IWR evidence cannot support promotion. Static IWR remains the selected
+  value and camera remains an agreement check. Focused contract and regression
+  validation passed 229 tests with one existing skip on Windows. No setup is
+  accuracy-qualified by this software change and no Pi hardware was exercised.
