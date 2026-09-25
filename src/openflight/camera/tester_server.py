@@ -1998,8 +1998,11 @@ def create_app(
     ladder_runs: dict[str, Path] = {}  # the run folder each tester's ladder is writing
     ladder_lock = threading.RLock()
 
-    def ladder_state(tester_id: str) -> study_ladder.LadderState:
-        return study_ladder.LadderState(tester_root(sessions_root, tester_id) / "ladder.json")
+    def ladder_state(tester_id: str, *, persist_initial: bool = True) -> study_ladder.LadderState:
+        return study_ladder.LadderState(
+            tester_root(sessions_root, tester_id) / "ladder.json",
+            persist_initial=persist_initial,
+        )
 
     def gain_facts(params_for_arm: TesterParameters) -> dict:
         results = latest_gain_results(arm_directory(sessions_root, params_for_arm)) or []
@@ -2187,7 +2190,7 @@ def create_app(
         if not SAFE_SEGMENT.fullmatch(tester_id):
             return jsonify({"error": "unknown tester"}), 400
         runner = ladder_runners.get(tester_id)
-        state = runner.state if runner else ladder_state(tester_id)
+        state = runner.state if runner else ladder_state(tester_id, persist_initial=False)
         run = ladder_runs.get(tester_id)
         return jsonify(
             {

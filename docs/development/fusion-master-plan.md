@@ -2,7 +2,7 @@
 
 Updated: 2026-09-24. Owner: Harjot. Status: active; M0 complete, M1 in progress.
 
-## Current pre-Pi software checkpoint
+## Current Pi commissioning checkpoint
 
 - [x] Pre-Pi software closure is complete: replay, commissioning, held-out
       criteria/template checks, UUID guards, session-wide candidate bridge and
@@ -13,8 +13,12 @@ Updated: 2026-09-24. Owner: Harjot. Status: active; M0 complete, M1 in progress.
 - [x] Windows relevant suite: 1497 passed, 9 skipped (4 symlink and 5 missing
       fixture cases); browser: 42 passed; UI lint/build and scoped Ruff passed;
       current scoped Pylint minimum is 9.72.
+- [x] First Pi ladder run persisted nine Arm 5 captures with camera frames, IWR
+      dumps and a radar session log. This is acquisition evidence only; the
+      session has not been reviewed for timing or accuracy.
 - [ ] M1 physical gate remains open. M3 selection and M4 pose/strike/spin are
-      evidence-dependent. The Pi handoff uses revision 5 of the source package.
+      evidence-dependent. Preserve the first session and finish its failure and
+      discrepancy review before changing estimators.
 
 The older unresolved-failure notes below are historical and superseded where
 they describe the now-fixed simulator retry and Linux cancellation failures.
@@ -438,6 +442,7 @@ live/replay equivalence claim or independent calibration.
 | 2026-09-24 | OmniPreSense documents OPS243-A rolling-buffer speed triggering with `STnnn` and `SMnnn`, but firmware 1.3.1 has a vendor data-sequence bug; the user plans to remove the acoustic trigger while retaining older-radar support | Add canonical opt-in `--trigger hardware` only for OPS243-A firmware 1.3.2+ in the 1.3 release train while preserving the sound and host-mediated speed modes. Guard `GC`, restore all detector settings, record trigger provenance and reject IWR/camera combinations until a timely shared edge is qualified. Do not treat first UART byte as impact or assume the internal trigger drives an output pin |
 | 2026-09-24 | Source and firmware audit found that the default OPS `S#16` split delays its first dump byte until its 68.27 ms post-trigger span has elapsed, while the 72 ms IWR profiles retain only 27-28 ms before the host dump request | Reject OPS UART first-byte fanout as the production IWR trigger. Treat an OPS trigger-output GPIO as an option only after vendor confirmation and measured electrical/timing qualification. If no such output is available, use an independently qualified IWR firmware-local trigger and fan its GPIO edge to OPS `HOST_INT` and the Pi/camera. Preserve the sound trigger as a supported fallback until soundless hardware validation passes |
 | 2026-09-24 | The test bench is intended to accelerate community development and its collected evidence must be usable by contributors, not held by one maintainer | Define a consent-based contribution and dataset contract: immutable checksummed source packages remain private by default; contributors choose visibility for raw camera/radar evidence; published releases use stable IDs, protocol/config/source hashes, redacted operator metadata, licenses and reproducible manifests. Keep upload, publication and model-training eligibility as separate states |
+| 2026-09-24 | First Pi commissioning persisted nine Arm 5 camera/IWR captures and exposed that read-only ladder polling wrote `ladder.json` for every partial tester ID typed into the UI; the earlier system outage had no persistent journal | Preserve the captures as acquisition evidence without claiming accuracy, make unstarted ladder status reads non-persistent, and retain persistent system/application logs for subsequent failure diagnosis |
 
 ## Soundless trigger architecture
 

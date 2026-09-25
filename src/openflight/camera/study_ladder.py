@@ -165,7 +165,7 @@ def swing_verdict(  # pylint: disable=too-many-locals
 class LadderState:
     """The ladder's progress for one tester, kept in ``ladder.json`` so a reload resumes it."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, persist_initial: bool = True):
         self.path = path
         if path.is_file():
             self._data = json.loads(path.read_text(encoding="utf-8"))
@@ -194,7 +194,8 @@ class LadderState:
                 "pending_photo": None,
                 "ineligible_captures": [],
             }
-            self._save()
+            if persist_initial:
+                self._save()
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

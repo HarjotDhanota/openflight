@@ -1023,6 +1023,18 @@ class TestTheLadder:
         assert response.status_code == 200
         assert response.get_json()["ladder"]["current"] == "full-300"
 
+    def test_polling_an_unstarted_tester_does_not_create_a_session(self, tmp_path):
+        client = eligible_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
+
+        response = client.get(
+            "/api/tester/ladder",
+            query_string={**self.body, "tester_id": "partially-typed-name"},
+        )
+
+        assert response.status_code == 200
+        assert response.get_json()["ladder"]["current"] == "full-300"
+        assert not (tmp_path / "partially-typed-name").exists()
+
     def test_a_comparator_export_is_kept_in_the_package(self, tmp_path):
         import io as _io  # pylint: disable=import-outside-toplevel
 
