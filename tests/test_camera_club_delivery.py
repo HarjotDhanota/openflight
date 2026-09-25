@@ -155,6 +155,41 @@ def test_club_delivery_uses_established_anchor_when_detection_is_missing(monkeyp
     assert result.status != "rejected_no_ball"
 
 
+def test_shared_anchor_is_not_replaced_by_the_club_trackers_anchor(monkeypatch):
+    tracker = ReferenceBallTracker(min_fallback_samples=2)
+    tracker.resolve(ReferenceBall(40.0, 100.0, 14.0, 140))
+    tracker.resolve(ReferenceBall(41.0, 100.0, 14.0, 140))
+    shared = ReferenceBall(160.0, 120.0, 14.0, 140)
+    seen = {}
+
+    def impact(_frames, ball, **_kwargs):
+        seen["ball"] = ball
+        return None
+
+    monkeypatch.setattr(club_delivery_module, "_detect_impact_index", impact)
+    result = estimate_chained_delivery(
+        np.full((60, 200, 320), 200, dtype=np.uint8),
+        np.arange(60, dtype=np.int64) * 2_000_000,
+        trigger_index=40,
+        range_evidence=None,
+        geometry=CameraDeliveryGeometry(
+            camera_height_m=0.2032,
+            radar_height_m=0.1524,
+            tee_range_m=1.524,
+            ball_height_m=0.04,
+            image_width_px=320,
+            image_height_px=200,
+        ),
+        ops_club_speed_mph=80.0,
+        ball_tracker=tracker,
+        reference_ball=shared,
+        reference_ball_selected=True,
+    )
+
+    assert result.status == "rejected_no_impact"
+    assert seen["ball"] is shared
+
+
 def _project_impact_tracks(
     *,
     path_deg: float,
@@ -431,6 +466,7 @@ def _project_camera_ops_pair(
     speed_ms: float = 35.0,
     camera_lateral_offset_m: float = -0.060325,
     camera_yaw_deg: float = 3.0,
+    camera_forward_offset_m: float = 0.0,
 ):
     """Project impact-adjacent club features without supplying radar range."""
     camera_height_m = 0.2032
@@ -443,6 +479,7 @@ def _project_camera_ops_pair(
         tee_range_m=math.hypot(ball_forward_m, ball_height_m - radar_height_m),
         ball_height_m=ball_height_m,
         camera_lateral_offset_m=camera_lateral_offset_m,
+        camera_forward_offset_m=camera_forward_offset_m,
         image_width_px=640,
         image_height_px=400,
     )
@@ -461,7 +498,9 @@ def _project_camera_ops_pair(
     times = np.array([-0.002, 0.0])
 
     def project(world_xyz):
-        delta = world_xyz - np.array([camera_lateral_offset_m, 0.0, camera_height_m])
+        delta = world_xyz - np.array(
+            [camera_lateral_offset_m, camera_forward_offset_m, camera_height_m]
+        )
         # Inverse of camera-heading rotation: world -> camera coordinates.
         camera_x = math.cos(yaw) * delta[0] - math.sin(yaw) * delta[1]
         camera_y = math.sin(yaw) * delta[0] + math.cos(yaw) * delta[1]
@@ -475,7 +514,9 @@ def _project_camera_ops_pair(
 
     contact = np.array([0.0, ball_forward_m, ball_height_m])
     ball_px = project(contact)
-    camera_ball_range = np.linalg.norm(contact - geometry.camera_origin)
+    camera_ball_range = np.linalg.norm(
+        contact - np.array([camera_lateral_offset_m, camera_forward_offset_m, camera_height_m])
+    )
     ball = ReferenceBall(
         x=float(ball_px[0]),
         y=float(ball_px[1]),
@@ -490,10 +531,12 @@ def _project_camera_ops_pair(
 
 
 class TestCameraOpsFallback:
-    def test_recovers_known_delivery_without_iwr_range(self):
+    @pytest.mark.parametrize("forward_offset", [0.0, 0.03, -0.03])
+    def test_recovers_known_delivery_without_iwr_range(self, forward_offset):
         tracks, times, ball, geometry = _project_camera_ops_pair(
             path_deg=3.0,
             aoa_deg=-5.0,
+            camera_forward_offset_m=forward_offset,
         )
 
         result = camera_ops_delivery_from_feature_pair(

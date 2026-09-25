@@ -355,6 +355,7 @@ class ProcessedCapture:
     spin: Optional[SpinResult] = None
     capture: Optional[IQCapture] = None
     impact: Optional[ImpactEstimate] = None
+    processor_config: Optional[dict] = None
 
     @property
     def impact_timestamp_ms(self) -> Optional[float]:

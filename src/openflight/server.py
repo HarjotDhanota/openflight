@@ -4,6 +4,8 @@ WebSocket server for OpenFlight UI.
 Provides real-time shot data to the web frontend via Flask-SocketIO.
 """
 
+import base64
+import hashlib
 import json
 import logging
 import math
@@ -15,16 +17,19 @@ import sys
 import threading
 import time
 from collections import deque
+from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
+import numpy as np
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
 from .ballistics import resolve_launch, simulate
+from .camera.fusion_diagnostics import build_snapshot as build_fusion_diagnostic
 from .clubs import ClubType
 from .clubs.physics import (
     SHOT_SIMULATION_DEFAULTS,
@@ -54,7 +59,7 @@ from .sim import (
     load_sim_config,
     resolve_shot,
 )
-from .speed_correction import correct_ball_speed
+from .speed_correction import evaluate_experimental_total_speed
 from .spin_estimate import calculated_spin_rpm
 from .startup_status import StartupStatusReporter, configured_startup_components
 from .swing_speed import SwingSpeedEvent
@@ -134,10 +139,14 @@ camera_capture_runtime = None
 # The tester study page may set exposure and gain and read raw frames only when
 # the kiosk is started with --study-mode; production never exposes either.
 study_mode_enabled = False
+tester_setup_required = False
+tester_config_hash: str | None = None
 camera_capture_config: dict = {"enabled": False}
 camera_replay_manager = None
 camera_reference_ball_tracker = None
 camera_ball_flight_reference_tracker = None
+camera_optical_calibration: dict | None = None
+camera_placement: dict | None = None
 
 # Optional LIS3DH enclosure orientation used to compensate TI mount tilt.
 inclinometer_service = None
@@ -157,7 +166,7 @@ sim_connectors: List = []
 # Seed the shot counter from the clock so ShotNumber strictly increases across
 # server restarts. Some sims (e.g. OpenGolfSim's Developer API) reject any
 # ShotNumber <= the highest they've seen, and that counter persists across
-# reconnects — a per-run reset to 1 would get every shot dropped. Uses epoch
+# reconnects â€” a per-run reset to 1 would get every shot dropped. Uses epoch
 # *seconds* (see initial_shot_counter): epoch millis overflow GSPro's 32-bit
 # ShotNumber field and every shot comes back 501 "Bad format".
 sim_player_state = SimPlayerState(shot_counter=initial_shot_counter())
@@ -196,6 +205,8 @@ class _ShotEnrichmentResult:
     iwr6843_ms: float | None = None
     kld7_ms: float | None = None
     camera_capture_ms: float | None = None
+    diagnostic_outcome: str = "complete"
+    diagnostic_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -206,6 +217,8 @@ class _PendingShotFinalization:
     emit_event: str
     initial_ui_ms: float | None
     enrichment: _ShotEnrichmentResult
+    diagnostic_logger: Any | None = None
+    diagnostic_session_uuid: str | None = None
 
 
 @dataclass(frozen=True)
@@ -216,6 +229,34 @@ class _RegisteredShotFinalization:
     emit_event: str
     initial_ui_ms: float | None
     deadline_monotonic: float | None
+    diagnostic_logger: Any | None
+    diagnostic_session_uuid: str | None
+
+
+def _log_fusion_diagnostic(
+    diagnostic_logger,
+    session_uuid: str | None,
+    shot: Shot,
+    *,
+    revision: int,
+    phase: str,
+    outcome: str,
+    reason: str | None = None,
+) -> None:
+    if diagnostic_logger is None or session_uuid is None:
+        return
+    try:
+        snapshot = build_fusion_diagnostic(
+            shot,
+            session_uuid=session_uuid,
+            revision=revision,
+            phase=phase,
+            outcome=outcome,
+            reason=reason,
+        )
+        diagnostic_logger.log_fusion_diagnostic(session_uuid, snapshot)
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] Fusion diagnostic logging failed: %s", error, exc_info=True)
 
 
 def _assign_shot_number(shot: Shot) -> None:
@@ -255,6 +296,18 @@ def _register_shot_for_finalization(
     """Record callback order and the bounded OPS-only fallback for a shot."""
     if shot.shot_number is None:
         raise ValueError("shot must have a stable number before registration")
+    diagnostic_logger = get_session_logger()
+    try:
+        diagnostic_session_uuid = (
+            getattr(diagnostic_logger, "active_session_uuid", None)
+            if diagnostic_logger is not None
+            else None
+        )
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] Fusion diagnostic session binding unavailable: %s", error)
+        diagnostic_logger = None
+        diagnostic_session_uuid = None
+    shot.camera_fusion_session_uuid = diagnostic_session_uuid
     with _shot_finalization_condition:
         if shot.shot_number in _shot_finalization_registered:
             raise ValueError(f"shot #{shot.shot_number} is already registered")
@@ -266,7 +319,18 @@ def _register_shot_for_finalization(
             deadline_monotonic=(
                 time.monotonic() + _SHOT_ENRICHMENT_DEADLINE_S if needs_watchdog else None
             ),
+            diagnostic_logger=diagnostic_logger,
+            diagnostic_session_uuid=diagnostic_session_uuid,
         )
+        if needs_watchdog:
+            _log_fusion_diagnostic(
+                diagnostic_logger,
+                diagnostic_session_uuid,
+                shot,
+                revision=1,
+                phase="pending",
+                outcome="processing",
+            )
         _ensure_shot_finalization_worker_locked()
         _shot_finalization_condition.notify_all()
 
@@ -338,7 +402,14 @@ def _shot_finalization_worker_loop() -> None:
                     shot=registered.shot,
                     emit_event=registered.emit_event,
                     initial_ui_ms=registered.initial_ui_ms,
-                    enrichment=_ShotEnrichmentResult(),
+                    enrichment=_ShotEnrichmentResult(
+                        diagnostic_outcome="partial",
+                        diagnostic_reason=(
+                            "enrichment_deadline" if deadline_expired else "coordinator_capacity"
+                        ),
+                    ),
+                    diagnostic_logger=registered.diagnostic_logger,
+                    diagnostic_session_uuid=registered.diagnostic_session_uuid,
                 )
             elif pending.shot is not registered.shot:
                 for shot_field in fields(Shot):
@@ -355,6 +426,8 @@ def _shot_finalization_worker_loop() -> None:
                     emit_event=pending.emit_event,
                     initial_ui_ms=pending.initial_ui_ms,
                     enrichment=pending.enrichment,
+                    diagnostic_logger=pending.diagnostic_logger,
+                    diagnostic_session_uuid=pending.diagnostic_session_uuid,
                 )
             except Exception as error:  # pylint: disable=broad-exception-caught
                 logger.error(
@@ -371,6 +444,15 @@ def _shot_finalization_worker_loop() -> None:
                         "ball_speed_mph": pending.shot.ball_speed_mph,
                     },
                     exc=error,
+                )
+                _log_fusion_diagnostic(
+                    pending.diagnostic_logger,
+                    pending.diagnostic_session_uuid,
+                    pending.shot,
+                    revision=2,
+                    phase="terminal",
+                    outcome="rejected",
+                    reason="finalization_error",
                 )
             finally:
                 with _shot_finalization_condition:
@@ -493,7 +575,7 @@ def estimate_launch_angle(
     """
     physics = get_club_physics(club)
 
-    # Slower than average → higher launch, faster → lower launch
+    # Slower than average â†’ higher launch, faster â†’ lower launch
     speed_delta = ball_speed_mph - physics.average_ball_speed_mph
     adjustment = -speed_delta * physics.launch_deg_per_mph
 
@@ -775,7 +857,7 @@ def _ensure_user_facing_launch_angles(shot: Shot) -> None:
         shot.launch_angle_vertical_source = "estimated"
         shot.angle_source = "estimated"
         logger.info(
-            "[SERVER] Angle source: estimated (%.1f°, conf=%.0f%%)",
+            "[SERVER] Angle source: estimated (%.1fÂ°, conf=%.0f%%)",
             estimated[0],
             estimated[1] * 100,
         )
@@ -800,7 +882,7 @@ def _ensure_user_facing_launch_angles(shot: Shot) -> None:
         shot.launch_angle_horizontal_source = "estimated"
         if shot.angle_source is None:
             shot.angle_source = "estimated"
-        logger.info("[SERVER] Horizontal angle source: neutral estimate (0.0°)")
+        logger.info("[SERVER] Horizontal angle source: neutral estimate (0.0Â°)")
 
 
 # K-LD7 produces ~34 RADC frames/sec at 3 Mbaud. With buffer_seconds=6
@@ -864,7 +946,7 @@ def _warn_if_kld7_buffer_underfilled(orientation: str, frame_count: int) -> None
         return
     if frame_count < expected * _KLD7_BUFFER_UNDERFILL_FRAC:
         logger.warning(
-            "[SERVER] K-LD7 %s buffer underfilled: %d/%d frames (%.0f%%) — "
+            "[SERVER] K-LD7 %s buffer underfilled: %d/%d frames (%.0f%%) â€” "
             "stream rate dropped, check USB cabling and contention.",
             orientation,
             frame_count,
@@ -915,6 +997,7 @@ def init_rig_geometry(path) -> None:
         "enabled": True,
         "path": str(Path(path).expanduser()),
         "derived": setup.as_dict(),
+        "snapshot": rig_geometry.snapshot(),
     }
     logger.info("[SERVER] Rig geometry loaded from %s: %s", path, setup.as_dict())
     if setup.missing:
@@ -959,7 +1042,33 @@ def _session_start_config() -> dict:
     config["iwr6843"] = dict(iwr6843_runtime_config)
     config["camera_capture"] = dict(camera_capture_config)
     config["inclinometer"] = dict(inclinometer_runtime_config)
-    config["rig_geometry"] = dict(rig_geometry_config)
+    config["rig_geometry"] = deepcopy(rig_geometry_config)
+    from .camera.geometry_contract import EffectiveCameraGeometryInputs, unavailable_snapshot
+
+    if not camera_capture_config.get("enabled"):
+        effective_geometry = unavailable_snapshot("camera capture is disabled")
+    elif iwr6843_runtime is None:
+        effective_geometry = unavailable_snapshot("IWR6843 runtime is unavailable")
+    else:
+        try:
+            effective_geometry = EffectiveCameraGeometryInputs.from_live(
+                camera_capture_config, iwr6843_runtime.calibration
+            ).snapshot()
+        except (AttributeError, TypeError, ValueError) as error:
+            effective_geometry = unavailable_snapshot(str(error))
+    config["effective_camera_geometry"] = effective_geometry
+    if camera_optical_calibration is not None and camera_placement is not None:
+        from .rig_geometry import geometry_fingerprint
+
+        config["camera_calibrated_fusion"] = {
+            "enabled": True,
+            "validation": "unvalidated",
+            "optical_calibration_sha256": geometry_fingerprint(camera_optical_calibration),
+            "placement_sha256": geometry_fingerprint(camera_placement),
+            "rig_geometry_sha256": camera_placement.get("rig_geometry_sha256"),
+        }
+    else:
+        config["camera_calibrated_fusion"] = {"enabled": False}
     config["power"] = {
         "enabled": battery_provider is not None,
         "provider": battery_provider,
@@ -1051,6 +1160,7 @@ def init_camera_capture(
     horizontal_offset_deg: float,
     use_gpio_trigger: bool,
     auto_exposure: bool = True,
+    forward_offset_m: float = 0.0,
 ) -> bool:
     """Initialize passive high-speed camera capture for offline alignment."""
     global camera_capture_runtime, camera_capture_config  # pylint: disable=global-statement
@@ -1083,6 +1193,13 @@ def init_camera_capture(
             output_dir=output_dir,
             settings=settings,
             use_gpio_trigger=use_gpio_trigger,
+            trigger_evidence_provider=(
+                lambda timestamp: _tester_setup_readiness(
+                    require_camera_armed=False, checked_at=timestamp
+                )
+            )
+            if tester_setup_required
+            else None,
         )
         camera_capture_runtime.start()
         settings = camera_capture_runtime.settings
@@ -1117,6 +1234,7 @@ def init_camera_capture(
             "scaler_crop": settings.scaler_crop,
             "mount_height_m": mount_height_m,
             "lateral_offset_m": lateral_offset_m,
+            "forward_offset_m": forward_offset_m,
             "horizontal_offset_deg": horizontal_offset_deg,
             "alignment_x_pct": 50.0,
             "alignment_y_pct": 50.0,
@@ -1137,6 +1255,56 @@ def init_camera_capture(
         camera_ball_flight_reference_tracker = None
         camera_capture_config = {"enabled": False, "error": str(error)}
         return False
+
+
+def init_camera_calibrated_fusion(calibration_path: str | None, placement_path: str | None) -> None:
+    """Load the opt-in optical candidate and explicit target-frame placement."""
+    global camera_optical_calibration, camera_placement  # pylint: disable=global-statement
+    if calibration_path is None and placement_path is None:
+        camera_optical_calibration = None
+        camera_placement = None
+        return
+    if not calibration_path or not placement_path:
+        raise ValueError("calibrated camera fusion requires both calibration and placement")
+    calibration = json.loads(Path(calibration_path).read_text(encoding="utf-8"))
+    placement = json.loads(Path(placement_path).read_text(encoding="utf-8"))
+    if not isinstance(calibration, dict) or not isinstance(placement, dict):
+        raise ValueError("camera calibration and placement files must contain JSON objects")
+    loaded_rig_hash = (rig_geometry_config.get("snapshot") or {}).get("sha256")
+    if not loaded_rig_hash or placement.get("rig_geometry_sha256") != loaded_rig_hash:
+        raise ValueError("camera placement rig_geometry_sha256 does not match the loaded rig")
+    if rig_geometry is None or rig_geometry.iwr_offset_mm is None:
+        raise ValueError("loaded rig lacks the measured IWR-to-camera offset")
+    mount = np.asarray(placement.get("optical_to_enclosure_lfu"), dtype=float)
+    alignment = np.asarray(placement.get("enclosure_to_target_lfu"), dtype=float)
+    expected_offset = (
+        alignment @ mount @ (np.asarray(rig_geometry.iwr_offset_mm, dtype=float) / 1000.0)
+    )
+    declared_offset = np.asarray(placement.get("radar_origin_lfu"), dtype=float) - np.asarray(
+        placement.get("camera_origin_lfu"), dtype=float
+    )
+    tolerance = float(placement.get("rig_offset_consistency_tolerance_m", -1))
+    if (
+        expected_offset.shape != (3,)
+        or declared_offset.shape != (3,)
+        or tolerance < 0
+        or not np.all(np.isfinite(expected_offset))
+        or not np.all(np.isfinite(declared_offset))
+        or not math.isfinite(tolerance)
+        or np.linalg.norm(expected_offset - declared_offset) > tolerance
+    ):
+        raise ValueError("camera placement origins contradict the loaded rig offset")
+    from .camera.calibrated_projection import build_calibrated_camera_model
+
+    reference = placement.get("reference_pose_deg") or {}
+    build_calibrated_camera_model(
+        calibration,
+        placement,
+        observed_pitch_deg=reference.get("pitch"),
+        observed_roll_deg=reference.get("roll"),
+    )
+    camera_optical_calibration = calibration
+    camera_placement = placement
 
 
 def init_iwr6843(
@@ -1163,6 +1331,22 @@ def init_iwr6843(
         from .iwr6843 import Calibration
         from .iwr6843.monitor import IWR6843CaptureMonitor, tx_order_from_config
         from .iwr6843.runtime import IWR6843Runtime
+
+        config_source = Path(config_path).expanduser()
+        calibration_source = Path(calibration_path).expanduser()
+        config_bytes = config_source.read_bytes()
+        calibration_bytes = calibration_source.read_bytes()
+        calibration_payload = json.loads(calibration_bytes)
+        if not isinstance(calibration_payload, dict):
+            raise ValueError("IWR6843 calibration must be a JSON object")
+        # Reject non-finite JSON extensions before preserving the exact startup payload.
+        json.dumps(calibration_payload, allow_nan=False)
+        try:
+            radar_config_payload = {"source_text": config_bytes.decode("utf-8")}
+        except UnicodeDecodeError:
+            radar_config_payload = {
+                "source_bytes_base64": base64.b64encode(config_bytes).decode("ascii")
+            }
 
         configured_order = tx_order_from_config(config_path)
         resolved_order = configured_order if tx_order == "auto" else tx_order
@@ -1207,6 +1391,25 @@ def init_iwr6843(
             # registration. Auto sign selection can choose the mirror solution
             # in multipath and collapse the eight-element vertical channel.
             tdm_sign_policy="positive",
+            calibration_provenance={
+                "schema_version": 1,
+                "source_path": str(calibration_source),
+                "source_sha256": hashlib.sha256(calibration_bytes).hexdigest(),
+                "source_payload": deepcopy(calibration_payload),
+                "effective": {
+                    "tilt_deg": math.degrees(calibration.tilt_rad),
+                    "range_bias_m": calibration.range_bias_m,
+                    "tee_slant_range_m": calibration.tee_range_m,
+                    "radar_height_m": calibration.radar_height_m,
+                    "ball_height_m": calibration.tee_ball_height_m,
+                },
+            },
+            radar_config_provenance={
+                "schema_version": 1,
+                "source_path": str(config_source),
+                "source_sha256": hashlib.sha256(config_bytes).hexdigest(),
+                **radar_config_payload,
+            },
         )
         iwr6843_runtime_config = {
             "enabled": True,
@@ -1366,7 +1569,7 @@ def init_kld7(
         if tracker.connect():
             tracker.start()
             logger.info(
-                "[SERVER] K-LD7 %s initialized (port=%s, offset=%.1f°, RBFR=%d)",
+                "[SERVER] K-LD7 %s initialized (port=%s, offset=%.1fÂ°, RBFR=%d)",
                 orientation,
                 port or "auto",
                 angle_offset_deg,
@@ -1436,6 +1639,218 @@ def _study_runtime():
             409,
         )
     return camera_capture_runtime, None
+
+
+def _tester_setup_readiness(
+    *, require_camera_armed: bool = True, checked_at: float | None = None
+) -> dict:
+    """Report current health of the hardware required by the tester kiosk."""
+    checks = []
+    observations: dict = {}
+
+    def add(
+        check_id: str, passed: bool, reason: str | None = None, *, warned: bool = False
+    ) -> None:
+        checks.append(
+            {
+                "id": check_id,
+                "status": "warn" if warned else ("pass" if passed else "block"),
+                "reason": reason if warned or not passed else None,
+            }
+        )
+
+    from .camera.setup_eligibility import setup_config_hash
+
+    address = inclinometer_runtime_config.get("i2c_address")
+    parsed_address = int(address, 0) if isinstance(address, str) else address
+    actual_hash = setup_config_hash(
+        (rig_geometry_config.get("snapshot") or {}).get("sha256") or "",
+        inclinometer_runtime_config.get("i2c_bus") or 0,
+        parsed_address or 0,
+        inclinometer_runtime_config.get("zero_offset_deg") or 0.0,
+    )
+    add(
+        "geometry",
+        bool(tester_config_hash and actual_hash == tester_config_hash),
+        "loaded rig geometry and LIS3DH settings do not match the required setup fingerprint",
+    )
+    observations["geometry"] = {"actual_config_hash": actual_hash}
+    ops_thread = getattr(monitor, "_capture_thread", None)
+    ops_serial = getattr(getattr(monitor, "radar", None), "serial", None)
+    ops_ok = bool(
+        monitor is not None
+        and not mock_mode
+        and getattr(monitor, "_running", False)
+        and ops_thread is not None
+        and ops_thread.is_alive()
+        and ops_serial is not None
+        and getattr(ops_serial, "is_open", False)
+    )
+    add("ops", ops_ok, "OPS capture transport is not running with an open serial link")
+    observations["ops"] = {
+        "running": bool(getattr(monitor, "_running", False)),
+        "worker_alive": bool(ops_thread is not None and ops_thread.is_alive()),
+        "serial_open": bool(ops_serial is not None and getattr(ops_serial, "is_open", False)),
+    }
+
+    camera_status = camera_capture_runtime.status() if camera_capture_runtime is not None else {}
+    camera_age = camera_status.get("latest_frame_age_s")
+    capture_mode = (
+        getattr(camera_capture_runtime, "_startup_capture_mode", None)
+        if camera_capture_runtime is not None
+        else None
+    ) or {}
+    camera_model = ((capture_mode.get("camera_properties") or {}).get("Model") or "").casefold()
+    resolved_raw_size = ((capture_mode.get("resolved_config") or {}).get("raw") or {}).get("size")
+    requested_size = (
+        [camera_capture_runtime.settings.width, camera_capture_runtime.settings.height]
+        if camera_capture_runtime is not None
+        else None
+    )
+    camera_ok = bool(
+        camera_capture_runtime is not None
+        and not camera_capture_runtime.settings.auto_exposure
+        and camera_status.get("running")
+        and (camera_status.get("armed") or not require_camera_armed)
+        and camera_age is not None
+        and camera_age <= 2.0
+        and ("ov9281" in camera_model or "ov9282" in camera_model)
+        and resolved_raw_size == requested_size
+    )
+    add(
+        "camera",
+        camera_ok,
+        "OV9281/OV9282 camera mode is not identified, dimension-matched, manual, armed, and fresh",
+    )
+    observations["camera"] = {
+        "running": bool(camera_status.get("running")),
+        "armed": bool(camera_status.get("armed")),
+        "latest_frame_age_s": camera_age,
+        "model": camera_model or None,
+        "resolved_raw_size": resolved_raw_size,
+        "requested_size": requested_size,
+    }
+
+    iwr_monitor = getattr(iwr6843_runtime, "capture_monitor", None)
+    iwr_worker = getattr(iwr_monitor, "_worker", None)
+    iwr_serial = getattr(getattr(iwr_monitor, "radar", None), "ser", None)
+    iwr_ok = bool(
+        iwr6843_runtime_config.get("enabled")
+        and iwr_monitor is not None
+        and getattr(iwr_monitor, "_running", False)
+        and getattr(iwr_monitor, "_armed", False)
+        and iwr_worker is not None
+        and iwr_worker.is_alive()
+        and iwr_serial is not None
+        and getattr(iwr_serial, "is_open", False)
+    )
+    add("iwr6843", iwr_ok, "IWR6843 capture transport, serial link, or GPIO arm is unavailable")
+    observations["iwr6843"] = {
+        "running": bool(getattr(iwr_monitor, "_running", False)),
+        "armed": bool(getattr(iwr_monitor, "_armed", False)),
+        "worker_alive": bool(iwr_worker is not None and iwr_worker.is_alive()),
+        "serial_open": bool(iwr_serial is not None and getattr(iwr_serial, "is_open", False)),
+    }
+    checked_at = time.time() if checked_at is None else checked_at
+    selection = (
+        inclinometer_service.snapshot_for_impact(checked_at)
+        if inclinometer_service is not None
+        else None
+    )
+    from .camera.setup_eligibility import placement_guard
+
+    expected_orientation = _expected_inclinometer_orientation()
+    placement = (
+        placement_guard(
+            selection.snapshot,
+            expected_pitch_deg=expected_orientation.get("pitch_deg") or 0.0,
+            expected_roll_deg=expected_orientation.get("roll_deg") or 0.0,
+        )
+        if selection is not None and selection.snapshot is not None
+        else {"ready": False, "reason": "no stable LIS3DH placement snapshot"}
+    )
+    lis_ok = bool(
+        inclinometer_runtime_config.get("enabled")
+        and selection is not None
+        and selection.status == "stable"
+        and selection.snapshot is not None
+        and placement["ready"]
+    )
+    lis_reason = placement.get("reason") or (
+        f"LIS3DH reading is {selection.status}"
+        if selection is not None
+        else "LIS3DH is not enabled"
+    )
+    add(
+        "lis3dh",
+        lis_ok,
+        placement.get("warning") or lis_reason,
+        warned=bool(lis_ok and placement.get("warned")),
+    )
+    observations["lis3dh"] = (
+        selection.to_dict()
+        if selection is not None and hasattr(selection, "to_dict")
+        else {
+            "status": selection.status if selection is not None else "unavailable",
+            "age_s": getattr(selection, "age_s", None),
+        }
+    )
+    observations["lis3dh"]["placement_guard"] = placement
+    active_logger = get_session_logger()
+    session_uuid = active_logger.active_session_uuid if active_logger is not None else None
+    run_dir = (
+        str(active_logger.log_dir.expanduser().resolve()) if active_logger is not None else None
+    )
+    logging_ok = bool(active_logger is not None and session_uuid and run_dir)
+    add("logging", logging_ok, "required session logger is not active")
+    observations["runtime"] = {"run_dir": run_dir, "session_uuid": session_uuid}
+    blockers = [dict(check) for check in checks if check["status"] == "block"]
+    warnings = [dict(check) for check in checks if check["status"] == "warn"]
+    return {
+        "schema_version": 1,
+        "required": tester_setup_required,
+        "checked_at": checked_at,
+        "trigger_checked_at": checked_at,
+        "ready": not blockers,
+        "config_hash": tester_config_hash,
+        "checks": checks,
+        "blockers": [{"id": item["id"], "reason": item["reason"]} for item in blockers],
+        "warnings": [{"id": item["id"], "reason": item["reason"]} for item in warnings],
+        "observations": observations,
+    }
+
+
+@app.get("/api/camera/study/readiness")
+def study_setup_readiness():
+    """Expose the mandatory tester hardware gate without taking sensor ownership."""
+    if not study_mode_enabled:
+        return jsonify({"error": "study mode is off"}), 404
+    return jsonify(_tester_setup_readiness())
+
+
+def _tester_trigger_evidence_problem(evidence: object) -> str | None:
+    """Reject trigger evidence that is incomplete or belongs to another run."""
+    if not isinstance(evidence, dict):
+        return "no matching trigger readiness evidence"
+    if evidence.get("schema_version") != 1:
+        return "trigger readiness schema is not version 1"
+    if evidence.get("required") is not True:
+        return "trigger readiness does not mark the setup gate required"
+    if evidence.get("ready") is not True:
+        return "trigger readiness was blocked"
+    if evidence.get("config_hash") != tester_config_hash:
+        return "trigger readiness setup hash does not match the active requirement"
+    runtime = (evidence.get("observations") or {}).get("runtime") or {}
+    active_logger = get_session_logger()
+    active_uuid = active_logger.active_session_uuid if active_logger is not None else None
+    active_run_dir = (
+        str(active_logger.log_dir.expanduser().resolve()) if active_logger is not None else None
+    )
+    if not active_uuid or runtime.get("session_uuid") != active_uuid:
+        return "trigger readiness belongs to a different or inactive logging session"
+    if not active_run_dir or runtime.get("run_dir") != active_run_dir:
+        return "trigger readiness belongs to a different runtime log directory"
+    return None
 
 
 @app.route("/api/camera/study/controls", methods=["POST"])
@@ -1864,7 +2279,7 @@ def _emit_sim_snapshot() -> None:
     The UI builds its connector buttons from ``sim_status`` events, which
     otherwise only fire on connection-state *changes* (see _sim_on_status). A
     client that connects or refreshes after a connector already reached its
-    state would miss those events and show no button — the intermittent
+    state would miss those events and show no button â€” the intermittent
     "sometimes the sim status shows, sometimes it doesn't". Replaying a snapshot
     on connect guarantees a button for every enabled connector (sim_connectors
     holds only the enabled ones) carrying its live state.
@@ -2296,7 +2711,7 @@ def _forward_shot_to_simulators(shot: Shot) -> None:
             measured = sum(1 for p in resolved.provenance.values() if p == "measured")
             estimated = len(resolved.provenance) - measured
             logger.info(
-                "[sim] → %s shot #%d: ball=%.1f vla=%.1f hla=%.1f spin=%.0f axis=%.1f "
+                "[sim] â†’ %s shot #%d: ball=%.1f vla=%.1f hla=%.1f spin=%.0f axis=%.1f "
                 "carry=%.1f (%dM/%dE)",
                 connector.name,
                 resolved.shot_number,
@@ -2318,7 +2733,7 @@ def _sim_on_status(target: str, event) -> None:
         logger.info("[sim] %s connected (%s:%s)", target, event.host, event.port)
     elif state == "reconnecting":
         logger.info(
-            "[sim] %s reconnecting — attempt %s, retry in %.0fs",
+            "[sim] %s reconnecting â€” attempt %s, retry in %.0fs",
             target,
             event.attempt,
             event.next_retry_in_s,
@@ -2357,7 +2772,7 @@ def _sim_on_inbound(target: str, event) -> None:
     if isinstance(event, PlayerUpdate):
         sim_player_state.apply(event)
         club_value = sim_player_state.club.value
-        logger.info("[sim] ← %s player update: club=%s", target, club_value)
+        logger.info("[sim] â† %s player update: club=%s", target, club_value)
         socketio.emit(
             "sim_player",
             {"target": target, "handed": sim_player_state.handed, "club": club_value},
@@ -2374,13 +2789,15 @@ def _sim_on_inbound(target: str, event) -> None:
                 logger.exception("[sim] monitor.set_club failed")
         socketio.emit("club_changed", {"club": club_value})
     elif isinstance(event, SimError):
-        logger.warning("[sim] ← %s error: %s", target, event.message)
+        logger.warning("[sim] â† %s error: %s", target, event.message)
         socketio.emit("sim_status", {"target": target, "state": "error", "message": event.message})
     elif isinstance(event, ShotAck):
         if not event.ok:
-            logger.info("[sim] ← %s rejected shot %s: %s", target, event.shot_number, event.message)
+            logger.info(
+                "[sim] â† %s rejected shot %s: %s", target, event.shot_number, event.message
+            )
         elif debug_mode:
-            logger.info("[sim] ← %s ack: shot %s ok", target, event.shot_number)
+            logger.info("[sim] â† %s ack: shot %s ok", target, event.shot_number)
 
 
 def _apply_calculated_spin(shot: Shot) -> bool:
@@ -2470,10 +2887,12 @@ def vertical_confidence(measurement) -> float:
 
 
 def horizontal_confidence_from(coherence: float | None) -> float:
-    """Horizontal launch confidence from HLCMF-v0 coherence."""
-    if coherence is None:
-        return 0.0
-    return round(min(ANGLE_CONFIDENCE_CEILING, max(0.0, float(coherence))), 3)
+    """Keep the historical server entry point backed by the shared helper."""
+    from .iwr6843.runtime import (  # pylint: disable=import-outside-toplevel
+        horizontal_confidence_from as shared_horizontal_confidence,
+    )
+
+    return shared_horizontal_confidence(coherence)
 
 
 def _snapshot_inclinometer_for_shot(shot: Shot) -> None:
@@ -2513,6 +2932,25 @@ def _snapshot_inclinometer_for_shot(shot: Shot) -> None:
     shot.inclinometer = data
 
 
+def _calibrated_pose_evidence(pose: dict, placement: dict) -> dict:
+    """Validate the stable, upright LIS3DH pose used by calibrated projection."""
+    if pose.get("status") != "stable" or pose.get("stable") is not True:
+        raise ValueError("calibrated camera fusion requires a stable LIS3DH reading")
+    from .camera.setup_eligibility import (  # pylint: disable=import-outside-toplevel
+        placement_guard,
+    )
+
+    reference = placement.get("reference_pose_deg") or {}
+    evidence = placement_guard(
+        pose,
+        expected_pitch_deg=reference.get("pitch", 0.0),
+        expected_roll_deg=reference.get("roll", 0.0),
+    )
+    if not evidence["ready"]:
+        raise ValueError(f"calibrated camera fusion pose rejected: {evidence['reason']}")
+    return evidence
+
+
 def _process_iwr6843_angle(shot: Shot) -> float | None:
     """Apply a correlated LCMF-v1 result without risking the OPS shot."""
     if iwr6843_runtime is None or shot.mode == "mock":
@@ -2520,16 +2958,29 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
 
     started = time.time()
     try:
+        effective_tilt_deg = (
+            shot.inclinometer.get("effective_iwr_tilt_deg")
+            if shot.inclinometer and shot.inclinometer.get("applied")
+            else None
+        )
+        club = shot.club.value
+        snapshotter = getattr(iwr6843_runtime, "replay_config_snapshot", None)
+        iwr_runtime_config_snapshot = (
+            snapshotter(  # pylint: disable=not-callable
+                ball_speed_mph=shot.ball_speed_mph,
+                club=club,
+                club_speed_mph=shot.club_speed_mph,
+                effective_tilt_deg=effective_tilt_deg,
+            )
+            if callable(snapshotter)
+            else None
+        )
         shot_result = iwr6843_runtime.process_shot(
             impact_timestamp=shot.impact_timestamp,
             ball_speed_mph=shot.ball_speed_mph,
-            club=shot.club.value,
+            club=club,
             club_speed_mph=shot.club_speed_mph,
-            tilt_deg=(
-                shot.inclinometer.get("effective_iwr_tilt_deg")
-                if shot.inclinometer and shot.inclinometer.get("applied")
-                else None
-            ),
+            tilt_deg=effective_tilt_deg,
         )
         capture = shot_result.capture
         measurement = shot_result.measurement
@@ -2555,6 +3006,12 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 club_path=(club_path.to_dict() if club_path is not None else None),
                 temperature_report=(
                     getattr(capture, "temperature_report", None) if capture is not None else None
+                ),
+                runtime_config=iwr_runtime_config_snapshot,
+                runtime_config_sha256=(
+                    iwr_runtime_config_snapshot["sha256"]
+                    if iwr_runtime_config_snapshot is not None
+                    else None
                 ),
             )
 
@@ -2603,14 +3060,14 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 shot.launch_angle_horizontal_confidence = shot.iwr6843_horizontal_confidence
                 shot.launch_angle_horizontal_source = "radar"
                 logger.info(
-                    "[SERVER] IWR6843 TX2 horizontal proxy: %.2f° (coherence %.0f%%, status=%s)",
+                    "[SERVER] IWR6843 TX2 horizontal proxy: %.2fÂ° (coherence %.0f%%, status=%s)",
                     horizontal_deg,
                     (horizontal_confidence or 0.0) * 100,
                     horizontal_status,
                 )
             logger.info(
-                "[SERVER] IWR6843 LCMF-v1 launch: %.2f° "
-                "(%d snapshots/%d frames, component std %.2f°)",
+                "[SERVER] IWR6843 LCMF-v1 launch: %.2fÂ° "
+                "(%d snapshots/%d frames, component std %.2fÂ°)",
                 measurement.angle_deg,
                 measurement.n_snapshots,
                 measurement.n_frames,
@@ -2665,7 +3122,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 shot.experimental_attack_angle_deg = round(candidate_attack, 1)
             if accepted_path is not None:
                 logger.info(
-                    "[SERVER] Experimental IWR6843 club path: %.2f° (confidence %.2f, %d frames)",
+                    "[SERVER] Experimental IWR6843 club path: %.2fÂ° (confidence %.2f, %d frames)",
                     accepted_path,
                     club_path.confidence or 0.0,
                     club_path.n_frames,
@@ -2717,11 +3174,15 @@ def _load_camera_capture_archive(camera_capture) -> dict[str, object] | None:
     if not frames_path.exists():
         return None
 
-    import numpy as np  # noqa: PLC0415  pylint: disable=import-outside-toplevel
+    import io  # noqa: PLC0415  pylint: disable=import-outside-toplevel
 
     try:
-        with np.load(frames_path) as archive:
-            return {name: archive[name] for name in archive.files}
+        frozen = frames_path.read_bytes()
+        with np.load(io.BytesIO(frozen), allow_pickle=False) as archive:
+            return {
+                **{name: archive[name] for name in archive.files},
+                "_capture_npz_sha256": hashlib.sha256(frozen).hexdigest(),
+            }
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning("[SERVER] Camera capture archive could not be loaded: %s", error)
         return None
@@ -2735,9 +3196,11 @@ def _fuse_camera_club_delivery(
     """Impact-centered camera + IWR depth club delivery, experimentally."""
     try:
         from openflight.camera.club_delivery import (  # noqa: PLC0415
-            CameraDeliveryGeometry,
             ChainedDelivery,
             estimate_chained_delivery,
+        )
+        from openflight.camera.geometry_contract import (  # noqa: PLC0415
+            EffectiveCameraGeometryInputs,
         )
 
         fused = ChainedDelivery(status="rejected_no_camera_capture")
@@ -2764,33 +3227,25 @@ def _fuse_camera_club_delivery(
                         if calibration.tee_range_m is None:
                             fused = ChainedDelivery(status="rejected_missing_tee_geometry")
                         else:
-                            fused = estimate_chained_delivery(
-                                archive["frames"],
-                                archive["host_timestamp_ns"],
-                                trigger_index=trigger_index,
-                                range_evidence=shot.iwr6843_club_range_evidence,
-                                geometry=CameraDeliveryGeometry(
-                                    camera_height_m=float(camera_capture_config["mount_height_m"]),
-                                    radar_height_m=calibration.radar_height_m,
-                                    tee_range_m=float(calibration.tee_range_m),
-                                    ball_height_m=calibration.tee_ball_height_m,
-                                    camera_lateral_offset_m=float(
-                                        camera_capture_config.get("lateral_offset_m", 0.0)
-                                    ),
-                                    image_width_px=int(camera_capture_config["width"]),
-                                    image_height_px=int(camera_capture_config["height"]),
-                                    horizontal_pixel_sign=(
-                                        -1.0
-                                        if camera_capture_config.get("mirror_horizontal")
-                                        else 1.0
-                                    ),
-                                    roll_correction_deg=float(
-                                        camera_capture_config.get("roll_correction_deg", 0.0)
-                                    ),
-                                ),
-                                ops_club_speed_mph=shot.club_speed_mph,
-                                ball_tracker=camera_reference_ball_tracker,
-                            )
+                            try:
+                                geometry_inputs = EffectiveCameraGeometryInputs.from_live(
+                                    camera_capture_config, calibration
+                                )
+                                geometry_inputs.validate_archive_dimensions(
+                                    archive["frames"].shape[-1], archive["frames"].shape[-2]
+                                )
+                            except ValueError:
+                                fused = ChainedDelivery(status="rejected_invalid_camera_geometry")
+                            else:
+                                fused = estimate_chained_delivery(
+                                    archive["frames"],
+                                    archive["host_timestamp_ns"],
+                                    trigger_index=trigger_index,
+                                    range_evidence=shot.iwr6843_club_range_evidence,
+                                    geometry=geometry_inputs.delivery_geometry(),
+                                    ops_club_speed_mph=shot.club_speed_mph,
+                                    ball_tracker=camera_reference_ball_tracker,
+                                )
             else:
                 fused = ChainedDelivery(status="rejected_missing_camera_frames")
         shot.experimental_fused_attack_angle_deg = fused.attack_angle_deg
@@ -2834,9 +3289,11 @@ def _fuse_camera_ball_flight(
     try:
         from openflight.camera.ball_flight import (  # noqa: PLC0415
             CameraBallEstimate,
-            CameraBallGeometry,
             estimate_camera_ball_flight,
             select_camera_assisted_horizontal,
+        )
+        from openflight.camera.geometry_contract import (  # noqa: PLC0415
+            EffectiveCameraGeometryInputs,
         )
 
         estimate = CameraBallEstimate(status="rejected_no_camera_capture")
@@ -2860,35 +3317,26 @@ def _fuse_camera_ball_flight(
                         estimate = CameraBallEstimate(status="rejected_missing_camera_frames")
                     else:
                         trigger_ns = int(archive["trigger_host_timestamp_ns"])
-                        estimate = estimate_camera_ball_flight(
-                            archive["frames"],
-                            archive["host_timestamp_ns"],
-                            trigger_ns=trigger_ns,
-                            range_evidence=shot.iwr6843_ball_range_evidence,
-                            geometry=CameraBallGeometry(
-                                camera_height_m=float(camera_capture_config["mount_height_m"]),
-                                radar_height_m=calibration.radar_height_m,
-                                tee_range_m=float(calibration.tee_range_m),
-                                ball_height_m=calibration.tee_ball_height_m,
-                                camera_lateral_offset_m=float(
-                                    camera_capture_config.get("lateral_offset_m", 0.0)
-                                ),
-                                horizontal_offset_deg=float(
-                                    camera_capture_config.get("horizontal_offset_deg", 0.0)
-                                ),
-                                roll_correction_deg=float(
-                                    camera_capture_config.get("roll_correction_deg", 0.0)
-                                ),
-                                horizontal_pixel_sign=(
-                                    -1.0 if camera_capture_config.get("mirror_horizontal") else 1.0
-                                ),
-                                image_width_px=int(camera_capture_config["width"]),
-                                image_height_px=int(camera_capture_config["height"]),
-                            ),
-                            ops_ball_speed_mph=shot.ball_speed_raw_mph or shot.ball_speed_mph,
-                            iwr_vertical_deg=shot.launch_angle_vertical,
-                            ball_tracker=camera_ball_flight_reference_tracker,
-                        )
+                        try:
+                            geometry_inputs = EffectiveCameraGeometryInputs.from_live(
+                                camera_capture_config, calibration
+                            )
+                            geometry_inputs.validate_archive_dimensions(
+                                archive["frames"].shape[-1], archive["frames"].shape[-2]
+                            )
+                        except ValueError:
+                            estimate = CameraBallEstimate(status="rejected_invalid_camera_geometry")
+                        else:
+                            estimate = estimate_camera_ball_flight(
+                                archive["frames"],
+                                archive["host_timestamp_ns"],
+                                trigger_ns=trigger_ns,
+                                range_evidence=shot.iwr6843_ball_range_evidence,
+                                geometry=geometry_inputs.ball_geometry(),
+                                ops_ball_speed_mph=shot.ball_speed_raw_mph or shot.ball_speed_mph,
+                                iwr_vertical_deg=shot.launch_angle_vertical,
+                                ball_tracker=camera_ball_flight_reference_tracker,
+                            )
 
         decision = select_camera_assisted_horizontal(
             estimate,
@@ -2959,13 +3407,196 @@ def _fuse_camera_measurements(shot: Shot, camera_capture) -> None:
         shot.experimental_fused_status = "rejected_lighting_quality"
         shot.experimental_fused_attack_angle_confidence = "withheld"
         shot.experimental_fused_club_path_confidence = "withheld"
+        shot.camera_fusion_context = {
+            "schema": "openflight.camera.fusion_context",
+            "version": 1,
+            "available": False,
+            "reason": "capture-time lighting was not analysis eligible",
+        }
         logger.warning(
             "[SERVER] Camera analysis withheld for lighting quality; using radar fallback"
         )
         return
     camera_archive = _load_camera_capture_archive(camera_capture)
+    if (
+        camera_archive is not None
+        and iwr6843_runtime is not None
+        and camera_reference_ball_tracker is not None
+        and camera_ball_flight_reference_tracker is not None
+    ):
+        try:
+            from openflight.camera.club_delivery import ReferenceBallTracker  # noqa: PLC0415
+            from openflight.camera.fusion_processing import (  # noqa: PLC0415
+                build_context,
+                process_camera_fusion,
+            )
+            from openflight.camera.geometry_contract import (  # noqa: PLC0415
+                EffectiveCameraGeometryInputs,
+            )
+
+            geometry = EffectiveCameraGeometryInputs.from_live(
+                camera_capture_config, iwr6843_runtime.calibration
+            )
+            if camera_optical_calibration is not None:
+                from openflight.camera.calibrated_projection import (  # noqa: PLC0415
+                    build_calibrated_camera_model,
+                    inspect_capture_compatibility,
+                )
+
+                capture_mode = getattr(camera_capture, "metadata", {}).get("capture_mode")
+                if not isinstance(capture_mode, dict):
+                    raise ValueError("calibrated camera fusion requires capture_mode evidence")
+                candidate = camera_optical_calibration.get("candidate", camera_optical_calibration)
+                compatibility = inspect_capture_compatibility(
+                    capture_mode,
+                    mode_profile=candidate["mode_profile"],
+                    frame_count=len(camera_archive["frames"]),
+                )
+                if compatibility.status == "incompatible":
+                    raise ValueError(
+                        "camera capture mode is incompatible with calibration: "
+                        + "; ".join(compatibility.reasons)
+                    )
+                qualification_only = {
+                    "capture mode identity is not independently established",
+                    "calibration remains unqualified",
+                    "startup driver parameter does not prove an applied sensor offset",
+                }
+                missing_evidence = [
+                    reason for reason in compatibility.reasons if reason not in qualification_only
+                ]
+                if missing_evidence:
+                    raise ValueError(
+                        "camera capture lacks required calibrated-mode evidence: "
+                        + "; ".join(missing_evidence)
+                    )
+                pose = shot.inclinometer or {}
+                pose_evidence = _calibrated_pose_evidence(pose, camera_placement)
+                gravity = (pose.get("x_g"), pose.get("y_g"), pose.get("z_g"))
+                if any(
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                    for value in gravity
+                ):
+                    raise ValueError("calibrated camera fusion requires finite LIS3DH gravity")
+                observed_roll = math.degrees(
+                    math.atan2(float(gravity[0]), math.hypot(float(gravity[1]), float(gravity[2])))
+                )
+                model = build_calibrated_camera_model(
+                    camera_optical_calibration,
+                    camera_placement,
+                    observed_pitch_deg=pose.get("calibrated_pitch_deg"),
+                    observed_roll_deg=observed_roll,
+                )
+                geometry = geometry.with_calibrated_model(
+                    model.snapshot,
+                    {
+                        "status": compatibility.status,
+                        "reasons": list(compatibility.reasons),
+                        "accuracy_qualified": False,
+                        "mode_profile_sha256": candidate.get("mode_profile_sha256"),
+                        "placement_guard": pose_evidence,
+                    },
+                )
+            session_uuid = shot.camera_fusion_session_uuid
+            shot_number = getattr(shot, "shot_number", None)
+            if not session_uuid or not isinstance(shot_number, int) or shot_number <= 0:
+                raise ValueError("active session and positive shot identity are required")
+            trigger_setup = getattr(camera_capture, "metadata", {}).get("tester_setup", {})
+            trigger_runtime = trigger_setup.get("observations", {}).get("runtime", {})
+            trigger_session_uuid = trigger_runtime.get("session_uuid")
+            if tester_setup_required and trigger_session_uuid != session_uuid:
+                raise ValueError(
+                    "camera trigger session does not match the registered shot session"
+                )
+            context = build_context(
+                geometry=geometry,
+                lighting_eligible=analysis_eligible,
+                ball_tracker=camera_ball_flight_reference_tracker,
+                club_tracker=camera_reference_ball_tracker,
+                ball_range_evidence=shot.iwr6843_ball_range_evidence,
+                club_range_evidence=shot.iwr6843_club_range_evidence,
+                ops_ball_speed_mph=shot.ball_speed_raw_mph or shot.ball_speed_mph,
+                ops_club_speed_mph=shot.club_speed_mph,
+                iwr_vertical_deg=shot.launch_angle_vertical,
+                iwr_horizontal_deg=shot.iwr6843_horizontal_deg,
+                iwr_horizontal_confidence=shot.iwr6843_horizontal_confidence,
+                club=shot.club,
+                capture_npz_sha256=camera_archive["_capture_npz_sha256"],
+                session_uuid=session_uuid,
+                shot_number=shot_number,
+            )
+            shot.camera_fusion_context = context
+            result = process_camera_fusion(context, camera_archive)
+            shot.camera_fusion_processing = result
+            shot.calibrated_camera_status = (
+                "experimental_unqualified"
+                if getattr(geometry, "calibrated_model_snapshot", None) is not None
+                else "legacy_inferred_ball_geometry"
+            )
+            shot.calibrated_camera_reason = None
+            decision = result["horizontal_decision"]
+            estimate = result["ball_estimate"]
+            fused = result["club_delivery"]
+            shot.experimental_camera_horizontal_deg = decision["camera_horizontal_deg"]
+            shot.experimental_camera_horizontal_confidence = (
+                decision["confidence"]
+                if decision["source"]
+                in ("camera_assisted_experimental", "camera_only_experimental")
+                else None
+            )
+            shot.experimental_camera_horizontal_status = (
+                decision["status"]
+                if estimate["confidence_tier"] != "withheld"
+                else f"{decision['status']}:{estimate['status']}"
+            )
+            shot.experimental_camera_iwr_delta_deg = decision["camera_iwr_delta_deg"]
+            if decision["selected_deg"] is not None:
+                shot.launch_angle_horizontal = decision["selected_deg"]
+                shot.launch_angle_horizontal_confidence = decision["confidence"]
+                shot.launch_angle_horizontal_source = decision["source"]
+            shot.experimental_fused_attack_angle_deg = fused["attack_angle_deg"]
+            shot.experimental_fused_club_path_deg = fused["club_path_deg"]
+            shot.experimental_fused_status = fused["status"]
+            shot.experimental_fused_attack_angle_confidence = fused["attack_confidence_tier"]
+            shot.experimental_fused_club_path_confidence = fused["path_confidence_tier"]
+            shot.experimental_camera_trace_deg = None
+            shot.experimental_aoa_offset_source = "none_chained_3d"
+            restored_ball = ReferenceBallTracker.from_snapshot(result["next_ball_tracker"])
+            restored_club = ReferenceBallTracker.from_snapshot(result["next_club_tracker"])
+            camera_ball_flight_reference_tracker._samples = restored_ball._samples
+            camera_reference_ball_tracker._samples = restored_club._samples
+            return
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            shot.camera_fusion_context = {
+                "schema": "openflight.camera.fusion_context",
+                "version": 1,
+                "available": False,
+                "reason": f"{type(error).__name__}: {error}",
+            }
+            shot.camera_fusion_processing = {
+                "schema_version": 1,
+                "status": "error",
+                "errors": {"adapter": f"{type(error).__name__}: {error}"},
+            }
+            if camera_optical_calibration is not None:
+                shot.calibrated_camera_status = "rejected"
+                shot.calibrated_camera_reason = f"{type(error).__name__}: {error}"
+            logger.warning("[SERVER] Shared camera fusion failed: %s", error, exc_info=True)
     _fuse_camera_ball_flight(shot, camera_capture, camera_archive)
     _fuse_camera_club_delivery(shot, camera_capture, camera_archive)
+    if shot.calibrated_camera_status == "rejected":
+        if shot.launch_angle_horizontal_source in {
+            "camera_assisted_experimental",
+            "camera_only_experimental",
+        }:
+            shot.launch_angle_horizontal_source = "camera_legacy_fallback"
+        if shot.experimental_camera_horizontal_status:
+            shot.experimental_camera_horizontal_status = (
+                "legacy_fallback_after_calibrated_rejection:"
+                + shot.experimental_camera_horizontal_status
+            )
 
 
 def _attach_camera_replay(shot: Shot, camera_capture) -> None:
@@ -3028,8 +3659,8 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                     selection_reason = vertical_selection_details["selection_reason"]
                     if not accepted:
                         logger.warning(
-                            "[SERVER] Vertical angle %.1f° rejected: %s "
-                            "(expected=%s°, delta=%s°, conf=%.0f%%)",
+                            "[SERVER] Vertical angle %.1fÂ° rejected: %s "
+                            "(expected=%sÂ°, delta=%sÂ°, conf=%.0f%%)",
                             kld7_angle.vertical_deg,
                             selection_reason,
                             vertical_selection_details.get("expected_launch_deg"),
@@ -3048,7 +3679,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                         shot.launch_angle_vertical_source = "radar"
                         shot.angle_source = "radar"
                         logger.info(
-                            "[SERVER] Vertical angle: %.1f° (conf=%.0f%%, %d frames, %s)",
+                            "[SERVER] Vertical angle: %.1fÂ° (conf=%.0f%%, %d frames, %s)",
                             kld7_angle.vertical_deg,
                             kld7_angle.confidence * 100,
                             kld7_angle.num_frames,
@@ -3068,17 +3699,17 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                         # but AoA is the club's attack direction (descending = negative).
                         candidate_aoa = -club_angle_v.vertical_deg
                         # Reject physically impossible AoA values.
-                        # Real AoA ranges from ~-15° (steep iron) to ~+8° (ascending driver).
+                        # Real AoA ranges from ~-15Â° (steep iron) to ~+8Â° (ascending driver).
                         if -15.0 <= candidate_aoa <= 8.0:
                             shot.club_angle_deg = candidate_aoa
                             logger.info(
-                                "[SERVER] Club AoA: %.1f° (conf=%.0f%%)",
+                                "[SERVER] Club AoA: %.1fÂ° (conf=%.0f%%)",
                                 shot.club_angle_deg,
                                 club_angle_v.confidence * 100,
                             )
                         else:
                             logger.warning(
-                                "[SERVER] Club AoA rejected: %.1f° outside plausible range",
+                                "[SERVER] Club AoA rejected: %.1fÂ° outside plausible range",
                                 candidate_aoa,
                             )
 
@@ -3122,7 +3753,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                         if shot.launch_angle_confidence is None:
                             shot.launch_angle_confidence = kld7_angle_h.confidence
                         logger.info(
-                            "[SERVER] Horizontal angle: %.1f° (conf=%.0f%%, %d frames, %s)",
+                            "[SERVER] Horizontal angle: %.1fÂ° (conf=%.0f%%, %d frames, %s)",
                             kld7_angle_h.horizontal_deg,
                             kld7_angle_h.confidence * 100,
                             kld7_angle_h.num_frames,
@@ -3130,8 +3761,8 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                         )
                     else:
                         logger.warning(
-                            "[SERVER] Horizontal angle %.1f° rejected: %s "
-                            "(limit=±%.0f°, conf=%.0f%%)",
+                            "[SERVER] Horizontal angle %.1fÂ° rejected: %s "
+                            "(limit=Â±%.0fÂ°, conf=%.0f%%)",
                             kld7_angle_h.horizontal_deg,
                             selection_reason_h,
                             horizontal_limit,
@@ -3149,7 +3780,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                     if club_angle_h and club_angle_h.horizontal_deg is not None:
                         shot.club_path_deg = club_angle_h.horizontal_deg
                         logger.info(
-                            "[SERVER] Club path: %.1f° (conf=%.0f%%)",
+                            "[SERVER] Club path: %.1fÂ° (conf=%.0f%%)",
                             club_angle_h.horizontal_deg,
                             club_angle_h.confidence * 100,
                         )
@@ -3184,7 +3815,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
             ):
                 shot.spin_axis_deg = round(shot.launch_angle_horizontal - shot.club_path_deg, 1)
                 logger.info(
-                    "[SERVER] Spin axis: %+.1f° (face=%+.1f° - path=%+.1f°)",
+                    "[SERVER] Spin axis: %+.1fÂ° (face=%+.1fÂ° - path=%+.1fÂ°)",
                     shot.spin_axis_deg,
                     shot.launch_angle_horizontal,
                     shot.club_path_deg,
@@ -3272,12 +3903,30 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     )
 
 
+def _attach_ball_speed_contract(shot: Shot) -> None:
+    """Keep OPS radial canonical and attach the shared experimental candidate."""
+    shot.ball_speed_contract = "radial"
+    shot.ball_speed_raw_mph = shot.ball_speed_mph
+    shot.experimental_ball_speed_total = None
+    if ball_speed_correction_enabled:
+        shot.experimental_ball_speed_total = evaluate_experimental_total_speed(
+            shot.ball_speed_mph,
+            shot.launch_angle_vertical,
+            shot.launch_angle_vertical_source,
+            ball_speed_correction_distance_ft,
+            ball_speed_correction_ball_above_radar_ft,
+            geometry_source="iwr_or_kld7_proxy",
+        )
+
+
 def _finalize_shot_detected(
     shot: Shot,
     *,
     emit_event: str,
     initial_ui_ms: float | None = None,
     enrichment: _ShotEnrichmentResult | None = None,
+    diagnostic_logger=None,
+    diagnostic_session_uuid: str | None = None,
 ) -> None:
     """Apply required fallbacks, persist once, and publish the final shot."""
     enrichment = enrichment or _ShotEnrichmentResult()
@@ -3289,36 +3938,18 @@ def _finalize_shot_detected(
     # rejected or missing axes fall back to conservative estimates.
     _ensure_user_facing_launch_angles(shot)
 
-    # Ball-speed cosine correction: the OPS reads the radial component of
-    # a ball departing at the launch angle. Applied AFTER the K-LD7 (which
-    # must anchor to the radial speed) and BEFORE carry/ballistics.
-    shot.ball_speed_contract = "radial"
-    if ball_speed_correction_enabled and shot.launch_angle_vertical is not None:
-        raw_speed = shot.ball_speed_mph
-        shot.ball_speed_raw_mph = raw_speed
-        shot.ball_speed_contract = "total_cosine_corrected"
-        shot.ball_speed_mph = correct_ball_speed(
-            raw_speed,
-            shot.launch_angle_vertical,
-            ball_speed_correction_distance_ft,
-            ball_speed_correction_ball_above_radar_ft,
-        )
-        logger.info(
-            "[SERVER] Ball speed cosine correction: %.1f -> %.1f mph (LA %.1f)",
-            raw_speed,
-            shot.ball_speed_mph,
-            shot.launch_angle_vertical,
-        )
+    # OPS speed remains the canonical radial observation. The historical
+    # peak-radial correction is retained only as an unvalidated candidate.
+    _attach_ball_speed_contract(shot)
 
-    # Calculated spin runs AFTER the cosine correction (the model is
-    # calibrated on true ball speed) and BEFORE carry/ballistics.
+    # Calculated spin and carry continue to consume the canonical OPS radial speed.
     if calculated_spin_enabled:
         _apply_calculated_spin(shot)
 
     # Compute carry. Prefer the physics simulator (drag + Magnus, RK4) when
     # ballistics is enabled and a vertical launch angle is available; fall
     # back to the table estimator otherwise (either ballistics disabled or
-    # angle missing → resolve_launch returns None).
+    # angle missing â†’ resolve_launch returns None).
     _MIN_RELIABLE_SPIN_CONF = 0.6
     if shot.carry_spin_adjusted is None and shot.mode != "mock":
         conditions = resolve_launch(shot) if ballistics_enabled else None
@@ -3365,20 +3996,43 @@ def _finalize_shot_detected(
             "%.0f" % (shot.spin_peak_freq_hz * 60) if shot.spin_peak_freq_hz is not None else "N/A",
         )
 
+    _log_fusion_diagnostic(
+        diagnostic_logger,
+        diagnostic_session_uuid,
+        shot,
+        revision=2,
+        phase="terminal",
+        outcome=enrichment.diagnostic_outcome,
+        reason=enrichment.diagnostic_reason,
+    )
+
     # Log shot with all data (radar + spin + camera) in one entry
     try:
-        session_log = get_session_logger()
-        if session_log:
-            session_log.log_shot(
-                shot=shot,
-                pipeline_ms={
-                    "initial_ui": (round(initial_ui_ms, 1) if initial_ui_ms is not None else None),
-                    "iwr6843": (round(iwr6843_ms, 1) if iwr6843_ms is not None else None),
-                    "kld7": round(kld7_ms, 1) if kld7_ms is not None else None,
-                    "camera_capture": (
-                        round(camera_capture_ms, 1) if camera_capture_ms is not None else None
-                    ),
-                },
+        session_log = diagnostic_logger
+        if session_log is None and diagnostic_session_uuid is None:
+            session_log = get_session_logger()
+        pipeline_ms = {
+            "initial_ui": (round(initial_ui_ms, 1) if initial_ui_ms is not None else None),
+            "iwr6843": (round(iwr6843_ms, 1) if iwr6843_ms is not None else None),
+            "kld7": round(kld7_ms, 1) if kld7_ms is not None else None,
+            "camera_capture": (
+                round(camera_capture_ms, 1) if camera_capture_ms is not None else None
+            ),
+        }
+        if (
+            session_log
+            and diagnostic_session_uuid is not None
+            and hasattr(session_log, "log_shot_pinned")
+        ):
+            logged = session_log.log_shot_pinned(diagnostic_session_uuid, shot, pipeline_ms)
+        elif session_log:
+            logged = session_log.log_shot(shot=shot, pipeline_ms=pipeline_ms) is not False
+        else:
+            logged = False
+        if not logged and diagnostic_session_uuid is not None:
+            logger.warning(
+                "[SERVER] Shot log skipped because registered session %s is no longer active",
+                diagnostic_session_uuid,
             )
     except Exception as e:
         logger.warning("[SERVER] Failed to log shot: %s", e, exc_info=True)
@@ -3398,7 +4052,7 @@ def _finalize_shot_detected(
         # Log shot info
         angle_str = ""
         if shot.launch_angle_vertical is not None:
-            angle_str = ", Launch: %.1f°" % shot.launch_angle_vertical
+            angle_str = ", Launch: %.1fÂ°" % shot.launch_angle_vertical
         logger.info(
             "[SERVER] Shot: ball=%.1f mph, carry=%.0f yds%s",
             shot.ball_speed_mph,
@@ -3464,6 +4118,11 @@ def _finish_shot_detected(
             context={"stage": "deferred_enrichment", "ball_speed_mph": shot.ball_speed_mph},
             exc=error,
         )
+        enrichment = replace(
+            enrichment,
+            diagnostic_outcome="partial",
+            diagnostic_reason="deferred_enrichment_error",
+        )
 
     _queue_shot_finalization(
         shot,
@@ -3516,7 +4175,11 @@ def _queue_ordered_shot_finalization(
         if shot_number in _shot_finalization_ready:
             logger.warning("[SERVER] Shot #%d is already waiting for finalization", shot_number)
             return
-        _shot_finalization_ready[shot_number] = pending
+        _shot_finalization_ready[shot_number] = replace(
+            pending,
+            diagnostic_logger=registered.diagnostic_logger,
+            diagnostic_session_uuid=registered.diagnostic_session_uuid,
+        )
         _ensure_shot_finalization_worker_locked()
         _shot_finalization_condition.notify_all()
 
@@ -3655,6 +4318,34 @@ def on_shot_detected(shot: Shot) -> None:
 
 def _handle_shot_detected(shot: Shot) -> None:
     """Publish OPS metrics promptly, then enrich optional hardware data."""
+    if tester_setup_required:
+        readiness = (
+            camera_capture_runtime.trigger_evidence_for_shot(shot.impact_timestamp)
+            if camera_capture_runtime is not None
+            else None
+        )
+        evidence_problem = _tester_trigger_evidence_problem(readiness)
+        if evidence_problem is not None:
+            evidence = readiness or {
+                "schema_version": 1,
+                "required": True,
+                "ready": False,
+                "config_hash": tester_config_hash,
+                "blockers": [
+                    {"id": "trigger_evidence", "reason": "no matching trigger readiness evidence"}
+                ],
+            }
+            if readiness:
+                evidence.setdefault("blockers", []).append(
+                    {"id": "trigger_evidence", "reason": evidence_problem}
+                )
+            log_session_error(
+                "Tester shot rejected because required setup readiness dropped",
+                component="tester_setup",
+                context={"readiness": evidence},
+            )
+            logger.warning("[SERVER] Tester shot rejected: %s", evidence["blockers"])
+            return
     _assign_shot_number(shot)
     active_profile = get_profile_store().get_active()
     shot.profile_id = active_profile.id
@@ -3705,6 +4396,9 @@ def _handle_shot_detected(shot: Shot) -> None:
             shot,
             emit_event=final_event,
             initial_ui_ms=initial_ui_ms,
+            enrichment=_ShotEnrichmentResult(
+                diagnostic_outcome="partial", diagnostic_reason="queue_full"
+            ),
         )
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning(
@@ -3718,6 +4412,9 @@ def _handle_shot_detected(shot: Shot) -> None:
             shot,
             emit_event=final_event,
             initial_ui_ms=initial_ui_ms,
+            enrichment=_ShotEnrichmentResult(
+                diagnostic_outcome="partial", diagnostic_reason="worker_unavailable"
+            ),
         )
 
 
@@ -3828,11 +4525,14 @@ def start_monitor(
     Args:
         port: Serial port for radar
         mock: Run in mock mode without radar
-        trigger_type: Trigger strategy (sound or speed)
+        trigger_type: Trigger strategy (hardware, sound, or speed)
         debug: Enable verbose debug output
         ops_baud: Target UART baud when the OPS243 is on the GPIO header
     """
     global monitor, mock_mode, mock_swing_speed_mode, debug_mode, radar_config
+
+    if trigger_type == "hardware" and sample_rate_ksps != 30:
+        raise ValueError("Hardware trigger mode requires a 30 ksps sample rate")
 
     # Stop any existing monitor first
     if monitor is not None:
@@ -3892,13 +4592,33 @@ def start_monitor(
     # Start session logging
     session_logger = get_session_logger()
     if session_logger:
-        radar_info = monitor.get_radar_info() if not mock else {}
+        if not mock and trigger_type == "hardware":
+            radar = getattr(monitor, "radar", None)
+            radar_info = {
+                "Product": "OPS243-A",
+                "Version": getattr(radar, "_internal_trigger_firmware_version", None),
+            }
+        else:
+            radar_info = monitor.get_radar_info() if not mock else {}
+        session_config = _session_start_config()
+        if not mock and trigger_type == "hardware":
+            hardware_trigger = getattr(monitor, "trigger", None)
+            session_config["ops_internal_trigger"] = {
+                "mode": "hardware",
+                "sensor": "OPS243-A",
+                "firmware_version": radar_info.get("Version"),
+                "trigger_threshold_mph": getattr(hardware_trigger, "trigger_threshold_mph", None),
+                "trigger_magnitude": getattr(hardware_trigger, "trigger_magnitude", None),
+                "pre_trigger_segments": getattr(hardware_trigger, "pre_trigger_segments", None),
+                "sample_rate_ksps": sample_rate_ksps,
+                "aux_trigger_fanout": "unavailable_no_qualified_trigger_edge",
+            }
         session_logger.start_session(
             radar_port=port if not mock else "mock",
             firmware_version=radar_info.get("Version"),
             camera_enabled=camera_capture_runtime is not None,
             camera_model="capture" if camera_capture_runtime is not None else None,
-            config=_session_start_config(),
+            config=session_config,
             mode="swing-speed" if swing_speed_mode else ("mock" if mock else "rolling-buffer"),
             trigger_type=None if swing_speed_mode or mock else trigger_type,
         )
@@ -3914,7 +4634,12 @@ def start_monitor(
             # anchor K-LD7 correlation to the OPS trigger_time instead of the
             # USB first-byte arrival time.
             radar = getattr(monitor, "radar", None)
-            if not swing_speed_mode and radar is not None and hasattr(radar, "read_clock_sync"):
+            if (
+                not swing_speed_mode
+                and trigger_type != "hardware"
+                and radar is not None
+                and hasattr(radar, "read_clock_sync")
+            ):
                 try:
                     clock_sync = radar.read_clock_sync()
                     session_logger.log_clock_sync(
@@ -4476,6 +5201,15 @@ def main():
         ),
     )
     parser.add_argument(
+        "--camera-capture-forward-offset-m",
+        type=float,
+        default=0.0,
+        help=(
+            "Camera forward position relative to the IWR radar reference in meters; "
+            "positive is toward the ball. Overridden by --rig-geometry when available."
+        ),
+    )
+    parser.add_argument(
         "--camera-capture-roll-deg",
         type=float,
         default=0.0,
@@ -4506,6 +5240,16 @@ def main():
         help="Mirror saved frames left-to-right after mount rotation.",
     )
     parser.add_argument(
+        "--camera-optical-calibration",
+        default=None,
+        help="Opt-in optical calibration candidate JSON for shared live/replay fusion.",
+    )
+    parser.add_argument(
+        "--camera-placement",
+        default=None,
+        help="Explicit camera/radar target-LFU placement JSON for calibrated fusion.",
+    )
+    parser.add_argument(
         "--session-location",
         "-l",
         default="range",
@@ -4533,9 +5277,30 @@ def main():
     _add_ballistics_arguments(parser)
     parser.add_argument(
         "--trigger",
-        choices=["sound", "speed"],
+        choices=["hardware", "sound", "speed"],
         default="sound",
         help="Trigger strategy (default: sound)",
+    )
+    parser.add_argument(
+        "--trigger-threshold",
+        "--speed-trigger-threshold",
+        "--trigger-speed",
+        dest="trigger_threshold",
+        type=float,
+        default=None,
+        help="Internal or host speed-trigger threshold in mph (hardware default: 25)",
+    )
+    parser.add_argument(
+        "--trigger-magnitude",
+        type=int,
+        default=25,
+        help="OPS243 internal trigger magnitude SMn, 1-2000 (default: 25)",
+    )
+    parser.add_argument(
+        "--pre-trigger-segments",
+        type=int,
+        default=6,
+        help="Internal hardware-trigger pre-trigger segments S#n, 0-32 (default: 6)",
     )
     parser.add_argument(
         "--swing-speed",
@@ -4624,6 +5389,16 @@ def main():
         ),
     )
     parser.add_argument(
+        "--tester-setup-required",
+        action="store_true",
+        help="Require the study kiosk hardware readiness gate before accepting shots",
+    )
+    parser.add_argument(
+        "--tester-config-hash",
+        default=None,
+        help="Required SHA-256 fingerprint of the measured tester rig geometry",
+    )
+    parser.add_argument(
         "--inclinometer",
         action="store_true",
         help="Enable LIS3DH enclosure pitch compensation for IWR6843 tilt",
@@ -4633,6 +5408,15 @@ def main():
         type=float,
         default=0.0,
         help="Degrees added to raw LIS3DH pitch (default: 0)",
+    )
+    parser.add_argument(
+        "--inclinometer-bus", type=int, default=1, help="LIS3DH I2C bus (default: 1)"
+    )
+    parser.add_argument(
+        "--inclinometer-address",
+        type=lambda value: int(value, 0),
+        default=0x18,
+        help="LIS3DH I2C address (default: 0x18)",
     )
     parser.add_argument(
         "--iwr6843-port", default=None, help="TI serial port (auto-detect by default)"
@@ -4760,7 +5544,7 @@ def main():
         type=float,
         default=os.getenv("KLD7_MOUNT_TILT"),
         help=(
-            "K-LD7 vertical radar mount tilt in degrees. REQUIRED with --kld7 — "
+            "K-LD7 vertical radar mount tilt in degrees. REQUIRED with --kld7 â€” "
             "measure it with a phone inclinometer against the radar face; there is "
             "no default because a wrong tilt silently corrupts the launch angle"
         ),
@@ -4818,6 +5602,23 @@ def main():
     args = parser.parse_args()
     _apply_kld7_device_defaults(args)
 
+    if args.trigger_threshold is not None and (
+        not math.isfinite(args.trigger_threshold) or args.trigger_threshold < 0
+    ):
+        parser.error("--trigger-threshold must be finite and non-negative")
+    if args.trigger == "hardware" and not 1 <= args.trigger_magnitude <= 2000:
+        parser.error("--trigger-magnitude must be between 1 and 2000")
+    if args.trigger == "hardware" and args.sample_rate != 30:
+        parser.error("--trigger hardware requires --sample-rate 30")
+    if args.trigger == "hardware" and not 0 <= args.pre_trigger_segments <= 32:
+        parser.error("--pre-trigger-segments must be between 0 and 32")
+    if args.trigger == "hardware" and (args.iwr6843 or args.camera_capture):
+        parser.error(
+            "--trigger hardware is OPS-only: it has no qualified low-latency trigger edge "
+            "for --iwr6843 or --camera-capture. Keep --trigger sound for synchronized "
+            "auxiliary capture until an independent trigger path is qualified."
+        )
+
     # Mount tilt cannot be defaulted safely (a wrong value silently biases the
     # launch angle), so require it whenever the K-LD7 radars are enabled.
     if args.kld7 and args.kld7_mount_tilt is None:
@@ -4840,9 +5641,18 @@ def main():
         parser.error("--iwr6843 cannot be used with --mock")
     if args.camera_capture and args.mock:
         parser.error("--camera-capture cannot be used with --mock")
+    if args.tester_setup_required and not args.tester_config_hash:
+        parser.error("--tester-setup-required requires --tester-config-hash")
     if args.iwr6843 and (args.iwr6843_tee_m <= 0 or args.iwr6843_net_m <= 0):
         parser.error("--iwr6843-tee-m and --iwr6843-net-m must be positive")
     init_rig_geometry(args.rig_geometry)
+    try:
+        init_camera_calibrated_fusion(
+            args.camera_optical_calibration,
+            args.camera_placement,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        parser.error(f"calibrated camera fusion: {error}")
     enclosure = rig_geometry.enclosure_setup() if rig_geometry is not None else None
     if enclosure is not None:
         args.camera_capture_mount_height_m = _rig_override(
@@ -4854,6 +5664,11 @@ def main():
             "camera lateral offset",
             args.camera_capture_lateral_offset_m,
             enclosure.camera_lateral_offset_m,
+        )
+        args.camera_capture_forward_offset_m = _rig_override(
+            "camera forward offset",
+            args.camera_capture_forward_offset_m,
+            enclosure.camera_forward_offset_m,
         )
         args.iwr6843_radar_height_m = _rig_override(
             "radar height", args.iwr6843_radar_height_m, enclosure.radar_height_m
@@ -4891,8 +5706,10 @@ def main():
     global ballistics_enabled
     global battery_provider
     global profile_store
-    global study_mode_enabled
+    global study_mode_enabled, tester_setup_required, tester_config_hash
     study_mode_enabled = bool(args.study_mode)
+    tester_setup_required = bool(args.tester_setup_required)
+    tester_config_hash = args.tester_config_hash
     global ball_speed_correction_enabled
     global ball_speed_correction_distance_ft
     global ball_speed_correction_ball_above_radar_ft
@@ -4968,9 +5785,24 @@ def main():
         set_show_raw_readings(True)
         print("Raw radar readings display ENABLED - signed speed values will be shown")
 
-    # Start the monitor
-    # Build trigger-specific kwargs (pre_trigger_segments always passed)
-    trigger_kwargs = {"pre_trigger_segments": args.sound_pre_trigger}
+    # Start the monitor. Keep each strategy's settings isolated so the
+    # established sound and host-speed defaults remain unchanged.
+    if args.trigger == "sound":
+        trigger_kwargs = {"pre_trigger_segments": args.sound_pre_trigger}
+    elif args.trigger == "hardware":
+        trigger_kwargs = {
+            "trigger_threshold_mph": (
+                args.trigger_threshold if args.trigger_threshold is not None else 25.0
+            ),
+            "trigger_magnitude": args.trigger_magnitude,
+            "pre_trigger_segments": args.pre_trigger_segments,
+        }
+    elif args.trigger == "speed":
+        trigger_kwargs = {}
+        if args.trigger_threshold is not None:
+            trigger_kwargs["min_trigger_speed_mph"] = args.trigger_threshold
+    else:
+        trigger_kwargs = {}
     swing_speed_kwargs = {
         "trigger_threshold_mph": args.swing_speed_threshold,
         "max_speed_mph": None if args.swing_speed_max <= 0 else args.swing_speed_max,
@@ -5000,6 +5832,7 @@ def main():
             gain=args.camera_capture_gain,
             mount_height_m=args.camera_capture_mount_height_m,
             lateral_offset_m=args.camera_capture_lateral_offset_m,
+            forward_offset_m=args.camera_capture_forward_offset_m,
             horizontal_offset_deg=args.camera_capture_horizontal_offset_deg,
             roll_correction_deg=args.camera_capture_roll_deg,
             stream=args.camera_capture_stream,
@@ -5068,7 +5901,11 @@ def main():
 
     if args.inclinometer:
         startup_status.start("inclinometer", "Connecting inclinometer")
-        if not init_inclinometer(zero_offset_deg=args.inclinometer_zero_offset):
+        if not init_inclinometer(
+            zero_offset_deg=args.inclinometer_zero_offset,
+            bus_number=args.inclinometer_bus,
+            address=args.inclinometer_address,
+        ):
             print("WARNING: Inclinometer unavailable; continuing with configured IWR6843 tilt")
             startup_status.skip("inclinometer", "Inclinometer unavailable; continuing")
         else:
@@ -5087,7 +5924,7 @@ def main():
             vertical_flight_window_net_distance_ft=args.net_distance,
         ):
             offset_str = (
-                f", offset: {args.kld7_angle_offset:+.1f}°" if args.kld7_angle_offset else ""
+                f", offset: {args.kld7_angle_offset:+.1f}Â°" if args.kld7_angle_offset else ""
             )
             print(f"K-LD7 vertical radar enabled (launch angle{offset_str})")
             startup_status.ready("kld7_vertical", "K-LD7 launch radar connected")
@@ -5110,7 +5947,7 @@ def main():
             base_freq=2,
         ):
             offset_str = (
-                f", offset: {args.kld7_horizontal_offset:+.1f}°"
+                f", offset: {args.kld7_horizontal_offset:+.1f}Â°"
                 if args.kld7_horizontal_offset
                 else ""
             )

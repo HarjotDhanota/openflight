@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 
 import pytest
@@ -101,6 +102,29 @@ class TestTheTiltArithmetic:
 
 
 class TestTheFileTravelsWithItsProvenance:
+    def test_session_preserves_loaded_geometry_after_source_file_changes(self, tmp_path):
+        path = tmp_path / "rig.json"
+        original = RigGeometry.from_json(V3)
+        original.to_json(path)
+        server.init_rig_geometry(path)
+        dataclasses.replace(original, focal_px=999.0).to_json(path)
+
+        block = server._session_start_config()["rig_geometry"]
+        snapshot = block["snapshot"]
+        payload = json.dumps(snapshot["parameters"], sort_keys=True, separators=(",", ":"))
+        assert snapshot["sha256"] == hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        assert json.loads(payload) == json.loads(json.dumps(dataclasses.asdict(original)))
+        path.unlink()
+        assert server._session_start_config()["rig_geometry"]["snapshot"] == snapshot
+
+    def test_session_config_cannot_mutate_the_loaded_snapshot(self):
+        server.init_rig_geometry(V3)
+        first = server._session_start_config()["rig_geometry"]
+        first["snapshot"]["parameters"]["focal_px"] = 999.0
+
+        second = server._session_start_config()["rig_geometry"]
+        assert second["snapshot"]["parameters"]["focal_px"] == server.rig_geometry.focal_px
+
     def test_the_v3_file_names_the_frame_and_what_it_is_not(self):
         text = json.loads(open(V3, encoding="utf-8").read())["provenance"]
         assert "camera image axes" in text

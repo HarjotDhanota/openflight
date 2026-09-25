@@ -6,7 +6,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Deque, Optional, Sequence
+from typing import Any, Deque, Optional, Sequence
 
 import numpy as np
 
@@ -20,6 +20,9 @@ class CameraFrame:
     host_timestamp_ns: int
     exposure_us: int
     analogue_gain: float
+    scaler_crop: tuple[int, int, int, int] | None = None
+    frame_duration_us: int | None = None
+    capture_mode: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

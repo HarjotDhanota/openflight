@@ -50,7 +50,10 @@ How a capture is initiated and framed.
 
 | Flag | Type / default | Description |
 | --- | --- | --- |
-| `--trigger` | choices: `sound`, `speed`; default `sound` | Trigger strategy |
+| `--trigger` | choices: `hardware`, `sound`, `speed`; default `sound` | Trigger strategy; hardware is OPS-only |
+| `--trigger-threshold`, `--speed-trigger-threshold`, `--trigger-speed` | float | Internal or host speed-trigger threshold in mph; hardware default `25` |
+| `--trigger-magnitude` | int; default `25` | OPS243 internal trigger magnitude (`SMn`, 1-2000) |
+| `--pre-trigger-segments` | int; default `6` | Internal hardware-trigger pre-trigger segments (`S#n`, 0-32) |
 | `--sound-pre-trigger` | int; default `16` | Pre-trigger segments S#n, 0-32 (default: 16 = 50/50 split, each segment ~4.27ms at 30ksps) |
 
 ## IWR6843 angle radar

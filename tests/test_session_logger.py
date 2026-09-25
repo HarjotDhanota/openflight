@@ -35,6 +35,18 @@ class TestLogError:
         assert logger.session_path is None
 
 
+def test_pinned_shot_write_rejects_session_rollover_without_incrementing_stats(tmp_path):
+    logger = SessionLogger(log_dir=tmp_path, enabled=True)
+    logger.start_session(mode="rolling-buffer", trigger_type="sound")
+    pinned = logger.active_session_uuid
+    with logger._write_lock:
+        logger._session_uuid = "replacement-session"
+    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), shot_number=1)
+    assert logger.log_shot(shot, expected_session_uuid=pinned) is False
+    assert logger.stats["shots_detected"] == 0
+    assert "shot_detected" not in logger.session_path.read_text(encoding="utf-8")
+
+
 class TestLogSessionError:
     """Tests for the module-level session error helper."""
 
@@ -554,6 +566,7 @@ class TestSessionIdentity:
 
     def test_session_start_has_uuid_and_format_version(self, tmp_path):
         import uuid
+        from datetime import datetime, timezone
 
         import openflight
 
@@ -565,11 +578,48 @@ class TestSessionIdentity:
         assert entry["session_uuid"] != entry["session_id"]
         assert entry["format_version"] == 2
         assert entry["app_version"] == openflight.__version__
+        started = datetime.fromisoformat(entry["started_at_utc"])
+        assert started.tzinfo is not None
+        assert started.utcoffset() == timezone.utc.utcoffset(started)
 
     def test_session_uuid_is_unique_per_session(self, tmp_path):
         first = self._start_entry(tmp_path / "a")
         second = self._start_entry(tmp_path / "b")
         assert first["session_uuid"] != second["session_uuid"]
+
+    def test_session_start_records_runtime_provenance(self, tmp_path):
+        expected = {"schema_version": 1, "source_snapshot": {"status": "preserved"}}
+        captured_identifiers = []
+
+        def collect(_log_dir, session_identifier):
+            captured_identifiers.append(session_identifier)
+            return expected
+
+        logger = SessionLogger(
+            log_dir=tmp_path,
+            provenance_collector=collect,
+        )
+        logger.start_session()
+        logger.end_session()
+
+        with next(tmp_path.glob("session_*.jsonl")).open() as handle:
+            entry = json.loads(handle.readline())
+        assert entry["runtime_provenance"] == expected
+        assert captured_identifiers == [entry["session_uuid"]]
+
+    def test_provenance_failure_does_not_prevent_session_start(self, tmp_path):
+        def fail(_log_dir, _session_id):
+            raise OSError("snapshot unavailable")
+
+        logger = SessionLogger(log_dir=tmp_path, provenance_collector=fail)
+        session_id = logger.start_session()
+        logger.end_session()
+
+        assert session_id
+        with next(tmp_path.glob("session_*.jsonl")).open() as handle:
+            entry = json.loads(handle.readline())
+        assert entry["runtime_provenance"]["source_snapshot"]["status"] == "unavailable"
+        assert "snapshot unavailable" in entry["runtime_provenance"]["source_snapshot"]["reason"]
 
 
 class _ConcurrencyProbeStream:

@@ -1,0 +1,1017 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Saved capture track review</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #fff;
+        --fg: #17191e;
+        --muted: #5e6675;
+        --panel: #f4f6f9;
+        --line: #d7dce5;
+        --accent: #37638f;
+        --bad: #b42318;
+        --warn: #946200;
+        --ok: #147a45;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #131519;
+          --fg: #eceef2;
+          --muted: #a4abba;
+          --panel: #1b1e24;
+          --line: #303640;
+          --accent: #8cb7e2;
+          --bad: #ff7b72;
+          --warn: #e3b341;
+          --ok: #5ed39a;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        font-size: clamp(1rem, 1.5vw + 0.45rem, 1.5rem);
+      }
+      body {
+        margin: 0;
+        padding: 0.65rem;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          1rem/1.35 system-ui,
+          sans-serif;
+      }
+      main {
+        max-width: 72rem;
+        margin: auto;
+      }
+      h1 {
+        font-size: 1.5rem;
+        margin: 0;
+      }
+      h2 {
+        font-size: 1.05rem;
+        margin: 0.2rem 0 0.5rem;
+      }
+      p {
+        margin: 0.35rem 0;
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+      .warning {
+        color: var(--warn);
+      }
+      .error {
+        color: var(--bad);
+      }
+      .ok {
+        color: var(--ok);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: minmax(15rem, 22rem) minmax(0, 1fr);
+        gap: 0.65rem;
+        align-items: start;
+      }
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 0.45rem;
+        background: var(--panel);
+        padding: 0.55rem;
+        min-width: 0;
+      }
+      .stack {
+        display: grid;
+        gap: 0.45rem;
+      }
+      .row {
+        display: flex;
+        gap: 0.4rem;
+        align-items: end;
+        flex-wrap: wrap;
+      }
+      label {
+        display: grid;
+        gap: 0.15rem;
+        color: var(--muted);
+        font-size: 0.78rem;
+        flex: 1 1 8rem;
+        min-width: 0;
+      }
+      input,
+      select,
+      button {
+        min-height: 2.55rem;
+        border: 1px solid var(--line);
+        border-radius: 0.4rem;
+        background: var(--bg);
+        color: var(--fg);
+        font: inherit;
+        padding: 0.35rem 0.5rem;
+        min-width: 0;
+      }
+      select,
+      input {
+        width: 100%;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      button.active {
+        border-color: var(--accent);
+        box-shadow: inset 0 0 0 2px var(--accent);
+      }
+      .scroller {
+        display: flex;
+        gap: 0.4rem;
+        overflow: auto;
+        touch-action: none;
+        padding: 0.15rem 0;
+        scrollbar-width: thin;
+      }
+      .scroller > * {
+        flex: 0 0 auto;
+        touch-action: none;
+      }
+      .viewer {
+        position: relative;
+        background: #000;
+        min-height: 10rem;
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+        border-radius: 0.35rem;
+      }
+      #frame {
+        display: block;
+        width: 100%;
+        height: auto;
+        image-rendering: pixelated;
+        user-select: none;
+        touch-action: none;
+      }
+      #marker {
+        position: absolute;
+        width: 1rem;
+        height: 1rem;
+        border: 3px solid #ffda2d;
+        border-radius: 50%;
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+        box-shadow: 0 0 0 2px #111;
+      }
+      .frame-controls {
+        display: grid;
+        grid-template-columns: auto minmax(5rem, 1fr) auto;
+        gap: 0.4rem;
+      }
+      .files {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.4rem;
+      }
+      .files input {
+        font-size: 0.72rem;
+      }
+      .summary {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+        gap: 0.35rem;
+      }
+      .summary span,
+      .reason,
+      .metric {
+        padding: 0.35rem;
+        border: 1px solid var(--line);
+        border-radius: 0.35rem;
+        background: var(--bg);
+      }
+      .report-track {
+        margin: 0.5rem 0;
+      }
+      .metric {
+        font-size: 0.78rem;
+        overflow-wrap: anywhere;
+      }
+      .actions button,
+      .actions a {
+        min-height: 2.55rem;
+        display: inline-flex;
+        align-items: center;
+        padding: 0.35rem 0.55rem;
+      }
+      a {
+        color: var(--accent);
+      }
+      #storage-error,
+      #request-error {
+        min-height: 1.1rem;
+      }
+      @media (max-width: 800px), (max-height: 480px) {
+        body {
+          padding: 0.4rem;
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        .panel {
+          padding: 0.4rem;
+        }
+        .files {
+          grid-template-columns: 1fr;
+        }
+        .viewer {
+          max-height: 52vh;
+        }
+        #frame {
+          max-height: 52vh;
+          object-fit: contain;
+          width: auto;
+          max-width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="row">
+        <div>
+          <h1>Saved capture track review</h1>
+          <p class="muted">
+            Manual saved-pixel evidence only. Results are finite feature-interval model differences, not launch metrics
+            or accuracy.
+          </p>
+        </div>
+        <a href="/">Mode study</a>
+      </div>
+      <p id="request-error" class="error" role="alert"></p>
+      <div class="grid">
+        <div class="stack">
+          <section class="panel stack" aria-labelledby="source-title">
+            <h2 id="source-title">1. Saved capture</h2>
+            <label>Tester ID<input id="tester-id" autocomplete="off" /></label>
+            <div class="row">
+              <label
+                >Run<select id="run">
+                  <option value="">Choose a saved run</option>
+                </select></label
+              ><button id="refresh-runs">Refresh</button>
+            </div>
+            <label
+              >Capture<select id="capture" disabled>
+                <option value="">Choose a capture</option>
+              </select></label
+            >
+            <p id="capture-info" class="muted">Select an exact run and capture.</p>
+          </section>
+          <section class="panel stack" aria-labelledby="track-title">
+            <h2 id="track-title">2. Point tracks</h2>
+            <div id="track-tabs" class="scroller"></div>
+            <div class="row">
+              <button id="new-ball">New ball track</button><button id="new-club">New club feature</button>
+            </div>
+            <label>Track name<input id="track-name" value="ball-main" readonly /></label>
+            <label
+              >Annotation source description<input id="source-description" value="Manual saved-frame annotation"
+            /></label>
+            <p class="muted">
+              Tap the exact same physical feature in each saved frame, or mark it missing. Ball and club features stay
+              separate.
+            </p>
+            <div class="row">
+              <button id="mark-missing" disabled>Mark missing</button
+              ><button id="clear-point" disabled>Clear frame</button>
+            </div>
+            <div class="row">
+              <label
+                >Saved-image x (px)<input id="pixel-x" type="number" min="0" step="0.1" inputmode="decimal" /></label
+              ><label
+                >Saved-image y (px)<input id="pixel-y" type="number" min="0" step="0.1" inputmode="decimal" /></label
+              ><button id="apply-pixel" disabled>Apply x/y</button>
+            </div>
+            <p class="muted">
+              Coordinates are in the exact saved-image pixel grid shown above. Refine finger taps numerically for
+              subpixel annotations.
+            </p>
+            <div class="row">
+              <label
+                >Optional radar range (m)<input id="range" type="number" min="0" step="any" inputmode="decimal"
+              /></label>
+            </div>
+            <label
+              >Range source description<input id="range-source" placeholder="Required when any range is entered"
+            /></label>
+            <p id="point-status" class="muted">Load a frame before annotating.</p>
+            <p id="storage-error" class="error" role="alert"></p>
+          </section>
+          <section class="panel stack" aria-labelledby="compare-title">
+            <h2 id="compare-title">3. Compare models</h2>
+            <div class="files">
+              <label>Candidate JSON<input id="candidate-file" type="file" accept="application/json,.json" /></label>
+              <label>Profile JSON<input id="profile-file" type="file" accept="application/json,.json" /></label>
+              <label>Setup JSON<input id="setup-file" type="file" accept="application/json,.json" /></label>
+            </div>
+            <div class="row actions">
+              <button id="compare" disabled>Compare saved tracks</button
+              ><button id="download-manifest" disabled>Download manifest</button
+              ><button id="download-report" disabled>Download report</button>
+            </div>
+            <p class="warning">
+              Drafts stay in this browser and are not included when the mode-study archive is packaged. Download the
+              manifest to preserve or transfer annotations.
+            </p>
+            <p id="compare-status" class="muted">Choose all three JSON files.</p>
+          </section>
+        </div>
+        <div class="stack">
+          <section class="panel stack">
+            <div class="frame-controls">
+              <button id="previous" disabled>Previous</button
+              ><label
+                >Frame<input id="frame-index" type="number" min="0" value="0" inputmode="numeric" disabled /></label
+              ><button id="next" disabled>Next</button>
+            </div>
+            <div class="viewer" id="viewer">
+              <img id="frame" alt="Selected saved capture frame" draggable="false" /><i id="marker" hidden></i>
+            </div>
+            <p id="frame-time" class="muted"></p>
+          </section>
+          <section class="panel stack" aria-labelledby="result-title">
+            <h2 id="result-title">Comparison report</h2>
+            <div id="report">
+              <p class="muted">
+                No current report. Any annotation, capture, or input-file change invalidates the previous result.
+              </p>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const TESTER_KEY = 'openflight-tester-id';
+      const DRAFT_PREFIX = 'openflight-track-review-v1:';
+      let scopes = [],
+        scope = null,
+        capture = null,
+        frameIndex = 0,
+        activeTrack = 'ball-main';
+      let annotations = { 'ball-main': {}, 'club-feature-main': {} },
+        report = null,
+        reportRawText = null,
+        reloadRequired = false;
+      let trackMeta = {
+        'ball-main': { object: 'ball', description: 'Manual saved-frame annotation', rangeSource: '' },
+        'club-feature-main': { object: 'club', description: 'Manual saved-frame annotation', rangeSource: '' },
+      };
+      let scopeVersion = 0,
+        frameVersion = 0,
+        compareVersion = 0;
+      const files = { candidate_json: null, profile_json: null, setup_json: null };
+      const fileVersions = { candidate_json: 0, profile_json: 0, setup_json: 0 };
+      const esc = (value) =>
+        String(value ?? '').replace(
+          /[&<>"']/g,
+          (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
+        );
+      const scopeQuery = () =>
+        scope ? { tester_id: scope.tester_id, arm_id: scope.arm_id, run_dir: scope.run_dir } : {};
+      const query = (value) => new URLSearchParams(value).toString();
+      async function jsonFetch(url, options) {
+        const response = await fetch(url, options);
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const error = new Error(body.error || `request failed (${response.status})`);
+          error.status = response.status;
+          throw error;
+        }
+        return body;
+      }
+      function showError(error) {
+        $('request-error').textContent = error?.message || String(error);
+      }
+      function invalidateReport(message = 'Inputs changed. Run comparison again.') {
+        compareVersion += 1;
+        report = null;
+        reportRawText = null;
+        $('download-report').disabled = true;
+        $('compare-status').textContent = message;
+        $('report').innerHTML =
+          '<p class="muted">No current report. Any annotation, capture, or input-file change invalidates the previous result.</p>';
+      }
+      function draftKey() {
+        return capture
+          ? DRAFT_PREFIX +
+              [
+                scope.tester_id,
+                scope.arm_id,
+                scope.run,
+                capture.capture_id,
+                capture.capture_npz_sha256,
+                capture.metadata_sha256,
+              ]
+                .map(encodeURIComponent)
+                .join(':')
+          : null;
+      }
+      function draftValue() {
+        return {
+          version: 1,
+          capture_npz_sha256: capture.capture_npz_sha256,
+          metadata_sha256: capture.metadata_sha256,
+          annotations,
+          trackMeta,
+          activeTrack,
+        };
+      }
+      function saveDraft() {
+        const key = draftKey();
+        if (!key) return;
+        try {
+          localStorage.setItem(key, JSON.stringify(draftValue()));
+          $('storage-error').textContent = '';
+        } catch (error) {
+          $('storage-error').textContent =
+            `Draft could not be saved: ${error.message}. Keep this page open or download the manifest.`;
+        }
+      }
+      function loadDraft() {
+        annotations = { 'ball-main': {}, 'club-feature-main': {} };
+        trackMeta = {
+          'ball-main': { object: 'ball', description: 'Manual saved-frame annotation', rangeSource: '' },
+          'club-feature-main': { object: 'club', description: 'Manual saved-frame annotation', rangeSource: '' },
+        };
+        activeTrack = 'ball-main';
+        try {
+          const raw = localStorage.getItem(draftKey());
+          if (raw) {
+            const value = JSON.parse(raw);
+            if (
+              value.capture_npz_sha256 === capture.capture_npz_sha256 &&
+              value.metadata_sha256 === capture.metadata_sha256
+            ) {
+              annotations = value.annotations || annotations;
+              trackMeta = value.trackMeta || trackMeta;
+              activeTrack = trackMeta[value.activeTrack] ? value.activeTrack : Object.keys(trackMeta)[0];
+            }
+          }
+          $('storage-error').textContent = '';
+        } catch (error) {
+          $('storage-error').textContent = `Saved draft could not be loaded: ${error.message}.`;
+        }
+        renderTrack();
+      }
+      function currentPoint() {
+        return annotations[activeTrack]?.[frameIndex];
+      }
+      function renderTrack() {
+        const meta = trackMeta[activeTrack];
+        if (!meta) return;
+        $('track-tabs').innerHTML = Object.entries(trackMeta)
+          .map(
+            ([id, item]) =>
+              `<button data-track="${esc(id)}" class="${id === activeTrack ? 'active' : ''}">${item.object === 'ball' ? 'Ball' : 'Club'} · ${esc(id)}</button>`
+          )
+          .join('');
+        $('track-name').value = activeTrack;
+        $('source-description').value = meta.description;
+        $('range-source').value = meta.rangeSource;
+        const point = currentPoint();
+        $('range').value = point?.radar_range_m ?? '';
+        $('pixel-x').value = point?.pixel_px?.[0] ?? '';
+        $('pixel-y').value = point?.pixel_px?.[1] ?? '';
+        $('point-status').textContent = !capture
+          ? 'Load a frame before annotating.'
+          : point?.missing
+            ? 'This frame is explicitly marked missing.'
+            : point?.pixel_px
+              ? `Saved pixel ${point.pixel_px.map((v) => v.toFixed(2)).join(', ')}.`
+              : 'This frame has no annotation yet.';
+        const marker = $('marker');
+        if (point?.pixel_px && $('frame').complete && $('frame').naturalWidth) {
+          const rect = $('frame').getBoundingClientRect(),
+            parent = $('viewer').getBoundingClientRect();
+          marker.style.left = `${rect.left - parent.left + ((point.pixel_px[0] + 0.5) / capture.width) * rect.width}px`;
+          marker.style.top = `${rect.top - parent.top + ((point.pixel_px[1] + 0.5) / capture.height) * rect.height}px`;
+          marker.hidden = false;
+        } else marker.hidden = true;
+      }
+      function updateButtons() {
+        const ready = Boolean(capture) && !reloadRequired && $('frame').dataset.loaded === 'true';
+        $('mark-missing').disabled = !ready;
+        $('clear-point').disabled = !ready;
+        $('apply-pixel').disabled = !ready;
+        $('pixel-x').disabled = !ready;
+        $('pixel-y').disabled = !ready;
+        $('previous').disabled = !capture || frameIndex <= 0;
+        $('next').disabled = !capture || frameIndex >= capture.frame_count - 1;
+        $('frame-index').disabled = !capture;
+        $('download-manifest').disabled = !capture;
+        $('compare').disabled = !capture || reloadRequired || Object.values(files).some((v) => v === null);
+      }
+      function clearFrameView(message = '') {
+        $('frame').removeAttribute('src');
+        $('frame').dataset.loaded = 'false';
+        $('marker').hidden = true;
+        $('frame-time').textContent = message;
+      }
+      function makeManifest() {
+        const tracks = Object.entries(trackMeta)
+          .map(([id, meta]) => {
+            const observations = Object.entries(annotations[id] || {})
+              .sort((a, b) => Number(a[0]) - Number(b[0]))
+              .map(([index, p]) => ({
+                frame_index: Number(index),
+                pixel_px: p.missing ? null : p.pixel_px,
+                radar_range_m: p.missing ? null : (p.radar_range_m ?? null),
+              }));
+            const track = {
+              id,
+              object: meta.object,
+              point_kind: meta.object === 'ball' ? 'ball_center' : 'club_feature',
+              source: { kind: 'manual_annotation', description: meta.description.trim() },
+              observations,
+            };
+            if (observations.some((o) => o.radar_range_m != null)) track.radar_range_source = meta.rangeSource.trim();
+            return track;
+          })
+          .filter((track) => track.observations.length);
+        return {
+          version: 1,
+          capture_npz_sha256: capture.capture_npz_sha256,
+          metadata_sha256: capture.metadata_sha256,
+          tracks,
+        };
+      }
+      function changed() {
+        invalidateReport();
+        saveDraft();
+        renderTrack();
+        updateButtons();
+      }
+      async function loadRuns() {
+        const version = ++scopeVersion;
+        frameVersion++;
+        compareVersion++;
+        scope = null;
+        capture = null;
+        reloadRequired = false;
+        $('run').innerHTML = '<option value="">Loading saved runs…</option>';
+        $('capture').innerHTML = '<option value="">Choose a capture</option>';
+        $('capture').disabled = true;
+        clearFrameView();
+        invalidateReport();
+        updateButtons();
+        showError('');
+        const tester = $('tester-id').value.trim();
+        try {
+          const body = await jsonFetch('/api/tester/attempts?' + query({ tester_id: tester }));
+          if (version !== scopeVersion || tester !== $('tester-id').value.trim()) return;
+          scopes = (body.scopes || []).filter((s) => s.tester_id === tester);
+          $('run').innerHTML =
+            '<option value="">Choose a saved run</option>' +
+            scopes.map((s, i) => `<option value="${i}">${esc(s.arm_id)} · ${esc(s.run)}</option>`).join('');
+        } catch (error) {
+          if (version === scopeVersion) showError(error);
+        }
+      }
+      async function selectRun() {
+        const version = ++scopeVersion;
+        frameVersion++;
+        compareVersion++;
+        capture = null;
+        const selected = $('run').value;
+        scope = selected === '' ? null : scopes[Number(selected)] || null;
+        $('capture').disabled = true;
+        $('capture').innerHTML = '<option value="">Choose a capture</option>';
+        clearFrameView();
+        $('capture-info').textContent = scope ? 'Loading saved captures…' : 'Select an exact run and capture.';
+        invalidateReport();
+        updateButtons();
+        if (!scope) return;
+        try {
+          const body = await jsonFetch('/api/tester/review/captures?' + query(scopeQuery()));
+          if (version !== scopeVersion) return;
+          const captures = body.captures || [];
+          $('capture').innerHTML =
+            '<option value="">Choose a capture</option>' +
+            captures
+              .map(
+                (c) =>
+                  `<option value="${esc(c.id)}" ${c.available === false ? 'disabled' : ''}>${esc(c.id)}${c.available === false ? ' — unavailable' : ''}</option>`
+              )
+              .join('');
+          $('capture').dataset.items = JSON.stringify(captures);
+          $('capture').disabled = false;
+          $('capture-info').textContent = captures.length
+            ? 'Choose an available capture.'
+            : 'No saved camera captures in this run.';
+        } catch (error) {
+          if (version === scopeVersion) {
+            showError(error);
+            $('capture-info').textContent = 'Capture list unavailable.';
+          }
+        }
+      }
+      async function selectCapture() {
+        const selected = $('capture').value;
+        const id =
+          selected === ''
+            ? null
+            : JSON.parse($('capture').dataset.items || '[]').find((item) => item.id === selected)?.id;
+        const version = ++scopeVersion;
+        frameVersion++;
+        compareVersion++;
+        capture = null;
+        reloadRequired = false;
+        clearFrameView();
+        invalidateReport();
+        updateButtons();
+        if (!id) return;
+        try {
+          const body = await jsonFetch('/api/tester/review/capture?' + query({ ...scopeQuery(), capture_id: id }));
+          if (version !== scopeVersion) return;
+          capture = body;
+          frameIndex = 0;
+          $('frame-index').max = String(body.frame_count - 1);
+          $('frame-index').value = '0';
+          $('capture-info').textContent =
+            `${body.capture_id} · ${body.frame_count} frames · ${body.width}×${body.height}`;
+          loadDraft();
+          await loadFrame();
+        } catch (error) {
+          if (version === scopeVersion) showError(error);
+        }
+      }
+      async function loadFrame() {
+        if (!capture) return;
+        const version = ++frameVersion,
+          bound = capture.capture_id;
+        $('frame').dataset.loaded = 'false';
+        $('marker').hidden = true;
+        $('frame-time').textContent = `Loading frame ${frameIndex + 1}/${capture.frame_count}...`;
+        updateButtons();
+        const url =
+          '/api/tester/review/frame?' +
+          query({
+            ...scopeQuery(),
+            capture_id: bound,
+            frame_index: String(frameIndex),
+            capture_npz_sha256: capture.capture_npz_sha256,
+            metadata_sha256: capture.metadata_sha256,
+          });
+        try {
+          const response = await fetch(url, { cache: 'no-store' });
+          if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            const error = new Error(body.error || `request failed (${response.status})`);
+            error.status = response.status;
+            throw error;
+          }
+          const blob = await response.blob();
+          if (version !== frameVersion || !capture || capture.capture_id !== bound) return;
+          const objectUrl = URL.createObjectURL(blob);
+          try {
+            await new Promise((resolve, reject) => {
+              const preload = new Image();
+              preload.onload = resolve;
+              preload.onerror = reject;
+              preload.src = objectUrl;
+            });
+            if (version !== frameVersion || !capture || capture.capture_id !== bound) return;
+            const image = $('frame');
+            image.src = objectUrl;
+            await image.decode();
+            if (version !== frameVersion || !capture || capture.capture_id !== bound) return;
+          } finally {
+            URL.revokeObjectURL(objectUrl);
+          }
+          $('frame').dataset.loaded = 'true';
+          const sensor = capture.sensor_timestamp_ns?.[frameIndex],
+            host = capture.host_timestamp_ns?.[frameIndex];
+          $('frame-time').textContent =
+            `Frame ${frameIndex + 1}/${capture.frame_count} · sensor ${sensor ?? 'missing'} ns · host ${host ?? 'missing'} ns`;
+          renderTrack();
+          updateButtons();
+        } catch (error) {
+          if (version !== frameVersion) return;
+          if (error.status === 409) {
+            reloadRequired = true;
+            $('frame-time').textContent =
+              'Capture files changed. Reload the capture before annotating; this draft was not rebound.';
+          }
+          showError(error);
+          updateButtons();
+        }
+      }
+      function setFrame(value) {
+        if (!capture) return;
+        const parsed = Number(value);
+        frameIndex = Math.max(0, Math.min(capture.frame_count - 1, Number.isFinite(parsed) ? Math.trunc(parsed) : 0));
+        $('frame-index').value = String(frameIndex);
+        loadFrame();
+      }
+      function annotate(event) {
+        if (!capture || $('frame').dataset.loaded !== 'true' || reloadRequired) return;
+        const rect = $('frame').getBoundingClientRect();
+        if (
+          event.clientX < rect.left ||
+          event.clientX > rect.right ||
+          event.clientY < rect.top ||
+          event.clientY > rect.bottom
+        )
+          return;
+        const x = Math.max(
+            0,
+            Math.min(capture.width - 1, ((event.clientX - rect.left) / rect.width) * capture.width - 0.5)
+          ),
+          y = Math.max(
+            0,
+            Math.min(capture.height - 1, ((event.clientY - rect.top) / rect.height) * capture.height - 0.5)
+          );
+        let radarRange;
+        try {
+          radarRange = parseRange();
+        } catch (error) {
+          showError(error);
+          return;
+        }
+        annotations[activeTrack][frameIndex] = { pixel_px: [x, y], radar_range_m: radarRange };
+        changed();
+      }
+      function parseRange() {
+        const text = $('range').value.trim();
+        if (!text) return null;
+        const value = Number(text);
+        if (!Number.isFinite(value) || value <= 0) {
+          throw new Error('Radar range must be a positive finite value or left blank.');
+        }
+        return value;
+      }
+      function download(name, value) {
+        downloadText(name, JSON.stringify(value, null, 2) + '\n');
+      }
+      function downloadText(name, text) {
+        const blob = new Blob([text], { type: 'application/json' }),
+          url = URL.createObjectURL(blob),
+          a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+      }
+      function fmt(value, digits = 4) {
+        return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : 'withheld';
+      }
+      function renderReport(value) {
+        const reasons = (value.compatibility?.reasons || []).map((r) => `<div class="reason">${esc(r)}</div>`).join('');
+        const tracks = (value.tracks || [])
+          .map(
+            (t) =>
+              `<div class="report-track"><strong>${esc(t.id)} · ${esc(t.point_kind)}</strong>${t.observations.map((o) => (o.status === 'withheld' ? `<div class="reason">Frame ${o.frame_index}: withheld — ${esc(o.error)}</div>` : `<div class="metric">Frame ${o.frame_index}: angular Δ ${fmt(o.angular_difference_deg)} deg${o.position_difference_m == null ? '' : ` · position Δ ${fmt(o.position_difference_m)} m`}</div>`)).join('')}${t.intervals.map((i) => (i.status === 'withheld' ? `<div class="reason">Frames ${i.start_frame_index}→${i.end_frame_index}: withheld — ${esc(i.error)}</div>` : `<div class="metric">Frames ${i.start_frame_index}→${i.end_frame_index}: speed Δ ${fmt(i.differences.speed_difference_mps)} m/s · velocity Δ ${fmt(i.differences.velocity_difference_mps)} m/s · horizontal direction Δ ${fmt(i.differences.horizontal_direction_difference_deg)} deg · vertical direction Δ ${fmt(i.differences.vertical_direction_difference_deg)} deg</div>`)).join('')}</div>`
+          )
+          .join('');
+        $('report').innerHTML =
+          `<div class="summary"><span>Status <b>${esc(value.status)}</b></span><span>Compared points <b>${value.counts?.observations_compared ?? 0}</b></span><span>Withheld points <b>${value.counts?.observations_withheld ?? 0}</b></span><span>Compared intervals <b>${value.counts?.intervals_compared ?? 0}</b></span></div><p class="warning">Conditional model disagreement only. This is not an accuracy result or a launch metric.</p><p class="muted">Signed speed and direction differences are candidate minus legacy; angular, position, and velocity-distance differences are magnitudes.</p>${reasons}${tracks}`;
+      }
+      async function compare() {
+        const manifest = makeManifest();
+        if (!manifest.tracks.length) {
+          showError(new Error('Annotate or mark missing at least one saved point.'));
+          return;
+        }
+        if (manifest.tracks.some((t) => !t.source.description)) {
+          showError(new Error('Describe the annotation source for every included track.'));
+          return;
+        }
+        if (manifest.tracks.some((t) => t.observations.some((o) => o.radar_range_m != null) && !t.radar_range_source)) {
+          showError(new Error('Describe the radar range source before comparing.'));
+          return;
+        }
+        const version = ++compareVersion,
+          bound = draftKey();
+        $('compare').disabled = true;
+        $('compare-status').textContent = 'Comparing frozen saved inputs…';
+        showError('');
+        try {
+          const response = await fetch('/api/tester/review/compare', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...scopeQuery(),
+              capture_id: capture.capture_id,
+              capture_npz_sha256: capture.capture_npz_sha256,
+              metadata_sha256: capture.metadata_sha256,
+              candidate_json: files.candidate_json,
+              profile_json: files.profile_json,
+              setup_json: files.setup_json,
+              tracks_json: JSON.stringify(manifest),
+            }),
+          });
+          const rawText = await response.text();
+          let body;
+          try {
+            body = JSON.parse(rawText);
+          } catch {
+            body = {};
+          }
+          if (!response.ok) {
+            const error = new Error(body.error || `request failed (${response.status})`);
+            error.status = response.status;
+            throw error;
+          }
+          if (version !== compareVersion || bound !== draftKey()) return;
+          report = body;
+          reportRawText = rawText;
+          renderReport(body);
+          $('download-report').disabled = false;
+          $('compare-status').textContent =
+            `Current ${body.status} report. Finite feature-interval discrepancies only.`;
+        } catch (error) {
+          if (version !== compareVersion) return;
+          if (error.status === 409) {
+            reloadRequired = true;
+            $('compare-status').textContent = 'Capture files changed. Reload required; the draft was not rebound.';
+          }
+          showError(error);
+        } finally {
+          updateButtons();
+        }
+      }
+      function dragScroll(node) {
+        let start = null,
+          dragged = false;
+        node.addEventListener('pointerdown', (e) => {
+          if (e.button !== 0) return;
+          start = { x: e.clientX, left: node.scrollLeft, id: e.pointerId };
+          dragged = false;
+        });
+        node.addEventListener('pointermove', (e) => {
+          if (!start || e.pointerId !== start.id) return;
+          const dx = e.clientX - start.x;
+          if (Math.abs(dx) > 16) {
+            dragged = true;
+            node.setPointerCapture(e.pointerId);
+            node.scrollLeft = start.left - dx;
+          }
+        });
+        node.addEventListener('pointerup', () => (start = null));
+        node.addEventListener(
+          'click',
+          (e) => {
+            if (dragged) {
+              e.preventDefault();
+              e.stopPropagation();
+              dragged = false;
+            }
+          },
+          true
+        );
+      }
+      try {
+        $('tester-id').value = localStorage.getItem(TESTER_KEY) || '';
+      } catch (error) {
+        $('tester-id').value = '';
+        $('storage-error').textContent = `Tester ID could not be restored: ${error.message}.`;
+      }
+      $('tester-id').addEventListener('input', () => {
+        try {
+          localStorage.setItem(TESTER_KEY, $('tester-id').value.trim());
+        } catch (error) {
+          $('storage-error').textContent = `Tester ID could not be saved: ${error.message}.`;
+        }
+        scope = null;
+        loadRuns();
+      });
+      $('refresh-runs').onclick = loadRuns;
+      $('run').onchange = selectRun;
+      $('capture').onchange = selectCapture;
+      $('previous').onclick = () => setFrame(frameIndex - 1);
+      $('next').onclick = () => setFrame(frameIndex + 1);
+      $('frame-index').onchange = (e) => setFrame(e.target.value);
+      $('frame').addEventListener('click', annotate);
+      window.addEventListener('resize', renderTrack);
+      $('track-tabs').addEventListener('click', (e) => {
+        const button = e.target.closest('[data-track]');
+        if (!button) return;
+        activeTrack = button.dataset.track;
+        renderTrack();
+      });
+      dragScroll($('track-tabs'));
+      function newTrack(object) {
+        let index = 1,
+          id;
+        do {
+          id = `${object === 'ball' ? 'ball' : 'club-feature'}-${index++}`;
+        } while (trackMeta[id]);
+        trackMeta[id] = { object, description: 'Manual saved-frame annotation', rangeSource: '' };
+        annotations[id] = {};
+        activeTrack = id;
+        changed();
+      }
+      $('new-ball').onclick = () => newTrack('ball');
+      $('new-club').onclick = () => newTrack('club');
+      $('source-description').addEventListener('input', () => {
+        trackMeta[activeTrack].description = $('source-description').value;
+        changed();
+      });
+      $('range-source').addEventListener('input', () => {
+        trackMeta[activeTrack].rangeSource = $('range-source').value;
+        changed();
+      });
+      $('range').addEventListener('change', () => {
+        const point = currentPoint();
+        if (point && !point.missing) {
+          try {
+            point.radar_range_m = parseRange();
+            showError('');
+            changed();
+          } catch (error) {
+            showError(error);
+          }
+        }
+      });
+      $('apply-pixel').onclick = () => {
+        const xText = $('pixel-x').value.trim(),
+          yText = $('pixel-y').value.trim(),
+          x = Number(xText),
+          y = Number(yText);
+        if (
+          !Number.isFinite(x) ||
+          !Number.isFinite(y) ||
+          x < 0 ||
+          y < 0 ||
+          x > capture.width - 1 ||
+          y > capture.height - 1
+        ) {
+          showError(
+            new Error(
+              `Saved-image pixel centers must be within 0≤x≤${capture.width - 1} and 0≤y≤${capture.height - 1}.`
+            )
+          );
+          return;
+        }
+        if (!xText || !yText) {
+          showError(new Error('Enter both saved-image x and y coordinates.'));
+          return;
+        }
+        let radarRange;
+        try {
+          radarRange = parseRange();
+        } catch (error) {
+          showError(error);
+          return;
+        }
+        showError('');
+        annotations[activeTrack][frameIndex] = { pixel_px: [x, y], radar_range_m: radarRange };
+        changed();
+      };
+      $('mark-missing').onclick = () => {
+        annotations[activeTrack][frameIndex] = { missing: true, pixel_px: null, radar_range_m: null };
+        changed();
+      };
+      $('clear-point').onclick = () => {
+        delete annotations[activeTrack][frameIndex];
+        changed();
+      };
+      [
+        ['candidate-file', 'candidate_json'],
+        ['profile-file', 'profile_json'],
+        ['setup-file', 'setup_json'],
+      ].forEach(([id, key]) =>
+        $(id).addEventListener('change', async (e) => {
+          const version = ++fileVersions[key],
+            input = e.target,
+            file = input.files[0];
+          files[key] = null;
+          invalidateReport();
+          updateButtons();
+          if (!file) return;
+          try {
+            const text = await file.text();
+            if (version !== fileVersions[key] || input.files[0] !== file) return;
+            files[key] = text;
+          } catch (error) {
+            if (version === fileVersions[key]) showError(new Error(`Could not read ${file.name}: ${error.message}`));
+          }
+          updateButtons();
+        })
+      );
+      $('compare').onclick = compare;
+      $('download-manifest').onclick = () => download(`${capture.capture_id}-tracks.json`, makeManifest());
+      $('download-report').onclick = () =>
+        report && reportRawText && downloadText(`${capture.capture_id}-comparison.json`, reportRawText);
+      loadRuns();
+    </script>
+  </body>
+</html>

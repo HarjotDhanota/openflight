@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fusion diagnostics</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #fff;
+        --fg: #17191e;
+        --muted: #5e6675;
+        --panel: #f4f6f9;
+        --line: #d7dce5;
+        --accent: #37638f;
+        --bad: #b42318;
+        --warn: #946200;
+        --ok: #147a45;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #131519;
+          --fg: #eceef2;
+          --muted: #a4abba;
+          --panel: #1b1e24;
+          --line: #303640;
+          --accent: #8cb7e2;
+          --bad: #ff7b72;
+          --warn: #e3b341;
+          --ok: #5ed39a;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        font-size: clamp(1rem, 1.5vw + 0.45rem, 1.5rem);
+      }
+      body {
+        margin: 0;
+        padding: 0.65rem;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          1rem/1.35 system-ui,
+          sans-serif;
+      }
+      main {
+        max-width: 72rem;
+        margin: auto;
+      }
+      h1 {
+        font-size: 1.5rem;
+        margin: 0;
+      }
+      h2 {
+        font-size: 1.05rem;
+        margin: 0.2rem 0 0.5rem;
+      }
+      p {
+        margin: 0.35rem 0;
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+      .error {
+        color: var(--bad);
+      }
+      .warning {
+        color: var(--warn);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);
+        gap: 0.65rem;
+        align-items: start;
+      }
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 0.45rem;
+        background: var(--panel);
+        padding: 0.55rem;
+        min-width: 0;
+      }
+      .stack {
+        display: grid;
+        gap: 0.45rem;
+      }
+      .row {
+        display: flex;
+        gap: 0.4rem;
+        align-items: end;
+        flex-wrap: wrap;
+      }
+      label {
+        display: grid;
+        gap: 0.15rem;
+        color: var(--muted);
+        font-size: 0.78rem;
+        flex: 1 1 9rem;
+        min-width: 0;
+      }
+      input,
+      select,
+      button {
+        min-height: 2.55rem;
+        border: 1px solid var(--line);
+        border-radius: 0.4rem;
+        background: var(--bg);
+        color: var(--fg);
+        font: inherit;
+        padding: 0.35rem 0.5rem;
+        min-width: 0;
+      }
+      input,
+      select {
+        width: 100%;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      button.active {
+        border-color: var(--accent);
+        box-shadow: inset 0 0 0 2px var(--accent);
+      }
+      .shot-list {
+        max-height: 18rem;
+        overflow: auto;
+        touch-action: none;
+        display: grid;
+        gap: 0.3rem;
+      }
+      .shot-list button {
+        text-align: left;
+        width: 100%;
+        touch-action: none;
+      }
+      .summary,
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+        gap: 0.4rem;
+      }
+      .card,
+      .reason {
+        border: 1px solid var(--line);
+        background: var(--bg);
+        border-radius: 0.4rem;
+        padding: 0.45rem;
+        overflow-wrap: anywhere;
+      }
+      .metric-value {
+        font-size: clamp(1.1rem, min(4vw, 7vh), 1.8rem);
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+      .metric-meta {
+        color: var(--muted);
+        font-size: 0.72rem;
+      }
+      .state {
+        font-weight: 700;
+        text-transform: capitalize;
+      }
+      .hidden-block {
+        border-color: var(--warn);
+      }
+      #diagnostic-error {
+        min-height: 1.1rem;
+      }
+      @media (max-width: 800px), (max-height: 480px) {
+        body {
+          padding: 0.4rem;
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        .panel {
+          padding: 0.4rem;
+        }
+        .shot-list {
+          max-height: 9rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="row">
+        <div>
+          <h1>Fusion diagnostics</h1>
+          <p class="muted">
+            Recorded snapshots from the existing live pipeline. All outputs are unvalidated; estimated and mock values
+            carry additional labels.
+          </p>
+        </div>
+        <a href="/">Mode study</a>
+      </div>
+      <p id="diagnostic-error" class="error" role="alert"></p>
+      <p id="block-error" class="error" role="alert"></p>
+      <div class="grid">
+        <div class="stack">
+          <section class="panel stack">
+            <h2>1. Testing block</h2>
+            <p class="muted">
+              A hidden block reduces observer bias. It is a display setting, not access control or a hardware-test
+              boundary.
+            </p>
+            <div class="row">
+              <button id="start-block">Start hidden-metric block</button
+              ><button id="end-block" disabled>End block</button><button id="reveal" disabled>Reveal metrics</button>
+            </div>
+            <p id="block-status" class="warning">
+              Metrics are visible. Start a block before choosing a run to hide them.
+            </p>
+          </section>
+          <section class="panel stack">
+            <h2>2. Saved run</h2>
+            <label>Tester ID<input id="tester-id" autocomplete="off" /></label>
+            <div class="row">
+              <label
+                >Run<select id="run">
+                  <option value="">Choose a saved run</option>
+                </select></label
+              ><button id="refresh">Refresh</button>
+            </div>
+            <p id="reader-status" class="muted">Select an exact saved run.</p>
+          </section>
+          <section class="panel stack">
+            <h2>Shots</h2>
+            <div id="shot-list" class="shot-list"><p class="muted">No run selected.</p></div>
+          </section>
+        </div>
+        <section class="panel stack" id="detail">
+          <h2>Diagnostic snapshot</h2>
+          <div id="snapshot"><p class="muted">Select a run and shot.</p></div>
+        </section>
+      </div>
+    </main>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const TESTER_KEY = 'openflight-tester-id';
+      const BLOCK_KEY = 'openflight-fusion-hidden-block-v1';
+      let scopes = [];
+      let scope = null;
+      let snapshots = new Map();
+      let selectedIdentity = null;
+      let generation = 0;
+      let requestGeneration = null;
+      let pollTimer = null;
+      let block = { id: null, active: false, hidden: false };
+
+      const escapeHtml = (value) =>
+        String(value ?? '').replace(
+          /[&<>"']/g,
+          (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]
+        );
+
+      function showError(error) {
+        $('diagnostic-error').textContent = error ? error.message || String(error) : '';
+      }
+
+      function scopeQuery() {
+        return scope ? { tester_id: scope.tester_id, arm_id: scope.arm_id, run_dir: scope.run_dir } : {};
+      }
+
+      async function fetchJson(url) {
+        const response = await fetch(url, { cache: 'no-store' });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || `request failed (${response.status})`);
+        return body;
+      }
+
+      function saveBlock() {
+        try {
+          localStorage.setItem(BLOCK_KEY, JSON.stringify(block));
+          $('block-error').textContent = '';
+          return true;
+        } catch (error) {
+          $('block-error').textContent = `Testing-block state could not be saved: ${error.message}`;
+          return false;
+        }
+      }
+
+      function renderBlock() {
+        $('start-block').disabled = Boolean(scope) || block.active;
+        $('end-block').disabled = !block.active;
+        $('reveal').disabled = !block.hidden || block.active;
+        $('detail').classList.toggle('hidden-block', block.hidden);
+        if (block.active) {
+          $('block-status').textContent = `Block ${block.id}: active. Numeric metrics and discrepancies stay hidden.`;
+        } else if (block.hidden) {
+          $('block-status').textContent =
+            `Block ${block.id}: ended. Metrics remain hidden until Reveal metrics is pressed.`;
+        } else {
+          $('block-status').textContent = 'Metrics are visible. Start a block before choosing a run to hide them.';
+        }
+      }
+
+      function snapshotIdentity(session, shot) {
+        return `${session.session_uuid || `legacy:${session.session_file}`}::${shot.shot_number}`;
+      }
+
+      function outcomeReason(shot) {
+        return (
+          shot.reason ||
+          (shot.phase === 'pending' ? 'Processing has not reached a terminal result.' : 'No reason recorded.')
+        );
+      }
+
+      function renderShots(response) {
+        const sessions = response.sessions || [];
+        const items = [];
+        for (const session of sessions) {
+          if (!session.diagnostics_available) {
+            items.push(
+              `<div class="reason">${escapeHtml(session.session_file)}: diagnostics unavailable — ${escapeHtml((session.reasons || []).join('; ') || 'legacy session')}</div>`
+            );
+            continue;
+          }
+          const sessionKey = session.session_uuid || `legacy:${session.session_file}`;
+          const latestShots = [...snapshots.entries()]
+            .filter(
+              ([, entry]) => (entry.session.session_uuid || `legacy:${entry.session.session_file}`) === sessionKey
+            )
+            .map(([identity, entry]) => ({ identity, shot: entry.shot }));
+          for (const { identity, shot } of latestShots) {
+            items.push(
+              `<button data-identity="${escapeHtml(identity)}" class="${identity === selectedIdentity ? 'active' : ''}">Session ${escapeHtml(session.session_uuid || session.session_file)} · shot ${shot.shot_number} · revision ${shot.revision} · ${escapeHtml(shot.outcome)}</button>`
+            );
+          }
+          if (session.ended && latestShots.some(({ shot }) => shot.phase === 'pending')) {
+            items.push(
+              '<div class="reason">Session ended while a diagnostic remained pending; no complete result is inferred.</div>'
+            );
+          }
+        }
+        $('shot-list').innerHTML =
+          items.join('') || '<p class="muted">No diagnostic snapshots recorded for this run.</p>';
+      }
+
+      function formatValue(metric) {
+        return metric.value === null ? 'Unavailable' : `${metric.value} ${metric.unit}`;
+      }
+
+      function renderSnapshot() {
+        const entry = snapshots.get(selectedIdentity);
+        if (!entry) {
+          $('snapshot').innerHTML = '<p class="muted">Select a recorded shot.</p>';
+          return;
+        }
+        const { session, shot } = entry;
+        let html = `<div class="summary"><div class="card"><span class="state">${escapeHtml(shot.outcome)}</span><div class="metric-meta">${escapeHtml(shot.phase)} · revision ${shot.revision}</div></div><div class="card">Session ${escapeHtml(session.session_uuid || session.session_file)}<div class="metric-meta">Shot ${shot.shot_number} · ${escapeHtml(shot.recorded_at)}</div></div></div>`;
+        if (shot.outcome !== 'complete' || shot.reason)
+          html += `<div class="reason">${escapeHtml(outcomeReason(shot))}</div>`;
+        if (block.hidden) {
+          html +=
+            '<div class="reason">Metrics and discrepancies are hidden for this testing block. States, availability, and terminal reasons remain visible.</div>';
+          $('snapshot').innerHTML = html;
+          return;
+        }
+        const metrics = (shot.metrics || [])
+          .map((metric) => {
+            const reason = metric.reason ? `<div class="metric-meta">${escapeHtml(metric.reason)}</div>` : '';
+            const recordedStatus = metric.recorded_status ? ` · recorded ${escapeHtml(metric.recorded_status)}` : '';
+            return `<div class="card"><strong>${escapeHtml(metric.label)}</strong><div class="metric-value">${escapeHtml(formatValue(metric))}</div><div class="metric-meta">${escapeHtml(metric.source)} · ${escapeHtml(metric.status)} · ${escapeHtml(metric.validation)}${recordedStatus}</div><div class="metric-meta">${escapeHtml(metric.definition)}</div>${reason}</div>`;
+          })
+          .join('');
+        html += `<div class="metrics">${metrics || '<div class="reason">No metric records were preserved.</div>'}</div>`;
+        const comparisons = (shot.comparisons || [])
+          .map((comparison) =>
+            comparison.status === 'available' && comparison.value !== null
+              ? `<div class="card"><strong>${escapeHtml(comparison.label)}</strong><div class="metric-value">${comparison.value} ${escapeHtml(comparison.unit)}</div><div class="metric-meta">Disagreement, not reference accuracy · shared inputs: ${escapeHtml((comparison.shared_inputs || []).join(', '))}</div></div>`
+              : `<div class="reason">${escapeHtml(comparison.label)}: withheld — ${escapeHtml(comparison.reason || 'unavailable')}</div>`
+          )
+          .join('');
+        html += comparisons
+          ? `<h2>Compatible recorded comparisons</h2><div class="metrics">${comparisons}</div>`
+          : '<div class="reason">No compatible legacy diagnostic comparison was recorded.</div>';
+        html +=
+          '<p class="warning">These are pipeline outputs and model disagreements, not TrackMan-equivalent or reference-validated accuracy.</p>';
+        $('snapshot').innerHTML = html;
+      }
+
+      function mergeResponse(response) {
+        const returnedIdentities = new Set();
+        for (const session of response.sessions || []) {
+          for (const shot of session.shots || []) {
+            const identity = snapshotIdentity(session, shot);
+            returnedIdentities.add(identity);
+            const previous = snapshots.get(identity);
+            if (!previous || shot.revision >= previous.shot.revision) snapshots.set(identity, { session, shot });
+          }
+        }
+        for (const identity of snapshots.keys()) {
+          if (!returnedIdentities.has(identity)) snapshots.delete(identity);
+        }
+        if (selectedIdentity && !snapshots.has(selectedIdentity)) selectedIdentity = null;
+        if (!selectedIdentity && snapshots.size) selectedIdentity = [...snapshots.keys()].at(-1);
+        renderShots(response);
+        renderSnapshot();
+        $('reader-status').textContent +=
+          ` · ${snapshots.size} recorded diagnostic shot${snapshots.size === 1 ? '' : 's'}`;
+      }
+
+      function schedulePoll(version) {
+        clearTimeout(pollTimer);
+        if (!scope || document.hidden || version !== generation) return;
+        pollTimer = setTimeout(() => loadDiagnostics(version), 1000);
+      }
+
+      async function loadDiagnostics(version = generation) {
+        if (!scope || requestGeneration === version || document.hidden || version !== generation) return;
+        requestGeneration = version;
+        const requestedScope = scope;
+        try {
+          const body = await fetchJson('/api/tester/diagnostics?' + new URLSearchParams(scopeQuery()));
+          if (version !== generation || requestedScope !== scope) return;
+          showError(null);
+          $('reader-status').textContent =
+            `${body.status} · ${body.read_complete ? 'complete read' : 'partial read'}${body.retention?.truncated ? ' · retained history truncated' : ''}`;
+          for (const reason of body.reasons || []) {
+            if (reason) $('reader-status').textContent += ` · ${reason}`;
+          }
+          mergeResponse(body);
+        } catch (error) {
+          if (version !== generation || requestedScope !== scope) return;
+          snapshots.clear();
+          selectedIdentity = null;
+          $('shot-list').innerHTML = '<p class="error">Diagnostics disconnected. Retry or refresh this run.</p>';
+          $('snapshot').innerHTML = '<p class="error">No current diagnostic values are shown while disconnected.</p>';
+          $('reader-status').textContent = 'Disconnected or unavailable.';
+          showError(error);
+        } finally {
+          if (requestGeneration === version) requestGeneration = null;
+          schedulePoll(version);
+        }
+      }
+
+      async function loadRuns() {
+        const version = ++generation;
+        clearTimeout(pollTimer);
+        scope = null;
+        snapshots.clear();
+        selectedIdentity = null;
+        renderBlock();
+        $('run').innerHTML = '<option value="">Loading saved runs…</option>';
+        $('shot-list').innerHTML = '<p class="muted">No run selected.</p>';
+        $('snapshot').innerHTML = '<p class="muted">Select a run and shot.</p>';
+        const testerId = $('tester-id').value.trim();
+        try {
+          const body = await fetchJson('/api/tester/attempts?' + new URLSearchParams({ tester_id: testerId }));
+          if (version !== generation || testerId !== $('tester-id').value.trim()) return;
+          scopes = (body.scopes || []).filter((item) => item.tester_id === testerId);
+          $('run').innerHTML =
+            '<option value="">Choose a saved run</option>' +
+            scopes
+              .map(
+                (item, index) =>
+                  `<option value="${index}">${escapeHtml(item.arm_id)} · ${escapeHtml(item.run)}</option>`
+              )
+              .join('');
+          showError(null);
+        } catch (error) {
+          if (version === generation) showError(error);
+        }
+      }
+
+      function selectRun() {
+        const selected = $('run').value;
+        generation++;
+        clearTimeout(pollTimer);
+        scope = selected === '' ? null : scopes[Number(selected)] || null;
+        snapshots.clear();
+        selectedIdentity = null;
+        renderBlock();
+        $('shot-list').innerHTML = scope
+          ? '<p class="muted">Loading diagnostics…</p>'
+          : '<p class="muted">No run selected.</p>';
+        $('snapshot').innerHTML = '<p class="muted">Select a recorded shot.</p>';
+        $('reader-status').textContent = scope ? 'Connecting to recorded diagnostics…' : 'Select an exact saved run.';
+        if (scope) loadDiagnostics(generation);
+      }
+
+      function dragScroll(node) {
+        let start = null;
+        let dragged = false;
+        node.addEventListener('pointerdown', (event) => {
+          if (event.button !== 0) return;
+          start = { y: event.clientY, top: node.scrollTop, id: event.pointerId };
+          dragged = false;
+        });
+        node.addEventListener('pointermove', (event) => {
+          if (!start || event.pointerId !== start.id) return;
+          const distance = event.clientY - start.y;
+          if (Math.abs(distance) > 16) {
+            dragged = true;
+            node.setPointerCapture(event.pointerId);
+            node.scrollTop = start.top - distance;
+          }
+        });
+        node.addEventListener('pointerup', () => {
+          start = null;
+        });
+        node.addEventListener(
+          'click',
+          (event) => {
+            if (!dragged) return;
+            event.preventDefault();
+            event.stopPropagation();
+            dragged = false;
+          },
+          true
+        );
+      }
+
+      try {
+        $('tester-id').value = localStorage.getItem(TESTER_KEY) || '';
+        const storedBlock = JSON.parse(localStorage.getItem(BLOCK_KEY) || 'null');
+        if (storedBlock && typeof storedBlock.hidden === 'boolean') block = storedBlock;
+      } catch (error) {
+        block = { id: 'storage-recovery', active: false, hidden: true };
+        $('block-error').textContent =
+          `Saved diagnostic settings could not be restored: ${error.message}. Metrics remain hidden until explicitly revealed.`;
+      }
+      renderBlock();
+      $('start-block').onclick = () => {
+        if (scope) return;
+        const previous = block;
+        block = { id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), active: true, hidden: true };
+        if (!saveBlock()) {
+          block = previous;
+          $('block-error').textContent += ' Hidden block was not started.';
+        }
+        renderBlock();
+        renderSnapshot();
+      };
+      $('end-block').onclick = () => {
+        block.active = false;
+        saveBlock();
+        renderBlock();
+        renderSnapshot();
+      };
+      $('reveal').onclick = () => {
+        block.hidden = false;
+        saveBlock();
+        renderBlock();
+        renderSnapshot();
+      };
+      $('tester-id').addEventListener('input', () => {
+        try {
+          localStorage.setItem(TESTER_KEY, $('tester-id').value.trim());
+        } catch (error) {
+          showError(new Error(`Tester ID could not be saved: ${error.message}`));
+        }
+        loadRuns();
+      });
+      $('refresh').onclick = loadRuns;
+      $('run').onchange = selectRun;
+      $('shot-list').addEventListener('click', (event) => {
+        const button = event.target.closest('[data-identity]');
+        if (!button) return;
+        selectedIdentity = button.dataset.identity;
+        renderShots({ sessions: [...new Set([...snapshots.values()].map((entry) => entry.session))] });
+        renderSnapshot();
+      });
+      dragScroll($('shot-list'));
+      document.addEventListener('visibilitychange', () => {
+        clearTimeout(pollTimer);
+        if (!document.hidden && scope) loadDiagnostics(generation);
+      });
+      loadRuns();
+    </script>
+  </body>
+</html>

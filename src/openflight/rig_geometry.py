@@ -11,6 +11,7 @@ image right (target-right), +y down, +z forward along the boresight.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from dataclasses import asdict, dataclass, field
@@ -23,6 +24,12 @@ SPEED_OF_SOUND_M_S = 343.0  # 20 C; the acoustic walk-back's default
 # diameter error is 12 % of range. It still runs; the warning names it.
 MIN_BALL_DIAMETER_PX = 8.0
 EDGE_MARGIN_RADII = 1.0
+
+
+def geometry_fingerprint(parameters: Mapping) -> str:
+    """SHA-256 of loaded parameters as sorted, compact, ASCII-escaped JSON."""
+    payload = json.dumps(parameters, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -75,10 +82,12 @@ class RigGeometry:
             missing.append("lens_height_above_floor_mm")
         radar_height = None
         lateral = None
+        forward = None
         if self.iwr_offset_mm is None:
             missing.append("iwr_offset_mm")
         else:
             lateral = -self.iwr_offset_mm[0] / 1000.0
+            forward = -self.iwr_offset_mm[2] / 1000.0
             if camera_height is not None:
                 radar_height = camera_height - self.iwr_offset_mm[1] / 1000.0
         if self.iwr_boresight_pitch_deg is None:
@@ -86,6 +95,7 @@ class RigGeometry:
         return EnclosureSetup(
             camera_mount_height_m=camera_height,
             camera_lateral_offset_m=lateral,
+            camera_forward_offset_m=forward,
             radar_height_m=radar_height,
             iwr_tilt_deg=self.iwr_boresight_pitch_deg,
             missing=tuple(missing),
@@ -137,6 +147,11 @@ class RigGeometry:
     def to_json(self, path: str | Path) -> None:
         Path(path).write_text(json.dumps(asdict(self), indent=1), encoding="utf-8")
 
+    def snapshot(self) -> dict:
+        """Preserve loaded values, including defaults, independently of the source file."""
+        parameters = asdict(self)
+        return {"parameters": parameters, "sha256": geometry_fingerprint(parameters)}
+
     @classmethod
     def from_json(cls, path: str | Path) -> "RigGeometry":
         data = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -156,11 +171,13 @@ class EnclosureSetup:
     iwr_tilt_deg: float | None
     missing: tuple[str, ...] = ()
     provenance: str = ""
+    camera_forward_offset_m: float | None = None
 
     def as_dict(self) -> dict:
         return {
             "camera_mount_height_m": self.camera_mount_height_m,
             "camera_lateral_offset_m": self.camera_lateral_offset_m,
+            "camera_forward_offset_m": self.camera_forward_offset_m,
             "radar_height_m": self.radar_height_m,
             "iwr_tilt_deg": self.iwr_tilt_deg,
             "missing": list(self.missing),

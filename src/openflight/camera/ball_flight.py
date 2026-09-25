@@ -11,19 +11,29 @@ from __future__ import annotations
 import math
 import statistics
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
 from openflight.camera.club_motion import (
     BALL_DIAMETER_MM,
     ReferenceBall,
+    detect_impact_reference_ball,
     detect_reference_ball,
 )
-from openflight.camera.geometry import deroll_normalized_offsets
+from openflight.camera.geometry import (
+    forward_distance_from_slant_range,
+    intersect_radar_range_sphere,
+    reference_ball_camera_model,
+    unit_world_rays,
+)
 
 MPH_PER_MS = 2.23694
 PARAMETER_SWEEP_SIZE = 27
 MAX_IWR_FALLBACK_ABS_DEG = 20.0
+
+# OpenCV's extension members are not visible to Pylint.
+# pylint: disable=no-member
 
 
 @dataclass(frozen=True)
@@ -59,17 +69,26 @@ class CameraBallGeometry:
     ball_diameter_m: float = BALL_DIAMETER_MM / 1000.0
     image_width_px: int = 640
     image_height_px: int = 400
+    camera_forward_offset_m: float = 0.0
+    calibrated_model: Any = None
 
     @property
     def ball_forward_m(self) -> float:
         """Forward radar-to-ball distance derived from tee slant range."""
         vertical = self.ball_height_m - self.radar_height_m
-        return math.sqrt(max(self.tee_range_m**2 - vertical**2, 1e-9))
+        return forward_distance_from_slant_range(self.tee_range_m, vertical)
+
+    @property
+    def camera_ball_forward_m(self) -> float:
+        """Forward camera-to-ball distance; positive camera offset is downrange."""
+        return self.ball_forward_m - self.camera_forward_offset_m
 
     @property
     def camera_origin(self) -> np.ndarray:
         """Camera origin in the radar-centered world coordinate system."""
-        return np.array([self.camera_lateral_offset_m, 0.0, self.camera_height_m])
+        return np.array(
+            [self.camera_lateral_offset_m, self.camera_forward_offset_m, self.camera_height_m]
+        )
 
 
 @dataclass(frozen=True)
@@ -90,6 +109,7 @@ class CameraBallEstimate:
     first_frame: int | None = None
     last_frame: int | None = None
     depth_source: str | None = None
+    reference_ball_diagnostics: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -124,27 +144,22 @@ def _camera_model(
     geometry: CameraBallGeometry,
 ) -> tuple[float, float, np.ndarray]:
     """Infer focal scale and pose from the stationary regulation-size ball."""
-    center_x = geometry.image_width_px / 2.0
-    center_y = geometry.image_height_px / 2.0
-    camera_ball_range = math.sqrt(
-        geometry.camera_lateral_offset_m**2
-        + geometry.ball_forward_m**2
-        + (geometry.ball_height_m - geometry.camera_height_m) ** 2
+    if geometry.calibrated_model is not None:
+        return (1.0, 0.0, np.zeros(3))
+    ball_position = np.array([0.0, geometry.ball_forward_m, geometry.ball_height_m])
+    return reference_ball_camera_model(
+        ball_x_px=anchor.x,
+        ball_y_px=anchor.y,
+        ball_diameter_px=anchor.diameter_px,
+        ball_diameter_m=geometry.ball_diameter_m,
+        image_width_px=geometry.image_width_px,
+        image_height_px=geometry.image_height_px,
+        horizontal_pixel_sign=geometry.horizontal_pixel_sign,
+        roll_correction_deg=geometry.roll_correction_deg,
+        camera_origin_lfu=geometry.camera_origin,
+        radar_origin_lfu=np.array([0.0, 0.0, geometry.radar_height_m]),
+        ball_position_lfu=ball_position,
     )
-    focal_px = anchor.diameter_px * camera_ball_range / geometry.ball_diameter_m
-    ball_x = geometry.horizontal_pixel_sign * (anchor.x - center_x) / focal_px
-    ball_z = -(anchor.y - center_y) / focal_px
-    _ball_x, ball_z = deroll_normalized_offsets(
-        ball_x,
-        ball_z,
-        geometry.roll_correction_deg,
-    )
-    pitch = math.atan2(
-        geometry.ball_height_m - geometry.camera_height_m,
-        geometry.ball_forward_m,
-    ) - math.atan2(ball_z, 1.0)
-    radar_from_camera = geometry.camera_origin - np.array([0.0, 0.0, geometry.radar_height_m])
-    return focal_px, pitch, radar_from_camera
 
 
 def _project(
@@ -154,16 +169,20 @@ def _project(
     model: tuple[float, float, np.ndarray],
     geometry: CameraBallGeometry,
 ) -> np.ndarray | None:
-    _focal_px, _pitch, radar_from_camera = model
-    ray = _camera_ray(candidate, model=model, geometry=geometry)
-    ray_offset = float(ray @ radar_from_camera)
-    discriminant = ray_offset**2 - (float(radar_from_camera @ radar_from_camera) - radar_range_m**2)
-    if discriminant < 0.0:
+    try:
+        if geometry.calibrated_model is not None:
+            return geometry.calibrated_model.reconstruct(
+                np.array([candidate.x, candidate.y]), radar_range_m
+            )
+        ray = _camera_ray(candidate, model=model, geometry=geometry)
+        return intersect_radar_range_sphere(
+            ray,
+            radar_range_m,
+            camera_origin_lfu=geometry.camera_origin,
+            radar_origin_lfu=np.array([0.0, 0.0, geometry.radar_height_m]),
+        )
+    except ValueError:
         return None
-    distance = -ray_offset + math.sqrt(discriminant)
-    if distance <= 0.0:
-        return None
-    return geometry.camera_origin + distance * ray
 
 
 def _camera_ray(
@@ -173,25 +192,18 @@ def _camera_ray(
     geometry: CameraBallGeometry,
 ) -> np.ndarray:
     """Return the unit camera ray through a detected ball centroid."""
+    if geometry.calibrated_model is not None:
+        return geometry.calibrated_model.rays(np.array([candidate.x, candidate.y]))
     focal_px, pitch, _radar_from_camera = model
-    image_x = (
-        geometry.horizontal_pixel_sign * (candidate.x - geometry.image_width_px / 2.0) / focal_px
+    return unit_world_rays(
+        np.array([candidate.x, candidate.y]),
+        focal_px=focal_px,
+        pitch_rad=pitch,
+        image_width_px=geometry.image_width_px,
+        image_height_px=geometry.image_height_px,
+        horizontal_pixel_sign=geometry.horizontal_pixel_sign,
+        roll_correction_deg=geometry.roll_correction_deg,
     )
-    image_z = -(candidate.y - geometry.image_height_px / 2.0) / focal_px
-    image_x, image_z = deroll_normalized_offsets(
-        image_x,
-        image_z,
-        geometry.roll_correction_deg,
-    )
-    ray = np.array(
-        [
-            image_x,
-            math.cos(pitch) - image_z * math.sin(pitch),
-            math.sin(pitch) + image_z * math.cos(pitch),
-        ]
-    )
-    ray /= np.linalg.norm(ray)
-    return ray
 
 
 def _project_from_ball_size(
@@ -201,6 +213,8 @@ def _project_from_ball_size(
     geometry: CameraBallGeometry,
 ) -> np.ndarray | None:
     """Project a regulation ball using apparent diameter as camera depth."""
+    if geometry.calibrated_model is not None:
+        return None
     measured_diameter_px = math.sqrt(4.0 * candidate.area / math.pi)
     if measured_diameter_px <= 0.0:
         return None
@@ -311,6 +325,152 @@ def _pixel_paths(
     return viable[:120]
 
 
+def _clean_launch_path(
+    path: list[tuple[int, BallCandidate]], frame_indices: list[int]
+) -> list[tuple[int, BallCandidate]]:
+    """Remove isolated trajectory outliers and fill only a single-frame gap."""
+    points = [(frame_indices[relative], candidate) for relative, candidate in path]
+    for _ in range(2):
+        if len(points) < 4:
+            break
+        slopes = [
+            (
+                (second.x - first.x) / (second_frame - first_frame),
+                (second.y - first.y) / (second_frame - first_frame),
+            )
+            for index, (first_frame, first) in enumerate(points)
+            for second_frame, second in points[index + 1 :]
+            if second_frame > first_frame
+        ]
+        velocity_x = statistics.median(value[0] for value in slopes)
+        velocity_y = statistics.median(value[1] for value in slopes)
+        intercept_x = statistics.median(
+            candidate.x - velocity_x * frame for frame, candidate in points
+        )
+        intercept_y = statistics.median(
+            candidate.y - velocity_y * frame for frame, candidate in points
+        )
+        residuals = [
+            math.hypot(
+                candidate.x - (intercept_x + velocity_x * frame),
+                candidate.y - (intercept_y + velocity_y * frame),
+            )
+            for frame, candidate in points
+        ]
+        kept = [point for point, residual in zip(points, residuals) if residual <= 6.0]
+        if len(kept) == len(points) or len(kept) < 4:
+            break
+        points = kept
+    filled = dict(points)
+    for (first_frame, first), (second_frame, second) in zip(points, points[1:]):
+        if second_frame - first_frame == 2:
+            filled[first_frame + 1] = BallCandidate(
+                x=(first.x + second.x) / 2.0,
+                y=(first.y + second.y) / 2.0,
+                area=round((first.area + second.area) / 2.0),
+                width=round((first.width + second.width) / 2.0),
+                height=round((first.height + second.height) / 2.0),
+                fill=(first.fill + second.fill) / 2.0,
+                circularity=(first.circularity + second.circularity) / 2.0,
+                mean_intensity=(first.mean_intensity + second.mean_intensity) / 2.0,
+            )
+    relative = {frame: index for index, frame in enumerate(frame_indices)}
+    return [(relative[frame], candidate) for frame, candidate in sorted(filled.items())]
+
+
+def _reference_candidate(candidate: ReferenceBall | None, reason: str | None) -> dict[str, Any]:
+    return {
+        "status": "available" if candidate is not None and reason is None else "rejected",
+        "reason": reason,
+        "candidate": vars(candidate).copy() if candidate is not None else None,
+    }
+
+
+# pylint: disable-next=too-many-branches
+def _select_reference_ball(frames, trigger_frame: int, geometry, ball_tracker):
+    """Choose between scene and impact evidence while retaining both observations."""
+    candidates: dict[str, ReferenceBall | None] = {"scene": None, "impact": None}
+    reasons: dict[str, str | None] = {"scene": None, "impact": None}
+    for name, detector, kwargs in (
+        ("scene", detect_reference_ball, {}),
+        ("impact", detect_impact_reference_ball, {"trigger_frame_index": trigger_frame}),
+    ):
+        try:
+            candidates[name] = detector(frames, **kwargs)
+        except (RuntimeError, ValueError) as error:
+            reasons[name] = f"{type(error).__name__}: {error}"
+
+    def plausible(candidate: ReferenceBall | None) -> bool:
+        basic = bool(
+            candidate is not None
+            and 9.0 <= candidate.diameter_px <= 30.0
+            and geometry.image_width_px * 0.1 <= candidate.x <= geometry.image_width_px * 0.9
+            and geometry.image_height_px * 0.4 <= candidate.y <= geometry.image_height_px * 0.95
+        )
+        if not basic or geometry.calibrated_model is None:
+            return basic
+        try:
+            point = geometry.calibrated_model.reconstruct(
+                np.asarray([candidate.x, candidate.y]), geometry.tee_range_m
+            )
+        except ValueError:
+            return False
+        expected = np.asarray([0.0, geometry.ball_forward_m, geometry.ball_height_m])
+        return float(np.linalg.norm(point - expected)) <= 0.15
+
+    observations = dict(candidates)
+    eligible = dict(candidates)
+    for name, candidate in observations.items():
+        if candidate is not None and not plausible(candidate):
+            reasons[name] = "candidate failed size or hitting-zone geometry"
+            eligible[name] = None
+    scene, impact = eligible["scene"], eligible["impact"]
+    agreement = None
+    selected = None
+    selected_source = None
+    if scene is not None and impact is not None:
+        distance = math.hypot(scene.x - impact.x, scene.y - impact.y)
+        size_ratio = impact.diameter_px / scene.diameter_px
+        agreement = distance <= max(8.0, 0.75 * scene.diameter_px) and 0.75 <= size_ratio <= 1.33
+        if agreement:
+            selected, selected_source = impact, "detector_agreement"
+        else:
+            anchor = ball_tracker.fallback() if ball_tracker is not None else None
+            if anchor is not None:
+
+                def score(candidate):
+                    return math.hypot(candidate.x - anchor.x, candidate.y - anchor.y) / max(
+                        anchor.diameter_px, 1.0
+                    ) + abs(math.log(candidate.diameter_px / anchor.diameter_px))
+
+                selected = min((scene, impact), key=score)
+                selected_source = "session_anchor_disagreement"
+            else:
+                selected_source = "detector_disagreement_no_stable_anchor"
+    elif scene is not None or impact is not None:
+        selected = scene or impact
+        selected_source = "scene_only" if scene is not None else "impact_only"
+    if selected is not None and ball_tracker is not None:
+        resolver = getattr(ball_tracker, "resolve_stable", ball_tracker.resolve)
+        selected, tracker_source = resolver(selected)
+        selected_source = f"{selected_source}:{tracker_source}"
+    if selected is None and ball_tracker is not None:
+        selected = ball_tracker.fallback()
+        if selected is not None:
+            selected_source = "session_anchor_fallback"
+    diagnostics = {
+        "scene": _reference_candidate(observations["scene"], reasons["scene"]),
+        "impact": _reference_candidate(observations["impact"], reasons["impact"]),
+        "agreement": agreement,
+        "distance_px": distance if scene is not None and impact is not None else None,
+        "size_ratio": size_ratio if scene is not None and impact is not None else None,
+        "selected_source": selected_source,
+        "selected_candidate": vars(selected).copy() if selected is not None else None,
+        "disagreement": agreement is False,
+    }
+    return selected, diagnostics
+
+
 def _robust_velocity(times: np.ndarray, positions: np.ndarray) -> tuple[np.ndarray, float]:
     slopes = []
     for first in range(len(times)):
@@ -403,15 +563,23 @@ def _path_estimate(
     fill_median = float(np.median([candidate.fill for candidate in used_candidates]))
     circularity_median = float(np.median([candidate.circularity for candidate in used_candidates]))
     intensity_median = float(np.median([candidate.mean_intensity for candidate in used_candidates]))
-    camera_origin = np.array([0.0, 0.0, geometry.camera_height_m])
-    camera_ranges = np.linalg.norm(positions_array - camera_origin, axis=1)
-    expected_diameter = model[0] * geometry.ball_diameter_m / camera_ranges
-    measured_diameter = np.asarray(
-        [math.sqrt(4.0 * candidate.area / math.pi) for candidate in used_candidates]
+    camera_origin = (
+        geometry.calibrated_model.camera_origin_lfu
+        if geometry.calibrated_model is not None
+        else geometry.camera_origin
     )
-    size_ratio = measured_diameter / expected_diameter
-    size_ratio_median = float(np.median(size_ratio))
-    size_ratio_mad = float(np.median(np.abs(size_ratio - size_ratio_median)))
+    camera_ranges = np.linalg.norm(positions_array - camera_origin, axis=1)
+    if geometry.calibrated_model is None:
+        expected_diameter = model[0] * geometry.ball_diameter_m / camera_ranges
+        measured_diameter = np.asarray(
+            [math.sqrt(4.0 * candidate.area / math.pi) for candidate in used_candidates]
+        )
+        size_ratio = measured_diameter / expected_diameter
+        size_ratio_median = float(np.median(size_ratio))
+        size_ratio_mad = float(np.median(np.abs(size_ratio - size_ratio_median)))
+    else:
+        size_ratio_median = 1.0
+        size_ratio_mad = 0.0
     if not (
         -30.0 <= horizontal <= 30.0
         and -5.0 <= vertical <= 55.0
@@ -463,6 +631,7 @@ def _confidence_tier(support: int, parameter_mad: float, window_mad: float) -> s
     return "withheld"
 
 
+# pylint: disable-next=too-many-arguments,too-many-return-statements,too-many-branches
 def estimate_camera_ball_flight(
     frames: np.ndarray,
     timestamps_ns: np.ndarray,
@@ -477,25 +646,36 @@ def estimate_camera_ball_flight(
     """Estimate horizontal flight with a frozen detector-consensus sweep."""
     if frames.ndim != 3 or len(frames) < 4 or len(timestamps_ns) != len(frames):
         return CameraBallEstimate("rejected_invalid_camera_frames")
-    try:
-        anchor = detect_reference_ball(frames)
-    except ValueError:
-        fallback = getattr(ball_tracker, "fallback", None)
-        anchor = fallback() if fallback is not None else None
-        if anchor is None:
-            return CameraBallEstimate("rejected_reference_ball_not_found")
-    else:
-        if ball_tracker is not None:
-            resolver = getattr(ball_tracker, "resolve_stable", ball_tracker.resolve)
-            anchor, _anchor_source = resolver(anchor)
-    if not 9.0 <= anchor.diameter_px <= 30.0:
-        return CameraBallEstimate("rejected_implausible_reference_ball")
-
-    model = _camera_model(anchor, geometry)
+    if geometry.calibrated_model is not None and range_evidence is None:
+        return CameraBallEstimate("rejected_calibrated_requires_iwr_range")
     trigger_frame = int(np.argmin(np.abs(timestamps_ns.astype(np.int64) - trigger_ns)))
+    anchor, reference_diagnostics = _select_reference_ball(
+        frames, trigger_frame, geometry, ball_tracker
+    )
+    if anchor is None:
+        return CameraBallEstimate(
+            "rejected_reference_ball_not_found",
+            reference_ball_diagnostics=reference_diagnostics,
+        )
+    if not 9.0 <= anchor.diameter_px <= 30.0:
+        return CameraBallEstimate(
+            "rejected_implausible_reference_ball",
+            reference_ball_diagnostics=reference_diagnostics,
+        )
+
+    try:
+        model = _camera_model(anchor, geometry)
+    except ValueError:
+        return CameraBallEstimate(
+            "rejected_implausible_reference_ball",
+            reference_ball_diagnostics=reference_diagnostics,
+        )
     frame_indices = list(range(trigger_frame, min(len(frames), trigger_frame + 15)))
     if len(frame_indices) < 4:
-        return CameraBallEstimate("rejected_insufficient_post_trigger_frames")
+        return CameraBallEstimate(
+            "rejected_insufficient_post_trigger_frames",
+            reference_ball_diagnostics=reference_diagnostics,
+        )
     background = np.median(frames[: min(20, len(frames))], axis=0).astype(np.uint8)
 
     def collect(depth_evidence) -> list[_PathEstimate]:
@@ -516,10 +696,10 @@ def estimate_camera_ball_flight(
                     ]
                     options = [
                         result
-                        for path in _pixel_paths(nodes, anchor)
+                        for raw_path in _pixel_paths(nodes, anchor)
                         if (
                             result := _path_estimate(
-                                path=path,
+                                path=_clean_launch_path(raw_path, frame_indices),
                                 frame_indices=frame_indices,
                                 timestamps_ns=timestamps_ns,
                                 trigger_ns=trigger_ns,
@@ -566,7 +746,10 @@ def estimate_camera_ball_flight(
                     estimates = camera_only
 
     if not estimates:
-        return CameraBallEstimate("rejected_no_stable_path")
+        return CameraBallEstimate(
+            "rejected_no_stable_path",
+            reference_ball_diagnostics=reference_diagnostics,
+        )
     horizontal = np.asarray([estimate.horizontal_deg for estimate in estimates])
     median_horizontal = float(np.median(horizontal))
     parameter_mad = float(np.median(np.abs(horizontal - median_horizontal)))
@@ -596,6 +779,7 @@ def estimate_camera_ball_flight(
         first_frame=representative.first_frame,
         last_frame=representative.last_frame,
         depth_source=depth_source,
+        reference_ball_diagnostics=reference_diagnostics,
     )
 
 

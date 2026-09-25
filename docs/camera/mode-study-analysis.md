@@ -52,7 +52,8 @@ to look at a frame. Grouped by what consumes them.
 
 | Metric | From | Why |
 | --- | --- | --- |
-| resolved mode (width, height, sensor crop, format) | `metadata.json` → `resolved`, read back from libcamera after configure | An arm that ran a different readout than requested is not that arm |
+| configured mode (width, height, bit depth, format) | `metadata.json` → `resolved`, reported by Picamera2 after configure | Detects configured mode substitution; does not prove native sampling or applied crop |
+| capture-bound mode/crop evidence | `metadata.json` → `capture_mode`, with frame-aligned request metadata and frozen startup context | Preserves differences within/across captures without substituting settings from the later save time; calibration binding remains unverified |
 | delivered fps, gap count, max gap | `sensor_timestamp_ns` via `timing_summary` | Frame-rate arms are only comparable at their delivered rate; a gap in the pre-impact window loses the clubhead |
 | exposure_us, analogue_gain, per frame | `frames.npz` arrays | Confirms the arm's exposure was held. The camera applies exposure in whole rows (87 µs requested runs at 80), and the config block records only the startup value |
 | camera light index | signal per µs per unit gain above the black floor: the slope of a line through the gain screen's unclipped gains up to 12×, at the applied exposure; the intercept is the black floor, recorded beside it | The pooling key across testers, independent of the gain each arm picked |
@@ -161,12 +162,44 @@ validation with a separate label.
 - **Capture:** the tester runner, with per-arm counters and the per-shot verdict
   (metrics A and D, live).
 - **Export:** the session exporter and `manifest.json`, which carries the arm
-  and light index per shot.
+  and light index per shot. Complete pairs remain in `shots`/`shots.csv`.
+  Excluded shots retain their reasons in `excluded_shots`/`excluded_shots.csv`;
+  surviving frames, raw metadata, PGM images and radar dumps are copied to
+  `partial_captures/` and inventoried in `manifest.partial_captures`. These
+  files are diagnostic evidence, not additional shots or accepted results.
+  Missing or malformed camera metadata excludes that pair without aborting
+  later shots. Use the manifest inventory rather than globbing an output
+  directory that may have been reused. Older version-1 exports may omit this
+  additive field. The independent `attempt_ledger.jsonl` preserves operator
+  observations and corrections, including swings with no sensor record. Its
+  manifest summary compares observed counts with logged sensor shots; it does
+  not establish shot identities or complete physical coverage. Invalid ledgers
+  remain diagnostic evidence and cannot supply trusted counts.
 - **Scoring:** `scripts/analysis/score_mode_study.py` — reads one or more
   exported sessions, computes metrics A–E per shot, aggregates per arm × light
   bin, tests H1 and H4–H7, applies the decision rule, and writes
   `mode_study.json` and a one-page `mode_study.md`. H2 and H3 need head blur
   and local contrast, which it does not measure yet.
+- **Denominators:** existing acceptance rates use logged sensor attempts,
+  including excluded attempts. Operator-recorded swings are reported separately;
+  missing ledgers are unknown, not zero swings. Even when every run has a ledger,
+  physical coverage and physical availability remain unverified. Do not promote
+  a mode using count agreement as proof of matched-shot accuracy.
+- **Software identity:** new sessions preserve `runtime_source_<session_uuid>.zip`
+  beside the log. The export carries that recorded archive and verifies its hash.
+  It includes allowlisted source, project locks and rig/calibration files present
+  at startup, with Git and runtime metadata. It is a disk snapshot, not proof of
+  already-imported code or device firmware. Legacy/missing evidence is labeled
+  unavailable; it is never replaced with current analysis-machine source.
+- **Camera geometry replay:** new `session_start.config.effective_camera_geometry`
+  records the scalar inputs used at startup. Load the session's `config` through
+  `EffectiveCameraGeometryInputs.from_recorded_session`, then call
+  `delivery_geometry()` or `ball_geometry()` and validate the archive dimensions.
+  A present invalid/unavailable snapshot cannot fall back to the current rig.
+  Legacy sessions use recorded camera/IWR fields and their documented defaults.
+  This shares the existing reference-ball projection model; it does not add an
+  independent lens calibration, per-shot crop mapping or a complete replay
+  processing pipeline.
 - **Bench, once, on the maintainer's unit:** grey-card average/sum factor, 1:1
   delivered cadence, a single lux reading to map the light index to lux, gain
   degradation on the outline extractor, and a moving-club measurement of the

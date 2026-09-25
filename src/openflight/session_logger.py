@@ -10,12 +10,13 @@ import logging
 import threading
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from . import __version__
 from .launch_monitor import Shot
+from .runtime_provenance import capture_runtime_provenance
 
 # Version of the session JSONL format itself. Bump on breaking changes to
 # entry structure; additive changes (new fields, new entry types) do not
@@ -43,6 +44,7 @@ class SessionMetadata:
     session_uuid: str = ""
     format_version: int = SESSION_FORMAT_VERSION
     app_version: str = ""
+    runtime_provenance: Optional[Dict[str, Any]] = None
 
 
 class SessionLogger:
@@ -64,7 +66,11 @@ class SessionLogger:
     DEFAULT_LOG_DIR = Path.home() / "openflight_sessions"
 
     def __init__(
-        self, log_dir: Optional[Path] = None, location: str = "range", enabled: bool = True
+        self,
+        log_dir: Optional[Path] = None,
+        location: str = "range",
+        enabled: bool = True,
+        provenance_collector: Optional[Callable[[Path, str], Dict[str, Any]]] = None,
     ):
         """
         Initialize session logger.
@@ -77,8 +83,10 @@ class SessionLogger:
         self.log_dir = Path(log_dir) if log_dir else self.DEFAULT_LOG_DIR
         self.location = location
         self.enabled = enabled
+        self._provenance_collector = provenance_collector or capture_runtime_provenance
 
         self._session_id: Optional[str] = None
+        self._session_uuid: Optional[str] = None
         self._session_file: Optional[Any] = None
         self._session_path: Optional[Path] = None
         self._raw_path: Optional[Path] = None
@@ -139,19 +147,31 @@ class SessionLogger:
         session_filename = f"session_{self._session_id}_{self.location}.jsonl"
         raw_filename = f"radar_raw_{self._session_id}.log"
 
-        self._session_path = self.log_dir / session_filename
-        self._raw_path = self.log_dir / raw_filename
-
-        # Open log files
-        self._session_file = open(self._session_path, "w")
-
+        session_path = self.log_dir / session_filename
+        raw_path = self.log_dir / raw_filename
         # Setup raw radar logging to file
+        self._session_path = session_path
+        self._raw_path = raw_path
         self._setup_raw_logging()
 
         # Reset stats
         self._stats = {k: 0 for k in self._stats}
 
         # Write session start entry
+        session_uuid = str(uuid.uuid4())
+        try:
+            runtime_provenance = self._provenance_collector(self.log_dir, session_uuid)
+        except Exception as exc:  # Provenance must never interrupt acquisition.
+            runtime_provenance = {
+                "schema_version": 1,
+                "scope": "Runtime provenance was requested at session startup.",
+                "limitations": [
+                    "Runtime provenance collection failed before a snapshot was saved."
+                ],
+                "repository": {"status": "unavailable", "reason": str(exc)},
+                "source_snapshot": {"status": "unavailable", "reason": str(exc)},
+            }
+
         metadata = SessionMetadata(
             session_id=self._session_id,
             start_time=timestamp.isoformat(),
@@ -162,12 +182,32 @@ class SessionLogger:
             config=config or {},
             mode=mode,
             trigger_type=trigger_type,
-            session_uuid=str(uuid.uuid4()),
+            session_uuid=session_uuid,
             format_version=SESSION_FORMAT_VERSION,
             app_version=__version__,
+            runtime_provenance=runtime_provenance,
         )
 
-        self._write_entry("session_start", asdict(metadata))
+        started_at_utc = datetime.now().astimezone().astimezone(timezone.utc).isoformat()
+        session_start = (
+            json.dumps(
+                {
+                    "ts": datetime.now().isoformat(),
+                    "started_at_utc": started_at_utc,
+                    "type": "session_start",
+                    **asdict(metadata),
+                }
+            )
+            + "\n"
+        )
+        with self._write_lock:
+            if self._session_file:
+                self._session_file.close()
+            session_file = open(session_path, "w", encoding="utf-8")
+            self._session_file = session_file
+            self._session_uuid = session_uuid
+            session_file.write(session_start)
+            session_file.flush()
 
         print(f"[SESSION] Started logging: {self._session_path}")
         print(f"[SESSION] Mode: {mode}" + (f" (trigger: {trigger_type})" if trigger_type else ""))
@@ -257,6 +297,7 @@ class SessionLogger:
             if self._session_file:
                 self._session_file.close()
                 self._session_file = None
+            self._session_uuid = None
 
         # Remove logging handlers
         for handler in self._raw_logger.handlers[:]:
@@ -293,19 +334,72 @@ class SessionLogger:
         self,
         shot: Shot,
         pipeline_ms: Optional[Dict] = None,
-    ):
+        *,
+        expected_session_uuid: Optional[str] = None,
+    ) -> bool:
         """Log a shot using the canonical raw shot schema."""
         if not self.enabled:
-            return
+            return False
 
-        self._stats["shots_detected"] += 1
         data = shot.to_dict()
-        if data["shot_number"] is None:
-            data["shot_number"] = self._stats["shots_detected"]
         if pipeline_ms is not None:
             data["pipeline_ms"] = pipeline_ms
+        with self._write_lock:
+            if not self._session_file or (
+                expected_session_uuid is not None and self._session_uuid != expected_session_uuid
+            ):
+                return False
+            self._stats["shots_detected"] += 1
+            if data["shot_number"] is None:
+                data["shot_number"] = self._stats["shots_detected"]
+            line = (
+                json.dumps({"ts": datetime.now().isoformat(), "type": "shot_detected", **data})
+                + "\n"
+            )
+            self._session_file.write(line)
+            self._session_file.flush()
+            return True
 
-        self._write_entry("shot_detected", data)
+    def log_shot_pinned(
+        self,
+        expected_session_uuid: str,
+        shot: Shot,
+        pipeline_ms: Optional[Dict] = None,
+    ) -> bool:
+        """Write a shot only while the session pinned at admission remains active."""
+        return self.log_shot(
+            shot,
+            pipeline_ms,
+            expected_session_uuid=expected_session_uuid,
+        )
+
+    @property
+    def active_session_uuid(self) -> Optional[str]:
+        """Return the UUID only while its session file remains writable."""
+        with self._write_lock:
+            return self._session_uuid if self._session_file else None
+
+    def log_fusion_diagnostic(self, expected_session_uuid: str, snapshot: Dict[str, Any]) -> bool:
+        """Write a snapshot only to the exact session pinned at shot admission."""
+        if not self.enabled:
+            return False
+        line = (
+            json.dumps(
+                {"ts": datetime.now().isoformat(), "type": "fusion_diagnostic", **snapshot},
+                allow_nan=False,
+            )
+            + "\n"
+        )
+        with self._write_lock:
+            if (
+                not self._session_file
+                or self._session_uuid != expected_session_uuid
+                or snapshot.get("session_uuid") != expected_session_uuid
+            ):
+                return False
+            self._session_file.write(line)
+            self._session_file.flush()
+            return True
 
     def log_camera_capture(
         self,
@@ -380,6 +474,8 @@ class SessionLogger:
         measurement: Optional[Dict] = None,
         club_path: Optional[Dict] = None,
         temperature_report: Optional[Dict[str, Any]] = None,
+        runtime_config: Optional[Dict[str, Any]] = None,
+        runtime_config_sha256: Optional[str] = None,
     ):
         """Log the TI raw-dump reference and complete LCMF evidence."""
         if not self.enabled:
@@ -404,6 +500,8 @@ class SessionLogger:
                 "measurement": measurement,
                 "club_path": club_path,
                 "temperature_report": temperature_report,
+                "runtime_config": runtime_config,
+                "runtime_config_sha256": runtime_config_sha256,
             },
         )
 
@@ -592,6 +690,7 @@ class SessionLogger:
         trigger_timestamp_source: Optional[str] = None,
         clock_sync_offset_s: Optional[float] = None,
         post_trigger_duration_ms: Optional[float] = None,
+        processor_config: Optional[Dict] = None,
     ):
         """
         Log raw rolling buffer capture data for offline analysis.
@@ -703,6 +802,10 @@ class SessionLogger:
                 ),
                 "clock_sync_offset_s": clock_sync_offset_s,
                 "post_trigger_duration_ms": post_trigger_duration_ms,
+                "processor_config": processor_config,
+                "processor_config_sha256": (
+                    processor_config.get("sha256") if isinstance(processor_config, dict) else None
+                ),
                 "smash_factor": smash_factor,
                 "spin_rpm": spin_rpm,
                 "spin_confidence": spin_confidence,

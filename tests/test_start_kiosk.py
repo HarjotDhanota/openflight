@@ -101,6 +101,21 @@ def test_server_arguments_pass_through_unchanged():
     assert _dry_run(*arguments) == ["openflight-server", "--web-port", "8080", *arguments]
 
 
+def test_hardware_trigger_arguments_pass_through_unchanged():
+    arguments = [
+        "--trigger",
+        "hardware",
+        "--trigger-threshold",
+        "25",
+        "--trigger-magnitude",
+        "25",
+        "--pre-trigger-segments",
+        "6",
+    ]
+
+    assert _dry_run(*arguments) == ["openflight-server", "--web-port", "8080", *arguments]
+
+
 @pytest.mark.parametrize("alias", ["--radar-port", "--ops-port"])
 def test_radar_alias_is_distinct_from_web_port(alias):
     assert _dry_run(alias, "/dev/serial0", "--port", "9090") == [

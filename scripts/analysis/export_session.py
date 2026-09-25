@@ -8,11 +8,13 @@ downstream reads that; every analysis script reads a session export:
     <out>/
       manifest.json  session.jsonl  radar_raw.log  shots.csv  excluded_shots.csv
       shots/shot_NNN_<club>/{camera_metadata.json, frames.npz, *.pgm, capture.l3dump}
+      partial_captures/shot_NNN_<club>/<surviving capture files>
 
 The session JSONL is the only unambiguous join between a camera capture and a
 radar dump. A shot is exported only when both sides are recorded without error
 and both files exist; everything else is listed in excluded_shots.csv with the
-reason, never silently dropped.
+reason, never silently dropped. Surviving files from excluded shots are retained
+under partial_captures and inventoried in the manifest, outside the paired shots.
 
     uv run python scripts/analysis/export_session.py --source <log-dir> --out <dir>
     uv run python scripts/analysis/export_session.py --tester-root ~/openflight_sessions/tester_pilot/<id> --out <dir>
@@ -22,11 +24,16 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from openflight.camera import attempt_ledger
+from openflight.rig_geometry import geometry_fingerprint
+from openflight.runtime_provenance import export_runtime_provenance
 
 CONTRACT_VERSION = 1
 ACCEPTED_STATUSES = frozenset({"ok", "fused", "chained_high", "approach_high"})
@@ -85,6 +92,42 @@ def fused_status(shot: dict) -> str | None:
         if key.startswith("experimental_fused") and key.endswith("_status") and value:
             return str(value)
     return None
+
+
+def _copy_capture_files(cam_dir: Path | None, dump_file: Path | None, dest: Path) -> list[str]:
+    """Copy surviving evidence, including raw metadata that may be malformed."""
+    files: list[tuple[Path, str]] = []
+    if cam_dir is not None and cam_dir.is_dir():
+        files.extend(
+            [
+                (cam_dir / "frames.npz", "frames.npz"),
+                (cam_dir / "metadata.json", "camera_metadata.json"),
+            ]
+        )
+        files.extend((pgm, pgm.name) for pgm in sorted(cam_dir.glob("*.pgm")))
+    if dump_file is not None:
+        files.append((dump_file, "capture.l3dump"))
+    copied = []
+    for source, name in files:
+        if source.is_file():
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, dest / name)
+            copied.append(name)
+    return copied
+
+
+def _camera_metadata(cam_dir: Path | None) -> tuple[dict, str | None]:
+    if cam_dir is None or not (cam_dir / "metadata.json").is_file():
+        return {}, "camera_metadata_missing_on_disk"
+    try:
+        metadata = json.loads((cam_dir / "metadata.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}, "camera_metadata_invalid"
+    if not isinstance(metadata, dict) or (
+        metadata.get("settings") is not None and not isinstance(metadata["settings"], dict)
+    ):
+        return {}, "camera_metadata_invalid"
+    return metadata, None
 
 
 def _flat(value):
@@ -167,13 +210,28 @@ def export_session(
         shutil.copy2(path, out / "radar_raw.log")
     if preflight_log and preflight_log.is_file():
         shutil.copy2(preflight_log, out / "preflight.log")
-    rig_path = ((start.get("config") or {}).get("rig_geometry") or {}).get("path")
-    if rig_path and Path(rig_path).is_file():
+    rig = (start.get("config") or {}).get("rig_geometry") or {}
+    rig_path = rig.get("path")
+    snapshot = rig.get("snapshot")
+    rig_source = "unavailable"
+    if snapshot is not None:
+        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("parameters"), dict):
+            report.problems.append("invalid rig geometry snapshot in session_start")
+            return report
+        (out / "rig_geometry.json").write_text(
+            json.dumps(snapshot["parameters"], indent=2) + "\n", encoding="utf-8"
+        )
+        rig_source = "session_snapshot"
+    elif rig_path and Path(rig_path).is_file():
         shutil.copy2(rig_path, out / "rig_geometry.json")
+        rig_source = "unverified_file_at_export"
+    else:
+        (out / "rig_geometry.json").unlink(missing_ok=True)
 
     index = _index(source)
     rows: list[dict] = []
     manifest_shots: list[dict] = []
+    partial_captures: list[dict] = []
     for number in sorted(set(shots) | set(cameras) | set(dumps)):
         reasons: list[str] = []
         shot = shots.get(number)
@@ -191,24 +249,32 @@ def export_session(
             reasons.append(f"radar_capture_error ({dump['capture_error']})")
         cam_dir = _locate(index, cam.get("capture_path")) if cam else None
         dump_file = _locate(index, dump.get("capture_path")) if dump else None
-        if cam and not reasons and (cam_dir is None or not (cam_dir / "frames.npz").is_file()):
+        if cam and (cam_dir is None or not (cam_dir / "frames.npz").is_file()):
             reasons.append("camera_frames_missing_on_disk")
-        if dump and not reasons and dump_file is None:
+        if dump and (dump_file is None or not dump_file.is_file()):
             reasons.append("radar_dump_missing_on_disk")
+        metadata, metadata_error = _camera_metadata(cam_dir)
+        if cam and metadata_error:
+            reasons.append(metadata_error)
+        club = str((shot or {}).get("club") or "unknown").replace(" ", "-")
+        name = f"shot_{number:03d}_{club}"
         if reasons:
             report.excluded[number] = reasons
+            directory = f"partial_captures/{name}"
+            files = _copy_capture_files(cam_dir, dump_file, out / directory)
+            if files:
+                partial_captures.append(
+                    {
+                        "shot_number": number,
+                        "dir": directory,
+                        "files": files,
+                        "joined_by": "session_jsonl",
+                    }
+                )
             continue
 
-        club = str(shot.get("club") or "unknown").replace(" ", "-")
-        name = f"shot_{number:03d}_{club}"
         dest = out / "shots" / name
-        dest.mkdir(exist_ok=True)
-        shutil.copy2(cam_dir / "frames.npz", dest / "frames.npz")
-        shutil.copy2(cam_dir / "metadata.json", dest / "camera_metadata.json")
-        for pgm in cam_dir.glob("*.pgm"):
-            shutil.copy2(pgm, dest / pgm.name)
-        shutil.copy2(dump_file, dest / "capture.l3dump")
-        metadata = json.loads((dest / "camera_metadata.json").read_text(encoding="utf-8"))
+        _copy_capture_files(cam_dir, dump_file, dest)
         rows.append(_shot_row(number, shot, cam, metadata, f"shots/{name}"))
         report.included.append(number)
         manifest_shots.append(
@@ -249,10 +315,77 @@ def export_session(
         None,
     )
     arm = arm_state or {}
+    ledger_source = source / "attempt_ledger.jsonl"
+    ledger_manifest = {
+        "status": "unavailable",
+        "reason": "no operator attempt ledger was recorded for this run",
+        "path": None,
+        "sha256": None,
+        "counts": {
+            "physical_operator_swings": None,
+            "operator_reported_misses": None,
+            "warmups": None,
+            "false_triggers": None,
+            "logged_sensor_shots": len(shots),
+        },
+        "reconciliation": {
+            "status": "unknown",
+            "difference": None,
+            "physical_availability": None,
+        },
+    }
+    if ledger_source.is_file():
+        ledger_dest = out / "attempt_ledger.jsonl"
+        shutil.copy2(ledger_source, ledger_dest)
+        ledger_manifest.update(
+            status="preserved",
+            reason=None,
+            path=ledger_dest.name,
+            sha256=hashlib.sha256(ledger_dest.read_bytes()).hexdigest(),
+        )
+        try:
+            frozen_records = attempt_ledger.read_audit(ledger_dest)
+            if not frozen_records:
+                raise attempt_ledger.LedgerError("attempt ledger is empty")
+            scope = (frozen_records[0].get("scope") if frozen_records else None) or {
+                "tester_id": arm.get("tester_id"),
+                "arm_id": arm.get("arm_id"),
+                "run": arm.get("run") or source.name,
+            }
+            for key in ("tester_id", "arm_id", "run"):
+                expected = arm.get(key) if key != "run" else arm.get("run")
+                if expected is not None and scope.get(key) != expected:
+                    raise attempt_ledger.LedgerError(f"attempt ledger {key} does not match export")
+            ledger_state = attempt_ledger.summarize(ledger_dest, scope, len(shots))
+            ledger_manifest.update(
+                counts=ledger_state["counts"],
+                reconciliation=ledger_state["reconciliation"],
+                entries=ledger_state["entries"],
+                audit=ledger_state["audit"],
+            )
+        except attempt_ledger.LedgerError as exc:
+            ledger_manifest.update(
+                status="invalid",
+                reason=str(exc),
+                counts={**ledger_manifest["counts"], "logged_sensor_shots": len(shots)},
+            )
     git_commit = None
     if preflight_log and preflight_log.is_file():
         first = preflight_log.read_text(encoding="utf-8", errors="replace").splitlines()
         git_commit = next((line.strip() for line in first if len(line.strip()) == 40), None)
+    runtime_metadata = start.get("runtime_provenance")
+    runtime_manifest = (
+        {
+            **runtime_metadata,
+            "export": export_runtime_provenance(source, out, runtime_metadata),
+        }
+        if isinstance(runtime_metadata, dict)
+        else {
+            "status": "unavailable",
+            "reason": "session_start has no runtime_provenance",
+            "export": {"status": "unavailable", "reason": "no session metadata"},
+        }
+    )
     manifest = {
         "contract_version": CONTRACT_VERSION,
         "session_id": start.get("session_id"),
@@ -271,6 +404,8 @@ def export_session(
             "revision": arm.get("enclosure_revision")
             or ("v3" if rig_path and "v3" in rig_path else None),
             "rig_geometry_path": rig_path,
+            "rig_geometry_source": rig_source,
+            "rig_geometry_sha256": snapshot.get("sha256") if snapshot is not None else None,
         },
         "capture": {
             "requested": {
@@ -297,9 +432,12 @@ def export_session(
             "solved_range_note": arm.get("solved_range_note"),
         },
         "shots": manifest_shots,
+        "partial_captures": partial_captures,
         "excluded_shots": [
             {"shot_number": n, "reasons": r} for n, r in sorted(report.excluded.items())
         ],
+        "attempt_ledger": ledger_manifest,
+        "runtime_provenance": runtime_manifest,
         "provenance": _geometry_provenance(config, arm),
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -316,6 +454,7 @@ def validate_export(out: Path) -> list[str]:
         return [f"manifest.json unreadable: {exc}"]
     if manifest.get("contract_version") != CONTRACT_VERSION:
         problems.append("contract_version is not 1")
+    starts = []
     if not (out / "session.jsonl").is_file():
         problems.append("session.jsonl missing")
     else:
@@ -326,6 +465,9 @@ def validate_export(out: Path) -> list[str]:
             problems.append(f"session.jsonl has {len(starts)} session_start events")
         elif starts[0].get("session_uuid") != manifest.get("session_uuid"):
             problems.append("manifest session_uuid does not match session_start")
+        if len(starts) == 1:
+            rig = (starts[0].get("config") or {}).get("rig_geometry") or {}
+            problems.extend(_validate_rig_geometry(out, manifest.get("enclosure") or {}, rig))
     for entry in manifest.get("shots", []):
         shot_dir = out / entry["dir"]
         for required in ("camera_metadata.json", "frames.npz", "capture.l3dump"):
@@ -333,6 +475,16 @@ def validate_export(out: Path) -> list[str]:
                 problems.append(f"{entry['dir']} missing {required}")
         if entry.get("joined_by") != "session_jsonl":
             problems.append(f"{entry['dir']} not joined by the session JSONL")
+    included = {entry["shot_number"] for entry in manifest.get("shots", [])}
+    excluded = {entry["shot_number"] for entry in manifest.get("excluded_shots", [])}
+    for entry in manifest.get("partial_captures", []):
+        if entry["shot_number"] not in excluded or entry["shot_number"] in included:
+            problems.append(f"{entry['dir']} partial capture must belong only to excluded shots")
+        if entry.get("joined_by") != "session_jsonl":
+            problems.append(f"{entry['dir']} not joined by the session JSONL")
+        for name in entry.get("files", []):
+            if not (out / entry["dir"] / name).is_file():
+                problems.append(f"{entry['dir']} missing {name}")
     if manifest.get("capture", {}).get("resolved") is None and not manifest.get("capture", {}).get(
         "resolved_missing_reason"
     ):
@@ -340,6 +492,72 @@ def validate_export(out: Path) -> list[str]:
     for key in GEOMETRY_KEYS:
         if key not in manifest.get("provenance", {}):
             problems.append(f"provenance missing {key}")
+    ledger = manifest.get("attempt_ledger") or {}
+    if ledger.get("status") in ("preserved", "invalid"):
+        ledger_path = out / str(ledger.get("path"))
+        try:
+            actual = hashlib.sha256(ledger_path.read_bytes()).hexdigest()
+            if actual != ledger.get("sha256"):
+                problems.append("attempt ledger hash does not match manifest")
+            elif ledger.get("status") == "preserved":
+                records = attempt_ledger.read_audit(ledger_path)
+                if not records:
+                    raise attempt_ledger.LedgerError("attempt ledger is empty")
+                scope = records[0]["scope"]
+                sensor_shots = len(
+                    _by_shot(read_events_file(out / "session.jsonl"), "shot_detected")
+                )
+                rebuilt = attempt_ledger.summarize(ledger_path, scope, sensor_shots)
+                for key in ("counts", "reconciliation", "entries", "audit"):
+                    if ledger.get(key) != rebuilt.get(key):
+                        problems.append(f"attempt ledger {key} does not match preserved evidence")
+        except OSError as exc:
+            problems.append(f"attempt ledger evidence unreadable: {exc}")
+        except attempt_ledger.LedgerError as exc:
+            problems.append(f"attempt ledger evidence invalid: {exc}")
+    runtime = manifest.get("runtime_provenance") or {}
+    exported_runtime = runtime.get("export") or {}
+    if exported_runtime.get("status") == "preserved":
+        snapshot = out / str(exported_runtime.get("path"))
+        try:
+            actual = hashlib.sha256(snapshot.read_bytes()).hexdigest()
+            if actual != exported_runtime.get("sha256"):
+                problems.append("runtime source snapshot hash does not match manifest")
+            session_runtime = starts[0].get("runtime_provenance") if len(starts) == 1 else None
+            recorded_sha = ((session_runtime or {}).get("source_snapshot") or {}).get("sha256")
+            if actual != recorded_sha:
+                problems.append("runtime source snapshot does not match session_start")
+        except OSError as exc:
+            problems.append(f"runtime source snapshot unreadable: {exc}")
+    return problems
+
+
+def _validate_rig_geometry(out: Path, enclosure: dict, rig: dict) -> list[str]:
+    snapshot = rig.get("snapshot")
+    if snapshot is None:
+        if enclosure.get("rig_geometry_source") == "session_snapshot":
+            return ["manifest claims a rig snapshot absent from session_start"]
+        return []
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("parameters"), dict):
+        return ["invalid rig geometry snapshot in session_start"]
+    try:
+        fingerprint = geometry_fingerprint(snapshot["parameters"])
+    except (TypeError, ValueError):
+        return ["invalid rig geometry parameters in session_start"]
+    problems = []
+    if snapshot.get("sha256") != fingerprint:
+        problems.append("rig geometry snapshot fingerprint mismatch in session_start")
+    if (
+        enclosure.get("rig_geometry_source") != "session_snapshot"
+        or enclosure.get("rig_geometry_sha256") != fingerprint
+    ):
+        problems.append("manifest rig geometry does not match the session snapshot")
+    try:
+        exported = json.loads((out / "rig_geometry.json").read_text(encoding="utf-8"))
+        if geometry_fingerprint(exported) != fingerprint:
+            problems.append("rig_geometry.json does not match the session snapshot")
+    except (OSError, ValueError, TypeError) as exc:
+        problems.append(f"rig_geometry.json unreadable or invalid: {exc}")
     return problems
 
 

@@ -12,6 +12,8 @@ from __future__ import annotations
 import io
 import json
 import math
+import os
+import tempfile
 import threading
 import time
 import urllib.request
@@ -22,6 +24,7 @@ import numpy as np
 
 from openflight.camera.auto_exposure import measure_exposure
 from openflight.camera.club_motion import detect_reference_ball
+from openflight.camera.paired_eligibility import evaluate_paired_capture
 
 SWINGS_PER_RUNG = 5
 GAIN_CEILING = 12.0
@@ -166,6 +169,11 @@ class LadderState:
         self.path = path
         if path.is_file():
             self._data = json.loads(path.read_text(encoding="utf-8"))
+            self._data.setdefault("photos", {})
+            self._data.setdefault("photo_skips", {})
+            self._data.setdefault("photo_target", None)
+            self._data.setdefault("pending_photo", None)
+            self._data.setdefault("ineligible_captures", [])
         else:
             self._data = {
                 "rungs": {
@@ -181,12 +189,27 @@ class LadderState:
                     for rung in LADDER
                 },
                 "photos": {},
+                "photo_skips": {},
+                "photo_target": None,
+                "pending_photo": None,
+                "ineligible_captures": [],
             }
             self._save()
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self._data, indent=2) + "\n", encoding="utf-8")
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", delete=False, suffix=".tmp", dir=self.path.parent
+            ) as handle:
+                temporary = Path(handle.name)
+                handle.write(json.dumps(self._data, indent=2) + "\n")
+            os.replace(temporary, self.path)
+            temporary = None
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
     @property
     def current(self) -> Rung | None:
@@ -206,7 +229,24 @@ class LadderState:
 
     def seen_captures(self) -> set[str]:
         rungs = self._data["rungs"].values()
-        return {swing["capture"] for rung in rungs for swing in rung["swings"]}
+        return {
+            *{swing["capture"] for rung in rungs for swing in rung["swings"]},
+            *{item["capture"] for item in self._data["ineligible_captures"]},
+        }
+
+    def record_ineligible_capture(self, capture: str, rung_id: str, readiness: dict) -> None:
+        """Retain a capture rejected by setup health without advancing or failing its rung."""
+        if capture in self.seen_captures():
+            return
+        self._data["ineligible_captures"].append(
+            {
+                "capture": capture,
+                "rung_id": rung_id,
+                "reason": "runtime setup readiness blocked at capture review",
+                "readiness": readiness,
+            }
+        )
+        self._save()
 
     def _skip_from(self, rung: Rung, status: str, reason: str) -> None:
         """This rung, and every shorter rung of its mode after it, will not be captured."""
@@ -227,7 +267,20 @@ class LadderState:
             entry["status"] = "active"
         else:
             self._skip_from(rung, "skipped", check.get("reason") or "failed the pre-rung check")
+        self._require_boundary_photo(rung)
         self._save()
+
+    def _require_boundary_photo(self, rung: Rung) -> None:
+        following = self.current
+        target = self._data["photo_target"]
+        if (
+            rung.arm_id == "arm5"
+            and (following is None or following.arm_id != rung.arm_id)
+            and target is not None
+            and target["capture"] not in self._data["photos"]
+            and target["capture"] not in self._data["photo_skips"]
+        ):
+            self._data["pending_photo"] = target
 
     def record_swing(self, verdict: dict) -> str:
         rung = self.current
@@ -237,18 +290,72 @@ class LadderState:
         if verdict["capture"] in self.seen_captures():
             return entry["status"]
         entry["swings"].append(verdict)
+        if rung.photos:
+            self._data["photo_target"] = {
+                "capture": verdict["capture"],
+                "rung_id": rung.rung_id,
+            }
         first = entry["swings"][:EARLY_EXIT_SWINGS]
         reds = sum(1 for swing in first if swing["color"] == "red")
         if reds >= EARLY_EXIT_REDS:
             self._skip_from(rung, "failed", f"{reds} of the first {len(first)} swings red")
         elif self.accepted(rung.rung_id) >= SWINGS_PER_RUNG:
             entry["status"] = "done"
+        self._require_boundary_photo(rung)
         self._save()
         return entry["status"]
 
-    def record_photo(self, capture: str, path: str) -> None:
+    def record_photo(self, capture: str, rung_id: str, path: str) -> None:
+        target = {"capture": capture, "rung_id": rung_id}
+        previous_target = self._data["photo_target"]
+        previous_photos = dict(self._data["photos"])
         self._data["photos"][capture] = path
-        self._save()
+        if previous_target == target:
+            self._data["photo_target"] = None
+        try:
+            self._save()
+        except OSError:
+            self._data["photos"] = previous_photos
+            self._data["photo_target"] = previous_target
+            raise
+
+    def _check_pending_photo(self, capture: str, rung_id: str) -> None:
+        if self._data["pending_photo"] != {"capture": capture, "rung_id": rung_id}:
+            raise RuntimeError("that capture is no longer the pending photo")
+
+    def finish_photo(self, capture: str, rung_id: str, path: str) -> None:
+        self._check_pending_photo(capture, rung_id)
+        previous_photos = dict(self._data["photos"])
+        previous_pending = self._data["pending_photo"]
+        previous_target = self._data["photo_target"]
+        self._data["photos"][capture] = path
+        self._data["pending_photo"] = None
+        if previous_target == {"capture": capture, "rung_id": rung_id}:
+            self._data["photo_target"] = None
+        try:
+            self._save()
+        except OSError:
+            self._data["photos"] = previous_photos
+            self._data["pending_photo"] = previous_pending
+            self._data["photo_target"] = previous_target
+            raise
+
+    def skip_photo(self, capture: str, rung_id: str) -> None:
+        self._check_pending_photo(capture, rung_id)
+        previous_skips = dict(self._data["photo_skips"])
+        previous_pending = self._data["pending_photo"]
+        previous_target = self._data["photo_target"]
+        self._data["photo_skips"][capture] = {"rung_id": rung_id}
+        self._data["pending_photo"] = None
+        if previous_target == {"capture": capture, "rung_id": rung_id}:
+            self._data["photo_target"] = None
+        try:
+            self._save()
+        except OSError:
+            self._data["photo_skips"] = previous_skips
+            self._data["pending_photo"] = previous_pending
+            self._data["photo_target"] = previous_target
+            raise
 
     def to_dict(self) -> dict:
         current = self.current
@@ -272,6 +379,17 @@ class KioskClient:
         except (OSError, ValueError):
             return False
         return bool(quality.get("sample_available"))
+
+    def setup_readiness(self) -> dict:
+        try:
+            return json.loads(self._get("/api/camera/study/readiness"))
+        except (OSError, ValueError) as exc:
+            return {
+                "schema_version": 1,
+                "ready": False,
+                "checks": [],
+                "blockers": [{"id": "kiosk", "reason": str(exc)}],
+            }
 
     def set_controls(self, exposure_us: int, gain: float) -> dict:
         body = json.dumps({"exposure_us": int(exposure_us), "gain": float(gain)}).encode()
@@ -322,60 +440,234 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
         # Between modes it names no rung, so nothing is set on a kiosk shutting down.
         self.mode: str | None = None
         self._last_capture: str | None = None
+        self._configured_rung: str | None = None
+        self._required_config_hash: str | None = None
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
-    def _wait_ready(self) -> None:
+    @property
+    def stopped(self) -> bool:
+        return self._stop.is_set()
+
+    def _wait_ready(self) -> bool:
         deadline = time.monotonic() + self.ready_timeout_s
-        while not self.client.ready():
+        while not self.stopped:
+            readiness = self._setup_readiness()
+            if readiness["ready"]:
+                return not self.stopped
             if time.monotonic() > deadline:
                 raise RuntimeError("the kiosk's camera did not come up")
-            time.sleep(0.2 if self.ready_timeout_s < 5 else 1.0)
+            self._stop.wait(0.2 if self.ready_timeout_s < 5 else 1.0)
+        return False
+
+    def _setup_readiness(self) -> dict:
+        if hasattr(self.client, "setup_readiness"):
+            readiness = self.client.setup_readiness()
+            if isinstance(readiness, dict) and isinstance(readiness.get("ready"), bool):
+                expected_run = self._run_dir()
+                if readiness.get("config_hash") and expected_run is not None:
+                    observations = readiness.get("observations")
+                    runtime = (
+                        observations.get("runtime") if isinstance(observations, dict) else None
+                    )
+                    actual_run = runtime.get("run_dir") if isinstance(runtime, dict) else None
+                    session_uuid = (
+                        runtime.get("session_uuid") if isinstance(runtime, dict) else None
+                    )
+                    try:
+                        matches = Path(str(actual_run)).resolve() == expected_run.resolve()
+                    except (OSError, ValueError):
+                        matches = False
+                    if not matches or not isinstance(session_uuid, str) or not session_uuid:
+                        return {
+                            **readiness,
+                            "ready": False,
+                            "blockers": [
+                                *(readiness.get("blockers") or []),
+                                {
+                                    "id": "runtime_identity",
+                                    "reason": "the kiosk responder is not the expected capture run",
+                                },
+                            ],
+                        }
+                return readiness
+            return {"ready": False, "blockers": [{"id": "kiosk", "reason": "invalid readiness"}]}
+        return {"ready": bool(self.client.ready()), "checks": [], "blockers": []}
 
     def _status(self, rung: Rung) -> str:
         return self.state.to_dict()["rungs"][rung.rung_id]["status"]
 
+    def _pending_photo(self) -> dict | None:
+        return self.state.to_dict().get("pending_photo")
+
+    def _finish_mode(self, arm_id: str) -> None:
+        if arm_id == "arm5" and self._pending_photo() is not None:
+            return
+        self._on_mode_done(arm_id)
+
+    def _prepare_pending_photo(self) -> bool:
+        target = self._pending_photo()
+        if target is None:
+            return False
+        rung = next(rung for rung in LADDER if rung.rung_id == target["rung_id"])
+        if self.mode not in (None, rung.arm_id) or not self._wait_ready():
+            return True
+        self.client.set_controls(rung.exposure_us, self.state.gain(rung.rung_id))
+        if not self._stop.wait(SETTLE_S):
+            self._configured_rung = rung.rung_id
+        return True
+
     def start_rung(self) -> dict | None:
         """Set the current rung, or skip on to the next that can work, within this mode."""
         with self._lock:
-            self._wait_ready()
-            while True:
+            if self._prepare_pending_photo():
+                return None
+            rung = self.state.current
+            if rung is None or self.mode not in (None, rung.arm_id) or not self._wait_ready():
+                return None
+            while not self.stopped:
                 rung = self.state.current
                 if rung is None or self.mode not in (None, rung.arm_id):
                     return None
                 if self._status(rung) == "active":
                     self.client.set_controls(rung.exposure_us, self.state.gain(rung.rung_id))
+                    if self._stop.wait(SETTLE_S):
+                        return None
+                    self._configured_rung = rung.rung_id
                     return self.state.to_dict()["rungs"][rung.rung_id]
                 gain = rung_gain(self._gain_at_300(rung.arm_id), rung.exposure_us)
                 self.client.set_controls(rung.exposure_us, gain)
-                time.sleep(SETTLE_S)
+                if self._stop.wait(SETTLE_S):
+                    return None
                 check = pre_rung_check(self.client.frames(5), self._black_floor(rung.arm_id))
+                if self.stopped:
+                    return None
                 self.state.begin(rung.rung_id, gain, check)
                 if check["ok"]:
+                    self._configured_rung = rung.rung_id
                     return self.state.to_dict()["rungs"][rung.rung_id]
                 following = self.state.current
                 if following is None or following.arm_id != rung.arm_id:
-                    self._on_mode_done(rung.arm_id)
+                    self._finish_mode(rung.arm_id)
                     return None
+        return None
 
     def poll_once(self) -> list[dict]:
         """Verdict every complete capture not yet seen, and move on when a rung finishes."""
+        with self._lock:
+            return self._poll_once()
+
+    def _poll_once(self) -> list[dict]:
+        if self.stopped:
+            return []
         run_dir = self._run_dir()
         current = self.state.current
         # a swing only counts against a rung whose exposure is set
-        if current is None or self._status(current) != "active":
+        if (
+            current is None
+            or self._status(current) != "active"
+            or self._configured_rung != current.rung_id
+            or self.mode not in (None, current.arm_id)
+        ):
             return []
         if run_dir is None or not run_dir.exists():
             return []
+        readiness = self._setup_readiness()
+        if readiness.get("ready") and isinstance(readiness.get("config_hash"), str):
+            self._required_config_hash = readiness["config_hash"]
+        if not readiness["ready"]:
+            self.last_verdict = {
+                "color": "red",
+                "reasons": ["setup readiness blocked; waiting for immutable capture evidence"],
+                "capture": None,
+                "setup_readiness": readiness,
+            }
+            if self._required_config_hash is None:
+                return []
         seen = self.state.seen_captures()
         verdicts = []
         for metadata in sorted(run_dir.rglob("camera_*/metadata.json")):
             folder = metadata.parent
             if folder.name in seen or not (folder / "frames.npz").is_file():
                 continue
+            if self._required_config_hash:
+                try:
+                    capture_metadata = json.loads(metadata.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    capture_metadata = {}
+                trigger_setup = capture_metadata.get("tester_setup")
+                valid_trigger = bool(
+                    isinstance(trigger_setup, dict)
+                    and trigger_setup.get("required") is True
+                    and trigger_setup.get("ready") is True
+                    and trigger_setup.get("config_hash") == self._required_config_hash
+                )
+                if not valid_trigger:
+                    evidence = trigger_setup if isinstance(trigger_setup, dict) else {}
+                    self.state.record_ineligible_capture(
+                        folder.name,
+                        current.rung_id,
+                        {
+                            **evidence,
+                            "ready": False,
+                            "blockers": evidence.get("blockers")
+                            or [
+                                {
+                                    "id": "trigger_evidence",
+                                    "reason": "capture has no matching eligible trigger evidence",
+                                }
+                            ],
+                        },
+                    )
+                    continue
+                paired = evaluate_paired_capture(run_dir, folder)
+                if paired["status"] == "pending":
+                    continue
+                observations = trigger_setup.get("observations")
+                runtime_identity = (
+                    observations.get("runtime") if isinstance(observations, dict) else None
+                )
+                trigger_session = (
+                    runtime_identity.get("session_uuid")
+                    if isinstance(runtime_identity, dict)
+                    else None
+                )
+                trigger_run = (
+                    runtime_identity.get("run_dir") if isinstance(runtime_identity, dict) else None
+                )
+                try:
+                    same_run = Path(str(trigger_run)).resolve() == run_dir.resolve()
+                except (OSError, ValueError):
+                    same_run = False
+                if paired["session_uuid"] != trigger_session or not same_run:
+                    paired = {
+                        **paired,
+                        "status": "ineligible",
+                        "blockers": [
+                            *paired["blockers"],
+                            {
+                                "id": "session_identity",
+                                "reason": "paired evidence is not from the trigger's runtime session",
+                            },
+                        ],
+                    }
+                if paired["status"] == "ineligible":
+                    self.state.record_ineligible_capture(
+                        folder.name,
+                        current.rung_id,
+                        {
+                            "ready": False,
+                            "config_hash": self._required_config_hash,
+                            "checks": paired["checks"],
+                            "blockers": paired["blockers"],
+                            "session_uuid": paired["session_uuid"],
+                            "shot_number": paired["shot_number"],
+                        },
+                    )
+                    continue
             rung = self.state.current
-            if rung is None or self._status(rung) != "active":
+            if self.stopped or rung is None or self._status(rung) != "active":
                 break
             rungs = self.state.to_dict()["rungs"]
             previous = [s["ball"] for s in rungs[rung.rung_id]["swings"] if s.get("ball")]
@@ -386,6 +678,8 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                 self._black_floor(rung.arm_id),
                 previous,
             )
+            if self.stopped:
+                break
             status = self.state.record_swing(verdict)
             self.last_verdict = {**verdict, "rung_id": rung.rung_id}
             self._last_capture = folder.name
@@ -393,17 +687,27 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
             if status in ("done", "failed"):
                 following = self.state.current
                 if following is None or following.arm_id != rung.arm_id:
-                    self._on_mode_done(rung.arm_id)
+                    self._finish_mode(rung.arm_id)
                     break
                 self.start_rung()
         return verdicts
 
-    def photograph(self) -> Path:
+    def photograph(self, capture: str, rung_id: str) -> Path:
         """A still of the club face, saved against the last swing; the rung is restored after."""
-        rung = self.state.current
-        if rung is None or not rung.photos:
-            raise RuntimeError("impact photos are taken on the 1280x800 rungs")
         with self._lock:
+            if self.stopped:
+                raise RuntimeError("the ladder is stopped")
+            target = self._pending_photo() or self.state.to_dict().get("photo_target")
+            if target != {"capture": capture, "rung_id": rung_id}:
+                raise RuntimeError("that capture is no longer the current photo target")
+            rung = next((item for item in LADDER if item.rung_id == rung_id), None)
+            if rung is None or not rung.photos or self.mode not in (None, rung.arm_id):
+                raise RuntimeError("impact photos are taken on the 1280x800 rungs")
+            configured = next(
+                (item for item in LADDER if item.rung_id == self._configured_rung), None
+            )
+            if configured is None or configured.arm_id != rung.arm_id:
+                raise RuntimeError("the pending photo camera is not ready")
             still = photo_exposure_us(
                 self._light_index(rung.arm_id),
                 self._black_floor(rung.arm_id),
@@ -411,42 +715,86 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
             )
             try:
                 self.client.set_controls(still, PHOTO_GAIN)
-                time.sleep(SETTLE_S)
+                if self._stop.wait(SETTLE_S):
+                    raise RuntimeError("the ladder is stopped")
                 image = self.client.frames(1)[0]
+                if self.stopped:
+                    raise RuntimeError("the ladder is stopped")
             finally:
-                self.client.set_controls(rung.exposure_us, self.state.gain(rung.rung_id))
-        name = self._last_capture or f"photo-{int(time.time())}"
-        self.photo_dir.mkdir(parents=True, exist_ok=True)
-        path = self.photo_dir / f"{name}.pgm"
-        with path.open("wb") as handle:
-            handle.write(f"P5\n{image.shape[1]} {image.shape[0]}\n255\n".encode("ascii"))
-            handle.write(np.asarray(image, dtype=np.uint8).tobytes())
-        self.state.record_photo(name, str(path))
-        return path
+                if not self.stopped:
+                    self.client.set_controls(
+                        configured.exposure_us, self.state.gain(configured.rung_id)
+                    )
+            if self.stopped:
+                raise RuntimeError("the ladder is stopped")
+            name = capture
+            self.photo_dir.mkdir(parents=True, exist_ok=True)
+            path = self.photo_dir / f"{name}.pgm"
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    delete=False, suffix=".tmp", dir=self.photo_dir
+                ) as handle:
+                    temporary = Path(handle.name)
+                    handle.write(f"P5\n{image.shape[1]} {image.shape[0]}\n255\n".encode("ascii"))
+                    handle.write(np.asarray(image, dtype=np.uint8).tobytes())
+                if self.stopped:
+                    raise RuntimeError("the ladder is stopped")
+                os.replace(temporary, path)
+                temporary = None
+                pending = self._pending_photo() is not None
+                if pending:
+                    self.state.finish_photo(name, rung_id, str(path))
+                    self._on_mode_done(rung.arm_id)
+                else:
+                    self.state.record_photo(name, rung_id, str(path))
+                return path
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+
+    def skip_photo(self, capture: str, rung_id: str) -> None:
+        with self._lock:
+            if self.stopped:
+                raise RuntimeError("the ladder is stopped")
+            self.state.skip_photo(capture, rung_id)
+            rung = next(item for item in LADDER if item.rung_id == rung_id)
+            self._on_mode_done(rung.arm_id)
+
+    def wait_for_photo_action(self) -> None:
+        """Wait until a photo or skip request has left its serialized state transition."""
+        with self._lock:
+            return
 
     def start(self) -> None:
-        self._stop.clear()
+        if self.stopped or (self._thread is not None and self._thread.is_alive()):
+            return
         self._thread = threading.Thread(target=self._loop, daemon=True, name="study-ladder")
         self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self, *, wait: bool = True) -> None:
         self._stop.set()
-        if self._thread is not None:
+        if wait and self._thread is not None and self._thread is not threading.current_thread():
             self._thread.join(timeout=3)
 
     def tick(self) -> None:
         """One step: set the rung if it is not set yet (a slow kiosk is retried), else verdict."""
         try:
-            rung = self.state.current
-            if rung is None:
+            if self._pending_photo() is not None:
+                if self._configured_rung != self._pending_photo()["rung_id"]:
+                    self.start_rung()
                 return
-            if self._status(rung) != "active":
+            rung = self.state.current
+            if self.stopped or rung is None or self.mode not in (None, rung.arm_id):
+                return
+            if self._status(rung) != "active" or self._configured_rung != rung.rung_id:
                 self.start_rung()
             else:
                 self.poll_once()
         except Exception as exc:  # pylint: disable=broad-exception-caught
             # nobody watches the logs on the Pi: every failure reaches the page
-            self.last_verdict = {"color": "red", "reasons": [f"ladder: {exc}"], "capture": None}
+            if not self.stopped:
+                self.last_verdict = {"color": "red", "reasons": [f"ladder: {exc}"], "capture": None}
 
     def _loop(self) -> None:
         self.tick()

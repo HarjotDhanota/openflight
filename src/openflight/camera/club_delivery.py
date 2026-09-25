@@ -17,11 +17,18 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
 from openflight.camera.club_motion import ReferenceBall, detect_reference_ball
-from openflight.camera.geometry import deroll_normalized_offsets
+from openflight.camera.geometry import (
+    deroll_normalized_offsets,
+    forward_distance_from_slant_range,
+    intersect_radar_range_sphere,
+    reference_ball_camera_model,
+    unit_world_rays,
+)
 from openflight.clubs import ClubType
 from openflight.clubs.physics import get_club_physics
 
@@ -117,17 +124,26 @@ class CameraDeliveryGeometry:
     # positive in-to-out by restoring physical lateral orientation here.
     horizontal_pixel_sign: float = 1.0
     roll_correction_deg: float = 0.0
+    camera_forward_offset_m: float = 0.0
+    calibrated_model: Any = None
 
     @property
     def ball_forward_m(self) -> float:
-        """Horizontal camera-to-ball distance from radar slant geometry."""
+        """Forward radar-to-ball distance from radar slant geometry."""
         vertical = self.ball_height_m - self.radar_height_m
-        return math.sqrt(max(self.tee_range_m**2 - vertical**2, 1e-9))
+        return forward_distance_from_slant_range(self.tee_range_m, vertical)
+
+    @property
+    def camera_ball_forward_m(self) -> float:
+        """Forward camera-to-ball distance; positive camera offset is downrange."""
+        return self.ball_forward_m - self.camera_forward_offset_m
 
     @property
     def camera_origin(self) -> np.ndarray:
         """Camera origin in the radar-centered world coordinate system."""
-        return np.array([self.camera_lateral_offset_m, 0.0, self.camera_height_m])
+        return np.array(
+            [self.camera_lateral_offset_m, self.camera_forward_offset_m, self.camera_height_m]
+        )
 
 
 @dataclass(frozen=True)
@@ -220,6 +236,49 @@ class ReferenceBallTracker:
             return None
         return self._anchor()
 
+    def snapshot(self) -> dict:
+        """Return all state needed to replay the next resolution exactly."""
+        return {
+            "schema_version": 1,
+            "max_samples": self.max_samples,
+            "min_fallback_samples": self.min_fallback_samples,
+            "samples": [vars(sample).copy() for sample in self._samples],
+        }
+
+    @classmethod
+    def from_snapshot(cls, snapshot: dict) -> "ReferenceBallTracker":
+        """Restore a tracker without inventing an empty legacy state."""
+        if not isinstance(snapshot, dict) or snapshot.get("schema_version") != 1:
+            raise ValueError("unsupported reference-ball tracker snapshot")
+        limits = (snapshot.get("max_samples"), snapshot.get("min_fallback_samples"))
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in limits
+        ):
+            raise ValueError("reference-ball tracker limits must be positive integers")
+        tracker = cls(max_samples=limits[0], min_fallback_samples=limits[1])
+        if tracker.min_fallback_samples > tracker.max_samples:
+            raise ValueError("reference-ball tracker fallback limit exceeds capacity")
+        samples = snapshot.get("samples")
+        if not isinstance(samples, list) or len(samples) > tracker.max_samples:
+            raise ValueError("invalid reference-ball tracker samples")
+        try:
+            restored = [ReferenceBall(**dict(sample)) for sample in samples]
+        except (TypeError, ValueError) as error:
+            raise ValueError("invalid reference-ball tracker sample") from error
+        for sample in restored:
+            values = (sample.x, sample.y, sample.diameter_px, sample.area_px)
+            if any(isinstance(value, bool) or not math.isfinite(float(value)) for value in values):
+                raise ValueError("reference-ball tracker samples must be finite numbers")
+            if (
+                sample.diameter_px <= 0
+                or not isinstance(sample.area_px, int)
+                or isinstance(sample.area_px, bool)
+                or sample.area_px <= 0
+            ):
+                raise ValueError("reference-ball tracker sample dimensions must be positive")
+        tracker._samples = restored
+        return tracker
+
 
 def _pixels_to_world(
     points_px: np.ndarray,
@@ -234,49 +293,38 @@ def _pixels_to_world(
     intersected with the IWR slant-range sphere, accounting for the camera and
     radar sitting at different heights.
     """
-    camera_ball_range_m = math.sqrt(
-        geometry.camera_lateral_offset_m**2
-        + geometry.ball_forward_m**2
-        + (geometry.ball_height_m - geometry.camera_height_m) ** 2
+    if geometry.calibrated_model is not None:
+        xyz = geometry.calibrated_model.reconstruct(points_px, radar_range_m)
+        return xyz[:, (0, 2, 1)]
+    radar_origin = np.array([0.0, 0.0, geometry.radar_height_m])
+    focal_px, pitch_rad, _radar_from_camera = reference_ball_camera_model(
+        ball_x_px=ball.x,
+        ball_y_px=ball.y,
+        ball_diameter_px=ball.diameter_px,
+        ball_diameter_m=geometry.ball_diameter_m,
+        image_width_px=geometry.image_width_px,
+        image_height_px=geometry.image_height_px,
+        horizontal_pixel_sign=geometry.horizontal_pixel_sign,
+        roll_correction_deg=geometry.roll_correction_deg,
+        camera_origin_lfu=geometry.camera_origin,
+        radar_origin_lfu=radar_origin,
+        ball_position_lfu=np.array([0.0, geometry.ball_forward_m, geometry.ball_height_m]),
     )
-    focal_px = ball.diameter_px * camera_ball_range_m / geometry.ball_diameter_m
-    if not math.isfinite(focal_px) or focal_px <= 0.0:
-        raise ValueError("invalid camera focal scale from reference ball")
-    center_x = geometry.image_width_px / 2.0
-    center_y = geometry.image_height_px / 2.0
-    ball_x = geometry.horizontal_pixel_sign * (ball.x - center_x) / focal_px
-    ball_z = -(ball.y - center_y) / focal_px
-    _ball_x, ball_z = deroll_normalized_offsets(
-        ball_x,
-        ball_z,
-        geometry.roll_correction_deg,
+    rays = unit_world_rays(
+        points_px,
+        focal_px=focal_px,
+        pitch_rad=pitch_rad,
+        image_width_px=geometry.image_width_px,
+        image_height_px=geometry.image_height_px,
+        horizontal_pixel_sign=geometry.horizontal_pixel_sign,
+        roll_correction_deg=geometry.roll_correction_deg,
     )
-    pitch_rad = math.atan2(
-        geometry.ball_height_m - geometry.camera_height_m,
-        geometry.ball_forward_m,
-    ) - math.atan2(ball_z, 1.0)
-    image_x = geometry.horizontal_pixel_sign * (points_px[:, 0] - center_x) / focal_px
-    image_z = -(points_px[:, 1] - center_y) / focal_px
-    image_x, image_z = deroll_normalized_offsets(
-        image_x,
-        image_z,
-        geometry.roll_correction_deg,
+    xyz = intersect_radar_range_sphere(
+        rays,
+        radar_range_m,
+        camera_origin_lfu=geometry.camera_origin,
+        radar_origin_lfu=radar_origin,
     )
-    rays = np.column_stack(
-        (
-            image_x,
-            math.cos(pitch_rad) - image_z * math.sin(pitch_rad),
-            math.sin(pitch_rad) + image_z * math.cos(pitch_rad),
-        )
-    )
-    rays /= np.linalg.norm(rays, axis=1, keepdims=True)
-    radar_from_camera = geometry.camera_origin - np.array([0.0, 0.0, geometry.radar_height_m])
-    ray_offset = rays @ radar_from_camera
-    discriminant = ray_offset**2 - (np.dot(radar_from_camera, radar_from_camera) - radar_range_m**2)
-    if np.any(discriminant < 0.0):
-        raise ValueError("camera ray does not intersect IWR range sphere")
-    distance = -ray_offset + np.sqrt(discriminant)
-    xyz = geometry.camera_origin + distance[:, None] * rays
     # Public ordering remains lateral, vertical, forward.
     return xyz[:, (0, 2, 1)]
 
@@ -326,9 +374,7 @@ def combine_approach_estimates(
     if preferred_path_estimate is not None:
         path_deg = preferred_path_estimate.path_deg
         values = np.asarray([estimate.path_deg for estimate in path_candidates])
-        path_mad = (
-            float(np.median(np.abs(values - path_deg))) if len(values) else None
-        )
+        path_mad = float(np.median(np.abs(values - path_deg))) if len(values) else None
         preferred_quality = (
             CHAINED_SPEED_RATIO_RANGE[0]
             <= preferred_path_estimate.speed_ratio_ops
@@ -339,9 +385,7 @@ def combine_approach_estimates(
             <= CHAINED_PATH_RANGE_DEG[1]
         )
         if preferred_quality and timing_plausible:
-            path_confidence = (
-                "high" if path_mad is not None and path_mad <= 2.0 else "medium"
-            )
+            path_confidence = "high" if path_mad is not None and path_mad <= 2.0 else "medium"
         else:
             path_confidence = "low"
     elif len(path_candidates) >= APPROACH_MIN_PATH_WINDOWS:
@@ -635,7 +679,7 @@ def camera_ops_delivery_from_feature_pair(
 
     camera_ball_range_m = math.sqrt(
         geometry.camera_lateral_offset_m**2
-        + geometry.ball_forward_m**2
+        + geometry.camera_ball_forward_m**2
         + (geometry.ball_height_m - geometry.camera_height_m) ** 2
     )
     focal_px = ball.diameter_px * camera_ball_range_m / geometry.ball_diameter_m
@@ -657,12 +701,12 @@ def camera_ops_delivery_from_feature_pair(
     ball_x, ball_z = normalized(np.asarray([[ball.x, ball.y]], dtype=float))
     ball_x = float(ball_x[0])
     ball_z = float(ball_z[0])
-    expected_azimuth = math.atan2(-geometry.camera_lateral_offset_m, geometry.ball_forward_m)
+    expected_azimuth = math.atan2(-geometry.camera_lateral_offset_m, geometry.camera_ball_forward_m)
     observed_azimuth = math.atan2(ball_x, 1.0)
     yaw_rad = expected_azimuth - observed_azimuth
     expected_elevation = math.atan2(
         geometry.ball_height_m - geometry.camera_height_m,
-        geometry.ball_forward_m,
+        geometry.camera_ball_forward_m,
     )
     pitch_rad = expected_elevation - math.atan2(ball_z, 1.0)
     contact_depth_m = camera_ball_range_m / math.sqrt(1.0 + ball_x**2 + ball_z**2)
@@ -905,6 +949,8 @@ def estimate_chained_delivery(
     geometry: CameraDeliveryGeometry,
     ops_club_speed_mph: float | None,
     ball_tracker: ReferenceBallTracker | None = None,
+    reference_ball: ReferenceBall | None = None,
+    reference_ball_selected: bool = False,
 ) -> ChainedDelivery:
     """Estimate final-approach club delivery from camera, IWR, and OPS."""
     if ops_club_speed_mph is None:
@@ -919,15 +965,21 @@ def estimate_chained_delivery(
     scene_p995, _ball_threshold, bright_now, dark_bg = _adaptive_thresholds(background)
     if scene_p995 < SCENE_P995_MIN:
         return ChainedDelivery(status="rejected_low_light", scene_p995=scene_p995)
-    try:
-        ball = detect_reference_ball(frames)
-    except ValueError:
-        ball = ball_tracker.fallback() if ball_tracker is not None else None
-        if ball is None:
-            return ChainedDelivery(status="rejected_no_ball", scene_p995=scene_p995)
-    else:
-        if ball_tracker is not None:
-            ball, _ball_source = ball_tracker.resolve(ball)
+    ball = reference_ball
+    if ball is None and reference_ball_selected:
+        return ChainedDelivery(status="rejected_no_ball", scene_p995=scene_p995)
+    if ball is None:
+        try:
+            ball = detect_reference_ball(frames)
+        except ValueError:
+            ball = ball_tracker.fallback() if ball_tracker is not None else None
+            if ball is None:
+                return ChainedDelivery(status="rejected_no_ball", scene_p995=scene_p995)
+        else:
+            if ball_tracker is not None:
+                ball, _ball_source = ball_tracker.resolve(ball)
+    elif ball_tracker is not None:
+        ball_tracker.resolve(ball)
     yy, xx = np.mgrid[0 : frames.shape[1], 0 : frames.shape[2]]
     image_scale = _image_scale(frames.shape)
     ball_zone_radius = max(50.0, BALL_ZONE_RADIUS_PX * image_scale)
@@ -972,30 +1024,35 @@ def estimate_chained_delivery(
         if feature_tracks is None:
             continue
         camera_times_s = timestamps_ns[indexes].astype(float) / 1e9
-        if range_evidence is None:
-            estimate = camera_ops_delivery_from_feature_pair(
-                feature_tracks,
-                camera_times_s,
-                ball=ball,
-                geometry=geometry,
-                ops_club_speed_mph=ops_club_speed_mph,
-            )
-        else:
-            relative_s = camera_times_s - contact_camera_s
-            radar_ranges_m = np.asarray(
-                [
-                    float(track.range_at(impact_t_s + offset, radar_geo.range_res_m))
-                    for offset in relative_s
-                ]
-            )
-            estimate = _delivery_from_feature_pair(
-                feature_tracks,
-                camera_times_s,
-                radar_ranges_m,
-                ball=ball,
-                geometry=geometry,
-                ops_club_speed_mph=ops_club_speed_mph,
-            )
+        try:
+            if range_evidence is None and geometry.calibrated_model is not None:
+                estimate = None
+            elif range_evidence is None:
+                estimate = camera_ops_delivery_from_feature_pair(
+                    feature_tracks,
+                    camera_times_s,
+                    ball=ball,
+                    geometry=geometry,
+                    ops_club_speed_mph=ops_club_speed_mph,
+                )
+            else:
+                relative_s = camera_times_s - contact_camera_s
+                radar_ranges_m = np.asarray(
+                    [
+                        float(track.range_at(impact_t_s + offset, radar_geo.range_res_m))
+                        for offset in relative_s
+                    ]
+                )
+                estimate = _delivery_from_feature_pair(
+                    feature_tracks,
+                    camera_times_s,
+                    radar_ranges_m,
+                    ball=ball,
+                    geometry=geometry,
+                    ops_club_speed_mph=ops_club_speed_mph,
+                )
+        except ValueError:
+            estimate = None
         if estimate is not None:
             pair_estimates[offsets] = estimate
 
@@ -1009,7 +1066,14 @@ def estimate_chained_delivery(
         "head_thickness_px": (round(head_thickness, 2) if head_thickness is not None else None),
     }
     if not pair_estimates:
-        return ChainedDelivery(status="rejected_no_stable_clubhead", **common)
+        return ChainedDelivery(
+            status=(
+                "rejected_calibrated_requires_iwr_range"
+                if range_evidence is None and geometry.calibrated_model is not None
+                else "rejected_no_stable_clubhead"
+            ),
+            **common,
+        )
     result = combine_approach_estimates(
         list(pair_estimates.values()),
         attack_estimate=pair_estimates.get((-1, 0)),

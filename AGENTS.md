@@ -17,6 +17,12 @@ OpenFlight is a DIY golf launch monitor using the OPS243-A Doppler radar and K-L
 
 ## Scope and Reviewability
 
+For radar-camera fusion and testing-suite work, follow
+[the fusion master plan](docs/development/fusion-master-plan.md). Tie changes to
+its active milestone, update its checkpoint, and record evidence-backed changes
+of direction in its decision log before implementing them. User instructions
+take precedence; do not treat pending hardware validation as completed.
+
 Agents must produce small, correct, and reviewable changes.
 
 - Keep every change scoped to one feature, fix, or documentation objective.

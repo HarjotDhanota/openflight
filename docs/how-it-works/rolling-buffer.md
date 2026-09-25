@@ -27,6 +27,12 @@ The runtime then starts in the persisted `GC` rolling-buffer mode without
 re-entering it. See [Sound trigger wiring](../build/sound-trigger.md) for the
 recommended direct hardware trigger.
 
+An opt-in OPS243-A native speed trigger is also available with `--trigger
+hardware`. It requires firmware 1.3.2 or newer in the 1.3 release train and the
+tested 30 ksps configuration. It is currently OPS-only: OpenFlight rejects it
+with IWR6843 or camera capture because no timely shared auxiliary trigger edge
+has been qualified. See [OPS243 Internal Hardware Trigger](../hardware-trigger.md).
+
 ## Current defaults
 
 | Setting | Value |
@@ -70,4 +76,5 @@ in the session JSONL logs described in the
 
 - [Raspberry Pi Setup](../setup/raspberry-pi.md)
 - [Sound Trigger Wiring](../build/sound-trigger.md)
+- [OPS243 Internal Hardware Trigger](../hardware-trigger.md)
 - [Spin Replay and Diagnostics](../development/spin-replay.md)

@@ -2,6 +2,7 @@
 
 import json
 import threading
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -707,3 +708,78 @@ def test_vertical_crop_update_rejects_unsafe_or_unaligned_offsets(tmp_path, offs
 
     with pytest.raises(ValueError, match="vertical crop"):
         runtime.update_vertical_crop(offset)
+
+
+def test_trigger_evidence_is_frozen_per_accepted_trigger(tmp_path):
+    current = {
+        "ready": True,
+        "blockers": [],
+        "warnings": [{"id": "lis3dh", "reason": "tilted"}],
+        "observations": {
+            "lis3dh": {
+                "placement_guard": {
+                    "warned": True,
+                    "pitch_deg": 5.25,
+                    "pitch_error_deg": 5.25,
+                    "accuracy_qualified": False,
+                }
+            }
+        },
+    }
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path, trigger_evidence_provider=lambda _timestamp: current
+    )
+    runtime._running = True
+    runtime._ring = SimpleNamespace(trigger=lambda _timestamp: True)
+
+    assert runtime.notify_trigger(10.0) is True
+    current["warnings"].clear()
+    current["observations"]["lis3dh"]["placement_guard"]["pitch_deg"] = 0.0
+    assert runtime.notify_trigger(11.0) is True
+
+    assert runtime._trigger_evidence.get_nowait() == {
+        "ready": True,
+        "blockers": [],
+        "warnings": [{"id": "lis3dh", "reason": "tilted"}],
+        "observations": {
+            "lis3dh": {
+                "placement_guard": {
+                    "warned": True,
+                    "pitch_deg": 5.25,
+                    "pitch_error_deg": 5.25,
+                    "accuracy_qualified": False,
+                }
+            }
+        },
+    }
+    assert runtime._trigger_evidence.get_nowait()["warnings"] == []
+
+
+def test_trigger_evidence_provider_failure_blocks_without_losing_trigger(tmp_path):
+    def broken(_timestamp):
+        raise RuntimeError("sensor read failed")
+
+    runtime = CameraCaptureRuntime(output_dir=tmp_path, trigger_evidence_provider=broken)
+    runtime._running = True
+    runtime._ring = SimpleNamespace(trigger=lambda _timestamp: True)
+
+    assert runtime.notify_trigger(10.0) is True
+    evidence = runtime._trigger_evidence.get_nowait()
+    assert evidence["ready"] is False
+    assert evidence["blockers"] == [
+        {"id": "provider", "reason": "RuntimeError: sensor read failed"}
+    ]
+
+
+def test_shot_admission_uses_frozen_trigger_evidence_after_provider_recovers(tmp_path):
+    current = {"ready": False, "blockers": [{"id": "lis3dh", "reason": "moving"}]}
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path, trigger_evidence_provider=lambda _timestamp: current
+    )
+    runtime._running = True
+    runtime._ring = SimpleNamespace(trigger=lambda _timestamp: True)
+
+    runtime.notify_trigger(10.0)
+    current["ready"] = True
+
+    assert runtime.trigger_evidence_for_shot(10.0)["ready"] is False

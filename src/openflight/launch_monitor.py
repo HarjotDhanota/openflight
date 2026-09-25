@@ -202,13 +202,11 @@ class Shot:
     impact_timestamp: Optional[float] = None
     impact_timestamp_kld7: Optional[float] = None
     club_speed_mph: Optional[float] = None
-    # Raw OPS radial ball speed, kept when the cosine correction rewrites
-    # ball_speed_mph (radar bin anchoring must keep using the radial value)
+    # Raw OPS radial ball speed retained for compatibility and explicit provenance.
     ball_speed_raw_mph: Optional[float] = None
-    # Which speed ball_speed_mph IS: the OPS radial reading, or the
-    # cosine-corrected total. Two sessions with different radars attached
-    # are otherwise indistinguishable after the fact.
+    # Which speed ball_speed_mph is. New live shots retain the OPS radial value.
     ball_speed_contract: Optional[str] = None
+    experimental_ball_speed_total: Optional[dict] = None
     peak_magnitude: Optional[float] = None
     readings: List[SpeedReading] = field(default_factory=list)
     club: ClubType = ClubType.DRIVER
@@ -247,6 +245,11 @@ class Shot:
     profile_name: str = ""
     readings_data: Optional[list] = None
     camera_replay: Optional[dict] = None
+    camera_fusion_context: Optional[dict] = None
+    camera_fusion_processing: Optional[dict] = None
+    camera_fusion_session_uuid: Optional[str] = field(default=None, repr=False, compare=False)
+    calibrated_camera_status: Optional[str] = None
+    calibrated_camera_reason: Optional[str] = None
     angle_source: Optional[str] = None  # "radar", "camera", "estimated", or None
     club_angle_deg: Optional[float] = None  # Club angle of attack from K-LD7 (vertical)
     club_path_deg: Optional[float] = None  # Club path: IWR6843, or K-LD7 (deprecated, horizontal)
@@ -380,6 +383,7 @@ class Shot:
             "ball_speed_mph": self.ball_speed_mph,
             "ball_speed_raw_mph": self.ball_speed_raw_mph,
             "ball_speed_contract": self.ball_speed_contract,
+            "experimental_ball_speed_total": self.experimental_ball_speed_total,
             "club_speed_mph": self.club_speed_mph,
             "smash_factor": self.smash_factor,
             "estimated_carry_yards": self.estimated_carry_yards,
@@ -427,6 +431,14 @@ class Shot:
             "experimental_camera_horizontal_status": self.experimental_camera_horizontal_status,
             "experimental_camera_iwr_delta_deg": self.experimental_camera_iwr_delta_deg,
             "camera_replay": dict(self.camera_replay) if self.camera_replay else None,
+            "camera_fusion_context": (
+                dict(self.camera_fusion_context) if self.camera_fusion_context else None
+            ),
+            "camera_fusion_processing": (
+                dict(self.camera_fusion_processing) if self.camera_fusion_processing else None
+            ),
+            "calibrated_camera_status": self.calibrated_camera_status,
+            "calibrated_camera_reason": self.calibrated_camera_reason,
             "spin_axis_deg": self.spin_axis_deg,
             "inclinometer": self.inclinometer,
             "spin_rpm": self.spin_rpm,

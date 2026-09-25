@@ -1,6 +1,7 @@
 """The exposure ladder's rungs, gains, pre-rung check and per-swing verdict."""
 
 import json
+import threading
 
 import numpy as np
 import pytest
@@ -100,6 +101,13 @@ def test_no_resting_ball_is_only_amber(tmp_path):
 
 def _verdict(color, name):
     return {"capture": name, "color": color, "reasons": [], "ball": None}
+
+
+def _make_pending_photo(state, capture="camera_final"):
+    state.begin("full-300", 3.0, {"ok": True})
+    state.record_swing(_verdict("red", "red-first"))
+    state.record_swing(_verdict("green", "accepted-middle"))
+    state.record_swing(_verdict("red", capture))
 
 
 def test_five_accepted_swings_finish_a_rung_and_the_next_begins(tmp_path):
@@ -217,13 +225,17 @@ def test_a_photo_restores_the_rung_even_when_it_fails(tmp_path):
     kiosk = FakeKiosk()
     runner = _runner(tmp_path, kiosk)
     runner.start_rung()
+    runner.state._data["photo_target"] = {  # pylint: disable=protected-access
+        "capture": "camera_a",
+        "rung_id": "full-300",
+    }
 
     def broken(count):
         raise OSError(f"kiosk went away asking for {count}")
 
     kiosk.frames = broken
     with pytest.raises(OSError):
-        runner.photograph()
+        runner.photograph("camera_a", "full-300")
     assert kiosk.calls[-1] == (300, 3.0)
 
 
@@ -235,11 +247,224 @@ def test_a_photo_is_saved_against_the_last_swing(tmp_path):
     runner.start_rung()
     _capture(run, exposure=300, gain=3.0, name="camera_a")
     runner.poll_once()
-    path = runner.photograph()
+    path = runner.photograph("camera_a", "full-300")
     assert path.name == "camera_a.pgm" and path.is_file()
     assert kiosk.calls[-2] == (820, 2.0)  # the still: (100 - 18) / (0.05 x 2), then back
     assert kiosk.calls[-1] == (300, 3.0)
     assert runner.state.to_dict()["photos"]["camera_a"].endswith("camera_a.pgm")
+
+
+def test_photo_after_same_mode_advance_restores_the_new_rung(tmp_path):
+    run = tmp_path / "run-01" / "arm5" / "camera"
+    run.mkdir(parents=True)
+    kiosk = FakeKiosk()
+    runner = _runner(tmp_path, kiosk, run_dir=tmp_path / "run-01")
+    runner.start_rung()
+    for index in range(4):
+        runner.state.record_swing(_verdict("green", f"old-{index}"))
+    _capture(run, exposure=300, gain=3.0, name="camera_fifth")
+
+    runner.poll_once()
+    path = runner.photograph("camera_fifth", "full-300")
+
+    assert path.is_file()
+    assert runner.state.current.rung_id == "full-200"
+    assert kiosk.calls[-2] == (820, 2.0)
+    assert kiosk.calls[-1] == (200, 4.5)
+
+
+def test_final_full_mode_swing_waits_for_its_photo_before_handoff(tmp_path):
+    run = tmp_path / "run-01" / "arm5" / "camera"
+    run.mkdir(parents=True)
+    done = []
+    runner = _runner(tmp_path, FakeKiosk(), run_dir=tmp_path / "run-01", done=done)
+    runner.start_rung()
+    runner.state.record_swing(_verdict("red", "old-0"))
+    runner.state.record_swing(_verdict("green", "old-1"))
+    _capture(run, exposure=200, gain=3.0, name="camera_final")
+
+    runner.poll_once()
+
+    pending = runner.state.to_dict()["pending_photo"]
+    assert pending == {"capture": "camera_final", "rung_id": "full-300"}
+    assert runner.state.current.rung_id == "half-300"
+    assert done == []
+    runner.photograph("camera_final", "full-300")
+    assert done == ["arm5"]
+    assert runner.state.to_dict()["pending_photo"] is None
+    assert runner.state.to_dict()["photo_target"] is None
+    with pytest.raises(RuntimeError, match="no longer the current photo target"):
+        runner.photograph("camera_final", "full-300")
+    assert done == ["arm5"]
+
+
+def test_fifth_accepted_full_75_swing_waits_for_its_exact_photo(tmp_path):
+    run = tmp_path / "run-01" / "arm5" / "camera"
+    run.mkdir(parents=True)
+    state = sl.LadderState(tmp_path / "ladder.json")
+    capture_number = 0
+    for rung_id in ("full-300", "full-200", "full-150", "full-100"):
+        state.begin(rung_id, 3.0, {"ok": True})
+        for _ in range(5):
+            state.record_swing(_verdict("green", f"old-{capture_number}"))
+            capture_number += 1
+    state.begin("full-75", 12.0, {"ok": True})
+    for index in range(4):
+        state.record_swing(_verdict("green", f"full75-{index}"))
+    done = []
+    runner = _runner(tmp_path, FakeKiosk(), run_dir=tmp_path / "run-01", done=done)
+    runner.start_rung()
+    _capture(run, exposure=75, gain=12.0, name="camera_final_75")
+
+    runner.poll_once()
+
+    assert runner.state.to_dict()["pending_photo"] == {
+        "capture": "camera_final_75",
+        "rung_id": "full-75",
+    }
+    assert done == []
+
+
+def test_failed_shorter_prechecks_preserve_the_last_full_capture_for_photo(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.begin("full-300", 3.0, {"ok": True})
+    for index in range(5):
+        state.record_swing(_verdict("green", f"camera_{index}"))
+    done = []
+    runner = _runner(tmp_path, FakeKiosk(level=24.0), done=done)
+
+    runner.start_rung()
+
+    assert runner.state.to_dict()["pending_photo"] == {
+        "capture": "camera_4",
+        "rung_id": "full-300",
+    }
+    assert done == []
+
+
+def test_photo_failure_keeps_the_exact_pending_target_for_retry(tmp_path):
+    kiosk = FakeKiosk()
+    runner = _runner(tmp_path, kiosk)
+    _make_pending_photo(runner.state, "c4")
+    runner._configured_rung = "full-300"  # pylint: disable=protected-access
+    kiosk.frames = lambda _count: (_ for _ in ()).throw(OSError("camera failed"))
+
+    with pytest.raises(OSError, match="camera failed"):
+        runner.photograph("c4", "full-300")
+
+    assert runner.state.to_dict()["pending_photo"] == {
+        "capture": "c4",
+        "rung_id": "full-300",
+    }
+
+
+def test_stop_during_photo_write_keeps_pending_and_publishes_no_photo(tmp_path, monkeypatch):
+    done = []
+    runner = _runner(tmp_path, FakeKiosk(), done=done)
+    runner.state.begin("full-300", 3.0, {"ok": True})
+    runner.state.record_swing(_verdict("red", "c0"))
+    runner.state.record_swing(_verdict("green", "c1"))
+    runner.state.record_swing(_verdict("red", "camera_final"))
+    runner.mode = "arm5"
+    runner.tick()
+    writing = threading.Event()
+    release = threading.Event()
+    original = sl.tempfile.NamedTemporaryFile
+
+    class BlockingTemporary:
+        def __init__(self, handle):
+            self.handle = handle
+            self.name = handle.name
+            self.writes = 0
+
+        def __enter__(self):
+            self.handle.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.handle.__exit__(*args)
+
+        def write(self, data):
+            self.writes += 1
+            if self.writes == 2:
+                writing.set()
+                assert release.wait(3)
+            return self.handle.write(data)
+
+    def temporary(*args, **kwargs):
+        handle = original(*args, **kwargs)
+        return (
+            BlockingTemporary(handle)
+            if kwargs.get("mode", args[0] if args else None) is None
+            else handle
+        )
+
+    monkeypatch.setattr(sl.tempfile, "NamedTemporaryFile", temporary)
+    errors = []
+
+    def take_photo():
+        try:
+            runner.photograph("camera_final", "full-300")
+        except RuntimeError as exc:
+            errors.append(str(exc))
+
+    worker = threading.Thread(target=take_photo)
+    worker.start()
+    assert writing.wait(2)
+    runner.stop()
+    release.set()
+    worker.join(3)
+    assert errors == ["the ladder is stopped"]
+    assert runner.state.to_dict()["pending_photo"]["capture"] == "camera_final"
+    assert not (tmp_path / "impact" / "camera_final.pgm").exists()
+    assert done == []
+
+
+def test_pending_photo_and_skip_survive_a_reload(tmp_path):
+    path = tmp_path / "ladder.json"
+    state = sl.LadderState(path)
+    _make_pending_photo(state)
+    again = sl.LadderState(path)
+    assert again.to_dict()["pending_photo"]["capture"] == "camera_final"
+    again.skip_photo("camera_final", "full-300")
+    reloaded = sl.LadderState(path).to_dict()
+    assert reloaded["pending_photo"] is None
+    assert reloaded["photo_target"] is None
+    assert reloaded["photo_skips"]["camera_final"]["rung_id"] == "full-300"
+
+
+def test_failed_photo_state_save_keeps_pending_in_memory(tmp_path, monkeypatch):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    _make_pending_photo(state)
+    monkeypatch.setattr(state, "_save", lambda: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises(OSError, match="disk full"):
+        state.finish_photo("camera_final", "full-300", "impact/camera_final.pgm")
+    assert state.to_dict()["pending_photo"] == {
+        "capture": "camera_final",
+        "rung_id": "full-300",
+    }
+
+
+def test_failed_photo_state_replace_keeps_pending_on_disk(tmp_path, monkeypatch):
+    path = tmp_path / "ladder.json"
+    state = sl.LadderState(path)
+    _make_pending_photo(state)
+    monkeypatch.setattr(sl.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError("disk")))
+    with pytest.raises(OSError, match="disk"):
+        state.finish_photo("camera_final", "full-300", "impact/camera_final.pgm")
+    assert sl.LadderState(path).to_dict()["pending_photo"] == {
+        "capture": "camera_final",
+        "rung_id": "full-300",
+    }
+
+
+def test_stale_photo_identity_is_rejected(tmp_path):
+    runner = _runner(tmp_path, FakeKiosk())
+    runner.start_rung()
+    runner._last_capture = "camera_new"  # pylint: disable=protected-access
+    runner.last_verdict = {"capture": "camera_new", "rung_id": "full-300"}
+    with pytest.raises(RuntimeError, match="no longer the current photo target"):
+        runner.photograph("camera_old", "full-300")
 
 
 def test_finishing_a_mode_hands_over_to_the_next(tmp_path):
@@ -249,6 +474,7 @@ def test_finishing_a_mode_hands_over_to_the_next(tmp_path):
     runner.start_rung()
     assert done == ["arm5"]
     assert runner.state.current.rung_id == "half-300"
+    assert runner.state.to_dict()["pending_photo"] is None
 
 
 def test_a_capture_before_the_rung_is_set_waits_instead_of_killing_the_runner(tmp_path):
@@ -294,3 +520,52 @@ def test_nothing_is_set_on_a_kiosk_that_is_between_modes(tmp_path):
     runner.mode = "arm5"
     runner.start_rung()
     assert kiosk.calls == [(300, 3.0)]
+
+
+def test_resuming_an_active_rung_reapplies_its_saved_controls_before_polling(tmp_path):
+    kiosk = FakeKiosk()
+    runner = _runner(tmp_path, kiosk)
+    runner.state.begin("full-300", 3.0, {"ok": True})
+    for i in range(5):
+        runner.state.record_swing(_verdict("green", f"c{i}"))
+    runner.state.begin("full-200", 4.5, {"ok": True})
+    resumed = _runner(tmp_path, kiosk)
+    resumed.tick()
+    assert kiosk.calls == [(200, 4.5)]
+    assert resumed.state.accepted("full-300") == 5
+    resumed.tick()
+    assert kiosk.calls == [(200, 4.5)]
+
+
+def test_stopped_runner_does_not_apply_controls_or_take_photos(tmp_path):
+    kiosk = FakeKiosk()
+    runner = _runner(tmp_path, kiosk)
+    runner.stop()
+    runner.tick()
+    runner.start_rung()
+    with pytest.raises(RuntimeError, match="stopped"):
+        runner.photograph("camera_a", "full-300")
+    assert kiosk.calls == []
+    assert runner.state.to_dict()["rungs"]["full-300"]["status"] == "pending"
+
+
+def test_stop_interrupts_waiting_for_the_kiosk(tmp_path):
+    entered = threading.Event()
+    kiosk = FakeKiosk()
+
+    def waiting():
+        entered.set()
+        return False
+
+    kiosk.ready = waiting
+    runner = _runner(tmp_path, kiosk)
+    runner.ready_timeout_s = 90
+    runner.start()
+    try:
+        assert entered.wait(2)
+        runner.stop()
+        assert not runner._thread.is_alive()  # pylint: disable=protected-access
+        assert kiosk.calls == []
+        assert runner.last_verdict is None
+    finally:
+        runner.stop()

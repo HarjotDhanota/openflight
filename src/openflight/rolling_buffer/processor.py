@@ -5,6 +5,7 @@ Handles FFT processing of raw I/Q data to extract speed and spin information.
 Based on OmniPreSense AN-027 Rolling Buffer application note.
 """
 
+import hashlib
 import json
 import logging
 from collections.abc import Iterator
@@ -170,6 +171,44 @@ class RollingBufferProcessor:
         """
         self.SAMPLE_RATE = sample_rate
         self.hanning_window = np.hanning(self.WINDOW_SIZE)
+
+    def replay_config(
+        self, *, club_type: ClubType, spin_prior_policy: str, resolved_spin_prior_rpm: float | None
+    ) -> dict:
+        """Return the exact primitive processing inputs for capture replay."""
+        constants = {}
+        for name in dir(type(self)):
+            if not name.isupper():
+                continue
+            value = getattr(type(self), name)
+            if value is None or isinstance(value, (str, bool, int, float)):
+                constants[name] = value
+            elif isinstance(value, (tuple, list)) and all(
+                isinstance(item, (str, bool, int, float)) for item in value
+            ):
+                constants[name] = list(value)
+        payload = {
+            "schema_version": 1,
+            "processor": "openflight.rolling_buffer.processor.RollingBufferProcessor",
+            "sample_rate_hz": self.SAMPLE_RATE,
+            "club_type": club_type.value,
+            "spin_prior_policy": spin_prior_policy,
+            "resolved_spin_prior_rpm": resolved_spin_prior_rpm,
+            "constants": constants,
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        payload["sha256"] = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        return payload
+
+    @staticmethod
+    def _resolve_replay_config(config: dict, resolved_spin_prior_rpm: float | None) -> dict:
+        """Fill the result-dependent prior without rereading mutable processor knobs."""
+        payload = dict(config)
+        payload.pop("sha256", None)
+        payload["resolved_spin_prior_rpm"] = resolved_spin_prior_rpm
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        payload["sha256"] = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        return payload
 
     def parse_capture(
         self,
@@ -1814,6 +1853,15 @@ class RollingBufferProcessor:
         Returns:
             ProcessedCapture with all extracted data, or None if processing fails
         """
+        frozen_processor_config = self.replay_config(
+            club_type=club_type,
+            spin_prior_policy=(
+                "get_optimal_spin_for_ball_speed_v1"
+                if expected_spin_for_ball_speed is not None
+                else "explicit_or_none"
+            ),
+            resolved_spin_prior_rpm=None,
+        )
         # Use non-overlapping (standard) processing to find ball speed.
         # Ball speed = the most-repeated speed across independent windows,
         # NOT the maximum. A single FFT window with a noise spike at 200 mph
@@ -1926,4 +1974,7 @@ class RollingBufferProcessor:
             spin=spin,
             capture=capture,
             impact=impact,
+            processor_config=self._resolve_replay_config(
+                frozen_processor_config, expected_spin_rpm
+            ),
         )

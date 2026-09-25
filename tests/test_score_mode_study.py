@@ -161,6 +161,46 @@ class TestArmAggregation:
         assert scorer.light_bin(1.5) == "2^0"
         assert scorer.light_bin(None) == "unknown"
 
+    def test_operator_ledger_is_separate_from_logged_attempt_availability(self, tmp_path):
+        export = _export(tmp_path, "arm1", 320, 200, 450.0, 12.0, ["ok", "low_light"])
+        manifest_path = export / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["attempt_ledger"] = {
+            "status": "preserved",
+            "counts": {
+                "physical_operator_swings": 3,
+                "operator_reported_misses": 1,
+                "warmups": 1,
+                "false_triggers": 0,
+                "logged_sensor_shots": 2,
+            },
+        }
+        manifest_path.write_text(json.dumps(manifest))
+        score, _ = scorer.score_export(export)
+        assert score.attempted == 2 and score.availability == 0.5
+        assert score.availability_basis.startswith("logged sensor attempts")
+        assert score.operator_recorded_swings == 3
+        assert score.physical_operator_swings is None
+        assert score.physical_attempt_coverage == "unverified"
+        assert score.observed_count_discrepancy == -1
+        assert (score.ledger_runs_covered, score.ledger_runs_total) == (1, 1)
+        assert score.physical_availability is None
+
+    def test_mixed_run_ledgers_keep_subtotal_without_a_discrepancy(self, tmp_path):
+        first = _export(tmp_path, "arm1", 320, 200, 450.0, 12.0, ["ok"], run="run-01")
+        second = _export(tmp_path, "arm1", 320, 200, 450.0, 12.0, ["ok"], run="run-02")
+        manifest_path = first / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["attempt_ledger"] = {
+            "status": "preserved",
+            "counts": {"physical_operator_swings": 1},
+        }
+        manifest_path.write_text(json.dumps(manifest))
+        score, _shots = scorer.score_exports([first, second])["t1"]["arm1"]
+        assert score.operator_recorded_swings == 1
+        assert (score.ledger_runs_covered, score.ledger_runs_total) == (1, 2)
+        assert score.observed_count_discrepancy is None
+
 
 class TestHypotheses:
     def test_h1_passes_when_the_1to1_ball_is_twice_the_size(self, tmp_path):

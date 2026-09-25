@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
+import numbers
 import queue
 import sys
 import threading
 import time
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -145,22 +148,147 @@ def resolved_camera_config(camera) -> dict | None:
         config = camera.camera_configuration() or {}
     except Exception:  # pylint: disable=broad-exception-caught
         return None
-    out: dict = {}
-    for stream in ("main", "raw"):
-        block = config.get(stream) or {}
-        out[stream] = {"size": list(block.get("size") or ()), "format": block.get("format")}
-    sensor = config.get("sensor") or {}
-    out["sensor"] = {
-        "output_size": list(sensor.get("output_size") or ()),
-        "bit_depth": sensor.get("bit_depth"),
+    try:
+        out: dict = {}
+        for stream in ("main", "raw"):
+            block = config.get(stream) or {}
+            out[stream] = {
+                "size": _json_safe(block.get("size")) or [],
+                "format": _json_safe(block.get("format")),
+            }
+        sensor = config.get("sensor") or {}
+        out["sensor"] = {
+            "output_size": _json_safe(sensor.get("output_size")) or [],
+            "bit_depth": _json_safe(sensor.get("bit_depth")),
+        }
+        controls = config.get("controls") or {}
+        out["controls"] = {
+            key: _json_safe(value)
+            for key, value in controls.items()
+            if key in ("ExposureTime", "AnalogueGain", "FrameDurationLimits", "ScalerCrop")
+        }
+        return out
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+
+
+def _json_safe(value):
+    """Convert common libcamera value objects to JSON-compatible values."""
+    if value is None or isinstance(value, (bool, str)):
+        return value
+    if isinstance(value, numbers.Integral):
+        return int(value)
+    if isinstance(value, numbers.Real):
+        return float(value) if math.isfinite(float(value)) else None
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_json_safe(item) for item in value]
+    if all(hasattr(value, key) for key in ("x", "y", "width", "height")):
+        return [_json_safe(getattr(value, key)) for key in ("x", "y", "width", "height")]
+    if all(hasattr(value, key) for key in ("width", "height")):
+        return [_json_safe(value.width), _json_safe(value.height)]
+    return None
+
+
+def camera_properties(camera) -> dict | None:
+    """Return the camera properties reported for this configured startup."""
+    names = (
+        "Model",
+        "PixelArraySize",
+        "PixelArrayActiveAreas",
+        "ScalerCropMaximum",
+        "UnitCellSize",
+    )
+    try:
+        properties = camera.camera_properties
+        if callable(properties):
+            properties = properties()
+        return {name: _json_safe(properties.get(name)) for name in names}
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+
+
+def _metadata_crop(value) -> tuple[int, int, int, int] | None:
+    if value is None:
+        return None
+    if all(hasattr(value, key) for key in ("x", "y", "width", "height")):
+        values = (value.x, value.y, value.width, value.height)
+    else:
+        try:
+            values = tuple(value)
+        except Exception:  # pylint: disable=broad-exception-caught
+            return None
+    if len(values) != 4:
+        return None
+    parsed = tuple(_exact_int(item) for item in values)
+    if any(item is None for item in parsed) or parsed[2] <= 0 or parsed[3] <= 0:
+        return None
+    return parsed
+
+
+def _metadata_int(value) -> int | None:
+    parsed = _exact_int(value)
+    if parsed is None or parsed <= 0:
+        return None
+    return parsed
+
+
+def _exact_int(value) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(numeric) or not numeric.is_integer():
+        return None
+    return int(numeric)
+
+
+def _capture_mode_metadata(frames) -> dict:
+    contexts: list[dict] = []
+    context_by_id: dict[str, int] = {}
+    context_indices: list[int | None] = []
+    for frame in frames:
+        if frame.capture_mode is None:
+            context_indices.append(None)
+            continue
+        serialized = json.dumps(frame.capture_mode, sort_keys=True, separators=(",", ":"))
+        context_id = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        if context_id not in context_by_id:
+            context_by_id[context_id] = len(contexts)
+            contexts.append({"id": context_id, "startup": deepcopy(frame.capture_mode)})
+        context_indices.append(context_by_id[context_id])
+
+    if not contexts:
+        context_status = "unavailable"
+    elif len(contexts) == 1 and all(index == 0 for index in context_indices):
+        context_status = "uniform"
+    else:
+        context_status = "mixed_or_incomplete"
+    return {
+        "version": 1,
+        "binding": "unverified",
+        "context_status": context_status,
+        "contexts": contexts,
+        "frames": {
+            "context_index": context_indices,
+            "scaler_crop": [
+                list(frame.scaler_crop) if frame.scaler_crop else None for frame in frames
+            ],
+            "frame_duration_us": [frame.frame_duration_us for frame in frames],
+            "saved_width": [int(frame.image.shape[1]) for frame in frames],
+            "saved_height": [int(frame.image.shape[0]) for frame in frames],
+        },
+        "unresolved": {
+            "native_sampling": True,
+            "optical_unit": True,
+            "lens": True,
+            "focus": True,
+            "raw_scaler_crop_mapping": True,
+        },
     }
-    controls = config.get("controls") or {}
-    out["controls"] = {
-        key: (list(value) if isinstance(value, (tuple, list)) else value)
-        for key, value in controls.items()
-        if key in ("ExposureTime", "AnalogueGain", "FrameDurationLimits", "ScalerCrop")
-    }
-    return out
 
 
 class CameraCaptureRuntime:
@@ -174,12 +302,14 @@ class CameraCaptureRuntime:
         button_factory: Callable | None = None,
         use_gpio_trigger: bool = True,
         vertical_offset_path: str | Path = OV9281_VERTICAL_OFFSET_PATH,
+        trigger_evidence_provider: Callable[[float], dict] | None = None,
     ):
         self.output_dir = Path(output_dir).expanduser()
         self.settings = settings or CameraCaptureSettings()
         self._button_factory = button_factory
         self._use_gpio_trigger = use_gpio_trigger
         self._vertical_offset_path = Path(vertical_offset_path)
+        self._trigger_evidence_provider = trigger_evidence_provider
         self._auto_exposure_state_path = (
             Path(self.settings.auto_exposure_state_path).expanduser()
             if self.settings.auto_exposure_state_path is not None
@@ -189,6 +319,7 @@ class CameraCaptureRuntime:
         self._restore_auto_exposure_controls()
         self._camera = None
         self._resolved_config: dict | None = None
+        self._startup_capture_mode: dict | None = None
         self._button = None
         self._ring = TriggeredFrameBuffer(self.settings.pre_frames, self.settings.post_frames)
         self._running = False
@@ -199,6 +330,8 @@ class CameraCaptureRuntime:
         self._condition = threading.Condition()
         self._trigger_epochs: queue.Queue[float] = queue.Queue()
         self._trigger_auto_exposure: queue.Queue[dict] = queue.Queue()
+        self._trigger_evidence: queue.Queue[dict | None] = queue.Queue()
+        self._admission_evidence: list[tuple[float, dict | None]] = []
         self._camera_control_lock = threading.Lock()
         self._trigger_exposure_lock = threading.Lock()
         self._reconfigure_lock = threading.Lock()
@@ -248,9 +381,10 @@ class CameraCaptureRuntime:
             encode=None,
         )
         self._camera.configure(config)
-        self._resolved_config = resolved_camera_config(self._camera)
         if self.settings.scaler_crop is not None:
             self._camera.set_controls({"ScalerCrop": self.settings.scaler_crop})
+        self._resolved_config = resolved_camera_config(self._camera)
+        self._startup_capture_mode = self._capture_mode_startup_snapshot()
         self._camera.post_callback = self._on_frame
         self._running = True
         self._worker = threading.Thread(
@@ -439,6 +573,48 @@ class CameraCaptureRuntime:
             )
         return payload
 
+    def _driver_offset_readback(self) -> dict:
+        """Read the OV9281 driver offset once for this camera startup."""
+        try:
+            raw_value = self._vertical_offset_path.read_text(encoding="ascii").strip()
+        except OSError:
+            return {"value_px": None, "scope": "startup", "status": "unavailable"}
+        try:
+            value = int(raw_value)
+        except ValueError:
+            return {"value_px": None, "scope": "startup", "status": "malformed"}
+        return {"value_px": value, "scope": "startup", "status": "observed"}
+
+    def _capture_mode_startup_snapshot(self) -> dict:
+        """Freeze mode evidence that must not be replaced by a later restart."""
+        settings = self.settings
+        return {
+            "settings": {
+                "width": settings.width,
+                "height": settings.height,
+                "fps": settings.fps,
+                "pre_ms": settings.pre_ms,
+                "post_ms": settings.post_ms,
+                "exposure_us": settings.exposure_us,
+                "gain": settings.gain,
+                "frame_duration_us": round(1_000_000 / settings.fps),
+                "stream": settings.stream,
+                "rotate_180": settings.rotate_180,
+                "mirror_horizontal": settings.mirror_horizontal,
+                "roll_correction_deg": settings.roll_correction_deg,
+                "scaler_crop": list(settings.scaler_crop) if settings.scaler_crop else None,
+                "auto_exposure": settings.auto_exposure,
+            },
+            "resolved_config": deepcopy(self._resolved_config),
+            "camera_properties": camera_properties(self._camera),
+            "driver": {
+                "strip_y_offset": {
+                    **self._driver_offset_readback(),
+                    "meaning": "configured_module_parameter_not_effective_sensor_offset",
+                }
+            },
+        }
+
     def update_vertical_crop(self, offset_px: int) -> dict:
         """Move the hardware sensor window and restart the rolling capture."""
         limits = vertical_crop_limits(self.settings.width, self.settings.height)
@@ -493,16 +669,25 @@ class CameraCaptureRuntime:
         self._ready = queue.Queue()
         self._trigger_epochs = queue.Queue()
         self._trigger_auto_exposure = queue.Queue()
+        self._trigger_evidence = queue.Queue()
+        self._admission_evidence = []
         self._auto_exposure_policy.reset()
 
     def status(self) -> dict:
         """Return lightweight state for the operator UI."""
         buffered_frames = self._ring.buffered_frames
+        latest = self._ring.latest_frame
+        latest_frame_age_s = (
+            max(0.0, (time.monotonic_ns() - latest.host_timestamp_ns) / 1_000_000_000)
+            if latest is not None
+            else None
+        )
         return {
             "running": self._running,
             "armed": self._running and buffered_frames >= self.settings.pre_frames,
             "buffered_frames": buffered_frames,
             "required_pre_frames": self.settings.pre_frames,
+            "latest_frame_age_s": latest_frame_age_s,
             "auto_exposure": self.auto_exposure_status(),
         }
 
@@ -512,13 +697,47 @@ class CameraCaptureRuntime:
             return False
         trigger_epoch = time.time() if timestamp is None else float(timestamp)
         with self._trigger_exposure_lock:
+            evidence = None
+            if self._trigger_evidence_provider is not None:
+                try:
+                    evidence = deepcopy(self._trigger_evidence_provider(trigger_epoch))
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    evidence = {
+                        "schema_version": 1,
+                        "ready": False,
+                        "blockers": [{"id": "provider", "reason": f"{type(exc).__name__}: {exc}"}],
+                    }
+                    logger.warning("[CAMERA] Trigger evidence provider failed", exc_info=True)
             accepted = self._ring.trigger(time.monotonic_ns())
             if not accepted:
                 logger.debug("[CAMERA] Ignoring trigger edge while capture is busy")
                 return False
             self._trigger_epochs.put(trigger_epoch)
             self._trigger_auto_exposure.put(self.auto_exposure_status())
+            self._trigger_evidence.put(evidence)
+            self._admission_evidence.append((trigger_epoch, deepcopy(evidence)))
             return True
+
+    def trigger_evidence_for_shot(self, impact_timestamp: float | None) -> dict | None:
+        """Consume the immutable trigger evidence nearest one OPS shot."""
+        if impact_timestamp is None:
+            return None
+        with self._trigger_exposure_lock:
+            cutoff = impact_timestamp - self.settings.match_tolerance_s
+            self._admission_evidence = [
+                item for item in self._admission_evidence if item[0] >= cutoff
+            ]
+            if not self._admission_evidence:
+                return None
+            index = min(
+                range(len(self._admission_evidence)),
+                key=lambda item: abs(self._admission_evidence[item][0] - impact_timestamp),
+            )
+            timestamp, evidence = self._admission_evidence[index]
+            if abs(timestamp - impact_timestamp) > self.settings.match_tolerance_s:
+                return None
+            self._admission_evidence.pop(index)
+            return deepcopy(evidence)
 
     def capture_for_shot(
         self,
@@ -717,32 +936,44 @@ class CameraCaptureRuntime:
     def _on_frame(self, request) -> None:
         try:
             metadata = request.get_metadata()
-            if self.settings.stream == "main-y":
+            startup_settings = (self._startup_capture_mode or {}).get("settings", {})
+            stream = startup_settings.get("stream", self.settings.stream)
+            width = startup_settings.get("width", self.settings.width)
+            height = startup_settings.get("height", self.settings.height)
+            rotate_180 = startup_settings.get("rotate_180", self.settings.rotate_180)
+            mirror_horizontal = startup_settings.get(
+                "mirror_horizontal", self.settings.mirror_horizontal
+            )
+            if stream == "main-y":
                 image = unpack_yuv420_y_plane(
                     request.make_array("main"),
-                    self.settings.width,
-                    self.settings.height,
-                    self.settings.rotate_180,
-                    self.settings.mirror_horizontal,
+                    width,
+                    height,
+                    rotate_180,
+                    mirror_horizontal,
                 )
             else:
                 image = unpack_r8_frame(
                     request.make_array("raw"),
-                    self.settings.width,
-                    self.settings.height,
-                    self.settings.rotate_180,
-                    self.settings.mirror_horizontal,
+                    width,
+                    height,
+                    rotate_180,
+                    mirror_horizontal,
                 )
-            self._ring.add_frame(
-                CameraFrame(
-                    image=image,
-                    sensor_timestamp_ns=int(metadata["SensorTimestamp"]),
-                    host_timestamp_ns=time.monotonic_ns(),
-                    exposure_us=int(metadata.get("ExposureTime", 0)),
-                    analogue_gain=float(metadata.get("AnalogueGain", 0.0)),
+            with self._trigger_exposure_lock:
+                self._ring.add_frame(
+                    CameraFrame(
+                        image=image,
+                        sensor_timestamp_ns=int(metadata["SensorTimestamp"]),
+                        host_timestamp_ns=time.monotonic_ns(),
+                        exposure_us=int(metadata.get("ExposureTime", 0)),
+                        analogue_gain=float(metadata.get("AnalogueGain", 0.0)),
+                        scaler_crop=_metadata_crop(metadata.get("ScalerCrop")),
+                        frame_duration_us=_metadata_int(metadata.get("FrameDuration")),
+                        capture_mode=self._startup_capture_mode,
+                    )
                 )
-            )
-            capture = self._ring.pop_capture()
+                capture = self._ring.pop_capture()
             if capture is not None:
                 self._ready.put(capture)
         except Exception as exc:  # pylint: disable=broad-except
@@ -753,12 +984,9 @@ class CameraCaptureRuntime:
             capture = self._ready.get()
             if capture is None:
                 break
-            trigger_epoch = self._trigger_epochs.get() if not self._trigger_epochs.empty() else 0.0
-            auto_exposure = (
-                self._trigger_auto_exposure.get()
-                if not self._trigger_auto_exposure.empty()
-                else None
-            )
+            trigger_epoch = self._trigger_epochs.get()
+            auto_exposure = self._trigger_auto_exposure.get()
+            trigger_evidence = self._trigger_evidence.get()
             self._sequence += 1
             sequence = self._sequence
             try:
@@ -767,6 +995,7 @@ class CameraCaptureRuntime:
                     trigger_epoch,
                     capture,
                     auto_exposure=auto_exposure,
+                    trigger_evidence=trigger_evidence,
                 )
             except Exception as exc:  # pylint: disable=broad-except
                 logger.warning("[CAMERA] Capture #%d save failed: %s", sequence, exc, exc_info=True)
@@ -789,6 +1018,7 @@ class CameraCaptureRuntime:
         capture: TriggeredCapture,
         *,
         auto_exposure: dict | None = None,
+        trigger_evidence: dict | None = None,
     ) -> SavedCameraCapture:
         timestamp = datetime.fromtimestamp(trigger_epoch or time.time()).strftime(
             "%Y%m%d_%H%M%S_%f"
@@ -808,6 +1038,14 @@ class CameraCaptureRuntime:
         )
         exposure_us = np.asarray([frame.exposure_us for frame in capture.frames], dtype=np.int32)
         gain = np.asarray([frame.analogue_gain for frame in capture.frames], dtype=np.float32)
+        capture_mode = _capture_mode_metadata(capture.frames)
+        uniform_startup = (
+            capture_mode["contexts"][0]["startup"]
+            if capture_mode["context_status"] == "uniform"
+            else None
+        )
+        frozen_settings = uniform_startup["settings"] if uniform_startup else None
+        frozen_resolved = uniform_startup["resolved_config"] if uniform_startup else None
 
         # These clips are consumed immediately by the live estimators. ZIP
         # compression delayed shot display by roughly a second on the Pi, so
@@ -846,23 +1084,12 @@ class CameraCaptureRuntime:
                 "storage_format": "npz_uncompressed",
                 "npz_bytes": (shot_dir / "frames.npz").stat().st_size,
                 "save_time_ms": (time.monotonic() - started) * 1000.0,
-                "resolved": self._resolved_config,
-                "settings": {
-                    "width": self.settings.width,
-                    "height": self.settings.height,
-                    "fps": self.settings.fps,
-                    "pre_ms": self.settings.pre_ms,
-                    "post_ms": self.settings.post_ms,
-                    "exposure_us": self.settings.exposure_us,
-                    "gain": self.settings.gain,
-                    "stream": self.settings.stream,
-                    "rotate_180": self.settings.rotate_180,
-                    "mirror_horizontal": self.settings.mirror_horizontal,
-                    "roll_correction_deg": self.settings.roll_correction_deg,
-                    "scaler_crop": self.settings.scaler_crop,
-                    "auto_exposure": self.settings.auto_exposure,
-                },
+                "resolved": frozen_resolved,
+                "settings": frozen_settings or {},
+                "settings_scope": "capture_startup" if frozen_settings else "unavailable",
                 "auto_exposure": auto_exposure or self.auto_exposure_status(),
+                "capture_mode": capture_mode,
+                "tester_setup": trigger_evidence,
             }
         )
         (shot_dir / "metadata.json").write_text(json.dumps(summary, indent=2) + "\n")

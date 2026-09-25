@@ -233,8 +233,21 @@ class RollingBufferMonitor:
         """
         self.radar.connect()
 
+        if self.trigger_type == "hardware":
+            self.radar.configure_for_internal_speed_trigger(
+                trigger_threshold_mph=self.trigger.trigger_threshold_mph,
+                pre_trigger_segments=self.trigger.pre_trigger_segments,
+                trigger_magnitude=self.trigger.trigger_magnitude,
+                sample_rate_ksps=self.sample_rate_ksps,
+            )
+            logger.info(
+                "[MONITOR] OPS internal hardware trigger configured (threshold %.1f, S#%d, SM%d)",
+                self.trigger.trigger_threshold_mph,
+                self.trigger.pre_trigger_segments,
+                self.trigger.trigger_magnitude,
+            )
         # Speed trigger handles its own configuration (starts in speed mode).
-        if self.trigger_type != "speed":
+        elif self.trigger_type != "speed":
             pre_trigger_segments = getattr(self.trigger, "pre_trigger_segments", 12)
             self.radar.prepare_persisted_rolling_buffer(
                 pre_trigger_segments=pre_trigger_segments,
@@ -280,6 +293,11 @@ class RollingBufferMonitor:
 
     def get_radar_info(self) -> dict:
         """Get radar module information."""
+        if self.trigger_type == "hardware":
+            return {
+                "Product": "OPS243-A",
+                "Version": getattr(self.radar, "_internal_trigger_firmware_version", None),
+            }
         return self.radar.get_info()
 
     def start(
@@ -444,7 +462,7 @@ class RollingBufferMonitor:
                     capture_started = True
                     self._notify_processing("capturing")
 
-                if self.trigger_type == "sound":
+                if self.trigger_type in ("sound", "hardware"):
                     trigger_kwargs["cancel_event"] = self._stop_event
                     trigger_kwargs["capture_started_callback"] = on_capture_started
                 capture = self.trigger.wait_for_trigger(**trigger_kwargs)
@@ -630,6 +648,7 @@ class RollingBufferMonitor:
                                 processed.spin.phase_confirmed if processed.spin else False
                             ),
                             spin_rejection_reason=shot.spin_rejection_reason,
+                            processor_config=processed.processor_config,
                         )
 
                     self._record_trigger_event(

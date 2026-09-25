@@ -27,12 +27,18 @@ from typing import Callable
 import numpy as np
 from flask import Flask, Response, jsonify, request, send_file
 
-from openflight.camera import study_ladder
+from openflight.camera import attempt_ledger, study_ladder
 from openflight.camera.club_motion import detect_reference_ball
+from openflight.camera.fusion_diagnostics import register_fusion_diagnostics
+from openflight.camera.paired_eligibility import evaluate_paired_capture
+from openflight.camera.setup_eligibility import SetupEligibility
+from openflight.camera.track_review import register_track_review
 from openflight.camera.triggered_buffer import unpack_r8_frame
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TESTER_PAGE = REPO_ROOT / "ui" / "public" / "tester.html"
+TRACK_REVIEW_PAGE = REPO_ROOT / "ui" / "public" / "track-review.html"
+FUSION_DIAGNOSTICS_PAGE = REPO_ROOT / "ui" / "public" / "fusion-diagnostics.html"
 DEFAULT_SESSIONS_ROOT = Path.home() / "openflight_sessions" / "tester_pilot"
 DEFAULT_RIG_GEOMETRY = REPO_ROOT / "config" / "enclosure_v3_rig_geometry.json"
 SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
@@ -401,16 +407,42 @@ def next_run_directory(arm_dir: Path) -> Path:
     return arm_dir / "paired" / f"run-{len(existing) + 1:02d}"
 
 
+def write_setup_admission(run_dir: Path, tester_id: str, eligibility: Mapping) -> None:
+    """Bind the server-lifetime operator admission to one capture run."""
+    run_dir.mkdir(parents=True, exist_ok=False)
+    document = {
+        "schema_version": 1,
+        "type": "setup_admission",
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "tester_id": tester_id,
+        "config_hash": eligibility["config_hash"],
+        "operator_confirmation": eligibility["operator_confirmation"],
+        "checks": eligibility["checks"],
+        "blockers": eligibility["blockers"],
+        "warnings": eligibility.get("warnings", []),
+    }
+    temporary = run_dir / ".setup_admission.json.tmp"
+    temporary.write_text(
+        json.dumps(document, allow_nan=False, separators=(",", ":")), encoding="utf-8"
+    )
+    os.replace(temporary, run_dir / "setup_admission.json")
+
+
 def action_commands(
     action: str,
     params: TesterParameters,
     sessions_root: Path,
     rig_geometry: Path,
     radar_port: str = DEFAULT_RADAR_PORT,
+    tester_setup: Mapping | None = None,
+    optical_calibration: Path | None = None,
+    camera_placement: Path | None = None,
 ) -> tuple[list[list[str]], Path]:
     """Build an allowlisted command sequence and its log path."""
     if action not in ACTION_LABELS:
         raise ValueError("unknown tester action")
+    if (optical_calibration is None) != (camera_placement is None):
+        raise ValueError("calibrated camera fusion requires both calibration and placement")
     root = arm_directory(sessions_root, params)
     arm = params.arm
     if action == "preflight":
@@ -512,6 +544,31 @@ def action_commands(
                 params.arm_id,
             ]
         ]
+    if action in {"ladder", "swings"}:
+        if not tester_setup or not tester_setup.get("config_hash"):
+            raise ValueError("tester setup evidence is required for capture")
+        commands[0].extend(
+            [
+                "--tester-setup-required",
+                "--tester-config-hash",
+                str(tester_setup["config_hash"]),
+                "--inclinometer-bus",
+                str(tester_setup["inclinometer_bus"]),
+                "--inclinometer-address",
+                hex(int(tester_setup["inclinometer_address"])),
+                "--inclinometer-zero-offset",
+                str(tester_setup["inclinometer_zero_offset_deg"]),
+            ]
+        )
+        if optical_calibration is not None and camera_placement is not None:
+            commands[0].extend(
+                [
+                    "--camera-optical-calibration",
+                    str(optical_calibration),
+                    "--camera-placement",
+                    str(camera_placement),
+                ]
+            )
     return commands, root / "logs" / f"{action}.log"
 
 
@@ -608,6 +665,9 @@ class TesterJobManager:
                     )
                     with self._lock:
                         self._process = process
+                        cancel_pending = self._cancel_requested
+                    if cancel_pending:
+                        self._request_process_stop(process)
                     if process.stdout is not None:
                         for line in process.stdout:
                             self._append(line, handle)
@@ -659,17 +719,21 @@ class TesterJobManager:
             self._cancel_requested = True
             process = self._process
         if process is not None:
-            process.terminate()
-            ender = threading.Timer(KILL_GRACE_S, self._end_group, args=(process,))
-            ender.daemon = True
-            ender.start()
+            self._request_process_stop(process)
         return True
 
+    @classmethod
+    def _request_process_stop(cls, process) -> None:
+        process.terminate()
+        ender = threading.Timer(KILL_GRACE_S, cls._end_group, args=(process, process.pid))
+        ender.daemon = True
+        ender.start()
+
     @staticmethod
-    def _end_group(process) -> None:
+    def _end_group(process, process_group_id: int) -> None:
         """End what is left of a stopped job's process group, so the camera is free."""
         try:
-            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            os.killpg(process_group_id, signal.SIGTERM)
         except (AttributeError, OSError):
             try:
                 process.kill()
@@ -899,6 +963,9 @@ class EnclosureTilt:
                 "expected_pitch_deg": round(expected, 2),
                 "camera_pitch_deg": round(rig.boresight_pitch_deg + departure, 2),
                 "gravity_g": round(snapshot.gravity_g, 3),
+                "x_g": snapshot.x_g,
+                "y_g": snapshot.y_g,
+                "z_g": snapshot.z_g,
                 "mount_yaw_deg": rig.lis3dh_mount_yaw_deg,
             }
         )
@@ -1208,6 +1275,7 @@ def _shot_events(session_dir: Path) -> list[dict]:
     """Every shot-level event in the arm's session JSONL files, in order."""
     events: list[dict] = []
     for path in sorted(session_dir.glob("session_*.jsonl")):
+        session_uuid = None
         with path.open(encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 try:
@@ -1215,8 +1283,52 @@ def _shot_events(session_dir: Path) -> list[dict]:
                 except json.JSONDecodeError:
                     continue
                 if isinstance(event, dict):
+                    if event.get("type") == "session_start":
+                        session_uuid = event.get("session_uuid")
+                    if session_uuid is not None:
+                        event = {**event, "_session_uuid": session_uuid}
                     events.append(event)
     return events
+
+
+def _logged_sensor_shot_count(events: Sequence[Mapping]) -> int:
+    """Count distinct valid sensor shot identities across supported event aliases."""
+    identities = set()
+    for event in events:
+        if event.get("type") not in ("shot_detected", "shot"):
+            continue
+        identity = event.get("shot_number")
+        if isinstance(identity, bool):
+            continue
+        try:
+            number = int(identity)
+        except (TypeError, ValueError):
+            continue
+        if number > 0:
+            identities.add(number)
+    return len(identities)
+
+
+def attempt_scopes(sessions_root: Path, tester_id: str) -> list[dict]:
+    """Saved capture scopes the client may address without parsing server paths."""
+    root = tester_root(sessions_root, tester_id)
+    scopes = []
+    if not root.is_dir():
+        return scopes
+    for arm_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        if arm_dir.name not in ARMS:
+            continue
+        for run in sorted((arm_dir / "paired").glob("run-*")):
+            if run.is_dir() and not run.is_symlink():
+                scopes.append(
+                    {
+                        "tester_id": tester_id,
+                        "arm_id": arm_dir.name,
+                        "run": run.name,
+                        "run_dir": str(run.resolve()),
+                    }
+                )
+    return scopes
 
 
 def _fused_status(event: dict) -> str | None:
@@ -1237,13 +1349,65 @@ def arm_progress(sessions_root: Path, params: TesterParameters) -> dict:
         f for run in runs for f in (run / params.arm_id / "camera").glob("camera_*/frames.npz")
     ]
     dumps = [f for run in runs for f in (run / "iwr6843").glob("*.l3dump")]
-    events = [event for run in runs for event in _shot_events(run)]
-    shots = [e for e in events if e.get("type") in ("shot_detected", "shot")]
     statuses = Counter()
-    for event in shots:
+    shots: list[dict] = []
+    all_shots: list[dict] = []
+    gated_pending = 0
+    gated_withheld = 0
+    for run in runs:
+        run_shots = [
+            event for event in _shot_events(run) if event.get("type") in ("shot_detected", "shot")
+        ]
+        all_shots.extend(run_shots)
+        admission_path = run / "setup_admission.json"
+        if not admission_path.is_file():
+            shots.extend(run_shots)
+            continue
+        try:
+            admission = json.loads(admission_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            admission = {}
+        eligible_identities: set[tuple[str, int]] = set()
+        for metadata_path in run.rglob("camera_*/metadata.json"):
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                gated_withheld += 1
+                continue
+            trigger = metadata.get("tester_setup") if isinstance(metadata, dict) else None
+            paired = evaluate_paired_capture(run, metadata_path.parent)
+            observations = trigger.get("observations") if isinstance(trigger, dict) else None
+            runtime = observations.get("runtime") if isinstance(observations, dict) else None
+            session_uuid = runtime.get("session_uuid") if isinstance(runtime, dict) else None
+            trigger_run = runtime.get("run_dir") if isinstance(runtime, dict) else None
+            try:
+                same_run = Path(str(trigger_run)).resolve() == run.resolve()
+            except (OSError, ValueError):
+                same_run = False
+            trigger_valid = bool(
+                isinstance(trigger, dict)
+                and trigger.get("required") is True
+                and trigger.get("ready") is True
+                and isinstance(admission.get("config_hash"), str)
+                and bool(admission["config_hash"])
+                and trigger.get("config_hash") == admission.get("config_hash")
+                and paired["session_uuid"] == session_uuid
+                and same_run
+            )
+            if paired["status"] == "pending":
+                gated_pending += 1
+            elif paired["status"] == "eligible" and trigger_valid:
+                eligible_identities.add((paired["session_uuid"], paired["shot_number"]))
+            else:
+                gated_withheld += 1
+        for event in run_shots:
+            identity = (event.get("_session_uuid"), event.get("shot_number"))
+            if identity in eligible_identities:
+                shots.append(event)
+    for event in all_shots:
         status = _fused_status(event)
         statuses[status or "unscored"] += 1
-    accepted = sum(count for status, count in statuses.items() if status in ACCEPTED_STATUSES)
+    accepted = sum(1 for event in shots if _fused_status(event) in ACCEPTED_STATUSES)
     problems: list[str] = []
     if camera and not dumps:
         problems.append("camera captures saved but no IWR6843 .l3dump files; was --debug active?")
@@ -1252,7 +1416,7 @@ def arm_progress(sessions_root: Path, params: TesterParameters) -> dict:
     if camera and dumps and abs(len(camera) - len(dumps)) > 1:
         problems.append(f"camera ({len(camera)}) and radar ({len(dumps)}) counts do not pair up")
     return {
-        "attempted": len(shots) or max(len(camera), len(dumps)),
+        "attempted": len(all_shots) or max(len(camera), len(dumps)),
         "accepted": accepted,
         "target": SWINGS_PER_ARM,
         "complete": accepted >= SWINGS_PER_ARM,
@@ -1260,6 +1424,8 @@ def arm_progress(sessions_root: Path, params: TesterParameters) -> dict:
         "radar_dumps": len(dumps),
         "status_histogram": dict(statuses),
         "runs": len(runs),
+        "gated_pending": gated_pending,
+        "gated_withheld": gated_withheld,
         "problems": problems,
     }
 
@@ -1301,10 +1467,11 @@ def package_study(sessions_root: Path, tester_id: str) -> Path:
         raise FileNotFoundError("there is no saved data yet")
     destination = _package_path(sessions_root, tester_id)
     temporary = destination.with_suffix(".zip.tmp")
-    with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_STORED) as bundle:
-        for path in sorted(root.rglob("*")):
-            if path.is_file() and not path.is_symlink():
-                bundle.write(path, path.relative_to(root.parent))
+    with attempt_ledger.snapshot_lock():
+        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_STORED) as bundle:
+            for path in sorted(root.rglob("*")):
+                if path.is_file() and not path.is_symlink():
+                    bundle.write(path, path.relative_to(root.parent))
     os.replace(temporary, destination)
     return destination
 
@@ -1317,16 +1484,186 @@ def create_app(
     manager: TesterJobManager | None = None,
     live_view: LiveView | None = None,
     tilt: EnclosureTilt | None = None,
+    setup_policy: SetupEligibility | None = None,
+    optical_calibration: Path | None = None,
+    camera_placement: Path | None = None,
 ) -> Flask:
     """Build the standalone tester service."""
+    if (optical_calibration is None) != (camera_placement is None):
+        raise ValueError("calibrated camera fusion requires both calibration and placement")
     app = Flask(__name__)
     jobs = manager or TesterJobManager()
     live = live_view or LiveView()
     enclosure = tilt or EnclosureTilt(rig_geometry)
+    setup = setup_policy or SetupEligibility(
+        rig_geometry,
+        sessions_root,
+        inclinometer_bus=enclosure.bus,
+        inclinometer_address=enclosure.address,
+        inclinometer_zero_offset_deg=enclosure.zero_offset_deg,
+    )
+    runtime_client = study_ladder.KioskClient()
+    active_setup_tester: dict[str, str | None] = {"tester_id": None}
+    active_runtime_dir: dict[str, Path | None] = {"path": None}
+    admitted_setup: dict[str, dict] = {}
+
+    def setup_status(tester_id: str) -> dict:
+        job = jobs.status()
+        if (
+            active_setup_tester["tester_id"] == tester_id
+            and job.get("state") == "running"
+            and job.get("action") in {"ladder", "swings"}
+        ):
+            runtime = runtime_client.setup_readiness()
+            observations = runtime.get("observations")
+            runtime_identity = (
+                observations.get("runtime") if isinstance(observations, Mapping) else None
+            )
+            actual_run = (
+                runtime_identity.get("run_dir") if isinstance(runtime_identity, Mapping) else None
+            )
+            session_uuid = (
+                runtime_identity.get("session_uuid")
+                if isinstance(runtime_identity, Mapping)
+                else None
+            )
+            try:
+                identity_matches = (
+                    active_runtime_dir["path"] is not None
+                    and Path(str(actual_run)).resolve() == active_runtime_dir["path"].resolve()
+                    and isinstance(session_uuid, str)
+                    and bool(session_uuid)
+                )
+            except (OSError, ValueError):
+                identity_matches = False
+            if not identity_matches:
+                runtime = {
+                    **runtime,
+                    "ready": False,
+                    "blockers": [
+                        *(runtime.get("blockers") or []),
+                        {
+                            "id": "runtime_identity",
+                            "reason": "the kiosk responder is not the active tester run",
+                            "remedy": "Stop the unexpected kiosk and restart this capture.",
+                        },
+                    ],
+                }
+            result = setup.evaluate(tester_id, {"status": "stable"})
+            runtime_hash = runtime.get("config_hash")
+            expected_hash = result.get("config_hash")
+            if runtime_hash != expected_hash:
+                runtime = {
+                    **runtime,
+                    "ready": False,
+                    "blockers": [
+                        *(runtime.get("blockers") or []),
+                        {
+                            "id": "config_hash",
+                            "reason": "running kiosk configuration does not match the confirmation",
+                            "remedy": "Stop and restart the capture from the tester.",
+                        },
+                    ],
+                }
+            runtime_blockers = list(runtime.get("blockers") or [])
+            result["checks"] = [
+                check for check in result["checks"] if check["id"] != "lis3dh"
+            ] + list(runtime.get("checks") or [])
+            result["blockers"] = [
+                blocker for blocker in result["blockers"] if blocker["id"] != "lis3dh"
+            ] + runtime_blockers
+            result["warnings"] = [
+                {"id": check["id"], "reason": check.get("reason")}
+                for check in result["checks"]
+                if check.get("status") == "warn"
+            ]
+            result["eligible"] = bool(not result["blockers"] and runtime.get("ready"))
+            result["stage"] = "runtime"
+            result["runtime"] = runtime
+            return result
+        return setup.evaluate(tester_id, enclosure.reading())
+
+    def setup_command_config(result: Mapping) -> dict:
+        return {
+            "config_hash": result["config_hash"],
+            "inclinometer_bus": enclosure.bus,
+            "inclinometer_address": enclosure.address,
+            "inclinometer_zero_offset_deg": enclosure.zero_offset_deg,
+        }
+
+    def blocked_setup(result: dict):
+        return jsonify({"error": "tester setup is not eligible", "setup_eligibility": result}), 409
 
     def parameters() -> TesterParameters:
         source = request.get_json(silent=True) if request.method == "POST" else request.args
         return TesterParameters.from_payload(source)
+
+    def resolve_attempt_scope(payload: Mapping) -> tuple[dict, Path]:
+        tester_id = str(payload.get("tester_id", ""))
+        arm_id = str(payload.get("arm_id", ""))
+        if not SAFE_SEGMENT.fullmatch(tester_id) or arm_id not in ARMS:
+            raise ValueError("unknown tester or arm")
+        tester = tester_root(sessions_root, tester_id)
+        arm_root = tester / arm_id
+        paired_path = arm_root / "paired"
+        if any(path.is_symlink() for path in (tester, arm_root, paired_path)):
+            raise ValueError("capture scope may not traverse a symlink")
+        paired = paired_path.resolve()
+        supplied_dir = payload.get("run_dir")
+        run_name = str(payload.get("run", ""))
+        if supplied_dir:
+            requested = Path(str(supplied_dir)).expanduser()
+            if requested.is_symlink():
+                raise ValueError("capture run may not be a symlink")
+            run = requested.resolve()
+            if run.parent != paired:
+                raise ValueError("run_dir is outside the requested tester and arm")
+            if run_name and run.name != run_name:
+                raise ValueError("run and run_dir disagree")
+        else:
+            if not SAFE_SEGMENT.fullmatch(run_name) or not run_name.startswith("run-"):
+                raise ValueError("run or run_dir is required")
+            requested = paired / run_name
+            if requested.is_symlink():
+                raise ValueError("capture run may not be a symlink")
+            run = requested.resolve()
+        if not run.name.startswith("run-") or not SAFE_SEGMENT.fullmatch(run.name):
+            raise ValueError("capture scope must identify a run-* directory")
+        if not run.is_dir():
+            raise FileNotFoundError("the requested capture run does not exist")
+        rung_id = payload.get("rung_id")
+        if rung_id is not None:
+            rung = next((item for item in study_ladder.LADDER if item.rung_id == rung_id), None)
+            if rung is None or rung.arm_id != arm_id:
+                raise ValueError("rung_id does not belong to the requested arm")
+        return {"tester_id": tester_id, "arm_id": arm_id, "run": run.name}, run
+
+    def attempt_state(scope: dict, run: Path) -> dict:
+        sensor_count = _logged_sensor_shot_count(_shot_events(run))
+        return attempt_ledger.summarize(run / "attempt_ledger.jsonl", scope, sensor_count)
+
+    register_track_review(app, resolve_attempt_scope, encode_png, TRACK_REVIEW_PAGE)
+    register_fusion_diagnostics(app, resolve_attempt_scope, FUSION_DIAGNOSTICS_PAGE)
+
+    def current_capture_scope(tester_id: str) -> dict | None:
+        run = ladder_runs.get(tester_id)
+        runner = ladder_runners.get(tester_id)
+        if run is None or runner is None or runner.mode not in ARMS:
+            return None
+        state = runner.state.to_dict()
+        pending = state.get("pending_photo")
+        rung_id = pending.get("rung_id") if isinstance(pending, dict) else state.get("current")
+        rung = next((item for item in study_ladder.LADDER if item.rung_id == rung_id), None)
+        if rung is None or rung.arm_id != runner.mode:
+            rung_id = None
+        return {
+            "tester_id": tester_id,
+            "arm_id": runner.mode,
+            "run": run.name,
+            "run_dir": str(run.resolve()),
+            "rung_id": rung_id,
+            "stopped": runner.stopped,
+        }
 
     def record_gain(params: TesterParameters) -> None:
         results = latest_gain_results(arm_directory(sessions_root, params))
@@ -1361,6 +1698,34 @@ def create_app(
             }
         )
 
+    @app.route("/api/tester/setup-eligibility", methods=["GET", "POST"])
+    def setup_eligibility():
+        payload = request.get_json(silent=True) if request.method == "POST" else request.args
+        payload = payload or {}
+        if not isinstance(payload, Mapping):
+            return jsonify({"error": "request body must be an object"}), 400
+        tester_id = str(payload.get("tester_id", ""))
+        if not SAFE_SEGMENT.fullmatch(tester_id):
+            return jsonify({"error": "unknown tester"}), 400
+        reading = enclosure.reading()
+        try:
+            if request.method == "POST":
+                if payload.get("action") != "confirm":
+                    raise ValueError("action must be confirm")
+                result = setup.confirm(
+                    tester_id,
+                    payload.get("config_hash"),
+                    payload.get("physical_rig_confirmed"),
+                    reading,
+                )
+            else:
+                result = setup_status(tester_id)
+            return jsonify(result)
+        except ValueError as exc:
+            return jsonify(
+                {"error": str(exc), "setup_eligibility": setup.evaluate(tester_id, reading)}
+            ), 400
+
     @app.route("/api/tester/status", methods=["GET", "POST"])
     def status():
         try:
@@ -1373,10 +1738,48 @@ def create_app(
                     "study": study_overview(sessions_root, params.tester_id),
                     "inclinometer": enclosure.reading(),
                     "package_ready": _package_path(sessions_root, params.tester_id).is_file(),
+                    "saved_attempt_scopes": attempt_scopes(sessions_root, params.tester_id),
                 }
             )
         except ValueError as exc:
             return jsonify({"available": True, "job": jobs.status(), "error": str(exc)}), 400
+
+    @app.route("/api/tester/attempts", methods=["GET", "POST"])
+    def attempts():
+        payload = request.get_json(silent=True) if request.method == "POST" else request.args
+        payload = payload or {}
+        if not isinstance(payload, Mapping):
+            return jsonify({"error": "request body must be an object"}), 400
+        tester_id = str(payload.get("tester_id", ""))
+        if (
+            request.method == "GET"
+            and not payload.get("arm_id")
+            and not payload.get("run")
+            and not payload.get("run_dir")
+        ):
+            if not SAFE_SEGMENT.fullmatch(tester_id):
+                return jsonify({"error": "unknown tester"}), 400
+            return jsonify(
+                {"schema_version": 1, "scopes": attempt_scopes(sessions_root, tester_id)}
+            )
+        try:
+            scope, run = resolve_attempt_scope(payload)
+            if request.method == "GET":
+                return jsonify(attempt_state(scope, run))
+            state, created = attempt_ledger.append(
+                run / "attempt_ledger.jsonl",
+                scope,
+                payload,
+                _logged_sensor_shot_count(_shot_events(run)),
+            )
+            return jsonify(state), 201 if created else 200
+        except FileNotFoundError as exc:
+            return jsonify({"error": str(exc)}), 404
+        except attempt_ledger.LedgerError as exc:
+            status_code = 409 if "malformed" in str(exc) or "already" in str(exc) else 400
+            return jsonify({"error": str(exc)}), status_code
+        except (OSError, ValueError) as exc:
+            return jsonify({"error": str(exc)}), 400
 
     @app.post("/api/tester/run")
     def run_action():
@@ -1384,8 +1787,20 @@ def create_app(
         try:
             params = TesterParameters.from_payload(payload)
             action = str((payload or {}).get("action", ""))
+            eligibility = None
+            if action in {"gain", "swings"}:
+                eligibility = setup.require(params.tester_id, enclosure.reading(), action)
+                if not eligibility["eligible"]:
+                    return blocked_setup(eligibility)
             commands, log_path = action_commands(
-                action, params, sessions_root, rig_geometry, radar_port
+                action,
+                params,
+                sessions_root,
+                rig_geometry,
+                radar_port,
+                setup_command_config(eligibility) if action == "swings" else None,
+                optical_calibration,
+                camera_placement,
             )
             write_arm_state(sessions_root, params)
             if action == "swings":
@@ -1403,11 +1818,27 @@ def create_app(
             elif action == "swings":
                 # the kiosk runs its own inclinometer service for the swings
                 enclosure.stop()
-                on_finish = lambda _a, _rc: enclosure.start()  # noqa: E731
+
+                def on_finish(_action, _return_code):
+                    active_setup_tester["tester_id"] = None
+                    active_runtime_dir["path"] = None
+                    enclosure.start()
             else:
                 on_finish = None
             live.stop()  # the camera does one thing at a time
-            jobs.start(action, commands, log_path, on_finish=on_finish)
+            if action == "swings":
+                active_setup_tester["tester_id"] = params.tester_id
+                run_dir = Path(commands[0][commands[0].index("--log-dir") + 1])
+                write_setup_admission(run_dir, params.tester_id, eligibility)
+                active_runtime_dir["path"] = run_dir
+            try:
+                jobs.start(action, commands, log_path, on_finish=on_finish)
+            except Exception:
+                if action == "swings":
+                    active_setup_tester["tester_id"] = None
+                    active_runtime_dir["path"] = None
+                    enclosure.start()
+                raise
             return jsonify({"job": jobs.status(), "arm": arm_progress(sessions_root, params)}), 202
         except RuntimeError as exc:
             return jsonify({"error": str(exc), "job": jobs.status()}), 409
@@ -1516,7 +1947,15 @@ def create_app(
 
     @app.post("/api/tester/stop")
     def stop_action():
-        return jsonify({"stopped": jobs.cancel(), "job": jobs.status()})
+        with ladder_lock:
+            runners = list(ladder_runners.values())
+            stopped = any(not runner.stopped for runner in runners)
+            for runner in runners:
+                runner.stop(wait=False)
+            stopped = jobs.cancel() or stopped
+        for runner in runners:
+            runner.stop()
+        return jsonify({"stopped": stopped, "job": jobs.status()})
 
     @app.post("/api/tester/package")
     def create_package():
@@ -1524,7 +1963,20 @@ def create_app(
             params = parameters()
             if jobs.status()["state"] == "running":
                 raise RuntimeError("stop the active capture before packaging")
-            path = package_study(sessions_root, params.tester_id)
+            awaited_runner = ladder_runners.get(params.tester_id)
+            if awaited_runner is not None:
+                if not awaited_runner.stopped:
+                    raise RuntimeError("stop the ladder before packaging")
+                awaited_runner.wait_for_photo_action()
+            with ladder_lock:
+                runner = ladder_runners.get(params.tester_id)
+                if runner is not awaited_runner:
+                    raise RuntimeError("the ladder changed while packaging")
+                if jobs.status()["state"] == "running" or (
+                    runner is not None and not runner.stopped
+                ):
+                    raise RuntimeError("stop the active capture before packaging")
+                path = package_study(sessions_root, params.tester_id)
             return jsonify({"package": path.name, "job": jobs.status(), "package_ready": True})
         except FileNotFoundError as exc:
             return jsonify({"error": str(exc)}), 404
@@ -1544,6 +1996,7 @@ def create_app(
 
     ladder_runners: dict[str, study_ladder.LadderRunner] = {}
     ladder_runs: dict[str, Path] = {}  # the run folder each tester's ladder is writing
+    ladder_lock = threading.RLock()
 
     def ladder_state(tester_id: str) -> study_ladder.LadderState:
         return study_ladder.LadderState(tester_root(sessions_root, tester_id) / "ladder.json")
@@ -1558,12 +2011,38 @@ def create_app(
         """Start the ladder's kiosk for one mode; return the run folder it writes."""
         params_for_arm = TesterParameters(tester_id, arm_id, environment)
         live.stop()
+        config_hash = setup.current_config_hash()
+        if not config_hash or not setup.confirmation_valid(tester_id):
+            raise RuntimeError("tester setup confirmation is no longer valid")
         enclosure.stop()  # the kiosk reads the LIS3DH itself during the ladder
         commands, log_path = action_commands(
-            "ladder", params_for_arm, sessions_root, rig_geometry, radar_port
+            "ladder",
+            params_for_arm,
+            sessions_root,
+            rig_geometry,
+            radar_port,
+            setup_command_config({"config_hash": config_hash}),
+            optical_calibration,
+            camera_placement,
         )
         run = Path(commands[0][commands[0].index("--log-dir") + 1])
-        jobs.start("ladder", commands, log_path)
+        write_setup_admission(run, tester_id, admitted_setup[tester_id])
+
+        def ladder_finished(_action, _return_code):
+            if active_runtime_dir["path"] == run:
+                active_setup_tester["tester_id"] = None
+                active_runtime_dir["path"] = None
+                enclosure.start()
+
+        active_setup_tester["tester_id"] = tester_id
+        active_runtime_dir["path"] = run
+        try:
+            jobs.start("ladder", commands, log_path, on_finish=ladder_finished)
+        except Exception:
+            active_setup_tester["tester_id"] = None
+            active_runtime_dir["path"] = None
+            enclosure.start()
+            raise
         return run
 
     @app.post("/api/tester/ladder/start")
@@ -1578,22 +2057,53 @@ def create_app(
             return jsonify({"error": f"run the gain step for both modes first ({exc})"}), 409
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
+        with ladder_lock:
+            return start_ladder(params, facts)
+
+    def start_ladder(params: TesterParameters, facts: dict):
         existing = ladder_runners.get(params.tester_id)
         job = jobs.status()
-        if existing is not None and job["state"] == "running" and job["action"] == "ladder":
+        if (
+            existing is not None
+            and not existing.stopped
+            and (
+                (job["state"] == "running" and job["action"] == "ladder")
+                or existing.mode == "between modes"
+            )
+        ):
             # already walking: pressing C again only shows where it is
             run = ladder_runs.get(params.tester_id)
             return jsonify(
                 {
                     "ladder": existing.state.to_dict(),
+                    "pending_photo": existing.state.to_dict().get("pending_photo"),
+                    "photo_target": existing.state.to_dict().get("pending_photo")
+                    or existing.state.to_dict().get("photo_target"),
+                    "stopped": existing.stopped,
                     "job": job,
                     "run_dir": str(run) if run else None,
+                    "capture_scope": current_capture_scope(params.tester_id),
+                    "saved_attempt_scopes": attempt_scopes(sessions_root, params.tester_id),
                 }
             )
+        eligibility = setup.require(params.tester_id, enclosure.reading(), "ladder")
+        if not eligibility["eligible"]:
+            return blocked_setup(eligibility)
+        admitted_setup[params.tester_id] = eligibility
+        if job["state"] == "running":
+            return jsonify({"error": "stop the active capture before starting the ladder"}), 409
+        for previous in ladder_runners.values():
+            previous.stop(wait=False)
         state = ladder_state(params.tester_id)
         rung = state.current
-        if rung is None:
+        pending_photo = state.to_dict().get("pending_photo")
+        if rung is None and pending_photo is None:
             return jsonify({"error": "the ladder is finished; package it"}), 409
+        start_rung = (
+            next(r for r in study_ladder.LADDER if r.rung_id == pending_photo["rung_id"])
+            if pending_photo
+            else rung
+        )
         root = tester_root(sessions_root, params.tester_id)
 
         def run_dir() -> Path | None:
@@ -1601,20 +2111,40 @@ def create_app(
             return ladder_runs.get(params.tester_id)
 
         def mode_done(_arm_id: str) -> None:
-            following = state.current
-            runner.mode = "between modes"  # nothing is set on a kiosk shutting down
-            jobs.cancel()
-            if following is None:
-                return
+            with ladder_lock:
+                if runner.stopped or ladder_runners.get(params.tester_id) is not runner:
+                    return
+                following = state.current
+                runner.mode = "between modes"  # nothing is set on a kiosk shutting down
+                jobs.cancel()
+                if following is None:
+                    runner.stop(wait=False)
+                    return
 
             def restart() -> None:
                 deadline = time.monotonic() + 30
-                while jobs.status()["state"] == "running" and time.monotonic() < deadline:
+                while (
+                    not runner.stopped
+                    and jobs.status()["state"] == "running"
+                    and time.monotonic() < deadline
+                ):
                     time.sleep(0.5)
-                ladder_runs[params.tester_id] = start_mode(
-                    params.tester_id, params.environment, following.arm_id
-                )
-                runner.mode = following.arm_id
+                with ladder_lock:
+                    if runner.stopped or ladder_runners.get(params.tester_id) is not runner:
+                        return
+                    try:
+                        ladder_runs[params.tester_id] = start_mode(
+                            params.tester_id, params.environment, following.arm_id
+                        )
+                    except (OSError, RuntimeError) as exc:
+                        runner.last_verdict = {
+                            "color": "red",
+                            "reasons": [f"ladder: {exc}"],
+                            "capture": None,
+                        }
+                        runner.stop(wait=False)
+                        return
+                    runner.mode = following.arm_id
                 runner.tick()
 
             threading.Thread(target=restart, daemon=True, name="ladder-next-mode").start()
@@ -1630,17 +2160,26 @@ def create_app(
             on_mode_done=mode_done,
         )
         try:
-            run = start_mode(params.tester_id, params.environment, rung.arm_id)
-        except RuntimeError as exc:
+            run = start_mode(params.tester_id, params.environment, start_rung.arm_id)
+        except (OSError, RuntimeError) as exc:
             return jsonify({"error": str(exc)}), 409
-        previous = ladder_runners.pop(params.tester_id, None)
-        if previous is not None:
-            previous.stop()
         ladder_runs[params.tester_id] = run
-        runner.mode = rung.arm_id
+        runner.mode = start_rung.arm_id
         ladder_runners[params.tester_id] = runner
         runner.start()
-        return jsonify({"ladder": state.to_dict(), "job": jobs.status(), "run_dir": str(run)})
+        state_data = state.to_dict()
+        return jsonify(
+            {
+                "ladder": state_data,
+                "pending_photo": state_data.get("pending_photo"),
+                "photo_target": state_data.get("pending_photo") or state_data.get("photo_target"),
+                "stopped": runner.stopped,
+                "job": jobs.status(),
+                "run_dir": str(run),
+                "capture_scope": current_capture_scope(params.tester_id),
+                "saved_attempt_scopes": attempt_scopes(sessions_root, params.tester_id),
+            }
+        )
 
     @app.get("/api/tester/ladder")
     def ladder_status():
@@ -1653,23 +2192,50 @@ def create_app(
         return jsonify(
             {
                 "ladder": state.to_dict(),
+                "pending_photo": state.to_dict().get("pending_photo"),
+                "photo_target": state.to_dict().get("pending_photo")
+                or state.to_dict().get("photo_target"),
+                "stopped": runner.stopped if runner else True,
                 "last_verdict": runner.last_verdict if runner else None,
                 "job": jobs.status(),
                 "run_dir": str(run) if run else None,
+                "capture_scope": current_capture_scope(tester_id),
+                "saved_attempt_scopes": attempt_scopes(sessions_root, tester_id),
             }
         )
 
     @app.post("/api/tester/ladder/photo")
     def ladder_photo():
-        tester_id = str((request.get_json(silent=True) or {}).get("tester_id", ""))
+        payload = request.get_json(silent=True) or {}
+        tester_id = str(payload.get("tester_id", ""))
         runner = ladder_runners.get(tester_id)
         if runner is None:
             return jsonify({"error": "start the ladder first"}), 409
         try:
-            path = runner.photograph()
+            capture = str(payload.get("capture", ""))
+            rung_id = str(payload.get("rung_id", ""))
+            action = str(payload.get("action", "capture"))
+            if action == "skip":
+                runner.skip_photo(capture, rung_id)
+                path = None
+            elif action == "capture":
+                path = runner.photograph(capture, rung_id)
+            else:
+                raise ValueError("photo action must be capture or skip")
         except (OSError, RuntimeError) as exc:
             return jsonify({"error": str(exc)}), 409
-        return jsonify({"photo": path.name})
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        state_data = runner.state.to_dict()
+        return jsonify(
+            {
+                "photo": path.name if path else None,
+                "skipped": action == "skip",
+                "pending_photo": state_data.get("pending_photo"),
+                "photo_target": state_data.get("pending_photo") or state_data.get("photo_target"),
+                "stopped": runner.stopped,
+            }
+        )
 
     @app.post("/api/tester/comparator")
     def comparator_upload():
@@ -1695,15 +2261,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--sessions-root", type=Path, default=DEFAULT_SESSIONS_ROOT)
     parser.add_argument("--rig-geometry", type=Path, default=DEFAULT_RIG_GEOMETRY)
+    parser.add_argument("--camera-optical-calibration", type=Path, default=None)
+    parser.add_argument("--camera-placement", type=Path, default=None)
     parser.add_argument("--radar-port", default=DEFAULT_RADAR_PORT, help="OPS243 serial port")
     parser.add_argument(
         "--no-inclinometer", action="store_true", help="Leave the LIS3DH unread (not on a Pi)"
     )
     parser.add_argument("--inclinometer-address", type=lambda value: int(value, 0), default=0x18)
+    parser.add_argument("--inclinometer-bus", type=int, default=1)
     parser.add_argument("--inclinometer-zero-offset-deg", type=float, default=0.0)
     args = parser.parse_args(argv)
+    if (args.camera_optical_calibration is None) != (args.camera_placement is None):
+        parser.error("calibrated camera fusion requires both calibration and placement")
     enclosure = EnclosureTilt(
         args.rig_geometry,
+        bus=args.inclinometer_bus,
         address=args.inclinometer_address,
         zero_offset_deg=args.inclinometer_zero_offset_deg,
     )
@@ -1715,6 +2287,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             rig_geometry=args.rig_geometry,
             radar_port=args.radar_port,
             tilt=enclosure,
+            optical_calibration=args.camera_optical_calibration,
+            camera_placement=args.camera_placement,
         ).run(host=args.host, port=args.port)
     finally:
         enclosure.stop()

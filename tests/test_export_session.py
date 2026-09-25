@@ -11,6 +11,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from openflight.rig_geometry import RigGeometry
+
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "analysis" / "export_session.py"
 spec = importlib.util.spec_from_file_location("export_session", SCRIPT)
 export_session = importlib.util.module_from_spec(spec)
@@ -177,6 +179,84 @@ class TestTheJoin:
         assert report.included == [] and "session_start" in report.problems[0]
 
 
+class TestPartialCaptures:
+    @pytest.mark.parametrize(
+        "failure, files",
+        [
+            ({"radar": False}, {"frames.npz", "camera_metadata.json", "first.pgm"}),
+            ({"camera": False}, {"capture.l3dump"}),
+            (
+                {"camera_error": "buffer overrun"},
+                {"frames.npz", "camera_metadata.json", "first.pgm", "capture.l3dump"},
+            ),
+        ],
+    )
+    def test_surviving_files_are_preserved_without_becoming_complete_shots(
+        self, tmp_path, failure, files
+    ):
+        src = _capture_tree(tmp_path, [{"n": 1, **failure}, {"n": 2}])
+        report = export_session.export_session(src, tmp_path / "out")
+        manifest = json.loads((report.out / "manifest.json").read_text())
+
+        assert report.included == [2] and set(report.excluded) == {1}
+        assert [s["shot_number"] for s in manifest["shots"]] == [2]
+        partial = manifest["partial_captures"][0]
+        assert partial["shot_number"] == 1
+        assert partial["joined_by"] == "session_jsonl"
+        assert set(partial["files"]) == files
+        for name in files:
+            source_name = {"camera_metadata.json": "metadata.json"}.get(name, name)
+            original = (
+                next(src.rglob("*001.l3dump"))
+                if name == "capture.l3dump"
+                else next(src.rglob("camera_20260922_001")) / source_name
+            )
+            assert (report.out / partial["dir"] / name).read_bytes() == original.read_bytes()
+        assert export_session.validate_export(report.out) == []
+
+    @pytest.mark.parametrize("contents", [None, "{broken", "[]", '{"settings": []}'])
+    def test_bad_metadata_preserves_evidence_and_does_not_abort_later_shots(
+        self, tmp_path, contents
+    ):
+        src = _capture_tree(tmp_path, [{"n": 1}, {"n": 2}])
+        metadata = next(src.rglob("camera_20260922_001")) / "metadata.json"
+        if contents is None:
+            metadata.unlink()
+        else:
+            metadata.write_text(contents)
+
+        report = export_session.export_session(src, tmp_path / "out")
+
+        assert report.included == [2]
+        reason = (
+            "camera_metadata_missing_on_disk" if contents is None else "camera_metadata_invalid"
+        )
+        assert report.excluded == {1: [reason]}
+        partial = json.loads((report.out / "manifest.json").read_text())["partial_captures"][0]
+        assert {"frames.npz", "capture.l3dump", "first.pgm"} <= set(partial["files"])
+        if contents is not None:
+            assert (report.out / partial["dir"] / "camera_metadata.json").read_text() == contents
+        assert export_session.validate_export(report.out) == []
+
+    def test_all_missing_files_are_reported_without_an_empty_partial_capture(self, tmp_path):
+        src = _capture_tree(tmp_path, [{"n": 1, "camera_files": False, "radar_files": False}])
+        report = export_session.export_session(src, tmp_path / "out")
+        assert "camera_frames_missing_on_disk" in report.excluded[1]
+        assert "radar_dump_missing_on_disk" in report.excluded[1]
+        manifest = json.loads((report.out / "manifest.json").read_text())
+        assert manifest["partial_captures"] == []
+        assert len(manifest["excluded_shots"]) == 1
+
+    def test_validator_detects_lost_partial_evidence(self, tmp_path):
+        src = _capture_tree(tmp_path, [{"n": 1, "camera": False}])
+        report = export_session.export_session(src, tmp_path / "out")
+        partial = json.loads((report.out / "manifest.json").read_text())["partial_captures"][0]
+        (report.out / partial["dir"] / "capture.l3dump").unlink()
+        assert f"{partial['dir']} missing capture.l3dump" in export_session.validate_export(
+            report.out
+        )
+
+
 class TestShotsCsv:
     def test_rows_carry_the_shot_the_capture_and_the_file_metadata(self, tmp_path):
         src = _capture_tree(tmp_path, [{"n": 1, "status": "low_light"}])
@@ -192,6 +272,100 @@ class TestShotsCsv:
 
 
 class TestManifest:
+    @pytest.mark.parametrize("source_exists", [True, False])
+    def test_export_uses_session_geometry_instead_of_current_file(self, tmp_path, source_exists):
+        src = _capture_tree(tmp_path, [{"n": 1}])
+        rig = RigGeometry.from_json(SCRIPT.parents[2] / "config/enclosure_v3_rig_geometry.json")
+        snapshot = rig.snapshot()
+        rig_path = tmp_path / "original-rig.json"
+        if source_exists:
+            rig_path.write_text('{"focal_px": 999.0}', encoding="utf-8")
+        path = next(src.glob("session_*.jsonl"))
+        events = export_session.read_events_file(path)
+        events[0]["config"]["rig_geometry"].update(path=str(rig_path), snapshot=snapshot)
+        path.write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+
+        report = export_session.export_session(src, tmp_path / "out")
+
+        assert report.problems == []
+        restored = RigGeometry.from_json(report.out / "rig_geometry.json")
+        assert restored == rig
+        enclosure = json.loads((report.out / "manifest.json").read_text())["enclosure"]
+        assert enclosure["rig_geometry_source"] == "session_snapshot"
+        assert enclosure["rig_geometry_sha256"] == snapshot["sha256"]
+        assert export_session.validate_export(report.out) == []
+        exported = json.loads((report.out / "rig_geometry.json").read_text())
+        exported["focal_px"] = 999.0
+        (report.out / "rig_geometry.json").write_text(json.dumps(exported))
+        assert (
+            "rig_geometry.json does not match the session snapshot"
+            in export_session.validate_export(report.out)
+        )
+
+    def test_legacy_geometry_file_is_explicitly_unverified(self, tmp_path):
+        src = _capture_tree(tmp_path, [{"n": 1}])
+        report = export_session.export_session(src, tmp_path / "out")
+        enclosure = json.loads((report.out / "manifest.json").read_text())["enclosure"]
+        assert enclosure["rig_geometry_source"] == "unverified_file_at_export"
+        assert enclosure["rig_geometry_sha256"] is None
+        assert export_session.validate_export(report.out) == []
+
+    def test_missing_legacy_file_does_not_leave_geometry_from_a_previous_export(self, tmp_path):
+        src = _capture_tree(tmp_path, [{"n": 1}])
+        path = next(src.glob("session_*.jsonl"))
+        events = export_session.read_events_file(path)
+        events[0]["config"]["rig_geometry"]["path"] = str(tmp_path / "absent-rig.json")
+        path.write_text("".join(json.dumps(e) + "\n" for e in events))
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / "rig_geometry.json").write_text('{"focal_px": 999.0}')
+
+        report = export_session.export_session(src, out)
+
+        enclosure = json.loads((out / "manifest.json").read_text())["enclosure"]
+        assert enclosure["rig_geometry_source"] == "unavailable"
+        assert not (out / "rig_geometry.json").exists()
+        assert export_session.validate_export(report.out) == []
+
+    def test_invalid_snapshot_is_reported_without_substituting_current_geometry(self, tmp_path):
+        src = _capture_tree(tmp_path, [{"n": 1}])
+        path = next(src.glob("session_*.jsonl"))
+        events = export_session.read_events_file(path)
+        events[0]["config"]["rig_geometry"]["snapshot"] = {"parameters": None}
+        path.write_text("".join(json.dumps(e) + "\n" for e in events))
+
+        report = export_session.export_session(src, tmp_path / "out")
+
+        assert report.problems == ["invalid rig geometry snapshot in session_start"]
+        assert not (report.out / "rig_geometry.json").exists()
+
+    @pytest.mark.parametrize("changed_record", ["session", "manifest", "file"])
+    def test_snapshot_validation_reports_changed_or_missing_evidence(
+        self, tmp_path, changed_record
+    ):
+        src = _capture_tree(tmp_path, [{"n": 1}])
+        path = next(src.glob("session_*.jsonl"))
+        events = export_session.read_events_file(path)
+        rig = RigGeometry.from_json(SCRIPT.parents[2] / "config/enclosure_v3_rig_geometry.json")
+        events[0]["config"]["rig_geometry"]["snapshot"] = rig.snapshot()
+        path.write_text("".join(json.dumps(e) + "\n" for e in events))
+        report = export_session.export_session(src, tmp_path / "out")
+        if changed_record == "session":
+            events[0]["config"]["rig_geometry"]["snapshot"]["sha256"] = "wrong"
+            (report.out / "session.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+            expected = "rig geometry snapshot fingerprint mismatch in session_start"
+        elif changed_record == "manifest":
+            manifest_path = report.out / "manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest["enclosure"]["rig_geometry_sha256"] = "wrong"
+            manifest_path.write_text(json.dumps(manifest))
+            expected = "manifest rig geometry does not match the session snapshot"
+        else:
+            (report.out / "rig_geometry.json").unlink()
+            expected = "rig_geometry.json unreadable or invalid:"
+
+        assert any(p.startswith(expected) for p in export_session.validate_export(report.out))
+
     def test_manifest_records_join_provenance_and_the_arm(self, tmp_path):
         src = _capture_tree(tmp_path, [{"n": 1}, {"n": 2, "camera": False}])
         arm = {
@@ -301,6 +475,57 @@ class TestTesterRoot:
 def test_accepted_follows_the_estimator_status(status, accepted):
     shot = {"experimental_fused_status": status} if status else {}
     assert (export_session.fused_status(shot) in export_session.ACCEPTED_STATUSES) is accepted
+
+
+class TestAttemptLedgerExport:
+    def test_per_run_ledger_and_effective_counts_are_preserved(self, tmp_path):
+        src = _capture_tree(tmp_path, [{"n": 1}], run="run-01")
+        session = next(src.glob("session_*.jsonl"))
+        events = export_session.read_events_file(session)
+        duplicate = next(event for event in events if event.get("type") == "shot_detected")
+        with session.open("a") as handle:
+            handle.write(json.dumps(duplicate) + "\n")
+        scope = {"tester_id": "t1", "arm_id": "arm1", "run": "run-01"}
+        from openflight.camera import attempt_ledger
+
+        attempt_ledger.append(
+            src / "attempt_ledger.jsonl",
+            scope,
+            {
+                "request_id": "r1",
+                "entry_id": "e1",
+                "action": "add",
+                "kind": "swing",
+                "operator_missed": False,
+            },
+            1,
+        )
+        report = export_session.export_session(
+            src,
+            tmp_path / "out",
+            arm_state={"tester_id": "t1", "arm_id": "arm1", "run": "run-01"},
+        )
+        manifest = json.loads((report.out / "manifest.json").read_text())
+        assert manifest["attempt_ledger"]["status"] == "preserved"
+        assert manifest["attempt_ledger"]["counts"]["physical_operator_swings"] == 1
+        assert (report.out / "attempt_ledger.jsonl").is_file()
+        assert export_session.validate_export(report.out) == []
+
+    def test_malformed_ledger_is_preserved_as_invalid_not_zero(self, tmp_path):
+        src = _capture_tree(tmp_path, [{"n": 1}])
+        (src / "attempt_ledger.jsonl").write_text('{"broken"')
+        report = export_session.export_session(src, tmp_path / "out")
+        ledger = json.loads((report.out / "manifest.json").read_text())["attempt_ledger"]
+        assert ledger["status"] == "invalid"
+        assert ledger["counts"]["physical_operator_swings"] is None
+        assert (report.out / "attempt_ledger.jsonl").read_text() == '{"broken"'
+
+    def test_legacy_export_marks_physical_attempts_unknown(self, tmp_path):
+        src = _capture_tree(tmp_path, [{"n": 1}])
+        report = export_session.export_session(src, tmp_path / "out")
+        ledger = json.loads((report.out / "manifest.json").read_text())["attempt_ledger"]
+        assert ledger["status"] == "unavailable"
+        assert ledger["counts"]["physical_operator_swings"] is None
 
 
 class TestTapeAndRuns:

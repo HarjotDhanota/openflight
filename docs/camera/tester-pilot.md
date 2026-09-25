@@ -1,21 +1,32 @@
 # Camera mode study — tester guide
 
+For the first run of the complete fusion bench, follow the
+[Pi commissioning procedure](pi-commissioning.md) alongside this guide.
+
 The test suite finds the shortest camera exposure that still works at full
 resolution (1280×800), and compares it with 640×400, while recording everything
 the camera and both radars see. You hit a 7-iron; the page sets each exposure
 itself, gives a verdict after every swing, skips exposures your light cannot
 support, and takes a photo of the club face after each full-resolution swing.
-The page never shows estimated club or ball numbers.
+The capture walkthrough does not show estimated club or ball numbers. Its
+separate [saved-capture review page](recorded-track-comparison.md) supports
+manual annotations and conditional geometry comparisons after recording.
+Use **View fusion diagnostics** for existing pipeline results as shots finish,
+including source labels, partial outcomes and recorded camera/IWR disagreements.
+The [diagnostics guide](live-fusion-diagnostics.md) explains hidden-metric blocks
+and why a completed result does not establish measurement accuracy.
 
 ## Requirements
 
-- The v3 enclosure (`config/enclosure_v3_rig_geometry.json`), on its static
-  feet. The geometry comes from that file; you measure nothing.
+- The measured v3 enclosure (`config/enclosure_v3_rig_geometry.json`) at its
+  recorded foot extension, with the lens 95 mm above the supporting floor.
+  A matching file alone does not prove that your physical unit matches it.
 - Raspberry Pi 5, OV9281 with the OpenFlight high-speed driver installed,
   OPS243, IWR6843LEVM, sound trigger, and the LIS3DH connected. The
   inclinometer runs on every session; it is how ball height is solved.
-- A 7-iron, balls, foot powder spray, and a cloth. Nothing is measured and
-  nothing is typed except your tester ID.
+- A 7-iron, balls, foot powder spray, and a cloth. Confirm the physical setup
+  before starting; the [setup requirements](tester-setup-gate.md) list the
+  approved sensor offsets and LIS3DH orientation.
 
 ## Before your first run
 
@@ -44,7 +55,10 @@ git fetch fork
 git checkout -B feat/tester-capture-pilot fork/feat/tester-capture-pilot
 ```
 
-To update later: `git fetch fork && git reset --hard fork/feat/tester-capture-pilot`.
+These branch commands do not install unpublished local work. For the morning
+source archive, use its `PI_START_HERE.md` and a fresh clone instead. Preserve
+existing Pi configuration, source edits and recordings when updating; do not
+reset a dirty checkout.
 
 ## Running it
 
@@ -87,8 +101,9 @@ minutes; later starts are quick.
    separately and counted together.
    - If an arm says **lighting required**, hit its five swings anyway. Its
      acceptance rate at your light level is part of the answer.
-3. **Package everything** and send the archive through the agreed channel. Raw
-   data stays out of Git.
+3. **Package everything** with the [community contribution package
+   workflow](community-contributions.md), then send the archive through the
+   agreed channel. Raw data stays out of Git.
 
 ## Test suite
 
@@ -103,14 +118,48 @@ On the study page, fill in **Who and where**, then work down **Test suite**:
    on after 5 good swings, and skips exposures your light cannot support.
    On the 1280×800 exposures: spray the face before each swing; after it, hold
    the face about 0.5 m from the lens inside the dashed box, press
-   **Photograph face**, then wipe it. Between the two modes the kiosk restarts
-   by itself (about 20 s).
+   **Photograph face**, then wipe it. Before leaving full resolution, the page
+   holds the final capture for its photo. Photograph it or choose **Skip photo**
+   before continuing; do not take another swing while this choice is pending.
+   The kiosk then restarts in the next mode (about 20 s). A failed photo can be
+   retried without losing the pending capture.
 4. **D. Package the data.** If you have a TM4, Full Swing KIT or Mevo Gen 2
    export, choose it first. Copy the archive off the Pi on a USB stick; it can be
-   about 1 GB.
+   about 1 GB. Use the [community contribution package
+   workflow](community-contributions.md) to record consent and create a local,
+   checksum-verified shareable archive.
 
-If the page is reloaded or the ladder stopped, press **C** again: it carries on
-from where it was.
+Reloading the page restores the ladder display. If the ladder was stopped,
+press **C** to resume. A pending final photo stays associated with its original
+capture across Stop and Resume; photograph that same strike mark, or skip it
+if the face has already been wiped or used for another swing. Skipped photos
+are recorded with the capture in the data package.
+
+### Record every attempt
+
+Use the operator tally during either the ladder or a single-arm capture. Check
+the selected arm and run, then press **Record swing** once for each physical
+swing. If the system missed it, use **Record missed shot** instead; do not press
+both for the same swing. Record warmups and false triggers with **Other event**.
+**Undo last** removes the latest observation from the tally while preserving
+its audit record in the package.
+
+The selected run stays pinned when the ladder advances so the last swing can
+still be recorded against its original run. Select the new run before recording
+its swings. Saved runs remain available after Stop and page reload. If a save
+is uncertain, confirm the pending entry with the retry control before recording
+another; its original identity prevents a duplicate.
+
+The tally compares recorded swings with logged sensor shots. A matching count
+does not prove that the same shots were matched or that every swing was recorded.
+Physical capture rate and accuracy remain unknown until coverage and independent
+reference matching are established. Missing tallies show unknown values, not zero
+swings. Use one tester service to write a capture directory at a time.
+
+New sessions also preserve a source archive beside their logs, and exports verify
+and retain it. This records the allowlisted source on disk at session startup,
+including local edits, plus software versions. It does not certify loaded module
+bytes or device firmware. Collection failures are recorded without stopping capture.
 
 ## The arms
 
@@ -141,8 +190,10 @@ frames without radar dumps, or counts that do not line up.
 
 ## What is deliberately absent
 
-No checkerboard: focal length is a property of the camera module, lens and
-mode, calibrated once by the maintainer and shared. No enclosure measurements:
+The swing study does not require each tester to collect checkerboard images.
+Independent optical calibration is a separate maintainer bench step; the v3
+nominal focal length is still uncalibrated, and transfer between units, focus
+settings and readout modes is not established. No enclosure measurements:
 the rig file carries them. No lux meter: the gain screen records a light index
 that is comparable across every unit. No exposure or gain fields: both are
 derived. No driver or wedge yet; no second camera; no fusion output on screen.

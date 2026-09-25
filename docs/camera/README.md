@@ -9,6 +9,38 @@ Camera capture is experimental. Camera-assisted horizontal launch, club path,
 and attack angle must remain quality-gated until they are validated against a
 launch-monitor source of truth.
 
+Development follows the [fusion master plan](../development/fusion-master-plan.md),
+which defines calibration, replay, accuracy validation and promotion gates.
+The [offline optical calibration bench](optical-calibration.md) fits independent
+checkerboard candidates and reports held-out residuals. The
+[opt-in live calibrated path](live-calibrated-fusion.md) consumes a candidate
+with explicit placement, mode checks and per-shot inclination; it remains
+unqualified until independent validation.
+The [offline projection comparison](calibrated-projection.md) compares candidate
+and current-model rays and checks capture compatibility without promoting either.
+The [recorded-track comparison](recorded-track-comparison.md) applies both models
+to capture-bound ball-center or club-feature annotations and reports conditional
+ray, position and interval-motion differences.
+The [tester fusion diagnostic view](live-fusion-diagnostics.md) displays existing
+pipeline results with processing states, source labels, recorded discrepancies
+and optional hidden-metric testing blocks.
+The [tester setup requirements](tester-setup-gate.md) distinguish the approved
+measured rig, operator physical confirmation and runtime sensor readiness.
+Use the [first Pi session procedure](pi-commissioning.md) to commission the
+complete bench and preserve level, tilted and recovery evidence.
+The [speed contract](speed-contract.md) explains the retained OPS radial result
+and why total-speed correction is now a separate experimental candidate.
+The [timing evidence bench](timing-validation.md) checks recorded camera clock
+correlation and independent event intervals without promoting a live mapping.
+[Recorded camera-fusion replay](fusion-replay.md) reuses the live camera core,
+and the [accuracy benchmark](accuracy-benchmark.md) scores reviewed reference
+matches while retaining incompatible and unavailable observations.
+[Raw radar and camera replay](raw-fusion-replay.md) reruns saved radar inputs
+through production processing. The [commissioning report](commissioning-report.md)
+summarizes acquisition, recorded timing and missing evidence after a Pi run.
+Use [community contribution packages](community-contributions.md) to make a
+consent-bound, checksum-verified local archive from a tester export.
+
 ## Supported Hardware
 
 The tested camera is an InnoMaker OV9281 monochrome global-shutter module on a
@@ -60,6 +92,17 @@ This physical distance is different from
 camera is mounted; the degree value corrects residual camera yaw or target-line
 alignment. Do not convert the physical separation into degrees, and do not use
 the degree setting as a substitute for the measured distance.
+
+Forward separation is recorded separately as
+`--camera-capture-forward-offset-m`: positive means the camera is ahead of the
+IWR reference, toward the ball. With `--rig-geometry`, the measured forward
+offset overrides that flag. The v3 file places the IWR reference 30 mm behind
+the camera, giving a camera offset of **+0.030 m**. Club and ball reconstruction
+use this offset in camera position and camera-to-ball distance; the supplied
+tee slant range remains measured from the radar. Without a measured offset or
+explicit flag, the historical zero-forward-separation assumption remains.
+This translation correction does not establish lens calibration or a general
+mount/placement rotation calibration.
 
 The useful image does not need to contain the golfer or the full shaft. It must
 contain:

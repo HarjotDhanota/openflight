@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import math
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 
 from openflight.iwr6843.calibration import Calibration
 from openflight.iwr6843.club import ClubPathResult, ClubWindowPolicy, estimate_club_path
@@ -36,6 +38,14 @@ _TDM_SIGN_BY_POLICY = {"positive": 1, "negative": -1, "auto": 1}
 OPS_TRACK_SPEED_TOLERANCE_FRAC = 0.15
 OPS_GUIDED_MAX_CANDIDATES = 8
 OPS_GUIDED_MIN_LAUNCH_DEG = 2.0
+HORIZONTAL_CONFIDENCE_CEILING = 0.95
+
+
+def horizontal_confidence_from(coherence: float | None) -> float:
+    """Normalize HLCMF coherence exactly once for live and replay consumers."""
+    if coherence is None:
+        return 0.0
+    return round(min(HORIZONTAL_CONFIDENCE_CEILING, max(0.0, float(coherence))), 3)
 
 
 def _ops_candidate_rank(candidate: RecoveryCandidate) -> tuple[float, int, float]:
@@ -96,6 +106,86 @@ def _recovery_result_rank(
     )
 
 
+def ops_guided_measurement(
+    raw: bytes,
+    calibration: Calibration,
+    *,
+    ball_speed_mph: float,
+    club: str | None,
+    baseline: LCMFResult,
+    prepared: PreparedLCMFCapture,
+    net_range_m: float | None,
+    tx_order: str,
+    tdm_sign_policy: str,
+    horizontal_phase_reference_rad: float | None,
+) -> LCMFResult:
+    """Apply the production OPS-guided alternate-track selection without hardware."""
+    if baseline is None or not hasattr(baseline, "track_speed_mph"):
+        return baseline
+    speed = baseline.track_speed_mph
+    if baseline.accepted and speed is None:
+        return replace(baseline, status="accepted_track_speed_warning")
+    speed_error = (
+        abs(speed / ball_speed_mph - 1.0)
+        if speed is not None and ball_speed_mph > 0.0
+        else float("inf")
+    )
+    if baseline.accepted and speed_error <= OPS_TRACK_SPEED_TOLERANCE_FRAC:
+        return baseline
+    try:
+        candidates = _credible_ops_candidates(
+            find_recovery_candidates(
+                raw,
+                calibration,
+                ball_speed_mph=ball_speed_mph,
+                net_range_m=net_range_m,
+                prepared=prepared.vertical,
+            )
+        )
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[IWR6843] OPS-guided track search failed: %s", error)
+        return (
+            replace(baseline, status="accepted_track_speed_warning")
+            if baseline.accepted
+            else baseline
+        )
+    recoveries: list[tuple[RecoveryCandidate, LCMFResult]] = []
+    for candidate in candidates:
+        result = estimate_lcmf_v1(
+            raw,
+            calibration,
+            ball_speed_mph=ball_speed_mph,
+            club=club,
+            net_range_m=net_range_m,
+            tx_order=tx_order,
+            tdm_sign_policy=tdm_sign_policy,
+            horizontal_phase_reference_rad=horizontal_phase_reference_rad,
+            track_override=candidate.track,
+            track_override_scope=candidate.scope,
+            prepared=prepared,
+        )
+        if (
+            result.accepted
+            and result.n_frames >= 4
+            and result.angle_deg is not None
+            and result.angle_deg >= OPS_GUIDED_MIN_LAUNCH_DEG
+        ):
+            recoveries.append((candidate, result))
+    if recoveries:
+        _candidate, selected = min(
+            recoveries, key=lambda item: _recovery_result_rank(item[0], item[1])
+        )
+        status = (
+            "accepted_ops_guided_single_channel"
+            if selected.single_channel
+            else "accepted_ops_guided"
+        )
+        return replace(selected, status=status)
+    return (
+        replace(baseline, status="accepted_track_speed_warning") if baseline.accepted else baseline
+    )
+
+
 @dataclass(frozen=True)
 class IWR6843ShotResult:
     """Capture transport result and optional angle measurement."""
@@ -103,6 +193,96 @@ class IWR6843ShotResult:
     capture: IWR6843Capture | None
     measurement: LCMFResult | None
     club_path: ClubPathResult | None = None
+
+
+def process_raw_capture(  # pylint: disable=too-many-arguments,too-many-locals
+    raw: bytes,
+    calibration: Calibration,
+    *,
+    ball_speed_mph: float,
+    club: str | None,
+    club_speed_mph: float | None,
+    net_range_m: float | None,
+    tx_order: str,
+    tdm_sign_policy: str,
+    azimuth_offset_deg: float,
+    horizontal_phase_reference_rad: float | None,
+    club_window_policy: ClubWindowPolicy,
+    club_impact_correction_s: float,
+    recovery_observations: list[tuple[float, float, float]],
+) -> tuple[LCMFResult, ClubPathResult | None]:
+    """Run the complete production ball and club estimator on frozen bytes."""
+    prepared = prepare_lcmf_capture(raw)
+    measurement = estimate_lcmf_v1(
+        raw,
+        calibration,
+        ball_speed_mph=ball_speed_mph,
+        club=club,
+        net_range_m=net_range_m,
+        tx_order=tx_order,
+        tdm_sign_policy=tdm_sign_policy,
+        horizontal_phase_reference_rad=horizontal_phase_reference_rad,
+        prepared=prepared,
+    )
+    measurement = ops_guided_measurement(
+        raw,
+        calibration,
+        ball_speed_mph=ball_speed_mph,
+        club=club,
+        baseline=measurement,
+        prepared=prepared,
+        net_range_m=net_range_m,
+        tx_order=tx_order,
+        tdm_sign_policy=tdm_sign_policy,
+        horizontal_phase_reference_rad=horizontal_phase_reference_rad,
+    )
+    if measurement is not None and getattr(measurement, "horizontal_deg", None) is not None:
+        measurement = replace(
+            measurement,
+            horizontal_deg=measurement.horizontal_deg + azimuth_offset_deg,
+            horizontal_raw_deg=measurement.horizontal_deg,
+        )
+    if not club_speed_mph:
+        return measurement, None
+    ball_sign = getattr(measurement, "tdm_sign_used", None)
+    fallback = ball_sign not in (-1, 1)
+    impact_t_s = getattr(measurement, "impact_t_s", None)
+    recovered_impact = False
+    if impact_t_s is None and len(recovery_observations) >= 3:
+        ratios, impacts, spans = zip(*recovery_observations)
+        try:
+            prior = RecoveryPrior.fit(list(ratios), list(impacts), list(spans))
+            candidate = select_recovery_candidate(
+                find_recovery_candidates(
+                    raw,
+                    calibration,
+                    ball_speed_mph=ball_speed_mph,
+                    net_range_m=net_range_m,
+                ),
+                prior,
+            )
+            impact_t_s = candidate.impact_s if candidate is not None else None
+            recovered_impact = impact_t_s is not None
+        except ValueError:
+            impact_t_s = None
+    if impact_t_s is not None:
+        impact_t_s += club_impact_correction_s
+    policy_sign = _TDM_SIGN_BY_POLICY.get(tdm_sign_policy, 1)
+    club_path = estimate_club_path(
+        raw,
+        calibration,
+        ops_club_speed_mph=club_speed_mph,
+        impact_t_s=impact_t_s,
+        aim_offset_deg=azimuth_offset_deg,
+        phase_reference_rad=horizontal_phase_reference_rad,
+        tdm_sign=policy_sign if fallback else ball_sign,
+        window_policy=club_window_policy,
+    )
+    if recovered_impact:
+        club_path.status = f"{club_path.status}_recovered_impact"
+    if fallback:
+        club_path.status = f"{club_path.status}_tdm_sign_fallback"
+    return measurement, club_path
 
 
 @dataclass
@@ -128,6 +308,42 @@ class IWR6843Runtime:
     # vertical solution may use that prior to recover impact timing for the
     # independent experimental club search, never to publish vertical launch.
     recovery_observations: list[tuple[float, float, float]] = field(default_factory=list)
+    calibration_provenance: dict | None = None
+    radar_config_provenance: dict | None = None
+
+    def replay_config_snapshot(
+        self,
+        *,
+        ball_speed_mph: float | None = None,
+        club: str | None = None,
+        club_speed_mph: float | None = None,
+        effective_tilt_deg: float | None = None,
+    ) -> dict:
+        """Freeze every primitive needed by the hardware-free estimator."""
+        payload = {
+            "schema_version": 1,
+            "net_range_m": self.net_range_m,
+            "tx_order": self.tx_order,
+            "tdm_sign_policy": self.tdm_sign_policy,
+            "azimuth_offset_deg": self.azimuth_offset_deg,
+            "horizontal_phase_reference_rad": self.horizontal_phase_reference_rad,
+            "club_window_policy": asdict(self.club_window_policy),
+            "club_impact_correction_s": self.club_impact_correction_s,
+            "recovery_observations": [list(item) for item in self.recovery_observations],
+            "source_revision_status": "captured_separately_in_session_runtime_provenance",
+            "calibration": self.calibration_provenance,
+            "radar_config": self.radar_config_provenance,
+            "per_shot_inputs": {
+                "ball_speed_mph": ball_speed_mph,
+                "club": club,
+                "club_speed_mph": club_speed_mph,
+                "effective_tilt_deg": effective_tilt_deg,
+            },
+        }
+        encoded = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+        return {**payload, "sha256": hashlib.sha256(encoded).hexdigest()}
 
     def _remember_recovery_observation(
         self, measurement: LCMFResult, ball_speed_mph: float
@@ -180,69 +396,18 @@ class IWR6843Runtime:
         prepared: PreparedLCMFCapture,
     ) -> LCMFResult:
         """Replace a suspicious TI range walk with an OPS-compatible one."""
-        speed = baseline.track_speed_mph
-        if baseline.accepted and speed is None:
-            return replace(baseline, status="accepted_track_speed_warning")
-        speed_error = (
-            abs(speed / ball_speed_mph - 1.0)
-            if speed is not None and ball_speed_mph > 0.0
-            else float("inf")
+        return ops_guided_measurement(
+            raw,
+            calibration,
+            ball_speed_mph=ball_speed_mph,
+            club=club,
+            baseline=baseline,
+            prepared=prepared,
+            net_range_m=self.net_range_m,
+            tx_order=self.tx_order,
+            tdm_sign_policy=self.tdm_sign_policy,
+            horizontal_phase_reference_rad=self.horizontal_phase_reference_rad,
         )
-        if baseline.accepted and speed_error <= OPS_TRACK_SPEED_TOLERANCE_FRAC:
-            return baseline
-
-        try:
-            candidates = _credible_ops_candidates(
-                find_recovery_candidates(
-                    raw,
-                    calibration,
-                    ball_speed_mph=ball_speed_mph,
-                    net_range_m=self.net_range_m,
-                    prepared=prepared.vertical,
-                )
-            )
-        except Exception as error:  # pylint: disable=broad-exception-caught
-            logger.warning("[IWR6843] OPS-guided track search failed: %s", error)
-            if baseline.accepted:
-                return replace(baseline, status="accepted_track_speed_warning")
-            return baseline
-        recoveries: list[tuple[RecoveryCandidate, LCMFResult]] = []
-        for candidate in candidates:
-            result = estimate_lcmf_v1(
-                raw,
-                calibration,
-                ball_speed_mph=ball_speed_mph,
-                club=club,
-                net_range_m=self.net_range_m,
-                tx_order=self.tx_order,
-                tdm_sign_policy=self.tdm_sign_policy,
-                horizontal_phase_reference_rad=self.horizontal_phase_reference_rad,
-                track_override=candidate.track,
-                track_override_scope=candidate.scope,
-                prepared=prepared,
-            )
-            if (
-                result.accepted
-                and result.n_frames >= 4
-                and result.angle_deg is not None
-                and result.angle_deg >= OPS_GUIDED_MIN_LAUNCH_DEG
-            ):
-                recoveries.append((candidate, result))
-
-        if recoveries:
-            _candidate, selected = min(
-                recoveries,
-                key=lambda item: _recovery_result_rank(item[0], item[1]),
-            )
-            status = (
-                "accepted_ops_guided_single_channel"
-                if selected.single_channel
-                else "accepted_ops_guided"
-            )
-            return replace(selected, status=status)
-        if baseline.accepted:
-            return replace(baseline, status="accepted_track_speed_warning")
-        return baseline
 
     def process_shot(  # pylint: disable=too-many-arguments
         self,
@@ -263,76 +428,22 @@ class IWR6843Runtime:
         shot_calibration = self.calibration
         if tilt_deg is not None:
             shot_calibration = replace(self.calibration, tilt_rad=math.radians(tilt_deg))
-        prepared = prepare_lcmf_capture(capture.raw)
-        measurement = estimate_lcmf_v1(
+        measurement, club_path = process_raw_capture(
             capture.raw,
             shot_calibration,
             ball_speed_mph=ball_speed_mph,
             club=club,
+            club_speed_mph=club_speed_mph,
             net_range_m=self.net_range_m,
             tx_order=self.tx_order,
             tdm_sign_policy=self.tdm_sign_policy,
+            azimuth_offset_deg=self.azimuth_offset_deg,
             horizontal_phase_reference_rad=self.horizontal_phase_reference_rad,
-            prepared=prepared,
+            club_window_policy=self.club_window_policy,
+            club_impact_correction_s=self.club_impact_correction_s,
+            recovery_observations=list(self.recovery_observations),
         )
-        if isinstance(measurement, LCMFResult):
-            measurement = self._ops_guided_measurement(
-                capture.raw,
-                shot_calibration,
-                ball_speed_mph=ball_speed_mph,
-                club=club,
-                baseline=measurement,
-                prepared=prepared,
-            )
-        horizontal_deg = getattr(measurement, "horizontal_deg", None)
-        if horizontal_deg is not None:
-            measurement = replace(
-                measurement,
-                horizontal_deg=horizontal_deg + self.azimuth_offset_deg,
-                horizontal_raw_deg=horizontal_deg,
-            )
         self._remember_recovery_observation(measurement, ball_speed_mph)
-        club_path = None
-        # No OPS club speed means no identity gate to distinguish the club
-        # track from hands, body, or the ball itself, so an estimate here
-        # would be an unverifiable guess -- worse than no estimate at all.
-        if club_speed_mph:
-            ball_sign = getattr(measurement, "tdm_sign_used", None)
-            fallback = ball_sign not in (-1, 1)
-            policy_sign = _TDM_SIGN_BY_POLICY.get(self.tdm_sign_policy, 1)
-            impact_t_s = getattr(measurement, "impact_t_s", None)
-            recovered_impact = False
-            if impact_t_s is None:
-                impact_t_s = self._recover_impact_time(
-                    capture.raw,
-                    shot_calibration,
-                    ball_speed_mph,
-                )
-                recovered_impact = impact_t_s is not None
-            if impact_t_s is not None:
-                impact_t_s += self.club_impact_correction_s
-            club_path = estimate_club_path(
-                capture.raw,
-                shot_calibration,
-                ops_club_speed_mph=club_speed_mph,
-                # Where impact sits in the ring, from the ball's own range
-                # walk. The freeze is requested by a UART command, so the
-                # trigger frame lands late by a variable 2-4 frames and the
-                # slot cannot be assumed; None means the ball tracker gave
-                # nothing to anchor to and club path declines.
-                impact_t_s=impact_t_s,
-                aim_offset_deg=self.azimuth_offset_deg,
-                phase_reference_rad=self.horizontal_phase_reference_rad,
-                tdm_sign=policy_sign if fallback else ball_sign,
-                window_policy=self.club_window_policy,
-            )
-            if recovered_impact:
-                club_path.status = f"{club_path.status}_recovered_impact"
-            if fallback:
-                # The ball measurement had no usable sign, so this is the
-                # configured policy's guess, not a measured value. Recorded
-                # in the status so a later replay can tell the two apart.
-                club_path.status = f"{club_path.status}_tdm_sign_fallback"
         return IWR6843ShotResult(capture=capture, measurement=measurement, club_path=club_path)
 
     def stop(self) -> None:
@@ -340,4 +451,10 @@ class IWR6843Runtime:
         self.capture_monitor.stop()
 
 
-__all__ = ["IWR6843Runtime", "IWR6843ShotResult"]
+__all__ = [
+    "IWR6843Runtime",
+    "IWR6843ShotResult",
+    "ops_guided_measurement",
+    "process_raw_capture",
+    "horizontal_confidence_from",
+]

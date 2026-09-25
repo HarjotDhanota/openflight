@@ -74,6 +74,17 @@ class ArmScore:
     attempted: int
     accepted: int
     availability: float | None
+    availability_basis: str
+    operator_recorded_swings: int | None
+    physical_operator_swings: int | None
+    operator_reported_misses: int | None
+    warmups: int | None
+    false_triggers: int | None
+    physical_attempt_coverage: str
+    ledger_runs_covered: int
+    ledger_runs_total: int
+    observed_count_discrepancy: int | None
+    physical_availability: float | None
     status_histogram: dict
     insufficient: bool
     medians: dict = field(default_factory=dict)
@@ -246,6 +257,28 @@ def build_score(manifests: list[dict], shots: list[ShotMetrics], fallback_id: st
     for entry in excluded:
         histogram["excluded:" + (entry.get("reasons") or ["?"])[0].split(" ")[0]] += 1
     light = _median([(m.get("environment") or {}).get("light_index") for m in manifests])
+    ledgers = [m.get("attempt_ledger") or {} for m in manifests]
+    available_ledgers = [ledger for ledger in ledgers if ledger.get("status") == "preserved"]
+    if available_ledgers:
+        physical = sum(
+            (ledger.get("counts") or {}).get("physical_operator_swings") or 0
+            for ledger in available_ledgers
+        )
+        missed = sum(
+            (ledger.get("counts") or {}).get("operator_reported_misses") or 0
+            for ledger in available_ledgers
+        )
+        warmups = sum(
+            (ledger.get("counts") or {}).get("warmups") or 0 for ledger in available_ledgers
+        )
+        false_triggers = sum(
+            (ledger.get("counts") or {}).get("false_triggers") or 0 for ledger in available_ledgers
+        )
+        coverage = "unverified"
+        discrepancy = attempted - physical if len(available_ledgers) == len(manifests) else None
+    else:
+        physical = missed = warmups = false_triggers = discrepancy = None
+        coverage = "unavailable"
     score = ArmScore(
         arm_id=arm.get("arm_id") or fallback_id,
         tester_id=manifests[0].get("tester_id"),
@@ -257,6 +290,17 @@ def build_score(manifests: list[dict], shots: list[ShotMetrics], fallback_id: st
         attempted=attempted,
         accepted=accepted,
         availability=(accepted / attempted) if attempted else None,
+        availability_basis="logged sensor attempts (included plus excluded)",
+        operator_recorded_swings=physical,
+        physical_operator_swings=None,
+        operator_reported_misses=missed,
+        warmups=warmups,
+        false_triggers=false_triggers,
+        physical_attempt_coverage=coverage,
+        ledger_runs_covered=len(available_ledgers),
+        ledger_runs_total=len(manifests),
+        observed_count_discrepancy=discrepancy,
+        physical_availability=None,
         status_histogram=dict(histogram),
         insufficient=accepted < MIN_CELL_ACCEPTED,
     )
@@ -430,8 +474,12 @@ def markdown_section(
 ) -> list[str]:
     ref = arms.get(REFERENCE_ARM)
     lines = [f"## Tester {tester} — light bin {ref.light_bin if ref else 'unknown'}", ""]
-    lines.append(
-        "| arm | mode | light bin | attempted | accepted | availability | ball px | jitter px | clipped % | edge grad | head frames (approx) | path MAD | AoA MAD | verdict |"
+    lines.extend(
+        [
+            "Attempted and availability below use logged sensor attempts (included plus excluded), not an asserted physical-swing denominator.",
+            "",
+            "| arm | mode | light bin | logged attempts | accepted | logged availability | ball px | jitter px | clipped % | edge grad | head frames (approx) | path MAD | AoA MAD | verdict |",
+        ]
     )
     lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
 
@@ -472,6 +520,13 @@ def markdown_section(
         lines.append(
             f"- **{arm_id}**: "
             + ", ".join(f"{k} {n}" for k, n in sorted(s.status_histogram.items()))
+        )
+    lines += ["", "### Operator attempt observations", ""]
+    for arm_id, s in arms.items():
+        lines.append(
+            f"- **{arm_id}**: recorded swings {f(s.operator_recorded_swings, 0)}; "
+            f"reported misses {f(s.operator_reported_misses, 0)}; ledgers "
+            f"{s.ledger_runs_covered}/{s.ledger_runs_total}; physical availability unknown"
         )
     lines += ["", "### Hypotheses", ""]
     for name, h in hyps.items():

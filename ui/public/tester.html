@@ -7,70 +7,389 @@
     <style>
       :root {
         color-scheme: light dark;
-        --bg: #ffffff; --fg: #16181d; --muted: #5b6270; --line: #d9dde5; --panel: #f5f7fa;
-        --ok: #1a7f4b; --warn: #9a6700; --bad: #b42318; --accent: #3b5b7f;
+        --bg: #ffffff;
+        --fg: #16181d;
+        --muted: #5b6270;
+        --line: #d9dde5;
+        --panel: #f5f7fa;
+        --ok: #1a7f4b;
+        --warn: #9a6700;
+        --bad: #b42318;
+        --accent: #3b5b7f;
       }
       @media (prefers-color-scheme: dark) {
-        :root { --bg: #14161a; --fg: #e8eaee; --muted: #9aa2b1; --line: #2c313a; --panel: #1b1e24;
-                --ok: #5ed39a; --warn: #e3b341; --bad: #ff7b72; --accent: #8fb0d6; }
+        :root {
+          --bg: #14161a;
+          --fg: #e8eaee;
+          --muted: #9aa2b1;
+          --line: #2c313a;
+          --panel: #1b1e24;
+          --ok: #5ed39a;
+          --warn: #e3b341;
+          --bad: #ff7b72;
+          --accent: #8fb0d6;
+        }
       }
-      * { box-sizing: border-box; }
-      body { margin: 0; padding: 24px 16px 64px; background: var(--bg); color: var(--fg);
-             font: 16px/1.55 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
-      main { max-width: 820px; margin: 0 auto; }
-      h1 { font-size: 1.6rem; margin: 0 0 4px; }
-      h2 { font-size: 1.1rem; margin: 32px 0 8px; }
-      p.lede { color: var(--muted); margin: 0 0 8px; }
-      section { border-top: 1px solid var(--line); padding-top: 8px; }
-      .controls { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
-      label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; color: var(--muted); }
-      input, select { font: inherit; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px;
-                      background: var(--bg); color: var(--fg); }
-      button { font: inherit; padding: 9px 14px; border: 1px solid var(--line); border-radius: 7px;
-               background: var(--panel); color: var(--fg); cursor: pointer; }
-      button:hover { border-color: var(--muted); } button:disabled { opacity: 0.5; cursor: not-allowed; }
-      .steps { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
-      .status { padding: 10px 12px; border-radius: 7px; background: var(--panel); border: 1px solid var(--line); margin: 12px 0; }
-      .status[data-state="error"], .status[data-state="unavailable"] { border-color: var(--bad); color: var(--bad); }
-      .status[data-state="running"] { border-color: var(--warn); color: var(--warn); }
-      .status[data-state="complete"] { border-color: var(--ok); color: var(--ok); }
-      .arms { list-style: none; padding: 0; margin: 12px 0; display: grid; gap: 8px; }
-      .arms li { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; align-items: center;
-                 padding: 10px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); }
-      .arms li.active { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
-      .arms li.done { opacity: 0.85; }
-      .arms .n { font-weight: 700; color: var(--muted); }
-      .arms .t { display: flex; flex-direction: column; gap: 2px; }
-      .arms .t small { color: var(--muted); }
-      .arms .p { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
-      .arms .p.ok { color: var(--ok); } .arms .p.warn { color: var(--warn); } .arms .p.bad { color: var(--bad); }
-      .log { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 10px;
-             max-height: 240px; overflow: auto; white-space: pre-wrap; font: 13px/1.5 ui-monospace, Menlo, monospace; }
-      .note { color: var(--muted); font-size: 0.88rem; }
-      .problem { color: var(--bad); font-size: 0.9rem; margin: 4px 0; }
-      .light { display: flex; flex-wrap: wrap; gap: 12px 24px; font-size: 0.9rem; margin: 8px 0; }
-      .light b { font-variant-numeric: tabular-nums; }
-      .live { margin: 12px 0; }
-      .live figure { margin: 8px 0; }
-      .live img { display: block; width: 100%; image-rendering: pixelated; background: #000; border-radius: 7px; }
-      .live figcaption { font-size: 0.8rem; color: var(--muted); }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 24px 16px 64px;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          16px/1.55 system-ui,
+          -apple-system,
+          Segoe UI,
+          Roboto,
+          sans-serif;
+      }
+      main {
+        max-width: 820px;
+        margin: 0 auto;
+      }
+      h1 {
+        font-size: 1.6rem;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 1.1rem;
+        margin: 32px 0 8px;
+      }
+      p.lede {
+        color: var(--muted);
+        margin: 0 0 8px;
+      }
+      section {
+        border-top: 1px solid var(--line);
+        padding-top: 8px;
+      }
+      .controls {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      }
+      label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+      input,
+      select {
+        font: inherit;
+        padding: 7px 9px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--bg);
+        color: var(--fg);
+        min-height: 44px;
+      }
+      button {
+        font: inherit;
+        padding: 9px 14px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--panel);
+        color: var(--fg);
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: var(--muted);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .steps {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 12px 0;
+      }
+      .status {
+        padding: 10px 12px;
+        border-radius: 7px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        margin: 12px 0;
+      }
+      .status[data-state='error'],
+      .status[data-state='unavailable'] {
+        border-color: var(--bad);
+        color: var(--bad);
+      }
+      .status[data-state='running'] {
+        border-color: var(--warn);
+        color: var(--warn);
+      }
+      .status[data-state='complete'] {
+        border-color: var(--ok);
+        color: var(--ok);
+      }
+      .arms {
+        list-style: none;
+        padding: 0;
+        margin: 12px 0;
+        display: grid;
+        gap: 8px;
+      }
+      .arms li {
+        display: grid;
+        grid-template-columns: 34px 1fr auto;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--panel);
+      }
+      .arms li.active {
+        border-color: var(--accent);
+        box-shadow: inset 3px 0 0 var(--accent);
+      }
+      .arms li.done {
+        opacity: 0.85;
+      }
+      .arms .n {
+        font-weight: 700;
+        color: var(--muted);
+      }
+      .arms .t {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .arms .t small {
+        color: var(--muted);
+      }
+      .arms .p {
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .arms .p.ok {
+        color: var(--ok);
+      }
+      .arms .p.warn {
+        color: var(--warn);
+      }
+      .arms .p.bad {
+        color: var(--bad);
+      }
+      .log {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 10px;
+        max-height: 240px;
+        overflow: auto;
+        white-space: pre-wrap;
+        font:
+          13px/1.5 ui-monospace,
+          Menlo,
+          monospace;
+      }
+      .note {
+        color: var(--muted);
+        font-size: 0.88rem;
+      }
+      .problem {
+        color: var(--bad);
+        font-size: 0.9rem;
+        margin: 4px 0;
+      }
+      .light {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px 24px;
+        font-size: 0.9rem;
+        margin: 8px 0;
+      }
+      .light b {
+        font-variant-numeric: tabular-nums;
+      }
+      .live {
+        margin: 12px 0;
+      }
+      .live figure {
+        margin: 8px 0;
+      }
+      .live img {
+        display: block;
+        width: 100%;
+        image-rendering: pixelated;
+        background: #000;
+        border-radius: 7px;
+      }
+      .live figcaption {
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+      .photo-handoff {
+        margin: 10px 0;
+        padding: 10px 12px;
+        border: 1px solid var(--accent);
+        border-radius: 7px;
+        background: var(--panel);
+      }
+      .photo-handoff p {
+        margin: 0 0 8px;
+      }
+      .photo-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .photo-actions button {
+        min-height: 44px;
+      }
+      .attempts {
+        margin: 12px 0;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--panel);
+      }
+      .attempts h3 {
+        font-size: 1rem;
+        margin: 0 0 6px;
+      }
+      .attempt-scope {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: end;
+      }
+      .attempt-scope label {
+        min-width: 0;
+      }
+      .attempt-scope select {
+        width: 100%;
+      }
+      .attempt-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        margin: 8px 0;
+      }
+      .attempt-actions button {
+        min-height: 48px;
+        padding: 7px 9px;
+      }
+      .attempt-actions .primary {
+        border-color: var(--accent);
+        font-weight: 700;
+      }
+      .attempt-counts {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 4px 12px;
+        margin: 8px 0;
+        font-size: 0.88rem;
+      }
+      .attempt-counts b {
+        font-variant-numeric: tabular-nums;
+      }
+      .attempt-advanced {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: end;
+      }
+      .attempt-advanced label {
+        flex: 1 1 150px;
+      }
+      .attempt-advanced button {
+        min-height: 44px;
+      }
+      .attempts .problem,
+      .attempts .note {
+        margin: 6px 0 0;
+      }
+      .setup-gate {
+        margin: 12px 0;
+        padding: 10px 12px;
+        border: 2px solid var(--bad);
+        border-radius: 7px;
+        background: var(--panel);
+      }
+      .setup-gate[data-ready='true'] {
+        border-color: var(--ok);
+      }
+      .setup-gate[data-warning='true'] {
+        border-color: var(--warn);
+      }
+      .setup-gate h3 {
+        margin: 0 0 6px;
+        font-size: 1rem;
+      }
+      .setup-checks {
+        display: grid;
+        gap: 6px;
+        margin: 8px 0;
+      }
+      .setup-check {
+        padding: 7px 9px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--bg);
+      }
+      .setup-check[data-status='block'] {
+        border-color: var(--bad);
+      }
+      .setup-check[data-status='warn'] {
+        border-color: var(--warn);
+      }
+      .setup-warning {
+        color: var(--warn);
+      }
+      .setup-confirm {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 8px;
+        align-items: start;
+        color: var(--fg);
+        font-size: 0.84rem;
+      }
+      .setup-confirm input {
+        width: 24px;
+        min-height: 24px;
+        margin-top: 2px;
+      }
+      @media (max-height: 480px) {
+        body {
+          padding-top: 12px;
+        }
+        .attempts {
+          padding: 8px 10px;
+        }
+        .attempt-actions {
+          margin: 6px 0;
+        }
+      }
     </style>
   </head>
   <body>
     <main>
       <h1>OpenFlight camera mode study</h1>
+      <p><a href="/track-review.html">Review saved capture tracks</a></p>
+      <p><a href="/fusion-diagnostics.html">View fusion diagnostics</a></p>
       <p class="lede">
-        The test suite finds the shortest exposure that still works at full resolution, and
-        compares 640×400. A 7-iron, five good swings per exposure; the page sets each exposure
-        itself, says after every swing whether it saved usable data, and skips exposures your
-        light cannot support. You collect; we analyse.
+        The test suite finds the shortest exposure that still works at full resolution, and compares 640×400. A 7-iron,
+        five good swings per exposure; the page sets each exposure itself, says after every swing whether it saved
+        usable data, and skips exposures your light cannot support. You collect; we analyse.
       </p>
 
       <section>
         <h2>Before you start</h2>
         <ul>
-          <li>Ball at address, unit placed the way you'll hit. The enclosure geometry comes from the checked-in file.</li>
-          <li>Nothing is measured and nothing is typed except your tester ID. The club is set to 7-iron for you.</li>
+          <li>
+            Ball at address, unit placed the way you'll hit. The enclosure geometry comes from the checked-in file.
+          </li>
+          <li>Your tester ID is the only typed study field. Before acquisition, you must physically verify and confirm the measured v3 rig setup.</li>
           <li>For the 1280×800 exposures: foot powder spray and a cloth, for the impact photos.</li>
           <li>Keep the light the same for the whole session. If you change it, start a new tester ID.</li>
         </ul>
@@ -80,38 +399,137 @@
         <h2>1. Who and where</h2>
         <form class="controls" id="controls">
           <label>Tester ID<input id="tester-id" value="20260922-name" autocomplete="off" /></label>
-          <label>Where<select id="environment">
-            <option value="indoors">Indoors</option><option value="outdoors">Outdoors</option>
-          </select></label>
-          <label>Radar window → ball centre (mm)<input id="tee-mm" type="number" min="500" max="4000" step="1" inputmode="numeric" /></label>
+          <label
+            >Where<select id="environment">
+              <option value="indoors">Indoors</option>
+              <option value="outdoors">Outdoors</option>
+            </select></label
+          >
+          <label
+            >Radar window → ball centre (mm)<input
+              id="tee-mm"
+              type="number"
+              min="500"
+              max="4000"
+              step="1"
+              inputmode="numeric"
+          /></label>
         </form>
+        <div class="setup-gate" id="setup-gate" data-ready="false">
+          <h3>Mandatory setup eligibility</h3>
+          <p id="setup-summary" class="problem">Checking the server-authoritative setup gate…</p>
+          <div class="setup-checks" id="setup-checks"></div>
+          <p class="note">
+            <strong>Required measured v3 placement:</strong> shell level; lens centre 95 mm above the floor at the
+            measured adjustable-feet extension; OPS centre 85 mm target-left, 47 mm forward and 20 mm below the lens;
+            IWR RX-row centre 44 mm forward and 30 mm below the lens. OPS and IWR mounts point 10° up. The LIS3DH lies
+            flat with +Y toward the back (180° yaw).
+          </p>
+          <p class="note">
+            Software can verify the selected config, sensor identity and current tilt evidence. It cannot inspect the
+            enclosure build, feet extension, lens vertex, wiring, or physical orientation.
+          </p>
+          <p class="note">
+            Deliberate tilted-placement correction tests may cross the 2 degree flag while keeping the sensor mounts,
+            foot extension and optical configuration fixed. The nominal 95 mm lens height is the level-placement
+            baseline, not proof of the lens height after tilting. Record every placement or ball-setup change. The
+            warning is retained; correction accuracy is not validated.
+          </p>
+          <p class="note">
+            The admission check itself is not an attempt. A setup-gate failure does not count as accepted data or a
+            camera exposure failure. If the operator swung, record it in the independent swing tally.
+          </p>
+          <label class="setup-confirm"
+            ><input id="setup-physical-confirm" type="checkbox" />I physically checked this tester against those
+            measurements and orientations, including feet, lens reference, radar mounts, LIS3DH orientation and required
+            sensor connections. This confirmation applies only to this tester ID and the exact config hash shown
+            below.</label
+          >
+          <div class="steps">
+            <button type="button" id="setup-confirm" disabled>Confirm physical setup</button
+            ><button type="button" id="setup-refresh">Recheck setup</button>
+          </div>
+          <p class="note" id="setup-authority">No server confirmation loaded.</p>
+        </div>
       </section>
 
       <section id="suite">
         <h2>2. Test suite</h2>
         <ol class="suite-steps">
-          <li><button type="button" id="step-check">A. Check the hardware</button>
-            <span id="check-verdict"></span></li>
-          <li><button type="button" id="step-light">B. Measure the light (both modes)</button>
-            <span id="light-verdict"></span></li>
-          <li><button type="button" id="step-ladder">C. Start the exposure ladder</button>
+          <li><button type="button" id="step-check">A. Check the hardware</button> <span id="check-verdict"></span></li>
+          <li>
+            <button type="button" id="step-light">B. Measure the light (both modes)</button>
+            <span id="light-verdict"></span>
+          </li>
+          <li>
+            <button type="button" id="step-ladder">C. Start the exposure ladder</button>
             <div class="light" id="ladder-panel"></div>
-            <div id="face-guide" hidden style="position:relative;width:640px;max-width:100%">
-              <img id="face-preview" alt="Camera preview" style="width:100%;display:block">
-              <div style="position:absolute;left:45%;top:35%;width:10%;height:22%;border:2px dashed #ffd400"></div>
+            <div id="face-guide" hidden style="position: relative; width: 640px; max-width: 100%">
+              <img id="face-preview" alt="Camera preview" style="width: 100%; display: block" />
+              <div
+                style="position: absolute; left: 45%; top: 35%; width: 10%; height: 22%; border: 2px dashed #ffd400"
+              ></div>
             </div>
-            <div><button type="button" id="step-photo" hidden>Photograph face</button></div>
-            <p class="note">Before each 1280×800 swing, spray the face. After it, hold the face about
-              0.5 m from the lens inside the dashed box, press <strong>Photograph face</strong>, then wipe it.</p></li>
-          <li><button type="button" id="step-package">D. Package the data</button>
-            <label>Comparator export (optional) <input type="file" id="comparator-file"></label></li>
+            <div class="photo-handoff" id="photo-handoff" hidden>
+              <p id="photo-message"></p>
+              <p class="problem" id="photo-error" role="alert" hidden></p>
+              <div class="photo-actions">
+                <button type="button" id="photo-pause">Pause ladder</button>
+                <button type="button" id="step-photo">Photograph face</button>
+                <button type="button" id="photo-skip">Skip photo</button>
+              </div>
+            </div>
+            <div class="attempts" id="attempts">
+              <h3>Independent swing tally</h3>
+              <div class="attempt-scope">
+                <label
+                  >Run<select id="attempt-run">
+                    <option value="">No saved run</option>
+                  </select></label
+                >
+                <button type="button" id="attempt-refresh">Refresh</button>
+              </div>
+              <p class="note" id="attempt-scope">Start or select an exact saved run.</p>
+              <div class="attempt-actions">
+                <button type="button" class="primary" id="attempt-swing">Record swing</button>
+                <button type="button" id="attempt-missed">Record missed shot</button>
+              </div>
+              <p class="note">
+                <strong>Record each physical swing once:</strong> use Record swing OR Record missed shot.
+              </p>
+              <button type="button" id="attempt-retry" hidden>Retry unresolved entry</button>
+              <div class="attempt-counts" id="attempt-counts"></div>
+              <p class="note" id="attempt-reconciliation">Reconciliation has not started.</p>
+              <div class="attempt-advanced">
+                <label
+                  >Other event<select id="attempt-kind">
+                    <option value="warmup">Warm-up</option>
+                    <option value="false_trigger">False trigger</option>
+                  </select></label
+                >
+                <button type="button" id="attempt-other">Add event</button>
+                <button type="button" id="attempt-undo">Undo last</button>
+              </div>
+              <p class="problem" id="attempt-error" role="alert" hidden></p>
+            </div>
+            <p class="note">
+              Before each 1280×800 swing, spray the face. After it, hold the face about 0.5 m from the lens inside the
+              dashed box, press <strong>Photograph face</strong>, then wipe it.
+            </p>
+          </li>
+          <li>
+            <button type="button" id="step-package">D. Package the data</button>
+            <label>Comparator export (optional) <input type="file" id="comparator-file" /></label>
+          </li>
         </ol>
       </section>
 
       <section>
         <h2>Single arm (advanced)</h2>
-        <p class="note">Work top to bottom. Each arm: <strong>Find gain</strong> (a few seconds, static), then
-          <strong>Capture swings</strong> and hit until it shows 5 accepted.</p>
+        <p class="note">
+          Work top to bottom. Each arm: <strong>Find gain</strong> (a few seconds, static), then
+          <strong>Capture swings</strong> and hit until it shows 5 accepted.
+        </p>
         <ul class="arms" id="arms"></ul>
         <div class="light" id="light"></div>
         <div class="light" id="enclosure"></div>
@@ -126,11 +544,16 @@
           <div class="light" id="live-ball"></div>
           <div class="light" id="live-distance"></div>
           <div id="live-frames" hidden>
-            <figure><img id="live-raw" alt="Live frame as captured" />
-              <figcaption>As captured, at this arm's readout mode</figcaption></figure>
-            <figure><img id="live-boost" alt="Live frame with contrast boosted" />
-              <figcaption>Contrast boosted, to show what a dark frame holds; the ring is where the ball
-                detector found the ball</figcaption></figure>
+            <figure>
+              <img id="live-raw" alt="Live frame as captured" />
+              <figcaption>As captured, at this arm's readout mode</figcaption>
+            </figure>
+            <figure>
+              <img id="live-boost" alt="Live frame with contrast boosted" />
+              <figcaption>
+                Contrast boosted, to show what a dark frame holds; the ring is where the ball detector found the ball
+              </figcaption>
+            </figure>
           </div>
         </div>
         <div class="steps">
@@ -150,8 +573,10 @@
           <button type="button" id="package">Package everything</button>
           <a id="download" href="#" hidden>Download archive</a>
         </div>
-        <p class="note">Send the whole archive. It carries every arm's settings, light index, camera frames,
-          radar dumps and logs. Raw data stays out of Git.</p>
+        <p class="note">
+          Send the whole archive. It carries every arm's settings, light index, camera frames, radar dumps and logs. Raw
+          data stays out of Git.
+        </p>
       </section>
     </main>
 
@@ -163,6 +588,32 @@
       const LIVE_GAINS = [1, 2, 4, 8, 12, 15.9];
       let liveOn = false;
       let liveArm = null;
+      let photoTarget = null;
+      let photoIsHandoff = false;
+      let photoStopped = false;
+      let photoActionPending = false;
+      let photoError = null;
+      let ladderRequestVersion = 0;
+      let setupEligibility = null;
+      let physicalConfirmationDraft = false;
+      let setupRequestVersion = 0;
+      let setupRequestRunning = false;
+      const TESTER_ID_STORAGE_KEY = 'openflight-tester-id';
+      const ATTEMPT_SELECTION_STORAGE_KEY = 'openflight-tester-attempt-scope';
+      const ATTEMPT_PENDING_STORAGE_KEY = 'openflight-tester-attempt-pending';
+      let attemptScopes = [];
+      let selectedAttemptScope = null;
+      let latestAttemptScope = null;
+      let newerAttemptScopeAvailable = false;
+      let attemptState = null;
+      let attemptPending = null;
+      let attemptRequestVersion = 0;
+      try {
+        const savedTesterId = localStorage.getItem(TESTER_ID_STORAGE_KEY);
+        if (savedTesterId) el('tester-id').value = savedTesterId;
+      } catch {
+        // Storage can be unavailable in locked-down kiosk browser profiles.
+      }
 
       function payload() {
         return {
@@ -172,13 +623,124 @@
           ...(el('tee-mm').value ? { tee_mm: Number(el('tee-mm').value) } : {}),
         };
       }
-      function query() { return new URLSearchParams(payload()).toString(); }
+      function query() {
+        return new URLSearchParams(payload()).toString();
+      }
 
       async function request(path, options) {
         const response = await fetch(path, options);
         const body = await response.json().catch(() => ({}));
         if (!response.ok && body.error) body.failed = body.error;
         return body;
+      }
+
+      function setupReady() {
+        return Boolean(
+          setupEligibility && setupEligibility.eligible && setupEligibility.tester_id === el('tester-id').value.trim()
+        );
+      }
+
+      function renderSetupEligibility() {
+        const ready = setupReady();
+        const warnings = setupEligibility
+          ? setupEligibility.warnings || setupEligibility.checks.filter((check) => check.status === 'warn')
+          : [];
+        el('setup-gate').dataset.ready = String(ready);
+        el('setup-gate').dataset.warning = String(Boolean(warnings.length));
+        el('step-light').disabled = !ready;
+        el('btn-gain').disabled = !ready;
+        el('btn-swings').disabled = !ready;
+        el('step-ladder').disabled = photoActionPending || !ready;
+        if (photoTarget) renderPhotoHandoff();
+        if (!setupEligibility) {
+          el('setup-summary').textContent = 'Setup eligibility is unknown. Recheck the server before acquisition.';
+          el('setup-checks').innerHTML = '';
+          el('setup-authority').textContent = 'No server confirmation loaded. Acquisition controls remain blocked.';
+          el('setup-confirm').disabled = true;
+          return;
+        }
+        el('setup-summary').className = ready ? (warnings.length ? 'setup-warning' : 'note') : 'problem';
+        el('setup-summary').textContent = ready
+          ? warnings.length
+            ? `Eligible with ${warnings.length} retained placement warning${warnings.length === 1 ? '' : 's'}. Correction accuracy is not validated.`
+            : 'Eligible for the tester admission stage. Live acquisition still verifies its runtime requirements.'
+          : `${setupEligibility.blockers.length} setup blocker${setupEligibility.blockers.length === 1 ? '' : 's'} must be resolved.`;
+        el('setup-checks').innerHTML = setupEligibility.checks
+          .map(
+            (check) => {
+              const guard = check.placement_guard;
+              const placement =
+                check.status === 'warn' && guard
+                  ? `<div>Measured pitch ${Number(guard.pitch_deg).toFixed(2)} degrees, roll ${Number(guard.roll_deg).toFixed(2)} degrees; signed deviations ${Number(guard.pitch_error_deg).toFixed(2)} degrees pitch and ${Number(guard.roll_error_deg).toFixed(2)} degrees roll; flag threshold +/-${Number(guard.tolerance_deg).toFixed(1)} degrees.</div>`
+                  : '';
+              return `<div class="setup-check" data-status="${check.status}"><strong>${check.label}: ${check.status}</strong>` +
+              `${check.reason ? `<div>${check.reason}</div>` : ''}` +
+              placement +
+              `${check.status === 'block' && check.remedy ? `<div><strong>Remedy:</strong> ${check.remedy}</div>` : ''}</div>`;
+            }
+          )
+          .join('');
+        const confirmation = setupEligibility.operator_confirmation;
+        el('setup-physical-confirm').checked = Boolean(confirmation.confirmed || physicalConfirmationDraft);
+        el('setup-authority').textContent =
+          `Config ${setupEligibility.config_hash} · confirmation authority ${confirmation.authority} · ` +
+          `${confirmation.confirmed ? `confirmed ${confirmation.confirmed_at}` : 'not confirmed'} · ` +
+          `runtime sensors: ${setupEligibility.runtime_requirements.join(', ')}.`;
+        el('setup-confirm').disabled = ready || !physicalConfirmationDraft;
+      }
+
+      function invalidateSetupEligibility(message) {
+        setupEligibility = null;
+        physicalConfirmationDraft = false;
+        setupRequestVersion += 1;
+        renderSetupEligibility();
+        el('setup-summary').textContent = message;
+      }
+
+      async function refreshSetupEligibility() {
+        if (setupRequestRunning) return false;
+        const testerId = el('tester-id').value.trim();
+        const version = ++setupRequestVersion;
+        setupRequestRunning = true;
+        try {
+          const response = await fetch(
+            '/api/tester/setup-eligibility?' + new URLSearchParams({ tester_id: testerId }),
+            { cache: 'no-store' }
+          );
+          const body = await response.json().catch(() => ({}));
+          if (version !== setupRequestVersion || testerId !== el('tester-id').value.trim()) return false;
+          if (!response.ok) throw new Error(body.error || `setup check failed (${response.status})`);
+          const prior = setupEligibility;
+          if (
+            !prior ||
+            prior.tester_id !== body.tester_id ||
+            prior.config_hash !== body.config_hash ||
+            (prior.eligible && !body.operator_confirmation.confirmed)
+          ) {
+            physicalConfirmationDraft = false;
+          }
+          setupEligibility = body;
+          renderSetupEligibility();
+          return setupReady();
+        } catch (error) {
+          if (version === setupRequestVersion && testerId === el('tester-id').value.trim()) {
+            setupEligibility = null;
+            renderSetupEligibility();
+            el('setup-summary').textContent = `Setup gate unavailable: ${error.message}`;
+          }
+          return false;
+        } finally {
+          setupRequestRunning = false;
+        }
+      }
+
+      async function requireSetupEligibility() {
+        if (setupReady()) return true;
+        await refreshSetupEligibility();
+        if (setupReady()) return true;
+        el('setup-summary').textContent = 'Acquisition blocked until every mandatory setup check passes.';
+        el('setup-gate').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        return false;
       }
 
       function progressClass(a) {
@@ -198,7 +760,7 @@
           li.dataset.arm = a.arm_id;
           const gainText = a.gain != null ? `gain ${a.gain}` : 'gain not found yet';
           const prog = a.attempted ? `${a.accepted} / ${a.target} accepted · ${a.attempted} hit` : `0 / ${a.target}`;
-          li.innerHTML = `<span class="n">${a.arm_id.replace('arm','')}</span>
+          li.innerHTML = `<span class="n">${a.arm_id.replace('arm', '')}</span>
             <span class="t"><span>${a.label}</span>
             <small>${a.isolates} · ${a.exposure_us} µs · ${gainText}${a.lighting_required ? ' · <b>lighting required</b>' : ''}</small></span>
             <span class="p ${progressClass(a)}">${prog}</span>`;
@@ -212,12 +774,13 @@
         }
         const a = arms.find((x) => x.arm_id === currentArm) || {};
         if (liveArm !== currentArm) liveDefaults();
-        el('btn-gain').textContent = `Find gain for arm ${currentArm.replace('arm','')}`;
-        el('btn-swings').textContent = `Capture swings for arm ${currentArm.replace('arm','')}`;
+        el('btn-gain').textContent = `Find gain for arm ${currentArm.replace('arm', '')}`;
+        el('btn-swings').textContent = `Capture swings for arm ${currentArm.replace('arm', '')}`;
         const li = a.light_index;
-        el('light').innerHTML = li != null
-          ? `<span>light index <b>${li.toExponential(2)}</b></span><span>${a.lighting_required ? 'This arm needs more light than you have; its swings will still be recorded as evidence.' : 'Light is sufficient for this arm.'}</span>`
-          : '';
+        el('light').innerHTML =
+          li != null
+            ? `<span>light index <b>${li.toExponential(2)}</b></span><span>${a.lighting_required ? 'This arm needs more light than you have; its swings will still be recorded as evidence.' : 'Light is sufficient for this arm.'}</span>`
+            : '';
         if (a.solved_range_m != null) {
           el('light').innerHTML += `<span>camera-solved range <b>${Math.round(a.solved_range_m * 1000)} mm</b></span>`;
         }
@@ -245,9 +808,13 @@
 
       async function refresh() {
         try {
-          render(await request('/api/tester/status', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload()),
-          }));
+          render(
+            await request('/api/tester/status', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload()),
+            })
+          );
         } catch {
           el('status').dataset.state = 'unavailable';
           el('status').textContent = 'Local runner is not reachable. Start scripts/start-tester.sh.';
@@ -274,39 +841,51 @@
       }
       function renderLive(s) {
         const problem = s.failed || s.error;
-        if (problem) { el('live-stats').innerHTML = `<span class="problem">${problem}</span>`; return; }
+        if (problem) {
+          el('live-stats').innerHTML = `<span class="problem">${problem}</span>`;
+          return;
+        }
         const st = s.stats;
         const ap = s.applied || {};
-        if (!st) { el('live-stats').textContent = s.running ? 'Opening the camera…' : ''; return; }
+        if (!st) {
+          el('live-stats').textContent = s.running ? 'Opening the camera…' : '';
+          return;
+        }
         el('live-stats').innerHTML =
           `<span>applied <b>${ap.exposure_us ?? '?'} µs × ${ap.gain != null ? ap.gain.toFixed(2) : '?'}</b></span>` +
           `<span>mean <b>${st.mean}</b>${st.above_floor != null ? ` (<b>${st.above_floor}</b> above the black floor)` : ''}</span>` +
           `<span>p99 <b>${st.p99}</b> · brightest <b>${st.max}</b></span>` +
           `<span>clipped <b>${st.clipped_pct}%</b></span>`;
         const b = s.ball;
-        el('live-ball').innerHTML = !b ? '' : b.found
-          ? `<span>ball found: <b>${b.diameter_px} px</b> across, about <b>${b.range_m} m</b> away</span>` +
-            (b.expected_diameter_px != null
-              ? `<span>your tape says <b>${b.expected_diameter_px} px</b>; the picture alone reads <b>${b.image_only_diameter_px ?? '?'} px</b></span>`
-              : '<span>enter the radar-to-ball distance so the ball\'s size is known</span>') +
-            (b.size_check ? `<span class="problem">${b.size_check}</span>` : '') +
-            `<span>ball <b>${b.ball_dn}</b> against <b>${b.around_dn}</b> around it</span>` +
-            `<span>edge <b>${b.edge_dn_per_px}</b> per px</span>`
-          : `<span class="problem">ball not found: ${b.reason}</span>`;
+        el('live-ball').innerHTML = !b
+          ? ''
+          : b.found
+            ? `<span>ball found: <b>${b.diameter_px} px</b> across, about <b>${b.range_m} m</b> away</span>` +
+              (b.expected_diameter_px != null
+                ? `<span>your tape says <b>${b.expected_diameter_px} px</b>; the picture alone reads <b>${b.image_only_diameter_px ?? '?'} px</b></span>`
+                : "<span>enter the radar-to-ball distance so the ball's size is known</span>") +
+              (b.size_check ? `<span class="problem">${b.size_check}</span>` : '') +
+              `<span>ball <b>${b.ball_dn}</b> against <b>${b.around_dn}</b> around it</span>` +
+              `<span>edge <b>${b.edge_dn_per_px}</b> per px</span>`
+            : `<span class="problem">ball not found: ${b.reason}</span>`;
       }
       function renderEnclosure(t) {
         if (!t) return;
-        el('enclosure').innerHTML = t.pitch_deg == null
-          ? `<span>inclinometer: <b>${t.status}</b>${t.error ? ` — ${t.error}` : ''}</span>`
-          : `<span>inclinometer: enclosure front <b>${updown(t.pitch_deg)}</b>` +
-            ` (expected ${updown(t.expected_pitch_deg)}), leaning <b>${Math.abs(t.roll_deg).toFixed(1)}°</b></span>` +
-            `<span>so the camera points <b>${updown(t.camera_pitch_deg)}</b> (${t.status})</span>` +
-            `<span>LIS3DH board ${t.mount_yaw_deg ? `turned ${t.mount_yaw_deg}°` : 'as designed'} (rig file)</span>`;
+        el('enclosure').innerHTML =
+          t.pitch_deg == null
+            ? `<span>inclinometer: <b>${t.status}</b>${t.error ? ` — ${t.error}` : ''}</span>`
+            : `<span>inclinometer: enclosure front <b>${updown(t.pitch_deg)}</b>` +
+              ` (expected ${updown(t.expected_pitch_deg)}), leaning <b>${Math.abs(t.roll_deg).toFixed(1)}°</b></span>` +
+              `<span>so the camera points <b>${updown(t.camera_pitch_deg)}</b> (${t.status})</span>` +
+              `<span>LIS3DH board ${t.mount_yaw_deg ? `turned ${t.mount_yaw_deg}°` : 'as designed'} (rig file)</span>`;
       }
       const updown = (v) => `${Math.abs(v).toFixed(2)}° ${v >= 0 ? 'up' : 'down'}`;
       function renderDistance(b) {
         const c = b && b.camera_says;
-        if (!c) { el('live-distance').innerHTML = ''; return; }
+        if (!c) {
+          el('live-distance').innerHTML = '';
+          return;
+        }
         const mm = (v) => (v == null ? '?' : `${(v / 1000).toFixed(2)} m`);
         const off = (v) => (v == null ? '' : ` (${v > 0 ? '+' : ''}${v}%)`);
         el('live-distance').innerHTML =
@@ -320,16 +899,23 @@
       }
       async function recordPlacement() {
         const r = await request('/api/tester/placement', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload()),
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload()),
         });
-        el('record-placement').textContent = r.failed ? 'Record this placement' : `Recorded ${r.placements} — move the ball and record again`;
+        el('record-placement').textContent = r.failed
+          ? 'Record this placement'
+          : `Recorded ${r.placements} — move the ball and record again`;
         if (r.failed) el('live-distance').innerHTML += `<span class="problem">${r.failed}</span>`;
       }
       async function liveStart() {
         const status = await request('/api/tester/live', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            ...payload(), exposure_us: Number(el('live-exposure').value), gain: Number(el('live-gain').value),
+            ...payload(),
+            exposure_us: Number(el('live-exposure').value),
+            gain: Number(el('live-gain').value),
           }),
         });
         liveShown(!status.failed);
@@ -337,9 +923,13 @@
       }
       async function liveStop() {
         liveShown(false);
-        renderLive(await request('/api/tester/live', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'stop' }),
-        }));
+        renderLive(
+          await request('/api/tester/live', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'stop' }),
+          })
+        );
       }
       async function liveTick() {
         if (!liveOn) return;
@@ -352,42 +942,68 @@
       }
       el('live-toggle').addEventListener('click', () => (liveOn ? liveStop() : liveStart()));
       el('record-placement').addEventListener('click', recordPlacement);
-      el('live-exposure').addEventListener('change', () => { if (liveOn) liveStart(); });
+      el('live-exposure').addEventListener('change', () => {
+        if (liveOn) liveStart();
+      });
       // a new tape distance reaches the live view without reopening the camera
       let teeTimer = null;
       el('tee-mm').addEventListener('input', () => {
         clearTimeout(teeTimer);
-        teeTimer = setTimeout(() => { if (liveOn) liveStart(); }, 600);
+        teeTimer = setTimeout(() => {
+          if (liveOn) liveStart();
+        }, 600);
       });
-      el('live-gain').addEventListener('change', () => { if (liveOn) liveStart(); });
+      el('live-gain').addEventListener('change', () => {
+        if (liveOn) liveStart();
+      });
       setInterval(liveTick, 350);
 
       for (const button of document.querySelectorAll('[data-action]')) {
         button.addEventListener('click', async () => {
-          liveShown(false);  // the runner closes the live view to free the camera
-          render(await request('/api/tester/run', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...payload(), action: button.dataset.action }),
-          }));
+          if (['gain', 'swings'].includes(button.dataset.action) && !(await requireSetupEligibility())) return;
+          liveShown(false); // the runner closes the live view to free the camera
+          render(
+            await request('/api/tester/run', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ...payload(), action: button.dataset.action }),
+            })
+          );
         });
       }
-      el('stop').addEventListener('click', async () => { render(await request('/api/tester/stop', { method: 'POST' })); });
+      el('stop').addEventListener('click', async () => {
+        render(await request('/api/tester/stop', { method: 'POST' }));
+      });
       el('package').addEventListener('click', async () => {
-        render(await request('/api/tester/package', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload()),
-        }));
+        render(
+          await request('/api/tester/package', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload()),
+          })
+        );
       });
 
       // --- test suite ---
       const suiteBody = (arm) => ({
-        tester_id: el('tester-id').value.trim(), arm_id: arm, environment: el('environment').value,
+        tester_id: el('tester-id').value.trim(),
+        arm_id: arm,
+        environment: el('environment').value,
       });
       async function post(path, body) {
         const r = await fetch(path, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
         });
         const j = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(j.error || `request failed (${r.status})`);
+        if (!r.ok) {
+          if (j.setup_eligibility) {
+            setupEligibility = j.setup_eligibility;
+            renderSetupEligibility();
+          }
+          throw new Error(j.error || `request failed (${r.status})`);
+        }
         return j;
       }
       async function waitJob() {
@@ -403,10 +1019,13 @@
           await post('/api/tester/run', { ...suiteBody('arm5'), action: 'preflight' });
           const job = await waitJob();
           el('check-verdict').textContent = job.state === 'complete' ? 'ready' : `failed: ${job.message}`;
-        } catch (e) { el('check-verdict').textContent = e.message; }
+        } catch (e) {
+          el('check-verdict').textContent = e.message;
+        }
       });
       el('step-light').addEventListener('click', async () => {
         try {
+          if (!(await requireSetupEligibility())) return;
           for (const arm of ['arm5', 'arm6']) {
             el('light-verdict').textContent = `measuring ${arm === 'arm5' ? '1280×800' : '640×400'}…`;
             await post('/api/tester/run', { ...suiteBody(arm), action: 'gain' });
@@ -414,42 +1033,451 @@
             if (job.state !== 'complete') throw new Error(job.message);
           }
           el('light-verdict').textContent = 'done for both modes';
-        } catch (e) { el('light-verdict').textContent = `failed: ${e.message}`; }
+        } catch (e) {
+          el('light-verdict').textContent = `failed: ${e.message}`;
+        }
       });
+
+      const attemptScopeKey = (scope) => (scope ? `${scope.tester_id}\n${scope.arm_id}\n${scope.run_dir}` : '');
+      const attemptScopeLabel = (scope) => `${scope.arm_id} · ${scope.run}`;
+      function saveAttemptValue(key, value) {
+        try {
+          if (value == null) localStorage.removeItem(key);
+          else localStorage.setItem(key, JSON.stringify(value));
+        } catch {
+          // The tally still works for this page load when browser storage is unavailable.
+        }
+      }
+      function readAttemptValue(key) {
+        try {
+          return JSON.parse(localStorage.getItem(key) || 'null');
+        } catch {
+          return null;
+        }
+      }
+      function mergeAttemptScopes(scopes) {
+        const byKey = new Map(attemptScopes.map((scope) => [attemptScopeKey(scope), scope]));
+        for (const scope of scopes || []) {
+          if (scope && scope.tester_id && scope.arm_id && scope.run && scope.run_dir) {
+            byKey.set(attemptScopeKey(scope), scope);
+          }
+        }
+        attemptScopes = [...byKey.values()].filter((scope) => scope.tester_id === el('tester-id').value.trim());
+      }
+      function renderAttemptScopeOptions() {
+        const select = el('attempt-run');
+        const selectedKey = attemptScopeKey(selectedAttemptScope);
+        select.innerHTML =
+          '<option value="">No saved run</option>' +
+          attemptScopes
+            .map((scope) => {
+              const key = attemptScopeKey(scope);
+              return `<option value="${encodeURIComponent(key)}"${key === selectedKey ? ' selected' : ''}>${attemptScopeLabel(scope)}</option>`;
+            })
+            .join('');
+      }
+      function renderAttemptState() {
+        renderAttemptScopeOptions();
+        const hasScope = Boolean(selectedAttemptScope);
+        const activeEntries =
+          attemptState && attemptState.entries
+            ? attemptState.entries.filter((entry) => entry.status === 'active' || entry.status === 'corrected')
+            : [];
+        const pendingHere =
+          attemptPending && attemptScopeKey(attemptPending.scope) === attemptScopeKey(selectedAttemptScope);
+        const showCount = (value) => (value == null ? 'unknown' : value);
+        const newerScope =
+          newerAttemptScopeAvailable &&
+          latestAttemptScope &&
+          attemptScopeKey(latestAttemptScope) !== attemptScopeKey(selectedAttemptScope);
+        el('attempt-scope').textContent = hasScope
+          ? `${selectedAttemptScope.arm_id} · ${selectedAttemptScope.run}` +
+            (newerScope
+              ? ` · New ${attemptScopeLabel(latestAttemptScope)} run available; this tally stays pinned.`
+              : '')
+          : 'Start or select an exact saved run.';
+        const counts = attemptState && attemptState.counts;
+        el('attempt-counts').innerHTML = counts
+          ? `<span>recorded swings <b>${showCount(counts.physical_operator_swings)}</b></span>` +
+            `<span>logged sensor shots <b>${showCount(counts.logged_sensor_shots)}</b></span>` +
+            `<span>reported misses <b>${showCount(counts.operator_reported_misses)}</b></span>` +
+            `<span>warm-ups / false triggers <b>${showCount(counts.warmups)} / ${showCount(counts.false_triggers)}</b></span>`
+          : '<span>Tally not loaded.</span>';
+        const reconciliation = attemptState && attemptState.reconciliation;
+        if (!reconciliation || reconciliation.status === 'unknown') {
+          el('attempt-reconciliation').textContent =
+            'Match status unknown. Counts do not establish physical availability or accuracy.';
+        } else if (reconciliation.status === 'count_match') {
+          el('attempt-reconciliation').textContent =
+            'Operator swings and logged sensor-shot counts match. Coverage, physical availability, and accuracy are unknown.';
+        } else {
+          const difference = reconciliation.difference;
+          el('attempt-reconciliation').textContent =
+            `Counts differ by ${difference == null ? '?' : Math.abs(difference)}. Review matching; availability and accuracy are unknown.`;
+        }
+        el('attempt-swing').disabled = !hasScope || Boolean(attemptPending);
+        el('attempt-missed').disabled = !hasScope || Boolean(attemptPending);
+        el('attempt-other').disabled = !hasScope || Boolean(attemptPending);
+        el('attempt-undo').disabled = !hasScope || !activeEntries.length || Boolean(attemptPending);
+        el('attempt-retry').hidden = !attemptPending;
+        el('attempt-retry').disabled = !pendingHere;
+        if (pendingHere) {
+          const retryLabel =
+            attemptPending.payload.action === 'void'
+              ? 'undo'
+              : attemptPending.payload.operator_missed
+                ? 'missed shot'
+                : attemptPending.payload.kind.replace('_', ' ');
+          el('attempt-error').hidden = false;
+          el('attempt-error').textContent =
+            `A ${retryLabel} entry may already be saved. Retry to confirm it without adding another.`;
+        } else if (attemptPending) {
+          el('attempt-error').hidden = false;
+          el('attempt-error').textContent =
+            `Unresolved entry belongs to ${attemptScopeLabel(attemptPending.scope)}. Select that run to retry it.`;
+        }
+      }
+      async function loadAttemptState(scope) {
+        if (!scope) {
+          attemptState = null;
+          renderAttemptState();
+          return;
+        }
+        const requestedKey = attemptScopeKey(scope);
+        const version = ++attemptRequestVersion;
+        try {
+          const query = new URLSearchParams({
+            tester_id: scope.tester_id,
+            arm_id: scope.arm_id,
+            run_dir: scope.run_dir,
+          });
+          const response = await fetch('/api/tester/attempts?' + query);
+          const state = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(state.error || `request failed (${response.status})`);
+          if (version !== attemptRequestVersion || requestedKey !== attemptScopeKey(selectedAttemptScope)) return;
+          attemptState = state;
+          el('attempt-error').hidden = true;
+          renderAttemptState();
+        } catch (error) {
+          if (version !== attemptRequestVersion || requestedKey !== attemptScopeKey(selectedAttemptScope)) return;
+          el('attempt-error').hidden = false;
+          el('attempt-error').textContent = error.message;
+          renderAttemptState();
+        }
+      }
+      function selectAttemptScope(scope) {
+        selectedAttemptScope = scope;
+        if (attemptScopeKey(scope) === attemptScopeKey(latestAttemptScope)) newerAttemptScopeAvailable = false;
+        attemptState = null;
+        attemptRequestVersion += 1;
+        saveAttemptValue(ATTEMPT_SELECTION_STORAGE_KEY, scope);
+        renderAttemptState();
+        loadAttemptState(scope);
+      }
+      async function discoverAttemptScopes(announcedScope = null, savedScopes = null) {
+        if (announcedScope) {
+          if (latestAttemptScope && attemptScopeKey(latestAttemptScope) !== attemptScopeKey(announcedScope)) {
+            newerAttemptScopeAvailable = true;
+          }
+          latestAttemptScope = announcedScope;
+          mergeAttemptScopes([announcedScope]);
+        }
+        if (savedScopes) mergeAttemptScopes(savedScopes);
+        try {
+          const testerId = el('tester-id').value.trim();
+          const response = await fetch('/api/tester/attempts?' + new URLSearchParams({ tester_id: testerId }));
+          const body = await response.json().catch(() => ({}));
+          if (response.ok && testerId === el('tester-id').value.trim()) mergeAttemptScopes(body.scopes);
+        } catch {
+          // A currently announced run remains usable while discovery is unavailable.
+        }
+        if (!selectedAttemptScope) {
+          const saved = readAttemptValue(ATTEMPT_SELECTION_STORAGE_KEY);
+          const savedMatch = attemptScopes.find((scope) => attemptScopeKey(scope) === attemptScopeKey(saved));
+          selectAttemptScope(savedMatch || announcedScope || attemptScopes[0] || null);
+        } else {
+          renderAttemptState();
+          loadAttemptState(selectedAttemptScope);
+        }
+      }
+      function newAttemptId() {
+        return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      }
+      async function submitAttempt(proposedPayload) {
+        if (!selectedAttemptScope) return;
+        const scope = { ...selectedAttemptScope };
+        const savedPending = readAttemptValue(ATTEMPT_PENDING_STORAGE_KEY);
+        if (!attemptPending && savedPending && attemptScopeKey(savedPending.scope) === attemptScopeKey(scope)) {
+          attemptPending = savedPending;
+        }
+        if (attemptPending && attemptScopeKey(attemptPending.scope) !== attemptScopeKey(scope)) return;
+        if (!attemptPending && proposedPayload) {
+          attemptPending = { scope, payload: proposedPayload };
+          saveAttemptValue(ATTEMPT_PENDING_STORAGE_KEY, attemptPending);
+        }
+        if (!attemptPending) return;
+        const pending = attemptPending;
+        const requestedKey = attemptScopeKey(pending.scope);
+        const version = ++attemptRequestVersion;
+        renderAttemptState();
+        try {
+          const response = await fetch('/api/tester/attempts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(pending.payload),
+          });
+          const state = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(state.error || `request failed (${response.status})`);
+          if (attemptPending === pending) {
+            attemptPending = null;
+            saveAttemptValue(ATTEMPT_PENDING_STORAGE_KEY, null);
+          }
+          if (version !== attemptRequestVersion || requestedKey !== attemptScopeKey(selectedAttemptScope)) return;
+          attemptState = state;
+          el('attempt-error').hidden = true;
+          renderAttemptState();
+        } catch (error) {
+          if (version !== attemptRequestVersion || requestedKey !== attemptScopeKey(selectedAttemptScope)) return;
+          el('attempt-error').hidden = false;
+          el('attempt-error').textContent = `${error.message}. Retry the same action to confirm it.`;
+          renderAttemptState();
+        }
+      }
+      function addAttempt(kind, operatorMissed = false) {
+        if (!selectedAttemptScope) return;
+        const entryId = newAttemptId();
+        submitAttempt({
+          tester_id: selectedAttemptScope.tester_id,
+          arm_id: selectedAttemptScope.arm_id,
+          run_dir: selectedAttemptScope.run_dir,
+          request_id: newAttemptId(),
+          entry_id: entryId,
+          action: 'add',
+          kind,
+          operator_missed: operatorMissed,
+        });
+      }
+      el('attempt-swing').addEventListener('click', () => addAttempt('swing'));
+      el('attempt-missed').addEventListener('click', () => addAttempt('swing', true));
+      el('attempt-retry').addEventListener('click', () => submitAttempt(null));
+      el('attempt-other').addEventListener('click', () => addAttempt(el('attempt-kind').value));
+      el('attempt-undo').addEventListener('click', () => {
+        if (!attemptState || !selectedAttemptScope) return;
+        const target = [...attemptState.entries]
+          .reverse()
+          .find((entry) => entry.status === 'active' || entry.status === 'corrected');
+        if (!target) return;
+        submitAttempt({
+          tester_id: selectedAttemptScope.tester_id,
+          arm_id: selectedAttemptScope.arm_id,
+          run_dir: selectedAttemptScope.run_dir,
+          request_id: newAttemptId(),
+          entry_id: newAttemptId(),
+          action: 'void',
+          target_entry_id: target.entry_id,
+        });
+      });
+      el('attempt-run').addEventListener('change', () => {
+        const key = decodeURIComponent(el('attempt-run').value || '');
+        selectAttemptScope(attemptScopes.find((scope) => attemptScopeKey(scope) === key) || null);
+      });
+      el('attempt-refresh').addEventListener('click', () => discoverAttemptScopes());
+      attemptPending = readAttemptValue(ATTEMPT_PENDING_STORAGE_KEY);
+      renderAttemptState();
+
       function renderLadder(s) {
-        const l = s.ladder, v = s.last_verdict;
-        const rows = Object.entries(l.rungs).map(([id, r]) => {
-          const ok = r.swings.filter((w) => w.color !== 'red').length;
-          return `<span>${id}: <b>${r.status}</b> ${ok}/5${r.reason ? ` — ${r.reason}` : ''}</span>`;
-        }).join('');
+        const l = s.ladder,
+          v = s.last_verdict;
+        discoverAttemptScopes(s.capture_scope, s.saved_attempt_scopes);
+        if (!l) {
+          if (s.error) el('ladder-panel').textContent = s.error;
+          return;
+        }
+        const rows = Object.entries(l.rungs)
+          .map(([id, r]) => {
+            const ok = r.swings.filter((w) => w.color !== 'red').length;
+            return `<span>${id}: <b>${r.status}</b> ${ok}/5${r.reason ? ` — ${r.reason}` : ''}</span>`;
+          })
+          .join('');
         const last = v
           ? `<span class="${v.color === 'red' ? 'problem' : ''}">last swing: <b>${v.color}</b> ${(v.reasons || []).join('; ')}</span>`
           : '';
-        el('ladder-panel').innerHTML = `<span>now: <b>${l.current || 'finished'}</b></span>${rows}${last}`;
-        const full = (l.current || '').startsWith('full-');
-        el('step-photo').hidden = !full;
-        el('face-guide').hidden = !full;
+        const target = l.pending_photo ?? ((l.current || '').startsWith('full-') ? s.photo_target : null);
+        const now = l.pending_photo
+          ? `photo for <b>${l.pending_photo.rung_id}</b> before ${l.current || 'finishing'}`
+          : `<b>${l.current || 'finished'}</b>`;
+        el('ladder-panel').innerHTML = `<span>now: ${now}</span>${rows}${last}`;
+        const oldTarget = photoTarget && `${photoTarget.capture}:${photoTarget.rung_id}`;
+        const newTarget = target && `${target.capture}:${target.rung_id}`;
+        if (oldTarget !== newTarget) photoError = null;
+        photoTarget = target;
+        photoIsHandoff = Boolean(l.pending_photo);
+        photoStopped = Boolean(s.stopped);
+        renderPhotoHandoff();
+        el('face-guide').hidden = !target;
         // the kiosk owns the camera during the ladder: show its preview with the face guide
-        if (full) el('face-preview').src = `http://${location.hostname}:8080/api/camera/preview.jpg?t=${Date.now()}`;
+        if (target && !photoStopped) {
+          el('face-preview').src = `http://${location.hostname}:8080/api/camera/preview.jpg?t=${Date.now()}`;
+        }
+      }
+      function renderPhotoHandoff() {
+        el('step-ladder').disabled = photoActionPending || !setupReady();
+        el('photo-handoff').hidden = !photoTarget;
+        if (!photoTarget) return;
+        el('photo-message').textContent = photoStopped
+          ? `Photo held for ${photoTarget.rung_id}. Resume the ladder to use the camera.`
+          : `Photo needed for ${photoTarget.rung_id} (${photoTarget.capture}).`;
+        el('photo-pause').textContent = photoStopped ? 'Resume ladder' : 'Pause ladder';
+        el('photo-pause').hidden = !photoIsHandoff;
+        el('photo-skip').hidden = !photoIsHandoff;
+        el('photo-pause').disabled = photoActionPending || (photoStopped && !setupReady());
+        el('step-photo').disabled = photoActionPending || photoStopped;
+        el('photo-skip').disabled = photoActionPending || photoStopped;
+        el('photo-error').hidden = !photoError;
+        el('photo-error').textContent = photoError || '';
       }
       let ladderTimer = null;
       async function ladderTick() {
-        const query = new URLSearchParams({ tester_id: el('tester-id').value.trim() });
-        renderLadder(await (await fetch('/api/tester/ladder?' + query)).json());
+        if (photoActionPending) return;
+        const testerId = el('tester-id').value.trim();
+        const version = ++ladderRequestVersion;
+        const query = new URLSearchParams({ tester_id: testerId });
+        try {
+          const response = await fetch('/api/tester/ladder?' + query);
+          const state = await response.json().catch(() => ({}));
+          if (version !== ladderRequestVersion || testerId !== el('tester-id').value.trim()) return;
+          renderLadder(state);
+        } catch {
+          if (version === ladderRequestVersion && testerId === el('tester-id').value.trim()) {
+            el('ladder-panel').textContent = 'Ladder status is unavailable.';
+          }
+        }
       }
       el('step-ladder').addEventListener('click', async () => {
+        if (photoActionPending) return;
         try {
-          liveShown(false);  // the kiosk takes the camera
-          renderLadder(await post('/api/tester/ladder/start', suiteBody('arm5')));
+          if (!(await requireSetupEligibility())) return;
+          liveShown(false); // the kiosk takes the camera
+          const version = ++ladderRequestVersion;
+          const state = await post('/api/tester/ladder/start', suiteBody('arm5'));
+          if (version === ladderRequestVersion) renderLadder(state);
           clearInterval(ladderTimer);
           ladderTimer = setInterval(ladderTick, 1500);
-        } catch (e) { el('ladder-panel').textContent = e.message; }
+        } catch (e) {
+          el('ladder-panel').textContent = e.message;
+        }
       });
-      el('step-photo').addEventListener('click', async () => {
+      el('step-photo').addEventListener('click', () => resolvePhoto('capture'));
+      el('photo-skip').addEventListener('click', () => resolvePhoto('skip'));
+      async function resolvePhoto(action) {
+        if (!photoTarget || photoStopped || photoActionPending) return;
+        const target = { ...photoTarget };
+        const testerId = el('tester-id').value.trim();
+        const version = ++ladderRequestVersion;
+        photoActionPending = true;
+        photoError = null;
+        renderPhotoHandoff();
         try {
-          const j = await post('/api/tester/ladder/photo', { tester_id: el('tester-id').value.trim() });
-          el('step-photo').textContent = `Photograph face (saved ${j.photo})`;
-        } catch (e) { el('step-photo').textContent = `Photograph face — ${e.message}`; }
+          const state = await post('/api/tester/ladder/photo', {
+            tester_id: testerId,
+            capture: target.capture,
+            rung_id: target.rung_id,
+            action,
+          });
+          if (version !== ladderRequestVersion || testerId !== el('tester-id').value.trim()) return;
+          photoActionPending = false;
+          photoError = null;
+          if (state.ladder) renderLadder(state);
+          else await ladderTick();
+        } catch (e) {
+          if (version !== ladderRequestVersion || testerId !== el('tester-id').value.trim()) return;
+          photoActionPending = false;
+          photoError = `${e.message} Try again or skip this photo.`;
+          renderPhotoHandoff();
+        }
+      }
+      el('photo-pause').addEventListener('click', async () => {
+        if (photoActionPending) return;
+        const testerId = el('tester-id').value.trim();
+        const version = ++ladderRequestVersion;
+        photoActionPending = true;
+        renderPhotoHandoff();
+        try {
+          if (photoStopped) {
+            if (!(await requireSetupEligibility())) {
+              photoActionPending = false;
+              renderPhotoHandoff();
+              return;
+            }
+            await post('/api/tester/ladder/start', suiteBody('arm5'));
+          } else await post('/api/tester/stop', {});
+          if (version !== ladderRequestVersion || testerId !== el('tester-id').value.trim()) return;
+          photoActionPending = false;
+          await ladderTick();
+        } catch (e) {
+          if (version !== ladderRequestVersion || testerId !== el('tester-id').value.trim()) return;
+          photoActionPending = false;
+          photoError = e.message;
+          renderPhotoHandoff();
+        }
+      });
+      el('tester-id').addEventListener('input', () => {
+        try {
+          localStorage.setItem(TESTER_ID_STORAGE_KEY, el('tester-id').value.trim());
+        } catch {
+          // The current page still works when browser storage is unavailable.
+        }
+        ladderRequestVersion += 1;
+        setupRequestRunning = false;
+        invalidateSetupEligibility('Tester ID changed. Server setup eligibility must be rechecked.');
+        photoActionPending = false;
+        photoTarget = null;
+        photoError = null;
+        attemptScopes = [];
+        selectedAttemptScope = null;
+        latestAttemptScope = null;
+        newerAttemptScopeAvailable = false;
+        attemptState = null;
+        attemptRequestVersion += 1;
+        renderPhotoHandoff();
+        renderAttemptState();
+        discoverAttemptScopes();
+        ladderTick();
+        refreshSetupEligibility();
+      });
+      el('setup-physical-confirm').addEventListener('change', () => {
+        physicalConfirmationDraft = el('setup-physical-confirm').checked;
+        renderSetupEligibility();
+      });
+      el('setup-refresh').addEventListener('click', refreshSetupEligibility);
+      el('setup-confirm').addEventListener('click', async () => {
+        if (!setupEligibility || !el('setup-physical-confirm').checked) return;
+        const testerId = el('tester-id').value.trim();
+        const configHash = setupEligibility.config_hash;
+        const version = ++setupRequestVersion;
+        el('setup-confirm').disabled = true;
+        try {
+          const response = await fetch('/api/tester/setup-eligibility', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              tester_id: testerId,
+              action: 'confirm',
+              config_hash: configHash,
+              physical_rig_confirmed: true,
+            }),
+          });
+          const body = await response.json().catch(() => ({}));
+          if (version !== setupRequestVersion || testerId !== el('tester-id').value.trim()) return;
+          if (!response.ok) throw new Error(body.error || `confirmation failed (${response.status})`);
+          physicalConfirmationDraft = false;
+          setupEligibility = body;
+          renderSetupEligibility();
+        } catch (error) {
+          if (version === setupRequestVersion && testerId === el('tester-id').value.trim()) {
+            invalidateSetupEligibility(`Physical setup confirmation was not accepted: ${error.message}`);
+          }
+        }
       });
       el('step-package').addEventListener('click', async () => {
         try {
@@ -464,11 +1492,17 @@
           }
           await post('/api/tester/package', suiteBody('arm5'));
           window.location = '/api/tester/package?' + new URLSearchParams(suiteBody('arm5'));
-        } catch (e) { el('step-package').textContent = `D. Package the data — ${e.message}`; }
+        } catch (e) {
+          el('step-package').textContent = `D. Package the data — ${e.message}`;
+        }
       });
 
       refresh();
+      refreshSetupEligibility();
+      ladderTick();
+      ladderTimer = setInterval(ladderTick, 1500);
       setInterval(refresh, 2000);
+      setInterval(refreshSetupEligibility, 2000);
     </script>
   </body>
 </html>

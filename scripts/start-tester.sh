@@ -10,9 +10,8 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 # picamera2 is installed by Raspberry Pi OS against the platform libcamera, so
-# the venv has to see system packages. The runner itself needs only Flask; the
-# camera extra (OpenCV) belongs to the live pipeline, which start-kiosk.sh syncs
-# for itself when the paired-capture action runs.
+# the venv has to see system packages. The tester's saved-capture comparison
+# also uses OpenCV from the camera extra.
 export UV_PYTHON=/usr/bin/python3
 if [ ! -x .venv/bin/python ] || ! .venv/bin/python -c "import picamera2" >/dev/null 2>&1; then
   uv venv --clear --system-site-packages --python /usr/bin/python3
@@ -24,6 +23,6 @@ if ! ls .venv/lib/python3*/site-packages/lgpio* >/dev/null 2>&1 \
   echo "  sudo apt update && sudo apt install -y swig liblgpio-dev python3-dev" >&2
   exit 1
 fi
-uv sync
+uv sync --extra camera
 
-exec uv run python -m openflight.camera.tester_server "$@"
+exec uv run --extra camera python -m openflight.camera.tester_server "$@"

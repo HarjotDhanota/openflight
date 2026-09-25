@@ -3,17 +3,22 @@
 Exercises TcpSimClient through a real codec (GSProCodec) against the mock
 sim server, plus framing unit tests for the brace-balanced JSON framer.
 """
+
 import json
+import threading
 import time
-from typing import List, Optional
+from typing import Optional
 
 import pytest
 
 from openflight.clubs import ClubType
 from openflight.gspro.codec import GSProCodec
-from openflight.sim.transport import find_json_end, TcpSimClient
+from openflight.sim.transport import TcpSimClient, find_json_end
 from openflight.sim.types import (
-    ConnectionState, PlayerUpdate, ResolvedShot, ShotAck,
+    ConnectionState,
+    PlayerUpdate,
+    ResolvedShot,
+    ShotAck,
 )
 
 # --- framing unit tests ------------------------------------------------------
@@ -51,7 +56,7 @@ def test_nested_objects():
 
 
 def test_empty_buffer_returns_none():
-    assert find_json_end(b'') is None
+    assert find_json_end(b"") is None
 
 
 def test_leading_whitespace_before_object():
@@ -68,6 +73,7 @@ def test_non_ascii_inside_string():
 
 class _NoHeartbeatCodec:
     """Minimal codec whose protocol has no keepalive (no heartbeat thread)."""
+
     name = "noheartbeat"
 
     def build_shot(self, resolved) -> bytes:
@@ -101,10 +107,19 @@ def _wait_for_state(client, state, deadline=3.0):
 
 def _resolved() -> ResolvedShot:
     return ResolvedShot(
-        shot_number=7, ball_speed_mph=140.0, vla=12.0, hla=0.0,
-        total_spin_rpm=2500.0, spin_axis_deg=0.0, back_spin_rpm=2500.0,
-        side_spin_rpm=0.0, carry_yards=255.0, club_path_deg=0.0,
-        club=ClubType.DRIVER, club_speed_mph=None, provenance={},
+        shot_number=7,
+        ball_speed_mph=140.0,
+        vla=12.0,
+        hla=0.0,
+        total_spin_rpm=2500.0,
+        spin_axis_deg=0.0,
+        back_spin_rpm=2500.0,
+        side_spin_rpm=0.0,
+        carry_yards=255.0,
+        club_path_deg=0.0,
+        club=ClubType.DRIVER,
+        club_speed_mph=None,
+        provenance={},
     )
 
 
@@ -249,22 +264,61 @@ def test_reconnect_after_server_drop(mock_sim):
         client.stop()
 
 
-def test_backoff_progression_capped():
-    client = TcpSimClient("127.0.0.1", 1, GSProCodec(), heartbeat_interval_s=60,
-                          backoff_seconds=(0.05, 0.1, 0.1))
+def test_backoff_progression_capped(monkeypatch):
+    connect_attempts = []
+
+    class _FailingSocket:
+        def __init__(self, *_args):
+            pass
+
+        def settimeout(self, _timeout):
+            pass
+
+        def connect(self, _address):
+            connect_attempts.append(_address)
+            raise ConnectionRefusedError("test connection failure")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("openflight.sim.transport.socket.socket", _FailingSocket)
     statuses = []
-    client.on_status = statuses.append
+    backoffs_reported = threading.Event()
+
+    def on_status(status):
+        statuses.append(status)
+        backoffs = [
+            event.next_retry_in_s
+            for event in statuses
+            if event.state == ConnectionState.CONNECTING and event.next_retry_in_s > 0
+        ]
+        if len(backoffs) == 3:
+            backoffs_reported.set()
+
+    client = TcpSimClient(
+        "127.0.0.1",
+        1,
+        GSProCodec(),
+        heartbeat_interval_s=60,
+        on_status=on_status,
+        backoff_seconds=(0.05, 0.1, 0.1),
+    )
     client.start()
-    time.sleep(0.5)
-    client.stop()
+    try:
+        assert backoffs_reported.wait(timeout=2.0)
+    finally:
+        client.stop()
     # Before the first successful connection the client reports CONNECTING during
     # the retry backoff (RECONNECT_BACKOFF is reserved for a connection that was
     # established and then dropped). The backoff schedule is still carried on
     # next_retry_in_s, so assert on the CONNECTING retries here.
-    backoffs = [s.next_retry_in_s for s in statuses
-                if s.state == ConnectionState.CONNECTING and s.next_retry_in_s > 0]
-    assert len(backoffs) >= 2
-    assert max(backoffs) <= 0.1
+    backoffs = [
+        s.next_retry_in_s
+        for s in statuses
+        if s.state == ConnectionState.CONNECTING and s.next_retry_in_s > 0
+    ]
+    assert connect_attempts[:3] == [("127.0.0.1", 1)] * 3
+    assert backoffs[:3] == [0.05, 0.1, 0.1]
 
 
 def test_stop_is_idempotent(mock_sim):

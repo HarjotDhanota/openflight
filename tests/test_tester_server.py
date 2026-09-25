@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import struct
+import threading
 import time
 import zipfile
 import zlib
@@ -15,6 +16,40 @@ import pytest
 from openflight.camera import tester_server as ts
 
 RIG = ts.DEFAULT_RIG_GEOMETRY
+TESTER_SETUP = {
+    "config_hash": "test-config",
+    "inclinometer_bus": 1,
+    "inclinometer_address": 0x18,
+    "inclinometer_zero_offset_deg": 0.0,
+}
+
+
+class _EligibleSetup:
+    def _result(self, tester_id):
+        return {
+            "eligible": True,
+            "config_hash": "test-config",
+            "tester_id": tester_id,
+            "operator_confirmation": {"confirmed": True, "confirmed_at": "test"},
+            "checks": [],
+            "blockers": [],
+        }
+
+    def evaluate(self, tester_id, _reading):
+        return self._result(tester_id)
+
+    def require(self, tester_id, _reading, _action):
+        return self._result(tester_id)
+
+    def confirmation_valid(self, _tester_id):
+        return True
+
+    def current_config_hash(self):
+        return "test-config"
+
+
+def eligible_app(**kwargs):
+    return ts.create_app(setup_policy=_EligibleSetup(), **kwargs)
 
 
 def params(**overrides):
@@ -178,7 +213,7 @@ class TestCommands:
     def test_swings_drive_the_kiosk_with_rig_geometry_and_inclinometer(self, tmp_path):
         p = params(arm_id="arm4", tee_mm=1524)
         screened(tmp_path, p)
-        commands, _ = ts.action_commands("swings", p, tmp_path, RIG)
+        commands, _ = ts.action_commands("swings", p, tmp_path, RIG, tester_setup=TESTER_SETUP)
         command = commands[0]
         assert command[1].endswith("start-kiosk.sh")
         for flag in ("--debug", "--iwr6843", "--inclinometer", "--camera-capture"):
@@ -198,10 +233,39 @@ class TestCommands:
     def test_the_exposure_arms_share_arm_1s_mode(self, tmp_path):
         p = params(arm_id="arm2", tee_mm=1524)
         screened(tmp_path, p)
-        command = ts.action_commands("swings", p, tmp_path, RIG)[0][0]
+        command = ts.action_commands("swings", p, tmp_path, RIG, tester_setup=TESTER_SETUP)[0][0]
         assert command[command.index("--camera-capture-exposure-us") + 1] == "175"
         assert command[command.index("--camera-capture-width") + 1] == "320"
         assert command[command.index("--camera-capture-fps") + 1] == "450.0"
+
+    def test_calibrated_fusion_files_reach_every_capture_kiosk(self, tmp_path):
+        p = params(arm_id="arm4", tee_mm=1524)
+        screened(tmp_path, p)
+        optical = tmp_path / "optical.json"
+        placement = tmp_path / "placement.json"
+        command = ts.action_commands(
+            "swings",
+            p,
+            tmp_path,
+            RIG,
+            tester_setup=TESTER_SETUP,
+            optical_calibration=optical,
+            camera_placement=placement,
+        )[0][0]
+        assert command[command.index("--camera-optical-calibration") + 1] == str(optical)
+        assert command[command.index("--camera-placement") + 1] == str(placement)
+
+    @pytest.mark.parametrize("missing", ["calibration", "placement"])
+    def test_capture_refuses_a_partial_calibrated_fusion_configuration(self, tmp_path, missing):
+        p = params(arm_id="arm4", tee_mm=1524)
+        screened(tmp_path, p)
+        options = {
+            "optical_calibration": tmp_path / "optical.json",
+            "camera_placement": tmp_path / "placement.json",
+        }
+        options["optical_calibration" if missing == "calibration" else "camera_placement"] = None
+        with pytest.raises(ValueError, match="requires both calibration and placement"):
+            ts.action_commands("swings", p, tmp_path, RIG, tester_setup=TESTER_SETUP, **options)
 
 
 def _write_session(root, arm_id, statuses, dumps=None, run="run-01"):
@@ -283,7 +347,7 @@ class TestPackage:
 
 class TestApp:
     def test_page_arms_and_status_are_served(self, tmp_path):
-        client = ts.create_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
+        client = eligible_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
         assert client.get("/").status_code == 200
         arms = client.get("/api/tester/arms").get_json()
         assert [a["arm_id"] for a in arms["arms"]] == [
@@ -308,7 +372,7 @@ class TestApp:
         assert len(body["study"]["arms"]) == len(ts.ARMS)
 
     def test_swings_before_gain_returns_409_with_the_reason(self, tmp_path):
-        client = ts.create_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
+        client = eligible_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
         response = client.post(
             "/api/tester/run",
             json={
@@ -322,7 +386,7 @@ class TestApp:
         assert "gain step" in response.get_json()["error"]
 
     def test_invalid_request_returns_400(self, tmp_path):
-        client = ts.create_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
+        client = eligible_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
         response = client.post("/api/tester/status", json={"tester_id": "../x"})
         assert response.status_code == 400
 
@@ -334,7 +398,7 @@ class TestApp:
             def start(self, action, commands, log_path, on_finish=None):
                 raise RuntimeError("another action is already running")
 
-        client = ts.create_app(
+        client = eligible_app(
             sessions_root=tmp_path, rig_geometry=RIG, manager=BusyManager()
         ).test_client()
         response = client.post(
@@ -364,7 +428,7 @@ class TestRunsAndTape:
         screened(tmp_path, p)
         root = ts.arm_directory(tmp_path, p)
         (root / "paired" / "run-01").mkdir(parents=True)
-        commands, _ = ts.action_commands("swings", p, tmp_path, RIG)
+        commands, _ = ts.action_commands("swings", p, tmp_path, RIG, tester_setup=TESTER_SETUP)
         assert commands[0][commands[0].index("--log-dir") + 1].endswith("run-02")
 
     def test_progress_sums_every_run(self, tmp_path):
@@ -379,7 +443,14 @@ class TestRunsAndTape:
     def test_the_radar_port_can_be_overridden_per_unit(self, tmp_path):
         p = params(tee_mm=1524)
         screened(tmp_path, p)
-        commands, _ = ts.action_commands("swings", p, tmp_path, RIG, radar_port="/dev/ttyACM0")
+        commands, _ = ts.action_commands(
+            "swings",
+            p,
+            tmp_path,
+            RIG,
+            radar_port="/dev/ttyACM0",
+            tester_setup=TESTER_SETUP,
+        )
         assert commands[0][commands[0].index("--radar-port") + 1] == "/dev/ttyACM0"
 
 
@@ -553,7 +624,7 @@ class TestFrameEncoding:
 class TestLiveEndpoints:
     def _client(self, tmp_path, manager=None):
         live = ts.LiveView(camera_factory=FakeCamera)
-        app = ts.create_app(
+        app = eligible_app(
             sessions_root=tmp_path, rig_geometry=RIG, manager=manager, live_view=live
         )
         return app.test_client(), live
@@ -797,7 +868,7 @@ class TestTheInclinometerRunsBesideThePage:
         tilt = ts.EnclosureTilt(RIG, service_factory=lambda: fake)
         tilt.start()
         manager = Recorder()
-        client = ts.create_app(
+        client = eligible_app(
             sessions_root=tmp_path,
             rig_geometry=RIG,
             manager=manager,
@@ -853,7 +924,7 @@ class TestEachPlacementUsesTheDistanceInTheBox:
 
     def _client(self, tmp_path):
         live = ts.LiveView(camera_factory=BallCamera)
-        app = ts.create_app(sessions_root=tmp_path, rig_geometry=RIG, live_view=live)
+        app = eligible_app(sessions_root=tmp_path, rig_geometry=RIG, live_view=live)
         return app.test_client(), live
 
     def test_a_new_distance_needs_no_restart(self, tmp_path):
@@ -930,20 +1001,24 @@ class TestTheLadder:
     def test_a_ladder_run_starts_the_kiosk_in_study_mode_without_a_tape(self, tmp_path):
         params = ts.TesterParameters("20260922-name", "arm5", "indoors")
         ts.write_arm_state(tmp_path, params, gain=3.0, gain_exposure_us=300)
-        commands, _log = ts.action_commands("ladder", params, tmp_path, RIG, "/dev/ttyAMA0")
+        commands, _log = ts.action_commands(
+            "ladder", params, tmp_path, RIG, "/dev/ttyAMA0", TESTER_SETUP
+        )
         command = commands[0]
         assert "--study-mode" in command
         assert "--iwr6843-tee-m" not in command
+        assert command[command.index("--tester-config-hash") + 1] == "test-config"
+        assert command[command.index("--inclinometer-address") + 1] == "0x18"
         assert command[command.index("--camera-capture-exposure-us") + 1] == "300"
 
     def test_the_ladder_needs_both_gain_screens_first(self, tmp_path):
-        client = ts.create_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
+        client = eligible_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
         response = client.post("/api/tester/ladder/start", json=self.body)
         assert response.status_code == 409
         assert "gain" in response.get_json()["error"]
 
     def test_the_ladder_state_is_read_back(self, tmp_path):
-        client = ts.create_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
+        client = eligible_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
         response = client.get("/api/tester/ladder", query_string=self.body)
         assert response.status_code == 200
         assert response.get_json()["ladder"]["current"] == "full-300"
@@ -951,7 +1026,7 @@ class TestTheLadder:
     def test_a_comparator_export_is_kept_in_the_package(self, tmp_path):
         import io as _io  # pylint: disable=import-outside-toplevel
 
-        client = ts.create_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
+        client = eligible_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
         response = client.post(
             "/api/tester/comparator",
             data={
@@ -967,7 +1042,6 @@ class TestTheLadder:
     def test_stopping_a_job_asks_first_then_ends_the_whole_group(self, monkeypatch):
         monkeypatch.setattr(ts, "KILL_GRACE_S", 0.05)
         killed, asked = [], []
-        monkeypatch.setattr(ts.os, "getpgid", lambda pid: pid, raising=False)
         monkeypatch.setattr(
             ts.os, "killpg", lambda pgid, sig: killed.append((pgid, sig)), raising=False
         )
@@ -989,6 +1063,47 @@ class TestTheLadder:
         time.sleep(0.4)
         # a group still alive after the grace period is ended
         assert killed == [(4321, ts.signal.SIGTERM)]
+
+    def test_group_cleanup_uses_the_owned_group_after_the_leader_exits(self, monkeypatch):
+        killed = []
+        monkeypatch.setattr(
+            ts.os, "killpg", lambda pgid, sig: killed.append((pgid, sig)), raising=False
+        )
+        process = type("ExitedLeader", (), {"pid": 4321, "poll": lambda self: 0})()
+        ts.TesterJobManager._end_group(process, process.pid)  # pylint: disable=protected-access
+        assert killed == [(4321, ts.signal.SIGTERM)]
+
+    def test_cancel_before_process_handoff_terminates_the_new_process(self, tmp_path, monkeypatch):
+        constructing = threading.Event()
+        release = threading.Event()
+        group_cleanup = threading.Event()
+
+        class DelayedProcess(_Forever):
+            def __init__(self, *args, **kwargs):
+                constructing.set()
+                assert release.wait(2)
+                super().__init__(*args, **kwargs)
+
+            def kill(self):
+                group_cleanup.set()
+                self._released.set()
+
+        manager = ts.TesterJobManager(popen=DelayedProcess)
+        monkeypatch.setattr(ts, "KILL_GRACE_S", 0.01)
+
+        def no_fake_group(_pid, _signal):
+            raise OSError("test process has no real group")
+
+        monkeypatch.setattr(ts.os, "killpg", no_fake_group, raising=False)
+        manager.start("gain", [["calibrate"]], tmp_path / "gain.log")
+        assert constructing.wait(1)
+        assert manager.cancel()
+        release.set()
+        deadline = time.monotonic() + 2
+        while manager.status()["state"] == "running" and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert manager.status()["state"] == "stopped"
+        assert group_cleanup.wait(1)
 
     def test_a_stuck_gain_screen_is_stopped_by_its_timeout(self, monkeypatch, tmp_path):
         import threading as _threading  # pylint: disable=import-outside-toplevel
@@ -1075,8 +1190,14 @@ class TestTheLadderHoldsUp:
             )
         monkeypatch.setattr(ts.study_ladder, "KioskClient", _LitKiosk)
         monkeypatch.setattr(ts, "KILL_GRACE_S", 0.05, raising=False)
+        monkeypatch.setattr(
+            ts.os,
+            "killpg",
+            lambda _pid, _signal: (_ for _ in ()).throw(OSError("test process has no real group")),
+            raising=False,
+        )
         manager = ts.TesterJobManager(popen=_Forever)
-        app = ts.create_app(sessions_root=tmp_path, rig_geometry=RIG, manager=manager)
+        app = eligible_app(sessions_root=tmp_path, rig_geometry=RIG, manager=manager)
         return app.test_client(), manager
 
     def test_pressing_start_again_while_the_ladder_runs_keeps_it(self, tmp_path, monkeypatch):
@@ -1100,10 +1221,252 @@ class TestTheLadderHoldsUp:
         finally:
             manager.cancel()
 
+    def test_stop_cancels_the_ladder_and_a_pending_mode_restart(self, tmp_path, monkeypatch):
+        runners = []
+        monkeypatch.setattr(
+            ts.study_ladder.LadderRunner, "start", lambda runner: runners.append(runner)
+        )
+        client, manager = self._client(tmp_path, monkeypatch)
+        waiting = threading.Event()
+        release = threading.Event()
+        original_status = manager.status
+
+        def status():
+            if threading.current_thread().name == "ladder-next-mode":
+                waiting.set()
+                assert release.wait(5)
+            return original_status()
+
+        monkeypatch.setattr(manager, "status", status)
+        worker = None
+        try:
+            started = client.post("/api/tester/ladder/start", json=self.body).get_json()
+            runner = runners[0]
+            runner.state.begin("full-300", 3.0, {"ok": False, "reason": "too dark"})
+            runner._on_mode_done("arm5")  # pylint: disable=protected-access
+            assert waiting.wait(2)
+            worker = next(t for t in threading.enumerate() if t.name == "ladder-next-mode")
+            again = client.post("/api/tester/ladder/start", json=self.body)
+            assert again.status_code == 200
+            assert again.get_json()["run_dir"] == started["run_dir"]
+            assert len(runners) == 1
+            stopped = client.post("/api/tester/stop")
+            assert stopped.status_code == 200
+            release.set()
+            worker.join(timeout=3)
+            assert not worker.is_alive()
+            status_data = client.get("/api/tester/ladder", query_string=self.body).get_json()
+            assert status_data["run_dir"] == started["run_dir"]
+            assert status_data["job"]["state"] != "running"
+            assert runner.stopped
+            assert runner.state.to_dict()["rungs"]["half-300"]["status"] == "pending"
+        finally:
+            release.set()
+            if worker is not None:
+                worker.join(timeout=3)
+            client.post("/api/tester/stop")
+            manager.cancel()
+
+    def test_stop_then_resume_keeps_progress_and_uses_a_new_run(self, tmp_path, monkeypatch):
+        runners = []
+        monkeypatch.setattr(
+            ts.study_ladder.LadderRunner, "start", lambda runner: runners.append(runner)
+        )
+        client, manager = self._client(tmp_path, monkeypatch)
+        try:
+            started = client.post("/api/tester/ladder/start", json=self.body).get_json()
+            runner = runners[0]
+            runner.state.begin("full-300", 3.0, {"ok": True})
+            runner.state.record_swing({"capture": "camera_a", "color": "green", "reasons": []})
+            client.post("/api/tester/stop")
+            assert runner.stopped
+            deadline = time.monotonic() + 2
+            while manager.status()["state"] == "running" and time.monotonic() < deadline:
+                time.sleep(0.01)
+            manager._state["state"] = "stopped"  # pylint: disable=protected-access
+            resumed = client.post("/api/tester/ladder/start", json=self.body)
+            assert resumed.status_code == 200
+            assert resumed.get_json()["run_dir"] != started["run_dir"]
+            assert runners[1].state.accepted("full-300") == 1
+            assert not runners[1].stopped
+        finally:
+            client.post("/api/tester/stop")
+            manager.cancel()
+
+    def test_pending_photo_resume_stays_in_full_mode_and_exposes_identity(
+        self, tmp_path, monkeypatch
+    ):
+        runners = []
+        monkeypatch.setattr(
+            ts.study_ladder.LadderRunner, "start", lambda runner: runners.append(runner)
+        )
+        state = ts.study_ladder.LadderState(tmp_path / "20260922-name" / "ladder.json")
+        state.begin("full-300", 3.0, {"ok": True})
+        state.record_swing({"capture": "red-first", "color": "red", "reasons": []})
+        state.record_swing({"capture": "green-middle", "color": "green", "reasons": []})
+        state.record_swing({"capture": "camera_final", "color": "red", "reasons": []})
+        client, manager = self._client(tmp_path, monkeypatch)
+        try:
+            response = client.post("/api/tester/ladder/start", json=self.body)
+            data = response.get_json()
+            assert response.status_code == 200
+            assert "arm5" in data["run_dir"]
+            assert data["pending_photo"] == {
+                "capture": "camera_final",
+                "rung_id": "full-300",
+            }
+            assert data["photo_target"] == data["pending_photo"]
+            assert data["stopped"] is False
+            assert runners[0].mode == "arm5"
+        finally:
+            client.post("/api/tester/stop")
+            manager.cancel()
+
+    def test_photo_route_rejects_stale_identity_and_skip_records_decision(
+        self, tmp_path, monkeypatch
+    ):
+        runners = []
+        monkeypatch.setattr(
+            ts.study_ladder.LadderRunner, "start", lambda runner: runners.append(runner)
+        )
+        client, manager = self._client(tmp_path, monkeypatch)
+        try:
+            client.post("/api/tester/ladder/start", json=self.body)
+            runner = runners[0]
+            runner.state.begin("full-300", 3.0, {"ok": True})
+            runner.state.record_swing({"capture": "red-first", "color": "red", "reasons": []})
+            runner.state.record_swing({"capture": "green-middle", "color": "green", "reasons": []})
+            runner.state.record_swing({"capture": "camera_final", "color": "red", "reasons": []})
+            stale = client.post(
+                "/api/tester/ladder/photo",
+                json={
+                    **self.body,
+                    "capture": "camera_old",
+                    "rung_id": "full-300",
+                    "action": "skip",
+                },
+            )
+            assert stale.status_code == 409
+            skipped = client.post(
+                "/api/tester/ladder/photo",
+                json={
+                    **self.body,
+                    "capture": "camera_final",
+                    "rung_id": "full-300",
+                    "action": "skip",
+                },
+            )
+            assert skipped.status_code == 200
+            assert skipped.get_json()["pending_photo"] is None
+            assert skipped.get_json()["photo_target"] is None
+            assert runner.state.to_dict()["photo_skips"]["camera_final"]["rung_id"] == "full-300"
+        finally:
+            client.post("/api/tester/stop")
+            manager.cancel()
+
+    def test_package_waits_for_an_inflight_photo_action(self, tmp_path, monkeypatch):
+        runners = []
+        monkeypatch.setattr(
+            ts.study_ladder.LadderRunner, "start", lambda runner: runners.append(runner)
+        )
+        client, manager = self._client(tmp_path, monkeypatch)
+        called = threading.Event()
+        archive = tmp_path / "package.zip"
+        archive.write_bytes(b"zip")
+
+        def package(*_args):
+            called.set()
+            return archive
+
+        monkeypatch.setattr(ts, "package_study", package)
+        held = False
+        try:
+            client.post("/api/tester/ladder/start", json=self.body)
+            active = client.post("/api/tester/package", json=self.body)
+            assert active.status_code == 409
+            assert "stop" in active.get_json()["error"]
+            client.post("/api/tester/stop")
+            deadline = time.monotonic() + 2
+            while manager.status()["state"] == "running" and time.monotonic() < deadline:
+                time.sleep(0.01)
+            manager._state["state"] = "stopped"  # pylint: disable=protected-access
+            runner = runners[0]
+            runner._lock.acquire()  # pylint: disable=protected-access
+            held = True
+            result = []
+
+            def request_package():
+                with client.application.test_client() as package_client:
+                    response = package_client.post("/api/tester/package", json=self.body)
+                    result.append((response.status_code, response.get_json()))
+
+            worker = threading.Thread(target=request_package)
+            worker.start()
+            assert not called.wait(0.2)
+            runner._lock.release()  # pylint: disable=protected-access
+            held = False
+            worker.join(3)
+            assert called.is_set()
+            assert result[0][0] == 200, result
+        finally:
+            if held:
+                runner._lock.release()  # pylint: disable=protected-access
+            manager.cancel()
+
+    @pytest.mark.parametrize("restart_fails", [False, True])
+    def test_mode_transition_starts_or_reports_its_failure(
+        self, tmp_path, monkeypatch, restart_fails
+    ):
+        runners = []
+        monkeypatch.setattr(
+            ts.study_ladder.LadderRunner, "start", lambda runner: runners.append(runner)
+        )
+        client, manager = self._client(tmp_path, monkeypatch)
+        completed = threading.Event()
+        try:
+            assert client.post("/api/tester/ladder/start", json=self.body).status_code == 200
+            runner = runners[0]
+            tick = runner.tick
+
+            def tick_and_signal():
+                try:
+                    tick()
+                finally:
+                    completed.set()
+
+            monkeypatch.setattr(runner, "tick", tick_and_signal)
+            if restart_fails:
+                stop = runner.stop
+
+                def stop_and_signal(**kwargs):
+                    stop(**kwargs)
+                    completed.set()
+
+                def failed_start(*args, **kwargs):
+                    raise RuntimeError("camera unavailable")
+
+                monkeypatch.setattr(runner, "stop", stop_and_signal)
+                monkeypatch.setattr(manager, "start", failed_start)
+            runner.state.begin("full-300", 3.0, {"ok": False, "reason": "too dark"})
+            runner._on_mode_done("arm5")  # pylint: disable=protected-access
+            assert completed.wait(3)
+            result = client.get("/api/tester/ladder", query_string=self.body).get_json()
+            if restart_fails:
+                assert runner.stopped
+                assert "camera unavailable" in result["last_verdict"]["reasons"][0]
+                assert result["ladder"]["rungs"]["half-300"]["status"] == "pending"
+            else:
+                assert result["job"]["state"] == "running"
+                assert "arm6" in result["run_dir"]
+                assert result["ladder"]["rungs"]["half-300"]["status"] == "active"
+        finally:
+            client.post("/api/tester/stop")
+            manager.cancel()
+
     def test_a_comparator_export_with_spaces_in_its_name_is_kept(self, tmp_path):
         import io as _io  # pylint: disable=import-outside-toplevel
 
-        client = ts.create_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
+        client = eligible_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
         response = client.post(
             "/api/tester/comparator",
             data={
@@ -1115,3 +1478,100 @@ class TestTheLadderHoldsUp:
         assert response.status_code == 200
         saved = response.get_json()["saved"]
         assert (tmp_path / "20260922-name" / "comparator" / saved).is_file()
+
+
+class TestAttemptLedgerRoutes:
+    def _client(self, tmp_path):
+        run = tmp_path / "tester" / "arm1" / "paired" / "run-01"
+        run.mkdir(parents=True)
+        return eligible_app(sessions_root=tmp_path, rig_geometry=RIG).test_client(), run
+
+    def test_saved_stopped_run_accepts_idempotent_operator_attempt(self, tmp_path):
+        client, run = self._client(tmp_path)
+        body = {
+            "tester_id": "tester",
+            "arm_id": "arm1",
+            "run": "run-01",
+            "request_id": "request-1",
+            "entry_id": "entry-1",
+            "action": "add",
+            "kind": "swing",
+            "operator_missed": True,
+        }
+        assert client.post("/api/tester/attempts", json=body).status_code == 201
+        retry = client.post("/api/tester/attempts", json=body)
+        assert retry.status_code == 200
+        assert retry.get_json()["counts"]["physical_operator_swings"] == 1
+        assert len((run / "attempt_ledger.jsonl").read_text().splitlines()) == 1
+
+    def test_scope_listing_and_missing_ledger_are_unknown(self, tmp_path):
+        client, _run = self._client(tmp_path)
+        listing = client.get("/api/tester/attempts", query_string={"tester_id": "tester"})
+        assert listing.get_json()["scopes"][0]["run"] == "run-01"
+        state = client.get(
+            "/api/tester/attempts",
+            query_string={"tester_id": "tester", "arm_id": "arm1", "run": "run-01"},
+        ).get_json()
+        assert state["counts"]["physical_operator_swings"] is None
+        assert state["reconciliation"]["status"] == "unknown"
+
+    def test_stale_arm_scope_and_symlink_escape_are_rejected(self, tmp_path):
+        client, run = self._client(tmp_path)
+        wrong = client.get(
+            "/api/tester/attempts",
+            query_string={
+                "tester_id": "tester",
+                "arm_id": "arm5",
+                "run_dir": str(run),
+            },
+        )
+        assert wrong.status_code == 400
+        link = tmp_path / "tester" / "arm1" / "paired" / "run-02"
+        try:
+            link.symlink_to(run, target_is_directory=True)
+        except OSError:
+            pytest.skip("directory symlinks unavailable")
+        escaped = client.get(
+            "/api/tester/attempts",
+            query_string={"tester_id": "tester", "arm_id": "arm1", "run": "run-02"},
+        )
+        assert escaped.status_code == 400
+
+    def test_duplicate_and_late_events_count_distinct_sensor_shots(self, tmp_path):
+        client, run = self._client(tmp_path)
+        session = run / "session_events.jsonl"
+        session.write_text(
+            "\n".join(
+                json.dumps(event)
+                for event in (
+                    {"type": "shot_detected", "shot_number": 1},
+                    {"type": "shot_detected", "shot_number": 1},
+                    {"type": "shot", "shot_number": "1"},
+                    {"type": "shot_detected", "shot_number": None},
+                    {"type": "shot_detected", "shot_number": "bad"},
+                )
+            )
+            + "\n"
+        )
+        body = {
+            "tester_id": "tester",
+            "arm_id": "arm1",
+            "run": "run-01",
+            "request_id": "request-1",
+            "entry_id": "entry-1",
+            "action": "add",
+            "kind": "swing",
+            "operator_missed": False,
+        }
+        posted = client.post("/api/tester/attempts", json=body).get_json()
+        assert posted["counts"]["physical_operator_swings"] == 1
+        assert posted["counts"]["logged_sensor_shots"] == 1
+        with session.open("a") as handle:
+            handle.write(json.dumps({"type": "shot_detected", "shot_number": 2}) + "\n")
+        refreshed = client.get(
+            "/api/tester/attempts",
+            query_string={"tester_id": "tester", "arm_id": "arm1", "run": "run-01"},
+        ).get_json()
+        assert refreshed["counts"]["physical_operator_swings"] == 1
+        assert refreshed["counts"]["logged_sensor_shots"] == 2
+        assert refreshed["reconciliation"]["difference"] == 1

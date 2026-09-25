@@ -42,6 +42,15 @@ def ball(x=160.0, y=100.0, diameter_px=12.0):
 
 
 class TestTheFile:
+    def test_snapshot_identity_survives_json_formatting_but_tracks_forward_offset(self, tmp_path):
+        original = rig()
+        path = tmp_path / "rig.json"
+        path.write_text(json.dumps(dataclasses.asdict(original), sort_keys=True, indent=4))
+
+        assert RigGeometry.from_json(path).snapshot() == original.snapshot()
+        moved = dataclasses.replace(original, iwr_offset_mm=(0.0, 44.0, -40.0))
+        assert moved.snapshot()["sha256"] != original.snapshot()["sha256"]
+
     def test_json_round_trips_tuples_and_nones(self, tmp_path):
         path = tmp_path / "rig.json"
         original = rig(ops_offset_mm=None)
@@ -99,6 +108,7 @@ class TestTheEnclosureSetup:
     def test_no_iwr_offset_means_no_lateral_and_no_radar_height(self):
         setup = rig(iwr_offset_mm=None).enclosure_setup()
         assert setup.camera_lateral_offset_m is None
+        assert setup.camera_forward_offset_m is None
         assert setup.radar_height_m is None
         assert "iwr_offset_mm" in setup.missing
 
