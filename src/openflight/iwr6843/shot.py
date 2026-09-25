@@ -319,6 +319,39 @@ def prepare_shot_dump(
     )
 
 
+def moving_ball_range_track(
+    prepared: PreparedShotDump,
+    *,
+    club: str | None,
+    net_range_m: float | None,
+) -> tuple[BallTrack | None, str]:
+    """Select the production moving-ball track without tee geometry or timing."""
+    geometry = prepared.geometry
+    maximum_range_m = net_range_m - 0.25 if net_range_m else None
+    minimum_speed_ms = CLUB_MIN_BALL_MS[club_class(club)]
+    scope = "burst"
+    track = tracking.find_ball(
+        prepared.mti(scope),
+        geometry,
+        max_range_m=maximum_range_m,
+        min_ball_ms=minimum_speed_ms,
+    )
+    if track_broken(track) or (track is not None and near_mti_notch(track.speed_ms)):
+        window_track = tracking.find_ball(
+            prepared.mti("window"),
+            geometry,
+            max_range_m=maximum_range_m,
+            min_ball_ms=minimum_speed_ms,
+        )
+        if not track_broken(window_track) and (
+            track_broken(track)
+            or window_track.rms_bins < track.rms_bins
+            or window_track.n_inliers >= track.n_inliers
+        ):
+            track, scope = window_track, "window"
+    return track, scope
+
+
 def process_dump(
     raw: bytes,
     cal: Calibration,
@@ -352,28 +385,9 @@ def process_dump(
                 tdm_tau_s = TX2_VERTICAL_TDM_TAU_S
         prepared = prepare_shot_dump(raw, loop_period_s=loop_period_s)
     geo = prepared.geometry
-    mti = prepared.mti()
-    # keep everything 25 cm short of the net: a ball riding up the net is
-    # an upward mover that tilts every angle fit high (user setup: net
-    # ~3 m past the tee)
-    max_r = (net_range_m - 0.25) if net_range_m else None
-    klass = club_class(club)
-    min_ms = CLUB_MIN_BALL_MS[klass]
-    track = tracking.find_ball(mti, geo, max_range_m=max_r, min_ball_ms=min_ms)
-
-    notch_used = False
-    if track_broken(track) or (track is not None and near_mti_notch(track.speed_ms)):
-        # burst-MTI notches balls near n x 26.93 m/s and shatters their
-        # range walk; the window-scope filter keeps them (statics still
-        # cancel over the full window)
-        mti_w = prepared.mti("window")
-        track_w = tracking.find_ball(mti_w, geo, max_range_m=max_r, min_ball_ms=min_ms)
-        if not track_broken(track_w) and (
-            track_broken(track)
-            or track_w.rms_bins < track.rms_bins
-            or track_w.n_inliers >= track.n_inliers
-        ):
-            mti, track, notch_used = mti_w, track_w, True
+    track, track_scope = moving_ball_range_track(prepared, club=club, net_range_m=net_range_m)
+    mti = prepared.mti(track_scope)
+    notch_used = track_scope == "window"
     result = ShotMeasurement(
         geometry=geo,
         ball_found=track is not None,
