@@ -874,6 +874,45 @@ class TestLiveView:
 
         assert self.live.snapshot()[1]["association"]["selected"] == {"x_px": 25.0}
 
+    def test_hung_capture_prevents_overlapping_camera_reopen(self, monkeypatch):
+        monkeypatch.setattr(ts, "LIVE_THREAD_JOIN_TIMEOUT_S", 0.01)
+        capture_entered = threading.Event()
+        release_capture = threading.Event()
+        cameras = []
+
+        class BlockingCamera(FakeCamera):
+            def capture_request(self):
+                capture_entered.set()
+                release_capture.wait(timeout=2.0)
+                return super().capture_request()
+
+        def factory():
+            camera = BlockingCamera()
+            cameras.append(camera)
+            return camera
+
+        live = ts.LiveView(camera_factory=factory)
+        try:
+            live.start(ts.ARMS["arm1"], 300, 4.0)
+            assert capture_entered.wait(timeout=2.0)
+            capture_thread = live._thread  # pylint: disable=protected-access
+
+            live.stop()
+            assert capture_thread is not None and capture_thread.is_alive()
+            with pytest.raises(
+                RuntimeError, match="previous live camera capture is still stopping"
+            ):
+                live.start(ts.ARMS["arm5"], 300, 4.0)
+            assert len(cameras) == 1
+
+            release_capture.set()
+            assert _wait(lambda: not capture_thread.is_alive())
+            live.start(ts.ARMS["arm5"], 300, 4.0)
+            assert _wait(lambda: len(cameras) == 2 and live.running)
+        finally:
+            release_capture.set()
+            live.stop()
+
     def test_a_camera_error_is_shown_not_raised(self):
         def broken():
             raise IndexError("list index out of range")

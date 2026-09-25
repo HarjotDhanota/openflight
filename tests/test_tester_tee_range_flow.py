@@ -65,12 +65,14 @@ class FakeLive:
         self.analyzer = None
         self.frame_sequence = 0
         self.latest_frame_at = None
+        self.context_generation = 0
 
     def start(self, arm, *_args, analyzer=None):
         self.running = True
         self.arm = arm
         self.analyzer = analyzer
         self.start_count += 1
+        self.context_generation += 1
         if analyzer is not None:
             frames = self.recent_frames()[1]
             for observation_id, observed_at in enumerate((1.0, 1.5, 2.0), start=1):
@@ -81,6 +83,7 @@ class FakeLive:
     def stop(self):
         self.running = False
         self.stop_count += 1
+        self.context_generation += 1
 
     def recent_frames(self):
         frames = np.full((3, self.arm.height, self.arm.width), 80, dtype=np.uint8)
@@ -89,6 +92,29 @@ class FakeLive:
     def recent_frames_context(self):
         arm, frames = self.recent_frames()
         return arm, frames, self.frame_sequence, self.latest_frame_at
+
+    def capture_context_snapshot(self):
+        arm, frames = self.recent_frames()
+        return {
+            "running": self.running,
+            "error": self.error,
+            "arm": arm,
+            "frames": frames,
+            "frame_sequence": self.frame_sequence,
+            "latest_frame_at": self.latest_frame_at,
+            "analyzer": self.analyzer,
+            "run_generation": self.context_generation,
+            "context_generation": self.context_generation,
+        }
+
+    def capture_context_is_current(self, context):
+        return bool(
+            self.running
+            and self.error is None
+            and self.arm == context.get("arm")
+            and self.analyzer is context.get("analyzer")
+            and self.context_generation == context.get("context_generation")
+        )
 
     def snapshot(self):
         return None, {
@@ -555,6 +581,34 @@ def test_latest_ambiguous_frames_are_preserved_and_withheld_after_live_readiness
     assert attempt["frame_sha256"]
     assert attempt["camera_only_analysis"]["status"] == "ambiguous"
     assert state["evidence"]["camera_capture_failure"]["stage"] == "camera-only association"
+
+
+def test_stop_during_save_preserves_frame_and_withholds_changed_context(
+    tmp_path, inputs, monkeypatch
+):
+    live = FakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    for index, action in enumerate(("start", "capture_empty", "capture_ball", "start_camera_arm5")):
+        assert post(client, tester, action, f"request-{index}").status_code == 200
+
+    def stop_during_analysis(*_args, **_kwargs):
+        live.stop()
+        return camera_result(1.2)
+
+    monkeypatch.setattr(ts, "estimate_reference_ball_range", stop_during_analysis)
+    response = post(client, tester, "evaluate_camera_arm5", "context-race")
+
+    assert response.status_code == 200
+    state = response.get_json()["state"]
+    assert state["phase"] == "retryable_failure"
+    attempt = next(
+        value for key, value in state["evidence"].items() if key.startswith("camera_arm5_attempt_")
+    )
+    assert attempt["status"] == "association_withheld"
+    assert attempt["frame_sha256"]
+    assert attempt["reason"] == "guided camera context changed during Save"
+    assert state["evidence"]["camera_capture_failure"]["message"] == attempt["reason"]
 
 
 def test_new_flow_does_not_stop_an_unrelated_standalone_live_view(tmp_path, inputs, monkeypatch):
