@@ -204,7 +204,7 @@ def test_duplicate_member_paths_are_refused_before_writing(tmp_path):
     clash.write_bytes(b"copied by hand")
     with pytest.raises(ValueError, match="duplicate member paths"):
         session_bundle.build_bundle(root, TESTER, viewer=None, provenance={})
-    assert not list(session_bundle.bundle_directory(root).glob("*"))
+    assert not list(session_bundle.bundle_directory(root).glob("*.zip*"))
 
 
 def test_the_archive_hash_comes_from_the_written_stream(tmp_path, monkeypatch):
@@ -350,3 +350,111 @@ def test_a_bundle_listing_one_path_twice_fails_validation(tmp_path):
         archive.writestr(f"{TESTER}/arm5/arm.json", b'{"gain": 12.0}\n')
     with pytest.raises(ValueError, match="duplicate members"):
         session_bundle.validate_bundle(copy)
+
+
+def _no_bundle_files(root: Path) -> bool:
+    return not list(session_bundle.bundle_directory(root).glob("*.zip*"))
+
+
+def test_evidence_changing_during_packaging_discards_the_bundle(tmp_path):
+    root = capture_tree(tmp_path / "pi")
+    target = f"{TESTER}/arm5/arm.json"
+
+    grown = []
+
+    def grow_while_read(_done, _total, name, phase):
+        if phase == "writing" and name == target and not grown:
+            grown.append(name)
+            with (root / target).open("ab") as handle:
+                handle.write(b" ")
+
+    with pytest.raises(session_bundle.SnapshotChanged, match="arm.json changed while"):
+        session_bundle.build_bundle(
+            root, TESTER, viewer=None, provenance={}, progress=grow_while_read
+        )
+    assert _no_bundle_files(root)
+    rebuilt = session_bundle.build_bundle(root, TESTER, viewer=None, provenance={})
+    session_bundle.validate_bundle(Path(rebuilt["path"]))
+
+
+def test_a_growing_service_log_does_not_abort_packaging(tmp_path):
+    root = capture_tree(tmp_path / "pi")
+
+    logged = []
+
+    def log_request(_done, _total, name, phase):
+        if phase == "writing" and name.endswith("diagnostics/tester-server.log") and not logged:
+            logged.append(name)
+            with (root / "tester-server.log").open("ab") as handle:
+                handle.write(b"GET /api/tester/analysis 200\n")
+
+    built = session_bundle.build_bundle(
+        root, TESTER, viewer=None, provenance={}, progress=log_request
+    )
+    session_bundle.validate_bundle(Path(built["path"]))
+
+
+def test_operator_writes_wait_for_the_snapshot_and_stay_out_of_it(tmp_path, monkeypatch):
+    from openflight.camera import tester_server as ts  # pylint: disable=import-outside-toplevel
+
+    root = capture_tree(tmp_path / "pi")
+    monkeypatch.setattr(session_bundle, "WRITER_WAIT_S", 0.2)
+    client = ts.create_app(sessions_root=root, rig_geometry=ts.DEFAULT_RIG_GEOMETRY).test_client()
+    scope = {"tester_id": TESTER, "arm_id": "arm5", "run": "run-01"}
+    loaded = client.get(
+        "/api/tester/review/capture", query_string={**scope, "capture_id": "camera_001"}
+    ).get_json()
+    identity = {key: loaded[key] for key in ("capture_npz_sha256", "metadata_sha256")}
+    annotation = {
+        **scope,
+        "capture_id": "camera_001",
+        **identity,
+        "tracks_json": json.dumps({"version": 1, **identity, "tracks": []}),
+    }
+    attempt = {
+        **scope,
+        "request_id": "request-1",
+        "entry_id": "entry-1",
+        "action": "add",
+        "kind": "swing",
+        "operator_missed": False,
+    }
+    during = {}
+
+    def write_during(_done, _total, _name, phase):
+        if phase == "writing" and not during:
+            during["annotation"] = client.post("/api/tester/review/annotation", json=annotation)
+            during["attempt"] = client.post("/api/tester/attempts", json=attempt)
+
+    built = session_bundle.build_bundle(
+        root, TESTER, viewer=None, provenance={}, progress=write_during
+    )
+    for response in during.values():
+        assert response.status_code == 409
+        assert "being packaged" in response.get_json()["error"]
+    names = {
+        entry["path"] for entry in session_bundle.validate_bundle(Path(built["path"]))["entries"]
+    }
+    assert not any("annotations/" in name or "attempt_ledger" in name for name in names)
+    assert client.post("/api/tester/review/annotation", json=annotation).status_code == 200
+    assert client.post("/api/tester/attempts", json=attempt).status_code == 201
+
+
+def test_evidence_changing_while_reuse_is_checked_is_not_reused(tmp_path):
+    root = capture_tree(tmp_path / "pi")
+    first = session_bundle.build_bundle(root, TESTER, viewer=None, provenance={})
+    target = root / TESTER / "arm5" / "arm.json"
+    changed = []
+
+    def mutate_while_checking(_done, _total, name, phase):
+        if phase == "checking" and name == f"{TESTER}/arm5/arm.json" and not changed:
+            changed.append(target.read_bytes().replace(b"6.0", b"7.0"))
+            target.write_bytes(changed[0])
+
+    second = session_bundle.build_bundle(
+        root, TESTER, viewer=None, provenance={}, progress=mutate_while_checking
+    )
+    assert changed
+    assert second["reused"] is False and second["name"] != first["name"]
+    with zipfile.ZipFile(second["path"]) as archive:
+        assert archive.read(f"{TESTER}/arm5/arm.json") == changed[0]

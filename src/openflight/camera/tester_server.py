@@ -1813,13 +1813,19 @@ def create_app(
             scope, run = resolve_attempt_scope(payload)
             if request.method == "GET":
                 return jsonify(attempt_state(scope, run))
-            state, created = attempt_ledger.append(
-                run / "attempt_ledger.jsonl",
-                scope,
-                payload,
-                _logged_sensor_shot_count(_shot_events(run)),
-            )
+            with session_bundle.snapshot_lock(
+                tester_root(sessions_root, scope["tester_id"]),
+                timeout_s=session_bundle.WRITER_WAIT_S,
+            ):
+                state, created = attempt_ledger.append(
+                    run / "attempt_ledger.jsonl",
+                    scope,
+                    payload,
+                    _logged_sensor_shot_count(_shot_events(run)),
+                )
             return jsonify(state), 201 if created else 200
+        except session_bundle.SnapshotBusy as exc:
+            return jsonify({"error": str(exc)}), 409
         except FileNotFoundError as exc:
             return jsonify({"error": str(exc)}), 404
         except attempt_ledger.LedgerError as exc:

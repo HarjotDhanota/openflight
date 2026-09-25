@@ -22,6 +22,8 @@ import numpy as np
 from flask import Flask, Response, request, send_file
 from werkzeug.exceptions import RequestEntityTooLarge
 
+from openflight import session_bundle
+
 MAX_COMPARE_BYTES = 8 * 1024 * 1024
 HASH_CHUNK_BYTES = 1024 * 1024
 MAX_ANNOTATION_BYTES = 1024 * 1024
@@ -453,26 +455,27 @@ def register_track_review(
                 raise ReviewError("the track manifest belongs to a different capture")
             tester = run.parents[2]
             target = annotation_path(tester, scope["arm_id"], run.name, capture.identifier)
-            _write_atomic(
-                target,
-                {
-                    "schema": ANNOTATION_SCHEMA,
-                    "saved_at": datetime.now(timezone.utc).isoformat(),
-                    "scope": scope,
-                    "capture_id": capture.identifier,
-                    "capture_npz_sha256": capture.frames_sha256,
-                    "metadata_sha256": capture.metadata_sha256,
-                    "manifest_sha256": _sha256(manifest_bytes),
-                    "manifest": manifest,
-                },
-            )
+            with session_bundle.snapshot_lock(tester, timeout_s=session_bundle.WRITER_WAIT_S):
+                _write_atomic(
+                    target,
+                    {
+                        "schema": ANNOTATION_SCHEMA,
+                        "saved_at": datetime.now(timezone.utc).isoformat(),
+                        "scope": scope,
+                        "capture_id": capture.identifier,
+                        "capture_npz_sha256": capture.frames_sha256,
+                        "metadata_sha256": capture.metadata_sha256,
+                        "manifest_sha256": _sha256(manifest_bytes),
+                        "manifest": manifest,
+                    },
+                )
             return _response(
                 {
                     "saved": target.relative_to(tester.parent).as_posix(),
                     "capture_id": capture.identifier,
                 }
             )
-        except StaleCaptureError as exc:
+        except (StaleCaptureError, session_bundle.SnapshotBusy) as exc:
             return _error(str(exc), 409)
         except FileNotFoundError as exc:
             return _error(str(exc), 404)

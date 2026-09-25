@@ -15,7 +15,9 @@ import json
 import os
 import re
 import shutil
+import time
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator, Mapping
@@ -27,6 +29,10 @@ CHUNK_BYTES = 1024 * 1024
 BUNDLE_DIR = ".bundles"
 # Headroom kept free on the card after the bundle is written.
 FREE_SPACE_MARGIN_BYTES = 256 * 1024 * 1024
+# A bundle waits this long for an operator write to finish; writers wait far less.
+SNAPSHOT_WAIT_S = 30.0
+WRITER_WAIT_S = 5.0
+LOCK_POLL_S = 0.05
 _STORED_SUFFIXES = frozenset({".npz", ".pgm", ".l3dump", ".png", ".zip"})
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _BUNDLE_NAME = re.compile(
@@ -35,6 +41,67 @@ _BUNDLE_NAME = re.compile(
 # The live job file changes while a bundle is written; it is described in the manifest instead.
 _TRANSIENT = frozenset({"job.json"})
 _ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
+
+
+class SnapshotBusy(RuntimeError):
+    """Another writer or a bundle holds the tester folder's snapshot lock."""
+
+
+class SnapshotChanged(ValueError):
+    """Evidence changed while a bundle was reading it; the bundle was discarded."""
+
+
+def _lock_file(handle) -> None:
+    if os.name == "nt":
+        import msvcrt  # pylint: disable=import-outside-toplevel,import-error
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl  # pylint: disable=import-outside-toplevel,import-error
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_file(handle) -> None:
+    if os.name == "nt":
+        import msvcrt  # pylint: disable=import-outside-toplevel,import-error
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl  # pylint: disable=import-outside-toplevel,import-error
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def snapshot_lock(tester_dir: Path, *, timeout_s: float) -> Iterator[None]:
+    """Hold one tester folder still across processes: bundles and operator writes.
+
+    The lock is a file beside the bundles, so the tester service and the separate
+    analysis process exclude each other; two holders in one process also exclude
+    each other because each opens its own handle.
+    """
+    tester_dir = Path(tester_dir)
+    path = tester_dir.parent / BUNDLE_DIR / f".{tester_dir.name}-snapshot.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout_s
+    with path.open("a+b") as handle:
+        while True:
+            try:
+                _lock_file(handle)
+                break
+            except OSError as error:
+                if time.monotonic() >= deadline:
+                    raise SnapshotBusy(
+                        "the session is being packaged; try again when packaging finishes"
+                    ) from error
+                time.sleep(LOCK_POLL_S)
+        try:
+            yield
+        finally:
+            _unlock_file(handle)
 
 
 def bundle_directory(sessions_root: Path) -> Path:
@@ -133,8 +200,9 @@ def _unique_output(directory: Path, tester_id: str, created_at: datetime) -> Pat
 
 
 def _write_member(
-    archive: zipfile.ZipFile, source: Path, arcname: str, advance
+    archive: zipfile.ZipFile, source: Path, arcname: str, advance, *, may_grow: bool
 ) -> tuple[int, str, list[int] | None]:
+    """Copy and hash one file; evidence that changes while it is read aborts the bundle."""
     info = zipfile.ZipInfo(arcname, date_time=_ZIP_EPOCH)
     info.compress_type = (
         zipfile.ZIP_STORED
@@ -151,6 +219,10 @@ def _write_member(
             size += len(chunk)
             advance(len(chunk), arcname)
     unchanged = _stamp(source) == before and size == before[0]
+    if not unchanged and not may_grow:
+        raise SnapshotChanged(
+            f"{arcname} changed while it was being packaged; package again once nothing is writing"
+        )
     return size, digest.hexdigest(), before if unchanged else None
 
 
@@ -250,9 +322,11 @@ def _reusable_latest(
     total = sum(p.stat().st_size for p, _name in candidates)
     done = 0
     listed = []
+    checked = []
     for source, name in candidates:
         known = index["files"].get(name)
         stamp = _stamp(source)
+        checked.append((source, stamp))
         if isinstance(known, dict) and known.get("stamp") == stamp:
             sha256 = known["sha256"]
         else:
@@ -266,6 +340,11 @@ def _reusable_latest(
         )
     if content_fingerprint(tester_id, listed, provenance) != manifest.get("content_fingerprint"):
         return None
+    # the decision stands only if nothing moved while it was being made
+    if _stamp(path) != recorded["stamp"] or any(
+        not source.is_file() or _stamp(source) != stamp for source, stamp in checked
+    ):
+        return None
     return {
         "name": latest["name"],
         "path": str(path),
@@ -278,7 +357,7 @@ def _reusable_latest(
     }
 
 
-def build_bundle(  # pylint: disable=too-many-arguments,too-many-locals
+def build_bundle(  # pylint: disable=too-many-arguments
     sessions_root: Path,
     tester_id: str,
     *,
@@ -292,6 +371,19 @@ def build_bundle(  # pylint: disable=too-many-arguments,too-many-locals
     ``progress(done_bytes, total_bytes, member, phase)`` is called as bytes are
     checked or written. The archive and every member are hashed as they are written.
     """
+    tester_dir = Path(sessions_root).resolve() / tester_id
+    with snapshot_lock(tester_dir, timeout_s=SNAPSHOT_WAIT_S):
+        return _build_locked(sessions_root, tester_id, viewer, provenance, created_at, progress)
+
+
+def _build_locked(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+    sessions_root: Path,
+    tester_id: str,
+    viewer: Path | None,
+    provenance: Mapping[str, Any],
+    created_at: datetime | None,
+    progress,
+) -> dict[str, Any]:
     created_at = created_at or datetime.now(timezone.utc)
     entries = _entries(sessions_root, tester_id, viewer)
     provenance = dict(provenance)
@@ -327,7 +419,13 @@ def build_bundle(  # pylint: disable=too-many-arguments,too-many-locals
             stream = _HashingWriter(handle)
             with zipfile.ZipFile(stream, "w", allowZip64=True) as archive:
                 for path, arcname in entries:
-                    size, sha256, stamp = _write_member(archive, path, arcname, advance)
+                    size, sha256, stamp = _write_member(
+                        archive,
+                        path,
+                        arcname,
+                        advance,
+                        may_grow=_role(arcname, tester_id) == "diagnostics",
+                    )
                     records.append(
                         {
                             "path": arcname,

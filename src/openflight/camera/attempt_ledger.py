@@ -7,7 +7,6 @@ import os
 import re
 import tempfile
 import threading
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
@@ -20,13 +19,6 @@ _LOCK = threading.RLock()
 
 class LedgerError(ValueError):
     """The ledger cannot be trusted or a requested mutation is invalid."""
-
-
-@contextmanager
-def snapshot_lock():
-    """Hold operator writes while a package takes its filesystem snapshot."""
-    with _LOCK:
-        yield
 
 
 def read_audit(path: Path) -> list[dict]:
