@@ -77,6 +77,8 @@ HASHES = {
     for name, character in (
         ("rig_geometry_sha256", "1"),
         ("camera_calibration_sha256", "2"),
+        ("camera_placement_sha256", "7"),
+        ("camera_mode_profile_sha256", "8"),
         ("iwr_firmware_sha256", "3"),
         ("iwr_capture_config_sha256", "4"),
         ("iwr_profile_sha256", "5"),
@@ -109,6 +111,8 @@ def qualified_camera(epoch_id="epoch-a", value=1.50, uncertainty=0.05, **updates
         "accuracy_qualified": True,
         "rig_geometry_sha256": HASHES["rig_geometry_sha256"],
         "camera_calibration_sha256": HASHES["camera_calibration_sha256"],
+        "camera_placement_sha256": HASHES["camera_placement_sha256"],
+        "camera_mode_profile_sha256": HASHES["camera_mode_profile_sha256"],
         "camera_arm_id": "arm5",
         "scope": "tester_setup",
         "manual_range_used": False,
@@ -362,6 +366,8 @@ def test_qualification_artifact_round_trips_with_stable_digests():
     [
         ("camera", "rig_geometry_sha256"),
         ("camera", "camera_calibration_sha256"),
+        ("camera", "camera_placement_sha256"),
+        ("camera", "camera_mode_profile_sha256"),
         ("iwr", "rig_geometry_sha256"),
         ("iwr", "iwr_firmware_sha256"),
         ("iwr", "iwr_capture_config_sha256"),
@@ -433,6 +439,24 @@ def test_qualification_loader_rejects_unbound_identity_fields():
     payload["identities"]["unreviewed_override"] = "accepted"
 
     with pytest.raises(ValueError, match="identities"):
+        TeeRangeQualification.from_dict(payload)
+
+
+@pytest.mark.parametrize("field", ["camera_placement_sha256", "camera_mode_profile_sha256"])
+def test_qualification_loader_refuses_missing_full_camera_identity(field):
+    payload = qualification().to_dict()
+    payload["identities"].pop(field)
+
+    with pytest.raises(ValueError, match="identities"):
+        TeeRangeQualification.from_dict(payload)
+
+
+def test_qualification_loader_refuses_legacy_schema_without_full_camera_identity():
+    payload = qualification().to_dict()
+    payload["schema"] = "openflight.tee_range_qualification.v1"
+    payload["schema_version"] = 1
+
+    with pytest.raises(ValueError, match="unsupported tee-range qualification"):
         TeeRangeQualification.from_dict(payload)
 
 

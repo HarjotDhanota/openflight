@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import numpy as np
 import pytest
 
 from openflight import tee_range, tee_range_setup
-from openflight.camera import tester_server as ts
+from openflight.camera import tee_range_flow, tester_server as ts
 from openflight.camera.reference_ball_range import (
     BallPlaneCamera,
     ReferenceBallRangeCandidate,
@@ -71,6 +72,47 @@ class FakeLive:
 
     def snapshot(self):
         return None, {"running": self.running}
+
+
+class ChangingFakeLive(FakeLive):
+    def __init__(self):
+        super().__init__()
+        self.value = 79
+
+    def start(self, arm, *_args):
+        super().start(arm, *_args)
+        self.value += 1
+
+    def recent_frames(self):
+        frames = np.full((3, self.arm.height, self.arm.width), self.value, dtype=np.uint8)
+        return self.arm, frames
+
+
+class IneligibleSetup(EligibleSetup):
+    def require(self, tester_id, _reading, _action):
+        result = super().require(tester_id, _reading, _action)
+        return {**result, "eligible": False, "blockers": [{"id": "lis3dh"}]}
+
+
+class MutableSetup(EligibleSetup):
+    def __init__(self):
+        self.eligible = True
+
+    def require(self, tester_id, _reading, _action):
+        result = super().require(tester_id, _reading, _action)
+        return {
+            **result,
+            "eligible": self.eligible,
+            "blockers": [] if self.eligible else [{"id": "lis3dh"}],
+        }
+
+
+class MutableTilt(FakeTilt):
+    def __init__(self):
+        self.pitch = 0.0
+
+    def reading(self):
+        return {"status": "stable", "camera_pitch_deg": self.pitch, "roll_deg": 0.0}
 
 
 def file_hash(path: Path) -> str:
@@ -179,6 +221,8 @@ def qualification(paths, *, residual=0.08):
     return tee_range.TeeRangeQualification(
         rig_geometry_sha256=file_hash(paths["rig"]),
         camera_calibration_sha256=file_hash(paths["camera"]),
+        camera_placement_sha256=file_hash(paths["placement"]),
+        camera_mode_profile_sha256=ts._camera_mode_profile_sha256(ts.ARMS["arm5"], paths["camera"]),
         camera_arm_id="arm5",
         iwr_firmware_sha256=file_hash(paths["firmware"]),
         iwr_capture_config_sha256=file_hash(paths["config"]),
@@ -211,13 +255,27 @@ def inputs(tmp_path):
     paths["placement"].write_text("{}", encoding="utf-8")
     paths["firmware"].write_bytes(b"firmware")
     paths["config"].write_text("profile", encoding="utf-8")
-    paths["calibration"].write_text('{"range_bias_const_m": 0.0}', encoding="utf-8")
+    paths["calibration"].write_text(
+        '{"range_bias_const_m": 0.0, "range_bias_uncertainty_m": 0.01}',
+        encoding="utf-8",
+    )
     artifact = qualification(paths)
     paths["qualification"].write_text(json.dumps(artifact.to_dict()), encoding="utf-8")
     return paths
 
 
-def app_for(tmp_path, inputs, monkeypatch, *, qualified=True, camera_m=1.2, fail=False):
+def app_for(
+    tmp_path,
+    inputs,
+    monkeypatch,
+    *,
+    qualified=True,
+    camera_m=1.2,
+    fail=False,
+    setup_policy=None,
+    live_view=None,
+    tilt=None,
+):
     def camera_model(arm, *_args):
         return BallPlaneCamera.nominal(
             focal_px=933.0 if arm.width == 1280 else 466.5,
@@ -247,9 +305,9 @@ def app_for(tmp_path, inputs, monkeypatch, *, qualified=True, camera_m=1.2, fail
         sessions_root=tmp_path / "sessions",
         rig_geometry=inputs["rig"],
         manager=manager,
-        live_view=FakeLive(),
-        tilt=FakeTilt(),
-        setup_policy=EligibleSetup(),
+        live_view=live_view or FakeLive(),
+        tilt=tilt or FakeTilt(),
+        setup_policy=setup_policy or EligibleSetup(),
         optical_calibration=inputs["camera"],
         camera_placement=inputs["placement"],
         iwr_static_config=inputs["config"],
@@ -309,6 +367,12 @@ def test_guided_flow_resolves_and_survives_reload(tmp_path, inputs, monkeypatch)
     assert identity["optical_calibration"]["sha256"] == file_hash(inputs["camera"])
     assert identity["camera_placement"]["sha256"] == file_hash(inputs["placement"])
     assert identity["mode"]["arm"]["arm_id"] == "arm5"
+    iwr = state["evidence"]["iwr_candidate"]
+    assert iwr["evidence"]["bias_uncertainty"] == {
+        "value_m": 0.01,
+        "source": "hashed_range_calibration",
+    }
+    assert iwr["uncertainty_m"] > 0.01
     reloaded = (
         app.test_client()
         .get("/api/tester/tee-range", query_string={"tester_id": tester})
@@ -317,6 +381,44 @@ def test_guided_flow_resolves_and_survives_reload(tmp_path, inputs, monkeypatch)
     assert reloaded == state
     solution = tee_range_setup.load_current_epoch(tmp_path / "sessions" / tester).solution
     assert ts._tee_range_cli_args(solution) == ["--iwr6843-tee-m", "1.2"]
+
+
+@pytest.mark.parametrize(
+    "calibration",
+    [
+        '{"range_bias_const_m": 0.0}',
+        '{"range_bias_const_m": 0.0, "range_bias_uncertainty_m": 0.0}',
+        '{"range_bias_const_m": 0.0, "range_bias_uncertainty_m": -0.01}',
+        '{"range_bias_const_m": 0.0, "range_bias_uncertainty_m": "NaN"}',
+    ],
+)
+def test_invalid_bias_uncertainty_can_never_promote_static_iwr(
+    tmp_path, inputs, monkeypatch, calibration
+):
+    inputs["calibration"].write_text(calibration, encoding="utf-8")
+    artifact = qualification(inputs)
+    inputs["qualification"].write_text(json.dumps(artifact.to_dict()), encoding="utf-8")
+
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    state = drive(app.test_client(), tester)
+
+    assert state["phase"] == "raw_only"
+    assert state["solution"]["reason"] == "qualified_static_iwr_candidate_missing"
+    iwr = state["evidence"]["iwr_candidate"]
+    assert iwr["evidence"]["qualification"]["accuracy_qualified"] is False
+    assert iwr["evidence"]["bias_uncertainty"] == "unavailable"
+
+
+def test_changed_camera_placement_cannot_match_a_qualified_artifact(tmp_path, inputs, monkeypatch):
+    inputs["placement"].write_text('{"changed": true}', encoding="utf-8")
+
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    state = drive(app.test_client(), tester)
+
+    assert state["phase"] == "raw_only"
+    assert state["solution"]["reason"] == "qualified_camera_candidate_missing"
+    camera = state["evidence"]["camera_arm5_candidate"]
+    assert camera["evidence"]["qualification"]["status"] == "rejected"
 
 
 def test_missing_qualification_and_disagreement_remain_raw_only(tmp_path, inputs, monkeypatch):
@@ -351,6 +453,225 @@ def test_requests_are_idempotent_and_failures_retry_without_erasing_evidence(
     assert retried["phase"] == "needs_empty"
     restarted = post(client, tester, "ball_moved", "new-epoch").get_json()["state"]
     assert restarted["epoch_id"] != first["epoch_id"]
+
+
+def test_direct_range_api_fails_closed_when_setup_is_not_eligible(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch, setup_policy=IneligibleSetup())
+
+    response = post(app.test_client(), tester, "start", "blocked")
+
+    assert response.status_code == 409
+    assert response.get_json()["setup_eligibility"]["eligible"] is False
+
+
+def test_direct_range_api_revalidates_setup_before_new_or_idempotent_evidence(
+    tmp_path, inputs, monkeypatch
+):
+    setup = MutableSetup()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, setup_policy=setup)
+    client = app.test_client()
+    assert post(client, tester, "start", "same-request").status_code == 200
+    setup.eligible = False
+
+    new_evidence = post(client, tester, "capture_empty", "capture")
+    repeated = post(client, tester, "start", "same-request")
+
+    assert new_evidence.status_code == 409
+    assert new_evidence.get_json()["setup_eligibility"]["blockers"] == [{"id": "lis3dh"}]
+    assert repeated.status_code == 409
+    assert repeated.get_json()["setup_eligibility"]["eligible"] is False
+
+
+def test_direct_range_api_requires_start_over_after_orientation_changes(
+    tmp_path, inputs, monkeypatch
+):
+    tilt = MutableTilt()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, tilt=tilt)
+    client = app.test_client()
+    assert post(client, tester, "start", "start").status_code == 200
+    tilt.pitch = ts.TEE_RANGE_ORIENTATION_DRIFT_DEG + 0.1
+
+    response = post(client, tester, "capture_empty", "capture")
+
+    assert response.status_code == 409
+    assert response.get_json()["start_over_required"] is True
+    assert "orientation changed" in response.get_json()["error"]
+
+
+def test_finalize_publishes_terminal_state_only_after_epoch_pointer(tmp_path, monkeypatch):
+    store = tee_range_flow.FlowStore(tmp_path / "tester")
+    state = store.start("start", setup_admission={"identity_sha256": "a" * 64})
+    state = store.transition(state, phase="evaluating", reason="ready")
+    solution = tee_range.TeeRangeSolution.unresolved(reason="raw_only")
+    original = tee_range_flow.write_epoch
+    calls = 0
+
+    def interrupted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        reference = original(*args, **kwargs)
+        if calls == 1:
+            raise OSError("simulated crash after current pointer")
+        return reference
+
+    monkeypatch.setattr(tee_range_flow, "write_epoch", interrupted)
+    with pytest.raises(OSError, match="simulated crash"):
+        store.finalize(state, solution)
+
+    assert store.load().phase == "evaluating"
+    finished = store.finalize(store.load(), solution)
+    assert finished.phase == "raw_only"
+    assert finished.evidence["final_reference"]["epoch_id"] == state.epoch_id
+
+
+def test_admission_refuses_a_current_pointer_from_another_epoch(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    state = drive(client, tester)
+    assert state["phase"] == "resolved"
+    other = tee_range_setup.TeeRangeEvidenceEpoch(
+        epoch_id="stale-other-epoch",
+        created_at_utc="2026-09-25T18:00:00Z",
+        solution=tee_range.TeeRangeSolution.unresolved(reason="stale"),
+    )
+    tee_range_setup.write_epoch(tmp_path / "sessions" / tester, other, make_current=True)
+
+    response = client.post(
+        "/api/tester/ladder/start",
+        json={"tester_id": tester, "arm_id": "arm5", "environment": "indoors"},
+    )
+
+    assert response.status_code == 409
+    assert "retryable_failure" in response.get_json()["error"]
+    assert "does not match" in phase(client, tester)["reason"]
+
+
+def test_restart_waits_for_a_live_detached_static_capture_and_reconciles_late_result(
+    tmp_path, inputs, monkeypatch
+):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    root = tmp_path / "sessions" / tester
+    store = tee_range_flow.FlowStore(root)
+    binding = ts._tee_range_setup_binding(
+        EligibleSetup().require(tester, {}, "start"), FakeTilt().reading()
+    )
+    state = store.start("start", setup_admission=binding)
+    state = store.transition(
+        state,
+        phase="empty_capturing",
+        reason="capturing_empty",
+        request_id="capture",
+        evidence={"empty_capture_id": "empty-detached"},
+    )
+    output = store.epoch_dir(state.epoch_id) / "iwr"
+    output.mkdir(parents=True)
+    (output / ".empty-detached.reserve").write_text(
+        f"pid={os.getpid()} capture_id=empty-detached\n", encoding="utf-8"
+    )
+
+    client = app.test_client()
+    assert phase(client, tester)["phase"] == "empty_capturing"
+
+    record = {
+        "capture_id": "empty-detached",
+        "capture_kind": "empty",
+        "status": "usable",
+        "usable": True,
+        "profile": profile(
+            "a", np.ones(96).tolist(), file_hash(inputs["config"]), file_hash(inputs["rig"])
+        ),
+    }
+    (output / "empty-detached.json").write_text(json.dumps(record), encoding="utf-8")
+    assert phase(client, tester)["phase"] == "needs_ball"
+
+
+def test_restart_marks_a_dead_detached_static_capture_retryable(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    store = tee_range_flow.FlowStore(tmp_path / "sessions" / tester)
+    binding = ts._tee_range_setup_binding(
+        EligibleSetup().require(tester, {}, "start"), FakeTilt().reading()
+    )
+    state = store.start("start", setup_admission=binding)
+    state = store.transition(
+        state,
+        phase="empty_capturing",
+        reason="capturing_empty",
+        request_id="capture",
+        evidence={"empty_capture_id": "empty-dead"},
+    )
+    output = store.epoch_dir(state.epoch_id) / "iwr"
+    output.mkdir(parents=True)
+    (output / ".empty-dead.reserve").write_text(
+        "pid=12345 capture_id=empty-dead\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(ts, "_process_is_alive", lambda _pid: False)
+
+    restarted = phase(app.test_client(), tester)
+
+    assert restarted["phase"] == "retryable_failure"
+    assert restarted["retry_phase"] == "needs_empty"
+    assert restarted["evidence"]["empty_capture_id"] == "empty-dead"
+
+
+def test_restart_records_an_interrupted_camera_evaluation_attempt(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    store = tee_range_flow.FlowStore(tmp_path / "sessions" / tester)
+    binding = ts._tee_range_setup_binding(
+        EligibleSetup().require(tester, {}, "start"), FakeTilt().reading()
+    )
+    state = store.start("start", setup_admission=binding)
+    capture_id = "arm5-000002"
+    state = store.transition(
+        state,
+        phase="camera_arm5_evaluating",
+        reason="evaluating_camera_arm5",
+        evidence={"camera_arm5_capture_setup": {"capture_id": capture_id}},
+    )
+    frame = store.epoch_dir(state.epoch_id) / f"camera-{capture_id}.pgm"
+    frame.write_bytes(b"P5\n1 1\n255\n\x80")
+
+    restarted = phase(app.test_client(), tester)
+
+    attempt = restarted["evidence"][f"camera_arm5_attempt_{capture_id}"]
+    assert restarted["phase"] == "retryable_failure"
+    assert restarted["retry_phase"] == "needs_camera_arm5"
+    assert attempt["status"] == "evaluation_interrupted"
+    assert attempt["frame"] == frame.name
+    assert attempt["frame_sha256"] == file_hash(frame)
+
+
+def test_camera_evaluation_retry_uses_a_new_immutable_frame_attempt(tmp_path, inputs, monkeypatch):
+    live = ChangingFakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    for index, action in enumerate(("start", "capture_empty", "capture_ball", "start_camera_arm5")):
+        assert post(client, tester, action, f"initial-{index}").status_code == 200
+
+    monkeypatch.setattr(
+        ts,
+        "estimate_reference_ball_range",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("transient")),
+    )
+    assert post(client, tester, "evaluate_camera_arm5", "bad-evaluation").status_code == 200
+    assert phase(client, tester)["phase"] == "retryable_failure"
+    assert (
+        post(client, tester, "retry", "retry-camera").get_json()["state"]["phase"]
+        == "needs_camera_arm5"
+    )
+    assert post(client, tester, "start_camera_arm5", "new-camera").status_code == 200
+    monkeypatch.setattr(
+        ts, "estimate_reference_ball_range", lambda *_args, **_kwargs: camera_result(1.2)
+    )
+
+    retried = post(client, tester, "evaluate_camera_arm5", "good-evaluation")
+
+    assert retried.status_code == 200
+    assert retried.get_json()["state"]["phase"] == "needs_camera_arm6"
+    root = tmp_path / "sessions" / tester
+    store = tee_range_flow.FlowStore(root)
+    state = store.load()
+    frames = list(store.epoch_dir(state.epoch_id).glob("camera-arm5-*.pgm"))
+    assert len(frames) == 2
 
 
 def test_concurrent_arm_and_placement_writes_keep_both_updates(tmp_path):

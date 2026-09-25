@@ -204,10 +204,23 @@ ACTION_LABELS = {
 }
 # a hardware step that hangs is stopped; the ladder runs as long as the tester swings
 ACTION_TIMEOUT_S = {"preflight": 120.0, "gain": 900.0, "tee_range": 120.0}
+TEE_RANGE_ORIENTATION_DRIFT_DEG = 0.5
+STATIC_CAPTURE_SPAWN_GRACE_S = 10.0
+STATIC_CAPTURE_RESTART_GRACE_S = 120.0
 # a stopped job first gets start-kiosk.sh's own shutdown, which closes the radars
 # and the camera; whatever of its process group is left after this is ended
 KILL_GRACE_S = 8.0
 SPAWN_WAIT_S = 10.0
+
+
+class TeeRangeSetupAdmissionError(RuntimeError):
+    """A guided-range request no longer matches its admitted physical setup."""
+
+    def __init__(self, message: str, eligibility: Mapping, *, start_over: bool = False):
+        super().__init__(message)
+        self.eligibility = dict(eligibility)
+        self.start_over = start_over
+
 
 # Chained-delivery statuses that mean the estimator produced a delivery.
 ACCEPTED_STATUSES = frozenset({"ok", "fused", "chained_high", "approach_high"})
@@ -1351,6 +1364,107 @@ def _file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _tee_range_setup_binding(eligibility: Mapping, reading: Mapping) -> dict:
+    """Freeze the physical/config admission that owns one automatic-range epoch."""
+    authority = {
+        "tester_id": eligibility.get("tester_id"),
+        "config_hash": eligibility.get("config_hash"),
+        "operator_confirmation": dict(eligibility.get("operator_confirmation") or {}),
+    }
+    identity = hashlib.sha256(
+        json.dumps(authority, sort_keys=True, allow_nan=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    return {
+        **authority,
+        "identity_sha256": identity,
+        "orientation_at_start": dict(reading),
+    }
+
+
+def _tee_range_setup_mismatch(
+    binding: Mapping, eligibility: Mapping, reading: Mapping
+) -> str | None:
+    if not binding:
+        return "automatic tee-range setup has no bound physical admission"
+    expected = _tee_range_setup_binding(eligibility, binding.get("orientation_at_start") or {})
+    if binding.get("identity_sha256") != expected["identity_sha256"]:
+        return "automatic tee-range setup admission changed; start over"
+    if reading.get("status") != "stable":
+        return "automatic tee-range setup requires a stable current LIS3DH reading"
+    origin = binding.get("orientation_at_start")
+    if not isinstance(origin, Mapping) or origin.get("status") != "stable":
+        return "automatic tee-range setup lacks a stable starting orientation"
+    for name in ("camera_pitch_deg", "roll_deg"):
+        try:
+            start_value = float(origin[name])
+            current_value = float(reading[name])
+        except (KeyError, TypeError, ValueError):
+            return f"automatic tee-range setup lacks comparable {name}"
+        if not math.isfinite(start_value) or not math.isfinite(current_value):
+            return f"automatic tee-range setup has invalid {name}"
+        if abs(current_value - start_value) > TEE_RANGE_ORIENTATION_DRIFT_DEG:
+            return f"automatic tee-range setup orientation changed ({name}); start over"
+    return None
+
+
+def _process_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _detached_static_capture_active(reservation: Path, state_updated_at_utc: str) -> bool:
+    """Allow a detached capture to publish its result after the service restarts."""
+    now = time.time()
+    if reservation.is_file():
+        try:
+            age_s = max(0.0, now - reservation.stat().st_mtime)
+            fields = dict(
+                item.split("=", 1)
+                for item in reservation.read_text(encoding="utf-8").split()
+                if "=" in item
+            )
+            return age_s <= STATIC_CAPTURE_RESTART_GRACE_S and _process_is_alive(
+                int(fields.get("pid", "0"))
+            )
+        except (OSError, TypeError, ValueError):
+            return False
+    try:
+        updated = datetime.fromisoformat(state_updated_at_utc.replace("Z", "+00:00"))
+        elapsed = datetime.now(timezone.utc).timestamp() - updated.timestamp()
+    except (TypeError, ValueError):
+        return False
+    return 0.0 <= elapsed <= STATIC_CAPTURE_SPAWN_GRACE_S
+
+
+def _camera_mode_profile_sha256(arm: Arm, optical_calibration: Path) -> str:
+    """Bind a qualified arm to the calibration's stable saved-image profile."""
+    artifact = json.loads(optical_calibration.read_text(encoding="utf-8"))
+    saved = artifact.get("candidate", artifact).get("mode_profile", {}).get("saved_image", {})
+    payload = {
+        "arm": {
+            "arm_id": arm.arm_id,
+            "width": arm.width,
+            "height": arm.height,
+            "fps": arm.fps,
+        },
+        "saved_image_profile": saved,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, allow_nan=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def _json_identity(path: Path | None) -> dict | None:
     if path is None:
         return None
@@ -1389,6 +1503,9 @@ def _guided_camera_candidate(
     rig_sha = _file_sha256(rig_geometry)
     camera_sha = _file_sha256(optical_calibration) if optical_calibration else None
     placement_sha = _file_sha256(camera_placement) if camera_placement else None
+    mode_profile_sha = (
+        _camera_mode_profile_sha256(arm, optical_calibration) if optical_calibration else None
+    )
     mode_snapshot = {
         "arm": arm.as_dict(),
         "controls": dict(capture_controls),
@@ -1414,6 +1531,10 @@ def _guided_camera_candidate(
         and qualification.rig_geometry_sha256 == rig_sha
         and camera_sha is not None
         and qualification.camera_calibration_sha256 == camera_sha
+        and placement_sha is not None
+        and qualification.camera_placement_sha256 == placement_sha
+        and mode_profile_sha is not None
+        and qualification.camera_mode_profile_sha256 == mode_profile_sha
     )
     facts = {
         "epoch_id": epoch_id,
@@ -1424,6 +1545,7 @@ def _guided_camera_candidate(
         "rig_geometry_sha256": rig_sha,
         "camera_calibration_sha256": camera_sha,
         "camera_placement_sha256": placement_sha,
+        "camera_mode_profile_sha256": mode_profile_sha,
         "camera_mode_sha256": mode_sha,
         "saved_frame_sha256": frame_sha256,
         "camera_arm_id": arm.arm_id,
@@ -1431,7 +1553,13 @@ def _guided_camera_candidate(
         "manual_range_used": False,
         "iwr_range_used": False,
         "moving_iwr_used": False,
-        "dependencies": ["rig_geometry", "camera_calibration", "saved_frame"],
+        "dependencies": [
+            "rig_geometry",
+            "camera_calibration",
+            "camera_placement",
+            "camera_mode_profile",
+            "saved_frame",
+        ],
     }
     uncertainty = None
     value = None
@@ -1483,6 +1611,12 @@ def _guided_iwr_candidate(
     calibration_sha = _file_sha256(calibration_path)
     calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
     bias_m = float(calibration.get("range_bias_const_m", calibration.get("range_offset_m", 0.0)))
+    bias_uncertainty_raw = calibration.get("range_bias_uncertainty_m")
+    try:
+        bias_uncertainty_m = float(bias_uncertainty_raw)
+    except (TypeError, ValueError):
+        bias_uncertainty_m = math.nan
+    bias_uncertainty_valid = math.isfinite(bias_uncertainty_m) and bias_uncertainty_m > 0.0
     firmware_sha = str(present_record["inputs"]["firmware"]["sha256"])
     config_sha = str(present_record["inputs"]["radar_config"]["sha256"])
     rig_sha = str(present_record["inputs"]["rig_geometry"]["sha256"])
@@ -1494,14 +1628,19 @@ def _guided_iwr_candidate(
         and qualification.iwr_profile_sha256 == result.capture_config_sha256
         and qualification.iwr_range_calibration_sha256 == calibration_sha
     )
-    qualified = bool(identity_matches and qualification and qualification.accuracy_qualified)
+    qualified = bool(
+        identity_matches
+        and bias_uncertainty_valid
+        and qualification
+        and qualification.accuracy_qualified
+    )
     if result.status == "accepted" and result.apparent_range_m is not None:
         qualified_result = replace(result, radar_profile_qualified=qualified)
         if qualified:
             candidate = build_static_profile_candidate(
                 qualified_result,
                 range_bias_m=bias_m,
-                range_bias_uncertainty_m=0.0,
+                range_bias_uncertainty_m=bias_uncertainty_m,
                 calibration_sha256=calibration_sha,
             )
             value = candidate.radar_slant_range_m
@@ -1544,7 +1683,11 @@ def _guided_iwr_candidate(
                 "camera_range_used": False,
                 "moving_iwr_used": False,
             },
-            "bias_uncertainty": "unavailable",
+            "bias_uncertainty": (
+                {"value_m": bias_uncertainty_m, "source": "hashed_range_calibration"}
+                if bias_uncertainty_valid
+                else "unavailable"
+            ),
         }
     )
     return tee_range.TeeRangeCandidate(
@@ -2093,14 +2236,36 @@ def create_app(
     def blocked_setup(result: dict):
         return jsonify({"error": "tester setup is not eligible", "setup_eligibility": result}), 409
 
+    def bound_range_setup(tester_id: str, state, action: str) -> tuple[dict, dict]:
+        if state is None:
+            raise RuntimeError("start automatic tee range before this step")
+        reading = enclosure.reading()
+        eligibility = setup.require(tester_id, reading, f"tee_range_{action}")
+        if not eligibility["eligible"]:
+            raise TeeRangeSetupAdmissionError(
+                "tester setup is not eligible for automatic tee range", eligibility
+            )
+        mismatch = _tee_range_setup_mismatch(state.setup_admission, eligibility, reading)
+        if mismatch:
+            raise TeeRangeSetupAdmissionError(mismatch, eligibility, start_over=True)
+        return eligibility, reading
+
     def admitted_range(tester_id: str):
+        final_reference = None
         if require_tee_range_flow:
             flow = _range_state(tester_id)
             if flow is None or flow.phase not in TERMINAL_PHASES:
                 phase = flow.phase if flow else "not_started"
                 raise RuntimeError(f"finish automatic tee range before capture ({phase})")
+            bound_range_setup(tester_id, flow, "admission")
+            final_payload = flow.evidence.get("final_reference")
+            if not isinstance(final_payload, Mapping):
+                raise RuntimeError("automatic tee-range terminal state has no final reference")
+            final_reference = tee_range_setup.TeeRangeEpochReference.from_dict(final_payload)
         root = tester_root(sessions_root, tester_id)
         reference = tee_range_setup.load_current_reference(root)
+        if final_reference is not None and reference != final_reference:
+            raise RuntimeError("automatic tee-range final reference does not match current epoch")
         if reference is not None:
             epoch = tee_range_setup.load_epoch(root, reference)
             return (
@@ -2266,14 +2431,46 @@ def create_app(
         state = store.load()
         if state is None or not reconcile:
             return state
+        if state.phase in TERMINAL_PHASES:
+            final_payload = state.evidence.get("final_reference")
+            try:
+                final_reference = tee_range_setup.TeeRangeEpochReference.from_dict(final_payload)
+                current_reference = tee_range_setup.load_current_reference(store.tester_root)
+                if current_reference != final_reference:
+                    raise ValueError("final reference does not match current epoch")
+                tee_range_setup.load_epoch(store.tester_root, final_reference)
+                bound_range_setup(tester_id, state, "terminal_revalidation")
+            except (KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                return store.transition(
+                    state,
+                    phase="retryable_failure",
+                    reason=f"tee_range_finalization_invalid_start_over_required: {exc}",
+                    retry_phase=None,
+                )
+            return state
         if state.phase == "evaluating":
             return _finalize_range_state(store, state)
         if state.phase.startswith("camera_") and state.phase.endswith("_evaluating"):
             arm_id = "arm5" if "arm5" in state.phase else "arm6"
+            capture_setup = state.evidence.get(f"camera_{arm_id}_capture_setup")
+            evidence = None
+            if isinstance(capture_setup, Mapping) and capture_setup.get("capture_id"):
+                capture_id = str(capture_setup["capture_id"])
+                frame_path = store.epoch_dir(state.epoch_id) / f"camera-{capture_id}.pgm"
+                evidence = {
+                    f"camera_{arm_id}_attempt_{capture_id}": {
+                        "capture_id": capture_id,
+                        "status": "evaluation_interrupted",
+                        "frame": frame_path.name if frame_path.is_file() else None,
+                        "frame_sha256": _file_sha256(frame_path) if frame_path.is_file() else None,
+                        "reason": "service_restarted_during_camera_evaluation",
+                    }
+                }
             return store.transition(
                 state,
                 phase="retryable_failure",
                 reason=f"camera_{arm_id}_evaluation_interrupted",
+                evidence=evidence,
                 retry_phase=f"needs_camera_{arm_id}",
             )
         if state.phase.startswith("camera_") and state.phase.endswith("_capturing"):
@@ -2302,6 +2499,9 @@ def create_app(
             return _finish_static_capture(tester_id, state.epoch_id, kind, capture_id)
         job = jobs.status()
         if job.get("state") == "running" and job.get("action") == "tee_range":
+            return state
+        reservation = result_path.with_name(f".{capture_id}.reserve")
+        if _detached_static_capture_active(reservation, state.updated_at_utc):
             return state
         return store.transition(
             state,
@@ -2366,6 +2566,19 @@ def create_app(
             )
 
     def _finalize_range_state(store: FlowStore, state):
+        try:
+            bound_range_setup(
+                state.setup_admission.get("tester_id", "") or store.tester_root.name,
+                state,
+                "finalize",
+            )
+        except RuntimeError as exc:
+            return store.transition(
+                state,
+                phase="retryable_failure",
+                reason=f"setup_admission_changed_start_over_required: {exc}",
+                retry_phase=None,
+            )
         try:
             candidates = [
                 tee_range.TeeRangeCandidate.from_dict(state.evidence["iwr_candidate"]),
@@ -2476,6 +2689,7 @@ def create_app(
         params = TesterParameters(tester_id, arm_id, "indoors")
         gain, exposure_us = resolve_gain(sessions_root, params)
         tilt_snapshot = enclosure.reading()
+        capture_id = f"{arm_id}-{state.sequence + 1:06d}"
         state = store.transition(
             state,
             phase=f"camera_{arm_id}_capturing",
@@ -2483,6 +2697,7 @@ def create_app(
             request_id=request_id,
             evidence={
                 f"camera_{arm_id}_capture_setup": {
+                    "capture_id": capture_id,
                     "gain": gain,
                     "exposure_us": exposure_us,
                     "arm": params.arm.as_dict(),
@@ -2518,16 +2733,21 @@ def create_app(
             reason=f"evaluating_camera_{arm_id}",
             request_id=request_id,
         )
+        capture_setup = dict(state.evidence[f"camera_{arm_id}_capture_setup"])
+        capture_id = str(capture_setup["capture_id"])
+        attempt_key = f"camera_{arm_id}_attempt_{capture_id}"
+        frame_path = store.epoch_dir(state.epoch_id) / f"camera-{capture_id}.pgm"
+        frame_sha256 = None
         try:
             frame = np.median(frames, axis=0).astype(np.uint8)
             frame_bytes = (
                 f"P5\n{frame.shape[1]} {frame.shape[0]}\n255\n".encode("ascii") + frame.tobytes()
             )
-            frame_path = store.epoch_dir(state.epoch_id) / f"camera-{arm_id}.pgm"
             if frame_path.exists() and frame_path.read_bytes() != frame_bytes:
-                raise FileExistsError(f"camera evidence already exists for {arm_id}")
+                raise FileExistsError(f"camera evidence already exists for attempt {capture_id}")
             if not frame_path.exists():
                 atomic_write(frame_path, frame_bytes)
+            frame_sha256 = hashlib.sha256(frame_bytes).hexdigest()
             tilt_snapshot = enclosure.reading()
             model = _reference_ball_camera(
                 ARMS[arm_id],
@@ -2551,22 +2771,40 @@ def create_app(
                 camera_placement=camera_placement,
                 camera_model=model,
                 capture_controls={
-                    **dict(state.evidence[f"camera_{arm_id}_capture_setup"]),
+                    **capture_setup,
                     "orientation_at_evaluation": tilt_snapshot,
                 },
-                frame_sha256=hashlib.sha256(frame_bytes).hexdigest(),
+                frame_sha256=frame_sha256,
                 qualification=qualification,
             )
-        except (OSError, TypeError, ValueError) as exc:
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
             return store.transition(
                 state,
                 phase="retryable_failure",
                 reason=f"camera_{arm_id}_evaluation_failed: {exc}",
+                evidence={
+                    attempt_key: {
+                        "capture_id": capture_id,
+                        "status": "evaluation_failed",
+                        "frame": frame_path.name if frame_path.is_file() else None,
+                        "frame_sha256": frame_sha256,
+                        "reason": str(exc),
+                    }
+                },
                 retry_phase=f"needs_camera_{arm_id}",
             )
         finally:
             live.stop()
-        evidence = {f"camera_{arm_id}_candidate": candidate.to_dict()}
+        evidence = {
+            f"camera_{arm_id}_candidate": candidate.to_dict(),
+            attempt_key: {
+                "capture_id": capture_id,
+                "status": "evaluated",
+                "frame": frame_path.name,
+                "frame_sha256": frame_sha256,
+                "candidate_id": candidate.candidate_id,
+            },
+        }
         if arm_id == "arm5":
             return store.transition(
                 state,
@@ -2608,19 +2846,49 @@ def create_app(
                     raise ValueError("request_id is required and must be at most 128 characters")
                 store = range_store(tester_id)
                 state = store.load()
+                actions = {
+                    "start",
+                    "start_over",
+                    "ball_moved",
+                    "capture_empty",
+                    "capture_ball",
+                    "start_camera_arm5",
+                    "start_camera_arm6",
+                    "evaluate_camera_arm5",
+                    "evaluate_camera_arm6",
+                    "retry",
+                }
+                if action not in actions:
+                    raise ValueError("unknown tee-range action")
                 if state is not None and request_id in state.request_ids:
+                    bound_range_setup(tester_id, state, f"idempotent_{action}")
                     return jsonify({"state": state.to_dict(), "idempotent": True})
                 if action in {"start", "start_over", "ball_moved"}:
-                    state = store.start(request_id)
+                    reading = enclosure.reading()
+                    eligibility = setup.require(tester_id, reading, f"tee_range_{action}")
+                    if not eligibility["eligible"]:
+                        return blocked_setup(eligibility)
+                    state = store.start(
+                        request_id,
+                        setup_admission={
+                            **_tee_range_setup_binding(eligibility, reading),
+                            "tester_id": tester_id,
+                        },
+                    )
                 elif action == "capture_empty":
+                    bound_range_setup(tester_id, state, action)
                     state = _start_static_capture(tester_id, "empty", request_id)
                 elif action == "capture_ball":
+                    bound_range_setup(tester_id, state, action)
                     state = _start_static_capture(tester_id, "ball_present", request_id)
                 elif action in {"start_camera_arm5", "start_camera_arm6"}:
+                    bound_range_setup(tester_id, state, action)
                     state = _start_camera_range(tester_id, action[-4:], request_id)
                 elif action in {"evaluate_camera_arm5", "evaluate_camera_arm6"}:
+                    bound_range_setup(tester_id, state, action)
                     state = _evaluate_camera_range(tester_id, action[-4:], request_id)
                 elif action == "retry":
+                    bound_range_setup(tester_id, state, action)
                     if state is None or state.phase != "retryable_failure" or not state.retry_phase:
                         raise RuntimeError("there is no retryable tee-range step")
                     state = store.transition(
@@ -2629,9 +2897,18 @@ def create_app(
                         reason="retry_requested",
                         request_id=request_id,
                     )
-                else:
-                    raise ValueError("unknown tee-range action")
                 return jsonify({"state": state.to_dict()})
+        except TeeRangeSetupAdmissionError as exc:
+            return (
+                jsonify(
+                    {
+                        "error": str(exc),
+                        "setup_eligibility": exc.eligibility,
+                        "start_over_required": exc.start_over,
+                    }
+                ),
+                409,
+            )
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 409
         except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError) as exc:

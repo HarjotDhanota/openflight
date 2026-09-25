@@ -233,6 +233,23 @@ Missing qualification or disagreement ends in raw-only mode: the ladder remains
 available but range metrics stay withheld. A qualified Arm 5/IWR pair freezes
 one range for both modes; Arm 6 cannot change it. Advanced tape is validation only.
 
+The setup admission is also frozen with the epoch: the approved configuration,
+operator confirmation and starting LIS3DH orientation must still match before
+each capture, evaluation, finalization and later ladder admission. A changed rig
+or orientation requires **Start over / ball moved**; a temporarily ineligible
+setup is refused by the server even when a stale browser still shows an enabled
+button. Camera qualification binds the exact rig, optical calibration, placement
+and saved-image mode profile. IWR qualification additionally requires a finite,
+positive measured range-bias uncertainty in the exact hashed calibration file.
+Missing or legacy qualification fields preserve the captures but keep them
+raw-only.
+
+If the tester service restarts during a static IWR capture, it keeps waiting only
+while the reserved capture process is alive within the bounded restart window,
+then consumes its late immutable result. A dead or stale reservation becomes a
+retryable step. Camera retries write a new immutable attempt frame and retain
+every earlier frame and failure record for review.
+
 | What you see | Cause | Fix |
 | --- | --- | --- |
 | `fatal: ambiguous argument 'origin/feat/tester-capture-pilot'` | `origin` is the upstream repository; the study branch is on the fork | Add the fork as shown in *Before your first run* |

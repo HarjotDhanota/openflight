@@ -16,8 +16,8 @@ from typing import Any, Iterable, Mapping, Sequence
 SCHEMA = "openflight.tee_range.v2"
 SCHEMA_VERSION = 2
 LEGACY_SCHEMA = "openflight.tee_range.v1"
-QUALIFICATION_SCHEMA = "openflight.tee_range_qualification.v1"
-QUALIFICATION_SCHEMA_VERSION = 1
+QUALIFICATION_SCHEMA = "openflight.tee_range_qualification.v2"
+QUALIFICATION_SCHEMA_VERSION = 2
 PROMOTION_POLICY_VERSION = "tee-range-promotion-v1"
 UNRESOLVED_LEGACY_REASON = "legacy_session_has_no_tee_range_contract"
 SOURCE_GROUPS = frozenset({"camera", "iwr", "manual_truth"})
@@ -176,6 +176,8 @@ class TeeRangeQualification:  # pylint: disable=too-many-instance-attributes
 
     rig_geometry_sha256: str
     camera_calibration_sha256: str
+    camera_placement_sha256: str
+    camera_mode_profile_sha256: str
     camera_arm_id: str
     iwr_firmware_sha256: str
     iwr_capture_config_sha256: str
@@ -194,6 +196,8 @@ class TeeRangeQualification:  # pylint: disable=too-many-instance-attributes
         for name in (
             "rig_geometry_sha256",
             "camera_calibration_sha256",
+            "camera_placement_sha256",
+            "camera_mode_profile_sha256",
             "iwr_firmware_sha256",
             "iwr_capture_config_sha256",
             "iwr_profile_sha256",
@@ -235,6 +239,8 @@ class TeeRangeQualification:  # pylint: disable=too-many-instance-attributes
             "identities": {
                 "rig_geometry_sha256": self.rig_geometry_sha256,
                 "camera_calibration_sha256": self.camera_calibration_sha256,
+                "camera_placement_sha256": self.camera_placement_sha256,
+                "camera_mode_profile_sha256": self.camera_mode_profile_sha256,
                 "camera_arm_id": self.camera_arm_id,
                 "iwr_firmware_sha256": self.iwr_firmware_sha256,
                 "iwr_capture_config_sha256": self.iwr_capture_config_sha256,
@@ -290,6 +296,8 @@ class TeeRangeQualification:  # pylint: disable=too-many-instance-attributes
         if set(identities) != {
             "rig_geometry_sha256",
             "camera_calibration_sha256",
+            "camera_placement_sha256",
+            "camera_mode_profile_sha256",
             "camera_arm_id",
             "iwr_firmware_sha256",
             "iwr_capture_config_sha256",
@@ -319,6 +327,8 @@ class TeeRangeQualification:  # pylint: disable=too-many-instance-attributes
         return cls(
             rig_geometry_sha256=identities["rig_geometry_sha256"],
             camera_calibration_sha256=identities["camera_calibration_sha256"],
+            camera_placement_sha256=identities["camera_placement_sha256"],
+            camera_mode_profile_sha256=identities["camera_mode_profile_sha256"],
             camera_arm_id=identities["camera_arm_id"],
             iwr_firmware_sha256=identities["iwr_firmware_sha256"],
             iwr_capture_config_sha256=identities["iwr_capture_config_sha256"],
@@ -632,6 +642,8 @@ def resolve_qualified_tee_range(
     for name, expected in (
         ("rig_geometry_sha256", qualification.rig_geometry_sha256),
         ("camera_calibration_sha256", qualification.camera_calibration_sha256),
+        ("camera_placement_sha256", qualification.camera_placement_sha256),
+        ("camera_mode_profile_sha256", qualification.camera_mode_profile_sha256),
     ):
         if reason := _exact_fact(camera_facts, name, expected, "camera"):
             return _unresolved(observed, reason)
