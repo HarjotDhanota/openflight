@@ -1200,6 +1200,7 @@ def init_camera_capture(
             )
             if tester_setup_required
             else None,
+            on_trigger_rejected=_log_camera_trigger_rejection,
         )
         camera_capture_runtime.start()
         settings = camera_capture_runtime.settings
@@ -1255,6 +1256,13 @@ def init_camera_capture(
         camera_ball_flight_reference_tracker = None
         camera_capture_config = {"enabled": False, "error": str(error)}
         return False
+
+
+def _log_camera_trigger_rejection(rejection: dict) -> None:
+    """Keep every refused camera trigger in the session log, with or without a shot."""
+    session_log = get_session_logger()
+    if session_log:
+        session_log.log_camera_trigger_rejected(**rejection)
 
 
 def init_camera_calibrated_fusion(calibration_path: str | None, placement_path: str | None) -> None:
@@ -3862,7 +3870,11 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                         trigger_timestamp=camera_capture.trigger_timestamp,
                         capture_path=str(camera_capture.path) if camera_capture.path else None,
                         metadata=camera_capture.metadata,
-                        capture_error=camera_capture.error,
+                        capture_error=(
+                            f"camera_save_failed: {camera_capture.error}"
+                            if camera_capture.error
+                            else None
+                        ),
                     )
                     if camera_capture.valid:
                         logger.info(
@@ -3877,12 +3889,20 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                             camera_capture.error,
                         )
                 else:
+                    rejection = camera_capture_runtime.trigger_rejection_for_shot(
+                        shot.impact_timestamp
+                    )
                     session_log.log_camera_capture(
                         shot_number=shot_number,
                         shot_timestamp=shot.impact_timestamp,
-                        trigger_timestamp=None,
+                        trigger_timestamp=rejection["trigger_timestamp"] if rejection else None,
                         capture_path=None,
-                        capture_error="no_matching_camera_capture",
+                        metadata={"trigger_rejection": rejection} if rejection else None,
+                        capture_error=(
+                            f"camera_trigger_rejected:{rejection['reason']}"
+                            if rejection
+                            else "no_matching_camera_capture"
+                        ),
                     )
                     logger.warning("[SERVER] No camera capture matched this shot")
     except Exception as error:  # pylint: disable=broad-exception-caught

@@ -432,6 +432,28 @@ class SessionLogger:
             },
         )
 
+    def log_camera_trigger_rejected(
+        self,
+        *,
+        trigger_timestamp: float,
+        reason: str,
+        detail: Optional[str] = None,
+        pending_saves: Optional[int] = None,
+    ):
+        """Log a trigger edge the camera refused, with the reason, even without a shot."""
+        if not self.enabled:
+            return
+
+        self._write_entry(
+            "camera_trigger_rejected",
+            {
+                "trigger_timestamp": trigger_timestamp,
+                "reason": reason,
+                "detail": detail,
+                "pending_saves": pending_saves,
+            },
+        )
+
     def log_kld7_buffer(
         self,
         shot_number: int,

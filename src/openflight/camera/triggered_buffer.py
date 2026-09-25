@@ -123,6 +123,17 @@ class TriggeredFrameBuffer:
             self._capturing = True
             return True
 
+    def busy_reason(self) -> Optional[str]:
+        """Why a trigger would be refused right now, or None when it would be taken."""
+        with self._condition:
+            if self._capturing:
+                return "capture_in_progress"
+            if self._ready is not None:
+                return "capture_awaiting_handoff"
+            if len(self._pre) < self.pre_trigger_frames:
+                return "prebuffer_filling"
+            return None
+
     def wait_for_capture(self, timeout_s: Optional[float] = None) -> Optional[TriggeredCapture]:
         """Wait for and consume the next completed capture."""
         with self._condition:

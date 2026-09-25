@@ -11,6 +11,7 @@ import queue
 import sys
 import threading
 import time
+from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -46,6 +47,7 @@ AUTO_EXPOSURE_STARTUP_SETTLE_S = 0.3
 # Completed clips waiting for the disk. Each full-resolution clip is about 25 MB in
 # RAM; a false-trigger storm on a slow card must not grow this without bound.
 MAX_PENDING_SAVES = 3
+MAX_REMEMBERED_REJECTIONS = 64
 
 
 def vertical_crop_limits(width: int, height: int) -> dict[str, int] | None:
@@ -306,6 +308,7 @@ class CameraCaptureRuntime:
         use_gpio_trigger: bool = True,
         vertical_offset_path: str | Path = OV9281_VERTICAL_OFFSET_PATH,
         trigger_evidence_provider: Callable[[float], dict] | None = None,
+        on_trigger_rejected: Callable[[dict], None] | None = None,
     ):
         self.output_dir = Path(output_dir).expanduser()
         self.settings = settings or CameraCaptureSettings()
@@ -313,6 +316,8 @@ class CameraCaptureRuntime:
         self._use_gpio_trigger = use_gpio_trigger
         self._vertical_offset_path = Path(vertical_offset_path)
         self._trigger_evidence_provider = trigger_evidence_provider
+        self._on_trigger_rejected = on_trigger_rejected
+        self._trigger_rejections: deque[dict] = deque(maxlen=MAX_REMEMBERED_REJECTIONS)
         self._auto_exposure_state_path = (
             Path(self.settings.auto_exposure_state_path).expanduser()
             if self.settings.auto_exposure_state_path is not None
@@ -701,17 +706,52 @@ class CameraCaptureRuntime:
             "auto_exposure": self.auto_exposure_status(),
         }
 
+    def _reject_trigger(self, trigger_epoch: float, reason: str, detail: str | None) -> bool:
+        """Remember why a trigger edge produced no capture, and report it."""
+        rejection = {
+            "trigger_timestamp": trigger_epoch,
+            "reason": reason,
+            "detail": detail,
+            "pending_saves": self._ready.qsize(),
+        }
+        logger.warning("[CAMERA] Trigger refused (%s): %s", reason, detail)
+        with self._condition:
+            self._trigger_rejections.append(rejection)
+        if self._on_trigger_rejected is not None:
+            try:
+                self._on_trigger_rejected(dict(rejection))
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.warning("[CAMERA] Trigger rejection observer failed", exc_info=True)
+        return False
+
+    def trigger_rejection_for_shot(self, impact_timestamp: float | None) -> dict | None:
+        """Consume the refused trigger nearest an OPS shot, if one explains a missing clip."""
+        if impact_timestamp is None:
+            return None
+        tolerance = self.settings.match_tolerance_s
+        with self._condition:
+            nearby = [
+                item
+                for item in self._trigger_rejections
+                if abs(item["trigger_timestamp"] - impact_timestamp) <= tolerance
+            ]
+            if not nearby:
+                return None
+            chosen = min(nearby, key=lambda item: abs(item["trigger_timestamp"] - impact_timestamp))
+            self._trigger_rejections.remove(chosen)
+            return dict(chosen)
+
     def notify_trigger(self, timestamp: float | None = None) -> bool:
         """Freeze the camera ring on a sound-trigger edge."""
-        if not self._running:
-            return False
-        if self._ready.qsize() >= MAX_PENDING_SAVES:
-            logger.warning(
-                "[CAMERA] Ignoring trigger: %d captures are still waiting to be saved",
-                self._ready.qsize(),
-            )
-            return False
         trigger_epoch = time.time() if timestamp is None else float(timestamp)
+        if not self._running:
+            return self._reject_trigger(trigger_epoch, "camera_stopped", "capture is not running")
+        if self._ready.qsize() >= MAX_PENDING_SAVES:
+            return self._reject_trigger(
+                trigger_epoch,
+                "save_backlog_full",
+                f"{self._ready.qsize()} completed clips are still waiting for the disk",
+            )
         with self._trigger_exposure_lock:
             evidence = None
             if self._trigger_evidence_provider is not None:
@@ -726,8 +766,8 @@ class CameraCaptureRuntime:
                     logger.warning("[CAMERA] Trigger evidence provider failed", exc_info=True)
             accepted = self._ring.trigger(time.monotonic_ns())
             if not accepted:
-                logger.debug("[CAMERA] Ignoring trigger edge while capture is busy")
-                return False
+                busy = getattr(self._ring, "busy_reason", lambda: None)()
+                return self._reject_trigger(trigger_epoch, "ring_busy", busy)
             self._trigger_epochs.put(trigger_epoch)
             self._trigger_auto_exposure.put(self.auto_exposure_status())
             self._trigger_evidence.put(evidence)

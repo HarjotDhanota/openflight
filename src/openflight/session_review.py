@@ -202,8 +202,61 @@ def _read_session(run: _Run) -> list[dict[str, Any]]:
     return events
 
 
+_TRIGGER_REJECTION_CATEGORIES = {
+    "save_backlog_full": "trigger_rejected_backlog",
+    "ring_busy": "trigger_rejected_ring_busy",
+    "camera_stopped": "trigger_rejected_camera_stopped",
+}
+CAMERA_OUTCOME_TEXT = {
+    "captured": "camera clip saved",
+    "trigger_rejected_backlog": "camera refused the trigger: earlier clips were still being saved",
+    "trigger_rejected_ring_busy": "camera refused the trigger: it was still busy with another clip",
+    "trigger_rejected_camera_stopped": "camera refused the trigger: capture was not running",
+    "trigger_rejected": "camera refused the trigger",
+    "save_failed": "the clip was captured but could not be saved",
+    "association_timeout": "no saved clip matched this shot within the association window",
+    "capture_error": "the camera reported an error",
+    "not_recorded": "the session recorded no camera outcome for this shot",
+}
+
+
+def camera_outcome(captures: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """What happened on the camera for one shot, in the categories the tester reports."""
+    saved = next((event for event in captures if not event.get("capture_error")), None)
+    if saved is not None:
+        category, detail = "captured", None
+    elif not captures:
+        category, detail = "not_recorded", None
+    else:
+        error = str(captures[0]["capture_error"])
+        rejection = mapping(mapping(captures[0].get("metadata")).get("trigger_rejection"))
+        if error.startswith("camera_trigger_rejected:"):
+            reason = error.split(":", 1)[1]
+            category = _TRIGGER_REJECTION_CATEGORIES.get(reason, "trigger_rejected")
+            detail = rejection.get("detail") or reason
+        elif error.startswith("camera_save_failed"):
+            category, detail = "save_failed", error.split(":", 1)[-1].strip()
+        elif error == "no_matching_camera_capture":
+            category, detail = "association_timeout", None
+        else:
+            category, detail = "capture_error", error
+    return {"category": category, "label": CAMERA_OUTCOME_TEXT[category], "detail": detail}
+
+
 def _summarize_triggers_and_ledger(run: _Run, events: list[dict[str, Any]], shots: int) -> None:
     for event in events:
+        if event.get("type") == "camera_trigger_rejected":
+            reason = str(event.get("reason"))
+            counts = run.summary["camera_trigger_rejections"]["counts"]
+            counts[reason] = counts.get(reason, 0) + 1
+            listed = run.summary["camera_trigger_rejections"]["recent"]
+            if len(listed) < MAX_REJECTED_TRIGGERS_PER_RUN:
+                listed.append(
+                    {
+                        key: event.get(key)
+                        for key in ("ts", "trigger_timestamp", "reason", "detail", "pending_saves")
+                    }
+                )
         if event.get("type") == "trigger_event" and event.get("accepted") is False:
             run.summary["rejected_trigger_count"] += 1
             if len(run.summary["rejected_triggers"]) < MAX_REJECTED_TRIGGERS_PER_RUN:
@@ -266,6 +319,7 @@ def _shot_attempt(
             "session_file": run.summary["session_file"],
             "camera_capture": run.relative(capture_dir),
             "camera_capture_error": camera_error,
+            "camera_outcome": camera_outcome(captures),
             "preview_frames": _previews(capture_dir, run.root),
             "iwr_dump": run.relative(iwr_file) if iwr_file and iwr_file.is_file() else None,
             "impact_photo": run.photo(capture_name),
@@ -328,6 +382,7 @@ def _review_run(run: _Run) -> list[dict[str, Any]]:
         session_uuid=None,
         errors=[],
         rejected_triggers=[],
+        camera_trigger_rejections={"counts": {}, "recent": []},
         rejected_trigger_count=0,
         attempt_ledger=None,
     )

@@ -398,3 +398,18 @@ def test_local_replay_reports_render_with_experimental_spin_and_reasons():
             assert metric["status"] in STATUSES
             if metric["status"] not in ("accepted",):
                 assert metric["reason"], metric
+
+
+def test_refused_camera_triggers_are_counted_by_reason_even_without_a_shot(tmp_path):
+    root = _tester_tree(tmp_path)
+    session = next((root / "t1" / "arm5" / "paired" / "run-01").glob("session_*.jsonl"))
+    with session.open("a", encoding="utf-8") as handle:
+        for reason in ("ring_busy", "ring_busy", "save_backlog_full"):
+            event = {"type": "camera_trigger_rejected", "reason": reason, "trigger_timestamp": 1.0}
+            handle.write(json.dumps(event) + "\n")
+    review = build_session_review(root, "t1", analysis={})
+    rejections = review["runs"][0]["camera_trigger_rejections"]
+    assert rejections["counts"] == {"ring_busy": 2, "save_backlog_full": 1}
+    assert len(rejections["recent"]) == 3
+    attempt = next(a for a in review["attempts"] if a["attempt_id"] == "session-one:1")
+    assert attempt["evidence"]["camera_outcome"]["category"] == "captured"
