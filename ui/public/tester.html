@@ -678,6 +678,7 @@
       let lastAutomaticRange = null;
       let teeRangeState = null;
       let teeRangeRequestRunning = false;
+      let teeRangeActionError = null;
       const REQUEST_TIMEOUT_MS = 5000;
       const ACTION_TIMEOUT_MS = 15000;
       const PACKAGE_TIMEOUT_MS = 300000;
@@ -1236,7 +1237,9 @@
             setupEligibility = j.setup_eligibility;
             renderSetupEligibility();
           }
-          throw new Error(j.error || `request failed (${r.status})`);
+          const error = new Error(j.error || `request failed (${r.status})`);
+          error.response = j;
+          throw error;
         }
         return j;
       }
@@ -1339,6 +1342,18 @@
         },
       };
 
+      function teeRangeFailureSummary(state) {
+        if (state?.phase !== 'retryable_failure') return null;
+        const failure = state?.evidence?.capture_failure;
+        if (!failure) return null;
+        const kind = failure.capture_kind === 'ball_present' ? 'Ball-present' : 'Empty';
+        const stage = failure.stage || 'unknown stage';
+        const type = failure.type ? ` (${failure.type})` : '';
+        const message = failure.message || 'capture was unusable';
+        const remedy = failure.remedy ? ` Remedy: ${failure.remedy}` : '';
+        return `${kind} IWR capture failed at ${stage}${type}: ${message}.${remedy}`;
+      }
+
       function renderTeeRange() {
         const state = teeRangeState;
         const phase = state?.phase;
@@ -1351,9 +1366,9 @@
         action.disabled = teeRangeRequestRunning || startOverRequired || Boolean(state && !step?.action);
         action.dataset.action = startOverRequired ? '' : (step?.action || 'start');
         el('automatic-range-summary').className = phase === 'retryable_failure' ? 'problem' : 'note';
-        el('automatic-range-summary').textContent = state
+        el('automatic-range-summary').textContent = teeRangeActionError || teeRangeFailureSummary(state) || (state
           ? `${startOverRequired ? state.reason : (step?.prompt || state.reason)} ${!startOverRequired && state.reason && state.reason !== step?.prompt ? `(${state.reason.replaceAll('_', ' ')})` : ''}`
-          : 'Start after both camera modes pass the light check. No tape measurement is required.';
+          : 'Start after both camera modes pass the light check. No tape measurement is required.');
         const solution = state?.solution;
         const selected = solution?.selected_range_m;
         const iwr = state?.evidence?.iwr_candidate;
@@ -1391,7 +1406,17 @@
 
       async function submitTeeRange(action) {
         if (teeRangeRequestRunning) return;
-        if (!(await requireSetupEligibility())) return;
+        if (!(await requireSetupEligibility())) {
+          const confirmationMissing = !setupEligibility?.operator_confirmation?.confirmed;
+          const iwrCheckMissing = setupEligibility?.blockers?.some((blocker) => blocker.id === 'iwr6843_cli');
+          teeRangeActionError = teeRangeState && confirmationMissing
+            ? `The tester restarted. ${iwrCheckMissing ? 'Run Check the hardware and ' : ''}reconfirm the physical setup, then start this automatic range over.`
+            : iwrCheckMissing
+              ? 'IWR6843 CLI readiness was invalidated by the failed capture. Press RESET if needed, run Check the hardware, then Retry this step.'
+              : 'Confirm the physical setup and pass every hardware check before starting automatic range.';
+          renderTeeRange();
+          return;
+        }
         teeRangeRequestRunning = true;
         renderTeeRange();
         try {
@@ -1401,9 +1426,12 @@
             request_id: newAttemptId(),
           });
           teeRangeState = body.state;
+          teeRangeActionError = null;
         } catch (error) {
-          el('automatic-range-summary').className = 'problem';
-          el('automatic-range-summary').textContent = error.message;
+          if (error.response?.state) teeRangeState = error.response.state;
+          teeRangeActionError = error.response?.start_over_required
+            ? `${error.message}. Use “Ball or rig moved: start over” to begin a new setup epoch.`
+            : error.message;
         } finally {
           teeRangeRequestRunning = false;
           renderTeeRange();
@@ -1853,6 +1881,7 @@
         setupActionPending = false;
         teeRangeState = null;
         teeRangeRequestRunning = false;
+        teeRangeActionError = null;
         renderTeeRange();
         invalidateSetupEligibility('Tester ID changed. Server setup eligibility must be rechecked.');
         photoActionPending = false;

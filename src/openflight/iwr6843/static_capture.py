@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from openflight.iwr6843.driver import IWR6843Radar
+from openflight.iwr6843.driver import IWR6843DumpRecoveryError, IWR6843Radar
 from openflight.iwr6843.range_evidence import static_range_profile
 
 SCHEMA = "openflight.iwr6843.static_capture.v1"
@@ -153,9 +153,10 @@ def _default_wait(cancel_event: threading.Event, seconds: float) -> bool:
     return cancel_event.wait(seconds)
 
 
-def _cleanup_radar(radar: Any) -> list[dict[str, str]]:
+def _cleanup_radar(radar: Any, *, stop_sensor: bool = True) -> list[dict[str, str]]:
     errors = []
-    for operation in ("stop_sensor", "close"):
+    operations = ("stop_sensor", "close") if stop_sensor else ("close",)
+    for operation in operations:
         try:
             getattr(radar, operation)()
         except Exception as error:  # pylint: disable=broad-exception-caught
@@ -212,6 +213,7 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
             ],
         }
         radar = None
+        cli_health_uncertain = False
         stage = "connect"
         config_snapshot: str | None = None
         try:
@@ -235,7 +237,13 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
                     "capture cancelled while waiting for a fresh stable ring"
                 )
             stage = "read_dump"
-            raw = radar.read_dump()
+            dump_recovery_error = None
+            try:
+                raw = radar.read_dump()
+            except IWR6843DumpRecoveryError as error:
+                raw = error.raw
+                dump_recovery_error = error
+                cli_health_uncertain = True
             if not isinstance(raw, bytes):
                 raise TypeError("IWR6843 read_dump must return bytes")
             stage = "persist_raw"
@@ -250,6 +258,14 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
             if cancel.is_set():
                 stage = "read_dump"
                 raise StaticCaptureCancelled("capture cancelled after raw evidence was saved")
+            stage = "post_dump_cli_health"
+            if dump_recovery_error is not None:
+                raise dump_recovery_error
+            try:
+                radar.verify_post_dump_cli()
+            except Exception:
+                cli_health_uncertain = True
+                raise
             stage = "derive_profile"
             profile = static_range_profile(
                 raw,
@@ -267,7 +283,9 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
             result["error"] = _error(stage, error)
         finally:
             if radar is not None:
-                result["cleanup_errors"] = _cleanup_radar(radar)
+                result["cleanup_errors"] = _cleanup_radar(
+                    radar, stop_sensor=not cli_health_uncertain
+                )
             if config_snapshot is not None:
                 Path(config_snapshot).unlink(missing_ok=True)
         if result["cleanup_errors"]:

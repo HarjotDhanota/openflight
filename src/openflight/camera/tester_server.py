@@ -554,6 +554,7 @@ def action_commands(
     optical_calibration: Path | None = None,
     camera_placement: Path | None = None,
     tee_range_solution: tee_range.TeeRangeSolution | None = None,
+    iwr_static_port: str | None = None,
 ) -> tuple[list[list[str]], Path]:
     """Build an allowlisted command sequence and its log path."""
     if action not in ACTION_LABELS:
@@ -568,6 +569,10 @@ def action_commands(
             ["uname", "-a"],
             ["rpicam-hello", "--list-cameras"],
             ["vcgencmd", "get_throttled"],
+            _python_command(
+                "scripts/iwr6843/check_cli.py",
+                *(["--port", iwr_static_port] if iwr_static_port else []),
+            ),
         ]
     elif action == "gain":
         commands = [
@@ -1701,6 +1706,39 @@ def _guided_iwr_candidate(
     )
 
 
+def _static_capture_failure(record: Mapping, capture_kind: str) -> dict[str, str]:
+    error = record.get("error") if isinstance(record.get("error"), Mapping) else {}
+    stage = str(error.get("stage") or "unknown")
+    error_type = str(error.get("type") or "UnknownError")
+    message = str(error.get("message") or "the capture did not provide an error message")
+    if stage == "connect" and "no IWR6843 CLI found" in message:
+        remedy = (
+            "Power the IWR6843, set its switches to functional mode, press RESET, and verify "
+            "the CP2105 Enhanced/UARTA interface (if00) is present. If auto-detection still "
+            "misses it, restart the tester with --iwr-static-port set to its stable "
+            "/dev/serial/by-id/...-if00-port0 path."
+        )
+    elif stage == "connect":
+        remedy = (
+            "Verify the IWR6843 uses the CP2105 Enhanced/UARTA interface (if00), stop any "
+            "other serial owner, press RESET, and retry."
+        )
+    elif stage == "post_dump_cli_health":
+        remedy = (
+            "The raw dump was preserved, but the firmware CLI did not recover cleanly. Press "
+            "RESET, rerun Check the hardware, then retry this capture step."
+        )
+    else:
+        remedy = "Resolve the preserved IWR6843 error, then retry this capture step."
+    return {
+        "capture_kind": capture_kind,
+        "stage": stage,
+        "type": error_type,
+        "message": message,
+        "remedy": remedy,
+    }
+
+
 def mark_ball(image: np.ndarray, ball: Mapping) -> np.ndarray:
     """A one-pixel ring just outside the ball the detector found."""
     marked = image.copy()
@@ -2106,6 +2144,8 @@ def create_app(
     iwr_calibration: Path = DEFAULT_IWR_CALIBRATION,
     tee_range_qualification: Path | None = None,
     require_tee_range_flow: bool = False,
+    iwr_static_port: str | None = None,
+    require_iwr_preflight: bool = False,
 ) -> Flask:
     """Build the standalone tester service."""
     if (optical_calibration is None) != (camera_placement is None):
@@ -2130,6 +2170,30 @@ def create_app(
     ] = {}
     qualification = _load_tee_range_qualification(tee_range_qualification)
     tee_range_lock = threading.RLock()
+    iwr_preflight: dict[str, bool] = {}
+
+    def with_iwr_preflight(result: dict) -> dict:
+        if not require_iwr_preflight:
+            return result
+        passed = iwr_preflight.get(str(result.get("tester_id"))) is True
+        check = {
+            "id": "iwr6843_cli",
+            "label": "IWR6843 Enhanced/UARTA CLI",
+            "status": "pass" if passed else "block",
+            "reason": None if passed else "IWR6843 CLI preflight has not passed for this tester",
+            "remedy": None
+            if passed
+            else "Run Check the hardware and resolve its IWR6843 CLI result.",
+        }
+        checks = [item for item in result.get("checks", []) if item.get("id") != check["id"]]
+        blockers = [item for item in result.get("blockers", []) if item.get("id") != check["id"]]
+        checks.append(check)
+        if not passed:
+            blockers.append({key: check[key] for key in ("id", "reason", "remedy")})
+        return {**result, "checks": checks, "blockers": blockers, "eligible": not blockers}
+
+    def require_setup(tester_id: str, reading: Mapping, action: str) -> dict:
+        return with_iwr_preflight(setup.require(tester_id, reading, action))
 
     @app.before_request
     def start_request_timer():
@@ -2222,8 +2286,8 @@ def create_app(
             result["eligible"] = bool(not result["blockers"] and runtime.get("ready"))
             result["stage"] = "runtime"
             result["runtime"] = runtime
-            return result
-        return setup.evaluate(tester_id, enclosure.reading())
+            return with_iwr_preflight(result)
+        return with_iwr_preflight(setup.evaluate(tester_id, enclosure.reading()))
 
     def setup_command_config(result: Mapping) -> dict:
         return {
@@ -2240,7 +2304,7 @@ def create_app(
         if state is None:
             raise RuntimeError("start automatic tee range before this step")
         reading = enclosure.reading()
-        eligibility = setup.require(tester_id, reading, f"tee_range_{action}")
+        eligibility = require_setup(tester_id, reading, f"tee_range_{action}")
         if not eligibility["eligible"]:
             raise TeeRangeSetupAdmissionError(
                 "tester setup is not eligible for automatic tee range", eligibility
@@ -2417,10 +2481,13 @@ def create_app(
                 )
             else:
                 result = setup_status(tester_id)
-            return jsonify(result)
+            return jsonify(with_iwr_preflight(result))
         except ValueError as exc:
             return jsonify(
-                {"error": str(exc), "setup_eligibility": setup.evaluate(tester_id, reading)}
+                {
+                    "error": str(exc),
+                    "setup_eligibility": with_iwr_preflight(setup.evaluate(tester_id, reading)),
+                }
             ), 400
 
     def range_store(tester_id: str) -> FlowStore:
@@ -2519,6 +2586,7 @@ def create_app(
             key = "empty" if kind == "empty" else "ball_present"
             result_path = store.epoch_dir(epoch_id) / "iwr" / f"{capture_id}.json"
             if not result_path.is_file():
+                iwr_preflight[tester_id] = False
                 return store.transition(
                     state,
                     phase="retryable_failure",
@@ -2528,11 +2596,15 @@ def create_app(
             record = json.loads(result_path.read_text(encoding="utf-8"))
             evidence = {f"{key}_capture": record}
             if not record.get("usable"):
+                iwr_preflight[tester_id] = False
                 return store.transition(
                     state,
                     phase="retryable_failure",
                     reason=f"{key}_capture_unusable",
-                    evidence=evidence,
+                    evidence={
+                        **evidence,
+                        "capture_failure": _static_capture_failure(record, key),
+                    },
                     retry_phase="needs_empty" if key == "empty" else "needs_ball",
                 )
             if key == "empty":
@@ -2653,6 +2725,7 @@ def create_app(
             rig_geometry,
             "--calibration",
             iwr_calibration,
+            *(["--port", iwr_static_port] if iwr_static_port else []),
         )
 
         def finished(_action, _return_code):
@@ -2865,7 +2938,7 @@ def create_app(
                     return jsonify({"state": state.to_dict(), "idempotent": True})
                 if action in {"start", "start_over", "ball_moved"}:
                     reading = enclosure.reading()
-                    eligibility = setup.require(tester_id, reading, f"tee_range_{action}")
+                    eligibility = require_setup(tester_id, reading, f"tee_range_{action}")
                     if not eligibility["eligible"]:
                         return blocked_setup(eligibility)
                     state = store.start(
@@ -2899,12 +2972,30 @@ def create_app(
                     )
                 return jsonify({"state": state.to_dict()})
         except TeeRangeSetupAdmissionError as exc:
+            failed_state = None
+            if exc.start_over:
+                store = range_store(tester_id)
+                failed_state = store.load()
+                reason = f"setup_admission_changed_start_over_required: {exc}"
+                if failed_state is not None and not (
+                    failed_state.phase == "retryable_failure"
+                    and failed_state.retry_phase is None
+                    and failed_state.reason == reason
+                ):
+                    failed_state = store.transition(
+                        failed_state,
+                        phase="retryable_failure",
+                        reason=reason,
+                        retry_phase=None,
+                        request_id=request_id,
+                    )
             return (
                 jsonify(
                     {
                         "error": str(exc),
                         "setup_eligibility": exc.eligibility,
                         "start_over_required": exc.start_over,
+                        "state": failed_state.to_dict() if failed_state else None,
                     }
                 ),
                 409,
@@ -2984,7 +3075,7 @@ def create_app(
             refuse_while_analysing()
             eligibility = None
             if action in {"gain", "swings"}:
-                eligibility = setup.require(params.tester_id, enclosure.reading(), action)
+                eligibility = require_setup(params.tester_id, enclosure.reading(), action)
                 if not eligibility["eligible"]:
                     return blocked_setup(eligibility)
             solution = None
@@ -3003,6 +3094,7 @@ def create_app(
                 optical_calibration,
                 camera_placement,
                 solution,
+                iwr_static_port,
             )
             write_arm_state(sessions_root, params)
             if action == "swings":
@@ -3033,6 +3125,10 @@ def create_app(
                     active_setup_tester["tester_id"] = None
                     active_runtime_dir["path"] = None
                     enclosure.start()
+            elif action == "preflight":
+
+                def on_finish(_action, return_code):
+                    iwr_preflight[params.tester_id] = return_code == 0
             else:
                 on_finish = None
             live.stop()  # the camera does one thing at a time
@@ -3427,7 +3523,7 @@ def create_app(
                     "saved_attempt_scopes": attempt_scopes(sessions_root, params.tester_id),
                 }
             )
-        eligibility = setup.require(params.tester_id, enclosure.reading(), "ladder")
+        eligibility = require_setup(params.tester_id, enclosure.reading(), "ladder")
         if not eligibility["eligible"]:
             return blocked_setup(eligibility)
         admitted_setup[params.tester_id] = eligibility
@@ -3632,6 +3728,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--iwr-static-config", type=Path, default=DEFAULT_IWR_STATIC_CONFIG)
     parser.add_argument("--iwr-firmware", type=Path, default=DEFAULT_IWR_FIRMWARE)
     parser.add_argument("--iwr-calibration", type=Path, default=DEFAULT_IWR_CALIBRATION)
+    parser.add_argument(
+        "--iwr-static-port",
+        default=None,
+        help=(
+            "IWR6843 Enhanced/UARTA device for tester preflight and static setup captures; "
+            "auto-detect when omitted"
+        ),
+    )
     parser.add_argument("--tee-range-qualification", type=Path, default=None)
     parser.add_argument("--radar-port", default=DEFAULT_RADAR_PORT, help="OPS243 serial port")
     parser.add_argument(
@@ -3681,8 +3785,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             iwr_static_config=args.iwr_static_config,
             iwr_firmware=args.iwr_firmware,
             iwr_calibration=args.iwr_calibration,
+            iwr_static_port=args.iwr_static_port,
             tee_range_qualification=args.tee_range_qualification,
             require_tee_range_flow=True,
+            require_iwr_preflight=True,
         ).run(host=args.host, port=args.port)
     except Exception:  # pylint: disable=broad-exception-caught
         logger.exception("Tester server stopped unexpectedly")

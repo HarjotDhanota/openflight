@@ -29,6 +29,14 @@ _PORT_GLOBS = ("/dev/ttyUSB*", "/dev/tty.SLAB_USBtoUART*")
 logger = logging.getLogger(__name__)
 
 
+class IWR6843DumpRecoveryError(RuntimeError):
+    """Dump bytes were received, but capture or CLI recovery did not complete."""
+
+    def __init__(self, message: str, raw: bytes):
+        super().__init__(message)
+        self.raw = raw
+
+
 def open_port(port: str, baud: int = BAUD, timeout: float = 0.3) -> serial.Serial:
     """DTR/RTS-safe serial open."""
     ser = serial.Serial()
@@ -217,22 +225,36 @@ class IWR6843Radar:
             elif len(buf) >= expected:
                 break
         if expected is None:
-            return bytes(buf)
+            raise IWR6843DumpRecoveryError(
+                "IWR6843 did not return a complete dump header before the capture timeout",
+                bytes(buf),
+            )
 
         payload = bytes(buf[:expected])
-        if len(payload) == expected:
-            # The binary payload can finish just before the CLI handler returns.
-            # Wait for its trailing Done before another command can be consumed
-            # by the firmware while it is still completing dump/restart work.
-            elapsed = time.time() - start
-            trailer = self._wait_for_dump_cli_ready(
-                buf[expected:], timeout_s=min(1.0, max(0.0, timeout_s - elapsed))
+        if len(payload) < expected:
+            raise IWR6843DumpRecoveryError(
+                f"IWR6843 dump ended early ({len(payload)} of {expected} bytes)",
+                payload,
             )
-            if b"Error" in trailer:
-                raise RuntimeError(
-                    f"IWR6843 dump completed but firmware restart failed: "
-                    f"{trailer.decode(errors='replace').strip()}"
-                )
+        # The binary payload can finish just before the CLI handler returns.
+        # Wait for its trailing Done before another command can be consumed
+        # by the firmware while it is still completing dump/restart work.
+        elapsed = time.time() - start
+        trailer = self._wait_for_dump_cli_ready(
+            buf[expected:], timeout_s=max(0.0, timeout_s - elapsed)
+        )
+        if b"Error" in trailer:
+            raise IWR6843DumpRecoveryError(
+                f"IWR6843 dump completed but firmware restart failed: "
+                f"{trailer.decode(errors='replace').strip()}",
+                payload,
+            )
+        if b"Done" not in trailer:
+            raise IWR6843DumpRecoveryError(
+                "IWR6843 dump completed but firmware did not return to its CLI before "
+                "the capture timeout; press RESET before retrying",
+                payload,
+            )
         return payload
 
     def _wait_for_dump_cli_ready(self, initial: bytes, *, timeout_s: float) -> bytes:
@@ -252,10 +274,22 @@ class IWR6843Radar:
         """Firmware health line (frames/wraps/active/calib/rf_faults)."""
         return self.cmd("stats", 2.0)
 
+    def verify_post_dump_cli(self) -> None:
+        """Require the restarted sensor and CLI after a completed binary dump."""
+        health = self.cmd("stats", 6.0)
+        try:
+            self._require_done("post-dump stats", health)
+        except RuntimeError as error:
+            raise RuntimeError(f"IWR6843 post-dump CLI health check failed: {error}") from error
+        if "active=1" not in health:
+            raise RuntimeError(
+                f"IWR6843 post-dump CLI health check found inactive capture: {health.strip()}"
+            )
+
     def stop_sensor(self) -> None:
         """Stop capture and verify the firmware returned to its idle CLI state."""
-        self._require_done("sensorStop", self.cmd("sensorStop", 3.0))
-        health = self.stats()
+        self._require_done("sensorStop", self.cmd("sensorStop", 6.0))
+        health = self.cmd("stats", 6.0)
         self._require_done("stats", health)
         if "active=0" not in health:
             raise RuntimeError(f"IWR6843 remained active after sensorStop: {health.strip()}")

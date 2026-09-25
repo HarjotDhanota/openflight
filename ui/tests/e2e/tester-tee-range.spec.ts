@@ -31,6 +31,7 @@ type FlowState = {
 
 async function base(page: Page, initial: FlowState | null = null) {
   let state = initial;
+  let postFailure: { body: object; status: number } | null = null;
   const next: Record<string, string> = {
     start: 'needs_empty',
     start_over: 'needs_empty',
@@ -48,6 +49,7 @@ async function base(page: Page, initial: FlowState | null = null) {
   await page.route('**/api/tester/ladder?**', (route) => json(route, { ladder: null, stopped: true }));
   await page.route('**/api/tester/tee-range**', (route) => {
     if (route.request().method() === 'GET') return json(route, { state });
+    if (postFailure) return json(route, postFailure.body, postFailure.status);
     const action = route.request().postDataJSON().action as string;
     const phase = next[action];
     state = {
@@ -71,6 +73,9 @@ async function base(page: Page, initial: FlowState | null = null) {
     state: () => state,
     setState: (value: FlowState) => {
       state = value;
+    },
+    setPostFailure: (value: { body: object; status: number } | null) => {
+      postFailure = value;
     },
   };
 }
@@ -114,6 +119,26 @@ test('shows retry and a qualified resolved range without accepting tape input', 
   });
   await page.goto('/tester.html');
   await expect(page.locator('#tee-range-action')).toHaveText('Retry this step');
+  fixture.setState({
+    ...fixture.state()!,
+    evidence: {
+      empty_capture: { usable: false },
+      capture_failure: {
+        capture_kind: 'empty',
+        stage: 'connect',
+        type: 'RuntimeError',
+        message: 'no IWR6843 CLI found — board on, flashed, single-port fw?',
+        remedy: 'Use the CP2105 Enhanced/UARTA interface (if00), press RESET, and retry.',
+      },
+    },
+  });
+  await page.reload();
+  await expect(page.locator('#automatic-range-summary')).toContainText(
+    'Empty IWR capture failed at connect (RuntimeError): no IWR6843 CLI found'
+  );
+  await expect(page.locator('#automatic-range-summary')).toContainText(
+    'Remedy: Use the CP2105 Enhanced/UARTA interface (if00), press RESET, and retry.'
+  );
   await page.locator('#tee-range-action').tap();
   await expect(page.locator('#tee-range-action')).toHaveText('Capture empty hitting area');
 
@@ -147,6 +172,59 @@ test('requires start over when setup admission changed', async ({ page }) => {
   await expect(page.locator('#tee-range-action')).toHaveText('Start over required');
   await expect(page.locator('#tee-range-action')).toBeDisabled();
   await expect(page.locator('#tee-range-restart')).toBeVisible();
+});
+
+test('guides reconfirmation after restart and retains the start-over response', async ({ page }) => {
+  const retryable: FlowState = {
+    epoch_id: 'epoch-before-restart',
+    phase: 'retryable_failure',
+    reason: 'empty_capture_unusable',
+    retry_phase: 'needs_empty',
+    evidence: {},
+    solution: null,
+  };
+  const fixture = await base(page, retryable);
+  await page.unroute('**/api/tester/setup-eligibility?**');
+  let confirmed = false;
+  await page.route('**/api/tester/setup-eligibility?**', (route) =>
+    json(route, {
+      ...eligibility(),
+      eligible: confirmed,
+      blockers: confirmed ? [] : [{ id: 'iwr6843_cli' }],
+      operator_confirmation: { confirmed },
+    })
+  );
+  await page.route('**/api/tester/setup-eligibility', (route) => {
+    confirmed = true;
+    return json(route, eligibility());
+  });
+  await page.goto('/tester.html');
+
+  await page.locator('#tee-range-action').tap();
+  await expect(page.locator('#automatic-range-summary')).toContainText(
+    'The tester restarted. Run Check the hardware and reconfirm the physical setup, then start this automatic range over.'
+  );
+
+  await page.locator('#setup-physical-confirm').check();
+  await page.locator('#setup-confirm').tap();
+  fixture.setPostFailure({
+    status: 409,
+    body: {
+      error: 'automatic tee-range setup admission changed; start over',
+      start_over_required: true,
+      state: { ...retryable, retry_phase: null, reason: 'setup_admission_changed_start_over_required' },
+    },
+  });
+  await page.locator('#tee-range-action').tap();
+
+  await expect(page.locator('#tee-range-action')).toHaveText('Start over required');
+  await expect(page.locator('#tee-range-action')).toBeDisabled();
+  await expect(page.locator('#automatic-range-summary')).toContainText(
+    'automatic tee-range setup admission changed; start over'
+  );
+  await expect(page.locator('#automatic-range-summary')).toContainText(
+    'Use “Ball or rig moved: start over” to begin a new setup epoch.'
+  );
 });
 
 for (const viewport of KIOSK_VIEWPORTS) {

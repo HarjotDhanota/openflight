@@ -193,6 +193,25 @@ class TestCommands:
         with pytest.raises(ValueError, match="unknown tester action"):
             ts.action_commands("rm -rf /", params(), tmp_path, RIG)
 
+    def test_preflight_probes_the_iwr_cli_on_the_configured_stable_port(self, tmp_path):
+        commands, _ = ts.action_commands(
+            "preflight",
+            params(),
+            tmp_path,
+            RIG,
+            iwr_static_port="/dev/serial/by-id/iwr-if00-port0",
+        )
+
+        probe = commands[-1]
+        assert ts.Path(probe[1]).name == "check_cli.py"
+        assert probe[-2:] == ["--port", "/dev/serial/by-id/iwr-if00-port0"]
+
+    def test_preflight_keeps_iwr_cli_autodetection_when_no_port_is_configured(self, tmp_path):
+        commands, _ = ts.action_commands("preflight", params(), tmp_path, RIG)
+
+        assert ts.Path(commands[-1][1]).name == "check_cli.py"
+        assert "--port" not in commands[-1]
+
     def test_gain_step_screens_gain_at_the_arms_exposure(self, tmp_path):
         commands, log_path = ts.action_commands("gain", params(arm_id="arm5"), tmp_path, RIG)
         command = commands[0]
@@ -524,6 +543,53 @@ class TestApp:
         body = response.get_json()
         assert body["available"] is True
         assert len(body["study"]["arms"]) == len(ts.ARMS)
+
+    def test_normal_tester_setup_is_blocked_until_iwr_cli_preflight_passes(self, tmp_path):
+        class ImmediatePreflight:
+            def __init__(self):
+                self._status = {"state": "idle", "action": None, "message": "Ready"}
+
+            def status(self):
+                return dict(self._status)
+
+            def start(self, action, _commands, _log_path, on_finish=None, **_kwargs):
+                self._status = {"state": "complete", "action": action, "message": "Complete"}
+                if on_finish:
+                    on_finish(action, 0)
+
+        app = eligible_app(
+            sessions_root=tmp_path,
+            rig_geometry=RIG,
+            manager=ImmediatePreflight(),
+            require_iwr_preflight=True,
+        )
+        client = app.test_client()
+        query = {"tester_id": "20260922-name"}
+
+        before = client.get("/api/tester/setup-eligibility", query_string=query).get_json()
+        assert before["eligible"] is False
+        assert before["blockers"] == [
+            {
+                "id": "iwr6843_cli",
+                "reason": "IWR6843 CLI preflight has not passed for this tester",
+                "remedy": "Run Check the hardware and resolve its IWR6843 CLI result.",
+            }
+        ]
+
+        response = client.post(
+            "/api/tester/run",
+            json={**query, "arm_id": "arm5", "environment": "indoors", "action": "preflight"},
+        )
+        assert response.status_code == 202
+        after = client.get("/api/tester/setup-eligibility", query_string=query).get_json()
+        assert after["eligible"] is True
+        assert next(check for check in after["checks"] if check["id"] == "iwr6843_cli") == {
+            "id": "iwr6843_cli",
+            "label": "IWR6843 Enhanced/UARTA CLI",
+            "status": "pass",
+            "reason": None,
+            "remedy": None,
+        }
 
     def test_swings_before_gain_returns_409_with_the_reason(self, tmp_path):
         client = eligible_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()

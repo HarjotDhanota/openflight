@@ -46,11 +46,28 @@ server assessment. Gain collection, single-arm swings and ladder acquisition
 require admission; hardware troubleshooting, saved-data review and export do
 not require a confirmed rig.
 
+**Check the hardware** must pass for the current tester before the normal
+acquisition controls become eligible. Its IWR check opens the single-port
+firmware CLI and sends `help`; it does not apply the static range profile or
+capture a dump. The empty and ball-present steps still own those later actions
+and preserve their own results. A passing CLI preflight establishes only that
+the tester could reach the board at that time, not that its configuration,
+static capture or calibration is usable. An unusable guided IWR capture
+invalidates that preflight result, so **Check the hardware** must pass again
+before Retry can advance the flow. Retry itself only changes guided state; it
+does not open or command the radar.
+
 Confirmation belongs to the tester ID and the exact geometry/inclinometer
 configuration in this server instance. A server restart requires confirmation
 again. Changing a configuration invalidates its earlier confirmation. Recheck
 and reconfirm after moving the setup or changing its physical arrangement;
 software cannot detect every mechanical change.
+
+An in-progress automatic-range epoch remains bound to the confirmation that
+started it. After a server restart, reconfirm the physical setup and then use
+**Ball or rig moved: start over**. The stale epoch cannot be retried under the
+new confirmation; the API persists `start_over_required` and the page disables
+its Retry action rather than appearing to ignore the tap.
 
 The tester checks its LIS3DH before handing hardware ownership to the kiosk.
 The kiosk then checks its own sensor state. Do not start a second I2C reader
@@ -101,6 +118,13 @@ than editing the logs to bypass a failed check.
 qualify hardware acquisition. A missing sensor must be repaired or connected,
 not replaced with a nominal pitch. An incompatible rig needs a separately
 reviewed measured profile. Do not edit a profile just to make the checks pass.
+
+The IWR6843 custom firmware uses the CP2105 **Enhanced/UARTA** interface for
+both CLI and dump traffic. Prefer its stable
+`/dev/serial/by-id/...-if00-port0` name and start the tester with
+`--iwr-static-port` when USB numbering is not stable. Omitting the option keeps
+CLI auto-detection. Do not encode a particular `/dev/ttyUSB` number in the rig
+configuration.
 
 Pitch or roll departures greater than two degrees produce a nonblocking
 warning. The observed angles, departures and threshold travel with admission
