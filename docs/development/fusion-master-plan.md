@@ -1020,3 +1020,15 @@ product acceptance limits. Promotion remains gated on that independent evidence.
   same 28 platform-specific bash, permission and symlink failures as the base.
   Ruff and formatting passed; scoped Pylint scored 9.96/10. No Pi hardware or
   automatic-range accuracy validation was performed.
+- Guided tee-range admission hardening (M1/M2, TB01/TB07/TB10): qualification
+  schema v2 binds the exact camera placement and stable saved-image mode profile,
+  while static IWR promotion requires a finite positive measured bias uncertainty
+  from the exact hashed calibration. Every guided API step revalidates the bound
+  configuration, operator confirmation and LIS3DH orientation. Finalization now
+  publishes the immutable epoch/current pointer before terminal flow state and
+  ladder admission requires that terminal reference to equal the current pointer.
+  Restart reconciliation waits only for a live bounded static-capture reservation,
+  and camera retries retain uniquely versioned frames and attempt records. Missing,
+  changed or legacy identities remain raw-only or require an explicit start-over;
+  no shipped calibration value or estimator acceptance gate changed. Software
+  validation does not establish Pi resource behavior or automatic-range accuracy.

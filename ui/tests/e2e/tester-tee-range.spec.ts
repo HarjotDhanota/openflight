@@ -24,6 +24,7 @@ type FlowState = {
   epoch_id: string;
   phase: string;
   reason: string;
+  retry_phase?: string | null;
   evidence: Record<string, unknown>;
   solution: null | { status: string; selected_range_m: number | null };
 };
@@ -107,6 +108,7 @@ test('shows retry and a qualified resolved range without accepting tape input', 
     epoch_id: 'epoch-retry',
     phase: 'retryable_failure',
     reason: 'empty_capture_unusable',
+    retry_phase: 'needs_empty',
     evidence: {},
     solution: null,
   });
@@ -129,6 +131,22 @@ test('shows retry and a qualified resolved range without accepting tape input', 
   await page.reload();
   await expect(page.locator('#automatic-range')).toContainText('canonical range 1.524 m');
   await expect(page.locator('#tee-mm')).toBeHidden();
+});
+
+test('requires start over when setup admission changed', async ({ page }) => {
+  await base(page, {
+    epoch_id: 'epoch-invalid-setup',
+    phase: 'retryable_failure',
+    reason: 'setup_admission_changed_start_over_required',
+    retry_phase: null,
+    evidence: {},
+    solution: null,
+  });
+  await page.goto('/tester.html');
+
+  await expect(page.locator('#tee-range-action')).toHaveText('Start over required');
+  await expect(page.locator('#tee-range-action')).toBeDisabled();
+  await expect(page.locator('#tee-range-restart')).toBeVisible();
 });
 
 for (const viewport of KIOSK_VIEWPORTS) {

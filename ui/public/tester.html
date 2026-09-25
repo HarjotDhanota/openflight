@@ -1343,15 +1343,16 @@
         const state = teeRangeState;
         const phase = state?.phase;
         const step = state ? TEE_RANGE_STEPS[phase] : null;
+        const startOverRequired = phase === 'retryable_failure' && !state?.retry_phase;
         const action = el('tee-range-action');
         el('automatic-range').dataset.ready = String(teeRangeComplete());
         el('tee-range-restart').hidden = !state;
-        action.textContent = step?.label || 'Start automatic range';
-        action.disabled = teeRangeRequestRunning || Boolean(state && !step?.action);
-        action.dataset.action = step?.action || 'start';
+        action.textContent = startOverRequired ? 'Start over required' : (step?.label || 'Start automatic range');
+        action.disabled = teeRangeRequestRunning || startOverRequired || Boolean(state && !step?.action);
+        action.dataset.action = startOverRequired ? '' : (step?.action || 'start');
         el('automatic-range-summary').className = phase === 'retryable_failure' ? 'problem' : 'note';
         el('automatic-range-summary').textContent = state
-          ? `${step?.prompt || state.reason} ${state.reason && state.reason !== step?.prompt ? `(${state.reason.replaceAll('_', ' ')})` : ''}`
+          ? `${startOverRequired ? state.reason : (step?.prompt || state.reason)} ${!startOverRequired && state.reason && state.reason !== step?.prompt ? `(${state.reason.replaceAll('_', ' ')})` : ''}`
           : 'Start after both camera modes pass the light check. No tape measurement is required.';
         const solution = state?.solution;
         const selected = solution?.selected_range_m;

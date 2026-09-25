@@ -13,7 +13,13 @@ from typing import Any, Mapping
 
 from openflight import session_bundle
 from openflight.tee_range import TeeRangeSolution
-from openflight.tee_range_setup import TeeRangeEvidenceEpoch, write_epoch
+from openflight.tee_range_setup import (
+    TeeRangeEpochReference,
+    TeeRangeEvidenceEpoch,
+    load_current_reference,
+    load_epoch,
+    write_epoch,
+)
 
 SCHEMA = "openflight.tester_tee_range_flow.v1"
 TERMINAL_PHASES = frozenset({"resolved", "raw_only"})
@@ -76,6 +82,7 @@ class FlowState:
     updated_at_utc: str
     request_ids: tuple[str, ...]
     evidence: Mapping[str, Any]
+    setup_admission: Mapping[str, Any]
     solution: Mapping[str, Any] | None = None
     retry_phase: str | None = None
 
@@ -90,6 +97,7 @@ class FlowState:
             "updated_at_utc": self.updated_at_utc,
             "request_ids": list(self.request_ids),
             "evidence": dict(self.evidence),
+            "setup_admission": dict(self.setup_admission),
             "solution": dict(self.solution) if self.solution is not None else None,
             "retry_phase": self.retry_phase,
         }
@@ -107,6 +115,7 @@ class FlowState:
             updated_at_utc=str(payload["updated_at_utc"]),
             request_ids=tuple(str(value) for value in payload.get("request_ids", [])),
             evidence=dict(payload.get("evidence", {})),
+            setup_admission=dict(payload.get("setup_admission", {})),
             solution=(dict(payload["solution"]) if payload.get("solution") is not None else None),
             retry_phase=(str(payload["retry_phase"]) if payload.get("retry_phase") else None),
         )
@@ -139,7 +148,7 @@ class FlowStore:
             raise ValueError("guided tee-range state digest mismatch")
         return FlowState.from_dict(json.loads(content))
 
-    def start(self, request_id: str) -> FlowState:
+    def start(self, request_id: str, *, setup_admission: Mapping[str, Any]) -> FlowState:
         with session_bundle.snapshot_lock(self.tester_root, timeout_s=session_bundle.WRITER_WAIT_S):
             current = self.load()
             if current is not None and request_id in current.request_ids:
@@ -156,6 +165,7 @@ class FlowStore:
                     updated_at_utc=now,
                     request_ids=(request_id,),
                     evidence={},
+                    setup_admission=dict(setup_admission),
                 )
             )
 
@@ -215,6 +225,7 @@ class FlowStore:
             updated_at_utc=now,
             request_ids=tuple(value for value in requests if value),
             evidence=merged,
+            setup_admission=state.setup_admission,
             solution=solution.to_dict() if solution is not None else state.solution,
             retry_phase=retry_phase,
         )
@@ -227,16 +238,17 @@ class FlowStore:
             current = self.load()
             if current is None or current.epoch_id != state.epoch_id:
                 raise RuntimeError("tee-range setup epoch changed before finalization")
+            if current.phase in TERMINAL_PHASES:
+                reference_payload = current.evidence.get("final_reference")
+                if not isinstance(reference_payload, Mapping):
+                    raise RuntimeError("terminal tee-range state has no final epoch reference")
+                reference = TeeRangeEpochReference.from_dict(reference_payload)
+                if load_current_reference(self.tester_root) != reference:
+                    raise RuntimeError("terminal tee-range state does not match current epoch")
+                load_epoch(self.tester_root, reference)
+                return current
             if current.sequence != state.sequence:
                 raise RuntimeError("tee-range setup state changed before finalization")
-            finished = self._save_unlocked(
-                self._next(
-                    current,
-                    phase=phase,
-                    reason=solution.reason,
-                    solution=solution,
-                )
-            )
             epoch = TeeRangeEvidenceEpoch(
                 epoch_id=state.epoch_id,
                 created_at_utc=state.created_at_utc,
@@ -246,7 +258,7 @@ class FlowStore:
             reference = write_epoch(self.tester_root, epoch, make_current=True)
             return self._save_unlocked(
                 self._next(
-                    finished,
+                    current,
                     phase=phase,
                     reason=solution.reason,
                     evidence={"final_reference": reference.to_dict()},
