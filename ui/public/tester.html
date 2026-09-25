@@ -392,8 +392,9 @@
     <main>
       <h1>OpenFlight tester</h1>
       <p class="lede">
-        Follow four steps: set up the measured rig, check hardware and light, capture the exposure ladder, then review
-        and package the evidence. An accepted capture is saved evidence; it does not establish measurement accuracy.
+        Set up the measured rig, check hardware and light, let the sensors find the ball range, capture the exposure
+        ladder, then review and package the evidence. An accepted capture is saved evidence; it does not establish
+        measurement accuracy.
       </p>
 
       <section>
@@ -419,14 +420,6 @@
             </select></label
           >
         </form>
-        <div class="setup-gate" id="automatic-range" data-ready="false">
-          <h3>Automatic ball range</h3>
-          <p id="automatic-range-summary" class="note">
-            Start the advanced live view and record the ball placement. Camera evidence remains pending until another
-            sensor independently verifies it; range-dependent metrics stay unavailable.
-          </p>
-          <div class="light" id="automatic-range-values"></div>
-        </div>
         <div class="setup-gate" id="setup-gate" data-ready="false">
           <h3>Mandatory setup eligibility</h3>
           <p id="setup-summary" class="problem">Checking the server-authoritative setup gate…</p>
@@ -478,7 +471,21 @@
             <span id="light-verdict"></span>
           </li>
           <li>
-            <h3>3. Capture the exposure ladder</h3>
+            <h3>3. Automatic ball range</h3>
+            <div class="setup-gate" id="automatic-range" data-ready="false">
+              <p id="automatic-range-summary" class="note">
+                The guided range check starts after both camera modes have passed the light check.
+              </p>
+              <div class="light" id="automatic-range-values"></div>
+              <div class="steps">
+                <button type="button" id="tee-range-action">Start automatic range</button>
+                <button type="button" id="tee-range-restart" hidden>Ball or rig moved: start over</button>
+              </div>
+            </div>
+            <p class="note">No tape measurement is required. Keep the enclosure and nearby objects still between radar captures.</p>
+          </li>
+          <li>
+            <h3>4. Capture the exposure ladder</h3>
             <button type="button" id="step-ladder">C. Start the exposure ladder</button>
             <div class="light" id="ladder-panel"></div>
             <div id="face-guide" hidden style="position: relative; width: 640px; max-width: 100%">
@@ -535,7 +542,7 @@
             </p>
           </li>
           <li>
-            <h3>4. Review and package</h3>
+            <h3>5. Review and package</h3>
             <label>Comparator export (optional) <input type="file" id="comparator-file" /></label>
             <button type="button" id="step-package">D. Analyse, review &amp; package</button>
             <p class="note">
@@ -669,6 +676,8 @@
       let suiteActionVersion = 0;
       let packageActionPending = false;
       let lastAutomaticRange = null;
+      let teeRangeState = null;
+      let teeRangeRequestRunning = false;
       const REQUEST_TIMEOUT_MS = 5000;
       const ACTION_TIMEOUT_MS = 15000;
       const PACKAGE_TIMEOUT_MS = 300000;
@@ -763,6 +772,8 @@
         );
       }
 
+      const teeRangeComplete = () => ['resolved', 'raw_only'].includes(teeRangeState?.phase);
+
       function renderSetupEligibility() {
         const ready = setupReady();
         const warnings = setupEligibility
@@ -773,7 +784,7 @@
         el('step-light').disabled = !ready;
         el('btn-gain').disabled = !ready;
         el('btn-swings').disabled = !ready;
-        el('step-ladder').disabled = photoActionPending || !ready;
+        el('step-ladder').disabled = photoActionPending || !ready || !teeRangeComplete();
         if (photoTarget) renderPhotoHandoff();
         if (!setupEligibility) {
           el('setup-summary').textContent = 'Setup eligibility is unknown. Recheck the server before acquisition.';
@@ -1274,6 +1285,132 @@
         }
       });
 
+      const TEE_RANGE_STEPS = {
+        needs_empty: {
+          label: 'Capture empty hitting area',
+          prompt: 'Remove the ball. Keep the rig, mat, cables and nearby objects completely still, then capture the empty area.',
+          action: 'capture_empty',
+        },
+        empty_capturing: {
+          label: 'Capturing empty area…',
+          prompt: 'Radar is recording the empty area. Do not place the ball yet.',
+        },
+        needs_ball: {
+          label: 'Capture ball at address',
+          prompt: 'Place one ball at address without moving the rig, mat, cables or nearby objects, then capture it.',
+          action: 'capture_ball',
+        },
+        ball_capturing: {
+          label: 'Capturing ball…',
+          prompt: 'Radar is recording the ball at address. Keep everything still.',
+        },
+        needs_camera_arm5: {
+          label: 'Open 1280×800 camera',
+          prompt: 'Leave the ball at address. Open the reference camera mode.',
+          action: 'start_camera_arm5',
+        },
+        camera_arm5_capturing: {
+          label: 'Save 1280×800 observation',
+          prompt: 'The reference camera is live. Wait for a stable view, then save its observation.',
+          action: 'evaluate_camera_arm5',
+        },
+        camera_arm5_evaluating: { label: 'Evaluating 1280×800…', prompt: 'Checking the saved reference frame.' },
+        needs_camera_arm6: {
+          label: 'Open 640×400 camera',
+          prompt: 'Do not move the ball or rig. Open the second camera mode to validate this same setup.',
+          action: 'start_camera_arm6',
+        },
+        camera_arm6_capturing: {
+          label: 'Save 640×400 observation',
+          prompt: 'The second camera mode is live. Wait for a stable view, then save its observation.',
+          action: 'evaluate_camera_arm6',
+        },
+        camera_arm6_evaluating: { label: 'Evaluating 640×400…', prompt: 'Checking the second saved frame.' },
+        evaluating: { label: 'Comparing sensors…', prompt: 'Applying the frozen central promotion policy.' },
+        retryable_failure: {
+          label: 'Retry this step',
+          prompt: 'This attempt is unusable. The evidence is preserved; retry the affected step.',
+          action: 'retry',
+        },
+        resolved: { label: 'Automatic range complete', prompt: 'The qualified camera and radar evidence agree.' },
+        raw_only: {
+          label: 'Evidence complete — raw-only mode',
+          prompt: 'raw-only: the evidence is saved, but policy did not qualify a canonical range. The ladder can continue with range-dependent metrics withheld.',
+        },
+      };
+
+      function renderTeeRange() {
+        const state = teeRangeState;
+        const phase = state?.phase;
+        const step = state ? TEE_RANGE_STEPS[phase] : null;
+        const action = el('tee-range-action');
+        el('automatic-range').dataset.ready = String(teeRangeComplete());
+        el('tee-range-restart').hidden = !state;
+        action.textContent = step?.label || 'Start automatic range';
+        action.disabled = teeRangeRequestRunning || Boolean(state && !step?.action);
+        action.dataset.action = step?.action || 'start';
+        el('automatic-range-summary').className = phase === 'retryable_failure' ? 'problem' : 'note';
+        el('automatic-range-summary').textContent = state
+          ? `${step?.prompt || state.reason} ${state.reason && state.reason !== step?.prompt ? `(${state.reason.replaceAll('_', ' ')})` : ''}`
+          : 'Start after both camera modes pass the light check. No tape measurement is required.';
+        const solution = state?.solution;
+        const selected = solution?.selected_range_m;
+        const iwr = state?.evidence?.iwr_candidate;
+        const arm5 = state?.evidence?.camera_arm5_candidate;
+        const arm6 = state?.evidence?.camera_arm6_candidate;
+        const range = (candidate) => candidate?.radar_slant_range_m == null ? 'unavailable' : `${candidate.radar_slant_range_m.toFixed(3)} m`;
+        el('automatic-range-values').innerHTML = state
+          ? `<span>setup epoch <b>${state.epoch_id}</b></span>` +
+            `<span>IWR apparent range <b>${range(iwr)}</b></span>` +
+            `<span>camera arm 5 <b>${range(arm5)}</b> · arm 6 validation <b>${range(arm6)}</b></span>` +
+            `<span>canonical range <b>${selected == null ? 'withheld' : `${selected.toFixed(3)} m`}</b></span>`
+          : '<span>No setup epoch yet.</span>';
+        el('step-ladder').disabled = photoActionPending || !setupReady() || !teeRangeComplete();
+      }
+
+      async function refreshTeeRange() {
+        if (teeRangeRequestRunning) return;
+        const testerId = el('tester-id').value.trim();
+        try {
+          const response = await fetchWithTimeout(
+            '/api/tester/tee-range?' + new URLSearchParams({ tester_id: testerId }),
+            { cache: 'no-store' }
+          );
+          const body = await readJson(response);
+          if (!response.ok) throw new Error(body.error || `range check failed (${response.status})`);
+          if (testerId !== el('tester-id').value.trim()) return;
+          teeRangeState = body.state;
+          renderTeeRange();
+        } catch (error) {
+          if (testerId !== el('tester-id').value.trim()) return;
+          el('automatic-range-summary').className = 'problem';
+          el('automatic-range-summary').textContent = `Automatic range unavailable: ${error.message}`;
+        }
+      }
+
+      async function submitTeeRange(action) {
+        if (teeRangeRequestRunning) return;
+        if (!(await requireSetupEligibility())) return;
+        teeRangeRequestRunning = true;
+        renderTeeRange();
+        try {
+          const body = await post('/api/tester/tee-range', {
+            tester_id: el('tester-id').value.trim(),
+            action,
+            request_id: newAttemptId(),
+          });
+          teeRangeState = body.state;
+        } catch (error) {
+          el('automatic-range-summary').className = 'problem';
+          el('automatic-range-summary').textContent = error.message;
+        } finally {
+          teeRangeRequestRunning = false;
+          renderTeeRange();
+        }
+      }
+      el('tee-range-action').addEventListener('click', () => submitTeeRange(el('tee-range-action').dataset.action || 'start'));
+      el('tee-range-restart').addEventListener('click', () => submitTeeRange('start_over'));
+
       const attemptScopeKey = (scope) => (scope ? `${scope.tester_id}\n${scope.arm_id}\n${scope.run_dir}` : '');
       const attemptScopeLabel = (scope) => `${scope.arm_id} · ${scope.run}`;
       function saveAttemptValue(key, value) {
@@ -1595,7 +1732,7 @@
         preview.src = `http://${location.hostname}:8080/api/camera/preview.jpg?width=640&t=${Date.now()}`;
       }
       function renderPhotoHandoff() {
-        el('step-ladder').disabled = photoActionPending || !setupReady();
+        el('step-ladder').disabled = photoActionPending || !setupReady() || !teeRangeComplete();
         el('photo-handoff').hidden = !photoTarget;
         if (!photoTarget) return;
         el('photo-message').textContent = photoStopped
@@ -1713,6 +1850,9 @@
         setupRequestController = null;
         setupRequestRunning = false;
         setupActionPending = false;
+        teeRangeState = null;
+        teeRangeRequestRunning = false;
+        renderTeeRange();
         invalidateSetupEligibility('Tester ID changed. Server setup eligibility must be rechecked.');
         photoActionPending = false;
         photoTarget = null;
@@ -1730,6 +1870,7 @@
           discoverAttemptScopes();
           ladderTick();
           refreshSetupEligibility();
+          refreshTeeRange();
           refresh();
         }, 300);
       });
@@ -1809,11 +1950,13 @@
 
       refresh();
       refreshSetupEligibility();
+      refreshTeeRange();
       ladderTick();
       ladderTimer = setInterval(ladderTick, 1500);
       setInterval(facePreviewTick, 300);
       setInterval(refresh, 5000);
       setInterval(refreshSetupEligibility, 2000);
+      setInterval(refreshTeeRange, 1000);
     </script>
   </body>
 </html>

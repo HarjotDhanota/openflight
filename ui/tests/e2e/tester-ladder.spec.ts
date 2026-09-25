@@ -28,6 +28,17 @@ async function fulfillJson(route: Route, payload: object, status = 200) {
 }
 
 async function mockBaseApis(page: Page, readLadder: () => object) {
+  await page.route('**/api/tester/tee-range?**', (route) =>
+    fulfillJson(route, {
+      state: {
+        epoch_id: 'fixture-range',
+        phase: 'raw_only',
+        reason: 'qualification_artifact_missing',
+        evidence: {},
+        solution: { status: 'unresolved', selected_range_m: null },
+      },
+    })
+  );
   await page.route('**/api/tester/setup-eligibility?**', (route) =>
     fulfillJson(route, {
       schema_version: 1,

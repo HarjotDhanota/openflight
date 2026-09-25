@@ -84,6 +84,17 @@ async function json(route: Route, payload: object, status = 200) {
 }
 
 async function mockBase(page: Page) {
+  await page.route('**/api/tester/tee-range?**', (route) =>
+    json(route, {
+      state: {
+        epoch_id: 'fixture-range',
+        phase: 'raw_only',
+        reason: 'qualification_artifact_missing',
+        evidence: {},
+        solution: { status: 'unresolved', selected_range_m: null },
+      },
+    })
+  );
   await page.route('**/api/tester/status**', (route) => json(route, {}));
   await page.route('**/api/tester/attempts?**', (route) => json(route, { schema_version: 1, scopes: [] }));
   await page.route('**/api/tester/ladder?**', (route) =>
@@ -292,35 +303,14 @@ test('automatic range is visible while tape stays optional and advanced', async 
   await page.goto('/tester.html');
 
   await expect(page.getByRole('heading', { name: 'Automatic ball range' })).toBeVisible();
-  await expect(page.locator('#automatic-range-summary')).toContainText('pending');
+  await expect(page.locator('#automatic-range-summary')).toContainText('raw-only');
+  await expect(page.locator('#automatic-range-values')).toContainText('canonical range withheld');
   await expect(page.locator('#tee-mm')).toBeHidden();
   await page.getByText('Advanced: manual single-arm tools').click();
   await expect(page.locator('#tee-mm')).toBeVisible();
   await expect(page.getByText('Validation only. This value does not guide camera detection')).toBeVisible();
 
-  await page.evaluate(() => {
-    (window as Window & { renderAutomaticRange?: (evidence: object, solution: object) => void })
-      .renderAutomaticRange?.(
-        {
-          status: 'selected',
-          confidence: 'experimental',
-          candidates: [{}],
-          selected: {
-            floor_radar_range_m: 1.101,
-            floor_range_uncertainty_m: 0.04,
-            size_camera_range_m: 1.08,
-            size_range_uncertainty_m: 0.09,
-            range_disagreement_m: 0.007,
-            consistency_sigma: 0.07,
-            confidence: 'experimental',
-          },
-        },
-        { status: 'unresolved' }
-      );
-  });
-  await expect(page.locator('#automatic-range')).toContainText('floor range 1.101 m');
-  await expect(page.locator('#automatic-range')).toContainText('pending independent cross-sensor verification');
-  await expect(page.locator('#automatic-range')).toContainText('canonical status unresolved');
+  await expect(page.locator('#automatic-range')).toContainText('IWR apparent range unavailable');
 });
 
 for (const viewport of KIOSK_VIEWPORTS) {

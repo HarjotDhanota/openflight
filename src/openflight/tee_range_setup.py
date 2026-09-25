@@ -262,6 +262,22 @@ def load_current_epoch(tester_root: str | Path) -> TeeRangeEvidenceEpoch | None:
     return load_epoch(tester_root, reference) if reference is not None else None
 
 
+def validate_epoch_solution(
+    epoch: TeeRangeEvidenceEpoch,
+    *,
+    required_qualification: TeeRangeQualification | None = None,
+) -> TeeRangeSolution:
+    """Require the configured artifact after the epoch loader re-runs policy."""
+    if (
+        epoch.solution.status == "resolved"
+        and required_qualification is not None
+        and epoch.qualification is not None
+        and epoch.qualification.artifact_sha256 != required_qualification.artifact_sha256
+    ):
+        raise ValueError("tee-range epoch qualification does not match server configuration")
+    return epoch.solution
+
+
 def write_reference(path: str | Path, reference: TeeRangeEpochReference) -> None:
     """Atomically write an arm/session reference without copying setup evidence."""
     _atomic_replace(Path(path), _canonical_bytes(reference.to_dict()))
@@ -282,6 +298,7 @@ __all__ = [
     "load_current_reference",
     "load_epoch",
     "load_reference",
+    "validate_epoch_solution",
     "write_epoch",
     "write_reference",
 ]
