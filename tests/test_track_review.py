@@ -486,3 +486,38 @@ def test_a_capture_changed_while_a_frame_is_read_is_refused(review):
     os.utime(capture_path / "metadata.json", ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
     with pytest.raises(track_review.StaleCaptureError):
         capture.frame(0)
+
+
+def test_saved_tracks_join_the_session_and_its_bundle(review, tmp_path):
+    from openflight import session_bundle  # pylint: disable=import-outside-toplevel
+
+    client, _run, _capture_path, scope = review
+    loaded = client.get(
+        "/api/tester/review/capture", query_string={**scope, "capture_id": "camera_001"}
+    ).get_json()
+    identity = {k: loaded[k] for k in ("capture_npz_sha256", "metadata_sha256")}
+    manifest = {"version": 1, **identity, "tracks": []}
+    body = {**scope, "capture_id": "camera_001", **identity, "tracks_json": json.dumps(manifest)}
+
+    saved = client.post("/api/tester/review/annotation", json=body)
+    assert saved.status_code == 200, saved.get_json()
+    relative = saved.get_json()["saved"]
+    assert relative == "tester/annotations/arm1/run-01/camera_001.tracks.json"
+    record = json.loads((tmp_path / relative).read_text(encoding="utf-8"))
+    assert (
+        record["manifest"] == manifest
+        and record["capture_npz_sha256"] == identity["capture_npz_sha256"]
+    )
+
+    stale = client.post("/api/tester/review/annotation", json={**body, "metadata_sha256": "0" * 64})
+    assert stale.status_code == 409
+    other = {**manifest, "capture_npz_sha256": "1" * 64}
+    mismatched = client.post(
+        "/api/tester/review/annotation", json={**body, "tracks_json": json.dumps(other)}
+    )
+    assert mismatched.status_code == 400
+    assert "different capture" in mismatched.get_json()["error"]
+
+    built = session_bundle.build_bundle(tmp_path, "tester", viewer=None, provenance={})
+    roles = {e["path"]: e["role"] for e in session_bundle.validate_bundle(built["path"])["entries"]}
+    assert roles[relative] == "annotation"

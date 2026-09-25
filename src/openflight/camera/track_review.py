@@ -6,10 +6,13 @@ import hashlib
 import importlib.metadata
 import io
 import json
+import os
 import platform
 import struct
+import tempfile
 import zipfile
 from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +22,8 @@ from werkzeug.exceptions import RequestEntityTooLarge
 
 MAX_COMPARE_BYTES = 8 * 1024 * 1024
 HASH_CHUNK_BYTES = 1024 * 1024
+MAX_ANNOTATION_BYTES = 1024 * 1024
+ANNOTATION_SCHEMA = "openflight.track_annotation.v1"
 _CAPTURE_PREFIX = "camera_"
 _DIGEST_CHARS = frozenset("0123456789abcdef")
 
@@ -197,6 +202,24 @@ class _Capture:
         return image
 
 
+def annotation_path(tester: Path, arm_id: str, run: str, capture_id: str) -> Path:
+    """Where a capture's saved point tracks live inside the tester folder."""
+    return tester / "annotations" / arm_id / run / f"{capture_id}.tracks.json"
+
+
+def _write_atomic(path: Path, value: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, prefix=".", suffix=".tmp", delete=False
+    ) as handle:
+        temporary = Path(handle.name)
+        handle.write(json.dumps(value, indent=2, allow_nan=False) + "\n")
+    try:
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _frames_layout(path: Path) -> tuple[tuple[int, int, int], int | None]:
     """The frames array's shape, and its byte offset when stored uncompressed in C order."""
     with zipfile.ZipFile(path) as archive:
@@ -354,6 +377,59 @@ def register_track_review(
         except FileNotFoundError as exc:
             return _error(str(exc), 404)
         except (OSError, ReviewError, ValueError) as exc:
+            return _error(str(exc), 400)
+
+    @app.post("/api/tester/review/annotation")
+    def review_annotation():
+        """Keep a reviewer's point tracks with the session so they reach the bundle."""
+        if request.content_length is not None and request.content_length > MAX_ANNOTATION_BYTES:
+            return _error("annotation request exceeds 1 MiB", 413)
+        request.max_content_length = MAX_ANNOTATION_BYTES + 1
+        try:
+            raw_body = request.get_data(cache=False)
+        except RequestEntityTooLarge:
+            return _error("annotation request exceeds 1 MiB", 413)
+        if len(raw_body) > MAX_ANNOTATION_BYTES:
+            return _error("annotation request exceeds 1 MiB", 413)
+        try:
+            payload = json.loads(raw_body)
+            if not isinstance(payload, dict):
+                raise ReviewError("request body must be a JSON object")
+            scope, run = resolve_scope(payload)
+            capture = _Capture(run, scope["arm_id"], payload.get("capture_id"))
+            capture.check(payload)
+            manifest, manifest_bytes = _document(payload, "tracks_json")
+            if (manifest.get("capture_npz_sha256"), manifest.get("metadata_sha256")) != (
+                capture.frames_sha256,
+                capture.metadata_sha256,
+            ):
+                raise ReviewError("the track manifest belongs to a different capture")
+            tester = run.parents[2]
+            target = annotation_path(tester, scope["arm_id"], run.name, capture.identifier)
+            _write_atomic(
+                target,
+                {
+                    "schema": ANNOTATION_SCHEMA,
+                    "saved_at": datetime.now(timezone.utc).isoformat(),
+                    "scope": scope,
+                    "capture_id": capture.identifier,
+                    "capture_npz_sha256": capture.frames_sha256,
+                    "metadata_sha256": capture.metadata_sha256,
+                    "manifest_sha256": _sha256(manifest_bytes),
+                    "manifest": manifest,
+                },
+            )
+            return _response(
+                {
+                    "saved": target.relative_to(tester.parent).as_posix(),
+                    "capture_id": capture.identifier,
+                }
+            )
+        except StaleCaptureError as exc:
+            return _error(str(exc), 409)
+        except FileNotFoundError as exc:
+            return _error(str(exc), 404)
+        except (json.JSONDecodeError, OSError, ReviewError, TypeError, ValueError) as exc:
             return _error(str(exc), 400)
 
     @app.post("/api/tester/review/compare")

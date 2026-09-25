@@ -172,6 +172,14 @@ class _Run:
         """A bundle-relative path, or None."""
         return _relative(path, self.root) if path is not None else None
 
+    def annotation(self, capture: str | None) -> str | None:
+        """Point tracks a reviewer saved against a capture, if any."""
+        if not capture:
+            return None
+        path = self.tester_dir / "annotations" / self.arm_id / self.path.name
+        path = path / f"{capture}.tracks.json"
+        return self.relative(path) if path.is_file() else None
+
     def photo(self, capture: str | None) -> str | None:
         """The impact photo recorded against a capture, if any."""
         return self.relative(Path(self.photos[capture])) if capture in self.photos else None
@@ -261,6 +269,7 @@ def _shot_attempt(
             "preview_frames": _previews(capture_dir, run.root),
             "iwr_dump": run.relative(iwr_file) if iwr_file and iwr_file.is_file() else None,
             "impact_photo": run.photo(capture_name),
+            "track_annotation": run.annotation(capture_name),
             "replay_report": run.relative(report_path) if report is not None else None,
         },
         "picture_verdict": run.verdicts.get(capture_name),
@@ -289,6 +298,7 @@ def _stray_capture_attempt(run: _Run, name: str, folder: Path) -> dict[str, Any]
             "preview_frames": _previews(folder, run.root),
             "iwr_dump": None,
             "impact_photo": run.photo(name),
+            "track_annotation": run.annotation(name),
             "replay_report": None,
         },
         "picture_verdict": run.verdicts.get(name),

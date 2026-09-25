@@ -211,6 +211,27 @@ test('draft identity includes both hashes and survives reload without rebinding'
   await expect(page.locator('#point-status')).toContainText('no annotation');
 });
 
+test('saves the current tracks to the session so the bundle carries them', async ({ page }) => {
+  await mockReview(page);
+  const saves: Record<string, string>[] = [];
+  await page.route('**/api/tester/review/annotation', async (route) => {
+    saves.push(route.request().postDataJSON());
+    await json(route, { saved: `${testerId}/annotations/arm5/run-01/camera_001.tracks.json` });
+  });
+  await openCapture(page);
+  await page.locator('#pixel-x').fill('18.25');
+  await page.locator('#pixel-y').fill('22.75');
+  await page.getByRole('button', { name: 'Apply x/y' }).click();
+  await page.getByRole('button', { name: 'Save to the session' }).click();
+
+  await expect(page.locator('#compare-status')).toContainText('Saved to the session as');
+  expect(saves).toHaveLength(1);
+  expect(saves[0]).toMatchObject({ capture_id: capture.capture_id, ...hashes, arm_id: 'arm5', run_dir: scope.run_dir });
+  const manifest = JSON.parse(saves[0].tracks_json);
+  expect(manifest.capture_npz_sha256).toBe(hashes.capture_npz_sha256);
+  expect(manifest.tracks[0].observations[0].pixel_px).toEqual([18.25, 22.75]);
+});
+
 test('late frame response cannot replace the newly selected frame', async ({ page }) => {
   await mockReview(page);
   let releaseFrameOne!: () => void;

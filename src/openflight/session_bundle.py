@@ -48,6 +48,8 @@ def _role(relative: str, tester_id: str) -> str:
         return "derived"
     if relative.startswith(f"{tester_id}/diagnostics/"):
         return "diagnostics"
+    if relative.startswith(f"{tester_id}/annotations/"):
+        return "annotation"
     return "raw"
 
 

@@ -323,12 +323,13 @@
             </div>
             <div class="row actions">
               <button id="compare" disabled>Compare saved tracks</button
+              ><button id="save-session" disabled>Save to the session</button
               ><button id="download-manifest" disabled>Download manifest</button
               ><button id="download-report" disabled>Download report</button>
             </div>
             <p class="warning">
-              Drafts stay in this browser and are not included when the mode-study archive is packaged. Download the
-              manifest to preserve or transfer annotations.
+              Drafts stay in this browser until you press Save to the session. Saved tracks are kept with the
+              capture and included in the next session bundle.
             </p>
             <p id="compare-status" class="muted">Choose all three JSON files.</p>
           </section>
@@ -538,6 +539,7 @@
         $('next').disabled = !capture || frameIndex >= capture.frame_count - 1;
         $('frame-index').disabled = !capture;
         $('download-manifest').disabled = !capture;
+        $('save-session').disabled = !capture;
         $('compare').disabled = !capture || reloadRequired || Object.values(files).some((v) => v === null);
       }
       function clearFrameView(message = '') {
@@ -1035,6 +1037,29 @@
       );
       $('compare').onclick = compare;
       $('download-manifest').onclick = () => download(`${capture.capture_id}-tracks.json`, makeManifest());
+      $('save-session').onclick = async () => {
+        if (!capture) return;
+        const bound = draftKey();
+        $('save-session').disabled = true;
+        try {
+          const body = await jsonFetch('/api/tester/review/annotation', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...scopeQuery(),
+              capture_id: capture.capture_id,
+              capture_npz_sha256: capture.capture_npz_sha256,
+              metadata_sha256: capture.metadata_sha256,
+              tracks_json: JSON.stringify(makeManifest()),
+            }),
+          });
+          if (bound === draftKey()) $('compare-status').textContent = `Saved to the session as ${body.saved}.`;
+        } catch (error) {
+          if (bound === draftKey()) $('compare-status').textContent = `Not saved: ${error.message}`;
+        } finally {
+          $('save-session').disabled = !capture;
+        }
+      };
       $('download-report').onclick = () =>
         report && reportRawText && downloadText(`${capture.capture_id}-comparison.json`, reportRawText);
       loadRuns();

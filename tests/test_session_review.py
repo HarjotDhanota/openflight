@@ -308,6 +308,9 @@ def _tester_tree(tmp_path: Path) -> Path:
         ),
         encoding="utf-8",
     )
+    annotation = tester / "annotations" / "arm5" / "run-01" / "camera_001.tracks.json"
+    annotation.parent.mkdir(parents=True)
+    annotation.write_text('{"schema": "openflight.track_annotation.v1"}', encoding="utf-8")
     report = replay_report_path(tester / "analysis", "arm5", "run-01", 1)
     report.parent.mkdir(parents=True)
     report.write_text(json.dumps(_report(*SESSION_ONE[0])), encoding="utf-8")
@@ -328,6 +331,10 @@ def test_session_review_covers_shots_stray_triggers_photos_and_verdicts(tmp_path
     )
     assert first["evidence"]["iwr_dump"] == "t1/arm5/paired/run-01/iwr6843/iwr_001.l3dump"
     assert first["evidence"]["replay_report"] == "t1/analysis/replay/arm5/run-01/shot-001.json"
+    assert first["evidence"]["track_annotation"] == (
+        "t1/annotations/arm5/run-01/camera_001.tracks.json"
+    )
+    assert attempts["session-one:2"]["evidence"]["track_annotation"] is None
     assert first["picture_verdict"]["color"] == "green"
     assert "not a fused-metric verdict" in first["picture_verdict"]["meaning"]
     assert first["live_processing"]["label"] == "processing finished"
