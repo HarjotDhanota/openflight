@@ -1,0 +1,907 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Session review</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #fff;
+        --fg: #17191e;
+        --muted: #5e6675;
+        --panel: #f4f6f9;
+        --line: #d7dce5;
+        --accent: #37638f;
+        --bad: #b42318;
+        --warn: #946200;
+        --ok: #147a45;
+        --exp: #6b46c1;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #131519;
+          --fg: #eceef2;
+          --muted: #a4abba;
+          --panel: #1b1e24;
+          --line: #303640;
+          --accent: #8cb7e2;
+          --bad: #ff7b72;
+          --warn: #e3b341;
+          --ok: #5ed39a;
+          --exp: #b69df8;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      html {
+        font-size: clamp(1rem, 1.5vw + 0.45rem, 1.5rem);
+      }
+      body {
+        margin: 0;
+        padding: 0.65rem;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          1rem/1.35 system-ui,
+          sans-serif;
+      }
+      main {
+        max-width: 80rem;
+        margin: auto;
+        display: grid;
+        gap: 0.65rem;
+      }
+      h1 {
+        font-size: 1.5rem;
+        margin: 0;
+      }
+      h2 {
+        font-size: 1.05rem;
+        margin: 0.2rem 0 0.4rem;
+      }
+      h3 {
+        font-size: 1rem;
+        margin: 0;
+      }
+      p {
+        margin: 0.3rem 0;
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+      .error {
+        color: var(--bad);
+      }
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 0.45rem;
+        background: var(--panel);
+        padding: 0.55rem;
+        min-width: 0;
+      }
+      .stack {
+        display: grid;
+        gap: 0.45rem;
+      }
+      .row {
+        display: flex;
+        gap: 0.4rem;
+        align-items: end;
+        flex-wrap: wrap;
+      }
+      label {
+        display: grid;
+        gap: 0.15rem;
+        color: var(--muted);
+        font-size: 0.78rem;
+        flex: 1 1 9rem;
+        min-width: 0;
+      }
+      input,
+      select,
+      button,
+      .button {
+        min-height: 2.55rem;
+        border: 1px solid var(--line);
+        border-radius: 0.4rem;
+        background: var(--bg);
+        color: var(--fg);
+        font: inherit;
+        padding: 0.35rem 0.5rem;
+        min-width: 0;
+      }
+      .button {
+        display: inline-flex;
+        align-items: center;
+        text-decoration: none;
+      }
+      button.primary {
+        border-color: var(--accent);
+        color: var(--accent);
+        font-weight: 600;
+      }
+      button:disabled {
+        opacity: 0.55;
+      }
+      progress {
+        width: 100%;
+      }
+      .chip {
+        display: inline-block;
+        border: 1px solid currentColor;
+        border-radius: 1rem;
+        padding: 0 0.45rem;
+        font-size: 0.76rem;
+        white-space: nowrap;
+      }
+      .s-accepted {
+        color: var(--ok);
+      }
+      .s-experimental {
+        color: var(--exp);
+      }
+      .s-rejected,
+      .s-processing_failed,
+      .red {
+        color: var(--bad);
+      }
+      .s-unavailable,
+      .s-not_requested {
+        color: var(--muted);
+      }
+      .amber {
+        color: var(--warn);
+      }
+      .green {
+        color: var(--ok);
+      }
+      .card header {
+        display: flex;
+        gap: 0.4rem;
+        flex-wrap: wrap;
+        align-items: baseline;
+      }
+      .frames {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+        gap: 0.4rem;
+      }
+      figure {
+        margin: 0;
+        min-width: 0;
+      }
+      canvas {
+        width: 100%;
+        height: auto;
+        background: #000;
+        border-radius: 0.3rem;
+        display: block;
+        min-height: 3rem;
+      }
+      figcaption {
+        font-size: 0.72rem;
+        color: var(--muted);
+      }
+      .table-wrap {
+        overflow-x: auto;
+        touch-action: pan-x pan-y;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 0.82rem;
+      }
+      th,
+      td {
+        text-align: left;
+        border-bottom: 1px solid var(--line);
+        padding: 0.2rem 0.35rem;
+        vertical-align: top;
+      }
+      td.num {
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      details summary {
+        cursor: pointer;
+        color: var(--accent);
+        font-size: 0.85rem;
+      }
+      dl {
+        display: grid;
+        grid-template-columns: max-content minmax(0, 1fr);
+        gap: 0.1rem 0.6rem;
+        font-size: 0.78rem;
+        margin: 0.3rem 0;
+      }
+      dt {
+        color: var(--muted);
+      }
+      dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      @media (max-width: 640px) {
+        th:nth-child(4),
+        td:nth-child(4) {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header class="stack">
+        <h1>Session review</h1>
+        <p class="muted" id="source">No session loaded.</p>
+        <p class="muted">
+          Every value is shown with its status. Accepted means the estimator's own rule accepted it; nothing here is
+          validated against a reference. Experimental values are candidates only.
+        </p>
+      </header>
+
+      <section class="panel stack" aria-labelledby="load-title">
+        <h2 id="load-title">Session</h2>
+        <div class="row" id="live-controls">
+          <label>Tester ID<input id="tester-id" autocomplete="off" /></label>
+          <button type="button" id="load">Load</button>
+          <button type="button" class="primary" id="analyse">Analyse, review &amp; package</button>
+        </div>
+        <label
+          >Open a session bundle (.zip) from any machine<input
+            id="bundle-file"
+            type="file"
+            accept=".zip,application/zip"
+        /></label>
+        <p id="analysis-state" role="status" class="muted"></p>
+        <progress id="analysis-progress" max="1" value="0" hidden></progress>
+        <div id="analysis-errors" class="muted"></div>
+        <div id="bundles" class="stack"></div>
+        <p id="verification" class="muted" role="status"></p>
+        <p id="error" class="error" role="alert" hidden></p>
+      </section>
+
+      <section class="panel stack" id="summary-panel" hidden aria-labelledby="summary-title">
+        <h2 id="summary-title">Summary</h2>
+        <div class="table-wrap" id="summary"></div>
+        <div id="runs" class="stack"></div>
+      </section>
+
+      <section class="stack" id="attempts-panel" hidden aria-labelledby="attempts-title">
+        <div class="row">
+          <h2 id="attempts-title">Attempts</h2>
+          <label
+            >Show<select id="filter">
+              <option value="all">Every attempt</option>
+              <option value="problems">Attempts with a rejected or failed metric</option>
+              <option value="experimental">Attempts with an experimental candidate</option>
+              <option value="triggers">Camera triggers without a shot</option>
+            </select></label
+          >
+        </div>
+        <div id="attempts" class="stack"></div>
+      </section>
+    </main>
+
+    <script>
+      const el = (id) => document.getElementById(id);
+      const TESTER_ID_STORAGE_KEY = 'openflight-tester-id';
+      const REQUEST_TIMEOUT_MS = 8000;
+      const POLL_MS = 2000;
+      const PREVIEW_MAX_WIDTH = 640;
+      const STATUS_TEXT = {
+        accepted: 'accepted',
+        experimental: 'experimental',
+        rejected: 'rejected',
+        not_requested: 'not requested',
+        unavailable: 'input absent',
+        processing_failed: 'processing failed',
+      };
+      const ANALYSIS_TEXT = {
+        never_run: 'Not analysed yet. Press Analyse, review & package after the session.',
+        running: 'Analysing',
+        complete: 'Analysed',
+        failed: 'The analysis failed',
+        stopped: 'The analysis was stopped before it finished; analyse again to resume.',
+        interrupted: 'The analysis was interrupted',
+      };
+      let source = null;
+      let review = null;
+      let pollTimer = null;
+      let loadVersion = 0;
+      let observer = null;
+      const offline = location.protocol === 'file:';
+
+      const esc = (value) =>
+        String(value ?? '').replace(
+          /[&<>"']/g,
+          (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
+        );
+      const fmt = (value) => {
+        if (value == null || !Number.isFinite(value)) return '—';
+        const size = Math.abs(value);
+        return value.toFixed(size >= 1000 ? 0 : size >= 10 ? 1 : 2);
+      };
+      const chip = (status) => `<span class="chip s-${esc(status)}">${esc(STATUS_TEXT[status] || status)}</span>`;
+
+      function showError(message) {
+        el('error').hidden = !message;
+        el('error').textContent = message || '';
+      }
+
+      async function getJson(url, options = {}) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+        try {
+          const response = await fetch(url, { ...options, signal: controller.signal, cache: 'no-store' });
+          const body = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(body.error || `request failed (${response.status})`);
+          return body;
+        } catch (error) {
+          throw new Error(error.name === 'AbortError' ? 'the tester did not answer in time' : error.message);
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+
+      // ---- ZIP reading for imported bundles (stored and deflated members, ZIP64 aware) ----
+      async function readSlice(file, start, end) {
+        return new Uint8Array(await file.slice(start, end).arrayBuffer());
+      }
+
+      async function openZip(file) {
+        const tailLength = Math.min(file.size, 65557 + 76);
+        const tail = await readSlice(file, file.size - tailLength, file.size);
+        const view = new DataView(tail.buffer);
+        let end = -1;
+        for (let i = tail.length - 22; i >= 0; i -= 1) {
+          if (view.getUint32(i, true) === 0x06054b50) {
+            end = i;
+            break;
+          }
+        }
+        if (end < 0) throw new Error('this file is not a ZIP bundle');
+        let count = view.getUint16(end + 10, true);
+        let directorySize = view.getUint32(end + 12, true);
+        let directoryOffset = view.getUint32(end + 16, true);
+        if (count === 0xffff || directorySize === 0xffffffff || directoryOffset === 0xffffffff) {
+          const locator = end - 20;
+          if (locator < 0 || view.getUint32(locator, true) !== 0x07064b50) throw new Error('ZIP64 record missing');
+          const at = Number(view.getBigUint64(locator + 8, true));
+          const record = new DataView((await readSlice(file, at, at + 56)).buffer);
+          if (record.getUint32(0, true) !== 0x06064b50) throw new Error('ZIP64 record is corrupt');
+          count = Number(record.getBigUint64(32, true));
+          directorySize = Number(record.getBigUint64(40, true));
+          directoryOffset = Number(record.getBigUint64(48, true));
+        }
+        const directory = await readSlice(file, directoryOffset, directoryOffset + directorySize);
+        const dv = new DataView(directory.buffer);
+        const decoder = new TextDecoder();
+        const entries = new Map();
+        let p = 0;
+        for (let n = 0; n < count; n += 1) {
+          if (dv.getUint32(p, true) !== 0x02014b50) throw new Error('the ZIP directory is corrupt');
+          const method = dv.getUint16(p + 10, true);
+          let compressed = dv.getUint32(p + 20, true);
+          let size = dv.getUint32(p + 24, true);
+          const nameLength = dv.getUint16(p + 28, true);
+          const extraLength = dv.getUint16(p + 30, true);
+          const commentLength = dv.getUint16(p + 32, true);
+          let offset = dv.getUint32(p + 42, true);
+          const name = decoder.decode(directory.subarray(p + 46, p + 46 + nameLength));
+          let e = p + 46 + nameLength;
+          const extraEnd = e + extraLength;
+          while (e + 4 <= extraEnd) {
+            const id = dv.getUint16(e, true);
+            const length = dv.getUint16(e + 2, true);
+            if (id === 1) {
+              let q = e + 4;
+              if (size === 0xffffffff) ((size = Number(dv.getBigUint64(q, true))), (q += 8));
+              if (compressed === 0xffffffff) ((compressed = Number(dv.getBigUint64(q, true))), (q += 8));
+              if (offset === 0xffffffff) offset = Number(dv.getBigUint64(q, true));
+            }
+            e += 4 + length;
+          }
+          entries.set(name, { method, compressed, size, offset });
+          p = extraEnd + commentLength;
+        }
+        return { file, entries };
+      }
+
+      async function zipBytes(zip, name) {
+        const entry = zip.entries.get(name);
+        if (!entry) throw new Error(`${name} is not in the bundle`);
+        const header = new DataView((await readSlice(zip.file, entry.offset, entry.offset + 30)).buffer);
+        if (header.getUint32(0, true) !== 0x04034b50) throw new Error(`${name} has a corrupt header`);
+        const start = entry.offset + 30 + header.getUint16(26, true) + header.getUint16(28, true);
+        const blob = zip.file.slice(start, start + entry.compressed);
+        if (entry.method === 0) return new Uint8Array(await blob.arrayBuffer());
+        if (entry.method === 8) {
+          const stream = blob.stream().pipeThrough(new DecompressionStream('deflate-raw'));
+          return new Uint8Array(await new Response(stream).arrayBuffer());
+        }
+        throw new Error(`${name} uses an unsupported compression method`);
+      }
+
+      async function sha256(bytes) {
+        const digest = await crypto.subtle.digest('SHA-256', bytes);
+        return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+      }
+
+      async function verifiedBytes(zip, entry) {
+        const bytes = await zipBytes(zip, entry.path);
+        if (bytes.length !== entry.size_bytes || (await sha256(bytes)) !== entry.sha256) {
+          throw new Error(`${entry.path} does not match its manifest hash`);
+        }
+        return bytes;
+      }
+
+      // ---- sources: this tester's API, or an imported bundle ----
+      function liveSource(testerId) {
+        return {
+          kind: 'live',
+          testerId,
+          async bytes(path) {
+            const query = new URLSearchParams({ tester_id: testerId, path });
+            const response = await fetch(`/api/tester/session-review/file?${query}`, { cache: 'no-store' });
+            if (!response.ok) throw new Error(`${path} could not be read (${response.status})`);
+            return new Uint8Array(await response.arrayBuffer());
+          },
+        };
+      }
+
+      async function openBundle(file) {
+        const version = ++loadVersion;
+        stopPolling();
+        showError('');
+        if (!crypto.subtle) {
+          throw new Error(
+            'this browser context cannot check SHA-256 hashes; open review.html from disk or via localhost'
+          );
+        }
+        const zip = await openZip(file);
+        const manifest = JSON.parse(new TextDecoder().decode(await zipBytes(zip, 'bundle_manifest.json')));
+        if (manifest.schema !== 'openflight.session_bundle.v1') throw new Error('not an OpenFlight session bundle');
+        const byPath = new Map(manifest.entries.map((entry) => [entry.path, entry]));
+        const reviewPath = `${manifest.tester_id}/analysis/session_review.json`;
+        if (!byPath.has(reviewPath)) throw new Error('this bundle has no session review; analyse before packaging');
+        const loaded = JSON.parse(new TextDecoder().decode(await verifiedBytes(zip, byPath.get(reviewPath))));
+        if (version !== loadVersion) return;
+        source = {
+          kind: 'bundle',
+          name: file.name,
+          manifest,
+          async bytes(path) {
+            const entry = byPath.get(path);
+            if (!entry) throw new Error(`${path} is not declared in the bundle`);
+            return verifiedBytes(zip, entry);
+          },
+        };
+        el('source').textContent =
+          `Imported bundle ${file.name} · tester ${manifest.tester_id} · made ${manifest.created_at} · ` +
+          `${manifest.entries.length} files`;
+        el('live-controls').hidden = true;
+        el('analysis-state').textContent = '';
+        el('bundles').innerHTML = '';
+        renderReview(loaded);
+        verifyAll(zip, manifest, version);
+      }
+
+      async function verifyAll(zip, manifest, version) {
+        const declared = new Set(manifest.entries.map((entry) => entry.path));
+        const undeclared = [...zip.entries.keys()].filter(
+          (name) => name !== 'bundle_manifest.json' && !declared.has(name)
+        );
+        const problems = undeclared.map((name) => `${name} is not declared in the manifest`);
+        let done = 0;
+        for (const entry of manifest.entries) {
+          if (version !== loadVersion) return;
+          try {
+            await verifiedBytes(zip, entry);
+          } catch (error) {
+            problems.push(error.message);
+          }
+          done += 1;
+          if (done % 10 === 0 || done === manifest.entries.length) {
+            el('verification').textContent = `Checking hashes: ${done} of ${manifest.entries.length} files`;
+          }
+        }
+        if (version !== loadVersion) return;
+        el('verification').className = problems.length ? 'error' : 'muted';
+        el('verification').textContent = problems.length
+          ? `Hash check FAILED: ${problems.slice(0, 5).join('; ')}`
+          : `All ${manifest.entries.length} files match their manifest SHA-256 hashes.`;
+      }
+
+      // ---- live analysis job ----
+      function stopPolling() {
+        clearTimeout(pollTimer);
+        pollTimer = null;
+      }
+
+      function renderAnalysis(analysis) {
+        const job = analysis.job || {};
+        const progress = job.progress || {};
+        let text = ANALYSIS_TEXT[analysis.state] || analysis.state;
+        if (analysis.state === 'running') {
+          text += ` (${job.phase || 'starting'}) ${progress.done ?? 0} of ${progress.total ?? '?'}`;
+          if (progress.current) text += ` · ${progress.current}`;
+        } else if (analysis.state === 'complete') {
+          text += ` ${job.finished_at || ''} · ${job.replayed ?? 0} replayed, ${job.reused ?? 0} reused`;
+        } else if (analysis.reason) {
+          text += `: ${analysis.reason}`;
+        }
+        el('analysis-state').textContent = text;
+        el('analysis-progress').hidden = analysis.state !== 'running';
+        el('analysis-progress').max = Math.max(progress.total || 1, 1);
+        el('analysis-progress').value = progress.done || 0;
+        const errors = job.errors || [];
+        el('analysis-errors').innerHTML = errors.length
+          ? `<details><summary>${errors.length} analysis problem(s)</summary><ul>${errors
+              .map((line) => `<li>${esc(line)}</li>`)
+              .join('')}</ul></details>`
+          : '';
+        el('analyse').disabled = analysis.state === 'running';
+        el('bundles').innerHTML = (analysis.bundles || [])
+          .map((bundle, index) => {
+            const query = new URLSearchParams({ tester_id: source.testerId, name: bundle.name });
+            const size = (bundle.size_bytes / 1048576).toFixed(1);
+            return `<div class="row"><a class="button" href="/api/tester/bundle?${query}" download>${
+              index === 0 ? 'Download the latest bundle' : 'Download'
+            } ${esc(bundle.name)} (${size} MiB)</a><span class="muted">SHA-256 ${esc(bundle.sha256 || 'not recorded')}</span></div>`;
+          })
+          .join('');
+      }
+
+      async function refreshAnalysis(version) {
+        stopPolling();
+        if (!source || source.kind !== 'live' || version !== loadVersion) return;
+        try {
+          const analysis = await getJson(`/api/tester/analysis?tester_id=${encodeURIComponent(source.testerId)}`);
+          if (version !== loadVersion) return;
+          renderAnalysis(analysis);
+          const finishedAt = analysis.job?.finished_at;
+          if (analysis.review_ready && (!review || review.loadedFor !== finishedAt)) {
+            const loaded = await getJson(`/api/tester/session-review?tester_id=${encodeURIComponent(source.testerId)}`);
+            if (version !== loadVersion) return;
+            loaded.loadedFor = finishedAt;
+            renderReview(loaded);
+          }
+          if (analysis.state === 'running') pollTimer = setTimeout(() => refreshAnalysis(version), POLL_MS);
+        } catch (error) {
+          if (version !== loadVersion) return;
+          showError(error.message);
+          pollTimer = setTimeout(() => refreshAnalysis(version), POLL_MS * 2);
+        }
+      }
+
+      function loadLive() {
+        const testerId = el('tester-id').value.trim();
+        if (!testerId) return;
+        try {
+          localStorage.setItem(TESTER_ID_STORAGE_KEY, testerId);
+        } catch {
+          // The page still works when browser storage is unavailable.
+        }
+        const version = ++loadVersion;
+        showError('');
+        source = liveSource(testerId);
+        review = null;
+        el('source').textContent = `Live from this tester · ${testerId}`;
+        el('verification').textContent = '';
+        refreshAnalysis(version);
+      }
+
+      async function startAnalysis() {
+        if (!source || source.kind !== 'live') return;
+        el('analyse').disabled = true;
+        showError('');
+        try {
+          const body = await getJson('/api/tester/analysis', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tester_id: source.testerId }),
+          });
+          renderAnalysis({ ...body.analysis, state: 'running' });
+          refreshAnalysis(loadVersion);
+        } catch (error) {
+          showError(error.message);
+          el('analyse').disabled = false;
+        }
+      }
+
+      // ---- rendering ----
+      function parsePgm(bytes) {
+        let offset = 0;
+        const tokens = [];
+        while (tokens.length < 4 && offset < bytes.length) {
+          while (offset < bytes.length && /\s/.test(String.fromCharCode(bytes[offset]))) offset += 1;
+          if (bytes[offset] === 35) {
+            while (offset < bytes.length && bytes[offset] !== 10) offset += 1;
+            continue;
+          }
+          let token = '';
+          while (offset < bytes.length && !/\s/.test(String.fromCharCode(bytes[offset]))) {
+            token += String.fromCharCode(bytes[offset]);
+            offset += 1;
+          }
+          tokens.push(token);
+        }
+        const [magic, width, height, max] = [tokens[0], Number(tokens[1]), Number(tokens[2]), Number(tokens[3])];
+        if (magic !== 'P5' || max !== 255 || !(width > 0) || !(height > 0)) throw new Error('not an 8-bit PGM image');
+        const data = bytes.subarray(offset + 1, offset + 1 + width * height);
+        if (data.length !== width * height) throw new Error('the PGM image is truncated');
+        return { width, height, data };
+      }
+
+      function drawPreview(canvas, image, overlay) {
+        const step = Math.max(1, Math.ceil(image.width / PREVIEW_MAX_WIDTH));
+        const width = Math.floor(image.width / step);
+        const height = Math.floor(image.height / step);
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext('2d');
+        const pixels = context.createImageData(width, height);
+        for (let y = 0; y < height; y += 1) {
+          for (let x = 0; x < width; x += 1) {
+            const value = image.data[y * step * image.width + x * step];
+            const at = (y * width + x) * 4;
+            pixels.data[at] = pixels.data[at + 1] = pixels.data[at + 2] = value;
+            pixels.data[at + 3] = 255;
+          }
+        }
+        context.putImageData(pixels, 0, 0);
+        if (!overlay) return;
+        const region = overlay.expected_region;
+        context.lineWidth = 2;
+        context.setLineDash([6, 4]);
+        context.strokeStyle = '#ffd400';
+        context.strokeRect(
+          region.x_fraction[0] * width,
+          region.y_fraction[0] * height,
+          (region.x_fraction[1] - region.x_fraction[0]) * width,
+          (region.y_fraction[1] - region.y_fraction[0]) * height
+        );
+        context.setLineDash([]);
+        context.font = `${Math.max(10, Math.round(width / 40))}px system-ui`;
+        const colours = { scene: '#ff5a5a', impact: '#4fc3f7', selected: '#5ed39a' };
+        for (const candidate of overlay.candidates || []) {
+          const radius = Math.max(4, (candidate.diameter_px || 8) / 2 / step);
+          context.strokeStyle = colours[candidate.detector] || '#ffffff';
+          context.fillStyle = context.strokeStyle;
+          context.beginPath();
+          context.arc(candidate.x / step, candidate.y / step, radius, 0, Math.PI * 2);
+          context.stroke();
+          context.fillText(candidate.detector, candidate.x / step + radius + 3, candidate.y / step);
+        }
+      }
+
+      async function loadCanvas(canvas) {
+        if (canvas.dataset.state === 'loaded' || canvas.dataset.state === 'loading') return;
+        canvas.dataset.state = 'loading';
+        const reading = source;
+        try {
+          const image = parsePgm(await reading.bytes(canvas.dataset.path));
+          if (reading !== source) return;
+          const overlay = canvas.dataset.overlay ? JSON.parse(canvas.dataset.overlay) : null;
+          drawPreview(canvas, image, overlay);
+          canvas.dataset.state = 'loaded';
+        } catch (error) {
+          canvas.dataset.state = 'failed';
+          canvas.closest('figure').querySelector('figcaption').textContent += ` — ${error.message}`;
+        }
+      }
+
+      function unloadCanvas(canvas) {
+        if (canvas.dataset.state !== 'loaded') return;
+        canvas.width = 0;
+        canvas.height = 0;
+        canvas.dataset.state = '';
+      }
+
+      function watchCanvases() {
+        observer?.disconnect();
+        observer = new IntersectionObserver(
+          (entries) => {
+            for (const entry of entries) {
+              if (entry.isIntersecting) loadCanvas(entry.target);
+              else unloadCanvas(entry.target);
+            }
+          },
+          { rootMargin: '400px 0px' }
+        );
+        document.querySelectorAll('canvas[data-path]').forEach((canvas) => observer.observe(canvas));
+      }
+
+      function figure(path, caption, overlay) {
+        if (!path) return `<figure><figcaption>${esc(caption)}: not recorded</figcaption></figure>`;
+        const data = overlay ? ` data-overlay="${esc(JSON.stringify(overlay))}"` : '';
+        return `<figure><canvas data-path="${esc(path)}"${data} role="img" aria-label="${esc(caption)}"></canvas><figcaption>${esc(caption)}</figcaption></figure>`;
+      }
+
+      function metricsTable(metrics) {
+        if (!metrics.length) return '';
+        const rows = metrics
+          .map(
+            (m) =>
+              `<tr data-metric="${esc(m.key)}"><td>${esc(m.label)}</td><td class="num">${fmt(m.value)} ${esc(
+                m.value == null ? '' : m.unit
+              )}</td><td>${chip(m.status)}</td><td class="muted">${esc(m.source)}</td><td class="num">${
+                m.confidence == null ? '' : fmt(m.confidence)
+              }</td><td>${esc(m.reason || '')}</td></tr>`
+          )
+          .join('');
+        return `<div class="table-wrap"><table><thead><tr><th>Metric</th><th>Value</th><th>Status</th><th>Source</th><th>Confidence</th><th>Reason</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      }
+
+      function agreementsTable(rows) {
+        if (!rows.length) return '';
+        const body = rows
+          .map((row) => {
+            const values = (row.values || []).map((v) => `${esc(v.source)} ${fmt(v.value)}`).join(' vs ');
+            const outcome =
+              row.matches != null
+                ? row.matches
+                  ? 'match'
+                  : 'MISMATCH'
+                : row.difference == null
+                  ? '—'
+                  : `${row.difference >= 0 ? '+' : ''}${fmt(row.difference)} ${esc(row.unit || '')}`;
+            return `<tr><td>${esc(row.label)}</td><td>${values || '—'}</td><td class="num">${outcome}</td><td class="muted">${esc(row.note || '')}</td></tr>`;
+          })
+          .join('');
+        return `<details><summary>Sensor agreement</summary><div class="table-wrap"><table><thead><tr><th>Comparison</th><th>Values</th><th>Difference</th><th>Note</th></tr></thead><tbody>${body}</tbody></table></div></details>`;
+      }
+
+      function definitionList(values, evidence = {}) {
+        const rows = Object.entries(values || {})
+          .map(([key, value]) => {
+            const shown = value == null ? 'not recorded' : typeof value === 'object' ? JSON.stringify(value) : value;
+            const from = evidence[key] ? ` <span class="muted">(${esc(evidence[key])})</span>` : '';
+            return `<dt>${esc(key)}</dt><dd>${esc(shown)}${from}</dd>`;
+          })
+          .join('');
+        return rows ? `<dl>${rows}</dl>` : '<p class="muted">Nothing recorded.</p>';
+      }
+
+      function attemptCard(a) {
+        const title = a.shot_number != null ? `Shot ${a.shot_number}` : 'Camera trigger without a shot';
+        const verdict = a.picture_verdict
+          ? `<span class="chip ${esc(a.picture_verdict.color)}" title="${esc(a.picture_verdict.meaning)}">picture ${esc(
+              a.picture_verdict.color
+            )} · ${esc(a.picture_verdict.rung_id)}</span>`
+          : '';
+        const processing = a.live_processing
+          ? `<span class="chip s-not_requested">live: ${esc(a.live_processing.label)}</span>`
+          : '';
+        const previews = a.evidence.preview_frames || {};
+        const frames = ['first', 'trigger', 'last']
+          .map((label) => figure(previews[label], `${label} frame`, a.overlay))
+          .join('');
+        const photo = a.evidence.impact_photo ? figure(a.evidence.impact_photo, 'impact photo (club face)', null) : '';
+        const rejection = a.rejection ? `<p class="error">Not a shot: ${esc(a.rejection.reason)}</p>` : '';
+        const cameraError = a.evidence.camera_capture_error
+          ? `<p class="error">Camera capture: ${esc(a.evidence.camera_capture_error)}</p>`
+          : '';
+        const pictureReasons = (a.picture_verdict?.reasons || []).length
+          ? `<p class="muted">Picture check: ${esc(a.picture_verdict.reasons.join('; '))}</p>`
+          : '';
+        return `<article class="panel stack card" data-attempt="${esc(a.attempt_id)}">
+          <header><h3>${esc(a.arm_id)} · ${esc(a.run)} · ${esc(title)}</h3>
+            <span class="muted">${esc(a.capture_id || '')}</span>${verdict}${processing}</header>
+          ${rejection}${cameraError}${pictureReasons}
+          <div class="frames">${frames}${photo}</div>
+          <p class="muted">Dashed box: where the camera estimator accepts a resting ball (diameter ${esc(
+            (a.overlay?.expected_region?.diameter_px || []).join('–')
+          )} px). Circles: the candidates its detectors found.</p>
+          ${metricsTable(a.metrics || [])}
+          ${agreementsTable(a.agreements || [])}
+          <details><summary>Identity and provenance</summary>${definitionList(a.identity, a.identity_evidence)}</details>
+          <details><summary>Stages and evidence files</summary>${definitionList(a.stages)}${definitionList(a.evidence)}</details>
+        </article>`;
+      }
+
+      function matchesFilter(a) {
+        const filter = el('filter').value;
+        const statuses = (a.metrics || []).map((m) => m.status);
+        if (filter === 'problems') return statuses.includes('rejected') || statuses.includes('processing_failed');
+        if (filter === 'experimental') return statuses.includes('experimental');
+        if (filter === 'triggers') return a.kind === 'camera_trigger_without_shot';
+        return true;
+      }
+
+      function renderAttempts() {
+        if (!review) return;
+        const shown = review.attempts.filter(matchesFilter);
+        el('attempts').innerHTML = shown.length
+          ? shown.map(attemptCard).join('')
+          : '<p class="muted">No attempt matches this filter.</p>';
+        watchCanvases();
+      }
+
+      function renderReview(loaded) {
+        review = loaded;
+        const counts = review.metric_status_counts || {};
+        const statuses = review.status_vocabulary || Object.keys(STATUS_TEXT);
+        const labels = {};
+        for (const attempt of review.attempts) for (const m of attempt.metrics || []) labels[m.key] = m.label;
+        const rows = Object.entries(counts)
+          .map(
+            ([key, byStatus]) =>
+              `<tr><td>${esc(labels[key] || key)}</td>${statuses
+                .map((s) => `<td class="num">${byStatus[s] ? `${byStatus[s]}` : ''}</td>`)
+                .join('')}</tr>`
+          )
+          .join('');
+        el('summary').innerHTML = rows
+          ? `<table><thead><tr><th>Metric</th>${statuses.map((s) => `<th>${chip(s)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`
+          : '<p class="muted">No metrics yet.</p>';
+        el('runs').innerHTML = review.runs
+          .map((run) => {
+            const errors = (run.errors || []).map((e) => `<li class="error">${esc(e)}</li>`).join('');
+            const triggers = run.rejected_trigger_count
+              ? `<details><summary>${run.rejected_trigger_count} trigger(s) rejected before a shot was logged</summary><ul>${run.rejected_triggers
+                  .map((t) => `<li>${esc(t.ts)} ${esc(t.reason)}</li>`)
+                  .join('')}</ul></details>`
+              : '';
+            const ledger = run.attempt_ledger
+              ? `<details><summary>Operator swing tally</summary>${definitionList(run.attempt_ledger)}</details>`
+              : '';
+            return `<div class="stack"><p><b>${esc(run.arm_id)} / ${esc(run.run)}</b> <span class="muted">session ${esc(
+              run.session_uuid || 'unreadable'
+            )} · SHA-256 ${esc((run.session_sha256 || '').slice(0, 12))}…</span></p>${
+              errors ? `<ul>${errors}</ul>` : ''
+            }${triggers}${ledger}</div>`;
+          })
+          .join('');
+        const photos = review.unattached_impact_photos || [];
+        if (photos.length) {
+          el('runs').innerHTML +=
+            `<details><summary>${photos.length} impact photo(s) not matched to a capture</summary><div class="frames">${photos
+              .map((path) => figure(path, path, null))
+              .join('')}</div></details>`;
+        }
+        el('summary-panel').hidden = false;
+        el('attempts-panel').hidden = false;
+        renderAttempts();
+      }
+
+      el('load').addEventListener('click', loadLive);
+      el('analyse').addEventListener('click', startAnalysis);
+      el('filter').addEventListener('change', renderAttempts);
+      el('tester-id').addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') loadLive();
+      });
+      el('bundle-file').addEventListener('change', async () => {
+        const file = el('bundle-file').files[0];
+        if (!file) return;
+        try {
+          await openBundle(file);
+        } catch (error) {
+          showError(`The bundle could not be opened: ${error.message}`);
+        }
+      });
+
+      if (offline) {
+        el('live-controls').hidden = true;
+        el('source').textContent = 'Opened from disk: choose the session bundle (.zip) to review it.';
+      } else {
+        const fromUrl = new URLSearchParams(location.search).get('tester_id');
+        let saved = null;
+        try {
+          saved = localStorage.getItem(TESTER_ID_STORAGE_KEY);
+        } catch {
+          // Storage can be unavailable in locked-down kiosk browser profiles.
+        }
+        el('tester-id').value = fromUrl || saved || '';
+        if (el('tester-id').value) loadLive();
+      }
+    </script>
+  </body>
+</html>

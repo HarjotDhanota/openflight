@@ -74,8 +74,8 @@ back to that computer, not to the Pi.
 
 The tester also writes a rotating service log to
 `~/openflight_sessions/tester_pilot/tester-server.log`. It remains available
-after the terminal or browser disconnects, and **Package everything** includes
-it under `diagnostics/` with any rotated copies. Refreshing the page is safe:
+after the terminal or browser disconnects, and the session bundle includes it
+under `diagnostics/` with any rotated copies. Refreshing the page is safe:
 the tester ID and active ladder state are restored from browser and server
 state. If the ladder was deliberately stopped, use **Resume ladder**.
 
@@ -113,22 +113,36 @@ the physical setup. Then work down **Test suite**:
    before continuing; do not take another swing while this choice is pending.
    The kiosk then restarts in the next mode (about 20 s). A failed photo can be
    retried without losing the pending capture.
-4. **Review the run.** Open **Review saved capture tracks** when a maintainer
-   has asked for manual point annotation. Open **View fusion diagnostics** to
-   inspect the existing pipeline's pending/final states, sources and explicit
-   unavailable or rejected results. These views do not recompute or certify
-   accuracy. Return to the study page when finished.
-5. **D. Package the data.** If you have a TM4, Full Swing KIT or Mevo Gen 2
-   export, choose it first. Copy the archive off the Pi on a USB stick; it can be
-   about 1 GB. Use the [community contribution package
-   workflow](community-contributions.md) to record consent and create a local,
-   checksum-verified shareable archive.
+4. **D. Analyse, review & package.** Stop the ladder first. If you have a TM4,
+   Full Swing KIT or Mevo Gen 2 export, choose it first. One press replays every
+   shot on the Pi, builds the session review and writes one session bundle. It
+   runs in the background: you can leave or refresh the page, and a stopped or
+   interrupted analysis resumes where it left off. Capture is refused while it
+   runs. When it finishes, **Open the session review** shows one card per
+   attempt, including camera triggers that never became a shot: the first,
+   trigger and last frames with the camera's accepted ball region and the
+   candidates it found, the impact photo, and every metric with its status,
+   source, confidence and reason. Experimental values such as radar spin are
+   labelled as candidates. See [session review workflow](session-review-workflow.md)
+   for the status vocabulary.
+5. **Download the session bundle** and copy it off the Pi (USB stick or the
+   browser download). It can be about 1 GB and is never overwritten; its SHA-256
+   is shown beside the link. On any computer, open `review.html` from the bundle
+   and choose the bundle file: the same review appears and every file is checked
+   against its recorded hash. Use the [community contribution package
+   workflow](community-contributions.md) to record consent and create a
+   shareable archive.
+
+**Review saved capture tracks** is for manual point annotation when a
+maintainer asks for it. **View live fusion diagnostics** shows the live
+pipeline's pending and final states as shots finish; "processing finished" there
+means the pipeline stopped working on the shot, not that fusion succeeded.
 
 Reloading the page restores the ladder display. If the ladder was stopped,
 press **C** to resume. A pending final photo stays associated with its original
 capture across Stop and Resume; photograph that same strike mark, or skip it
 if the face has already been wiped or used for another swing. Skipped photos
-are recorded with the capture in the data package.
+are recorded with the capture in the session bundle.
 
 ### Record every attempt
 

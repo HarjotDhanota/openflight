@@ -120,7 +120,7 @@ test('fails closed with concrete physical and sensor remedies while recovery act
   await expect(page.getByRole('button', { name: 'B. Measure the light (both modes)' })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'A. Check the hardware' })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Stop all tester activity' })).toBeEnabled();
-  await expect(page.getByRole('button', { name: 'D. Package the data' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'D. Analyse, review & package' })).toBeEnabled();
   await page.locator('#btn-swings').evaluate((button: HTMLButtonElement) => button.click());
   expect(acquisitionRequests).toBe(0);
 });

@@ -215,7 +215,7 @@ test('Stop cancels the remaining light-measurement sequence', async ({ page }) =
   await expect(page.locator('#light-verdict')).toContainText('cancelled');
 });
 
-test('package keeps its original tester context and ignores a duplicate click', async ({ page }) => {
+test('analyse-and-package keeps its original tester context and ignores a duplicate click', async ({ page }) => {
   await mockBaseApis(page, () => ladderState(null));
   let comparatorUploads = 0;
   let releaseUpload!: () => void;
@@ -227,16 +227,18 @@ test('package keeps its original tester context and ignores a duplicate click', 
     await uploadGate;
     await fulfillJson(route, { saved: true });
   });
-  const packagePosts: Record<string, unknown>[] = [];
-  const downloads: URL[] = [];
-  await page.route('**/api/tester/package**', async (route) => {
-    if (route.request().method() === 'POST') {
-      packagePosts.push(route.request().postDataJSON());
-      await fulfillJson(route, { package_ready: true });
-      return;
-    }
-    downloads.push(new URL(route.request().url()));
-    await route.fulfill({ status: 200, contentType: 'application/octet-stream', body: '' });
+  const analysisPosts: Record<string, unknown>[] = [];
+  const bundle = { name: '20260922-name-session-bundle-20260925T010203Z.zip', size_bytes: 10, sha256: 'c'.repeat(64) };
+  await page.route('**/api/tester/analysis', async (route) => {
+    analysisPosts.push(route.request().postDataJSON());
+    await fulfillJson(
+      route,
+      {
+        job: { state: 'running', action: 'analyze' },
+        analysis: { state: 'complete', review_ready: true, latest_bundle: bundle, bundles: [bundle], job: {} },
+      },
+      202
+    );
   });
   await page.goto('/tester.html');
   await page.locator('#comparator-file').setInputFiles({
@@ -245,22 +247,42 @@ test('package keeps its original tester context and ignores a duplicate click', 
     buffer: Buffer.from('{}'),
   });
 
-  const packageButton = page.getByRole('button', { name: 'D. Package the data' });
+  const packageButton = page.getByRole('button', { name: 'D. Analyse, review & package' });
   await packageButton.dispatchEvent('click');
   await packageButton.dispatchEvent('click');
   await expect.poll(() => comparatorUploads).toBe(1);
   await page.locator('#tester-id').fill('new-tester');
   releaseUpload();
 
-  await expect.poll(() => packagePosts).toHaveLength(1);
-  await expect.poll(() => downloads).toHaveLength(1);
-  expect(packagePosts[0]).toEqual({
-    tester_id: '20260922-name',
-    arm_id: 'arm5',
-    environment: 'indoors',
-  });
-  expect(downloads[0].searchParams.get('tester_id')).toBe('20260922-name');
-  expect(downloads[0].searchParams.get('arm_id')).toBe('arm5');
+  await expect.poll(() => analysisPosts).toHaveLength(1);
+  expect(analysisPosts[0]).toEqual({ tester_id: '20260922-name' });
+});
+
+test('a finished analysis offers the review and the bundle download', async ({ page }) => {
+  const bundle = { name: '20260922-name-session-bundle-20260925T010203Z.zip', size_bytes: 10, sha256: 'c'.repeat(64) };
+  await mockBaseApis(page, () => ladderState(null));
+  await page.route('**/api/tester/status?**', (route) =>
+    fulfillJson(route, {
+      job: { state: 'idle', message: 'Ready' },
+      analysis: { state: 'complete', review_ready: true, latest_bundle: bundle, bundles: [bundle], job: {} },
+    })
+  );
+  await page.route('**/api/tester/status', (route) =>
+    fulfillJson(route, {
+      job: { state: 'idle', message: 'Ready' },
+      analysis: { state: 'complete', review_ready: true, latest_bundle: bundle, bundles: [bundle], job: {} },
+    })
+  );
+  await page.goto('/tester.html');
+  await expect(page.locator('#package-status')).toContainText('Analysed and packaged');
+  await expect(page.getByRole('link', { name: 'Open the session review' })).toHaveAttribute(
+    'href',
+    '/session-review.html?tester_id=20260922-name'
+  );
+  await expect(page.getByRole('link', { name: `Download ${bundle.name}` })).toHaveAttribute(
+    'href',
+    `/api/tester/bundle?tester_id=20260922-name&name=${encodeURIComponent(bundle.name)}`
+  );
 });
 
 test('keeps a stale-target error visible through polling and retries with the same identity', async ({ page }) => {

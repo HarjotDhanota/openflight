@@ -91,8 +91,11 @@ Report the precise action and terminal log if recovery fails.
 
 ## Preserve the evidence
 
-Use **Package the data**, including a reference-device export when available.
-Keep the original package and raw capture folders; analyze copies. Record:
+Use **D. Analyse, review & package**, including a reference-device export when
+available. Keep the original bundle and raw capture folders; analyze copies.
+`uv run --extra camera python scripts/analysis/analyze_tester_session.py --verify
+<bundle.zip>` re-derives every result from the bundle's own raw files on another
+machine and lists any difference. Record:
 
 - Tester/run IDs, actual rig and lens/focus identity, lighting, measured setup
   and all placement changes.

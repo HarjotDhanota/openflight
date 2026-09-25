@@ -537,9 +537,21 @@
           </li>
           <li>
             <h3>4. Review and package</h3>
-            <p><a href="/track-review.html">Review saved capture tracks</a> · <a href="/fusion-diagnostics.html">View fusion diagnostics</a></p>
-            <button type="button" id="step-package">D. Package the data</button>
             <label>Comparator export (optional) <input type="file" id="comparator-file" /></label>
+            <button type="button" id="step-package">D. Analyse, review &amp; package</button>
+            <p class="note">
+              Stop the ladder first. This replays every shot on the Pi, then builds one archive you can download and
+              open on any computer. It keeps running if you leave or refresh this page.
+            </p>
+            <p class="note" id="package-status" role="status">Not analysed yet.</p>
+            <p id="package-links" hidden>
+              <a id="review-link" href="/session-review.html">Open the session review</a> ·
+              <a id="bundle-link" href="#" download>Download the session bundle</a>
+            </p>
+            <p>
+              <a href="/track-review.html">Annotate saved capture tracks</a> ·
+              <a href="/fusion-diagnostics.html">View live fusion diagnostics</a>
+            </p>
           </li>
         </ol>
       </section>
@@ -590,12 +602,12 @@
       <section>
         <h2>Manual package controls</h2>
         <div class="steps">
-          <button type="button" id="package">Package everything</button>
-          <a id="download" href="#" hidden>Download archive</a>
+          <button type="button" id="package">Analyse and package everything</button>
+          <a id="download" href="#" hidden>Download the latest bundle</a>
         </div>
         <p class="note">
-          Send the whole archive. It carries every arm's settings, light index, camera frames, radar dumps and logs. Raw
-          data stays out of Git.
+          Send the whole bundle. It carries every arm's settings, light index, camera frames, radar dumps, logs, the
+          replayed results and a review page, with a SHA-256 for every file. Raw data stays out of Git.
         </p>
       </section>
       </details>
@@ -860,7 +872,9 @@
           li.className = (a.arm_id === currentArm ? 'active ' : '') + (a.complete ? 'done' : '');
           li.dataset.arm = a.arm_id;
           const gainText = a.gain != null ? `gain ${a.gain}` : 'gain not found yet';
-          const prog = a.attempted ? `${a.accepted} / ${a.target} accepted · ${a.attempted} hit` : `0 / ${a.target}`;
+          const prog = a.attempted
+            ? `${a.accepted} / ${a.target} with a fused club result · ${a.attempted} hit`
+            : `0 / ${a.target}`;
           li.innerHTML = `<span class="n">${a.arm_id.replace('arm', '')}</span>
             <span class="t"><span>${a.label}</span>
             <small>${a.isolates} · ${a.exposure_us} µs · ${gainText}${a.lighting_required ? ' · <b>lighting required</b>' : ''}</small></span>
@@ -903,8 +917,49 @@
         renderEnclosure(body.inclinometer);
         const problems = (body.arm && body.arm.problems) || [];
         el('problems').innerHTML = problems.map((p) => `<div class="problem">${p}</div>`).join('');
-        el('download').hidden = !body.package_ready;
-        if (body.package_ready) el('download').href = `/api/tester/package?${query()}`;
+        renderAnalysis(body.analysis);
+      }
+
+      const ANALYSIS_TEXT = {
+        never_run: 'Not analysed yet.',
+        running: 'Analysing',
+        complete: 'Analysed and packaged',
+        failed: 'The analysis failed',
+        stopped: 'The analysis was stopped; press D again to resume.',
+        interrupted: 'The analysis was interrupted',
+      };
+
+      function renderAnalysis(analysis) {
+        if (!analysis) return;
+        const job = analysis.job || {};
+        const progress = job.progress || {};
+        let text = ANALYSIS_TEXT[analysis.state] || analysis.state;
+        if (analysis.state === 'running') {
+          text += ` (${job.phase || 'starting'}) ${progress.done ?? 0} of ${progress.total ?? '?'}`;
+        } else if (analysis.reason) {
+          text += `: ${analysis.reason}`;
+        } else if (analysis.state === 'failed' && (job.errors || []).length) {
+          text += `: ${job.errors[job.errors.length - 1]}`;
+        }
+        el('package-status').textContent = text;
+        const testerId = el('tester-id').value.trim();
+        const latest = analysis.latest_bundle;
+        el('package-links').hidden = !analysis.review_ready;
+        el('review-link').href = `/session-review.html?${new URLSearchParams({ tester_id: testerId })}`;
+        el('bundle-link').hidden = !latest;
+        el('download').hidden = !latest;
+        if (latest) {
+          const href = `/api/tester/bundle?${new URLSearchParams({ tester_id: testerId, name: latest.name })}`;
+          el('bundle-link').href = href;
+          el('bundle-link').textContent = `Download ${latest.name}`;
+          el('download').href = href;
+        }
+      }
+
+      async function startAnalysis(context) {
+        const body = await post('/api/tester/analysis', { tester_id: context.tester_id }, ACTION_TIMEOUT_MS);
+        if (context.tester_id === el('tester-id').value.trim()) renderAnalysis(body.analysis);
+        refresh();
       }
 
       async function refresh() {
@@ -1095,17 +1150,11 @@
         render(await request('/api/tester/stop', { method: 'POST' }));
       });
       el('package').addEventListener('click', async () => {
-        render(
-          await request(
-            '/api/tester/package',
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload()),
-            },
-            PACKAGE_TIMEOUT_MS
-          )
-        );
+        try {
+          await startAnalysis(suiteContext());
+        } catch (e) {
+          el('package-status').textContent = `Could not start the analysis: ${e.message}`;
+        }
       });
 
       // --- test suite ---
@@ -1461,7 +1510,7 @@
         const rows = Object.entries(l.rungs)
           .map(([id, r]) => {
             const ok = r.swings.filter((w) => w.color !== 'red').length;
-            return `<span>${id}: <b>${r.status}</b> ${ok}/5${r.reason ? ` — ${r.reason}` : ''}</span>`;
+            return `<span>${id}: <b>${r.status}</b> ${ok}/5 usable pictures${r.reason ? ` — ${r.reason}` : ''}</span>`;
           })
           .join('');
         const last = v
@@ -1707,10 +1756,9 @@
             const saved = await readJson(up);
             if (!up.ok) throw new Error(`comparator export not saved: ${saved.error || up.status}`);
           }
-          await post('/api/tester/package', suiteBody('arm5', context), PACKAGE_TIMEOUT_MS);
-          window.location = '/api/tester/package?' + new URLSearchParams(suiteBody('arm5', context));
+          await startAnalysis(context);
         } catch (e) {
-          el('step-package').textContent = `D. Package the data — ${e.message}`;
+          el('package-status').textContent = `Could not start the analysis: ${e.message}`;
         } finally {
           packageActionPending = false;
           el('step-package').disabled = false;

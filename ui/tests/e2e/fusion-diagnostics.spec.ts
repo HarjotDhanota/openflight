@@ -123,7 +123,8 @@ test('polls pending to terminal and renders zero separately from unavailable wit
   await expect(page.locator('#snapshot')).toContainText('Disagreement, not reference accuracy');
   await expect(page.locator('#snapshot')).toContainText('shared inputs: camera_horizontal_deg, iwr_horizontal_deg');
   await expect(page.locator('#shot-list')).toContainText('revision 2', { timeout: 2500 });
-  await expect(page.locator('#snapshot')).toContainText('complete');
+  await expect(page.locator('#snapshot')).toContainText('processing finished');
+  await expect(page.locator('#shot-list')).toContainText('revision 2 · processing finished');
 });
 
 test('ignores an older revision and keeps same shot numbers separate across sessions', async ({ page }) => {
@@ -231,7 +232,7 @@ test('reader errors clear stale values and polling retries without overlapping r
   await openRun(page);
   await expect(page.locator('#snapshot')).toContainText('0 mph');
   await expect(page.locator('#snapshot')).toContainText('No current diagnostic values', { timeout: 2500 });
-  await expect(page.locator('#snapshot')).toContainText('complete', { timeout: 2500 });
+  await expect(page.locator('#snapshot')).toContainText('processing finished', { timeout: 2500 });
   expect(maximumActive).toBe(1);
 });
 
@@ -261,7 +262,7 @@ test('a stalled diagnostic read times out and polling can retry', async ({ page 
   await openRun(page);
   await expect(page.locator('#diagnostic-error')).toContainText('timed out', { timeout: 6500 });
   await expect(page.locator('#snapshot')).toContainText('No current diagnostic values');
-  await expect(page.locator('#snapshot')).toContainText('complete', { timeout: 2500 });
+  await expect(page.locator('#snapshot')).toContainText('processing finished', { timeout: 2500 });
   await expect(page.locator('#diagnostic-error')).toBeEmpty();
 });
 

@@ -196,7 +196,10 @@
           <h1>Fusion diagnostics</h1>
           <p class="muted">
             Recorded snapshots from the existing live pipeline. All outputs are unvalidated; estimated and mock values
-            carry additional labels.
+            carry additional labels. "Processing finished" means the live pipeline stopped working on the shot, not that
+            fusion succeeded; read each metric's own status. The
+            <a href="/session-review.html">session review</a> shows every replayed result with its full rejection
+            evidence.
           </p>
         </div>
         <a href="/">Mode study</a>
@@ -322,6 +325,10 @@
         return `${session.session_uuid || `legacy:${session.session_file}`}::${shot.shot_number}`;
       }
 
+      function outcomeLabel(outcome) {
+        return outcome === 'complete' ? 'processing finished' : outcome;
+      }
+
       function outcomeReason(shot) {
         return (
           shot.reason ||
@@ -347,7 +354,7 @@
             .map(([identity, entry]) => ({ identity, shot: entry.shot }));
           for (const { identity, shot } of latestShots) {
             items.push(
-              `<button data-identity="${escapeHtml(identity)}" class="${identity === selectedIdentity ? 'active' : ''}">Session ${escapeHtml(session.session_uuid || session.session_file)} · shot ${shot.shot_number} · revision ${shot.revision} · ${escapeHtml(shot.outcome)}</button>`
+              `<button data-identity="${escapeHtml(identity)}" class="${identity === selectedIdentity ? 'active' : ''}">Session ${escapeHtml(session.session_uuid || session.session_file)} · shot ${shot.shot_number} · revision ${shot.revision} · ${escapeHtml(outcomeLabel(shot.outcome))}</button>`
             );
           }
           if (session.ended && latestShots.some(({ shot }) => shot.phase === 'pending')) {
@@ -371,7 +378,7 @@
           return;
         }
         const { session, shot } = entry;
-        let html = `<div class="summary"><div class="card"><span class="state">${escapeHtml(shot.outcome)}</span><div class="metric-meta">${escapeHtml(shot.phase)} · revision ${shot.revision}</div></div><div class="card">Session ${escapeHtml(session.session_uuid || session.session_file)}<div class="metric-meta">Shot ${shot.shot_number} · ${escapeHtml(shot.recorded_at)}</div></div></div>`;
+        let html = `<div class="summary"><div class="card"><span class="state">${escapeHtml(outcomeLabel(shot.outcome))}</span><div class="metric-meta">${escapeHtml(shot.phase)} · revision ${shot.revision}</div></div><div class="card">Session ${escapeHtml(session.session_uuid || session.session_file)}<div class="metric-meta">Shot ${shot.shot_number} · ${escapeHtml(shot.recorded_at)}</div></div></div>`;
         if (shot.outcome !== 'complete' || shot.reason)
           html += `<div class="reason">${escapeHtml(outcomeReason(shot))}</div>`;
         if (block.hidden) {
