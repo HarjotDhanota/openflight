@@ -580,6 +580,10 @@ def action_commands(
     return commands, root / "logs" / f"{action}.log"
 
 
+class SpawnError(RuntimeError):
+    """A detached job's process could not be started, or did not start in time."""
+
+
 class TesterJobManager:
     """Run one allowlisted hardware job at a time and retain bounded output."""
 
@@ -598,6 +602,7 @@ class TesterJobManager:
         self._on_finish: Callable[[str, int], None] | None = None
         self._output_to_log = False
         self._spawned = threading.Event()
+        self._spawn_error: BaseException | None = None
         self._timer: threading.Timer | None = None
         self._state: dict[str, object] = {
             "state": "idle",
@@ -646,6 +651,7 @@ class TesterJobManager:
                 name="tester-job",
             )
             self._spawned.clear()
+            self._spawn_error = None
             self._thread.start()
             timeout = ACTION_TIMEOUT_S.get(action)
             self._timer = threading.Timer(timeout, self.cancel) if timeout else None
@@ -654,7 +660,21 @@ class TesterJobManager:
                 self._timer.start()
         if output_to_log:
             # the caller's acceptance promises a process that outlives this server
-            self._spawned.wait(SPAWN_WAIT_S)
+            if not self._spawned.wait(SPAWN_WAIT_S):
+                self.cancel()
+                raise SpawnError(f"the {action} process did not start within {SPAWN_WAIT_S:g} s")
+            with self._lock:
+                error = self._spawn_error
+            if error is not None:
+                raise SpawnError(f"the {action} process could not start: {error}")
+
+    def _report_spawn(self, error: BaseException | None) -> None:
+        """Tell a waiting ``start`` whether the first process exists; only once per job."""
+        with self._lock:
+            if self._spawned.is_set():
+                return
+            self._spawn_error = error
+        self._spawned.set()
 
     def _append(self, line: str, handle) -> None:
         clean = line.rstrip("\r\n")
@@ -675,11 +695,13 @@ class TesterJobManager:
                         self._append(f"(output continues in {log_path})", handle)
                     try:
                         process = self._spawn(command, handle)
-                    finally:
-                        self._spawned.set()
+                    except Exception as exc:  # pylint: disable=broad-exception-caught
+                        self._report_spawn(exc)
+                        raise OSError(f"could not start {command[0]}: {exc}") from exc
                     with self._lock:
                         self._process = process
                         cancel_pending = self._cancel_requested
+                    self._report_spawn(None)
                     if cancel_pending:
                         self._request_process_stop(process)
                     if process.stdout is not None:
@@ -695,7 +717,7 @@ class TesterJobManager:
                         message = f"Failed with exit code {returncode}"
                         break
         except (OSError, ValueError) as exc:
-            self._spawned.set()
+            self._report_spawn(exc)
             returncode = -1
             message = str(exc)
             try:
@@ -2053,6 +2075,9 @@ def create_app(
                     "analysis": review_routes.read_analysis(sessions_root, tester_id),
                 }
             ), 202
+        except SpawnError as exc:
+            logger.error("Analysis did not start: %s", exc)
+            return jsonify({"error": str(exc), "job": jobs.status()}), 503
         except FileNotFoundError as exc:
             return jsonify({"error": str(exc)}), 404
         except ValueError as exc:
