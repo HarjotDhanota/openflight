@@ -1986,6 +1986,7 @@ class LiveView:
         self._run_generation = 0
         self._context_generation = 0
         self._thread: threading.Thread | None = None
+        self._retired_threads: list[tuple[str, threading.Thread]] = []
         self._arm: Arm | None = None
         self._pending: dict | None = None
         self._requested: dict | None = None
@@ -2008,7 +2009,17 @@ class LiveView:
 
     @property
     def running(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
+        return bool(
+            self._thread is not None
+            and self._thread.is_alive()
+            and self._active_stop is not None
+            and not self._active_stop.is_set()
+        )
+
+    def _prune_retired_locked(self) -> None:
+        self._retired_threads = [
+            (role, thread) for role, thread in self._retired_threads if thread.is_alive()
+        ]
 
     def start(  # pylint: disable=too-many-arguments
         self,
@@ -2050,6 +2061,9 @@ class LiveView:
                 return
         self.stop()
         with self._lock:
+            self._prune_retired_locked()
+            if any(role == "capture" for role, _thread in self._retired_threads):
+                raise RuntimeError("previous live camera capture is still stopping")
             self._run_generation += 1
             generation = self._run_generation
             self._context_generation += 1
@@ -2093,15 +2107,26 @@ class LiveView:
     def stop(self) -> None:
         with self._lock:
             stop_event = self._active_stop
-            threads = (self._thread, self._looker)
+            threads = (("capture", self._thread), ("analyzer", self._looker))
             self._run_generation += 1
-            self._thread = self._looker = None
-            self._active_stop = None
         if stop_event is not None:
             stop_event.set()
-        for thread in threads:
+        for _role, thread in threads:
             if thread is not None:
                 thread.join(timeout=LIVE_THREAD_JOIN_TIMEOUT_S)
+        with self._lock:
+            for role, thread in threads:
+                if thread is not None and thread.is_alive():
+                    retired = (role, thread)
+                    if retired not in self._retired_threads:
+                        self._retired_threads.append(retired)
+            if self._thread is threads[0][1]:
+                self._thread = None
+            if self._looker is threads[1][1]:
+                self._looker = None
+            if self._active_stop is stop_event:
+                self._active_stop = None
+            self._prune_retired_locked()
 
     def _look(self, arm: Arm, stop_event: threading.Event, generation: int) -> None:
         focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
@@ -2177,6 +2202,34 @@ class LiveView:
             sequence = self._frame_sequence
             latest_at = self._latest_frame_at
         return arm, (np.stack(recent) if len(recent) >= 3 else None), sequence, latest_at
+
+    def capture_context_snapshot(self) -> dict:
+        """Atomically freeze the live camera facts and exact recent frame window for Save."""
+        with self._lock:
+            recent = list(self._recent)
+            return {
+                "running": self.running,
+                "error": self._error,
+                "arm": self._arm,
+                "frames": np.stack(recent) if len(recent) >= 3 else None,
+                "frame_sequence": self._frame_sequence,
+                "latest_frame_at": self._latest_frame_at,
+                "analyzer": self._analyzer,
+                "run_generation": self._run_generation,
+                "context_generation": self._context_generation,
+            }
+
+    def capture_context_is_current(self, context: Mapping) -> bool:
+        """Whether a frozen Save context still owns this healthy live camera run."""
+        with self._lock:
+            return bool(
+                self.running
+                and self._error is None
+                and self._arm == context.get("arm")
+                and self._analyzer is context.get("analyzer")
+                and self._run_generation == context.get("run_generation")
+                and self._context_generation == context.get("context_generation")
+            )
 
     def analyzed_snapshot(self) -> tuple[np.ndarray | None, dict | None]:
         """Return the median frame and association produced in the same analyzer call."""
@@ -3238,12 +3291,18 @@ def create_app(
         if not readiness or not readiness.get("save_eligible"):
             reason = (readiness or {}).get("readiness_reason") or "camera analysis is warming up"
             raise RuntimeError(f"camera {arm_id} is not ready to save: {reason}")
-        live_status = live.snapshot()[1]
-        if not live_status.get("running") or live_status.get("error"):
+        capture_context = live.capture_context_snapshot()
+        if capture_context.get("analyzer") is not analyzer:
+            raise RuntimeError(f"camera {arm_id} guided analyzer context changed")
+        if not capture_context.get("running") or capture_context.get("error"):
             raise RuntimeError(
-                f"camera {arm_id} is not healthy: {live_status.get('error') or 'live view stopped'}"
+                f"camera {arm_id} is not healthy: "
+                f"{capture_context.get('error') or 'live view stopped'}"
             )
-        shown_arm, frames, frame_sequence, latest_frame_at = live.recent_frames_context()
+        shown_arm = capture_context.get("arm")
+        frames = capture_context.get("frames")
+        frame_sequence = capture_context.get("frame_sequence")
+        latest_frame_at = capture_context.get("latest_frame_at")
         if shown_arm != ARMS[arm_id] or frames is None:
             raise RuntimeError(f"camera {arm_id} does not have a stable frame yet")
         if latest_frame_at is None or time.monotonic() - latest_frame_at > LIVE_FRAME_STALE_S:
@@ -3270,6 +3329,8 @@ def create_app(
                 atomic_write(frame_path, frame_bytes)
             frame_sha256 = hashlib.sha256(frame_bytes).hexdigest()
             result, save_analysis, unsafe_reason = analyzer.analyze_for_save(frames, frame_sequence)
+            if not live.capture_context_is_current(capture_context):
+                unsafe_reason = "guided camera context changed during Save"
             if unsafe_reason:
                 return store.transition(
                     state,
