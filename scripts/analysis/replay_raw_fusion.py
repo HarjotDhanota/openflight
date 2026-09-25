@@ -13,8 +13,11 @@ import re
 import sys
 import tempfile
 from dataclasses import asdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
+import numpy as np
+
+from openflight import rig_geometry
 from openflight.camera.fusion_processing import process_camera_fusion
 from openflight.camera.geometry_contract import geometry_fingerprint
 from openflight.clubs import ClubType
@@ -25,11 +28,13 @@ from openflight.iwr6843.runtime import horizontal_confidence_from
 from openflight.raw_radar_replay import (
     benchmark_candidate_from_raw_replays,
     load_session_events,
+    locate_recorded_capture,
     replay_iwr_capture_bytes,
     replay_ops_capture,
     session_shot_events,
 )
 from openflight.rolling_buffer.processor import RollingBufferProcessor
+from openflight.runtime_provenance import source_content_manifest_sha256
 from openflight.speed_correction import evaluate_measured_projection_total_speed
 
 try:
@@ -45,53 +50,179 @@ def _one(events, event_type):
     return matches[0]
 
 
-def _source_identity(session_start):
-    """Expose only recorded source identities; absent evidence remains null."""
-    runtime = session_start.get("runtime_provenance")
-    runtime = runtime if isinstance(runtime, dict) else {}
-    snapshot = runtime.get("source_snapshot")
-    snapshot = snapshot if isinstance(snapshot, dict) else {}
+def _is_sha256(value) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def _mapping(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _recorded_path(value: str):
+    return PureWindowsPath(value) if "\\" in value else PurePosixPath(value)
+
+
+def _session_location(session_start) -> tuple[str | None, str]:
+    output_dir = _mapping(_mapping(session_start.get("config")).get("camera_capture")).get(
+        "output_dir"
+    )
+    if isinstance(output_dir, str) and output_dir:
+        path = _recorded_path(output_dir)
+        if path.name == "camera" and path.parent.name:
+            return path.parent.name, "session_start.config.camera_capture.output_dir location"
+    return None, "session_start records no camera output location"
+
+
+def _rig_geometry_hash(session_start) -> tuple[str | None, str]:
+    snapshot = _mapping(_mapping(session_start.get("config")).get("rig_geometry")).get("snapshot")
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("parameters"), dict):
+        return None, "session_start records no rig geometry snapshot"
+    try:
+        fingerprint = rig_geometry.geometry_fingerprint(snapshot["parameters"])
+    except (TypeError, ValueError) as error:
+        return None, f"rig geometry snapshot is invalid: {error}"
+    if snapshot.get("sha256") != fingerprint:
+        return None, "rig geometry snapshot hash does not match its parameters"
+    return fingerprint, "session_start.config.rig_geometry.snapshot"
+
+
+def _applied_controls(camera_event, session_dir: Path) -> tuple[float | None, float | None, str]:
+    try:
+        capture, _resolution = locate_recorded_capture(camera_event["capture_path"], session_dir)
+        if capture.is_dir():
+            capture = capture / "frames.npz"
+        with np.load(capture, allow_pickle=False) as frames:
+            exposure = np.asarray(frames["exposure_us"], dtype=float)
+            gain = np.asarray(frames["analogue_gain"], dtype=float)
+    except (FileNotFoundError, KeyError, OSError, ValueError) as error:
+        return None, None, f"applied camera controls unreadable: {error}"
+    if not exposure.size or not gain.size:
+        return None, None, "capture records no per-frame exposure or gain"
+    return (
+        float(np.median(exposure)),
+        float(np.median(gain)),
+        "frames.npz exposure_us/analogue_gain (median of per-frame applied values)",
+    )
+
+
+def _source_identity(session_start, events, session_dir: Path) -> tuple[dict, dict]:
+    """Identity recorded for this shot's evidence, and where each value came from.
+
+    A value is null only when the session did not record it; the evidence map
+    says why.
+    """
+    runtime = _mapping(session_start.get("runtime_provenance"))
+    snapshot = _mapping(runtime.get("source_snapshot"))
     content_hash = snapshot.get("content_manifest_sha256")
     snapshot_hash = snapshot.get("sha256")
-    if (
-        snapshot.get("status") != "preserved"
-        or not isinstance(content_hash, str)
-        or re.fullmatch(r"[0-9a-f]{64}", content_hash) is None
-        or not isinstance(snapshot_hash, str)
-        or re.fullmatch(r"[0-9a-f]{64}", snapshot_hash) is None
+    if not (
+        snapshot.get("status") == "preserved"
+        and _is_sha256(content_hash)
+        and _is_sha256(snapshot_hash)
     ):
         content_hash = None
         snapshot_hash = None
-    return {
-        "arm_id": None,
-        "rig_geometry_sha256": None,
-        "capture_exposure_us": None,
-        "capture_gain": None,
+    arm_id, arm_source = _session_location(session_start)
+    rig_hash, rig_source = _rig_geometry_hash(session_start)
+    camera_events = [
+        event
+        for event in events
+        if event.get("type") == "camera_capture" and not event.get("capture_error")
+    ]
+    setup_hash = placement_warned = exposure_us = gain = None
+    if len(camera_events) == 1:
+        trigger = _mapping(_mapping(camera_events[0].get("metadata")).get("tester_setup"))
+        setup_hash = trigger.get("config_hash") if _is_sha256(trigger.get("config_hash")) else None
+        setup_source = (
+            "camera_capture.metadata.tester_setup.config_hash"
+            if setup_hash
+            else "camera capture recorded no tester setup hash"
+        )
+        guard = _mapping(
+            _mapping(_mapping(trigger.get("observations")).get("lis3dh")).get("placement_guard")
+        )
+        placement_warned = guard.get("warned") if isinstance(guard.get("warned"), bool) else None
+        placement_source = (
+            "camera_capture.metadata.tester_setup.observations.lis3dh.placement_guard.warned"
+            if placement_warned is not None
+            else "camera capture recorded no placement guard"
+        )
+        exposure_us, gain, controls_source = _applied_controls(camera_events[0], session_dir)
+    else:
+        reason = (
+            "shot has no successful camera capture"
+            if not camera_events
+            else "shot has more than one successful camera capture"
+        )
+        setup_source = placement_source = controls_source = reason
+    identity = {
+        "arm_id": arm_id,
+        "rig_geometry_sha256": rig_hash,
+        "capture_exposure_us": exposure_us,
+        "capture_gain": gain,
         "captured_software_content_sha256": content_hash,
-        "setup_config_hash": None,
-        "placement_warned": None,
+        "setup_config_hash": setup_hash,
+        "placement_warned": placement_warned,
         "runtime_source_snapshot_status": snapshot.get("status"),
         "runtime_source_snapshot_sha256": snapshot_hash,
     }
+    evidence = {
+        "arm_id": arm_source,
+        "rig_geometry_sha256": rig_source,
+        "capture_exposure_us": controls_source,
+        "capture_gain": controls_source,
+        "setup_config_hash": setup_source,
+        "placement_warned": placement_source,
+    }
+    return identity, evidence
 
 
-def _replay_software_content_sha256():
-    """Hash the disk source used by this replay entry point, with an import caveat."""
-    source_paths = [
-        Path(__file__),
-        Path(replay_ops_capture.__code__.co_filename),
-        Path(replay_iwr_capture_bytes.__code__.co_filename),
-        Path(process_camera_fusion.__code__.co_filename),
-    ]
-    digest = hashlib.sha256()
-    for source in sorted({path.resolve() for path in source_paths}, key=str):
-        payload = source.read_bytes()
-        name = str(source).encode("utf-8")
-        digest.update(len(name).to_bytes(8, "big"))
-        digest.update(name)
-        digest.update(len(payload).to_bytes(8, "big"))
-        digest.update(payload)
-    return digest.hexdigest()
+def _replay_software_content_sha256() -> tuple[str | None, str]:
+    """The same allowlisted content hash a capture session snapshots, when available."""
+    try:
+        return source_content_manifest_sha256(), (
+            "allowlisted repository source and config on disk at replay time, keyed by "
+            "repository-relative path; already-imported module bytes may differ"
+        )
+    except (OSError, ValueError) as error:
+        return None, f"replay source content unavailable: {error}"
+
+
+def _portable(path, root: Path | None) -> str:
+    """Report a path relative to ``root`` when one is given, else as resolved."""
+    resolved = Path(path).resolve()
+    if root is None:
+        return str(resolved)
+    try:
+        return resolved.relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return resolved.name
+
+
+def _recorded_ops_inputs(events, args) -> tuple[int | None, str | None, dict]:
+    """Sample rate and club from the capture's recorded processor config unless overridden."""
+    capture = next((e for e in events if e.get("type") == "rolling_buffer_capture"), {})
+    recorded = _mapping(capture.get("processor_config"))
+    shot = next((e for e in events if e.get("type") == "shot_detected"), {})
+    rate = args.ops_sample_rate_hz
+    rate_source = "operator_argument"
+    if rate is None:
+        rate = recorded.get("sample_rate_hz")
+        rate_source = (
+            "rolling_buffer_capture.processor_config.sample_rate_hz" if rate is not None else None
+        )
+    club = args.club
+    club_source = "operator_argument"
+    if club is None:
+        club = recorded.get("club_type") or shot.get("club")
+        club_source = (
+            "rolling_buffer_capture.processor_config.club_type"
+            if recorded.get("club_type")
+            else "shot_detected.club"
+            if club
+            else None
+        )
+    return rate, club, {"ops_sample_rate_hz": rate_source, "club": club_source}
 
 
 def replay(args, *, frozen_session=None) -> dict:
@@ -102,18 +233,27 @@ def replay(args, *, frozen_session=None) -> dict:
     iwr_measurement = None
     iwr_club_path = None
     session_start = _one(events, "session_start")
+    session_dir = args.session.resolve().parent
+    path_root = getattr(args, "path_root", None)
+    identity, identity_evidence = _source_identity(session_start, events, session_dir)
+    software_hash, software_limitation = _replay_software_content_sha256()
+    sample_rate_hz, club, input_sources = _recorded_ops_inputs(events, args)
     report = {
         "schema_version": 1,
-        "session_file": str(args.session.resolve()),
+        "session_file": _portable(args.session, path_root),
         "session_sha256": session_hash,
         "session_uuid": session_start["session_uuid"],
         "session_started_at": session_start.get("started_at_utc"),
         "source_identity": {
-            **_source_identity(session_start),
-            "replay_software_content_sha256": _replay_software_content_sha256(),
-            "replay_software_identity_limitation": (
-                "disk source bytes at replay time; already-imported module bytes may differ"
-            ),
+            **identity,
+            "replay_software_content_sha256": software_hash,
+            "replay_software_identity_limitation": software_limitation,
+        },
+        "source_identity_evidence": identity_evidence,
+        "replay_inputs": {
+            "ops_sample_rate_hz": sample_rate_hz,
+            "club": club,
+            "sources": input_sources,
         },
         "shot_number": args.shot,
         "equivalence_claim": "none_unless_each_stage_is_eligible",
@@ -124,15 +264,21 @@ def replay(args, *, frozen_session=None) -> dict:
         if event.get("type") in {"iwr6843_capture", "camera_capture"} and isinstance(
             event.get("capture_path"), str
         ):
-            source = Path(event["capture_path"]).expanduser()
-            if not source.is_absolute():
-                source = args.session.parent / source
-            report["input_paths"].append(str(source.resolve()))
+            try:
+                source, _resolution = locate_recorded_capture(event["capture_path"], session_dir)
+            except (FileNotFoundError, ValueError):
+                continue
+            report["input_paths"].append(_portable(source, path_root))
     try:
+        if sample_rate_hz is None or club is None:
+            raise ValueError(
+                "the capture records no OPS sample rate or club; pass --ops-sample-rate-hz "
+                "and --club"
+            )
         report["stages"]["ops"] = replay_ops_capture(
             _one(events, "rolling_buffer_capture"),
-            sample_rate_hz=args.ops_sample_rate_hz,
-            club_type=ClubType(args.club),
+            sample_rate_hz=sample_rate_hz,
+            club_type=ClubType(club),
         )
     except Exception as error:  # stage failures belong in the artifact
         report["stages"]["ops"] = {
@@ -171,9 +317,7 @@ def replay(args, *, frozen_session=None) -> dict:
             origin_ns = manifest.pop("ops_capture_origin_ns", None)
             if isinstance(origin_ns, bool) or not isinstance(origin_ns, int):
                 raise ValueError("projection manifest needs an integer OPS capture origin")
-            window_ns = round(
-                RollingBufferProcessor.WINDOW_SIZE / args.ops_sample_rate_hz * 1_000_000_000
-            )
+            window_ns = round(RollingBufferProcessor.WINDOW_SIZE / sample_rate_hz * 1_000_000_000)
             window_start_ns = origin_ns + round(reading["timestamp_ms"] * 1_000_000)
             window_end_ns = window_start_ns + window_ns
             center_ns = window_start_ns + window_ns // 2
@@ -192,7 +336,7 @@ def replay(args, *, frozen_session=None) -> dict:
                     "status": "operator_declared_common_clock_origin",
                     "ops_capture_origin_ns": origin_ns,
                     "window_size_samples": RollingBufferProcessor.WINDOW_SIZE,
-                    "sample_rate_hz": args.ops_sample_rate_hz,
+                    "sample_rate_hz": sample_rate_hz,
                     "derived_window_start_ns": window_start_ns,
                     "derived_window_end_ns": window_end_ns,
                     "derived_center_ns": center_ns,
@@ -303,10 +447,9 @@ def replay(args, *, frozen_session=None) -> dict:
                 tx_order = tx_order_from_config(frozen_radar_config)
             if capture_event.get("capture_error"):
                 raise ValueError("IWR capture event records a capture error")
-            capture_path = Path(capture_event["capture_path"]).expanduser()
-            if not capture_path.is_absolute():
-                capture_path = args.session.parent / capture_path
-            capture_path = capture_path.resolve(strict=True)
+            capture_path, capture_resolution = locate_recorded_capture(
+                capture_event.get("capture_path"), session_dir
+            )
             raw = capture_path.read_bytes()
             if not raw:
                 raise ValueError("IWR raw capture is empty")
@@ -324,7 +467,7 @@ def replay(args, *, frozen_session=None) -> dict:
             club_speed = ops_result.get("club_speed_mph") if isinstance(ops_result, dict) else None
             if isinstance(per_shot_inputs, dict) and (
                 per_shot_inputs.get("ball_speed_mph") != ball_speed
-                or per_shot_inputs.get("club") != args.club
+                or per_shot_inputs.get("club") != club
                 or per_shot_inputs.get("club_speed_mph") != club_speed
             ):
                 raise ValueError(
@@ -334,7 +477,7 @@ def replay(args, *, frozen_session=None) -> dict:
                 raw,
                 calibration,
                 ball_speed_mph=float(ball_speed),
-                club=args.club,
+                club=club,
                 club_speed_mph=club_speed,
                 net_range_m=runtime_config.get("net_range_m"),
                 tx_order=tx_order,
@@ -351,7 +494,8 @@ def replay(args, *, frozen_session=None) -> dict:
             report["stages"]["iwr6843"] = {
                 **measurement.to_dict(),
                 "club_path": club_path.to_dict() if club_path is not None else None,
-                "capture_path": str(capture_path),
+                "capture_path": _portable(capture_path, path_root),
+                "capture_path_resolution": capture_resolution,
                 "capture_sha256": hashlib.sha256(raw).hexdigest(),
                 "calibration_reconstructed_payload_sha256": hashlib.sha256(
                     calibration_bytes
@@ -383,6 +527,7 @@ def replay(args, *, frozen_session=None) -> dict:
             )
             context = frozen.pop("_context")
             archive = frozen.pop("_archive")
+            frozen["capture_path"] = _portable(frozen["capture_path"], path_root)
             camera_stage = {"recorded_context": frozen}
             iwr_stage = report["stages"].get("iwr6843", {})
             if iwr_stage.get("status") == "error" or "capture_path" not in iwr_stage:
@@ -491,8 +636,16 @@ def parser():
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("session", type=Path)
     result.add_argument("shot", type=int)
-    result.add_argument("--ops-sample-rate-hz", required=True, type=int)
-    result.add_argument("--club", required=True, choices=[club.value for club in ClubType])
+    result.add_argument(
+        "--ops-sample-rate-hz",
+        type=int,
+        help="Override the sample rate recorded in the capture's processor config",
+    )
+    result.add_argument(
+        "--club",
+        choices=[club.value for club in ClubType],
+        help="Override the club recorded in the capture's processor config",
+    )
     result.add_argument("--camera", action="store_true")
     result.add_argument("--camera-capture", type=Path)
     result.add_argument("--projection-manifest", type=Path)

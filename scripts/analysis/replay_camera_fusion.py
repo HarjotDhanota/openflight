@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 
 from openflight.camera.fusion_processing import process_camera_fusion
+from openflight.raw_radar_replay import locate_recorded_capture
 
 
 def _read_events(session_file: Path) -> list[dict[str, Any]]:
@@ -37,12 +38,15 @@ def _one(items: list[Any], description: str):
 
 
 def _capture_file(recorded: str, run_dir: Path, override: Path | None) -> Path:
-    selected = override if override is not None else Path(recorded)
+    if override is not None:
+        selected = override.expanduser().resolve(strict=True)
+    else:
+        try:
+            selected, _resolution = locate_recorded_capture(recorded, run_dir)
+        except FileNotFoundError as error:
+            raise ValueError(f"{error}; use --capture") from error
     if selected.is_dir():
         selected = selected / "frames.npz"
-    selected = selected.expanduser().resolve(strict=True)
-    if override is None and run_dir not in selected.parents:
-        raise ValueError("recorded camera capture is outside this session directory; use --capture")
     if not selected.is_file() or selected.name != "frames.npz":
         raise ValueError("camera capture must be a frames.npz file or its containing directory")
     return selected

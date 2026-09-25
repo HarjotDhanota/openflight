@@ -117,19 +117,39 @@ def _runtime_metadata() -> dict[str, Any]:
     }
 
 
-def _build_bundle(file_bytes: Mapping[str, bytes]) -> tuple[bytes, dict[str, Any]]:
-    contents = {
-        relative: {"sha256": _sha256(data), "size_bytes": len(data)}
-        for relative, data in file_bytes.items()
-    }
-    manifest = {
+def _content_manifest(file_bytes: Mapping[str, bytes]) -> dict[str, Any]:
+    return {
         "schema_version": SCHEMA_VERSION,
         "scope": (
             "Allowlisted OpenFlight runtime/fusion source, project locks, and "
             "rig/calibration config"
         ),
-        "files": contents,
+        "files": {
+            relative: {"sha256": _sha256(data), "size_bytes": len(data)}
+            for relative, data in file_bytes.items()
+        },
     }
+
+
+def _manifest_sha256(manifest: Mapping[str, Any]) -> str:
+    return _sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+
+
+def source_content_manifest_sha256(repo_root: Optional[Path] = None) -> str:
+    """Hash the allowlisted disk source exactly as a session snapshot records it.
+
+    Equal values mean a replay read the same source and config bytes the capture
+    session snapshotted, independent of where either checkout lives.
+    """
+    root = (Path(repo_root) if repo_root else Path(__file__).resolve().parents[2]).resolve()
+    file_bytes = _read_files(root, _allowed_files(root))
+    if not any(name.startswith("src/openflight/") for name in file_bytes):
+        raise ValueError("no allowlisted OpenFlight runtime source was found")
+    return _manifest_sha256(_content_manifest(file_bytes))
+
+
+def _build_bundle(file_bytes: Mapping[str, bytes]) -> tuple[bytes, dict[str, Any]]:
+    manifest = _content_manifest(file_bytes)
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for relative, data in file_bytes.items():
@@ -194,9 +214,7 @@ def capture_runtime_provenance(
             "basename": basename,
             "sha256": _sha256(bundle),
             "file_count": len(manifest["files"]),
-            "content_manifest_sha256": _sha256(
-                json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            ),
+            "content_manifest_sha256": _manifest_sha256(manifest),
         }
     except (OSError, ValueError, zipfile.BadZipFile) as exc:
         metadata.setdefault("repository", _git_metadata(root, git_executable))

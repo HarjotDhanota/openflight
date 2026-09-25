@@ -48,18 +48,28 @@ uv run --extra camera python scripts/analysis/replay_raw_fusion.py \
 The candidate is one file per session, so it can be supplied once with
 `benchmark_accuracy.py --candidate`. It retains `read` and `no_read` attempts,
 the exact session-file SHA-256, and the captured runtime content-manifest hash
-when the source snapshot is present and valid. Its grouping identity instead
-uses a hash of the current replay disk sources and records that loaded module
-bytes can differ. Missing arm, geometry, capture, or setup identities remain
-null; they are not inferred from raw radar data and can make a requested
-benchmark grouping ineligible. It contains no physical attempt ledger, so
+when the source snapshot is present and valid. Its grouping identity uses the
+same allowlisted content-manifest hash computed over the replay checkout, keyed
+by repository-relative path, so equal values mean replay read the same source
+the capture snapshotted; loaded module bytes can still differ. Arm (session
+location), rig-geometry snapshot hash, applied exposure and gain (median of the
+per-frame values in `frames.npz`), setup hash and placement warning are read
+from the recording; `source_identity_evidence` names where each came from, and a
+value stays null with its reason only when the session did not record it.
+Exposure, gain, setup hash and placement are per shot, because the ladder
+changes controls per rung. It contains no physical attempt ledger, so
 physical coverage remains unavailable until an operator provides a reviewed
 reconciliation. OPS and club-speed metrics remain radial; any comparison to a
 total-speed reference requires a reviewed conditional metric contract.
 
-`--ops-sample-rate-hz` and `--club` apply uniformly to every replayed attempt
-in the session candidate. They are replay configuration overrides, not a claim
-that older captures used those settings. A one-shot `--camera-capture` override
+The OPS sample rate and club come from each capture's recorded processor
+config (club falls back to the shot record); `replay_inputs` records the source.
+A capture without either fails its OPS stage rather than guessing.
+`--ops-sample-rate-hz` and `--club` are overrides for older captures and apply
+uniformly to every replayed attempt; they are not a claim that those captures
+used those settings. Captures are located inside the session folder: a recorded
+Pi path is matched by its longest trailing part under the folder, so a copied or
+extracted session replays unchanged, and nothing outside the folder is read. A one-shot `--camera-capture` override
 is rejected with session-candidate output so it cannot be associated with the
 wrong shot.
 

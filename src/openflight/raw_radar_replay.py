@@ -7,7 +7,7 @@ import json
 import math
 import re
 from dataclasses import asdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Mapping
 
 from .clubs import ClubType
@@ -16,6 +16,47 @@ from .rolling_buffer.processor import RollingBufferProcessor
 from .rolling_buffer.types import IQCapture
 
 SCHEMA_VERSION = 1
+# Identity fields recorded per trigger, which legitimately differ between shots of
+# one session: the ladder changes exposure and gain per rung, and a shot without a
+# camera capture has no trigger evidence at all.
+PER_SHOT_IDENTITY_KEYS = frozenset(
+    {"capture_exposure_us", "capture_gain", "placement_warned", "setup_config_hash"}
+)
+
+
+def _inside(path: Path, root: Path) -> bool:
+    try:
+        path.resolve(strict=True).relative_to(root)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def locate_recorded_capture(recorded: str, session_dir: Path) -> tuple[Path, str]:
+    """Find a capture recorded on the acquisition host inside this session folder.
+
+    Sessions record absolute paths on the Pi. A copied or extracted session keeps
+    the same layout below its session folder, so the longest trailing part of the
+    recorded path that exists there is the capture. Nothing outside the folder is
+    ever read.
+    """
+    if not isinstance(recorded, str) or not recorded:
+        raise ValueError("capture event has no recorded path")
+    root = Path(session_dir).resolve(strict=True)
+    direct = Path(recorded).expanduser()
+    if not direct.is_absolute():
+        direct = root / direct
+    if direct.exists() and _inside(direct, root):
+        return direct.resolve(strict=True), "recorded"
+    flavour = PureWindowsPath if "\\" in recorded else PurePosixPath
+    parts = [part for part in flavour(recorded).parts if part not in (flavour(recorded).anchor, "")]
+    for length in range(len(parts), 0, -1):
+        candidate = root.joinpath(*parts[-length:])
+        if candidate.exists() and _inside(candidate, root):
+            return candidate.resolve(strict=True), "relocated_under_session_directory"
+    raise FileNotFoundError(
+        f"recorded capture {parts[-1] if parts else recorded!r} is not in the session folder"
+    )
 
 
 def _benchmark_metric(
@@ -230,10 +271,14 @@ def benchmark_candidate_from_raw_replays(reports: list[Mapping[str, Any]]) -> di
         raise ValueError("raw replay reports must have unique shot identities")
     session_uuid = next(iter(session_uuids))
     session_hash = next(iter(session_hashes))
-    source_identity = reports[0].get("source_identity")
-    if not isinstance(source_identity, Mapping):
-        source_identity = {}
-    if any(report.get("source_identity", {}) != source_identity for report in reports[1:]):
+
+    def session_identity(report: Mapping[str, Any]) -> dict[str, Any]:
+        identity = report.get("source_identity")
+        identity = identity if isinstance(identity, Mapping) else {}
+        return {key: value for key, value in identity.items() if key not in PER_SHOT_IDENTITY_KEYS}
+
+    source_identity = session_identity(reports[0])
+    if any(session_identity(report) != source_identity for report in reports[1:]):
         raise ValueError("raw replay reports disagree on source identity")
     return {
         "schema_version": 1,
