@@ -498,6 +498,7 @@
               <div class="light" id="automatic-range-values"></div>
               <div class="guided-camera-preview" id="tee-range-camera-preview" hidden>
                 <p class="note" id="tee-range-camera-status" role="status">Waiting for the first camera frame…</p>
+                <p class="note" id="tee-range-camera-detector" role="status">Ball detector is warming up…</p>
                 <img id="tee-range-camera-frame" alt="Live raw frame for automatic ball range" hidden />
               </div>
               <div class="steps">
@@ -1445,6 +1446,8 @@
         frame.dataset.previewKey = context.key;
         el('tee-range-camera-status').className = 'note';
         el('tee-range-camera-status').textContent = 'Camera is warming up. Waiting for the first frame…';
+        el('tee-range-camera-detector').className = 'note';
+        el('tee-range-camera-detector').textContent = 'Ball detector is warming up…';
         queueMicrotask(guidedCameraTick);
       }
 
@@ -1452,6 +1455,24 @@
         const status = el('tee-range-camera-status');
         status.className = problem ? 'problem' : 'note';
         status.textContent = message;
+      }
+
+      function guidedCameraDetectorStatus(ball, frameReady) {
+        const detector = el('tee-range-camera-detector');
+        detector.className = 'note';
+        if (!ball) {
+          detector.textContent = frameReady ? 'Looking for the ball…' : 'Ball detector is warming up…';
+          return;
+        }
+        if (!ball.found) {
+          detector.textContent = `Ball not detected: ${ball.reason || 'no candidate passed the detector checks'}`;
+          return;
+        }
+        const numeric = (value) => value != null && Number.isFinite(Number(value));
+        const coordinate = (value) => numeric(value) ? Number(value).toFixed(1) : '?';
+        const diameter = numeric(ball.diameter_px) ? `${Number(ball.diameter_px).toFixed(1)} px` : 'unavailable';
+        const range = numeric(ball.range_m) ? ` · range ${Number(ball.range_m).toFixed(3)} m` : '';
+        detector.textContent = `Ball detected · x ${coordinate(ball.x)} · y ${coordinate(ball.y)} · diameter ${diameter}${range}`;
       }
 
       function loadGuidedCameraFrame(context, version) {
@@ -1482,7 +1503,7 @@
             guidedCameraStatus('Camera is live. Waiting for the first frame to become available…');
           }
         });
-        frame.src = `/api/tester/live.png?view=raw&t=${Date.now()}`;
+        frame.src = `/api/tester/live.png?view=overlay&t=${Date.now()}`;
       }
 
       async function guidedCameraTick() {
@@ -1511,12 +1532,15 @@
           }
           if (status.error || status.failed) {
             guidedCameraStatus(`Camera error: ${status.error || status.failed}`, true);
+            guidedCameraDetectorStatus(null, false);
             return;
           }
           if (!status.running) {
             guidedCameraStatus('The guided camera stopped before evaluation. Retry this camera step.', true);
+            guidedCameraDetectorStatus(null, false);
             return;
           }
+          guidedCameraDetectorStatus(status.ball, Boolean(status.stats));
           if (!status.stats) {
             guidedCameraStatus('Camera is warming up. Waiting for the first frame…');
             return;
