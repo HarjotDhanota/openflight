@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from openflight.iwr6843.device_lock import IWR6843DeviceBusyError
 from openflight.iwr6843.driver import IWR6843Radar
 from openflight.iwr6843.dump import TEMP_REPORT_KEYS, pack_dump
 
@@ -19,6 +20,155 @@ def test_send_config_rejects_missing_cli_acknowledgement(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="did not acknowledge"):
         radar.send_config(str(config))
+
+
+class FakeDeviceLock:
+    """Fail on nested ownership so auto-detection lock scope is observable."""
+
+    held = set()
+
+    def __init__(self, port, **_kwargs):
+        self.port = port
+        self.acquired = False
+
+    def acquire(self):
+        if self.port in self.held:
+            raise IWR6843DeviceBusyError(self.port)
+        self.held.add(self.port)
+        self.acquired = True
+        return self
+
+    def release(self):
+        if self.acquired:
+            self.held.remove(self.port)
+            self.acquired = False
+
+
+class OpenedSerial:
+    def __init__(self, response=b"sensorStart\n"):
+        self.response = bytearray(response)
+        self.closed = False
+
+    def reset_input_buffer(self):
+        pass
+
+    def write(self, _data):
+        pass
+
+    def read(self, size):
+        chunk = self.response[:size]
+        del self.response[:size]
+        return bytes(chunk)
+
+    def close(self):
+        self.closed = True
+
+
+def test_radar_holds_device_lock_until_close(monkeypatch):
+    from openflight.iwr6843 import driver
+
+    locks = []
+    serial_handle = OpenedSerial()
+
+    def lock_factory(port, **_kwargs):
+        lock = FakeDeviceLock(port)
+        locks.append(lock)
+        return lock
+
+    monkeypatch.setattr(driver, "IWR6843DeviceLock", lock_factory)
+    monkeypatch.setattr(driver, "open_port", lambda *_args, **_kwargs: serial_handle)
+
+    radar = IWR6843Radar(port="/dev/test-iwr")
+
+    assert locks[0].acquired is True
+    radar.close()
+    assert serial_handle.closed is True
+    assert locks[0].acquired is False
+
+
+def test_close_releases_device_lock_when_serial_close_fails(monkeypatch):
+    from openflight.iwr6843 import driver
+
+    lock = FakeDeviceLock("/dev/test-iwr")
+
+    class CloseFailureSerial(OpenedSerial):
+        def close(self):
+            raise OSError("close failed")
+
+    monkeypatch.setattr(driver, "IWR6843DeviceLock", lambda *_args, **_kwargs: lock)
+    monkeypatch.setattr(driver, "open_port", lambda *_args, **_kwargs: CloseFailureSerial())
+    radar = IWR6843Radar(port="/dev/test-iwr")
+
+    with pytest.raises(OSError, match="close failed"):
+        radar.close()
+
+    assert lock.acquired is False
+
+
+def test_serial_open_failure_releases_device_lock(monkeypatch):
+    from openflight.iwr6843 import driver
+
+    locks = []
+
+    def lock_factory(port, **_kwargs):
+        lock = FakeDeviceLock(port)
+        locks.append(lock)
+        return lock
+
+    monkeypatch.setattr(driver, "IWR6843DeviceLock", lock_factory)
+    monkeypatch.setattr(
+        driver, "open_port", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("open failed"))
+    )
+
+    with pytest.raises(OSError, match="open failed"):
+        IWR6843Radar(port="/dev/test-iwr")
+
+    assert locks[0].acquired is False
+
+
+def test_auto_detection_releases_probe_lock_before_owning_radar(monkeypatch):
+    from openflight.iwr6843 import driver
+
+    FakeDeviceLock.held.clear()
+    handles = []
+
+    def opened(*_args, **_kwargs):
+        handle = OpenedSerial()
+        handles.append(handle)
+        return handle
+
+    monkeypatch.setattr(driver.glob, "glob", lambda _pattern: ["/dev/test-iwr"])
+    monkeypatch.setattr(driver, "IWR6843DeviceLock", FakeDeviceLock)
+    monkeypatch.setattr(driver, "open_port", opened)
+
+    radar = IWR6843Radar()
+
+    assert radar.port == "/dev/test-iwr"
+    assert len(handles) == 2
+    assert handles[0].closed is True
+    assert "/dev/test-iwr" in FakeDeviceLock.held
+    radar.close()
+    assert not FakeDeviceLock.held
+
+
+def test_auto_detection_reports_busy_candidate(monkeypatch):
+    from openflight.iwr6843 import driver
+
+    class BusyLock:
+        def __init__(self, port, **_kwargs):
+            self.port = port
+
+        def acquire(self):
+            raise IWR6843DeviceBusyError(self.port)
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(driver.glob, "glob", lambda _pattern: ["/dev/busy-iwr"])
+    monkeypatch.setattr(driver, "IWR6843DeviceLock", BusyLock)
+
+    with pytest.raises(IWR6843DeviceBusyError, match="/dev/busy-iwr"):
+        IWR6843Radar()
 
 
 def test_stop_sensor_requires_acknowledgement_and_inactive_health(monkeypatch):

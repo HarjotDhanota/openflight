@@ -32,6 +32,7 @@ Flash one configurable firmware image, then select a runtime profile:
 | Wide/default config | `config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg` |
 | Dense/advanced config | `config/iwr6843_l3dump_dense_36f2ms_53bin_iq8.cfg` |
 | Dense/wide-late experimental config | `config/iwr6843_l3dump_dense_36f2ms_53bin_iq8_wide_late.cfg` |
+| Static setup diagnostic config | `config/iwr6843_static_range_24f3ms_53bin_iq16.cfg` |
 | Reference array calibration | `config/iwr6843_calibration_reference.json` |
 | Firmware size | 346,820 bytes |
 | Firmware SHA-256 | `823ddd18a231d0004020de6262160d6863384cccac6674bae6f7d0fcea58f955` |
@@ -131,6 +132,10 @@ Work these in order — each depends on the one before it.
 - :material-numeric-6-circle-outline: **[Calibration and replay](calibration.md)**
 
     Calibration sessions, estimator limits, and offline capture replay.
+
+- :material-radar: **[Static setup range capture](static-range-capture.md)**
+
+    Raw-first empty-tee and ball-present diagnostic evidence.
 
 - :material-wrench: **[Troubleshooting](troubleshooting.md)**
 

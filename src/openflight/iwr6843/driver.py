@@ -20,6 +20,7 @@ import time
 
 import serial
 
+from openflight.iwr6843.device_lock import IWR6843DeviceBusyError, IWR6843DeviceLock
 from openflight.iwr6843.dump import HEADER, MAGIC, parse_header, payload_nbytes
 
 BAUD = 1_041_667
@@ -47,30 +48,48 @@ class IWR6843Radar:
             if port is None:
                 raise RuntimeError("no IWR6843 CLI found — board on, flashed, single-port fw?")
         self.port = port
-        self.ser = open_port(port, baud)
+        self._device_lock = IWR6843DeviceLock(port)
+        self._device_lock.acquire()
+        try:
+            self.ser = open_port(port, baud)
+        except BaseException:
+            self._device_lock.release()
+            raise
 
     @staticmethod
     def detect_port(baud: int = BAUD) -> str | None:
         """First serial port whose CLI answers `help` with our commands."""
         candidates: list[str] = []
+        busy_ports: list[str] = []
         for pattern in _PORT_GLOBS:
             candidates.extend(sorted(glob.glob(pattern)))
-        for cand in candidates:
+        for cand in dict.fromkeys(candidates):
+            device_lock = IWR6843DeviceLock(cand)
             try:
-                ser = open_port(cand, baud)
-            except (OSError, serial.SerialException):
+                device_lock.acquire()
+            except IWR6843DeviceBusyError:
+                busy_ports.append(cand)
                 continue
             try:
-                ser.reset_input_buffer()
-                ser.write(b"help\n")
-                resp = b""
-                deadline = time.time() + 1.5
-                while time.time() < deadline and b"sensorStart" not in resp:
-                    resp += ser.read(512)
+                try:
+                    ser = open_port(cand, baud)
+                except (OSError, serial.SerialException):
+                    continue
+                try:
+                    ser.reset_input_buffer()
+                    ser.write(b"help\n")
+                    resp = b""
+                    deadline = time.time() + 1.5
+                    while time.time() < deadline and b"sensorStart" not in resp:
+                        resp += ser.read(512)
+                finally:
+                    ser.close()
+                if b"sensorStart" in resp:
+                    return cand
             finally:
-                ser.close()
-            if b"sensorStart" in resp:
-                return cand
+                device_lock.release()
+        if busy_ports:
+            raise IWR6843DeviceBusyError(", ".join(busy_ports))
         return None
 
     def cmd(self, line: str, window: float = 1.5) -> str:
@@ -243,7 +262,12 @@ class IWR6843Radar:
 
     def close(self) -> None:
         """Release the serial port."""
-        self.ser.close()
+        try:
+            self.ser.close()
+        finally:
+            device_lock = getattr(self, "_device_lock", None)
+            if device_lock is not None:
+                device_lock.release()
 
     def __enter__(self) -> "IWR6843Radar":
         return self
