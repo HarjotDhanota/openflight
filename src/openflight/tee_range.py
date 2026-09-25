@@ -7,8 +7,10 @@ import json
 import math
 import os
 import re
+import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Sequence
 
 SCHEMA = "openflight.tee_range.v2"
@@ -26,6 +28,40 @@ def _canonical_json(payload: Mapping) -> bytes:
     return json.dumps(dict(payload), sort_keys=True, allow_nan=False, separators=(",", ":")).encode(
         "utf-8"
     )
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _thaw_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _thaw_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_thaw_json(item) for item in value]
+    return value
+
+
+def _frozen_json(value: Any, name: str) -> Any:
+    try:
+        detached = json.loads(json.dumps(_thaw_json(value), allow_nan=False))
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{name} must be finite JSON data") from error
+
+    def freeze(item: Any) -> Any:
+        if isinstance(item, dict):
+            return MappingProxyType({key: freeze(child) for key, child in item.items()})
+        if isinstance(item, list):
+            return tuple(freeze(child) for child in item)
+        return item
+
+    return freeze(detached)
 
 
 def _positive_finite(value: float, name: str) -> float:
@@ -62,6 +98,8 @@ class TeeRangeCandidate:
     selectable: bool = True
 
     def __post_init__(self) -> None:
+        if not isinstance(self.selectable, bool):
+            raise ValueError("selectable must be a boolean")
         object.__setattr__(self, "candidate_id", _required_text(self.candidate_id, "candidate_id"))
         object.__setattr__(self, "source", _required_text(self.source, "source"))
         group = _required_text(self.source_group, "source_group")
@@ -86,8 +124,9 @@ class TeeRangeCandidate:
             object.__setattr__(
                 self, "uncertainty_m", _positive_finite(self.uncertainty_m, "uncertainty_m")
             )
-        evidence = dict(self.evidence)
-        json.dumps(evidence, allow_nan=False)
+        evidence = _frozen_json(self.evidence, "evidence")
+        if not isinstance(evidence, Mapping):
+            raise ValueError("evidence must be a JSON object")
         object.__setattr__(self, "evidence", evidence)
         if group == "manual_truth" and self.selectable:
             raise ValueError("manual truth must not be selectable")
@@ -101,7 +140,7 @@ class TeeRangeCandidate:
             "radar_slant_range_m": self.radar_slant_range_m,
             "uncertainty_m": self.uncertainty_m,
             "selectable": self.selectable,
-            "evidence": dict(self.evidence),
+            "evidence": _thaw_json(self.evidence),
         }
 
     @classmethod
@@ -113,7 +152,7 @@ class TeeRangeCandidate:
             source_group=payload["source_group"],
             radar_slant_range_m=payload["radar_slant_range_m"],
             uncertainty_m=payload["uncertainty_m"],
-            selectable=bool(payload.get("selectable", True)),
+            selectable=payload.get("selectable", True),
             evidence=payload.get("evidence", {}),
         )
 
@@ -421,8 +460,14 @@ class TeeRangeSolution:  # pylint: disable=too-many-instance-attributes
         }
 
     @classmethod
-    def from_dict(cls, payload: Mapping) -> TeeRangeSolution:
-        """Validate a solution, downgrading legacy resolved records to unresolved."""
+    def from_dict(
+        cls,
+        payload: Mapping,
+        *,
+        qualification: TeeRangeQualification | None = None,
+        epoch_id: str | None = None,
+    ) -> TeeRangeSolution:
+        """Validate a solution and require qualification context for resolved records."""
         schema = payload.get("schema")
         version = payload.get("schema_version")
         if schema == LEGACY_SCHEMA and version == 1:
@@ -436,12 +481,38 @@ class TeeRangeSolution:  # pylint: disable=too-many-instance-attributes
             return cls.unresolved(candidates, reason=payload["reason"])
         if schema != SCHEMA or version != SCHEMA_VERSION:
             raise ValueError("unsupported tee-range schema")
+        expected_fields = {
+            "schema",
+            "schema_version",
+            "status",
+            "reason",
+            "selected_candidate_id",
+            "selected_range_m",
+            "selected_uncertainty_m",
+            "supporting_source_groups",
+            "evidence_epoch_id",
+            "qualification_sha256",
+            "policy_sha256",
+            "agreement_residual_m",
+            "agreement_normalized_sigma",
+            "candidates",
+        }
+        if set(payload) != expected_fields:
+            raise ValueError("tee-range solution fields do not match the schema")
+        candidates = tuple(
+            TeeRangeCandidate.from_dict(item) for item in payload.get("candidates", [])
+        )
+        if payload["status"] == "resolved":
+            if qualification is not None and epoch_id is not None:
+                return _validated_loaded_solution(payload, candidates, qualification, epoch_id)
+            return cls.unresolved(
+                (_without_promotion(item) for item in candidates),
+                reason="resolved_range_requires_qualification_context",
+            )
         return cls(
             status=payload["status"],
             reason=payload["reason"],
-            candidates=tuple(
-                TeeRangeCandidate.from_dict(item) for item in payload.get("candidates", [])
-            ),
+            candidates=candidates,
             selected_candidate_id=payload.get("selected_candidate_id"),
             selected_range_m=payload.get("selected_range_m"),
             selected_uncertainty_m=payload.get("selected_uncertainty_m"),
@@ -451,7 +522,6 @@ class TeeRangeSolution:  # pylint: disable=too-many-instance-attributes
             policy_sha256=payload.get("policy_sha256"),
             agreement_residual_m=payload.get("agreement_residual_m"),
             agreement_normalized_sigma=payload.get("agreement_normalized_sigma"),
-            _policy_validated=payload.get("status") == "resolved",
         )
 
 
@@ -487,6 +557,12 @@ def _promote_candidate(
         "policy_version": qualification.policy_version,
     }
     return replace(candidate, selectable=True, evidence=evidence)
+
+
+def _without_promotion(candidate: TeeRangeCandidate) -> TeeRangeCandidate:
+    evidence = _thaw_json(candidate.evidence)
+    evidence.pop("promotion", None)
+    return replace(candidate, selectable=False, evidence=evidence)
 
 
 def resolve_qualified_tee_range(
@@ -618,17 +694,45 @@ def resolve_qualified_tee_range(
     )
 
 
+def _validated_loaded_solution(
+    payload: Mapping,
+    candidates: Sequence[TeeRangeCandidate],
+    qualification: TeeRangeQualification,
+    epoch_id: str,
+) -> TeeRangeSolution:
+    rebuilt = resolve_qualified_tee_range(
+        epoch_id,
+        (_without_promotion(item) for item in candidates),
+        qualification,
+    )
+    if rebuilt.status != "resolved" or _canonical_json(rebuilt.to_dict()) != _canonical_json(
+        payload
+    ):
+        raise ValueError("resolved tee-range solution failed policy validation")
+    return rebuilt
+
+
 def write_solution(path: str | Path, solution: TeeRangeSolution) -> None:
     """Atomically persist a range contract beside the session evidence."""
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.tmp")
-    temporary.write_bytes(_canonical_json(solution.to_dict()) + b"\n")
-    os.replace(temporary, destination)
+    temporary: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile("wb", dir=destination.parent, delete=False) as handle:
+            temporary = handle.name
+            handle.write(_canonical_json(solution.to_dict()) + b"\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, destination)
+        temporary = None
+        _fsync_directory(destination.parent)
+    finally:
+        if temporary is not None:
+            Path(temporary).unlink(missing_ok=True)
 
 
 def load_solution(path: str | Path) -> TeeRangeSolution:
-    """Load a range contract, mapping old sessions to an explicit unresolved state."""
+    """Load a standalone contract without trusting an unbound resolved claim."""
     source = Path(path)
     if not source.exists():
         return TeeRangeSolution.unresolved(reason=UNRESOLVED_LEGACY_REASON)

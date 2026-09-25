@@ -7,6 +7,7 @@ import json
 import threading
 
 import numpy as np
+import pytest
 
 from openflight.iwr6843.dump import pack_dump
 from openflight.iwr6843.static_capture import (
@@ -128,10 +129,76 @@ def test_success_saves_raw_before_profile_and_records_exact_hashes(tmp_path, mon
         },
     }
     assert result["profile"]["capture_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert result["raw_evidence_sha256"] == hashlib.sha256(raw).hexdigest()
     assert result["profile"]["radar_profile_sha256"] == result["inputs"]["radar_config"]["sha256"]
     assert result["profile"]["rig_geometry_sha256"] == result["inputs"]["rig_geometry"]["sha256"]
     saved = json.loads((inputs.output_dir / "empty-001.json").read_text(encoding="utf-8"))
     assert saved == result
+
+
+def test_concurrent_same_id_is_refused_before_second_hardware_owner(tmp_path):
+    inputs = _inputs(tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+    factory_calls = []
+    outcomes = []
+
+    def factory(**_kwargs):
+        factory_calls.append(1)
+        return FakeRadar(_raw_dump())
+
+    def wait_for_settle(_cancel, _seconds):
+        entered.set()
+        assert release.wait(3)
+        return False
+
+    def first_capture():
+        outcomes.append(
+            capture_static_range(
+                inputs,
+                radar_factory=factory,
+                wait_for_settle=wait_for_settle,
+            )
+        )
+
+    worker = threading.Thread(target=first_capture)
+    worker.start()
+    assert entered.wait(3)
+    try:
+        with pytest.raises(FileExistsError, match="reserved"):
+            capture_static_range(
+                inputs,
+                radar_factory=factory,
+                wait_for_settle=lambda *_args: False,
+            )
+    finally:
+        release.set()
+        worker.join(3)
+
+    assert not worker.is_alive()
+    assert len(factory_calls) == 1
+    assert outcomes[0]["usable"] is True
+    assert (inputs.output_dir / "empty-001.l3dump").read_bytes() == _raw_dump()
+    assert not list(inputs.output_dir.glob("*.reserve"))
+
+
+def test_existing_partial_raw_is_never_replaced_or_sent_to_hardware(tmp_path):
+    inputs = _inputs(tmp_path)
+    inputs.output_dir.mkdir(parents=True)
+    raw_path = inputs.output_dir / "empty-001.l3dump"
+    raw_path.write_bytes(b"preserved-partial-evidence")
+    factory_calls = []
+
+    with pytest.raises(FileExistsError, match="output already exists"):
+        capture_static_range(
+            inputs,
+            radar_factory=lambda **_kwargs: factory_calls.append(1),
+            wait_for_settle=lambda *_args: False,
+        )
+
+    assert raw_path.read_bytes() == b"preserved-partial-evidence"
+    assert factory_calls == []
+    assert not list(inputs.output_dir.glob("*.reserve"))
 
 
 def test_partial_dump_is_preserved_and_marked_unusable(tmp_path):

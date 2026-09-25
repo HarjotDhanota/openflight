@@ -1002,3 +1002,16 @@ product acceptance limits. Promotion remains gated on that independent evidence.
   checks prevent a selected anchor from relying on unbounded back-projection.
   Synthetic validation does not qualify the Pi optics, sensor clocks, radar
   calibration or automatic range.
+- Tee-range integrity hardening (M1/M2, TB01/TB07/TB10): candidate evidence is
+  now deeply immutable and serialization returns detached JSON. Resolved epoch
+  loads reconstruct promotion from non-selectable evidence under the embedded
+  qualification and require exact canonical equality, so persisted promotion,
+  residual and policy claims cannot bypass the resolver. Epoch references hash
+  the exact bytes written. Static IWR capture reserves an ID before hardware
+  ownership, publishes raw/result files without replacement and binds results
+  to the raw digest; solution writes use unique durable temporary files.
+  Focused fusion/integrity validation passed 224 tests with one skip. The full
+  camera-enabled Windows suite passed 2,506 tests with 12 skips and retained the
+  same 28 platform-specific bash, permission and symlink failures as the base.
+  Ruff and formatting passed; scoped Pylint scored 9.96/10. No Pi hardware or
+  automatic-range accuracy validation was performed.

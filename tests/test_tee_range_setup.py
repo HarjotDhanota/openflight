@@ -1,5 +1,6 @@
 """Setup-level tee range evidence is immutable and referenced by digest."""
 
+import hashlib
 import json
 
 import pytest
@@ -102,6 +103,93 @@ def test_resolved_epoch_binds_qualification_and_epoch_identity(tmp_path):
     reference = write_epoch(tmp_path / "tester", record, make_current=True)
 
     assert load_epoch(tmp_path / "tester", reference) == record
+
+
+def test_epoch_reference_is_stable_after_source_and_export_mutation():
+    artifact = qualification()
+    camera = qualified_camera("epoch-stable")
+    radar = qualified_iwr("epoch-stable")
+    record = TeeRangeEvidenceEpoch(
+        epoch_id="epoch-stable",
+        created_at_utc="2026-09-25T18:00:00Z",
+        solution=resolve_qualified_tee_range("epoch-stable", [camera, radar], artifact),
+        qualification=artifact,
+    )
+    reference = record.reference
+    exported = record.to_dict()
+
+    exported["solution"]["candidates"][0]["evidence"]["qualification"]["manual_range_used"] = True
+
+    assert record.reference == reference
+
+
+def test_epoch_write_uses_the_digest_of_the_exact_bytes_written(tmp_path, monkeypatch):
+    artifact = qualification()
+    camera = qualified_camera("epoch-during-write")
+    radar = qualified_iwr("epoch-during-write")
+    record = TeeRangeEvidenceEpoch(
+        epoch_id="epoch-during-write",
+        created_at_utc="2026-09-25T18:00:00Z",
+        solution=resolve_qualified_tee_range("epoch-during-write", [camera, radar], artifact),
+        qualification=artifact,
+    )
+    original_to_dict = TeeRangeEvidenceEpoch.to_dict
+    calls = 0
+
+    def changing_to_dict(self):
+        nonlocal calls
+        calls += 1
+        payload = original_to_dict(self)
+        if calls > 1:
+            payload["solution"]["candidates"][0]["evidence"]["qualification"][
+                "manual_range_used"
+            ] = True
+        return payload
+
+    monkeypatch.setattr(TeeRangeEvidenceEpoch, "to_dict", changing_to_dict)
+
+    reference = write_epoch(tmp_path / "tester", record)
+    persisted = (
+        tmp_path / "tester" / "calibration" / "tee-range" / "epochs" / "epoch-during-write.json"
+    ).read_bytes()
+
+    assert calls == 1
+    assert reference.epoch_sha256 == hashlib.sha256(persisted).hexdigest()
+    monkeypatch.undo()
+    assert load_epoch(tmp_path / "tester", reference) == record
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        lambda payload: payload["solution"]["candidates"][0]["evidence"][
+            "qualification"
+        ].__setitem__("iwr_range_used", True),
+        lambda payload: payload["solution"]["candidates"][0]["evidence"][
+            "qualification"
+        ].__setitem__("camera_calibration_sha256", "f" * 64),
+        lambda payload: payload["solution"].__setitem__("agreement_residual_m", 0.0),
+        lambda payload: payload["solution"].__setitem__("policy_sha256", "f" * 64),
+    ],
+    ids=("circular", "identity", "residual", "policy"),
+)
+def test_resolved_epoch_loader_reruns_policy_and_refuses_forgery(tamper):
+    artifact = qualification()
+    record = TeeRangeEvidenceEpoch(
+        epoch_id="epoch-forged",
+        created_at_utc="2026-09-25T18:00:00Z",
+        solution=resolve_qualified_tee_range(
+            "epoch-forged",
+            [qualified_camera("epoch-forged"), qualified_iwr("epoch-forged")],
+            artifact,
+        ),
+        qualification=artifact,
+    )
+    payload = record.to_dict()
+    tamper(payload)
+
+    with pytest.raises(ValueError, match="policy validation"):
+        TeeRangeEvidenceEpoch.from_dict(payload)
 
 
 def test_resolved_epoch_refuses_missing_or_mismatched_qualification():

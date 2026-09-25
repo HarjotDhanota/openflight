@@ -147,6 +147,8 @@ class TeeRangeEvidenceEpoch:
                 raise ValueError("resolved solution must reference its containing epoch")
             if self.solution.qualification_sha256 != self.qualification.artifact_sha256:
                 raise ValueError("resolved solution qualification digest does not match")
+            if self.solution.policy_sha256 != self.qualification.policy_sha256:
+                raise ValueError("resolved solution policy digest does not match")
 
     def to_dict(self) -> dict:
         """Return the complete immutable epoch document."""
@@ -186,16 +188,26 @@ class TeeRangeEvidenceEpoch:
             "solution",
         }:
             raise ValueError("tee-range setup epoch contains unsupported fields")
-        qualification = payload.get("qualification")
+        qualification_payload = payload.get("qualification")
+        qualification = (
+            TeeRangeQualification.from_dict(qualification_payload)
+            if isinstance(qualification_payload, Mapping)
+            else None
+        )
+        solution_payload = payload["solution"]
+        if not isinstance(solution_payload, Mapping):
+            raise ValueError("tee-range setup solution must be a JSON object")
+        if solution_payload.get("status") == "resolved" and qualification is None:
+            raise ValueError("a resolved epoch requires its qualification artifact")
         return cls(
             epoch_id=payload["epoch_id"],
             created_at_utc=payload["created_at_utc"],
-            qualification=(
-                TeeRangeQualification.from_dict(qualification)
-                if isinstance(qualification, Mapping)
-                else None
+            qualification=qualification,
+            solution=TeeRangeSolution.from_dict(
+                solution_payload,
+                qualification=qualification,
+                epoch_id=payload["epoch_id"],
             ),
-            solution=TeeRangeSolution.from_dict(payload["solution"]),
         )
 
 
@@ -214,7 +226,7 @@ def write_epoch(
     content = _canonical_bytes(epoch.to_dict())
     destination = root / "epochs" / f"{epoch.epoch_id}.json"
     _write_immutable(destination, content)
-    reference = epoch.reference
+    reference = TeeRangeEpochReference(epoch.epoch_id, hashlib.sha256(content).hexdigest())
     if make_current:
         _atomic_replace(root / "current.json", _canonical_bytes(reference.to_dict()))
     return reference
