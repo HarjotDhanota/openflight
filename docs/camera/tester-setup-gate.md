@@ -122,8 +122,11 @@ reviewed measured profile. Do not edit a profile just to make the checks pass.
 The IWR6843 custom firmware uses the CP2105 **Enhanced/UARTA** interface for
 both CLI and dump traffic. Prefer its stable
 `/dev/serial/by-id/...-if00-port0` name and start the tester with
-`--iwr-static-port` when USB numbering is not stable. Omitting the option keeps
-CLI auto-detection. Do not encode a particular `/dev/ttyUSB` number in the rig
+`--iwr-static-port` when USB numbering is not stable. The same path is used by
+**Check the hardware**, the guided static captures and the kiosk runs it starts
+(`--iwr6843-port`), so every step owns the interface the check verified. The
+check shows its last log line: the port that answered, or each probed port and
+why it did not. Omitting the option keeps CLI auto-detection. Do not encode a particular `/dev/ttyUSB` number in the rig
 configuration.
 
 Pitch or roll departures greater than two degrees produce a nonblocking
