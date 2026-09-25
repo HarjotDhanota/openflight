@@ -34,6 +34,13 @@ Updated: 2026-09-24. Owner: Harjot. Status: active; M0 complete, M1 in progress.
       warnings. Tester browser checks passed 31 plus one focused packaging case;
       diagnostic/review browser checks passed 23. These are not Pi hardware,
       acquisition-load or accuracy validation.
+- [x] Session review workflow (`agent/review-workflow`): one background
+      analyse-review-package job, immutable hash-inventoried session bundle,
+      per-attempt statuses with rejection evidence and experimental spin,
+      browser import with hash checks, and `--verify` reproduction. Windows:
+      affected backend suites pass; full suite 2340 passed with the same 28
+      Windows-only failures as `f7c67ac`; tester/review/diagnostics browser
+      suites pass. Not yet run on the Pi or on session 1's raw captures.
 - [ ] M1 physical gate remains open. M3 selection and M4 pose/strike/spin are
       evidence-dependent. Preserve the first session and finish its failure and
       discrepancy review before changing estimators.

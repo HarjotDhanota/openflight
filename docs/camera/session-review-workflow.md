@@ -104,6 +104,27 @@ Cost: one new module pair and page; the old package layout is kept inside the
 bundle so existing extraction habits keep working. Acceptance gates are not
 changed; no estimator threshold is touched.
 
+## Implementation status
+
+| # | Finding | Status |
+|---|---|---|
+| 1 | Non-portable replay | Fixed: captures located inside the session folder; bundle-relative report paths (`b5ad7fc`) |
+| 2 | No canonical artifact | Fixed: immutable session bundle with manifest, roles, hashes and sidecar (`df43f74`, `cfa5a50`) |
+| 3 | Terminal-only replay | Fixed: one background job replays every shot from recorded sample rate and club (`b5ad7fc`, `df43f74`) |
+| 4 | Dropped identity | Fixed: arm, rig hash, applied exposure/gain, setup hash, placement, with per-field evidence; per-shot keys excluded from session aggregation (`b5ad7fc`) |
+| 5 | Path-dependent software hash | Fixed: replay hashes the capture snapshot's allowlist by relative path (`b5ad7fc`) |
+| 6 | Hidden experimental spin | Fixed in the review: `experimental` with confidence and quality; the processor's own reliability rule decides `accepted` (`15b2745`) |
+| 7 | Overloaded "accepted"/"complete" | Fixed in labels: "processing finished", "usable pictures", "with a fused club result" (`c1c97e0`) |
+| 8 | Flattened rejections | Fixed in the review: scene/impact candidates, reasons, confidence and dependency chain (`15b2745`) |
+| 9 | Impact photos | Fixed: stored tester-relative, shown per attempt; legacy absolute paths still resolve (`cfa5a50`, `c1c97e0`) |
+| 10 | Browser-only drafts | Fixed: hash-bound save into `<tester>/annotations/`, bundled as `annotation` (`dbd359e`) |
+| 11-13 | Pi memory | Fixed: single-frame reads, streamed packaging, camera save backlog bounded at three clips (`ce2c5ba`) |
+| 14 | Class sample rate in replay config | Open, noted only |
+
+Fusion diagnostics still show only the live snapshot allowlist; the full
+replayed evidence is in the session review. The live snapshot schema was left
+unchanged.
+
 ## Estimator questions blocked on frames or hardware
 
 1. Camera reference ball, session 1: all scene candidates sit at y 193-246 on
