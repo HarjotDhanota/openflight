@@ -841,6 +841,39 @@ class TestLiveView:
         self.live.stop()
         assert self.cameras[1].closed and not self.live.running
 
+    def test_slow_old_analyzer_cannot_publish_after_stop_and_restart(self, monkeypatch):
+        monkeypatch.setattr(ts, "LIVE_BALL_EVERY_S", 0.01)
+        monkeypatch.setattr(ts, "LIVE_THREAD_JOIN_TIMEOUT_S", 0.01)
+        old_started = threading.Event()
+        release_old = threading.Event()
+
+        def slow_analyzer(_frames, _observation_id):
+            old_started.set()
+            release_old.wait(timeout=2.0)
+            return {"status": "selected", "selected": {"x_px": 10.0}}
+
+        def current_analyzer(_frames, observation_id):
+            return {
+                "status": "selected",
+                "selected": {"x_px": 25.0},
+                "observation_id": observation_id,
+            }
+
+        self.live.start(ts.ARMS["arm1"], 300, 4.0, analyzer=slow_analyzer)
+        assert old_started.wait(timeout=2.0)
+        self.live.stop()
+        self.live.start(ts.ARMS["arm1"], 300, 4.0, analyzer=current_analyzer)
+        assert _wait(
+            lambda: (
+                (self.live.snapshot()[1].get("association") or {}).get("selected") == {"x_px": 25.0}
+            )
+        )
+
+        release_old.set()
+        time.sleep(0.05)
+
+        assert self.live.snapshot()[1]["association"]["selected"] == {"x_px": 25.0}
+
     def test_a_camera_error_is_shown_not_raised(self):
         def broken():
             raise IndexError("list index out of range")
@@ -1128,17 +1161,53 @@ class TestGuidedRangeAnalyzer:
         analyzer = ts.GuidedRangeAnalyzer(_guided_camera(), orientation, lambda: orientation)
         frames = np.full((5, 200, 320), 70, dtype=np.uint8)
 
-        assert analyzer.observe(frames, observed_at=4.0)["stable_count"] == 1
-        assert analyzer.observe(frames, observed_at=4.5)["save_eligible"] is False
-        ready = analyzer.observe(frames, observed_at=5.0)
+        assert analyzer.observe(frames, 1, observed_at=4.0)["stable_count"] == 1
+        assert analyzer.observe(frames, 2, observed_at=4.5)["save_eligible"] is False
+        ready = analyzer.observe(frames, 3, observed_at=5.0)
         assert ready["stable_count"] == 3
         assert ready["stable_span_s"] == 1.0
         assert ready["save_eligible"] is True
 
         current["result"] = _guided_result(x=200.0)
-        reset = analyzer.observe(frames, observed_at=6.0)
+        reset = analyzer.observe(frames, 4, observed_at=6.0)
         assert reset["stable_count"] == 1
         assert reset["save_eligible"] is False
+
+    def test_gradual_drift_cannot_chain_past_the_first_streak_observation(self, monkeypatch):
+        current = {"result": _guided_result(x=160.0)}
+        monkeypatch.setattr(
+            ts, "estimate_reference_ball_range", lambda *_args, **_kwargs: current["result"]
+        )
+        orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
+        analyzer = ts.GuidedRangeAnalyzer(_guided_camera(), orientation, lambda: orientation)
+        frames = np.full((5, 200, 320), 70, dtype=np.uint8)
+
+        assert analyzer.observe(frames, 1, observed_at=1.0)["stable_count"] == 1
+        current["result"] = _guided_result(x=162.5)
+        assert analyzer.observe(frames, 2, observed_at=1.5)["stable_count"] == 2
+        current["result"] = _guided_result(x=165.0)
+
+        drifted = analyzer.observe(frames, 3, observed_at=2.0)
+
+        assert drifted["stable_count"] == 1
+        assert drifted["stable_span_s"] == 0.0
+        assert drifted["save_eligible"] is False
+
+    def test_repeated_analysis_of_one_frozen_window_does_not_advance_readiness(self, monkeypatch):
+        monkeypatch.setattr(
+            ts, "estimate_reference_ball_range", lambda *_args, **_kwargs: _guided_result()
+        )
+        orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
+        analyzer = ts.GuidedRangeAnalyzer(_guided_camera(), orientation, lambda: orientation)
+        frames = np.full((5, 200, 320), 70, dtype=np.uint8)
+
+        first = analyzer.observe(frames, 7, observed_at=1.0)
+        frozen = analyzer.observe(frames, 7, observed_at=5.0)
+
+        assert first["stable_count"] == frozen["stable_count"] == 1
+        assert frozen["stable_span_s"] == 0.0
+        assert frozen["save_eligible"] is False
+        assert frozen["observation_id"] == 7
 
     @pytest.mark.parametrize("status", ["ambiguous", "not_found", "no_consistent_candidate"])
     def test_unsafe_association_never_draws_or_enables_save(self, monkeypatch, status):
@@ -1151,7 +1220,7 @@ class TestGuidedRangeAnalyzer:
         analyzer = ts.GuidedRangeAnalyzer(_guided_camera(), orientation, lambda: orientation)
         frames = np.full((5, 200, 320), 70, dtype=np.uint8)
 
-        association = analyzer.observe(frames, observed_at=1.0)
+        association = analyzer.observe(frames, 1, observed_at=1.0)
 
         assert association["status"] == status
         assert association["selected"] is None
@@ -1165,11 +1234,14 @@ class TestGuidedRangeAnalyzer:
         orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
         analyzer = ts.GuidedRangeAnalyzer(_guided_camera(), orientation, lambda: orientation)
         frames = np.full((5, 200, 320), 70, dtype=np.uint8)
-        for observed_at in (1.0, 1.5, 2.0):
-            assert analyzer.observe(frames, observed_at=observed_at)["status"] == "selected"
+        for observation_id, observed_at in enumerate((1.0, 1.5, 2.0), start=1):
+            assert (
+                analyzer.observe(frames, observation_id, observed_at=observed_at)["status"]
+                == "selected"
+            )
         orientation["camera_pitch_deg"] = 1.0
 
-        reset = analyzer.observe(frames, observed_at=3.0)
+        reset = analyzer.observe(frames, 4, observed_at=3.0)
 
         assert reset["save_eligible"] is False
         assert reset["stable_count"] == 0
