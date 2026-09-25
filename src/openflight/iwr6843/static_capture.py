@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from openflight.iwr6843.driver import IWR6843DumpRecoveryError, IWR6843Radar
+from openflight.iwr6843.dump import parse_header, payload_nbytes
 from openflight.iwr6843.range_evidence import static_range_profile
 
 SCHEMA = "openflight.iwr6843.static_capture.v1"
@@ -145,6 +146,15 @@ def _input_manifest(inputs: StaticCaptureInputs) -> tuple[dict[str, dict[str, st
     return manifest, config_bytes
 
 
+def _declared_dump_nbytes(raw: bytes) -> int | None:
+    """Total size the dump's own header declares, or None without a readable header."""
+    try:
+        metadata = parse_header(raw)
+        return metadata["header_nbytes"] + payload_nbytes(metadata, raw)
+    except (KeyError, ValueError):
+        return None
+
+
 def _profile_payload(profile) -> dict[str, Any]:
     return json.loads(json.dumps(asdict(profile), allow_nan=False))
 
@@ -247,20 +257,28 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
             if not isinstance(raw, bytes):
                 raise TypeError("IWR6843 read_dump must return bytes")
             stage = "persist_raw"
-            _atomic_write_bytes(raw_path, raw)
-            raw_sha256 = _sha256(raw)
-            result["raw_evidence_sha256"] = raw_sha256
-            result["artifacts"]["raw"] = {
-                "path": raw_path.name,
-                "size_bytes": len(raw),
-                "sha256": raw_sha256,
-            }
+            declared_nbytes = _declared_dump_nbytes(raw)
+            raw_complete = declared_nbytes == len(raw)
+            if raw:
+                _atomic_write_bytes(raw_path, raw)
+                raw_sha256 = _sha256(raw)
+                # Only a complete dump is raw evidence; partial bytes stay
+                # hashed in the artifact record for diagnosis.
+                result["raw_evidence_sha256"] = raw_sha256 if raw_complete else None
+                result["artifacts"]["raw"] = {
+                    "path": raw_path.name,
+                    "size_bytes": len(raw),
+                    "sha256": raw_sha256,
+                    "complete": raw_complete,
+                    "expected_size_bytes": declared_nbytes,
+                }
+            if dump_recovery_error is not None:
+                stage = "post_dump_cli_health" if raw_complete else "read_dump"
+                raise dump_recovery_error
             if cancel.is_set():
                 stage = "read_dump"
                 raise StaticCaptureCancelled("capture cancelled after raw evidence was saved")
             stage = "post_dump_cli_health"
-            if dump_recovery_error is not None:
-                raise dump_recovery_error
             try:
                 radar.verify_post_dump_cli()
             except Exception:
