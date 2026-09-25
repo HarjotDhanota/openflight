@@ -31,6 +31,10 @@ from openflight.camera.geometry import (
 MPH_PER_MS = 2.23694
 PARAMETER_SWEEP_SIZE = 27
 MAX_IWR_FALLBACK_ABS_DEG = 20.0
+# The resting-ball gate: diameter in pixels, and centre as fractions of the frame.
+REFERENCE_BALL_DIAMETER_PX = (9.0, 30.0)
+REFERENCE_BALL_X_FRACTION = (0.1, 0.9)
+REFERENCE_BALL_Y_FRACTION = (0.4, 0.95)
 
 # OpenCV's extension members are not visible to Pylint.
 # pylint: disable=no-member
@@ -401,11 +405,15 @@ def _select_reference_ball(frames, trigger_frame: int, geometry, ball_tracker):
             reasons[name] = f"{type(error).__name__}: {error}"
 
     def plausible(candidate: ReferenceBall | None) -> bool:
-        basic = bool(
-            candidate is not None
-            and 9.0 <= candidate.diameter_px <= 30.0
-            and geometry.image_width_px * 0.1 <= candidate.x <= geometry.image_width_px * 0.9
-            and geometry.image_height_px * 0.4 <= candidate.y <= geometry.image_height_px * 0.95
+        if candidate is None:
+            return False
+        smallest, largest = REFERENCE_BALL_DIAMETER_PX
+        left, right = (geometry.image_width_px * f for f in REFERENCE_BALL_X_FRACTION)
+        top, bottom = (geometry.image_height_px * f for f in REFERENCE_BALL_Y_FRACTION)
+        basic = (
+            smallest <= candidate.diameter_px <= largest
+            and left <= candidate.x <= right
+            and top <= candidate.y <= bottom
         )
         if not basic or geometry.calibrated_model is None:
             return basic
