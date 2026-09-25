@@ -63,6 +63,8 @@ class FakeLive:
         self.stop_count = 0
         self.error = None
         self.analyzer = None
+        self.frame_sequence = 0
+        self.latest_frame_at = None
 
     def start(self, arm, *_args, analyzer=None):
         self.running = True
@@ -71,8 +73,10 @@ class FakeLive:
         self.start_count += 1
         if analyzer is not None:
             frames = self.recent_frames()[1]
-            for observed_at in (1.0, 1.5, 2.0):
-                analyzer.observe(frames, observed_at=observed_at)
+            for observation_id, observed_at in enumerate((1.0, 1.5, 2.0), start=1):
+                analyzer.observe(frames, observation_id, observed_at=observed_at)
+            self.frame_sequence = 3
+            self.latest_frame_at = ts.time.monotonic()
 
     def stop(self):
         self.running = False
@@ -81,6 +85,10 @@ class FakeLive:
     def recent_frames(self):
         frames = np.full((3, self.arm.height, self.arm.width), 80, dtype=np.uint8)
         return self.arm, frames
+
+    def recent_frames_context(self):
+        arm, frames = self.recent_frames()
+        return arm, frames, self.frame_sequence, self.latest_frame_at
 
     def snapshot(self):
         return None, {
@@ -110,6 +118,14 @@ class UnreadyFakeLive(FakeLive):
         self.arm = arm
         self.analyzer = analyzer
         self.start_count += 1
+        self.frame_sequence = 1
+        self.latest_frame_at = ts.time.monotonic()
+
+
+class StaleFakeLive(FakeLive):
+    def start(self, arm, *_args, analyzer=None):
+        super().start(arm, *_args, analyzer=analyzer)
+        self.latest_frame_at = ts.time.monotonic() - ts.LIVE_FRAME_STALE_S - 1.0
 
 
 class IneligibleSetup(EligibleSetup):
@@ -493,6 +509,20 @@ def test_backend_refuses_save_before_camera_only_selection_is_stable(tmp_path, i
     assert "not ready to save" in response.get_json()["error"]
     assert phase(client, tester)["phase"] == "camera_arm5_capturing"
     assert live.running is True
+
+
+def test_backend_refuses_save_when_latest_camera_frame_is_stale(tmp_path, inputs, monkeypatch):
+    live = StaleFakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    for index, action in enumerate(("start", "capture_empty", "capture_ball", "start_camera_arm5")):
+        assert post(client, tester, action, f"request-{index}").status_code == 200
+
+    response = post(client, tester, "evaluate_camera_arm5", "stale-camera")
+
+    assert response.status_code == 409
+    assert "latest frame is stale" in response.get_json()["error"]
+    assert phase(client, tester)["phase"] == "camera_arm5_capturing"
 
 
 def test_latest_ambiguous_frames_are_preserved_and_withheld_after_live_readiness(

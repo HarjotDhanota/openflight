@@ -98,6 +98,8 @@ GAIN_CEILING = 12.0
 LIVE_FPS = 12.0
 LIVE_EXPOSURE_RANGE_US = (20, 20000)
 LIVE_BALL_EVERY_S = 1.0
+LIVE_FRAME_STALE_S = 2.5
+LIVE_THREAD_JOIN_TIMEOUT_S = 5.0
 GUIDED_RANGE_STABLE_COUNT = 3
 GUIDED_RANGE_STABLE_SPAN_S = 1.0
 # the picture's own reading of the ball's size, against the size the tape
@@ -1390,9 +1392,10 @@ class GuidedRangeAnalyzer:
         self._orientation_reader = orientation_reader
         self._lock = threading.Lock()
         self._last: dict | None = None
-        self._stable_selected: dict | None = None
+        self._stable_anchor: dict | None = None
         self._stable_count = 0
         self._stable_started_at: float | None = None
+        self._last_observation_id: int | None = None
 
     def _orientation_problem(self) -> str | None:
         current = self._orientation_reader()
@@ -1423,9 +1426,22 @@ class GuidedRangeAnalyzer:
             return f"camera-only association is {status or 'not ready'}"
         return "camera-only selection is still stabilizing"
 
-    def observe(self, frames: np.ndarray, *, observed_at: float | None = None) -> dict:
+    def observe(
+        self,
+        frames: np.ndarray,
+        observation_id: int,
+        *,
+        observed_at: float | None = None,
+    ) -> dict:
         """Analyze one recent frame window and update the independent stability streak."""
         now = time.monotonic() if observed_at is None else float(observed_at)
+        observation_id = int(observation_id)
+        with self._lock:
+            if (
+                self._last_observation_id is not None
+                and observation_id <= self._last_observation_id
+            ):
+                return dict(self._last) if self._last is not None else {}
         problem = self._orientation_problem()
         _result, analysis = _guided_camera_analysis(frames, self.camera)
         if problem:
@@ -1435,17 +1451,16 @@ class GuidedRangeAnalyzer:
         selected = analysis.get("selected")
         with self._lock:
             if problem or not isinstance(selected, Mapping) or analysis["status"] != "selected":
-                self._stable_selected = None
+                self._stable_anchor = None
                 self._stable_count = 0
                 self._stable_started_at = None
-            elif self._stable_selected is None or not _same_guided_candidate(
-                self._stable_selected, selected
+            elif self._stable_anchor is None or not _same_guided_candidate(
+                self._stable_anchor, selected
             ):
-                self._stable_selected = dict(selected)
+                self._stable_anchor = dict(selected)
                 self._stable_count = 1
                 self._stable_started_at = now
             else:
-                self._stable_selected = dict(selected)
                 self._stable_count += 1
             span = (
                 max(0.0, now - self._stable_started_at)
@@ -1459,6 +1474,7 @@ class GuidedRangeAnalyzer:
             )
             analysis.update(
                 {
+                    "observation_id": observation_id,
                     "stable_count": self._stable_count,
                     "stable_span_s": round(span, 3),
                     "save_eligible": eligible,
@@ -1466,11 +1482,12 @@ class GuidedRangeAnalyzer:
                     or (None if eligible else self._readiness_reason(analysis)),
                 }
             )
+            self._last_observation_id = observation_id
             self._last = dict(analysis)
             return dict(analysis)
 
-    def __call__(self, frames: np.ndarray) -> dict:
-        return self.observe(frames)
+    def __call__(self, frames: np.ndarray, observation_id: int) -> dict:
+        return self.observe(frames, observation_id)
 
     def snapshot(self) -> dict | None:
         """Return the latest live association without exposing mutable tracker state."""
@@ -1478,15 +1495,17 @@ class GuidedRangeAnalyzer:
             return dict(self._last) if self._last is not None else None
 
     def analyze_for_save(
-        self, frames: np.ndarray
+        self, frames: np.ndarray, observation_id: int
     ) -> tuple[ReferenceBallRangeResult, dict, str | None]:
         """Re-run the estimator on exact Save frames and compare with stable live readiness."""
         result, analysis = _guided_camera_analysis(frames, self.camera)
         with self._lock:
             prior = dict(self._last) if self._last is not None else None
-            stable = dict(self._stable_selected) if self._stable_selected is not None else None
+            stable = dict(self._stable_anchor) if self._stable_anchor is not None else None
         if not prior or not prior.get("save_eligible"):
             return result, analysis, "camera-only selection is not temporally stable"
+        if int(observation_id) < int(prior.get("observation_id", -1)):
+            return result, analysis, "Save frames are older than the stable camera observation"
         problem = self._orientation_problem()
         if problem:
             return result, analysis, problem
@@ -1503,6 +1522,7 @@ class GuidedRangeAnalyzer:
             {
                 "stable_count": prior["stable_count"],
                 "stable_span_s": prior["stable_span_s"],
+                "observation_id": int(observation_id),
                 "save_eligible": True,
                 "readiness_reason": None,
             }
@@ -1962,7 +1982,9 @@ class LiveView:
     def __init__(self, camera_factory: Callable[[], object] | None = None):
         self._camera_factory = camera_factory
         self._lock = threading.Lock()
-        self._stop = threading.Event()
+        self._active_stop: threading.Event | None = None
+        self._run_generation = 0
+        self._context_generation = 0
         self._thread: threading.Thread | None = None
         self._arm: Arm | None = None
         self._pending: dict | None = None
@@ -1977,10 +1999,11 @@ class LiveView:
         self._analysis_image: np.ndarray | None = None
         self._analysis_frame_sequence: int | None = None
         self._frame_sequence = 0
+        self._latest_frame_at: float | None = None
         self._expected: float | None = None
         self._expected_row: tuple[float, float] | None = None
         self._cues: Callable[[Mapping], dict] | None = None
-        self._analyzer: Callable[[np.ndarray], Mapping] | None = None
+        self._analyzer: Callable[[np.ndarray, int], Mapping] | None = None
         self._looker: threading.Thread | None = None
 
     @property
@@ -1996,76 +2019,107 @@ class LiveView:
         expected_diameter_px: float | None = None,
         cues: Callable[[Mapping], dict] | None = None,
         expected_row: tuple[float, float] | None = None,
-        analyzer: Callable[[np.ndarray], Mapping] | None = None,
+        analyzer: Callable[[np.ndarray, int], Mapping] | None = None,
     ) -> None:
         """Open the arm's mode, or only change exposure and gain if it is already open."""
         controls = live_controls(arm, exposure_us, gain)
         with self._lock:
+            reuse = self.running and self._arm == arm
             prior_controls = self._pending or self._requested
             context_changed = (
                 self._arm != arm
                 or self._analyzer is not analyzer
                 or (prior_controls is not None and prior_controls != controls)
             )
-            self._pending = controls
-            self._black_floor = black_floor
-            self._expected = expected_diameter_px
-            self._expected_row = expected_row
-            self._cues = cues
-            self._analyzer = analyzer
-            self._error = None
-            if context_changed:
-                self._recent.clear()
-                self._ball = None
-                self._association = None
-                self._analysis_image = None
-                self._analysis_frame_sequence = None
-            if self.running and self._arm == arm:
+            if reuse:
+                self._pending = controls
+                self._black_floor = black_floor
+                self._expected = expected_diameter_px
+                self._expected_row = expected_row
+                self._cues = cues
+                self._analyzer = analyzer
+                self._error = None
+                if context_changed:
+                    self._context_generation += 1
+                    self._recent.clear()
+                    self._ball = None
+                    self._association = None
+                    self._analysis_image = None
+                    self._analysis_frame_sequence = None
+                    self._latest_frame_at = None
                 return
         self.stop()
         with self._lock:
+            self._run_generation += 1
+            generation = self._run_generation
+            self._context_generation += 1
+            stop_event = threading.Event()
+            self._active_stop = stop_event
             self._arm = arm
+            self._pending = controls
+            self._requested = None
             self._image = None
             self._metadata = {}
+            self._error = None
+            self._black_floor = black_floor
             self._recent.clear()
             self._ball = None
             self._association = None
             self._analysis_image = None
             self._analysis_frame_sequence = None
             self._frame_sequence = 0
-            self._stop.clear()
+            self._latest_frame_at = None
+            self._expected = expected_diameter_px
+            self._expected_row = expected_row
+            self._cues = cues
+            self._analyzer = analyzer
             self._thread = threading.Thread(
-                target=self._run, args=(arm,), daemon=True, name="tester-live"
+                target=self._run,
+                args=(arm, stop_event, generation),
+                daemon=True,
+                name="tester-live",
             )
             self._thread.start()
             # the ball is looked for on its own thread: a fit can take a few
             # tenths of a second, and the picture should not wait for it
             self._looker = threading.Thread(
-                target=self._look, args=(arm,), daemon=True, name="tester-live-ball"
+                target=self._look,
+                args=(arm, stop_event, generation),
+                daemon=True,
+                name="tester-live-ball",
             )
             self._looker.start()
 
     def stop(self) -> None:
-        self._stop.set()
-        for thread in (self._thread, self._looker):
+        with self._lock:
+            stop_event = self._active_stop
+            threads = (self._thread, self._looker)
+            self._run_generation += 1
+            self._thread = self._looker = None
+            self._active_stop = None
+        if stop_event is not None:
+            stop_event.set()
+        for thread in threads:
             if thread is not None:
-                thread.join(timeout=5.0)
-        self._thread = self._looker = None
+                thread.join(timeout=LIVE_THREAD_JOIN_TIMEOUT_S)
 
-    def _look(self, arm: Arm) -> None:
+    def _look(self, arm: Arm, stop_event: threading.Event, generation: int) -> None:
         focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
-        while not self._stop.wait(LIVE_BALL_EVERY_S):
+        while not stop_event.wait(LIVE_BALL_EVERY_S):
             with self._lock:
+                if generation != self._run_generation or self._arm != arm:
+                    return
                 recent, expected, cues = list(self._recent), self._expected, self._cues
                 expected_row = self._expected_row
                 analyzer = self._analyzer
                 frame_sequence = self._frame_sequence
+                context_generation = self._context_generation
             if len(recent) < 3:
                 continue
             frames = np.stack(recent)
             if analyzer is not None:
                 try:
-                    association = dict(analyzer(frames))
+                    association = dict(analyzer(frames, frame_sequence))
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     association = {
                         "status": "analysis_error",
@@ -2081,6 +2135,14 @@ class LiveView:
                 association["frame_sequence"] = frame_sequence
                 analysis_image = np.median(frames, axis=0).astype(np.uint8)
                 with self._lock:
+                    if (
+                        stop_event.is_set()
+                        or generation != self._run_generation
+                        or context_generation != self._context_generation
+                        or analyzer is not self._analyzer
+                        or self._arm != arm
+                    ):
+                        continue
                     self._association = association
                     self._analysis_image = analysis_image
                     self._analysis_frame_sequence = frame_sequence
@@ -2090,6 +2152,13 @@ class LiveView:
             if ball.get("found") and cues is not None:
                 ball["camera_says"] = cues(ball)
             with self._lock:
+                if (
+                    stop_event.is_set()
+                    or generation != self._run_generation
+                    or context_generation != self._context_generation
+                    or self._arm != arm
+                ):
+                    continue
                 self._ball = ball
 
     def recent_frames(self) -> tuple[Arm | None, np.ndarray | None]:
@@ -2097,6 +2166,17 @@ class LiveView:
         with self._lock:
             arm, recent = self._arm, list(self._recent)
         return arm, (np.stack(recent) if len(recent) >= 3 else None)
+
+    def recent_frames_context(
+        self,
+    ) -> tuple[Arm | None, np.ndarray | None, int, float | None]:
+        """Return recent frames with the advancing sequence and latest capture time."""
+        with self._lock:
+            arm = self._arm
+            recent = list(self._recent)
+            sequence = self._frame_sequence
+            latest_at = self._latest_frame_at
+        return arm, (np.stack(recent) if len(recent) >= 3 else None), sequence, latest_at
 
     def analyzed_snapshot(self) -> tuple[np.ndarray | None, dict | None]:
         """Return the median frame and association produced in the same analyzer call."""
@@ -2142,11 +2222,13 @@ class LiveView:
 
         return Picamera2()
 
-    def _run(self, arm: Arm) -> None:
+    def _run(self, arm: Arm, stop_event: threading.Event, generation: int) -> None:
         camera = None
         try:
             camera = self._open()
             with self._lock:
+                if generation != self._run_generation or self._arm != arm:
+                    return
                 controls, self._pending = self._pending, None
                 self._requested = controls
             config = camera.create_video_configuration(
@@ -2160,8 +2242,10 @@ class LiveView:
             camera.configure(config)
             camera.start()
             shown = 0.0
-            while not self._stop.is_set():
+            while not stop_event.is_set():
                 with self._lock:
+                    if generation != self._run_generation or self._arm != arm:
+                        return
                     pending, self._pending = self._pending, None
                 if pending:
                     camera.set_controls(pending)
@@ -2179,12 +2263,20 @@ class LiveView:
                 finally:
                     request_.release()
                 with self._lock:
+                    if (
+                        stop_event.is_set()
+                        or generation != self._run_generation
+                        or self._arm != arm
+                    ):
+                        continue
                     self._image, self._metadata = image, metadata
                     self._recent.append(image)
                     self._frame_sequence += 1
+                    self._latest_frame_at = time.monotonic()
         except Exception as exc:  # pylint: disable=broad-exception-caught
             with self._lock:
-                self._error = f"{type(exc).__name__}: {exc}"
+                if generation == self._run_generation and self._arm == arm:
+                    self._error = f"{type(exc).__name__}: {exc}"
         finally:
             if camera is not None:
                 for close in ("stop", "close"):
@@ -3146,9 +3238,16 @@ def create_app(
         if not readiness or not readiness.get("save_eligible"):
             reason = (readiness or {}).get("readiness_reason") or "camera analysis is warming up"
             raise RuntimeError(f"camera {arm_id} is not ready to save: {reason}")
-        shown_arm, frames = live.recent_frames()
+        live_status = live.snapshot()[1]
+        if not live_status.get("running") or live_status.get("error"):
+            raise RuntimeError(
+                f"camera {arm_id} is not healthy: {live_status.get('error') or 'live view stopped'}"
+            )
+        shown_arm, frames, frame_sequence, latest_frame_at = live.recent_frames_context()
         if shown_arm != ARMS[arm_id] or frames is None:
             raise RuntimeError(f"camera {arm_id} does not have a stable frame yet")
+        if latest_frame_at is None or time.monotonic() - latest_frame_at > LIVE_FRAME_STALE_S:
+            raise RuntimeError(f"camera {arm_id} latest frame is stale")
         state = store.transition(
             state,
             phase=f"camera_{arm_id}_evaluating",
@@ -3170,7 +3269,7 @@ def create_app(
             if not frame_path.exists():
                 atomic_write(frame_path, frame_bytes)
             frame_sha256 = hashlib.sha256(frame_bytes).hexdigest()
-            result, save_analysis, unsafe_reason = analyzer.analyze_for_save(frames)
+            result, save_analysis, unsafe_reason = analyzer.analyze_for_save(frames, frame_sequence)
             if unsafe_reason:
                 return store.transition(
                     state,
