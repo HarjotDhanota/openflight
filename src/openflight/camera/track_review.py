@@ -7,6 +7,7 @@ import importlib.metadata
 import io
 import json
 import platform
+import struct
 import zipfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -17,6 +18,7 @@ from flask import Flask, Response, request, send_file
 from werkzeug.exceptions import RequestEntityTooLarge
 
 MAX_COMPARE_BYTES = 8 * 1024 * 1024
+HASH_CHUNK_BYTES = 1024 * 1024
 _CAPTURE_PREFIX = "camera_"
 _DIGEST_CHARS = frozenset("0123456789abcdef")
 
@@ -96,7 +98,7 @@ def _read_capture(run: Path, arm_id: str, capture_id: Any):
         raise ReviewError("capture metadata must be a JSON object")
     try:
         with np.load(io.BytesIO(frames_raw), allow_pickle=False) as bundle:
-            archive = {name: np.asarray(bundle[name]).copy() for name in bundle.files}
+            archive = {name: bundle[name] for name in bundle.files}
     except (OSError, TypeError, ValueError, KeyError, EOFError, zipfile.BadZipFile) as exc:
         raise ReviewError(f"capture frames archive is invalid: {exc}") from exc
     frames = archive.get("frames")
@@ -124,6 +126,105 @@ def _read_capture(run: Path, arm_id: str, capture_id: Any):
 
 def _identity(frames_raw: bytes, metadata_raw: bytes) -> tuple[str, str]:
     return _sha256(frames_raw), _sha256(metadata_raw)
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(HASH_CHUNK_BYTES):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _stamp(path: Path) -> tuple[int, int]:
+    stat = path.stat()
+    return stat.st_size, stat.st_mtime_ns
+
+
+class _Capture:
+    """A saved capture read without decoding its frames: hashes, shape and timestamps."""
+
+    def __init__(self, run: Path, arm_id: str, capture_id: Any):
+        self.identifier, self.frames_path, self.metadata_path = _capture_paths(
+            run, arm_id, capture_id
+        )
+        self._stamps = (_stamp(self.frames_path), _stamp(self.metadata_path))
+        self.frames_sha256 = _file_sha256(self.frames_path)
+        self.metadata_sha256 = _file_sha256(self.metadata_path)
+        try:
+            metadata = json.loads(self.metadata_path.read_bytes())
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ReviewError(f"capture metadata is invalid JSON: {exc}") from exc
+        if not isinstance(metadata, dict):
+            raise ReviewError("capture metadata must be a JSON object")
+        try:
+            self.shape, self._offset = _frames_layout(self.frames_path)
+            with np.load(self.frames_path, allow_pickle=False) as bundle:
+                sensor = np.asarray(bundle["sensor_timestamp_ns"])
+                host = np.asarray(bundle["host_timestamp_ns"])
+        except (OSError, TypeError, ValueError, KeyError, EOFError, zipfile.BadZipFile) as exc:
+            if isinstance(exc, ReviewError):
+                raise
+            raise ReviewError(f"capture frames archive is invalid: {exc}") from exc
+        for name, timestamps in (("sensor_timestamp_ns", sensor), ("host_timestamp_ns", host)):
+            if timestamps.dtype.kind not in "iu" or timestamps.shape != (self.shape[0],):
+                raise ReviewError(f"capture {name} must be an integer array aligned to frames")
+        self.sensor, self.host = sensor, host
+
+    def check(self, payload: Mapping[str, Any]) -> None:
+        expected = (
+            _expected_digest(payload.get("capture_npz_sha256"), "capture_npz_sha256"),
+            _expected_digest(payload.get("metadata_sha256"), "metadata_sha256"),
+        )
+        if expected != (self.frames_sha256, self.metadata_sha256):
+            raise StaleCaptureError("capture files changed; reload the capture")
+
+    def frame(self, index: int) -> np.ndarray:
+        """One frame, read alone from the archive; refused if the files changed meanwhile."""
+        count, height, width = self.shape
+        if not 0 <= index < count:
+            raise ReviewError("frame_index is outside the capture")
+        if self._offset is not None:
+            with self.frames_path.open("rb") as handle:
+                handle.seek(self._offset + index * height * width)
+                image = np.frombuffer(handle.read(height * width), dtype=np.uint8)
+            image = image.reshape(height, width)
+        else:
+            with np.load(self.frames_path, allow_pickle=False) as bundle:
+                image = np.asarray(bundle["frames"][index])
+        if (_stamp(self.frames_path), _stamp(self.metadata_path)) != self._stamps:
+            raise StaleCaptureError("capture files changed; reload the capture")
+        return image
+
+
+def _frames_layout(path: Path) -> tuple[tuple[int, int, int], int | None]:
+    """The frames array's shape, and its byte offset when stored uncompressed in C order."""
+    with zipfile.ZipFile(path) as archive:
+        info = archive.getinfo("frames.npy")
+        with archive.open(info) as member:
+            version = np.lib.format.read_magic(member)
+            if version == (1, 0):
+                shape, fortran, dtype = np.lib.format.read_array_header_1_0(member)
+            elif version == (2, 0):
+                shape, fortran, dtype = np.lib.format.read_array_header_2_0(member)
+            else:
+                shape, fortran, dtype = None, True, None
+            header_bytes = member.tell()
+    if shape is None:
+        with np.load(path, allow_pickle=False) as bundle:
+            frames = bundle["frames"]
+            shape, dtype, fortran = frames.shape, frames.dtype, True
+    if dtype != np.uint8 or len(shape) != 3 or min(shape) <= 0:
+        raise ReviewError("capture frames must be a nonempty uint8 [frame,height,width] array")
+    if fortran or info.compress_type != zipfile.ZIP_STORED:
+        return shape, None
+    with path.open("rb") as handle:
+        handle.seek(info.header_offset)
+        local = handle.read(30)
+    if local[:4] != b"PK\x03\x04":
+        raise ReviewError("capture frames archive is invalid: bad member header")
+    name_length, extra_length = struct.unpack("<HH", local[26:30])
+    return shape, info.header_offset + 30 + name_length + extra_length + header_bytes
 
 
 def _expected_digest(value: Any, name: str) -> str:
@@ -214,25 +315,18 @@ def register_track_review(
     def review_capture():
         try:
             scope, run = resolve_scope(request.args)
-            identifier, frames_raw, metadata_raw, archive, _metadata = _read_capture(
-                run, scope["arm_id"], request.args.get("capture_id")
-            )
-            frames = archive["frames"]
-            frames_hash, metadata_hash = _identity(frames_raw, metadata_raw)
+            capture = _Capture(run, scope["arm_id"], request.args.get("capture_id"))
+            count, height, width = capture.shape
             return _response(
                 {
-                    "capture_id": identifier,
-                    "capture_npz_sha256": frames_hash,
-                    "metadata_sha256": metadata_hash,
-                    "frame_count": int(frames.shape[0]),
-                    "width": int(frames.shape[2]),
-                    "height": int(frames.shape[1]),
-                    "sensor_timestamp_ns": [
-                        str(int(value)) for value in archive["sensor_timestamp_ns"]
-                    ],
-                    "host_timestamp_ns": [
-                        str(int(value)) for value in archive["host_timestamp_ns"]
-                    ],
+                    "capture_id": capture.identifier,
+                    "capture_npz_sha256": capture.frames_sha256,
+                    "metadata_sha256": capture.metadata_sha256,
+                    "frame_count": int(count),
+                    "width": int(width),
+                    "height": int(height),
+                    "sensor_timestamp_ns": [str(int(value)) for value in capture.sensor],
+                    "host_timestamp_ns": [str(int(value)) for value in capture.host],
                 }
             )
         except FileNotFoundError as exc:
@@ -244,18 +338,14 @@ def register_track_review(
     def review_frame():
         try:
             scope, run = resolve_scope(request.args)
-            _identifier, frames_raw, metadata_raw, archive, _metadata = _read_capture(
-                run, scope["arm_id"], request.args.get("capture_id")
-            )
-            _check_identity(request.args, frames_raw, metadata_raw)
+            capture = _Capture(run, scope["arm_id"], request.args.get("capture_id"))
+            capture.check(request.args)
             try:
                 frame_index = int(request.args.get("frame_index", ""))
             except (TypeError, ValueError) as exc:
                 raise ReviewError("frame_index must be an integer") from exc
-            if not 0 <= frame_index < archive["frames"].shape[0]:
-                raise ReviewError("frame_index is outside the capture")
             return Response(
-                encode_png(archive["frames"][frame_index]),
+                encode_png(capture.frame(frame_index)),
                 mimetype="image/png",
                 headers={"Cache-Control": "no-store"},
             )

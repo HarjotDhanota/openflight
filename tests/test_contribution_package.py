@@ -136,3 +136,20 @@ def test_cli_verify_rejects_sidecar_checksum_mismatch(tmp_path):
     result = build_contribution_package(export, tmp_path / "valid.zip", _metadata())
     (tmp_path / "valid.zip.sha256").write_text(f"{'0' * 64}  valid.zip\n", encoding="ascii")
     assert package_cli.main(["verify", result["archive"]]) == 2
+
+
+def test_packaging_and_validation_stream_large_captures(tmp_path):
+    import tracemalloc  # pylint: disable=import-outside-toplevel
+
+    export = _export(tmp_path)
+    with (export / "shots" / "shot_001" / "frames.npz").open("wb") as handle:
+        for _ in range(32):
+            handle.write(bytes(1024 * 1024))
+    tracemalloc.start()
+    try:
+        build_contribution_package(export, tmp_path / "large.zip", _metadata())
+        validate_contribution_package(tmp_path / "large.zip")
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 8 * 1024 * 1024, peak

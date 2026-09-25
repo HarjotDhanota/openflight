@@ -807,3 +807,21 @@ def test_shot_admission_uses_frozen_trigger_evidence_after_provider_recovers(tmp
     current["ready"] = True
 
     assert runtime.trigger_evidence_for_shot(10.0)["ready"] is False
+
+
+def test_triggers_are_refused_while_the_save_backlog_is_full(tmp_path):
+    from openflight.camera import capture_runtime  # pylint: disable=import-outside-toplevel
+
+    accepted = []
+    runtime = CameraCaptureRuntime(output_dir=tmp_path)
+    runtime._running = True
+    runtime._ring = SimpleNamespace(trigger=lambda _timestamp: accepted.append(1) or True)
+    for _ in range(capture_runtime.MAX_PENDING_SAVES):
+        runtime._ready.put(object())
+
+    assert runtime.notify_trigger(10.0) is False
+    assert accepted == [] and runtime._trigger_epochs.empty()
+
+    runtime._ready.get_nowait()
+    assert runtime.notify_trigger(11.0) is True
+    assert runtime._trigger_epochs.get_nowait() == 11.0

@@ -43,6 +43,9 @@ CameraCaptureStream = Literal["raw", "main-y"]
 RASPBERRY_PI_DIST_PACKAGES = Path("/usr/lib/python3/dist-packages")
 OV9281_VERTICAL_OFFSET_PATH = Path("/sys/module/ov9282/parameters/strip_y_offset")
 AUTO_EXPOSURE_STARTUP_SETTLE_S = 0.3
+# Completed clips waiting for the disk. Each full-resolution clip is about 25 MB in
+# RAM; a false-trigger storm on a slow card must not grow this without bound.
+MAX_PENDING_SAVES = 3
 
 
 def vertical_crop_limits(width: int, height: int) -> dict[str, int] | None:
@@ -701,6 +704,12 @@ class CameraCaptureRuntime:
     def notify_trigger(self, timestamp: float | None = None) -> bool:
         """Freeze the camera ring on a sound-trigger edge."""
         if not self._running:
+            return False
+        if self._ready.qsize() >= MAX_PENDING_SAVES:
+            logger.warning(
+                "[CAMERA] Ignoring trigger: %d captures are still waiting to be saved",
+                self._ready.qsize(),
+            )
             return False
         trigger_epoch = time.time() if timestamp is None else float(timestamp)
         with self._trigger_exposure_lock:

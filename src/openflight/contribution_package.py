@@ -20,10 +20,36 @@ _CONTENT_CLASSES = frozenset(
 )
 _MANIFEST_NAME = "contribution_manifest.json"
 _TRANSPORT = "local-only; no automatic upload"
+_CHUNK_BYTES = 1024 * 1024
+_ZIP64_THRESHOLD_BYTES = 2**31
 
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _stream_sha256(handle) -> tuple[int, str]:
+    digest = hashlib.sha256()
+    size = 0
+    while chunk := handle.read(_CHUNK_BYTES):
+        digest.update(chunk)
+        size += len(chunk)
+    return size, digest.hexdigest()
+
+
+def _write_member(archive: zipfile.ZipFile, path: Path, relative: str) -> tuple[int, str]:
+    """Copy one file into the archive in fixed chunks, hashing exactly what was written."""
+    info = zipfile.ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
+    info.compress_type = zipfile.ZIP_DEFLATED
+    digest = hashlib.sha256()
+    size = 0
+    large = path.stat().st_size >= _ZIP64_THRESHOLD_BYTES
+    with path.open("rb") as source, archive.open(info, "w", force_zip64=large) as member:
+        while chunk := source.read(_CHUNK_BYTES):
+            digest.update(chunk)
+            member.write(chunk)
+            size += len(chunk)
+    return size, digest.hexdigest()
 
 
 def _canonical(value: Mapping[str, Any]) -> bytes:
@@ -133,7 +159,8 @@ def _validate_sidecar(archive_path: Path) -> None:
     if len(fields) != 1 or filename != archive_path.name or not _valid_sha256(expected):
         raise ValueError("contribution archive checksum sidecar is invalid")
     try:
-        actual = _sha256(archive_path.read_bytes())
+        with archive_path.open("rb") as handle:
+            actual = _stream_sha256(handle)[1]
     except OSError as exc:
         raise ValueError("contribution archive is unreadable") from exc
     if actual != expected:
@@ -157,44 +184,38 @@ def build_contribution_package(
         raise ValueError("export manifest contract_version must be 1")
     if output.exists():
         raise ValueError("contribution package output already exists")
-    files = _files(export_dir, consent["visibility"])
-    entries = []
-    payloads = {}
-    for path in files:
-        relative = path.relative_to(export_dir).as_posix()
-        data = path.read_bytes()
-        payloads[relative] = data
-        entries.append(
-            {
+    files = {
+        path.relative_to(export_dir).as_posix(): path
+        for path in _files(export_dir, consent["visibility"])
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    written = {}
+    with zipfile.ZipFile(output, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+        for relative in sorted(files):
+            size, sha256 = _write_member(archive, files[relative], relative)
+            written[relative] = {
                 "path": relative,
-                "size_bytes": len(data),
-                "sha256": _sha256(data),
+                "size_bytes": size,
+                "sha256": sha256,
                 "content_class": _content_class(relative),
             }
-        )
-    package_manifest = {
-        "schema_version": SCHEMA_VERSION,
-        "package_version": PACKAGE_VERSION,
-        "visibility": consent["visibility"],
-        "consent": {
-            key: consent[key]
-            for key in ("consent_version", "consented_at", "contributor_id", "license")
-        },
-        "source_identity": _source_identity(source_manifest, _sha256(source_manifest_bytes)),
-        "entries": entries,
-        "transport": _TRANSPORT,
-    }
-    manifest_bytes = _canonical(package_manifest) + b"\n"
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(output, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-        for relative in sorted(payloads):
-            info = zipfile.ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_DEFLATED
-            archive.writestr(info, payloads[relative])
+        package_manifest = {
+            "schema_version": SCHEMA_VERSION,
+            "package_version": PACKAGE_VERSION,
+            "visibility": consent["visibility"],
+            "consent": {
+                key: consent[key]
+                for key in ("consent_version", "consented_at", "contributor_id", "license")
+            },
+            "source_identity": _source_identity(source_manifest, _sha256(source_manifest_bytes)),
+            "entries": [written[relative] for relative in files],
+            "transport": _TRANSPORT,
+        }
         info = zipfile.ZipInfo(_MANIFEST_NAME, date_time=(1980, 1, 1, 0, 0, 0))
         info.compress_type = zipfile.ZIP_DEFLATED
-        archive.writestr(info, manifest_bytes)
-    archive_sha256 = _sha256(output.read_bytes())
+        archive.writestr(info, _canonical(package_manifest) + b"\n")
+    with output.open("rb") as handle:
+        archive_sha256 = _stream_sha256(handle)[1]
     checksum = output.with_suffix(output.suffix + ".sha256")
     checksum.write_text(f"{archive_sha256}  {output.name}\n", encoding="ascii")
     return {
@@ -284,12 +305,13 @@ def validate_contribution_package(archive_path: Path) -> dict[str, Any]:
             ):
                 raise ValueError("contribution manifest entry is invalid")
             try:
-                data = archive.read(path)
+                with archive.open(path) as member:
+                    size, sha256 = _stream_sha256(member)
             except KeyError as exc:
                 raise ValueError("contribution package is missing a declared file") from exc
             except zipfile.BadZipFile as exc:
                 raise ValueError("contribution archive is unreadable") from exc
-            if len(data) != entry["size_bytes"] or _sha256(data) != entry["sha256"]:
+            if size != entry["size_bytes"] or sha256 != entry["sha256"]:
                 raise ValueError("contribution package file hash mismatch")
             expected.add(path)
         if set(archive.namelist()) != expected:

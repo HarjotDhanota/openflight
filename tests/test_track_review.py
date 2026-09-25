@@ -421,3 +421,68 @@ def test_missing_comparison_runtime_returns_503_without_breaking_capture_api(rev
         ).status_code
         == 200
     )
+
+
+def _large_capture(run, name, *, compressed=False):
+    folder = run / "arm1" / "camera" / name
+    folder.mkdir(parents=True)
+    frames = np.zeros((40, 800, 1280), dtype=np.uint8)
+    frames[7] = 200
+    save = np.savez_compressed if compressed else np.savez
+    save(
+        folder / "frames.npz",
+        frames=frames,
+        sensor_timestamp_ns=np.arange(40, dtype=np.int64),
+        host_timestamp_ns=np.arange(40, dtype=np.int64),
+    )
+    (folder / "metadata.json").write_text(json.dumps(_metadata(40)), encoding="utf-8")
+    return folder
+
+
+def _frame_query(client, scope, name, index):
+    loaded = client.get(
+        "/api/tester/review/capture", query_string={**scope, "capture_id": name}
+    ).get_json()
+    return {**scope, "capture_id": name, "frame_index": index, **loaded}
+
+
+def test_a_full_resolution_frame_is_served_without_decoding_the_capture(review):
+    import tracemalloc  # pylint: disable=import-outside-toplevel
+
+    client, run, _capture_path, scope = review
+    _large_capture(run, "camera_big")
+    query = _frame_query(client, scope, "camera_big", 7)
+    tracemalloc.start()
+    try:
+        response = client.get("/api/tester/review/frame", query_string=query)
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert response.status_code == 200
+    assert peak < 12 * 1024 * 1024, peak
+
+
+def test_a_compressed_capture_still_serves_the_right_frame(review):
+    client, run, _capture_path, scope = review
+    _large_capture(run, "camera_zip", compressed=True)
+    response = client.get(
+        "/api/tester/review/frame", query_string=_frame_query(client, scope, "camera_zip", 7)
+    )
+    assert response.status_code == 200
+    import cv2  # pylint: disable=import-outside-toplevel
+
+    decoded = cv2.imdecode(np.frombuffer(response.data, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+    assert decoded.shape == (800, 1280) and int(decoded.min()) == 200
+
+
+def test_a_capture_changed_while_a_frame_is_read_is_refused(review):
+    import os  # pylint: disable=import-outside-toplevel
+
+    from openflight.camera import track_review  # pylint: disable=import-outside-toplevel
+
+    _client, run, capture_path, _scope = review
+    capture = track_review._Capture(run, "arm1", "camera_001")  # pylint: disable=protected-access
+    stat = (capture_path / "metadata.json").stat()
+    os.utime(capture_path / "metadata.json", ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
+    with pytest.raises(track_review.StaleCaptureError):
+        capture.frame(0)
