@@ -133,7 +133,7 @@ PICTURE_NOISE_FLOOR_DN = 1.0
 LATERAL_SIGMA_FRACTION = 0.13
 
 
-def _lit_ball_near_size(  # pylint: disable=too-many-arguments,too-many-locals
+def _lit_ball_candidates_near_size(  # pylint: disable=too-many-arguments,too-many-locals,too-many-positional-arguments
     image: np.ndarray,
     coarse: np.ndarray,
     window: tuple[int, int, int, int],
@@ -141,8 +141,8 @@ def _lit_ball_near_size(  # pylint: disable=too-many-arguments,too-many-locals
     expected_radius: float,
     noise: float,
     expected_row: tuple[float, float] | None = None,
-) -> ReferenceBall | None:
-    """The lit ball among the round candidates of the size the distance predicts.
+) -> list[ReferenceBall]:
+    """Return ranked lit spheres near one expected size and optional floor row.
 
     A door panel over the dark gap beneath it, or a bright patch of carpet, can
     stand out as much as the ball; none of them looks like a lit sphere. A door
@@ -156,7 +156,7 @@ def _lit_ball_near_size(  # pylint: disable=too-many-arguments,too-many-locals
         y0 = max(y0, int((row - band) / factor))
         y1 = min(y1, int(math.ceil((row + band) / factor)) + 1)
         if y1 <= y0:
-            return None
+            return []
     coarse_r = expected_radius / factor
     # only noise is ruled out here: a dim ball can sit below the contrast a
     # size-free search needs, and the lit-sphere fit is the real test
@@ -192,8 +192,6 @@ def _lit_ball_near_size(  # pylint: disable=too-many-arguments,too-many-locals
             expected_row is None or abs(fit.y - expected_row[0]) <= expected_row[1]
         ):
             fits.append(fit)
-    if not fits:
-        return None
     width = image.shape[1]
 
     def weight(fit) -> float:
@@ -201,13 +199,108 @@ def _lit_ball_near_size(  # pylint: disable=too-many-arguments,too-many-locals
         down = (fit.y - expected_row[0]) / (expected_row[1] / 2.0) if expected_row else 0.0
         return fit.quality * math.exp(-0.5 * (across**2 + down**2))
 
-    best = max(fits, key=weight)
-    return ReferenceBall(
-        x=best.x,
-        y=best.y,
-        diameter_px=best.diameter_px,
-        area_px=int(round(math.pi * best.radius_px**2)),
+    return [
+        ReferenceBall(
+            x=fit.x,
+            y=fit.y,
+            diameter_px=fit.diameter_px,
+            area_px=int(round(math.pi * fit.radius_px**2)),
+        )
+        for fit in sorted(fits, key=weight, reverse=True)
+    ]
+
+
+def _lit_ball_near_size(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    image: np.ndarray,
+    coarse: np.ndarray,
+    window: tuple[int, int, int, int],
+    factor: int,
+    expected_radius: float,
+    noise: float,
+    expected_row: tuple[float, float] | None = None,
+) -> ReferenceBall | None:
+    """Return the existing single best size-constrained detector result."""
+    candidates = _lit_ball_candidates_near_size(
+        image,
+        coarse,
+        window,
+        factor,
+        expected_radius,
+        noise,
+        expected_row,
     )
+    return candidates[0] if candidates else None
+
+
+def reference_ball_candidates(
+    frames: np.ndarray,
+    *,
+    expected_diameters_px: Sequence[float],
+    roi: tuple[int, int, int, int] | None = None,
+) -> list[ReferenceBall]:
+    """Enumerate distinct lit-sphere fits over a caller-supplied size range."""
+    if frames.dtype != np.uint8 or frames.ndim != 3 or frames.shape[0] < 3:
+        raise ValueError("frames must be uint8 with shape (n, height, width) and n >= 3")
+    diameters = sorted({float(value) for value in expected_diameters_px})
+    if not diameters or any(not math.isfinite(value) or value <= 0.0 for value in diameters):
+        raise ValueError("expected ball diameters must be finite and positive")
+
+    background = np.median(frames[: min(20, frames.shape[0])], axis=0)
+    height, width = background.shape
+    x0, y0, x1, y1 = roi or (0, 0, width, height)
+    if not (0 <= x0 < x1 <= width and 0 <= y0 < y1 <= height):
+        raise ValueError("ball ROI is outside the image")
+    factor = max(1, round(width / DISK_SEARCH_WIDTH_PX))
+    image = background.astype(np.float32)
+    coarse = _bin(image, factor)
+    window = tuple(value // factor for value in (x0, y0, x1, y1))
+    frame_noise = float(np.median(np.std(frames[: min(20, len(frames))], axis=0)))
+    picture_noise = max(
+        PICTURE_NOISE_FLOOR_DN,
+        MEDIAN_NOISE_FACTOR * frame_noise / math.sqrt(min(20, len(frames))),
+    )
+
+    found: list[tuple[float, ReferenceBall]] = []
+    for diameter in diameters:
+        candidates = _lit_ball_candidates_near_size(
+            image,
+            coarse,
+            window,
+            factor,
+            diameter / 2.0,
+            picture_noise,
+        )
+        for candidate in candidates:
+            quality = 0.0
+            free_fit = fit_lit_ball(
+                image,
+                candidate.x,
+                candidate.y,
+                candidate.diameter_px / 2.0,
+                noise_dn=picture_noise,
+            )
+            if free_fit is not None:
+                quality = free_fit.quality
+                candidate = ReferenceBall(
+                    x=free_fit.x,
+                    y=free_fit.y,
+                    diameter_px=free_fit.diameter_px,
+                    area_px=int(round(math.pi * free_fit.radius_px**2)),
+                )
+            duplicate = next(
+                (
+                    index
+                    for index, (_prior_quality, prior) in enumerate(found)
+                    if math.hypot(candidate.x - prior.x, candidate.y - prior.y)
+                    <= max(2.0, 0.35 * min(candidate.diameter_px, prior.diameter_px))
+                ),
+                None,
+            )
+            if duplicate is None:
+                found.append((quality, candidate))
+            elif quality > found[duplicate][0]:
+                found[duplicate] = (quality, candidate)
+    return [candidate for _quality, candidate in found]
 
 
 def _contrast_ball(
