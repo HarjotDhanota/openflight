@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from openflight.camera import attempt_ledger
+from openflight.capture_facts import capture_facts
 from openflight.raw_radar_replay import load_session_events
 from openflight.review_metrics import STATUSES, finite, mapping, overlay, review_replay
 
@@ -167,6 +168,7 @@ class _Run:
     photos: dict[str, str]
     ineligible: dict[str, dict]
     summary: dict[str, Any] = field(default_factory=dict)
+    start: dict[str, Any] = field(default_factory=dict)
 
     def relative(self, path: Path | None) -> str | None:
         """A bundle-relative path, or None."""
@@ -199,6 +201,7 @@ def _read_session(run: _Run) -> list[dict[str, Any]]:
         return []
     run.summary["session_sha256"] = session_hash
     run.summary["session_uuid"] = start.get("session_uuid")
+    run.start = start
     return events
 
 
@@ -327,6 +330,7 @@ def _shot_attempt(
             "replay_report": run.relative(report_path) if report is not None else None,
         },
         "picture_verdict": run.verdicts.get(capture_name),
+        "camera": capture_facts(capture_dir, camera_event, run.start),
         "live": live,
         "identity": mapping((report or {}).get("source_identity")),
         "identity_evidence": mapping((report or {}).get("source_identity_evidence")),
@@ -356,6 +360,7 @@ def _stray_capture_attempt(run: _Run, name: str, folder: Path) -> dict[str, Any]
             "replay_report": None,
         },
         "picture_verdict": run.verdicts.get(name),
+        "camera": capture_facts(folder, {}, run.start),
         "live_processing": None,
         "live": {},
         "identity": {},
