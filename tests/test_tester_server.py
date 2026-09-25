@@ -917,6 +917,23 @@ class TestTheTapeGivesTheBallsSize:
 
 
 class TestTheCameraSaysHowFar:
+    def test_automatic_model_uses_active_mode_rig_offsets_and_lis3dh_pose(self):
+        camera = ts._reference_ball_camera(  # pylint: disable=protected-access
+            ts.ARMS["arm5"],
+            RIG,
+            {"camera_pitch_deg": 3.25, "roll_deg": -2.5},
+            None,
+            None,
+        )
+
+        assert (camera.image_width_px, camera.image_height_px) == (1280, 800)
+        assert camera.ray_model.pitch_rad == pytest.approx(math.radians(3.25))
+        assert camera.ray_model.roll_correction_deg == pytest.approx(-2.5)
+        assert camera.camera_origin_lfu == pytest.approx((0.0, 0.0, 0.095))
+        assert camera.radar_origin_lfu == pytest.approx((0.0, 0.044, 0.065))
+        assert camera.source == "nominal_uncalibrated"
+        assert camera.accuracy_qualified is False
+
     def test_both_routes_agree_with_the_tape_on_a_level_camera(self):
         # a ball 1041 mm from the lens, on the floor, centred: where a level
         # 2.8 mm camera 95 mm up would see it
@@ -954,17 +971,65 @@ class TestTheCameraSaysHowFar:
         assert rows[0]["tee_mm"] == 1071 and rows[0]["arm"]["width"] == 1280
         assert (folder / rows[1]["frame"]).stat().st_size > 1280 * 800
 
-    def test_recording_needs_the_tape_and_a_found_ball(self, tmp_path):
+    def test_recording_needs_a_live_frame_but_not_a_tape(self, tmp_path):
         client, _live = TestLiveEndpoints()._client(tmp_path)
         body = {"tester_id": "20260922-name", "arm_id": "arm5", "environment": "indoors"}
-        assert client.post("/api/tester/placement", json=body).status_code == 400
-        assert (
-            client.post("/api/tester/placement", json={**body, "tee_mm": 1071}).status_code == 409
-        )
+        assert client.post("/api/tester/placement", json=body).status_code == 409
         listed = client.get(
             "/api/tester/placements?" + "&".join(f"{k}={v}" for k, v in body.items())
         )
         assert listed.get_json() == {"placements": []}
+
+    def test_camera_candidate_is_persisted_unresolved_without_tape(self, tmp_path, monkeypatch):
+        from openflight.camera.reference_ball_range import (
+            ReferenceBallRangeCandidate,
+            ReferenceBallRangeResult,
+        )
+
+        client, live = TestLiveEndpoints()._client(tmp_path)
+        body = {"tester_id": "20260922-name", "arm_id": "arm5", "environment": "indoors"}
+        client.post("/api/tester/live", json=body)
+        assert _wait(lambda: live.recent_frames()[1] is not None)
+        candidate = ReferenceBallRangeCandidate(
+            x_px=640.0,
+            y_px=470.0,
+            diameter_px=38.0,
+            area_px=1100,
+            floor_point_lfu_m=(0.0, 1.1, 0.021335),
+            floor_radar_range_m=1.101,
+            floor_camera_range_m=1.073,
+            size_camera_range_m=1.08,
+            floor_range_uncertainty_m=0.04,
+            size_range_uncertainty_m=0.09,
+            range_disagreement_m=0.007,
+            consistency_sigma=0.07,
+            source="nominal_uncalibrated",
+            confidence="experimental",
+            score=0.07,
+            rejection_reason=None,
+        )
+        monkeypatch.setattr(
+            ts,
+            "estimate_reference_ball_range",
+            lambda *_args, **_kwargs: ReferenceBallRangeResult(
+                "selected", "experimental", candidate, (candidate,), {"capture_mode": "1280x800"}
+            ),
+        )
+
+        response = client.post("/api/tester/placement", json=body)
+
+        assert response.status_code == 200
+        assert response.get_json()["tee_range"]["status"] == "unresolved"
+        state = ts.read_arm_state(tmp_path, body["tester_id"], body["arm_id"])
+        assert state["tee_range_solution"]["selected_range_m"] is None
+        assert state["tee_range_solution"]["candidates"][0]["source_group"] == "camera"
+        row = json.loads(
+            (tmp_path / body["tester_id"] / "calibration" / "placements.jsonl")
+            .read_text()
+            .splitlines()[0]
+        )
+        assert row["tee_mm"] is None
+        assert row["automatic_range"]["selected"]["floor_radar_range_m"] == pytest.approx(1.101)
 
 
 class FakeTiltService:
@@ -1106,7 +1171,7 @@ class BallCamera(FakeCamera):
         return request_
 
 
-class TestEachPlacementUsesTheDistanceInTheBox:
+class TestEachPlacementKeepsOptionalTapeSeparate:
     body = {"tester_id": "20260922-name", "arm_id": "arm1", "environment": "indoors"}
 
     def _client(self, tmp_path):
@@ -1114,7 +1179,7 @@ class TestEachPlacementUsesTheDistanceInTheBox:
         app = eligible_app(sessions_root=tmp_path, rig_geometry=RIG, live_view=live)
         return app.test_client(), live
 
-    def test_a_new_distance_needs_no_restart(self, tmp_path):
+    def test_a_new_tape_reference_needs_no_restart_and_does_not_guide_detection(self, tmp_path):
         client, live = self._client(tmp_path)
         try:
             client.post("/api/tester/live", json={**self.body, "tee_mm": 1661})
@@ -1126,10 +1191,8 @@ class TestEachPlacementUsesTheDistanceInTheBox:
             live.stop()
         query = "&".join(f"{k}={v}" for k, v in self.body.items())
         rows = client.get(f"/api/tester/placements?{query}").get_json()["placements"]
-        assert [r["ball"]["camera_says"]["tape_mm"] for r in rows] == [1631, 1231]
-        assert rows[1]["ball"]["expected_diameter_px"] == pytest.approx(
-            ts.FOCAL_PX_2X * ts.BALL_DIAMETER_MM / 1231, abs=0.1
-        )
+        assert [r["tee_mm"] for r in rows] == [1661, 1261]
+        assert rows[0]["automatic_range"]["selected"] == rows[1]["automatic_range"]["selected"]
 
     def test_a_placement_for_another_arm_is_refused(self, tmp_path):
         client, live = self._client(tmp_path)

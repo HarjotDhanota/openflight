@@ -962,3 +962,11 @@ product acceptance limits. Promotion remains gated on that independent evidence.
   1.575 m default or publish range-dependent canonical fusion. This checkpoint
   does not promote the nominal camera focal length, prove IWR impact timing, or
   establish automatic-range accuracy; those remain physical validation gates.
+- Camera tee-range integration (M1/M2, TB01/TB07/TB10): the tester now evaluates
+  the stationary ball in the active saved-image mode using measured rig origins,
+  lens/ball heights, current LIS3DH pitch/roll and a compatible calibrated model
+  when configured. It persists all camera candidates, ambiguity, rejection,
+  disagreement and uncertainty in placement, arm and per-run tee-range evidence.
+  Camera candidates remain non-selectable and the solution remains unresolved;
+  optional tape is validation truth only. Software checks do not qualify optics,
+  automatic range, or range-dependent fusion.

@@ -286,6 +286,43 @@ test('placement warning stays visible after reload without blocking acquisition'
   }
 });
 
+test('automatic range is visible while tape stays optional and advanced', async ({ page }) => {
+  await mockBase(page);
+  await page.route('**/api/tester/setup-eligibility?**', (route) => json(route, eligibility()));
+  await page.goto('/tester.html');
+
+  await expect(page.getByRole('heading', { name: 'Automatic ball range' })).toBeVisible();
+  await expect(page.locator('#automatic-range-summary')).toContainText('pending');
+  await expect(page.locator('#tee-mm')).toBeHidden();
+  await page.getByText('Advanced: manual single-arm tools').click();
+  await expect(page.locator('#tee-mm')).toBeVisible();
+  await expect(page.getByText('Validation only. This value does not guide camera detection')).toBeVisible();
+
+  await page.evaluate(() => {
+    (window as Window & { renderAutomaticRange?: (evidence: object, solution: object) => void })
+      .renderAutomaticRange?.(
+        {
+          status: 'selected',
+          confidence: 'experimental',
+          candidates: [{}],
+          selected: {
+            floor_radar_range_m: 1.101,
+            floor_range_uncertainty_m: 0.04,
+            size_camera_range_m: 1.08,
+            size_range_uncertainty_m: 0.09,
+            range_disagreement_m: 0.007,
+            consistency_sigma: 0.07,
+            confidence: 'experimental',
+          },
+        },
+        { status: 'unresolved' }
+      );
+  });
+  await expect(page.locator('#automatic-range')).toContainText('floor range 1.101 m');
+  await expect(page.locator('#automatic-range')).toContainText('pending independent cross-sensor verification');
+  await expect(page.locator('#automatic-range')).toContainText('canonical status unresolved');
+});
+
 for (const viewport of KIOSK_VIEWPORTS) {
   test(`setup gate remains touchable without horizontal clipping at ${viewport.width}x${viewport.height}`, async ({
     page,
@@ -300,6 +337,12 @@ for (const viewport of KIOSK_VIEWPORTS) {
     await page.locator('#setup-physical-confirm').tap();
     await page.getByRole('button', { name: 'Confirm physical setup' }).tap();
     await expect(page.getByRole('button', { name: 'Stop all tester activity' })).toBeVisible();
+    const automaticRange = page.locator('#automatic-range');
+    await automaticRange.scrollIntoViewIfNeeded();
+    const rangeRect = await automaticRange.boundingBox();
+    expect(rangeRect).not.toBeNull();
+    expect(rangeRect!.x).toBeGreaterThanOrEqual(0);
+    expect(rangeRect!.x + rangeRect!.width).toBeLessThanOrEqual(viewport.width);
     await page.getByRole('button', { name: 'Stop all tester activity' }).scrollIntoViewIfNeeded();
     const stopBox = await page.getByRole('button', { name: 'Stop all tester activity' }).boundingBox();
     expect(stopBox).not.toBeNull();

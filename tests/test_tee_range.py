@@ -39,6 +39,20 @@ def test_manual_truth_is_retained_but_never_silently_selected():
     assert document["candidates"][0]["selectable"] is False
 
 
+def test_evidence_only_rejection_round_trips_without_a_fabricated_range():
+    rejected = TeeRangeCandidate(
+        candidate_id="camera-rejected-1",
+        source="nominal_uncalibrated",
+        source_group="camera",
+        radar_slant_range_m=None,
+        uncertainty_m=None,
+        selectable=False,
+        evidence={"rejection_reason": "ray reaches plane behind camera"},
+    )
+
+    assert TeeRangeCandidate.from_dict(rejected.to_dict()) == rejected
+
+
 def test_same_sensor_group_cannot_resolve_the_range():
     size = candidate("a", "camera", 1.50)
     floor = candidate("b", "camera", 1.52)

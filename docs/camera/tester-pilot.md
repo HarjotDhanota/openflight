@@ -224,14 +224,26 @@ check, not proof of absolute accuracy.
 
 ## Troubleshooting
 
+### Automatic ball range
+
+The normal setup no longer asks for a radar-to-ball tape measurement. In the
+Advanced live view, record the stationary ball placement. The tester preserves
+the floor-plane and apparent-size estimates, their uncertainty, disagreement,
+confidence, every rejected or ambiguous candidate, the active camera mode and
+the current inclination evidence. Camera-only evidence remains unresolved and
+does not enable canonical range-dependent metrics. An optional tape value under
+Advanced is validation truth only; it neither guides detection nor becomes the
+runtime range. Raw captures remain useful while cross-sensor verification is
+pending.
+
 | What you see | Cause | Fix |
 | --- | --- | --- |
 | `fatal: ambiguous argument 'origin/feat/tester-capture-pilot'` | `origin` is the upstream repository; the study branch is on the fork | Add the fork as shown in *Before your first run* |
 | `Failed to build lgpio` … `swig: No such file or directory` | Build tools missing | `sudo apt install -y swig liblgpio-dev python3-dev`, then start again |
 | Find gain fails with `IndexError: list index out of range` in `Picamera2()`, or `rpicam-hello --list-cameras` has no `320x200` | The camera or its high-speed driver is not set up on this Pi | Follow the [camera README](README.md#raspberry-pi-packages) setup, then reboot |
 | The live view is soft or fuzzy even at 10000 µs | The lens is out of focus; fitting the camera into the enclosure can turn it | Turn the lens barrel until the ball's edge is crisp, then run **Find gain** again |
-| The ball line says `no ball of the size the distance gives` and that the floor is clipped white | The carpet or mat around the ball is saturated, so a white ball cannot be told from it | Lower the exposure or the gain until the floor has texture again |
-| The ball line says `no ball of the size the distance gives` in a dim picture | The ball stands too little above the picture's noise at this exposure and gain | Check the radar-window distance, then raise the gain; the arm's own setting is still worth recording |
+| The ball line says no plausible resting ball was found and the floor is clipped white | The carpet or mat around the ball is saturated, so a white ball cannot be told from it | Lower the exposure or the gain until the floor has texture again |
+| The ball line says no plausible resting ball was found in a dim picture | The ball stands too little above the picture's noise at this exposure and gain | Raise the gain; the arm's own setting is still worth recording |
 | `Removed virtual environment at: .venv` after running a repository script | Plain `uv run` uses the repository's Python 3.11 and rebuilds the environment without the Pi's camera library | Run repository scripts on the Pi with `.venv/bin/python`, not `uv run`; `start-tester.sh` restores the environment |
 | `Creating virtual environment at: .venv` on a Pi that ran OpenFlight before | The runner rebuilds the environment when it cannot import `picamera2`; lgpio compiles again | Expected once; needs the build tools above |
 | Every swing rejected with no ball speed | The OPS243 was not found | Pass `--radar-port` with your port (`/dev/ttyAMA0` for the GPIO UART, `/dev/ttyACM0` for USB) |
@@ -243,6 +255,6 @@ check, not proof of absolute accuracy.
 | Ladder verdict red: `controls: exposure ...` or `gain ...` | The camera did not take the exposure's setting | Press **C** again; the ladder carries on where it stopped |
 | Ladder verdict red: `light: too dark` | This exposure is below what your light supports | Expected on the shortest exposures; the ladder skips the rest |
 | Ladder verdict red: `light: ... clipped` | The ball area is washed out | Dim or move the light; this exposure will fail |
-| Ladder verdict amber: `resting ball not found` | The camera could not pick the ball out without knowing its distance | The swing still counts; keep placing the ball in the same spot |
+| Ladder verdict amber: `resting ball not found` | The camera could not distinguish a plausible resting ball in that frame | The swing still counts; keep placing the ball in the same spot |
 | `run the gain step for both modes first` | Step **B** did not finish for both modes | Run **B** again |
 

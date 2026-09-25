@@ -36,8 +36,8 @@ class TeeRangeCandidate:
     candidate_id: str
     source: str
     source_group: str
-    radar_slant_range_m: float
-    uncertainty_m: float
+    radar_slant_range_m: float | None
+    uncertainty_m: float | None
     evidence: Mapping
     selectable: bool = True
 
@@ -48,14 +48,24 @@ class TeeRangeCandidate:
         if group not in SOURCE_GROUPS:
             raise ValueError(f"unsupported source_group: {group}")
         object.__setattr__(self, "source_group", group)
-        object.__setattr__(
-            self,
-            "radar_slant_range_m",
-            _positive_finite(self.radar_slant_range_m, "radar_slant_range_m"),
-        )
-        object.__setattr__(
-            self, "uncertainty_m", _positive_finite(self.uncertainty_m, "uncertainty_m")
-        )
+        if self.radar_slant_range_m is None or self.uncertainty_m is None:
+            if (
+                self.selectable
+                or self.radar_slant_range_m is not None
+                or self.uncertainty_m is not None
+            ):
+                raise ValueError(
+                    "evidence-only candidates require null range/uncertainty and selectable=false"
+                )
+        else:
+            object.__setattr__(
+                self,
+                "radar_slant_range_m",
+                _positive_finite(self.radar_slant_range_m, "radar_slant_range_m"),
+            )
+            object.__setattr__(
+                self, "uncertainty_m", _positive_finite(self.uncertainty_m, "uncertainty_m")
+            )
         evidence = dict(self.evidence)
         json.dumps(evidence, allow_nan=False)
         object.__setattr__(self, "evidence", evidence)

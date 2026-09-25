@@ -38,14 +38,16 @@ evidence to fix, not a reason to disable the setup checks.
 ## Establish a level baseline
 
 1. Match the [measured v3 rig](tester-setup-gate.md), including fixed mounts,
-   the default foot extension and LIS3DH orientation. Measure the level lens
-   height and radar-window-to-ball distance. Keep focus and lighting fixed.
+   the default foot extension and LIS3DH orientation. Verify the recorded level lens
+   height. Keep focus and lighting fixed; routine capture does not require a taped ball distance.
 2. Choose a unique tester ID for these conditions. Run **Check the hardware**,
    inspect the setup checks, then confirm the physical setup. Software
    preflight alone does not establish live radar acquisition.
 3. Run **Measure the light**, then start the normal exposure ladder. Use the
    **Advanced: manual single-arm tools** only for a specifically requested investigation.
-   Check that the stationary ball is visible and sharp before swinging.
+   Record the stationary ball placement and inspect both camera range candidates before swinging.
+   They remain pending until another sensor independently verifies them. A tape distance may be
+   entered under Advanced as validation truth, but it does not guide detection or runtime metrics.
 4. Make a short ladder screening block, allowing each shot to finish. Record every
    physical swing in the operator tally, including no-reads. Keep warmups and
    false triggers separately identified. Screening counts are not an accuracy

@@ -418,16 +418,15 @@
               <option value="outdoors">Outdoors</option>
             </select></label
           >
-          <label
-            >Radar window → ball centre (mm)<input
-              id="tee-mm"
-              type="number"
-              min="500"
-              max="4000"
-              step="1"
-              inputmode="numeric"
-          /></label>
         </form>
+        <div class="setup-gate" id="automatic-range" data-ready="false">
+          <h3>Automatic ball range</h3>
+          <p id="automatic-range-summary" class="note">
+            Start the advanced live view and record the ball placement. Camera evidence remains pending until another
+            sensor independently verifies it; range-dependent metrics stay unavailable.
+          </p>
+          <div class="light" id="automatic-range-values"></div>
+        </div>
         <div class="setup-gate" id="setup-gate" data-ready="false">
           <h3>Mandatory setup eligibility</h3>
           <p id="setup-summary" class="problem">Checking the server-authoritative setup gate…</p>
@@ -573,6 +572,16 @@
         <div class="light" id="light"></div>
         <div class="light" id="enclosure"></div>
         <div class="live">
+          <label
+            >Optional tape/reference distance (radar window → ball centre, mm)<input
+              id="tee-mm"
+              type="number"
+              min="500"
+              max="4000"
+              step="1"
+              inputmode="numeric"
+          /></label>
+          <p class="note">Validation only. This value does not guide camera detection or enable runtime range.</p>
           <div class="controls">
             <label>Live exposure<select id="live-exposure"></select></label>
             <label>Live gain<select id="live-gain"></select></label>
@@ -659,6 +668,7 @@
       let lastAttemptStateRefreshAt = 0;
       let suiteActionVersion = 0;
       let packageActionPending = false;
+      let lastAutomaticRange = null;
       const REQUEST_TIMEOUT_MS = 5000;
       const ACTION_TIMEOUT_MS = 15000;
       const PACKAGE_TIMEOUT_MS = 300000;
@@ -904,6 +914,8 @@
         if (a.solved_range_m != null) {
           el('light').innerHTML += `<span>camera-solved range <b>${Math.round(a.solved_range_m * 1000)} mm</b></span>`;
         }
+        const ranged = [...arms].reverse().find((item) => item.tee_range_camera_evidence);
+        if (ranged) renderAutomaticRange(ranged.tee_range_camera_evidence, ranged.tee_range_solution);
       }
 
       function render(body) {
@@ -1034,7 +1046,7 @@
             ? `<span>ball found: <b>${b.diameter_px} px</b> across, about <b>${b.range_m} m</b> away</span>` +
               (b.expected_diameter_px != null
                 ? `<span>your tape says <b>${b.expected_diameter_px} px</b>; the picture alone reads <b>${b.image_only_diameter_px ?? '?'} px</b></span>`
-                : "<span>enter the radar-to-ball distance so the ball's size is known</span>") +
+                : '<span>unconstrained camera detection; record this placement for automatic range evidence</span>') +
               (b.size_check ? `<span class="problem">${b.size_check}</span>` : '') +
               `<span>ball <b>${b.ball_dn}</b> against <b>${b.around_dn}</b> around it</span>` +
               `<span>edge <b>${b.edge_dn_per_px}</b> per px</span>`
@@ -1068,6 +1080,32 @@
               `<b>${updown(c.camera_pitch_deg)}</b>, leaving <b>${updown(c.pitch_unexplained_deg)}</b> (a lens centre ${c.lens_offset_equivalent_px} px low) for the lens or its mount</span>`
             : '');
       }
+      function renderAutomaticRange(evidence, solution) {
+        lastAutomaticRange = evidence ? { evidence, solution } : lastAutomaticRange;
+        const selected = evidence && evidence.selected;
+        const status = evidence ? evidence.status : 'pending';
+        el('automatic-range').dataset.ready = 'false';
+        el('automatic-range-summary').className = status === 'selected' ? 'note' : 'problem';
+        el('automatic-range-summary').textContent =
+          status === 'selected'
+            ? `Camera candidate recorded (${evidence.confidence}); pending independent cross-sensor verification.`
+            : `Camera range ${status.replaceAll('_', ' ')}; no canonical range selected.`;
+        if (!selected) {
+          el('automatic-range-values').innerHTML =
+            `<span>observed candidates <b>${evidence?.candidates?.length ?? 0}</b></span>` +
+            `<span>range-dependent metrics <b>unavailable</b></span>`;
+          return;
+        }
+        const metres = (value) => (value == null ? '?' : `${value.toFixed(3)} m`);
+        const tape = Number(el('tee-mm').value) / 1000;
+        const residual = Number.isFinite(tape) && tape > 0 ? selected.floor_radar_range_m - tape : null;
+        el('automatic-range-values').innerHTML =
+          `<span>floor range <b>${metres(selected.floor_radar_range_m)}</b> ± ${metres(selected.floor_range_uncertainty_m)}</span>` +
+          `<span>apparent-size range <b>${metres(selected.size_camera_range_m)}</b> ± ${metres(selected.size_range_uncertainty_m)}</span>` +
+          `<span>disagreement <b>${metres(selected.range_disagreement_m)}</b> · consistency <b>${selected.consistency_sigma?.toFixed(2) ?? '?'}σ</b></span>` +
+          `<span>confidence <b>${selected.confidence}</b> · canonical status <b>${solution?.status ?? 'unresolved'}</b></span>` +
+          (residual == null ? '' : `<span>optional tape residual <b>${residual >= 0 ? '+' : ''}${metres(residual)}</b></span>`);
+      }
       async function recordPlacement() {
         const r = await request('/api/tester/placement', {
           method: 'POST',
@@ -1078,6 +1116,7 @@
           ? 'Record this placement'
           : `Recorded ${r.placements} — move the ball and record again`;
         if (r.failed) el('live-distance').innerHTML += `<span class="problem">${r.failed}</span>`;
+        else renderAutomaticRange(r.automatic_range, r.tee_range);
       }
       async function liveStart() {
         const status = await request('/api/tester/live', {
@@ -1123,13 +1162,11 @@
       el('live-exposure').addEventListener('change', () => {
         if (liveOn) liveStart();
       });
-      // a new tape distance reaches the live view without reopening the camera
-      let teeTimer = null;
+      // Tape is validation-only: update the residual display without restarting detection.
       el('tee-mm').addEventListener('input', () => {
-        clearTimeout(teeTimer);
-        teeTimer = setTimeout(() => {
-          if (liveOn) liveStart();
-        }, 600);
+        if (lastAutomaticRange) {
+          renderAutomaticRange(lastAutomaticRange.evidence, lastAutomaticRange.solution);
+        }
       });
       el('live-gain').addEventListener('change', () => {
         if (liveOn) liveStart();

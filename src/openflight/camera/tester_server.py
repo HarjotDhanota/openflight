@@ -19,7 +19,7 @@ import time
 import zlib
 from collections import Counter, deque
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -33,6 +33,11 @@ from openflight.camera import attempt_ledger, session_review_routes as review_ro
 from openflight.camera.club_motion import detect_reference_ball
 from openflight.camera.fusion_diagnostics import register_fusion_diagnostics
 from openflight.camera.paired_eligibility import evaluate_paired_capture
+from openflight.camera.reference_ball_range import (
+    BallPlaneCamera,
+    ReferenceBallRangeResult,
+    estimate_reference_ball_range,
+)
 from openflight.camera.setup_eligibility import SetupEligibility
 from openflight.camera.track_review import register_track_review
 from openflight.camera.triggered_buffer import unpack_r8_frame
@@ -277,6 +282,32 @@ def write_arm_state(sessions_root: Path, params: TesterParameters, **updates: ob
     return state
 
 
+def pending_tee_range_solution(
+    sessions_root: Path, params: TesterParameters
+) -> tee_range.TeeRangeSolution:
+    """Freeze camera evidence and optional manual truth without selecting either."""
+    state = read_arm_state(sessions_root, params.tester_id, params.arm_id)
+    candidates = [
+        tee_range.TeeRangeCandidate.from_dict(item)
+        for item in state.get("tee_range_camera_candidates", [])
+    ]
+    tape_m = (
+        params.tee_mm / 1000.0
+        if params.tee_mm is not None
+        else state.get("tee_range_validation_truth_m")
+    )
+    if tape_m is not None:
+        candidates.append(
+            tee_range.manual_truth_candidate(
+                tape_m,
+                evidence={"method": "operator_tape", "reported_unit": "mm"},
+            )
+        )
+    return tee_range.TeeRangeSolution.unresolved(
+        candidates, reason="pending_independent_cross_sensor_verification"
+    )
+
+
 def choose_gain(
     results: Sequence[Mapping],
     *,
@@ -415,7 +446,12 @@ def next_run_directory(arm_dir: Path) -> Path:
     return arm_dir / "paired" / f"run-{len(existing) + 1:02d}"
 
 
-def write_setup_admission(run_dir: Path, tester_id: str, eligibility: Mapping) -> None:
+def write_setup_admission(
+    run_dir: Path,
+    tester_id: str,
+    eligibility: Mapping,
+    tee_range_solution: tee_range.TeeRangeSolution | None = None,
+) -> None:
     """Bind the server-lifetime operator admission to one capture run."""
     run_dir.mkdir(parents=True, exist_ok=False)
     document = {
@@ -428,6 +464,7 @@ def write_setup_admission(run_dir: Path, tester_id: str, eligibility: Mapping) -
         "checks": eligibility["checks"],
         "blockers": eligibility["blockers"],
         "warnings": eligibility.get("warnings", []),
+        "tee_range": tee_range_solution.to_dict() if tee_range_solution is not None else None,
     }
     temporary = run_dir / ".setup_admission.json.tmp"
     temporary.write_text(
@@ -1098,8 +1135,9 @@ def record_placement(
     status: Mapping,
     frame: np.ndarray,
     tilt: Mapping | None = None,
+    automatic_range: Mapping | None = None,
 ) -> int:
-    """Keep one taped placement: what the camera saw, its frame, and the tape."""
+    """Keep one placement with its frame, automatic evidence, and optional tape truth."""
     folder = tester_root(sessions_root, params.tester_id) / "calibration"
     folder.mkdir(parents=True, exist_ok=True)
     log = folder / "placements.jsonl"
@@ -1115,12 +1153,112 @@ def record_placement(
         "tee_mm": params.tee_mm,
         "applied": status.get("applied"),
         "ball": status.get("ball"),
+        "automatic_range": dict(automatic_range or {}),
         "inclinometer": dict(tilt or {}),
         "frame": name,
     }
     with log.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry) + "\n")
     return count + 1
+
+
+def _reference_ball_camera(
+    arm: Arm,
+    rig_geometry: Path,
+    tilt: Mapping,
+    optical_calibration: Path | None,
+    camera_placement: Path | None,
+) -> BallPlaneCamera:
+    """Build the active saved-image camera model without claiming qualification."""
+    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+    if optical_calibration is not None and camera_placement is not None:
+        from openflight.camera.calibrated_projection import (  # noqa: PLC0415
+            build_calibrated_camera_model,
+        )
+
+        artifact = json.loads(optical_calibration.read_text(encoding="utf-8"))
+        placement = json.loads(camera_placement.read_text(encoding="utf-8"))
+        saved = artifact.get("candidate", artifact).get("mode_profile", {}).get("saved_image", {})
+        if (saved.get("width"), saved.get("height")) != (arm.width, arm.height):
+            raise ValueError("calibrated camera mode does not match the active capture mode")
+        model = build_calibrated_camera_model(
+            artifact,
+            placement,
+            observed_pitch_deg=tilt.get("pitch_deg"),
+            observed_roll_deg=tilt.get("roll_deg"),
+        )
+        return BallPlaneCamera.calibrated(model)
+    rig = RigGeometry.from_json(rig_geometry)
+    if rig.lens_height_above_floor_mm is None:
+        raise ValueError("rig geometry lacks the measured lens height")
+    camera = np.asarray((0.0, 0.0, rig.lens_height_above_floor_mm / 1000.0))
+    offset = np.asarray(rig.iwr_offset_mm or (0.0, 0.0, 0.0)) / 1000.0
+    return BallPlaneCamera.nominal(
+        focal_px=FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X,
+        image_width_px=arm.width,
+        image_height_px=arm.height,
+        pitch_deg=float(tilt.get("camera_pitch_deg", rig.boresight_pitch_deg)),
+        roll_correction_deg=float(tilt.get("roll_deg", 0.0)),
+        mirror_horizontal=False,
+        camera_origin_lfu=camera,
+        radar_origin_lfu=camera + offset,
+        angular_uncertainty_deg=1.0,
+        focal_relative_uncertainty=0.08,
+    )
+
+
+def _camera_range_evidence(result: ReferenceBallRangeResult) -> dict:
+    return {
+        "status": result.status,
+        "confidence": result.confidence,
+        "selected": asdict(result.selected) if result.selected is not None else None,
+        "candidates": [asdict(item) for item in result.candidates],
+        "diagnostics": dict(result.diagnostics),
+    }
+
+
+def _camera_tee_candidates(
+    result: ReferenceBallRangeResult, placement: int
+) -> list[tee_range.TeeRangeCandidate]:
+    candidates = []
+    for index, item in enumerate(result.candidates, start=1):
+        uncertainty = item.floor_range_uncertainty_m or item.size_range_uncertainty_m or 0.25
+        candidates.append(
+            tee_range.TeeRangeCandidate(
+                candidate_id=f"camera-placement-{placement:02d}-{index:02d}",
+                source=item.source,
+                source_group="camera",
+                radar_slant_range_m=item.floor_radar_range_m,
+                uncertainty_m=(
+                    max(float(uncertainty), 0.001) if item.floor_radar_range_m is not None else None
+                ),
+                selectable=False,
+                evidence={
+                    "result_status": result.status,
+                    "result_confidence": result.confidence,
+                    "candidate": asdict(item),
+                    "diagnostics": dict(result.diagnostics),
+                },
+            )
+        )
+    if not candidates:
+        candidates.append(
+            tee_range.TeeRangeCandidate(
+                candidate_id=f"camera-placement-{placement:02d}-result",
+                source=str(result.diagnostics.get("source", "camera_range_estimator")),
+                source_group="camera",
+                radar_slant_range_m=None,
+                uncertainty_m=None,
+                selectable=False,
+                evidence={
+                    "result_status": result.status,
+                    "result_confidence": result.confidence,
+                    "diagnostics": dict(result.diagnostics),
+                },
+            )
+        )
+    return candidates
 
 
 def mark_ball(image: np.ndarray, ball: Mapping) -> np.ndarray:
@@ -1504,6 +1642,8 @@ def study_overview(sessions_root: Path, tester_id: str) -> dict:
                 "light_index": state.get("light_index"),
                 "solved_range_m": state.get("solved_range_m"),
                 "tee_range_m": state.get("tee_range_m"),
+                "tee_range_solution": state.get("tee_range_solution"),
+                "tee_range_camera_evidence": state.get("tee_range_camera_evidence"),
                 **progress,
             }
         )
@@ -1877,20 +2017,7 @@ def create_app(
             write_arm_state(sessions_root, params)
             if action == "swings":
                 gain, exposure_us = resolve_gain(sessions_root, params)
-                candidates = (
-                    [
-                        tee_range.manual_truth_candidate(
-                            params.tee_mm / 1000.0,
-                            evidence={"method": "operator_tape", "reported_unit": "mm"},
-                        )
-                    ]
-                    if params.tee_mm is not None
-                    else []
-                )
-                solution = tee_range.TeeRangeSolution.unresolved(
-                    candidates,
-                    reason="automatic_range_not_yet_qualified",
-                )
+                solution = pending_tee_range_solution(sessions_root, params)
                 write_arm_state(
                     sessions_root,
                     params,
@@ -1919,7 +2046,7 @@ def create_app(
             if action == "swings":
                 active_setup_tester["tester_id"] = params.tester_id
                 run_dir = Path(commands[0][commands[0].index("--log-dir") + 1])
-                write_setup_admission(run_dir, params.tester_id, eligibility)
+                write_setup_admission(run_dir, params.tester_id, eligibility, solution)
                 tee_range.write_solution(run_dir / "tee_range.json", solution)
                 active_runtime_dir["path"] = run_dir
             try:
@@ -1960,11 +2087,11 @@ def create_app(
                 exposure_us,
                 gain,
                 state.get("black_floor_dn"),
-                expected_ball_diameter_px(params.arm, params.tee_mm, rig_geometry),
+                None,
                 lambda ball: distance_cues(
-                    ball, params.arm, params.tee_mm, rig_geometry, enclosure.reading()
+                    ball, params.arm, None, rig_geometry, enclosure.reading()
                 ),
-                expected_ball_row_px(params.arm, params.tee_mm, rig_geometry, enclosure.reading()),
+                None,
             )
             return jsonify(live.snapshot()[1])
         except RuntimeError as exc:
@@ -1976,30 +2103,75 @@ def create_app(
     def placement():
         try:
             params = TesterParameters.from_payload(request.get_json(silent=True))
-            if params.tee_mm is None:
-                raise ValueError("enter the radar-to-ball distance first")
             arm, frames = live.recent_frames()
             if frames is None:
                 raise RuntimeError("start the live view first")
             if arm != params.arm:
                 raise RuntimeError("the live view is showing another arm; select it first")
-            # measured now, at the distance in the box now: the live view's last
-            # look may predate a new tape reading
+            # Measure this placement from the current frames and current rig pose.
             tilt = enclosure.reading()
-            focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
-            ball = ball_readout(
-                frames,
-                focal,
-                expected_ball_diameter_px(arm, params.tee_mm, rig_geometry),
-                expected_ball_row_px(arm, params.tee_mm, rig_geometry, tilt),
+            camera = _reference_ball_camera(
+                arm, rig_geometry, tilt, optical_calibration, camera_placement
             )
-            if not ball.get("found"):
-                raise RuntimeError(f"no ball in the live view: {ball.get('reason')}")
-            ball["camera_says"] = distance_cues(ball, arm, params.tee_mm, rig_geometry, tilt)
+            rig_ball_height_m = BALL_DIAMETER_MM / 2000.0
+            result = estimate_reference_ball_range(
+                frames,
+                camera,
+                ball_center_height_m=rig_ball_height_m,
+                plausible_radar_range_m=(TEE_RANGE_MM[0] / 1000.0, TEE_RANGE_MM[1] / 1000.0),
+            )
+            evidence = _camera_range_evidence(result)
+            selected = result.selected
+            ball = (
+                {
+                    "found": True,
+                    "x": selected.x_px,
+                    "y": selected.y_px,
+                    "diameter_px": selected.diameter_px,
+                    "camera_says": {
+                        "from_size_mm": round(selected.size_camera_range_m * 1000)
+                        if selected.size_camera_range_m is not None
+                        else None,
+                        "from_floor_mm": round(selected.floor_radar_range_m * 1000)
+                        if selected.floor_radar_range_m is not None
+                        else None,
+                    },
+                }
+                if selected is not None
+                else {"found": False, "reason": result.status}
+            )
             status = {**live.snapshot()[1], "ball": ball}
             frame = np.median(frames, axis=0)
-            count = record_placement(sessions_root, params, status, frame, tilt)
-            return jsonify({"placements": count})
+            count = record_placement(
+                sessions_root, params, status, frame, tilt, automatic_range=evidence
+            )
+            new_candidates = _camera_tee_candidates(result, count)
+            state = read_arm_state(sessions_root, params.tester_id, params.arm_id)
+            prior = [
+                tee_range.TeeRangeCandidate.from_dict(item)
+                for item in state.get("tee_range_camera_candidates", [])
+            ]
+            solution = tee_range.TeeRangeSolution.unresolved(
+                [*prior, *new_candidates],
+                reason=f"camera_{result.status}_pending_cross_sensor_verification",
+            )
+            write_arm_state(
+                sessions_root,
+                params,
+                tee_range_m=None,
+                tee_range_source="unresolved",
+                tee_range_camera_evidence=evidence,
+                tee_range_camera_candidates=[item.to_dict() for item in solution.candidates],
+                tee_range_validation_truth_m=(
+                    params.tee_mm / 1000.0
+                    if params.tee_mm is not None
+                    else state.get("tee_range_validation_truth_m")
+                ),
+                tee_range_solution=solution.to_dict(),
+            )
+            return jsonify(
+                {"placements": count, "tee_range": solution.to_dict(), "automatic_range": evidence}
+            )
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 409
         except ValueError as exc:
@@ -2146,10 +2318,11 @@ def create_app(
             camera_placement,
         )
         run = Path(commands[0][commands[0].index("--log-dir") + 1])
-        write_setup_admission(run, tester_id, admitted_setup[tester_id])
+        solution = pending_tee_range_solution(sessions_root, params_for_arm)
+        write_setup_admission(run, tester_id, admitted_setup[tester_id], solution)
         tee_range.write_solution(
             run / "tee_range.json",
-            tee_range.TeeRangeSolution.unresolved(reason="automatic_range_not_yet_qualified"),
+            solution,
         )
 
         def ladder_finished(_action, _return_code):
