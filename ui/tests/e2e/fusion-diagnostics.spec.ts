@@ -235,6 +235,36 @@ test('reader errors clear stale values and polling retries without overlapping r
   expect(maximumActive).toBe(1);
 });
 
+test('a stalled diagnostic read times out and polling can retry', async ({ page }) => {
+  await mockRuns(page);
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch.bind(window);
+    let diagnosticReads = 0;
+    window.fetch = async (input, init) => {
+      if (!String(input).includes('/api/tester/diagnostics?')) return originalFetch(input, init);
+      diagnosticReads += 1;
+      if (diagnosticReads > 1) return originalFetch(input, init);
+      let streamController!: ReadableStreamDefaultController<Uint8Array>;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          streamController = controller;
+          controller.enqueue(new TextEncoder().encode('{'));
+        },
+      });
+      init?.signal?.addEventListener('abort', () =>
+        streamController.error(new DOMException('The operation was aborted.', 'AbortError'))
+      );
+      return new Response(stream, { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+  });
+  await page.route('**/api/tester/diagnostics?**', (route) => json(route, response([shot(2, 'complete')])));
+  await openRun(page);
+  await expect(page.locator('#diagnostic-error')).toContainText('timed out', { timeout: 6500 });
+  await expect(page.locator('#snapshot')).toContainText('No current diagnostic values');
+  await expect(page.locator('#snapshot')).toContainText('complete', { timeout: 2500 });
+  await expect(page.locator('#diagnostic-error')).toBeEmpty();
+});
+
 test('corrupt block storage fails closed and a failed save does not start a block', async ({ page }) => {
   await mockRuns(page);
   await page.addInitScript(() => localStorage.setItem('openflight-fusion-hidden-block-v1', '{'));

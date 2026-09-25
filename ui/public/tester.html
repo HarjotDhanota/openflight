@@ -103,6 +103,22 @@
         opacity: 0.5;
         cursor: not-allowed;
       }
+      button,
+      summary {
+        min-height: 44px;
+      }
+      .advanced-tools {
+        margin-top: 24px;
+        border-top: 1px solid var(--line);
+        padding-top: 8px;
+      }
+      .advanced-tools > summary {
+        display: flex;
+        align-items: center;
+        cursor: pointer;
+        color: var(--muted);
+        font-weight: 700;
+      }
       .steps {
         display: flex;
         flex-wrap: wrap;
@@ -374,13 +390,10 @@
   </head>
   <body>
     <main>
-      <h1>OpenFlight camera mode study</h1>
-      <p><a href="/track-review.html">Review saved capture tracks</a></p>
-      <p><a href="/fusion-diagnostics.html">View fusion diagnostics</a></p>
+      <h1>OpenFlight tester</h1>
       <p class="lede">
-        The test suite finds the shortest exposure that still works at full resolution, and compares 640×400. A 7-iron,
-        five good swings per exposure; the page sets each exposure itself, says after every swing whether it saved
-        usable data, and skips exposures your light cannot support. You collect; we analyse.
+        Follow four steps: set up the measured rig, check hardware and light, capture the exposure ladder, then review
+        and package the evidence. An accepted capture is saved evidence; it does not establish measurement accuracy.
       </p>
 
       <section>
@@ -396,7 +409,7 @@
       </section>
 
       <section>
-        <h2>1. Who and where</h2>
+        <h2>1. Set up the rig</h2>
         <form class="controls" id="controls">
           <label>Tester ID<input id="tester-id" value="20260922-name" autocomplete="off" /></label>
           <label
@@ -454,7 +467,11 @@
       </section>
 
       <section id="suite">
-        <h2>2. Test suite</h2>
+        <h2>2. Check hardware and light</h2>
+        <div class="steps">
+          <button type="button" id="stop">Stop all tester activity</button>
+        </div>
+        <div class="status" id="status" data-state="unavailable">Connecting to the local runner…</div>
         <ol class="suite-steps">
           <li><button type="button" id="step-check">A. Check the hardware</button> <span id="check-verdict"></span></li>
           <li>
@@ -462,6 +479,7 @@
             <span id="light-verdict"></span>
           </li>
           <li>
+            <h3>3. Capture the exposure ladder</h3>
             <button type="button" id="step-ladder">C. Start the exposure ladder</button>
             <div class="light" id="ladder-panel"></div>
             <div id="face-guide" hidden style="position: relative; width: 640px; max-width: 100%">
@@ -518,14 +536,18 @@
             </p>
           </li>
           <li>
+            <h3>4. Review and package</h3>
+            <p><a href="/track-review.html">Review saved capture tracks</a> · <a href="/fusion-diagnostics.html">View fusion diagnostics</a></p>
             <button type="button" id="step-package">D. Package the data</button>
             <label>Comparator export (optional) <input type="file" id="comparator-file" /></label>
           </li>
         </ol>
       </section>
 
+      <details class="advanced-tools">
+        <summary>Advanced: manual single-arm tools</summary>
       <section>
-        <h2>Single arm (advanced)</h2>
+        <h2>Manual single-arm controls</h2>
         <p class="note">
           Work top to bottom. Each arm: <strong>Find gain</strong> (a few seconds, static), then
           <strong>Capture swings</strong> and hit until it shows 5 accepted.
@@ -560,15 +582,13 @@
           <button type="button" data-action="preflight">Preflight</button>
           <button type="button" data-action="gain" id="btn-gain">Find gain for this arm</button>
           <button type="button" data-action="swings" id="btn-swings">Capture swings for this arm</button>
-          <button type="button" id="stop">Stop</button>
         </div>
-        <div class="status" id="status" data-state="unavailable">Connecting to the local runner…</div>
         <div id="problems"></div>
         <pre class="log" id="log">Waiting for a step.</pre>
       </section>
 
       <section>
-        <h2>Send (single arm)</h2>
+        <h2>Manual package controls</h2>
         <div class="steps">
           <button type="button" id="package">Package everything</button>
           <a id="download" href="#" hidden>Download archive</a>
@@ -578,6 +598,7 @@
           data stays out of Git.
         </p>
       </section>
+      </details>
     </main>
 
     <script>
@@ -617,6 +638,10 @@
       let attemptState = null;
       let attemptPending = null;
       let attemptRequestVersion = 0;
+      let attemptSubmissionRunning = false;
+      let lastAttemptStateRefreshAt = 0;
+      let suiteActionVersion = 0;
+      let packageActionPending = false;
       const REQUEST_TIMEOUT_MS = 5000;
       const ACTION_TIMEOUT_MS = 15000;
       const PACKAGE_TIMEOUT_MS = 300000;
@@ -645,25 +670,64 @@
         const abortFromExternal = () => controller.abort();
         if (externalSignal?.aborted) controller.abort();
         else externalSignal?.addEventListener('abort', abortFromExternal, { once: true });
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        let rejectTimeout;
+        const timeout = new Promise((_, reject) => {
+          rejectTimeout = reject;
+        });
+        const timer = setTimeout(() => {
+          controller.abort();
+          rejectTimeout(new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds.`));
+        }, timeoutMs);
+        const cleanup = () => {
+          clearTimeout(timer);
+          externalSignal?.removeEventListener('abort', abortFromExternal);
+        };
         try {
-          return await fetch(path, { ...options, signal: controller.signal });
+          const response = await Promise.race([fetch(path, { ...options, signal: controller.signal }), timeout]);
+          const readJson = response.json.bind(response);
+          return new Proxy(response, {
+            get(target, property) {
+              if (property === 'json') {
+                return async () => {
+                  try {
+                    return await Promise.race([readJson(), timeout]);
+                  } catch (error) {
+                    if (error.name === 'AbortError') {
+                      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
+                    }
+                    throw error;
+                  } finally {
+                    cleanup();
+                  }
+                };
+              }
+              const value = Reflect.get(target, property, target);
+              return typeof value === 'function' ? value.bind(target) : value;
+            },
+          });
         } catch (error) {
+          cleanup();
           if (error.name === 'AbortError') {
             throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
           }
           throw error;
-        } finally {
-          clearTimeout(timer);
-          externalSignal?.removeEventListener('abort', abortFromExternal);
         }
       }
 
       async function request(path, options, timeoutMs = REQUEST_TIMEOUT_MS) {
         const response = await fetchWithTimeout(path, options, timeoutMs);
-        const body = await response.json().catch(() => ({}));
+        const body = await readJson(response);
         if (!response.ok && body.error) body.failed = body.error;
         return body;
+      }
+
+      async function readJson(response) {
+        try {
+          return await response.json();
+        } catch (error) {
+          if (error instanceof SyntaxError) return {};
+          throw error;
+        }
       }
 
       function setupReady() {
@@ -741,7 +805,7 @@
             '/api/tester/setup-eligibility?' + new URLSearchParams({ tester_id: testerId }),
             { cache: 'no-store', signal: controller.signal }
           );
-          const body = await response.json().catch(() => ({}));
+          const body = await readJson(response);
           if (version !== setupRequestVersion || testerId !== el('tester-id').value.trim()) return false;
           if (!response.ok) throw new Error(body.error || `setup check failed (${response.status})`);
           const prior = setupEligibility;
@@ -1026,6 +1090,8 @@
         });
       }
       el('stop').addEventListener('click', async () => {
+        suiteActionVersion += 1;
+        liveShown(false);
         render(await request('/api/tester/stop', { method: 'POST' }));
       });
       el('package').addEventListener('click', async () => {
@@ -1043,10 +1109,14 @@
       });
 
       // --- test suite ---
-      const suiteBody = (arm) => ({
+      const suiteContext = () => ({
         tester_id: el('tester-id').value.trim(),
-        arm_id: arm,
         environment: el('environment').value,
+      });
+      const suiteBody = (arm, context = suiteContext()) => ({
+        tester_id: context.tester_id,
+        arm_id: arm,
+        environment: context.environment,
       });
       async function post(path, body, timeoutMs = ACTION_TIMEOUT_MS) {
         const r = await fetchWithTimeout(
@@ -1058,7 +1128,7 @@
           },
           timeoutMs
         );
-        const j = await r.json().catch(() => ({}));
+        const j = await readJson(r);
         if (!r.ok) {
           if (j.setup_eligibility) {
             setupEligibility = j.setup_eligibility;
@@ -1068,30 +1138,43 @@
         }
         return j;
       }
-      async function waitJob() {
+      async function waitJob(context, version) {
         for (;;) {
-          const s = await request('/api/tester/status?' + new URLSearchParams(suiteBody('arm5')));
+          if (version !== suiteActionVersion || context.tester_id !== el('tester-id').value.trim()) {
+            throw new Error('cancelled because tester ID changed or Stop was pressed');
+          }
+          const s = await request('/api/tester/status?' + new URLSearchParams(suiteBody('arm5', context)));
+          if (version !== suiteActionVersion || context.tester_id !== el('tester-id').value.trim()) {
+            throw new Error('cancelled because tester ID changed or Stop was pressed');
+          }
           if (!s.job || s.job.state !== 'running') return s.job || { state: 'error', message: 'no job' };
           await new Promise((resolve) => setTimeout(resolve, 1000));
         }
       }
       el('step-check').addEventListener('click', async () => {
+        const context = suiteContext();
+        const version = ++suiteActionVersion;
         el('check-verdict').textContent = 'checking…';
         try {
-          await post('/api/tester/run', { ...suiteBody('arm5'), action: 'preflight' });
-          const job = await waitJob();
+          await post('/api/tester/run', { ...suiteBody('arm5', context), action: 'preflight' });
+          const job = await waitJob(context, version);
           el('check-verdict').textContent = job.state === 'complete' ? 'ready' : `failed: ${job.message}`;
         } catch (e) {
           el('check-verdict').textContent = e.message;
         }
       });
       el('step-light').addEventListener('click', async () => {
+        const context = suiteContext();
+        const version = ++suiteActionVersion;
         try {
           if (!(await requireSetupEligibility())) return;
           for (const arm of ['arm5', 'arm6']) {
+            if (version !== suiteActionVersion || context.tester_id !== el('tester-id').value.trim()) {
+              throw new Error('cancelled because tester ID changed or Stop was pressed');
+            }
             el('light-verdict').textContent = `measuring ${arm === 'arm5' ? '1280×800' : '640×400'}…`;
-            await post('/api/tester/run', { ...suiteBody(arm), action: 'gain' });
-            const job = await waitJob();
+            await post('/api/tester/run', { ...suiteBody(arm, context), action: 'gain' });
+            const job = await waitJob(context, version);
             if (job.state !== 'complete') throw new Error(job.message);
           }
           el('light-verdict').textContent = 'done for both modes';
@@ -1207,6 +1290,7 @@
         }
         const requestedKey = attemptScopeKey(scope);
         const version = ++attemptRequestVersion;
+        lastAttemptStateRefreshAt = Date.now();
         try {
           const query = new URLSearchParams({
             tester_id: scope.tester_id,
@@ -1214,7 +1298,7 @@
             run_dir: scope.run_dir,
           });
           const response = await fetchWithTimeout('/api/tester/attempts?' + query, { cache: 'no-store' });
-          const state = await response.json().catch(() => ({}));
+          const state = await readJson(response);
           if (!response.ok) throw new Error(state.error || `request failed (${response.status})`);
           if (version !== attemptRequestVersion || requestedKey !== attemptScopeKey(selectedAttemptScope)) return;
           attemptState = state;
@@ -1257,7 +1341,7 @@
               '/api/tester/attempts?' + new URLSearchParams({ tester_id: testerId }),
               { cache: 'no-store' }
             );
-            const body = await response.json().catch(() => ({}));
+            const body = await readJson(response);
             if (response.ok && testerId === el('tester-id').value.trim()) mergeAttemptScopes(body.scopes);
           } catch {
             // A currently announced run remains usable while discovery is unavailable.
@@ -1277,6 +1361,7 @@
       }
       async function submitAttempt(proposedPayload) {
         if (!selectedAttemptScope) return;
+        if (attemptSubmissionRunning) return;
         const scope = { ...selectedAttemptScope };
         const savedPending = readAttemptValue(ATTEMPT_PENDING_STORAGE_KEY);
         if (!attemptPending && savedPending && attemptScopeKey(savedPending.scope) === attemptScopeKey(scope)) {
@@ -1291,6 +1376,7 @@
         const pending = attemptPending;
         const requestedKey = attemptScopeKey(pending.scope);
         const version = ++attemptRequestVersion;
+        attemptSubmissionRunning = true;
         renderAttemptState();
         try {
           const response = await fetchWithTimeout('/api/tester/attempts', {
@@ -1298,7 +1384,7 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(pending.payload),
           });
-          const state = await response.json().catch(() => ({}));
+          const state = await readJson(response);
           if (!response.ok) throw new Error(state.error || `request failed (${response.status})`);
           if (attemptPending === pending) {
             attemptPending = null;
@@ -1313,6 +1399,8 @@
           el('attempt-error').hidden = false;
           el('attempt-error').textContent = `${error.message}. Retry the same action to confirm it.`;
           renderAttemptState();
+        } finally {
+          attemptSubmissionRunning = false;
         }
       }
       function addAttempt(kind, operatorMissed = false) {
@@ -1363,6 +1451,9 @@
         // The ladder response already carries every saved scope. Avoid two more
         // attempt-ledger requests on every ladder poll as a session grows.
         discoverAttemptScopes(s.capture_scope, s.saved_attempt_scopes, false);
+        if (selectedAttemptScope && !attemptPending && Date.now() - lastAttemptStateRefreshAt >= 4000) {
+          loadAttemptState(selectedAttemptScope);
+        }
         if (!l) {
           if (s.error) el('ladder-panel').textContent = s.error;
           return;
@@ -1439,7 +1530,7 @@
         ladderRequestRunning = true;
         try {
           const response = await fetchWithTimeout('/api/tester/ladder?' + query, { cache: 'no-store' });
-          const state = await response.json().catch(() => ({}));
+          const state = await readJson(response);
           if (version !== ladderRequestVersion || testerId !== el('tester-id').value.trim()) return;
           renderLadder(state);
         } catch (error) {
@@ -1519,6 +1610,7 @@
         }
       });
       el('tester-id').addEventListener('input', () => {
+        suiteActionVersion += 1;
         try {
           localStorage.setItem(TESTER_ID_STORAGE_KEY, el('tester-id').value.trim());
         } catch {
@@ -1578,7 +1670,7 @@
               physical_rig_confirmed: true,
             }),
           });
-          const body = await response.json().catch(() => ({}));
+          const body = await readJson(response);
           if (version !== setupRequestVersion || testerId !== el('tester-id').value.trim()) return;
           if (!response.ok) throw new Error(body.error || `confirmation failed (${response.status})`);
           physicalConfirmationDraft = false;
@@ -1589,29 +1681,39 @@
             invalidateSetupEligibility(`Physical setup confirmation was not accepted: ${error.message}`);
           }
         } finally {
-          if (setupRequestController === controller) setupRequestController = null;
-          setupActionPending = false;
+          if (setupRequestController === controller) {
+            setupRequestController = null;
+            setupActionPending = false;
+            renderSetupEligibility();
+          }
         }
       });
       el('step-package').addEventListener('click', async () => {
+        if (packageActionPending) return;
+        const context = suiteContext();
+        packageActionPending = true;
+        el('step-package').disabled = true;
         try {
           const file = el('comparator-file').files[0];
           if (file) {
             const form = new FormData();
-            form.append('tester_id', el('tester-id').value.trim());
+            form.append('tester_id', context.tester_id);
             form.append('file', file);
             const up = await fetchWithTimeout(
               '/api/tester/comparator',
               { method: 'POST', body: form },
               PACKAGE_TIMEOUT_MS
             );
-            const saved = await up.json().catch(() => ({}));
+            const saved = await readJson(up);
             if (!up.ok) throw new Error(`comparator export not saved: ${saved.error || up.status}`);
           }
-          await post('/api/tester/package', suiteBody('arm5'), PACKAGE_TIMEOUT_MS);
-          window.location = '/api/tester/package?' + new URLSearchParams(suiteBody('arm5'));
+          await post('/api/tester/package', suiteBody('arm5', context), PACKAGE_TIMEOUT_MS);
+          window.location = '/api/tester/package?' + new URLSearchParams(suiteBody('arm5', context));
         } catch (e) {
           el('step-package').textContent = `D. Package the data — ${e.message}`;
+        } finally {
+          packageActionPending = false;
+          el('step-package').disabled = false;
         }
       });
 

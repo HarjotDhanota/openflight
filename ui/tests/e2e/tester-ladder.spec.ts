@@ -166,6 +166,103 @@ test('ignores a delayed status response for the previous tester ID', async ({ pa
   await expect(page.locator('#status')).not.toContainText('20260922-name');
 });
 
+test('changing tester ID cancels the remaining light-measurement sequence', async ({ page }) => {
+  await mockBaseApis(page, () => ladderState(null));
+  const runBodies: Record<string, unknown>[] = [];
+  await page.route('**/api/tester/run', async (route) => {
+    runBodies.push(route.request().postDataJSON());
+    await fulfillJson(route, {});
+  });
+  let statusReads = 0;
+  await page.route('**/api/tester/status?**', async (route) => {
+    statusReads += 1;
+    await fulfillJson(route, {
+      job: statusReads === 1 ? { state: 'running', message: 'measuring' } : { state: 'complete', message: 'done' },
+    });
+  });
+  await page.goto('/tester.html');
+  await page.getByRole('button', { name: 'B. Measure the light (both modes)' }).tap();
+  await expect.poll(() => statusReads).toBe(1);
+  await page.locator('#tester-id').fill('new-tester');
+  await page.waitForTimeout(1200);
+
+  expect(runBodies).toEqual([
+    { tester_id: '20260922-name', arm_id: 'arm5', environment: 'indoors', action: 'gain' },
+  ]);
+  await expect(page.locator('#light-verdict')).toContainText('cancelled');
+});
+
+test('Stop cancels the remaining light-measurement sequence', async ({ page }) => {
+  await mockBaseApis(page, () => ladderState(null));
+  const runBodies: Record<string, unknown>[] = [];
+  await page.route('**/api/tester/run', async (route) => {
+    runBodies.push(route.request().postDataJSON());
+    await fulfillJson(route, {});
+  });
+  let statusReads = 0;
+  await page.route('**/api/tester/status?**', async (route) => {
+    statusReads += 1;
+    await fulfillJson(route, { job: { state: 'running', message: 'measuring' } });
+  });
+  await page.route('**/api/tester/stop', (route) => fulfillJson(route, {}));
+  await page.goto('/tester.html');
+  await page.getByRole('button', { name: 'B. Measure the light (both modes)' }).tap();
+  await expect.poll(() => statusReads).toBe(1);
+  await page.getByRole('button', { name: 'Stop all tester activity' }).tap();
+  await page.waitForTimeout(1200);
+
+  expect(runBodies).toHaveLength(1);
+  await expect(page.locator('#light-verdict')).toContainText('cancelled');
+});
+
+test('package keeps its original tester context and ignores a duplicate click', async ({ page }) => {
+  await mockBaseApis(page, () => ladderState(null));
+  let comparatorUploads = 0;
+  let releaseUpload!: () => void;
+  const uploadGate = new Promise<void>((resolve) => {
+    releaseUpload = resolve;
+  });
+  await page.route('**/api/tester/comparator', async (route) => {
+    comparatorUploads += 1;
+    await uploadGate;
+    await fulfillJson(route, { saved: true });
+  });
+  const packagePosts: Record<string, unknown>[] = [];
+  const downloads: URL[] = [];
+  await page.route('**/api/tester/package**', async (route) => {
+    if (route.request().method() === 'POST') {
+      packagePosts.push(route.request().postDataJSON());
+      await fulfillJson(route, { package_ready: true });
+      return;
+    }
+    downloads.push(new URL(route.request().url()));
+    await route.fulfill({ status: 200, contentType: 'application/octet-stream', body: '' });
+  });
+  await page.goto('/tester.html');
+  await page.locator('#comparator-file').setInputFiles({
+    name: 'comparison.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from('{}'),
+  });
+
+  const packageButton = page.getByRole('button', { name: 'D. Package the data' });
+  await packageButton.dispatchEvent('click');
+  await packageButton.dispatchEvent('click');
+  await expect.poll(() => comparatorUploads).toBe(1);
+  await page.locator('#tester-id').fill('new-tester');
+  releaseUpload();
+
+  await expect.poll(() => packagePosts).toHaveLength(1);
+  await expect.poll(() => downloads).toHaveLength(1);
+  expect(packagePosts[0]).toEqual({
+    tester_id: '20260922-name',
+    arm_id: 'arm5',
+    environment: 'indoors',
+  });
+  expect(downloads[0].searchParams.get('tester_id')).toBe('20260922-name');
+  expect(downloads[0].searchParams.get('arm_id')).toBe('arm5');
+});
+
 test('keeps a stale-target error visible through polling and retries with the same identity', async ({ page }) => {
   const target = { capture: 'camera-final-18', rung_id: 'full-300' };
   let attempts = 0;

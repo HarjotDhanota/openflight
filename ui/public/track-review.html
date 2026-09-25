@@ -361,6 +361,8 @@
       const $ = (id) => document.getElementById(id);
       const TESTER_KEY = 'openflight-tester-id';
       const DRAFT_PREFIX = 'openflight-track-review-v1:';
+      const REQUEST_TIMEOUT_MS = 5000;
+      const COMPARISON_TIMEOUT_MS = 300000;
       let scopes = [],
         scope = null,
         capture = null,
@@ -387,9 +389,28 @@
       const scopeQuery = () =>
         scope ? { tester_id: scope.tester_id, arm_id: scope.arm_id, run_dir: scope.run_dir } : {};
       const query = (value) => new URLSearchParams(value).toString();
-      async function jsonFetch(url, options) {
-        const response = await fetch(url, options);
-        const body = await response.json().catch(() => ({}));
+      async function readFetch(url, options, readBody, timeoutMs = REQUEST_TIMEOUT_MS) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const response = await fetch(url, { ...options, signal: controller.signal });
+          return { response, body: await readBody(response) };
+        } catch (error) {
+          if (controller.signal.aborted) throw new Error(`Request timed out after ${timeoutMs / 1000} seconds.`);
+          throw error;
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+      async function jsonFetch(url, options = {}) {
+        const { response, body } = await readFetch(url, options, async (value) => {
+          try {
+            return await value.json();
+          } catch (error) {
+            if (!(error instanceof SyntaxError)) throw error;
+            return {};
+          }
+        });
         if (!response.ok) {
           const error = new Error(body.error || `request failed (${response.status})`);
           error.status = response.status;
@@ -671,14 +692,15 @@
             metadata_sha256: capture.metadata_sha256,
           });
         try {
-          const response = await fetch(url, { cache: 'no-store' });
-          if (!response.ok) {
-            const body = await response.json().catch(() => ({}));
-            const error = new Error(body.error || `request failed (${response.status})`);
-            error.status = response.status;
-            throw error;
-          }
-          const blob = await response.blob();
+          const { body: blob } = await readFetch(url, { cache: 'no-store' }, async (value) => {
+            if (!value.ok) {
+              const body = await value.json().catch(() => ({}));
+              const error = new Error(body.error || `request failed (${value.status})`);
+              error.status = value.status;
+              throw error;
+            }
+            return value.blob();
+          });
           if (version !== frameVersion || !capture || capture.capture_id !== bound) return;
           const objectUrl = URL.createObjectURL(blob);
           try {
@@ -804,21 +826,25 @@
         $('compare-status').textContent = 'Comparing frozen saved inputs…';
         showError('');
         try {
-          const response = await fetch('/api/tester/review/compare', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              ...scopeQuery(),
-              capture_id: capture.capture_id,
-              capture_npz_sha256: capture.capture_npz_sha256,
-              metadata_sha256: capture.metadata_sha256,
-              candidate_json: files.candidate_json,
-              profile_json: files.profile_json,
-              setup_json: files.setup_json,
-              tracks_json: JSON.stringify(manifest),
-            }),
-          });
-          const rawText = await response.text();
+          const { response, body: rawText } = await readFetch(
+            '/api/tester/review/compare',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                ...scopeQuery(),
+                capture_id: capture.capture_id,
+                capture_npz_sha256: capture.capture_npz_sha256,
+                metadata_sha256: capture.metadata_sha256,
+                candidate_json: files.candidate_json,
+                profile_json: files.profile_json,
+                setup_json: files.setup_json,
+                tracks_json: JSON.stringify(manifest),
+              }),
+            },
+            (value) => value.text(),
+            COMPARISON_TIMEOUT_MS
+          );
           let body;
           try {
             body = JSON.parse(rawText);

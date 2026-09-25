@@ -134,6 +134,54 @@ test('retries the exact scoped request and undoes through the append-only API', 
   expect(requests).toHaveLength(3);
 });
 
+test('a rapid double tap submits one attempt request', async ({ page }) => {
+  const states = new Map([[runOne.run_dir, attemptState(runOne)]]);
+  let requests = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await mockPage(page, [runOne], states);
+  await page.route('**/api/tester/attempts', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    requests += 1;
+    const body = route.request().postDataJSON();
+    await gate;
+    await fulfillJson(
+      route,
+      attemptState(runOne, [
+        { entry_id: body.entry_id, kind: 'swing', operator_missed: false, status: 'active' },
+      ]),
+      201
+    );
+  });
+  await page.goto('/tester.html');
+
+  await page.evaluate(() => {
+    (window as Window & { addAttempt?: (kind: string) => void }).addAttempt?.('swing');
+    (window as Window & { addAttempt?: (kind: string) => void }).addAttempt?.('swing');
+  });
+  await expect.poll(() => requests).toBe(1);
+  release();
+  await expect(page.locator('#attempt-counts')).toContainText('recorded swings 1');
+});
+
+test('ongoing ladder polling refreshes counters for sensor shots', async ({ page }) => {
+  let sensorShots = 0;
+  const states = new Map([[runOne.run_dir, attemptState(runOne, [], sensorShots)]]);
+  await mockPage(page, [runOne], states);
+  await page.route('**/api/tester/attempts?**', (route) => {
+    const url = new URL(route.request().url());
+    if (!url.searchParams.get('run_dir')) return fulfillJson(route, { schema_version: 1, scopes: [runOne] });
+    return fulfillJson(route, attemptState(runOne, [], sensorShots));
+  });
+  await page.goto('/tester.html');
+  await expect(page.locator('#attempt-counts')).toContainText('logged sensor shots 0');
+
+  sensorShots = 1;
+  await expect(page.locator('#attempt-counts')).toContainText('logged sensor shots 1', { timeout: 7000 });
+});
+
 test('a delayed response cannot move an entry or counters to a newly selected run', async ({ page }) => {
   const states = new Map([
     [runOne.run_dir, attemptState(runOne)],

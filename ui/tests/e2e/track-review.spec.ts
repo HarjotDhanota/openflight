@@ -256,6 +256,47 @@ test('late run discovery cannot restore a previous tester scope', async ({ page 
   await expect(page.locator('#run')).not.toContainText('run-01');
 });
 
+test('a stalled saved-run read times out and leaves recovery controls available', async ({ page }) => {
+  await page.addInitScript(({ key, value }) => localStorage.setItem(key, value), {
+    key: 'openflight-tester-id',
+    value: testerId,
+  });
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      if (!String(input).includes('/api/tester/attempts?')) return originalFetch(input, init);
+      let streamController!: ReadableStreamDefaultController<Uint8Array>;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          streamController = controller;
+          controller.enqueue(new TextEncoder().encode('{'));
+        },
+      });
+      init?.signal?.addEventListener('abort', () =>
+        streamController.error(new DOMException('The operation was aborted.', 'AbortError'))
+      );
+      return new Response(stream, { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+  });
+  await page.goto('/track-review.html');
+  await expect(page.locator('#request-error')).toContainText('timed out', { timeout: 6500 });
+  await expect(page.getByRole('button', { name: 'Refresh' })).toBeEnabled();
+});
+
+test('a stalled frame body times out without enabling annotation', async ({ page }) => {
+  await mockReview(page);
+  await page.unroute('**/api/tester/review/frame?**');
+  await page.route('**/api/tester/review/frame?**', async () => {
+    await new Promise(() => {});
+  });
+  await page.goto('/track-review.html');
+  await page.locator('#run').selectOption({ label: 'arm5 · run-01' });
+  await page.locator('#capture').selectOption(capture.capture_id);
+  await expect(page.locator('#request-error')).toContainText('timed out', { timeout: 6500 });
+  await expect(page.locator('#frame')).toHaveAttribute('data-loaded', 'false');
+  await expect(page.getByRole('button', { name: 'Mark missing' })).toBeDisabled();
+});
+
 test('a comparison response arriving after an edit cannot restore a stale report', async ({ page }) => {
   await mockReview(page);
   let releaseCompare!: () => void;

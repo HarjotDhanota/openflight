@@ -119,8 +119,8 @@ test('fails closed with concrete physical and sensor remedies while recovery act
   await expect(page.locator('#btn-swings')).toBeDisabled();
   await expect(page.getByRole('button', { name: 'B. Measure the light (both modes)' })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'A. Check the hardware' })).toBeEnabled();
-  await expect(page.getByRole('button', { name: 'Stop' })).toBeEnabled();
-  await expect(page.getByRole('button', { name: 'Package everything' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Stop all tester activity' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'D. Package the data' })).toBeEnabled();
   await page.locator('#btn-swings').evaluate((button: HTMLButtonElement) => button.click());
   expect(acquisitionRequests).toBe(0);
 });
@@ -156,6 +156,75 @@ test('posts exact config-bound attestation and a server restart revokes eligibil
   confirmed = false;
   await expect(page.locator('#setup-gate')).toHaveAttribute('data-ready', 'false', { timeout: 3000 });
   await expect(page.getByRole('button', { name: 'C. Start the exposure ladder' })).toBeDisabled();
+});
+
+test('request timeout remains active while the response body stalls', async ({ page }) => {
+  await mockBase(page);
+  await page.addInitScript(() => {
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      if (String(input).includes('/api/tester/setup-eligibility?')) {
+        return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
+      }
+      return nativeFetch(input, init);
+    };
+  });
+  await page.goto('/tester.html');
+
+  await expect(page.locator('#setup-summary')).toContainText('timed out', { timeout: 6500 });
+});
+
+test('an old confirmation cannot clear the pending state of a newer confirmation', async ({ page }) => {
+  await mockBase(page);
+  await page.addInitScript(() => {
+    const nativeFetch = window.fetch.bind(window);
+    let releaseOld!: () => void;
+    const oldGate = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    (window as Window & { releaseOldSetup?: () => void }).releaseOldSetup = releaseOld;
+    window.fetch = async (input, init) => {
+      if (
+        String(input).endsWith('/api/tester/setup-eligibility') &&
+        init?.method === 'POST' &&
+        String(init.body).includes('20260922-name')
+      ) {
+        await oldGate;
+        return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return nativeFetch(input, init);
+    };
+  });
+  let releaseNew!: () => void;
+  const newGate = new Promise<void>((resolve) => {
+    releaseNew = resolve;
+  });
+  let eligibilityReads = 0;
+  await page.route('**/api/tester/setup-eligibility?**', (route) => {
+    eligibilityReads += 1;
+    const id = new URL(route.request().url()).searchParams.get('tester_id') || '';
+    return json(route, eligibility(id, false));
+  });
+  await page.route('**/api/tester/setup-eligibility', async (route) => {
+    await newGate;
+    const id = String(route.request().postDataJSON().tester_id);
+    await json(route, eligibility(id, true));
+  });
+  await page.goto('/tester.html');
+  await page.locator('#setup-physical-confirm').check();
+  await page.getByRole('button', { name: 'Confirm physical setup' }).tap();
+  await page.locator('#tester-id').fill('new-tester');
+  await expect(page.locator('#setup-summary')).toContainText('setup blocker');
+  await page.locator('#setup-physical-confirm').check();
+  await page.getByRole('button', { name: 'Confirm physical setup' }).tap();
+
+  await page.evaluate(() => (window as Window & { releaseOldSetup?: () => void }).releaseOldSetup?.());
+  await page.waitForTimeout(50);
+  const readsBeforeManualRefresh = eligibilityReads;
+  await page.evaluate(() => (window as Window & { refreshSetupEligibility?: () => Promise<boolean> }).refreshSetupEligibility?.());
+  expect(eligibilityReads).toBe(readsBeforeManualRefresh);
+  releaseNew();
+  await expect(page.locator('#setup-gate')).toHaveAttribute('data-ready', 'true');
 });
 
 test('late eligibility for the prior tester cannot authorize the new tester', async ({ page }) => {
@@ -230,10 +299,19 @@ for (const viewport of KIOSK_VIEWPORTS) {
     await gate.scrollIntoViewIfNeeded();
     await page.locator('#setup-physical-confirm').tap();
     await page.getByRole('button', { name: 'Confirm physical setup' }).tap();
+    await expect(page.getByRole('button', { name: 'Stop all tester activity' })).toBeVisible();
+    await page.getByRole('button', { name: 'Stop all tester activity' }).scrollIntoViewIfNeeded();
+    const stopBox = await page.getByRole('button', { name: 'Stop all tester activity' }).boundingBox();
+    expect(stopBox).not.toBeNull();
+    expect(stopBox!.width).toBeGreaterThanOrEqual(44);
+    expect(stopBox!.height).toBeGreaterThanOrEqual(44);
+    await expect(page.getByText('Advanced: manual single-arm tools')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Manual single-arm controls' })).toBeHidden();
     const clipped = await gate.evaluate((node) => {
       const rect = node.getBoundingClientRect();
       return rect.left < 0 || rect.right > window.innerWidth;
     });
     expect(clipped).toBe(false);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 }

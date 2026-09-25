@@ -246,6 +246,7 @@
       const $ = (id) => document.getElementById(id);
       const TESTER_KEY = 'openflight-tester-id';
       const BLOCK_KEY = 'openflight-fusion-hidden-block-v1';
+      const REQUEST_TIMEOUT_MS = 5000;
       let scopes = [];
       let scope = null;
       let snapshots = new Map();
@@ -270,10 +271,25 @@
       }
 
       async function fetchJson(url) {
-        const response = await fetch(url, { cache: 'no-store' });
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(body.error || `request failed (${response.status})`);
-        return body;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+        try {
+          const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
+          let body;
+          try {
+            body = await response.json();
+          } catch (error) {
+            if (!(error instanceof SyntaxError)) throw error;
+            body = {};
+          }
+          if (!response.ok) throw new Error(body.error || `request failed (${response.status})`);
+          return body;
+        } catch (error) {
+          if (controller.signal.aborted) throw new Error('Request timed out after 5 seconds.');
+          throw error;
+        } finally {
+          clearTimeout(timer);
+        }
       }
 
       function saveBlock() {
