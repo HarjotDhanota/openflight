@@ -889,6 +889,27 @@ class TestLiveEndpoints:
         client, _live = self._client(tmp_path)
         assert client.get("/api/tester/live.png").status_code == 503
 
+    def test_overlay_preserves_raw_brightness_and_marks_the_detected_ball(self, tmp_path):
+        image = np.zeros((40, 60), dtype=np.uint8)
+
+        class StaticLive:
+            running = True
+
+            @staticmethod
+            def snapshot():
+                return image, {"ball": {"found": True, "x": 30.0, "y": 20.0, "diameter_px": 12.0}}
+
+        app = eligible_app(sessions_root=tmp_path, rig_geometry=RIG, live_view=StaticLive())
+        response = app.test_client().get("/api/tester/live.png?view=overlay")
+
+        assert response.status_code == 200
+        idat = response.data[response.data.index(b"IDAT") + 4 : response.data.index(b"IEND") - 8]
+        rows = np.frombuffer(zlib.decompress(idat), np.uint8).reshape(40, 61)
+        overlay = rows[:, 1:]
+        assert overlay[20, 30] == 0
+        assert overlay[20, 38] == 255
+        assert np.count_nonzero(overlay) > 0
+
     def test_general_stop_closes_a_standalone_live_view(self, tmp_path):
         client, live = self._client(tmp_path)
         body = {"tester_id": "20260922-name", "arm_id": "arm1", "environment": "indoors"}

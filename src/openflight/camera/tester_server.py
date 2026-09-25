@@ -3423,10 +3423,11 @@ def create_app(
         image, status = live.snapshot()
         if image is None:
             return jsonify({"error": "no live frame yet"}), 503
-        if request.args.get("view") == "boost":
+        view = request.args.get("view")
+        if view == "boost":
             image = boost(image)
-            if (status.get("ball") or {}).get("found"):
-                image = mark_ball(image, status["ball"])
+        if view in {"boost", "overlay"} and (status.get("ball") or {}).get("found"):
+            image = mark_ball(image, status["ball"])
         return Response(
             encode_png(image), mimetype="image/png", headers={"Cache-Control": "no-store"}
         )

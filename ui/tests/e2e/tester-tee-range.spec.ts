@@ -147,6 +147,7 @@ test('shows the server-owned guided camera frame without starting another live v
   let statusPolls = 0;
   let framePolls = 0;
   let livePosts = 0;
+  let frameUrl = '';
   await page.route('**/api/tester/live', (route) => {
     if (route.request().method() !== 'GET') {
       livePosts += 1;
@@ -163,10 +164,14 @@ test('shows the server-owned guided camera frame without starting another live v
         arm_id: 'arm5',
       },
       stats: statusPolls > 1 ? { mean: 72.1, p99: 140, max: 181, clipped_pct: 0 } : null,
+      ball: statusPolls > 1
+        ? { found: true, x: 641.2, y: 502.7, diameter_px: 24.4, range_m: 1.527 }
+        : null,
     });
   });
   await page.route('**/api/tester/live.png?**', async (route) => {
     framePolls += 1;
+    frameUrl = route.request().url();
     if (statusPolls < 2) return json(route, { error: 'no live frame yet' }, 503);
     await route.fulfill({ status: 200, contentType: 'image/png', body: TINY_PNG });
   });
@@ -177,15 +182,54 @@ test('shows the server-owned guided camera frame without starting another live v
   const preview = page.locator('#tee-range-camera-preview');
   await expect(preview).toBeVisible();
   await expect(page.locator('#tee-range-camera-status')).toContainText('Waiting for the first frame');
+  await expect(page.locator('#tee-range-camera-detector')).toContainText('Ball detector is warming up');
   await expect(page.locator('#automatic-range-summary')).toContainText('The reference camera is live');
   await expect(page.locator('#tee-range-camera-status')).toContainText('Live 1280×800 frame ready');
-  await expect(page.locator('#tee-range-camera-frame')).toHaveAttribute('src', /\/api\/tester\/live\.png\?/);
+  await expect(page.locator('#tee-range-camera-detector')).toContainText(
+    'Ball detected · x 641.2 · y 502.7 · diameter 24.4 px · range 1.527 m'
+  );
+  await expect(page.locator('#tee-range-camera-frame')).toHaveAttribute('src', /view=overlay/);
   expect(statusPolls).toBeGreaterThan(1);
   expect(framePolls).toBeGreaterThan(0);
+  expect(frameUrl).toContain('view=overlay');
   expect(livePosts).toBe(0);
 
   await page.locator('#tee-range-action').tap();
   await expect(preview).toBeHidden();
+});
+
+test('reports the live detector reason without treating it as a camera failure', async ({ page }) => {
+  await base(page, {
+    epoch_id: 'epoch-no-ball',
+    phase: 'camera_arm5_capturing',
+    reason: 'camera_arm5_warming',
+    evidence: {},
+    solution: null,
+  });
+  await page.route('**/api/tester/live', (route) =>
+    json(route, {
+      running: true,
+      arm_id: 'arm5',
+      owner: {
+        kind: 'guided_tee_range',
+        tester_id: '20260922-name',
+        epoch_id: 'epoch-no-ball',
+        arm_id: 'arm5',
+      },
+      stats: { mean: 71, p99: 139, max: 178, clipped_pct: 0 },
+      ball: { found: false, reason: 'no round bright object passed the contrast gate' },
+    })
+  );
+  await page.goto('/tester.html');
+
+  const detector = page.locator('#tee-range-camera-detector');
+  await expect(detector).toContainText(
+    'Ball not detected: no round bright object passed the contrast gate'
+  );
+  await expect(detector).toHaveClass(/note/);
+  await expect(detector).not.toHaveClass(/problem/);
+  await expect(page.locator('#automatic-range-summary')).toContainText('The reference camera is live');
+  await expect(page.locator('#tee-range-action')).toHaveText('Save 1280×800 observation');
 });
 
 test('guided camera errors stay beside the preview and stale tester polls are ignored', async ({ page }) => {
