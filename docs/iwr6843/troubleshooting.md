@@ -9,7 +9,8 @@ until power, ports, firmware, config, and geometry are verified.
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| `no IWR6843 CLI found` | Wrong USB interface, board still in flash mode, missing functional RESET, stale serial owner, or unstable power | Set functional switches, press RESET, verify interface `00`, stop serial processes, then retry with explicit `--iwr6843-port` |
+| `no IWR6843 CLI found` | Wrong USB interface, board still in flash mode, missing functional RESET, stale serial owner, or unstable power | Set functional switches, press RESET, verify Enhanced/UARTA interface `00`, stop serial processes, then give the tester its stable `/dev/serial/by-id/...-if00-port0` path with `--iwr-static-port` |
+| Static capture reports `stage=post_dump_cli_health` | Raw bytes arrived but the firmware never returned a healthy CLI after `l3dump` | Keep the preserved raw file, press RESET, rerun the tester hardware check on Enhanced/UARTA `if00`, then start a new capture; do not repeatedly send Retry while the CLI check fails |
 | `GPIO busy` | Another kiosk, calibration, or shot-test process owns BCM17 | Stop the old process; use `pgrep -af` and `sudo fuser -v /dev/gpiochip*` to locate it |
 | `captureFormat` or `phaseCaptureCfg` rejected | Older firmware is flashed | Flash the configurable release, reset in functional mode, and retry either supported profile |
 | Bootloader probe returns no response | Wrong CP2105 port or RESET occurred before the script opened UART | Use Enhanced/UARTA, rerun the probe, type `READY`, then RESET only when prompted |

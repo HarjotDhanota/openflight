@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+from dataclasses import replace
 
 import numpy as np
 import pytest
 
+from openflight.iwr6843.driver import IWR6843DumpRecoveryError
 from openflight.iwr6843.dump import pack_dump
 from openflight.iwr6843.static_capture import (
     StaticCaptureInputs,
@@ -17,9 +19,18 @@ from openflight.iwr6843.static_capture import (
 
 
 class FakeRadar:
-    def __init__(self, raw: bytes, *, send_error: Exception | None = None):
+    def __init__(
+        self,
+        raw: bytes,
+        *,
+        send_error: Exception | None = None,
+        read_error: Exception | None = None,
+        health_error: Exception | None = None,
+    ):
         self.raw = raw
         self.send_error = send_error
+        self.read_error = read_error
+        self.health_error = health_error
         self.config_bytes = None
         self.calls = []
 
@@ -32,7 +43,14 @@ class FakeRadar:
 
     def read_dump(self) -> bytes:
         self.calls.append("read_dump")
+        if self.read_error is not None:
+            raise self.read_error
         return self.raw
+
+    def verify_post_dump_cli(self) -> None:
+        self.calls.append("verify_post_dump_cli")
+        if self.health_error is not None:
+            raise self.health_error
 
     def stop_sensor(self) -> None:
         self.calls.append("stop_sensor")
@@ -109,7 +127,13 @@ def test_success_saves_raw_before_profile_and_records_exact_hashes(tmp_path, mon
     assert result["profile"]["radar_profile_qualified"] is False
     assert order == ["raw", "profile"]
     assert fake.config_bytes == inputs.config_path.read_bytes()
-    assert fake.calls == ["send_config", "read_dump", "stop_sensor", "close"]
+    assert fake.calls == [
+        "send_config",
+        "read_dump",
+        "verify_post_dump_cli",
+        "stop_sensor",
+        "close",
+    ]
     assert result["inputs"] == {
         "firmware": {
             "path": str(inputs.firmware_path.resolve()),
@@ -134,6 +158,39 @@ def test_success_saves_raw_before_profile_and_records_exact_hashes(tmp_path, mon
     assert result["profile"]["rig_geometry_sha256"] == result["inputs"]["rig_geometry"]["sha256"]
     saved = json.loads((inputs.output_dir / "empty-001.json").read_text(encoding="utf-8"))
     assert saved == result
+
+
+def test_repeated_static_captures_verify_and_stop_each_serial_lifecycle(tmp_path):
+    first_inputs = _inputs(tmp_path, capture_id="empty-001")
+    second_inputs = replace(
+        first_inputs,
+        capture_id="ball-002",
+        capture_kind="ball_present",
+    )
+    radars = [FakeRadar(_raw_dump()), FakeRadar(_raw_dump())]
+
+    first = capture_static_range(
+        first_inputs,
+        radar_factory=_factory(radars[0]),
+        wait_for_settle=lambda *_args: False,
+    )
+    second = capture_static_range(
+        second_inputs,
+        radar_factory=_factory(radars[1]),
+        wait_for_settle=lambda *_args: False,
+    )
+
+    assert first["usable"] is True
+    assert second["usable"] is True
+    expected = [
+        "send_config",
+        "read_dump",
+        "verify_post_dump_cli",
+        "stop_sensor",
+        "close",
+    ]
+    assert radars[0].calls == expected
+    assert radars[1].calls == expected
 
 
 def test_concurrent_same_id_is_refused_before_second_hardware_owner(tmp_path):
@@ -217,7 +274,53 @@ def test_partial_dump_is_preserved_and_marked_unusable(tmp_path):
     assert result["error"]["stage"] == "derive_profile"
     assert (inputs.output_dir / "empty-001.l3dump").read_bytes() == partial
     assert result["artifacts"]["raw"]["sha256"] == hashlib.sha256(partial).hexdigest()
-    assert fake.calls == ["send_config", "read_dump", "stop_sensor", "close"]
+    assert fake.calls == [
+        "send_config",
+        "read_dump",
+        "verify_post_dump_cli",
+        "stop_sensor",
+        "close",
+    ]
+
+
+def test_wedged_post_dump_cli_preserves_raw_and_marks_capture_unusable(tmp_path):
+    inputs = _inputs(tmp_path)
+    raw = _raw_dump()
+    fake = FakeRadar(raw, health_error=RuntimeError("CLI wedged"))
+
+    result = capture_static_range(
+        inputs,
+        radar_factory=_factory(fake),
+        wait_for_settle=lambda *_args: False,
+    )
+
+    assert result["usable"] is False
+    assert result["error"] == {
+        "stage": "post_dump_cli_health",
+        "type": "RuntimeError",
+        "message": "CLI wedged",
+    }
+    assert (inputs.output_dir / "empty-001.l3dump").read_bytes() == raw
+    assert result["raw_evidence_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert fake.calls == ["send_config", "read_dump", "verify_post_dump_cli", "close"]
+
+
+def test_dump_recovery_failure_carries_and_preserves_complete_raw(tmp_path):
+    inputs = _inputs(tmp_path)
+    raw = _raw_dump()
+    failure = IWR6843DumpRecoveryError("firmware did not return to its CLI", raw)
+    fake = FakeRadar(raw, read_error=failure)
+
+    result = capture_static_range(
+        inputs,
+        radar_factory=_factory(fake),
+        wait_for_settle=lambda *_args: False,
+    )
+
+    assert result["usable"] is False
+    assert result["error"]["stage"] == "post_dump_cli_health"
+    assert (inputs.output_dir / "empty-001.l3dump").read_bytes() == raw
+    assert fake.calls == ["send_config", "read_dump", "close"]
 
 
 def test_configuration_error_writes_unusable_result_and_closes(tmp_path):

@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from openflight.iwr6843.device_lock import IWR6843DeviceBusyError
-from openflight.iwr6843.driver import IWR6843Radar
+from openflight.iwr6843.driver import IWR6843DumpRecoveryError, IWR6843Radar
 from openflight.iwr6843.dump import TEMP_REPORT_KEYS, pack_dump
 
 
@@ -185,7 +185,7 @@ def test_stop_sensor_requires_acknowledgement_and_inactive_health(monkeypatch):
 
     radar.stop_sensor()
 
-    assert calls == [("sensorStop", 3.0), ("stats", 2.0)]
+    assert calls == [("sensorStop", 6.0), ("stats", 6.0)]
 
 
 def test_stop_sensor_rejects_firmware_that_remains_active(monkeypatch):
@@ -323,8 +323,47 @@ def test_read_dump_reports_firmware_restart_error_after_binary_payload():
     radar = IWR6843Radar.__new__(IWR6843Radar)
     radar.ser = FakeSerial(b"l3dump\r\n" + raw + b"Error: RF restart failed\r\n")
 
-    with pytest.raises(RuntimeError, match="RF restart failed"):
+    with pytest.raises(IWR6843DumpRecoveryError, match="RF restart failed") as raised:
         radar.read_dump(timeout_s=0.1)
+
+    assert raised.value.raw == raw
+
+
+def test_read_dump_rejects_complete_payload_without_trailing_cli_ready():
+    raw = pack_dump(np.ones((1, 3, 4, 4), dtype=complex), n_tx=3, version=3)
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    radar.ser = FakeSerial(b"l3dump\r\n" + raw)
+
+    with pytest.raises(IWR6843DumpRecoveryError, match="did not return to its CLI") as raised:
+        radar.read_dump(timeout_s=0.01)
+
+    assert raised.value.raw == raw
+
+
+def test_read_dump_rejects_partial_transport_without_sending_a_followup_command():
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    radar.ser = FakeSerial(b"l3dump\r\nILD1-partial")
+
+    with pytest.raises(IWR6843DumpRecoveryError, match="complete dump header") as raised:
+        radar.read_dump(timeout_s=0.01, stall_tolerance_s=0.0)
+
+    assert raised.value.raw.endswith(b"ILD1-partial")
+    assert radar.ser.writes == [b"l3dump\n"]
+
+
+def test_post_dump_health_requires_active_cli_response(monkeypatch):
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    monkeypatch.setattr(radar, "cmd", lambda command, window: f"{command}\nactive=1\nDone\n")
+
+    radar.verify_post_dump_cli()
+
+
+def test_post_dump_health_rejects_wedged_cli(monkeypatch):
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    monkeypatch.setattr(radar, "cmd", lambda *_args: "")
+
+    with pytest.raises(RuntimeError, match="post-dump CLI health check"):
+        radar.verify_post_dump_cli()
 
 
 def test_read_dump_sizes_v5_header_extension():
@@ -335,7 +374,7 @@ def test_read_dump_sizes_v5_header_extension():
         version=5,
         temperature_report=report,
     )
-    serial = FakeSerial(b"cli echo\r\n" + raw + b"trailing cli noise")
+    serial = FakeSerial(b"cli echo\r\n" + raw + b"Done\r\nl3dump:/>")
     radar = IWR6843Radar.__new__(IWR6843Radar)
     radar.ser = serial
 

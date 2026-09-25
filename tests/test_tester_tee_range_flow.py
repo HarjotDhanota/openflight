@@ -107,6 +107,22 @@ class MutableSetup(EligibleSetup):
         }
 
 
+class ReconfirmedSetup(EligibleSetup):
+    def __init__(self):
+        self.confirmed_at = "first-server"
+
+    def require(self, tester_id, _reading, _action):
+        result = super().require(tester_id, _reading, _action)
+        return {
+            **result,
+            "operator_confirmation": {
+                "confirmed": True,
+                "confirmed_at": self.confirmed_at,
+                "authority": "operator_physical_setup",
+            },
+        }
+
+
 class MutableTilt(FakeTilt):
     def __init__(self):
         self.pitch = 0.0
@@ -148,14 +164,22 @@ class StaticManager:
         self.rig_hash = rig_hash
         self.calibration_hash = calibration_hash
         self.fail = fail
+        self.last_command = None
+        self.start_count = 0
         self._status = {"state": "idle", "action": None, "message": "Ready"}
 
     def status(self):
         return dict(self._status)
 
     def start(self, action, commands, _log_path, on_finish=None, **_kwargs):
+        self.start_count += 1
+        if action == "preflight":
+            if on_finish:
+                on_finish(action, 0)
+            return
         assert action == "tee_range"
         command = list(commands[0])
+        self.last_command = command
 
         def value(flag):
             return command[command.index(flag) + 1]
@@ -185,7 +209,13 @@ class StaticManager:
                 self.config_hash,
                 self.rig_hash,
             ),
-            "error": {"message": "fixture failure"} if self.fail else None,
+            "error": {
+                "stage": "connect",
+                "type": "RuntimeError",
+                "message": "no IWR6843 CLI found — board on, flashed, single-port fw?",
+            }
+            if self.fail
+            else None,
         }
         (output / f"{capture_id}.json").write_text(json.dumps(record), encoding="utf-8")
         if on_finish:
@@ -275,6 +305,7 @@ def app_for(
     setup_policy=None,
     live_view=None,
     tilt=None,
+    require_iwr_preflight=False,
 ):
     def camera_model(arm, *_args):
         return BallPlaneCamera.nominal(
@@ -315,7 +346,10 @@ def app_for(
         iwr_calibration=inputs["calibration"],
         tee_range_qualification=inputs["qualification"] if qualified else None,
         require_tee_range_flow=True,
+        iwr_static_port="/dev/serial/by-id/iwr-if00-port0",
+        require_iwr_preflight=require_iwr_preflight,
     )
+    app.config["TEST_STATIC_MANAGER"] = manager
     tester = "guided-fixture"
     for arm_id in ("arm5", "arm6"):
         params = ts.TesterParameters(tester, arm_id, "indoors")
@@ -323,6 +357,16 @@ def app_for(
             tmp_path / "sessions", params, gain=4.0, gain_exposure_us=params.arm.exposure_us
         )
     return app, tester
+
+
+def test_guided_static_capture_uses_the_configured_iwr_port(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    assert post(client, tester, "start", "start").status_code == 200
+    assert post(client, tester, "capture_empty", "empty").status_code == 200
+
+    command = app.config["TEST_STATIC_MANAGER"].last_command
+    assert command[command.index("--port") + 1] == "/dev/serial/by-id/iwr-if00-port0"
 
 
 def post(client, tester, action, request_id):
@@ -449,10 +493,57 @@ def test_requests_are_idempotent_and_failures_retry_without_erasing_evidence(
     failed = phase(client, tester)
     assert failed["phase"] == "retryable_failure"
     assert failed["evidence"]["empty_capture"]["usable"] is False
+    assert failed["evidence"]["capture_failure"] == {
+        "capture_kind": "empty",
+        "stage": "connect",
+        "type": "RuntimeError",
+        "message": "no IWR6843 CLI found — board on, flashed, single-port fw?",
+        "remedy": (
+            "Power the IWR6843, set its switches to functional mode, press RESET, and verify "
+            "the CP2105 Enhanced/UARTA interface (if00) is present. If auto-detection still "
+            "misses it, restart the tester with --iwr-static-port set to its stable "
+            "/dev/serial/by-id/...-if00-port0 path."
+        ),
+    }
     retried = post(client, tester, "retry", "retry").get_json()["state"]
     assert retried["phase"] == "needs_empty"
+    assert app.config["TEST_STATIC_MANAGER"].start_count == 1
     restarted = post(client, tester, "ball_moved", "new-epoch").get_json()["state"]
     assert restarted["epoch_id"] != first["epoch_id"]
+
+
+def test_unusable_static_capture_invalidates_the_required_iwr_preflight(
+    tmp_path, inputs, monkeypatch
+):
+    app, tester = app_for(
+        tmp_path,
+        inputs,
+        monkeypatch,
+        fail=True,
+        require_iwr_preflight=True,
+    )
+    client = app.test_client()
+    preflight = client.post(
+        "/api/tester/run",
+        json={
+            "tester_id": tester,
+            "arm_id": "arm5",
+            "environment": "indoors",
+            "action": "preflight",
+        },
+    )
+    assert preflight.status_code == 202
+    assert post(client, tester, "start", "start").status_code == 200
+    assert post(client, tester, "capture_empty", "empty").status_code == 200
+
+    eligibility = client.get(
+        "/api/tester/setup-eligibility", query_string={"tester_id": tester}
+    ).get_json()
+    assert eligibility["eligible"] is False
+    assert eligibility["blockers"][-1]["id"] == "iwr6843_cli"
+    retry = post(client, tester, "retry", "retry")
+    assert retry.status_code == 409
+    assert retry.get_json()["setup_eligibility"]["blockers"][-1]["id"] == "iwr6843_cli"
 
 
 def test_direct_range_api_fails_closed_when_setup_is_not_eligible(tmp_path, inputs, monkeypatch):
@@ -496,6 +587,26 @@ def test_direct_range_api_requires_start_over_after_orientation_changes(
     assert response.status_code == 409
     assert response.get_json()["start_over_required"] is True
     assert "orientation changed" in response.get_json()["error"]
+
+
+def test_reconfirmation_persists_start_over_required_in_the_guided_state(
+    tmp_path, inputs, monkeypatch
+):
+    setup = ReconfirmedSetup()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, setup_policy=setup)
+    client = app.test_client()
+    assert post(client, tester, "start", "start").status_code == 200
+    setup.confirmed_at = "after-restart"
+
+    response = post(client, tester, "capture_empty", "stale-epoch")
+
+    body = response.get_json()
+    assert response.status_code == 409
+    assert body["start_over_required"] is True
+    assert body["state"]["phase"] == "retryable_failure"
+    assert body["state"]["retry_phase"] is None
+    assert "admission changed" in body["state"]["reason"]
+    assert phase(client, tester) == body["state"]
 
 
 def test_finalize_publishes_terminal_state_only_after_epoch_pointer(tmp_path, monkeypatch):

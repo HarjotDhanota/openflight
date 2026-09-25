@@ -41,6 +41,19 @@ Updated: 2026-09-25. Owner: Harjot. Status: active; M0 complete, M1 in progress.
       affected backend suites pass; full suite 2340 passed with the same 28
       Windows-only failures as `f7c67ac`; tester/review/diagnostics browser
       suites pass. Not yet run on the Pi or on session 1's raw captures.
+- [x] The first guided automatic-range attempt preserved an empty IWR result
+      with `stage=connect` and `no IWR6843 CLI found`; the earlier tester
+      preflight had never contacted the IWR. The normal tester now requires a
+      read-only single-port CLI preflight, accepts an optional stable
+      Enhanced/UARTA `if00` path for preflight and static captures, and exposes
+      the preserved stage/type/message/remedy. Reboot recovery now retains the
+      reconfirm/start-over error and persists a non-retryable stale epoch. This
+      correction also requires the post-dump `Done` and active CLI health before
+      marking static evidence usable, while preserving raw bytes and avoiding
+      further commands when recovery is uncertain. An unusable capture revokes
+      the server's CLI preflight until the hardware check passes again; Retry
+      itself remains state-only. It is software tested only; the board
+      connection and static capture still need a Pi run.
 - [ ] M1 physical gate remains open. M3 selection and M4 pose/strike/spin are
       evidence-dependent. Preserve the first session and finish its failure and
       discrepancy review before changing estimators.
@@ -473,6 +486,8 @@ live/replay equivalence claim or independent calibration.
 | 2026-09-24 | M1 recovery and usability review found duplicate normal and advanced acquisition/export paths that can send a real tester into an incomplete single-arm run or package the wrong scope | Make the guided setup, hardware, light, exposure-ladder, review and package sequence the normal workflow; keep manual single-arm controls as a collapsed advanced investigation path. Preserve rig/readiness gates, raw evidence schemas and diagnostic truth, and do not treat this navigation change as hardware or accuracy validation |
 | 2026-09-25 | The user rejected routine radar-to-ball measurement, while audit found that the tester still requires tape for manual swings and otherwise silently inherits the server's 1.575 m default; current camera optics and IWR impact timing are not qualified to replace it accurately | Introduce a versioned tee-range evidence contract and an explicit unresolved/raw-only acquisition path. Preserve optional tape as validation truth that is never silently selected, require independent source groups before an automatic solution can be selected, and withhold range-dependent canonical fusion until a qualified solution exists. Add camera and IWR candidates to the test bench before promotion; do not change estimator acceptance gates |
 | 2026-09-25 | Static IWR range differencing needs two matched pre-MTI captures, but production shot profiles move their range windows and concurrent setup capture could steal the runtime's single UART | Add a fixed-window diagnostic profile, raw-first setup capture with exact input hashes, and one interprocess lock shared by auto-detection and runtime ownership. Preserve failures as unusable evidence, keep firmware identity declared rather than read-back verified, and do not select or promote an IWR tee-range candidate in this slice |
+| 2026-09-25 | Live Pi evidence showed the hardware check reported ready although the guided empty capture immediately preserved `stage=connect`, `RuntimeError`, `no IWR6843 CLI found`; code inspection confirmed preflight checked Git, OS, camera enumeration and throttling but never IWR reachability | Require a read-only IWR single-port CLI probe in the normal tester admission, keep configuration and dump acquisition in the later static-capture step, surface the preserved structured error with an operator remedy, and allow one explicit stable CP2105 Enhanced/UARTA `if00` path while retaining auto-detection. This changes no estimator or promotion gate and makes no hardware-success claim |
+| 2026-09-25 | After reboot restored IWR auto-detection, the next static-capture attempt left the CLI undiscoverable; audit found `read_dump` accepted a complete payload after waiting at most one second for trailing `Done`, below the driver's documented multi-second CP2105 stalls, then cleanup sent commands into an uncertain firmware state | Use the full remaining capture timeout for the dump handler to return `Done`, require an active post-dump `stats` response, extend cleanup command windows beyond the known stall interval, preserve complete or partial raw bytes on recovery failure, and close without `sensorStop` when CLI state is uncertain. Keep Retry as a state transition only; require RESET and a passing hardware check before another capture |
 | 2026-09-25 | Camera floor/size cues are one dependent optical source, moving-IWR impact range can reuse the range it is meant to establish, and arm-local copies can drift after setup | Keep estimator candidates non-selectable and centralize promotion in a versioned policy. Resolve only same-epoch qualified Arm 5 camera plus static empty/present IWR evidence with exact calibration/config hashes and independent inputs; select static IWR without averaging after absolute and normalized agreement gates. Store immutable setup epochs under `calibration/tee-range` and put only epoch ID/digest references in arms and sessions |
 | 2026-09-25 | Moving IWR range and camera↔IWR path association are useful offline diagnostics, but impact extrapolation can be circular and the camera association consumes the same IWR ranges | Preserve the full tee-independent moving range series in replay. Build a non-selectable candidate only from explicitly independent qualified impact timing and matching qualified range calibration. Run the camera association only with saved, qualified camera/range/clock/OPS inputs, retain all alternatives and rejections, and prohibit both diagnostics from tee-range promotion or independent-source counting |
 
@@ -1032,3 +1047,16 @@ product acceptance limits. Promotion remains gated on that independent evidence.
   changed or legacy identities remain raw-only or require an explicit start-over;
   no shipped calibration value or estimator acceptance gate changed. Software
   validation does not establish Pi resource behavior or automatic-range accuracy.
+- Guided IWR reachability correction (M1, TB06/TB12): a Pi empty-capture
+  failure established that the old hardware check did not probe the IWR6843.
+  The tester now separates a required read-only CLI preflight from the later
+  static configuration/dump capture, preserves auto-detection, supports one
+  stable Enhanced/UARTA `if00` override for both paths, and presents the
+  capture's saved stage, exception type, message and remedy. A restart requires
+  reconfirmation and persists the old epoch as start-over-only instead of
+  restoring its Retry button. Static evidence is now usable only after trailing
+  `Done`, active CLI health and verified cleanup; recovery failures retain raw
+  evidence and avoid follow-up commands in an uncertain handler state. The
+  implementation does not alter tee-range estimation or promotion policy.
+  Automated software checks do not establish that the Pi board is powered,
+  enumerated or flashed.
