@@ -45,6 +45,7 @@ const review = {
       errors: [],
       rejected_triggers: [{ ts: 't1', reason: 'no ball speed' }],
       rejected_trigger_count: 1,
+      camera_trigger_rejections: { counts: { save_backlog_full: 2 }, recent: [] },
       attempt_ledger: null,
     },
   ],
@@ -64,6 +65,23 @@ const review = {
         },
         impact_photo: `${testerId}/impact/camera_001.pgm`,
         camera_capture_error: null,
+        camera_outcome: { category: 'captured', label: 'camera clip saved', detail: null },
+      },
+      camera: {
+        saved_dimensions_px: [1280, 800],
+        stream: 'raw',
+        scaler_crop: null,
+        strip_y_offset_px: 0,
+        orientation: { rotate_180: false, mirror_horizontal: false, roll_correction_deg: 0 },
+        session_orientation: { rotate_180: true, mirror_horizontal: false },
+        orientation_matches_session: false,
+        delivered_fps: 115.2,
+        gap_count: 0,
+        pre_trigger_frames: 18,
+        post_trigger_frames: 6,
+        trigger_frame_index: 17,
+        placement: { warned: false, pitch_deg: 3.3, roll_deg: 0.1 },
+        ball_gate_rows_px: [320, 760],
       },
       picture_verdict: {
         rung_id: 'full-300',
@@ -120,7 +138,15 @@ const review = {
       run: 'run-01',
       shot_number: null,
       capture_id: 'camera_009',
-      evidence: { preview_frames: { first: null, trigger: null, last: null }, impact_photo: null },
+      evidence: {
+        preview_frames: { first: null, trigger: null, last: null },
+        impact_photo: null,
+        camera_outcome: {
+          category: 'trigger_rejected_backlog',
+          label: 'camera refused the trigger: earlier clips were still being saved',
+          detail: '3 completed clips are still waiting for the disk',
+        },
+      },
       picture_verdict: null,
       live_processing: null,
       identity: {},
@@ -213,8 +239,22 @@ test('live review starts the analysis, survives a reload and shows every status'
   await expect(trigger).toHaveAttribute('data-state', 'loaded');
   expect(await trigger.evaluate((canvas: HTMLCanvasElement) => canvas.width)).toBe(640);
 
+  const orientation = card.locator('[data-orientation]');
+  await expect(orientation).toContainText('As saved: rotate 180° off · mirror off');
+  await expect(orientation).toContainText('1280×800 raw');
+  await expect(orientation).toContainText('differs from the session setting (rotate ON, mirror off)');
+  await expect(orientation).toContainText('Ball gate accepts rows 320–760; detectors found scene y=245');
+  await expect(orientation).toContainText('pitch at trigger 3.3°');
+  await card.getByText('Camera capture facts').click();
+  await expect(card).toContainText('delivered_fps');
+  await expect(card).toContainText('115.2');
+
   const stray = page.locator('[data-attempt="run-01:camera_009"]');
   await expect(stray).toContainText('Not a shot: runtime setup readiness blocked');
+  await expect(stray.locator('[data-camera-outcome="trigger_rejected_backlog"]')).toContainText(
+    'earlier clips were still being saved (3 completed clips'
+  );
+  await expect(page.locator('[data-camera-refusals]')).toContainText('Camera refused 2 trigger(s): save_backlog_full');
   await page.getByLabel('Show').selectOption('experimental');
   await expect(stray).toHaveCount(0);
   await expect(page.locator('#runs')).toContainText('1 trigger(s) rejected');
@@ -238,8 +278,53 @@ for (const viewport of KIOSK_VIEWPORTS) {
   });
 }
 
+test('packaging progress is shown in bytes and a reused bundle is explained', async ({ page }) => {
+  const state = await mockLive(page);
+  state.phase = 'running';
+  await page.unroute('**/api/tester/analysis**');
+  let phase = 'package';
+  await page.route('**/api/tester/analysis**', (route) =>
+    phase === 'package'
+      ? json(route, {
+          state: 'running',
+          job: {
+            phase: 'package',
+            progress: { done: 3 * 1048576, total: 10 * 1048576, unit: 'bytes', current: 'writing a.npz' },
+            errors: [],
+          },
+          review_ready: false,
+          bundles: [],
+        })
+      : json(route, {
+          state: 'complete',
+          job: { finished_at: 't', replayed: 0, reused: 5, errors: [], bundle: { reused: true } },
+          review_ready: true,
+          bundles: [bundleEntry],
+          latest_bundle: bundleEntry,
+        })
+  );
+  await page.goto('/session-review.html');
+  await expect(page.locator('#analysis-state')).toContainText('(package) 3.0 MiB of 10.0 MiB · writing a.npz');
+  phase = 'done';
+  await expect(page.locator('#analysis-state')).toContainText('nothing changed, so the existing bundle was kept', {
+    timeout: 6000,
+  });
+});
+
+test('the page explains how to review a bundle elsewhere and offers the viewer', async ({ page }) => {
+  await mockLive(page);
+  await page.goto('/session-review.html');
+  await expect(page.locator('#offline-steps')).toContainText('extract review.html from the bundle ZIP');
+  await expect(page.locator('#offline-steps')).toContainText('Choose the original, unextracted bundle .zip');
+  await expect(page.getByRole('link', { name: 'Download the offline viewer (review.html)' })).toHaveAttribute(
+    'href',
+    '/api/tester/review-viewer'
+  );
+});
+
 test.describe('bundle import', () => {
   let bundlePath = '';
+  let duplicatePath = '';
 
   test.beforeAll(() => {
     const folder = mkdtempSync(join(tmpdir(), 'openflight-review-'));
@@ -248,7 +333,9 @@ test.describe('bundle import', () => {
       encoding: 'utf-8',
       timeout: 120000,
     });
-    bundlePath = JSON.parse(output.trim().split('\n').pop() as string).bundle;
+    const made = JSON.parse(output.trim().split('\n').pop() as string);
+    bundlePath = made.bundle;
+    duplicatePath = made.duplicate;
   });
 
   test.beforeEach(async ({ page }) => {
@@ -264,12 +351,24 @@ test.describe('bundle import', () => {
       timeout: 20000,
     });
     const card = page.locator(`[data-attempt="session-bundle:1"]`);
-    await expect(card.locator('tr[data-metric="iwr_launch_vertical_deg"]')).toContainText('input absent');
+    await expect(card.locator('tr[data-metric="iwr_launch_vertical_deg"]')).toContainText('accepted');
+    await expect(card.locator('tr[data-metric="iwr_launch_vertical_deg"]')).toContainText('18.5 deg');
+    await expect(card.locator('[data-orientation]')).toContainText(
+      'As saved: rotate 180° off · mirror off · 320×200 raw'
+    );
+    await expect(card.locator('[data-orientation]')).toContainText('Ball gate accepts rows 80–190');
     await expect(card.locator('tr[data-metric="spin_rpm"]')).toBeVisible();
     const photo = card.getByRole('img', { name: 'impact photo (club face)' });
     await photo.scrollIntoViewIfNeeded();
     await expect(photo).toHaveAttribute('data-state', 'loaded');
     await expect(page.locator('#live-controls')).toBeHidden();
+  });
+
+  test('a bundle listing one path twice is refused instead of trusting either copy', async ({ page }) => {
+    await page.goto('/session-review.html');
+    await page.getByLabel('Open a session bundle (.zip) from any machine').setInputFiles(duplicatePath);
+    await expect(page.locator('#error')).toContainText('lists pilot-1/arm5/arm.json more than once');
+    await expect(page.locator('#attempts-panel')).toBeHidden();
   });
 
   test('a changed byte in a bundle fails the hash check visibly', async ({ page }) => {

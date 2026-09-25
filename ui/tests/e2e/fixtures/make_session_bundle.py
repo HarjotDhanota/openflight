@@ -6,7 +6,10 @@ Prints JSON naming the bundle. Nothing here is recorded evidence.
 """
 
 import json
+import shutil
 import sys
+import warnings
+import zipfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[4]
@@ -20,4 +23,10 @@ viewer = REPO / "ui" / "public" / "session-review.html"
 if runner.analyze(root, TESTER, package=True, viewer=viewer) != 0:
     raise SystemExit("analysis failed")
 job = json.loads((root / TESTER / "analysis" / "job.json").read_text(encoding="utf-8"))
-print(json.dumps({"bundle": job["bundle"]["path"], "tester_id": TESTER}))
+bundle = Path(job["bundle"]["path"])
+duplicate = bundle.with_name("duplicate-member.zip")
+shutil.copy2(bundle, duplicate)
+with warnings.catch_warnings(), zipfile.ZipFile(duplicate, "a") as archive:
+    warnings.simplefilter("ignore")
+    archive.writestr(f"{TESTER}/arm5/arm.json", b'{"gain": 12.0}\n')
+print(json.dumps({"bundle": str(bundle), "duplicate": str(duplicate), "tester_id": TESTER}))

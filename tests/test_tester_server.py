@@ -482,6 +482,13 @@ class TestSessionReviewWorkflow:
         assert response.status_code == 409
         assert not review_routes.job_path(root, TESTER).exists()
 
+    def test_the_offline_viewer_downloads_as_review_html(self, tmp_path):
+        client = eligible_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
+        response = client.get("/api/tester/review-viewer")
+        assert response.status_code == 200
+        assert "filename=review.html" in response.headers["Content-Disposition"]
+        assert b"<title>Session review</title>" in response.data
+
     def test_unknown_or_empty_testers_are_refused(self, tmp_path):
         client = eligible_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
         assert client.post("/api/tester/analysis", json={"tester_id": "../x"}).status_code == 400

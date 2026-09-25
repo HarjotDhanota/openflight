@@ -177,6 +177,10 @@ def register_session_review(
         response.headers["Cache-Control"] = "no-store"
         return response
 
+    @app.get("/api/tester/review-viewer")
+    def review_viewer_download():
+        return send_file(page_path, as_attachment=True, download_name="review.html")
+
     @app.get("/api/tester/analysis")
     def analysis_status():
         try:

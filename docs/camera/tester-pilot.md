@@ -127,9 +127,12 @@ the physical setup. Then work down **Test suite**:
    for the status vocabulary.
 5. **Download the session bundle** and copy it off the Pi (USB stick or the
    browser download). It can be about 1 GB and is never overwritten; its SHA-256
-   is shown beside the link. On any computer, open `review.html` from the bundle
-   and choose the bundle file: the same review appears and every file is checked
-   against its recorded hash. Use the [community contribution package
+   is shown beside the link. Pressing D again when nothing has changed keeps the
+   existing bundle instead of filling the card with copies. To review on any
+   computer: extract `review.html` from the bundle ZIP (or use **Download the
+   offline viewer** on the tester page), open it in a browser, then choose the
+   original, unextracted bundle `.zip`. The same review appears and every file is
+   checked against its recorded hash. Use the [community contribution package
    workflow](community-contributions.md) to record consent and create a
    shareable archive.
 

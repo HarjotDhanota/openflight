@@ -336,3 +336,17 @@ def test_a_stop_is_recorded_and_the_next_run_resumes(tmp_path, viewer, monkeypat
     resumed = _analyze(root, viewer)
     assert (resumed["reused"], resumed["replayed"]) == (1, 1)
     assert resumed["bundle"] is not None
+
+
+def test_a_bundle_listing_one_path_twice_fails_validation(tmp_path):
+    import warnings  # pylint: disable=import-outside-toplevel
+
+    root = capture_tree(tmp_path / "pi")
+    built = Path(session_bundle.build_bundle(root, TESTER, viewer=None, provenance={})["path"])
+    copy = tmp_path / "duplicate.zip"
+    shutil.copy2(built, copy)
+    with warnings.catch_warnings(), zipfile.ZipFile(copy, "a") as archive:
+        warnings.simplefilter("ignore")
+        archive.writestr(f"{TESTER}/arm5/arm.json", b'{"gain": 12.0}\n')
+    with pytest.raises(ValueError, match="duplicate members"):
+        session_bundle.validate_bundle(copy)

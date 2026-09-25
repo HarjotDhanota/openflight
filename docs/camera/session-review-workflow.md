@@ -126,6 +126,29 @@ changed; no estimator threshold is touched.
 | 11-13 | Pi memory | Fixed: single-frame reads, streamed packaging, camera save backlog bounded at three clips (`ce2c5ba`) |
 | 14 | Class sample rate in replay config | Open, noted only |
 
+Review follow-up (2026-09-25):
+
+- A bundle is reused when its content fingerprint (every entry's path, size,
+  SHA-256 and role, plus provenance) matches the newest bundle and that file is
+  unchanged since it was written. Service logs are excluded from the
+  fingerprint because every page request appends to them; a reused bundle
+  carries the logs from when it was made. Unchanged multi-gigabyte evidence is
+  not re-read: a per-file hash index keyed by size, mtime, inode, device and
+  ctime answers for it.
+- The archive SHA-256 comes from the bytes as they are written (members use
+  ZIP data descriptors), so there is no silent re-read at the end; progress is
+  reported in bytes while checking and writing.
+- Every attempt carries the camera facts needed to read its frames: saved
+  dimensions, stream, crop, strip offset, rotate_180, mirror and roll (flagged
+  when they differ from the session), delivered fps and gaps, pre/post-trigger
+  counts and trigger timestamps, requested and applied exposure and gain,
+  setup, rig and calibration hashes, and the rows the resting-ball gate
+  accepts. The review page prints orientation and gate rows beside the overlay.
+- A shot without a clip says why: trigger refused because the save backlog was
+  full, the ring was busy, or the camera was stopped; the clip failed to save;
+  or no clip matched within the association window. Refused triggers without a
+  shot are logged as `camera_trigger_rejected` events and counted per run.
+
 Fusion diagnostics still show only the live snapshot allowlist; the full
 replayed evidence is in the session review. The live snapshot schema was left
 unchanged.

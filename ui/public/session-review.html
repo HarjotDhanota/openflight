@@ -132,6 +132,11 @@
       progress {
         width: 100%;
       }
+      .orientation {
+        border-left: 4px solid var(--accent);
+        padding-left: 0.45rem;
+        font-size: 0.85rem;
+      }
       .chip {
         display: inline-block;
         border: 1px solid currentColor;
@@ -259,6 +264,17 @@
             type="file"
             accept=".zip,application/zip"
         /></label>
+        <ol class="muted" id="offline-steps">
+          <li>
+            Get this page onto the other computer: extract <b>review.html</b> from the bundle ZIP, or use
+            <b>Download the offline viewer</b> on the tester page.
+          </li>
+          <li>Open review.html in Chrome, Edge, Firefox or Safari (double-click it; no server or install).</li>
+          <li>Choose the original, unextracted bundle .zip above. Every file is checked against its SHA-256.</li>
+        </ol>
+        <p id="viewer-link" hidden>
+          <a href="/api/tester/review-viewer" download>Download the offline viewer (review.html)</a>
+        </p>
         <p id="analysis-state" role="status" class="muted"></p>
         <progress id="analysis-progress" max="1" value="0" hidden></progress>
         <div id="analysis-errors" class="muted"></div>
@@ -408,6 +424,7 @@
             }
             e += 4 + length;
           }
+          if (entries.has(name)) throw new Error(`the ZIP lists ${name} more than once`);
           entries.set(name, { method, compressed, size, offset });
           p = extraEnd + commentLength;
         }
@@ -469,6 +486,7 @@
         const manifest = JSON.parse(new TextDecoder().decode(await zipBytes(zip, 'bundle_manifest.json')));
         if (manifest.schema !== 'openflight.session_bundle.v1') throw new Error('not an OpenFlight session bundle');
         const byPath = new Map(manifest.entries.map((entry) => [entry.path, entry]));
+        if (byPath.size !== manifest.entries.length) throw new Error('the manifest lists a file more than once');
         const reviewPath = `${manifest.tester_id}/analysis/session_review.json`;
         if (!byPath.has(reviewPath)) throw new Error('this bundle has no session review; analyse before packaging');
         const loaded = JSON.parse(new TextDecoder().decode(await verifiedBytes(zip, byPath.get(reviewPath))));
@@ -525,15 +543,22 @@
         pollTimer = null;
       }
 
+      function amount(value, unit) {
+        return unit === 'bytes' ? `${(value / 1048576).toFixed(1)} MiB` : `${value}`;
+      }
+
       function renderAnalysis(analysis) {
         const job = analysis.job || {};
         const progress = job.progress || {};
         let text = ANALYSIS_TEXT[analysis.state] || analysis.state;
         if (analysis.state === 'running') {
-          text += ` (${job.phase || 'starting'}) ${progress.done ?? 0} of ${progress.total ?? '?'}`;
+          text += ` (${job.phase || 'starting'}) ${amount(progress.done ?? 0, progress.unit)} of ${
+            progress.total == null ? '?' : amount(progress.total, progress.unit)
+          }`;
           if (progress.current) text += ` · ${progress.current}`;
         } else if (analysis.state === 'complete') {
           text += ` ${job.finished_at || ''} · ${job.replayed ?? 0} replayed, ${job.reused ?? 0} reused`;
+          if (job.bundle?.reused) text += ' · nothing changed, so the existing bundle was kept';
         } else if (analysis.reason) {
           text += `: ${analysis.reason}`;
         }
@@ -770,6 +795,29 @@
         return rows ? `<dl>${rows}</dl>` : '<p class="muted">Nothing recorded.</p>';
       }
 
+      function orientationLine(a) {
+        const c = a.camera;
+        if (!c) return '';
+        const flag = (value) => (value == null ? 'not recorded' : value ? 'ON' : 'off');
+        const size = c.saved_dimensions_px ? c.saved_dimensions_px.join('×') : 'unknown size';
+        const rows = c.ball_gate_rows_px ? `${c.ball_gate_rows_px[0]}–${c.ball_gate_rows_px[1]}` : 'unknown';
+        const found = (a.overlay?.candidates || [])
+          .map((candidate) => `${candidate.detector} y=${Math.round(candidate.y)}`)
+          .join(', ');
+        const warning = c.orientation_matches_session
+          ? ''
+          : ` <b class="error">differs from the session setting (rotate ${flag(
+              c.session_orientation?.rotate_180
+            )}, mirror ${flag(c.session_orientation?.mirror_horizontal)})</b>`;
+        return `<p class="orientation" data-orientation><b>As saved: rotate 180° ${flag(
+          c.orientation?.rotate_180
+        )} · mirror ${flag(c.orientation?.mirror_horizontal)}</b> · ${esc(size)} ${esc(c.stream || '')} · crop ${esc(
+          c.scaler_crop == null ? 'none' : JSON.stringify(c.scaler_crop)
+        )} · strip offset ${esc(c.strip_y_offset_px ?? 'not recorded')} px · pitch at trigger ${esc(
+          c.placement?.pitch_deg ?? 'not recorded'
+        )}°${warning}<br />Ball gate accepts rows ${esc(rows)}${found ? `; detectors found ${esc(found)}` : ''}</p>`;
+      }
+
       function attemptCard(a) {
         const title = a.shot_number != null ? `Shot ${a.shot_number}` : 'Camera trigger without a shot';
         const verdict = a.picture_verdict
@@ -786,9 +834,15 @@
           .join('');
         const photo = a.evidence.impact_photo ? figure(a.evidence.impact_photo, 'impact photo (club face)', null) : '';
         const rejection = a.rejection ? `<p class="error">Not a shot: ${esc(a.rejection.reason)}</p>` : '';
-        const cameraError = a.evidence.camera_capture_error
-          ? `<p class="error">Camera capture: ${esc(a.evidence.camera_capture_error)}</p>`
-          : '';
+        const outcome = a.evidence.camera_outcome;
+        const cameraError =
+          outcome && outcome.category !== 'captured'
+            ? `<p class="error" data-camera-outcome="${esc(outcome.category)}">Camera: ${esc(outcome.label)}${
+                outcome.detail ? ` (${esc(outcome.detail)})` : ''
+              }</p>`
+            : a.evidence.camera_capture_error
+              ? `<p class="error">Camera capture: ${esc(a.evidence.camera_capture_error)}</p>`
+              : '';
         const pictureReasons = (a.picture_verdict?.reasons || []).length
           ? `<p class="muted">Picture check: ${esc(a.picture_verdict.reasons.join('; '))}</p>`
           : '';
@@ -796,10 +850,12 @@
           <header><h3>${esc(a.arm_id)} · ${esc(a.run)} · ${esc(title)}</h3>
             <span class="muted">${esc(a.capture_id || '')}</span>${verdict}${processing}</header>
           ${rejection}${cameraError}${pictureReasons}
+          ${orientationLine(a)}
           <div class="frames">${frames}${photo}</div>
           <p class="muted">Dashed box: where the camera estimator accepts a resting ball (diameter ${esc(
             (a.overlay?.expected_region?.diameter_px || []).join('–')
           )} px). Circles: the candidates its detectors found.</p>
+          ${a.camera ? `<details><summary>Camera capture facts</summary>${definitionList(a.camera)}</details>` : ''}
           ${metricsTable(a.metrics || [])}
           ${agreementsTable(a.agreements || [])}
           <details><summary>Identity and provenance</summary>${definitionList(a.identity, a.identity_evidence)}</details>
@@ -850,6 +906,12 @@
                   .map((t) => `<li>${esc(t.ts)} ${esc(t.reason)}</li>`)
                   .join('')}</ul></details>`
               : '';
+            const refused = Object.entries(run.camera_trigger_rejections?.counts || {});
+            const cameraRefusals = refused.length
+              ? `<p class="error" data-camera-refusals>Camera refused ${refused
+                  .map(([reason, count]) => `${count} trigger(s): ${esc(reason)}`)
+                  .join('; ')}</p>`
+              : '';
             const ledger = run.attempt_ledger
               ? `<details><summary>Operator swing tally</summary>${definitionList(run.attempt_ledger)}</details>`
               : '';
@@ -857,7 +919,7 @@
               run.session_uuid || 'unreadable'
             )} · SHA-256 ${esc((run.session_sha256 || '').slice(0, 12))}…</span></p>${
               errors ? `<ul>${errors}</ul>` : ''
-            }${triggers}${ledger}</div>`;
+            }${triggers}${cameraRefusals}${ledger}</div>`;
           })
           .join('');
         const photos = review.unattached_impact_photos || [];
@@ -890,8 +952,9 @@
 
       if (offline) {
         el('live-controls').hidden = true;
-        el('source').textContent = 'Opened from disk: choose the session bundle (.zip) to review it.';
+        el('source').textContent = 'Opened from disk: choose the original session bundle (.zip) below.';
       } else {
+        el('viewer-link').hidden = false;
         const fromUrl = new URLSearchParams(location.search).get('tester_id');
         let saved = null;
         try {
