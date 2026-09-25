@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import hashlib
 import json
 import os
 import signal
@@ -31,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from openflight import session_bundle
-from openflight.raw_radar_replay import load_session_events
+from openflight.raw_radar_replay import load_session_events, locate_recorded_capture
 from openflight.session_review import (
     ANALYSIS_DIR,
     attempts_csv,
@@ -53,6 +54,8 @@ JOB_SCHEMA = "openflight.analysis_job.v1"
 HEARTBEAT_S = 5.0
 ANALYSER = "analyze_tester_session.v1"
 REPLACE_ATTEMPTS = 50
+PROGRESS_INTERVAL_S = 0.5
+REPLAY_INDEX = ".replay-index.json"
 
 
 def _now() -> str:
@@ -198,7 +201,7 @@ def _failed_report(session_uuid: Any, shot: int, message: str) -> dict[str, Any]
 
 
 def _replay_shot(
-    session: Path, frozen: tuple, shot: int, sessions_root: Path, key: str, target: Path, job: Job
+    session: Path, frozen: tuple, shot: int, sessions_root: Path, target: Path, job: Job
 ) -> None:
     current = job.state["progress"]["current"]
     try:
@@ -208,17 +211,38 @@ def _replay_shot(
         job.error(f"{current}: replay failed: {message}")
         report = _failed_report(frozen[1].get("session_uuid"), shot, message)
         traceback.print_exc()
-    report["analysis"] = {"key": key, "analyser": ANALYSER}
+    report["analysis"] = {"analyser": ANALYSER}
     write_json_atomic(target, report)
     job.update(replayed=job.state["replayed"] + 1)
 
 
-def _already_replayed(target: Path, key: str) -> bool:
+def _capture_identity(events: list[dict[str, Any]], shot: int, session: Path) -> str:
+    """The shot's capture files as they are now, so a changed capture is replayed again."""
+    stamps = []
+    for event in events:
+        if event.get("shot_number") != shot or not isinstance(event.get("capture_path"), str):
+            continue
+        try:
+            found, _resolution = locate_recorded_capture(event["capture_path"], session.parent)
+        except (FileNotFoundError, ValueError):
+            stamps.append([event["capture_path"], None])
+            continue
+        for path in sorted(found.rglob("*") if found.is_dir() else [found]):
+            if path.is_file():
+                stat = path.stat()
+                stamps.append([path.name, stat.st_size, stat.st_mtime_ns, stat.st_ino])
+    encoded = json.dumps(stamps, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def _read_replay_index(path: Path) -> dict[str, str]:
+    """Which inputs each stored report was made from; kept out of the reports themselves
+    so a report's bytes depend only on its inputs and software."""
     try:
-        existing = json.loads(target.read_text(encoding="utf-8"))
+        index = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return False
-    return (existing.get("analysis") or {}).get("key") == key
+        return {}
+    return index if isinstance(index, dict) else {}
 
 
 def replay_all(sessions_root: Path, tester_id: str, job: Job, software: str | None) -> None:
@@ -229,6 +253,8 @@ def replay_all(sessions_root: Path, tester_id: str, job: Job, software: str | No
     """
     tester_dir = sessions_root / tester_id
     analysis_dir = tester_dir / ANALYSIS_DIR
+    index_path = analysis_dir / REPLAY_INDEX
+    replay_index = _read_replay_index(index_path)
     plan = []
     for arm_id, run in _runs(tester_dir):
         sessions = sorted(run.glob("session_*.jsonl"))
@@ -246,7 +272,9 @@ def replay_all(sessions_root: Path, tester_id: str, job: Job, software: str | No
     total = sum(len(shots) for *_rest, shots in plan)
     done = 0
     job.update(
-        phase="replay", shots_total=total, progress={"done": 0, "total": total, "current": None}
+        phase="replay",
+        shots_total=total,
+        progress={"done": 0, "total": total, "unit": "shots", "current": None},
     )
     for arm_id, run, session, shots in plan:
         try:
@@ -257,22 +285,26 @@ def replay_all(sessions_root: Path, tester_id: str, job: Job, software: str | No
             continue
         for shot in shots:
             target = replay_report_path(analysis_dir, arm_id, run.name, shot)
-            key = f"{frozen[0]}:{software}:{shot}"
+            key = f"{frozen[0]}:{software}:{shot}:{_capture_identity(frozen[2], shot, session)}"
             job.update(
                 progress={
                     "done": done,
                     "total": total,
+                    "unit": "shots",
                     "current": f"{arm_id}/{run.name} shot {shot}",
                 }
             )
-            if software is not None and _already_replayed(target, key):
+            name = target.relative_to(analysis_dir).as_posix()
+            if software is not None and target.is_file() and replay_index.get(name) == key:
                 job.update(reused=job.state["reused"] + 1)
             else:
-                _replay_shot(session, frozen, shot, sessions_root, key, target, job)
+                _replay_shot(session, frozen, shot, sessions_root, target, job)
+                replay_index[name] = key
+                write_json_atomic(index_path, replay_index)
                 gc.collect()
             done += 1
         del frozen
-    job.update(progress={"done": total, "total": total, "current": None})
+    job.update(progress={"done": total, "total": total, "unit": "shots", "current": None})
 
 
 def write_review(sessions_root: Path, tester_id: str, analysis: dict[str, Any]) -> dict[str, Any]:
@@ -283,6 +315,22 @@ def write_review(sessions_root: Path, tester_id: str, analysis: dict[str, Any]) 
     _write_text_atomic(analysis_dir / "attempts.csv", attempts_csv(review))
     _write_text_atomic(analysis_dir / "report.md", report_markdown(review))
     return review
+
+
+def _throttled(job: Job):
+    """Byte progress for the job file, written at most twice a second."""
+    last = [0.0]
+
+    def report(done: int, total: int, name: str, phase: str) -> None:
+        now = time.monotonic()
+        if done < total and now - last[0] < PROGRESS_INTERVAL_S:
+            return
+        last[0] = now
+        job.update(
+            progress={"done": done, "total": total, "unit": "bytes", "current": f"{phase} {name}"}
+        )
+
+    return report
 
 
 def analyze(sessions_root: Path, tester_id: str, *, package: bool, viewer: Path | None) -> int:
@@ -296,13 +344,12 @@ def analyze(sessions_root: Path, tester_id: str, *, package: bool, viewer: Path 
     try:
         replay_all(sessions_root, tester_id, job, software)
         job.update(phase="review")
+        # Only what determines the results: timings and counts stay in job.json, so an
+        # unchanged session yields byte-identical outputs and reuses its bundle.
         analysis = {
             "analyser": ANALYSER,
             "software_content_sha256": software,
             "software_identity_limitation": limitation,
-            "started_at": job.state["started_at"],
-            "replayed": job.state["replayed"],
-            "reused": job.state["reused"],
             "errors": list(job.state["errors"]),
         }
         review = write_review(sessions_root, tester_id, analysis)
@@ -318,9 +365,7 @@ def analyze(sessions_root: Path, tester_id: str, *, package: bool, viewer: Path 
                         "attempts": len(review["attempts"]),
                         "review": f"{tester_id}/{ANALYSIS_DIR}/session_review.json",
                     },
-                    progress=lambda done, total, name: job.update(
-                        progress={"done": done, "total": total, "current": name}
-                    ),
+                    progress=_throttled(job),
                 )
             )
     except KeyboardInterrupt:

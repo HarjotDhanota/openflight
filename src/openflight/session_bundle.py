@@ -3,8 +3,9 @@
 A bundle is a ZIP whose root mirrors the sessions folder (``<tester>/...``), so a
 path in the session review is the same on the Pi and inside the bundle. Files are
 streamed in fixed chunks and hashed as they are written; nothing holds a whole
-capture in memory. A bundle is never overwritten: each build gets a new name
-and a detached ``.sha256`` sidecar.
+capture in memory, and the archive's own SHA-256 is taken from the bytes as they
+are emitted. A bundle is never overwritten: each build gets a new name and a
+detached ``.sha256`` sidecar, and an unchanged session reuses its newest bundle.
 """
 
 from __future__ import annotations
@@ -77,7 +78,48 @@ def _entries(sessions_root: Path, tester_id: str, viewer: Path | None) -> list[t
             entries.append((log, f"{tester_id}/diagnostics/{log.name}"))
     if viewer is not None:
         entries.append((Path(viewer), VIEWER_NAME))
+    names = [name for _path, name in entries]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates or MANIFEST_NAME in names:
+        clash = duplicates or [MANIFEST_NAME]
+        raise ValueError(f"the bundle would contain duplicate member paths: {clash[:5]}")
     return entries
+
+
+def _stamp(path: Path) -> list[int]:
+    stat = path.stat()
+    return [stat.st_size, stat.st_mtime_ns, stat.st_ino, stat.st_dev, stat.st_ctime_ns]
+
+
+class _HashingWriter:
+    """Append-only output that hashes every byte the ZIP writer emits.
+
+    Because it cannot seek, ``zipfile`` writes each member once, followed by a
+    data descriptor, so the archive's SHA-256 is known when the last byte lands.
+    """
+
+    def __init__(self, handle):
+        self._handle = handle
+        self._digest = hashlib.sha256()
+        self._position = 0
+
+    def write(self, data) -> int:
+        self._handle.write(data)
+        self._digest.update(data)
+        self._position += len(data)
+        return len(data)
+
+    def tell(self) -> int:
+        return self._position
+
+    def seek(self, *_args):
+        raise OSError("the bundle is written once, front to back")
+
+    def flush(self) -> None:
+        self._handle.flush()
+
+    def hexdigest(self) -> str:
+        return self._digest.hexdigest()
 
 
 def _unique_output(directory: Path, tester_id: str, created_at: datetime) -> Path:
@@ -90,7 +132,9 @@ def _unique_output(directory: Path, tester_id: str, created_at: datetime) -> Pat
     return candidate
 
 
-def _write_member(archive: zipfile.ZipFile, source: Path, arcname: str) -> tuple[int, str]:
+def _write_member(
+    archive: zipfile.ZipFile, source: Path, arcname: str, advance
+) -> tuple[int, str, list[int] | None]:
     info = zipfile.ZipInfo(arcname, date_time=_ZIP_EPOCH)
     info.compress_type = (
         zipfile.ZIP_STORED
@@ -99,12 +143,15 @@ def _write_member(archive: zipfile.ZipFile, source: Path, arcname: str) -> tuple
     )
     digest = hashlib.sha256()
     size = 0
+    before = _stamp(source)
     with source.open("rb") as handle, archive.open(info, "w", force_zip64=True) as member:
         while chunk := handle.read(CHUNK_BYTES):
             digest.update(chunk)
             member.write(chunk)
             size += len(chunk)
-    return size, digest.hexdigest()
+            advance(len(chunk), arcname)
+    unchanged = _stamp(source) == before and size == before[0]
+    return size, digest.hexdigest(), before if unchanged else None
 
 
 def _file_sha256(path: Path) -> str:
@@ -115,7 +162,123 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def build_bundle(  # pylint: disable=too-many-arguments
+def content_fingerprint(
+    tester_id: str, entries: list[Mapping[str, Any]], provenance: Mapping[str, Any]
+) -> str:
+    """What a bundle says, independent of when it was written.
+
+    Service logs are excluded: they grow with every page request, and reusing a
+    bundle whose evidence, annotations, analysis, viewer and provenance are all
+    unchanged is the point. A reused bundle carries the logs from when it was made.
+    """
+    listed = sorted(
+        [entry["path"], entry["size_bytes"], entry["sha256"], entry["role"]]
+        for entry in entries
+        if entry["role"] != "diagnostics"
+    )
+    payload = {
+        "schema": SCHEMA,
+        "tester_id": tester_id,
+        "provenance": provenance,
+        "entries": listed,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _index_path(sessions_root: Path, tester_id: str) -> Path:
+    return bundle_directory(sessions_root) / f".{tester_id}-bundle-index.json"
+
+
+def _read_index(sessions_root: Path, tester_id: str) -> dict[str, Any]:
+    try:
+        index = json.loads(_index_path(sessions_root, tester_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"files": {}, "bundles": {}}
+    if not isinstance(index, dict):
+        return {"files": {}, "bundles": {}}
+    return {
+        "files": index.get("files") if isinstance(index.get("files"), dict) else {},
+        "bundles": index.get("bundles") if isinstance(index.get("bundles"), dict) else {},
+    }
+
+
+def _write_index(sessions_root: Path, tester_id: str, index: Mapping[str, Any]) -> None:
+    path = _index_path(sessions_root, tester_id)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(index, separators=(",", ":")) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _reusable_latest(
+    sessions_root: Path,
+    tester_id: str,
+    entries: list[tuple[Path, str]],
+    provenance: Mapping[str, Any],
+    index: Mapping[str, Any],
+    *,
+    progress,
+) -> dict[str, Any] | None:
+    """The newest bundle, when it is unchanged on disk and says exactly what would be written."""
+    bundles = list_bundles(sessions_root, tester_id)
+    if not bundles:
+        return None
+    latest = bundles[0]
+    path = bundle_directory(sessions_root) / latest["name"]
+    recorded = index["bundles"].get(latest["name"])
+    if (
+        not isinstance(recorded, dict)
+        or recorded.get("stamp") != _stamp(path)
+        or recorded.get("sha256") != latest["sha256"]
+    ):
+        return None
+    try:
+        with zipfile.ZipFile(path) as archive:
+            manifest = json.loads(archive.read(MANIFEST_NAME))
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile):
+        return None
+    previous = {
+        entry["path"]: entry
+        for entry in manifest.get("entries") or []
+        if entry.get("role") != "diagnostics"
+    }
+    candidates = [(p, name) for p, name in entries if _role(name, tester_id) != "diagnostics"]
+    if {name for _p, name in candidates} != set(previous) or any(
+        p.stat().st_size != previous[name]["size_bytes"] for p, name in candidates
+    ):
+        return None
+    total = sum(p.stat().st_size for p, _name in candidates)
+    done = 0
+    listed = []
+    for source, name in candidates:
+        known = index["files"].get(name)
+        stamp = _stamp(source)
+        if isinstance(known, dict) and known.get("stamp") == stamp:
+            sha256 = known["sha256"]
+        else:
+            sha256 = _file_sha256(source)
+            index["files"][name] = {"stamp": stamp, "sha256": sha256}
+        done += stamp[0]
+        if progress is not None:
+            progress(done, total, name, "checking")
+        listed.append(
+            {"path": name, "size_bytes": stamp[0], "sha256": sha256, "role": _role(name, tester_id)}
+        )
+    if content_fingerprint(tester_id, listed, provenance) != manifest.get("content_fingerprint"):
+        return None
+    return {
+        "name": latest["name"],
+        "path": str(path),
+        "sha256": latest["sha256"],
+        "size_bytes": latest["size_bytes"],
+        "entries": len(manifest.get("entries") or []),
+        "created_at": manifest.get("created_at"),
+        "content_fingerprint": manifest["content_fingerprint"],
+        "reused": True,
+    }
+
+
+def build_bundle(  # pylint: disable=too-many-arguments,too-many-locals
     sessions_root: Path,
     tester_id: str,
     *,
@@ -124,55 +287,81 @@ def build_bundle(  # pylint: disable=too-many-arguments
     created_at: datetime | None = None,
     progress=None,
 ) -> dict[str, Any]:
-    """Write one new immutable bundle and its checksum sidecar; return its identity."""
+    """Reuse the newest bundle when nothing it would carry changed; else write a new one.
+
+    ``progress(done_bytes, total_bytes, member, phase)`` is called as bytes are
+    checked or written. The archive and every member are hashed as they are written.
+    """
     created_at = created_at or datetime.now(timezone.utc)
     entries = _entries(sessions_root, tester_id, viewer)
+    provenance = dict(provenance)
+    index = _read_index(sessions_root, tester_id)
+    reused = _reusable_latest(
+        sessions_root, tester_id, entries, provenance, index, progress=progress
+    )
+    if reused is not None:
+        _write_index(sessions_root, tester_id, index)
+        return reused
     directory = bundle_directory(sessions_root)
     directory.mkdir(parents=True, exist_ok=True)
-    expected = sum(path.stat().st_size for path, _name in entries)
+    total = sum(path.stat().st_size for path, _name in entries)
     free = shutil.disk_usage(directory).free
-    if free < expected + FREE_SPACE_MARGIN_BYTES:
+    if free < total + FREE_SPACE_MARGIN_BYTES:
         raise OSError(
-            f"not enough free space for the bundle: need about {expected // 2**20} MiB "
+            f"not enough free space for the bundle: need about {total // 2**20} MiB "
             f"plus {FREE_SPACE_MARGIN_BYTES // 2**20} MiB headroom, "
             f"{free // 2**20} MiB free"
         )
     output = _unique_output(directory, tester_id, created_at)
     partial = output.with_suffix(".zip.partial")
     records = []
+    written = [0]
+
+    def advance(count: int, name: str) -> None:
+        written[0] += count
+        if progress is not None:
+            progress(written[0], total, name, "writing")
+
     try:
-        with zipfile.ZipFile(partial, "x", allowZip64=True) as archive:
-            for index, (path, arcname) in enumerate(entries, 1):
-                size, sha256 = _write_member(archive, path, arcname)
-                records.append(
-                    {
-                        "path": arcname,
-                        "size_bytes": size,
-                        "sha256": sha256,
-                        "role": _role(arcname, tester_id),
-                    }
-                )
-                if progress is not None:
-                    progress(index, len(entries), arcname)
-            manifest = {
-                "schema": SCHEMA,
-                "created_at": created_at.isoformat(),
-                "tester_id": tester_id,
-                "layout": "paths are relative to the sessions folder; the tester folder is the root",
-                "provenance": dict(provenance),
-                "entries": records,
-            }
-            info = zipfile.ZipInfo(MANIFEST_NAME, date_time=_ZIP_EPOCH)
-            info.compress_type = zipfile.ZIP_DEFLATED
-            archive.writestr(info, json.dumps(manifest, indent=2, allow_nan=False) + "\n")
+        with partial.open("xb") as handle:
+            stream = _HashingWriter(handle)
+            with zipfile.ZipFile(stream, "w", allowZip64=True) as archive:
+                for path, arcname in entries:
+                    size, sha256, stamp = _write_member(archive, path, arcname, advance)
+                    records.append(
+                        {
+                            "path": arcname,
+                            "size_bytes": size,
+                            "sha256": sha256,
+                            "role": _role(arcname, tester_id),
+                        }
+                    )
+                    if stamp is not None:
+                        index["files"][arcname] = {"stamp": stamp, "sha256": sha256}
+                manifest = {
+                    "schema": SCHEMA,
+                    "created_at": created_at.isoformat(),
+                    "tester_id": tester_id,
+                    "layout": "paths are relative to the sessions folder; the tester folder is the root",
+                    "provenance": provenance,
+                    "content_fingerprint": content_fingerprint(tester_id, records, provenance),
+                    "entries": records,
+                }
+                info = zipfile.ZipInfo(MANIFEST_NAME, date_time=_ZIP_EPOCH)
+                info.compress_type = zipfile.ZIP_DEFLATED
+                archive.writestr(info, json.dumps(manifest, indent=2, allow_nan=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        archive_sha256 = stream.hexdigest()
         if output.exists():
             raise FileExistsError(f"{output.name} appeared while it was being written")
         os.replace(partial, output)
     finally:
         partial.unlink(missing_ok=True)
-    archive_sha256 = _file_sha256(output)
     sidecar = output.with_suffix(".zip.sha256")
     sidecar.write_text(f"{archive_sha256}  {output.name}\n", encoding="ascii")
+    index["bundles"][output.name] = {"stamp": _stamp(output), "sha256": archive_sha256}
+    _write_index(sessions_root, tester_id, index)
     return {
         "name": output.name,
         "path": str(output),
@@ -180,6 +369,8 @@ def build_bundle(  # pylint: disable=too-many-arguments
         "size_bytes": output.stat().st_size,
         "entries": len(records),
         "created_at": created_at.isoformat(),
+        "content_fingerprint": manifest["content_fingerprint"],
+        "reused": False,
     }
 
 

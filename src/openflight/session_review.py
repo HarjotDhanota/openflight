@@ -447,8 +447,7 @@ def report_markdown(review: Mapping[str, Any]) -> str:
     analysis = mapping(review.get("analysis"))
     if analysis:
         lines += [
-            f"Analysed {analysis.get('finished_at') or analysis.get('started_at') or ''} "
-            f"with software {analysis.get('software_content_sha256') or 'unrecorded'}.",
+            f"Analysed with software {analysis.get('software_content_sha256') or 'unrecorded'}.",
             "",
         ]
     for run in review.get("runs") or []:

@@ -87,19 +87,155 @@ def test_one_action_replays_reviews_and_bundles_every_shot(tmp_path, viewer):
         assert archive.read(f"{TESTER}/diagnostics/tester-server.log") == b"tester alive\n"
 
 
-def test_a_rerun_reuses_replays_and_never_overwrites_a_bundle(tmp_path, viewer):
+def _zips(root: Path) -> list[Path]:
+    return sorted(session_bundle.bundle_directory(root).glob("*.zip"))
+
+
+def test_repeated_analysis_of_an_unchanged_session_reuses_one_bundle(tmp_path, viewer):
     root = capture_tree(tmp_path / "pi")
     first = _analyze(root, viewer)
     first_path = Path(first["bundle"]["path"])
     first_bytes = first_path.read_bytes()
-    second = _analyze(root, viewer)
-    assert second["reused"] == 2 and second["replayed"] == 0
-    assert second["bundle"]["name"] != first["bundle"]["name"]
+    assert first["bundle"]["reused"] is False
+    for _ in range(2):
+        again = _analyze(root, viewer)
+        assert again["reused"] == 2 and again["replayed"] == 0
+        assert again["bundle"]["name"] == first["bundle"]["name"]
+        assert again["bundle"]["reused"] is True
+    assert _zips(root) == [first_path]
     assert first_path.read_bytes() == first_bytes
-    names = [item["name"] for item in session_bundle.list_bundles(root, TESTER)]
-    assert names == sorted(names, reverse=True) and len(names) == 2
     sidecar = first_path.with_suffix(".zip.sha256").read_text(encoding="ascii").split()
     assert sidecar == [hashlib.sha256(first_bytes).hexdigest(), first_path.name]
+
+
+def test_rewriting_identical_bytes_still_reuses_the_bundle(tmp_path, viewer):
+    root = capture_tree(tmp_path / "pi")
+    first = _analyze(root, viewer)
+    frames = next((root / TESTER).rglob("frames.npz"))
+    content = frames.read_bytes()
+    frames.unlink()
+    frames.write_bytes(content)
+    assert _analyze(root, viewer)["bundle"]["name"] == first["bundle"]["name"]
+    assert len(_zips(root)) == 1
+
+
+def _change_evidence(root, _viewer):
+    dump = next((root / TESTER).rglob("*.l3dump"))
+    content = bytearray(dump.read_bytes())
+    content[-1] ^= 0xFF
+    dump.write_bytes(bytes(content))
+
+
+def _add_annotation(root, _viewer):
+    note = root / TESTER / "annotations" / "arm5" / "run-01" / "camera_001.tracks.json"
+    note.parent.mkdir(parents=True)
+    note.write_text('{"schema": "openflight.track_annotation.v1"}', encoding="utf-8")
+
+
+def _change_viewer(_root, viewer):
+    viewer.write_text("<!doctype html><title>Session review v2</title>", encoding="utf-8")
+
+
+def _change_verdict(root, _viewer):
+    ladder = root / TESTER / "ladder.json"
+    ladder.write_text(
+        json.dumps(
+            {
+                "rungs": {
+                    "full-300": {
+                        "swings": [{"capture": "camera_002", "color": "red", "reasons": []}]
+                    }
+                },
+                "photos": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize(
+    "change", [_change_evidence, _add_annotation, _change_viewer, _change_verdict]
+)
+def test_any_change_to_what_a_bundle_carries_makes_a_new_bundle(tmp_path, viewer, change):
+    root = capture_tree(tmp_path / "pi")
+    first = _analyze(root, viewer)
+    first_path = Path(first["bundle"]["path"])
+    first_bytes = first_path.read_bytes()
+    change(root, viewer)
+    second = _analyze(root, viewer)
+    assert second["bundle"]["reused"] is False
+    assert second["bundle"]["name"] != first["bundle"]["name"]
+    assert second["bundle"]["content_fingerprint"] != first["bundle"]["content_fingerprint"]
+    assert len(_zips(root)) == 2
+    assert first_path.read_bytes() == first_bytes
+
+
+def test_changed_provenance_makes_a_new_bundle(tmp_path):
+    root = capture_tree(tmp_path / "pi")
+    first = session_bundle.build_bundle(root, TESTER, viewer=None, provenance={"software": "a"})
+    same = session_bundle.build_bundle(root, TESTER, viewer=None, provenance={"software": "a"})
+    other = session_bundle.build_bundle(root, TESTER, viewer=None, provenance={"software": "b"})
+    assert same["name"] == first["name"] and same["reused"] is True
+    assert other["name"] != first["name"] and other["reused"] is False
+
+
+def test_service_logs_alone_do_not_make_a_new_bundle(tmp_path, viewer):
+    root = capture_tree(tmp_path / "pi")
+    first = _analyze(root, viewer)
+    with (root / "tester-server.log").open("ab") as log:
+        log.write(b"GET /api/tester/status 200\n")
+    assert _analyze(root, viewer)["bundle"]["name"] == first["bundle"]["name"]
+
+
+def test_a_bundle_changed_on_disk_is_never_reused(tmp_path, viewer):
+    root = capture_tree(tmp_path / "pi")
+    first_path = Path(_analyze(root, viewer)["bundle"]["path"])
+    with first_path.open("ab") as handle:
+        handle.write(b"\0")
+    second = _analyze(root, viewer)
+    assert second["bundle"]["name"] != first_path.name
+    session_bundle.validate_bundle(Path(second["bundle"]["path"]))
+
+
+def test_duplicate_member_paths_are_refused_before_writing(tmp_path):
+    root = capture_tree(tmp_path / "pi")
+    clash = root / TESTER / "diagnostics" / "tester-server.log"
+    clash.parent.mkdir()
+    clash.write_bytes(b"copied by hand")
+    with pytest.raises(ValueError, match="duplicate member paths"):
+        session_bundle.build_bundle(root, TESTER, viewer=None, provenance={})
+    assert not list(session_bundle.bundle_directory(root).glob("*"))
+
+
+def test_the_archive_hash_comes_from_the_written_stream(tmp_path, monkeypatch):
+    root = capture_tree(tmp_path / "pi")
+
+    def no_reread(_path):
+        raise AssertionError("the finished archive was read again to hash it")
+
+    monkeypatch.setattr(session_bundle, "_file_sha256", no_reread)
+    phases = []
+    built = session_bundle.build_bundle(
+        root,
+        TESTER,
+        viewer=None,
+        provenance={},
+        progress=lambda done, total, _name, phase: phases.append((phase, done, total)),
+    )
+    monkeypatch.undo()
+    path = Path(built["path"])
+    assert built["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert phases[-1][0] == "writing" and phases[-1][1] == phases[-1][2]
+    assert [done for _phase, done, _total in phases] == sorted(done for _p, done, _t in phases)
+    session_bundle.validate_bundle(path)
+
+
+def test_a_changed_capture_is_replayed_again_not_reused(tmp_path, viewer):
+    root = capture_tree(tmp_path / "pi")
+    _analyze(root, viewer)
+    _change_evidence(root, viewer)
+    again = _analyze(root, viewer)
+    assert (again["replayed"], again["reused"]) == (1, 1)
 
 
 def test_bundle_reproduces_on_another_machine(tmp_path, viewer):
