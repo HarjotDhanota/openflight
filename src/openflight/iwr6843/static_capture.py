@@ -58,11 +58,45 @@ def _atomic_write_bytes(path: Path, value: bytes) -> None:
             handle.write(value)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        temporary = None
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            raise FileExistsError(f"capture output already exists: {path.name}") from None
+        _fsync_directory(path.parent)
     finally:
         if temporary is not None:
             Path(temporary).unlink(missing_ok=True)
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _reserve_capture(output_dir: Path, capture_id: str) -> Path:
+    reservation = output_dir / f".{capture_id}.reserve"
+    try:
+        descriptor = os.open(reservation, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise FileExistsError(f"capture ID {capture_id!r} is already reserved") from None
+    try:
+        value = f"pid={os.getpid()} capture_id={capture_id}\n".encode("utf-8")
+        os.write(descriptor, value)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    _fsync_directory(output_dir)
+    return reservation
+
+
+def _release_reservation(path: Path) -> None:
+    path.unlink(missing_ok=True)
+    _fsync_directory(path.parent)
 
 
 def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
@@ -146,95 +180,107 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
     _validate(inputs)
     input_manifest, config_bytes = _input_manifest(inputs)
     output_dir = inputs.output_dir.expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
     raw_path = output_dir / f"{inputs.capture_id}.l3dump"
     result_path = output_dir / f"{inputs.capture_id}.json"
-    if raw_path.exists() or result_path.exists():
-        raise FileExistsError(f"capture output already exists for {inputs.capture_id!r}")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    cancel = cancel_event or threading.Event()
-    started_at = _utc_now()
-    result: dict[str, Any] = {
-        "schema": SCHEMA,
-        "capture_id": inputs.capture_id,
-        "capture_kind": inputs.capture_kind,
-        "status": "error",
-        "usable": False,
-        "started_at_utc": started_at,
-        "completed_at_utc": None,
-        "port": inputs.port or "auto",
-        "settle_s": float(inputs.settle_s),
-        "radar_profile_qualified": False,
-        "inputs": input_manifest,
-        "artifacts": {"raw": None},
-        "profile": None,
-        "error": None,
-        "cleanup_errors": [],
-        "limitations": [
-            "firmware.sha256 identifies the declared image file; "
-            "the running board image is not read back",
-            "this setup capture is diagnostic and does not promote a tee-range candidate",
-        ],
-    }
-    radar = None
-    stage = "connect"
-    config_snapshot: str | None = None
+    reservation = _reserve_capture(output_dir, inputs.capture_id)
     try:
-        with tempfile.NamedTemporaryFile(
-            "wb", suffix=".cfg", prefix=f".{inputs.capture_id}-", dir=output_dir, delete=False
-        ) as handle:
-            config_snapshot = handle.name
-            handle.write(config_bytes)
-            handle.flush()
-            os.fsync(handle.fileno())
-        radar = radar_factory(port=inputs.port)
-        stage = "configure"
-        radar.send_config(config_snapshot)
-        stage = "settle"
-        if wait_for_settle(cancel, float(inputs.settle_s)) or cancel.is_set():
-            raise StaticCaptureCancelled("capture cancelled while waiting for a fresh stable ring")
-        stage = "read_dump"
-        raw = radar.read_dump()
-        if not isinstance(raw, bytes):
-            raise TypeError("IWR6843 read_dump must return bytes")
-        stage = "persist_raw"
-        _atomic_write_bytes(raw_path, raw)
-        result["artifacts"]["raw"] = {
-            "path": raw_path.name,
-            "size_bytes": len(raw),
-            "sha256": _sha256(raw),
+        if raw_path.exists() or result_path.exists():
+            raise FileExistsError(f"capture output already exists for {inputs.capture_id!r}")
+        cancel = cancel_event or threading.Event()
+        result: dict[str, Any] = {
+            "schema": SCHEMA,
+            "capture_id": inputs.capture_id,
+            "capture_kind": inputs.capture_kind,
+            "status": "error",
+            "usable": False,
+            "started_at_utc": _utc_now(),
+            "completed_at_utc": None,
+            "port": inputs.port or "auto",
+            "settle_s": float(inputs.settle_s),
+            "radar_profile_qualified": False,
+            "raw_evidence_sha256": None,
+            "inputs": input_manifest,
+            "artifacts": {"raw": None},
+            "profile": None,
+            "error": None,
+            "cleanup_errors": [],
+            "limitations": [
+                "firmware.sha256 identifies the declared image file; "
+                "the running board image is not read back",
+                "this setup capture is diagnostic and does not promote a tee-range candidate",
+            ],
         }
-        if cancel.is_set():
+        radar = None
+        stage = "connect"
+        config_snapshot: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "wb",
+                suffix=".cfg",
+                prefix=f".{inputs.capture_id}-",
+                dir=output_dir,
+                delete=False,
+            ) as handle:
+                config_snapshot = handle.name
+                handle.write(config_bytes)
+                handle.flush()
+                os.fsync(handle.fileno())
+            radar = radar_factory(port=inputs.port)
+            stage = "configure"
+            radar.send_config(config_snapshot)
+            stage = "settle"
+            if wait_for_settle(cancel, float(inputs.settle_s)) or cancel.is_set():
+                raise StaticCaptureCancelled(
+                    "capture cancelled while waiting for a fresh stable ring"
+                )
             stage = "read_dump"
-            raise StaticCaptureCancelled("capture cancelled after raw evidence was saved")
-        stage = "derive_profile"
-        profile = static_range_profile(
-            raw,
-            radar_profile_sha256=input_manifest["radar_config"]["sha256"],
-            radar_profile_qualified=False,
-            rig_geometry_sha256=input_manifest["rig_geometry"]["sha256"],
-        )
-        result["profile"] = _profile_payload(profile)
-        result["status"] = "usable"
-        result["usable"] = True
-    except StaticCaptureCancelled as error:
-        result["status"] = "cancelled"
-        result["error"] = _error(stage, error)
-    except Exception as error:  # pylint: disable=broad-exception-caught
-        result["error"] = _error(stage, error)
+            raw = radar.read_dump()
+            if not isinstance(raw, bytes):
+                raise TypeError("IWR6843 read_dump must return bytes")
+            stage = "persist_raw"
+            _atomic_write_bytes(raw_path, raw)
+            raw_sha256 = _sha256(raw)
+            result["raw_evidence_sha256"] = raw_sha256
+            result["artifacts"]["raw"] = {
+                "path": raw_path.name,
+                "size_bytes": len(raw),
+                "sha256": raw_sha256,
+            }
+            if cancel.is_set():
+                stage = "read_dump"
+                raise StaticCaptureCancelled("capture cancelled after raw evidence was saved")
+            stage = "derive_profile"
+            profile = static_range_profile(
+                raw,
+                radar_profile_sha256=input_manifest["radar_config"]["sha256"],
+                radar_profile_qualified=False,
+                rig_geometry_sha256=input_manifest["rig_geometry"]["sha256"],
+            )
+            result["profile"] = _profile_payload(profile)
+            result["status"] = "usable"
+            result["usable"] = True
+        except StaticCaptureCancelled as error:
+            result["status"] = "cancelled"
+            result["error"] = _error(stage, error)
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            result["error"] = _error(stage, error)
+        finally:
+            if radar is not None:
+                result["cleanup_errors"] = _cleanup_radar(radar)
+            if config_snapshot is not None:
+                Path(config_snapshot).unlink(missing_ok=True)
+        if result["cleanup_errors"]:
+            result["status"] = "error"
+            result["usable"] = False
+            if result["error"] is None:
+                cleanup = RuntimeError("IWR6843 cleanup did not complete")
+                result["error"] = _error("cleanup", cleanup)
+        result["completed_at_utc"] = _utc_now()
+        _atomic_write_json(result_path, result)
+        return result
     finally:
-        if radar is not None:
-            result["cleanup_errors"] = _cleanup_radar(radar)
-        if config_snapshot is not None:
-            Path(config_snapshot).unlink(missing_ok=True)
-    if result["cleanup_errors"]:
-        result["status"] = "error"
-        result["usable"] = False
-        if result["error"] is None:
-            cleanup = RuntimeError("IWR6843 cleanup did not complete")
-            result["error"] = _error("cleanup", cleanup)
-    result["completed_at_utc"] = _utc_now()
-    _atomic_write_json(result_path, result)
-    return result
+        _release_reservation(reservation)
 
 
 __all__ = [
