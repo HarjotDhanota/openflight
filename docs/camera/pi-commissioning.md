@@ -6,18 +6,21 @@ does not qualify launch-monitor accuracy. Follow the
 
 ## Install the intended checkout
 
-Use the tester-pilot checkout containing the new setup gate, attempt ledger,
-saved-capture review and fusion diagnostics. Local desktop edits are not on
-the Pi merely because both machines show the same branch or commit. Transfer
-the reviewed working tree or publish and fetch its revision before testing;
-preserve any Pi-only configuration and recordings. Do not reset a dirty Pi
-checkout to update it.
+Use the published `feat/tester-capture-pilot` branch from the fork. It contains
+the setup gate, attempt ledger, saved-capture review, fusion diagnostics and
+session recovery through commit `ba082d8`. A new Pi checkout can be installed
+directly:
 
-For the local morning handoff ZIP, follow its `PI_START_HERE.md`: clone the
-fork into a new directory, check out the recorded base commit, then overlay the
-archive there. The ZIP contains the uncommitted source, built UI and a file-hash
-manifest; pulling the branch alone does not install these changes. Keep the
-clone's `.git` directory because tester preflight records its base revision.
+```bash
+git clone --branch feat/tester-capture-pilot https://github.com/HarjotDhanota/openflight.git openflight-tester-pilot
+cd openflight-tester-pilot
+git rev-parse --short HEAD
+```
+
+The last command should report `ba082d8` or a later reviewed revision. For an
+existing checkout, preserve Pi-only configuration, source edits and recordings
+before updating; do not reset a dirty checkout. A same-named local branch does
+not prove the Pi has fetched the published revision.
 
 From that checkout, stop the normal kiosk and run:
 
@@ -25,11 +28,12 @@ From that checkout, stop the normal kiosk and run:
 bash scripts/start-tester.sh
 ```
 
-Open `http://127.0.0.1:8765`. The launcher installs the camera extra and uses
-the system Picamera2 installation. See the [tester guide](tester-pilot.md) for
-the one-time Pi packages, driver and wiring requirements. Keep the terminal
-log when startup fails; a failure is evidence to fix, not a reason to disable
-the setup checks.
+On the Pi itself, open `http://127.0.0.1:8765`. From another computer, open
+`http://<pi-hostname-or-address>:8765`; its own `127.0.0.1` is not the Pi. The
+launcher installs the camera extra and uses the system Picamera2 installation.
+See the [tester guide](tester-pilot.md) for the one-time Pi packages, driver and
+wiring requirements. Keep the terminal log when startup fails; a failure is
+evidence to fix, not a reason to disable the setup checks.
 
 ## Establish a level baseline
 
@@ -39,9 +43,10 @@ the setup checks.
 2. Choose a unique tester ID for these conditions. Run **Check the hardware**,
    inspect the setup checks, then confirm the physical setup. Software
    preflight alone does not establish live radar acquisition.
-3. Open one arm's live view and check that the stationary ball is visible and
-   sharp. Set the tape distance, find gain, and start **Capture swings**.
-4. Make a short screening block, allowing each shot to finish. Record every
+3. Run **Measure the light**, then start the normal exposure ladder. Use the
+   **Advanced: manual single-arm tools** only for a specifically requested investigation.
+   Check that the stationary ball is visible and sharp before swinging.
+4. Make a short ladder screening block, allowing each shot to finish. Record every
    physical swing in the operator tally, including no-reads. Keep warmups and
    false triggers separately identified. Screening counts are not an accuracy
    or reliability acceptance sample.
@@ -49,8 +54,8 @@ the setup checks.
    pending to final, missing/rejected outputs have reasons, and displayed
    sources distinguish measurements from model-derived estimates. A terminal
    result is not a validation certificate.
-6. Stop, reload, and resume. Confirm that exposure/gain and the selected mode
-   are restored. Check that the saved capture can be opened in track review.
+6. Stop, reload, and resume. Confirm that exposure/gain and the current ladder
+   step are restored. Check that the saved capture can be opened in track review.
    For a full-resolution ladder run, complete or explicitly skip the pending
    final face photograph before the mode transition.
 

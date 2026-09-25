@@ -16,6 +16,24 @@ Updated: 2026-09-24. Owner: Harjot. Status: active; M0 complete, M1 in progress.
 - [x] First Pi ladder run persisted nine Arm 5 captures with camera frames, IWR
       dumps and a radar session log. This is acquisition evidence only; the
       session has not been reviewed for timing or accuracy.
+- [x] The recovery baseline is published through `ba082d8` on
+      `feat/tester-capture-pilot`; the old uncommitted ZIP overlay is no longer
+      the installation path.
+- [x] M1 operator-flow simplification makes the guided ladder the normal
+      acquisition path and keeps manual single-arm work in a closed advanced
+      section. The focused tester browser suite passed 31 checks.
+- [x] Fusion diagnostics and saved-track review now bound stalled header and
+      body reads. Their complete focused browser suites passed 23 checks,
+      including the new timeout recovery cases.
+- [ ] Full-progress paired validation still rereads growing JSONL evidence per
+      capture. Reduced polling cadence limits frequency but does not remove the
+      growing read cost.
+- [x] Current local validation: 149 focused backend tests passed and 4 directory-
+      symlink cases were skipped on Windows; 239 UI unit tests, lint and build
+      passed; full-source Pylint exited successfully at 9.66/10 with existing
+      warnings. Tester browser checks passed 31 plus one focused packaging case;
+      diagnostic/review browser checks passed 23. These are not Pi hardware,
+      acquisition-load or accuracy validation.
 - [ ] M1 physical gate remains open. M3 selection and M4 pose/strike/spin are
       evidence-dependent. Preserve the first session and finish its failure and
       discrepancy review before changing estimators.
@@ -444,6 +462,7 @@ live/replay equivalence claim or independent calibration.
 | 2026-09-24 | The test bench is intended to accelerate community development and its collected evidence must be usable by contributors, not held by one maintainer | Define a consent-based contribution and dataset contract: immutable checksummed source packages remain private by default; contributors choose visibility for raw camera/radar evidence; published releases use stable IDs, protocol/config/source hashes, redacted operator metadata, licenses and reproducible manifests. Keep upload, publication and model-training eligibility as separate states |
 | 2026-09-24 | First Pi commissioning persisted nine Arm 5 camera/IWR captures and exposed that read-only ladder polling wrote `ladder.json` for every partial tester ID typed into the UI; the first valid rung then reached its required boundary-photo checkpoint, which looked like a stalled run while later sound events saved rejected raw captures; the earlier system outage had no persistent journal | Preserve the captures as acquisition evidence without claiming accuracy, make unstarted ladder status reads non-persistent, state the boundary-photo pause and no-swing action explicitly, and retain persistent system/application logs for subsequent failure diagnosis |
 | 2026-09-24 | The same capture held about 115.2 camera fps with zero reported gaps, while the face preview updated only with the 1.5 s ladder poll and browser polling repeated full progress and attempt-ledger reads; accepted shots also needed roughly 7 s for the IWR dump and roughly 11 s for final fusion | Treat the camera capture rate and operator-visible latency as separate contracts: poll previews independently at reduced resolution, prevent overlapping requests, bound stalled requests, remove duplicate ledger reads, reduce full-progress polling, and package rotating tester-service diagnostics |
+| 2026-09-24 | M1 recovery and usability review found duplicate normal and advanced acquisition/export paths that can send a real tester into an incomplete single-arm run or package the wrong scope | Make the guided setup, hardware, light, exposure-ladder, review and package sequence the normal workflow; keep manual single-arm controls as a collapsed advanced investigation path. Preserve rig/readiness gates, raw evidence schemas and diagnostic truth, and do not treat this navigation change as hardware or accuracy validation |
 
 ## Soundless trigger architecture
 
@@ -521,6 +540,24 @@ load. Soundless commissioning remains blocked until those measurements pass
 and the captured trigger provenance agrees with the observed content.
 
 ## Current checkpoint
+
+Usability/recovery update, 2026-09-24: present setup, hardware, light,
+exposure-ladder capture, review and packaging as one normal operator path.
+Keep manual single-arm acquisition and export controls in a collapsed advanced
+section for directed investigation. This changes navigation and instructions;
+it preserves readiness gates, evidence schemas and the meaning of diagnostics.
+Diagnostic, run-discovery, capture-discovery and frame reads now have a
+five-second client deadline. Offline saved-track comparison has a bounded
+five-minute client deadline because its Pi runtime is not yet characterized;
+timing out does not cancel server computation or automatically retry the action.
+Do not claim bounded progress-read cost until paired-validation read behavior is
+fixed and tested.
+
+Tester-service recovery now leaves a job running until callback output is
+durable, turns setup and callback failures into visible error states, appends
+repeated action logs, and lets the global Stop action close a standalone live
+preview. These changes improve recovery evidence and controls; they do not
+establish hardware readiness or loss-free acquisition.
 
 Software-closure decision, 2026-09-24: the user requests continuing until only
 Pi validation remains. Audit and close the existing M1/M2 workflows end to end:

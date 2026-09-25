@@ -46,8 +46,8 @@ Set up the camera as in the [camera README](README.md#raspberry-pi-packages),
 including the high-speed driver. `rpicam-hello --list-cameras` must list
 `320x200` before you start.
 
-Getting the study branch before it is merged: your clone's `origin` is the
-upstream repository, which does not have it. Add the fork once:
+The reviewed tester is published on the fork's `feat/tester-capture-pilot`
+branch. If your clone's `origin` is the upstream repository, add the fork once:
 
 ```bash
 git remote add fork https://github.com/HarjotDhanota/openflight.git
@@ -55,10 +55,9 @@ git fetch fork
 git checkout -B feat/tester-capture-pilot fork/feat/tester-capture-pilot
 ```
 
-These branch commands do not install unpublished local work. For the morning
-source archive, use its `PI_START_HERE.md` and a fresh clone instead. Preserve
-existing Pi configuration, source edits and recordings when updating; do not
-reset a dirty checkout.
+Confirm `git rev-parse --short HEAD` reports `ba082d8` or a later reviewed
+revision before collecting evidence. Preserve existing Pi configuration,
+source edits and recordings when updating; do not reset a dirty checkout.
 
 ## Running it
 
@@ -69,7 +68,9 @@ repository root:
 bash scripts/start-tester.sh
 ```
 
-Open `http://127.0.0.1:8765` in the browser on the Pi's screen.
+On the Pi itself, open `http://127.0.0.1:8765`. From another computer, use
+`http://<pi-hostname-or-address>:8765`; `127.0.0.1` on that computer points
+back to that computer, not to the Pi.
 
 The tester also writes a rotating service log to
 `~/openflight_sessions/tester_pilot/tester-server.log`. It remains available
@@ -87,34 +88,16 @@ the sensor to the kiosk and takes it back afterwards. The OPS243 is expected on 
 elsewhere. The first `start-tester.sh` builds the environment and takes a few
 minutes; later starts are quick.
 
-1. **Who and where.** A tester ID, indoors or outdoors, and one tape
-   measurement: the radar window to the centre of the ball, in mm. That is
-   everything you type; the frames carry the light level and any flicker. Keep
-   the light the same for the whole session; if it changes, start a new tester
-   ID.
-2. **Arms, top to bottom.** Select an arm and **Start live view** first: it
-   shows the camera exactly as that arm will capture, with a contrast-boosted
-   copy beneath it, and you can change exposure and gain while it runs. At
-   10000 µs, check the ball is in view and its edge is crisp; if the whole
-   image is soft, turn the lens barrel until it is. With your tape distance
-   entered, the ring is the ball at the size that distance gives, and the
-   page warns if the picture alone disagrees by more than a quarter. Then,
-   for each arm: **Find gain** (a few seconds on the static scene — it picks
-   the gain that lights the frame correctly at that arm's exposure, records
-   the light level, and solves the ball's range from the same frame so it can
-   be compared with your tape), then **Capture swings**. The club is set to
-   7-iron for you. Hit until the arm shows **5 accepted**, then press
-   **Stop**. Stopping and starting again is fine: each capture run is kept
-   separately and counted together.
-   - If an arm says **lighting required**, hit its five swings anyway. Its
-     acceptance rate at your light level is part of the answer.
-3. **Package everything** with the [community contribution package
-   workflow](community-contributions.md), then send the archive through the
-   agreed channel. Raw data stays out of Git.
+Use the numbered test suite for a normal collection: **1. Set up the rig**,
+**2. Check hardware and light**, **3. Capture the exposure ladder**, then
+**4. Review and package**. **Advanced: manual single-arm tools** is for a
+maintainer-directed investigation of one mode; it is not the normal pilot and
+does not replace the ladder.
 
 ## Test suite
 
-On the study page, fill in **Who and where**, then work down **Test suite**:
+On the study page, fill in **Who and where**, review the setup checks and confirm
+the physical setup. Then work down **Test suite**:
 
 1. **A. Check the hardware.** Ready means the software and camera answered.
 2. **B. Measure the light.** Runs the camera's light screen at both modes, about
@@ -130,7 +113,12 @@ On the study page, fill in **Who and where**, then work down **Test suite**:
    before continuing; do not take another swing while this choice is pending.
    The kiosk then restarts in the next mode (about 20 s). A failed photo can be
    retried without losing the pending capture.
-4. **D. Package the data.** If you have a TM4, Full Swing KIT or Mevo Gen 2
+4. **Review the run.** Open **Review saved capture tracks** when a maintainer
+   has asked for manual point annotation. Open **View fusion diagnostics** to
+   inspect the existing pipeline's pending/final states, sources and explicit
+   unavailable or rejected results. These views do not recompute or certify
+   accuracy. Return to the study page when finished.
+5. **D. Package the data.** If you have a TM4, Full Swing KIT or Mevo Gen 2
    export, choose it first. Copy the archive off the Pi on a USB stick; it can be
    about 1 GB. Use the [community contribution package
    workflow](community-contributions.md) to record consent and create a local,
@@ -170,7 +158,9 @@ bytes or device firmware. Collection failures are recorded without stopping capt
 
 ## The arms
 
-The single-arm controls below the suite are for investigating one mode by hand.
+The closed **Advanced: manual single-arm tools** section below the suite is for
+investigating one mode by hand when a maintainer asks for it. A normal tester
+should use the exposure ladder above.
 
 | Arm | Mode | Exposure | Why it exists |
 | --- | --- | --- | --- |
@@ -202,8 +192,10 @@ Independent optical calibration is a separate maintainer bench step; the v3
 nominal focal length is still uncalibrated, and transfer between units, focus
 settings and readout modes is not established. No enclosure measurements:
 the rig file carries them. No lux meter: the gain screen records a light index
-that is comparable across every unit. No exposure or gain fields: both are
-derived. No driver or wedge yet; no second camera; no fusion output on screen.
+that is comparable across every unit. No exposure or gain choices in the
+normal ladder: both are derived. No driver or wedge yet; no second camera.
+Fusion diagnostics are available on a separate screen, but remain diagnostic
+evidence rather than a result from the capture walkthrough or proof of accuracy.
 
 ## What this pilot does not do
 
