@@ -42,7 +42,12 @@ def test_one_action_replays_reviews_and_bundles_every_shot(tmp_path, viewer):
         )
     )
     assert report["replay_inputs"]["ops_sample_rate_hz"] == 30_000
-    assert report["stages"]["iwr6843"]["status"] == "error"
+    iwr = report["stages"]["iwr6843"]
+    assert iwr["status"].startswith("accepted"), iwr.get("error")
+    assert iwr["capture_path_resolution"] == "relocated_under_session_directory"
+    camera = report["stages"]["camera"]
+    assert camera["recorded_context"]["matches_recorded"] is None
+    assert camera["recomputed_radar_context"]["status"] == "replayed"
     derived = "".join(
         path.read_text(encoding="utf-8") for path in (root / TESTER / "analysis").rglob("*.json")
     )
@@ -52,8 +57,13 @@ def test_one_action_replays_reviews_and_bundles_every_shot(tmp_path, viewer):
         (root / TESTER / "analysis" / "session_review.json").read_text(encoding="utf-8")
     )
     metrics = {m["key"]: m for m in review["attempts"][0]["metrics"]}
-    assert metrics["iwr_launch_vertical_deg"]["status"] == "unavailable"
-    assert "runtime config is absent" in metrics["iwr_launch_vertical_deg"]["reason"]
+    vertical = metrics["iwr_launch_vertical_deg"]
+    assert vertical["status"] == "accepted"
+    assert abs(vertical["value"] - 18.0) < 1.5
+    for key in ("camera_launch_horizontal_deg", "camera_club_path_deg"):
+        assert metrics[key]["status"] in ("accepted", "experimental", "rejected"), metrics[key]
+        assert metrics[key]["source"] == "camera_replay:replayed_radar_context"
+    assert metrics["ball_speed_mph"]["value"] > 95
     assert review["attempts"][0]["evidence"]["impact_photo"] == f"{TESTER}/impact/camera_001.pgm"
     assert (root / TESTER / "analysis" / "attempts.csv").is_file()
     assert (root / TESTER / "analysis" / "report.md").is_file()
