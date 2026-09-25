@@ -2179,7 +2179,55 @@ def create_app(
     ] = {}
     qualification = _load_tee_range_qualification(tee_range_qualification)
     tee_range_lock = threading.RLock()
+    live_owner_lock = threading.RLock()
+    live_owner: dict[str, dict[str, str] | None] = {"guided": None}
     iwr_preflight: dict[str, bool] = {}
+
+    def live_owner_snapshot() -> dict[str, str] | None:
+        with live_owner_lock:
+            owner = live_owner["guided"]
+            return dict(owner) if owner is not None else None
+
+    def guided_live_matches(tester_id: str, epoch_id: str, arm_id: str) -> bool:
+        owner = live_owner_snapshot()
+        return bool(
+            owner
+            and owner["tester_id"] == tester_id
+            and owner["epoch_id"] == epoch_id
+            and owner["arm_id"] == arm_id
+        )
+
+    def stop_live() -> None:
+        with live_owner_lock:
+            live.stop()
+            live_owner["guided"] = None
+
+    def stop_guided_live(
+        tester_id: str, epoch_id: str | None = None, arm_id: str | None = None
+    ) -> bool:
+        with live_owner_lock:
+            owner = dict(live_owner["guided"] or {})
+            if not owner:
+                return False
+            if owner["tester_id"] != tester_id:
+                return False
+            if epoch_id is not None and owner["epoch_id"] != epoch_id:
+                return False
+            if arm_id is not None and owner["arm_id"] != arm_id:
+                return False
+            live.stop()
+            live_owner["guided"] = None
+            return True
+
+    def start_guided_live(tester_id: str, epoch_id: str, arm_id: str, *args) -> None:
+        with live_owner_lock:
+            live.start(*args)
+            live_owner["guided"] = {
+                "kind": "guided_tee_range",
+                "tester_id": tester_id,
+                "epoch_id": epoch_id,
+                "arm_id": arm_id,
+            }
 
     def with_iwr_preflight(result: dict) -> dict:
         if not require_iwr_preflight:
@@ -2550,13 +2598,29 @@ def create_app(
                 retry_phase=f"needs_camera_{arm_id}",
             )
         if state.phase.startswith("camera_") and state.phase.endswith("_capturing"):
-            if live.running:
-                return state
             arm_id = "arm5" if "arm5" in state.phase else "arm6"
+            owned = guided_live_matches(tester_id, state.epoch_id, arm_id)
+            if live.running and owned:
+                return state
+            live_status = live.snapshot()[1]
+            message = (
+                str(live_status.get("error"))
+                if owned and live_status.get("error")
+                else "guided camera ownership ended before a stable observation was saved"
+            )
+            stop_guided_live(tester_id, state.epoch_id, arm_id)
             return store.transition(
                 state,
                 phase="retryable_failure",
                 reason=f"camera_{arm_id}_capture_interrupted",
+                evidence={
+                    "camera_capture_failure": {
+                        "arm_id": arm_id,
+                        "stage": "live_view",
+                        "message": message,
+                        "remedy": "Check the camera connection, then retry this camera step.",
+                    }
+                },
                 retry_phase=f"needs_camera_{arm_id}",
             )
         if state.phase not in CAPTURE_PHASES:
@@ -2787,7 +2851,10 @@ def create_app(
                 }
             },
         )
-        live.start(
+        start_guided_live(
+            tester_id,
+            state.epoch_id,
+            arm_id,
             params.arm,
             exposure_us,
             gain,
@@ -2806,6 +2873,8 @@ def create_app(
             raise RuntimeError(f"tee-range setup is {state.phase if state else 'not_started'}")
         if request_id in state.request_ids:
             return state
+        if not guided_live_matches(tester_id, state.epoch_id, arm_id):
+            raise RuntimeError(f"camera {arm_id} is no longer owned by this guided range capture")
         shown_arm, frames = live.recent_frames()
         if shown_arm != ARMS[arm_id] or frames is None:
             raise RuntimeError(f"camera {arm_id} does not have a stable frame yet")
@@ -2876,7 +2945,7 @@ def create_app(
                 retry_phase=f"needs_camera_{arm_id}",
             )
         finally:
-            live.stop()
+            stop_guided_live(tester_id, state.epoch_id, arm_id)
         evidence = {
             f"camera_{arm_id}_candidate": candidate.to_dict(),
             attempt_key: {
@@ -2950,6 +3019,7 @@ def create_app(
                     eligibility = require_setup(tester_id, reading, f"tee_range_{action}")
                     if not eligibility["eligible"]:
                         return blocked_setup(eligibility)
+                    stop_guided_live(tester_id)
                     state = store.start(
                         request_id,
                         setup_admission={
@@ -2979,6 +3049,8 @@ def create_app(
                         reason="retry_requested",
                         request_id=request_id,
                     )
+                if not (state.phase.startswith("camera_") and state.phase.endswith("_capturing")):
+                    stop_guided_live(tester_id)
                 return jsonify({"state": state.to_dict()})
         except TeeRangeSetupAdmissionError as exc:
             failed_state = None
@@ -3003,6 +3075,7 @@ def create_app(
                         except RuntimeError:
                             # A detached capture published first; report what is stored.
                             failed_state = store.load()
+                    stop_guided_live(tester_id, failed_state.epoch_id if failed_state else None)
             return (
                 jsonify(
                     {
@@ -3145,7 +3218,7 @@ def create_app(
                     iwr_preflight[params.tester_id] = return_code == 0
             else:
                 on_finish = None
-            live.stop()  # the camera does one thing at a time
+            stop_live()  # the camera does one thing at a time
             if action == "swings":
                 active_setup_tester["tester_id"] = params.tester_id
                 run_dir = Path(commands[0][commands[0].index("--log-dir") + 1])
@@ -3177,7 +3250,11 @@ def create_app(
         payload = request.get_json(silent=True) or {}
         try:
             if payload.get("action") == "stop":
-                live.stop()
+                if live_owner_snapshot() is not None:
+                    raise RuntimeError(
+                        "guided automatic range owns the live camera; use Stop all tester activity"
+                    )
+                stop_live()
                 return jsonify(live.snapshot()[1])
             params = TesterParameters.from_payload(payload)
             if jobs.status()["state"] == "running":
@@ -3191,17 +3268,20 @@ def create_app(
             if not low <= exposure_us <= high or not 1.0 <= gain <= 15.94:
                 raise ValueError(f"exposure {low}-{high} us and gain 1-15.9 only")
             state = read_arm_state(sessions_root, params.tester_id, params.arm_id)
-            live.start(
-                params.arm,
-                exposure_us,
-                gain,
-                state.get("black_floor_dn"),
-                None,
-                lambda ball: distance_cues(
-                    ball, params.arm, None, rig_geometry, enclosure.reading()
-                ),
-                None,
-            )
+            with live_owner_lock:
+                if live_owner["guided"] is not None:
+                    raise RuntimeError("guided automatic range owns the live camera")
+                live.start(
+                    params.arm,
+                    exposure_us,
+                    gain,
+                    state.get("black_floor_dn"),
+                    None,
+                    lambda ball: distance_cues(
+                        ball, params.arm, None, rig_geometry, enclosure.reading()
+                    ),
+                    None,
+                )
             return jsonify(live.snapshot()[1])
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 409
@@ -3336,7 +3416,7 @@ def create_app(
 
     @app.get("/api/tester/live")
     def live_status():
-        return jsonify(live.snapshot()[1])
+        return jsonify({**live.snapshot()[1], "owner": live_owner_snapshot()})
 
     @app.get("/api/tester/live.png")
     def live_frame():
@@ -3354,7 +3434,7 @@ def create_app(
     @app.post("/api/tester/stop")
     def stop_action():
         live_running = live.running
-        live.stop()
+        stop_live()
         with ladder_lock:
             runners = list(ladder_runners.values())
             stopped = live_running or any(not runner.stopped for runner in runners)
@@ -3391,7 +3471,7 @@ def create_app(
                 if runner is not None and not runner.stopped:
                     raise RuntimeError("stop the active capture before analysing")
                 refuse_while_analysing()
-                live.stop()
+                stop_live()
                 log_path = review_routes.analysis_log(sessions_root, tester_id)
                 jobs.start(
                     "analyze",
@@ -3445,7 +3525,7 @@ def create_app(
     def start_mode(tester_id: str, environment: str, arm_id: str) -> Path:
         """Start the ladder's kiosk for one mode; return the run folder it writes."""
         params_for_arm = TesterParameters(tester_id, arm_id, environment)
-        live.stop()
+        stop_live()
         config_hash = setup.current_config_hash()
         if not config_hash or not setup.confirmation_valid(tester_id):
             raise RuntimeError("tester setup confirmation is no longer valid")

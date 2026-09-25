@@ -244,6 +244,25 @@
         font-size: 0.8rem;
         color: var(--muted);
       }
+      .guided-camera-preview {
+        margin: 10px 0;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: #080b0f;
+      }
+      .guided-camera-preview p {
+        margin: 0 0 6px;
+      }
+      .guided-camera-preview img {
+        display: block;
+        width: 100%;
+        max-height: min(44vh, 360px);
+        object-fit: contain;
+        image-rendering: pixelated;
+        background: #000;
+        border-radius: 5px;
+      }
       .photo-handoff {
         margin: 10px 0;
         padding: 10px 12px;
@@ -477,6 +496,10 @@
                 The guided range check starts after both camera modes have passed the light check.
               </p>
               <div class="light" id="automatic-range-values"></div>
+              <div class="guided-camera-preview" id="tee-range-camera-preview" hidden>
+                <p class="note" id="tee-range-camera-status" role="status">Waiting for the first camera frame…</p>
+                <img id="tee-range-camera-frame" alt="Live raw frame for automatic ball range" hidden />
+              </div>
               <div class="steps">
                 <button type="button" id="tee-range-action">Start automatic range</button>
                 <button type="button" id="tee-range-restart" hidden>Ball or rig moved: start over</button>
@@ -681,6 +704,10 @@
       let teeRangeActionError = null;
       // The flow state an action error describes; a newer server state supersedes it.
       let teeRangeActionErrorKey = null;
+      let guidedCameraPreviewKey = null;
+      let guidedCameraPreviewVersion = 0;
+      let guidedCameraRequestRunning = false;
+      let guidedCameraFrameLoading = false;
       const REQUEST_TIMEOUT_MS = 5000;
       const ACTION_TIMEOUT_MS = 15000;
       const PACKAGE_TIMEOUT_MS = 300000;
@@ -1205,6 +1232,8 @@
       el('stop').addEventListener('click', async () => {
         suiteActionVersion += 1;
         liveShown(false);
+        teeRangeState = null;
+        syncGuidedCameraPreview();
         render(await request('/api/tester/stop', { method: 'POST' }));
       });
       el('package').addEventListener('click', async () => {
@@ -1359,6 +1388,12 @@
 
       function teeRangeFailureSummary(state) {
         if (state?.phase !== 'retryable_failure') return null;
+        const cameraFailure = state?.evidence?.camera_capture_failure;
+        if (cameraFailure) {
+          const arm = cameraFailure.arm_id === 'arm6' ? '640×400' : '1280×800';
+          const remedy = cameraFailure.remedy ? ` Remedy: ${cameraFailure.remedy}` : '';
+          return `${arm} camera failed at ${cameraFailure.stage || 'live view'}: ${cameraFailure.message || 'the live camera stopped'}.${remedy}`;
+        }
         const failure = state?.evidence?.capture_failure;
         if (!failure) return null;
         const kind = failure.capture_kind === 'ball_present' ? 'Ball-present' : 'Empty';
@@ -1367,6 +1402,136 @@
         const message = failure.message || 'capture was unusable';
         const remedy = failure.remedy ? ` Remedy: ${failure.remedy}` : '';
         return `${kind} IWR capture failed at ${stage}${type}: ${message}.${remedy}`;
+      }
+
+      function guidedCameraContext() {
+        const phase = teeRangeState?.phase;
+        const armId = phase === 'camera_arm5_capturing'
+          ? 'arm5'
+          : phase === 'camera_arm6_capturing'
+            ? 'arm6'
+            : null;
+        if (!armId) return null;
+        const testerId = el('tester-id').value.trim();
+        return {
+          testerId,
+          epochId: teeRangeState.epoch_id,
+          armId,
+          key: `${testerId}|${teeRangeState.epoch_id}|${armId}`,
+        };
+      }
+
+      function syncGuidedCameraPreview() {
+        const context = guidedCameraContext();
+        const preview = el('tee-range-camera-preview');
+        const frame = el('tee-range-camera-frame');
+        if (!context) {
+          if (guidedCameraPreviewKey !== null) guidedCameraPreviewVersion += 1;
+          guidedCameraPreviewKey = null;
+          guidedCameraFrameLoading = false;
+          preview.hidden = true;
+          frame.hidden = true;
+          frame.removeAttribute('src');
+          frame.removeAttribute('data-preview-key');
+          return;
+        }
+        preview.hidden = false;
+        if (guidedCameraPreviewKey === context.key) return;
+        guidedCameraPreviewKey = context.key;
+        guidedCameraPreviewVersion += 1;
+        guidedCameraFrameLoading = false;
+        frame.hidden = true;
+        frame.removeAttribute('src');
+        frame.dataset.previewKey = context.key;
+        el('tee-range-camera-status').className = 'note';
+        el('tee-range-camera-status').textContent = 'Camera is warming up. Waiting for the first frame…';
+        queueMicrotask(guidedCameraTick);
+      }
+
+      function guidedCameraStatus(message, problem = false) {
+        const status = el('tee-range-camera-status');
+        status.className = problem ? 'problem' : 'note';
+        status.textContent = message;
+      }
+
+      function loadGuidedCameraFrame(context, version) {
+        const previous = el('tee-range-camera-frame');
+        const frame = previous.cloneNode(false);
+        frame.hidden = true;
+        frame.dataset.previewKey = context.key;
+        previous.replaceWith(frame);
+        guidedCameraFrameLoading = true;
+        frame.addEventListener('load', () => {
+          if (frame !== el('tee-range-camera-frame')) return;
+          guidedCameraFrameLoading = false;
+          if (
+            version === guidedCameraPreviewVersion &&
+            frame.dataset.previewKey === guidedCameraPreviewKey
+          ) {
+            frame.hidden = false;
+          }
+        });
+        frame.addEventListener('error', () => {
+          if (frame !== el('tee-range-camera-frame')) return;
+          guidedCameraFrameLoading = false;
+          if (
+            version === guidedCameraPreviewVersion &&
+            frame.dataset.previewKey === guidedCameraPreviewKey
+          ) {
+            frame.hidden = true;
+            guidedCameraStatus('Camera is live. Waiting for the first frame to become available…');
+          }
+        });
+        frame.src = `/api/tester/live.png?view=raw&t=${Date.now()}`;
+      }
+
+      async function guidedCameraTick() {
+        const context = guidedCameraContext();
+        if (!context || context.key !== guidedCameraPreviewKey || guidedCameraRequestRunning) return;
+        const version = guidedCameraPreviewVersion;
+        guidedCameraRequestRunning = true;
+        try {
+          const status = await request('/api/tester/live');
+          const current = guidedCameraContext();
+          if (
+            version !== guidedCameraPreviewVersion ||
+            !current ||
+            current.key !== context.key ||
+            context.testerId !== el('tester-id').value.trim()
+          ) return;
+          const owner = status.owner;
+          if (
+            owner?.kind !== 'guided_tee_range' ||
+            owner?.tester_id !== context.testerId ||
+            owner?.epoch_id !== context.epochId ||
+            owner?.arm_id !== context.armId
+          ) {
+            guidedCameraStatus('The guided camera is no longer owned by this range step. Retry or start over.', true);
+            return;
+          }
+          if (status.error || status.failed) {
+            guidedCameraStatus(`Camera error: ${status.error || status.failed}`, true);
+            return;
+          }
+          if (!status.running) {
+            guidedCameraStatus('The guided camera stopped before evaluation. Retry this camera step.', true);
+            return;
+          }
+          if (!status.stats) {
+            guidedCameraStatus('Camera is warming up. Waiting for the first frame…');
+            return;
+          }
+          const dimensions = context.armId === 'arm5' ? '1280×800' : '640×400';
+          guidedCameraStatus(`Live ${dimensions} frame ready · mean ${status.stats.mean ?? '?'} · brightest ${status.stats.max ?? '?'}`);
+          if (!guidedCameraFrameLoading) loadGuidedCameraFrame(context, version);
+        } catch (error) {
+          const current = guidedCameraContext();
+          if (version === guidedCameraPreviewVersion && current?.key === context.key) {
+            guidedCameraStatus(`Live camera status unavailable: ${error.message}`, true);
+          }
+        } finally {
+          guidedCameraRequestRunning = false;
+        }
       }
 
       function renderTeeRange() {
@@ -1396,6 +1561,7 @@
             `<span>camera arm 5 <b>${range(arm5)}</b> · arm 6 validation <b>${range(arm6)}</b></span>` +
             `<span>canonical range <b>${selected == null ? 'withheld' : `${selected.toFixed(3)} m`}</b></span>`
           : '<span>No setup epoch yet.</span>';
+        syncGuidedCameraPreview();
         el('step-ladder').disabled = photoActionPending || !setupReady() || !teeRangeComplete();
       }
 
@@ -2005,6 +2171,7 @@
       setInterval(refresh, 5000);
       setInterval(refreshSetupEligibility, 2000);
       setInterval(refreshTeeRange, 1000);
+      setInterval(guidedCameraTick, 350);
     </script>
   </body>
 </html>

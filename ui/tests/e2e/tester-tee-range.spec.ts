@@ -29,6 +29,11 @@ type FlowState = {
   solution: null | { status: string; selected_range_m: number | null };
 };
 
+const TINY_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  'base64'
+);
+
 async function base(page: Page, initial: FlowState | null = null) {
   let state = initial;
   let postFailure: { body: object; status: number } | null = null;
@@ -47,6 +52,29 @@ async function base(page: Page, initial: FlowState | null = null) {
   await page.route('**/api/tester/status**', (route) => json(route, {}));
   await page.route('**/api/tester/attempts?**', (route) => json(route, { scopes: [] }));
   await page.route('**/api/tester/ladder?**', (route) => json(route, { ladder: null, stopped: true }));
+  await page.route('**/api/tester/live', (route) => {
+    const armId = state?.phase === 'camera_arm5_capturing'
+      ? 'arm5'
+      : state?.phase === 'camera_arm6_capturing'
+        ? 'arm6'
+        : null;
+    return json(route, {
+      running: Boolean(armId),
+      arm_id: armId,
+      owner: armId && state
+        ? {
+            kind: 'guided_tee_range',
+            tester_id: '20260922-name',
+            epoch_id: state.epoch_id,
+            arm_id: armId,
+          }
+        : null,
+      stats: armId ? { mean: 70, p99: 140, max: 180, clipped_pct: 0 } : null,
+    });
+  });
+  await page.route('**/api/tester/live.png?**', (route) =>
+    route.fulfill({ status: 200, contentType: 'image/png', body: TINY_PNG })
+  );
   await page.route('**/api/tester/tee-range**', (route) => {
     if (route.request().method() === 'GET') return json(route, { state });
     if (postFailure) return json(route, postFailure.body, postFailure.status);
@@ -107,6 +135,151 @@ test('walks the main automatic-range prompts and reconstructs after reload', asy
   await expect(page.locator('#automatic-range')).toContainText('canonical range withheld');
   await expect(page.getByRole('button', { name: 'C. Start the exposure ladder' })).toBeEnabled();
 });
+
+test('shows the server-owned guided camera frame without starting another live view', async ({ page }) => {
+  await base(page, {
+    epoch_id: 'epoch-camera',
+    phase: 'needs_camera_arm5',
+    reason: 'needs_camera_arm5',
+    evidence: {},
+    solution: null,
+  });
+  let statusPolls = 0;
+  let framePolls = 0;
+  let livePosts = 0;
+  await page.route('**/api/tester/live', (route) => {
+    if (route.request().method() !== 'GET') {
+      livePosts += 1;
+      return json(route, { error: 'guided preview must not start live view' }, 409);
+    }
+    statusPolls += 1;
+    return json(route, {
+      running: true,
+      arm_id: 'arm5',
+      owner: {
+        kind: 'guided_tee_range',
+        tester_id: '20260922-name',
+        epoch_id: 'epoch-camera',
+        arm_id: 'arm5',
+      },
+      stats: statusPolls > 1 ? { mean: 72.1, p99: 140, max: 181, clipped_pct: 0 } : null,
+    });
+  });
+  await page.route('**/api/tester/live.png?**', async (route) => {
+    framePolls += 1;
+    if (statusPolls < 2) return json(route, { error: 'no live frame yet' }, 503);
+    await route.fulfill({ status: 200, contentType: 'image/png', body: TINY_PNG });
+  });
+  await page.goto('/tester.html');
+
+  await page.locator('#tee-range-action').tap();
+
+  const preview = page.locator('#tee-range-camera-preview');
+  await expect(preview).toBeVisible();
+  await expect(page.locator('#tee-range-camera-status')).toContainText('Waiting for the first frame');
+  await expect(page.locator('#automatic-range-summary')).toContainText('The reference camera is live');
+  await expect(page.locator('#tee-range-camera-status')).toContainText('Live 1280×800 frame ready');
+  await expect(page.locator('#tee-range-camera-frame')).toHaveAttribute('src', /\/api\/tester\/live\.png\?/);
+  expect(statusPolls).toBeGreaterThan(1);
+  expect(framePolls).toBeGreaterThan(0);
+  expect(livePosts).toBe(0);
+
+  await page.locator('#tee-range-action').tap();
+  await expect(preview).toBeHidden();
+});
+
+test('guided camera errors stay beside the preview and stale tester polls are ignored', async ({ page }) => {
+  await base(page, {
+    epoch_id: 'epoch-camera-error',
+    phase: 'camera_arm6_capturing',
+    reason: 'camera_arm6_warming',
+    evidence: {},
+    solution: null,
+  });
+  let releaseStatus: (() => void) | null = null;
+  let statusRequests = 0;
+  await page.route('**/api/tester/live', async (route) => {
+    statusRequests += 1;
+    if (statusRequests === 1) {
+      return json(route, {
+        running: false,
+        arm_id: 'arm6',
+        error: 'camera cable disconnected',
+        owner: {
+          kind: 'guided_tee_range',
+          tester_id: '20260922-name',
+          epoch_id: 'epoch-camera-error',
+          arm_id: 'arm6',
+        },
+      });
+    }
+    await new Promise<void>((resolve) => {
+      releaseStatus = resolve;
+    });
+    return json(route, {
+      running: false,
+      arm_id: 'arm6',
+      error: 'camera cable disconnected',
+      owner: {
+        kind: 'guided_tee_range',
+        tester_id: '20260922-name',
+        epoch_id: 'epoch-camera-error',
+        arm_id: 'arm6',
+      },
+    });
+  });
+  await page.goto('/tester.html');
+  await expect(page.locator('#tee-range-camera-preview')).toBeVisible();
+  await expect(page.locator('#tee-range-camera-status')).toContainText('Camera error: camera cable disconnected');
+  await expect(page.locator('#automatic-range-summary')).toContainText('The second camera mode is live');
+  await expect(page.locator('#automatic-range-summary')).not.toContainText('camera cable disconnected');
+  await expect.poll(() => releaseStatus !== null).toBe(true);
+
+  await page.locator('#tester-id').fill('20260922-other');
+  releaseStatus?.();
+
+  await expect(page.locator('#tee-range-camera-preview')).toBeHidden();
+  await expect(page.locator('#automatic-range-summary')).toContainText('Start after both camera modes');
+  await expect(page.locator('#automatic-range-summary')).not.toContainText('camera cable disconnected');
+});
+
+for (const viewport of KIOSK_VIEWPORTS) {
+  test(`guided camera preview fits at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await base(page, {
+      epoch_id: 'epoch-preview-size',
+      phase: 'camera_arm5_capturing',
+      reason: 'camera_arm5_warming',
+      evidence: {},
+      solution: null,
+    });
+    await page.route('**/api/tester/live', (route) =>
+      json(route, {
+        running: true,
+        arm_id: 'arm5',
+        owner: {
+          kind: 'guided_tee_range',
+          tester_id: '20260922-name',
+          epoch_id: 'epoch-preview-size',
+          arm_id: 'arm5',
+        },
+        stats: { mean: 70, p99: 140, max: 180, clipped_pct: 0 },
+      })
+    );
+    await page.route('**/api/tester/live.png?**', (route) =>
+      route.fulfill({ status: 200, contentType: 'image/png', body: TINY_PNG })
+    );
+    await page.goto('/tester.html');
+
+    const image = page.locator('#tee-range-camera-frame');
+    await expect(image).toBeVisible();
+    const box = await image.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.height).toBeLessThanOrEqual(viewport.height * 0.45 + 1);
+    expect(box!.width).toBeLessThanOrEqual(viewport.width);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
+}
 
 test('shows retry and a qualified resolved range without accepting tape input', async ({ page }) => {
   const fixture = await base(page, {

@@ -58,20 +58,25 @@ class FakeLive:
     def __init__(self):
         self.running = False
         self.arm = None
+        self.start_count = 0
+        self.stop_count = 0
+        self.error = None
 
     def start(self, arm, *_args):
         self.running = True
         self.arm = arm
+        self.start_count += 1
 
     def stop(self):
         self.running = False
+        self.stop_count += 1
 
     def recent_frames(self):
         frames = np.full((3, self.arm.height, self.arm.width), 80, dtype=np.uint8)
         return self.arm, frames
 
     def snapshot(self):
-        return None, {"running": self.running}
+        return None, {"running": self.running, "error": self.error}
 
 
 class ChangingFakeLive(FakeLive):
@@ -425,6 +430,61 @@ def test_guided_flow_resolves_and_survives_reload(tmp_path, inputs, monkeypatch)
     assert reloaded == state
     solution = tee_range_setup.load_current_epoch(tmp_path / "sessions" / tester).solution
     assert ts._tee_range_cli_args(solution) == ["--iwr6843-tee-m", "1.2"]
+
+
+def test_start_over_stops_only_the_guided_camera_owner(tmp_path, inputs, monkeypatch):
+    live = FakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    for index, action in enumerate(("start", "capture_empty", "capture_ball", "start_camera_arm5")):
+        assert post(client, tester, action, f"request-{index}").status_code == 200
+    assert live.running is True
+    assert client.get("/api/tester/live").get_json()["owner"]["kind"] == "guided_tee_range"
+
+    response = post(client, tester, "start_over", "restart")
+
+    assert response.status_code == 200
+    assert response.get_json()["state"]["phase"] == "needs_empty"
+    assert live.running is False
+    assert live.stop_count == 1
+    assert client.get("/api/tester/live").get_json()["owner"] is None
+
+
+def test_new_flow_does_not_stop_an_unrelated_standalone_live_view(tmp_path, inputs, monkeypatch):
+    live = FakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    body = {
+        "tester_id": tester,
+        "arm_id": "arm5",
+        "environment": "indoors",
+        "exposure_us": 300,
+        "gain": 4,
+    }
+    assert client.post("/api/tester/live", json=body).status_code == 200
+    assert live.running is True
+
+    response = post(client, tester, "start", "start")
+
+    assert response.status_code == 200
+    assert live.running is True
+    assert live.stop_count == 0
+    assert client.get("/api/tester/live").get_json()["owner"] is None
+
+
+def test_general_stop_releases_the_guided_camera_owner(tmp_path, inputs, monkeypatch):
+    live = FakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    for index, action in enumerate(("start", "capture_empty", "capture_ball", "start_camera_arm5")):
+        assert post(client, tester, action, f"request-{index}").status_code == 200
+
+    response = client.post("/api/tester/stop")
+
+    assert response.status_code == 200
+    assert response.get_json()["stopped"] is True
+    assert live.running is False
+    assert client.get("/api/tester/live").get_json()["owner"] is None
 
 
 @pytest.mark.parametrize(
@@ -822,6 +882,8 @@ def test_camera_evaluation_retry_uses_a_new_immutable_frame_attempt(tmp_path, in
     )
     assert post(client, tester, "evaluate_camera_arm5", "bad-evaluation").status_code == 200
     assert phase(client, tester)["phase"] == "retryable_failure"
+    assert live.running is False
+    assert client.get("/api/tester/live").get_json()["owner"] is None
     assert (
         post(client, tester, "retry", "retry-camera").get_json()["state"]["phase"]
         == "needs_camera_arm5"
@@ -835,11 +897,35 @@ def test_camera_evaluation_retry_uses_a_new_immutable_frame_attempt(tmp_path, in
 
     assert retried.status_code == 200
     assert retried.get_json()["state"]["phase"] == "needs_camera_arm6"
+    assert live.running is False
+    assert client.get("/api/tester/live").get_json()["owner"] is None
     root = tmp_path / "sessions" / tester
     store = tee_range_flow.FlowStore(root)
     state = store.load()
     frames = list(store.epoch_dir(state.epoch_id).glob("camera-arm5-*.pgm"))
     assert len(frames) == 2
+
+
+def test_interrupted_guided_camera_preserves_its_live_error(tmp_path, inputs, monkeypatch):
+    live = FakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    for index, action in enumerate(("start", "capture_empty", "capture_ball", "start_camera_arm5")):
+        assert post(client, tester, action, f"request-{index}").status_code == 200
+    live.error = "camera cable disconnected"
+    live.running = False
+
+    state = phase(client, tester)
+
+    assert state["phase"] == "retryable_failure"
+    assert state["retry_phase"] == "needs_camera_arm5"
+    assert state["evidence"]["camera_capture_failure"] == {
+        "arm_id": "arm5",
+        "stage": "live_view",
+        "message": "camera cable disconnected",
+        "remedy": "Check the camera connection, then retry this camera step.",
+    }
+    assert client.get("/api/tester/live").get_json()["owner"] is None
 
 
 def test_concurrent_arm_and_placement_writes_keep_both_updates(tmp_path):
