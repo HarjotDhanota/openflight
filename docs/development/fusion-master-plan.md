@@ -472,6 +472,7 @@ live/replay equivalence claim or independent calibration.
 | 2026-09-24 | Session 1 review needed five terminal replays; replay cannot run from an extracted archive (absolute capture paths), drops recorded provenance, hides experimental spin, and the package has no manifest or derived results ([audit](../camera/session-review-workflow.md)) | Replace package + terminal replay with one background analyze-review-package job producing an immutable hash-inventoried session bundle with relative paths, per-attempt statuses and a review page that imports the bundle anywhere. Estimator thresholds unchanged; the camera gate question stays blocked on frames |
 | 2026-09-24 | M1 recovery and usability review found duplicate normal and advanced acquisition/export paths that can send a real tester into an incomplete single-arm run or package the wrong scope | Make the guided setup, hardware, light, exposure-ladder, review and package sequence the normal workflow; keep manual single-arm controls as a collapsed advanced investigation path. Preserve rig/readiness gates, raw evidence schemas and diagnostic truth, and do not treat this navigation change as hardware or accuracy validation |
 | 2026-09-25 | The user rejected routine radar-to-ball measurement, while audit found that the tester still requires tape for manual swings and otherwise silently inherits the server's 1.575 m default; current camera optics and IWR impact timing are not qualified to replace it accurately | Introduce a versioned tee-range evidence contract and an explicit unresolved/raw-only acquisition path. Preserve optional tape as validation truth that is never silently selected, require independent source groups before an automatic solution can be selected, and withhold range-dependent canonical fusion until a qualified solution exists. Add camera and IWR candidates to the test bench before promotion; do not change estimator acceptance gates |
+| 2026-09-25 | Static IWR range differencing needs two matched pre-MTI captures, but production shot profiles move their range windows and concurrent setup capture could steal the runtime's single UART | Add a fixed-window diagnostic profile, raw-first setup capture with exact input hashes, and one interprocess lock shared by auto-detection and runtime ownership. Preserve failures as unusable evidence, keep firmware identity declared rather than read-back verified, and do not select or promote an IWR tee-range candidate in this slice |
 
 ## Soundless trigger architecture
 
@@ -970,3 +971,10 @@ product acceptance limits. Promotion remains gated on that independent evidence.
   Camera candidates remain non-selectable and the solution remains unresolved;
   optional tape is validation truth only. Software checks do not qualify optics,
   automatic range, or range-dependent fusion.
+- Static IWR capture foundation (M1, TB06/TB07/TB09/TB12): the driver now owns
+  its single serial device through an interprocess lock shared with auto-detect,
+  and an offline setup command records fixed-window empty/ball raw dumps before
+  deriving profiles. Results bind the exact declared firmware, config, rig and
+  calibration bytes and retain invalid dumps as unusable evidence. This is
+  software validation only; the profile, hardware behavior and range candidate
+  remain unqualified and are not wired into the tester or fusion selection.
