@@ -58,10 +58,17 @@ the remaining capture timeout for the firmware's trailing `Done`, then requires
 an acknowledged `stats` response showing capture active before deriving the
 profile. Cleanup uses longer CLI windows than the CP2105's documented stalls and
 verifies `active=0` after `sensorStop`. If the dump is complete or partial but
-the CLI does not recover, the raw bytes are still saved, the result records
-`stage=post_dump_cli_health`, and the host closes the port without sending more
-commands into a possibly active dump handler. Press RESET, rerun **Check the
-hardware**, and retry only after the CLI probe passes.
+the CLI does not recover, the raw bytes are still saved and the host closes the
+port without sending more commands into a possibly active dump handler. The raw
+artifact records `complete` and the size its own header declares
+(`expected_size_bytes`); only a complete dump sets `raw_evidence_sha256`. A
+truncated transfer records `stage=read_dump`; a complete payload whose handler
+never returned `Done`, or whose post-dump `stats` failed, records
+`stage=post_dump_cli_health`. No raw file is written when no byte arrived. An
+`l3dump` answered with `Error` and no header (for example after a board reset
+left capture inactive) is an ordinary `read_dump` failure: the CLI answered, so
+cleanup still stops the sensor. Press RESET, rerun **Check the hardware**, and
+retry only after the CLI probe passes.
 
 Every capture remains explicitly unqualified. Successful transport does not
 qualify the profile; a later hardware-validation step must regenerate the
