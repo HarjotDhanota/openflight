@@ -1,6 +1,5 @@
 """Offline moving-range replay contracts."""
 
-from dataclasses import asdict
 from types import SimpleNamespace
 
 import numpy as np
@@ -104,7 +103,7 @@ def test_moving_iwr_replay_retains_full_series_and_diagnostic_candidate(monkeypa
     assert stage["status"] == "candidate"
     assert stage["promotion_allowed"] is False
     assert stage["independent_support_eligible"] is False
-    assert stage["tee_range_candidate"] == asdict(candidate)
+    assert stage["tee_range_candidate"] == candidate.to_dict()
     assert len(stage["track"]["series"]["times_s"]) > 2
     assert stage["track"]["series"]["range_reference"] == "bias_corrected"
     assert series is not None and series.qualified

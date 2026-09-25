@@ -259,7 +259,7 @@ def replay_moving_iwr_range(
             "reason": series_error
             or (None if series is not None else "qualified series unavailable"),
         },
-        "tee_range_candidate": asdict(candidate) if candidate is not None else None,
+        "tee_range_candidate": candidate.to_dict() if candidate is not None else None,
         "capture_event_identity": {
             "shot_number": capture_event.get("shot_number"),
             "capture_bytes": capture_event.get("capture_bytes"),
