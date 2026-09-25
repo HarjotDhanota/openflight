@@ -147,6 +147,34 @@ def _report(shot, spin, confidence, iwr_status, club_status, scene):
                 },
                 "recomputed_radar_context": {"status": "replayed", "result": camera},
             },
+            "moving_iwr_range": {
+                "status": "candidate",
+                "reason": None,
+                "promotion_allowed": False,
+                "prerequisites": [
+                    {"id": "independent_impact_time", "status": "ready", "reason": "qualified"}
+                ],
+                "track": {"series": {"times_s": [0.01, 0.02], "ranges_m": [1.5, 1.9]}},
+                "tee_range_candidate": {
+                    "radar_slant_range_m": 1.45,
+                    "uncertainty_m": 0.03,
+                    "selectable": False,
+                },
+            },
+            "moving_camera_iwr_anchor": {
+                "status": "withheld_prerequisites",
+                "reason": "camera calibration is not accuracy-qualified",
+                "promotion_allowed": False,
+                "independent_camera_support": False,
+                "prerequisites": [
+                    {
+                        "id": "qualified_camera_model",
+                        "status": "withheld",
+                        "reason": "unqualified",
+                    }
+                ],
+                "result": None,
+            },
         },
     }
 
@@ -198,6 +226,9 @@ def test_session_one_shapes_render_every_status_with_its_reason(shape):
 
     agreements = {row["key"]: row for row in reviewed["agreements"]}
     assert agreements["live_vs_replay_ball_speed"]["difference"] == pytest.approx(0.0)
+    moving = reviewed["moving_range_diagnostics"]
+    assert moving["iwr_range"]["tee_range_candidate"]["selectable"] is False
+    assert moving["camera_iwr_anchor"]["status"] == "withheld_prerequisites"
     assert agreements["ops_ball_vs_iwr_track_speed"]["difference"] == pytest.approx(9.2)
     assert agreements["camera_replay_vs_live"]["matches"] is True
 

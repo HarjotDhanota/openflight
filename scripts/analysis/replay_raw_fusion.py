@@ -25,6 +25,10 @@ from openflight.iwr6843.club import ClubWindowPolicy
 from openflight.iwr6843.monitor import tx_order_from_config
 from openflight.iwr6843.replay import build_replay_calibration
 from openflight.iwr6843.runtime import horizontal_confidence_from
+from openflight.moving_range_replay import (
+    replay_moving_camera_iwr_anchor,
+    replay_moving_iwr_range,
+)
 from openflight.raw_radar_replay import (
     benchmark_candidate_from_raw_replays,
     load_session_events,
@@ -225,6 +229,24 @@ def _recorded_ops_inputs(events, args) -> tuple[int | None, str | None, dict]:
     return rate, club, {"ops_sample_rate_hz": rate_source, "club": club_source}
 
 
+def _saved_iwr_raw(events, session_dir: Path):
+    """Load the one saved IWR dump without depending on canonical calibration replay."""
+    matches = [event for event in events if event.get("type") == "iwr6843_capture"]
+    if len(matches) != 1:
+        return {}, None, None, None, f"expected exactly one iwr6843_capture, found {len(matches)}"
+    event = matches[0]
+    if event.get("capture_error"):
+        return event, None, None, None, "IWR capture event records a capture error"
+    try:
+        path, resolution = locate_recorded_capture(event.get("capture_path"), session_dir)
+        raw = path.read_bytes()
+    except (FileNotFoundError, OSError, TypeError, ValueError) as error:
+        return event, None, None, None, f"saved IWR dump is unreadable: {error}"
+    if not raw:
+        return event, path, resolution, None, "saved IWR dump is empty"
+    return event, path, resolution, raw, None
+
+
 def replay(args, *, frozen_session=None) -> dict:
     """Run requested stages while preserving every stage failure."""
     session_hash, events = session_shot_events(
@@ -232,7 +254,11 @@ def replay(args, *, frozen_session=None) -> dict:
     )
     iwr_measurement = None
     iwr_club_path = None
+    moving_iwr_series = None
+    camera_context = None
+    camera_archive = None
     session_start = _one(events, "session_start")
+    shot_event = next((event for event in events if event.get("type") == "shot_detected"), {})
     session_dir = args.session.resolve().parent
     path_root = getattr(args, "path_root", None)
     identity, identity_evidence = _source_identity(session_start, events, session_dir)
@@ -351,9 +377,22 @@ def replay(args, *, frozen_session=None) -> dict:
             }
     else:
         report["stages"]["measured_total_speed_candidate"] = {"status": "not_requested"}
+    iwr_capture_event = {}
+    iwr_capture_path = iwr_capture_resolution = iwr_raw = None
+    iwr_load_error = None
+    if args.iwr or args.iwr_calibration:
+        (
+            iwr_capture_event,
+            iwr_capture_path,
+            iwr_capture_resolution,
+            iwr_raw,
+            iwr_load_error,
+        ) = _saved_iwr_raw(events, session_dir)
     if args.iwr or args.iwr_calibration:
         try:
-            capture_event = _one(events, "iwr6843_capture")
+            capture_event = iwr_capture_event
+            if iwr_load_error:
+                raise ValueError(iwr_load_error)
             if args.iwr_runtime_config:
                 runtime_bytes = args.iwr_runtime_config.read_bytes()
                 runtime_config = json.loads(runtime_bytes)
@@ -445,14 +484,11 @@ def replay(args, *, frozen_session=None) -> dict:
                     ball_height_m=ball_height_m,
                 )
                 tx_order = tx_order_from_config(frozen_radar_config)
-            if capture_event.get("capture_error"):
-                raise ValueError("IWR capture event records a capture error")
-            capture_path, capture_resolution = locate_recorded_capture(
-                capture_event.get("capture_path"), session_dir
+            capture_path, capture_resolution, raw = (
+                iwr_capture_path,
+                iwr_capture_resolution,
+                iwr_raw,
             )
-            raw = capture_path.read_bytes()
-            if not raw:
-                raise ValueError("IWR raw capture is empty")
             recorded_bytes = capture_event.get("capture_bytes")
             if (
                 isinstance(recorded_bytes, int)
@@ -536,6 +572,23 @@ def replay(args, *, frozen_session=None) -> dict:
             "status": "not_requested",
             "reason": "explicit calibration and runtime options were not supplied",
         }
+    if args.iwr or args.iwr_calibration:
+        moving_stage, moving_iwr_series = replay_moving_iwr_range(
+            iwr_raw,
+            capture_event=iwr_capture_event,
+            runtime_config=_mapping(iwr_capture_event.get("runtime_config")),
+            shot_event=shot_event,
+            club=club,
+        )
+        if iwr_load_error:
+            moving_stage["capture_load_error"] = iwr_load_error
+        report["stages"]["moving_iwr_range"] = moving_stage
+    else:
+        report["stages"]["moving_iwr_range"] = {
+            "status": "not_requested",
+            "reason": "IWR replay was not requested",
+            "promotion_allowed": False,
+        }
     if args.camera:
         try:
             frozen = replay_frozen_shot(
@@ -543,6 +596,8 @@ def replay(args, *, frozen_session=None) -> dict:
             )
             context = frozen.pop("_context")
             archive = frozen.pop("_archive")
+            camera_context = context
+            camera_archive = archive
             frozen["capture_path"] = _portable(frozen["capture_path"], path_root)
             camera_stage = {"recorded_context": frozen}
             iwr_stage = report["stages"].get("iwr6843", {})
@@ -601,6 +656,22 @@ def replay(args, *, frozen_session=None) -> dict:
             }
     else:
         report["stages"]["camera"] = {"status": "not_requested"}
+    if args.camera:
+        ops_result = _mapping(report["stages"].get("ops")).get("result")
+        report["stages"]["moving_camera_iwr_anchor"] = replay_moving_camera_iwr_anchor(
+            context=camera_context,
+            archive=camera_archive,
+            shot_event=shot_event,
+            iwr_ranges=moving_iwr_series,
+            ops_ball_speed_mph=_mapping(ops_result).get("ball_speed_mph"),
+        )
+    else:
+        report["stages"]["moving_camera_iwr_anchor"] = {
+            "status": "not_requested",
+            "reason": "camera replay was not requested",
+            "promotion_allowed": False,
+            "independent_camera_support": False,
+        }
     return report
 
 

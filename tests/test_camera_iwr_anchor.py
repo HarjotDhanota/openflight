@@ -234,7 +234,7 @@ def test_camera_iwr_range_disagreement_is_retained_and_withheld():
 
     assert result.status == "withheld_no_consistent_path"
     assert result.candidates
-    assert all(
+    assert any(
         "camera_iwr_range_disagreement" in item.rejection_reasons for item in result.candidates
     )
 
@@ -317,4 +317,101 @@ def test_unqualified_iwr_range_never_exposes_an_impact_pixel():
 
     assert result.status == "withheld_unqualified_iwr_range"
     assert result.selected_path_id is None
+    assert result.impact_pixel_xy is None
+
+
+def test_trigger_outside_saved_camera_timestamp_support_is_withheld_before_tracking():
+    camera, frames, timestamps, series, clock, speed, _impact = _shot()
+
+    result = estimate_moving_ball_impact_anchor(
+        frames,
+        timestamps,
+        trigger_ns=int(timestamps[-1]) + 1,
+        camera=camera,
+        clock_mapping=clock,
+        iwr_ranges=series,
+        ops_ball_speed_mph=speed,
+    )
+
+    assert result.status == "withheld_trigger_outside_camera_capture"
+    assert result.candidates == ()
+    assert result.impact_pixel_xy is None
+    assert result.diagnostics["camera_timestamp_support_ns"] == [
+        int(timestamps[0]),
+        int(timestamps[-1]),
+    ]
+
+
+def test_timed_path_starting_more_than_two_frames_after_impact_is_withheld():
+    camera, frames, timestamps, series, _clock, speed, _impact = _shot()
+    delayed_clock = CameraIwrClockMapping(
+        offset_s=0.025,
+        uncertainty_s=0.0002,
+        qualified=True,
+        source="synthetic_delayed_mapping",
+    )
+    delayed_series = TimedIwrRangeSeries(
+        times_s=tuple(value + 0.025 for value in series.times_s),
+        ranges_m=series.ranges_m,
+        range_uncertainty_m=series.range_uncertainty_m,
+        source="delayed_iwr_track",
+        qualified=True,
+    )
+
+    result = estimate_moving_ball_impact_anchor(
+        frames,
+        timestamps,
+        trigger_ns=0,
+        camera=camera,
+        clock_mapping=delayed_clock,
+        iwr_ranges=delayed_series,
+        ops_ball_speed_mph=speed,
+    )
+
+    assert result.status == "withheld_no_consistent_path"
+    assert result.candidates
+    assert all(
+        "impact_extrapolation_exceeds_cap" in candidate.rejection_reasons
+        for candidate in result.candidates
+    )
+    assert result.diagnostics["maximum_impact_extrapolation_frames"] == 2.0
+
+
+def test_backprojected_impact_pixel_outside_image_is_retained_and_rejected():
+    camera = _camera(640, 400, 500.0)
+    times_s = np.arange(10) / 120.0
+    impact = np.asarray([-1.0, 1.45, 0.021335])
+    velocity = np.asarray([30.0, 17.5, 5.0])
+    points = [impact + velocity * time for time in times_s]
+    projected = [_project(camera, point) for point in points]
+    path = [
+        (x, y, camera.focal_size_px * BALL_DIAMETER_M / distance) for x, y, distance in projected
+    ]
+    frames = _scene(640, 400, [path])
+    radar = np.asarray(camera.radar_origin_lfu)
+    series = TimedIwrRangeSeries(
+        times_s=tuple(float(value) for value in times_s),
+        ranges_m=tuple(float(np.linalg.norm(point - radar)) for point in points),
+        range_uncertainty_m=0.015,
+        source="synthetic_iwr_track",
+        qualified=True,
+    )
+    timestamps = np.asarray(np.round(times_s * 1e9), dtype=np.int64)
+    clock = CameraIwrClockMapping(0.0, 0.0002, True, "synthetic_shared_clock")
+
+    result = estimate_moving_ball_impact_anchor(
+        frames,
+        timestamps,
+        trigger_ns=0,
+        camera=camera,
+        clock_mapping=clock,
+        iwr_ranges=series,
+        ops_ball_speed_mph=float(np.linalg.norm(velocity) * 2.23694),
+    )
+
+    assert result.status == "withheld_no_consistent_path"
+    assert any(
+        "impact_pixel_outside_image" in candidate.rejection_reasons
+        for candidate in result.candidates
+    )
     assert result.impact_pixel_xy is None

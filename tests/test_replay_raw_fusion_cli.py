@@ -521,6 +521,8 @@ def test_unified_camera_recomputation_receives_replayed_radar_context(tmp_path, 
     assert seen["context"]["iwr_vertical_deg"] == 18.0
     assert seen["context"]["iwr_horizontal_confidence"] == 0.812
     assert seen["archive"] == {"frozen": True}
+    assert result["stages"]["moving_iwr_range"]["promotion_allowed"] is False
+    assert result["stages"]["moving_camera_iwr_anchor"]["status"] == ("withheld_prerequisites")
 
 
 def test_recorded_iwr_snapshot_restores_base_tilt_and_base64_config(tmp_path, monkeypatch):
@@ -679,3 +681,7 @@ def test_recorded_unresolved_range_preserves_raw_capture_without_estimating(tmp_
     assert stage["status"] == "withheld"
     assert stage["reason"] == "tee_range_unresolved"
     assert stage["capture_sha256"] == hashlib.sha256(b"raw").hexdigest()
+    moving = result["stages"]["moving_iwr_range"]
+    assert moving["status"] == "withheld_track_error"
+    assert moving["promotion_allowed"] is False
+    assert moving["tee_range_candidate"] is None

@@ -101,6 +101,77 @@ to null and never falls back to an old recorded track. A recorded-context match
 proves deterministic replay of those saved inputs; neither result proves that
 the radar or camera evidence is physically accurate.
 
+Every `--iwr` replay also writes `stages.moving_iwr_range`. This stage extracts
+the moving-ball range fit without a configured tee and stores the fit plus its
+range at every captured IWR loop time inside the fitted support. Apparent ranges
+remain labelled apparent unless the shot carries a qualified range-bias record
+that exactly matches the captured calibration hash and bias. The stage never
+promotes tee range.
+
+A moving-track tee-range candidate is produced only when the `shot_detected`
+event already contains a `moving_range_evidence` object with both of these
+records:
+
+```jsonc
+{
+  "range_calibration": {
+    "source_sha256": "<captured calibration source SHA-256>",
+    "bias_m": <same finite range_bias_m recorded in the runtime snapshot>,
+    "uncertainty_m": <non-negative measured uncertainty>,
+    "qualified": true,
+    "source": "<independent range-calibration evidence>"
+  },
+  "impact_time": {
+    "time_s": <impact time in the IWR capture timeline>,
+    "uncertainty_s": <non-negative measured uncertainty>,
+    "source": "<independent impact-time evidence>",
+    "qualified": true,
+    "independent_of_iwr_range": true,
+    "provenance": {
+      "independence_basis": "<how independence was established>",
+      "dependencies": ["<every input; must exclude iwr_range>"]
+    }
+  }
+}
+```
+
+The boolean alone is insufficient: replay requires a non-empty independence
+basis and an explicit dependency list that excludes `iwr_range`. Missing,
+malformed, unqualified or circular timing is retained as a structured withheld
+result. The candidate is always non-selectable and cannot count as independent
+IWR support in the tee-range resolver.
+
+When `--camera` is also requested, `stages.moving_camera_iwr_anchor` records the
+anchor-free camera/IWR moving-ball diagnostic. Replay invokes it only when the
+saved archive has aligned frames, host timestamps and a trigger timestamp; the
+camera context restores an accuracy-qualified calibrated projection; the OPS
+replay produces positive ball speed; the moving IWR track has qualified range
+calibration; and `moving_range_evidence.camera_iwr_clock_mapping` is qualified
+and hash-bound to provenance:
+
+```jsonc
+{
+  "camera_iwr_clock_mapping": {
+    "offset_s": <camera-trigger-relative to IWR-impact-relative offset>,
+    "uncertainty_s": <non-negative mapping uncertainty>,
+    "qualified": true,
+    "source": "<independent timing bench>",
+    "source_sha256": "<timing evidence SHA-256>",
+    "provenance": {"<recorded provenance>": "<value>"}
+  }
+}
+```
+
+Otherwise the report lists every missing or unqualified prerequisite without
+inventing a clock, calibration, speed or range. A run retains the selected path,
+alternatives, scores and rejection reasons. The trigger must fall inside the
+saved camera timestamps, a camera observation with IWR range support must land
+within two delivered frame intervals of mapped impact, and back-projection is
+capped at those two intervals. An impact pixel outside the saved image is
+rejected. The anchor is conditioned on the same moving IWR range series, so it
+is downstream diagnostic evidence and can never be recycled as independent
+camera support for tee-range promotion.
+
 The canonical OPS ball speed is an aggregate of several FFT windows and remains
 radial. It must not be assigned the timestamp of one strong window. The measured
 projection candidate in `openflight.speed_correction` accepts only one

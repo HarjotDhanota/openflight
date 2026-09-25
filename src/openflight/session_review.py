@@ -369,6 +369,7 @@ def _stray_capture_attempt(run: _Run, name: str, folder: Path) -> dict[str, Any]
         "stages": {},
         "overlay": overlay({}),
         "agreements": [],
+        "moving_range_diagnostics": {"iwr_range": {}, "camera_iwr_anchor": {}},
         "rejection": {
             "reason": ineligible.get("reason")
             or "no sensor shot was logged for this camera trigger",
@@ -548,6 +549,26 @@ def report_markdown(review: Mapping[str, Any]) -> str:
                 lines.append(f"Camera: {outcome['label']}{detail}")
             if attempt["evidence"].get("impact_photo"):
                 lines.append(f"Impact photo: {attempt['evidence']['impact_photo']}")
+            moving = mapping(attempt.get("moving_range_diagnostics"))
+            moving_iwr = mapping(moving.get("iwr_range"))
+            moving_anchor = mapping(moving.get("camera_iwr_anchor"))
+            if moving_iwr:
+                candidate = mapping(moving_iwr.get("tee_range_candidate"))
+                value = finite(candidate.get("radar_slant_range_m"))
+                suffix = f" ({value:.3f} m diagnostic candidate)" if value is not None else ""
+                lines.append(
+                    f"Moving IWR range: {moving_iwr.get('status') or 'unknown'}{suffix}; "
+                    "never eligible to promote tee range."
+                )
+                if moving_iwr.get("reason"):
+                    lines.append(f"Moving IWR withheld: {moving_iwr['reason']}")
+            if moving_anchor:
+                lines.append(
+                    "Moving camera/IWR anchor: "
+                    f"{moving_anchor.get('status') or 'unknown'}; downstream diagnostic only."
+                )
+                if moving_anchor.get("reason"):
+                    lines.append(f"Moving anchor withheld: {moving_anchor['reason']}")
             if attempt.get("metrics"):
                 lines += [
                     "",
