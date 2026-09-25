@@ -679,6 +679,8 @@
       let teeRangeState = null;
       let teeRangeRequestRunning = false;
       let teeRangeActionError = null;
+      // The flow state an action error describes; a newer server state supersedes it.
+      let teeRangeActionErrorKey = null;
       const REQUEST_TIMEOUT_MS = 5000;
       const ACTION_TIMEOUT_MS = 15000;
       const PACKAGE_TIMEOUT_MS = 300000;
@@ -1094,6 +1096,8 @@
       }
       function renderAutomaticRange(evidence, solution) {
         lastAutomaticRange = evidence ? { evidence, solution } : lastAutomaticRange;
+        // The guided flow owns this panel once it exists; never overwrite its errors.
+        if (teeRangeState) return;
         const selected = evidence && evidence.selected;
         const status = evidence ? evidence.status : 'pending';
         el('automatic-range').dataset.ready = 'false';
@@ -1263,7 +1267,10 @@
         try {
           await post('/api/tester/run', { ...suiteBody('arm5', context), action: 'preflight' });
           const job = await waitJob(context, version);
-          el('check-verdict').textContent = job.state === 'complete' ? 'ready' : `failed: ${job.message}`;
+          // The IWR6843 CLI probe runs last and prints one line saying which port answered or why not.
+          const detail = [...(job.output || [])].reverse().find((line) => line.trim());
+          const suffix = detail ? ` — ${detail}` : '';
+          el('check-verdict').textContent = job.state === 'complete' ? `ready${suffix}` : `failed: ${job.message}${suffix}`;
         } catch (e) {
           el('check-verdict').textContent = e.message;
         }
@@ -1342,6 +1349,14 @@
         },
       };
 
+      const teeRangeStateKey = (state) =>
+        state ? `${state.epoch_id}|${state.sequence ?? ''}|${state.phase}` : '';
+
+      function setTeeRangeActionError(message) {
+        teeRangeActionError = message;
+        teeRangeActionErrorKey = message ? teeRangeStateKey(teeRangeState) : null;
+      }
+
       function teeRangeFailureSummary(state) {
         if (state?.phase !== 'retryable_failure') return null;
         const failure = state?.evidence?.capture_failure;
@@ -1396,6 +1411,9 @@
           if (!response.ok) throw new Error(body.error || `range check failed (${response.status})`);
           if (testerId !== el('tester-id').value.trim()) return;
           teeRangeState = body.state;
+          if (teeRangeActionError && teeRangeStateKey(teeRangeState) !== teeRangeActionErrorKey) {
+            setTeeRangeActionError(null);
+          }
           renderTeeRange();
         } catch (error) {
           if (testerId !== el('tester-id').value.trim()) return;
@@ -1409,11 +1427,11 @@
         if (!(await requireSetupEligibility())) {
           const confirmationMissing = !setupEligibility?.operator_confirmation?.confirmed;
           const iwrCheckMissing = setupEligibility?.blockers?.some((blocker) => blocker.id === 'iwr6843_cli');
-          teeRangeActionError = teeRangeState && confirmationMissing
+          setTeeRangeActionError(teeRangeState && confirmationMissing
             ? `The tester restarted. ${iwrCheckMissing ? 'Run Check the hardware and ' : ''}reconfirm the physical setup, then start this automatic range over.`
             : iwrCheckMissing
               ? 'IWR6843 CLI readiness was invalidated by the failed capture. Press RESET if needed, run Check the hardware, then Retry this step.'
-              : 'Confirm the physical setup and pass every hardware check before starting automatic range.';
+              : 'Confirm the physical setup and pass every hardware check before starting automatic range.');
           renderTeeRange();
           return;
         }
@@ -1426,12 +1444,12 @@
             request_id: newAttemptId(),
           });
           teeRangeState = body.state;
-          teeRangeActionError = null;
+          setTeeRangeActionError(null);
         } catch (error) {
           if (error.response?.state) teeRangeState = error.response.state;
-          teeRangeActionError = error.response?.start_over_required
+          setTeeRangeActionError(error.response?.start_over_required
             ? `${error.message}. Use “Ball or rig moved: start over” to begin a new setup epoch.`
-            : error.message;
+            : error.message);
         } finally {
           teeRangeRequestRunning = false;
           renderTeeRange();
@@ -1881,7 +1899,7 @@
         setupActionPending = false;
         teeRangeState = null;
         teeRangeRequestRunning = false;
-        teeRangeActionError = null;
+        setTeeRangeActionError(null);
         renderTeeRange();
         invalidateSetupEligibility('Tester ID changed. Server setup eligibility must be rechecked.');
         photoActionPending = false;

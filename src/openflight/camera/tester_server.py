@@ -665,6 +665,9 @@ def action_commands(
     if action in {"ladder", "swings"}:
         if not tester_setup or not tester_setup.get("config_hash"):
             raise ValueError("tester setup evidence is required for capture")
+        if iwr_static_port:
+            # The kiosk must own the same interface the hardware check verified.
+            commands[0].extend(["--iwr6843-port", iwr_static_port])
         commands[0].extend(
             [
                 "--tester-setup-required",
@@ -1722,6 +1725,12 @@ def _static_capture_failure(record: Mapping, capture_kind: str) -> dict[str, str
         remedy = (
             "Verify the IWR6843 uses the CP2105 Enhanced/UARTA interface (if00), stop any "
             "other serial owner, press RESET, and retry."
+        )
+    elif stage == "read_dump":
+        remedy = (
+            "The dump transfer did not complete; any bytes received were preserved and "
+            "labelled incomplete. Press RESET, rerun Check the hardware, then retry this "
+            "capture step."
         )
     elif stage == "post_dump_cli_health":
         remedy = (
@@ -2974,21 +2983,26 @@ def create_app(
         except TeeRangeSetupAdmissionError as exc:
             failed_state = None
             if exc.start_over:
-                store = range_store(tester_id)
-                failed_state = store.load()
-                reason = f"setup_admission_changed_start_over_required: {exc}"
-                if failed_state is not None and not (
-                    failed_state.phase == "retryable_failure"
-                    and failed_state.retry_phase is None
-                    and failed_state.reason == reason
-                ):
-                    failed_state = store.transition(
-                        failed_state,
-                        phase="retryable_failure",
-                        reason=reason,
-                        retry_phase=None,
-                        request_id=request_id,
-                    )
+                with tee_range_lock:
+                    store = range_store(tester_id)
+                    failed_state = store.load()
+                    reason = f"setup_admission_changed_start_over_required: {exc}"
+                    if failed_state is not None and not (
+                        failed_state.phase == "retryable_failure"
+                        and failed_state.retry_phase is None
+                        and failed_state.reason == reason
+                    ):
+                        try:
+                            failed_state = store.transition(
+                                failed_state,
+                                phase="retryable_failure",
+                                reason=reason,
+                                retry_phase=None,
+                                request_id=request_id,
+                            )
+                        except RuntimeError:
+                            # A detached capture published first; report what is stored.
+                            failed_state = store.load()
             return (
                 jsonify(
                     {
@@ -3449,6 +3463,7 @@ def create_app(
             optical_calibration,
             camera_placement,
             solution,
+            iwr_static_port,
         )
         run = Path(commands[0][commands[0].index("--log-dir") + 1])
         with session_bundle.snapshot_lock(
@@ -3732,8 +3747,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--iwr-static-port",
         default=None,
         help=(
-            "IWR6843 Enhanced/UARTA device for tester preflight and static setup captures; "
-            "auto-detect when omitted"
+            "IWR6843 Enhanced/UARTA device for tester preflight, static setup captures and "
+            "kiosk runs; auto-detect when omitted"
         ),
     )
     parser.add_argument("--tee-range-qualification", type=Path, default=None)
