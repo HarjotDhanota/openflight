@@ -661,6 +661,18 @@ class TestLiveEndpoints:
         client, _live = self._client(tmp_path)
         assert client.get("/api/tester/live.png").status_code == 503
 
+    def test_general_stop_closes_a_standalone_live_view(self, tmp_path):
+        client, live = self._client(tmp_path)
+        body = {"tester_id": "20260922-name", "arm_id": "arm1", "environment": "indoors"}
+        assert client.post("/api/tester/live", json=body).status_code == 200
+        assert _wait(lambda: live.running)
+
+        response = client.post("/api/tester/stop")
+
+        assert response.status_code == 200
+        assert response.get_json()["stopped"] is True
+        assert not live.running
+
     def test_out_of_range_settings_are_refused(self, tmp_path):
         client, _live = self._client(tmp_path)
         body = {"tester_id": "20260922-name", "arm_id": "arm1", "environment": "indoors"}
@@ -1132,6 +1144,93 @@ class TestTheLadder:
             time.sleep(0.01)
         assert manager.status()["state"] == "stopped"
         assert group_cleanup.wait(1)
+
+    def test_log_directory_failure_finishes_the_job_as_an_error(self, tmp_path, monkeypatch):
+        manager = ts.TesterJobManager()
+
+        def fail_mkdir(*_args, **_kwargs):
+            raise OSError("disk unavailable")
+
+        monkeypatch.setattr(ts.Path, "mkdir", fail_mkdir)
+        manager.start("gain", [["calibrate"]], tmp_path / "logs" / "gain.log")
+
+        assert _wait(lambda: manager.status()["state"] != "running")
+        status = manager.status()
+        assert status["state"] == "error"
+        assert status["returncode"] == -1
+        assert "disk unavailable" in status["message"]
+
+    def test_repeat_actions_preserve_the_previous_log(self, tmp_path):
+        class Successful:
+            pid = 10
+
+            def __init__(self, command, **_kwargs):
+                self.stdout = iter([f"ran {command[0]}\n"])
+
+            def wait(self):
+                return 0
+
+        log_path = tmp_path / "gain.log"
+        manager = ts.TesterJobManager(popen=Successful)
+        manager.start("gain", [["first"]], log_path)
+        assert _wait(lambda: manager.status()["state"] == "complete")
+        manager.start("gain", [["second"]], log_path)
+        assert _wait(lambda: manager.status()["state"] == "complete")
+
+        contents = log_path.read_text(encoding="utf-8")
+        assert "ran first" in contents
+        assert "ran second" in contents
+
+    def test_job_stays_running_until_its_finish_callback_returns(self, tmp_path):
+        callback_started = threading.Event()
+        release_callback = threading.Event()
+
+        class Successful:
+            pid = 10
+            stdout = iter(())
+
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def wait(self):
+                return 0
+
+        def finish(_action, _returncode):
+            callback_started.set()
+            assert release_callback.wait(2)
+
+        manager = ts.TesterJobManager(popen=Successful)
+        manager.start("gain", [["first"]], tmp_path / "gain.log", on_finish=finish)
+        assert callback_started.wait(1)
+        assert manager.status()["state"] == "running"
+        with pytest.raises(RuntimeError, match="already running"):
+            manager.start("gain", [["second"]], tmp_path / "gain.log")
+        release_callback.set()
+        assert _wait(lambda: manager.status()["state"] == "complete")
+
+    def test_finish_callback_failure_marks_the_job_as_an_error(self, tmp_path):
+        class Successful:
+            pid = 10
+            stdout = iter(())
+
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def wait(self):
+                return 0
+
+        def fail_finish(_action, _returncode):
+            raise OSError("gain record unavailable")
+
+        manager = ts.TesterJobManager(popen=Successful)
+        manager.start("gain", [["calibrate"]], tmp_path / "gain.log", on_finish=fail_finish)
+        assert _wait(lambda: manager.status()["state"] != "running")
+
+        status = manager.status()
+        assert status["state"] == "error"
+        assert status["returncode"] == -1
+        assert "gain record unavailable" in status["message"]
+        assert any("gain record unavailable" in line for line in status["output"])
 
     def test_a_stuck_gain_screen_is_stopped_by_its_timeout(self, monkeypatch, tmp_path):
         import threading as _threading  # pylint: disable=import-outside-toplevel

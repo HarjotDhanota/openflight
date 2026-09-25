@@ -652,9 +652,9 @@ class TesterJobManager:
     def _run(self, commands: tuple[tuple[str, ...], ...], log_path: Path) -> None:
         returncode = 0
         message = "Complete"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with log_path.open("w", encoding="utf-8") as handle:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as handle:
                 for command in commands:
                     self._append(f"$ {shlex.join(command)}", handle)
                     process = self._popen(
@@ -695,27 +695,35 @@ class TesterJobManager:
                 with self._lock:
                     self._output.append(f"ERROR: {exc}")
         with self._lock:
-            cancelled = self._cancel_requested
             action = str(self._state["action"])
             on_finish = self._on_finish
             self._process = None
-            self._state.update(
-                {
-                    "state": "stopped"
-                    if cancelled
-                    else ("complete" if returncode == 0 else "error"),
-                    "message": message,
-                    "returncode": returncode,
-                    "finished_at": datetime.now(timezone.utc).isoformat(),
-                }
-            )
         if self._timer is not None:
             self._timer.cancel()
         if on_finish is not None:
             try:
                 on_finish(action, returncode)
-            except Exception:  # pylint: disable=broad-exception-caught
-                pass
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                returncode = -1
+                message = f"Completion failed: {exc}"
+                try:
+                    with log_path.open("a", encoding="utf-8") as handle:
+                        self._append(f"ERROR: {message}", handle)
+                except OSError:
+                    with self._lock:
+                        self._output.append(f"ERROR: {message}")
+        with self._lock:
+            cancelled = self._cancel_requested
+            self._state.update(
+                {
+                    "state": "stopped"
+                    if cancelled
+                    else ("complete" if returncode == 0 else "error"),
+                    "message": "Stopped" if cancelled else message,
+                    "returncode": returncode,
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
 
     def cancel(self) -> bool:
         with self._lock:
@@ -1973,9 +1981,11 @@ def create_app(
 
     @app.post("/api/tester/stop")
     def stop_action():
+        live_running = live.running
+        live.stop()
         with ladder_lock:
             runners = list(ladder_runners.values())
-            stopped = any(not runner.stopped for runner in runners)
+            stopped = live_running or any(not runner.stopped for runner in runners)
             for runner in runners:
                 runner.stop(wait=False)
             stopped = jobs.cancel() or stopped
