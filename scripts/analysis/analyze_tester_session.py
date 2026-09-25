@@ -341,6 +341,7 @@ def analyze(sessions_root: Path, tester_id: str, *, package: bool, viewer: Path 
         return 2
     software, limitation = _replay_software_content_sha256()
     job = Job(tester_dir / ANALYSIS_DIR / "job.json", tester_id, software)
+    print(f"analysis started for {tester_id} (pid {os.getpid()})", flush=True)
     try:
         replay_all(sessions_root, tester_id, job, software)
         job.update(phase="review")
@@ -378,6 +379,8 @@ def analyze(sessions_root: Path, tester_id: str, *, package: bool, viewer: Path 
         traceback.print_exc()
         return 1
     job.finish("complete")
+    bundle = job.state.get("bundle") or {}
+    print(f"analysis complete for {tester_id}: {bundle.get('name', 'no bundle')}", flush=True)
     return 0
 
 

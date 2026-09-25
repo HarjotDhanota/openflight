@@ -184,6 +184,7 @@ ACTION_TIMEOUT_S = {"preflight": 120.0, "gain": 900.0}
 # a stopped job first gets start-kiosk.sh's own shutdown, which closes the radars
 # and the camera; whatever of its process group is left after this is ended
 KILL_GRACE_S = 8.0
+SPAWN_WAIT_S = 10.0
 
 # Chained-delivery statuses that mean the estimator produced a delivery.
 ACCEPTED_STATUSES = frozenset({"ok", "fused", "chained_high", "approach_high"})
@@ -595,6 +596,8 @@ class TesterJobManager:
         self._thread: threading.Thread | None = None
         self._cancel_requested = False
         self._on_finish: Callable[[str, int], None] | None = None
+        self._output_to_log = False
+        self._spawned = threading.Event()
         self._timer: threading.Timer | None = None
         self._state: dict[str, object] = {
             "state": "idle",
@@ -616,12 +619,17 @@ class TesterJobManager:
         commands: Sequence[Sequence[str]],
         log_path: Path,
         on_finish: Callable[[str, int], None] | None = None,
+        *,
+        output_to_log: bool = False,
     ) -> None:
+        """Run the commands in order; ``output_to_log`` hands the child its log file
+        directly, so it keeps writing if this server process stops."""
         with self._lock:
             if self._state["state"] == "running":
                 raise RuntimeError("another action is already running")
             self._cancel_requested = False
             self._on_finish = on_finish
+            self._output_to_log = output_to_log
             self._output.clear()
             self._state = {
                 "state": "running",
@@ -637,12 +645,16 @@ class TesterJobManager:
                 daemon=True,
                 name="tester-job",
             )
+            self._spawned.clear()
             self._thread.start()
             timeout = ACTION_TIMEOUT_S.get(action)
             self._timer = threading.Timer(timeout, self.cancel) if timeout else None
             if self._timer is not None:
                 self._timer.daemon = True
                 self._timer.start()
+        if output_to_log:
+            # the caller's acceptance promises a process that outlives this server
+            self._spawned.wait(SPAWN_WAIT_S)
 
     def _append(self, line: str, handle) -> None:
         clean = line.rstrip("\r\n")
@@ -659,17 +671,12 @@ class TesterJobManager:
             with log_path.open("a", encoding="utf-8") as handle:
                 for command in commands:
                     self._append(f"$ {shlex.join(command)}", handle)
-                    process = self._popen(
-                        list(command),
-                        cwd=self.cwd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        bufsize=1,
-                        start_new_session=True,
-                    )
+                    if self._output_to_log:
+                        self._append(f"(output continues in {log_path})", handle)
+                    try:
+                        process = self._spawn(command, handle)
+                    finally:
+                        self._spawned.set()
                     with self._lock:
                         self._process = process
                         cancel_pending = self._cancel_requested
@@ -688,6 +695,7 @@ class TesterJobManager:
                         message = f"Failed with exit code {returncode}"
                         break
         except (OSError, ValueError) as exc:
+            self._spawned.set()
             returncode = -1
             message = str(exc)
             try:
@@ -726,6 +734,19 @@ class TesterJobManager:
                     "finished_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
+
+    def _spawn(self, command: Sequence[str], handle):
+        return self._popen(
+            list(command),
+            cwd=self.cwd,
+            stdout=handle if self._output_to_log else subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            start_new_session=True,
+        )
 
     def cancel(self) -> bool:
         with self._lock:
@@ -2018,6 +2039,7 @@ def create_app(
                     "analyze",
                     [review_routes.analysis_command(sessions_root, tester_id)],
                     log_path,
+                    output_to_log=True,
                 )
             return jsonify(
                 {

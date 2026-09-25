@@ -50,7 +50,7 @@ def analysis_command(sessions_root: Path, tester_id: str) -> list[str]:
         tester_id,
         "--package",
     ]
-    nice = shutil.which("nice")
+    nice = shutil.which("nice") if os.name == "posix" else None
     return [nice, "-n", "10", *command] if nice else command
 
 
