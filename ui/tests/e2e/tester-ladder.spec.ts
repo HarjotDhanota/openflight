@@ -81,7 +81,11 @@ test('captures the returned target identity once and hides the handoff after suc
   });
   await page.goto('/tester.html');
 
-  await expect(page.getByText('Photo needed for full-300 (camera-final-17).')).toBeVisible();
+  await expect(
+    page.getByText(
+      'Arm 5 is complete. Do not swing. Photograph or skip the face image for full-300 (camera-final-17) to continue to Arm 6.',
+    ),
+  ).toBeVisible();
   const capture = page.getByRole('button', { name: 'Photograph face' });
   await capture.tap();
   await capture.tap({ force: true });

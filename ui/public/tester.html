@@ -1326,7 +1326,9 @@
         if (!photoTarget) return;
         el('photo-message').textContent = photoStopped
           ? `Photo held for ${photoTarget.rung_id}. Resume the ladder to use the camera.`
-          : `Photo needed for ${photoTarget.rung_id} (${photoTarget.capture}).`;
+          : photoIsHandoff
+            ? `Arm 5 is complete. Do not swing. Photograph or skip the face image for ${photoTarget.rung_id} (${photoTarget.capture}) to continue to Arm 6.`
+            : `Impact photo available for ${photoTarget.rung_id} (${photoTarget.capture}).`;
         el('photo-pause').textContent = photoStopped ? 'Resume ladder' : 'Pause ladder';
         el('photo-pause').hidden = !photoIsHandoff;
         el('photo-skip').hidden = !photoIsHandoff;
