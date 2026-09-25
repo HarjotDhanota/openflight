@@ -255,6 +255,20 @@ class TestCommands:
         assert "--iwr6843-tee-range-pending" in command
         assert command[command.index("--log-dir") + 1].endswith("run-01")
 
+    @pytest.mark.parametrize("action", ["swings", "ladder"])
+    def test_kiosk_runs_own_the_iwr_port_the_hardware_check_verified(self, tmp_path, action):
+        p = params(arm_id="arm4", tee_mm=1524)
+        screened(tmp_path, p)
+        stable = "/dev/serial/by-id/iwr-if00-port0"
+
+        pinned = ts.action_commands(
+            action, p, tmp_path, RIG, tester_setup=TESTER_SETUP, iwr_static_port=stable
+        )[0][0]
+        detected = ts.action_commands(action, p, tmp_path, RIG, tester_setup=TESTER_SETUP)[0][0]
+
+        assert pinned[pinned.index("--iwr6843-port") + 1] == stable
+        assert "--iwr6843-port" not in detected
+
     def test_the_exposure_arms_share_arm_1s_mode(self, tmp_path):
         p = params(arm_id="arm2", tee_mm=1524)
         screened(tmp_path, p)

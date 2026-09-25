@@ -248,3 +248,107 @@ for (const viewport of KIOSK_VIEWPORTS) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 }
+
+const CONNECT_FAILURE = {
+  capture_kind: 'empty',
+  stage: 'connect',
+  type: 'RuntimeError',
+  message: 'no IWR6843 CLI found — board on, flashed, single-port fw? Probes: /dev/ttyUSB0 (CP2105 Enhanced if00): no reply to help within 1.5 s',
+  remedy: 'Press RESET and retry.',
+};
+
+test('a newer server failure replaces an earlier rejected-action message', async ({ page }) => {
+  const fixture = await base(page, {
+    epoch_id: 'epoch-live',
+    phase: 'needs_empty',
+    reason: 'needs_empty',
+    evidence: {},
+    solution: null,
+  });
+  await page.goto('/tester.html');
+  fixture.setPostFailure({ status: 409, body: { error: 'the tee_range job owns the hardware' } });
+  await page.locator('#tee-range-action').tap();
+  await expect(page.locator('#automatic-range-summary')).toHaveText('the tee_range job owns the hardware');
+
+  fixture.setState({
+    epoch_id: 'epoch-live',
+    phase: 'retryable_failure',
+    reason: 'empty_capture_unusable',
+    retry_phase: 'needs_empty',
+    evidence: { empty_capture: { usable: false }, capture_failure: CONNECT_FAILURE },
+    solution: null,
+  });
+
+  await expect(page.locator('#automatic-range-summary')).toContainText(
+    'Empty IWR capture failed at connect (RuntimeError): no IWR6843 CLI found'
+  );
+});
+
+test('legacy camera evidence polling never overwrites the guided failure', async ({ page }) => {
+  await base(page, {
+    epoch_id: 'epoch-failed',
+    phase: 'retryable_failure',
+    reason: 'empty_capture_unusable',
+    retry_phase: 'needs_empty',
+    evidence: { empty_capture: { usable: false }, capture_failure: CONNECT_FAILURE },
+    solution: null,
+  });
+  let statusPolls = 0;
+  await page.route('**/api/tester/status**', (route) => {
+    statusPolls += 1;
+    return json(route, {
+      study: {
+        arms: [
+          {
+            arm_id: 'arm5',
+            label: 'Arm 5',
+            isolates: 'reference',
+            exposure_us: 300,
+            target: 10,
+            tee_range_camera_evidence: { status: 'pending', candidates: [] },
+          },
+        ],
+      },
+    });
+  });
+  await page.goto('/tester.html');
+  await expect(page.locator('#automatic-range-summary')).toContainText('no IWR6843 CLI found');
+
+  await expect.poll(() => statusPolls).toBeGreaterThan(0);
+
+  // Read in the same task as the status render, before the 1 s range poll could repaint.
+  const summary = await page.evaluate(async () => {
+    await (window as unknown as { refresh: () => Promise<void> }).refresh();
+    return document.getElementById('automatic-range-summary')?.textContent ?? '';
+  });
+
+  expect(summary).toContain('no IWR6843 CLI found');
+  expect(summary).not.toContain('Camera range');
+});
+
+test('a failed hardware check shows the IWR6843 reason, not only the exit code', async ({ page }) => {
+  await base(page);
+  await page.route('**/api/tester/run', (route) => json(route, { job: { state: 'running' } }, 202));
+  await page.route('**/api/tester/status**', (route) =>
+    json(route, {
+      job: {
+        state: 'error',
+        action: 'preflight',
+        message: 'Failed with exit code 1',
+        output: [
+          '$ python scripts/iwr6843/check_cli.py',
+          'IWR6843 CLI check failed: no IWR6843 CLI found — board on, flashed, single-port fw? Probes: /dev/ttyUSB0 (CP2105 Enhanced if00): no reply to help within 1.5 s',
+          '',
+        ],
+      },
+    })
+  );
+  await page.goto('/tester.html');
+
+  await page.locator('#step-check').tap();
+
+  await expect(page.locator('#check-verdict')).toContainText('failed: Failed with exit code 1');
+  await expect(page.locator('#check-verdict')).toContainText(
+    '/dev/ttyUSB0 (CP2105 Enhanced if00): no reply to help within 1.5 s'
+  );
+});

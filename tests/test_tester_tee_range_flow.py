@@ -609,6 +609,63 @@ def test_reconfirmation_persists_start_over_required_in_the_guided_state(
     assert phase(client, tester) == body["state"]
 
 
+def test_start_over_persistence_that_loses_a_race_reports_the_stored_state(
+    tmp_path, inputs, monkeypatch
+):
+    setup = ReconfirmedSetup()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, setup_policy=setup)
+    client = app.test_client()
+    assert post(client, tester, "start", "start").status_code == 200
+    stored = phase(client, tester)
+    setup.confirmed_at = "after-restart"
+
+    def lost_race(*_args, **_kwargs):
+        raise RuntimeError("tee-range setup state changed; reload and retry")
+
+    monkeypatch.setattr(tee_range_flow.FlowStore, "transition", lost_race)
+    response = post(client, tester, "capture_empty", "stale-epoch")
+
+    assert response.status_code == 409
+    assert response.get_json()["start_over_required"] is True
+    assert response.get_json()["state"] == stored
+
+
+def test_retry_after_a_repassed_hardware_check_is_state_only(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch, fail=True, require_iwr_preflight=True)
+    client = app.test_client()
+    manager = app.config["TEST_STATIC_MANAGER"]
+    body = {"tester_id": tester, "arm_id": "arm5", "environment": "indoors", "action": "preflight"}
+    assert client.post("/api/tester/run", json=body).status_code == 202
+    assert post(client, tester, "start", "start").status_code == 200
+    assert post(client, tester, "capture_empty", "empty").status_code == 200
+    assert post(client, tester, "retry", "blocked").status_code == 409
+    assert client.post("/api/tester/run", json=body).status_code == 202
+    hardware_starts = manager.start_count
+
+    retried = post(client, tester, "retry", "retry")
+
+    assert retried.status_code == 200
+    assert retried.get_json()["state"]["phase"] == "needs_empty"
+    assert manager.start_count == hardware_starts
+    manager.fail = False
+    assert post(client, tester, "capture_empty", "empty-again").status_code == 200
+    assert manager.start_count == hardware_starts + 1
+    command = manager.last_command
+    assert command[command.index("--port") + 1] == "/dev/serial/by-id/iwr-if00-port0"
+    assert phase(client, tester)["phase"] == "needs_ball"
+
+
+def test_incomplete_dump_failure_names_the_transfer_and_its_remedy():
+    failure = ts._static_capture_failure(
+        {"error": {"stage": "read_dump", "type": "IWR6843DumpRecoveryError", "message": "ended"}},
+        "empty",
+    )
+
+    assert failure["stage"] == "read_dump"
+    assert "did not complete" in failure["remedy"]
+    assert "press reset" in failure["remedy"].lower()
+
+
 def test_finalize_publishes_terminal_state_only_after_epoch_pointer(tmp_path, monkeypatch):
     store = tee_range_flow.FlowStore(tmp_path / "tester")
     state = store.start("start", setup_admission={"identity_sha256": "a" * 64})
