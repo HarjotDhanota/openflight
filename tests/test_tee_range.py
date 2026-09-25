@@ -157,7 +157,7 @@ def qualified_iwr(epoch_id="epoch-a", value=1.53, uncertainty=0.03, **updates):
     )
 
 
-def test_cross_sensor_solution_is_deterministic_and_round_trips(tmp_path):
+def test_cross_sensor_solution_is_deterministic_and_standalone_load_is_safe(tmp_path):
     camera = qualified_camera()
     radar = qualified_iwr()
     first = resolve_qualified_tee_range("epoch-a", [camera, radar], qualification())
@@ -166,7 +166,11 @@ def test_cross_sensor_solution_is_deterministic_and_round_trips(tmp_path):
 
     write_solution(path, first)
 
-    assert first.to_dict() == second.to_dict() == load_solution(path).to_dict()
+    loaded = load_solution(path)
+
+    assert first.to_dict() == second.to_dict()
+    assert loaded.status == "unresolved"
+    assert loaded.reason == "resolved_range_requires_qualification_context"
     assert first.status == "resolved"
     assert first.selected_range_m == 1.53
     assert first.selected_candidate_id == "iwr"
@@ -174,6 +178,47 @@ def test_cross_sensor_solution_is_deterministic_and_round_trips(tmp_path):
     assert first.agreement_residual_m == pytest.approx(0.03)
     assert first.agreement_normalized_sigma == pytest.approx(0.03 / (0.05**2 + 0.03**2) ** 0.5)
     assert first.policy_sha256 == qualification().policy_sha256
+
+
+def test_candidate_evidence_is_deeply_frozen_and_serialization_is_detached():
+    facts = qualified_camera().evidence["qualification"]
+    external = {"qualification": dict(facts), "nested": {"values": [1, 2]}}
+    camera = TeeRangeCandidate(
+        candidate_id="camera-detached",
+        source="camera_reference_ball_floor_plane",
+        source_group="camera",
+        radar_slant_range_m=1.5,
+        uncertainty_m=0.05,
+        selectable=False,
+        evidence=external,
+    )
+
+    external["qualification"]["iwr_range_used"] = True
+    external["nested"]["values"].append(3)
+    serialized = camera.to_dict()
+    serialized["evidence"]["qualification"]["iwr_range_used"] = True
+    serialized["evidence"]["nested"]["values"].append(4)
+
+    assert camera.evidence["qualification"]["iwr_range_used"] is False
+    assert camera.evidence["nested"]["values"] == (1, 2)
+    with pytest.raises(TypeError):
+        camera.evidence["new"] = "mutation"
+    with pytest.raises(TypeError):
+        camera.evidence["qualification"]["new"] = "mutation"
+
+
+def test_resolved_solution_cannot_change_after_external_evidence_mutation():
+    camera = qualified_camera()
+    radar = qualified_iwr()
+    solution = resolve_qualified_tee_range("epoch-a", [camera, radar], qualification())
+    before = solution.to_dict()
+
+    exported = solution.to_dict()
+    promoted = next(item for item in exported["candidates"] if item["candidate_id"] == "camera")
+    promoted["evidence"]["qualification"]["iwr_range_used"] = True
+    promoted["evidence"]["promotion"]["policy_sha256"] = "f" * 64
+
+    assert solution.to_dict() == before
 
 
 def test_legacy_resolved_factory_cannot_bypass_qualification():
