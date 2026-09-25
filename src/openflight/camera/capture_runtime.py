@@ -432,7 +432,7 @@ class CameraCaptureRuntime:
             self._worker.join(timeout=3.0)
             self._worker = None
 
-    def capture_preview_jpeg(self, quality: int = 80) -> bytes | None:
+    def capture_preview_jpeg(self, quality: int = 80, max_width: int | None = None) -> bytes | None:
         """Encode the latest rolling-buffer frame as a preview JPEG.
 
         Reusing the compact raw frame avoids a second capture request and
@@ -462,6 +462,13 @@ class CameraCaptureRuntime:
                     flags=cv2.INTER_LINEAR,
                     borderMode=cv2.BORDER_CONSTANT,
                     borderValue=0,
+                )
+            if max_width is not None and image.shape[1] > max_width:
+                scale = max_width / image.shape[1]
+                image = cv2.resize(
+                    image,
+                    (max_width, max(1, round(image.shape[0] * scale))),
+                    interpolation=cv2.INTER_AREA,
                 )
             ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
             return encoded.tobytes() if ok else None

@@ -1611,7 +1611,10 @@ def camera_capture_preview():
     """
     if camera_capture_runtime is None:
         return "Camera capture not enabled", 404
-    jpeg = camera_capture_runtime.capture_preview_jpeg()
+    max_width = request.args.get("width", type=int)
+    if max_width is not None and not 160 <= max_width <= 1920:
+        return "Preview width must be between 160 and 1920 pixels", 400
+    jpeg = camera_capture_runtime.capture_preview_jpeg(max_width=max_width)
     if jpeg is None:
         return "Camera not running", 503
     return Response(jpeg, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})

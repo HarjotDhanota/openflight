@@ -594,10 +594,19 @@
       let photoActionPending = false;
       let photoError = null;
       let ladderRequestVersion = 0;
+      let ladderRequestRunning = false;
+      let statusRequestRunning = false;
+      let statusRequestVersion = 0;
+      let liveRequestRunning = false;
+      let facePreviewLoading = false;
+      let facePreviewReleaseTimer = null;
+      let testerIdRefreshTimer = null;
       let setupEligibility = null;
       let physicalConfirmationDraft = false;
       let setupRequestVersion = 0;
       let setupRequestRunning = false;
+      let setupRequestController = null;
+      let setupActionPending = false;
       const TESTER_ID_STORAGE_KEY = 'openflight-tester-id';
       const ATTEMPT_SELECTION_STORAGE_KEY = 'openflight-tester-attempt-scope';
       const ATTEMPT_PENDING_STORAGE_KEY = 'openflight-tester-attempt-pending';
@@ -608,6 +617,9 @@
       let attemptState = null;
       let attemptPending = null;
       let attemptRequestVersion = 0;
+      const REQUEST_TIMEOUT_MS = 5000;
+      const ACTION_TIMEOUT_MS = 15000;
+      const PACKAGE_TIMEOUT_MS = 300000;
       try {
         const savedTesterId = localStorage.getItem(TESTER_ID_STORAGE_KEY);
         if (savedTesterId) el('tester-id').value = savedTesterId;
@@ -627,8 +639,28 @@
         return new URLSearchParams(payload()).toString();
       }
 
-      async function request(path, options) {
-        const response = await fetch(path, options);
+      async function fetchWithTimeout(path, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
+        const controller = new AbortController();
+        const externalSignal = options.signal;
+        const abortFromExternal = () => controller.abort();
+        if (externalSignal?.aborted) controller.abort();
+        else externalSignal?.addEventListener('abort', abortFromExternal, { once: true });
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          return await fetch(path, { ...options, signal: controller.signal });
+        } catch (error) {
+          if (error.name === 'AbortError') {
+            throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
+          }
+          throw error;
+        } finally {
+          clearTimeout(timer);
+          externalSignal?.removeEventListener('abort', abortFromExternal);
+        }
+      }
+
+      async function request(path, options, timeoutMs = REQUEST_TIMEOUT_MS) {
+        const response = await fetchWithTimeout(path, options, timeoutMs);
         const body = await response.json().catch(() => ({}));
         if (!response.ok && body.error) body.failed = body.error;
         return body;
@@ -698,14 +730,16 @@
       }
 
       async function refreshSetupEligibility() {
-        if (setupRequestRunning) return false;
+        if (setupRequestRunning || setupActionPending) return false;
         const testerId = el('tester-id').value.trim();
         const version = ++setupRequestVersion;
+        const controller = new AbortController();
+        setupRequestController = controller;
         setupRequestRunning = true;
         try {
-          const response = await fetch(
+          const response = await fetchWithTimeout(
             '/api/tester/setup-eligibility?' + new URLSearchParams({ tester_id: testerId }),
-            { cache: 'no-store' }
+            { cache: 'no-store', signal: controller.signal }
           );
           const body = await response.json().catch(() => ({}));
           if (version !== setupRequestVersion || testerId !== el('tester-id').value.trim()) return false;
@@ -730,7 +764,10 @@
           }
           return false;
         } finally {
-          setupRequestRunning = false;
+          if (setupRequestController === controller) {
+            setupRequestController = null;
+            setupRequestRunning = false;
+          }
         }
       }
 
@@ -807,17 +844,27 @@
       }
 
       async function refresh() {
+        if (statusRequestRunning) return;
+        const testerId = el('tester-id').value.trim();
+        const version = ++statusRequestVersion;
+        const requestPayload = payload();
+        statusRequestRunning = true;
         try {
-          render(
-            await request('/api/tester/status', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload()),
-            })
-          );
+          const body = await request('/api/tester/status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestPayload),
+          });
+          if (version !== statusRequestVersion || testerId !== el('tester-id').value.trim()) return;
+          render(body);
         } catch {
-          el('status').dataset.state = 'unavailable';
-          el('status').textContent = 'Local runner is not reachable. Start scripts/start-tester.sh.';
+          if (version === statusRequestVersion && testerId === el('tester-id').value.trim()) {
+            el('status').dataset.state = 'unavailable';
+            el('status').textContent = 'Local runner is not reachable. Start scripts/start-tester.sh.';
+          }
+        } finally {
+          statusRequestRunning = false;
+          if (version !== statusRequestVersion) queueMicrotask(refresh);
         }
       }
 
@@ -932,13 +979,20 @@
         );
       }
       async function liveTick() {
-        if (!liveOn) return;
+        if (!liveOn || liveRequestRunning) return;
+        liveRequestRunning = true;
         const t = Date.now();
         el('live-raw').src = `/api/tester/live.png?view=raw&t=${t}`;
         el('live-boost').src = `/api/tester/live.png?view=boost&t=${t}`;
-        const status = await request('/api/tester/live');
-        renderLive(status);
-        renderDistance(status.ball);
+        try {
+          const status = await request('/api/tester/live');
+          renderLive(status);
+          renderDistance(status.ball);
+        } catch (error) {
+          renderLive({ failed: `Live view unavailable: ${error.message}` });
+        } finally {
+          liveRequestRunning = false;
+        }
       }
       el('live-toggle').addEventListener('click', () => (liveOn ? liveStop() : liveStart()));
       el('record-placement').addEventListener('click', recordPlacement);
@@ -976,11 +1030,15 @@
       });
       el('package').addEventListener('click', async () => {
         render(
-          await request('/api/tester/package', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload()),
-          })
+          await request(
+            '/api/tester/package',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload()),
+            },
+            PACKAGE_TIMEOUT_MS
+          )
         );
       });
 
@@ -990,12 +1048,16 @@
         arm_id: arm,
         environment: el('environment').value,
       });
-      async function post(path, body) {
-        const r = await fetch(path, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
+      async function post(path, body, timeoutMs = ACTION_TIMEOUT_MS) {
+        const r = await fetchWithTimeout(
+          path,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          },
+          timeoutMs
+        );
         const j = await r.json().catch(() => ({}));
         if (!r.ok) {
           if (j.setup_eligibility) {
@@ -1008,7 +1070,7 @@
       }
       async function waitJob() {
         for (;;) {
-          const s = await (await fetch('/api/tester/status?' + new URLSearchParams(suiteBody('arm5')))).json();
+          const s = await request('/api/tester/status?' + new URLSearchParams(suiteBody('arm5')));
           if (!s.job || s.job.state !== 'running') return s.job || { state: 'error', message: 'no job' };
           await new Promise((resolve) => setTimeout(resolve, 1000));
         }
@@ -1151,7 +1213,7 @@
             arm_id: scope.arm_id,
             run_dir: scope.run_dir,
           });
-          const response = await fetch('/api/tester/attempts?' + query);
+          const response = await fetchWithTimeout('/api/tester/attempts?' + query, { cache: 'no-store' });
           const state = await response.json().catch(() => ({}));
           if (!response.ok) throw new Error(state.error || `request failed (${response.status})`);
           if (version !== attemptRequestVersion || requestedKey !== attemptScopeKey(selectedAttemptScope)) return;
@@ -1174,7 +1236,12 @@
         renderAttemptState();
         loadAttemptState(scope);
       }
-      async function discoverAttemptScopes(announcedScope = null, savedScopes = null) {
+      async function discoverAttemptScopes(
+        announcedScope = null,
+        savedScopes = null,
+        fetchRemote = true,
+        forceStateReload = false
+      ) {
         if (announcedScope) {
           if (latestAttemptScope && attemptScopeKey(latestAttemptScope) !== attemptScopeKey(announcedScope)) {
             newerAttemptScopeAvailable = true;
@@ -1183,13 +1250,18 @@
           mergeAttemptScopes([announcedScope]);
         }
         if (savedScopes) mergeAttemptScopes(savedScopes);
-        try {
-          const testerId = el('tester-id').value.trim();
-          const response = await fetch('/api/tester/attempts?' + new URLSearchParams({ tester_id: testerId }));
-          const body = await response.json().catch(() => ({}));
-          if (response.ok && testerId === el('tester-id').value.trim()) mergeAttemptScopes(body.scopes);
-        } catch {
-          // A currently announced run remains usable while discovery is unavailable.
+        if (fetchRemote) {
+          try {
+            const testerId = el('tester-id').value.trim();
+            const response = await fetchWithTimeout(
+              '/api/tester/attempts?' + new URLSearchParams({ tester_id: testerId }),
+              { cache: 'no-store' }
+            );
+            const body = await response.json().catch(() => ({}));
+            if (response.ok && testerId === el('tester-id').value.trim()) mergeAttemptScopes(body.scopes);
+          } catch {
+            // A currently announced run remains usable while discovery is unavailable.
+          }
         }
         if (!selectedAttemptScope) {
           const saved = readAttemptValue(ATTEMPT_SELECTION_STORAGE_KEY);
@@ -1197,7 +1269,7 @@
           selectAttemptScope(savedMatch || announcedScope || attemptScopes[0] || null);
         } else {
           renderAttemptState();
-          loadAttemptState(selectedAttemptScope);
+          if (forceStateReload || !attemptState) loadAttemptState(selectedAttemptScope);
         }
       }
       function newAttemptId() {
@@ -1221,7 +1293,7 @@
         const version = ++attemptRequestVersion;
         renderAttemptState();
         try {
-          const response = await fetch('/api/tester/attempts', {
+          const response = await fetchWithTimeout('/api/tester/attempts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(pending.payload),
@@ -1281,14 +1353,16 @@
         const key = decodeURIComponent(el('attempt-run').value || '');
         selectAttemptScope(attemptScopes.find((scope) => attemptScopeKey(scope) === key) || null);
       });
-      el('attempt-refresh').addEventListener('click', () => discoverAttemptScopes());
+      el('attempt-refresh').addEventListener('click', () => discoverAttemptScopes(null, null, true, true));
       attemptPending = readAttemptValue(ATTEMPT_PENDING_STORAGE_KEY);
       renderAttemptState();
 
       function renderLadder(s) {
         const l = s.ladder,
           v = s.last_verdict;
-        discoverAttemptScopes(s.capture_scope, s.saved_attempt_scopes);
+        // The ladder response already carries every saved scope. Avoid two more
+        // attempt-ledger requests on every ladder poll as a session grows.
+        discoverAttemptScopes(s.capture_scope, s.saved_attempt_scopes, false);
         if (!l) {
           if (s.error) el('ladder-panel').textContent = s.error;
           return;
@@ -1315,10 +1389,28 @@
         photoStopped = Boolean(s.stopped);
         renderPhotoHandoff();
         el('face-guide').hidden = !target;
-        // the kiosk owns the camera during the ladder: show its preview with the face guide
-        if (target && !photoStopped) {
-          el('face-preview').src = `http://${location.hostname}:8080/api/camera/preview.jpg?t=${Date.now()}`;
+        if (oldTarget !== newTarget) {
+          facePreviewLoading = false;
+          clearTimeout(facePreviewReleaseTimer);
+          facePreviewTick();
         }
+      }
+
+      function facePreviewTick() {
+        if (!photoTarget || photoStopped || photoActionPending || document.hidden || facePreviewLoading) return;
+        facePreviewLoading = true;
+        const preview = el('face-preview');
+        let released = false;
+        const release = () => {
+          if (released) return;
+          released = true;
+          clearTimeout(facePreviewReleaseTimer);
+          facePreviewLoading = false;
+        };
+        preview.onload = release;
+        preview.onerror = release;
+        facePreviewReleaseTimer = setTimeout(release, 2000);
+        preview.src = `http://${location.hostname}:8080/api/camera/preview.jpg?width=640&t=${Date.now()}`;
       }
       function renderPhotoHandoff() {
         el('step-ladder').disabled = photoActionPending || !setupReady();
@@ -1340,19 +1432,22 @@
       }
       let ladderTimer = null;
       async function ladderTick() {
-        if (photoActionPending) return;
+        if (photoActionPending || ladderRequestRunning) return;
         const testerId = el('tester-id').value.trim();
         const version = ++ladderRequestVersion;
         const query = new URLSearchParams({ tester_id: testerId });
+        ladderRequestRunning = true;
         try {
-          const response = await fetch('/api/tester/ladder?' + query);
+          const response = await fetchWithTimeout('/api/tester/ladder?' + query, { cache: 'no-store' });
           const state = await response.json().catch(() => ({}));
           if (version !== ladderRequestVersion || testerId !== el('tester-id').value.trim()) return;
           renderLadder(state);
-        } catch {
+        } catch (error) {
           if (version === ladderRequestVersion && testerId === el('tester-id').value.trim()) {
-            el('ladder-panel').textContent = 'Ladder status is unavailable.';
+            el('ladder-panel').textContent = `Ladder status is unavailable: ${error.message}`;
           }
+        } finally {
+          ladderRequestRunning = false;
         }
       }
       el('step-ladder').addEventListener('click', async () => {
@@ -1430,7 +1525,11 @@
           // The current page still works when browser storage is unavailable.
         }
         ladderRequestVersion += 1;
+        statusRequestVersion += 1;
+        setupRequestController?.abort();
+        setupRequestController = null;
         setupRequestRunning = false;
+        setupActionPending = false;
         invalidateSetupEligibility('Tester ID changed. Server setup eligibility must be rechecked.');
         photoActionPending = false;
         photoTarget = null;
@@ -1443,9 +1542,13 @@
         attemptRequestVersion += 1;
         renderPhotoHandoff();
         renderAttemptState();
-        discoverAttemptScopes();
-        ladderTick();
-        refreshSetupEligibility();
+        clearTimeout(testerIdRefreshTimer);
+        testerIdRefreshTimer = setTimeout(() => {
+          discoverAttemptScopes();
+          ladderTick();
+          refreshSetupEligibility();
+          refresh();
+        }, 300);
       });
       el('setup-physical-confirm').addEventListener('change', () => {
         physicalConfirmationDraft = el('setup-physical-confirm').checked;
@@ -1456,11 +1559,17 @@
         if (!setupEligibility || !el('setup-physical-confirm').checked) return;
         const testerId = el('tester-id').value.trim();
         const configHash = setupEligibility.config_hash;
+        setupRequestController?.abort();
+        const controller = new AbortController();
+        setupRequestController = controller;
+        setupRequestRunning = false;
+        setupActionPending = true;
         const version = ++setupRequestVersion;
         el('setup-confirm').disabled = true;
         try {
-          const response = await fetch('/api/tester/setup-eligibility', {
+          const response = await fetchWithTimeout('/api/tester/setup-eligibility', {
             method: 'POST',
+            signal: controller.signal,
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               tester_id: testerId,
@@ -1479,6 +1588,9 @@
           if (version === setupRequestVersion && testerId === el('tester-id').value.trim()) {
             invalidateSetupEligibility(`Physical setup confirmation was not accepted: ${error.message}`);
           }
+        } finally {
+          if (setupRequestController === controller) setupRequestController = null;
+          setupActionPending = false;
         }
       });
       el('step-package').addEventListener('click', async () => {
@@ -1488,11 +1600,15 @@
             const form = new FormData();
             form.append('tester_id', el('tester-id').value.trim());
             form.append('file', file);
-            const up = await fetch('/api/tester/comparator', { method: 'POST', body: form });
+            const up = await fetchWithTimeout(
+              '/api/tester/comparator',
+              { method: 'POST', body: form },
+              PACKAGE_TIMEOUT_MS
+            );
             const saved = await up.json().catch(() => ({}));
             if (!up.ok) throw new Error(`comparator export not saved: ${saved.error || up.status}`);
           }
-          await post('/api/tester/package', suiteBody('arm5'));
+          await post('/api/tester/package', suiteBody('arm5'), PACKAGE_TIMEOUT_MS);
           window.location = '/api/tester/package?' + new URLSearchParams(suiteBody('arm5'));
         } catch (e) {
           el('step-package').textContent = `D. Package the data — ${e.message}`;
@@ -1503,7 +1619,8 @@
       refreshSetupEligibility();
       ladderTick();
       ladderTimer = setInterval(ladderTick, 1500);
-      setInterval(refresh, 2000);
+      setInterval(facePreviewTick, 300);
+      setInterval(refresh, 5000);
       setInterval(refreshSetupEligibility, 2000);
     </script>
   </body>

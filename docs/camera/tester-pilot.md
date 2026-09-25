@@ -71,6 +71,13 @@ bash scripts/start-tester.sh
 
 Open `http://127.0.0.1:8765` in the browser on the Pi's screen.
 
+The tester also writes a rotating service log to
+`~/openflight_sessions/tester_pilot/tester-server.log`. It remains available
+after the terminal or browser disconnects, and **Package everything** includes
+it under `diagnostics/` with any rotated copies. Refreshing the page is safe:
+the tester ID and active ladder state are restored from browser and server
+state. If the ladder was deliberately stopped, use **Resume ladder**.
+
 The runner holds each arm's exposure and gain fixed for the whole run;
 auto-exposure is off by design. It reads the enclosure's inclinometer the
 whole time, with the service the kiosk runs, shows the enclosure's tilt, and
@@ -221,6 +228,8 @@ check, not proof of absolute accuracy.
 | Every swing rejected with no ball speed | The OPS243 was not found | Pass `--radar-port` with your port (`/dev/ttyAMA0` for the GPIO UART, `/dev/ttyACM0` for USB) |
 | An arm's counter stays at 0 while swings save | The estimator rejected them; the status histogram in the archive says why | Hit the five anyway if it reads `lighting required`; its acceptance rate is part of the result |
 | Stopped mid-arm | Nothing is lost | Press **Capture swings** again; runs are kept separately and counted together |
+| The page is slow, frozen, or disconnects | The browser, tester service, Wi-Fi, or Pi may have stalled independently | Preserve the session and run `tail -n 250 ~/openflight_sessions/tester_pilot/tester-server.log`; packaged data now carries this log automatically |
+| Refreshing the page shows a held photo step | The ladder restored its durable boundary-photo checkpoint | Do not swing; use **Photograph face**, **Skip photo**, or **Resume ladder** if it says the ladder is stopped |
 | Ladder verdict red: `frames: ... fps delivered` or `gap(s)` | The Pi could not keep up with the camera mode | Close other programs, check the power supply, run **A** again |
 | Ladder verdict red: `controls: exposure ...` or `gain ...` | The camera did not take the exposure's setting | Press **C** again; the ladder carries on where it stopped |
 | Ladder verdict red: `light: too dark` | This exposure is below what your light supports | Expected on the shortest exposures; the ladder skips the rest |

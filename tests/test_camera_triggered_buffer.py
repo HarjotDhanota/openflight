@@ -616,6 +616,30 @@ def test_preview_roll_correction_levels_sloped_line_without_modifying_raw_frame(
     assert np.array_equal(runtime._ring.latest_frame.image, image)
 
 
+def test_preview_can_downscale_before_encoding(tmp_path):
+    cv2 = pytest.importorskip("cv2")
+    runtime = CameraCaptureRuntime(output_dir=tmp_path, settings=CameraCaptureSettings())
+    image = np.arange(800 * 1280, dtype=np.uint8).reshape(800, 1280)
+    runtime._ring.add_frame(
+        CameraFrame(
+            image=image,
+            sensor_timestamp_ns=1,
+            host_timestamp_ns=2,
+            exposure_us=300,
+            analogue_gain=12.0,
+        )
+    )
+    runtime._camera = object()
+    runtime._running = True
+
+    encoded = runtime.capture_preview_jpeg(max_width=640)
+
+    assert encoded is not None
+    preview = cv2.imdecode(np.frombuffer(encoded, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+    assert preview.shape == (400, 640)
+    assert np.array_equal(runtime._ring.latest_frame.image, image)
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [

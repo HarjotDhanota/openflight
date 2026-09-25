@@ -83,8 +83,8 @@ test('captures the returned target identity once and hides the handoff after suc
 
   await expect(
     page.getByText(
-      'Arm 5 is complete. Do not swing. Photograph or skip the face image for full-300 (camera-final-17) to continue to Arm 6.',
-    ),
+      'Arm 5 is complete. Do not swing. Photograph or skip the face image for full-300 (camera-final-17) to continue to Arm 6.'
+    )
   ).toBeVisible();
   const capture = page.getByRole('button', { name: 'Photograph face' });
   await capture.tap();
@@ -103,6 +103,67 @@ test('captures the returned target identity once and hides the handoff after suc
   finishPhoto();
   await expect(page.locator('#photo-handoff')).toBeHidden();
   await expect(start).toBeEnabled();
+});
+
+test('refreshes the face preview independently from the ladder status poll', async ({ page }) => {
+  let previews = 0;
+  await mockBaseApis(page, () => ladderState({ capture: 'camera-preview', rung_id: 'full-300' }));
+  await page.unroute('**/api/camera/preview.jpg**');
+  await page.route('**/api/camera/preview.jpg**', async (route) => {
+    previews += 1;
+    await route.fulfill({ status: 204 });
+  });
+
+  await page.goto('/tester.html');
+
+  await expect.poll(() => previews, { timeout: 1400 }).toBeGreaterThanOrEqual(3);
+});
+
+test('does not overlap ladder status polls when the network stalls', async ({ page }) => {
+  let active = 0;
+  let maximumActive = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await mockBaseApis(page, () => ladderState(null));
+  await page.unroute('**/api/tester/ladder?**');
+  await page.route('**/api/tester/ladder?**', async (route) => {
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    await gate;
+    active -= 1;
+    await fulfillJson(route, ladderState(null));
+  });
+
+  await page.goto('/tester.html');
+  await page.waitForTimeout(3200);
+
+  expect(maximumActive).toBe(1);
+  release();
+});
+
+test('ignores a delayed status response for the previous tester ID', async ({ page }) => {
+  let releaseOld!: () => void;
+  const oldGate = new Promise<void>((resolve) => {
+    releaseOld = resolve;
+  });
+  await mockBaseApis(page, () => ladderState(null));
+  await page.unroute('**/api/tester/status**');
+  await page.route('**/api/tester/status**', async (route) => {
+    const testerId = route.request().postDataJSON().tester_id;
+    if (testerId === '20260922-name') await oldGate;
+    await fulfillJson(route, {
+      job: { state: 'complete', message: testerId, output: [] },
+    });
+  });
+
+  await page.goto('/tester.html');
+  await page.locator('#tester-id').fill('new-tester');
+  releaseOld();
+
+  await expect(page.locator('#status')).toHaveText('new-tester (complete)');
+  await expect(page.locator('#status')).not.toContainText('20260922-name');
 });
 
 test('keeps a stale-target error visible through polling and retries with the same identity', async ({ page }) => {

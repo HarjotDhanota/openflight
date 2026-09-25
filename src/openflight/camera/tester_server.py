@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import os
 import re
@@ -21,11 +22,12 @@ from collections import Counter, deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Callable
 
 import numpy as np
-from flask import Flask, Response, jsonify, request, send_file
+from flask import Flask, Response, g, jsonify, request, send_file
 
 from openflight.camera import attempt_ledger, study_ladder
 from openflight.camera.club_motion import detect_reference_ball
@@ -47,6 +49,9 @@ SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 DEFAULT_RADAR_PORT = "/dev/ttyAMA0"
 TEE_RANGE_MM = (500.0, 4000.0)
 MAX_LOG_LINES = 400
+SERVER_LOG_NAME = "tester-server.log"
+
+logger = logging.getLogger(__name__)
 
 CLUB = "7-iron"
 SWINGS_PER_ARM = 5
@@ -1472,6 +1477,9 @@ def package_study(sessions_root: Path, tester_id: str) -> Path:
             for path in sorted(root.rglob("*")):
                 if path.is_file() and not path.is_symlink():
                     bundle.write(path, path.relative_to(root.parent))
+            for path in sorted(sessions_root.glob(f"{SERVER_LOG_NAME}*")):
+                if path.is_file() and not path.is_symlink():
+                    bundle.write(path, Path(root.name) / "diagnostics" / path.name)
     os.replace(temporary, destination)
     return destination
 
@@ -1506,6 +1514,24 @@ def create_app(
     active_setup_tester: dict[str, str | None] = {"tester_id": None}
     active_runtime_dir: dict[str, Path | None] = {"path": None}
     admitted_setup: dict[str, dict] = {}
+
+    @app.before_request
+    def start_request_timer():
+        g.openflight_started_at = time.perf_counter()
+
+    @app.after_request
+    def record_slow_request(response):
+        elapsed_ms = (time.perf_counter() - g.openflight_started_at) * 1000.0
+        response.headers["Server-Timing"] = f"app;dur={elapsed_ms:.1f}"
+        if elapsed_ms >= 1000.0:
+            logger.warning(
+                "Slow tester request: method=%s path=%s status=%s elapsed_ms=%.1f",
+                request.method,
+                request.path,
+                response.status_code,
+                elapsed_ms,
+            )
+        return response
 
     def setup_status(tester_id: str) -> dict:
         job = jobs.status()
@@ -2276,6 +2302,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if (args.camera_optical_calibration is None) != (args.camera_placement is None):
         parser.error("calibrated camera fusion requires both calibration and placement")
+    sessions_root = args.sessions_root.expanduser().resolve()
+    sessions_root.mkdir(parents=True, exist_ok=True)
+    server_log = sessions_root / SERVER_LOG_NAME
+    handler = RotatingFileHandler(
+        server_log,
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
+        encoding="utf-8",
+    )
+    handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+    logging.getLogger().addHandler(handler)
+    logging.getLogger().setLevel(logging.INFO)
+    logger.info(
+        "Tester server starting: pid=%s host=%s port=%s sessions=%s",
+        os.getpid(),
+        args.host,
+        args.port,
+        sessions_root,
+    )
     enclosure = EnclosureTilt(
         args.rig_geometry,
         bus=args.inclinometer_bus,
@@ -2286,15 +2331,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         enclosure.start()
     try:
         create_app(
-            sessions_root=args.sessions_root,
+            sessions_root=sessions_root,
             rig_geometry=args.rig_geometry,
             radar_port=args.radar_port,
             tilt=enclosure,
             optical_calibration=args.camera_optical_calibration,
             camera_placement=args.camera_placement,
         ).run(host=args.host, port=args.port)
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.exception("Tester server stopped unexpectedly")
+        raise
     finally:
         enclosure.stop()
+        logger.info("Tester server stopped")
+        handler.flush()
     return 0
 
 

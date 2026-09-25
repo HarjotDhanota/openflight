@@ -344,11 +344,27 @@ class TestPackage:
         assert saved["club"] == "7-iron"
         assert saved["exposure_us"] == 175
 
+    def test_archive_carries_rotating_tester_server_diagnostics(self, tmp_path):
+        ts.write_arm_state(tmp_path, params(arm_id="arm1"), gain=4.0)
+        (tmp_path / ts.SERVER_LOG_NAME).write_bytes(b"tester alive\n")
+        (tmp_path / f"{ts.SERVER_LOG_NAME}.1").write_bytes(b"prior run\n")
+
+        archive = ts.package_study(tmp_path, "20260922-name")
+
+        with zipfile.ZipFile(archive) as bundle:
+            names = bundle.namelist()
+            current = next(name for name in names if name.endswith("diagnostics/tester-server.log"))
+            prior = next(name for name in names if name.endswith("diagnostics/tester-server.log.1"))
+            assert bundle.read(current) == b"tester alive\n"
+            assert bundle.read(prior) == b"prior run\n"
+
 
 class TestApp:
     def test_page_arms_and_status_are_served(self, tmp_path):
         client = eligible_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
-        assert client.get("/").status_code == 200
+        page = client.get("/")
+        assert page.status_code == 200
+        assert page.headers["Server-Timing"].startswith("app;dur=")
         arms = client.get("/api/tester/arms").get_json()
         assert [a["arm_id"] for a in arms["arms"]] == [
             "arm1",
