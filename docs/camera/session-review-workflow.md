@@ -72,17 +72,22 @@ Alternative chosen: one immutable, hash-inventoried **session bundle** per
 tester, produced by one background job, readable on the Pi and anywhere else.
 
 ```
-<tester>-session-bundle-<UTC>.zip          (+ .zip.sha256, never overwritten)
+<tester>-session-bundle-<UTC>.zip          (+ .zip.sha256; in <sessions>/.bundles, never overwritten)
   bundle_manifest.json   schema openflight.session_bundle.v1: every entry's path, size, sha256, role
   review.html            the review page; opened from disk it imports this ZIP and verifies hashes
-  report.md              human-readable per-attempt summary
-  <tester>/...           raw evidence, byte-identical, same layout as the old package
-  analysis/session_review.json   per-attempt metrics, statuses, reasons, evidence paths, identities
-  analysis/attempts.csv          one row per attempt and metric
-  analysis/replay/<arm>/<run>/shot-NNN.json   full replay reports with relative paths
+  <tester>/...           raw evidence, byte-identical, same layout as the old package (role raw)
+  <tester>/annotations/<arm>/<run>/<capture>.tracks.json   saved Track Review tracks (role annotation)
+  <tester>/diagnostics/tester-server.log*                  service logs (role diagnostics)
+  <tester>/analysis/session_review.json   per-attempt metrics, statuses, reasons, evidence, identity (derived)
+  <tester>/analysis/attempts.csv          one row per attempt and metric
+  <tester>/analysis/report.md             human-readable per-attempt summary
+  <tester>/analysis/replay/<arm>/<run>/shot-NNN.json   full replay reports with relative paths
 ```
 
-- The job (`Analyze, review & package`) runs as a separate low-priority
+The bundle root mirrors the sessions folder, so every path in the review is
+the same on the Pi and inside the bundle.
+
+- The job (**Analyse, review & package**) runs as a separate low-priority
   process, one at a time, refused while a capture runs. Its state is written
   atomically to `<tester>/analysis/job.json`, so a refresh, reconnect or tester
   restart shows it; an interrupted job resumes and skips shots whose replay
