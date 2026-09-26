@@ -80,6 +80,12 @@ Updated: 2026-09-25. Owner: Harjot. Status: active; M0 complete, M1 in progress.
       Synthetic fake-clock, concurrency, failure, deterministic-output and
       lifecycle checks passed; Pi throughput, physical-edge timing, memory,
       hardware UART timing and browser latency remain unvalidated.
+- [x] An opt-in offline IQ8 qualification tool now rejects unproven pairings,
+      distinguishes same-cube, same-event derivation and independently
+      reference-matched swings, and records deterministic input/provenance
+      hashes, payload/UART reduction and estimator parity aggregates. It does
+      not change the IQ16 production default or establish Pi throughput,
+      hardware reliability, reference accuracy or production eligibility.
 - [ ] M1 physical gate remains open. M3 selection and M4 pose/strike/spin are
       evidence-dependent. Preserve the first session and finish its failure and
       discrepancy review before changing estimators.
@@ -522,6 +528,7 @@ live/replay equivalence claim or independent calibration.
 | 2026-09-25 | Guided camera acquisition can use the already-computed static IWR range to reduce provisional search cost, but allowing that conditioned result into promotion would make the nominally independent camera agreement circular | Add a versioned, non-promoting IWR-to-camera search hint that narrows only the floor/range and diameter hypotheses; range alone does not constrain azimuth. Label conditioned previews as radar-guided and ineligible for promotion, fall back to the broad detector when the hint is invalid, stale or too broad, and require Save to rerun the unchanged full-frame 0.5-4 m camera estimator on the exact frames before any camera candidate or promotion. Retain the hint, timings, rejections and a post-Save camera-to-IWR ranking diagnostic without changing the static IWR result or `TeeRangeSolution` candidates |
 | 2026-09-25 | Provisional OPS output already avoids blocking the UI, but final enrichment serially waited for IWR, then matched and loaded camera evidence; a roughly 768 KiB IWR dump at 1,041,667 baud has a roughly 7.55 s theoretical wire floor, and the watchdog cannot cancel its worker | Keep the provisional OPS event, overlap exactly one camera association/archive load with IWR processing, retain the existing IWR/K-LD7/camera estimator and qualification order, and record monotonic stage durations. Bound the prefetch to one worker and one archive. On a deadline, finalize OPS-only while truthfully recording that work continues and that any late result will be discarded; record the discard only when it occurs. This is software concurrency evidence, not Pi throughput or hardware timing validation |
 | 2026-09-25 | Latency review found that `trigger_latency_ms` has parse/re-arm or whole-wait semantics by trigger mode, `pipeline_ms.iwr6843` combines transport and analysis, and `pipeline_ms.initial_ui` stops at the server rather than the browser | Preserve those numeric fields for historical readers, but make a versioned host-monotonic duration contract authoritative. Measure only observable boundaries, split IWR UART and estimator work, identify golfer-idle wait explicitly, and mark physical-edge, independent OPS acquisition-window, browser receive and browser paint timing unavailable until separately instrumented or validated |
+| 2026-09-25 | IQ8 can halve complex-sample payload, but differing capture cadence and unmatched swings can make apparent estimator parity meaningless | Add a non-promotional offline comparison contract with hash-verified source, transformation and reference provenance. Require identical observed profile/cadence for same-event encodings; score distinct swings only against their own independent references. Keep IQ16 as production default until Pi workload, retained-failure and frozen reference gates pass |
 
 ## Soundless trigger architecture
 
