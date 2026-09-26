@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 from datetime import datetime
@@ -205,8 +206,23 @@ class _ShotEnrichmentResult:
     iwr6843_ms: float | None = None
     kld7_ms: float | None = None
     camera_capture_ms: float | None = None
+    camera_archive_load_ms: float | None = None
+    camera_wait_ms: float | None = None
+    camera_analysis_ms: float | None = None
+    enrichment_ms: float | None = None
+    clock_domain: str = "host_monotonic"
     diagnostic_outcome: str = "complete"
     diagnostic_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class _CameraPrefetchResult:
+    """One matched camera capture and its single in-memory archive."""
+
+    capture: Any | None
+    archive: dict[str, object] | None
+    match_ms: float
+    archive_load_ms: float | None
 
 
 @dataclass(frozen=True)
@@ -257,6 +273,56 @@ def _log_fusion_diagnostic(
         diagnostic_logger.log_fusion_diagnostic(session_uuid, snapshot)
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning("[SERVER] Fusion diagnostic logging failed: %s", error, exc_info=True)
+
+
+def _enrichment_timing_payload(enrichment: _ShotEnrichmentResult) -> dict[str, object]:
+    """Return explicit monotonic stage durations for lifecycle evidence."""
+    return {
+        "clock_domain": enrichment.clock_domain,
+        "enrichment_ms": enrichment.enrichment_ms,
+        "iwr6843_ms": enrichment.iwr6843_ms,
+        "kld7_ms": enrichment.kld7_ms,
+        "camera_match_ms": enrichment.camera_capture_ms,
+        "camera_archive_load_ms": enrichment.camera_archive_load_ms,
+        "camera_wait_ms": enrichment.camera_wait_ms,
+        "camera_analysis_ms": enrichment.camera_analysis_ms,
+    }
+
+
+def _log_shot_enrichment_lifecycle(
+    diagnostic_logger,
+    session_uuid: str | None,
+    shot: Shot,
+    *,
+    state: str,
+    reason: str,
+    background_work: str,
+    result_discarded: bool,
+    enrichment: _ShotEnrichmentResult | None = None,
+) -> None:
+    """Persist whether deadline work continued and whether its result was discarded."""
+    if diagnostic_logger is None or session_uuid is None:
+        return
+    log_lifecycle = getattr(diagnostic_logger, "log_shot_enrichment", None)
+    if not callable(log_lifecycle):
+        return
+    try:
+        log_lifecycle(
+            session_uuid,
+            {
+                "shot_number": shot.shot_number,
+                "state": state,
+                "reason": reason,
+                "background_work": background_work,
+                "late_result_policy": "discard",
+                "result_discarded": result_discarded,
+                "timing": (
+                    _enrichment_timing_payload(enrichment) if enrichment is not None else None
+                ),
+            },
+        )
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] Shot enrichment lifecycle logging failed: %s", error)
 
 
 def _assign_shot_number(shot: Shot) -> None:
@@ -393,10 +459,23 @@ def _shot_finalization_worker_loop() -> None:
 
             if pending is None:
                 reason = "deadline" if deadline_expired else "coordinator capacity"
+                diagnostic_reason = (
+                    "enrichment_deadline" if deadline_expired else "coordinator_capacity"
+                )
                 logger.warning(
-                    "[SERVER] Shot #%d optional enrichment exceeded %s; finalizing OPS-only",
+                    "[SERVER] Shot #%d optional enrichment exceeded %s; "
+                    "finalizing OPS-only while background work continues",
                     next_shot_number,
                     reason,
+                )
+                _log_shot_enrichment_lifecycle(
+                    registered.diagnostic_logger,
+                    registered.diagnostic_session_uuid,
+                    registered.shot,
+                    state="ops_only_finalized",
+                    reason=diagnostic_reason,
+                    background_work="continuing",
+                    result_discarded=False,
                 )
                 pending = _PendingShotFinalization(
                     shot=registered.shot,
@@ -404,9 +483,7 @@ def _shot_finalization_worker_loop() -> None:
                     initial_ui_ms=registered.initial_ui_ms,
                     enrichment=_ShotEnrichmentResult(
                         diagnostic_outcome="partial",
-                        diagnostic_reason=(
-                            "enrichment_deadline" if deadline_expired else "coordinator_capacity"
-                        ),
+                        diagnostic_reason=diagnostic_reason,
                     ),
                     diagnostic_logger=registered.diagnostic_logger,
                     diagnostic_session_uuid=registered.diagnostic_session_uuid,
@@ -2968,7 +3045,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
     if iwr6843_runtime is None or shot.mode == "mock":
         return None
 
-    started = time.time()
+    started = time.monotonic()
     try:
         effective_tilt_deg = (
             shot.inclinometer.get("effective_iwr_tilt_deg")
@@ -3154,7 +3231,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             exc=error,
         )
         _emit_iwr6843_trigger_status(shot, state="error", reason=str(error))
-    return (time.time() - started) * 1000.0
+    return (time.monotonic() - started) * 1000.0
 
 
 def _emit_iwr6843_trigger_status(
@@ -3200,6 +3277,25 @@ def _load_camera_capture_archive(camera_capture) -> dict[str, object] | None:
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning("[SERVER] Camera capture archive could not be loaded: %s", error)
         return None
+
+
+def _prefetch_camera_capture(shot: Shot) -> _CameraPrefetchResult:
+    """Match one completed camera clip and load its archive once."""
+    match_started = time.monotonic()
+    camera_capture = camera_capture_runtime.capture_for_shot(
+        shot.impact_timestamp,
+        timeout_s=2.0,
+    )
+    match_finished = time.monotonic()
+    archive_started = match_finished
+    camera_archive = _load_camera_capture_archive(camera_capture)
+    archive_finished = time.monotonic()
+    return _CameraPrefetchResult(
+        capture=camera_capture,
+        archive=camera_archive,
+        match_ms=(match_finished - match_started) * 1000.0,
+        archive_load_ms=(archive_finished - archive_started) * 1000.0,
+    )
 
 
 def _fuse_camera_club_delivery(
@@ -3394,7 +3490,11 @@ def _fuse_camera_ball_flight(
         )
 
 
-def _fuse_camera_measurements(shot: Shot, camera_capture) -> None:
+def _fuse_camera_measurements(
+    shot: Shot,
+    camera_capture,
+    camera_archive=_CAMERA_ARCHIVE_UNSET,
+) -> None:
     """Decode one camera clip and share it across all live estimators."""
     captured_auto_exposure = (
         camera_capture.metadata.get("auto_exposure")
@@ -3431,7 +3531,8 @@ def _fuse_camera_measurements(shot: Shot, camera_capture) -> None:
             "[SERVER] Camera analysis withheld for lighting quality; using radar fallback"
         )
         return
-    camera_archive = _load_camera_capture_archive(camera_capture)
+    if camera_archive is _CAMERA_ARCHIVE_UNSET:
+        camera_archive = _load_camera_capture_archive(camera_capture)
     if (
         camera_archive is not None
         and iwr6843_runtime is not None
@@ -3640,17 +3741,26 @@ def _attach_camera_replay(shot: Shot, camera_capture) -> None:
 def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     """Mutate a shot with available radar/camera measurements and timings."""
 
+    enrichment_started = time.monotonic()
     # Snapshot orientation before IWR capture can block, and select only data
     # timestamped before impact so impact vibration cannot bias the geometry.
     _snapshot_inclinometer_for_shot(shot)
+    camera_executor: ThreadPoolExecutor | None = None
+    camera_future: Future[_CameraPrefetchResult] | None = None
+    if camera_capture_runtime is not None and shot.mode != "mock":
+        camera_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="camera-prefetch")
+        camera_future = camera_executor.submit(_prefetch_camera_capture, shot)
     iwr6843_ms = _process_iwr6843_angle(shot)
     kld7_ms = None
     camera_capture_ms = None
+    camera_archive_load_ms = None
+    camera_wait_ms = None
+    camera_analysis_ms = None
     # Process K-LD7 angle radars (vertical = launch angle, horizontal = club path)
     try:
         if shot.mode != "mock":
-            kld7_start = time.time()
-            shot_ts = shot.impact_timestamp or kld7_start
+            kld7_start = time.monotonic()
+            shot_ts = shot.impact_timestamp or time.time()
             session_log = get_session_logger()
             if kld7_vertical or kld7_horizontal:
                 _maybe_wait_for_kld7_post_shot_frames(shot_ts)
@@ -3836,7 +3946,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                 )
 
             if kld7_vertical or kld7_horizontal:
-                kld7_ms = (time.time() - kld7_start) * 1000
+                kld7_ms = (time.monotonic() - kld7_start) * 1000
                 logger.info("[SERVER] K-LD7 processing: %.1fms", kld7_ms)
     except Exception as e:
         # Covers K-LD7 processing AND the spin-axis derivation above, which
@@ -3855,77 +3965,90 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
         )
 
     camera_capture = None
-    try:
-        if camera_capture_runtime is not None and shot.mode != "mock":
-            camera_capture_start = time.time()
-            camera_capture = camera_capture_runtime.capture_for_shot(
-                shot.impact_timestamp,
-                timeout_s=2.0,
+    camera_archive = None
+    if camera_future is not None:
+        camera_wait_started = time.monotonic()
+        try:
+            prefetched = camera_future.result()
+            camera_capture = prefetched.capture
+            camera_archive = prefetched.archive
+            camera_capture_ms = prefetched.match_ms
+            camera_archive_load_ms = prefetched.archive_load_ms
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            logger.warning("[SERVER] Camera capture matching error: %s", error, exc_info=True)
+            log_session_error(
+                "Camera capture matching failed",
+                component="camera_capture",
+                context={
+                    "stage": "camera_capture_match",
+                    "ball_speed_mph": shot.ball_speed_mph,
+                },
+                exc=error,
             )
-            camera_capture_ms = (time.time() - camera_capture_start) * 1000.0
-            session_log = get_session_logger()
-            if session_log:
-                shot_number = _shot_number_for_log(shot, session_log)
-                if camera_capture is not None:
-                    session_log.log_camera_capture(
-                        shot_number=shot_number,
-                        shot_timestamp=shot.impact_timestamp,
-                        trigger_timestamp=camera_capture.trigger_timestamp,
-                        capture_path=str(camera_capture.path) if camera_capture.path else None,
-                        metadata=camera_capture.metadata,
-                        capture_error=(
-                            f"camera_save_failed: {camera_capture.error}"
-                            if camera_capture.error
-                            else None
-                        ),
-                    )
-                    if camera_capture.valid:
-                        logger.info(
-                            "[SERVER] Camera capture #%d matched -> %s",
-                            camera_capture.sequence,
-                            camera_capture.path,
-                        )
-                    else:
-                        logger.warning(
-                            "[SERVER] Camera capture #%d failed: %s",
-                            camera_capture.sequence,
-                            camera_capture.error,
-                        )
-                else:
-                    rejection = camera_capture_runtime.trigger_rejection_for_shot(
-                        shot.impact_timestamp
-                    )
-                    session_log.log_camera_capture(
-                        shot_number=shot_number,
-                        shot_timestamp=shot.impact_timestamp,
-                        trigger_timestamp=rejection["trigger_timestamp"] if rejection else None,
-                        capture_path=None,
-                        metadata={"trigger_rejection": rejection} if rejection else None,
-                        capture_error=(
-                            f"camera_trigger_rejected:{rejection['reason']}"
-                            if rejection
-                            else "no_matching_camera_capture"
-                        ),
-                    )
-                    logger.warning("[SERVER] No camera capture matched this shot")
-    except Exception as error:  # pylint: disable=broad-exception-caught
-        logger.warning("[SERVER] Camera capture matching error: %s", error, exc_info=True)
-        log_session_error(
-            "Camera capture matching failed",
-            component="camera_capture",
-            context={"stage": "camera_capture_match", "ball_speed_mph": shot.ball_speed_mph},
-            exc=error,
-        )
+        finally:
+            camera_wait_ms = (time.monotonic() - camera_wait_started) * 1000.0
+            if camera_executor is not None:
+                camera_executor.shutdown(wait=True, cancel_futures=False)
 
+        session_log = get_session_logger()
+        if session_log:
+            shot_number = _shot_number_for_log(shot, session_log)
+            if camera_capture is not None:
+                session_log.log_camera_capture(
+                    shot_number=shot_number,
+                    shot_timestamp=shot.impact_timestamp,
+                    trigger_timestamp=camera_capture.trigger_timestamp,
+                    capture_path=str(camera_capture.path) if camera_capture.path else None,
+                    metadata=camera_capture.metadata,
+                    capture_error=(
+                        f"camera_save_failed: {camera_capture.error}"
+                        if camera_capture.error
+                        else None
+                    ),
+                )
+                if camera_capture.valid:
+                    logger.info(
+                        "[SERVER] Camera capture #%d matched -> %s",
+                        camera_capture.sequence,
+                        camera_capture.path,
+                    )
+                else:
+                    logger.warning(
+                        "[SERVER] Camera capture #%d failed: %s",
+                        camera_capture.sequence,
+                        camera_capture.error,
+                    )
+            else:
+                rejection = camera_capture_runtime.trigger_rejection_for_shot(shot.impact_timestamp)
+                session_log.log_camera_capture(
+                    shot_number=shot_number,
+                    shot_timestamp=shot.impact_timestamp,
+                    trigger_timestamp=rejection["trigger_timestamp"] if rejection else None,
+                    capture_path=None,
+                    metadata={"trigger_rejection": rejection} if rejection else None,
+                    capture_error=(
+                        f"camera_trigger_rejected:{rejection['reason']}"
+                        if rejection
+                        else "no_matching_camera_capture"
+                    ),
+                )
+                logger.warning("[SERVER] No camera capture matched this shot")
+
+    camera_analysis_started = time.monotonic()
     _attach_camera_replay(shot, camera_capture)
 
     if shot.mode != "mock":
-        _fuse_camera_measurements(shot, camera_capture)
+        _fuse_camera_measurements(shot, camera_capture, camera_archive)
+        camera_analysis_ms = (time.monotonic() - camera_analysis_started) * 1000.0
 
     return _ShotEnrichmentResult(
         iwr6843_ms=iwr6843_ms,
         kld7_ms=kld7_ms,
         camera_capture_ms=camera_capture_ms,
+        camera_archive_load_ms=camera_archive_load_ms,
+        camera_wait_ms=camera_wait_ms,
+        camera_analysis_ms=camera_analysis_ms,
+        enrichment_ms=(time.monotonic() - enrichment_started) * 1000.0,
     )
 
 
@@ -4043,6 +4166,24 @@ def _finalize_shot_detected(
             "kld7": round(kld7_ms, 1) if kld7_ms is not None else None,
             "camera_capture": (
                 round(camera_capture_ms, 1) if camera_capture_ms is not None else None
+            ),
+            "camera_archive_load": (
+                round(enrichment.camera_archive_load_ms, 1)
+                if enrichment.camera_archive_load_ms is not None
+                else None
+            ),
+            "camera_wait": (
+                round(enrichment.camera_wait_ms, 1)
+                if enrichment.camera_wait_ms is not None
+                else None
+            ),
+            "camera_analysis": (
+                round(enrichment.camera_analysis_ms, 1)
+                if enrichment.camera_analysis_ms is not None
+                else None
+            ),
+            "enrichment": (
+                round(enrichment.enrichment_ms, 1) if enrichment.enrichment_ms is not None else None
             ),
         }
         if (
@@ -4194,8 +4335,19 @@ def _queue_ordered_shot_finalization(
         registered = _shot_finalization_registered.get(shot_number)
         if registered is None or registered.shot is not source_shot:
             logger.info(
-                "[SERVER] Ignoring late enrichment for finalized shot #%d",
+                "[SERVER] Discarding late enrichment for finalized shot #%d",
                 shot_number,
+            )
+            lifecycle_logger = get_session_logger()
+            _log_shot_enrichment_lifecycle(
+                lifecycle_logger,
+                getattr(source_shot, "camera_fusion_session_uuid", None),
+                source_shot,
+                state="late_result_discarded",
+                reason="shot_already_finalized",
+                background_work="complete",
+                result_discarded=True,
+                enrichment=pending.enrichment,
             )
             return
         if shot_number in _shot_finalization_ready:

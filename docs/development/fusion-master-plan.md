@@ -63,6 +63,15 @@ Updated: 2026-09-25. Owner: Harjot. Status: active; M0 complete, M1 in progress.
       camera on evaluation, failure, start-over and general stop without
       stopping an unrelated manual live view. This is browser/backend tested;
       it does not validate Pi frame timing, camera quality or range accuracy.
+- [x] M1 shot-output latency now preserves the provisional OPS event while one
+      bounded camera match/archive load overlaps optional IWR processing. The
+      final log separates monotonic camera match, archive-load, residual-wait,
+      analysis and total-enrichment stages; its legacy initial-UI duration is
+      explicitly identified as a host-epoch estimate that excludes browser
+      rendering. Deadline fallback records that work continues and records a
+      discard only if the late result actually returns. Synthetic concurrency,
+      failure, deterministic-output and lifecycle checks passed; Pi throughput,
+      UART timing and browser-paint latency remain unvalidated.
 - [ ] M1 physical gate remains open. M3 selection and M4 pose/strike/spin are
       evidence-dependent. Preserve the first session and finish its failure and
       discrepancy review before changing estimators.
@@ -503,6 +512,7 @@ live/replay equivalence claim or independent calibration.
 | 2026-09-25 | Moving IWR range and camera↔IWR path association are useful offline diagnostics, but impact extrapolation can be circular and the camera association consumes the same IWR ranges | Preserve the full tee-independent moving range series in replay. Build a non-selectable candidate only from explicitly independent qualified impact timing and matching qualified range calibration. Run the camera association only with saved, qualified camera/range/clock/OPS inputs, retain all alternatives and rejections, and prohibit both diagnostics from tee-range promotion or independent-source counting |
 
 | 2026-09-25 | Guided camera acquisition can use the already-computed static IWR range to reduce provisional search cost, but allowing that conditioned result into promotion would make the nominally independent camera agreement circular | Add a versioned, non-promoting IWR-to-camera search hint that narrows only the floor/range and diameter hypotheses; range alone does not constrain azimuth. Label conditioned previews as radar-guided and ineligible for promotion, fall back to the broad detector when the hint is invalid, stale or too broad, and require Save to rerun the unchanged full-frame 0.5-4 m camera estimator on the exact frames before any camera candidate or promotion. Retain the hint, timings, rejections and a post-Save camera-to-IWR ranking diagnostic without changing the static IWR result or `TeeRangeSolution` candidates |
+| 2026-09-25 | Provisional OPS output already avoids blocking the UI, but final enrichment serially waited for IWR, then matched and loaded camera evidence; a roughly 768 KiB IWR dump at 1,041,667 baud has a roughly 7.55 s theoretical wire floor, and the watchdog cannot cancel its worker | Keep the provisional OPS event, overlap exactly one camera association/archive load with IWR processing, retain the existing IWR/K-LD7/camera estimator and qualification order, and record monotonic stage durations. Bound the prefetch to one worker and one archive. On a deadline, finalize OPS-only while truthfully recording that work continues and that any late result will be discarded; record the discard only when it occurs. This is software concurrency evidence, not Pi throughput or hardware timing validation |
 
 ## Soundless trigger architecture
 
@@ -1101,3 +1111,15 @@ product acceptance limits. Promotion remains gated on that independent evidence.
   passed. UI lint/build and scoped Pylint were not completed after an external
   interruption. No Pi throughput, hardware behavior or range accuracy was
   validated.
+- Shot-output latency implementation (M1, TB04/TB08/TB09/TB12): provisional
+  OPS publication remains immediate. A single bounded camera prefetch now
+  matches and loads one archive while the long IWR stage runs, then reuses that
+  archive after the unchanged radar and K-LD7 stages. Session evidence records
+  the monotonic camera/enrichment stages and the distinct legacy host-epoch UI
+  estimate. Deadline evidence no longer implies cancellation: it records
+  continuing work and a separate late-result discard if completion occurs.
+  The focused server/logger/camera suites passed 302 tests with one absent
+  historical session-log fixture skipped. Ruff lint/format passed; scoped
+  Pylint scored 9.68/10 with existing diagnostics. Tests use synthetic waits
+  and captures; no Raspberry Pi latency, memory, UART-throughput or browser-
+  rendering validation was performed.

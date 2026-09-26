@@ -3119,6 +3119,153 @@ class TestOnShotDetected:
         assert len(updates) == 1
         assert updates[0]["shot"]["timestamp"] == shot.timestamp.isoformat()
 
+    def test_camera_prefetch_overlaps_iwr_and_reuses_one_archive(self, monkeypatch):
+        """Camera association and one archive load overlap the long TI transfer."""
+        camera_loaded = threading.Event()
+        load_calls = []
+        fused_archives = []
+        archive = {"frames": np.zeros((1, 2, 2), dtype=np.uint8)}
+        capture = SimpleNamespace(
+            trigger_timestamp=100.0,
+            path=Path("camera-001"),
+            metadata={},
+            error=None,
+            valid=True,
+            sequence=1,
+        )
+
+        class CameraRuntime:
+            camera_analysis_eligible = True
+
+            @staticmethod
+            def capture_for_shot(impact_timestamp, timeout_s):
+                assert impact_timestamp == 100.0
+                assert timeout_s == 2.0
+                return capture
+
+        def load_camera(selected):
+            load_calls.append(selected)
+            camera_loaded.set()
+            return archive
+
+        def process_iwr(_shot):
+            assert camera_loaded.wait(1.0), "camera work did not overlap IWR processing"
+            return 7500.0
+
+        monkeypatch.setattr(server_module, "camera_capture_runtime", CameraRuntime())
+        monkeypatch.setattr(server_module, "_load_camera_capture_archive", load_camera)
+        monkeypatch.setattr(server_module, "_process_iwr6843_angle", process_iwr)
+        monkeypatch.setattr(server_module, "_snapshot_inclinometer_for_shot", lambda _shot: None)
+        monkeypatch.setattr(server_module, "_attach_camera_replay", lambda *_args: None)
+        monkeypatch.setattr(
+            server_module,
+            "_fuse_camera_measurements",
+            lambda _shot, selected, prefetched: fused_archives.append((selected, prefetched)),
+        )
+        monkeypatch.setattr(server_module, "kld7_vertical", None)
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+
+        result = server_module._enrich_shot_from_optional_hardware(self._shot())
+
+        assert load_calls == [capture]
+        assert fused_archives == [(capture, archive)]
+        assert result.iwr6843_ms == 7500.0
+        assert result.camera_archive_load_ms is not None
+        assert result.camera_analysis_ms is not None
+        assert result.enrichment_ms is not None
+        assert result.clock_domain == "host_monotonic"
+
+    def test_camera_prefetch_failure_does_not_discard_iwr_result(self, monkeypatch):
+        """A camera association failure remains isolated from radar enrichment."""
+        fused = []
+
+        class FailingCameraRuntime:
+            @staticmethod
+            def capture_for_shot(_impact_timestamp, timeout_s):
+                assert timeout_s == 2.0
+                raise OSError("camera save failed")
+
+        def process_iwr(shot):
+            shot.launch_angle_vertical = 18.5
+            shot.launch_angle_vertical_source = "radar"
+            return 25.0
+
+        monkeypatch.setattr(server_module, "camera_capture_runtime", FailingCameraRuntime())
+        monkeypatch.setattr(server_module, "_process_iwr6843_angle", process_iwr)
+        monkeypatch.setattr(server_module, "_snapshot_inclinometer_for_shot", lambda _shot: None)
+        monkeypatch.setattr(server_module, "_attach_camera_replay", lambda *_args: None)
+        monkeypatch.setattr(
+            server_module,
+            "_fuse_camera_measurements",
+            lambda _shot, capture, archive: fused.append((capture, archive)),
+        )
+        monkeypatch.setattr(server_module, "kld7_vertical", None)
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(server_module, "log_session_error", lambda *_args, **_kwargs: None)
+        shot = self._shot()
+
+        result = server_module._enrich_shot_from_optional_hardware(shot)
+
+        assert shot.launch_angle_vertical == 18.5
+        assert shot.launch_angle_vertical_source == "radar"
+        assert result.iwr6843_ms == 25.0
+        assert result.camera_capture_ms is None
+        assert fused == [(None, None)]
+        assert not any(
+            thread.name.startswith("camera-prefetch") and thread.is_alive()
+            for thread in threading.enumerate()
+        )
+
+    def test_prefetch_completion_order_does_not_change_fused_output(self, monkeypatch):
+        """Concurrency changes latency, not the deterministic fusion inputs."""
+        camera_delay_s = [0.0]
+        archive = {"selected": 4.0}
+        capture = SimpleNamespace(
+            trigger_timestamp=100.0,
+            path=Path("camera-001"),
+            metadata={},
+            error=None,
+            valid=True,
+            sequence=1,
+        )
+
+        class CameraRuntime:
+            @staticmethod
+            def capture_for_shot(_impact_timestamp, timeout_s):
+                assert timeout_s == 2.0
+                if camera_delay_s[0]:
+                    threading.Event().wait(camera_delay_s[0])
+                return capture
+
+        def process_iwr(shot):
+            shot.launch_angle_vertical = 16.0
+            shot.launch_angle_vertical_source = "radar"
+            return 10.0
+
+        def fuse(shot, _capture, prefetched):
+            shot.launch_angle_horizontal = prefetched["selected"]
+            shot.launch_angle_horizontal_source = "camera_assisted_experimental"
+
+        monkeypatch.setattr(server_module, "camera_capture_runtime", CameraRuntime())
+        monkeypatch.setattr(server_module, "_load_camera_capture_archive", lambda _capture: archive)
+        monkeypatch.setattr(server_module, "_process_iwr6843_angle", process_iwr)
+        monkeypatch.setattr(server_module, "_snapshot_inclinometer_for_shot", lambda _shot: None)
+        monkeypatch.setattr(server_module, "_attach_camera_replay", lambda *_args: None)
+        monkeypatch.setattr(server_module, "_fuse_camera_measurements", fuse)
+        monkeypatch.setattr(server_module, "kld7_vertical", None)
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+
+        fast_camera_shot = self._shot()
+        server_module._enrich_shot_from_optional_hardware(fast_camera_shot)
+        camera_delay_s[0] = 0.03
+        slow_camera_shot = self._shot()
+        server_module._enrich_shot_from_optional_hardware(slow_camera_shot)
+
+        assert slow_camera_shot.to_dict() == fast_camera_shot.to_dict()
+
     def test_deferred_shots_are_fifo_on_one_worker(self, monkeypatch):
         processed = []
         worker_targets = []

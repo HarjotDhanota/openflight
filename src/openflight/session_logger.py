@@ -344,6 +344,25 @@ class SessionLogger:
         data = shot.to_dict()
         if pipeline_ms is not None:
             data["pipeline_ms"] = pipeline_ms
+            monotonic_stages = {
+                stage: "host_monotonic" for stage in pipeline_ms if stage != "initial_ui"
+            }
+            data["pipeline_timing"] = {
+                "schema_version": 1,
+                "clock_domains": {
+                    "initial_ui": "host_epoch_difference",
+                    **monotonic_stages,
+                },
+                "definitions": {
+                    "initial_ui": (
+                        "estimated impact epoch to server WebSocket emit; "
+                        "does not include browser rendering"
+                    ),
+                    "camera_capture": "camera association wait, overlapped with IWR when enabled",
+                    "camera_wait": "non-overlapped wait after radar stages",
+                    "enrichment": "optional-hardware worker elapsed time",
+                },
+            }
         with self._write_lock:
             if not self._session_file or (
                 expected_session_uuid is not None and self._session_uuid != expected_session_uuid
@@ -396,6 +415,28 @@ class SessionLogger:
                 or self._session_uuid != expected_session_uuid
                 or snapshot.get("session_uuid") != expected_session_uuid
             ):
+                return False
+            self._session_file.write(line)
+            self._session_file.flush()
+            return True
+
+    def log_shot_enrichment(
+        self,
+        expected_session_uuid: str,
+        lifecycle: Dict[str, Any],
+    ) -> bool:
+        """Record truthful deadline continuation and late-result disposal."""
+        if not self.enabled:
+            return False
+        line = (
+            json.dumps(
+                {"ts": datetime.now().isoformat(), "type": "shot_enrichment", **lifecycle},
+                allow_nan=False,
+            )
+            + "\n"
+        )
+        with self._write_lock:
+            if not self._session_file or self._session_uuid != expected_session_uuid:
                 return False
             self._session_file.write(line)
             self._session_file.flush()

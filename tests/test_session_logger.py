@@ -170,6 +170,30 @@ class TestLogTriggerEvent:
 class TestLogShot:
     """Tests for shot logging."""
 
+    def test_pipeline_stages_declare_clock_domain_and_ui_boundary(self, tmp_path):
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now(), shot_number=1)
+        pipeline_ms = {
+            "initial_ui": 120.0,
+            "iwr6843": 7550.0,
+            "camera_capture": 40.0,
+            "camera_wait": 0.2,
+            "camera_analysis": 300.0,
+            "enrichment": 7860.0,
+        }
+
+        logger.log_shot(shot, pipeline_ms=pipeline_ms)
+
+        entry = json.loads(logger.session_path.read_text().strip().split("\n")[-1])
+        assert entry["pipeline_ms"] == pipeline_ms
+        assert entry["pipeline_timing"]["clock_domains"]["initial_ui"] == ("host_epoch_difference")
+        assert entry["pipeline_timing"]["clock_domains"]["iwr6843"] == "host_monotonic"
+        assert (
+            "does not include browser rendering"
+            in entry["pipeline_timing"]["definitions"]["initial_ui"]
+        )
+
     def test_shot_uses_detection_time_shot_number(self, tmp_path):
         logger = SessionLogger(log_dir=tmp_path, enabled=True)
         logger.start_session(mode="rolling-buffer", trigger_type="sound")

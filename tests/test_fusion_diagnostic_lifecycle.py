@@ -16,11 +16,18 @@ class _DiagnosticLog:
     def __init__(self):
         self.active_session_uuid = "session-one"
         self.rows = []
+        self.enrichment_rows = []
 
     def log_fusion_diagnostic(self, expected_session_uuid, snapshot):
         if expected_session_uuid != self.active_session_uuid:
             return False
         self.rows.append(snapshot)
+        return True
+
+    def log_shot_enrichment(self, expected_session_uuid, lifecycle):
+        if expected_session_uuid != self.active_session_uuid:
+            return False
+        self.enrichment_rows.append(lifecycle)
         return True
 
 
@@ -110,6 +117,17 @@ def test_deadline_emits_partial_terminal_without_guessing_completion(monkeypatch
     assert diagnostic_log.rows[-1]["phase"] == "terminal"
     assert diagnostic_log.rows[-1]["outcome"] == "partial"
     assert diagnostic_log.rows[-1]["reason"] == "enrichment_deadline"
+    assert diagnostic_log.enrichment_rows == [
+        {
+            "shot_number": 1,
+            "state": "ops_only_finalized",
+            "reason": "enrichment_deadline",
+            "background_work": "continuing",
+            "late_result_policy": "discard",
+            "result_discarded": False,
+            "timing": None,
+        }
+    ]
 
 
 def test_late_terminal_cannot_enter_replacement_session(monkeypatch):
@@ -139,6 +157,54 @@ def test_duplicate_late_result_does_not_create_another_terminal(monkeypatch):
     server._queue_shot_finalization(shot, emit_event="shot_update", initial_ui_ms=None)
     time.sleep(0.02)
     assert [row["revision"] for row in diagnostic_log.rows] == [1, 2]
+    assert diagnostic_log.enrichment_rows[-1] == {
+        "shot_number": 1,
+        "state": "late_result_discarded",
+        "reason": "shot_already_finalized",
+        "background_work": "complete",
+        "late_result_policy": "discard",
+        "result_discarded": True,
+        "timing": {
+            "clock_domain": "host_monotonic",
+            "enrichment_ms": None,
+            "iwr6843_ms": None,
+            "kld7_ms": None,
+            "camera_match_ms": None,
+            "camera_archive_load_ms": None,
+            "camera_wait_ms": None,
+            "camera_analysis_ms": None,
+        },
+    }
+
+
+def test_deadline_records_continuation_then_actual_late_discard(monkeypatch):
+    diagnostic_log = _DiagnosticLog()
+    finished = _capture_finalization(monkeypatch, diagnostic_log)
+    monkeypatch.setattr(server, "_SHOT_ENRICHMENT_DEADLINE_S", 0.01)
+    shot = _shot()
+    server._register_shot_for_finalization(shot, needs_watchdog=True)
+    assert finished.wait(2.0)
+
+    server._queue_shot_finalization(
+        shot,
+        emit_event="shot_update",
+        initial_ui_ms=None,
+        enrichment=server._ShotEnrichmentResult(
+            iwr6843_ms=7500.0,
+            camera_wait_ms=0.2,
+            enrichment_ms=7600.0,
+        ),
+    )
+
+    assert [row["state"] for row in diagnostic_log.enrichment_rows] == [
+        "ops_only_finalized",
+        "late_result_discarded",
+    ]
+    assert diagnostic_log.enrichment_rows[0]["background_work"] == "continuing"
+    assert diagnostic_log.enrichment_rows[0]["result_discarded"] is False
+    assert diagnostic_log.enrichment_rows[1]["background_work"] == "complete"
+    assert diagnostic_log.enrichment_rows[1]["result_discarded"] is True
+    assert diagnostic_log.enrichment_rows[1]["timing"]["iwr6843_ms"] == 7500.0
 
 
 def _prepare_real_finalizer(monkeypatch, diagnostic_log):
