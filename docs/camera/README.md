@@ -1,13 +1,35 @@
 # OV9281 High-Speed Camera
 
-OpenFlight can capture a short, synchronized camera movie around impact. The
-camera does not replace the OPS243 or IWR6843: OPS anchors speed and trigger
-timing, the IWR6843 measures radar angles, and the camera provides a visual
-record of the clubhead and early ball flight.
+OpenFlight can capture a short camera movie around the same impact event used
+by the radars. The camera frames remain free-running; the shared sound edge
+freezes each rolling buffer but does not trigger an exposure. The camera does
+not replace the OPS243 or IWR6843: OPS anchors speed and trigger timing, the
+IWR6843 measures radar angles, and the camera provides a visual record of the
+clubhead and early ball flight.
 
 Camera capture is experimental. Camera-assisted horizontal launch, club path,
 and attack angle must remain quality-gated until they are validated against a
 launch-monitor source of truth.
+
+Contributors evaluating Cormac's enclosure design or alternate
+resolution/frame-rate combinations should use the
+[camera mode study](contributor-study.md). Its
+[guided field runner](../../ui/public/camera-study.html) starts each allowlisted
+camera test from the browser, shows live output, and creates one archive for
+sharing. It keeps production changes behind a separate maintainer-approved
+pull request.
+
+On the test Pi, stop the normal kiosk and start the runner once:
+
+```bash
+cd ~/openflight
+bash scripts/start-camera-study.sh
+```
+
+Then open `http://127.0.0.1:8765` in the Pi browser. Select the study ID and
+camera mode, then use the numbered actions; no terminal command is needed
+between tests. The normal kiosk and study runner must not own the OV9281 at the
+same time.
 
 ## Supported Hardware
 
@@ -29,13 +51,23 @@ and camera board before applying power.
 
 ## Mounting And Sensor Offset
 
+> **Enclosure revisions require new measurements.** The dimensions below
+> describe the tested original assembly. Do not reuse them, or an older rig
+> geometry file, for a changed enclosure.
+>
+> For Cormac's enclosure design, the IWR board-frame origin is the centroid of
+> the four RX RF-group phase centers. The rig geometry must also retain the
+> individual TX1-TX3 and RX1-RX4 phase-center coordinates so the 12 TX/RX
+> paths are not collapsed to one averaged antenna point. See the
+> [camera mode study](contributor-study.md).
+
 Mount the camera rigidly and point it down the target line. The tested original
 assembly placed the camera directly above the IWR6843 antenna center, about
 `8.25 in` (`0.20955 m`) above the hitting surface. A laterally offset camera is
 also supported when its position is measured and passed to OpenFlight.
 
-Measure horizontally from the radar antenna center used for radar height to the
-camera lens optical center. Pass that signed distance in meters:
+Measure horizontally from the RX-centroid board origin used for radar height to
+the camera lens optical center. Pass that signed distance in meters:
 
 ```bash
 scripts/start-kiosk.sh \
@@ -162,12 +194,21 @@ running. Stop OpenFlight and reboot after installing or restoring a driver.
 
 Measured modes on the test Pi 5:
 
-| Mode | Purpose | Observed cadence |
-|---|---|---:|
-| `640x400` | Full-field setup and baseline capture | about `288 FPS` |
-| `640x200` | Wide impact strip | about `536 FPS` |
-| `320x200` | Dense impact and early-flight capture | about `576 FPS` |
-| `640x100` | Timing experiment only; vertically fragile | not recommended |
+| Mode | Readout class | Purpose | Observed cadence |
+|---|---|---|---:|
+| `640x400` | approximately 2x subsampled, full field | Full-field setup and baseline capture | about `288 FPS` |
+| `640x200` | approximately 2x subsampled, wide strip | Wide impact strip | about `536 FPS` |
+| `320x200` | approximately 2x subsampled, central crop | Dense impact and early-flight capture | about `576 FPS` |
+| `640x100` | approximately 2x subsampled, narrow strip | Timing experiment only; vertically fragile | not recommended |
+| `1280x800` | 1:1 native, full field | Native-resolution study arm | not yet measured; datasheet limit `120 FPS` |
+| `1280x720` | 1:1 native, row crop | Secondary native-resolution study arm | not yet measured |
+
+The four lower-resolution modes are often called “binned” modes in study
+discussions, but the sensor register tables use subsampling/skipping rather than
+photon-summing binning. They share approximately the same angular sampling per
+output pixel; changing from `320x200` to `640x400` primarily restores field of
+view rather than doubling ball or club detail. The controlled comparisons and
+required provenance are defined in the [camera mode study](contributor-study.md).
 
 The production experiment should use the fixed `320x200` mode requested at
 `450 FPS`. Higher requests require exposures too short for reliable golf
@@ -301,7 +342,7 @@ delivered FPS, and `gaps=0`.
 
 ## Running OpenFlight
 
-Enable synchronized rolling capture with `--camera-capture`:
+Enable event-aligned rolling capture with `--camera-capture`:
 
 ```bash
 scripts/start-kiosk.sh \

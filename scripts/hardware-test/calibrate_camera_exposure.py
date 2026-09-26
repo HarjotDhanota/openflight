@@ -56,7 +56,7 @@ def parse_scaler_crop(value: str | None) -> tuple[int, int, int, int] | None:
     return x, y, width, height
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--width", type=int, default=640)
@@ -100,11 +100,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-clipped-pct", type=float, default=1.0)
     parser.add_argument("--max-dark-pct", type=float, default=5.0)
     parser.add_argument(
+        "--no-prompt",
+        action="store_true",
+        help="Start immediately instead of waiting for Enter",
+    )
+    parser.add_argument(
         "--outdir",
         type=Path,
         default=Path.home() / "openflight_sessions" / "camera_exposure_calibration",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def save_pgm(path: Path, image: np.ndarray) -> None:
@@ -240,9 +245,10 @@ def main() -> int:
             f"({args.stream})"
         )
         print(f"Output: {session_dir}")
-        print("Place the enclosure/ball in normal setup. Press Enter to start...")
-        with open("/dev/tty", encoding="utf-8") as terminal:
-            terminal.readline()
+        if not args.no_prompt:
+            print("Place the enclosure/ball in normal setup. Press Enter to start...")
+            with open("/dev/tty", encoding="utf-8") as terminal:
+                terminal.readline()
 
         for exposure_us in args.exposures_us:
             if exposure_us >= frame_duration_us:

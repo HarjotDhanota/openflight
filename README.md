@@ -322,6 +322,7 @@ uv run pytest tests/ -v
 - **[Simulator Connectors](docs/simulator/README.md)** — Stream shots to GSPro, OpenGolfSim, and others
 - **[Cloud Sync](docs/cloud-sync.md)** — Push filtered sessions to FlightWeb
 - **[Rolling Buffer & Spin Detection](docs/rolling_buffer_spin_detection.md)** — Production capture and experimental spin details
+- **[Camera Mode Contributor Study](docs/camera/contributor-study.md)** — Matched binned/native OV9281 tests for sampling, cadence, blur, timing, and fusion reliability
 - **[Dechirped-Sideband Spin Replay](docs/spin-dechirp-replay.md)** — Next-gen spin estimator test bench
 - **[Camera and YOLO Experiments](docs/yolo-performance-tuning.md)** — Optional, non-production vision work
 - **[Legacy K-LD7 Setup](docs/kld7.md)** — Existing K-LD7 builds only

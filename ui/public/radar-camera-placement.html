@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="OpenFlight contributor reference: IWR6843LEVM orientation, OV9281 placement, calibration requirements, and controlled comparison tests.">
+  <title>OpenFlight — Radar orientation &amp; camera placement</title>
+  <style>
+    :root { color-scheme: light; font: 100%/1.55 system-ui, sans-serif; color: #20252a; background: #fff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 72rem; margin: auto; padding: 2rem 1.25rem 4rem; }
+    h1 { font-size: 1.9rem; line-height: 1.2; }
+    h2 { margin-top: 2.5rem; font-size: 1.35rem; border-bottom: 1px solid #bbc1c7; padding-bottom: .4rem; }
+    h3 { font-size: 1.05rem; margin-bottom: .35rem; }
+    p, ul, ol { margin-top: .6rem; }
+    li { margin-bottom: .5rem; }
+    a { color: #124e80; text-underline-offset: .15em; overflow-wrap: anywhere; }
+    a:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+    nav { display: flex; flex-wrap: wrap; gap: .4rem 1.25rem; }
+    nav a { padding: .5rem 0; }
+    .status { border-left: 3px solid #59636c; padding-left: 1rem; }
+    .meta, footer { color: #505a63; font-size: .9rem; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; margin: 1rem 0; }
+    caption { text-align: left; font-weight: 600; margin-bottom: .5rem; }
+    th, td { border: 1px solid #bbc1c7; padding: .65rem; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+    thead th { background: #f1f3f5; }
+    code { font-size: .9em; overflow-wrap: anywhere; }
+    figure { margin: 1.5rem 0; }
+    .drawing { display: block; width: 100%; height: auto; border: 1px solid #bbc1c7; background: #fff; }
+    .drawing text { fill: #20252a; font: 1rem system-ui, sans-serif; }
+    .drawing .small-label { font-size: .8rem; }
+    .drawing .drawing-heading { font-size: 1.15rem; font-weight: 650; }
+    .pcb { fill: #eef3ef; stroke: #263e32; stroke-width: .3; }
+    .hole { fill: white; stroke: #263e32; stroke-width: .2; }
+    .rx { fill: #add9ee; stroke: #145478; stroke-width: .15; }
+    .tx { fill: #efd09a; stroke: #79501a; stroke-width: .15; }
+    .component { fill: #e2e5e8; stroke: #616b74; stroke-width: .2; }
+    .drawing .extension { fill: none; stroke: #8b939a; stroke-width: 1; }
+    .drawing .dimension { fill: none; stroke: #303940; stroke-width: 1; marker-start: url(#dim-arrow); marker-end: url(#dim-arrow); }
+    .drawing .datum { fill: none; stroke: #145478; stroke-width: 1.3; stroke-dasharray: 6 4; }
+    .drawing .leader { fill: none; stroke: #505a63; stroke-width: 1; }
+    .drawing .proposed { fill: none; stroke: #805125; stroke-width: 1.5; stroke-dasharray: 5 4; }
+    .drawing .fov { fill: #eaf4fa; stroke: none; }
+    .drawing .center { fill: white; stroke: #145478; stroke-width: 1.5; }
+    figcaption { margin-top: .5rem; font-size: .9rem; }
+    .measurement-table { font-variant-numeric: tabular-nums; }
+    footer { margin-top: 2rem; border-top: 1px solid #bbc1c7; padding-top: 1rem; }
+    @media (max-width: 36rem) { main { padding: 1rem .75rem 3rem; } h1 { font-size: 1.55rem; } th, td { padding: .4rem; font-size: .9rem; } }
+    @media print { main { max-width: none; padding: 0; } nav { display: none; } h2, h3 { break-after: avoid; } tr { break-inside: avoid; } a { color: inherit; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Radar orientation &amp; camera placement</h1>
+    <p>OpenFlight contributor reference — IWR6843LEVM radar, OV9281 camera, and <strong>Cormac’s enclosure design</strong>.</p>
+    <p class="meta">Reviewed 17 September 2026 · Proposed experiments, not an approved production configuration.</p>
+    <p class="status">Keep the current enclosure and documented RX-vertical orientation as the baseline. First check camera fit, framing, and RF behavior with the camera above the antenna area. RX-center alignment is optional. Investigate radar rotation only if measurements identify a limitation that could justify the enclosure and processing changes. Production geometry, camera defaults, and processing changes require maintainer approval.</p>
+    <nav aria-label="Sections">
+      <a href="#orientation">Orientation</a><a href="#drawings">Dimensioned drawings</a><a href="#tradeoffs">Radar tradeoffs</a>
+      <a href="#camera">Camera placement</a><a href="#geometry">Measurements</a>
+      <a href="#tests">Test procedure</a><a href="#submission">Share results</a><a href="#sources">Evidence</a>
+    </nav>
+  </header>
+
+  <section id="orientation">
+    <h2>1. Identify the orientation before changing anything</h2>
+    <p>All directions below are viewed from the <strong>antenna side, looking at the board</strong>. “TI reference” means the orientation in TI’s board photograph, not a mandatory mounting direction. This reference applies to the LEVM, not the ISK, ODS, or antenna-on-package boards.</p>
+    <table>
+      <caption>Physical landmarks — do not identify orientation from “clockwise” alone</caption>
+      <thead><tr><th scope="col">Landmark</th><th scope="col">TI reference: RX horizontal</th><th scope="col">Documented OpenFlight: RX vertical</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Four RX groups</th><td>Horizontal row</td><td>Vertical column</td></tr>
+        <tr><th scope="row">Three TX groups</th><td>To the right of RX</td><td>Above RX</td></tr>
+        <tr><th scope="row">Micro-USB connector</th><td>Bottom-right</td><td>Top-right</td></tr>
+        <tr><th scope="row">Board roll relative to TI photo</th><td>0°</td><td>90° counterclockwise</td></tr>
+      </tbody>
+    </table>
+    <p>Returning the documented installation to TI’s reference means rotating it <strong>90° clockwise from this front view</strong>. Looking from behind reverses the apparent direction. Verify Cormac’s actual assembly with a front photograph; the recorded installation does not establish the latest build’s orientation. See <a href="#source-ti">TI figures 2-1 and 4-1</a> and the <a href="#source-installation">historical installation record</a>.</p>
+    <p><strong>Seven antenna groups, up to twelve virtual channels:</strong> three TX × four RX. Each outlined physical group contains two radiating patches, not two independently accessible channels. Twelve TX–RX responses require a capture configuration that enables all three transmitters. They are not twelve physical antennas. <a href="#source-ti">TI figure 4-2</a>.</p>
+  </section>
+
+  <section id="drawings">
+    <h2>1A. STEP-derived drawings and board-edge measurements</h2>
+    <p><strong>All dimensions are millimetres.</strong> These orthographic projections use the supplied <code>IWR6843LEVM.step</code>: PCB outline, eight mounting holes, seven antenna-group boxes, and two component placeholders. They are not an AI reconstruction. Front view means looking at the antenna side; dimensions reference the PCB, not the connector or enclosure.</p>
+    <p class="status">The file is a simplified reference model, not a manufacturing drawing. Antenna coordinates below are <strong>box midpoints, not calibrated RF phase centers</strong>. Values are reported to 0.001 mm to preserve the model; this does not claim that the physical board, reconstructed antenna locations, or camera calibration are accurate to 0.001 mm. Check the real board before committing Cormac’s mounting design.</p>
+
+    <figure id="drawing-horizontal">
+      <svg class="drawing" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 635" role="img" aria-labelledby="horizontal-title horizontal-desc">
+        <title id="horizontal-title">TI reference orientation, dimensioned from the supplied STEP</title>
+        <desc id="horizontal-desc">Front projection. PCB width 55.000 mm and overall height 68.456 mm. The RX centroid is 27.573 mm from the left edge and 14.739 mm down from the top. Four receivers run left to right; three transmitters are to their right. The connector is at bottom-right. The bottom-left PCB corner has a rectangular relief.</desc>
+        <defs>
+          <marker id="dim-arrow" viewBox="0 0 8 8" refX="4" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 8 4 L 0 0 L 0 8 Z" fill="#303940"/>
+          </marker>
+          <g id="step-board" data-step-solid="23">
+            <path class="pcb" d="M 0 0 H 14.1362 V -7.8319 H 55 V 60.6243 H 0 Z"/>
+            <g class="hole">
+              <circle cx="2.99999" cy="57.12435" r="1.5"/><circle cx="51.99989" cy="57.12435" r="1.5"/>
+              <circle cx="2.99999" cy="35.7185" r="1.5"/><circle cx="51.99989" cy="35.7185" r="1.5"/>
+              <circle cx="2.99999" cy="27.62428" r="1.5"/><circle cx="51.99989" cy="27.62428" r="1.5"/>
+              <circle cx="2.99999" cy="8.62432" r="1.5"/><circle cx="51.99989" cy="8.62432" r="1.5"/>
+            </g>
+            <rect class="rx" data-step-solid="25" data-channel="RX1" x="23.1214" y="44.0362" width="1.6499" height="3.6988"/>
+            <rect class="rx" data-step-solid="27" data-channel="RX2" x="25.5389" y="44.0362" width="1.6500" height="3.6988"/>
+            <rect class="rx" data-step-solid="26" data-channel="RX3" x="27.9568" y="44.0362" width="1.6499" height="3.6988"/>
+            <rect class="rx" data-step-solid="28" data-channel="RX4" x="30.3743" y="44.0362" width="1.6500" height="3.6988"/>
+            <rect class="tx" data-step-solid="29" data-channel="TX1" x="37.8508" y="40.3215" width="1.6500" height="3.6987"/>
+            <rect class="tx" data-step-solid="24" data-channel="TX2" x="42.6862" y="42.7391" width="1.6500" height="3.6987"/>
+            <rect class="tx" data-step-solid="30" data-channel="TX3" x="47.5214" y="40.3215" width="1.6500" height="3.6987"/>
+            <rect class="component" data-step-solid="31" x="23.3094" y="27.3737" width="10.4" height="10.4"/>
+            <rect class="component" data-step-solid="32" x="48.1094" y="-5.6823" width="8" height="6"/>
+          </g>
+        </defs>
+        <text x="30" y="32" class="drawing-heading">A · RX horizontal — TI reference orientation</text>
+        <use href="#step-board" transform="matrix(6 0 0 -6 120 473.7458)"/>
+        <path class="datum" d="M 285.43695 87 V 530 M 112 198.4322 H 502"/>
+        <circle class="center" cx="285.43695" cy="198.4322" r="4"/>
+        <path class="extension" d="M 120 108 V 61 M 285.43695 85 V 61 M 120 523 V 571 M 450 523 V 571 M 118 110 H 58 M 202 520.7372 H 58 M 452 110 H 506"/>
+        <path class="dimension" d="M 120 70 H 285.43695 M 120 559 H 450 M 67 110 V 520.7372 M 493 110 V 198.4322"/>
+        <text x="202.718" y="61" text-anchor="middle">27.573</text>
+        <text x="285" y="583" text-anchor="middle">55.000 · PCB width</text>
+        <text x="49" y="315" text-anchor="middle" transform="rotate(-90 49 315)">68.456 · overall PCB height</text>
+        <text x="509" y="159">14.739</text>
+        <text x="123" y="100" class="small-label">O · top-left PCB corner</text>
+        <g class="small-label" text-anchor="middle">
+          <text x="263.6781" y="227">1</text><text x="278.1834" y="227">2</text>
+          <text x="292.6905" y="227">3</text><text x="307.1958" y="227">4</text>
+          <text x="352.0548" y="249">1</text><text x="381.0672" y="235">2</text><text x="410.0784" y="249">3</text>
+        </g>
+        <text x="265" y="169">RX</text><text x="382" y="180">TX</text>
+        <path class="leader" d="M 291 195 L 337 164 H 410 M 431.34 487 H 529 M 138 140 L 175 332 H 235"/>
+        <text x="344" y="156" class="small-label">RX centroid</text>
+        <text x="541" y="482">USB placeholder</text>
+        <text x="541" y="504" class="small-label">Not the PCB edge datum</text>
+        <text x="180" y="349" class="small-label">8 × Ø3.000 through holes</text>
+        <text x="548" y="285">Blue blocks: RX1–RX4</text>
+        <text x="548" y="313">Amber blocks: TX1–TX3</text>
+        <text x="548" y="346" class="small-label">Each block encloses one</text>
+        <text x="548" y="367" class="small-label">two-patch antenna group.</text>
+        <text x="30" y="613" class="small-label">Dimensions to antenna centers, not box edges. Projection is proportional; browser/print size is not a 1:1 template.</text>
+      </svg>
+      <figcaption>Drawing A. PCB geometry is projected directly from the STEP XY plane. The file’s +Y points up in this view; the measurement tables use distance <em>down</em> from the top PCB edge. Antenna names are assigned by matching their arrangement to TI figure 4-1.</figcaption>
+    </figure>
+
+    <figure id="drawing-vertical">
+      <svg class="drawing" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 590" role="img" aria-labelledby="vertical-title vertical-desc">
+        <title id="vertical-title">Documented 90 degree counterclockwise orientation with board-edge dimensions</title>
+        <desc id="vertical-desc">Front projection after a 90 degree counterclockwise rotation. PCB overall width 68.456 mm, height 55.000 mm. RX centroid is 14.739 mm from the left edge, 53.718 mm from the right edge, and 27.427 mm below the top edge. RX4 is above RX3, RX2, RX1. TX3 is above TX2 and TX1. USB is top-right.</desc>
+        <text x="30" y="32" class="drawing-heading">B · RX vertical — 90° CCW from drawing A, viewed from the front</text>
+        <use href="#step-board" transform="matrix(0 -6 -6 0 483.7458 450)"/>
+        <path class="datum" d="M 208.4322 88 V 459 M 112 284.56305 H 584"/>
+        <circle class="center" cx="208.4322" cy="284.56305" r="4"/>
+        <path class="extension" d="M 120 118 V 60 M 208.4322 86 V 60 M 118 120 H 55 M 118 450 H 55 M 120 452 V 516 M 530.7372 367 V 516 M 534 120 H 590"/>
+        <path class="dimension" d="M 120 70 H 208.4322 M 65 120 V 450 M 120 501 H 530.7372 M 577 120 V 284.56305"/>
+        <text x="164.2161" y="61" text-anchor="middle">14.739</text>
+        <text x="46" y="285" text-anchor="middle" transform="rotate(-90 46 285)">55.000 · PCB height</text>
+        <text x="325.3686" y="525" text-anchor="middle">68.456 · overall PCB width</text>
+        <text x="593" y="207">27.427</text>
+        <text x="123" y="109" class="small-label">O · top-left PCB corner</text>
+        <g class="small-label">
+          <text x="228" y="267.8042">RX4</text><text x="228" y="282.3095">RX3</text>
+          <text x="228" y="296.8166">RX2</text><text x="228" y="311.3219">RX1</text>
+          <text x="256" y="163.9216">TX3</text><text x="241" y="192.9328">TX2</text><text x="256" y="221.9452">TX1</text>
+        </g>
+        <path class="leader" d="M 203 285 L 167 344 H 140 M 500 137 L 624 98 H 710"/>
+        <text x="134" y="364" class="small-label">RX centroid</text>
+        <text x="613" y="87">USB placeholder</text>
+        <text x="600" y="325" class="small-label">Optional RX alignment:</text>
+        <text x="600" y="350">14.739 from LEFT</text>
+        <text x="600" y="375" class="small-label">53.718 from RIGHT</text>
+        <text x="30" y="567" class="small-label">The same STEP geometry, rotated without mirroring. The PCB relief moves to bottom-right.</text>
+      </svg>
+      <figcaption>Drawing B. Note the edge reversal: after a front-view CCW rotation, the antenna column is near the <strong>left</strong> edge. USB remains top-right. Optional camera alignment above RX is 14.739 mm from the left edge (53.718 mm from the right); this is a mechanical reference, not a required placement.</figcaption>
+    </figure>
+
+    <h3>Individual antenna centers from PCB edges</h3>
+    <p>Use the table for the orientation actually installed. “Left/right/top/bottom” always refer to the displayed front view’s outermost PCB extents; at the rectangular relief, extend the outer-edge datum line. Right and bottom distances complement the left and top distances to the overall board size.</p>
+    <table class="measurement-table" id="horizontal-measurements">
+      <caption>A · TI reference / RX horizontal — 55.000 × 68.456 mm</caption>
+      <thead><tr><th scope="col">Center</th><th scope="col">From left</th><th scope="col">From right</th><th scope="col">From top</th><th scope="col">From bottom</th></tr></thead>
+      <tbody>
+        <tr data-channel="RX1"><th scope="row">RX1</th><td>23.946</td><td>31.054</td><td>14.739</td><td>53.718</td></tr>
+        <tr data-channel="RX2"><th scope="row">RX2</th><td>26.364</td><td>28.636</td><td>14.739</td><td>53.718</td></tr>
+        <tr data-channel="RX3"><th scope="row">RX3</th><td>28.782</td><td>26.218</td><td>14.739</td><td>53.718</td></tr>
+        <tr data-channel="RX4"><th scope="row">RX4</th><td>31.199</td><td>23.801</td><td>14.739</td><td>53.718</td></tr>
+        <tr data-channel="TX1"><th scope="row">TX1</th><td>38.676</td><td>16.324</td><td>18.453</td><td>50.003</td></tr>
+        <tr data-channel="TX2"><th scope="row">TX2</th><td>43.511</td><td>11.489</td><td>16.036</td><td>52.420</td></tr>
+        <tr data-channel="TX3"><th scope="row">TX3</th><td>48.346</td><td>6.654</td><td>18.453</td><td>50.003</td></tr>
+        <tr data-channel="RX centroid"><th scope="row">RX centroid</th><td>27.573</td><td>27.427</td><td>14.739</td><td>53.718</td></tr>
+      </tbody>
+    </table>
+    <table class="measurement-table" id="vertical-measurements">
+      <caption>B · 90° CCW / RX vertical — 68.456 × 55.000 mm</caption>
+      <thead><tr><th scope="col">Center</th><th scope="col">From left</th><th scope="col">From right</th><th scope="col">From top</th><th scope="col">From bottom</th></tr></thead>
+      <tbody>
+        <tr data-channel="RX1"><th scope="row">RX1</th><td>14.739</td><td>53.718</td><td>31.054</td><td>23.946</td></tr>
+        <tr data-channel="RX2"><th scope="row">RX2</th><td>14.739</td><td>53.718</td><td>28.636</td><td>26.364</td></tr>
+        <tr data-channel="RX3"><th scope="row">RX3</th><td>14.739</td><td>53.718</td><td>26.218</td><td>28.782</td></tr>
+        <tr data-channel="RX4"><th scope="row">RX4</th><td>14.739</td><td>53.718</td><td>23.801</td><td>31.199</td></tr>
+        <tr data-channel="TX1"><th scope="row">TX1</th><td>18.453</td><td>50.003</td><td>16.324</td><td>38.676</td></tr>
+        <tr data-channel="TX2"><th scope="row">TX2</th><td>16.036</td><td>52.420</td><td>11.489</td><td>43.511</td></tr>
+        <tr data-channel="TX3"><th scope="row">TX3</th><td>18.453</td><td>50.003</td><td>6.654</td><td>48.346</td></tr>
+        <tr data-channel="RX centroid"><th scope="row">RX centroid</th><td>14.739</td><td>53.718</td><td>27.427</td><td>27.573</td></tr>
+      </tbody>
+    </table>
+
+    <details>
+      <summary>Mounting-hole dimensions, board relief, and STEP provenance</summary>
+      <p>All eight holes are Ø3.000 in the model. For drawing A, the two hole columns are 3.000 and 52.000 mm from the left edge; the four rows are 3.500, 24.906, 33.000, and 52.000 mm down from the top. For drawing B, the four columns are 3.500, 24.906, 33.000, and 52.000 mm from the left; the two rows are 3.000 and 52.000 mm from the top.</p>
+      <p>The PCB thickness is 1.600 mm. Drawing A’s bottom-left relief is 14.136 mm wide × 7.832 mm high; drawing B’s bottom-right relief is 7.832 mm wide × 14.136 mm high. The component solids are simplified placeholders; do not use them to approve connector clearances.</p>
+      <p>STEP units: millimetres. Raw PCB bounds: X = 0 to 55.0000, Y = −7.8319 to 60.6243, Z = −1.6000 to 0. Antenna boxes extend from Z = 0 to +0.0500; use the box footprint centers at the front PCB plane as nominal geometry, with calibrated phase-center offsets separate.</p>
+      <p>Coordinate conversion from STEP (X, Y): drawing A <code>(left, down) = (X, 60.6243 − Y)</code>; drawing B <code>(left, down) = (60.6243 − Y, 55 − X)</code>. These are drawing coordinates, not a newly mandated fusion coordinate system.</p>
+      <p>Source: <code>IWR6843LEVM.step</code>, 85,450 bytes; internal export name <code>reference-iwr6843levm.step</code>, exported 11 September 2026. SHA-256: <code>6d9eaf550962849684550d1e8e056ee96687dd9c61bf80a92420a486af9e43e8</code>. Antenna solids: RX1 #25, RX2 #27, RX3 #26, RX4 #28; TX1 #29, TX2 #24, TX3 #30. PCB: #23. No camera geometry is included.</p>
+    </details>
+
+    <figure id="drawing-camera">
+      <svg class="drawing" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 510" role="img" aria-labelledby="camera-title camera-desc">
+        <title id="camera-title">Proposed camera alignment and dimensions still to measure</title>
+        <desc id="camera-desc">Front schematic in RX-vertical orientation: optional camera alignment above RX is 14.739 mm from the left PCB edge. Height h and optical-center depth zC remain unspecified. The side schematic shows nominal vertical radar coverage of plus or minus 60 degrees about boresight from a representative point in the antenna region. It is not an RF clearance boundary. Camera outline is illustrative; measured lens and bracket geometry must be checked separately.</desc>
+        <text x="25" y="32" class="drawing-heading">C · Camera alignment proposal — camera dimensions are NOT in the STEP</text>
+        <text x="35" y="67">Front · RX vertical</text><text x="476" y="67">Side · schematic, not to scale</text>
+        <use href="#step-board" transform="matrix(0 -3 -3 0 261.8729 355)"/>
+        <path class="datum" d="M 124.2161 84 V 365 M 76 272.281525 H 185"/>
+        <circle class="proposed" cx="124.2161" cy="110" r="24"/>
+        <circle class="center" cx="124.2161" cy="110" r="3"/>
+        <circle class="center" cx="124.2161" cy="272.281525" r="3"/>
+        <path class="extension" d="M 80 188 V 148 M 124.2161 140 V 148 M 150 110 H 350 M 288 190 H 350"/>
+        <path class="dimension" d="M 80 156 H 124.2161 M 339 110 V 190"/>
+        <text x="101" y="146" text-anchor="middle" class="small-label">14.739</text>
+        <text x="353" y="151">h · TBD</text>
+        <text x="163" y="97" class="small-label">Camera optical center C</text>
+        <text x="163" y="121" class="small-label">Lens/housing outline illustrative</text>
+        <path class="leader" d="M 128 273 L 175 294 H 204"/>
+        <text x="166" y="313" class="small-label">RX centroid</text>
+        <text x="35" y="450" class="small-label">C is h above the top PCB edge.</text>
+        <text x="35" y="473" class="small-label">RX-to-C vertical separation = 27.427 + h.</text>
+        <path class="fov" d="M 674 300 L 744 178.756 A 140 140 0 0 1 744 421.244 Z"/>
+        <path class="datum" d="M 744 178.756 L 674 300 L 744 421.244"/>
+        <path class="datum" d="M 674 86 V 427 M 674 300 H 860"/>
+        <rect class="component" x="660" y="220" width="14" height="140"/>
+        <path class="proposed" d="M 523 88 H 611 V 143 H 523 Z M 611 97 H 635 V 134 H 611"/>
+        <circle class="center" cx="604" cy="115" r="3"/>
+        <path class="datum" d="M 607 115 H 817"/>
+        <path class="extension" d="M 604 145 V 188 M 674 173 H 677"/>
+        <path class="dimension" d="M 604 180 H 674"/>
+        <text x="639" y="202" text-anchor="middle" class="small-label">zC · measure</text>
+        <text x="520" y="245">z = 0</text><text x="520" y="269" class="small-label">Front PCB plane</text>
+        <path class="leader" d="M 630 263 L 674 280 M 610 327 L 674 300"/>
+        <circle class="center" cx="674" cy="300" r="3"/>
+        <text x="496" y="349" class="small-label">Antenna region</text>
+        <text x="747" y="208" class="small-label">Nominal vertical FoV</text>
+        <text x="747" y="230">120° (±60°)</text>
+        <text x="747" y="252" class="small-label">RX vertical</text>
+        <text x="749" y="288" class="small-label">Boresight / +z</text>
+        <text x="476" y="450" class="small-label">Shown behind plane: zC &lt; 0 (illustration only).</text>
+        <text x="476" y="473" class="small-label">FoV sector is NOT an RF-safe gap boundary.</text>
+      </svg>
+      <figcaption>Drawing C. Brown dashed geometry is a proposal, not measured camera hardware. The blue sector shows nominal RX-vertical coverage from a representative point in the antenna region; it does not model the full aperture or near-field interactions. Overlay the measured lens, PCB, bracket, fasteners, and cable envelope in CAD and check coverage from all antenna groups, including installed radar tilt. No fixed height, depth, housing diameter, or RF-safe gap is established by this schematic or the radar STEP. <a href="#source-ti">TI field-of-view specification</a>.</figcaption>
+    </figure>
+    <ol>
+      <li><strong>Pick the orientation and verify the landmarks.</strong> Use A for RX horizontal or B for the documented 90° CCW arrangement. Measure from PCB edges, not the USB body.</li>
+      <li><strong>Choose a camera centerline that fits the enclosure.</strong> Optional alignment above the RX centroid is, in A: 27.573 mm from the left edge (27.427 from the right); in B: 14.739 mm from the left edge (53.718 from the right). These are convenient mechanical references, not an RF optimum or a required camera position. A lateral adjustment is reasonable if fit, framing, and RF checks pass; record and calibrate the resulting transform.</li>
+      <li><strong>Choose and record the remaining dimensions.</strong> Supply camera/lens geometry; set height <code>h</code> above the top edge and depth <code>zC</code> from the front PCB plane after checking the full assembly envelope. Include the lens-front-to-optical-center offset and camera pitch/yaw/roll.</li>
+      <li><strong>For the orientation comparison, hold the world geometry fixed.</strong> Ideally roll the radar about the RX centroid, keeping that point and the camera stationary. A fixture rotating about a different point must translate the board or record the changed transform. Do not move the camera merely to preserve its board-edge distance.</li>
+    </ol>
+  </section>
+
+  <section id="tradeoffs">
+    <h2>2. What rotating the radar changes</h2>
+    <p>The TX1/TX3 × four-RX combination forms the longer, eight-element virtual array. TX2 adds an offset on the perpendicular axis. Rolling the board swaps which world direction receives the longer aperture. <a href="#source-ti">TI virtual-array geometry</a>.</p>
+    <table>
+      <caption>Expected consequences of the array geometry — not measured accuracy guarantees</caption>
+      <thead><tr><th scope="col">Configuration</th><th scope="col">Potential benefit</th><th scope="col">Tradeoff</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">RX vertical</th><td>Stronger vertical angular separation; useful for launch angle and separating direct returns from floor reflections.</td><td>Less horizontal aperture for lateral separation and direction estimates.</td></tr>
+        <tr><th scope="row">RX horizontal</th><td>Stronger horizontal angular separation; potentially useful for horizontal launch and club-path tracking.</td><td>Less vertical aperture; vertical tracking and floor-reflection rejection need renewed evaluation.</td></tr>
+      </tbody>
+    </table>
+    <p>These are engineering expectations from the geometry. Angular resolution is not single-target angle accuracy. Better horizontal tracking does not directly measure clubface orientation or prove better impact-location estimates.</p>
+    <p><strong>Coverage also rotates.</strong> TI specifies nominal 120° azimuth × 80° elevation FoV in the RX-horizontal reference orientation. With RX vertical, that becomes approximately 80° horizontal × 120° vertical about the radar boresight (±40° and ±60°, respectively). Apply the installed pitch/yaw when checking the enclosure. The wider vertical coverage matters for a lens protruding above the antenna region; FoV is neither angular resolution nor a sharp RF clearance boundary. <a href="#source-ti">TI user guide, section 1.1</a>.</p>
+    <p class="status"><strong>Software gate:</strong> current direction-of-arrival code uses a vertical array and a floor-image rejection rule. A horizontal installation needs reviewed axis/sign handling, channel geometry, multipath treatment, and new calibration before its angle or fused outputs are scored. Rotating the hardware and relabeling existing results is insufficient. <a href="#source-code">Current processing code</a>.</p>
+  </section>
+
+  <section id="camera">
+    <h2>3. Camera above the radar: what we can actually conclude</h2>
+    <p><strong>Above the radar is not inherently worse for face angle or impact location.</strong> Optical evidence depends on the camera’s position relative to the ball and club, lens, sampling, exposure, and visible features—not the radar’s position underneath it. Rotating only the radar leaves the optical view unchanged.</p>
+    <table>
+      <caption>Placement options to evaluate on Cormac’s design</caption>
+      <thead><tr><th scope="col">Option</th><th scope="col">Reason to try it</th><th scope="col">What to check</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Above, optionally centered on RX</th><td>Simple mechanical reference; removes lateral offset to the RX centroid when aligned. Exact alignment is not required.</td><td>Vertical/depth offsets remain. Check club/ball overlap, visible club features, framing, and radar interference.</td></tr>
+        <tr><th scope="row">Higher camera position</th><td>Changes the actual viewing elevation; may expose useful crown or topline features.</td><td>May hide other features or change occlusion. No validated ideal height or accuracy advantage yet.</td></tr>
+        <tr><th scope="row">Lateral camera offset</th><td>Changes viewpoint and may separate overlapping features.</td><td>Adds lateral parallax and potentially handedness-dependent occlusion; test both relevant swing directions.</td></tr>
+      </tbody>
+    </table>
+    <p>Aim to retain the stationary ball, final club approach, contact region, and early ball flight. Tilting around the same optical center changes framing, not viewpoint. Do not inherit old enclosure heights, lens assumptions, or extrinsics.</p>
+    <p>Face angle requires an identifiable club orientation; an ambiguous rear silhouette may not provide it. Impact location additionally needs a registered clubface reference, depth and timing, plus independent strike-location truth. Neither endpoint has a demonstrated accuracy guarantee for the proposed layout.</p>
+    <p><strong>RF clearance:</strong> keep the lens housing, camera PCB, fasteners, and cables out of the antenna’s forward region where practical. Above and behind the antenna plane is a starting layout, not proof of RF transparency. There is no validated universal camera-to-antenna clearance for this assembly; compare returns with the actual camera and enclosure installed. <a href="#source-radome">TI radome guidance</a>.</p>
+  </section>
+
+  <section id="geometry">
+    <h2>4. Record the full geometry—not one average distance</h2>
+    <p>The <strong>RX centroid is a valid coordinate origin</strong>. Keep the individual TX and RX positions in that coordinate system; choosing an origin does not discard their geometry. TX position matters because each measured signal travels from a particular transmitter to the target and back to a particular receiver.</p>
+    <ul>
+      <li>Record the nominal 3D centers of all three TX and four RX groups, with channel labels, units, axis directions, and board revision. CAD group centers are starting references, not calibrated RF phase centers.</li>
+      <li>Record the camera-to-radar translation <em>and rotation</em>. Seven scalar camera-to-antenna distances are not a substitute for that transform.</li>
+      <li>Distinguish the measured lens-front reference from the camera optical center; solve camera intrinsics/distortion and radar–camera extrinsics at the installed focus and mode.</li>
+      <li>Survey the ball/target position, floor height, radar boresight, and camera view. Repeat geometry checks whenever a mount moves.</li>
+    </ul>
+    <p>Per-channel amplitude and phase can help validate the array model against a surveyed reflector. They are not twelve independent ground-truth target positions. A camera pixel supplies a ray, not range; an optical club feature may also differ from the strongest radar scattering point.</p>
+  </section>
+
+  <section id="tests">
+    <h2>5. Contributor test procedure</h2>
+    <p>Agree on the comparison and acceptable endpoint errors with the maintainer before collecting a large dataset. Change one factor at a time. Keep failed and rejected captures.</p>
+    <h3>First: decide camera placement within the current enclosure</h3>
+    <p>Keep RX vertical and use the current camera mode for these checks. A full orientation comparison, camera-mode study, face-angle study, or timing study is not a prerequisite for this mechanical placement decision. Passing these checks establishes a candidate layout, not validated accuracy for every launch-monitor metric.</p>
+    <ol>
+      <li><strong>Document the assembly.</strong> Photograph the antenna side and full rig. Record Cormac’s design revision, board/camera/lens identification, mounting measurements, software commit, radar profile, and lighting.</li>
+      <li><strong>Check fit and framing.</strong> Fit the actual camera, lens, bracket, fasteners, and cables above the radar. Check their envelope against the antenna coverage at the installed tilt. Confirm the stationary ball, final club approach, contact region, and early ball flight remain in frame. Adjust the camera centerline if needed and record its pose.</li>
+      <li><strong>Establish the supported baseline.</strong> With RX vertical, capture surveyed stationary targets at several ranges and horizontal/vertical positions. Register a visible marker to the radar reflector with a measured offset. Reserve some positions for validation rather than calibration.</li>
+      <li><strong>Check camera/enclosure interference.</strong> At unchanged radar pose and settings, compare camera absent, installed but unpowered, and powered/capturing. Check the final shell too. Retain raw channel data; compare detection availability, noise, amplitude, relative phase, and target estimates.</li>
+    </ol>
+    <p class="status"><strong>Placement decision:</strong> retain the current orientation and enclosure if fit, framing, and RF behavior meet the agreed requirements. If they do not, first investigate the measured obstruction, interference, or visibility problem. Consider radar rotation only when evidence points to an orientation-dependent limitation; require a repeatable benefit on a temporary fixture before committing to an enclosure redesign.</p>
+    <h3>Follow-up studies: address a measured limitation</h3>
+    <p>Select the study relevant to the limitation. Hold the other variables fixed; these studies can proceed separately from the initial placement decision.</p>
+    <ol>
+      <li><strong>Compare radar orientations.</strong> Hold camera pose, mode, exposure, focus, lighting, and target geometry fixed. Record any unavoidable radar-center movement. Alternate RX-vertical / RX-horizontal / RX-vertical to expose drift. Horizontal raw captures are useful before software support; label derived outputs unvalidated until the software gate in section 2 is met.</li>
+      <li><strong>Compare camera positions separately.</strong> Fix the radar orientation. Recalibrate each camera position and compare visibility, ball/club pixel span, localization uncertainty, clipping, blur, and valid pre-impact observations across drivers, irons, and wedges.</li>
+      <li><strong>Evaluate actual endpoints.</strong> Compare against independent reference measurements where available. Report signed bias, absolute error, upper-tail error, sample count, and failure rate—not only attractive example frames. Separate calibration captures from held-out evaluation swings.</li>
+    </ol>
+    <h3>Camera-mode study: include binned modes</h3>
+    <p>After the placement comparison, test the available native and binned/subsampled OV9281 modes separately. Start with matched delivered cadence, then vary cadence and exposure. Record the resolved sensor readout, crop, binning/skipping configuration, bit depth, exposure, gain, and achieved frame intervals. Output dimensions alone do not identify the readout. Measure sensitivity and noise rather than assuming all reduced-resolution modes are pure skipping or that they provide a fixed light gain. <a href="#source-sensor">Sensor documentation</a>.</p>
+    <h3>Timing: measure it before adding hardware</h3>
+    <p>Preserve sensor timestamps, exposure information, radar chirp/frame timing, and trigger/clock metadata. Compare independently identified events; do not “validate” synchronization using a camera estimate already anchored to radar contact. Report offset, jitter, and clock drift. This protocol requires neither an LED nor a new timing board. Any electrical synchronization proposal follows a measured timing shortfall, with a separate hardware review.</p>
+  </section>
+
+  <section id="submission">
+    <h2>6. What to send back</h2>
+    <p>Use one study archive, grouped by <strong>radar orientation → camera position → camera mode → run</strong>. Give corresponding camera, radar, and reference records the same run/shot identifier.</p>
+    <ul>
+      <li><strong>Manifest:</strong> hardware and software versions, geometry and units, settings, timestamps/clock definitions, lighting, club, test condition, and missing or failed captures.</li>
+      <li><strong>Original evidence:</strong> camera frames/video with metadata, available raw radar captures and profiles, calibration inputs/results, assembly photos, and independent reference data.</li>
+      <li><strong>Short report:</strong> question tested, controlled variables, sample counts, measured differences, uncertainty, failure cases, and proposed next step. Mark unmeasured quantities as unknown.</li>
+    </ul>
+    <p class="status">This page is a standalone reference, not a capture controller. The separate camera-study runner packages its camera-study artifacts; it does not automatically provide this full orientation experiment, collect every radar stream, or implement rotated-array processing. Verify archive contents before sharing.</p>
+    <p>Share raw data through the agreed storage channel, not Git. Send a small report and archive link first. Any proposed code, geometry, or default-setting change must remain a focused, maintainer-reviewed change; data collection is not approval to deploy it.</p>
+  </section>
+
+  <section id="sources">
+    <h2>7. Evidence and limits</h2>
+    <p><strong>Do not carry forward superseded claims:</strong> August rig dimensions were assumptions, and the earlier sub-frame timing validation was circular. Old optics calculations do not establish an optimal camera height, a universal face-angle penalty, or a fixed “15× more light” requirement. The research correction below takes precedence over those earlier claims.</p>
+    <ul>
+      <li id="source-ti"><a href="https://www.ti.com/jp/lit/pdf/swru585">TI IWR6843LEVM user guide, SWRU585</a> — board photograph (figure 2-1), antenna groups (4-1), and virtual array (4-2). Physical hardware reference.</li>
+      <li id="source-installation"><a href="https://github.com/HarjotDhanota/openflight/blob/acdacfbb22a2a5c1503f817a437fd1e5f8e4ff43/config/enclosure_v42_rig_geometry.json">Recorded OpenFlight installation geometry</a> — evidence for the prior 90° CCW mounting only; not dimensions for Cormac’s design.</li>
+      <li id="source-code"><a href="https://github.com/HarjotDhanota/openflight/blob/acdacfbb22a2a5c1503f817a437fd1e5f8e4ff43/src/openflight/iwr6843/doa.py">Direction-of-arrival implementation</a> and <a href="https://github.com/HarjotDhanota/openflight/blob/acdacfbb22a2a5c1503f817a437fd1e5f8e4ff43/src/openflight/iwr6843/multipath.py">multipath implementation</a> — current vertical-array assumptions, not horizontal-orientation validation.</li>
+      <li id="source-radome"><a href="https://www.ti.com/lit/an/swra705/swra705.pdf">TI mmWave radar radome design guide</a> — enclosure material and RF interaction considerations; not a camera-clearance specification.</li>
+      <li id="source-sensor"><a href="https://www.ovt.com/wp-content/uploads/2024/05/OV9281-PB-v1.4-WEB.pdf">OMNIVISION OV9281 product brief</a> and <a href="https://www.v-visiontech.com/web/userfiles/download/OV9281_CSP5_DS_1.01.pdf">OV9281 datasheet (manufacturer document, third-party mirror)</a> — sensor capabilities and readout controls. Actual usable modes depend on the module and installed driver.</li>
+      <li><a href="https://github.com/HarjotDhanota/openflight/blob/3a4f03eb9d7104959338e97d743fb0d0227edbdc/docs/Personal%20Research/markerless-club-data-guide-v2-research-corrected.md">Corrected club-data research, section 1O, 10 September 2026</a> — geometry and timing retractions. Earlier sections contain superseded proposals.</li>
+      <li><a href="https://github.com/HarjotDhanota/openflight/blob/3a4f03eb9d7104959338e97d743fb0d0227edbdc/docs/Personal%20Research/research-2026-08-28/E_optics_vantage.md">Historical optics/vantage research</a> — experimental questions and limitations; not proof of performance in the new enclosure.</li>
+    </ul>
+  </section>
+  <footer>One self-contained HTML file. Open locally or share unchanged; no installation, scripts, or external assets are needed to read it. Source links require internet access and repository access where applicable.</footer>
+</main>
+</body>
+</html>

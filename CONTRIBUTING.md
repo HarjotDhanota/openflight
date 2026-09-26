@@ -190,6 +190,7 @@ Add ball detection indicator to UI header
 - Documentation improvements
 - Performance optimizations
 - Test coverage improvements
+- Hardware evidence for the maintainer-reviewed [OV9281 camera mode study](docs/camera/contributor-study.md)
 
 **Feature ideas:**
 - Launch angle detection improvements

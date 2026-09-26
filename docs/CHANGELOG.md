@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full horizontal speed, overstating attack angle on any shot with club path.
 
 ### Added
+- **Contributor camera-mode study.** A guided local runner and review plan use
+  matched binned/subsampled and native-readout arms to separate crop, spatial
+  sampling, delivered cadence, exposure/blur, timing, capture reliability, and
+  frozen full-stack results without changing production defaults.
 - **Track-derived club metrics, all experimental and all unvalidated against a
   reference instrument.** A 3-D clubhead track
   (`camera.clubpose.head_track.build_head_track`) lifts each frame's head mask
