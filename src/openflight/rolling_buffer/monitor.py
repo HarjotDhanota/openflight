@@ -16,6 +16,12 @@ from ..clubs.physics import get_club_physics
 from ..launch_monitor import Shot, estimate_carry_distance, summarize_shots
 from ..ops243 import OPS243Radar, SpeedReading
 from ..session_logger import get_session_logger, log_session_error
+from ..timing import (
+    clone_stage_timing,
+    measured_stage,
+    new_stage_timing,
+    set_legacy_provenance,
+)
 from .processor import RollingBufferProcessor
 from .trigger import create_trigger
 from .types import ProcessedCapture, SpeedTimeline
@@ -367,6 +373,18 @@ class RollingBufferMonitor:
         }
         event.setdefault("all_outbound_speeds", [])
         event.setdefault("all_inbound_speeds", [])
+        if updates.get("latency_ms") is not None:
+            stage_timing = clone_stage_timing(event.get("stage_timing"))
+            set_legacy_provenance(
+                stage_timing,
+                "latency_ms",
+                semantics=(
+                    "whole trigger strategy wall duration including golfer idle wait and capture"
+                ),
+                clock_domain="host_wall",
+                ambiguity="legacy field is not physical trigger-edge latency",
+            )
+            event["stage_timing"] = stage_timing
 
         try:
             session_logger = get_session_logger()
@@ -388,6 +406,7 @@ class RollingBufferMonitor:
                     spin_rpm=event.get("spin_rpm"),
                     carry_yards=event.get("carry_yards"),
                     latency_ms=event.get("latency_ms"),
+                    stage_timing=event.get("stage_timing"),
                 )
         except Exception:
             logger.warning("[MONITOR] Trigger event logging failed", exc_info=True)
@@ -413,17 +432,48 @@ class RollingBufferMonitor:
             "all_inbound_speeds": inbound,
         }
 
-    def _emit_diagnostics(self, wall_clock_ms: float = 0):
+    def _emit_diagnostics(
+        self,
+        wall_clock_ms: float = 0,
+        *,
+        fallback_ops_timing: Optional[dict] = None,
+        ensure_accepted: bool = False,
+    ):
         """Emit rejected triggers and retain accepted capture metadata."""
         diagnostics = self.trigger.drain_diagnostics()
         accepted_diagnostic = {}
 
         for diag in diagnostics:
             diag["trigger_type"] = self.trigger_type
-            # Use trigger's own edge-to-S! latency if measured,
-            # otherwise fall back to wall-clock (includes idle wait + serial transfer)
-            latency = diag.pop("trigger_latency_ms", None) or wall_clock_ms
+            # Preserve the legacy number exactly. Its two historical sources
+            # have different meanings, documented by the structured contract.
+            strategy_latency = diag.get("trigger_latency_ms")
+            latency = strategy_latency or wall_clock_ms
             diag["latency_ms"] = latency
+            stage_timing = new_stage_timing()
+            stage_timing["ops"].update(fallback_ops_timing or {})
+            stage_timing["ops"].update(diag.pop("ops_timing", None) or {})
+            if strategy_latency is not None:
+                set_legacy_provenance(
+                    stage_timing,
+                    "trigger_latency_ms",
+                    semantics="OPS response parse and radar re-arm wall duration",
+                    clock_domain="host_wall",
+                    ambiguity="legacy name is not physical trigger-edge latency",
+                )
+                latency_semantics = "copied from legacy trigger_latency_ms"
+            else:
+                latency_semantics = (
+                    "whole trigger strategy wall duration including golfer idle wait and capture"
+                )
+            set_legacy_provenance(
+                stage_timing,
+                "latency_ms",
+                semantics=latency_semantics,
+                clock_domain="host_wall",
+                ambiguity="legacy field has trigger-mode-dependent semantics",
+            )
+            diag["stage_timing"] = stage_timing
 
             if diag["accepted"]:
                 accepted_diagnostic = diag
@@ -433,6 +483,25 @@ class RollingBufferMonitor:
                 diag,
                 accepted=False,
                 reason=diag.get("reason", ""),
+            )
+
+        if ensure_accepted and not accepted_diagnostic:
+            accepted_diagnostic = {
+                "trigger_type": self.trigger_type,
+                "accepted": True,
+                "reason": "accepted",
+                "latency_ms": wall_clock_ms,
+                "stage_timing": new_stage_timing(),
+            }
+            accepted_diagnostic["stage_timing"]["ops"].update(fallback_ops_timing or {})
+            set_legacy_provenance(
+                accepted_diagnostic["stage_timing"],
+                "latency_ms",
+                semantics=(
+                    "whole trigger strategy wall duration including golfer idle wait and capture"
+                ),
+                clock_domain="host_wall",
+                ambiguity="legacy field has trigger-mode-dependent semantics",
             )
 
         return accepted_diagnostic
@@ -446,6 +515,7 @@ class RollingBufferMonitor:
             trigger_latency_ms = 0.0
             try:
                 trigger_start = time.time()
+                trigger_started_ns = time.monotonic_ns()
 
                 # Wait for trigger and capture
                 # Use a long timeout so sound/hardware triggers can wait
@@ -456,24 +526,50 @@ class RollingBufferMonitor:
                     "timeout": 30.0,
                 }
                 capture_started = False
+                first_marker_ns = None
 
                 def on_capture_started() -> None:
-                    nonlocal capture_started
+                    nonlocal capture_started, first_marker_ns
                     capture_started = True
+                    if first_marker_ns is None:
+                        first_marker_ns = time.monotonic_ns()
                     self._notify_processing("capturing")
 
                 if self.trigger_type in ("sound", "hardware"):
                     trigger_kwargs["cancel_event"] = self._stop_event
                     trigger_kwargs["capture_started_callback"] = on_capture_started
                 capture = self.trigger.wait_for_trigger(**trigger_kwargs)
+                trigger_returned_ns = time.monotonic_ns()
 
                 if not self._running:
                     break
 
                 trigger_latency_ms = (time.time() - trigger_start) * 1000
+                fallback_ops_timing = new_stage_timing()["ops"]
+                fallback_ops_timing["blocking_operation"] = measured_stage(
+                    trigger_started_ns,
+                    trigger_returned_ns,
+                    "trigger_wait_started",
+                    "trigger_strategy_returned",
+                    includes_golfer_idle=True,
+                    interpretation="whole_blocking_operation_not_physical_edge_latency",
+                )
+                if first_marker_ns is not None:
+                    fallback_ops_timing["trigger_observation_wait"] = measured_stage(
+                        trigger_started_ns,
+                        first_marker_ns,
+                        "trigger_wait_started",
+                        "first_valid_dump_marker_observed",
+                        includes_golfer_idle=True,
+                        interpretation="host_wait_to_observation_not_physical_edge_latency",
+                    )
 
                 # Always drain trigger diagnostics (captures in-loop rejections)
-                trigger_diagnostic = self._emit_diagnostics(trigger_latency_ms)
+                trigger_diagnostic = self._emit_diagnostics(
+                    trigger_latency_ms,
+                    fallback_ops_timing=fallback_ops_timing,
+                    ensure_accepted=capture is not None,
+                )
 
                 if capture is None:
                     if capture_started:
@@ -483,6 +579,7 @@ class RollingBufferMonitor:
                 # Process capture (FFT + speed/spin extraction)
                 self._notify_processing("calculating")
                 process_start = time.time()
+                process_started_ns = time.monotonic_ns()
                 processed = self.processor.process_capture(
                     capture,
                     expected_spin_for_ball_speed=lambda ball_speed_mph: (
@@ -493,7 +590,14 @@ class RollingBufferMonitor:
                     ),
                     club_type=self._current_club,
                 )
+                process_completed_ns = time.monotonic_ns()
                 process_ms = (time.time() - process_start) * 1000
+                trigger_diagnostic["stage_timing"]["ops"]["analysis"] = measured_stage(
+                    process_started_ns,
+                    process_completed_ns,
+                    "capture_analysis_started",
+                    "capture_analysis_completed",
+                )
                 logger.info("[MONITOR] process_capture: %.1fms", process_ms)
 
                 if processed is None:
@@ -532,6 +636,7 @@ class RollingBufferMonitor:
                 shot = self._create_shot(processed)
 
                 if shot:
+                    shot.stage_timing = trigger_diagnostic.get("stage_timing")
                     self._shot_sequence_number += 1
                     shot.shot_number = self._shot_sequence_number
                     self._shots.append(shot)
@@ -554,6 +659,19 @@ class RollingBufferMonitor:
                     # Log raw I/Q data and trigger events to session logger
                     session_logger = get_session_logger()
                     if session_logger:
+                        capture_stage_timing = clone_stage_timing(
+                            trigger_diagnostic.get("stage_timing")
+                        )
+                        set_legacy_provenance(
+                            capture_stage_timing,
+                            "trigger_latency_ms",
+                            semantics=(
+                                "whole trigger strategy wall duration including golfer idle wait "
+                                "and capture"
+                            ),
+                            clock_domain="host_wall",
+                            ambiguity="legacy field is not physical trigger-edge latency",
+                        )
                         # Log raw I/Q data for offline analysis
                         session_logger.log_rolling_buffer_capture(
                             shot_number=shot.shot_number,
@@ -602,6 +720,7 @@ class RollingBufferMonitor:
                                 else None
                             ),
                             trigger_latency_ms=trigger_latency_ms,
+                            stage_timing=capture_stage_timing,
                             first_byte_timestamp=capture.first_byte_timestamp,
                             trigger_timestamp=capture.trigger_timestamp,
                             trigger_timestamp_source=capture.trigger_timestamp_source,

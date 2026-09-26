@@ -50,6 +50,8 @@ class IWR6843Capture:
     path: Path | None
     error: str | None = None
     temperature_report: dict[str, int] | None = None
+    dump_duration_ns: int | None = None
+    uart_transport_duration_ns: int | None = None
 
     @property
     def valid(self) -> bool:
@@ -214,16 +216,23 @@ class IWR6843CaptureMonitor:
                 self._sequence += 1
                 sequence = self._sequence
             start = time.time()
+            dump_started_ns = time.monotonic_ns()
             raw = None
             path = None
             error = None
             metadata = None
+            uart_started_ns = None
+            uart_completed_ns = None
             try:
                 logger.info(
                     "[IWR6843] Trigger #%d: dumping firmware-frozen L3 ring",
                     sequence,
                 )
-                raw = self.radar.read_dump()
+                uart_started_ns = time.monotonic_ns()
+                try:
+                    raw = self.radar.read_dump()
+                finally:
+                    uart_completed_ns = time.monotonic_ns()
                 metadata = self._validate_dump(raw)
                 if self.save_dumps:
                     path = self._capture_path(sequence, edge_timestamp)
@@ -233,6 +242,7 @@ class IWR6843CaptureMonitor:
                 raw = None
                 logger.warning("[IWR6843] Capture #%d failed: %s", sequence, exc, exc_info=True)
             completed = time.time()
+            dump_completed_ns = time.monotonic_ns()
             capture = IWR6843Capture(
                 sequence=sequence,
                 trigger_timestamp=edge_timestamp,
@@ -243,6 +253,12 @@ class IWR6843CaptureMonitor:
                 error=error,
                 temperature_report=(
                     metadata.get("temperature_report") if metadata is not None else None
+                ),
+                dump_duration_ns=max(0, dump_completed_ns - dump_started_ns),
+                uart_transport_duration_ns=(
+                    max(0, uart_completed_ns - uart_started_ns)
+                    if uart_started_ns is not None and uart_completed_ns is not None
+                    else None
                 ),
             )
             with self._condition:

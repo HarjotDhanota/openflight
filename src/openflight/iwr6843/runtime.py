@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import math
+import time
 from dataclasses import asdict, dataclass, field, replace
 
 from openflight.iwr6843.calibration import Calibration
@@ -194,6 +195,9 @@ class IWR6843ShotResult:
     measurement: LCMFResult | None
     club_path: ClubPathResult | None = None
     withheld_reason: str | None = None
+    capture_wait_duration_ns: int | None = None
+    estimator_analysis_duration_ns: int | None = None
+    aggregate_duration_ns: int | None = None
 
 
 def process_raw_capture(  # pylint: disable=too-many-arguments,too-many-locals
@@ -425,21 +429,41 @@ class IWR6843Runtime:
         tilt_deg: float | None = None,
     ) -> IWR6843ShotResult:
         """Match one OPS shot to TI data and run LCMF-v1."""
+        process_started_ns = time.monotonic_ns()
         capture = self.capture_monitor.capture_for_shot(
             impact_timestamp,
             timeout_s=self.capture_timeout_s,
         )
+        capture_returned_ns = time.monotonic_ns()
+
+        def result(
+            *,
+            measurement: LCMFResult | None,
+            club_path: ClubPathResult | None = None,
+            withheld_reason: str | None = None,
+            estimator_analysis_duration_ns: int | None = None,
+        ) -> IWR6843ShotResult:
+            return IWR6843ShotResult(
+                capture=capture,
+                measurement=measurement,
+                club_path=club_path,
+                withheld_reason=withheld_reason,
+                capture_wait_duration_ns=max(0, capture_returned_ns - process_started_ns),
+                estimator_analysis_duration_ns=estimator_analysis_duration_ns,
+                aggregate_duration_ns=max(0, time.monotonic_ns() - process_started_ns),
+            )
+
         if capture is None or not capture.valid or capture.raw is None:
-            return IWR6843ShotResult(capture=capture, measurement=None)
+            return result(measurement=None)
         shot_calibration = self.calibration
         if tilt_deg is not None:
             shot_calibration = replace(self.calibration, tilt_rad=math.radians(tilt_deg))
         if getattr(shot_calibration, "tee_range_m", 1.0) is None:
-            return IWR6843ShotResult(
-                capture=capture,
+            return result(
                 measurement=None,
                 withheld_reason="tee_range_unresolved",
             )
+        analysis_started_ns = time.monotonic_ns()
         measurement, club_path = process_raw_capture(
             capture.raw,
             shot_calibration,
@@ -455,8 +479,13 @@ class IWR6843Runtime:
             club_impact_correction_s=self.club_impact_correction_s,
             recovery_observations=list(self.recovery_observations),
         )
+        analysis_completed_ns = time.monotonic_ns()
         self._remember_recovery_observation(measurement, ball_speed_mph)
-        return IWR6843ShotResult(capture=capture, measurement=measurement, club_path=club_path)
+        return result(
+            measurement=measurement,
+            club_path=club_path,
+            estimator_analysis_duration_ns=max(0, analysis_completed_ns - analysis_started_ns),
+        )
 
     def stop(self) -> None:
         """Release TI hardware."""

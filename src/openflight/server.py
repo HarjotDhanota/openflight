@@ -64,6 +64,7 @@ from .speed_correction import evaluate_experimental_total_speed
 from .spin_estimate import calculated_spin_rpm
 from .startup_status import StartupStatusReporter, configured_startup_components
 from .swing_speed import SwingSpeedEvent
+from .timing import clone_stage_timing, measured_stage, set_legacy_provenance
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -3046,6 +3047,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
         return None
 
     started = time.monotonic()
+    shot_result = None
     try:
         effective_tilt_deg = (
             shot.inclinometer.get("effective_iwr_tilt_deg")
@@ -3231,6 +3233,44 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             exc=error,
         )
         _emit_iwr6843_trigger_status(shot, state="error", reason=str(error))
+
+    timing = clone_stage_timing(shot.stage_timing)
+    if shot_result is not None:
+        capture_wait_ns = getattr(shot_result, "capture_wait_duration_ns", None)
+        if capture_wait_ns is not None:
+            timing["iwr6843"]["capture_wait"] = measured_stage(
+                0,
+                capture_wait_ns,
+                "iwr_process_shot_started",
+                "iwr_capture_returned",
+            )
+        capture = getattr(shot_result, "capture", None)
+        uart_transport_ns = getattr(capture, "uart_transport_duration_ns", None)
+        if uart_transport_ns is not None:
+            timing["iwr6843"]["uart_transport"] = measured_stage(
+                0,
+                uart_transport_ns,
+                "iwr_uart_read_started",
+                "iwr_uart_read_completed",
+            )
+        estimator_analysis_ns = getattr(shot_result, "estimator_analysis_duration_ns", None)
+        if estimator_analysis_ns is not None:
+            timing["iwr6843"]["estimator_analysis"] = measured_stage(
+                0,
+                estimator_analysis_ns,
+                "iwr_estimator_started",
+                "iwr_estimator_completed",
+            )
+        aggregate_ns = getattr(shot_result, "aggregate_duration_ns", None)
+        if aggregate_ns is not None:
+            timing["iwr6843"]["aggregate"] = measured_stage(
+                0,
+                aggregate_ns,
+                "iwr_process_shot_started",
+                "iwr_process_shot_completed",
+                interpretation="aggregate_wait_and_analysis_not_uart_transport",
+            )
+    shot.stage_timing = timing
     return (time.monotonic() - started) * 1000.0
 
 
@@ -4160,6 +4200,29 @@ def _finalize_shot_detected(
         session_log = diagnostic_logger
         if session_log is None and diagnostic_session_uuid is None:
             session_log = get_session_logger()
+        stage_timing = clone_stage_timing(shot.stage_timing)
+        set_legacy_provenance(
+            stage_timing,
+            "pipeline_ms.initial_ui",
+            semantics=(
+                "inferred impact wall timestamp to return of the initial server WebSocket emit"
+            ),
+            clock_domain="host_wall_epoch_difference",
+            ambiguity=(
+                "impact is inferred; wall clock may adjust; excludes browser receive and paint"
+            ),
+        )
+        set_legacy_provenance(
+            stage_timing,
+            "pipeline_ms.iwr6843",
+            semantics=(
+                "aggregate server IWR operation including capture wait, estimator, "
+                "and status/log work"
+            ),
+            clock_domain="host_monotonic",
+            ambiguity="aggregate is not UART transport duration",
+        )
+        shot.stage_timing = stage_timing
         pipeline_ms = {
             "initial_ui": (round(initial_ui_ms, 1) if initial_ui_ms is not None else None),
             "iwr6843": (round(iwr6843_ms, 1) if iwr6843_ms is not None else None),
@@ -4214,6 +4277,8 @@ def _finalize_shot_detected(
     try:
         shot_data = shot_to_dict(shot)
         stats = monitor.get_session_stats() if monitor else {}
+        _record_server_publication_invocation(shot)
+        shot_data["stage_timing"] = deepcopy(shot.stage_timing)
         socketio.emit(emit_event, {"shot": shot_data, "stats": stats})
 
         # Log shot info
@@ -4273,7 +4338,11 @@ def _finish_shot_detected(
     # Optional hardware may return after the coordinator has timed out this
     # shot. Mutate a shallow dataclass copy so a late result cannot change the
     # already-finalized OPS object retained by the monitor.
-    enriched_shot = replace(shot) if _has_slow_shot_enrichment(shot) else shot
+    enriched_shot = (
+        replace(shot, stage_timing=clone_stage_timing(shot.stage_timing))
+        if _has_slow_shot_enrichment(shot)
+        else shot
+    )
     enrichment = _ShotEnrichmentResult()
     try:
         enrichment = _enrich_shot_from_optional_hardware(enriched_shot)
@@ -4362,16 +4431,36 @@ def _queue_ordered_shot_finalization(
         _shot_finalization_condition.notify_all()
 
 
+def _record_server_publication_invocation(shot: Shot) -> None:
+    """Record the host callback-to-emit boundary; browser timing is unavailable."""
+    callback_started_ns = shot.server_callback_started_monotonic_ns
+    if callback_started_ns is None:
+        return
+    timing = clone_stage_timing(shot.stage_timing)
+    if timing["server"]["publication"].get("status") == "measured":
+        return
+    timing["server"]["publication"] = measured_stage(
+        callback_started_ns,
+        time.monotonic_ns(),
+        "shot_callback_started",
+        "server_websocket_emit_invoked",
+        interpretation="server_boundary_only_excludes_browser_receive_and_paint",
+    )
+    shot.stage_timing = timing
+
+
 def _emit_initial_ops_shot(shot: Shot) -> bool:
     """Publish immediately available OPS metrics before slow enrichments."""
     try:
-        shot_data = shot_to_dict(shot)
         stats = monitor.get_session_stats() if monitor else {}
         pending = {}
         if iwr6843_runtime is not None:
             pending["iwr6843"] = True
         if camera_capture_runtime is not None:
             pending["camera"] = True
+        shot_data = shot_to_dict(shot)
+        _record_server_publication_invocation(shot)
+        shot_data["stage_timing"] = deepcopy(shot.stage_timing)
         socketio.emit(
             "shot",
             {
@@ -4496,6 +4585,8 @@ def on_shot_detected(shot: Shot) -> None:
 
 def _handle_shot_detected(shot: Shot) -> None:
     """Publish OPS metrics promptly, then enrich optional hardware data."""
+    shot.server_callback_started_monotonic_ns = time.monotonic_ns()
+    shot.stage_timing = clone_stage_timing(shot.stage_timing)
     if tester_setup_required:
         readiness = (
             camera_capture_runtime.trigger_evidence_for_shot(shot.impact_timestamp)

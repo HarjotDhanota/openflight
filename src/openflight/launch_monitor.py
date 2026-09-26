@@ -6,6 +6,7 @@ RollingBufferMonitor and the Flask server.
 """
 
 import statistics
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional
@@ -290,6 +291,12 @@ class Shot:
     )
     spin_axis_deg: Optional[float] = None  # Spin axis tilt: 0=backspin, +right(fade), -left(draw)
     inclinometer: Optional[dict] = None  # Stable enclosure orientation used for this shot
+    stage_timing: Optional[dict] = None
+    server_callback_started_monotonic_ns: Optional[int] = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     @property
     def ball_speed_ms(self) -> float:
@@ -431,6 +438,7 @@ class Shot:
             "experimental_camera_horizontal_status": self.experimental_camera_horizontal_status,
             "experimental_camera_iwr_delta_deg": self.experimental_camera_iwr_delta_deg,
             "camera_replay": dict(self.camera_replay) if self.camera_replay else None,
+            "stage_timing": deepcopy(self.stage_timing),
             "camera_fusion_context": (
                 dict(self.camera_fusion_context) if self.camera_fusion_context else None
             ),

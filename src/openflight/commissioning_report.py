@@ -6,6 +6,8 @@ import math
 from collections import Counter, defaultdict
 from typing import Any, Mapping, Sequence
 
+from .timing import SCHEMA_NAME, SCHEMA_VERSION
+
 
 def _finite(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -27,6 +29,26 @@ def _summary(values: list[float]) -> dict[str, Any]:
         "p90": ordered[max(0, math.ceil(0.9 * len(ordered)) - 1)],
         "maximum": ordered[-1],
     }
+
+
+def _collect_stage_timing(row: Mapping[str, Any], timing: dict[str, list[float]]) -> None:
+    contract = row.get("stage_timing")
+    if (
+        not isinstance(contract, Mapping)
+        or contract.get("schema") != SCHEMA_NAME
+        or contract.get("version") != SCHEMA_VERSION
+    ):
+        return
+    for component in ("ops", "iwr6843", "server", "browser"):
+        stages = contract.get(component)
+        if not isinstance(stages, Mapping):
+            continue
+        for stage_name, stage in stages.items():
+            if not isinstance(stage_name, str) or not isinstance(stage, Mapping):
+                continue
+            duration_ns = _finite(stage.get("duration_ns"))
+            if duration_ns is not None and duration_ns >= 0:
+                timing[f"stage_{component}_{stage_name}_ms"].append(duration_ns / 1_000_000.0)
 
 
 def build_commissioning_report(sources: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -88,6 +110,8 @@ def build_commissioning_report(sources: Sequence[Mapping[str, Any]]) -> dict[str
                     numeric = _finite(value)
                     if isinstance(stage, str) and numeric is not None:
                         timing[f"pipeline_{stage}_ms"].append(numeric)
+            if event_type == "shot_detected":
+                _collect_stage_timing(row, timing)
         shots = []
         for number, events in sorted(by_shot.items()):
             shot = {"session_uuid": session_uuid, "shot_number": number}

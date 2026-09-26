@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable, List, Optional
 
+from ..timing import OpsCaptureTimer
 from .processor import RollingBufferProcessor
 from .types import IQCapture
 
@@ -62,6 +63,7 @@ class TriggerStrategy(ABC):
         peak_outbound_magnitude: float = 0.0,
         peak_inbound_magnitude: float = 0.0,
         trigger_latency_ms: Optional[float] = None,
+        ops_timing: Optional[dict] = None,
     ):
         """Append a diagnostic entry for the current trigger event."""
         entry = {
@@ -81,6 +83,8 @@ class TriggerStrategy(ABC):
         }
         if trigger_latency_ms is not None:
             entry["trigger_latency_ms"] = trigger_latency_ms
+        if ops_timing is not None:
+            entry["ops_timing"] = ops_timing
         self._diagnostics.append(entry)
 
     def _summarize_capture_activity(
@@ -122,6 +126,7 @@ class TriggerStrategy(ABC):
         reason: str,
         response_bytes: int,
         trigger_latency_ms: Optional[float] = None,
+        ops_timing: Optional[dict] = None,
     ):
         """Append a diagnostic entry using capture-activity summary fields."""
         self._append_diagnostic(
@@ -138,6 +143,7 @@ class TriggerStrategy(ABC):
             peak_outbound_magnitude=summary["peak_outbound_magnitude"],
             peak_inbound_magnitude=summary["peak_inbound_magnitude"],
             trigger_latency_ms=trigger_latency_ms,
+            ops_timing=ops_timing,
         )
 
     @abstractmethod
@@ -578,11 +584,13 @@ class SoundTrigger(TriggerStrategy):
         """
         logger.info("[TRIGGER] Waiting for sound trigger (timeout=%.0fs)...", timeout)
 
+        capture_timer = OpsCaptureTimer.start()
         response = radar.wait_for_hardware_trigger(
             timeout=timeout,
             cancel_event=cancel_event,
-            on_first_byte=capture_started_callback,
+            on_first_byte=lambda: capture_timer.first_marker_callback(capture_started_callback),
         )
+        capture_timer.response_completed()
 
         if not response:
             logger.info("[TRIGGER] Sound trigger timeout — no hardware trigger received")
@@ -617,6 +625,7 @@ class SoundTrigger(TriggerStrategy):
                 accepted=False,
                 reason="parse_failed",
                 response_bytes=response_len,
+                ops_timing=capture_timer.ops_section(time.monotonic_ns()),
             )
             return None
 
@@ -645,6 +654,7 @@ class SoundTrigger(TriggerStrategy):
                 accepted=False,
                 reason="no_outbound_speed",
                 response_bytes=response_len,
+                ops_timing=capture_timer.ops_section(time.monotonic_ns()),
             )
             return None
 
@@ -676,6 +686,7 @@ class SoundTrigger(TriggerStrategy):
             accepted=True,
             reason="accepted",
             response_bytes=response_len,
+            ops_timing=capture_timer.ops_section(time.monotonic_ns()),
         )
 
         return capture
@@ -744,11 +755,13 @@ class HardwareTriggeredCapture(TriggerStrategy):
             timeout,
         )
 
+        capture_timer = OpsCaptureTimer.start()
         response = radar.wait_for_hardware_trigger(
             timeout=timeout,
             cancel_event=cancel_event,
-            on_first_byte=capture_started_callback,
+            on_first_byte=lambda: capture_timer.first_marker_callback(capture_started_callback),
         )
+        capture_timer.response_completed()
         if not response:
             logger.info("[TRIGGER] OPS hardware trigger timeout - no dump received")
             return None
@@ -787,6 +800,7 @@ class HardwareTriggeredCapture(TriggerStrategy):
                 reason="parse_failed",
                 response_bytes=response_bytes,
                 trigger_latency_ms=trigger_latency_ms,
+                ops_timing=capture_timer.ops_section(time.monotonic_ns()),
             )
             self._decorate_latest_diagnostic(radar, rearmed=rearmed)
             return None
@@ -802,6 +816,7 @@ class HardwareTriggeredCapture(TriggerStrategy):
                 reason="no_ball_speed",
                 response_bytes=response_bytes,
                 trigger_latency_ms=trigger_latency_ms,
+                ops_timing=capture_timer.ops_section(time.monotonic_ns()),
             )
             self._decorate_latest_diagnostic(radar, rearmed=rearmed)
             logger.info(
@@ -816,6 +831,7 @@ class HardwareTriggeredCapture(TriggerStrategy):
             reason="accepted",
             response_bytes=response_bytes,
             trigger_latency_ms=trigger_latency_ms,
+            ops_timing=capture_timer.ops_section(time.monotonic_ns()),
         )
         self._decorate_latest_diagnostic(radar, rearmed=rearmed)
         logger.info(

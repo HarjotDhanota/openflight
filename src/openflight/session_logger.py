@@ -349,18 +349,27 @@ class SessionLogger:
             }
             data["pipeline_timing"] = {
                 "schema_version": 1,
+                "legacy": True,
+                "authoritative_contract": "stage_timing",
                 "clock_domains": {
                     "initial_ui": "host_epoch_difference",
                     **monotonic_stages,
                 },
                 "definitions": {
                     "initial_ui": (
-                        "estimated impact epoch to server WebSocket emit; "
-                        "does not include browser rendering"
+                        "legacy inferred-impact wall difference to initial server WebSocket "
+                        "emit return; does not include browser rendering, receive, or paint"
+                    ),
+                    "iwr6843": (
+                        "legacy aggregate IWR server operation; not UART transport duration"
                     ),
                     "camera_capture": "camera association wait, overlapped with IWR when enabled",
                     "camera_wait": "non-overlapped wait after radar stages",
                     "enrichment": "optional-hardware worker elapsed time",
+                },
+                "unavailable": {
+                    "browser_receive": "not instrumented",
+                    "browser_paint": "not instrumented",
                 },
             }
         with self._write_lock:
@@ -667,6 +676,7 @@ class SessionLogger:
         spin_rpm: Optional[float] = None,
         carry_yards: Optional[float] = None,
         latency_ms: Optional[float] = None,
+        stage_timing: Optional[Dict] = None,
     ):
         """Log the single enriched event for one physical trigger."""
         if not self.enabled:
@@ -702,6 +712,7 @@ class SessionLogger:
                 "spin_rpm": spin_rpm,
                 "carry_yards": carry_yards,
                 "latency_ms": latency_ms,
+                "stage_timing": stage_timing,
             },
         )
 
@@ -754,6 +765,7 @@ class SessionLogger:
         clock_sync_offset_s: Optional[float] = None,
         post_trigger_duration_ms: Optional[float] = None,
         processor_config: Optional[Dict] = None,
+        stage_timing: Optional[Dict] = None,
     ):
         """
         Log raw rolling buffer capture data for offline analysis.
@@ -780,7 +792,9 @@ class SessionLogger:
             impact_first_ball_timestamp_ms: First ball-like frame start time
             impact_first_ball_center_ms: First ball-like frame center time
             impact_min_transition_delta_mph: Minimum speed jump for transition
-            trigger_latency_ms: Edge-to-S! latency (ms)
+            trigger_latency_ms: Legacy whole trigger-strategy wall duration (ms),
+                including golfer idle wait. See stage_timing for authoritative boundaries.
+            stage_timing: Versioned monotonic duration/provenance contract
             smash_factor: Ball speed / club speed ratio
             spin_rpm: Detected spin rate in RPM
             spin_confidence: Confidence of spin detection (0-1)
@@ -847,6 +861,7 @@ class SessionLogger:
                 "impact_first_ball_center_ms": impact_first_ball_center_ms,
                 "impact_min_transition_delta_mph": impact_min_transition_delta_mph,
                 "trigger_latency_ms": trigger_latency_ms,
+                "stage_timing": stage_timing,
                 "first_byte_timestamp": first_byte_timestamp,
                 "trigger_timestamp": trigger_timestamp,
                 "trigger_timestamp_source": trigger_timestamp_source,

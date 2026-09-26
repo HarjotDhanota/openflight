@@ -5,10 +5,12 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 from openflight.commissioning_report import build_commissioning_report
 from openflight.session_logger import SessionLogger
+from openflight.timing import measured_stage, new_stage_timing
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "analysis" / "commissioning_report.py"
 SPEC = importlib.util.spec_from_file_location("commissioning_report_cli", SCRIPT)
@@ -63,6 +65,42 @@ def test_report_exposes_recorded_failures_gaps_and_stage_timing():
     assert report["counts"]["acquisition_states"]["iwr6843_capture_failed"] == 1
     assert report["timing"]["pipeline_iwr6843_ms"]["median"] == 12.0
     assert report["interpretation"]["physical_attempt_coverage"].startswith("unknown")
+
+
+def test_old_commissioning_timing_is_unchanged_and_new_contract_is_additive():
+    old_source = {
+        "records": [
+            {"type": "session_start", "session_uuid": "old"},
+            {
+                "type": "shot_detected",
+                "shot_number": 1,
+                "pipeline_ms": {"initial_ui": 12.5, "iwr6843": 8000.0},
+            },
+            {"type": "trigger_event", "latency_ms": 3.5},
+            {"type": "session_end"},
+        ]
+    }
+    old_report = build_commissioning_report([old_source])
+
+    new_source = deepcopy(old_source)
+    new_source["records"][0]["session_uuid"] = "new"
+    timing = new_stage_timing()
+    timing["iwr6843"]["uart_transport"] = measured_stage(
+        1,
+        7_550_000_001,
+        "iwr_uart_read_started",
+        "iwr_uart_read_completed",
+    )
+    new_source["records"][1]["stage_timing"] = timing
+    new_report = build_commissioning_report([new_source])
+
+    for field in (
+        "pipeline_initial_ui_ms",
+        "pipeline_iwr6843_ms",
+        "trigger_event_latency_ms",
+    ):
+        assert new_report["timing"][field] == old_report["timing"][field]
+    assert new_report["timing"]["stage_iwr6843_uart_transport_ms"]["median"] == 7550.0
 
 
 def test_cli_hashes_evidence_verifies_artifacts_and_marks_unfinished_session_partial(tmp_path):
