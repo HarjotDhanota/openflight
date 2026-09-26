@@ -356,6 +356,38 @@ def test_iwr_capture_separates_uart_transport_from_dump_bookkeeping(monkeypatch,
     assert capture.dump_duration_s == -10.0
 
 
+def test_iwr_capture_preserves_reversed_monotonic_transport_for_contract_rejection(
+    monkeypatch,
+    tmp_path,
+):
+    from openflight.iwr6843 import monitor as monitor_module
+
+    monotonic_ticks = iter((1_000, 900, 800, 700))
+    wall_ticks = iter((10.0, 12.0))
+    monkeypatch.setattr(monitor_module.time, "monotonic_ns", lambda: next(monotonic_ticks))
+    monkeypatch.setattr(monitor_module.time, "time", lambda: next(wall_ticks))
+
+    radar = SimpleNamespace(port="test", read_dump=lambda: b"dump")
+    capture_monitor = IWR6843CaptureMonitor(
+        config_path=tmp_path / "unused.cfg",
+        output_dir=tmp_path,
+        radar=radar,
+    )
+    monkeypatch.setattr(capture_monitor, "_validate_dump", lambda _raw: {})
+    capture_monitor._running = True
+    capture_monitor._events = queue.Queue()
+    capture_monitor._events.put(123.0)
+    capture_monitor._events.put(None)
+
+    capture_monitor._capture_loop()
+
+    capture = capture_monitor.capture_for_shot(123.0, timeout_s=0.0)
+    assert capture is not None
+    assert capture.uart_transport_duration_ns == -100
+    assert capture.dump_duration_ns == -300
+    assert capture.dump_duration_s == 2.0
+
+
 def test_iwr_runtime_separates_capture_wait_and_estimator_analysis(monkeypatch):
     from openflight.iwr6843 import runtime as runtime_module
 
@@ -401,6 +433,57 @@ def test_iwr_runtime_separates_capture_wait_and_estimator_analysis(monkeypatch):
     assert result.estimator_analysis_duration_ns == 425_000_000
     assert result.aggregate_duration_ns == 8_025_000_000
     assert result.capture.uart_transport_duration_ns == 7_550_000_000
+
+
+def test_iwr_runtime_reversed_stages_are_rejected_by_server_contract(monkeypatch):
+    from openflight import server
+    from openflight.iwr6843 import runtime as runtime_module
+
+    monotonic_ticks = iter((1_000, 900, 800, 700, 600))
+    monkeypatch.setattr(runtime_module.time, "monotonic_ns", lambda: next(monotonic_ticks))
+    capture = IWR6843Capture(
+        sequence=1,
+        trigger_timestamp=1.0,
+        completed_timestamp=2.0,
+        dump_duration_s=7.55,
+        raw=b"capture",
+        path=None,
+        uart_transport_duration_ns=-50,
+    )
+    capture_monitor = SimpleNamespace(capture_for_shot=lambda _timestamp, *, timeout_s: capture)
+    measurement = SimpleNamespace(accepted=False)
+    monkeypatch.setattr(
+        runtime_module,
+        "process_raw_capture",
+        lambda *_args, **_kwargs: (measurement, None),
+    )
+    runtime = IWR6843Runtime(
+        capture_monitor=capture_monitor,
+        calibration=SimpleNamespace(tee_range_m=1.0),
+        net_range_m=4.0,
+    )
+
+    result = runtime.process_shot(
+        impact_timestamp=1.0,
+        ball_speed_mph=100.0,
+        club="driver",
+    )
+
+    assert result.capture_wait_duration_ns == -100
+    assert result.estimator_analysis_duration_ns == -100
+    assert result.aggregate_duration_ns == -400
+
+    monkeypatch.setattr(server, "iwr6843_runtime", SimpleNamespace(process_shot=lambda **_: result))
+    monkeypatch.setattr(server, "get_session_logger", lambda: None)
+    monkeypatch.setattr(server.socketio, "emit", lambda *_args, **_kwargs: None)
+    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
+    server._process_iwr6843_angle(shot)
+
+    for stage_name in ("capture_wait", "uart_transport", "estimator_analysis", "aggregate"):
+        stage = shot.stage_timing["iwr6843"][stage_name]
+        assert stage["status"] == "unavailable"
+        assert stage["duration_ns"] is None
+        assert stage["reason"] == "monotonic_boundary_order_invalid"
 
 
 def test_shot_serializes_contract_but_not_transient_callback_clock():

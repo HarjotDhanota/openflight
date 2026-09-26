@@ -401,6 +401,33 @@ class SessionLogger:
             expected_session_uuid=expected_session_uuid,
         )
 
+    def log_shot_publication(
+        self,
+        expected_session_uuid: str,
+        evidence: Dict[str, Any],
+    ) -> bool:
+        """Persist post-emit timing evidence without counting another shot."""
+        if (
+            not self.enabled
+            or evidence.get("session_uuid") != expected_session_uuid
+            or not isinstance(evidence.get("shot_number"), int)
+            or evidence["shot_number"] <= 0
+        ):
+            return False
+        line = (
+            json.dumps(
+                {"ts": datetime.now().isoformat(), "type": "shot_publication", **evidence},
+                allow_nan=False,
+            )
+            + "\n"
+        )
+        with self._write_lock:
+            if not self._session_file or self._session_uuid != expected_session_uuid:
+                return False
+            self._session_file.write(line)
+            self._session_file.flush()
+            return True
+
     @property
     def active_session_uuid(self) -> Optional[str]:
         """Return the UUID only while its session file remains writable."""

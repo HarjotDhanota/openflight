@@ -4277,9 +4277,16 @@ def _finalize_shot_detected(
     try:
         shot_data = shot_to_dict(shot)
         stats = monitor.get_session_stats() if monitor else {}
-        _record_server_publication_invocation(shot)
+        publication_timing_updated = _record_server_publication_invocation(shot)
         shot_data["stage_timing"] = deepcopy(shot.stage_timing)
         socketio.emit(emit_event, {"shot": shot_data, "stats": stats})
+        if publication_timing_updated:
+            _persist_shot_publication(
+                diagnostic_logger,
+                diagnostic_session_uuid,
+                shot,
+                emit_event=emit_event,
+            )
 
         # Log shot info
         angle_str = ""
@@ -4431,14 +4438,14 @@ def _queue_ordered_shot_finalization(
         _shot_finalization_condition.notify_all()
 
 
-def _record_server_publication_invocation(shot: Shot) -> None:
+def _record_server_publication_invocation(shot: Shot) -> bool:
     """Record the host callback-to-emit boundary; browser timing is unavailable."""
     callback_started_ns = shot.server_callback_started_monotonic_ns
     if callback_started_ns is None:
-        return
+        return False
     timing = clone_stage_timing(shot.stage_timing)
     if timing["server"]["publication"].get("status") == "measured":
-        return
+        return False
     timing["server"]["publication"] = measured_stage(
         callback_started_ns,
         time.monotonic_ns(),
@@ -4447,6 +4454,42 @@ def _record_server_publication_invocation(shot: Shot) -> None:
         interpretation="server_boundary_only_excludes_browser_receive_and_paint",
     )
     shot.stage_timing = timing
+    return True
+
+
+def _persist_shot_publication(
+    diagnostic_logger,
+    session_uuid: str | None,
+    shot: Shot,
+    *,
+    emit_event: str,
+) -> None:
+    """Persist an OPS-only emit boundary after the emit returns successfully."""
+    if diagnostic_logger is None or session_uuid is None:
+        return
+    log_publication = getattr(diagnostic_logger, "log_shot_publication", None)
+    if not callable(log_publication):
+        return
+    try:
+        logged = log_publication(
+            session_uuid,
+            {
+                "schema": "openflight.shot_publication",
+                "version": 1,
+                "session_uuid": session_uuid,
+                "shot_number": shot.shot_number,
+                "emit_event": emit_event,
+                "persisted_after": "successful_server_websocket_emit_return",
+                "stage_timing": deepcopy(shot.stage_timing),
+            },
+        )
+        if logged is False:
+            logger.warning(
+                "[SERVER] Shot publication evidence skipped because session %s is inactive",
+                session_uuid,
+            )
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] Shot publication evidence logging failed: %s", error)
 
 
 def _emit_initial_ops_shot(shot: Shot) -> bool:

@@ -254,9 +254,9 @@ class IWR6843CaptureMonitor:
                 temperature_report=(
                     metadata.get("temperature_report") if metadata is not None else None
                 ),
-                dump_duration_ns=max(0, dump_completed_ns - dump_started_ns),
+                dump_duration_ns=dump_completed_ns - dump_started_ns,
                 uart_transport_duration_ns=(
-                    max(0, uart_completed_ns - uart_started_ns)
+                    uart_completed_ns - uart_started_ns
                     if uart_started_ns is not None and uart_completed_ns is not None
                     else None
                 ),

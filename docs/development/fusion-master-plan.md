@@ -74,8 +74,11 @@ Updated: 2026-09-25. Owner: Harjot. Status: active; M0 complete, M1 in progress.
       unavailable. Legacy timing numbers remain for compatibility and document
       their actual aggregate or ambiguous provenance. Deadline fallback records
       that work continues and records a discard only if the late result actually
-      returns. Synthetic fake-clock, concurrency, failure, deterministic-output
-      and lifecycle checks passed; Pi throughput, physical-edge timing, memory,
+      returns. Reversed IWR monotonic boundaries now remain signed until the
+      contract withholds them, and OPS-only publication timing is persisted in
+      a pinned post-emit `shot_publication` record without adding another shot.
+      Synthetic fake-clock, concurrency, failure, deterministic-output and
+      lifecycle checks passed; Pi throughput, physical-edge timing, memory,
       hardware UART timing and browser latency remain unvalidated.
 - [ ] M1 physical gate remains open. M3 selection and M4 pose/strike/spin are
       evidence-dependent. Preserve the first session and finish its failure and

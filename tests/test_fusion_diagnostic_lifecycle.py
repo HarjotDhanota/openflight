@@ -241,6 +241,56 @@ def test_real_finalizer_writes_terminal_revision_two(monkeypatch):
     assert [event for event, _payload in emitted] == ["shot"]
 
 
+def test_ops_only_finalizer_persists_publication_after_emit_without_second_shot(monkeypatch):
+    order = []
+
+    class PublicationLog(_FinalizerLog):
+        def __init__(self):
+            super().__init__()
+            self.publications = []
+
+        def log_shot(self, shot, pipeline_ms=None):
+            order.append("shot_detected")
+            super().log_shot(shot, pipeline_ms)
+
+        def log_shot_publication(self, expected_session_uuid, evidence):
+            assert expected_session_uuid == self.active_session_uuid
+            order.append("shot_publication")
+            self.publications.append(evidence)
+            return True
+
+    diagnostic_log = PublicationLog()
+    shot, emitted = _prepare_real_finalizer(monkeypatch, diagnostic_log)
+    shot.server_callback_started_monotonic_ns = 1_000
+    monkeypatch.setattr(server.time, "monotonic_ns", lambda: 1_250)
+
+    def emit(event, payload):
+        order.append("emit")
+        emitted.append((event, payload))
+
+    monkeypatch.setattr(server.socketio, "emit", emit)
+
+    server._finalize_shot_detected(
+        shot,
+        emit_event="shot",
+        enrichment=server._ShotEnrichmentResult(),
+        diagnostic_logger=diagnostic_log,
+        diagnostic_session_uuid="session-one",
+    )
+
+    assert order == ["shot_detected", "emit", "shot_publication"]
+    assert len(diagnostic_log.shots) == 1
+    assert len(diagnostic_log.publications) == 1
+    evidence = diagnostic_log.publications[0]
+    assert evidence["session_uuid"] == "session-one"
+    assert evidence["shot_number"] == shot.shot_number
+    assert evidence["emit_event"] == "shot"
+    assert evidence["stage_timing"]["server"]["publication"]["duration_ns"] == 250
+    assert emitted[0][1]["shot"]["stage_timing"]["server"]["publication"]["duration_ns"] == 250
+    evidence["stage_timing"]["server"]["publication"]["duration_ns"] = 999
+    assert emitted[0][1]["shot"]["stage_timing"]["server"]["publication"]["duration_ns"] == 250
+
+
 def test_diagnostic_logger_failure_does_not_break_real_finalization(monkeypatch):
     diagnostic_log = _FinalizerLog(fail_diagnostic=True)
     shot, emitted = _prepare_real_finalizer(monkeypatch, diagnostic_log)

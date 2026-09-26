@@ -448,9 +448,9 @@ class IWR6843Runtime:
                 measurement=measurement,
                 club_path=club_path,
                 withheld_reason=withheld_reason,
-                capture_wait_duration_ns=max(0, capture_returned_ns - process_started_ns),
+                capture_wait_duration_ns=capture_returned_ns - process_started_ns,
                 estimator_analysis_duration_ns=estimator_analysis_duration_ns,
-                aggregate_duration_ns=max(0, time.monotonic_ns() - process_started_ns),
+                aggregate_duration_ns=time.monotonic_ns() - process_started_ns,
             )
 
         if capture is None or not capture.valid or capture.raw is None:
@@ -484,7 +484,7 @@ class IWR6843Runtime:
         return result(
             measurement=measurement,
             club_path=club_path,
-            estimator_analysis_duration_ns=max(0, analysis_completed_ns - analysis_started_ns),
+            estimator_analysis_duration_ns=analysis_completed_ns - analysis_started_ns,
         )
 
     def stop(self) -> None:

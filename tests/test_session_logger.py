@@ -170,6 +170,52 @@ class TestLogTriggerEvent:
 class TestLogShot:
     """Tests for shot logging."""
 
+    def test_publication_evidence_is_session_pinned_without_counting_another_shot(
+        self,
+        tmp_path,
+    ):
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+        session_uuid = logger.active_session_uuid
+        timing = {
+            "schema": "openflight.shot_stage_timing",
+            "version": 1,
+            "server": {
+                "publication": {
+                    "status": "measured",
+                    "duration_ns": 123,
+                    "end_event": "server_websocket_emit_invoked",
+                }
+            },
+        }
+
+        assert logger.log_shot_publication(
+            session_uuid,
+            {
+                "session_uuid": session_uuid,
+                "shot_number": 7,
+                "emit_event": "shot",
+                "stage_timing": timing,
+            },
+        )
+        assert not logger.log_shot_publication(
+            "replacement-session",
+            {
+                "session_uuid": "replacement-session",
+                "shot_number": 7,
+                "emit_event": "shot",
+                "stage_timing": timing,
+            },
+        )
+
+        entries = [json.loads(line) for line in logger.session_path.read_text().splitlines()]
+        publication = [entry for entry in entries if entry["type"] == "shot_publication"]
+        assert len(publication) == 1
+        assert publication[0]["session_uuid"] == session_uuid
+        assert publication[0]["shot_number"] == 7
+        assert publication[0]["stage_timing"] == timing
+        assert logger.stats["shots_detected"] == 0
+
     def test_pipeline_stages_declare_clock_domain_and_ui_boundary(self, tmp_path):
         logger = SessionLogger(log_dir=tmp_path, enabled=True)
         logger.start_session(mode="rolling-buffer", trigger_type="sound")
