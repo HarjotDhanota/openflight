@@ -15,9 +15,9 @@ from typing import Any, Callable
 
 from openflight.iwr6843.driver import IWR6843DumpRecoveryError, IWR6843Radar
 from openflight.iwr6843.dump import parse_header, payload_nbytes
-from openflight.iwr6843.range_evidence import static_range_profile
+from openflight.iwr6843.range_evidence import static_range_profile_v2 as static_range_profile
 
-SCHEMA = "openflight.iwr6843.static_capture.v1"
+SCHEMA = "openflight.iwr6843.static_capture.v2"
 MIN_SETTLE_S = 0.25
 _CAPTURE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _CAPTURE_KINDS = {"empty", "ball_present"}

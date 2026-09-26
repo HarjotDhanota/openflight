@@ -16,8 +16,8 @@ from typing import Any, Iterable, Mapping, Sequence
 SCHEMA = "openflight.tee_range.v2"
 SCHEMA_VERSION = 2
 LEGACY_SCHEMA = "openflight.tee_range.v1"
-QUALIFICATION_SCHEMA = "openflight.tee_range_qualification.v2"
-QUALIFICATION_SCHEMA_VERSION = 2
+QUALIFICATION_SCHEMA = "openflight.tee_range_qualification.v3"
+QUALIFICATION_SCHEMA_VERSION = 3
 PROMOTION_POLICY_VERSION = "tee-range-promotion-v1"
 UNRESOLVED_LEGACY_REASON = "legacy_session_has_no_tee_range_contract"
 SOURCE_GROUPS = frozenset({"camera", "iwr", "manual_truth"})
@@ -178,11 +178,15 @@ class TeeRangeQualification:  # pylint: disable=too-many-instance-attributes
     camera_calibration_sha256: str
     camera_placement_sha256: str
     camera_mode_profile_sha256: str
+    camera_range_estimator_sha256: str
+    camera_exposure_policy_sha256: str
+    camera_exposure_policy_purpose: str
     camera_arm_id: str
     iwr_firmware_sha256: str
     iwr_capture_config_sha256: str
     iwr_profile_sha256: str
     iwr_range_calibration_sha256: str
+    iwr_static_estimator_sha256: str
     policy_version: str
     scope: str
     accuracy_qualified: bool
@@ -198,14 +202,22 @@ class TeeRangeQualification:  # pylint: disable=too-many-instance-attributes
             "camera_calibration_sha256",
             "camera_placement_sha256",
             "camera_mode_profile_sha256",
+            "camera_range_estimator_sha256",
+            "camera_exposure_policy_sha256",
             "iwr_firmware_sha256",
             "iwr_capture_config_sha256",
             "iwr_profile_sha256",
             "iwr_range_calibration_sha256",
+            "iwr_static_estimator_sha256",
         ):
             object.__setattr__(self, name, _sha256(getattr(self, name), name))
         object.__setattr__(
             self, "camera_arm_id", _required_text(self.camera_arm_id, "camera_arm_id")
+        )
+        object.__setattr__(
+            self,
+            "camera_exposure_policy_purpose",
+            _required_text(self.camera_exposure_policy_purpose, "camera_exposure_policy_purpose"),
         )
         object.__setattr__(
             self, "policy_version", _required_text(self.policy_version, "policy_version")
@@ -241,11 +253,15 @@ class TeeRangeQualification:  # pylint: disable=too-many-instance-attributes
                 "camera_calibration_sha256": self.camera_calibration_sha256,
                 "camera_placement_sha256": self.camera_placement_sha256,
                 "camera_mode_profile_sha256": self.camera_mode_profile_sha256,
+                "camera_range_estimator_sha256": self.camera_range_estimator_sha256,
+                "camera_exposure_policy_sha256": self.camera_exposure_policy_sha256,
+                "camera_exposure_policy_purpose": self.camera_exposure_policy_purpose,
                 "camera_arm_id": self.camera_arm_id,
                 "iwr_firmware_sha256": self.iwr_firmware_sha256,
                 "iwr_capture_config_sha256": self.iwr_capture_config_sha256,
                 "iwr_profile_sha256": self.iwr_profile_sha256,
                 "iwr_range_calibration_sha256": self.iwr_range_calibration_sha256,
+                "iwr_static_estimator_sha256": self.iwr_static_estimator_sha256,
             },
             "policy": self.policy_dict(),
         }
@@ -298,11 +314,15 @@ class TeeRangeQualification:  # pylint: disable=too-many-instance-attributes
             "camera_calibration_sha256",
             "camera_placement_sha256",
             "camera_mode_profile_sha256",
+            "camera_range_estimator_sha256",
+            "camera_exposure_policy_sha256",
+            "camera_exposure_policy_purpose",
             "camera_arm_id",
             "iwr_firmware_sha256",
             "iwr_capture_config_sha256",
             "iwr_profile_sha256",
             "iwr_range_calibration_sha256",
+            "iwr_static_estimator_sha256",
         }:
             raise ValueError("tee-range qualification identities do not match the schema")
         expected_policy_keys = {
@@ -329,11 +349,15 @@ class TeeRangeQualification:  # pylint: disable=too-many-instance-attributes
             camera_calibration_sha256=identities["camera_calibration_sha256"],
             camera_placement_sha256=identities["camera_placement_sha256"],
             camera_mode_profile_sha256=identities["camera_mode_profile_sha256"],
+            camera_range_estimator_sha256=identities["camera_range_estimator_sha256"],
+            camera_exposure_policy_sha256=identities["camera_exposure_policy_sha256"],
+            camera_exposure_policy_purpose=identities["camera_exposure_policy_purpose"],
             camera_arm_id=identities["camera_arm_id"],
             iwr_firmware_sha256=identities["iwr_firmware_sha256"],
             iwr_capture_config_sha256=identities["iwr_capture_config_sha256"],
             iwr_profile_sha256=identities["iwr_profile_sha256"],
             iwr_range_calibration_sha256=identities["iwr_range_calibration_sha256"],
+            iwr_static_estimator_sha256=identities["iwr_static_estimator_sha256"],
             policy_version=policy["version"],
             scope=payload["scope"],
             accuracy_qualified=payload["accuracy_qualified"],
@@ -644,6 +668,9 @@ def resolve_qualified_tee_range(
         ("camera_calibration_sha256", qualification.camera_calibration_sha256),
         ("camera_placement_sha256", qualification.camera_placement_sha256),
         ("camera_mode_profile_sha256", qualification.camera_mode_profile_sha256),
+        ("camera_range_estimator_sha256", qualification.camera_range_estimator_sha256),
+        ("camera_exposure_policy_sha256", qualification.camera_exposure_policy_sha256),
+        ("camera_exposure_policy_purpose", qualification.camera_exposure_policy_purpose),
     ):
         if reason := _exact_fact(camera_facts, name, expected, "camera"):
             return _unresolved(observed, reason)
@@ -653,6 +680,7 @@ def resolve_qualified_tee_range(
         ("iwr_capture_config_sha256", qualification.iwr_capture_config_sha256),
         ("iwr_profile_sha256", qualification.iwr_profile_sha256),
         ("iwr_range_calibration_sha256", qualification.iwr_range_calibration_sha256),
+        ("iwr_static_estimator_sha256", qualification.iwr_static_estimator_sha256),
     ):
         if reason := _exact_fact(iwr_facts, name, expected, "iwr"):
             return _unresolved(observed, reason)

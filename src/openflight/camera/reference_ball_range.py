@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from dataclasses import dataclass
 from typing import Any, Mapping
@@ -20,6 +22,28 @@ _MAX_HINT_RANGE_WIDTH_M = 1.5
 _MAX_HINT_ROI_HEIGHT_FRACTION = 0.85
 _HINT_UNCERTAINTY_MULTIPLIER = 3.0
 _MIN_HINT_HALF_WIDTH_M = 0.12
+
+
+def camera_range_estimator_policy() -> dict[str, Any]:
+    """Return the camera range policy bound by qualification artifacts."""
+    return {
+        "name": "camera_reference_ball_floor_plane",
+        "version": 1,
+        "detector": "reference_ball_candidates_v1",
+        "golf_ball_diameter_m": GOLF_BALL_DIAMETER_M,
+        "diameter_hypotheses": _DIAMETER_HYPOTHESES,
+        "ambiguity_score_margin": _AMBIGUITY_SCORE_MARGIN,
+        "full_radar_range_m": list(_FULL_RADAR_RANGE_M),
+        "independent_save_confirmation": True,
+    }
+
+
+def camera_range_estimator_sha256() -> str:
+    """Identify the camera range estimator without hashing source files."""
+    payload = json.dumps(
+        camera_range_estimator_policy(), sort_keys=True, allow_nan=False, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _vector(value: Any, name: str) -> tuple[float, float, float]:

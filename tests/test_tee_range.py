@@ -79,10 +79,13 @@ HASHES = {
         ("camera_calibration_sha256", "2"),
         ("camera_placement_sha256", "7"),
         ("camera_mode_profile_sha256", "8"),
+        ("camera_range_estimator_sha256", "9"),
+        ("camera_exposure_policy_sha256", "a"),
         ("iwr_firmware_sha256", "3"),
         ("iwr_capture_config_sha256", "4"),
         ("iwr_profile_sha256", "5"),
         ("iwr_range_calibration_sha256", "6"),
+        ("iwr_static_estimator_sha256", "b"),
     )
 }
 
@@ -91,6 +94,7 @@ def qualification(**updates):
     values = {
         **HASHES,
         "camera_arm_id": "arm5",
+        "camera_exposure_policy_purpose": "static_reference_ball",
         "policy_version": PROMOTION_POLICY_VERSION,
         "scope": "tester_setup",
         "accuracy_qualified": True,
@@ -113,6 +117,9 @@ def qualified_camera(epoch_id="epoch-a", value=1.50, uncertainty=0.05, **updates
         "camera_calibration_sha256": HASHES["camera_calibration_sha256"],
         "camera_placement_sha256": HASHES["camera_placement_sha256"],
         "camera_mode_profile_sha256": HASHES["camera_mode_profile_sha256"],
+        "camera_range_estimator_sha256": HASHES["camera_range_estimator_sha256"],
+        "camera_exposure_policy_sha256": HASHES["camera_exposure_policy_sha256"],
+        "camera_exposure_policy_purpose": "static_reference_ball",
         "camera_arm_id": "arm5",
         "scope": "tester_setup",
         "manual_range_used": False,
@@ -141,6 +148,7 @@ def qualified_iwr(epoch_id="epoch-a", value=1.53, uncertainty=0.03, **updates):
         "iwr_capture_config_sha256": HASHES["iwr_capture_config_sha256"],
         "iwr_profile_sha256": HASHES["iwr_profile_sha256"],
         "iwr_range_calibration_sha256": HASHES["iwr_range_calibration_sha256"],
+        "iwr_static_estimator_sha256": HASHES["iwr_static_estimator_sha256"],
         "scope": "tester_setup",
         "manual_range_used": False,
         "camera_range_used": False,
@@ -368,16 +376,19 @@ def test_qualification_artifact_round_trips_with_stable_digests():
         ("camera", "camera_calibration_sha256"),
         ("camera", "camera_placement_sha256"),
         ("camera", "camera_mode_profile_sha256"),
+        ("camera", "camera_range_estimator_sha256"),
+        ("camera", "camera_exposure_policy_sha256"),
         ("iwr", "rig_geometry_sha256"),
         ("iwr", "iwr_firmware_sha256"),
         ("iwr", "iwr_capture_config_sha256"),
         ("iwr", "iwr_profile_sha256"),
         ("iwr", "iwr_range_calibration_sha256"),
+        ("iwr", "iwr_static_estimator_sha256"),
     ],
 )
 def test_resolver_checks_every_bound_identity(group, field):
-    camera = qualified_camera(**({field: "a" * 64} if group == "camera" else {}))
-    iwr = qualified_iwr(**({field: "a" * 64} if group == "iwr" else {}))
+    camera = qualified_camera(**({field: "f" * 64} if group == "camera" else {}))
+    iwr = qualified_iwr(**({field: "f" * 64} if group == "iwr" else {}))
 
     solution = resolve_qualified_tee_range("epoch-a", [camera, iwr], qualification())
 
@@ -442,7 +453,16 @@ def test_qualification_loader_rejects_unbound_identity_fields():
         TeeRangeQualification.from_dict(payload)
 
 
-@pytest.mark.parametrize("field", ["camera_placement_sha256", "camera_mode_profile_sha256"])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "camera_placement_sha256",
+        "camera_mode_profile_sha256",
+        "camera_range_estimator_sha256",
+        "camera_exposure_policy_sha256",
+        "camera_exposure_policy_purpose",
+    ],
+)
 def test_qualification_loader_refuses_missing_full_camera_identity(field):
     payload = qualification().to_dict()
     payload["identities"].pop(field)

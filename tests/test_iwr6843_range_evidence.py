@@ -1,6 +1,8 @@
 """Truth-free IWR range evidence stays diagnostic until hardware validation."""
 
+import json
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -10,6 +12,7 @@ from openflight.iwr6843.music import LAM
 from openflight.iwr6843.range_evidence import (
     IndependentImpactTime,
     StaticRangeProfile,
+    StaticRangeProfileV2,
     build_moving_track_candidate,
     build_static_profile_candidate,
     compare_static_range_profiles,
@@ -21,6 +24,7 @@ from openflight.iwr6843.tracking import RANGE_SPAN_M
 PROFILE_SHA = "a" * 64
 RIG_SHA = "b" * 64
 CALIBRATION_SHA = "c" * 64
+STATIC_REGRESSION_ROOT = Path(__file__).parent / "fixtures" / "iwr6843_static_range"
 
 
 def _moving_ball_dump(*, start_range_m=1.25, speed_ms=42.0):
@@ -96,6 +100,27 @@ def _profile(
         range_bin_count=len(power),
         range_resolution_m=0.04,
         power=tuple(float(value) for value in power),
+    )
+
+
+def _regression_fixture(epoch_id):
+    return json.loads((STATIC_REGRESSION_ROOT / f"{epoch_id}.json").read_text(encoding="utf-8"))
+
+
+def _recorded_profile(fixture, capture):
+    return StaticRangeProfile(**fixture[capture]["profile"])
+
+
+def _v2_profile(fixture, capture):
+    recorded = fixture[capture]["profile"]
+    frames = np.asarray(fixture[capture]["frame_power"], dtype=float)
+    center = np.median(frames, axis=0)
+    spread = np.median(np.abs(frames - center), axis=0) / np.maximum(center, 1e-12)
+    return StaticRangeProfileV2(
+        **{key: recorded[key] for key in recorded if key != "power"},
+        power=tuple(center),
+        frame_mad_fraction=tuple(spread),
+        frame_count=len(frames),
     )
 
 
@@ -203,6 +228,54 @@ def test_pre_mti_static_difference_finds_a_localized_added_reflector():
     assert candidate.selectable is False
     assert candidate.radar_slant_range_m == pytest.approx(result.apparent_range_m - 0.03)
     assert candidate.evidence["method"] == "pre_mti_empty_vs_ball_present"
+
+
+@pytest.mark.parametrize(
+    ("epoch_id", "status", "peak_bin"),
+    [
+        ("setup-20260925-fff56186f155", "rejected_no_ball", 23.0),
+        ("setup-20260926-153ffb8aa4be", "accepted", 12.0),
+        ("setup-20260926-b9f4dd8b3a75", "accepted", 36.0),
+    ],
+)
+def test_pi_static_range_fixtures_reproduce_the_recorded_v1_results(epoch_id, status, peak_bin):
+    fixture = _regression_fixture(epoch_id)
+    empty = _recorded_profile(fixture, "empty")
+    present = _recorded_profile(fixture, "present")
+
+    assert fixture["schema"] == "openflight.iwr6843.static_range_regression.v1"
+    assert fixture["empty"]["raw_sha256"] == empty.capture_sha256
+    assert fixture["present"]["raw_sha256"] == present.capture_sha256
+    assert np.mean(fixture["empty"]["frame_power"], axis=0) == pytest.approx(empty.power)
+    assert np.mean(fixture["present"]["frame_power"], axis=0) == pytest.approx(present.power)
+
+    result = compare_static_range_profiles(empty, present)
+
+    assert result.status == status
+    assert result.peak_bin == pytest.approx(peak_bin)
+    assert result.peak_score == pytest.approx(fixture["recorded_v1_difference"]["peak_score"])
+
+
+@pytest.mark.parametrize(
+    ("epoch_id", "forbidden_peak_bin"),
+    [
+        ("setup-20260926-153ffb8aa4be", 12.0),
+        ("setup-20260926-b9f4dd8b3a75", 36.0),
+    ],
+)
+def test_pi_static_range_regressions_do_not_confidently_accept_observed_false_peaks(
+    epoch_id, forbidden_peak_bin
+):
+    fixture = _regression_fixture(epoch_id)
+
+    result = compare_static_range_profiles(
+        _v2_profile(fixture, "empty"),
+        _v2_profile(fixture, "present"),
+    )
+
+    assert not (
+        result.status == "accepted" and result.peak_bin == pytest.approx(forbidden_peak_bin)
+    )
 
 
 @pytest.mark.parametrize(

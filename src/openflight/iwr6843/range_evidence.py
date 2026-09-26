@@ -27,6 +27,45 @@ _STATIC_AMBIGUITY_RATIO = 0.75
 _STATIC_CLUTTER_SCORE = 4.0
 _STATIC_MAX_CHANGED_FRACTION = 0.12
 _STATIC_MAX_PEAK_WIDTH_BINS = 4
+STATIC_PROFILE_V2_SCHEMA = "openflight.iwr6843.static_range_profile.v2"
+_STATIC_V2_MIN_FRACTIONAL_EXCESS = 0.50
+_STATIC_V2_MIN_ABSOLUTE_SCORE = 4.0
+_STATIC_V2_MAX_FRAME_MAD_FRACTION = 0.10
+_STATIC_V2_SCALE_BASELINE_PERCENTILES = (10.0, 80.0)
+_STATIC_V2_SCALE_STABLE_FRACTION = 0.70
+_STATIC_V2_BOUNDARY_GUARD_BINS = 1
+
+
+def static_range_estimator_policy() -> dict[str, Any]:
+    """Return the complete selector policy bound by qualification artifacts."""
+    return {
+        "name": "iwr_static_profile_selector",
+        "version": 2,
+        "profile_schema": STATIC_PROFILE_V2_SCHEMA,
+        "normalization": {
+            "method": "trimmed_median_per_bin_ratio",
+            "baseline_percentiles": list(_STATIC_V2_SCALE_BASELINE_PERCENTILES),
+            "stable_fraction": _STATIC_V2_SCALE_STABLE_FRACTION,
+        },
+        "candidate_gates": {
+            "minimum_fractional_excess": _STATIC_V2_MIN_FRACTIONAL_EXCESS,
+            "minimum_absolute_score": _STATIC_V2_MIN_ABSOLUTE_SCORE,
+            "maximum_frame_mad_fraction": _STATIC_V2_MAX_FRAME_MAD_FRACTION,
+            "maximum_changed_fraction": _STATIC_MAX_CHANGED_FRACTION,
+            "maximum_peak_width_bins": _STATIC_MAX_PEAK_WIDTH_BINS,
+            "ambiguity_ratio": _STATIC_AMBIGUITY_RATIO,
+            "boundary_guard_bins": _STATIC_V2_BOUNDARY_GUARD_BINS,
+        },
+        "search_window_policy": "qualification_interval_intersect_capture_with_edge_rejection",
+    }
+
+
+def static_range_estimator_sha256() -> str:
+    """Identify every selection constant without hashing source files."""
+    payload = json.dumps(
+        static_range_estimator_policy(), sort_keys=True, allow_nan=False, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _finite(value: Any, name: str) -> float:
@@ -269,6 +308,59 @@ class StaticRangeProfile:
         object.__setattr__(self, "power", power)
 
 
+@dataclass(frozen=True)
+class StaticRangeProfileV2:
+    """A robust per-frame profile with scene-stability evidence."""
+
+    capture_sha256: str
+    radar_profile_sha256: str
+    radar_profile_qualified: bool
+    rig_geometry_sha256: str
+    capture_config_sha256: str
+    range_bin_start: int
+    range_bin_count: int
+    range_resolution_m: float
+    power: tuple[float, ...]
+    frame_mad_fraction: tuple[float, ...]
+    frame_count: int
+    schema: str = STATIC_PROFILE_V2_SCHEMA
+
+    def __post_init__(self) -> None:
+        if self.schema != STATIC_PROFILE_V2_SCHEMA:
+            raise ValueError("unsupported static range profile schema")
+        legacy = StaticRangeProfile(
+            capture_sha256=self.capture_sha256,
+            radar_profile_sha256=self.radar_profile_sha256,
+            radar_profile_qualified=self.radar_profile_qualified,
+            rig_geometry_sha256=self.rig_geometry_sha256,
+            capture_config_sha256=self.capture_config_sha256,
+            range_bin_start=self.range_bin_start,
+            range_bin_count=self.range_bin_count,
+            range_resolution_m=self.range_resolution_m,
+            power=self.power,
+        )
+        for name in (
+            "capture_sha256",
+            "radar_profile_sha256",
+            "radar_profile_qualified",
+            "rig_geometry_sha256",
+            "capture_config_sha256",
+            "range_bin_start",
+            "range_bin_count",
+            "range_resolution_m",
+            "power",
+        ):
+            object.__setattr__(self, name, getattr(legacy, name))
+        spread = tuple(
+            _nonnegative(value, "frame MAD fraction") for value in self.frame_mad_fraction
+        )
+        if len(spread) != self.range_bin_count:
+            raise ValueError("frame MAD fraction length must match range_bin_count")
+        object.__setattr__(self, "frame_mad_fraction", spread)
+        if not isinstance(self.frame_count, int) or self.frame_count < 3:
+            raise ValueError("static range profile requires at least three frames")
+
+
 def _fixed_range_window(metadata: Mapping[str, Any]) -> tuple[int, int]:
     starts = metadata.get("range_bin_starts")
     counts = metadata.get("range_bin_counts")
@@ -325,6 +417,55 @@ def static_range_profile(
     )
 
 
+def static_range_profile_v2(
+    raw: bytes,
+    *,
+    radar_profile_sha256: str,
+    rig_geometry_sha256: str,
+    radar_profile_qualified: bool = False,
+) -> StaticRangeProfileV2:
+    """Reduce a raw capture into a robust profile and stability diagnostic."""
+    metadata, cube = parse_dump(raw)
+    start, count = _fixed_range_window(metadata)
+    range_domain = is_range_snapshot(metadata)
+    range_cube = cube if range_domain else np.fft.fft(cube, axis=-1)
+    frame_power = np.mean(np.abs(range_cube[..., :count]) ** 2, axis=(1, 2))
+    center = np.median(frame_power, axis=0)
+    mad = np.median(np.abs(frame_power - center), axis=0)
+    spread = mad / np.maximum(center, 1e-12)
+    range_fft_size = 128 if range_domain else metadata["n_samples"]
+    config = {
+        "version": metadata["version"],
+        "n_frames": metadata["n_frames"],
+        "chirps_per_frame": metadata["chirps_per_frame"],
+        "n_tx": metadata["n_tx"],
+        "n_rx": metadata["n_rx"],
+        "n_samples": metadata["n_samples"],
+        "sample_fmt": metadata["sample_fmt"],
+        "trigger_frame": metadata["trigger_frame"],
+        "frame_period_us": metadata["frame_period_us"],
+        "range_bin_start": start,
+        "range_bin_count": count,
+        "range_fft_size": range_fft_size,
+    }
+    config_hash = hashlib.sha256(
+        json.dumps(config, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return StaticRangeProfileV2(
+        capture_sha256=hashlib.sha256(raw).hexdigest(),
+        radar_profile_sha256=radar_profile_sha256,
+        radar_profile_qualified=radar_profile_qualified,
+        rig_geometry_sha256=rig_geometry_sha256,
+        capture_config_sha256=config_hash,
+        range_bin_start=start,
+        range_bin_count=count,
+        range_resolution_m=tracking.RANGE_SPAN_M / range_fft_size,
+        power=tuple(float(value) for value in center),
+        frame_mad_fraction=tuple(float(value) for value in spread),
+        frame_count=int(frame_power.shape[0]),
+    )
+
+
 @dataclass(frozen=True)
 class StaticRangeDifferenceResult:
     """Accepted or rejected empty-tee versus ball-present profile evidence."""
@@ -344,9 +485,17 @@ class StaticRangeDifferenceResult:
     radar_profile_qualified: bool
     rig_geometry_sha256: str
     capture_config_sha256: str
+    estimator_sha256: str | None = None
+    normalization_scale: float | None = None
+    peak_fractional_excess: float | None = None
+    secondary_fractional_excess: float | None = None
+    alternate_peaks: tuple[Mapping[str, Any], ...] = ()
 
 
-def _matching_static_profiles(empty: StaticRangeProfile, present: StaticRangeProfile) -> None:
+def _matching_static_profiles(
+    empty: StaticRangeProfile | StaticRangeProfileV2,
+    present: StaticRangeProfile | StaticRangeProfileV2,
+) -> None:
     if empty.capture_sha256 == present.capture_sha256:
         raise ValueError("empty and ball-present evidence must be distinct captures")
     if empty.radar_profile_sha256 != present.radar_profile_sha256:
@@ -373,8 +522,8 @@ def _matching_static_profiles(empty: StaticRangeProfile, present: StaticRangePro
 def _static_result(  # pylint: disable=too-many-arguments
     status: str,
     reason: str,
-    empty: StaticRangeProfile,
-    present: StaticRangeProfile,
+    empty: StaticRangeProfile | StaticRangeProfileV2,
+    present: StaticRangeProfile | StaticRangeProfileV2,
     *,
     changed_fraction: float,
     peak_score: float | None = None,
@@ -382,6 +531,11 @@ def _static_result(  # pylint: disable=too-many-arguments
     peak_bin: float | None = None,
     range_bin_uncertainty_m: float | None = None,
     peak_width_bins: int | None = None,
+    estimator_sha256: str | None = None,
+    normalization_scale: float | None = None,
+    peak_fractional_excess: float | None = None,
+    secondary_fractional_excess: float | None = None,
+    alternate_peaks: tuple[Mapping[str, Any], ...] = (),
 ) -> StaticRangeDifferenceResult:
     return StaticRangeDifferenceResult(
         status=status,
@@ -399,16 +553,204 @@ def _static_result(  # pylint: disable=too-many-arguments
         radar_profile_qualified=empty.radar_profile_qualified,
         rig_geometry_sha256=empty.rig_geometry_sha256,
         capture_config_sha256=empty.capture_config_sha256,
+        estimator_sha256=estimator_sha256,
+        normalization_scale=normalization_scale,
+        peak_fractional_excess=peak_fractional_excess,
+        secondary_fractional_excess=secondary_fractional_excess,
+        alternate_peaks=alternate_peaks,
+    )
+
+
+def _profile_search(
+    profile: StaticRangeProfile | StaticRangeProfileV2,
+    plausible_apparent_range_m: tuple[float, float],
+) -> tuple[np.ndarray, np.ndarray]:
+    low, high = (_finite(value, "plausible apparent range") for value in plausible_apparent_range_m)
+    if not 0.0 < low < high:
+        raise ValueError("plausible apparent range must be a positive increasing interval")
+    ranges = (
+        np.arange(profile.range_bin_count, dtype=float) + profile.range_bin_start
+    ) * profile.range_resolution_m
+    search = (ranges >= low) & (ranges <= high)
+    if np.count_nonzero(search) < 5:
+        raise ValueError("plausible apparent range has fewer than five stored bins")
+    return ranges, search
+
+
+def _v2_scale(baseline: np.ndarray, observed: np.ndarray, search: np.ndarray) -> float:
+    ratios = observed / np.maximum(baseline, 1e-12)
+    low, high = np.percentile(baseline[search], _STATIC_V2_SCALE_BASELINE_PERCENTILES)
+    pool = search & (baseline >= low) & (baseline <= high)
+    if np.count_nonzero(pool) < 5:
+        pool = search
+    initial = float(np.median(ratios[pool]))
+    residual = np.abs(np.log(np.maximum(ratios / max(initial, 1e-12), 1e-12)))
+    cutoff = float(np.quantile(residual[pool], _STATIC_V2_SCALE_STABLE_FRACTION))
+    stable = pool & (residual <= cutoff)
+    return float(np.median(ratios[stable])) if np.any(stable) else initial
+
+
+def _contiguous_groups(indices: np.ndarray) -> list[np.ndarray]:
+    if not len(indices):
+        return []
+    cuts = np.flatnonzero(np.diff(indices) > 1) + 1
+    return [group for group in np.split(indices, cuts) if len(group)]
+
+
+def _compare_static_range_profiles_v2(  # pylint: disable=too-many-locals
+    empty: StaticRangeProfileV2,
+    present: StaticRangeProfileV2,
+    *,
+    plausible_apparent_range_m: tuple[float, float],
+) -> StaticRangeDifferenceResult:
+    _matching_static_profiles(empty, present)
+    ranges, search = _profile_search(empty, plausible_apparent_range_m)
+    baseline = np.asarray(empty.power, dtype=float)
+    observed = np.asarray(present.power, dtype=float)
+    scale = _v2_scale(baseline, observed, search)
+    expected = scale * baseline
+    delta = observed - expected
+    center = float(np.median(delta[search]))
+    mad = float(np.median(np.abs(delta[search] - center)))
+    absolute_floor = max(1.4826 * mad, 0.02 * float(np.median(expected[search])), 1e-12)
+    absolute_score = (delta - center) / absolute_floor
+    fractional = observed / np.maximum(expected, 1e-12) - 1.0
+    passing = (
+        search
+        & (fractional >= _STATIC_V2_MIN_FRACTIONAL_EXCESS)
+        & (absolute_score >= _STATIC_V2_MIN_ABSOLUTE_SCORE)
+    )
+    changed_fraction = float(np.mean(passing[search]))
+    search_indices = np.flatnonzero(search)
+    diagnostic_index = int(search_indices[np.argmax(fractional[search])])
+    estimator = static_range_estimator_sha256()
+    if not np.any(passing):
+        return _static_result(
+            "rejected_no_ball",
+            "no localized change cleared both fractional and absolute gates",
+            empty,
+            present,
+            changed_fraction=changed_fraction,
+            peak_score=float(absolute_score[diagnostic_index]),
+            peak_bin=float(diagnostic_index + empty.range_bin_start),
+            range_bin_uncertainty_m=empty.range_resolution_m,
+            estimator_sha256=estimator,
+            normalization_scale=scale,
+            peak_fractional_excess=float(fractional[diagnostic_index]),
+        )
+    groups = _contiguous_groups(np.flatnonzero(passing))
+    peaks: list[dict[str, Any]] = []
+    empty_spread = np.asarray(empty.frame_mad_fraction)
+    present_spread = np.asarray(present.frame_mad_fraction)
+    first, last = int(search_indices[0]), int(search_indices[-1])
+    for group in groups:
+        peak = int(group[np.argmax(fractional[group])])
+        peaks.append(
+            {
+                "peak_index": peak,
+                "peak_bin": float(peak + empty.range_bin_start),
+                "apparent_range_m": float(ranges[peak]),
+                "fractional_excess": float(fractional[peak]),
+                "absolute_score": float(absolute_score[peak]),
+                "width_bins": int(len(group)),
+                "boundary": bool(
+                    int(group[0]) <= first + _STATIC_V2_BOUNDARY_GUARD_BINS
+                    or int(group[-1]) >= last - _STATIC_V2_BOUNDARY_GUARD_BINS
+                ),
+                "frame_mad_fraction": float(
+                    max(np.max(empty_spread[group]), np.max(present_spread[group]))
+                ),
+                "indices": group,
+            }
+        )
+    peaks.sort(key=lambda item: item["fractional_excess"], reverse=True)
+    diagnostic_peaks = tuple(
+        {key: value for key, value in item.items() if key not in {"peak_index", "indices"}}
+        for item in peaks
+    )
+    best = peaks[0]
+    second = peaks[1] if len(peaks) > 1 else None
+    common = {
+        "changed_fraction": changed_fraction,
+        "peak_score": best["absolute_score"],
+        "secondary_peak_score": second["absolute_score"] if second else 0.0,
+        "peak_bin": best["peak_bin"],
+        "range_bin_uncertainty_m": max(0.5, best["width_bins"] / 2.0) * empty.range_resolution_m,
+        "peak_width_bins": best["width_bins"],
+        "estimator_sha256": estimator,
+        "normalization_scale": scale,
+        "peak_fractional_excess": best["fractional_excess"],
+        "secondary_fractional_excess": second["fractional_excess"] if second else 0.0,
+        "alternate_peaks": diagnostic_peaks,
+    }
+    if changed_fraction > _STATIC_MAX_CHANGED_FRACTION:
+        return _static_result(
+            "rejected_clutter", "too much of the range profile changed", empty, present, **common
+        )
+    if best["width_bins"] > _STATIC_MAX_PEAK_WIDTH_BINS:
+        return _static_result(
+            "rejected_clutter",
+            "the added reflector spans too many range bins",
+            empty,
+            present,
+            **common,
+        )
+    if best["boundary"]:
+        return _static_result(
+            "rejected_boundary",
+            "the strongest change touches the search boundary",
+            empty,
+            present,
+            **common,
+        )
+    if best["frame_mad_fraction"] > _STATIC_V2_MAX_FRAME_MAD_FRACTION:
+        return _static_result(
+            "rejected_unstable",
+            "the strongest change was unstable during a capture",
+            empty,
+            present,
+            **common,
+        )
+    if (
+        second
+        and second["fractional_excess"] >= _STATIC_AMBIGUITY_RATIO * best["fractional_excess"]
+    ):
+        return _static_result(
+            "rejected_ambiguous",
+            "multiple comparable fractional changes are present",
+            empty,
+            present,
+            **common,
+        )
+    group = best["indices"]
+    weights = np.maximum(delta[group] - center, 0.0)
+    local_bins = group.astype(float) + empty.range_bin_start
+    peak_bin = (
+        float(np.average(local_bins, weights=weights))
+        if float(np.sum(weights)) > 0.0
+        else best["peak_bin"]
+    )
+    common["peak_bin"] = peak_bin
+    return _static_result(
+        "accepted", "one stable localized fractional change was added", empty, present, **common
     )
 
 
 def compare_static_range_profiles(
-    empty: StaticRangeProfile,
-    present: StaticRangeProfile,
+    empty: StaticRangeProfile | StaticRangeProfileV2,
+    present: StaticRangeProfile | StaticRangeProfileV2,
     *,
     plausible_apparent_range_m: tuple[float, float] = (0.5, 4.0),
 ) -> StaticRangeDifferenceResult:
     """Find one localized reflector added between matched pre-MTI profiles."""
+    if isinstance(empty, StaticRangeProfileV2) or isinstance(present, StaticRangeProfileV2):
+        if not isinstance(empty, StaticRangeProfileV2) or not isinstance(
+            present, StaticRangeProfileV2
+        ):
+            raise ValueError("static range profile schemas do not match")
+        return _compare_static_range_profiles_v2(
+            empty, present, plausible_apparent_range_m=plausible_apparent_range_m
+        )
     _matching_static_profiles(empty, present)
     low, high = (_finite(value, "plausible apparent range") for value in plausible_apparent_range_m)
     if not 0.0 < low < high:
@@ -558,6 +900,11 @@ def build_static_profile_candidate(
         "secondary_peak_score": result.secondary_peak_score,
         "changed_fraction": result.changed_fraction,
         "peak_width_bins": result.peak_width_bins,
+        "estimator_sha256": result.estimator_sha256,
+        "normalization_scale": result.normalization_scale,
+        "peak_fractional_excess": result.peak_fractional_excess,
+        "secondary_fractional_excess": result.secondary_fractional_excess,
+        "alternate_peaks": [dict(item) for item in result.alternate_peaks],
         "range_calibration": {
             "sha256": calibration_hash,
             "bias_m": bias_m,
@@ -583,9 +930,13 @@ __all__ = [
     "MovingRangeTrackResult",
     "StaticRangeDifferenceResult",
     "StaticRangeProfile",
+    "StaticRangeProfileV2",
     "build_moving_track_candidate",
     "build_static_profile_candidate",
     "compare_static_range_profiles",
     "extract_moving_ball_range_track",
+    "static_range_estimator_policy",
+    "static_range_estimator_sha256",
     "static_range_profile",
+    "static_range_profile_v2",
 ]

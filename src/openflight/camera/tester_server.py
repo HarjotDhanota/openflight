@@ -39,9 +39,14 @@ from openflight.camera.reference_ball_range import (
     BallPlaneCamera,
     ReferenceBallRangeResult,
     build_iwr_camera_search_hint,
+    camera_range_estimator_sha256 as _camera_range_estimator_sha256,
     estimate_reference_ball_range,
 )
 from openflight.camera.setup_eligibility import SetupEligibility
+from openflight.camera.static_exposure import (
+    STATIC_EXPOSURE_PURPOSE,
+    static_exposure_policy_sha256 as _static_exposure_policy_sha256,
+)
 from openflight.camera.tee_range_flow import (
     CAPTURE_PHASES,
     TERMINAL_PHASES,
@@ -52,8 +57,10 @@ from openflight.camera.track_review import register_track_review
 from openflight.camera.triggered_buffer import unpack_r8_frame
 from openflight.iwr6843.range_evidence import (
     StaticRangeProfile,
+    StaticRangeProfileV2,
     build_static_profile_candidate,
     compare_static_range_profiles,
+    static_range_estimator_sha256 as _iwr_static_estimator_sha256,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -1948,6 +1955,8 @@ def _guided_camera_candidate(
     mode_sha = hashlib.sha256(
         json.dumps(mode_snapshot, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+    estimator_sha = _camera_range_estimator_sha256()
+    exposure_policy_sha = _static_exposure_policy_sha256()
     identity_matches = bool(
         qualification is not None
         and qualification.camera_arm_id == "arm5"
@@ -1959,6 +1968,9 @@ def _guided_camera_candidate(
         and qualification.camera_placement_sha256 == placement_sha
         and mode_profile_sha is not None
         and qualification.camera_mode_profile_sha256 == mode_profile_sha
+        and qualification.camera_range_estimator_sha256 == estimator_sha
+        and qualification.camera_exposure_policy_sha256 == exposure_policy_sha
+        and qualification.camera_exposure_policy_purpose == STATIC_EXPOSURE_PURPOSE
     )
     facts = {
         "epoch_id": epoch_id,
@@ -1970,6 +1982,9 @@ def _guided_camera_candidate(
         "camera_calibration_sha256": camera_sha,
         "camera_placement_sha256": placement_sha,
         "camera_mode_profile_sha256": mode_profile_sha,
+        "camera_range_estimator_sha256": estimator_sha,
+        "camera_exposure_policy_sha256": exposure_policy_sha,
+        "camera_exposure_policy_purpose": STATIC_EXPOSURE_PURPOSE,
         "camera_mode_sha256": mode_sha,
         "saved_frame_sha256": frame_sha256,
         "analyzed_frame_window_sha256": frame_window_sha256,
@@ -2016,11 +2031,14 @@ def _guided_camera_candidate(
     )
 
 
-def _static_profile(result: Mapping) -> StaticRangeProfile:
+def _static_profile(result: Mapping) -> StaticRangeProfile | StaticRangeProfileV2:
     profile = result.get("profile")
     if not isinstance(profile, Mapping):
         raise ValueError("static capture has no derived range profile")
-    return StaticRangeProfile(**dict(profile))
+    payload = dict(profile)
+    if payload.get("schema") is not None:
+        return StaticRangeProfileV2(**payload)
+    return StaticRangeProfile(**payload)
 
 
 def _guided_iwr_candidate(
@@ -2031,12 +2049,19 @@ def _guided_iwr_candidate(
     calibration_path: Path,
     qualification: tee_range.TeeRangeQualification | None,
 ) -> tee_range.TeeRangeCandidate:
-    empty = _static_profile(empty_record)
-    present = _static_profile(present_record)
-    result = compare_static_range_profiles(empty, present)
     calibration_sha = _file_sha256(calibration_path)
     calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
     bias_m = float(calibration.get("range_bias_const_m", calibration.get("range_offset_m", 0.0)))
+    empty = _static_profile(empty_record)
+    present = _static_profile(present_record)
+    apparent_interval = (
+        tuple(value + bias_m for value in qualification.plausible_range_m)
+        if qualification is not None
+        else (TEE_RANGE_MM[0] / 1000.0, TEE_RANGE_MM[1] / 1000.0)
+    )
+    result = compare_static_range_profiles(
+        empty, present, plausible_apparent_range_m=apparent_interval
+    )
     bias_uncertainty_raw = calibration.get("range_bias_uncertainty_m")
     try:
         bias_uncertainty_m = float(bias_uncertainty_raw)
@@ -2046,6 +2071,7 @@ def _guided_iwr_candidate(
     firmware_sha = str(present_record["inputs"]["firmware"]["sha256"])
     config_sha = str(present_record["inputs"]["radar_config"]["sha256"])
     rig_sha = str(present_record["inputs"]["rig_geometry"]["sha256"])
+    estimator_sha = _iwr_static_estimator_sha256()
     identity_matches = bool(
         qualification is not None
         and qualification.rig_geometry_sha256 == rig_sha
@@ -2053,6 +2079,8 @@ def _guided_iwr_candidate(
         and qualification.iwr_capture_config_sha256 == config_sha
         and qualification.iwr_profile_sha256 == result.capture_config_sha256
         and qualification.iwr_range_calibration_sha256 == calibration_sha
+        and result.estimator_sha256 == estimator_sha
+        and qualification.iwr_static_estimator_sha256 == estimator_sha
     )
     qualified = bool(
         identity_matches
@@ -2104,6 +2132,7 @@ def _guided_iwr_candidate(
                 "iwr_capture_config_sha256": config_sha,
                 "iwr_profile_sha256": result.capture_config_sha256,
                 "iwr_range_calibration_sha256": calibration_sha,
+                "iwr_static_estimator_sha256": result.estimator_sha256,
                 "scope": qualification.scope if qualification else "tester_setup",
                 "manual_range_used": False,
                 "camera_range_used": False,
