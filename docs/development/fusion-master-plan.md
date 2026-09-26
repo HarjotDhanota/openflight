@@ -502,6 +502,8 @@ live/replay equivalence claim or independent calibration.
 | 2026-09-25 | Camera floor/size cues are one dependent optical source, moving-IWR impact range can reuse the range it is meant to establish, and arm-local copies can drift after setup | Keep estimator candidates non-selectable and centralize promotion in a versioned policy. Resolve only same-epoch qualified Arm 5 camera plus static empty/present IWR evidence with exact calibration/config hashes and independent inputs; select static IWR without averaging after absolute and normalized agreement gates. Store immutable setup epochs under `calibration/tee-range` and put only epoch ID/digest references in arms and sessions |
 | 2026-09-25 | Moving IWR range and camera↔IWR path association are useful offline diagnostics, but impact extrapolation can be circular and the camera association consumes the same IWR ranges | Preserve the full tee-independent moving range series in replay. Build a non-selectable candidate only from explicitly independent qualified impact timing and matching qualified range calibration. Run the camera association only with saved, qualified camera/range/clock/OPS inputs, retain all alternatives and rejections, and prohibit both diagnostics from tee-range promotion or independent-source counting |
 
+| 2026-09-25 | Guided camera acquisition can use the already-computed static IWR range to reduce provisional search cost, but allowing that conditioned result into promotion would make the nominally independent camera agreement circular | Add a versioned, non-promoting IWR-to-camera search hint that narrows only the floor/range and diameter hypotheses; range alone does not constrain azimuth. Label conditioned previews as radar-guided and ineligible for promotion, fall back to the broad detector when the hint is invalid, stale or too broad, and require Save to rerun the unchanged full-frame 0.5-4 m camera estimator on the exact frames before any camera candidate or promotion. Retain the hint, timings, rejections and a post-Save camera-to-IWR ranking diagnostic without changing the static IWR result or `TeeRangeSolution` candidates |
+
 ## Soundless trigger architecture
 
 The current supported path uses one SEN-14262 edge for OPS `HOST_INT` and Pi
@@ -1082,3 +1084,20 @@ product acceptance limits. Promotion remains gated on that independent evidence.
   detector. No IWR range, tape value, prior canonical range, promotion rule or
   estimator threshold participates in this camera association. Software tests
   do not establish Pi frame-rate cost or camera-range accuracy.
+- Bidirectional acquisition implementation (M1/M2, TB01/TB07/TB10): an
+  accepted same-epoch static IWR candidate can now provide a versioned,
+  identity-bound range/row/diameter hint to the provisional live camera search;
+  radar range never narrows azimuth. Missing, rejected, stale, malformed or too-
+  broad hints retain their reason and fall back to the broad full-frame camera
+  detector. Conditioned stability can enable Save but is labeled radar-guided,
+  non-independent and non-promoting. Save hashes and reruns the exact recent
+  frame window through the unconditioned full-frame 0.5-4 m estimator, and
+  withholds the camera candidate unless that result confirms the provisional
+  object. The independent result may rank the retained static radar hypothesis
+  only in a diagnostic record that is excluded from `TeeRangeSolution`.
+  Provenance retains source/camera identities, uncertainties, fallback reasons
+  and host-duration timings. Focused validation passed 31 range/analyzer tests,
+  five guided-flow cases and all 18 tee-range Playwright checks; scoped Ruff
+  passed. UI lint/build and scoped Pylint were not completed after an external
+  interruption. No Pi throughput, hardware behavior or range accuracy was
+  validated.

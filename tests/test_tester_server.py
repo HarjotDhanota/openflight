@@ -1164,6 +1164,22 @@ def _guided_camera():
     )
 
 
+def _usable_guided_hint():
+    hint = ts.build_iwr_camera_search_hint(
+        _guided_camera(),
+        radar_range_m=1.5,
+        uncertainty_m=0.03,
+        ball_center_height_m=ts.BALL_DIAMETER_MM / 2000.0,
+        epoch_id="epoch-guided",
+        source_epoch_id="epoch-guided",
+        candidate_id="iwr-static-guided",
+        source_input_identity={"empty_capture_sha256": "a" * 64},
+        camera_input_identity={"arm_id": "arm5"},
+    )
+    assert hint["status"] == "usable"
+    return hint
+
+
 class TestGuidedRangeAnalyzer:
     def test_shared_camera_only_analysis_has_no_range_prior_dependency(self, monkeypatch):
         calls = []
@@ -1187,6 +1203,91 @@ class TestGuidedRangeAnalyzer:
             "iwr_range_used": False,
             "manual_range_used": False,
             "prior_canonical_range_used": False,
+        }
+        assert analysis["independent"] is True
+        assert analysis["promotion_eligible"] is False
+        assert analysis["fallback"]["reason_code"] == "radar_hint_missing"
+        assert analysis["timing"]["clock"] == "host_performance_counter_duration"
+
+    def test_usable_radar_hint_conditions_only_the_provisional_live_search(self, monkeypatch):
+        calls = []
+
+        def estimate(frames, camera, **kwargs):
+            calls.append((frames.copy(), camera, kwargs))
+            return _guided_result()
+
+        monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
+        frames = np.full((5, 200, 320), 70, dtype=np.uint8)
+        hint = _usable_guided_hint()
+
+        _result, analysis = ts._guided_camera_analysis(frames, _guided_camera(), hint)
+
+        assert len(calls) == 1
+        assert calls[0][2]["plausible_radar_range_m"] == pytest.approx(hint["support_range_m"])
+        assert calls[0][2]["roi"] == tuple(hint["roi_px"])
+        assert calls[0][2]["expected_diameter_range_px"] == pytest.approx(
+            hint["expected_diameter_px"]
+        )
+        assert analysis["method"] == "iwr_conditioned_camera_floor_plane_v1"
+        assert analysis["discovery_mode"] == "radar_guided_provisional"
+        assert analysis["independent"] is False
+        assert analysis["promotion_eligible"] is False
+        assert analysis["dependency_facts"]["iwr_range_used"] is True
+        assert analysis["fallback"]["used"] is False
+        assert analysis["search_region_px"][0::2] == [0, 320]
+
+    @pytest.mark.parametrize(
+        "hint,reason_code",
+        [
+            (None, "radar_hint_missing"),
+            (
+                {
+                    "schema": ts.IWR_CAMERA_HINT_SCHEMA,
+                    "status": "rejected",
+                    "reason_code": "static_iwr_candidate_rejected",
+                    "rejection_reasons": ["radar evidence was rejected"],
+                    "fallback": {
+                        "reason_code": "static_iwr_candidate_rejected",
+                        "reason": "radar evidence was rejected",
+                    },
+                },
+                "static_iwr_candidate_rejected",
+            ),
+        ],
+    )
+    def test_missing_or_rejected_radar_hint_runs_broad_full_frame_search(
+        self, monkeypatch, hint, reason_code
+    ):
+        calls = []
+
+        def estimate(_frames, _camera, **kwargs):
+            calls.append(kwargs)
+            return _guided_result()
+
+        monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
+
+        _result, analysis = ts._guided_camera_analysis(
+            np.full((5, 200, 320), 70, dtype=np.uint8), _guided_camera(), hint
+        )
+
+        assert calls == [
+            {
+                "ball_center_height_m": ts.BALL_DIAMETER_MM / 2000.0,
+                "plausible_radar_range_m": (0.5, 4.0),
+            }
+        ]
+        assert analysis["discovery_mode"] == "broad_full_frame_unconditioned"
+        assert analysis["independent"] is True
+        assert analysis["dependency_facts"]["iwr_range_used"] is False
+        assert analysis["fallback"] == {
+            "used": True,
+            "mode": "broad_full_frame_unconditioned",
+            "reason_code": reason_code,
+            "reason": (
+                "no radar search hint was provided"
+                if hint is None
+                else "radar evidence was rejected"
+            ),
         }
 
     def test_three_matching_analyses_over_one_second_enable_save_and_a_switch_resets(
@@ -1285,6 +1386,73 @@ class TestGuidedRangeAnalyzer:
         assert reset["save_eligible"] is False
         assert reset["stable_count"] == 0
         assert "pose changed" in reset["readiness_reason"]
+
+    def test_save_promotes_only_matching_broad_unconditioned_confirmation(self, monkeypatch):
+        calls = []
+
+        def estimate(_frames, _camera, **kwargs):
+            calls.append(kwargs)
+            return _guided_result()
+
+        monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
+        orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
+        analyzer = ts.GuidedRangeAnalyzer(
+            _guided_camera(), orientation, lambda: orientation, _usable_guided_hint()
+        )
+        frames = np.full((5, 200, 320), 70, dtype=np.uint8)
+        for observation_id, observed_at in enumerate((1.0, 1.5, 2.0), start=1):
+            analyzer.observe(frames, observation_id, observed_at=observed_at)
+
+        _result, analysis, reason = analyzer.analyze_for_save(frames, 3)
+
+        assert reason is None
+        assert "roi" in calls[-2]
+        assert calls[-1] == {
+            "ball_center_height_m": ts.BALL_DIAMETER_MM / 2000.0,
+            "plausible_radar_range_m": (0.5, 4.0),
+        }
+        assert analysis["analysis_role"] == "independent_save_confirmation"
+        assert analysis["independent"] is True
+        assert analysis["promotion_eligible"] is True
+        assert analysis["promotion_rejection_reason"] is None
+        assert analysis["dependency_facts"]["iwr_range_used"] is False
+        assert analysis["search_region_px"] is None
+        assert analysis["fallback"]["used"] is False
+
+    def test_static_door_hinge_selected_by_hint_cannot_pass_broad_save(self, monkeypatch):
+        guided_hinge = _guided_result(x=80.0, y=105.0, range_m=1.5)
+        independent_ball = _guided_result(x=160.0, y=140.0, range_m=1.5)
+        calls = []
+
+        def estimate(_frames, _camera, **kwargs):
+            calls.append(kwargs)
+            return guided_hinge if "roi" in kwargs else independent_ball
+
+        monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
+        orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
+        analyzer = ts.GuidedRangeAnalyzer(
+            _guided_camera(), orientation, lambda: orientation, _usable_guided_hint()
+        )
+        frames = np.full((5, 200, 320), 70, dtype=np.uint8)
+        for observation_id, observed_at in enumerate((1.0, 1.5, 2.0), start=1):
+            readiness = analyzer.observe(frames, observation_id, observed_at=observed_at)
+        assert readiness["save_eligible"] is True
+        assert readiness["independent"] is False
+
+        _result, analysis, reason = analyzer.analyze_for_save(frames, 3)
+
+        assert calls[-1] == {
+            "ball_center_height_m": ts.BALL_DIAMETER_MM / 2000.0,
+            "plausible_radar_range_m": (0.5, 4.0),
+        }
+        assert reason == (
+            "broad independent camera search does not confirm the stable provisional selection"
+        )
+        assert analysis["status"] == "selected"
+        assert analysis["selected"]["x_px"] == 160.0
+        assert analysis["independent"] is True
+        assert analysis["promotion_eligible"] is False
+        assert analysis["promotion_rejection_reason"] == reason
 
 
 class TestTheTapeGivesTheBallsSize:

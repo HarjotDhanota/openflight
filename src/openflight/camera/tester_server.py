@@ -35,8 +35,10 @@ from openflight.camera.club_motion import detect_reference_ball
 from openflight.camera.fusion_diagnostics import register_fusion_diagnostics
 from openflight.camera.paired_eligibility import evaluate_paired_capture
 from openflight.camera.reference_ball_range import (
+    IWR_CAMERA_HINT_SCHEMA,
     BallPlaneCamera,
     ReferenceBallRangeResult,
+    build_iwr_camera_search_hint,
     estimate_reference_ball_range,
 )
 from openflight.camera.setup_eligibility import SetupEligibility
@@ -1329,26 +1331,211 @@ def _camera_range_evidence(result: ReferenceBallRangeResult) -> dict:
     }
 
 
+def _camera_model_evidence(camera: BallPlaneCamera) -> dict:
+    return {
+        "source": camera.source,
+        "accuracy_qualified": camera.accuracy_qualified,
+        "camera_origin_lfu": list(camera.camera_origin_lfu),
+        "radar_origin_lfu": list(camera.radar_origin_lfu),
+        "focal_size_px": camera.focal_size_px,
+        "image_width_px": camera.image_width_px,
+        "image_height_px": camera.image_height_px,
+        "angular_uncertainty_deg": camera.angular_uncertainty_deg,
+        "focal_relative_uncertainty": camera.focal_relative_uncertainty,
+    }
+
+
+def _validated_guided_search_hint(
+    search_hint: Mapping | None, camera: BallPlaneCamera, analysis_role: str
+) -> tuple[dict, bool, dict]:
+    broad = {
+        "ball_center_height_m": BALL_DIAMETER_MM / 2000.0,
+        "plausible_radar_range_m": (TEE_RANGE_MM[0] / 1000.0, TEE_RANGE_MM[1] / 1000.0),
+    }
+    if search_hint is None:
+        if analysis_role == "independent_save_confirmation":
+            return (
+                broad,
+                False,
+                {
+                    "used": False,
+                    "mode": "broad_full_frame_unconditioned",
+                    "reason_code": "independent_save_requires_unconditioned_search",
+                    "reason": "Save intentionally bypasses radar conditioning",
+                },
+            )
+        return (
+            broad,
+            False,
+            {
+                "used": True,
+                "mode": "broad_full_frame_unconditioned",
+                "reason_code": "radar_hint_missing",
+                "reason": "no radar search hint was provided",
+            },
+        )
+    if not isinstance(search_hint, Mapping):
+        return (
+            broad,
+            False,
+            {
+                "used": True,
+                "mode": "broad_full_frame_unconditioned",
+                "reason_code": "radar_hint_invalid",
+                "reason": "the radar search hint is not an object",
+            },
+        )
+    if search_hint.get("status") != "usable":
+        fallback = search_hint.get("fallback")
+        fallback = fallback if isinstance(fallback, Mapping) else {}
+        reasons = search_hint.get("rejection_reasons")
+        reason = (
+            str(fallback.get("reason"))
+            if fallback.get("reason")
+            else str(reasons[0])
+            if isinstance(reasons, Sequence) and reasons
+            else "the radar search hint was rejected"
+        )
+        return (
+            broad,
+            False,
+            {
+                "used": True,
+                "mode": "broad_full_frame_unconditioned",
+                "reason_code": str(
+                    fallback.get("reason_code")
+                    or search_hint.get("reason_code")
+                    or "radar_hint_rejected"
+                ),
+                "reason": reason,
+            },
+        )
+    try:
+        if search_hint.get("schema") != IWR_CAMERA_HINT_SCHEMA:
+            raise ValueError("unsupported schema")
+        if search_hint.get("promotion_eligible") is not False:
+            raise ValueError("promotion boundary is not explicit")
+        if search_hint.get("independent_confirmation_eligible") is not False:
+            raise ValueError("independence boundary is not explicit")
+        if search_hint.get("iwr_range_used") is not True:
+            raise ValueError("radar dependency is not explicit")
+        if search_hint.get("horizontal_basis") != "full_saved_image_range_only_has_no_azimuth":
+            raise ValueError("horizontal search is not full-frame")
+        identity = search_hint.get("input_identity")
+        if not isinstance(identity, Mapping):
+            raise ValueError("input identity is missing")
+        if identity.get("active_epoch_id") != identity.get("source_epoch_id"):
+            raise ValueError("source epoch does not match the active epoch")
+        if not identity.get("source_candidate_id"):
+            raise ValueError("source candidate identity is missing")
+        projection = identity.get("camera_projection")
+        projection = projection if isinstance(projection, Mapping) else {}
+        if projection.get("image_size_px") != [camera.image_width_px, camera.image_height_px]:
+            raise ValueError("camera projection identity does not match this mode")
+        support = tuple(float(value) for value in search_hint["support_range_m"])
+        roi = tuple(int(value) for value in search_hint["roi_px"])
+        diameter = tuple(float(value) for value in search_hint["expected_diameter_px"])
+        if len(support) != 2 or not all(math.isfinite(value) for value in support):
+            raise ValueError("range support is invalid")
+        if (
+            not broad["plausible_radar_range_m"][0]
+            <= support[0]
+            < support[1]
+            <= broad["plausible_radar_range_m"][1]
+        ):
+            raise ValueError("range support is outside the broad search")
+        if len(roi) != 4 or roi[0] != 0 or roi[2] != camera.image_width_px:
+            raise ValueError("horizontal ROI is not full-frame")
+        if not 0 <= roi[1] < roi[3] <= camera.image_height_px:
+            raise ValueError("vertical ROI is outside the image")
+        if len(diameter) != 2 or not 0.0 < diameter[0] < diameter[1]:
+            raise ValueError("diameter support is invalid")
+        if not all(math.isfinite(value) for value in diameter):
+            raise ValueError("diameter support is non-finite")
+    except (KeyError, TypeError, ValueError) as exc:
+        return (
+            broad,
+            False,
+            {
+                "used": True,
+                "mode": "broad_full_frame_unconditioned",
+                "reason_code": "radar_hint_invalid",
+                "reason": f"radar search hint validation failed: {exc}",
+            },
+        )
+    return (
+        {
+            **broad,
+            "plausible_radar_range_m": support,
+            "roi": roi,
+            "expected_diameter_range_px": diameter,
+        },
+        True,
+        {
+            "used": False,
+            "mode": None,
+            "reason_code": None,
+            "reason": None,
+        },
+    )
+
+
 def _guided_camera_analysis(
-    frames: np.ndarray, camera: BallPlaneCamera
+    frames: np.ndarray,
+    camera: BallPlaneCamera,
+    search_hint: Mapping | None = None,
+    *,
+    analysis_role: str = "live_preview",
 ) -> tuple[ReferenceBallRangeResult, dict]:
-    """Run the camera-only physical association shared by live guidance and Save."""
+    """Run broad or explicitly non-promoting IWR-conditioned camera association."""
+    if analysis_role not in {"live_preview", "independent_save_confirmation"}:
+        raise ValueError("unknown guided camera analysis role")
+    kwargs, usable_hint, fallback = _validated_guided_search_hint(
+        search_hint, camera, analysis_role
+    )
+    started_at = time.perf_counter()
     result = estimate_reference_ball_range(
         frames,
         camera,
-        ball_center_height_m=BALL_DIAMETER_MM / 2000.0,
-        plausible_radar_range_m=(TEE_RANGE_MM[0] / 1000.0, TEE_RANGE_MM[1] / 1000.0),
+        **kwargs,
     )
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
     return result, {
         **_camera_range_evidence(result),
-        "method": "camera_floor_plane_v1",
-        "independent": True,
+        "method": (
+            "iwr_conditioned_camera_floor_plane_v1" if usable_hint else "camera_floor_plane_v1"
+        ),
+        "analysis_role": analysis_role,
+        "discovery_mode": (
+            "radar_guided_provisional" if usable_hint else "broad_full_frame_unconditioned"
+        ),
+        "independent": not usable_hint,
+        "promotion_eligible": False,
+        "promotion_rejection_reason": "independent Save confirmation has not completed",
         "dependency_facts": {
-            "iwr_range_used": False,
+            "iwr_range_used": usable_hint,
             "manual_range_used": False,
             "prior_canonical_range_used": False,
         },
-        "support_interval_m": [TEE_RANGE_MM[0] / 1000.0, TEE_RANGE_MM[1] / 1000.0],
+        "support_interval_m": list(kwargs["plausible_radar_range_m"]),
+        "search_region_px": list(kwargs["roi"]) if "roi" in kwargs else None,
+        "search_hint": dict(search_hint) if isinstance(search_hint, Mapping) else None,
+        "fallback": fallback,
+        "input_identity": {
+            "camera_model": _camera_model_evidence(camera),
+            "frame_window": {
+                "frame_count": int(frames.shape[0]),
+                "height_px": int(frames.shape[1]),
+                "width_px": int(frames.shape[2]),
+                "dtype": str(frames.dtype),
+            },
+        },
+        "detector_elapsed_ms": elapsed_ms,
+        "timing": {
+            "detector_duration_ms": elapsed_ms,
+            "clock": "host_performance_counter_duration",
+            "scope": "reference_ball_estimator_only",
+        },
         "stable_count": 0,
         "stable_span_s": 0.0,
         "save_eligible": False,
@@ -1379,17 +1566,19 @@ def _same_guided_candidate(first: Mapping, second: Mapping) -> bool:
 
 
 class GuidedRangeAnalyzer:
-    """Camera-only live association and temporal readiness for one frozen capture."""
+    """Live association and temporal readiness for one frozen guided capture."""
 
     def __init__(
         self,
         camera: BallPlaneCamera,
         orientation: Mapping,
         orientation_reader: Callable[[], Mapping],
+        search_hint: Mapping | None = None,
     ):
         self.camera = camera
         self.orientation = dict(orientation)
         self._orientation_reader = orientation_reader
+        self.search_hint = dict(search_hint) if search_hint is not None else None
         self._lock = threading.Lock()
         self._last: dict | None = None
         self._stable_anchor: dict | None = None
@@ -1415,16 +1604,21 @@ class GuidedRangeAnalyzer:
 
     @staticmethod
     def _readiness_reason(analysis: Mapping) -> str:
+        source = (
+            "radar-guided provisional search"
+            if analysis.get("dependency_facts", {}).get("iwr_range_used") is True
+            else "camera-only search"
+        )
         status = analysis.get("status")
         if status == "ambiguous":
-            return "multiple camera-only candidates remain plausible"
+            return f"multiple candidates remain plausible in the {source}"
         if status == "not_found":
-            return "no reference ball was found by the camera-only estimator"
+            return f"no reference ball was found by the {source}"
         if status == "no_consistent_candidate":
             return "visible candidates do not agree with the floor and apparent-size geometry"
         if status != "selected":
-            return f"camera-only association is {status or 'not ready'}"
-        return "camera-only selection is still stabilizing"
+            return f"{source} is {status or 'not ready'}"
+        return f"{source} selection is still stabilizing"
 
     def observe(
         self,
@@ -1433,7 +1627,7 @@ class GuidedRangeAnalyzer:
         *,
         observed_at: float | None = None,
     ) -> dict:
-        """Analyze one recent frame window and update the independent stability streak."""
+        """Analyze one recent frame window and update its provisional stability streak."""
         now = time.monotonic() if observed_at is None else float(observed_at)
         observation_id = int(observation_id)
         with self._lock:
@@ -1443,7 +1637,7 @@ class GuidedRangeAnalyzer:
             ):
                 return dict(self._last) if self._last is not None else {}
         problem = self._orientation_problem()
-        _result, analysis = _guided_camera_analysis(frames, self.camera)
+        _result, analysis = _guided_camera_analysis(frames, self.camera, self.search_hint)
         if problem:
             analysis["estimator_status"] = analysis["status"]
             analysis["status"] = "pose_changed"
@@ -1482,6 +1676,12 @@ class GuidedRangeAnalyzer:
                     or (None if eligible else self._readiness_reason(analysis)),
                 }
             )
+            analysis["timing"] = {
+                **analysis["timing"],
+                "observation_sequence": observation_id,
+                "stability_clock": "host_monotonic_duration",
+                "stable_span_s": round(span, 3),
+            }
             self._last_observation_id = observation_id
             self._last = dict(analysis)
             return dict(analysis)
@@ -1498,35 +1698,55 @@ class GuidedRangeAnalyzer:
         self, frames: np.ndarray, observation_id: int
     ) -> tuple[ReferenceBallRangeResult, dict, str | None]:
         """Re-run the estimator on exact Save frames and compare with stable live readiness."""
-        result, analysis = _guided_camera_analysis(frames, self.camera)
+        result, analysis = _guided_camera_analysis(
+            frames,
+            self.camera,
+            analysis_role="independent_save_confirmation",
+        )
         with self._lock:
             prior = dict(self._last) if self._last is not None else None
             stable = dict(self._stable_anchor) if self._stable_anchor is not None else None
         if not prior or not prior.get("save_eligible"):
-            return result, analysis, "camera-only selection is not temporally stable"
+            reason = "provisional camera selection is not temporally stable"
+            analysis["promotion_rejection_reason"] = reason
+            return result, analysis, reason
         if int(observation_id) < int(prior.get("observation_id", -1)):
-            return result, analysis, "Save frames are older than the stable camera observation"
+            reason = "Save frames are older than the stable camera observation"
+            analysis["promotion_rejection_reason"] = reason
+            return result, analysis, reason
         problem = self._orientation_problem()
         if problem:
+            analysis["promotion_rejection_reason"] = problem
             return result, analysis, problem
         selected = analysis.get("selected")
         if analysis.get("status") != "selected" or not isinstance(selected, Mapping):
-            return result, analysis, self._readiness_reason(analysis)
+            reason = self._readiness_reason(analysis)
+            analysis["promotion_rejection_reason"] = reason
+            return result, analysis, reason
         if stable is None or not _same_guided_candidate(stable, selected):
-            return (
-                result,
-                analysis,
-                "latest frames no longer match the stable camera-only selection",
+            reason = (
+                "broad independent camera search does not confirm the stable provisional selection"
             )
+            analysis["promotion_rejection_reason"] = reason
+            return result, analysis, reason
         analysis.update(
             {
                 "stable_count": prior["stable_count"],
                 "stable_span_s": prior["stable_span_s"],
                 "observation_id": int(observation_id),
                 "save_eligible": True,
+                "promotion_eligible": True,
+                "promotion_rejection_reason": None,
+                "promotion_basis": (
+                    "broad_full_frame_unconditioned_camera_matches_provisional_selection"
+                ),
                 "readiness_reason": None,
             }
         )
+        analysis["timing"] = {
+            **analysis["timing"],
+            "observation_sequence": int(observation_id),
+        }
         return result, analysis, None
 
 
@@ -1709,6 +1929,7 @@ def _guided_camera_candidate(
     camera_model: BallPlaneCamera,
     capture_controls: Mapping,
     frame_sha256: str,
+    frame_window_sha256: str,
     qualification: tee_range.TeeRangeQualification | None,
 ) -> tee_range.TeeRangeCandidate:
     selected = result.selected
@@ -1722,17 +1943,7 @@ def _guided_camera_candidate(
     mode_snapshot = {
         "arm": arm.as_dict(),
         "controls": dict(capture_controls),
-        "camera_model": {
-            "source": camera_model.source,
-            "accuracy_qualified": camera_model.accuracy_qualified,
-            "camera_origin_lfu": list(camera_model.camera_origin_lfu),
-            "radar_origin_lfu": list(camera_model.radar_origin_lfu),
-            "focal_size_px": camera_model.focal_size_px,
-            "image_width_px": camera_model.image_width_px,
-            "image_height_px": camera_model.image_height_px,
-            "angular_uncertainty_deg": camera_model.angular_uncertainty_deg,
-            "focal_relative_uncertainty": camera_model.focal_relative_uncertainty,
-        },
+        "camera_model": _camera_model_evidence(camera_model),
     }
     mode_sha = hashlib.sha256(
         json.dumps(mode_snapshot, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -1761,6 +1972,7 @@ def _guided_camera_candidate(
         "camera_mode_profile_sha256": mode_profile_sha,
         "camera_mode_sha256": mode_sha,
         "saved_frame_sha256": frame_sha256,
+        "analyzed_frame_window_sha256": frame_window_sha256,
         "camera_arm_id": arm.arm_id,
         "scope": qualification.scope if qualification else "tester_setup",
         "manual_range_used": False,
@@ -1792,6 +2004,7 @@ def _guided_camera_candidate(
             "capture_identity": {
                 "epoch_id": epoch_id,
                 "saved_frame_sha256": frame_sha256,
+                "analyzed_frame_window_sha256": frame_window_sha256,
                 "rig_geometry": _json_identity(rig_geometry),
                 "optical_calibration": _json_identity(optical_calibration),
                 "camera_placement": _json_identity(camera_placement),
@@ -1912,6 +2125,171 @@ def _guided_iwr_candidate(
         selectable=False,
         evidence=evidence,
     )
+
+
+def _iwr_hint_source_identity(candidate: Mapping) -> dict:
+    evidence = candidate.get("evidence")
+    evidence = evidence if isinstance(evidence, Mapping) else {}
+    difference = evidence.get("difference")
+    difference = difference if isinstance(difference, Mapping) else {}
+    qualification = evidence.get("qualification")
+    qualification = qualification if isinstance(qualification, Mapping) else {}
+    range_calibration = evidence.get("range_calibration")
+    range_calibration = range_calibration if isinstance(range_calibration, Mapping) else {}
+    return {
+        "empty_capture_sha256": evidence.get("empty_capture_sha256")
+        or difference.get("empty_capture_sha256"),
+        "present_capture_sha256": evidence.get("present_capture_sha256")
+        or difference.get("present_capture_sha256"),
+        "radar_profile_sha256": evidence.get("radar_profile_sha256")
+        or difference.get("radar_profile_sha256"),
+        "capture_config_sha256": evidence.get("capture_config_sha256")
+        or difference.get("capture_config_sha256"),
+        "rig_geometry_sha256": evidence.get("rig_geometry_sha256")
+        or qualification.get("rig_geometry_sha256"),
+        "iwr_firmware_sha256": qualification.get("iwr_firmware_sha256"),
+        "iwr_capture_config_sha256": qualification.get("iwr_capture_config_sha256"),
+        "iwr_range_calibration_sha256": range_calibration.get("sha256")
+        or qualification.get("iwr_range_calibration_sha256"),
+    }
+
+
+def _guided_camera_input_identity(
+    arm: Arm,
+    camera: BallPlaneCamera,
+    *,
+    rig_geometry: Path,
+    optical_calibration: Path | None,
+    camera_placement: Path | None,
+    orientation: Mapping,
+) -> dict:
+    return {
+        "arm": arm.as_dict(),
+        "rig_geometry_sha256": _file_sha256(rig_geometry),
+        "camera_calibration_sha256": (
+            _file_sha256(optical_calibration) if optical_calibration else None
+        ),
+        "camera_placement_sha256": (_file_sha256(camera_placement) if camera_placement else None),
+        "camera_mode_profile_sha256": (
+            _camera_mode_profile_sha256(arm, optical_calibration) if optical_calibration else None
+        ),
+        "orientation_at_start": dict(orientation),
+        "camera_model": _camera_model_evidence(camera),
+    }
+
+
+def _guided_iwr_camera_hint(
+    state, camera: BallPlaneCamera, *, camera_input_identity: Mapping
+) -> dict:
+    """Build an identity-bound live-search hint from the retained static candidate."""
+    candidate = state.evidence.get("iwr_candidate")
+    candidate = candidate if isinstance(candidate, Mapping) else {}
+    evidence = candidate.get("evidence")
+    evidence = evidence if isinstance(evidence, Mapping) else {}
+    qualification = evidence.get("qualification")
+    qualification = qualification if isinstance(qualification, Mapping) else {}
+    difference = evidence.get("difference")
+    difference = difference if isinstance(difference, Mapping) else {}
+    valid_static_source = bool(
+        candidate.get("source") == "iwr_static_profile_difference"
+        and candidate.get("source_group") == "iwr"
+        and difference.get("status") == "accepted"
+        and qualification.get("status") == "accepted"
+        and qualification.get("accuracy_qualified") is True
+    )
+    return build_iwr_camera_search_hint(
+        camera,
+        radar_range_m=candidate.get("radar_slant_range_m"),
+        uncertainty_m=candidate.get("uncertainty_m"),
+        ball_center_height_m=BALL_DIAMETER_MM / 2000.0,
+        epoch_id=state.epoch_id,
+        source_epoch_id=(qualification.get("epoch_id") if valid_static_source else None),
+        candidate_id=(str(candidate["candidate_id"]) if candidate.get("candidate_id") else None),
+        source_input_identity=_iwr_hint_source_identity(candidate),
+        camera_input_identity=camera_input_identity,
+    )
+
+
+def _camera_to_iwr_ranking(
+    camera_result: ReferenceBallRangeResult,
+    iwr_candidate: Mapping,
+    *,
+    epoch_id: str,
+    camera_candidate_id: str,
+    saved_frame_sha256: str,
+) -> dict:
+    """Compare the independent camera Save with the one retained static-IWR hypothesis."""
+    started_at = time.perf_counter()
+    selected = camera_result.selected
+    hypotheses = []
+    rejection_reasons = []
+    try:
+        camera_range = float(selected.floor_radar_range_m) if selected is not None else math.nan
+        camera_uncertainty = (
+            float(selected.floor_range_uncertainty_m) if selected is not None else math.nan
+        )
+        iwr_range = float(iwr_candidate["radar_slant_range_m"])
+        iwr_uncertainty = float(iwr_candidate["uncertainty_m"])
+    except (KeyError, TypeError, ValueError):
+        camera_range = math.nan
+        camera_uncertainty = math.nan
+        iwr_range = math.nan
+        iwr_uncertainty = math.nan
+    if iwr_candidate.get("source_group") != "iwr":
+        rejection_reasons.append("the retained hypothesis is not radar evidence")
+    if not all(
+        math.isfinite(value)
+        for value in (camera_range, camera_uncertainty, iwr_range, iwr_uncertainty)
+    ):
+        rejection_reasons.append("camera or radar range uncertainty is unavailable")
+    elif camera_uncertainty <= 0.0 or iwr_uncertainty <= 0.0:
+        rejection_reasons.append("camera and radar uncertainty must both be positive")
+    elif not rejection_reasons:
+        residual = abs(camera_range - iwr_range)
+        combined_uncertainty = math.hypot(camera_uncertainty, iwr_uncertainty)
+        hypotheses.append(
+            {
+                "rank": 1,
+                "candidate_id": iwr_candidate.get("candidate_id"),
+                "radar_slant_range_m": iwr_range,
+                "radar_uncertainty_m": iwr_uncertainty,
+                "camera_range_m": camera_range,
+                "camera_uncertainty_m": camera_uncertainty,
+                "combined_uncertainty_m": combined_uncertainty,
+                "camera_residual_m": residual,
+                "normalized_residual": residual / combined_uncertainty,
+            }
+        )
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    return {
+        "schema": "openflight.camera_to_iwr_static_ranking.v1",
+        "status": "ranked" if hypotheses else "unavailable",
+        "role": "diagnostic_ranking_only",
+        "promotion_eligible": False,
+        "independent_confirmation_eligible": False,
+        "camera_result_independent_of_iwr_range": True,
+        "static_iwr_candidate_unchanged": True,
+        "rejection_reasons": rejection_reasons,
+        "input_identity": {
+            "epoch_id": epoch_id,
+            "camera_candidate_id": camera_candidate_id,
+            "saved_frame_sha256": saved_frame_sha256,
+            "camera_estimator": "camera_floor_plane_v1",
+            "radar_candidate_id": iwr_candidate.get("candidate_id"),
+            "radar_source": iwr_candidate.get("source"),
+            "radar_source_group": iwr_candidate.get("source_group"),
+            "radar_inputs": _iwr_hint_source_identity(iwr_candidate),
+        },
+        "timing": {
+            "ranking_duration_ms": elapsed_ms,
+            "clock": "host_performance_counter_duration",
+        },
+        "hypotheses": hypotheses,
+        "limitation": (
+            "The static estimator retains only its selected peak and secondary score, not "
+            "alternate peak locations; this diagnostic can rank only the original static candidate."
+        ),
+    }
 
 
 def _static_capture_failure(record: Mapping, capture_kind: str) -> dict[str, str]:
@@ -3241,7 +3619,20 @@ def create_app(
             optical_calibration,
             camera_placement,
         )
-        analyzer = GuidedRangeAnalyzer(model, tilt_snapshot, enclosure.reading)
+        camera_input_identity = _guided_camera_input_identity(
+            params.arm,
+            model,
+            rig_geometry=rig_geometry,
+            optical_calibration=optical_calibration,
+            camera_placement=camera_placement,
+            orientation=tilt_snapshot,
+        )
+        search_hint = _guided_iwr_camera_hint(
+            state, model, camera_input_identity=camera_input_identity
+        )
+        analyzer = GuidedRangeAnalyzer(
+            model, tilt_snapshot, enclosure.reading, search_hint=search_hint
+        )
         capture_id = f"{arm_id}-{state.sequence + 1:06d}"
         state = store.transition(
             state,
@@ -3255,6 +3646,8 @@ def create_app(
                     "exposure_us": exposure_us,
                     "arm": params.arm.as_dict(),
                     "orientation_at_start": tilt_snapshot,
+                    "camera_input_identity": camera_input_identity,
+                    "iwr_camera_search_hint": search_hint,
                 }
             },
         )
@@ -3307,6 +3700,7 @@ def create_app(
             raise RuntimeError(f"camera {arm_id} does not have a stable frame yet")
         if latest_frame_at is None or time.monotonic() - latest_frame_at > LIVE_FRAME_STALE_S:
             raise RuntimeError(f"camera {arm_id} latest frame is stale")
+        frame_age_at_save_start_ms = max(0.0, (time.monotonic() - latest_frame_at) * 1000.0)
         state = store.transition(
             state,
             phase=f"camera_{arm_id}_evaluating",
@@ -3318,7 +3712,17 @@ def create_app(
         attempt_key = f"camera_{arm_id}_attempt_{capture_id}"
         frame_path = store.epoch_dir(state.epoch_id) / f"camera-{capture_id}.pgm"
         frame_sha256 = None
+        frame_window_sha256 = None
         try:
+            contiguous_frames = np.ascontiguousarray(frames)
+            frame_window_header = json.dumps(
+                {"shape": list(contiguous_frames.shape), "dtype": str(contiguous_frames.dtype)},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            frame_window_sha256 = hashlib.sha256(
+                frame_window_header + b"\n" + contiguous_frames.tobytes()
+            ).hexdigest()
             frame = np.median(frames, axis=0).astype(np.uint8)
             frame_bytes = (
                 f"P5\n{frame.shape[1]} {frame.shape[0]}\n255\n".encode("ascii") + frame.tobytes()
@@ -3329,8 +3733,33 @@ def create_app(
                 atomic_write(frame_path, frame_bytes)
             frame_sha256 = hashlib.sha256(frame_bytes).hexdigest()
             result, save_analysis, unsafe_reason = analyzer.analyze_for_save(frames, frame_sequence)
+            save_analysis["input_identity"] = {
+                **save_analysis["input_identity"],
+                "epoch_id": state.epoch_id,
+                "capture_id": capture_id,
+                "observation_sequence": int(frame_sequence),
+                "analyzed_frame_window_sha256": frame_window_sha256,
+                "saved_median_frame_sha256": frame_sha256,
+                "camera_inputs": capture_setup.get("camera_input_identity"),
+            }
+            save_analysis["timing"] = {
+                **save_analysis["timing"],
+                "frame_age_at_save_start_ms": frame_age_at_save_start_ms,
+                "frame_age_clock": "host_monotonic_duration",
+            }
             if not live.capture_context_is_current(capture_context):
                 unsafe_reason = "guided camera context changed during Save"
+                save_analysis["promotion_eligible"] = False
+                save_analysis["promotion_rejection_reason"] = unsafe_reason
+            if unsafe_reason is None and (
+                save_analysis.get("independent") is not True
+                or save_analysis.get("promotion_eligible") is not True
+                or save_analysis.get("dependency_facts", {}).get("iwr_range_used") is not False
+                or save_analysis.get("search_region_px") is not None
+            ):
+                unsafe_reason = "Save did not produce independent full-frame camera confirmation"
+                save_analysis["promotion_eligible"] = False
+                save_analysis["promotion_rejection_reason"] = unsafe_reason
             if unsafe_reason:
                 return store.transition(
                     state,
@@ -3342,7 +3771,10 @@ def create_app(
                             "status": "association_withheld",
                             "frame": frame_path.name,
                             "frame_sha256": frame_sha256,
+                            "analyzed_frame_window_sha256": frame_window_sha256,
                             "reason": unsafe_reason,
+                            "live_guidance": readiness,
+                            "search_hint": capture_setup.get("iwr_camera_search_hint"),
                             "camera_only_analysis": save_analysis,
                         },
                         "camera_capture_failure": {
@@ -3364,20 +3796,31 @@ def create_app(
                 camera_placement=camera_placement,
                 camera_model=model,
                 capture_controls={
-                    **capture_setup,
+                    "capture_id": capture_id,
+                    "gain": capture_setup["gain"],
+                    "exposure_us": capture_setup["exposure_us"],
+                    "arm": capture_setup["arm"],
+                    "orientation_at_start": capture_setup["orientation_at_start"],
                     "orientation_frozen_for_association": analyzer.orientation,
                     "orientation_at_evaluation": enclosure.reading(),
                 },
                 frame_sha256=frame_sha256,
+                frame_window_sha256=frame_window_sha256,
                 qualification=qualification,
             )
             candidate = replace(
                 candidate,
                 evidence={
                     **candidate.evidence,
-                    "live_readiness": readiness,
                     "save_camera_only_analysis": save_analysis,
                 },
+            )
+            iwr_ranking = _camera_to_iwr_ranking(
+                result,
+                state.evidence.get("iwr_candidate", {}),
+                epoch_id=state.epoch_id,
+                camera_candidate_id=candidate.candidate_id,
+                saved_frame_sha256=frame_sha256,
             )
         except (OSError, RuntimeError, TypeError, ValueError) as exc:
             return store.transition(
@@ -3390,7 +3833,10 @@ def create_app(
                         "status": "evaluation_failed",
                         "frame": frame_path.name if frame_path.is_file() else None,
                         "frame_sha256": frame_sha256,
+                        "analyzed_frame_window_sha256": frame_window_sha256,
                         "reason": str(exc),
+                        "live_guidance": readiness,
+                        "search_hint": capture_setup.get("iwr_camera_search_hint"),
                     }
                 },
                 retry_phase=f"needs_camera_{arm_id}",
@@ -3399,12 +3845,22 @@ def create_app(
             stop_guided_live(tester_id, state.epoch_id, arm_id)
         evidence = {
             f"camera_{arm_id}_candidate": candidate.to_dict(),
+            f"camera_{arm_id}_guidance": {
+                "live_readiness": readiness,
+                "search_hint": capture_setup.get("iwr_camera_search_hint"),
+                "save_camera_only_analysis": save_analysis,
+                "camera_to_iwr_ranking": iwr_ranking,
+            },
             attempt_key: {
                 "capture_id": capture_id,
                 "status": "evaluated",
                 "frame": frame_path.name,
                 "frame_sha256": frame_sha256,
+                "analyzed_frame_window_sha256": frame_window_sha256,
                 "candidate_id": candidate.candidate_id,
+                "live_guidance": readiness,
+                "save_camera_only_analysis": save_analysis,
+                "camera_to_iwr_ranking": iwr_ranking,
             },
         }
         if arm_id == "arm5":

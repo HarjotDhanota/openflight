@@ -1467,13 +1467,23 @@
           detector.textContent = frameReady ? 'Camera-only association is warming up…' : 'Ball detector is warming up…';
           return;
         }
+        const radarGuided = association.dependency_facts?.iwr_range_used === true;
+        const broadFallback = !radarGuided && association.fallback?.used === true;
+        const method = radarGuided
+          ? 'Radar-guided provisional search'
+          : broadFallback
+            ? 'Camera-only broad fallback'
+            : 'Camera-only search';
+        const fallback = broadFallback && association.fallback?.reason
+          ? ` · radar hint fallback: ${association.fallback.reason}`
+          : '';
         if (association.status !== 'selected' || !association.selected) {
           const labels = {
-            ambiguous: 'Multiple camera-only candidates remain plausible',
+            ambiguous: 'Multiple candidates remain plausible',
             not_found: 'No reference ball was found',
             no_consistent_candidate: 'Visible candidates do not agree with the floor and apparent-size geometry',
           };
-          detector.textContent = `${labels[association.status] || association.readiness_reason || 'Camera-only association is not ready'}. Save remains disabled.`;
+          detector.textContent = `${method}: ${labels[association.status] || association.readiness_reason || 'association is not ready'}. Save remains disabled${fallback}.`;
           return;
         }
         const ball = association.selected;
@@ -1484,7 +1494,8 @@
         const readiness = association.save_eligible
           ? ' · stable and ready to save'
           : ` · stabilizing ${association.stable_count || 0}/3`;
-        detector.textContent = `Camera-only ball selected · x ${coordinate(ball.x_px)} · y ${coordinate(ball.y_px)} · diameter ${diameter}${range}${readiness}`;
+        const independence = radarGuided ? ' · independent full-frame check pending on Save' : '';
+        detector.textContent = `${method}: ball selected · x ${coordinate(ball.x_px)} · y ${coordinate(ball.y_px)} · diameter ${diameter}${range}${readiness}${independence}${fallback}`;
       }
 
       function loadGuidedCameraFrame(context, version) {

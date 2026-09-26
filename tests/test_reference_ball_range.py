@@ -7,6 +7,7 @@ import pytest
 
 from openflight.camera.reference_ball_range import (
     BallPlaneCamera,
+    build_iwr_camera_search_hint,
     estimate_reference_ball_range,
     ray_to_ball_center_plane,
 )
@@ -125,6 +126,75 @@ def test_parallel_ray_is_rejected_instead_of_inventing_a_floor_range():
 
     with pytest.raises(ValueError, match="parallel"):
         ray_to_ball_center_plane(camera, (160.0, 100.0), ball_center_height_m=0.021335)
+
+
+def test_static_iwr_hint_retains_identity_uncertainty_and_full_horizontal_search():
+    camera = _camera(640, 400, 466.6667)
+    source_inputs = {
+        "empty_capture_sha256": "a" * 64,
+        "present_capture_sha256": "b" * 64,
+        "capture_config_sha256": "c" * 64,
+    }
+    camera_inputs = {"rig_geometry_sha256": "d" * 64, "arm_id": "arm5"}
+
+    hint = build_iwr_camera_search_hint(
+        camera,
+        radar_range_m=1.55,
+        uncertainty_m=0.03,
+        ball_center_height_m=BALL_DIAMETER_M / 2.0,
+        epoch_id="epoch-1",
+        source_epoch_id="epoch-1",
+        candidate_id="iwr-static-1",
+        source_input_identity=source_inputs,
+        camera_input_identity=camera_inputs,
+    )
+
+    assert hint["status"] == "usable"
+    assert hint["conditioning"] == "radar_guided_provisional_camera_search"
+    assert hint["roi_px"][0::2] == [0, camera.image_width_px]
+    assert 0 < hint["roi_px"][1] < hint["roi_px"][3] < camera.image_height_px
+    assert hint["support_range_m"] == pytest.approx([1.43, 1.67])
+    assert hint["uncertainty"] == {
+        "source_standard_uncertainty_m": 0.03,
+        "support_multiplier": 3.0,
+        "minimum_half_width_m": 0.12,
+        "support_range_m": pytest.approx([1.43, 1.67]),
+    }
+    assert hint["input_identity"]["source_inputs"] == source_inputs
+    assert hint["input_identity"]["camera_projection"]["artifacts"] == camera_inputs
+    assert hint["promotion_eligible"] is False
+    assert hint["independent_confirmation_eligible"] is False
+    assert hint["fallback"] is None
+
+
+@pytest.mark.parametrize(
+    "source_epoch_id,candidate_id,uncertainty_m,reason_code",
+    [
+        (None, None, 0.03, "static_iwr_candidate_missing"),
+        (None, "rejected", 0.03, "static_iwr_candidate_rejected"),
+        ("old-epoch", "stale", 0.03, "static_iwr_candidate_stale"),
+        ("epoch-1", "broad", 0.8, "static_iwr_uncertainty_too_broad"),
+    ],
+)
+def test_missing_rejected_stale_or_broad_iwr_hint_requires_unconditioned_fallback(
+    source_epoch_id, candidate_id, uncertainty_m, reason_code
+):
+    hint = build_iwr_camera_search_hint(
+        _camera(640, 400, 466.6667),
+        radar_range_m=1.55,
+        uncertainty_m=uncertainty_m,
+        ball_center_height_m=BALL_DIAMETER_M / 2.0,
+        epoch_id="epoch-1",
+        source_epoch_id=source_epoch_id,
+        candidate_id=candidate_id,
+    )
+
+    assert hint["status"] == "rejected"
+    assert hint["reason_code"] == reason_code
+    assert hint["conditioning"] == "not_applied"
+    assert hint["iwr_range_used"] is False
+    assert hint["fallback"]["mode"] == "broad_full_frame_unconditioned"
+    assert hint["fallback"]["reason_code"] == reason_code
 
 
 def _lit_spheres(

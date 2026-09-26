@@ -478,16 +478,47 @@ def test_guided_flow_resolves_and_survives_reload(tmp_path, inputs, monkeypatch)
     assert identity["optical_calibration"]["sha256"] == file_hash(inputs["camera"])
     assert identity["camera_placement"]["sha256"] == file_hash(inputs["placement"])
     assert identity["mode"]["arm"]["arm_id"] == "arm5"
-    assert camera_evidence["live_readiness"]["save_eligible"] is True
+    assert identity["analyzed_frame_window_sha256"]
+    assert "iwr_camera_search_hint" not in identity["mode"]["controls"]
+    guidance = state["evidence"]["camera_arm5_guidance"]
+    live = guidance["live_readiness"]
+    hint = guidance["search_hint"]
+    save = guidance["save_camera_only_analysis"]
+    ranking = guidance["camera_to_iwr_ranking"]
+    assert live["save_eligible"] is True
+    assert live["independent"] is False
+    assert live["promotion_eligible"] is False
+    assert live["dependency_facts"]["iwr_range_used"] is True
+    assert live["timing"]["clock"] == "host_performance_counter_duration"
+    assert hint["status"] == "usable"
+    assert hint["input_identity"]["active_epoch_id"] == state["epoch_id"]
+    assert hint["input_identity"]["source_epoch_id"] == state["epoch_id"]
+    assert hint["input_identity"]["source_inputs"]["empty_capture_sha256"] == "a" * 64
+    assert hint["input_identity"]["source_inputs"]["present_capture_sha256"] == "b" * 64
+    assert hint["input_identity"]["camera_projection"]["artifacts"][
+        "rig_geometry_sha256"
+    ] == file_hash(inputs["rig"])
+    assert hint["source_uncertainty_m"] > 0.0
+    assert hint["uncertainty"]["source_standard_uncertainty_m"] == hint["source_uncertainty_m"]
     assert camera_evidence["save_camera_only_analysis"]["dependency_facts"] == {
         "iwr_range_used": False,
         "manual_range_used": False,
         "prior_canonical_range_used": False,
     }
+    assert save["independent"] is True
+    assert save["promotion_eligible"] is True
+    assert save["search_region_px"] is None
     assert (
-        camera_evidence["live_readiness"]["selected"]
-        == camera_evidence["save_camera_only_analysis"]["selected"]
+        save["input_identity"]["analyzed_frame_window_sha256"]
+        == identity["analyzed_frame_window_sha256"]
     )
+    assert live["selected"] == save["selected"]
+    assert ranking["role"] == "diagnostic_ranking_only"
+    assert ranking["promotion_eligible"] is False
+    assert ranking["independent_confirmation_eligible"] is False
+    assert ranking["input_identity"]["saved_frame_sha256"] == identity["saved_frame_sha256"]
+    assert ranking["hypotheses"][0]["camera_uncertainty_m"] > 0.0
+    assert "camera_to_iwr_static_ranking" not in json.dumps(state["solution"]["candidates"])
     iwr = state["evidence"]["iwr_candidate"]
     assert iwr["evidence"]["bias_uncertainty"] == {
         "value_m": 0.01,
@@ -502,6 +533,47 @@ def test_guided_flow_resolves_and_survives_reload(tmp_path, inputs, monkeypatch)
     assert reloaded == state
     solution = tee_range_setup.load_current_epoch(tmp_path / "sessions" / tester).solution
     assert ts._tee_range_cli_args(solution) == ["--iwr6843-tee-m", "1.2"]
+
+
+def test_conditioned_static_object_must_match_broad_save_before_promotion(
+    tmp_path, inputs, monkeypatch
+):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    guided_hinge = camera_result(1.2)
+    guided_hinge = replace(
+        guided_hinge,
+        selected=replace(guided_hinge.selected, x_px=260.0, y_px=360.0),
+        candidates=(replace(guided_hinge.candidates[0], x_px=260.0, y_px=360.0),),
+    )
+    independent_ball = camera_result(1.2)
+
+    def estimate(_frames, _camera, **kwargs):
+        return guided_hinge if "roi" in kwargs else independent_ball
+
+    monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
+    client = app.test_client()
+    for index, action in enumerate(("start", "capture_empty", "capture_ball", "start_camera_arm5")):
+        assert post(client, tester, action, f"hinge-{index}").status_code == 200
+
+    response = post(client, tester, "evaluate_camera_arm5", "hinge-save")
+
+    assert response.status_code == 200
+    state = response.get_json()["state"]
+    assert state["phase"] == "retryable_failure"
+    assert "camera_arm5_candidate" not in state["evidence"]
+    attempt = next(
+        value for key, value in state["evidence"].items() if key.startswith("camera_arm5_attempt_")
+    )
+    assert attempt["status"] == "association_withheld"
+    assert attempt["live_guidance"]["dependency_facts"]["iwr_range_used"] is True
+    assert attempt["live_guidance"]["promotion_eligible"] is False
+    assert attempt["camera_only_analysis"]["independent"] is True
+    assert attempt["camera_only_analysis"]["promotion_eligible"] is False
+    assert attempt["camera_only_analysis"]["search_region_px"] is None
+    assert attempt["reason"] == (
+        "broad independent camera search does not confirm the stable provisional selection"
+    )
+    assert state["evidence"]["iwr_candidate"]["radar_slant_range_m"] == pytest.approx(1.2)
 
 
 def test_start_over_stops_only_the_guided_camera_owner(tmp_path, inputs, monkeypatch):
@@ -691,6 +763,15 @@ def test_missing_qualification_and_disagreement_remain_raw_only(tmp_path, inputs
     missing = drive(app.test_client(), tester)
     assert missing["phase"] == "raw_only"
     assert missing["solution"]["reason"] == "qualification_artifact_missing"
+    fallback = missing["evidence"]["camera_arm5_guidance"]
+    assert fallback["search_hint"]["status"] == "rejected"
+    assert fallback["search_hint"]["reason_code"] == "static_iwr_candidate_rejected"
+    assert fallback["live_readiness"]["discovery_mode"] == "broad_full_frame_unconditioned"
+    assert fallback["live_readiness"]["independent"] is True
+    assert fallback["live_readiness"]["fallback"]["used"] is True
+    assert fallback["live_readiness"]["fallback"]["reason_code"] == (
+        "static_iwr_candidate_rejected"
+    )
     assert ts._tee_range_cli_args(tee_range.TeeRangeSolution.from_dict(missing["solution"])) == [
         "--iwr6843-tee-range-pending"
     ]

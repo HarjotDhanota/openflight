@@ -215,7 +215,7 @@ test('shows the server-owned guided camera frame without starting another live v
   await expect(page.locator('#automatic-range-summary')).toContainText('The reference camera is live');
   await expect(page.locator('#tee-range-camera-status')).toContainText('Live 1280×800 frame ready');
   await expect(page.locator('#tee-range-camera-detector')).toContainText(
-    'Camera-only ball selected · x 641.2 · y 502.7 · diameter 24.4 px · range 1.527 m · stable and ready to save'
+    'Camera-only search: ball selected · x 641.2 · y 502.7 · diameter 24.4 px · range 1.527 m · stable and ready to save'
   );
   await expect(page.locator('#tee-range-camera-frame')).toHaveAttribute('src', /view=overlay/);
   expect(statusPolls).toBeGreaterThan(1);
@@ -254,6 +254,10 @@ test('reports the live detector reason without treating it as a camera failure',
         stable_span_s: 0,
         save_eligible: false,
         readiness_reason: 'no reference ball was found by the camera-only estimator',
+        fallback: {
+          used: true,
+          reason: 'the static IWR candidate was rejected',
+        },
       },
     })
   );
@@ -261,7 +265,7 @@ test('reports the live detector reason without treating it as a camera failure',
 
   const detector = page.locator('#tee-range-camera-detector');
   await expect(detector).toContainText(
-    'No reference ball was found. Save remains disabled.'
+    'Camera-only broad fallback: No reference ball was found. Save remains disabled · radar hint fallback: the static IWR candidate was rejected.'
   );
   await expect(detector).toHaveClass(/note/);
   await expect(detector).not.toHaveClass(/problem/);
@@ -303,10 +307,54 @@ test('withholds Save and a confident verdict when camera-only association is amb
   await page.goto('/tester.html');
 
   await expect(page.locator('#tee-range-camera-detector')).toContainText(
-    'Multiple camera-only candidates remain plausible. Save remains disabled.'
+    'Camera-only search: Multiple candidates remain plausible. Save remains disabled.'
   );
   await expect(page.locator('#tee-range-action')).toBeDisabled();
   await expect(page.locator('#automatic-range-summary')).toContainText('The reference camera is live');
+});
+
+test('labels radar-conditioned readiness as provisional until independent Save', async ({ page }) => {
+  await base(page, {
+    epoch_id: 'epoch-radar-guided',
+    phase: 'camera_arm5_capturing',
+    reason: 'camera_arm5_warming',
+    evidence: {},
+    solution: null,
+  });
+  await page.route('**/api/tester/live', (route) =>
+    json(route, {
+      running: true,
+      arm_id: 'arm5',
+      owner: {
+        kind: 'guided_tee_range',
+        tester_id: '20260922-name',
+        epoch_id: 'epoch-radar-guided',
+        arm_id: 'arm5',
+      },
+      stats: { mean: 71, p99: 139, max: 178, clipped_pct: 0 },
+      association: {
+        status: 'selected',
+        selected: {
+          x_px: 641.2,
+          y_px: 502.7,
+          diameter_px: 24.4,
+          floor_radar_range_m: 1.527,
+        },
+        stable_count: 3,
+        stable_span_s: 1,
+        save_eligible: true,
+        independent: false,
+        promotion_eligible: false,
+        dependency_facts: { iwr_range_used: true },
+      },
+    })
+  );
+  await page.goto('/tester.html');
+
+  const detector = page.locator('#tee-range-camera-detector');
+  await expect(detector).toContainText('Radar-guided provisional search: ball selected');
+  await expect(detector).toContainText('independent full-frame check pending on Save');
+  await expect(page.locator('#tee-range-action')).toBeEnabled();
 });
 
 test('guided camera errors stay beside the preview and stale tester polls are ignored', async ({ page }) => {

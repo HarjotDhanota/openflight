@@ -14,6 +14,12 @@ from openflight.camera.geometry import unit_world_rays
 GOLF_BALL_DIAMETER_M = 0.04267
 _DIAMETER_HYPOTHESES = 12
 _AMBIGUITY_SCORE_MARGIN = 0.75
+IWR_CAMERA_HINT_SCHEMA = "openflight.iwr_camera_search_hint.v1"
+_FULL_RADAR_RANGE_M = (0.5, 4.0)
+_MAX_HINT_RANGE_WIDTH_M = 1.5
+_MAX_HINT_ROI_HEIGHT_FRACTION = 0.85
+_HINT_UNCERTAINTY_MULTIPLIER = 3.0
+_MIN_HINT_HALF_WIDTH_M = 0.12
 
 
 def _vector(value: Any, name: str) -> tuple[float, float, float]:
@@ -225,6 +231,221 @@ class ReferenceBallRangeResult:
     diagnostics: Mapping[str, Any]
 
 
+def _search_hint_input_identity(
+    camera: BallPlaneCamera,
+    *,
+    epoch_id: str,
+    source_epoch_id: str | None,
+    candidate_id: str | None,
+    source_input_identity: Mapping[str, Any] | None,
+    camera_input_identity: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "active_epoch_id": epoch_id,
+        "source_epoch_id": source_epoch_id,
+        "source_candidate_id": candidate_id,
+        "source": "iwr_static_profile_difference",
+        "source_group": "iwr",
+        "source_inputs": dict(source_input_identity or {}),
+        "camera_projection": {
+            "source": camera.source,
+            "accuracy_qualified": camera.accuracy_qualified,
+            "image_size_px": [camera.image_width_px, camera.image_height_px],
+            "camera_origin_lfu_m": list(camera.camera_origin_lfu),
+            "radar_origin_lfu_m": list(camera.radar_origin_lfu),
+            "focal_size_px": camera.focal_size_px,
+            "angular_uncertainty_deg": camera.angular_uncertainty_deg,
+            "focal_relative_uncertainty": camera.focal_relative_uncertainty,
+            "artifacts": dict(camera_input_identity or {}),
+        },
+    }
+
+
+def _rejected_search_hint(
+    *, input_identity: Mapping[str, Any], reason_code: str, reason: str
+) -> dict[str, Any]:
+    return {
+        "schema": IWR_CAMERA_HINT_SCHEMA,
+        "status": "rejected",
+        "reason_code": reason_code,
+        "rejection_reasons": [reason],
+        "input_identity": dict(input_identity),
+        "conditioning": "not_applied",
+        "promotion_eligible": False,
+        "independent_confirmation_eligible": False,
+        "iwr_range_used": False,
+        "fallback": {
+            "mode": "broad_full_frame_unconditioned",
+            "reason_code": reason_code,
+            "reason": reason,
+        },
+    }
+
+
+def build_iwr_camera_search_hint(  # pylint: disable=too-many-locals
+    camera: BallPlaneCamera,
+    *,
+    radar_range_m: Any,
+    uncertainty_m: Any,
+    ball_center_height_m: float,
+    epoch_id: str,
+    source_epoch_id: str | None,
+    candidate_id: str | None,
+    source_input_identity: Mapping[str, Any] | None = None,
+    camera_input_identity: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Project a static-IWR range band into a non-promoting camera search hint."""
+    input_identity = _search_hint_input_identity(
+        camera,
+        epoch_id=epoch_id,
+        source_epoch_id=source_epoch_id,
+        candidate_id=candidate_id,
+        source_input_identity=source_input_identity,
+        camera_input_identity=camera_input_identity,
+    )
+    if not epoch_id:
+        return _rejected_search_hint(
+            input_identity=input_identity,
+            reason_code="active_epoch_missing",
+            reason="the active guided-flow epoch is missing",
+        )
+    if not candidate_id:
+        return _rejected_search_hint(
+            input_identity=input_identity,
+            reason_code="static_iwr_candidate_missing",
+            reason="no accepted static IWR candidate is available",
+        )
+    if source_epoch_id is None:
+        return _rejected_search_hint(
+            input_identity=input_identity,
+            reason_code="static_iwr_candidate_rejected",
+            reason="the static IWR candidate is not accepted for provisional guidance",
+        )
+    if source_epoch_id != epoch_id:
+        return _rejected_search_hint(
+            input_identity=input_identity,
+            reason_code="static_iwr_candidate_stale",
+            reason="static IWR candidate epoch does not match the active flow",
+        )
+    try:
+        radar_range = float(radar_range_m)
+        uncertainty = float(uncertainty_m)
+        ball_height = float(ball_center_height_m)
+    except (TypeError, ValueError):
+        return _rejected_search_hint(
+            input_identity=input_identity,
+            reason_code="static_iwr_numeric_input_invalid",
+            reason="static IWR range or uncertainty is not numeric",
+        )
+    if (
+        not math.isfinite(radar_range)
+        or not math.isfinite(uncertainty)
+        or uncertainty <= 0.0
+        or not _FULL_RADAR_RANGE_M[0] <= radar_range <= _FULL_RADAR_RANGE_M[1]
+        or not math.isfinite(ball_height)
+        or ball_height < 0.0
+    ):
+        return _rejected_search_hint(
+            input_identity=input_identity,
+            reason_code="static_iwr_physical_input_invalid",
+            reason="static IWR range, uncertainty, or ball height is invalid",
+        )
+    padding = max(_HINT_UNCERTAINTY_MULTIPLIER * uncertainty, _MIN_HINT_HALF_WIDTH_M)
+    support = (
+        max(_FULL_RADAR_RANGE_M[0], radar_range - padding),
+        min(_FULL_RADAR_RANGE_M[1], radar_range + padding),
+    )
+    if support[1] - support[0] >= _MAX_HINT_RANGE_WIDTH_M:
+        return _rejected_search_hint(
+            input_identity=input_identity,
+            reason_code="static_iwr_uncertainty_too_broad",
+            reason="static IWR uncertainty is too broad to reduce the camera search",
+        )
+
+    width = camera.image_width_px
+    height = camera.image_height_px
+    xs = np.linspace(0.0, width - 1.0, min(width, 65))
+    ys = np.arange(height, dtype=float)
+    grid_x, grid_y = np.meshgrid(xs, ys)
+    pixels = np.column_stack((grid_x.ravel(), grid_y.ravel()))
+    try:
+        rays = np.asarray(camera.ray_model.rays(pixels), dtype=float).reshape(height, -1, 3)
+    except (RuntimeError, TypeError, ValueError):
+        return _rejected_search_hint(
+            input_identity=input_identity,
+            reason_code="camera_projection_failed",
+            reason="camera geometry could not project the static IWR range band",
+        )
+    if not np.all(np.isfinite(rays)):
+        return _rejected_search_hint(
+            input_identity=input_identity,
+            reason_code="camera_projection_non_finite",
+            reason="camera geometry returned non-finite rays for the range band",
+        )
+    camera_origin = np.asarray(camera.camera_origin_lfu, dtype=float)
+    radar_origin = np.asarray(camera.radar_origin_lfu, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        distance = (ball_height - camera_origin[2]) / rays[..., 2]
+        points = camera_origin + distance[..., None] * rays
+        radar_ranges = np.linalg.norm(points - radar_origin, axis=-1)
+    valid = (
+        np.isfinite(radar_ranges)
+        & (distance > 0.0)
+        & (points[..., 1] > camera_origin[1])
+        & (radar_ranges >= support[0])
+        & (radar_ranges <= support[1])
+    )
+    rows = np.flatnonzero(np.any(valid, axis=1))
+    if not rows.size:
+        return _rejected_search_hint(
+            input_identity=input_identity,
+            reason_code="range_band_outside_camera_view",
+            reason="static IWR range band does not intersect the saved camera image",
+        )
+
+    origin_separation = float(np.linalg.norm(camera_origin - radar_origin))
+    camera_near = max(0.1, support[0] - origin_separation)
+    camera_far = support[1] + origin_separation
+    angular_large = 2.0 * math.asin(min(1.0, GOLF_BALL_DIAMETER_M / (2.0 * camera_near)))
+    angular_small = 2.0 * math.asin(min(1.0, GOLF_BALL_DIAMETER_M / (2.0 * camera_far)))
+    focal_margin = camera.focal_relative_uncertainty
+    smallest = camera.focal_size_px * max(0.5, 1.0 - focal_margin) * angular_small
+    largest = camera.focal_size_px * (1.0 + focal_margin) * angular_large
+    row_margin = int(math.ceil(largest / 2.0 + 4.0))
+    y0 = max(0, int(rows[0]) - row_margin)
+    y1 = min(height, int(rows[-1]) + row_margin + 1)
+    if (y1 - y0) / height >= _MAX_HINT_ROI_HEIGHT_FRACTION:
+        return _rejected_search_hint(
+            input_identity=input_identity,
+            reason_code="projected_roi_too_broad",
+            reason="projected IWR floor band is too broad to reduce the camera search",
+        )
+    return {
+        "schema": IWR_CAMERA_HINT_SCHEMA,
+        "status": "usable",
+        "reason_code": None,
+        "rejection_reasons": [],
+        "input_identity": input_identity,
+        "conditioning": "radar_guided_provisional_camera_search",
+        "source_range_m": radar_range,
+        "source_uncertainty_m": uncertainty,
+        "support_range_m": [support[0], support[1]],
+        "uncertainty": {
+            "source_standard_uncertainty_m": uncertainty,
+            "support_multiplier": _HINT_UNCERTAINTY_MULTIPLIER,
+            "minimum_half_width_m": _MIN_HINT_HALF_WIDTH_M,
+            "support_range_m": [support[0], support[1]],
+        },
+        "roi_px": [0, y0, width, y1],
+        "horizontal_basis": "full_saved_image_range_only_has_no_azimuth",
+        "expected_diameter_px": [smallest, largest],
+        "promotion_eligible": False,
+        "independent_confirmation_eligible": False,
+        "iwr_range_used": True,
+        "fallback": None,
+    }
+
+
 def ray_to_ball_center_plane(
     camera: BallPlaneCamera,
     pixel_xy: Any,
@@ -428,6 +649,7 @@ def estimate_reference_ball_range(
     ball_center_height_m: float,
     plausible_radar_range_m: tuple[float, float] = (0.5, 4.0),
     roi: tuple[int, int, int, int] | None = None,
+    expected_diameter_range_px: tuple[float, float] | None = None,
 ) -> ReferenceBallRangeResult:
     """Rank stationary sphere candidates without requiring a tape distance."""
     if frames.ndim != 3 or frames.shape[1:] != (
@@ -445,6 +667,10 @@ def estimate_reference_ball_range(
     camera_far = high + origin_separation
     largest = camera.focal_size_px * GOLF_BALL_DIAMETER_M / camera_near
     smallest = camera.focal_size_px * GOLF_BALL_DIAMETER_M / camera_far
+    if expected_diameter_range_px is not None:
+        smallest, largest = (float(value) for value in expected_diameter_range_px)
+        if not 0.0 < smallest < largest or not math.isfinite(smallest + largest):
+            raise ValueError("expected diameter range must be a finite positive interval")
     diameters = np.geomspace(smallest, largest, _DIAMETER_HYPOTHESES)
     observed = reference_ball_candidates(
         frames,
@@ -470,6 +696,7 @@ def estimate_reference_ball_range(
         "angular_uncertainty_deg": camera.angular_uncertainty_deg,
         "focal_relative_uncertainty": camera.focal_relative_uncertainty,
         "diameter_search_px": [float(smallest), float(largest)],
+        "roi_px": list(roi) if roi is not None else None,
         "observed_candidate_count": len(candidates),
         "plausible_candidate_count": len(plausible),
         "ambiguity_score_margin": margin,
