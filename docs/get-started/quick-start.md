@@ -40,11 +40,13 @@ The UI is at **`http://localhost:8080`** on the Pi, or
     scripts/start-kiosk.sh \
       --iwr6843 \
       --radar-port /dev/ttyAMA0 \
-      --iwr6843-tee-m 1.575 \
+      --iwr6843-tee-m <measured-slant-metres> \
       --iwr6843-net-m 4.6
     ```
 
-    The geometry values are examples. **Measure your own** — see
+    Replace the tee-range placeholder with the current measured placement. The
+    guided tester supplies a qualified automatic solution when one is available;
+    otherwise OpenFlight stays raw-only. See
     [mounting and geometry](../iwr6843/mounting.md).
 
 === "Swing speed only"

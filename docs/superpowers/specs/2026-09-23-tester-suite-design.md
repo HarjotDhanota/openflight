@@ -85,8 +85,9 @@ so a rung change inside one run is recorded per swing.
 - `LADDER`: the eight rungs above, with the mode, fps and exposure of each.
 - New job `ladder <mode>`: starts the kiosk with `--study-mode`, manual exposure,
   the mode's size and fps, IWR6843 with raw dumps, inclinometer and rig file, and
-  **no `--iwr6843-tee-m`**. Its live radar numbers fall back to the kiosk default;
-  the raw dumps let every radar number be recomputed later.
+  **no `--iwr6843-tee-m`**. It remains explicitly raw-only until the guided
+  workflow has a qualified tee-range solution; the raw dumps let every radar
+  number be recomputed later.
 - State per tester in `ladder.json`: current rung; per rung the gain applied, the
   pre-rung check, every swing's verdict and capture id, and skip reasons. The page
   and the package both read it.

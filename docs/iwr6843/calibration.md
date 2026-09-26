@@ -24,7 +24,7 @@ uv run \
   --ops-port /dev/ttyAMA0 \
   --iwr6843-port /dev/ttyUSB0 \
   --cfg config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg \
-  --tee-m 1.575 \
+  --tee-m <measured-slant-metres> \
   --net-m 4.6 \
   --tilt-deg 10.4 \
   --radar-height-m 0.1524 \
@@ -100,7 +100,7 @@ Replay a debug session JSONL:
 uv run python scripts/iwr6843/replay.py \
   --input ~/openflight_sessions/session_YYYYMMDD_HHMMSS_home.jsonl \
   --cfg config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg \
-  --tee-m 1.575 \
+  --tee-m <measured-slant-metres> \
   --net-m 4.6 \
   --tilt-deg 10.4 \
   --radar-height-m 0.1524 \
@@ -117,7 +117,7 @@ uv run python scripts/iwr6843/replay.py \
   --ball-speed-mph 105.9 \
   --cfg config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg \
   --club 9i \
-  --tee-m 1.575 \
+  --tee-m <measured-slant-metres> \
   --net-m 4.6 \
   --tilt-deg 10.4 \
   --radar-height-m 0.1524 \

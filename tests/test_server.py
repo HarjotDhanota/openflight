@@ -4609,6 +4609,127 @@ class TestBatteryConfiguration:
             parser.parse_args(["--battery", "unknown"])
 
 
+class TestIwrTeeRangeConfiguration:
+    """Range-dependent IWR output must never inherit a guessed placement."""
+
+    def test_cli_has_no_implicit_tee_range(self):
+        parser = argparse.ArgumentParser()
+        server_module._add_iwr_tee_range_arguments(parser)
+
+        assert parser.parse_args([]).iwr6843_tee_m is None
+
+    def test_cli_preserves_explicit_measured_tee_range(self):
+        parser = argparse.ArgumentParser()
+        server_module._add_iwr_tee_range_arguments(parser)
+
+        args = parser.parse_args(["--iwr6843-tee-m", "2.3368"])
+
+        assert args.iwr6843_tee_m == pytest.approx(2.3368)
+
+    @staticmethod
+    def _run_main_until_iwr_init(monkeypatch, tmp_path, extra_argv):
+        class StopAfterIwrInit(Exception):
+            pass
+
+        received = {}
+
+        def fake_init_iwr6843(**kwargs):
+            received.update(kwargs)
+            raise StopAfterIwrInit
+
+        monkeypatch.setattr(server_module, "init_iwr6843", fake_init_iwr6843)
+        monkeypatch.setattr(server_module, "init_session_logger", lambda **kwargs: None)
+        monkeypatch.setattr(server_module, "ball_speed_correction_enabled", None)
+        monkeypatch.setattr(server_module, "profile_store", None)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "openflight-server",
+                "--iwr6843",
+                "--no-logging",
+                "--profiles-path",
+                str(tmp_path / "profiles.json"),
+                *extra_argv,
+            ],
+        )
+
+        with pytest.raises(StopAfterIwrInit):
+            server_module.main()
+
+        return received
+
+    def test_production_launch_without_tee_range_stays_unresolved(self, monkeypatch, tmp_path):
+        received = self._run_main_until_iwr_init(monkeypatch, tmp_path, [])
+
+        assert received["tee_range_m"] is None
+        assert server_module.ball_speed_correction_enabled is False
+
+    def test_production_launch_passes_measured_tee_range_unchanged(self, monkeypatch, tmp_path):
+        received = self._run_main_until_iwr_init(
+            monkeypatch, tmp_path, ["--iwr6843-tee-m", "2.3368"]
+        )
+
+        assert received["tee_range_m"] == 2.3368
+        assert server_module.ball_speed_correction_enabled is True
+
+    def test_pending_flag_overrides_a_supplied_tee_range(self, monkeypatch, tmp_path):
+        received = self._run_main_until_iwr_init(
+            monkeypatch,
+            tmp_path,
+            ["--iwr6843-tee-m", "2.3368", "--iwr6843-tee-range-pending"],
+        )
+
+        assert received["tee_range_m"] is None
+        assert server_module.ball_speed_correction_enabled is False
+
+    def test_init_iwr6843_records_unresolved_tee_range(self, monkeypatch, tmp_path):
+        class FakeCaptureMonitor:
+            def __init__(self, **kwargs):
+                self.port = "/dev/ttyUSB0"
+
+            def start(self, *, armed=True):
+                return None
+
+            def stop(self):
+                return None
+
+        monkeypatch.setattr(Calibration, "load", lambda _path: Calibration.identity())
+        monkeypatch.setattr(
+            "openflight.iwr6843.monitor.IWR6843CaptureMonitor",
+            FakeCaptureMonitor,
+        )
+        monkeypatch.setattr(
+            "openflight.iwr6843.monitor.tx_order_from_config",
+            lambda _path: "normal",
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+        config_path = tmp_path / "snapshot.cfg"
+        calibration_path = tmp_path / "cal.json"
+        config_path.write_text("profileCfg 0\n", encoding="utf-8")
+        calibration_path.write_text("{}", encoding="utf-8")
+
+        assert server_module.init_iwr6843(
+            port="/dev/ttyUSB0",
+            config_path=str(config_path),
+            calibration_path=str(calibration_path),
+            output_dir=tmp_path,
+            trigger_pin=17,
+            tee_range_m=None,
+            net_range_m=4.6,
+            tx_order="auto",
+            capture_timeout_s=12.0,
+        )
+
+        runtime = server_module.iwr6843_runtime
+        assert runtime.calibration.tee_range_m is None
+        assert server_module.iwr6843_runtime_config["tee_range_status"] == "unresolved"
+        assert server_module.iwr6843_runtime_config["tee_slant_range_m"] is None
+        snapshot = runtime.replay_config_snapshot()
+        assert snapshot["tee_range_status"] == "unresolved"
+        assert snapshot["calibration"]["effective"]["tee_slant_range_m"] is None
+
+
 def test_kld7_device_symlinks_supply_stable_defaults(tmp_path):
     (tmp_path / "kld7_vertical").touch()
     (tmp_path / "kld7_horizontal").touch()

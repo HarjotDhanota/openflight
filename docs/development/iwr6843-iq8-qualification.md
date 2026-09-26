@@ -13,7 +13,7 @@ uv run python scripts/iwr6843/qualify_iq8.py \
   --cal config/iwr6843_calibration_reference.json \
   --iq16-config config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg \
   --iq8-config config/iwr6843_l3dump_dense_36f2ms_53bin_iq8.cfg \
-  --tee-m 1.575 --net-m 4.064
+  --tee-m <measured-slant-metres> --net-m 4.064
 ```
 
 The output path must not already exist. A complete offline comparison returns

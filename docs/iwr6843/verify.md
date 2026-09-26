@@ -19,7 +19,7 @@ scripts/start-kiosk.sh --debug \
   --iwr6843 \
   --iwr6843-port /dev/ttyUSB0 \
   --iwr6843-config config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg \
-  --iwr6843-tee-m 1.575 \
+  --iwr6843-tee-m <measured-slant-metres> \
   --iwr6843-net-m 4.6 \
   --iwr6843-tilt-deg 10.4 \
   --iwr6843-radar-height-m 0.1524 \
@@ -45,7 +45,9 @@ use the experimental profile:
 ```
 
 Passing `--iwr6843-config` explicitly keeps the selected profile visible in the
-launch command and session log.
+launch command and session log. There is no tee-range default: replace the
+placeholder with the current measurement, or omit the option to preserve raw
+captures while withholding range-dependent metrics.
 
 The OPS port can also be supplied as `--ops-port /dev/ttyAMA0`. `--port` means
 the web-server port, so do not use it for the OPS serial device.

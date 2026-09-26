@@ -52,6 +52,12 @@ OpenFlight needs these physical inputs:
 | `--iwr6843-radar-height-m` | Antenna-center height above the floor reference |
 | `--iwr6843-ball-height-m` | Ball-center height above the same floor reference |
 
+There is no tee-range default. A manual launch must pass the current measured
+slant range. The guided tester passes its own solution only when the placement
+qualifies; otherwise OpenFlight saves raw captures and withholds every
+range-dependent metric. Passing software tests does not establish the physical
+accuracy of the automatic range; that still requires validation on the Pi.
+
 Measurement guidance:
 
 - Measure from the antenna center, not the enclosure edge or mounting feet.

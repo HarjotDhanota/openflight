@@ -67,7 +67,8 @@ The supported angle radar.
 | `--iwr6843-config` | default `config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg` | TI RF config matching the flashed L3 firmware |
 | `--iwr6843-cal` | default `config/iwr6843_calibration_reference.json` | TI complex array/range calibration JSON |
 | `--iwr6843-trigger-pin` | int; default `17` | BCM GPIO receiving the shared sound-trigger edge (default: 17) |
-| `--iwr6843-tee-m` | float; default `1.575` | Antenna-center to tee slant range in metres (default: 1.575) |
+| `--iwr6843-tee-m` | float; no default | Measured antenna-center to tee slant range in metres. If omitted, OpenFlight saves raw TI captures but withholds range-dependent metrics. |
+| `--iwr6843-tee-range-pending` | flag | Explicitly mark the tee range unresolved and run raw-only, even if another launch wrapper supplied a range. |
 | `--iwr6843-net-m` | float; default `4.6` | Antenna-center to net range in metres (default: 4.6) |
 | `--iwr6843-tilt-deg` | float | Override mount tilt from the TI calibration JSON |
 | `--iwr6843-radar-height-m` | float | Override antenna-center height from the TI calibration JSON |

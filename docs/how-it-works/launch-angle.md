@@ -267,7 +267,7 @@ Driver needs an additional speed sanity check before any confidence badge. The w
 
 - club**Keep club speed with OPS, but start collecting club-delivery evidence.** A split pre-impact/post-impact firmware mode may expose attack angle and club path research signals without pretending the TI board is the club-speed authority.
 - aim**Add TX2 for horizontal launch and shank classification.** Far-right shots should eventually be recognized as far-right shots, not forced through a purely vertical interpretation.
-- inputs**Harden tee distance, mount tilt, radar height, ball height, mat height, and net distance.** The app should support measured settings, defaults, and radar sanity checks that warn when the actual session appears to drift.
+- inputs**Harden tee distance, mount tilt, radar height, ball height, mat height, and net distance.** The app should support measured settings, an explicit unresolved state, and radar sanity checks that warn when the actual session appears to drift.
 
 **DIY setup variables**
 

@@ -5398,6 +5398,27 @@ def _add_battery_arguments(parser):
     )
 
 
+def _add_iwr_tee_range_arguments(parser):
+    """Add IWR tee-range inputs without guessing the physical placement."""
+    parser.add_argument(
+        "--iwr6843-tee-m",
+        type=float,
+        default=None,
+        help=(
+            "Measured antenna-center to tee slant range in metres. When omitted, "
+            "raw TI captures are saved but range-dependent metrics are withheld."
+        ),
+    )
+    parser.add_argument(
+        "--iwr6843-tee-range-pending",
+        action="store_true",
+        help=(
+            "Capture raw TI evidence without a resolved tee range; withhold "
+            "range-dependent launch and club metrics"
+        ),
+    )
+
+
 def _apply_kld7_device_defaults(args, dev_root: Path = Path("/dev")) -> None:
     """Preserve kiosk symlink discovery while keeping CLI policy in the server."""
     vertical = dev_root / "kld7_vertical"
@@ -5749,20 +5770,7 @@ def main():
         default=17,
         help="BCM GPIO receiving the shared sound-trigger edge (default: 17)",
     )
-    parser.add_argument(
-        "--iwr6843-tee-m",
-        type=float,
-        default=1.575,
-        help="Antenna-center to tee slant range in metres (default: 1.575)",
-    )
-    parser.add_argument(
-        "--iwr6843-tee-range-pending",
-        action="store_true",
-        help=(
-            "Capture raw TI evidence without a resolved tee range; withhold "
-            "range-dependent launch and club metrics"
-        ),
-    )
+    _add_iwr_tee_range_arguments(parser)
     parser.add_argument(
         "--iwr6843-net-m",
         type=float,

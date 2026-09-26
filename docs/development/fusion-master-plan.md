@@ -1049,6 +1049,11 @@ product acceptance limits. Promotion remains gated on that independent evidence.
   revalidates its digest-bound solution and freezes one command for both modes.
   Missing qualification or disagreement stays raw-only; tape remains Advanced
   validation. Software tests do not establish Pi operation or range accuracy.
+- Production tee-range fail-closed policy (M1/M2, TB07): the generic server no
+  longer supplies a fixed IWR tee distance. An explicit measured value passes
+  through unchanged; omission remains unresolved and therefore raw-only. The
+  guided tester still selects only a digest-bound, qualified automatic solution.
+  This removes the legacy fallback but does not qualify automatic-range accuracy.
 - Moving-range replay diagnostics (M1/M2, TB07/TB10/TB12): raw replay now
   preserves the tee-independent IWR fit as a full fitted range/time series and
   records a structured withheld result unless impact timing proves independence

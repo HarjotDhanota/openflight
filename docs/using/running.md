@@ -43,15 +43,16 @@ on the Pi GPIO UART — the IWR6843 needs the USB bus.
 scripts/start-kiosk.sh \
   --iwr6843 \
   --radar-port /dev/ttyAMA0 \
-  --iwr6843-tee-m 1.575 \
+  --iwr6843-tee-m <measured-slant-metres> \
   --iwr6843-net-m 4.6 \
   --iwr6843-ball-height-m 0.040
 ```
 
 !!! warning "Measure your own geometry"
 
-    The distances above are examples from one rig. Wrong geometry silently
-    corrupts the launch angle rather than failing loudly. See
+    Replace the tee-range placeholder with the current measured placement.
+    Omitting it intentionally keeps IWR capture raw-only and withholds
+    range-dependent output. See
     [mounting and geometry](../iwr6843/mounting.md#measure-the-geometry).
 
 Add `--inclinometer` if you have fitted the LIS3DH, so enclosure tilt is
