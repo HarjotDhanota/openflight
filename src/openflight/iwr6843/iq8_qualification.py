@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import re
 import statistics
@@ -22,6 +23,8 @@ from openflight.iwr6843.dump import (
 from openflight.iwr6843.replay import build_replay_calibration
 from openflight.iwr6843.runtime import process_raw_capture
 from openflight.runtime_provenance import source_content_manifest_sha256
+
+logger = logging.getLogger(__name__)
 
 MANIFEST_SCHEMA = "openflight.iwr6843_iq_pair_manifest.v2"
 REPORT_SCHEMA = "openflight.iwr6843_iq8_qualification.v2"
@@ -109,16 +112,31 @@ def _profile_contract(path: Path) -> dict[str, Any]:
         command_rows.append(fields)
     try:
         frame = commands["frameCfg"]
-        phase = commands["phaseCaptureCfg"]
+        phase = [int(value) for value in commands["phaseCaptureCfg"]]
         capture_format = commands["captureFormat"][0]
+        n_tx, loops = int(frame[1]) - int(frame[0]) + 1, int(frame[2])
+        period_us = round(float(frame[4]) * 1000)
+        pre_frames, impact_frames, ball_frames = phase[2], phase[5], phase[9]
+        schedule = (
+            [(phase[0], phase[1])] * pre_frames
+            + [(phase[3], phase[4])] * impact_frames
+            + [(phase[6], phase[7])] * (ball_frames // 2)
+            + [(phase[8], phase[7])] * (ball_frames - ball_frames // 2)
+        )
+        offsets = [0]
+        for index in range(1, len(schedule)):
+            offsets.append(
+                offsets[-1] + period_us * (phase[10] if index > pre_frames + impact_frames else 1)
+            )
         contract = {
             "capture_format": capture_format,
-            "n_tx": int(frame[1]) - int(frame[0]) + 1,
-            "loops": int(frame[2]),
-            "frame_period_us": round(float(frame[4]) * 1000),
-            "n_frames": int(phase[2]) + int(phase[5]) + int(phase[9]),
-            "window_widths": [int(phase[1]), int(phase[4]), int(phase[7])],
-            "window_starts": [int(phase[0]), int(phase[3]), int(phase[6]), int(phase[8])],
+            "n_tx": n_tx,
+            "loops": loops,
+            "chirps_per_frame": n_tx * loops,
+            "frame_period_us": period_us,
+            "n_frames": len(schedule),
+            "phase_schedule": schedule,
+            "frame_time_offsets_us": offsets,
         }
     except (KeyError, IndexError, ValueError) as error:
         raise ValueError(f"cannot derive capture contract from {path.name}") from error
@@ -145,11 +163,19 @@ def _validate_profile(
             "iq8" if metadata["sample_fmt"] == SAMPLE_RANGE_FFT_IQ8_VARIABLE_TIMED else "iq16"
         ),
         "n_tx": metadata["n_tx"],
+        "chirps_per_frame": metadata["chirps_per_frame"],
         "loops": metadata["chirps_per_frame"] // metadata["n_tx"],
         "frame_period_us": metadata["frame_period_us"],
         "n_frames": metadata["n_frames"],
     }
-    for field in ("capture_format", "n_tx", "loops", "frame_period_us", "n_frames"):
+    for field in (
+        "capture_format",
+        "n_tx",
+        "chirps_per_frame",
+        "loops",
+        "frame_period_us",
+        "n_frames",
+    ):
         if contract[field] != observed[field]:
             raise ValueError(
                 f"{representation} capture {input_id} conflicts with profile {field}: "
@@ -157,12 +183,11 @@ def _validate_profile(
             )
     if contract["capture_format"] != expected_format:
         raise ValueError(f"{representation} profile declares {contract['capture_format']}")
-    if any(count not in contract["window_widths"] for count in metadata["range_bin_counts"]):
-        raise ValueError(f"{representation} capture {input_id} has bins outside the profile widths")
-    if any(start not in contract["window_starts"] for start in metadata["range_bin_starts"]):
-        raise ValueError(
-            f"{representation} capture {input_id} has starts outside the profile windows"
-        )
+    observed_schedule = list(zip(metadata["range_bin_starts"], metadata["range_bin_counts"]))
+    if observed_schedule != contract["phase_schedule"]:
+        raise ValueError(f"{representation} capture {input_id} conflicts with phase schedule")
+    if list(metadata["frame_time_offsets_us"]) != contract["frame_time_offsets_us"]:
+        raise ValueError(f"{representation} capture {input_id} conflicts with phase timing")
     if representation == "iq8" and any(
         scale != contract["iq8_scale"] for scale in metadata["iq8_scales"]
     ):
@@ -612,11 +637,9 @@ def _same_event_metrics(iq16: dict[str, Any], iq8: dict[str, Any]) -> dict[str, 
             "iq16": baseline,
             "iq8": candidate,
             "both_available": both_available,
-            "status_agreement": (
-                both_available
-                and baseline["status"] is not None
-                and baseline["status"] == candidate["status"]
-            ),
+            "status_comparable": baseline["status"] is not None and candidate["status"] is not None,
+            "status_agreement": baseline["status"] is not None
+            and baseline["status"] == candidate["status"],
             "delta_iq8_minus_iq16": delta,
             "absolute_delta": abs(delta) if delta is not None else None,
         }
@@ -646,11 +669,9 @@ def _reference_metrics(iq16: dict[str, Any], iq8: dict[str, Any]) -> dict[str, A
             **sides,
             "reference_declared": all(sides[item]["reference_value"] is not None for item in sides),
             "both_reference_errors_available": both_errors,
-            "status_agreement": (
-                both_errors
-                and sides["iq16"]["status"] is not None
-                and sides["iq16"]["status"] == sides["iq8"]["status"]
-            ),
+            "status_comparable": all(sides[item]["status"] is not None for item in sides),
+            "status_agreement": sides["iq16"]["status"] is not None
+            and sides["iq16"]["status"] == sides["iq8"]["status"],
             "absolute_error_delta_iq8_minus_iq16": (
                 sides["iq8"]["absolute_error"] - sides["iq16"]["absolute_error"]
                 if both_errors
@@ -742,33 +763,34 @@ def _metric_aggregate(pairs: list[dict[str, Any]], *, reference: bool) -> dict[s
     result = {}
     for metric in _METRIC_FIELDS:
         records = [pair["comparison"]["estimators"]["metrics"][metric] for pair in pairs]
-        denominator = (
-            sum(record["reference_declared"] for record in records) if reference else len(records)
-        )
-        iq16_available = sum(record["iq16"]["available"] for record in records)
-        iq8_available = sum(record["iq8"]["available"] for record in records)
-        status_agreement = sum(record["status_agreement"] for record in records)
+        eligible = [record for record in records if not reference or record["reference_declared"]]
+        denominator = len(eligible)
+        iq16_available = sum(record["iq16"]["available"] for record in eligible)
+        iq8_available = sum(record["iq8"]["available"] for record in eligible)
+        status_comparable = sum(record["status_comparable"] for record in eligible)
+        status_agreement = sum(record["status_agreement"] for record in eligible)
         common = {
             "declared_pairs": denominator,
             "iq16_available_count": iq16_available,
             "iq16_availability_rate": _rate(iq16_available, denominator),
             "iq8_available_count": iq8_available,
             "iq8_availability_rate": _rate(iq8_available, denominator),
+            "status_comparable_count": status_comparable,
             "status_agreement_count": status_agreement,
-            "status_agreement_rate": _rate(status_agreement, denominator),
+            "status_agreement_rate": _rate(status_agreement, status_comparable),
         }
         if reference:
             iq16_errors = [
                 record["iq16"]["signed_error"]
-                for record in records
+                for record in eligible
                 if record["iq16"]["signed_error"] is not None
             ]
             iq8_errors = [
                 record["iq8"]["signed_error"]
-                for record in records
+                for record in eligible
                 if record["iq8"]["signed_error"] is not None
             ]
-            both = sum(record["both_reference_errors_available"] for record in records)
+            both = sum(record["both_reference_errors_available"] for record in eligible)
             result[metric] = {
                 **common,
                 "both_reference_errors_count": both,
@@ -983,30 +1005,27 @@ def build_qualification_report(  # pylint: disable=too-many-arguments
             "pair_id": declared["pair_id"],
             "match_basis": declared["match_basis"],
         }
+        stage, representation, input_id = "pair_provenance", None, declared["pair_id"]
         try:
             if declared["match_basis"] in _SAME_EVENT_BASES:
                 pair["comparison_provenance"] = _shared_provenance_for_report(declared, source_path)
-            pair["iq16"] = _evaluate_capture(
-                "iq16",
-                declared["iq16"],
-                source_path,
-                calibration,
-                runtime,
-                profile_contracts["iq16"],
-                baud,
-            )
-            pair["iq8"] = _evaluate_capture(
-                "iq8",
-                declared["iq8"],
-                source_path,
-                calibration,
-                runtime,
-                profile_contracts["iq8"],
-                baud,
-            )
+            for representation in ("iq16", "iq8"):
+                stage = "capture_evaluation"
+                input_id = _normalized_declared_path(declared[representation]["path"])
+                pair[representation] = _evaluate_capture(
+                    representation,
+                    declared[representation],
+                    source_path,
+                    calibration,
+                    runtime,
+                    profile_contracts[representation],
+                    baud,
+                )
             if declared["match_basis"] in _SAME_EVENT_BASES:
+                stage, representation, input_id = "comparability", None, declared["pair_id"]
                 _validate_observed_comparability(declared, pair)
             else:
+                stage, representation, input_id = "reference_provenance", None, declared["pair_id"]
                 pair["reference_match"] = _reference_match_for_report(declared, source_path)
                 for representation in ("iq16", "iq8"):
                     pair[representation].update(
@@ -1017,11 +1036,19 @@ def build_qualification_report(  # pylint: disable=too-many-arguments
                             declared["pair_id"],
                         )
                     )
+            stage = "comparison"
             pair["comparison"] = _compare_pair(declared["match_basis"], pair["iq16"], pair["iq8"])
             pair["status"] = "compared"
         except Exception as error:  # Pair failures belong in the evidence artifact.
+            logger.warning("IQ pair %s failed at %s: %s", declared["pair_id"], stage, error)
             pair["status"] = "error"
-            pair["error"] = f"{type(error).__name__}: {error}"
+            pair["failure"] = {
+                "code": f"{stage}_failed",
+                "exception_type": type(error).__name__,
+                "stage": stage,
+                "representation": representation,
+                "input_id": input_id,
+            }
         pairs.append(pair)
     aggregate = _aggregate(pairs)
     manifest_contract = {

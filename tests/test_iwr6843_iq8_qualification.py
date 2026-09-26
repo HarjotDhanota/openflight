@@ -37,7 +37,7 @@ def _config(path: Path, capture_format: str) -> None:
                 "frameCfg 0 2 12 0 2 1 0",
                 f"captureFormat {capture_format}",
                 scale.rstrip(),
-                "phaseCaptureCfg 20 7 1 20 7 1 20 7 20 2 1",
+                "phaseCaptureCfg 20 7 1 30 6 1 40 5 50 2 2",
                 "sensorStart",
             ]
         ).replace("\n\n", "\n")
@@ -54,9 +54,9 @@ def _pair_files(tmp_path: Path) -> tuple[Path, Path]:
         "n_tx": 3,
         "version": 6,
         "frame_period_us": 2000,
-        "range_bin_starts": (20, 20, 20, 20),
-        "range_bin_counts": (7, 7, 7, 7),
-        "frame_time_offsets_us": (0, 2000, 4000, 6000),
+        "range_bin_starts": (20, 30, 40, 50),
+        "range_bin_counts": (7, 6, 5, 5),
+        "frame_time_offsets_us": (0, 2000, 4000, 8000),
     }
     iq16 = tmp_path / "pair-iq16.l3dump"
     iq8 = tmp_path / "pair-iq8.l3dump"
@@ -156,7 +156,7 @@ def _manifest(
     return path
 
 
-def _report(tmp_path: Path, monkeypatch=None) -> dict:
+def _report(tmp_path: Path, monkeypatch=None, *, missing: str | None = None) -> dict:
     tmp_path.mkdir(parents=True, exist_ok=True)
     iq16, iq8 = _pair_files(tmp_path)
     iq16_config = tmp_path / "iq16.cfg"
@@ -164,6 +164,8 @@ def _report(tmp_path: Path, monkeypatch=None) -> dict:
     _config(iq16_config, "iq16")
     _config(iq8_config, "iq8")
     manifest = _manifest(tmp_path, iq16, iq8, iq16_config, iq8_config)
+    if missing:
+        {"iq16": iq16, "iq8": iq8}[missing].unlink()
     if monkeypatch is not None:
         calls = []
 
@@ -240,7 +242,7 @@ def test_synthetic_pair_runs_the_complete_current_estimator_path(tmp_path):
     report = _report(tmp_path)
 
     pair = report["pairs"][0]
-    assert pair["status"] == "compared", pair.get("error")
+    assert pair["status"] == "compared", pair.get("failure")
     for representation in ("iq16", "iq8"):
         estimators = pair[representation]["estimators"]
         assert estimators["ball"]["estimator"] == "lcmf_v1"
@@ -279,9 +281,32 @@ def test_profile_mismatch_is_preserved_as_failed_evidence(tmp_path, monkeypatch)
     )
 
     assert report["pairs"][0]["status"] == "error"
-    assert "frame_period_us" in report["pairs"][0]["error"]
+    assert report["pairs"][0]["failure"]["code"] == "capture_evaluation_failed"
     assert report["qualification"]["criteria"][0]["passed"] is False
     assert report["qualification"]["evidence_status"] == "incomplete"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("chirps_per_frame", 35),
+        ("range_bin_starts", (30, 20, 40, 50)),
+        ("range_bin_counts", (6, 7, 5, 5)),
+        ("n_frames", 5),
+        ("frame_time_offsets_us", (0, 2000, 4000, 6000)),
+    ],
+)
+def test_profile_requires_exact_chirps_phase_schedule_and_timing(tmp_path, field, value):
+    iq16, _iq8 = _pair_files(tmp_path)
+    config = tmp_path / "iq16.cfg"
+    _config(config, "iq16")
+    metadata, _cube = parse_dump(iq16.read_bytes())
+    metadata[field] = value
+
+    with pytest.raises(ValueError):
+        qualification._validate_profile(
+            "iq16", metadata, qualification._profile_contract(config), iq16
+        )
 
 
 def test_manifest_refuses_incomplete_or_unverified_provenance(tmp_path):
@@ -352,7 +377,7 @@ def test_declared_cadence_must_match_both_parsed_dumps(tmp_path, monkeypatch):
     )
 
     assert report["pairs"][0]["status"] == "error"
-    assert "declared cadence identity" in report["pairs"][0]["error"]
+    assert report["pairs"][0]["failure"]["code"] == "comparability_failed"
 
 
 def test_evidence_hash_is_relocation_and_clock_independent(tmp_path, monkeypatch):
@@ -366,6 +391,25 @@ def test_evidence_hash_is_relocation_and_clock_independent(tmp_path, monkeypatch
 
     assert first == second
     assert first["evidence_sha256"] == second["evidence_sha256"]
+
+
+def test_missing_pair_input_failure_is_relocation_identical(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        qualification,
+        "_repository_identity",
+        lambda _root: {"source_content_manifest_sha256": "f" * 64},
+    )
+    first = _report(tmp_path / "first", monkeypatch, missing="iq8")
+    second = _report(tmp_path / "second", monkeypatch, missing="iq8")
+
+    assert first == second
+    assert first["pairs"][0]["failure"] == {
+        "code": "capture_evaluation_failed",
+        "exception_type": "FileNotFoundError",
+        "stage": "capture_evaluation",
+        "representation": "iq8",
+        "input_id": "pair-iq8.l3dump",
+    }
 
 
 def test_distinct_swings_compare_each_estimate_only_to_its_reference(tmp_path, monkeypatch):
@@ -462,6 +506,52 @@ def test_distinct_swings_compare_each_estimate_only_to_its_reference(tmp_path, m
     assert aggregate["declared_pairs"] == 1
     assert aggregate["iq16_error_to_reference"]["mae"] == pytest.approx(0.5)
     assert aggregate["iq8_error_to_reference"]["mae"] == pytest.approx(0.25)
+
+
+def test_reference_aggregate_scopes_availability_and_status_denominators():
+    def capture(reference, value, status):
+        return {
+            "estimators": {
+                "ball": {
+                    "launch_angle_deg": value,
+                    "horizontal_deg": value,
+                    "status": status,
+                    "horizontal_status": status,
+                },
+                "club": {
+                    "path_deg": value,
+                    "candidate_attack_angle_deg": value,
+                    "status": status,
+                    "attack_angle_status": status,
+                },
+            },
+            "reference": {"metrics": reference},
+        }
+
+    def pair(reference, value, statuses):
+        metrics = qualification._reference_metrics(
+            capture(reference, value, statuses[0]), capture(reference, value, statuses[1])
+        )
+        return {"comparison": {"estimators": {"metrics": metrics}}}
+
+    aggregate = qualification._metric_aggregate(
+        [
+            pair({"launch_angle_deg": 18.0}, None, ("rejected", "rejected")),
+            pair({"horizontal_deg": 1.0}, 1.0, (None, "accepted")),
+        ],
+        reference=True,
+    )
+    launch, horizontal, attack = (
+        aggregate[name] for name in ("launch_angle_deg", "horizontal_deg", "attack_angle_deg")
+    )
+    assert (launch["declared_pairs"], launch["iq16_available_count"]) == (1, 0)
+    assert (launch["status_comparable_count"], launch["status_agreement_rate"]) == (1, 1.0)
+    assert (
+        horizontal["status_comparable_count"] == 0 and horizontal["status_agreement_rate"] is None
+    )
+    assert horizontal["both_reference_errors_rate"] == 1.0
+    assert attack["declared_pairs"] == attack["iq16_available_count"] == 0
+    assert attack["iq16_availability_rate"] is None
 
 
 def test_cli_writes_deterministic_incomplete_evidence_and_returns_nonzero(tmp_path, monkeypatch):

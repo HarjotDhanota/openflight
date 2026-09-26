@@ -64,8 +64,8 @@ For `same_event_derived_encoding`, change the source kind to `recorded_event`.
 Give one transformation `captured_event`; give the other `derived_encoding`
 and `"source_representation": "iq16"` (or `iq8`). Profile identity is the
 canonical hash of configuration commands excluding only representation and
-IQ8 scale. Cadence identity hashes parsed frame count/timing, chirp and antenna
-geometry, trigger frame, and per-frame range windows. Both observed hashes must
+IQ8 scale. Cadence identity hashes exact chirp count, ordered phase windows and
+stride-derived frame timing with the remaining capture geometry. Both hashes must
 equal the declarations, so the shipped wide-IQ16 and dense-IQ8 profiles cannot
 be presented as same-cadence encodings.
 
@@ -97,8 +97,9 @@ configuration, calibration, source, and provenance hashes. It excludes local
 paths, timestamps, Git state, and uncontrolled processing duration.
 `qualification.evidence_status=complete` means only that the declared offline
 contract was comparable and every pair processed. The report always keeps
-`hardware_qualified=false`, `production_eligible=false`, and
-`production_default_may_change=false`.
+`hardware_qualified=false`, `production_eligible=false`, and production-default
+changes disabled. Metric availability uses only reference-eligible records;
+status agreement uses its explicit status-comparable denominator.
 
 Transport evidence reports sample payload and total dump bytes, reduction
 fractions, and modeled UART time. The UART model is bytes times 10 bits (8N1)
