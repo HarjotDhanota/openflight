@@ -918,3 +918,50 @@ for (const viewport of KIOSK_VIEWPORTS) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 }
+
+for (const viewport of KIOSK_VIEWPORTS) {
+  test(`a lighting failure offers an unqualified raw-evidence save at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    const state = {
+      epoch_id: 'epoch-dark',
+      phase: 'camera_arm5_capturing',
+      reason: 'camera_arm5_warming',
+      evidence: {},
+      solution: null,
+    };
+    await base(page, state);
+    let display = guidedDisplay('lighting_required', {
+      reason: 'no visible setting passed the ball-pixel gates',
+    });
+    await page.route('**/api/tester/live', (route) =>
+      json(route, {
+        running: true,
+        arm_id: 'arm5',
+        owner: { kind: 'guided_tee_range', tester_id: '20260922-name', epoch_id: 'epoch-dark', arm_id: 'arm5' },
+        stats: { mean: 21.3, p99: 30, max: 38, clipped_pct: 0 },
+        association: { status: 'not_found', selected: null, save_eligible: false },
+        guided_display: display,
+      })
+    );
+    const posted: string[] = [];
+    await page.route('**/api/tester/tee-range**', (route) => {
+      if (route.request().method() === 'GET') return json(route, { state, display: rangeDisplay(state) });
+      posted.push(route.request().postDataJSON().action);
+      return json(route, { state, display: rangeDisplay(state) });
+    });
+    await page.goto('/tester.html');
+
+    const diagnostic = page.locator('#tee-range-diagnostic');
+    await diagnostic.scrollIntoViewIfNeeded();
+    await expect(diagnostic).toBeVisible();
+    await expect(page.locator('#tee-range-action')).toBeDisabled();
+    const box = await diagnostic.boundingBox();
+    expect(box!.height).toBeGreaterThanOrEqual(44);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width);
+    await diagnostic.tap();
+    await expect.poll(() => posted).toEqual(['save_camera_arm5_diagnostic']);
+
+    display = guidedDisplay('exposure_locked');
+    await expect(diagnostic).toBeHidden();
+  });
+}

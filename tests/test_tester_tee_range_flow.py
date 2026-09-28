@@ -596,6 +596,23 @@ def test_static_exposure_locks_the_lowest_passing_setting_before_camera_save(
     assert controls["applied_gain"] == lock["applied_gain"]
 
 
+def test_a_static_exposure_lock_never_reaches_swing_capture(tmp_path, inputs, monkeypatch):
+    monkeypatch.setattr(ts.Path, "home", classmethod(lambda _cls: tmp_path / "home"))
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+
+    state = drive(app.test_client(), tester)
+
+    for arm_id in ("arm5", "arm6"):
+        lock = state["evidence"][f"camera_{arm_id}_static_exposure"]["lock"]
+        params = ts.TesterParameters(tester, arm_id, "indoors")
+        swing_gain, swing_exposure_us = ts.resolve_gain(tmp_path / "sessions", params)
+        arm_state = ts.read_arm_state(tmp_path / "sessions", tester, arm_id)
+        assert (swing_exposure_us, swing_gain) == (params.arm.exposure_us, 4.0)
+        assert (lock["exposure_us"], lock["gain"]) != (swing_exposure_us, swing_gain)
+        assert "static_exposure" not in json.dumps(arm_state)
+    assert not list((tmp_path / "home").rglob("camera-exposure.json"))
+
+
 def test_dark_scene_requires_light_and_blocks_camera_save(tmp_path, inputs, monkeypatch):
     live = FakeLive()
     live.ball_per_signal = 0.0001
@@ -610,6 +627,45 @@ def test_dark_scene_requires_light_and_blocks_camera_save(tmp_path, inputs, monk
     assert "no visible setting passed the ball-pixel gates" in response.get_json()["error"]
     assert association["static_exposure"]["status"] == "lighting_required"
     assert association["save_eligible"] is False
+    assert phase(client, tester)["phase"] == "camera_arm5_capturing"
+
+
+def test_a_dark_camera_view_can_be_kept_as_unqualified_raw_evidence(tmp_path, inputs, monkeypatch):
+    live = FakeLive()
+    live.ball_per_signal = 0.0001
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    start_arm5(client, tester)
+
+    response = post(client, tester, "save_camera_arm5_diagnostic", "dark-diagnostic")
+    state = phase(client, tester)
+
+    saved = state["evidence"]["camera_arm5_diagnostic_capture"]
+    path = (
+        tee_range_flow.FlowStore(ts.tester_root(tmp_path / "sessions", tester)).epoch_dir(
+            state["epoch_id"]
+        )
+        / saved["file"]
+    )
+    assert response.status_code == 200
+    assert state["phase"] == "raw_only"
+    assert state["solution"]["status"] == "unresolved"
+    assert state["solution"]["reason"] == "camera_arm5_lighting_required_raw_evidence_only"
+    assert saved["qualified"] is False
+    assert saved["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert "camera_arm5_candidate" not in state["evidence"]
+    assert live.running is False
+
+
+def test_the_diagnostic_save_is_refused_when_the_light_is_usable(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    start_arm5(client, tester)
+
+    response = post(client, tester, "save_camera_arm5_diagnostic", "usable-diagnostic")
+
+    assert response.status_code == 409
+    assert "only for a lighting failure" in response.get_json()["error"]
     assert phase(client, tester)["phase"] == "camera_arm5_capturing"
 
 

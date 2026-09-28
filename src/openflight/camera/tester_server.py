@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import logging
 import math
@@ -4315,6 +4316,68 @@ def create_app(
         )
         return _finalize_range_state(store, completed)
 
+    def _save_camera_diagnostic(tester_id: str, arm_id: str, request_id: str):
+        """Keep an unusable camera view as unqualified raw evidence and finish raw-only."""
+        store = range_store(tester_id)
+        state = _range_state(tester_id)
+        expected = f"camera_{arm_id}_capturing"
+        if state is None or state.phase != expected:
+            raise RuntimeError(f"tee-range setup is {state.phase if state else 'not_started'}")
+        if request_id in state.request_ids:
+            return state
+        if not guided_live_matches(tester_id, state.epoch_id, arm_id):
+            raise RuntimeError(f"camera {arm_id} is no longer owned by this guided range capture")
+        with live_owner_lock:
+            analyzer = guided_analyzer["value"]
+        if analyzer is None:
+            raise RuntimeError(f"camera {arm_id} has no guided exposure search")
+        exposure = analyzer.status()
+        if exposure["status"] != "lighting_required":
+            raise RuntimeError(
+                f"camera {arm_id} diagnostic save is only for a lighting failure; use Save"
+            )
+        context = live.capture_context_snapshot()
+        frames = context.get("frames")
+        if frames is None:
+            raise RuntimeError(f"camera {arm_id} has no frames to preserve yet")
+        applied = [list(item) for item in context.get("applied_controls") or []]
+        capture_id = str(state.evidence[f"camera_{arm_id}_capture_setup"]["capture_id"])
+        buffer = io.BytesIO()
+        np.savez_compressed(buffer, frames=np.ascontiguousarray(frames))
+        payload = buffer.getvalue()
+        path = store.epoch_dir(state.epoch_id) / f"camera-{capture_id}-diagnostic.npz"
+        if path.exists() and path.read_bytes() != payload:
+            raise FileExistsError(f"diagnostic evidence already exists for attempt {capture_id}")
+        if not path.exists():
+            atomic_write(path, payload)
+        reason = f"camera_{arm_id}_lighting_required_raw_evidence_only"
+        candidates = [
+            tee_range.TeeRangeCandidate.from_dict(state.evidence[key])
+            for key in ("iwr_candidate", "camera_arm5_candidate")
+            if isinstance(state.evidence.get(key), Mapping)
+        ]
+        completed = store.transition(
+            state,
+            phase="evaluating",
+            reason=reason,
+            request_id=request_id,
+            evidence={
+                f"camera_{arm_id}_static_exposure": exposure,
+                f"camera_{arm_id}_diagnostic_capture": {
+                    "capture_id": capture_id,
+                    "file": path.name,
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "frame_count": int(len(frames)),
+                    "applied_controls": applied,
+                    "qualified": False,
+                    "label": "unqualified diagnostic raw evidence: lighting required",
+                },
+            },
+        )
+        return store.finalize(
+            completed, tee_range.TeeRangeSolution.unresolved(candidates, reason=reason)
+        )
+
     @app.route("/api/tester/tee-range", methods=["GET", "POST"])
     def guided_tee_range():
         payload = request.get_json(silent=True) if request.method == "POST" else request.args
@@ -4356,6 +4419,8 @@ def create_app(
                     "start_camera_arm6",
                     "evaluate_camera_arm5",
                     "evaluate_camera_arm6",
+                    "save_camera_arm5_diagnostic",
+                    "save_camera_arm6_diagnostic",
                     "retry",
                 }
                 if action not in actions:
@@ -4388,6 +4453,9 @@ def create_app(
                 elif action in {"evaluate_camera_arm5", "evaluate_camera_arm6"}:
                     bound_range_setup(tester_id, state, action)
                     state = _evaluate_camera_range(tester_id, action[-4:], request_id)
+                elif action in {"save_camera_arm5_diagnostic", "save_camera_arm6_diagnostic"}:
+                    bound_range_setup(tester_id, state, action)
+                    state = _save_camera_diagnostic(tester_id, action.split("_")[2], request_id)
                 elif action == "retry":
                     bound_range_setup(tester_id, state, action)
                     if state is None or state.phase != "retryable_failure" or not state.retry_phase:

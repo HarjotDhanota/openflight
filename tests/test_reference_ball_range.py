@@ -8,6 +8,8 @@ import pytest
 from openflight.camera.reference_ball_range import (
     BallPlaneCamera,
     build_iwr_camera_search_hint,
+    camera_range_estimator_policy,
+    camera_range_estimator_sha256,
     estimate_reference_ball_range,
     ray_to_ball_center_plane,
 )
@@ -353,3 +355,11 @@ def test_existing_detector_behavior_remains_compatible():
 
     assert ball.x == pytest.approx(62.0, abs=0.5)
     assert ball.y == pytest.approx(43.0, abs=0.5)
+
+
+def test_camera_range_estimator_identity_is_pinned():
+    """Any estimator constant change must be a deliberate, reviewed identity change."""
+    assert camera_range_estimator_policy()["name"] == "camera_reference_ball_floor_plane"
+    assert camera_range_estimator_sha256() == (
+        "48c758f5cda34f2b5fe96623b73ec1fa328d679b352208c1248f9bee9bcdf8bf"
+    )

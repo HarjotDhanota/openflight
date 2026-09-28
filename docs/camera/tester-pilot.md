@@ -238,7 +238,8 @@ gain until the ball is visible, then locks the lowest exposure and gain whose
 applied camera metadata match the request and whose ball pixels pass the
 brightness, contrast, edge and clipping checks. Save stays disabled until that
 lock holds, and the lock is dropped if the light changes. If no setting passes,
-the step reports that more light is needed. This lock is for the stationary ball
+the step reports that more light is needed: add light and retry, or keep the view
+as unqualified raw evidence, which finishes the setup raw-only. This lock is for the stationary ball
 only; it never sets swing-capture exposure. Its thresholds are provisional until
 the camera lighting study.
 

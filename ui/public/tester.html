@@ -505,6 +505,7 @@
               <div class="steps">
                 <button type="button" id="tee-range-action">Start automatic range</button>
                 <button type="button" id="tee-range-restart" hidden>Ball or rig moved: start over</button>
+                <button type="button" id="tee-range-diagnostic" hidden>Keep raw evidence and continue without a range (unqualified)</button>
               </div>
             </div>
             <p class="note">No tape measurement is required. Keep the enclosure and nearby objects still between radar captures.</p>
@@ -1669,6 +1670,13 @@
         const action = el('tee-range-action');
         el('automatic-range').dataset.ready = String(teeRangeComplete());
         el('tee-range-restart').hidden = !state;
+        const diagnosticArm = guidedCameraDisplay?.state === 'lighting_required'
+          ? guidedCameraContext()?.armId
+          : null;
+        const diagnostic = el('tee-range-diagnostic');
+        diagnostic.hidden = !diagnosticArm;
+        diagnostic.disabled = teeRangeRequestRunning || !diagnosticArm;
+        diagnostic.dataset.action = diagnosticArm ? `save_camera_${diagnosticArm}_diagnostic` : '';
         action.textContent = startOverRequired ? 'Start over required' : (step?.label || 'Start automatic range');
         action.disabled = teeRangeRequestRunning || startOverRequired || guidedSaveBlocked || Boolean(state && !step?.action);
         action.dataset.action = startOverRequired ? '' : (step?.action || 'start');
@@ -1765,6 +1773,10 @@
       }
       el('tee-range-action').addEventListener('click', () => submitTeeRange(el('tee-range-action').dataset.action || 'start'));
       el('tee-range-restart').addEventListener('click', () => submitTeeRange('start_over'));
+      el('tee-range-diagnostic').addEventListener('click', () => {
+        const action = el('tee-range-diagnostic').dataset.action;
+        if (action) submitTeeRange(action);
+      });
 
       const attemptScopeKey = (scope) => (scope ? `${scope.tester_id}\n${scope.arm_id}\n${scope.run_dir}` : '');
       const attemptScopeLabel = (scope) => `${scope.arm_id} · ${scope.run}`;
