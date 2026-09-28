@@ -654,6 +654,8 @@ def resolve_qualified_tee_range(
         return _unresolved(observed, "iwr_evidence_epoch_mismatch")
     if camera_facts.get("accuracy_qualified") is not True:
         return _unresolved(observed, "camera_evidence_not_accuracy_qualified")
+    if camera_facts.get("static_exposure_lock_verified") is not True:
+        return _unresolved(observed, "camera_static_exposure_unverified")
     if iwr_facts.get("accuracy_qualified") is not True:
         return _unresolved(observed, "iwr_evidence_not_accuracy_qualified")
     if camera_facts.get("camera_arm_id") != "arm5":

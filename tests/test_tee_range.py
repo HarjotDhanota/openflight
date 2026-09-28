@@ -121,6 +121,7 @@ def qualified_camera(epoch_id="epoch-a", value=1.50, uncertainty=0.05, **updates
         "camera_range_estimator_sha256": HASHES["camera_range_estimator_sha256"],
         "camera_exposure_policy_sha256": HASHES["camera_exposure_policy_sha256"],
         "camera_exposure_policy_purpose": "static_reference_ball",
+        "static_exposure_lock_verified": True,
         "camera_arm_id": "arm5",
         "scope": "tester_setup",
         "manual_range_used": False,
@@ -168,6 +169,16 @@ def qualified_iwr(epoch_id="epoch-a", value=1.53, uncertainty=0.03, **updates):
             "qualification": facts,
         },
     )
+
+
+@pytest.mark.parametrize("verified", [False, None])
+def test_camera_evidence_without_a_verified_static_exposure_lock_cannot_promote(verified):
+    camera = qualified_camera(static_exposure_lock_verified=verified)
+
+    solution = resolve_qualified_tee_range("epoch-a", [camera, qualified_iwr()], qualification())
+
+    assert solution.status == "unresolved"
+    assert solution.reason == "camera_static_exposure_unverified"
 
 
 def test_camera_agreement_with_an_alternate_radar_peak_cannot_promote_it():

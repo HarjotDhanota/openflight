@@ -827,6 +827,35 @@ class TestLiveView:
         assert self.cameras[0].controls[-1]["ExposureTime"] == 87
         assert self.cameras[0].controls[-1]["AnalogueGain"] == 12.0
 
+    def test_each_analysis_frame_carries_its_applied_controls(self):
+        received = []
+
+        def analyzer(frames, _observation_id, applied_controls=()):
+            received.append((len(frames), list(applied_controls)))
+            return {"status": "not_found", "selected": None}
+
+        self.live.start(ts.ARMS["arm1"], 300, 4.0, analyzer=analyzer)
+        assert _wait(lambda: received)
+
+        count, applied = received[0]
+        assert applied == [(280, 4.0)] * count
+        assert self.live.capture_context_snapshot()["applied_controls"]
+
+    def test_changing_controls_restarts_analysis_from_fresh_frames(self):
+        self.live.start(ts.ARMS["arm1"], 300, 4.0)
+        assert _wait(lambda: len(self.live.recent_applied_controls()) >= 3)
+
+        self.live.change_controls(500, 8.0)
+
+        assert _wait(lambda: self.cameras[0].controls)
+        assert self.cameras[0].controls[-1]["ExposureTime"] == 500
+        assert self.cameras[0].controls[-1]["AnalogueGain"] == 8.0
+        assert FakeCamera.opened == 1
+
+    def test_changing_controls_requires_a_running_camera(self):
+        with pytest.raises(RuntimeError, match="not running"):
+            self.live.change_controls(500, 8.0)
+
     def test_a_long_look_lengthens_the_frame_not_the_mode(self):
         controls = ts.live_controls(ts.ARMS["arm1"], 10000, 2.0)
         assert controls["FrameDurationLimits"] == (10200, 10200)
@@ -847,12 +876,12 @@ class TestLiveView:
         old_started = threading.Event()
         release_old = threading.Event()
 
-        def slow_analyzer(_frames, _observation_id):
+        def slow_analyzer(_frames, _observation_id, _applied_controls=()):
             old_started.set()
             release_old.wait(timeout=2.0)
             return {"status": "selected", "selected": {"x_px": 10.0}}
 
-        def current_analyzer(_frames, observation_id):
+        def current_analyzer(_frames, observation_id, _applied_controls=()):
             return {
                 "status": "selected",
                 "selected": {"x_px": 25.0},

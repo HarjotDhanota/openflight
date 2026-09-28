@@ -56,7 +56,18 @@ class FakeTilt:
         return None
 
 
+def ball_pixels(width: int, height: int) -> tuple[float, float, float]:
+    """Where the fake camera draws the reference ball, and its diameter."""
+    return width / 2.0, height * 0.625, 24.0 * width / 1280.0
+
+
 class FakeLive:
+    """A live camera whose ball brightness follows exposure x gain and echoes its controls."""
+
+    background = 40.0
+    ball_per_signal = 0.03
+    max_observations = 80
+
     def __init__(self):
         self.running = False
         self.arm = None
@@ -67,27 +78,69 @@ class FakeLive:
         self.frame_sequence = 0
         self.latest_frame_at = None
         self.context_generation = 0
+        self.controls = None
+        self.applied_offset_us = 0.0
+        self.requested_history = []
+        self.other_bright_objects = []
 
-    def start(self, arm, *_args, analyzer=None):
+    def start(self, arm, exposure_us, gain, *_args, analyzer=None):
         self.running = True
         self.arm = arm
         self.analyzer = analyzer
         self.start_count += 1
         self.context_generation += 1
+        self.controls = (exposure_us, gain)
+        self.requested_history.append(self.controls)
         if analyzer is not None:
-            frames = self.recent_frames()[1]
-            for observation_id, observed_at in enumerate((1.0, 1.5, 2.0), start=1):
-                analyzer.observe(frames, observation_id, observed_at=observed_at)
-            self.frame_sequence = 3
+            self.pump()
+
+    def change_controls(self, exposure_us, gain):
+        self.controls = (exposure_us, gain)
+        self.requested_history.append(self.controls)
+        self.context_generation += 1
+
+    def applied(self):
+        exposure_us, gain = self.controls
+        return exposure_us + self.applied_offset_us, gain
+
+    def pump(self):
+        for _ in range(self.max_observations):
+            generation = self.context_generation
+            self.frame_sequence += 1
+            self.analyzer.observe(
+                self.recent_frames()[1],
+                self.frame_sequence,
+                observed_at=self.frame_sequence * 0.5,
+                applied_controls=[self.applied()] * 3,
+            )
             self.latest_frame_at = ts.time.monotonic()
+            status = self.analyzer.status()
+            snapshot = self.analyzer.snapshot() or {}
+            if generation == self.context_generation and (
+                status["status"] == "lighting_required"
+                or (status["locked_and_passing"] and snapshot.get("save_eligible"))
+            ):
+                return
 
     def stop(self):
         self.running = False
         self.stop_count += 1
         self.context_generation += 1
 
+    def ball_level(self):
+        exposure_us, gain = self.applied()
+        return min(255.0, self.background + self.ball_per_signal * exposure_us * gain)
+
     def recent_frames(self):
-        frames = np.full((3, self.arm.height, self.arm.width), 80, dtype=np.uint8)
+        height, width = self.arm.height, self.arm.width
+        x, y, diameter = ball_pixels(width, height)
+        yy, xx = np.ogrid[:height, :width]
+        image = np.full((height, width), self.background, dtype=np.float32)
+        for object_x, object_y, object_diameter in [(x, y, diameter), *self.other_bright_objects]:
+            image[np.hypot(xx - object_x, yy - object_y) <= object_diameter / 2.0] = (
+                self.ball_level()
+            )
+        frames = np.repeat(np.clip(image, 0, 255).astype(np.uint8)[None], 3, axis=0)
         return self.arm, frames
 
     def recent_frames_context(self):
@@ -101,6 +154,7 @@ class FakeLive:
             "error": self.error,
             "arm": arm,
             "frames": frames,
+            "applied_controls": [self.applied()] * 3,
             "frame_sequence": self.frame_sequence,
             "latest_frame_at": self.latest_frame_at,
             "analyzer": self.analyzer,
@@ -128,30 +182,27 @@ class FakeLive:
 class ChangingFakeLive(FakeLive):
     def __init__(self):
         super().__init__()
-        self.value = 79
+        self.background = 39.0
 
-    def start(self, arm, *_args, **kwargs):
-        super().start(arm, *_args, **kwargs)
-        self.value += 1
-
-    def recent_frames(self):
-        frames = np.full((3, self.arm.height, self.arm.width), self.value, dtype=np.uint8)
-        return self.arm, frames
+    def start(self, arm, *args, **kwargs):
+        self.background += 1.0
+        super().start(arm, *args, **kwargs)
 
 
 class UnreadyFakeLive(FakeLive):
-    def start(self, arm, *_args, analyzer=None):
+    def start(self, arm, exposure_us, gain, *_args, analyzer=None):
         self.running = True
         self.arm = arm
         self.analyzer = analyzer
         self.start_count += 1
+        self.controls = (exposure_us, gain)
         self.frame_sequence = 1
         self.latest_frame_at = ts.time.monotonic()
 
 
 class StaleFakeLive(FakeLive):
-    def start(self, arm, *_args, analyzer=None):
-        super().start(arm, *_args, analyzer=analyzer)
+    def start(self, arm, *args, analyzer=None):
+        super().start(arm, *args, analyzer=analyzer)
         self.latest_frame_at = ts.time.monotonic() - ts.LIVE_FRAME_STALE_S - 1.0
 
 
@@ -305,11 +356,12 @@ class StaticManager:
         return False
 
 
-def camera_result(value: float) -> ReferenceBallRangeResult:
+def camera_result(value: float, width: int = 1280, height: int = 800) -> ReferenceBallRangeResult:
+    x, y, diameter = ball_pixels(width, height)
     candidate = ReferenceBallRangeCandidate(
-        x_px=640.0,
-        y_px=500.0,
-        diameter_px=24.0,
+        x_px=x,
+        y_px=y,
+        diameter_px=diameter,
         area_px=450,
         floor_point_lfu_m=(0.0, value, 0.021),
         floor_radar_range_m=value,
@@ -408,7 +460,11 @@ def app_for(
 
     monkeypatch.setattr(ts, "_reference_ball_camera", camera_model)
     monkeypatch.setattr(
-        ts, "estimate_reference_ball_range", lambda *_args, **_kwargs: camera_result(camera_m)
+        ts,
+        "estimate_reference_ball_range",
+        lambda _frames, camera, **_kwargs: camera_result(
+            camera_m, camera.image_width_px, camera.image_height_px
+        ),
     )
     manager = StaticManager(
         config_hash=file_hash(inputs["config"]),
@@ -482,6 +538,140 @@ def drive(client, tester):
         response = post(client, tester, action, f"request-{index}")
         assert response.status_code == 200, response.get_json()
     return phase(client, tester)
+
+
+def start_arm5(client, tester, prefix="exposure"):
+    for index, action in enumerate(("start", "capture_empty", "capture_ball", "start_camera_arm5")):
+        assert post(client, tester, action, f"{prefix}-{index}").status_code == 200
+
+
+def test_static_exposure_locks_the_lowest_passing_setting_before_camera_save(
+    tmp_path, inputs, monkeypatch
+):
+    live = FakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+
+    state = drive(app.test_client(), tester)
+
+    exposure = state["evidence"]["camera_arm5_static_exposure"]
+    lock = exposure["lock"]
+    arm = ts.ARMS["arm5"]
+    x, y, diameter = ball_pixels(arm.width, arm.height)
+    probe = FakeLive()
+    probe.arm = arm
+
+    def passes(step):
+        probe.controls = (step.exposure_us, step.gain)
+        return ts.assess_static_exposure(
+            probe.recent_frames()[1],
+            {
+                "status": "selected",
+                "selected": {"x_px": x, "y_px": y, "diameter_px": diameter},
+                "stable_count": 3,
+            },
+            requested=step,
+            applied_exposure_us=step.exposure_us,
+            applied_gain=step.gain,
+            black_floor_dn=None,
+        ).acceptable
+
+    lowest_passing = next(
+        step for step in sorted(ts.exposure_steps_for_fps(arm.fps)) if passes(step)
+    )
+    facts = state["evidence"]["camera_arm5_candidate"]["evidence"]["qualification"]
+    controls = state["evidence"]["camera_arm5_candidate"]["evidence"]["capture_identity"]["mode"][
+        "controls"
+    ]
+    assert state["phase"] == "resolved"
+    assert exposure["status"] == "locked"
+    assert exposure["locked_and_passing"] is True
+    assert (lock["exposure_us"], lock["gain"]) == (
+        lowest_passing.exposure_us,
+        lowest_passing.gain,
+    )
+    assert exposure["attempts"][0]["stage"] == "bootstrap"
+    assert facts["static_exposure_lock_verified"] is True
+    assert controls["applied_exposure_us"] == lock["applied_exposure_us"]
+    assert controls["applied_gain"] == lock["applied_gain"]
+
+
+def test_dark_scene_requires_light_and_blocks_camera_save(tmp_path, inputs, monkeypatch):
+    live = FakeLive()
+    live.ball_per_signal = 0.0001
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    start_arm5(client, tester)
+
+    response = post(client, tester, "evaluate_camera_arm5", "dark-save")
+    association = live.analyzer.snapshot()
+
+    assert response.status_code == 409
+    assert "no visible setting passed the ball-pixel gates" in response.get_json()["error"]
+    assert association["static_exposure"]["status"] == "lighting_required"
+    assert association["save_eligible"] is False
+    assert phase(client, tester)["phase"] == "camera_arm5_capturing"
+
+
+def test_controls_the_camera_ignores_never_lock(tmp_path, inputs, monkeypatch):
+    live = FakeLive()
+    live.applied_offset_us = 500.0
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    start_arm5(client, tester)
+
+    response = post(client, tester, "evaluate_camera_arm5", "ignored-save")
+    exposure = live.analyzer.status()
+
+    assert response.status_code == 409
+    assert exposure["status"] == "lighting_required"
+    assert exposure["lock"] is None
+    assert {item["reason"] for item in exposure["attempts"]} == {"controls_not_applied"}
+
+
+def test_save_frames_not_at_the_locked_controls_are_withheld(tmp_path, inputs, monkeypatch):
+    live = FakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    start_arm5(client, tester)
+    assert live.analyzer.status()["locked_and_passing"] is True
+    live.applied_offset_us = 300.0
+
+    state = post(client, tester, "evaluate_camera_arm5", "moved-save").get_json()["state"]
+
+    attempt = next(
+        value for key, value in state["evidence"].items() if key.startswith("camera_arm5_attempt_")
+    )
+    assert state["phase"] == "retryable_failure"
+    assert attempt["reason"] == "Save frames were not captured at the locked static exposure"
+    assert "camera_arm5_candidate" not in state["evidence"]
+
+
+def test_losing_light_after_the_lock_restarts_the_search(tmp_path, inputs, monkeypatch):
+    live = FakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    start_arm5(client, tester)
+    locked = live.analyzer.status()["lock"]
+    live.ball_per_signal = 0.0001
+
+    for _ in range(2):
+        live.frame_sequence += 1
+        live.analyzer.observe(
+            live.recent_frames()[1],
+            live.frame_sequence,
+            observed_at=live.frame_sequence * 0.5,
+            applied_controls=[live.applied()] * 3,
+        )
+    exposure = live.analyzer.status()
+
+    assert exposure["status"] == "searching"
+    assert exposure["lock"] is None
+    assert exposure["invalidations"][0]["lock"] == locked
+    assert live.controls == (
+        exposure["current_step"]["exposure_us"],
+        exposure["current_step"]["gain"],
+    )
+    assert post(client, tester, "evaluate_camera_arm5", "dim-save").status_code == 409
 
 
 def test_guided_flow_resolves_and_survives_reload(tmp_path, inputs, monkeypatch):
@@ -558,7 +748,9 @@ def test_guided_flow_resolves_and_survives_reload(tmp_path, inputs, monkeypatch)
 def test_conditioned_static_object_must_match_broad_save_before_promotion(
     tmp_path, inputs, monkeypatch
 ):
-    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    live = FakeLive()
+    live.other_bright_objects = [(260.0, 360.0, 24.0)]
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
     guided_hinge = camera_result(1.2)
     guided_hinge = replace(
         guided_hinge,

@@ -45,6 +45,12 @@ from openflight.camera.reference_ball_range import (
 from openflight.camera.setup_eligibility import SetupEligibility
 from openflight.camera.static_exposure import (
     STATIC_EXPOSURE_PURPOSE,
+    StaticExposureObservation,
+    StaticExposureSearch,
+    StaticExposureStep,
+    applied_controls_match,
+    assess_static_exposure,
+    exposure_steps_for_fps,
     static_exposure_policy_sha256 as _static_exposure_policy_sha256,
 )
 from openflight.camera.tee_range_flow import (
@@ -1693,7 +1699,12 @@ class GuidedRangeAnalyzer:
             self._last = dict(analysis)
             return dict(analysis)
 
-    def __call__(self, frames: np.ndarray, observation_id: int) -> dict:
+    def __call__(
+        self,
+        frames: np.ndarray,
+        observation_id: int,
+        _applied_controls: Sequence[tuple[float | None, float | None]] = (),
+    ) -> dict:
         return self.observe(frames, observation_id)
 
     def snapshot(self) -> dict | None:
@@ -1755,6 +1766,193 @@ class GuidedRangeAnalyzer:
             "observation_sequence": int(observation_id),
         }
         return result, analysis, None
+
+
+class StaticExposureController:
+    """A guided analyzer that finds, locks and keeps checking static reference-ball exposure.
+
+    It wraps one ``GuidedRangeAnalyzer`` per exposure step so temporal stability
+    never carries across control changes, and it only lets Save proceed while a
+    lock is held and the saved frames were captured at the locked controls.
+    """
+
+    _LOCK_LOSS_LIMIT = 2
+
+    def __init__(
+        self,
+        analyzer_factory: Callable[[], GuidedRangeAnalyzer],
+        steps: Sequence[StaticExposureStep],
+        change_controls: Callable[[int, float], None],
+        black_floor_dn: float | None,
+    ):
+        self._factory = analyzer_factory
+        self._steps = tuple(steps)
+        self._change_controls = change_controls
+        self._black_floor_dn = black_floor_dn
+        self._lock = threading.Lock()
+        self._inner = analyzer_factory()
+        self._search = StaticExposureSearch(self._steps)
+        self._last_observation: StaticExposureObservation | None = None
+        self._lock_losses = 0
+        self._invalidations: list[dict] = []
+
+    @property
+    def camera(self) -> BallPlaneCamera:
+        return self._inner.camera
+
+    @property
+    def orientation(self) -> dict:
+        return self._inner.orientation
+
+    @property
+    def initial_step(self) -> StaticExposureStep:
+        step = self._search.current_step
+        if step is None:
+            raise RuntimeError("static exposure search has no step to start from")
+        return step
+
+    def _active_step(self) -> StaticExposureStep | None:
+        if self._search.lock is not None:
+            return StaticExposureStep(self._search.lock.exposure_us, self._search.lock.gain)
+        return self._search.current_step
+
+    @staticmethod
+    def _applied(
+        step: StaticExposureStep, applied_controls: Sequence[tuple[float | None, float | None]]
+    ) -> tuple[float | None, float | None]:
+        if not applied_controls:
+            return None, None
+        for exposure, gain in applied_controls:
+            if not applied_controls_match(step, exposure, gain):
+                return exposure, gain
+        return (
+            float(np.median([exposure for exposure, _gain in applied_controls])),
+            float(np.median([gain for _exposure, gain in applied_controls])),
+        )
+
+    def _restart_search(self, observation: StaticExposureObservation) -> StaticExposureStep:
+        self._invalidations.append(
+            {
+                "lock": self._search.lock.to_dict() if self._search.lock else None,
+                "observation": observation.to_dict(),
+                "reason": "locked setting stopped passing the ball-pixel gates",
+            }
+        )
+        self._search = StaticExposureSearch(self._steps)
+        self._lock_losses = 0
+        return self._search.current_step
+
+    def observe(
+        self,
+        frames: np.ndarray,
+        observation_id: int,
+        *,
+        observed_at: float | None = None,
+        applied_controls: Sequence[tuple[float | None, float | None]] = (),
+    ) -> dict:
+        """Assess one frame window at the current step and advance the search."""
+        with self._lock:
+            inner = self._inner
+            step = self._active_step()
+        association = inner.observe(frames, observation_id, observed_at=observed_at)
+        if step is None:
+            return self._decorate(association)
+        exposure, gain = self._applied(step, applied_controls)
+        observation = assess_static_exposure(
+            frames,
+            association,
+            requested=step,
+            applied_exposure_us=exposure,
+            applied_gain=gain,
+            black_floor_dn=self._black_floor_dn,
+        )
+        next_step = None
+        with self._lock:
+            if inner is not self._inner:
+                return self._decorate(association)
+            self._last_observation = observation
+            if self._search.status == "searching":
+                self._search.record(observation)
+                candidate = self._search.current_step
+                if candidate is not None and candidate != step:
+                    next_step = candidate
+            elif self._search.status == "locked":
+                if observation.status in {"accepted", "stabilizing"}:
+                    self._lock_losses = 0
+                else:
+                    self._lock_losses += 1
+                    if self._lock_losses >= self._LOCK_LOSS_LIMIT:
+                        next_step = self._restart_search(observation)
+            if next_step is not None:
+                self._inner = self._factory()
+                self._last_observation = None
+        if next_step is not None:
+            self._change_controls(next_step.exposure_us, next_step.gain)
+        return self._decorate(association)
+
+    def __call__(
+        self,
+        frames: np.ndarray,
+        observation_id: int,
+        applied_controls: Sequence[tuple[float | None, float | None]] = (),
+    ) -> dict:
+        return self.observe(frames, observation_id, applied_controls=applied_controls)
+
+    def status(self) -> dict:
+        """Search progress, lock and invalidation evidence for the page and the epoch."""
+        with self._lock:
+            payload = self._search.to_dict()
+            payload["last_observation"] = (
+                self._last_observation.to_dict() if self._last_observation else None
+            )
+            payload["invalidations"] = list(self._invalidations)
+            payload["locked_and_passing"] = bool(
+                self._search.lock is not None
+                and self._last_observation is not None
+                and self._last_observation.acceptable
+            )
+            return payload
+
+    def _decorate(self, association: Mapping | None) -> dict:
+        exposure = self.status()
+        payload = dict(association or {})
+        payload["static_exposure"] = exposure
+        if not exposure["locked_and_passing"]:
+            payload["save_eligible"] = False
+            payload["readiness_reason"] = (
+                f"lighting required: {exposure['reason']}"
+                if exposure["status"] == "lighting_required"
+                else "static exposure is still being searched and locked"
+            )
+        return payload
+
+    def snapshot(self) -> dict | None:
+        """The latest association, gated on a held static exposure lock."""
+        inner = self._inner.snapshot()
+        return self._decorate(inner) if inner is not None else None
+
+    def analyze_for_save(
+        self,
+        frames: np.ndarray,
+        observation_id: int,
+        applied_controls: Sequence[tuple[float | None, float | None]] = (),
+    ) -> tuple[ReferenceBallRangeResult, dict, str | None]:
+        """Confirm Save frames independently and at the locked applied controls."""
+        result, analysis, reason = self._inner.analyze_for_save(frames, observation_id)
+        exposure = self.status()
+        lock = exposure["lock"]
+        if reason is None and not exposure["locked_and_passing"]:
+            reason = "static exposure is not locked on a passing setting"
+        if reason is None:
+            step = StaticExposureStep(lock["exposure_us"], lock["gain"])
+            applied = self._applied(step, applied_controls)
+            if not applied_controls_match(step, *applied):
+                reason = "Save frames were not captured at the locked static exposure"
+        analysis["static_exposure"] = exposure
+        if reason is not None:
+            analysis["promotion_eligible"] = False
+            analysis["promotion_rejection_reason"] = reason
+        return result, analysis, reason
 
 
 def _camera_tee_candidates(
@@ -1948,6 +2146,7 @@ def _guided_camera_candidate(
     frame_sha256: str,
     frame_window_sha256: str,
     qualification: tee_range.TeeRangeQualification | None,
+    static_exposure: Mapping | None = None,
 ) -> tee_range.TeeRangeCandidate:
     selected = result.selected
     accepted = selected is not None and selected.floor_radar_range_m is not None
@@ -1967,6 +2166,13 @@ def _guided_camera_candidate(
     ).hexdigest()
     estimator_sha = _camera_range_estimator_sha256()
     exposure_policy_sha = _static_exposure_policy_sha256()
+    exposure_lock = (static_exposure or {}).get("lock") or {}
+    exposure_lock_verified = bool(
+        static_exposure
+        and static_exposure.get("locked_and_passing") is True
+        and exposure_lock.get("policy_sha256") == exposure_policy_sha
+        and exposure_lock.get("purpose") == STATIC_EXPOSURE_PURPOSE
+    )
     identity_matches = bool(
         qualification is not None
         and qualification.camera_arm_id == "arm5"
@@ -1981,6 +2187,7 @@ def _guided_camera_candidate(
         and qualification.camera_range_estimator_sha256 == estimator_sha
         and qualification.camera_exposure_policy_sha256 == exposure_policy_sha
         and qualification.camera_exposure_policy_purpose == STATIC_EXPOSURE_PURPOSE
+        and exposure_lock_verified
     )
     facts = {
         "epoch_id": epoch_id,
@@ -1995,6 +2202,7 @@ def _guided_camera_candidate(
         "camera_range_estimator_sha256": estimator_sha,
         "camera_exposure_policy_sha256": exposure_policy_sha,
         "camera_exposure_policy_purpose": STATIC_EXPOSURE_PURPOSE,
+        "static_exposure_lock_verified": exposure_lock_verified,
         "camera_mode_sha256": mode_sha,
         "saved_frame_sha256": frame_sha256,
         "analyzed_frame_window_sha256": frame_window_sha256,
@@ -2026,6 +2234,7 @@ def _guided_camera_candidate(
         evidence={
             "result": _camera_range_evidence(result),
             "frame_sha256": frame_sha256,
+            "static_exposure_lock": exposure_lock or None,
             "capture_identity": {
                 "epoch_id": epoch_id,
                 "saved_frame_sha256": frame_sha256,
@@ -2413,6 +2622,7 @@ class LiveView:
         self._error: str | None = None
         self._black_floor: float | None = None
         self._recent: deque[np.ndarray] = deque(maxlen=5)
+        self._recent_applied: deque[tuple[float | None, float | None]] = deque(maxlen=5)
         self._ball: dict | None = None
         self._association: dict | None = None
         self._analysis_image: np.ndarray | None = None
@@ -2471,6 +2681,7 @@ class LiveView:
                 if context_changed:
                     self._context_generation += 1
                     self._recent.clear()
+                    self._recent_applied.clear()
                     self._ball = None
                     self._association = None
                     self._analysis_image = None
@@ -2495,6 +2706,7 @@ class LiveView:
             self._error = None
             self._black_floor = black_floor
             self._recent.clear()
+            self._recent_applied.clear()
             self._ball = None
             self._association = None
             self._analysis_image = None
@@ -2521,6 +2733,26 @@ class LiveView:
                 name="tester-live-ball",
             )
             self._looker.start()
+
+    def change_controls(self, exposure_us: int, gain: float) -> None:
+        """Request new controls on the open mode and restart analysis from fresh frames."""
+        with self._lock:
+            if not self.running or self._arm is None:
+                raise RuntimeError("live camera is not running")
+            self._pending = live_controls(self._arm, exposure_us, gain)
+            self._context_generation += 1
+            self._recent.clear()
+            self._recent_applied.clear()
+            self._ball = None
+            self._association = None
+            self._analysis_image = None
+            self._analysis_frame_sequence = None
+            self._latest_frame_at = None
+
+    def recent_applied_controls(self) -> list[tuple[float | None, float | None]]:
+        """Applied (exposure_us, gain) metadata for each frame in the recent window."""
+        with self._lock:
+            return list(self._recent_applied)
 
     def stop(self) -> None:
         with self._lock:
@@ -2553,6 +2785,7 @@ class LiveView:
                 if generation != self._run_generation or self._arm != arm:
                     return
                 recent, expected, cues = list(self._recent), self._expected, self._cues
+                applied = list(self._recent_applied)
                 expected_row = self._expected_row
                 analyzer = self._analyzer
                 frame_sequence = self._frame_sequence
@@ -2562,7 +2795,7 @@ class LiveView:
             frames = np.stack(recent)
             if analyzer is not None:
                 try:
-                    association = dict(analyzer(frames, frame_sequence))
+                    association = dict(analyzer(frames, frame_sequence, applied))
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     association = {
                         "status": "analysis_error",
@@ -2630,6 +2863,7 @@ class LiveView:
                 "error": self._error,
                 "arm": self._arm,
                 "frames": np.stack(recent) if len(recent) >= 3 else None,
+                "applied_controls": list(self._recent_applied),
                 "frame_sequence": self._frame_sequence,
                 "latest_frame_at": self._latest_frame_at,
                 "analyzer": self._analyzer,
@@ -2742,6 +2976,9 @@ class LiveView:
                         continue
                     self._image, self._metadata = image, metadata
                     self._recent.append(image)
+                    self._recent_applied.append(
+                        (metadata.get("ExposureTime"), metadata.get("AnalogueGain"))
+                    )
                     self._frame_sequence += 1
                     self._latest_frame_at = time.monotonic()
         except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -3036,7 +3273,7 @@ def create_app(
         epoch_id: str,
         arm_id: str,
         *args,
-        analyzer: GuidedRangeAnalyzer,
+        analyzer: StaticExposureController,
     ) -> None:
         with live_owner_lock:
             live.start(*args, analyzer=analyzer)
@@ -3650,7 +3887,7 @@ def create_app(
         if busy:
             raise RuntimeError(busy)
         params = TesterParameters(tester_id, arm_id, "indoors")
-        gain, exposure_us = resolve_gain(sessions_root, params)
+        black_floor = read_arm_state(sessions_root, tester_id, arm_id).get("black_floor_dn")
         tilt_snapshot = enclosure.reading()
         model = _reference_ball_camera(
             params.arm,
@@ -3670,9 +3907,15 @@ def create_app(
         search_hint = _guided_iwr_camera_hint(
             state, model, camera_input_identity=camera_input_identity
         )
-        analyzer = GuidedRangeAnalyzer(
-            model, tilt_snapshot, enclosure.reading, search_hint=search_hint
+        analyzer = StaticExposureController(
+            lambda: GuidedRangeAnalyzer(
+                model, tilt_snapshot, enclosure.reading, search_hint=search_hint
+            ),
+            exposure_steps_for_fps(params.arm.fps),
+            live.change_controls,
+            black_floor,
         )
+        first_step = analyzer.initial_step
         capture_id = f"{arm_id}-{state.sequence + 1:06d}"
         state = store.transition(
             state,
@@ -3682,8 +3925,13 @@ def create_app(
             evidence={
                 f"camera_{arm_id}_capture_setup": {
                     "capture_id": capture_id,
-                    "gain": gain,
-                    "exposure_us": exposure_us,
+                    "exposure_policy": STATIC_EXPOSURE_PURPOSE,
+                    "exposure_policy_sha256": _static_exposure_policy_sha256(),
+                    "initial_step": {
+                        "exposure_us": first_step.exposure_us,
+                        "gain": first_step.gain,
+                    },
+                    "black_floor_dn": black_floor,
                     "arm": params.arm.as_dict(),
                     "orientation_at_start": tilt_snapshot,
                     "camera_input_identity": camera_input_identity,
@@ -3696,9 +3944,9 @@ def create_app(
             state.epoch_id,
             arm_id,
             params.arm,
-            exposure_us,
-            gain,
-            read_arm_state(sessions_root, tester_id, arm_id).get("black_floor_dn"),
+            first_step.exposure_us,
+            first_step.gain,
+            black_floor,
             None,
             None,
             None,
@@ -3734,6 +3982,7 @@ def create_app(
             )
         shown_arm = capture_context.get("arm")
         frames = capture_context.get("frames")
+        applied_controls = capture_context.get("applied_controls") or ()
         frame_sequence = capture_context.get("frame_sequence")
         latest_frame_at = capture_context.get("latest_frame_at")
         if shown_arm != ARMS[arm_id] or frames is None:
@@ -3772,7 +4021,9 @@ def create_app(
             if not frame_path.exists():
                 atomic_write(frame_path, frame_bytes)
             frame_sha256 = hashlib.sha256(frame_bytes).hexdigest()
-            result, save_analysis, unsafe_reason = analyzer.analyze_for_save(frames, frame_sequence)
+            result, save_analysis, unsafe_reason = analyzer.analyze_for_save(
+                frames, frame_sequence, applied_controls
+            )
             save_analysis["input_identity"] = {
                 **save_analysis["input_identity"],
                 "epoch_id": state.epoch_id,
@@ -3816,6 +4067,7 @@ def create_app(
                             "live_guidance": readiness,
                             "search_hint": capture_setup.get("iwr_camera_search_hint"),
                             "camera_only_analysis": save_analysis,
+                            "static_exposure": analyzer.status(),
                         },
                         "camera_capture_failure": {
                             "arm_id": arm_id,
@@ -3837,8 +4089,12 @@ def create_app(
                 camera_model=model,
                 capture_controls={
                     "capture_id": capture_id,
-                    "gain": capture_setup["gain"],
-                    "exposure_us": capture_setup["exposure_us"],
+                    "gain": save_analysis["static_exposure"]["lock"]["gain"],
+                    "exposure_us": save_analysis["static_exposure"]["lock"]["exposure_us"],
+                    "applied_gain": save_analysis["static_exposure"]["lock"]["applied_gain"],
+                    "applied_exposure_us": save_analysis["static_exposure"]["lock"][
+                        "applied_exposure_us"
+                    ],
                     "arm": capture_setup["arm"],
                     "orientation_at_start": capture_setup["orientation_at_start"],
                     "orientation_frozen_for_association": analyzer.orientation,
@@ -3847,6 +4103,7 @@ def create_app(
                 frame_sha256=frame_sha256,
                 frame_window_sha256=frame_window_sha256,
                 qualification=qualification,
+                static_exposure=save_analysis["static_exposure"],
             )
             candidate = replace(
                 candidate,
@@ -3877,6 +4134,7 @@ def create_app(
                         "reason": str(exc),
                         "live_guidance": readiness,
                         "search_hint": capture_setup.get("iwr_camera_search_hint"),
+                        "static_exposure": analyzer.status(),
                     }
                 },
                 retry_phase=f"needs_camera_{arm_id}",
@@ -3885,6 +4143,7 @@ def create_app(
             stop_guided_live(tester_id, state.epoch_id, arm_id)
         evidence = {
             f"camera_{arm_id}_candidate": candidate.to_dict(),
+            f"camera_{arm_id}_static_exposure": save_analysis["static_exposure"],
             f"camera_{arm_id}_guidance": {
                 "live_readiness": readiness,
                 "search_hint": capture_setup.get("iwr_camera_search_hint"),

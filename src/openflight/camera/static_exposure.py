@@ -15,8 +15,8 @@ import numpy as np
 
 STATIC_EXPOSURE_PURPOSE = "static_reference_ball"
 STATIC_EXPOSURE_SCHEMA = "openflight.camera.static_exposure_lock.v1"
-_EXPOSURES_US = (100, 150, 200, 300, 500, 800, 1250, 2000, 3000, 4000, 6000, 8000)
-_GAINS = (2.0, 4.0, 6.0, 8.0, 10.0, 12.0)
+EXPOSURES_US = (100, 150, 200, 300, 500, 800, 1250, 2000, 3000, 4000, 6000, 8000)
+GAINS = (2.0, 4.0, 6.0, 8.0, 10.0, 12.0)
 _MIN_SIGNAL_ABOVE_FLOOR_DN = 20.0
 _MIN_LOCAL_CONTRAST_DN = 12.0
 _MIN_EDGE_GRADIENT_DN = 8.0
@@ -24,6 +24,10 @@ _MAX_BALL_CLIPPED_PCT = 5.0
 _REQUIRED_STABLE_OBSERVATIONS = 3
 _APPLIED_EXPOSURE_TOLERANCE_FRACTION = 0.02
 _APPLIED_EXPOSURE_TOLERANCE_US = 5.0
+_SETTLE_LIMIT = 4
+_STABILIZE_LIMIT = 6
+_REFINE_ATTEMPT_LIMIT = 48
+_DARK_GATES = frozenset({"signal", "contrast", "edge"})
 
 
 def static_exposure_policy() -> dict[str, Any]:
@@ -32,14 +36,23 @@ def static_exposure_policy() -> dict[str, Any]:
         "name": "stationary_reference_ball_exposure",
         "version": 1,
         "purpose": STATIC_EXPOSURE_PURPOSE,
-        "exposures_us": list(_EXPOSURES_US),
-        "gains": list(_GAINS),
+        "exposures_us": list(EXPOSURES_US),
+        "gains": list(GAINS),
         "objective": "minimum_exposure_then_gain",
+        "search": {
+            "bootstrap": "ascending_exposure_at_maximum_gain_until_ball_found",
+            "refine": "lexicographic_with_monotone_signal_pruning",
+            "settle_limit_observations": _SETTLE_LIMIT,
+            "stabilize_limit_observations": _STABILIZE_LIMIT,
+            "refine_attempt_limit": _REFINE_ATTEMPT_LIMIT,
+        },
         "gates": {
             "minimum_signal_above_floor_dn": _MIN_SIGNAL_ABOVE_FLOOR_DN,
             "minimum_local_contrast_dn": _MIN_LOCAL_CONTRAST_DN,
             "minimum_edge_gradient_dn": _MIN_EDGE_GRADIENT_DN,
             "maximum_ball_clipped_pct": _MAX_BALL_CLIPPED_PCT,
+            "edge_region_radius_fraction": [0.8, 1.2],
+            "background_ring_radius_fraction": [1.25, 1.8],
             "required_stable_observations": _REQUIRED_STABLE_OBSERVATIONS,
             "applied_controls_required": True,
             "applied_exposure_tolerance_fraction": _APPLIED_EXPOSURE_TOLERANCE_FRACTION,
@@ -63,6 +76,11 @@ class StaticExposureStep:
     exposure_us: int
     gain: float
 
+    @property
+    def signal(self) -> float:
+        """Relative image signal used to order the bootstrap and refine stages."""
+        return self.exposure_us * self.gain
+
 
 @dataclass(frozen=True)
 class StaticExposureObservation:
@@ -78,6 +96,9 @@ class StaticExposureObservation:
     edge_gradient_dn: float | None = None
     ball_clipped_pct: float | None = None
     stable_observations: int = 0
+    applied_exposure_us: float | None = None
+    applied_gain: float | None = None
+    failed_gates: tuple[str, ...] = ()
 
     @property
     def acceptable(self) -> bool:
@@ -107,15 +128,11 @@ class StaticExposureLock:
             raise ValueError("static exposure lock policy does not match")
         if not self.observation.acceptable:
             raise ValueError("static exposure lock requires an accepted observation")
-        if not math.isclose(
-            self.exposure_us,
+        if not applied_controls_match(
+            StaticExposureStep(self.exposure_us, self.gain),
             self.applied_exposure_us,
-            abs_tol=max(
-                _APPLIED_EXPOSURE_TOLERANCE_US,
-                self.exposure_us * _APPLIED_EXPOSURE_TOLERANCE_FRACTION,
-            ),
-            rel_tol=0.0,
-        ) or not math.isclose(self.gain, self.applied_gain, abs_tol=1 / 16, rel_tol=0.0):
+            self.applied_gain,
+        ):
             raise ValueError("static exposure lock requires matching applied controls")
 
     def to_dict(self) -> dict:
@@ -128,23 +145,47 @@ def exposure_steps_for_fps(fps: float) -> tuple[StaticExposureStep, ...]:
     maximum = math.floor(1_000_000 / fps) - 200
     return tuple(
         StaticExposureStep(exposure, gain)
-        for exposure in _EXPOSURES_US
+        for exposure in EXPOSURES_US
         if exposure <= maximum
-        for gain in _GAINS
+        for gain in GAINS
     )
 
 
-def _ball_regions(shape: tuple[int, int], selected: Mapping) -> tuple[np.ndarray, np.ndarray]:
+def applied_controls_match(requested: StaticExposureStep, exposure_us, gain) -> bool:
+    """Whether camera metadata shows the requested controls within tolerance."""
+    return bool(
+        exposure_us is not None
+        and gain is not None
+        and math.isclose(
+            float(exposure_us),
+            requested.exposure_us,
+            abs_tol=max(
+                _APPLIED_EXPOSURE_TOLERANCE_US,
+                requested.exposure_us * _APPLIED_EXPOSURE_TOLERANCE_FRACTION,
+            ),
+            rel_tol=0.0,
+        )
+        and math.isclose(float(gain), requested.gain, abs_tol=1 / 16, rel_tol=0.0)
+    )
+
+
+def _ball_regions(
+    shape: tuple[int, int], selected: Mapping
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     height, width = shape
     x = float(selected["x_px"])
     y = float(selected["y_px"])
     radius = float(selected["diameter_px"]) / 2.0
     yy, xx = np.ogrid[:height, :width]
     distance = np.hypot(xx - x, yy - y)
-    return distance <= 0.7 * radius, (distance >= 1.25 * radius) & (distance <= 1.8 * radius)
+    return (
+        distance <= 0.7 * radius,
+        (distance >= 0.8 * radius) & (distance <= 1.2 * radius),
+        (distance >= 1.25 * radius) & (distance <= 1.8 * radius),
+    )
 
 
-def assess_static_exposure(
+def assess_static_exposure(  # pylint: disable=too-many-locals
     frames: np.ndarray,
     association: Mapping | None,
     *,
@@ -153,38 +194,35 @@ def assess_static_exposure(
     applied_gain: float | None,
     black_floor_dn: float | None,
 ) -> StaticExposureObservation:
-    """Approve only a detected ball with matching controls and usable local pixels."""
-    applied_match = bool(
-        applied_exposure_us is not None
-        and applied_gain is not None
-        and math.isclose(
-            float(applied_exposure_us),
-            requested.exposure_us,
-            abs_tol=max(
-                _APPLIED_EXPOSURE_TOLERANCE_US,
-                requested.exposure_us * _APPLIED_EXPOSURE_TOLERANCE_FRACTION,
-            ),
-            rel_tol=0.0,
-        )
-        and math.isclose(float(applied_gain), requested.gain, abs_tol=1 / 16, rel_tol=0.0)
-    )
-    if not applied_match:
+    """Approve only a detected, stable ball with matching controls and usable local pixels."""
+    applied = {"applied_exposure_us": applied_exposure_us, "applied_gain": applied_gain}
+    if not applied_controls_match(requested, applied_exposure_us, applied_gain):
         return StaticExposureObservation(
-            requested, "settling", "waiting for requested controls to be applied", False, False
+            requested,
+            "settling",
+            "waiting for requested controls to be applied",
+            False,
+            False,
+            **applied,
         )
     selected = association.get("selected") if isinstance(association, Mapping) else None
     if not isinstance(selected, Mapping) or association.get("status") != "selected":
         return StaticExposureObservation(
-            requested, "rejected", "no reference ball was detected", False, True
+            requested, "rejected", "no reference ball was detected", False, True, **applied
         )
     images = np.asarray(frames)
     if images.dtype != np.uint8 or images.ndim != 3 or images.shape[0] < 3:
         raise ValueError("static exposure assessment requires at least three uint8 frames")
     image = np.median(images, axis=0).astype(np.float32)
-    ball, ring = _ball_regions(image.shape, selected)
-    if not np.any(ball) or not np.any(ring):
+    ball, edge_region, ring = _ball_regions(image.shape, selected)
+    if not np.any(ball) or not np.any(ring) or not np.any(edge_region):
         return StaticExposureObservation(
-            requested, "rejected", "detected ball region is outside the frame", True, True
+            requested,
+            "rejected",
+            "detected ball region is outside the frame",
+            True,
+            True,
+            **applied,
         )
     ball_level = float(np.median(image[ball]))
     ring_level = float(np.median(image[ring]))
@@ -192,22 +230,29 @@ def assess_static_exposure(
     signal = ball_level - floor
     contrast = ball_level - ring_level
     gradient_y, gradient_x = np.gradient(image)
-    edge = float(np.median(np.hypot(gradient_x, gradient_y)[ring]))
+    edge = float(np.percentile(np.hypot(gradient_x, gradient_y)[edge_region], 75))
     clipped = float(np.mean(image[ball] >= 250.0) * 100.0)
     stable = int(association.get("stable_count", 0))
-    gates = (
-        signal >= _MIN_SIGNAL_ABOVE_FLOOR_DN,
-        contrast >= _MIN_LOCAL_CONTRAST_DN,
-        edge >= _MIN_EDGE_GRADIENT_DN,
-        clipped <= _MAX_BALL_CLIPPED_PCT,
-        stable >= _REQUIRED_STABLE_OBSERVATIONS,
-    )
+    failed = [
+        name
+        for name, passed in (
+            ("signal", signal >= _MIN_SIGNAL_ABOVE_FLOOR_DN),
+            ("contrast", contrast >= _MIN_LOCAL_CONTRAST_DN),
+            ("edge", edge >= _MIN_EDGE_GRADIENT_DN),
+            ("clipped", clipped <= _MAX_BALL_CLIPPED_PCT),
+        )
+        if not passed
+    ]
+    if failed:
+        status, reason = "rejected", "failed ball-pixel gates: " + ", ".join(failed)
+    elif stable < _REQUIRED_STABLE_OBSERVATIONS:
+        status, reason = "stabilizing", "waiting for a temporally stable ball detection"
+    else:
+        status, reason = "accepted", "reference ball pixels pass every optical gate"
     return StaticExposureObservation(
         requested,
-        "accepted" if all(gates) else "rejected",
-        "reference ball pixels pass every optical gate"
-        if all(gates)
-        else "reference ball pixels do not support a reliable static measurement",
+        status,
+        reason,
         True,
         True,
         round(signal, 2),
@@ -215,14 +260,154 @@ def assess_static_exposure(
         round(edge, 2),
         round(clipped, 3),
         stable,
+        **applied,
+        failed_gates=tuple(failed),
     )
 
 
-def select_lowest_passing(
-    observations: Sequence[StaticExposureObservation],
-) -> StaticExposureObservation | None:
-    accepted = [item for item in observations if item.acceptable]
-    return min(accepted, key=lambda item: item.step) if accepted else None
+class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
+    """Deterministic two-stage search for the lowest passing applied static controls.
+
+    Bootstrap raises exposure at the highest gain only to make the ball visible;
+    it never qualifies a setting. Refine then walks, lowest exposure first, the
+    steps brighter than the last bootstrap step that showed no ball, and locks the
+    first one whose applied controls and ball pixels pass every gate. Ball level
+    rises with exposure x gain, so a too-dark failure drops every queued step no
+    brighter than it and a clipped failure drops every step no darker.
+    """
+
+    def __init__(self, steps: Sequence[StaticExposureStep]):
+        ordered = sorted(set(steps))
+        if not ordered:
+            raise ValueError("static exposure search needs at least one step")
+        top_gain = max(step.gain for step in ordered)
+        self._steps = tuple(ordered)
+        self._queue: list[StaticExposureStep] = [
+            StaticExposureStep(exposure, top_gain)
+            for exposure in sorted({step.exposure_us for step in ordered})
+        ]
+        self.stage = "bootstrap"
+        self.status = "searching"
+        self.reason: str | None = None
+        self.lock: StaticExposureLock | None = None
+        self.attempts: list[dict] = []
+        self._dark_signal = 0.0
+        self._settling = 0
+        self._stabilizing = 0
+        self._refine_attempts = 0
+        self._ball_seen = False
+
+    @property
+    def current_step(self) -> StaticExposureStep | None:
+        """The controls to apply next, or None once the search has finished."""
+        return self._queue[0] if self.status == "searching" and self._queue else None
+
+    def _log(self, observation: StaticExposureObservation, reason: str) -> None:
+        self.attempts.append(
+            {
+                "stage": self.stage,
+                "exposure_us": observation.step.exposure_us,
+                "gain": observation.step.gain,
+                "status": observation.status,
+                "reason": reason,
+                "observation": observation.to_dict(),
+            }
+        )
+
+    def _advance(self, prune: str | None = None) -> None:
+        failed = self._queue.pop(0)
+        if prune == "dark":
+            self._queue = [step for step in self._queue if step.signal > failed.signal]
+        elif prune == "bright":
+            self._queue = [step for step in self._queue if step.signal < failed.signal]
+        self._settling = 0
+        self._stabilizing = 0
+        if self.stage == "refine":
+            self._refine_attempts += 1
+        if self._queue and self._refine_attempts < _REFINE_ATTEMPT_LIMIT:
+            return
+        self._queue = []
+        self.status = "lighting_required"
+        self.reason = (
+            "no visible setting passed the ball-pixel gates"
+            if self._ball_seen
+            else "reference ball not visible at the brightest static setting"
+        )
+
+    def _enter_refine(self) -> None:
+        self.stage = "refine"
+        self._queue = [step for step in self._steps if step.signal > self._dark_signal]
+        self._settling = 0
+        self._stabilizing = 0
+
+    def record(self, observation: StaticExposureObservation) -> None:
+        """Consume one assessment of the current step and choose what to try next."""
+        step = self.current_step
+        if step is None or observation.step != step:
+            return
+        if observation.status == "settling":
+            self._settling += 1
+            if self._settling >= _SETTLE_LIMIT:
+                self._log(observation, "controls_not_applied")
+                if self.stage == "bootstrap":
+                    self._dark_signal = step.signal
+                self._advance()
+            return
+        self._settling = 0
+        if self.stage == "bootstrap":
+            if not observation.ball_found:
+                self._log(observation, "ball_not_visible")
+                self._dark_signal = step.signal
+                self._advance()
+                return
+            self._ball_seen = True
+            self._log(observation, "ball_visible")
+            self._enter_refine()
+            return
+        if observation.ball_found:
+            self._ball_seen = True
+        if observation.status == "stabilizing":
+            self._stabilizing += 1
+            if self._stabilizing < _STABILIZE_LIMIT:
+                return
+            self._log(observation, "ball_not_stable")
+            self._advance()
+            return
+        if observation.status != "accepted":
+            self._log(observation, observation.reason)
+            if not observation.ball_found or _DARK_GATES & set(observation.failed_gates):
+                self._advance(prune="dark")
+            elif "clipped" in observation.failed_gates:
+                self._advance(prune="bright")
+            else:
+                self._advance()
+            return
+        self._log(observation, "locked")
+        self.lock = StaticExposureLock(
+            exposure_us=step.exposure_us,
+            gain=step.gain,
+            applied_exposure_us=round(float(observation.applied_exposure_us)),
+            applied_gain=float(observation.applied_gain),
+            observation=observation,
+            policy_sha256=static_exposure_policy_sha256(),
+        )
+        self.status = "locked"
+        self.reason = None
+
+    def to_dict(self) -> dict:
+        """Durable search evidence, including every attempted step."""
+        step = self.current_step
+        return {
+            "schema": STATIC_EXPOSURE_SCHEMA,
+            "policy_sha256": static_exposure_policy_sha256(),
+            "purpose": STATIC_EXPOSURE_PURPOSE,
+            "status": self.status,
+            "stage": self.stage,
+            "reason": self.reason,
+            "current_step": asdict(step) if step is not None else None,
+            "lock": self.lock.to_dict() if self.lock else None,
+            "attempts": list(self.attempts),
+        }
 
 
 def write_static_exposure_lock(path: Path, lock: StaticExposureLock) -> None:

@@ -233,6 +233,15 @@ Missing qualification or disagreement ends in raw-only mode: the ladder remains
 available but range metrics stay withheld. A qualified Arm 5/IWR pair freezes
 one range for both modes; Arm 6 cannot change it. Advanced tape is validation only.
 
+Each camera step first finds its own static exposure: it raises exposure at full
+gain until the ball is visible, then locks the lowest exposure and gain whose
+applied camera metadata match the request and whose ball pixels pass the
+brightness, contrast, edge and clipping checks. Save stays disabled until that
+lock holds, and the lock is dropped if the light changes. If no setting passes,
+the step reports that more light is needed. This lock is for the stationary ball
+only; it never sets swing-capture exposure. Its thresholds are provisional until
+the camera lighting study.
+
 The setup admission is also frozen with the epoch: the approved configuration,
 operator confirmation and starting LIS3DH orientation must still match before
 each capture, evaluation, finalization and later ladder admission. A changed rig
