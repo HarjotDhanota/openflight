@@ -1775,6 +1775,9 @@ class GuidedRangeAnalyzer:
         return result, analysis, None
 
 
+STATIC_EXPOSURE_FAILURES = frozenset({"lighting_required", "ball_not_identified", "rig_moved"})
+
+
 def _detection_summary(association: Mapping | None) -> dict | None:
     """What the detector concluded and the few candidates it weighed, for evidence."""
     if not isinstance(association, Mapping):
@@ -1807,7 +1810,7 @@ class StaticExposureController:
         self,
         analyzer_factory: Callable[[], GuidedRangeAnalyzer],
         steps: Sequence[StaticExposureStep],
-        change_controls: Callable[[int, float], None],
+        change_controls: Callable[..., None],
         black_floor_dn: float | None,
         on_change: Callable[[dict], None] | None = None,
     ):
@@ -1882,10 +1885,14 @@ class StaticExposureController:
         with self._lock:
             inner = self._inner
             step = self._active_step()
-        association = inner.observe(frames, observation_id, observed_at=observed_at)
         if step is None:
-            return self._decorate(association)
+            return self._decorate(inner.observe(frames, observation_id, observed_at=observed_at))
         exposure, gain = self._applied(step, applied_controls)
+        association = (
+            inner.observe(frames, observation_id, observed_at=observed_at)
+            if applied_controls_match(step, exposure, gain)
+            else inner.snapshot()
+        )
         observation = assess_static_exposure(
             frames,
             association,
@@ -1918,7 +1925,7 @@ class StaticExposureController:
                 self._last_observation = None
             changed = self._change_key() != before
         if next_step is not None:
-            self._change_controls(next_step.exposure_us, next_step.gain)
+            self._change_controls(next_step.exposure_us, next_step.gain, owner=self)
         if changed:
             self._persist()
         return self._decorate(association)
@@ -1972,7 +1979,7 @@ class StaticExposureController:
             payload["save_eligible"] = False
             payload["readiness_reason"] = (
                 f"{exposure['status'].replace('_', ' ')}: {exposure['reason']}"
-                if exposure["status"] in {"lighting_required", "ball_not_identified"}
+                if exposure["status"] in STATIC_EXPOSURE_FAILURES
                 else "static exposure is still being searched and locked"
             )
         return payload
@@ -1999,6 +2006,24 @@ class StaticExposureController:
             applied = self._applied(step, applied_controls)
             if not applied_controls_match(step, *applied):
                 reason = "Save frames were not captured at the locked static exposure"
+        if reason is None:
+            with self._lock:
+                stable = self._last_observation.stable_observations if self._last_observation else 0
+            check = assess_static_exposure(
+                frames,
+                {
+                    "status": analysis.get("status"),
+                    "selected": analysis.get("selected"),
+                    "stable_count": stable,
+                },
+                requested=step,
+                applied_exposure_us=applied[0],
+                applied_gain=applied[1],
+                black_floor_dn=self._black_floor_dn,
+            )
+            analysis["save_frame_optical_check"] = check.to_dict()
+            if not check.acceptable:
+                reason = f"Save frames failed the ball-pixel gates: {check.reason}"
         analysis["static_exposure"] = exposure
         if reason is not None:
             analysis["promotion_eligible"] = False
@@ -2629,7 +2654,7 @@ def guided_camera_display(status: Mapping) -> dict:
         state, reason = "camera_unavailable", "the guided camera is not running"
     elif association is None or exposure is None:
         state, reason = "warming", "waiting for the first analysed frames"
-    elif exposure.get("status") in {"lighting_required", "ball_not_identified"}:
+    elif exposure.get("status") in STATIC_EXPOSURE_FAILURES:
         state, reason = str(exposure["status"]), str(exposure.get("reason"))
     elif exposure.get("locked_and_passing"):
         state = "exposure_locked"
@@ -2923,9 +2948,15 @@ class LiveView:
             )
             self._looker.start()
 
-    def change_controls(self, exposure_us: int, gain: float) -> None:
-        """Request new controls on the open mode and restart analysis from fresh frames."""
+    def change_controls(self, exposure_us: int, gain: float, owner: object = None) -> None:
+        """Request new controls on the open mode and restart analysis from fresh frames.
+
+        A call from an analyzer that no longer owns the run (a slow thread left over
+        from a previous camera step) is ignored.
+        """
         with self._lock:
+            if owner is not None and owner is not self._analyzer:
+                return
             if not self.running or self._arm is None:
                 raise RuntimeError("live camera is not running")
             self._pending = live_controls(self._arm, exposure_us, gain)
@@ -2969,7 +3000,8 @@ class LiveView:
 
     def _look(self, arm: Arm, stop_event: threading.Event, generation: int) -> None:
         focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
-        while not stop_event.wait(LIVE_BALL_EVERY_S):
+        last_context, last_sequence, last_at, context_started = None, 0, 0.0, 0.0
+        while not stop_event.wait(min(0.1, LIVE_BALL_EVERY_S)):
             with self._lock:
                 if generation != self._run_generation or self._arm != arm:
                     return
@@ -2981,6 +3013,16 @@ class LiveView:
                 context_generation = self._context_generation
             if len(recent) < 3:
                 continue
+            now = time.monotonic()
+            if context_generation != last_context:
+                context_started = now
+            # Right after a control change, look as soon as fresh frames exist so the
+            # new setting is judged quickly; afterwards keep the steady cadence.
+            fresh = context_generation != last_context or frame_sequence - last_sequence >= 3
+            settling = now - context_started < LIVE_BALL_EVERY_S
+            if not fresh or not (settling or now - last_at >= LIVE_BALL_EVERY_S):
+                continue
+            last_context, last_sequence, last_at = context_generation, frame_sequence, now
             frames = np.stack(recent)
             if analyzer is not None:
                 try:
@@ -4412,10 +4454,9 @@ def create_app(
             for key in ("iwr_candidate", "camera_arm5_candidate")
             if isinstance(state.evidence.get(key), Mapping)
         ]
-        completed = store.transition(
+        return store.finalize(
             state,
-            phase="evaluating",
-            reason=reason,
+            tee_range.TeeRangeSolution.unresolved(candidates, reason=reason),
             request_id=request_id,
             evidence={
                 f"camera_{arm_id}_static_exposure": exposure,
@@ -4432,9 +4473,6 @@ def create_app(
                     ),
                 },
             },
-        )
-        return store.finalize(
-            completed, tee_range.TeeRangeSolution.unresolved(candidates, reason=reason)
         )
 
     @app.route("/api/tester/tee-range", methods=["GET", "POST"])

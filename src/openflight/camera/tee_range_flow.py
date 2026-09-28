@@ -231,7 +231,13 @@ class FlowStore:
         )
 
     def finalize(
-        self, state: FlowState, solution: TeeRangeSolution, qualification=None
+        self,
+        state: FlowState,
+        solution: TeeRangeSolution,
+        qualification=None,
+        *,
+        evidence: Mapping[str, Any] | None = None,
+        request_id: str | None = None,
     ) -> FlowState:
         phase = "resolved" if solution.status == "resolved" else "raw_only"
         with session_bundle.snapshot_lock(self.tester_root, timeout_s=session_bundle.WRITER_WAIT_S):
@@ -261,7 +267,8 @@ class FlowStore:
                     current,
                     phase=phase,
                     reason=solution.reason,
-                    evidence={"final_reference": reference.to_dict()},
+                    request_id=request_id,
+                    evidence={**(evidence or {}), "final_reference": reference.to_dict()},
                     solution=solution,
                 )
             )

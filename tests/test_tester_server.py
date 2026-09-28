@@ -899,6 +899,33 @@ class TestLiveView:
         assert self.cameras[0].controls[-1]["AnalogueGain"] == 8.0
         assert FakeCamera.opened == 1
 
+    def test_a_stale_analyzer_cannot_change_the_new_runs_controls(self):
+        current = lambda *_args: {"status": "not_found", "selected": None}  # noqa: E731
+        stale = object()
+        self.live.start(ts.ARMS["arm1"], 300, 4.0, analyzer=current)
+        assert _wait(lambda: self.live.snapshot()[0] is not None)
+
+        self.live.change_controls(900, 8.0, owner=stale)
+        time.sleep(0.05)
+
+        assert all(item.get("ExposureTime") != 900 for item in self.cameras[0].controls)
+
+    def test_a_control_change_is_judged_well_inside_the_steady_cadence(self):
+        calls = []
+
+        def analyzer(_frames, _observation_id, _applied_controls=()):
+            calls.append(time.monotonic())
+            return {"status": "not_found", "selected": None}
+
+        self.live.start(ts.ARMS["arm1"], 300, 4.0, analyzer=analyzer)
+        assert _wait(lambda: calls)
+        changed_at = time.monotonic()
+        self.live.change_controls(500, 8.0, owner=analyzer)
+
+        assert _wait(lambda: any(at > changed_at for at in calls), timeout=2.0)
+        first_after = min(at for at in calls if at > changed_at)
+        assert first_after - changed_at < ts.LIVE_BALL_EVERY_S * 0.8
+
     def test_changing_controls_requires_a_running_camera(self):
         with pytest.raises(RuntimeError, match="not running"):
             self.live.change_controls(500, 8.0)

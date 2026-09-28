@@ -34,6 +34,7 @@ _REFINE_ATTEMPT_LIMIT = 48
 _DARK_GATES = frozenset({"signal", "contrast", "edge"})
 _IDENTIFY_LIMIT = 6
 _UNIDENTIFIED_STATUSES = frozenset({"ambiguous", "no_consistent_candidate"})
+_DARK_DETECTOR_STATUSES = frozenset({"not_found", None})
 
 
 def static_exposure_policy() -> dict[str, Any]:
@@ -54,6 +55,9 @@ def static_exposure_policy() -> dict[str, Any]:
             "unidentified_ball": "not_a_brightness_signal_no_pruning",
             "unidentified_statuses": sorted(_UNIDENTIFIED_STATUSES),
             "identify_limit_observations": _IDENTIFY_LIMIT,
+            "darkness_evidence": "detector_not_found_or_dark_gates_only",
+            "clipping_prunes_before_dark_gates": True,
+            "pose_change": "retry_same_step_then_rig_moved",
         },
         "gates": {
             "minimum_signal_above_floor_dn": _MIN_SIGNAL_ABOVE_FLOOR_DN,
@@ -295,6 +299,7 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
         self._stabilizing = 0
         self._refine_attempts = 0
         self._unidentified = 0
+        self._pose_retries = 0
         self._ball_seen = False
 
     @property
@@ -353,11 +358,19 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
             self._settling += 1
             if self._settling >= _SETTLE_LIMIT:
                 self._log(observation, "controls_not_applied")
-                if self.stage == "bootstrap":
-                    self._dark_signal = step.signal
                 self._advance()
             return
         self._settling = 0
+        if observation.association_status == "pose_changed":
+            self._pose_retries += 1
+            if self._pose_retries >= _SETTLE_LIMIT:
+                self._log(observation, "rig_moved")
+                self._finish(
+                    "rig_moved",
+                    "the rig orientation changed during the search; start this camera step again",
+                )
+            return
+        self._pose_retries = 0
         if not observation.ball_found and observation.association_status in _UNIDENTIFIED_STATUSES:
             # Ball-like objects are visible but the ball cannot be picked out; more
             # light does not resolve that, so it must not be read as darkness.
@@ -374,10 +387,14 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
                 self._advance()
             return
         self._unidentified = 0
+        dark = not observation.ball_found and (
+            observation.association_status in _DARK_DETECTOR_STATUSES
+        )
         if self.stage == "bootstrap":
             if not observation.ball_found:
-                self._log(observation, "ball_not_visible")
-                self._dark_signal = step.signal
+                self._log(observation, "ball_not_visible" if dark else observation.reason)
+                if dark:
+                    self._dark_signal = step.signal
                 self._advance()
                 return
             self._ball_seen = True
@@ -395,10 +412,10 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
             return
         if observation.status != "accepted":
             self._log(observation, observation.reason)
-            if not observation.ball_found or _DARK_GATES & set(observation.failed_gates):
-                self._advance(prune="dark")
-            elif "clipped" in observation.failed_gates:
+            if "clipped" in observation.failed_gates:
                 self._advance(prune="bright")
+            elif dark or _DARK_GATES & set(observation.failed_gates):
+                self._advance(prune="dark")
             else:
                 self._advance()
             return

@@ -191,7 +191,7 @@ def test_lock_serializes_with_policy_identity_and_applied_controls(tmp_path):
 def test_static_exposure_policy_identity_is_pinned():
     """A lattice or gate change must be a deliberate, reviewed identity change."""
     assert se.static_exposure_policy_sha256() == (
-        "0baafdca0b5fc543b6c04c0109be2185c959f2f3730ae0d8702035df874fd351"
+        "1c6b89373508c6f3041c8014604204194d5f730e66b8ea17bf0ae931ef4d3a52"
     )
 
 
@@ -232,3 +232,51 @@ def test_ambiguity_does_not_prune_dimmer_settings_as_too_dark():
 
     assert search.stage == "refine"
     assert search.current_step == sorted(STEPS)[sorted(STEPS).index(first_refine) + 1]
+
+
+def _observation(step, association, frames=None, applied=None):
+    exposure, gain = applied if applied is not None else (step.exposure_us, step.gain)
+    return se.assess_static_exposure(
+        frames if frames is not None else _frames(160.0),
+        association,
+        requested=step,
+        applied_exposure_us=exposure,
+        applied_gain=gain,
+        black_floor_dn=15.0,
+    )
+
+
+def test_a_clipped_ball_never_walks_the_search_brighter():
+    """A saturated ball on a bright mat fails contrast and clipping; only darker can help."""
+    search = se.StaticExposureSearch(STEPS)
+    search.record(_observation(search.current_step, _association()))
+    step = search.current_step
+    clipped = _observation(step, _association(), frames=_frames(255.0, 250.0))
+    assert {"clipped", "contrast"} <= set(clipped.failed_gates)
+
+    search.record(clipped)
+
+    assert search.current_step is None or search.current_step.signal < step.signal
+
+
+def test_a_pose_blip_retries_the_same_step_instead_of_skipping_it():
+    search = se.StaticExposureSearch(STEPS)
+    search.record(_observation(search.current_step, _association()))
+    step = search.current_step
+
+    search.record(_observation(step, {"status": "pose_changed", "selected": None}))
+
+    assert search.current_step == step
+
+
+def test_a_bootstrap_settle_timeout_is_not_taken_as_darkness():
+    search = se.StaticExposureSearch(STEPS)
+    first = search.current_step
+    for _ in range(4):
+        search.record(
+            _observation(first, _association(), applied=(first.exposure_us + 500, first.gain))
+        )
+    search.record(_observation(search.current_step, _association()))
+
+    assert search.stage == "refine"
+    assert search.current_step == sorted(STEPS)[0]

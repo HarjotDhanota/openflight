@@ -94,7 +94,9 @@ class FakeLive:
         if analyzer is not None:
             self.pump()
 
-    def change_controls(self, exposure_us, gain):
+    def change_controls(self, exposure_us, gain, owner=None):
+        if owner is not None and owner is not self.analyzer:
+            return
         self.controls = (exposure_us, gain)
         self.requested_history.append(self.controls)
         self.context_generation += 1
@@ -691,6 +693,11 @@ def test_a_dark_camera_view_can_be_kept_as_unqualified_raw_evidence(tmp_path, in
     assert saved["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
     assert "camera_arm5_candidate" not in state["evidence"]
     assert live.running is False
+    phases = [
+        json.loads(item.read_text(encoding="utf-8"))["phase"]
+        for item in path.parent.glob("state-*.json")
+    ]
+    assert "evaluating" not in phases
 
 
 def test_an_ambiguous_ball_is_reported_as_unidentified_not_as_dark(tmp_path, inputs, monkeypatch):
@@ -759,6 +766,43 @@ def test_save_frames_not_at_the_locked_controls_are_withheld(tmp_path, inputs, m
     assert state["phase"] == "retryable_failure"
     assert attempt["reason"] == "Save frames were not captured at the locked static exposure"
     assert "camera_arm5_candidate" not in state["evidence"]
+
+
+def test_save_rechecks_the_ball_pixels_on_the_save_frames(tmp_path, inputs, monkeypatch):
+    live = FakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    start_arm5(client, tester)
+    assert live.analyzer.status()["locked_and_passing"] is True
+    live.ball_per_signal = 0.0001
+
+    state = post(client, tester, "evaluate_camera_arm5", "dimmed-save").get_json()["state"]
+
+    attempt = next(
+        value for key, value in state["evidence"].items() if key.startswith("camera_arm5_attempt_")
+    )
+    assert state["phase"] == "retryable_failure"
+    assert attempt["reason"].startswith("Save frames failed the ball-pixel gates")
+    assert "camera_arm5_candidate" not in state["evidence"]
+
+
+def test_the_estimator_is_not_run_until_the_camera_applies_the_controls(
+    tmp_path, inputs, monkeypatch
+):
+    live = FakeLive()
+    live.applied_offset_us = 500.0
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    calls = []
+
+    def counting(_frames, camera, **_kwargs):
+        calls.append(1)
+        return camera_result(1.2, camera.image_width_px, camera.image_height_px)
+
+    monkeypatch.setattr(ts, "estimate_reference_ball_range", counting)
+    start_arm5(app.test_client(), tester)
+
+    assert live.analyzer.status()["status"] == "lighting_required"
+    assert calls == []
 
 
 def test_losing_light_after_the_lock_restarts_the_search(tmp_path, inputs, monkeypatch):
