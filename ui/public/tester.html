@@ -511,7 +511,7 @@
                 <button type="button" id="tee-range-diagnostic" hidden>Keep raw evidence and continue without a range (unqualified)</button>
               </div>
             </div>
-            <p class="note">No tape measurement is required. Keep the enclosure and nearby objects still between radar captures.</p>
+            <p class="note">No tape measurement is required. Keep the enclosure and nearby objects still between radar captures, and stand in the same spot outside the radar’s view for both of them: a person who moves changes the radar picture more than the ball does.</p>
           </li>
           <li>
             <h3>4. Capture the exposure ladder</h3>
@@ -1353,21 +1353,21 @@
       const TEE_RANGE_STEPS = {
         needs_empty: {
           label: 'Capture empty hitting area',
-          prompt: 'Remove the ball. Keep the rig, mat, cables and nearby objects completely still, then capture the empty area.',
+          prompt: 'Remove the ball. Pick a spot outside the radar’s view (behind the rig) and stand there, still, for both radar captures; keep everyone else away. Keep the rig, mat, cables and nearby objects completely still, then capture the empty area.',
           action: 'capture_empty',
         },
         empty_capturing: {
           label: 'Capturing empty area…',
-          prompt: 'Radar is recording the empty area. Do not place the ball yet.',
+          prompt: 'Radar is recording the empty area. Stay still in your spot. Do not place the ball yet.',
         },
         needs_ball: {
           label: 'Capture ball at address',
-          prompt: 'Place one ball at address without moving the rig, mat, cables or nearby objects, then capture it.',
+          prompt: 'Place one ball at address without moving the rig, mat, cables or nearby objects. Go back to exactly the same spot as for the empty capture, keep still, then capture it.',
           action: 'capture_ball',
         },
         ball_capturing: {
           label: 'Capturing ball…',
-          prompt: 'Radar is recording the ball at address. Keep everything still.',
+          prompt: 'Radar is recording the ball at address. Stay still in the same spot and keep everything else still.',
         },
         needs_camera_arm5: {
           label: 'Open 1280×800 camera',

@@ -233,6 +233,13 @@ Missing qualification or disagreement ends in raw-only mode: the ladder remains
 available but range metrics stay withheld. A qualified Arm 5/IWR pair freezes
 one range for both modes; Arm 6 cannot change it. Advanced tape is validation only.
 
+For the two radar captures, stand in one spot outside the radar's view (behind
+the rig) for both, keep still, and keep others away. The ball is a weak radar
+target: in the first tape-checked test at 1.25 m its return was about a quarter
+of the room's typical background, so a person standing somewhere different for
+the second capture changed the picture more than the ball did and the pair was
+correctly rejected.
+
 Each camera step first finds its own static exposure: it raises exposure at full
 gain until the ball is visible, then locks the lowest exposure and gain whose
 applied camera metadata match the request and whose ball pixels pass the

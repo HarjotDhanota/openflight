@@ -613,6 +613,42 @@ def test_a_static_exposure_lock_never_reaches_swing_capture(tmp_path, inputs, mo
     assert not list((tmp_path / "home").rglob("camera-exposure.json"))
 
 
+def _search_evidence(tmp_path, client, tester):
+    state = phase(client, tester)
+    name = state["evidence"]["camera_arm5_capture_setup"]["exposure_search_file"]
+    store = tee_range_flow.FlowStore(ts.tester_root(tmp_path / "sessions", tester))
+    return json.loads((store.epoch_dir(state["epoch_id"]) / name).read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    ("ball_per_signal", "ambiguous", "status", "detector"),
+    [
+        (0.03, False, "locked", "selected"),
+        (0.0001, False, "lighting_required", "selected"),
+        (0.03, True, "ball_not_identified", "ambiguous"),
+    ],
+)
+def test_the_exposure_search_is_saved_to_disk_without_any_save(
+    tmp_path, inputs, monkeypatch, ball_per_signal, ambiguous, status, detector
+):
+    live = FakeLive()
+    live.ball_per_signal = ball_per_signal
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    if ambiguous:
+        result = replace(camera_result(1.2), status="ambiguous", selected=None)
+        monkeypatch.setattr(ts, "estimate_reference_ball_range", lambda *_args, **_kwargs: result)
+    client = app.test_client()
+    start_arm5(client, tester)
+
+    saved = _search_evidence(tmp_path, client, tester)
+
+    assert saved["status"] == status
+    assert saved["attempts"]
+    assert saved["last_detection"]["status"] == detector
+    assert saved["last_detection"]["candidates"]
+    assert saved["policy_sha256"] == ts._static_exposure_policy_sha256()
+
+
 def test_dark_scene_requires_light_and_blocks_camera_save(tmp_path, inputs, monkeypatch):
     live = FakeLive()
     live.ball_per_signal = 0.0001

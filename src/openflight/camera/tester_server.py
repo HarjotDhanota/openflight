@@ -1775,6 +1775,24 @@ class GuidedRangeAnalyzer:
         return result, analysis, None
 
 
+def _detection_summary(association: Mapping | None) -> dict | None:
+    """What the detector concluded and the few candidates it weighed, for evidence."""
+    if not isinstance(association, Mapping):
+        return None
+    keys = ("x_px", "y_px", "diameter_px", "score", "source", "rejection_reason")
+    candidates = association.get("candidates") or []
+    return {
+        "status": association.get("status"),
+        "readiness_reason": association.get("readiness_reason"),
+        "discovery_mode": association.get("discovery_mode"),
+        "candidates": [
+            {key: item.get(key) for key in keys}
+            for item in candidates[:8]
+            if isinstance(item, Mapping)
+        ],
+    }
+
+
 class StaticExposureController:
     """A guided analyzer that finds, locks and keeps checking static reference-ball exposure.
 
@@ -1791,8 +1809,11 @@ class StaticExposureController:
         steps: Sequence[StaticExposureStep],
         change_controls: Callable[[int, float], None],
         black_floor_dn: float | None,
+        on_change: Callable[[dict], None] | None = None,
     ):
         self._factory = analyzer_factory
+        self._on_change = on_change
+        self._last_detection: dict | None = None
         self._steps = tuple(steps)
         self._change_controls = change_controls
         self._black_floor_dn = black_floor_dn
@@ -1877,7 +1898,9 @@ class StaticExposureController:
         with self._lock:
             if inner is not self._inner:
                 return self._decorate(association)
+            before = self._change_key()
             self._last_observation = observation
+            self._last_detection = _detection_summary(association)
             if self._search.status == "searching":
                 self._search.record(observation)
                 candidate = self._search.current_step
@@ -1893,9 +1916,29 @@ class StaticExposureController:
             if next_step is not None:
                 self._inner = self._factory()
                 self._last_observation = None
+            changed = self._change_key() != before
         if next_step is not None:
             self._change_controls(next_step.exposure_us, next_step.gain)
+        if changed:
+            self._persist()
         return self._decorate(association)
+
+    def _change_key(self) -> tuple:
+        return (
+            self._search.status,
+            self._search.current_step,
+            self._search.lock is not None,
+            len(self._search.attempts),
+            len(self._invalidations),
+        )
+
+    def _persist(self) -> None:
+        if self._on_change is None:
+            return
+        try:
+            self._on_change(self.status())
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("Static exposure evidence could not be saved: %s", exc)
 
     def __call__(
         self,
@@ -1913,6 +1956,7 @@ class StaticExposureController:
                 self._last_observation.to_dict() if self._last_observation else None
             )
             payload["invalidations"] = list(self._invalidations)
+            payload["last_detection"] = self._last_detection
             payload["locked_and_passing"] = bool(
                 self._search.lock is not None
                 and self._last_observation is not None
@@ -4052,6 +4096,8 @@ def create_app(
         search_hint = _guided_iwr_camera_hint(
             state, model, camera_input_identity=camera_input_identity
         )
+        capture_id = f"{arm_id}-{state.sequence + 1:06d}"
+        search_path = store.epoch_dir(state.epoch_id) / f"camera-{capture_id}-exposure-search.json"
         analyzer = StaticExposureController(
             lambda: GuidedRangeAnalyzer(
                 model, tilt_snapshot, enclosure.reading, search_hint=search_hint
@@ -4059,9 +4105,11 @@ def create_app(
             exposure_steps_for_fps(params.arm.fps),
             live.change_controls,
             black_floor,
+            on_change=lambda payload: atomic_write(
+                search_path, (json.dumps(payload, indent=2) + "\n").encode("utf-8")
+            ),
         )
         first_step = analyzer.initial_step
-        capture_id = f"{arm_id}-{state.sequence + 1:06d}"
         state = store.transition(
             state,
             phase=f"camera_{arm_id}_capturing",
@@ -4077,6 +4125,7 @@ def create_app(
                         "gain": first_step.gain,
                     },
                     "black_floor_dn": black_floor,
+                    "exposure_search_file": search_path.name,
                     "arm": params.arm.as_dict(),
                     "orientation_at_start": tilt_snapshot,
                     "camera_input_identity": camera_input_identity,
