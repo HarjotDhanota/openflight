@@ -493,11 +493,12 @@
             <h3>3. Automatic ball range</h3>
             <div class="setup-gate" id="automatic-range" data-ready="false">
               <p id="automatic-range-summary" class="note">
-                The guided range check starts after both camera modes have passed the light check.
+                Each camera step finds its own exposure for the resting ball. No tape measurement is required.
               </p>
               <div class="light" id="automatic-range-values"></div>
               <div class="guided-camera-preview" id="tee-range-camera-preview" hidden>
                 <p class="note" id="tee-range-camera-status" role="status">Waiting for the first camera frame…</p>
+                <p class="note" id="tee-range-camera-exposure" role="status">Finding the camera exposure…</p>
                 <p class="note" id="tee-range-camera-detector" role="status">Ball detector is warming up…</p>
                 <img id="tee-range-camera-frame" alt="Live raw frame for automatic ball range" hidden />
               </div>
@@ -701,6 +702,7 @@
       let packageActionPending = false;
       let lastAutomaticRange = null;
       let teeRangeState = null;
+      let teeRangeDisplay = null;
       let teeRangeRequestRunning = false;
       let teeRangeActionError = null;
       // The flow state an action error describes; a newer server state supersedes it.
@@ -710,6 +712,7 @@
       let guidedCameraRequestRunning = false;
       let guidedCameraFrameLoading = false;
       let guidedCameraAssociation = null;
+      let guidedCameraDisplay = null;
       const REQUEST_TIMEOUT_MS = 5000;
       const ACTION_TIMEOUT_MS = 15000;
       const PACKAGE_TIMEOUT_MS = 300000;
@@ -1235,6 +1238,7 @@
         suiteActionVersion += 1;
         liveShown(false);
         teeRangeState = null;
+        teeRangeDisplay = null;
         syncGuidedCameraPreview();
         render(await request('/api/tester/stop', { method: 'POST' }));
       });
@@ -1315,12 +1319,23 @@
             if (version !== suiteActionVersion || context.tester_id !== el('tester-id').value.trim()) {
               throw new Error('cancelled because tester ID changed or Stop was pressed');
             }
+            el('light-verdict').className = '';
             el('light-verdict').textContent = `measuring ${arm === 'arm5' ? '1280×800' : '640×400'}…`;
             await post('/api/tester/run', { ...suiteBody(arm, context), action: 'gain' });
             const job = await waitJob(context, version);
             if (job.state !== 'complete') throw new Error(job.message);
           }
-          el('light-verdict').textContent = 'done for both modes';
+          const overview = await request('/api/tester/status?' + new URLSearchParams(suiteBody('arm5', context)));
+          const arms = overview.study?.arms || [];
+          const verdicts = [['arm5', '1280×800'], ['arm6', '640×400']].map(([armId, size]) => {
+            const arm = arms.find((item) => item.arm_id === armId);
+            if (!arm || arm.lighting_required == null) return [size, 'no result'];
+            return [size, arm.lighting_required ? 'more light needed' : 'light sufficient'];
+          });
+          const dark = verdicts.some(([, verdict]) => verdict !== 'light sufficient');
+          el('light-verdict').className = dark ? 'problem' : '';
+          el('light-verdict').textContent = verdicts.map(([size, verdict]) => `${size}: ${verdict}`).join(' · ') +
+            (dark ? ' — swings are still recorded, as evidence only' : '');
         } catch (e) {
           el('light-verdict').textContent = `failed: ${e.message}`;
         }
@@ -1432,6 +1447,7 @@
           guidedCameraPreviewKey = null;
           guidedCameraFrameLoading = false;
           guidedCameraAssociation = null;
+          guidedCameraDisplay = null;
           preview.hidden = true;
           frame.hidden = true;
           frame.removeAttribute('src');
@@ -1444,6 +1460,7 @@
         guidedCameraPreviewVersion += 1;
         guidedCameraFrameLoading = false;
         guidedCameraAssociation = null;
+        guidedCameraDisplay = null;
         frame.hidden = true;
         frame.removeAttribute('src');
         frame.dataset.previewKey = context.key;
@@ -1451,7 +1468,51 @@
         el('tee-range-camera-status').textContent = 'Camera is warming up. Waiting for the first frame…';
         el('tee-range-camera-detector').className = 'note';
         el('tee-range-camera-detector').textContent = 'Ball detector is warming up…';
+        guidedCameraExposureStatus(null);
         queueMicrotask(guidedCameraTick);
+      }
+
+      const escapeHtml = (value) => String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;');
+
+      const GUIDED_CAMERA_STATES = {
+        camera_unavailable: 'Camera is not running',
+        camera_error: 'Camera error',
+        warming: 'Waiting for the first analysed frames',
+        exposure_searching: 'Finding the lowest usable exposure',
+        ball_not_found: 'No reference ball at this exposure; trying a brighter setting',
+        optical_gates_failed: 'Ball found, but its pixels are not usable at this exposure',
+        lighting_required: 'More light is needed on the ball',
+        exposure_locked: 'Exposure locked',
+      };
+
+      const controlsText = (controls) => controls?.exposure_us != null
+        ? `${Math.round(controls.exposure_us)} µs × ${controls.gain != null ? Number(controls.gain).toFixed(2) : '?'}`
+        : 'unknown';
+
+      function guidedCameraExposureStatus(display) {
+        const line = el('tee-range-camera-exposure');
+        if (!display) {
+          line.className = 'note';
+          delete line.dataset.state;
+          line.textContent = 'Finding the camera exposure…';
+          return;
+        }
+        const label = GUIDED_CAMERA_STATES[display.state] || display.state;
+        const lock = display.exposure?.lock;
+        const step = display.exposure?.current_step;
+        const where = lock ? ` at ${controlsText(lock)}` : step ? ` (trying ${controlsText(step)})` : '';
+        const controls = display.controls || {};
+        const applied = controls.match
+          ? `Camera applied ${controlsText(controls.applied)}.`
+          : `Requested ${controlsText(controls.requested)}; camera applied ${controlsText(controls.applied)}.`;
+        const blocked = ['lighting_required', 'camera_error', 'camera_unavailable'].includes(display.state);
+        line.className = blocked ? 'problem' : 'note';
+        line.dataset.state = display.state;
+        line.textContent = `${label}${where}: ${display.reason}. ${applied} ${display.save_ready ? 'Ready to save.' : 'Save stays disabled.'}`;
       }
 
       function guidedCameraStatus(message, problem = false) {
@@ -1552,12 +1613,14 @@
             owner?.arm_id !== context.armId
           ) {
             guidedCameraAssociation = null;
+            guidedCameraDisplay = null;
             renderTeeRange();
             guidedCameraStatus('The guided camera is no longer owned by this range step. Retry or start over.', true);
             return;
           }
           if (status.error || status.failed) {
             guidedCameraAssociation = null;
+            guidedCameraDisplay = null;
             renderTeeRange();
             guidedCameraStatus(`Camera error: ${status.error || status.failed}`, true);
             guidedCameraDetectorStatus(null, false);
@@ -1565,13 +1628,16 @@
           }
           if (!status.running) {
             guidedCameraAssociation = null;
+            guidedCameraDisplay = null;
             renderTeeRange();
             guidedCameraStatus('The guided camera stopped before evaluation. Retry this camera step.', true);
             guidedCameraDetectorStatus(null, false);
             return;
           }
           guidedCameraAssociation = status.association || null;
+          guidedCameraDisplay = status.guided_display || null;
           guidedCameraDetectorStatus(guidedCameraAssociation, Boolean(status.stats));
+          guidedCameraExposureStatus(guidedCameraDisplay);
           renderTeeRange();
           if (!status.stats) {
             guidedCameraStatus('Camera is warming up. Waiting for the first frame…');
@@ -1584,6 +1650,7 @@
           const current = guidedCameraContext();
           if (version === guidedCameraPreviewVersion && current?.key === context.key) {
             guidedCameraAssociation = null;
+            guidedCameraDisplay = null;
             renderTeeRange();
             guidedCameraStatus(`Live camera status unavailable: ${error.message}`, true);
           }
@@ -1598,7 +1665,7 @@
         const step = state ? TEE_RANGE_STEPS[phase] : null;
         const startOverRequired = phase === 'retryable_failure' && !state?.retry_phase;
         const guidedSaveBlocked = ['camera_arm5_capturing', 'camera_arm6_capturing'].includes(phase)
-          && !guidedCameraAssociation?.save_eligible;
+          && !guidedCameraDisplay?.save_ready;
         const action = el('tee-range-action');
         el('automatic-range').dataset.ready = String(teeRangeComplete());
         el('tee-range-restart').hidden = !state;
@@ -1608,18 +1675,31 @@
         el('automatic-range-summary').className = phase === 'retryable_failure' ? 'problem' : 'note';
         el('automatic-range-summary').textContent = teeRangeActionError || teeRangeFailureSummary(state) || (state
           ? `${startOverRequired ? state.reason : (step?.prompt || state.reason)} ${!startOverRequired && state.reason && state.reason !== step?.prompt ? `(${state.reason.replaceAll('_', ' ')})` : ''}`
-          : 'Start after both camera modes pass the light check. No tape measurement is required.');
-        const solution = state?.solution;
-        const selected = solution?.selected_range_m;
-        const iwr = state?.evidence?.iwr_candidate;
-        const arm5 = state?.evidence?.camera_arm5_candidate;
-        const arm6 = state?.evidence?.camera_arm6_candidate;
-        const range = (candidate) => candidate?.radar_slant_range_m == null ? 'unavailable' : `${candidate.radar_slant_range_m.toFixed(3)} m`;
+          : 'Each camera step finds its own exposure for the resting ball. No tape measurement is required.');
+        const display = teeRangeDisplay;
+        const metres = (value) => `${Number(value).toFixed(3)} m`;
+        const describe = (label, item) => {
+          if (!item || item.state === 'pending' || item.state === 'not_captured') {
+            return `<span data-state="pending">${label} <b>not measured yet</b></span>`;
+          }
+          if (item.state === 'accepted') {
+            return `<span data-state="accepted">${label} <b>${metres(item.range_m)}</b></span>`;
+          }
+          const reason = item.reason ? ` — ${escapeHtml(item.reason)}` : '';
+          const diagnostic = item.diagnostic_range_m == null
+            ? ''
+            : ` · diagnostic ${metres(item.diagnostic_range_m)}, not used`;
+          return `<span class="problem" data-state="${item.state}">${label} <b>${item.state}</b>${reason}${diagnostic}</span>`;
+        };
+        const canonical = display?.canonical;
         el('automatic-range-values').innerHTML = state
-          ? `<span>setup epoch <b>${state.epoch_id}</b></span>` +
-            `<span>IWR apparent range <b>${range(iwr)}</b></span>` +
-            `<span>camera arm 5 <b>${range(arm5)}</b> · arm 6 validation <b>${range(arm6)}</b></span>` +
-            `<span>canonical range <b>${selected == null ? 'withheld' : `${selected.toFixed(3)} m`}</b></span>`
+          ? `<span>setup epoch <b>${escapeHtml(state.epoch_id)}</b></span>` +
+            describe(escapeHtml(display?.iwr?.label || 'bias-corrected IWR slant range'), display?.iwr) +
+            describe('camera arm 5', display?.camera?.arm5) +
+            describe('camera arm 6 validation', display?.camera?.arm6) +
+            (canonical?.state === 'resolved'
+              ? `<span data-state="resolved">canonical range <b>${metres(canonical.range_m)}</b></span>`
+              : `<span data-state="withheld">canonical range <b>withheld</b>${canonical?.reason ? ` — ${escapeHtml(canonical.reason.replaceAll('_', ' '))}` : ''}</span>`)
           : '<span>No setup epoch yet.</span>';
         syncGuidedCameraPreview();
         el('step-ladder').disabled = photoActionPending || !setupReady() || !teeRangeComplete();
@@ -1637,6 +1717,7 @@
           if (!response.ok) throw new Error(body.error || `range check failed (${response.status})`);
           if (testerId !== el('tester-id').value.trim()) return;
           teeRangeState = body.state;
+          teeRangeDisplay = body.display || null;
           if (teeRangeActionError && teeRangeStateKey(teeRangeState) !== teeRangeActionErrorKey) {
             setTeeRangeActionError(null);
           }
@@ -1670,6 +1751,7 @@
             request_id: newAttemptId(),
           });
           teeRangeState = body.state;
+          teeRangeDisplay = body.display || null;
           setTeeRangeActionError(null);
         } catch (error) {
           if (error.response?.state) teeRangeState = error.response.state;
@@ -2124,6 +2206,7 @@
         setupRequestRunning = false;
         setupActionPending = false;
         teeRangeState = null;
+        teeRangeDisplay = null;
         teeRangeRequestRunning = false;
         setTeeRangeActionError(null);
         renderTeeRange();

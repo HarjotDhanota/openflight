@@ -294,6 +294,7 @@ class StaticManager:
         self.calibration_hash = calibration_hash
         self.fail = fail
         self.legacy_profile = legacy_profile
+        self.ball_return = 30.0
         self.last_command = None
         self.start_count = 0
         self._status = {"state": "idle", "action": None, "message": "Ready"}
@@ -319,7 +320,7 @@ class StaticManager:
         output = Path(value("--output-dir"))
         output.mkdir(parents=True, exist_ok=True)
         empty = np.ones(96).tolist()
-        present = (np.ones(96) + np.where(np.arange(96) == 30, 30.0, 0.0)).tolist()
+        present = (np.ones(96) + np.where(np.arange(96) == 30, self.ball_return, 0.0)).tolist()
         record = {
             "capture_id": capture_id,
             "capture_kind": kind,
@@ -672,6 +673,63 @@ def test_losing_light_after_the_lock_restarts_the_search(tmp_path, inputs, monke
         exposure["current_step"]["gain"],
     )
     assert post(client, tester, "evaluate_camera_arm5", "dim-save").status_code == 409
+
+
+def test_range_display_reports_accepted_values_only_when_qualified(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    drive(client, tester)
+
+    display = client.get("/api/tester/tee-range", query_string={"tester_id": tester}).get_json()[
+        "display"
+    ]
+
+    assert display["iwr"]["state"] == "accepted"
+    assert display["iwr"]["range_m"] == pytest.approx(1.2)
+    assert display["iwr"]["diagnostic_range_m"] is None
+    assert display["iwr"]["label"] == "bias-corrected IWR slant range"
+    assert display["camera"]["arm5"]["state"] == "accepted"
+    assert display["canonical"] == {
+        "state": "resolved",
+        "range_m": pytest.approx(1.2),
+        "reason": None,
+    }
+
+
+def test_range_display_marks_unqualified_values_as_diagnostics(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
+    client = app.test_client()
+    drive(client, tester)
+
+    display = client.get("/api/tester/tee-range", query_string={"tester_id": tester}).get_json()[
+        "display"
+    ]
+
+    assert display["iwr"]["state"] == "unqualified"
+    assert display["iwr"]["range_m"] is None
+    assert display["iwr"]["diagnostic_range_m"] == pytest.approx(1.2)
+    assert display["camera"]["arm5"]["state"] == "unqualified"
+    assert display["canonical"]["state"] == "withheld"
+    assert display["canonical"]["reason"] == "qualification_artifact_missing"
+
+
+def test_range_display_never_presents_a_rejected_radar_number_as_a_range(
+    tmp_path, inputs, monkeypatch
+):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    app.config["TEST_STATIC_MANAGER"].ball_return = 0.0
+    client = app.test_client()
+    for index, action in enumerate(("start", "capture_empty", "capture_ball")):
+        assert post(client, tester, action, f"rejected-{index}").status_code == 200
+
+    display = client.get("/api/tester/tee-range", query_string={"tester_id": tester}).get_json()[
+        "display"
+    ]
+
+    assert display["iwr"]["state"] == "rejected"
+    assert display["iwr"]["range_m"] is None
+    assert display["iwr"]["reason"].startswith("rejected_no_ball")
+    assert display["canonical"]["state"] == "withheld"
 
 
 def test_guided_flow_resolves_and_survives_reload(tmp_path, inputs, monkeypatch):

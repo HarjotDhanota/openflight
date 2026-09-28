@@ -2541,6 +2541,144 @@ def _camera_to_iwr_ranking(
     }
 
 
+def _controls(values: Mapping | None) -> dict:
+    values = values if isinstance(values, Mapping) else {}
+    return {"exposure_us": values.get("exposure_us"), "gain": values.get("gain")}
+
+
+def guided_camera_display(status: Mapping) -> dict:
+    """One backend-derived state for the guided camera, so the page never re-derives it."""
+    requested = _controls(status.get("requested"))
+    applied = _controls(status.get("applied"))
+    controls_match = bool(
+        requested["exposure_us"] is not None
+        and requested["gain"] is not None
+        and applied_controls_match(
+            StaticExposureStep(int(requested["exposure_us"]), float(requested["gain"])),
+            applied["exposure_us"],
+            applied["gain"],
+        )
+    )
+    association = status.get("association")
+    association = association if isinstance(association, Mapping) else None
+    exposure = (association or {}).get("static_exposure")
+    exposure = exposure if isinstance(exposure, Mapping) else None
+    last = (exposure or {}).get("last_observation") or {}
+    selected = (association or {}).get("selected")
+    outline = (
+        {key: selected.get(key) for key in ("x_px", "y_px", "diameter_px")}
+        if association is not None
+        and association.get("status") == "selected"
+        and isinstance(selected, Mapping)
+        else None
+    )
+    if status.get("error"):
+        state, reason = "camera_error", str(status["error"])
+    elif not status.get("running"):
+        state, reason = "camera_unavailable", "the guided camera is not running"
+    elif association is None or exposure is None:
+        state, reason = "warming", "waiting for the first analysed frames"
+    elif exposure.get("status") == "lighting_required":
+        state, reason = "lighting_required", str(exposure.get("reason"))
+    elif exposure.get("locked_and_passing"):
+        state = "exposure_locked"
+        reason = association.get("readiness_reason") or "ready to save"
+    elif not last or last.get("status") == "settling":
+        state, reason = (
+            "exposure_searching",
+            "waiting for the camera to apply the requested controls",
+        )
+    elif not last.get("ball_found"):
+        state, reason = "ball_not_found", "no reference ball at the current exposure"
+    elif last.get("failed_gates"):
+        state = "optical_gates_failed"
+        reason = "ball pixels failed: " + ", ".join(last["failed_gates"])
+    else:
+        state, reason = "exposure_searching", "waiting for a stable ball at the current exposure"
+    lock = (exposure or {}).get("lock")
+    return {
+        "schema": "openflight.tester_guided_camera_display.v1",
+        "state": state,
+        "reason": reason,
+        "save_ready": bool(
+            state == "exposure_locked" and association and association.get("save_eligible")
+        ),
+        "controls": {"requested": requested, "applied": applied, "match": controls_match},
+        "exposure": {
+            "status": (exposure or {}).get("status"),
+            "stage": (exposure or {}).get("stage"),
+            "current_step": (exposure or {}).get("current_step"),
+            "attempts": len((exposure or {}).get("attempts") or []),
+            "lock": (
+                {
+                    key: lock.get(key)
+                    for key in ("exposure_us", "gain", "applied_exposure_us", "applied_gain")
+                }
+                if isinstance(lock, Mapping)
+                else None
+            ),
+        },
+        "ball_outline": outline,
+    }
+
+
+def _candidate_display(candidate: Mapping | None, *, qualified_source: bool) -> dict:
+    if not isinstance(candidate, Mapping):
+        return {"state": "pending", "range_m": None, "diagnostic_range_m": None, "reason": None}
+    evidence = candidate.get("evidence") if isinstance(candidate.get("evidence"), Mapping) else {}
+    facts = (
+        evidence.get("qualification") if isinstance(evidence.get("qualification"), Mapping) else {}
+    )
+    value = candidate.get("radar_slant_range_m")
+    if not qualified_source:
+        state, reason = "rejected", "the measurement itself was rejected"
+    elif facts.get("status") == "accepted" and facts.get("accuracy_qualified") is True:
+        state, reason = "accepted", None
+    else:
+        state, reason = "unqualified", "not qualified for promotion on this setup"
+    return {
+        "state": state,
+        "range_m": value if state == "accepted" else None,
+        "diagnostic_range_m": value if state != "accepted" else None,
+        "reason": reason,
+    }
+
+
+def tee_range_display(state: Mapping | None) -> dict:
+    """Backend states for the range summary; rejected numbers are diagnostics only."""
+    evidence = (state or {}).get("evidence") or {}
+    iwr = evidence.get("iwr_candidate")
+    difference = (
+        (iwr.get("evidence") or {}).get("difference") if isinstance(iwr, Mapping) else None
+    ) or {}
+    iwr_display = _candidate_display(
+        iwr, qualified_source=difference.get("status") in {None, "accepted"}
+    )
+    if iwr is None:
+        iwr_display = {**iwr_display, "state": "not_captured"}
+    elif iwr_display["state"] == "rejected":
+        iwr_display["reason"] = f"{difference.get('status')}: {difference.get('reason')}"
+    cameras = {}
+    for arm_id in ("arm5", "arm6"):
+        candidate = evidence.get(f"camera_{arm_id}_candidate")
+        value = candidate.get("radar_slant_range_m") if isinstance(candidate, Mapping) else None
+        cameras[arm_id] = _candidate_display(
+            candidate, qualified_source=candidate is None or value is not None
+        )
+    solution = (state or {}).get("solution") or {}
+    resolved = solution.get("status") == "resolved"
+    return {
+        "schema": "openflight.tester_tee_range_display.v1",
+        "iwr": {**iwr_display, "label": "bias-corrected IWR slant range"},
+        "camera": cameras,
+        "canonical": {
+            "state": "resolved" if resolved else "withheld",
+            "range_m": solution.get("selected_range_m") if resolved else None,
+            "reason": None if resolved else (solution.get("reason") or (state or {}).get("reason")),
+        },
+    }
+
+
 def _static_capture_failure(record: Mapping, capture_kind: str) -> dict[str, str]:
     error = record.get("error") if isinstance(record.get("error"), Mapping) else {}
     stage = str(error.get("stage") or "unknown")
@@ -4193,6 +4331,7 @@ def create_app(
                     return jsonify(
                         {
                             "state": state.to_dict() if state else None,
+                            "display": tee_range_display(state.to_dict() if state else None),
                             "qualification_available": qualification is not None,
                             "qualification_status": {
                                 "loaded": qualification is not None,
@@ -4261,7 +4400,9 @@ def create_app(
                     )
                 if not (state.phase.startswith("camera_") and state.phase.endswith("_capturing")):
                     stop_guided_live(tester_id)
-                return jsonify({"state": state.to_dict()})
+                return jsonify(
+                    {"state": state.to_dict(), "display": tee_range_display(state.to_dict())}
+                )
         except TeeRangeSetupAdmissionError as exc:
             failed_state = None
             if exc.start_over:
@@ -4626,7 +4767,16 @@ def create_app(
 
     @app.get("/api/tester/live")
     def live_status():
-        return jsonify({**live.snapshot()[1], "owner": live_owner_snapshot()})
+        status = live.snapshot()[1]
+        owner = live_owner_snapshot()
+        guided = owner is not None and owner.get("kind") == "guided_tee_range"
+        return jsonify(
+            {
+                **status,
+                "owner": owner,
+                "guided_display": guided_camera_display(status) if guided else None,
+            }
+        )
 
     @app.get("/api/tester/live.png")
     def live_frame():

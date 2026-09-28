@@ -2510,3 +2510,114 @@ class TestAttemptLedgerRoutes:
         assert refreshed["counts"]["physical_operator_swings"] == 1
         assert refreshed["counts"]["logged_sensor_shots"] == 2
         assert refreshed["reconciliation"]["difference"] == 1
+
+
+def _guided_status(
+    *,
+    exposure=None,
+    association_status="selected",
+    running=True,
+    error=None,
+    requested=(1250, 8.0),
+    applied=(1248, 8.0),
+    save_eligible=False,
+):
+    association = None
+    if exposure is not None:
+        association = {
+            "status": association_status,
+            "selected": {"x_px": 640.0, "y_px": 500.0, "diameter_px": 24.0}
+            if association_status == "selected"
+            else None,
+            "save_eligible": save_eligible,
+            "readiness_reason": None if save_eligible else "stabilizing",
+            "static_exposure": exposure,
+        }
+    return {
+        "running": running,
+        "error": error,
+        "requested": {"exposure_us": requested[0], "gain": requested[1]},
+        "applied": {"exposure_us": applied[0], "gain": applied[1]},
+        "association": association,
+    }
+
+
+def _exposure(status="searching", *, last=None, locked=False):
+    return {
+        "status": status,
+        "stage": "refine",
+        "reason": "no visible setting passed the ball-pixel gates"
+        if status == "lighting_required"
+        else None,
+        "current_step": {"exposure_us": 1250, "gain": 8.0},
+        "attempts": [{}, {}],
+        "lock": {"exposure_us": 1250, "gain": 8.0, "applied_exposure_us": 1248, "applied_gain": 8.0}
+        if locked
+        else None,
+        "last_observation": last,
+        "locked_and_passing": locked,
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "state"),
+    [
+        (_guided_status(running=False), "camera_unavailable"),
+        (_guided_status(error="RuntimeError: boom"), "camera_error"),
+        (_guided_status(), "warming"),
+        (_guided_status(exposure=_exposure()), "exposure_searching"),
+        (
+            _guided_status(
+                exposure=_exposure(last={"status": "rejected", "ball_found": False}),
+                association_status="not_found",
+            ),
+            "ball_not_found",
+        ),
+        (
+            _guided_status(
+                exposure=_exposure(
+                    last={"status": "rejected", "ball_found": True, "failed_gates": ["clipped"]}
+                )
+            ),
+            "optical_gates_failed",
+        ),
+        (_guided_status(exposure=_exposure("lighting_required")), "lighting_required"),
+        (_guided_status(exposure=_exposure("locked", locked=True)), "exposure_locked"),
+    ],
+)
+def test_guided_camera_display_derives_one_state_per_situation(status, state):
+    display = ts.guided_camera_display(status)
+
+    assert display["state"] == state
+    assert display["save_ready"] is False
+
+
+def test_guided_camera_display_is_save_ready_only_on_a_held_lock():
+    display = ts.guided_camera_display(
+        _guided_status(exposure=_exposure("locked", locked=True), save_eligible=True)
+    )
+
+    assert display["state"] == "exposure_locked"
+    assert display["save_ready"] is True
+    assert display["exposure"]["lock"]["applied_exposure_us"] == 1248
+    assert display["ball_outline"] == {"x_px": 640.0, "y_px": 500.0, "diameter_px": 24.0}
+
+
+def test_guided_camera_display_reports_controls_that_were_not_applied():
+    display = ts.guided_camera_display(
+        _guided_status(exposure=_exposure(), requested=(1250, 8.0), applied=(298, 12.0))
+    )
+
+    assert display["controls"]["match"] is False
+    assert display["controls"]["applied"] == {"exposure_us": 298, "gain": 12.0}
+
+
+def test_guided_camera_display_draws_no_outline_without_a_real_detection():
+    display = ts.guided_camera_display(
+        _guided_status(
+            exposure=_exposure(last={"status": "rejected", "ball_found": False}),
+            association_status="not_found",
+        )
+    )
+
+    assert display["ball_outline"] is None

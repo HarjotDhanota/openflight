@@ -203,6 +203,33 @@ test('changing tester ID cancels the remaining light-measurement sequence', asyn
   await expect(page.locator('#light-verdict')).toContainText('cancelled');
 });
 
+for (const [arm5Dark, arm6Dark, verdict, problem] of [
+  [false, false, '1280×800: light sufficient · 640×400: light sufficient', false],
+  [true, false, '1280×800: more light needed · 640×400: light sufficient — swings are still recorded, as evidence only', true],
+] as const) {
+  test(`the light verdict reports each mode's result (${verdict.slice(0, 30)})`, async ({ page }) => {
+    await mockBaseApis(page, () => ladderState(null));
+    await page.route('**/api/tester/run', (route) => fulfillJson(route, {}));
+    await page.route('**/api/tester/status?**', (route) =>
+      fulfillJson(route, {
+        job: { state: 'complete', message: 'done' },
+        study: {
+          arms: [
+            { arm_id: 'arm5', lighting_required: arm5Dark },
+            { arm_id: 'arm6', lighting_required: arm6Dark },
+          ],
+        },
+      })
+    );
+    await page.goto('/tester.html');
+    await page.getByRole('button', { name: 'B. Measure the light (both modes)' }).tap();
+
+    await expect(page.locator('#light-verdict')).toHaveText(verdict);
+    if (problem) await expect(page.locator('#light-verdict')).toHaveClass('problem');
+    else await expect(page.locator('#light-verdict')).not.toHaveClass('problem');
+  });
+}
+
 test('Stop cancels the remaining light-measurement sequence', async ({ page }) => {
   await mockBaseApis(page, () => ladderState(null));
   const runBodies: Record<string, unknown>[] = [];

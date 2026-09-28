@@ -310,7 +310,9 @@ test('automatic range is visible while tape stays optional and advanced', async 
   await expect(page.locator('#tee-mm')).toBeVisible();
   await expect(page.getByText('Validation only. This value does not guide camera detection')).toBeVisible();
 
-  await expect(page.locator('#automatic-range')).toContainText('IWR apparent range unavailable');
+  await expect(page.locator('#automatic-range')).toContainText(
+    'bias-corrected IWR slant range not measured yet'
+  );
 });
 
 for (const viewport of KIOSK_VIEWPORTS) {
