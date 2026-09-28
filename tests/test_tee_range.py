@@ -369,6 +369,23 @@ def test_qualification_artifact_round_trips_with_stable_digests():
     assert rebuilt.policy_sha256 == artifact.policy_sha256
 
 
+def test_qualification_v3_digests_are_pinned():
+    """A schema, identity or policy change must be a deliberate, reviewed digest change."""
+    artifact = qualification()
+
+    assert artifact.to_dict()["schema"] == "openflight.tee_range_qualification.v3"
+    assert artifact.artifact_sha256 == (
+        "6662576b5582221d1320c96ccd57455ad26275d02375de86564408b888599b15"
+    )
+    assert artifact.policy_sha256 == (
+        "de484906d660a1b762a4cbe558f0a4281d1108496c19b21fc9912891338216af"
+    )
+    assert (
+        qualification(iwr_static_estimator_sha256="c" * 64).artifact_sha256
+        != artifact.artifact_sha256
+    )
+
+
 @pytest.mark.parametrize(
     ("group", "field"),
     [

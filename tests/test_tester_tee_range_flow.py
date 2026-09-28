@@ -17,6 +17,7 @@ from openflight.camera.reference_ball_range import (
     ReferenceBallRangeCandidate,
     ReferenceBallRangeResult,
 )
+from openflight.iwr6843.range_evidence import STATIC_PROFILE_V2_SCHEMA
 
 
 class EligibleSetup:
@@ -201,8 +202,10 @@ def file_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def profile(capture: str, power: list[float], config_hash: str, rig_hash: str) -> dict:
-    return {
+def profile(
+    capture: str, power: list[float], config_hash: str, rig_hash: str, *, legacy=False
+) -> dict:
+    payload = {
         "capture_sha256": capture * 64,
         "radar_profile_sha256": config_hash,
         "radar_profile_qualified": False,
@@ -212,6 +215,14 @@ def profile(capture: str, power: list[float], config_hash: str, rig_hash: str) -
         "range_bin_count": 96,
         "range_resolution_m": 0.04,
         "power": power,
+    }
+    if legacy:
+        return payload
+    return {
+        **payload,
+        "schema": STATIC_PROFILE_V2_SCHEMA,
+        "frame_mad_fraction": [0.0] * 96,
+        "frame_count": 24,
     }
 
 
@@ -224,12 +235,14 @@ class StaticManager:
         rig_hash: str,
         calibration_hash: str,
         fail=False,
+        legacy_profile=False,
     ):
         self.config_hash = config_hash
         self.firmware_hash = firmware_hash
         self.rig_hash = rig_hash
         self.calibration_hash = calibration_hash
         self.fail = fail
+        self.legacy_profile = legacy_profile
         self.last_command = None
         self.start_count = 0
         self._status = {"state": "idle", "action": None, "message": "Ready"}
@@ -274,6 +287,7 @@ class StaticManager:
                 empty if kind == "empty" else present,
                 self.config_hash,
                 self.rig_hash,
+                legacy=self.legacy_profile,
             ),
             "error": {
                 "stage": "connect",
@@ -376,6 +390,7 @@ def app_for(
     live_view=None,
     tilt=None,
     require_iwr_preflight=False,
+    legacy_profile=False,
 ):
     def camera_model(arm, *_args):
         return BallPlaneCamera.nominal(
@@ -401,6 +416,7 @@ def app_for(
         rig_hash=file_hash(inputs["rig"]),
         calibration_hash=file_hash(inputs["calibration"]),
         fail=fail,
+        legacy_profile=legacy_profile,
     )
     app = ts.create_app(
         sessions_root=tmp_path / "sessions",
@@ -784,6 +800,76 @@ def test_missing_qualification_and_disagreement_remain_raw_only(tmp_path, inputs
     disagreed = drive(app.test_client(), tester)
     assert disagreed["phase"] == "raw_only"
     assert disagreed["solution"]["reason"] == "absolute_residual_exceeds_policy"
+
+
+@pytest.mark.parametrize(
+    ("artifact", "reason"),
+    [
+        ("{not json", "qualification_artifact_invalid"),
+        ('["not", "an", "object"]', "qualification_artifact_invalid"),
+        (None, "qualification_artifact_legacy_schema"),
+    ],
+)
+def test_legacy_or_invalid_qualification_starts_and_stays_raw_only(
+    tmp_path, inputs, monkeypatch, artifact, reason
+):
+    if artifact is None:
+        legacy = json.loads(inputs["qualification"].read_text(encoding="utf-8"))
+        legacy["schema"] = "openflight.tee_range_qualification.v2"
+        legacy["schema_version"] = 2
+        for field in (
+            "camera_range_estimator_sha256",
+            "camera_exposure_policy_sha256",
+            "camera_exposure_policy_purpose",
+            "iwr_static_estimator_sha256",
+        ):
+            legacy["identities"].pop(field)
+        artifact = json.dumps(legacy)
+    inputs["qualification"].write_text(artifact, encoding="utf-8")
+
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    status = client.get("/api/tester/tee-range", query_string={"tester_id": tester}).get_json()
+    state = drive(client, tester)
+
+    assert status["qualification_available"] is False
+    assert status["qualification_status"]["reason"].startswith(reason)
+    assert state["phase"] == "raw_only"
+    assert state["solution"]["status"] == "unresolved"
+    assert state["solution"]["reason"].startswith(reason)
+
+
+def test_resolved_epoch_is_withdrawn_without_a_configured_qualification(
+    tmp_path, inputs, monkeypatch
+):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    assert drive(app.test_client(), tester)["phase"] == "resolved"
+    epoch = tee_range_setup.load_current_epoch(ts.tester_root(tmp_path / "sessions", tester))
+
+    configured = tee_range_setup.validate_epoch_solution(
+        epoch, required_qualification=epoch.qualification
+    )
+    withdrawn = tee_range_setup.validate_epoch_solution(epoch)
+
+    assert configured.status == "resolved"
+    assert withdrawn.status == "unresolved"
+    assert withdrawn.reason == "resolved_range_requires_qualification_context"
+    assert withdrawn.selected_range_m is None
+    assert all("promotion" not in item.evidence for item in withdrawn.candidates)
+
+
+def test_legacy_v1_static_profiles_never_promote_under_v3_qualification(
+    tmp_path, inputs, monkeypatch
+):
+    app, tester = app_for(tmp_path, inputs, monkeypatch, legacy_profile=True)
+    state = drive(app.test_client(), tester)
+
+    iwr = state["evidence"]["iwr_candidate"]["evidence"]["qualification"]
+    assert state["phase"] == "raw_only"
+    assert state["solution"]["status"] == "unresolved"
+    assert iwr["status"] == "rejected"
+    assert iwr["accuracy_qualified"] is False
+    assert iwr["iwr_static_estimator_sha256"] is None
 
 
 def test_requests_are_idempotent_and_failures_retry_without_erasing_evidence(

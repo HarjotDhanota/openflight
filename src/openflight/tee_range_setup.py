@@ -268,10 +268,12 @@ def validate_epoch_solution(
     required_qualification: TeeRangeQualification | None = None,
 ) -> TeeRangeSolution:
     """Require the configured artifact after the epoch loader re-runs policy."""
+    if epoch.solution.status != "resolved":
+        return epoch.solution
+    if required_qualification is None:
+        return TeeRangeSolution.from_dict(epoch.solution.to_dict())
     if (
-        epoch.solution.status == "resolved"
-        and required_qualification is not None
-        and epoch.qualification is not None
+        epoch.qualification is not None
         and epoch.qualification.artifact_sha256 != required_qualification.artifact_sha256
     ):
         raise ValueError("tee-range epoch qualification does not match server configuration")

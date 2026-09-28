@@ -1916,13 +1916,23 @@ def _json_identity(path: Path | None) -> dict | None:
     }
 
 
-def _load_tee_range_qualification(path: Path | None) -> tee_range.TeeRangeQualification | None:
+def _load_tee_range_qualification(
+    path: Path | None,
+) -> tuple[tee_range.TeeRangeQualification | None, str]:
+    """Load the artifact, or return why automatic range must stay unresolved."""
     if path is None:
-        return None
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, Mapping):
-        raise ValueError("tee-range qualification artifact must be a JSON object")
-    return tee_range.TeeRangeQualification.from_dict(payload)
+        return None, "qualification_artifact_missing"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, Mapping):
+            raise ValueError("tee-range qualification artifact must be a JSON object")
+        if payload.get("schema") != tee_range.QUALIFICATION_SCHEMA and str(
+            payload.get("schema", "")
+        ).startswith("openflight.tee_range_qualification."):
+            return None, f"qualification_artifact_legacy_schema: {payload.get('schema')}"
+        return tee_range.TeeRangeQualification.from_dict(payload), "qualification_loaded"
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return None, f"qualification_artifact_invalid: {exc}"
 
 
 def _guided_camera_candidate(
@@ -2973,7 +2983,9 @@ def create_app(
     admitted_tee_range: dict[
         str, tuple[tee_range.TeeRangeSolution, tee_range_setup.TeeRangeEpochReference | None]
     ] = {}
-    qualification = _load_tee_range_qualification(tee_range_qualification)
+    qualification, qualification_reason = _load_tee_range_qualification(tee_range_qualification)
+    if qualification is None and tee_range_qualification is not None:
+        logger.warning("Tee-range qualification unavailable: %s", qualification_reason)
     tee_range_lock = threading.RLock()
     live_owner_lock = threading.RLock()
     live_owner: dict[str, dict[str, str] | None] = {"guided": None}
@@ -3546,9 +3558,7 @@ def create_app(
         solution = (
             tee_range.resolve_qualified_tee_range(state.epoch_id, candidates, qualification)
             if qualification is not None
-            else tee_range.TeeRangeSolution.unresolved(
-                candidates, reason="qualification_artifact_missing"
-            )
+            else tee_range.TeeRangeSolution.unresolved(candidates, reason=qualification_reason)
         )
         return store.finalize(state, solution, qualification)
 
@@ -3924,6 +3934,10 @@ def create_app(
                         {
                             "state": state.to_dict() if state else None,
                             "qualification_available": qualification is not None,
+                            "qualification_status": {
+                                "loaded": qualification is not None,
+                                "reason": qualification_reason,
+                            },
                             "flow_required": require_tee_range_flow,
                         }
                     )
