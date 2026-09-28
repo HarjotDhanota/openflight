@@ -55,7 +55,8 @@ def static_exposure_policy() -> dict[str, Any]:
             "unidentified_ball": "not_a_brightness_signal_no_pruning",
             "unidentified_statuses": sorted(_UNIDENTIFIED_STATUSES),
             "identify_limit_observations": _IDENTIFY_LIMIT,
-            "darkness_evidence": "detector_not_found_or_dark_gates_only",
+            "darkness_evidence": "detector_not_found_or_dark_gates_or_unlit_frame",
+            "unidentified_requires_frame_signal_dn": _MIN_SIGNAL_ABOVE_FLOOR_DN,
             "clipping_prunes_before_dark_gates": True,
             "pose_change": "retry_same_step_then_rig_moved",
         },
@@ -113,6 +114,7 @@ class StaticExposureObservation:
     applied_gain: float | None = None
     failed_gates: tuple[str, ...] = ()
     association_status: str | None = None
+    frame_signal_dn: float | None = None
 
     @property
     def acceptable(self) -> bool:
@@ -210,8 +212,21 @@ def assess_static_exposure(  # pylint: disable=too-many-locals
     detector = association.get("status") if isinstance(association, Mapping) else None
     applied["association_status"] = detector
     if not isinstance(selected, Mapping) or detector != "selected":
+        images = np.asarray(frames)
+        frame_signal = (
+            float(np.median(images))
+            - (float(black_floor_dn) if black_floor_dn is not None else 0.0)
+            if images.size
+            else None
+        )
         return StaticExposureObservation(
-            requested, "rejected", "no reference ball was detected", False, True, **applied
+            requested,
+            "rejected",
+            "no reference ball was detected",
+            False,
+            True,
+            **applied,
+            frame_signal_dn=round(frame_signal, 2) if frame_signal is not None else None,
         )
     images = np.asarray(frames)
     if images.dtype != np.uint8 or images.ndim != 3 or images.shape[0] < 3:
@@ -371,7 +386,15 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
                 )
             return
         self._pose_retries = 0
-        if not observation.ball_found and observation.association_status in _UNIDENTIFIED_STATUSES:
+        unlit = (
+            observation.frame_signal_dn is not None
+            and observation.frame_signal_dn < _MIN_SIGNAL_ABOVE_FLOOR_DN
+        )
+        if (
+            not observation.ball_found
+            and observation.association_status in _UNIDENTIFIED_STATUSES
+            and not unlit
+        ):
             # Ball-like objects are visible but the ball cannot be picked out; more
             # light does not resolve that, so it must not be read as darkness.
             self._unidentified += 1
@@ -387,8 +410,9 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
                 self._advance()
             return
         self._unidentified = 0
+        # Noise in an unlit frame makes geometry-inconsistent candidates; that is darkness.
         dark = not observation.ball_found and (
-            observation.association_status in _DARK_DETECTOR_STATUSES
+            observation.association_status in _DARK_DETECTOR_STATUSES or unlit
         )
         if self.stage == "bootstrap":
             if not observation.ball_found:

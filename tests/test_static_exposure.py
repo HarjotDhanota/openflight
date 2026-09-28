@@ -191,7 +191,7 @@ def test_lock_serializes_with_policy_identity_and_applied_controls(tmp_path):
 def test_static_exposure_policy_identity_is_pinned():
     """A lattice or gate change must be a deliberate, reviewed identity change."""
     assert se.static_exposure_policy_sha256() == (
-        "1c6b89373508c6f3041c8014604204194d5f730e66b8ea17bf0ae931ef4d3a52"
+        "4ae68eab34732286d8eb5400b1d78c17a68cbda1aa03a80eebd8c4b5f2b108a8"
     )
 
 
@@ -280,3 +280,38 @@ def test_a_bootstrap_settle_timeout_is_not_taken_as_darkness():
 
     assert search.stage == "refine"
     assert search.current_step == sorted(STEPS)[0]
+
+
+def test_noise_candidates_in_a_black_frame_are_darkness_not_ambiguity():
+    """Pi 2026-09-28: at 145 us x 6 the frame was nearly black and noise gave
+    geometry-inconsistent candidates; the search must keep brightening."""
+    search = se.StaticExposureSearch(STEPS)
+    for _ in range(8):
+        step = search.current_step
+        search.record(
+            _observation(
+                step,
+                {"status": "no_consistent_candidate", "selected": None},
+                frames=_frames(26.0, 24.0),
+            )
+        )
+
+    assert search.status == "searching"
+    assert search.stage == "bootstrap"
+    assert all(item["reason"] == "ball_not_visible" for item in search.attempts)
+    assert search.current_step.exposure_us > STEPS[0].exposure_us
+
+
+def test_ambiguity_in_a_lit_frame_is_still_reported_as_unidentified():
+    search = se.StaticExposureSearch(STEPS)
+    for _ in range(8):
+        step = search.current_step
+        if step is None:
+            break
+        search.record(
+            _observation(
+                step, {"status": "ambiguous", "selected": None}, frames=_frames(160.0, 90.0)
+            )
+        )
+
+    assert search.status == "ball_not_identified"
