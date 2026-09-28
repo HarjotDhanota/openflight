@@ -1,16 +1,22 @@
 # Static Range and Camera Exposure Implementation Plan
 
-Status: implementation handoff; partially implemented and not yet validated
+Status: active implementation plan; WIP committed, not yet fully validated
 
 Date: 2026-09-26
 
+Last corrected: 2026-09-28
+
 Branch: `feat/tester-capture-pilot`
-Clean base before this work: `79092de5a553f0417beb402834e36ec694566dcf`
+
+Clean base before implementation: `79092de5a553f0417beb402834e36ec694566dcf`
+
+Last pushed planning baseline: `d07320a2c13003d948b74b979927756b1bba1e11`
 
 This document is the handoff for completing the IWR6843 static-ball range and
-camera exposure work. The worktree already contains partial, uncommitted
-changes. Inspect and continue those changes; do not discard or rewrite them
-blindly.
+camera exposure work. The partial implementation is committed in `8fa2768` and
+the first next-agent handoff is committed in `d07320a`. Inspect those changes
+before continuing; do not discard or rewrite them blindly. Re-check the
+worktree because later planning or implementation edits may be uncommitted.
 
 Do not push, open a PR, or merge this work into OpenFlight unless the owner
 explicitly asks. Keep the work on the private feature branch as local,
@@ -30,6 +36,26 @@ reviewable commits.
 
 Use `uv` for Python commands. Do not weaken tests, suppress failures, or claim
 hardware qualification from Windows/offline tests.
+
+## Corrected execution order
+
+The numbered change sets are dependency ordered as follows:
+
+1. Revalidate the committed WIP and freeze reproducible evidence.
+2. Complete qualification schema v3.
+3. Finish the guarded radar selector v2.
+4. Integrate the static exposure search and durable backend lock, including a
+   coarse bootstrap phase for scenes where the initial exposure cannot detect
+   the ball.
+5. Finalize API states, then make the UI render those states truthfully.
+6. Add armed exposure enforcement and metric provenance only after the range
+   and static-exposure contracts are stable.
+7. Handle serial recovery as an independent lifecycle change.
+8. Run the preregistered Pi qualification and frozen holdout.
+
+Do not implement UI state assumptions ahead of the backend contract, and do
+not let metric-provenance work expand the critical path for correct setup
+range and exposure.
 
 ## Goal and non-negotiable behavior
 
@@ -85,9 +111,25 @@ The checked-in fixtures intentionally record the operator's E3 distance only
 as an external observation with `qualification_truth: false`. Do not convert it
 to ground truth after the fact.
 
-## Current dirty worktree
+### 2026-09-28 Pi retest of the pushed WIP
 
-At handoff, these paths are modified or untracked:
+The guided Arm 5 view on pushed commit `d07320a` reported a live 1280×800 frame
+with mean 21.3 and brightest pixel 38, found no reference ball, drew no outline,
+and correctly kept Save disabled. It displayed an IWR apparent-range diagnostic
+of 1.153 m while stating that the radar candidate was not accepted for
+provisional guidance and canonical range was withheld. No contemporaneous tape
+truth was recorded for this observation, so 1.153 m is not an accuracy result.
+
+Code inspection confirms that the guided range path calls `resolve_gain()`
+once, starts `LiveView` with that fixed exposure/gain pair and never invokes the
+new static exposure search or persists a static exposure lock. The
+`static_exposure.py` module is currently used only for policy identity. This Pi
+observation therefore confirms the known integration gap; it does not show
+that the proposed exposure policy failed.
+
+## Committed WIP inventory
+
+Before commit `8fa2768`, these paths were modified or untracked:
 
 ```text
  M docs/development/fusion-master-plan.md
@@ -104,9 +146,10 @@ At handoff, these paths are modified or untracked:
 ?? tests/fixtures/
 ```
 
-Re-run `git status --short` because the list may have changed after this file
-was added. Do not assume any partial implementation is correct merely because
-it exists.
+They were committed together as an explicit WIP handoff. Re-run
+`git status --short` and inspect `git diff 79092de..HEAD` because the worktree
+and branch may have advanced. Do not assume any partial implementation is
+correct merely because it is committed.
 
 ### Work already started
 
@@ -249,44 +292,7 @@ Acceptance:
 - Documentation calls the thresholds provisional until the hardware
   qualification stage.
 
-## Change set 4: Make camera and UI state truthful
-
-The tester page must show whether the ball and controls are actually usable,
-not just that a frame exists.
-
-Required work:
-
-- Separate these states in the API and UI:
-  - camera unavailable;
-  - warming;
-  - live but ball not found;
-  - ball found but light/contrast/clipping failed;
-  - static exposure search in progress;
-  - exposure locked and applied;
-  - camera range accepted/rejected/unqualified;
-  - IWR apparent range observed but rejected;
-  - canonical fused range accepted/withheld.
-- Never render a rejected radar number as though it were a usable range. It may
-  be shown in a clearly labeled diagnostics area with its reason.
-- Overlay the detected ball outline and ROI only when detection is real. Avoid
-  a decorative or stale outline.
-- Show requested and applied exposure/gain values when they differ.
-- Fix manual-camera eligibility so the backend and UI agree about whether a
-  camera can contribute to canonical range.
-- Normal tester mode must block save/promotion/production metrics when optical
-  gates fail. An advanced diagnostic action may save raw evidence if it is
-  explicitly labeled unqualified.
-- Preserve accessibility, keyboard behavior, and useful error text.
-
-Required UI coverage:
-
-- component/state tests for every state above;
-- Playwright coverage for successful lock, missing ball, insufficient light,
-  clipping, applied-control mismatch, rejected IWR, and withheld fusion;
-- viewport coverage at 800x400, 800x480, and 1024x600;
-- no clipped critical controls or hidden rejection explanations.
-
-## Change set 5: Integrate static exposure search and lock
+## Change set 4: Integrate static exposure search and lock
 
 Static ranging needs its own deterministic policy and durable lock artifact.
 Do not reuse the swing exposure file or copy static settings into armed mode.
@@ -296,8 +302,13 @@ Required work:
 - Finish the `static_exposure.py` data model, strict loader, validation, policy
   hash, atomic writer, and focused tests.
 - Run the search only while disarmed/setup-only.
-- Search a deterministic exposure/gain ladder from lowest light collection
-  upward.
+- Use a two-stage deterministic search:
+  - bootstrap with bounded coarse exposure/gain steps until a plausible ball
+    ROI can be found or the diagnostic ceiling is reached;
+  - refine from the lowest nearby controls upward and select the lowest
+    applied setting that passes every optical gate.
+- The bootstrap stage may use whole-frame and candidate-region statistics only
+  to obtain a detectable image. It must not qualify the ball or promote range.
 - After each control request, read back applied camera metadata. Reject a step
   when the camera did not apply the requested controls within declared
   tolerance.
@@ -322,15 +333,56 @@ Required work:
 Acceptance:
 
 - Unit tests prove the lowest passing applied setting is selected.
-- Tests cover delayed control application, ignored controls, low contrast,
-  clipping, unstable detection, camera restart, stale lock, and identity
-  mismatch.
+- Tests cover initially invisible balls, bootstrap exhaustion, delayed control
+  application, ignored controls, low contrast, clipping, unstable detection,
+  camera restart, stale lock, and identity mismatch.
 - Static exposure never changes the armed swing exposure configuration.
+
+## Change set 5: Make camera, API and UI state truthful
+
+Define and test the backend state contract after change set 4, then make the
+tester page show whether the ball and applied controls are actually usable,
+not just that a frame exists.
+
+Required work:
+
+- Separate these states in the API and UI:
+  - camera unavailable;
+  - warming;
+  - live but ball not found;
+  - ball found but light/contrast/clipping failed;
+  - static exposure bootstrap/search in progress;
+  - exposure locked and applied;
+  - camera range accepted/rejected/unqualified;
+  - IWR apparent range observed but rejected;
+  - canonical fused range accepted/withheld.
+- Finalize one backend representation and reason-code vocabulary before wiring
+  UI components. Do not duplicate state derivation in the frontend.
+- Never render a rejected radar number as though it were a usable range. It may
+  be shown in a clearly labeled diagnostics area with its reason.
+- Overlay the detected ball outline and ROI only when detection is real. Avoid
+  a decorative or stale outline.
+- Show requested and applied exposure/gain values when they differ.
+- Fix manual-camera eligibility so the backend and UI agree about whether a
+  camera can contribute to canonical range.
+- Normal tester mode must block save/promotion/production metrics when optical
+  gates fail. An advanced diagnostic action may save raw evidence if it is
+  explicitly labeled unqualified.
+- Preserve accessibility, keyboard behavior, and useful error text.
+
+Required UI coverage:
+
+- backend contract and component/state tests for every state above;
+- Playwright coverage for successful lock, missing ball, insufficient light,
+  clipping, applied-control mismatch, rejected IWR, and withheld fusion;
+- viewport coverage at 800x400, 800x480, and 1024x600;
+- no clipped critical controls or hidden rejection explanations.
 
 ## Change set 6: Enforce armed exposure and metric provenance
 
-This change must respect the distinction between production capture and
-disarmed research capture.
+Start this change only after change sets 1-5 have stable range, exposure-lock,
+and API contracts. It must respect the distinction between production capture
+and disarmed research capture without expanding the setup-critical path.
 
 Required work:
 
@@ -397,17 +449,54 @@ Required Pi/physical matrix:
 
 Process:
 
-1. Freeze estimator and exposure-policy hashes before collecting the holdout.
-2. Store tape truth contemporaneously in the session evidence.
-3. Tune only on the development set.
-4. Run the untouched holdout once with frozen identities.
-5. Record false accepts, false rejects, range error, optical-gate failures, and
+1. Run a downstream sensitivity analysis and obtain owner approval for the
+   numeric gates before collecting qualification data.
+2. Freeze estimator and exposure-policy hashes before collecting the holdout.
+3. Store tape truth contemporaneously in the session evidence.
+4. Tune only on the development set.
+5. Run the untouched holdout once with frozen identities.
+6. Record false accepts, false rejects, range error, optical-gate failures, and
    all withheld reasons.
-6. Sign qualification only for the tested hardware, firmware, camera mode,
+7. Sign qualification only for the tested hardware, firmware, camera mode,
    placement envelope, estimator hashes, and exposure policy.
+
+Provisional preregistration target, to be accepted or revised before data
+collection:
+
+- Radar development: at least 5 tape-measured distances × 4 reflector layouts
+  × 5 complete repeats for each supported mount/profile combination.
+- Radar holdout: at least 3 unseen distances × 3 unseen reflector layouts × 5
+  complete repeats, collected only after hashes are frozen.
+- Camera development: at least 4 supported lighting regimes × 5 complete
+  searches for each supported camera mode, including dim, normal, bright and
+  backlit scenes.
+- Camera holdout: at least 3 unseen scenes × 5 complete searches per supported
+  mode after the policy hash is frozen.
+- No false promotion in no-ball, ambiguous, identity-mismatch,
+  out-of-envelope, or holdout cases.
+- At least 90% accepted-range availability inside the declared operating
+  envelope, with median absolute range error no greater than 0.025 m and P95
+  no greater than 0.050 m.
+- Applied exposure/gain identity must match on 100% of promoted camera
+  observations; supported-lighting ball/optical availability must be at least
+  95%, with zero no-ball promotions.
+
+These values are engineering targets, not existing results. If downstream
+launch-angle sensitivity or initial development data shows that a target is
+inappropriate, revise and record it before freezing the holdout. Never tune a
+gate after seeing the holdout outcome.
 
 Promotion must fail closed when any identity or envelope differs. Report real
 accuracy and failure rates; do not turn a small test set into a broader claim.
+
+## Deferred research workstream: IWR6843 spin feasibility
+
+The channel-aware micro-Doppler and differential-phase proposal is documented
+separately in
+[IWR6843 spin feasibility study](2026-09-28-iwr6843-spin-feasibility.md).
+It remains an offline M4 research track after the range/exposure critical path.
+Total spin, OPS harmonic disambiguation and spin axis have separate gates;
+differential array phase is not treated as a direct spin measurement.
 
 ## Recommended local commit boundaries
 
@@ -416,11 +505,15 @@ Keep these as separate reviewable commits, not one large commit:
 1. `test: freeze static range regression evidence`
 2. `feat: bind tee qualification estimator identities`
 3. `feat: add guarded static radar selector v2`
-4. `feat: report truthful tester range states`
-5. `feat: add static camera exposure lock`
+4. `feat: add static camera exposure lock`
+5. `feat: report truthful tester range states`
 6. `feat: enforce armed optical policy`
 7. `fix: harden IWR serial lifecycle`
 8. `docs: record hardware qualification results` only after real hardware work
+
+Keep IWR spin research in a later, separate branch/commit series after the
+range/exposure critical path. Do not fold an unvalidated spin estimator into
+these commits.
 
 Do not create empty commits just to match this list. If a boundary cannot pass
 its focused tests independently, fix the dependency or document why two
@@ -485,6 +578,8 @@ The implementation is not complete until all of the following are true:
 - [ ] Radar v2 rejects the known E2/E3 false reflectors and the full synthetic
       negative matrix.
 - [ ] Alternate peaks cannot become canonical measurements.
+- [ ] Camera bootstrap can reveal an initially invisible ball without treating
+      bootstrap evidence as qualification.
 - [ ] Camera setup selects and proves the lowest applied passing setting.
 - [ ] Static exposure is isolated from armed swing exposure.
 - [ ] UI and durable evidence distinguish observed, rejected, accepted,
@@ -497,6 +592,8 @@ The implementation is not complete until all of the following are true:
 - [ ] Focused tests, broader Python tests, Ruff, formatting, UI lint/build, and
       Playwright pass without weakened gates.
 - [ ] Master-plan checkpoint and decision log reflect what was actually proven.
+- [ ] Numeric qualification gates and sample counts were frozen before the
+      holdout, and the holdout was not used for tuning.
 - [ ] No hardware accuracy claim is made until the Pi holdout passes.
 - [ ] No push or PR occurs without explicit owner approval.
 
@@ -506,11 +603,13 @@ The implementation is not complete until all of the following are true:
 > `C:\Users\harjo\Desktop\Coding\OpenFlight\openflight-tester-pilot`. Read the
 > root `AGENTS.md`, `ui/AGENTS.md`, and
 > `docs/development/2026-09-26-static-range-camera-exposure-implementation-plan.md`
-> completely before editing. The worktree is intentionally dirty: inspect and
-> preserve the partial changes instead of resetting them. Complete every change
-> set in the plan as small local commits, with failing regression tests first
-> where applicable. Do not push, open a PR, merge into OpenFlight, weaken gates,
-> or claim hardware qualification. Run all specified focused and broader test,
-> lint, format, build, and Playwright gates, and update the fusion master plan
-> with only evidence-backed claims. Stop before any remote operation and report
-> exact commits, tests, remaining Pi work, and any unresolved risks.
+> completely before editing. The partial implementation is committed; inspect
+> `git status` and `git diff 79092de..HEAD` before changing it, and preserve its
+> evidence instead of resetting it. Complete every change set in the corrected
+> dependency order as small local commits, with failing regression tests first
+> where applicable. Keep the IWR spin work offline and separate from the
+> range/exposure critical path. Do not push, open a PR, merge into OpenFlight,
+> weaken gates, or claim hardware qualification. Run all specified focused and
+> broader test, lint, format, build, and Playwright gates, and update the fusion
+> master plan with only evidence-backed claims. Stop before any remote operation
+> and report exact commits, tests, remaining Pi work, and unresolved risks.

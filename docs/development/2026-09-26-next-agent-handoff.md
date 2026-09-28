@@ -2,9 +2,14 @@
 
 Date: 2026-09-26
 
+Last corrected: 2026-09-28
+
 Branch: `feat/tester-capture-pilot`
 
-Starting commit: `8fa27688d1f4881e937e3d78450e5cd3a53e4cfb`
+Partial implementation commit: `8fa27688d1f4881e937e3d78450e5cd3a53e4cfb`
+
+Last pushed baseline before the 2026-09-28 planning correction:
+`d07320a2c13003d948b74b979927756b1bba1e11`
 
 This is a continuation handoff, not a completion report. The branch contains a
 partially implemented static-range selector, qualification schema changes,
@@ -34,12 +39,20 @@ approval.
 2. `ui/AGENTS.md` before any UI change.
 3. `docs/development/fusion-master-plan.md`.
 4. `docs/development/2026-09-26-static-range-camera-exposure-implementation-plan.md`.
-5. This handoff.
+5. `docs/development/2026-09-28-iwr6843-spin-feasibility.md` only when working
+   on the deferred spin study.
+6. This handoff.
 
 The implementation plan is authoritative for the eight change sets,
 acceptance gates, negative-test matrix, recommended commit boundaries, and Pi
 qualification procedure. This file summarizes the current state and immediate
 next actions; it does not replace that plan.
+
+The corrected dependency order is evidence, qualification v3, radar selector,
+static-exposure backend/lock, API/UI truthfulness, armed-policy provenance,
+serial lifecycle, then physical qualification. IWR spin feasibility is a
+separate offline research workstream and must not delay or contaminate that
+critical path.
 
 ## Why this work exists
 
@@ -131,6 +144,9 @@ integrated and verified.
   inventing new metric-accuracy claims.
 - Address the CP2105/IWR serial-reset lifecycle as a separate change set.
 - Run real Pi hardware qualification and a frozen holdout matrix.
+- Separately test whether channel-aware IWR micro-Doppler and calibrated
+  RX/TX-pair phase improve total-spin coverage or harmonic disambiguation.
+  Do not assume that differential phase directly measures spin or spin axis.
 
 ## Exact safety decisions to preserve
 
@@ -223,8 +239,9 @@ When handing back to the owner, report:
 ## Ready-to-use continuation prompt
 
 > Continue the tester static-range and camera-exposure work on
-> `feat/tester-capture-pilot` from commit
-> `8fa27688d1f4881e937e3d78450e5cd3a53e4cfb`. First read the root `AGENTS.md`,
+> `feat/tester-capture-pilot` from the current branch head (the last pushed
+> baseline before the planning correction was
+> `d07320a2c13003d948b74b979927756b1bba1e11`). First read the root `AGENTS.md`,
 > `ui/AGENTS.md`,
 > `docs/development/2026-09-26-next-agent-handoff.md`, and
 > `docs/development/2026-09-26-static-range-camera-exposure-implementation-plan.md`
