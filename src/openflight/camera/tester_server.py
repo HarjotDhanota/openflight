@@ -2064,11 +2064,12 @@ def _guided_iwr_candidate(
     bias_m = float(calibration.get("range_bias_const_m", calibration.get("range_offset_m", 0.0)))
     empty = _static_profile(empty_record)
     present = _static_profile(present_record)
-    apparent_interval = (
-        tuple(value + bias_m for value in qualification.plausible_range_m)
+    corrected_interval = (
+        qualification.plausible_range_m
         if qualification is not None
         else (TEE_RANGE_MM[0] / 1000.0, TEE_RANGE_MM[1] / 1000.0)
     )
+    apparent_interval = tuple(value + bias_m for value in corrected_interval)
     result = compare_static_range_profiles(
         empty, present, plausible_apparent_range_m=apparent_interval
     )

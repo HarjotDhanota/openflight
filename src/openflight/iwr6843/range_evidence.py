@@ -34,6 +34,7 @@ _STATIC_V2_MAX_FRAME_MAD_FRACTION = 0.10
 _STATIC_V2_SCALE_BASELINE_PERCENTILES = (10.0, 80.0)
 _STATIC_V2_SCALE_STABLE_FRACTION = 0.70
 _STATIC_V2_BOUNDARY_GUARD_BINS = 1
+_STATIC_V2_MIN_FRAME_COUNT = 12
 
 
 def static_range_estimator_policy() -> dict[str, Any]:
@@ -50,6 +51,9 @@ def static_range_estimator_policy() -> dict[str, Any]:
         "candidate_gates": {
             "minimum_fractional_excess": _STATIC_V2_MIN_FRACTIONAL_EXCESS,
             "minimum_absolute_score": _STATIC_V2_MIN_ABSOLUTE_SCORE,
+            "cluster_membership": "contiguous_bins_meeting_minimum_fractional_excess",
+            "scene_change": "reciprocal_fractional_loss_with_minimum_absolute_score",
+            "minimum_frame_count": _STATIC_V2_MIN_FRAME_COUNT,
             "maximum_frame_mad_fraction": _STATIC_V2_MAX_FRAME_MAD_FRACTION,
             "maximum_changed_fraction": _STATIC_MAX_CHANGED_FRACTION,
             "maximum_peak_width_bins": _STATIC_MAX_PEAK_WIDTH_BINS,
@@ -605,6 +609,16 @@ def _compare_static_range_profiles_v2(  # pylint: disable=too-many-locals
 ) -> StaticRangeDifferenceResult:
     _matching_static_profiles(empty, present)
     ranges, search = _profile_search(empty, plausible_apparent_range_m)
+    estimator = static_range_estimator_sha256()
+    if min(empty.frame_count, present.frame_count) < _STATIC_V2_MIN_FRAME_COUNT:
+        return _static_result(
+            "rejected_insufficient_frames",
+            "a capture has too few frames to judge scene stability",
+            empty,
+            present,
+            changed_fraction=0.0,
+            estimator_sha256=estimator,
+        )
     baseline = np.asarray(empty.power, dtype=float)
     observed = np.asarray(present.power, dtype=float)
     scale = _v2_scale(baseline, observed, search)
@@ -623,7 +637,6 @@ def _compare_static_range_profiles_v2(  # pylint: disable=too-many-locals
     changed_fraction = float(np.mean(passing[search]))
     search_indices = np.flatnonzero(search)
     diagnostic_index = int(search_indices[np.argmax(fractional[search])])
-    estimator = static_range_estimator_sha256()
     if not np.any(passing):
         return _static_result(
             "rejected_no_ball",
@@ -638,7 +651,30 @@ def _compare_static_range_profiles_v2(  # pylint: disable=too-many-locals
             normalization_scale=scale,
             peak_fractional_excess=float(fractional[diagnostic_index]),
         )
-    groups = _contiguous_groups(np.flatnonzero(passing))
+    lost = (
+        search
+        & (observed <= expected / (1.0 + _STATIC_V2_MIN_FRACTIONAL_EXCESS))
+        & (absolute_score <= -_STATIC_V2_MIN_ABSOLUTE_SCORE)
+    )
+    if np.any(lost):
+        lost_index = int(np.flatnonzero(lost)[np.argmin(absolute_score[lost])])
+        return _static_result(
+            "rejected_scene_changed",
+            "a static reflector disappeared between captures",
+            empty,
+            present,
+            changed_fraction=changed_fraction,
+            peak_score=float(absolute_score[lost_index]),
+            peak_bin=float(lost_index + empty.range_bin_start),
+            range_bin_uncertainty_m=empty.range_resolution_m,
+            estimator_sha256=estimator,
+            normalization_scale=scale,
+            peak_fractional_excess=float(fractional[lost_index]),
+        )
+    members = search & (fractional >= _STATIC_V2_MIN_FRACTIONAL_EXCESS)
+    groups = [
+        group for group in _contiguous_groups(np.flatnonzero(members)) if np.any(passing[group])
+    ]
     peaks: list[dict[str, Any]] = []
     empty_spread = np.asarray(empty.frame_mad_fraction)
     present_spread = np.asarray(present.frame_mad_fraction)

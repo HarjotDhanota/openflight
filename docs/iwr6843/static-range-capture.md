@@ -74,3 +74,27 @@ Every capture remains explicitly unqualified. Successful transport does not
 qualify the profile; a later hardware-validation step must regenerate the
 profile from the saved raw bytes and exact hashes before it can contribute even
 a noncanonical tee-range candidate.
+
+## Comparing the pair
+
+Each capture stores a v2 profile: the per-bin median power across frames and
+each bin's frame-to-frame spread. The selector rescales the ball-present
+profile for capture-to-capture gain drift, then looks for contiguous bins that
+rose by a large fraction *and* by enough absolute power. A strong static
+reflector such as a door behind the ball cannot win on a small percentage
+change, and a weak noisy bin cannot win on a large percentage alone.
+
+The pair is rejected, never guessed, when no change clears both gates
+(`rejected_no_ball`), a static reflector disappeared (`rejected_scene_changed`),
+the change touches the search window edge (`rejected_boundary`), spans too many
+bins or too much of the profile (`rejected_clutter`), two comparable changes
+exist (`rejected_ambiguous`), the change moved during a capture
+(`rejected_unstable`) or a capture has too few frames
+(`rejected_insufficient_frames`). An accepted result reports one range; other
+changed regions are kept only as diagnostics.
+
+These thresholds are provisional. They were checked against three recorded Pi
+setups and synthetic cases only, none with a recorded tape measurement, so they
+are not an accuracy result. The selector's identity is bound into the
+qualification artifact, so changing any threshold invalidates an existing
+qualification until the hardware study repeats.

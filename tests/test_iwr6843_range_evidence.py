@@ -17,6 +17,8 @@ from openflight.iwr6843.range_evidence import (
     build_static_profile_candidate,
     compare_static_range_profiles,
     extract_moving_ball_range_track,
+    static_range_estimator_policy,
+    static_range_estimator_sha256,
     static_range_profile,
 )
 from openflight.iwr6843.tracking import RANGE_SPAN_M
@@ -256,26 +258,41 @@ def test_pi_static_range_fixtures_reproduce_the_recorded_v1_results(epoch_id, st
     assert result.peak_score == pytest.approx(fixture["recorded_v1_difference"]["peak_score"])
 
 
+def test_pi_static_range_regressions_do_not_confidently_accept_observed_false_peaks():
+    near_field = _regression_fixture("setup-20260926-153ffb8aa4be")
+    door = _regression_fixture("setup-20260926-b9f4dd8b3a75")
+
+    shifted = compare_static_range_profiles(
+        _v2_profile(near_field, "empty"), _v2_profile(near_field, "present")
+    )
+    behind = compare_static_range_profiles(_v2_profile(door, "empty"), _v2_profile(door, "present"))
+
+    assert shifted.status != "accepted"
+    assert not (behind.status == "accepted" and abs(behind.peak_bin - 36.0) < 2.0)
+
+
 @pytest.mark.parametrize(
-    ("epoch_id", "forbidden_peak_bin"),
+    ("epoch_id", "status", "peak_bin", "width"),
     [
-        ("setup-20260926-153ffb8aa4be", 12.0),
-        ("setup-20260926-b9f4dd8b3a75", 36.0),
+        ("setup-20260925-fff56186f155", "accepted", 23.5007, 2),
+        ("setup-20260926-153ffb8aa4be", "rejected_scene_changed", 11.0, None),
+        ("setup-20260926-b9f4dd8b3a75", "accepted", 23.9376, 3),
     ],
 )
-def test_pi_static_range_regressions_do_not_confidently_accept_observed_false_peaks(
-    epoch_id, forbidden_peak_bin
+def test_provisional_v2_selector_outcomes_on_the_captured_epochs_are_pinned(
+    epoch_id, status, peak_bin, width
 ):
+    """Characterization only: no epoch carries tape truth, so none is an accuracy result."""
     fixture = _regression_fixture(epoch_id)
 
     result = compare_static_range_profiles(
-        _v2_profile(fixture, "empty"),
-        _v2_profile(fixture, "present"),
+        _v2_profile(fixture, "empty"), _v2_profile(fixture, "present")
     )
 
-    assert not (
-        result.status == "accepted" and result.peak_bin == pytest.approx(forbidden_peak_bin)
-    )
+    assert result.status == status
+    assert result.peak_bin == pytest.approx(peak_bin, abs=1e-3)
+    assert result.peak_width_bins == width
+    assert result.estimator_sha256 == static_range_estimator_sha256()
 
 
 @pytest.mark.parametrize(
@@ -435,3 +452,204 @@ def test_static_candidate_refuses_an_unqualified_radar_profile():
             range_bias_uncertainty_m=0.01,
             calibration_sha256=CALIBRATION_SHA,
         )
+
+
+SYNTHETIC_WINDOW_M = (0.5, 2.8)
+
+
+def _synthetic_v2(power, *, capture, frame_mad=None, frame_count=24):
+    power = np.asarray(power, dtype=float)
+    return StaticRangeProfileV2(
+        capture_sha256=capture * 64,
+        radar_profile_sha256=PROFILE_SHA,
+        radar_profile_qualified=True,
+        rig_geometry_sha256=RIG_SHA,
+        capture_config_sha256="e" * 64,
+        range_bin_start=0,
+        range_bin_count=len(power),
+        range_resolution_m=0.05,
+        power=tuple(power),
+        frame_mad_fraction=tuple(np.full(len(power), 0.01) if frame_mad is None else frame_mad),
+        frame_count=frame_count,
+    )
+
+
+def _static_scene(*, scale=1.0, seed=7):
+    rng = np.random.default_rng(seed)
+    empty = 1e6 * np.exp(rng.normal(0.0, 0.6, 60))
+    present = empty * scale * (1.0 + rng.normal(0.0, 0.02, 60))
+    return empty, present
+
+
+def _added(present, empty, scale, bins, fraction=1.3):
+    changed = present.copy()
+    for index in bins:
+        changed[index] = empty[index] * scale * (1.0 + fraction)
+    return changed
+
+
+def _compare(empty, present, *, window=SYNTHETIC_WINDOW_M, **present_options):
+    return compare_static_range_profiles(
+        _synthetic_v2(empty, capture="d"),
+        _synthetic_v2(present, capture="f", **present_options),
+        plausible_apparent_range_m=window,
+    )
+
+
+def test_v2_accepts_one_added_reflector_despite_global_gain_drift():
+    empty, present = _static_scene(scale=1.58)
+
+    result = _compare(empty, _added(present, empty, 1.58, [25]))
+
+    assert result.status == "accepted"
+    assert result.peak_bin == pytest.approx(25.0)
+    assert result.normalization_scale == pytest.approx(1.58, rel=0.02)
+
+
+@pytest.mark.parametrize("scale", [0.66, 1.0, 1.58])
+def test_v2_rejects_global_gain_drift_without_an_added_reflector(scale):
+    empty, present = _static_scene(scale=scale)
+
+    assert _compare(empty, present).status == "rejected_no_ball"
+
+
+def test_v2_ignores_a_much_stronger_static_reflector_with_a_small_fractional_change():
+    empty, present = _static_scene()
+    empty[45] *= 250.0
+    present[45] = empty[45] * 1.01
+
+    result = _compare(empty, _added(present, empty, 1.0, [25]))
+
+    assert result.status == "accepted"
+    assert result.peak_bin == pytest.approx(25.0)
+    door_only = _compare(empty, present)
+    assert door_only.status == "rejected_no_ball"
+
+
+def test_v2_rejects_a_weak_bin_whose_large_percentage_change_is_below_absolute_evidence():
+    empty, present = _static_scene()
+    empty[30] = 1e3
+    present[30] = 5e3
+
+    assert _compare(empty, present).status == "rejected_no_ball"
+
+
+@pytest.mark.parametrize("edge_bin", [10, 55])
+def test_v2_rejects_a_change_at_either_search_boundary(edge_bin):
+    empty, present = _static_scene()
+
+    result = _compare(empty, _added(present, empty, 1.0, [edge_bin]))
+
+    assert result.status == "rejected_boundary"
+
+
+def test_v2_rejects_two_comparable_added_reflectors():
+    empty, present = _static_scene()
+
+    result = _compare(empty, _added(present, empty, 1.0, [20, 40]))
+
+    assert result.status == "rejected_ambiguous"
+    assert len(result.alternate_peaks) == 2
+
+
+def test_v2_rejects_a_broad_multipath_change():
+    empty, present = _static_scene()
+
+    result = _compare(empty, _added(present, empty, 1.0, range(25, 30)))
+
+    assert result.status == "rejected_clutter"
+    assert result.peak_width_bins == 5
+
+
+def test_v2_treats_adjacent_changed_bins_as_one_reflector_with_honest_width():
+    empty, present = _static_scene()
+    present = _added(present, empty, 1.0, [24, 26])
+    present[25] = empty[25] * 1.6
+
+    result = _compare(empty, present)
+
+    assert result.status == "accepted"
+    assert result.peak_width_bins == 3
+    assert result.range_bin_uncertainty_m == pytest.approx(1.5 * 0.05)
+
+
+def test_v2_rejects_a_reflector_that_moved_during_the_capture():
+    empty, present = _static_scene()
+    unstable = np.full(60, 0.01)
+    unstable[25] = 0.2
+
+    result = _compare(empty, _added(present, empty, 1.0, [25]), frame_mad=unstable)
+
+    assert result.status == "rejected_unstable"
+
+
+def test_v2_rejects_captures_with_too_few_frames():
+    empty, present = _static_scene()
+
+    result = _compare(empty, _added(present, empty, 1.0, [25]), frame_count=6)
+
+    assert result.status == "rejected_insufficient_frames"
+    assert result.peak_bin is None
+
+
+def test_v2_rejects_a_scene_where_a_static_reflector_disappeared():
+    empty, present = _static_scene()
+    empty[40] *= 10.0
+    present[40] = empty[40] * 0.3
+    present = _added(present, empty, 1.0, [25])
+
+    result = _compare(empty, present)
+
+    assert result.status == "rejected_scene_changed"
+    assert result.peak_bin == pytest.approx(40.0)
+
+
+def test_v2_searches_only_the_supplied_placement_envelope():
+    empty, present = _static_scene()
+    present = _added(present, empty, 1.0, [25])
+
+    inside = _compare(empty, present)
+    outside = _compare(empty, present, window=(1.5, 2.8))
+
+    assert inside.status == "accepted"
+    assert outside.status == "rejected_no_ball"
+
+
+def test_v2_refuses_to_compare_a_legacy_profile_with_a_v2_profile():
+    empty, present = _static_scene()
+
+    with pytest.raises(ValueError, match="schemas do not match"):
+        compare_static_range_profiles(
+            _profile(empty, capture="d"),
+            _synthetic_v2(present, capture="f"),
+            plausible_apparent_range_m=SYNTHETIC_WINDOW_M,
+        )
+
+
+def test_v2_candidate_carries_alternates_only_as_diagnostics():
+    empty, present = _static_scene()
+    present = _added(present, empty, 1.0, [25])
+    present = _added(present, empty, 1.0, [40], fraction=0.6)
+
+    result = _compare(empty, present)
+    candidate = build_static_profile_candidate(
+        result, range_bias_m=0.05, range_bias_uncertainty_m=0.01, calibration_sha256="c" * 64
+    )
+
+    assert result.status == "accepted"
+    assert [peak["peak_bin"] for peak in result.alternate_peaks] == [25.0, 40.0]
+    assert candidate.radar_slant_range_m == pytest.approx(result.apparent_range_m - 0.05)
+    assert all(
+        "radar_slant_range_m" not in peak and "candidate_id" not in peak
+        for peak in candidate.evidence["alternate_peaks"]
+    )
+
+
+def test_static_range_estimator_identity_is_pinned():
+    """Any selector constant change must be a deliberate, reviewed identity change."""
+    policy = static_range_estimator_policy()
+
+    assert policy["profile_schema"] == "openflight.iwr6843.static_range_profile.v2"
+    assert static_range_estimator_sha256() == (
+        "566af877085e84c22e19820066d8f6d5c43a6cb59e35ff20a4a647fe28e4777f"
+    )

@@ -1,6 +1,7 @@
 """Versioned tee-range evidence stays explicit, independent and replayable."""
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -167,6 +168,28 @@ def qualified_iwr(epoch_id="epoch-a", value=1.53, uncertainty=0.03, **updates):
             "qualification": facts,
         },
     )
+
+
+def test_camera_agreement_with_an_alternate_radar_peak_cannot_promote_it():
+    radar = qualified_iwr(value=1.53)
+    radar = replace(
+        radar,
+        evidence={
+            **radar.evidence,
+            "alternate_peaks": [
+                {"peak_bin": 30.0, "apparent_range_m": 1.53},
+                {"peak_bin": 24.0, "apparent_range_m": 1.20},
+            ],
+        },
+    )
+
+    solution = resolve_qualified_tee_range(
+        "epoch-a", [qualified_camera(value=1.20), radar], qualification()
+    )
+
+    assert solution.status == "unresolved"
+    assert solution.reason == "absolute_residual_exceeds_policy"
+    assert solution.selected_range_m is None
 
 
 def test_cross_sensor_solution_is_deterministic_and_standalone_load_is_safe(tmp_path):
