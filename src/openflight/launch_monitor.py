@@ -247,6 +247,7 @@ class Shot:
     readings_data: Optional[list] = None
     camera_replay: Optional[dict] = None
     camera_fusion_context: Optional[dict] = None
+    camera_optical_quality: Optional[dict] = None
     camera_fusion_processing: Optional[dict] = None
     camera_fusion_session_uuid: Optional[str] = field(default=None, repr=False, compare=False)
     calibrated_camera_status: Optional[str] = None
@@ -441,6 +442,9 @@ class Shot:
             "stage_timing": deepcopy(self.stage_timing),
             "camera_fusion_context": (
                 dict(self.camera_fusion_context) if self.camera_fusion_context else None
+            ),
+            "camera_optical_quality": (
+                deepcopy(self.camera_optical_quality) if self.camera_optical_quality else None
             ),
             "camera_fusion_processing": (
                 dict(self.camera_fusion_processing) if self.camera_fusion_processing else None

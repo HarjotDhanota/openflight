@@ -169,14 +169,16 @@ class FakeKiosk:
     def __init__(self, level=60.0, ready_after=0):
         self.level = level
         self.calls = []
+        self.purposes = []
         self._ready_after = ready_after
 
     def ready(self):
         self._ready_after -= 1
         return self._ready_after < 0
 
-    def set_controls(self, exposure_us, gain):
+    def set_controls(self, exposure_us, gain, purpose="capture"):
         self.calls.append((exposure_us, gain))
+        self.purposes.append(purpose)
         return {"exposure_us": exposure_us, "gain": gain}
 
     def frames(self, count):
@@ -236,6 +238,30 @@ def test_a_photo_restores_the_rung_even_when_it_fails(tmp_path):
     kiosk.frames = broken
     with pytest.raises(OSError):
         runner.photograph("camera_a", "full-300")
+    assert kiosk.calls[-1] == (300, 3.0)
+
+
+def test_stopping_during_a_photo_still_restores_capture_controls(tmp_path):
+    kiosk = FakeKiosk()
+    runner = _runner(tmp_path, kiosk)
+    runner.start_rung()
+    runner.state._data["photo_target"] = {  # pylint: disable=protected-access
+        "capture": "camera_a",
+        "rung_id": "full-300",
+    }
+    original = kiosk.set_controls
+
+    def stop_on_photo(exposure_us, gain, purpose="capture"):
+        result = original(exposure_us, gain, purpose)
+        if purpose == "still_photo":
+            runner.stop()
+        return result
+
+    kiosk.set_controls = stop_on_photo
+    with pytest.raises(RuntimeError, match="stopped"):
+        runner.photograph("camera_a", "full-300")
+
+    assert kiosk.purposes[-2:] == ["still_photo", "capture"]
     assert kiosk.calls[-1] == (300, 3.0)
 
 

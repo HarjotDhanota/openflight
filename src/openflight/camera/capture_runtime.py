@@ -16,7 +16,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Callable, Literal, Mapping
 
 import numpy as np
 
@@ -27,6 +27,7 @@ from openflight.camera.auto_exposure import (
     measure_exposure,
     motion_blur_risk,
 )
+from openflight.camera.optical_quality import within_armed_profile
 from openflight.camera.triggered_buffer import (
     CameraFrame,
     TriggeredCapture,
@@ -78,6 +79,13 @@ class CameraCaptureSettings:
     match_tolerance_s: float = 0.75
     auto_exposure: bool = True
     auto_exposure_state_path: Path | None = None
+    armed_profile: Mapping | None = None
+    diagnostic_capture: bool = False
+
+    @property
+    def enforced_profile(self) -> Mapping | None:
+        """The qualified armed ceiling, unless this is a labelled diagnostic capture."""
+        return None if self.diagnostic_capture else self.armed_profile
 
     @property
     def pre_frames(self) -> int:
@@ -341,9 +349,14 @@ class CameraCaptureRuntime:
         self._trigger_evidence: queue.Queue[dict | None] = queue.Queue()
         self._admission_evidence: list[tuple[float, dict | None]] = []
         self._camera_control_lock = threading.Lock()
+        self._controls_purpose = "capture"
         self._trigger_exposure_lock = threading.Lock()
         self._reconfigure_lock = threading.Lock()
-        self._auto_exposure_policy = AutoExposurePolicy(fps=self.settings.fps)
+        profile = self.settings.enforced_profile
+        self._auto_exposure_policy = AutoExposurePolicy(
+            fps=self.settings.fps,
+            max_exposure_us=profile["exposure_ceiling_us"] if profile else None,
+        )
         self._auto_exposure_stop = threading.Event()
         self._auto_exposure_lock = threading.Lock()
         self._auto_exposure_decision = AutoExposureDecision(
@@ -494,7 +507,7 @@ class CameraCaptureRuntime:
     def camera_analysis_eligible(self) -> bool:
         """Whether current lighting permits camera-derived shot metrics."""
         if not self.settings.auto_exposure:
-            return True
+            return self._manual_exposure_observation().acceptable
         with self._auto_exposure_lock:
             return self._auto_exposure_decision.analysis_eligible
 
@@ -510,14 +523,41 @@ class CameraCaptureRuntime:
                     "last_adjustment_timestamp": self._auto_exposure_last_adjustment_epoch,
                 }
             )
+        if not self.settings.auto_exposure:
+            observation = self._manual_exposure_observation()
+            payload.update(
+                {
+                    "status": "manual",
+                    "analysis_eligible": observation.acceptable,
+                    "message": observation.message,
+                    "observation": observation.to_dict(),
+                }
+            )
         payload["exposure_us"] = self.settings.exposure_us
         payload["gain"] = self.settings.gain
+        payload["controls_purpose"] = self._controls_purpose
+        payload["armed_profile"] = (
+            dict(self.settings.armed_profile) if self.settings.armed_profile else None
+        )
+        payload["diagnostic_capture"] = self.settings.diagnostic_capture
         return payload
 
-    def update_image_controls(self, *, exposure_us: int, gain: float) -> dict:
-        """Apply exposure and gain without stopping the rolling buffer."""
+    def _manual_exposure_observation(self) -> ExposureObservation:
+        frame = self._ring.latest_frame
+        return measure_exposure(frame.image if frame is not None else np.asarray([]))
+
+    def update_image_controls(
+        self, *, exposure_us: int, gain: float, purpose: str = "capture"
+    ) -> dict:
+        """Apply exposure and gain without stopping the rolling buffer.
+
+        ``still_photo`` controls are recorded on every capture so metrics from a
+        swing that lands during the photo are withheld, never silently measured.
+        """
         exposure_us = int(exposure_us)
         gain = float(gain)
+        if purpose not in {"capture", "still_photo"}:
+            raise ValueError("camera control purpose must be 'capture' or 'still_photo'")
         frame_period_us = round(1_000_000 / self.settings.fps)
         if exposure_us <= 0:
             raise ValueError("camera exposure must be positive")
@@ -527,6 +567,12 @@ class CameraCaptureRuntime:
             )
         if gain <= 0:
             raise ValueError("camera gain must be positive")
+        profile = self.settings.enforced_profile
+        if purpose == "capture" and not within_armed_profile(profile, exposure_us, gain):
+            raise ValueError(
+                f"{exposure_us}us x {gain:g} exceeds the armed profile ceiling "
+                f"{profile['exposure_ceiling_us']}us x {profile['gain_ceiling']:g}"
+            )
         if not self._running or self._camera is None:
             raise RuntimeError("camera capture is not running")
 
@@ -537,6 +583,7 @@ class CameraCaptureRuntime:
                     "AnalogueGain": gain,
                 }
             )
+            self._controls_purpose = purpose
         self.settings = replace(
             self.settings,
             exposure_us=exposure_us,

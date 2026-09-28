@@ -148,6 +148,7 @@ Optional rolling-buffer capture and replay. See [camera setup](../camera/README.
 | `--camera-capture-post-ms` | float; default `50` | Milliseconds retained after the trigger |
 | `--camera-capture-exposure-us` | int; default `1000` | Exposure seed for startup calibration |
 | `--camera-capture-gain` | float; default `4.0` | Analogue-gain seed for startup calibration |
+| `--camera-armed-profile` | path | Qualified armed exposure profile. Production capture refuses exposure or gain above its ceiling; `--study-mode` captures stay diagnostic and their out-of-ceiling metrics are withheld. There is no default ceiling. |
 | `--camera-capture-mount-height-m` | float; default `0.20955` | Camera optical-center height above the hitting surface |
 | `--camera-capture-horizontal-offset-deg` | float; default `0` | Target-line correction added to horizontal launch angles |
 | `--camera-capture-lateral-offset-m` | float; default `0` | Camera position relative to radar center; positive is target-right |

@@ -825,3 +825,89 @@ def test_triggers_are_refused_while_the_save_backlog_is_full(tmp_path):
     runtime._ready.get_nowait()
     assert runtime.notify_trigger(11.0) is True
     assert runtime._trigger_epochs.get_nowait() == 11.0
+
+
+class _ControlCamera:
+    def __init__(self):
+        self.controls = []
+
+    def set_controls(self, controls):
+        self.controls.append(controls)
+
+
+def _running_runtime(tmp_path, **settings):
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(fps=300.0, exposure_us=500, gain=2.0, **settings),
+    )
+    runtime._camera = _ControlCamera()
+    runtime._running = True
+    return runtime
+
+
+def _add_image(runtime, image):
+    runtime._ring.add_frame(
+        CameraFrame(
+            image=image,
+            sensor_timestamp_ns=1,
+            host_timestamp_ns=2,
+            exposure_us=runtime.settings.exposure_us,
+            analogue_gain=runtime.settings.gain,
+        )
+    )
+
+
+def test_manual_exposure_eligibility_comes_from_the_latest_frame(tmp_path):
+    runtime = _running_runtime(tmp_path, auto_exposure=False)
+    _add_image(runtime, np.full((200, 320), 8, dtype=np.uint8))
+
+    dark = runtime.auto_exposure_status()
+    assert runtime.camera_analysis_eligible is False
+    assert dark["status"] == "manual"
+    assert dark["analysis_eligible"] is False
+
+    _add_image(runtime, make_good_exposure_image())
+
+    assert runtime.camera_analysis_eligible is True
+    assert runtime.auto_exposure_status()["analysis_eligible"] is True
+
+
+def test_still_photo_controls_are_recorded_for_the_next_capture(tmp_path):
+    runtime = _running_runtime(tmp_path)
+
+    runtime.update_image_controls(exposure_us=3000, gain=2.0, purpose="still_photo")
+    during = runtime.auto_exposure_status()["controls_purpose"]
+    runtime.update_image_controls(exposure_us=500, gain=2.0)
+
+    assert during == "still_photo"
+    assert runtime.auto_exposure_status()["controls_purpose"] == "capture"
+    with pytest.raises(ValueError, match="purpose"):
+        runtime.update_image_controls(exposure_us=500, gain=2.0, purpose="guess")
+
+
+ARMED = {"sha256": "a" * 64, "qualified": True, "exposure_ceiling_us": 400, "gain_ceiling": 8.0}
+
+
+def test_armed_capture_controls_are_refused_above_the_qualified_ceiling(tmp_path):
+    runtime = _running_runtime(tmp_path, armed_profile=ARMED)
+
+    with pytest.raises(ValueError, match="exceeds the armed profile ceiling"):
+        runtime.update_image_controls(exposure_us=1250, gain=2.0)
+    runtime.update_image_controls(exposure_us=3000, gain=2.0, purpose="still_photo")
+    runtime.update_image_controls(exposure_us=400, gain=8.0)
+
+    assert runtime.auto_exposure_status()["armed_profile"] == ARMED
+
+
+def test_diagnostic_capture_is_not_held_to_the_armed_ceiling(tmp_path):
+    runtime = _running_runtime(tmp_path, armed_profile=ARMED, diagnostic_capture=True)
+
+    runtime.update_image_controls(exposure_us=1250, gain=2.0)
+
+    assert runtime.auto_exposure_status()["diagnostic_capture"] is True
+
+
+def test_automatic_exposure_never_steps_past_the_armed_ceiling(tmp_path):
+    runtime = _running_runtime(tmp_path, armed_profile=ARMED)
+
+    assert max(step.exposure_us for step in runtime._auto_exposure_policy.steps) <= 400

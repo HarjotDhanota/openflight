@@ -1772,6 +1772,52 @@ class TestShotToDict:
 
         assert shot.experimental_fused_status == "rejected_lighting_quality"
 
+    @pytest.mark.parametrize(
+        ("auto_exposure", "applied_exposure_us", "status"),
+        [
+            (
+                {
+                    "analysis_eligible": True,
+                    "exposure_us": 8000,
+                    "gain": 2.0,
+                    "controls_purpose": "still_photo",
+                },
+                8000,
+                "rejected_still_photo_controls_active",
+            ),
+            (
+                {
+                    "analysis_eligible": True,
+                    "exposure_us": 300,
+                    "gain": 8.0,
+                    "controls_purpose": "capture",
+                },
+                1250,
+                "rejected_applied_controls_mismatch",
+            ),
+        ],
+    )
+    def test_camera_metrics_are_withheld_when_optical_provenance_fails(
+        self, monkeypatch, auto_exposure, applied_exposure_us, status
+    ):
+        monkeypatch.setattr(
+            server_module, "camera_capture_runtime", SimpleNamespace(camera_analysis_eligible=True)
+        )
+        archive = {
+            "exposure_us": np.full(4, applied_exposure_us, dtype=np.int32),
+            "analogue_gain": np.full(4, auto_exposure["gain"], dtype=np.float32),
+        }
+        shot = Shot(ball_speed_mph=110.0, timestamp=datetime.now())
+        capture = SimpleNamespace(valid=True, metadata={"auto_exposure": auto_exposure})
+
+        server_module._fuse_camera_measurements(shot, capture, archive)
+        result = shot_to_dict(shot)
+
+        assert shot.experimental_fused_status == status
+        assert shot.experimental_fused_club_path_deg is None
+        assert result["camera_optical_quality"]["status"] == "withheld"
+        assert result["camera_optical_quality"]["applied"]["exposure_us"] == applied_exposure_us
+
     def test_angle_source_none_by_default(self):
         """Shot without angle source should have None."""
         shot = Shot(
@@ -4682,6 +4728,96 @@ class TestIwrTeeRangeConfiguration:
 
         assert received["tee_range_m"] is None
         assert server_module.ball_speed_correction_enabled is False
+
+    @pytest.mark.parametrize(
+        ("profile", "message"),
+        [
+            ({"qualified": False}, "not qualified"),
+            ({"exposure_ceiling_us": 400}, "exceed the qualified armed profile ceiling"),
+        ],
+    )
+    def test_armed_profile_is_checked_before_capture_starts(
+        self, monkeypatch, tmp_path, capsys, profile, message
+    ):
+        path = tmp_path / "armed.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema": "openflight.camera.armed_exposure_profile.v1",
+                    "qualified": True,
+                    "exposure_ceiling_us": 2000,
+                    "gain_ceiling": 12.0,
+                    **profile,
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "openflight-server",
+                "--camera-capture",
+                "--camera-capture-exposure-us",
+                "1250",
+                "--camera-armed-profile",
+                str(path),
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            server_module.main()
+
+        assert exc_info.value.code == 2
+        assert message in capsys.readouterr().err
+
+    def test_study_mode_capture_is_diagnostic_under_an_armed_profile(self, monkeypatch, tmp_path):
+        path = tmp_path / "armed.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema": "openflight.camera.armed_exposure_profile.v1",
+                    "qualified": True,
+                    "exposure_ceiling_us": 400,
+                    "gain_ceiling": 12.0,
+                }
+            ),
+            encoding="utf-8",
+        )
+        received = {}
+
+        class StopAfterCameraInit(Exception):
+            pass
+
+        def fake_init_camera_capture(**kwargs):
+            received.update(kwargs)
+            raise StopAfterCameraInit
+
+        monkeypatch.setattr(server_module, "init_camera_capture", fake_init_camera_capture)
+        monkeypatch.setattr(server_module, "init_session_logger", lambda **kwargs: None)
+        monkeypatch.setattr(server_module, "profile_store", None)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "openflight-server",
+                "--camera-capture",
+                "--study-mode",
+                "--no-logging",
+                "--profiles-path",
+                str(tmp_path / "profiles.json"),
+                "--camera-capture-exposure-us",
+                "1250",
+                "--camera-armed-profile",
+                str(path),
+            ],
+        )
+
+        with pytest.raises(StopAfterCameraInit):
+            server_module.main()
+
+        assert received["diagnostic_capture"] is True
+        assert received["armed_profile"]["exposure_ceiling_us"] == 400
 
     def test_init_iwr6843_records_unresolved_tee_range(self, monkeypatch, tmp_path):
         class FakeCaptureMonitor:

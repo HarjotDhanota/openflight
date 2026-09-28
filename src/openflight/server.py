@@ -1239,6 +1239,8 @@ def init_camera_capture(
     use_gpio_trigger: bool,
     auto_exposure: bool = True,
     forward_offset_m: float = 0.0,
+    armed_profile: dict | None = None,
+    diagnostic_capture: bool = False,
 ) -> bool:
     """Initialize passive high-speed camera capture for offline alignment."""
     global camera_capture_runtime, camera_capture_config  # pylint: disable=global-statement
@@ -1266,6 +1268,8 @@ def init_camera_capture(
             auto_exposure_state_path=(
                 Path.home() / ".config" / "openflight" / "camera-exposure.json"
             ),
+            armed_profile=armed_profile,
+            diagnostic_capture=diagnostic_capture,
         )
         camera_capture_runtime = CameraCaptureRuntime(
             output_dir=output_dir,
@@ -1952,7 +1956,9 @@ def study_camera_controls():
     body = request.get_json(silent=True) or {}
     try:
         applied = runtime.update_image_controls(
-            exposure_us=int(body["exposure_us"]), gain=float(body["gain"])
+            exposure_us=int(body["exposure_us"]),
+            gain=float(body["gain"]),
+            purpose=str(body.get("purpose", "capture")),
         )
     except (KeyError, TypeError, ValueError) as error:
         return jsonify({"error": str(error)}), 400
@@ -3530,6 +3536,25 @@ def _fuse_camera_ball_flight(
         )
 
 
+def _withhold_camera_metrics(shot: Shot, status: str, reason: str) -> None:
+    """Keep the capture but publish none of its pixel-derived metrics."""
+    shot.experimental_camera_horizontal_status = status
+    shot.experimental_camera_horizontal_deg = None
+    shot.experimental_camera_horizontal_confidence = None
+    shot.experimental_camera_iwr_delta_deg = None
+    shot.experimental_fused_attack_angle_deg = None
+    shot.experimental_fused_club_path_deg = None
+    shot.experimental_fused_status = status
+    shot.experimental_fused_attack_angle_confidence = "withheld"
+    shot.experimental_fused_club_path_confidence = "withheld"
+    shot.camera_fusion_context = {
+        "schema": "openflight.camera.fusion_context",
+        "version": 1,
+        "available": False,
+        "reason": reason,
+    }
+
+
 def _fuse_camera_measurements(
     shot: Shot,
     camera_capture,
@@ -3552,27 +3577,35 @@ def _fuse_camera_measurements(
         )
     )
     if not analysis_eligible:
-        shot.experimental_camera_horizontal_status = "rejected_lighting_quality"
-        shot.experimental_camera_horizontal_deg = None
-        shot.experimental_camera_horizontal_confidence = None
-        shot.experimental_camera_iwr_delta_deg = None
-        shot.experimental_fused_attack_angle_deg = None
-        shot.experimental_fused_club_path_deg = None
-        shot.experimental_fused_status = "rejected_lighting_quality"
-        shot.experimental_fused_attack_angle_confidence = "withheld"
-        shot.experimental_fused_club_path_confidence = "withheld"
-        shot.camera_fusion_context = {
-            "schema": "openflight.camera.fusion_context",
-            "version": 1,
-            "available": False,
-            "reason": "capture-time lighting was not analysis eligible",
-        }
+        _withhold_camera_metrics(
+            shot,
+            "rejected_lighting_quality",
+            "capture-time lighting was not analysis eligible",
+        )
         logger.warning(
             "[SERVER] Camera analysis withheld for lighting quality; using radar fallback"
         )
         return
     if camera_archive is _CAMERA_ARCHIVE_UNSET:
         camera_archive = _load_camera_capture_archive(camera_capture)
+    if isinstance(captured_auto_exposure, dict):
+        from openflight.camera.optical_quality import (  # noqa: PLC0415
+            capture_optical_quality,
+        )
+
+        quality = capture_optical_quality(camera_capture.metadata, camera_archive)
+        shot.camera_optical_quality = quality
+        if quality["status"] == "withheld":
+            _withhold_camera_metrics(
+                shot,
+                f"rejected_{quality['reason']}",
+                f"capture optical quality withheld: {quality['reason']}",
+            )
+            logger.warning(
+                "[SERVER] Camera analysis withheld (%s); using radar fallback",
+                quality["reason"],
+            )
+            return
     if (
         camera_archive is not None
         and iwr6843_runtime is not None
@@ -5487,6 +5520,15 @@ def main():
     parser.add_argument("--camera-capture-fps", type=float, default=300.0)
     parser.add_argument("--camera-capture-pre-ms", type=float, default=150.0)
     parser.add_argument(
+        "--camera-armed-profile",
+        type=Path,
+        default=None,
+        help=(
+            "Qualified armed exposure profile JSON; production capture refuses "
+            "controls above its ceiling (study mode stays diagnostic)"
+        ),
+    )
+    parser.add_argument(
         "--camera-capture-manual-exposure",
         action="store_true",
         help=(
@@ -6020,6 +6062,24 @@ def main():
         or args.camera_capture_mount_height_m <= 0
     ):
         parser.error("--camera-capture dimensions, timing, exposure, and gain must be positive")
+    armed_profile = None
+    if args.camera_armed_profile is not None:
+        from .camera.optical_quality import (  # noqa: PLC0415
+            load_armed_exposure_profile,
+            within_armed_profile,
+        )
+
+        try:
+            armed_profile = load_armed_exposure_profile(args.camera_armed_profile)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            parser.error(f"--camera-armed-profile: {error}")
+        if not args.study_mode and not within_armed_profile(
+            armed_profile, args.camera_capture_exposure_us, args.camera_capture_gain
+        ):
+            parser.error(
+                "--camera-capture-exposure-us/--camera-capture-gain exceed the qualified "
+                "armed profile ceiling"
+            )
     camera_capture_scaler_crop = None
     if args.camera_capture_scaler_crop:
         try:
@@ -6173,6 +6233,8 @@ def main():
             scaler_crop=camera_capture_scaler_crop,
             use_gpio_trigger=not args.iwr6843,
             auto_exposure=not args.camera_capture_manual_exposure,
+            armed_profile=armed_profile,
+            diagnostic_capture=bool(args.study_mode),
         ):
             print("Camera capture unavailable - running without high-speed camera capture")
             startup_status.skip("camera", "High-speed camera unavailable; continuing")

@@ -392,8 +392,10 @@ class KioskClient:
                 "blockers": [{"id": "kiosk", "reason": str(exc)}],
             }
 
-    def set_controls(self, exposure_us: int, gain: float) -> dict:
-        body = json.dumps({"exposure_us": int(exposure_us), "gain": float(gain)}).encode()
+    def set_controls(self, exposure_us: int, gain: float, purpose: str = "capture") -> dict:
+        body = json.dumps(
+            {"exposure_us": int(exposure_us), "gain": float(gain), "purpose": purpose}
+        ).encode()
         request = urllib.request.Request(
             self.base_url + "/api/camera/study/controls",
             data=body,
@@ -715,17 +717,22 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                 RUNG_FPS[rung.arm_id],
             )
             try:
-                self.client.set_controls(still, PHOTO_GAIN)
+                self.client.set_controls(still, PHOTO_GAIN, purpose="still_photo")
                 if self._stop.wait(SETTLE_S):
                     raise RuntimeError("the ladder is stopped")
                 image = self.client.frames(1)[0]
                 if self.stopped:
                     raise RuntimeError("the ladder is stopped")
             finally:
-                if not self.stopped:
+                # Restore even after Stop: a still-photo exposure left on the kiosk
+                # would be applied to the next swing it captures.
+                try:
                     self.client.set_controls(
                         configured.exposure_us, self.state.gain(configured.rung_id)
                     )
+                except OSError:
+                    if not self.stopped:
+                        raise
             if self.stopped:
                 raise RuntimeError("the ladder is stopped")
             name = capture

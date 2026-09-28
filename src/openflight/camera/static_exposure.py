@@ -13,6 +13,12 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from openflight.camera.optical_quality import (
+    APPLIED_EXPOSURE_TOLERANCE_FRACTION,
+    APPLIED_EXPOSURE_TOLERANCE_US,
+    controls_match,
+)
+
 STATIC_EXPOSURE_PURPOSE = "static_reference_ball"
 STATIC_EXPOSURE_SCHEMA = "openflight.camera.static_exposure_lock.v1"
 EXPOSURES_US = (100, 150, 200, 300, 500, 800, 1250, 2000, 3000, 4000, 6000, 8000)
@@ -22,8 +28,6 @@ _MIN_LOCAL_CONTRAST_DN = 12.0
 _MIN_EDGE_GRADIENT_DN = 8.0
 _MAX_BALL_CLIPPED_PCT = 5.0
 _REQUIRED_STABLE_OBSERVATIONS = 3
-_APPLIED_EXPOSURE_TOLERANCE_FRACTION = 0.02
-_APPLIED_EXPOSURE_TOLERANCE_US = 5.0
 _SETTLE_LIMIT = 4
 _STABILIZE_LIMIT = 6
 _REFINE_ATTEMPT_LIMIT = 48
@@ -55,8 +59,8 @@ def static_exposure_policy() -> dict[str, Any]:
             "background_ring_radius_fraction": [1.25, 1.8],
             "required_stable_observations": _REQUIRED_STABLE_OBSERVATIONS,
             "applied_controls_required": True,
-            "applied_exposure_tolerance_fraction": _APPLIED_EXPOSURE_TOLERANCE_FRACTION,
-            "applied_exposure_tolerance_us": _APPLIED_EXPOSURE_TOLERANCE_US,
+            "applied_exposure_tolerance_fraction": APPLIED_EXPOSURE_TOLERANCE_FRACTION,
+            "applied_exposure_tolerance_us": APPLIED_EXPOSURE_TOLERANCE_US,
             "ball_detection_required": True,
         },
     }
@@ -153,20 +157,7 @@ def exposure_steps_for_fps(fps: float) -> tuple[StaticExposureStep, ...]:
 
 def applied_controls_match(requested: StaticExposureStep, exposure_us, gain) -> bool:
     """Whether camera metadata shows the requested controls within tolerance."""
-    return bool(
-        exposure_us is not None
-        and gain is not None
-        and math.isclose(
-            float(exposure_us),
-            requested.exposure_us,
-            abs_tol=max(
-                _APPLIED_EXPOSURE_TOLERANCE_US,
-                requested.exposure_us * _APPLIED_EXPOSURE_TOLERANCE_FRACTION,
-            ),
-            rel_tol=0.0,
-        )
-        and math.isclose(float(gain), requested.gain, abs_tol=1 / 16, rel_tol=0.0)
-    )
+    return controls_match(requested.exposure_us, requested.gain, exposure_us, gain)
 
 
 def _ball_regions(
