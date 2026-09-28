@@ -21,6 +21,7 @@ import glob
 import logging
 import os
 import time
+from typing import Any
 
 import serial
 
@@ -34,6 +35,8 @@ _CP2105_USB_ID = ("10c4", "ea70")
 _CP2105_INTERFACE_NAMES = {0: "CP2105 Enhanced if00", 1: "CP2105 Standard if01"}
 _CP2105_STANDARD_INTERFACE = 1
 _PROBE_WINDOW_S = 1.5
+_BY_ID_GLOB = "/dev/serial/by-id/*"
+_RESET_ACTION = "press RESET on the IWR6843 board once with its switches in functional mode"
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +80,88 @@ def _describe_probe_reply(response: bytes) -> str:
     return f"{len(response)} bytes without the CLI help (starts {response[:24]!r})"
 
 
+def _resolved_device(port: str) -> str:
+    return os.path.realpath(port) if os.path.islink(port) else port
+
+
+def port_identity(port: str) -> dict[str, Any]:
+    """Requested path, resolved device, by-id aliases and USB interface of a port."""
+    resolved = _resolved_device(port)
+    usb = _usb_serial_identity(port)
+    return {
+        "requested": port,
+        "resolved": resolved,
+        "by_id": sorted(
+            link for link in glob.glob(_BY_ID_GLOB) if _resolved_device(link) == resolved
+        ),
+        "usb_vendor_product": f"{usb[0]}:{usb[1]}" if usb else None,
+        "usb_interface": usb[2] if usb else None,
+        "cp2105_interface": _CP2105_INTERFACE_NAMES.get(_cp2105_interface(usb)),
+    }
+
+
+def no_help_reply_message(port: str) -> str:
+    """Why a configured port gave no CLI help, naming the device and the operator action."""
+    identity = port_identity(port)
+    where = port if identity["resolved"] == port else f"{port} -> {identity['resolved']}"
+    interface = identity["cp2105_interface"]
+    if interface:
+        where += f" ({interface})"
+    if interface and identity["usb_interface"] == _CP2105_STANDARD_INTERFACE:
+        action = (
+            "this is the CP2105 Standard interface, which has no CLI: run this check with "
+            "the same adapter's Enhanced if00 port (/dev/serial/by-id/...-if00-port0)"
+        )
+    else:
+        action = f"{_RESET_ACTION}, then run this check again on the same port"
+        if not interface:
+            action = f"confirm it is the CP2105 Enhanced/UARTA interface (if00), then {action}"
+    return f"IWR6843 CLI did not answer help within {_PROBE_WINDOW_S:g} s on {where}; {action}"
+
+
+def _record(events: list[dict] | None, event: str, port: str, **fields: Any) -> None:
+    if events is not None:
+        events.append({"event": event, "port": port, "at_unix_s": time.time(), **fields})
+
+
+def _probe_help(ser: serial.Serial, port: str, events: list[dict] | None) -> bytes:
+    """Send `help` once and collect the reply until the CLI help or the probe window ends."""
+    started = time.time()
+    resp = b""
+    try:
+        ser.reset_input_buffer()
+        ser.write(b"help\n")
+        while time.time() < started + _PROBE_WINDOW_S and b"sensorStart" not in resp:
+            resp += ser.read(512)
+    except (OSError, serial.SerialException) as error:
+        _record(events, "help_probe", port, outcome="io_error", error=str(error))
+        raise
+    if b"sensorStart" in resp:
+        outcome = "cli_help"
+    else:
+        outcome = "unexpected_bytes" if resp else "no_reply"
+    _record(
+        events,
+        "help_probe",
+        port,
+        outcome=outcome,
+        window_s=_PROBE_WINDOW_S,
+        elapsed_s=time.time() - started,
+        reply_nbytes=len(resp),
+        reply_head=resp[:24].decode("ascii", errors="backslashreplace"),
+    )
+    return resp
+
+
+def _close_port(ser: serial.Serial, port: str, events: list[dict] | None) -> None:
+    try:
+        ser.close()
+    except BaseException as error:
+        _record(events, "close_failed", port, error=str(error))
+        raise
+    _record(events, "closed", port)
+
+
 def open_port(port: str, baud: int = BAUD, timeout: float = 0.3) -> serial.Serial:
     """DTR/RTS-safe serial open."""
     ser = serial.Serial()
@@ -90,22 +175,37 @@ def open_port(port: str, baud: int = BAUD, timeout: float = 0.3) -> serial.Seria
 class IWR6843Radar:
     """CLI + dump transport for the custom L3-dump firmware."""
 
-    def __init__(self, port: str | None = None, baud: int = BAUD):
+    def __init__(
+        self, port: str | None = None, baud: int = BAUD, *, events: list[dict] | None = None
+    ):
+        """Own the CLI port; ``events`` collects each ownership step, even on failure."""
+        self._events = events
         if port is None:
-            port, probes = self.probe_ports(baud)
+            port, probes = self.probe_ports(baud, events=events)
             if port is None:
                 detail = "; ".join(probes) or "no serial candidates"
                 raise RuntimeError(
-                    f"no IWR6843 CLI found — board on, flashed, single-port fw? Probes: {detail}"
+                    f"no IWR6843 CLI found — board on, flashed, single-port fw? Probes: {detail}. "
+                    f"Next: {_RESET_ACTION}, then retry on its CP2105 Enhanced if00 port"
                 )
+        else:
+            _record(events, "port_identity", port, identity=port_identity(port))
         self.port = port
         self._device_lock = IWR6843DeviceLock(port)
-        self._device_lock.acquire()
+        try:
+            self._device_lock.acquire()
+        except IWR6843DeviceBusyError as error:
+            _record(events, "lock_busy", port, owner=error.owner)
+            raise
+        _record(events, "lock_acquired", port)
         try:
             self.ser = open_port(port, baud)
-        except BaseException:
+        except BaseException as error:
+            _record(events, "open_failed", port, error=str(error))
             self._device_lock.release()
+            _record(events, "lock_released", port)
             raise
+        _record(events, "opened", port)
 
     @staticmethod
     def detect_port(baud: int = BAUD) -> str | None:
@@ -113,7 +213,9 @@ class IWR6843Radar:
         return IWR6843Radar.probe_ports(baud)[0]
 
     @staticmethod
-    def probe_ports(baud: int = BAUD) -> tuple[str | None, list[str]]:
+    def probe_ports(
+        baud: int = BAUD, *, events: list[dict] | None = None
+    ) -> tuple[str | None, list[str]]:
         """Probe candidates, CP2105 Enhanced first; also return what each one did."""
         candidates: list[str] = []
         for pattern in _PORT_GLOBS:
@@ -127,36 +229,41 @@ class IWR6843Radar:
             label = (
                 f"{cand} ({_CP2105_INTERFACE_NAMES[interface]})" if interface in (0, 1) else cand
             )
+            _record(events, "port_identity", cand, identity=port_identity(cand))
             if interface == _CP2105_STANDARD_INTERFACE:
+                _record(events, "not_probed", cand, reason="cp2105_standard_interface")
                 probes.append(f"{label}: not probed; the CLI is on the Enhanced interface")
                 continue
             device_lock = IWR6843DeviceLock(cand)
             try:
                 device_lock.acquire()
-            except IWR6843DeviceBusyError:
+            except IWR6843DeviceBusyError as error:
+                _record(events, "lock_busy", cand, owner=error.owner)
                 busy_ports.append(cand)
                 probes.append(f"{label}: busy")
                 continue
+            _record(events, "lock_acquired", cand)
             try:
                 try:
                     ser = open_port(cand, baud)
                 except (OSError, serial.SerialException) as error:
+                    _record(events, "open_failed", cand, error=str(error))
                     probes.append(f"{label}: could not open ({error})")
                     continue
+                _record(events, "opened", cand)
                 try:
-                    ser.reset_input_buffer()
-                    ser.write(b"help\n")
-                    resp = b""
-                    deadline = time.time() + _PROBE_WINDOW_S
-                    while time.time() < deadline and b"sensorStart" not in resp:
-                        resp += ser.read(512)
+                    resp = _probe_help(ser, cand, events)
+                except (OSError, serial.SerialException) as error:
+                    probes.append(f"{label}: I/O error during help ({error})")
+                    continue
                 finally:
-                    ser.close()
+                    _close_port(ser, cand, events)
                 if b"sensorStart" in resp:
                     return cand, probes
                 probes.append(f"{label}: {_describe_probe_reply(resp)}")
             finally:
                 device_lock.release()
+                _record(events, "lock_released", cand)
         if busy_ports:
             raise IWR6843DeviceBusyError(", ".join(busy_ports))
         return None, probes
@@ -339,6 +446,10 @@ class IWR6843Radar:
                 response.extend(chunk)
         return bytes(response)
 
+    def probe_help(self) -> bytes:
+        """Send `help` once on the owned port and return the raw reply."""
+        return _probe_help(self.ser, self.port, self._events)
+
     def stats(self) -> str:
         """Firmware health line (frames/wraps/active/calib/rf_faults)."""
         return self.cmd("stats", 2.0)
@@ -365,12 +476,14 @@ class IWR6843Radar:
 
     def close(self) -> None:
         """Release the serial port."""
+        events = getattr(self, "_events", None)
         try:
-            self.ser.close()
+            _close_port(self.ser, self.port, events)
         finally:
             device_lock = getattr(self, "_device_lock", None)
             if device_lock is not None:
                 device_lock.release()
+                _record(events, "lock_released", self.port)
 
     def __enter__(self) -> "IWR6843Radar":
         return self

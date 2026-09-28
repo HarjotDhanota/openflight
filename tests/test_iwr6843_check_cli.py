@@ -20,6 +20,8 @@ def _board(monkeypatch, handle, clock):
     monkeypatch.setattr(driver, "time", clock.module())
     monkeypatch.setattr(driver, "IWR6843DeviceLock", NoLock)
     monkeypatch.setattr(driver, "open_port", lambda *_args, **_kwargs: handle)
+    monkeypatch.setattr(driver, "_usb_serial_identity", lambda _port: None)
+    monkeypatch.setattr(driver, "_resolved_device", lambda port: port)
 
 
 def test_answering_cli_on_the_configured_port_passes(monkeypatch, capsys):
@@ -41,9 +43,10 @@ def test_silent_configured_port_fails_with_one_readable_line(monkeypatch, capsys
 
     lines = capsys.readouterr().err.strip().splitlines()
     assert lines == [
-        "IWR6843 CLI check failed: IWR6843 CLI did not answer help on "
-        "/dev/serial/by-id/iwr-if00-port0; use the CP2105 Enhanced/UARTA interface (if00), "
-        "set functional mode, and press RESET"
+        "IWR6843 CLI check failed: IWR6843 CLI did not answer help within 1.5 s on "
+        "/dev/serial/by-id/iwr-if00-port0; confirm it is the CP2105 Enhanced/UARTA interface "
+        "(if00), then press RESET on the IWR6843 board once with its switches in functional "
+        "mode, then run this check again on the same port"
     ]
 
 

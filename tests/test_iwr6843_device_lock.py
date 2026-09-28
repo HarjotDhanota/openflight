@@ -59,3 +59,23 @@ lock.release()
         child.wait(timeout=5)
 
     assert child.returncode == 0, child.stderr.read() if child.stderr else ""
+
+
+def test_failure_after_locking_leaves_the_device_free(tmp_path, monkeypatch):
+    """An error while recording the owner must not strand the lock on a live handle."""
+    from openflight.iwr6843 import device_lock
+
+    stranded = IWR6843DeviceLock("/dev/test-iwr", lock_root=tmp_path)
+
+    def owner_write_failure():
+        raise OSError("owner record failed")
+
+    monkeypatch.setattr(device_lock.os, "getpid", owner_write_failure)
+    with pytest.raises(OSError, match="owner record failed"):
+        stranded.acquire()
+    monkeypatch.undo()
+
+    contender = IWR6843DeviceLock("/dev/test-iwr", lock_root=tmp_path)
+    contender.acquire()
+    contender.release()
+    stranded.release()

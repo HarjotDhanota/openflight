@@ -350,3 +350,43 @@ def test_capture_monitor_closes_serial_when_gpio_setup_fails(tmp_path):
         raise AssertionError("expected GPIO setup to fail")
     assert radar.shutdown_events == ["sensorStop", "close"]
     assert radar.closed
+
+
+def test_capture_monitor_force_closes_serial_when_dump_never_finishes(tmp_path, monkeypatch):
+    """A stuck dump must not keep the CLI port owned; no command is sent into it."""
+    from openflight.iwr6843 import monitor as monitor_module
+
+    monkeypatch.setattr(monitor_module, "_GRACEFUL_DUMP_SHUTDOWN_S", 0.05)
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+
+    class StuckRadar(FakeRadar):
+        def __init__(self, raw):
+            super().__init__(raw)
+            self.read_started = threading.Event()
+            self.port_closed = threading.Event()
+
+        def read_dump(self):
+            self.read_started.set()
+            self.port_closed.wait(timeout=2.0)
+            raise OSError("port closed during dump")
+
+        def close(self):
+            super().close()
+            self.port_closed.set()
+
+    radar = StuckRadar(_raw_dump())
+    monitor = IWR6843CaptureMonitor(
+        config_path=config,
+        output_dir=tmp_path / "dumps",
+        radar=radar,
+        button_factory=FakeButton,
+    )
+    monitor.start()
+    assert monitor.notify_trigger(time.time())
+    assert radar.read_started.wait(timeout=0.5)
+
+    monitor.stop()
+
+    assert radar.shutdown_events == ["close"]
+    assert radar.closed

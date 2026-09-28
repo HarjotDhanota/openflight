@@ -88,26 +88,34 @@ class IWR6843DeviceLock:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         descriptor = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
         handle = os.fdopen(descriptor, "r+b")
-        if self.path.stat().st_size < _LOCK_FILE_BYTES:
-            handle.seek(0)
-            handle.write(b"\0" * _LOCK_FILE_BYTES)
+        locked = False
+        try:
+            if self.path.stat().st_size < _LOCK_FILE_BYTES:
+                handle.seek(0)
+                handle.write(b"\0" * _LOCK_FILE_BYTES)
+                handle.flush()
+            deadline = time.monotonic() + self.timeout_s
+            while True:
+                try:
+                    _try_lock(handle)
+                    break
+                except (OSError, BlockingIOError):
+                    if time.monotonic() >= deadline:
+                        raise IWR6843DeviceBusyError(self.port, self._read_owner(handle)) from None
+                    time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+            locked = True
+            owner = f"pid={os.getpid()} port={self.port}".encode("utf-8")[:_OWNER_BYTES]
+            handle.seek(1)
+            handle.write(owner.ljust(_OWNER_BYTES, b"\0"))
             handle.flush()
-        deadline = time.monotonic() + self.timeout_s
-        while True:
+        except BaseException:
             try:
-                _try_lock(handle)
-                break
-            except (OSError, BlockingIOError):
-                if time.monotonic() >= deadline:
-                    owner = self._read_owner(handle)
-                    handle.close()
-                    raise IWR6843DeviceBusyError(self.port, owner) from None
-                time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+                if locked:
+                    _unlock(handle)
+            finally:
+                handle.close()
+            raise
         self._handle = handle
-        owner = f"pid={os.getpid()} port={self.port}".encode("utf-8")[:_OWNER_BYTES]
-        handle.seek(1)
-        handle.write(owner.ljust(_OWNER_BYTES, b"\0"))
-        handle.flush()
         return self
 
     @staticmethod

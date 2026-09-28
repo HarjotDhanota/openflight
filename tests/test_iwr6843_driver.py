@@ -546,6 +546,10 @@ def test_missing_cli_reports_what_each_candidate_did(monkeypatch):
     assert "/dev/ttyUSB1: could not open (" in message and "Permission denied" in message
     assert "/dev/ttyUSB2: 80 bytes without the CLI help" in message
     assert "/dev/ttyUSB3 (CP2105 Standard if01): not probed" in message
+    assert message.endswith(
+        "Next: press RESET on the IWR6843 board once with its switches in functional mode, "
+        "then retry on its CP2105 Enhanced if00 port"
+    )
 
 
 def test_usb_serial_identity_reads_linux_sysfs(tmp_path, monkeypatch):
