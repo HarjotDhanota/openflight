@@ -13,9 +13,11 @@ class FakeRuntime:
     def __init__(self, auto_exposure=False):
         self.settings = SimpleNamespace(auto_exposure=auto_exposure, fps=120.0)
         self.applied = []
+        self.purposes = []
 
-    def update_image_controls(self, *, exposure_us, gain):
+    def update_image_controls(self, *, exposure_us, gain, purpose="capture"):
         self.applied.append((exposure_us, gain))
+        self.purposes.append(purpose)
         return {"exposure_us": exposure_us, "gain": gain}
 
     def recent_frames(self, count, *, timeout_s=2.0):
@@ -47,6 +49,19 @@ def test_the_page_sets_exposure_and_gain_live(client):
     assert response.status_code == 200
     assert response.get_json() == {"exposure_us": 150, "gain": 8.0}
     assert runtime.applied == [(150, 8.0)]
+    assert runtime.purposes == ["capture"]
+
+
+def test_a_still_photo_request_is_forwarded_with_its_purpose(client):
+    test_client, runtime = client
+
+    response = test_client.post(
+        "/api/camera/study/controls",
+        json={"exposure_us": 4000, "gain": 2.0, "purpose": "still_photo"},
+    )
+
+    assert response.status_code == 200
+    assert runtime.purposes == ["still_photo"]
 
 
 def test_raw_frames_come_back_with_their_controls(client):
