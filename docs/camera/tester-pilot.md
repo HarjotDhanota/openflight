@@ -239,9 +239,9 @@ applied camera metadata match the request and whose ball pixels pass the
 brightness, contrast, edge and clipping checks. Save stays disabled until that
 lock holds, and the lock is dropped if the light changes. If no setting passes,
 the step reports that more light is needed: add light and retry, or keep the view
-as unqualified raw evidence, which finishes the setup raw-only. This lock is for the stationary ball
-only; it never sets swing-capture exposure. Its thresholds are provisional until
-the camera lighting study.
+as unqualified raw evidence, which finishes the setup raw-only. This lock is for
+the stationary ball only; it never sets swing-capture exposure. Its thresholds
+are provisional until the camera lighting study.
 
 The setup admission is also frozen with the epoch: the approved configuration,
 operator confirmation and starting LIS3DH orientation must still match before

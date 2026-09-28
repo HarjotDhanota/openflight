@@ -436,3 +436,27 @@ for (const viewport of KIOSK_VIEWPORTS) {
     expect(clipped).toBe(false);
   });
 }
+
+test('the hardware check records whether RESET was pressed', async ({ page }) => {
+  await mockBaseApis(page, () => ladderState(null));
+  const runBodies: Record<string, unknown>[] = [];
+  await page.route('**/api/tester/run', async (route) => {
+    runBodies.push(route.request().postDataJSON());
+    await fulfillJson(route, {});
+  });
+  await page.route('**/api/tester/status?**', (route) =>
+    fulfillJson(route, { job: { state: 'complete', message: 'done', output: ['IWR6843 CLI ready'] } })
+  );
+  await page.goto('/tester.html');
+  const reset = page.locator('#iwr-reset-pressed');
+
+  await reset.check();
+  await page.getByRole('button', { name: 'A. Check the hardware' }).tap();
+  await expect(page.locator('#check-verdict')).toContainText('ready');
+  await expect(reset).not.toBeChecked();
+  await page.getByRole('button', { name: 'A. Check the hardware' }).tap();
+  await expect.poll(() => runBodies.length).toBe(2);
+
+  expect(runBodies.map((body) => body.operator_reset)).toEqual([true, false]);
+  expect(runBodies.every((body) => body.action === 'preflight')).toBe(true);
+});

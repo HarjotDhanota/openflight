@@ -217,6 +217,24 @@ class TestCommands:
         assert ts.Path(commands[-1][1]).name == "check_cli.py"
         assert "--port" not in commands[-1]
 
+    @pytest.mark.parametrize(
+        ("operator_reset", "expected"),
+        [(True, ["--operator-reset", "pressed"]), (False, ["--operator-reset", "not-pressed"])],
+    )
+    def test_preflight_records_whether_the_operator_pressed_reset(
+        self, tmp_path, operator_reset, expected
+    ):
+        commands, _ = ts.action_commands(
+            "preflight", params(), tmp_path, RIG, operator_reset=operator_reset
+        )
+
+        assert commands[-1][-2:] == expected
+
+    def test_preflight_leaves_the_reset_record_unknown_when_not_reported(self, tmp_path):
+        commands, _ = ts.action_commands("preflight", params(), tmp_path, RIG)
+
+        assert "--operator-reset" not in commands[-1]
+
     def test_gain_step_screens_gain_at_the_arms_exposure(self, tmp_path):
         commands, log_path = ts.action_commands("gain", params(arm_id="arm5"), tmp_path, RIG)
         command = commands[0]
@@ -562,6 +580,35 @@ class TestApp:
         body = response.get_json()
         assert body["available"] is True
         assert len(body["study"]["arms"]) == len(ts.ARMS)
+
+    def test_the_run_route_forwards_and_validates_the_reset_record(self, tmp_path):
+        class RecordingManager:
+            def __init__(self):
+                self.commands = None
+
+            def status(self):
+                return {"state": "idle", "action": None, "message": "Ready"}
+
+            def start(self, _action, commands, _log_path, on_finish=None, **_kwargs):
+                self.commands = commands
+
+        manager = RecordingManager()
+        client = eligible_app(
+            sessions_root=tmp_path, rig_geometry=RIG, manager=manager
+        ).test_client()
+        body = {
+            "tester_id": "20260922-name",
+            "arm_id": "arm5",
+            "environment": "indoors",
+            "action": "preflight",
+        }
+
+        refused = client.post("/api/tester/run", json={**body, "operator_reset": "yes"})
+        accepted = client.post("/api/tester/run", json={**body, "operator_reset": True})
+
+        assert refused.status_code == 400
+        assert accepted.status_code == 202
+        assert list(manager.commands[-1][-2:]) == ["--operator-reset", "pressed"]
 
     def test_normal_tester_setup_is_blocked_until_iwr_cli_preflight_passes(self, tmp_path):
         class ImmediatePreflight:

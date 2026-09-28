@@ -484,7 +484,10 @@
         </div>
         <div class="status" id="status" data-state="unavailable">Connecting to the local runner…</div>
         <ol class="suite-steps">
-          <li><button type="button" id="step-check">A. Check the hardware</button> <span id="check-verdict"></span></li>
+          <li>
+            <button type="button" id="step-check">A. Check the hardware</button> <span id="check-verdict"></span>
+            <label class="setup-confirm"><input type="checkbox" id="iwr-reset-pressed" /> I pressed RESET on the IWR6843 board since the last check</label>
+          </li>
           <li>
             <button type="button" id="step-light">B. Measure the light (both modes)</button>
             <span id="light-verdict"></span>
@@ -1301,7 +1304,12 @@
         const version = ++suiteActionVersion;
         el('check-verdict').textContent = 'checking…';
         try {
-          await post('/api/tester/run', { ...suiteBody('arm5', context), action: 'preflight' });
+          await post('/api/tester/run', {
+            ...suiteBody('arm5', context),
+            action: 'preflight',
+            operator_reset: el('iwr-reset-pressed').checked,
+          });
+          el('iwr-reset-pressed').checked = false;
           const job = await waitJob(context, version);
           // The IWR6843 CLI probe runs last and prints one line saying which port answered or why not.
           const detail = [...(job.output || [])].reverse().find((line) => line.trim());

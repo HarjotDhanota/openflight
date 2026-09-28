@@ -575,6 +575,7 @@ def action_commands(
     camera_placement: Path | None = None,
     tee_range_solution: tee_range.TeeRangeSolution | None = None,
     iwr_static_port: str | None = None,
+    operator_reset: bool | None = None,
 ) -> tuple[list[list[str]], Path]:
     """Build an allowlisted command sequence and its log path."""
     if action not in ACTION_LABELS:
@@ -592,6 +593,11 @@ def action_commands(
             _python_command(
                 "scripts/iwr6843/check_cli.py",
                 *(["--port", iwr_static_port] if iwr_static_port else []),
+                *(
+                    ["--operator-reset", "pressed" if operator_reset else "not-pressed"]
+                    if operator_reset is not None
+                    else []
+                ),
             ),
         ]
     elif action == "gain":
@@ -4578,6 +4584,9 @@ def create_app(
         try:
             params = TesterParameters.from_payload(payload)
             action = str((payload or {}).get("action", ""))
+            operator_reset = (payload or {}).get("operator_reset")
+            if operator_reset is not None and not isinstance(operator_reset, bool):
+                raise ValueError("operator_reset must be true, false or absent")
             refuse_while_analysing()
             eligibility = None
             if action in {"gain", "swings"}:
@@ -4601,6 +4610,7 @@ def create_app(
                 camera_placement,
                 solution,
                 iwr_static_port,
+                operator_reset if action == "preflight" else None,
             )
             write_arm_state(sessions_root, params)
             if action == "swings":

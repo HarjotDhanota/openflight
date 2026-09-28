@@ -40,7 +40,8 @@ Every `check_cli.py` run prints one `IWR6843 CLI evidence: {...}` JSON line
 before its result: requested and resolved port, by-id aliases, USB interface,
 each lock/open/`help`/close step with reply size and timing, and the error.
 Pass `--operator-reset pressed` or `--operator-reset not-pressed` when running
-it by hand; the tester page does not ask, so its runs record `null`.
+it by hand. On the tester page, tick "I pressed RESET on the IWR6843 board since
+the last check" before **Check the hardware**; unticked records `not-pressed`.
 
 To characterize it, run one session on the Pi and keep every evidence line.
 "Check" means `uv run python scripts/iwr6843/check_cli.py --port
