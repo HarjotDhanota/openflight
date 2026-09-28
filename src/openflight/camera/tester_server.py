@@ -1927,8 +1927,8 @@ class StaticExposureController:
         if not exposure["locked_and_passing"]:
             payload["save_eligible"] = False
             payload["readiness_reason"] = (
-                f"lighting required: {exposure['reason']}"
-                if exposure["status"] == "lighting_required"
+                f"{exposure['status'].replace('_', ' ')}: {exposure['reason']}"
+                if exposure["status"] in {"lighting_required", "ball_not_identified"}
                 else "static exposure is still being searched and locked"
             )
         return payload
@@ -2585,8 +2585,8 @@ def guided_camera_display(status: Mapping) -> dict:
         state, reason = "camera_unavailable", "the guided camera is not running"
     elif association is None or exposure is None:
         state, reason = "warming", "waiting for the first analysed frames"
-    elif exposure.get("status") == "lighting_required":
-        state, reason = "lighting_required", str(exposure.get("reason"))
+    elif exposure.get("status") in {"lighting_required", "ball_not_identified"}:
+        state, reason = str(exposure["status"]), str(exposure.get("reason"))
     elif exposure.get("locked_and_passing"):
         state = "exposure_locked"
         reason = association.get("readiness_reason") or "ready to save"
@@ -4338,9 +4338,10 @@ def create_app(
         if analyzer is None:
             raise RuntimeError(f"camera {arm_id} has no guided exposure search")
         exposure = analyzer.status()
-        if exposure["status"] != "lighting_required":
+        if exposure["status"] not in {"lighting_required", "ball_not_identified"}:
             raise RuntimeError(
-                f"camera {arm_id} diagnostic save is only for a lighting failure; use Save"
+                f"camera {arm_id} diagnostic save is only for a lighting or "
+                "ball-identification failure; use Save"
             )
         context = live.capture_context_snapshot()
         frames = context.get("frames")
@@ -4356,7 +4357,7 @@ def create_app(
             raise FileExistsError(f"diagnostic evidence already exists for attempt {capture_id}")
         if not path.exists():
             atomic_write(path, payload)
-        reason = f"camera_{arm_id}_lighting_required_raw_evidence_only"
+        reason = f"camera_{arm_id}_{exposure['status']}_raw_evidence_only"
         candidates = [
             tee_range.TeeRangeCandidate.from_dict(state.evidence[key])
             for key in ("iwr_candidate", "camera_arm5_candidate")
@@ -4376,7 +4377,10 @@ def create_app(
                     "frame_count": int(len(frames)),
                     "applied_controls": applied,
                     "qualified": False,
-                    "label": "unqualified diagnostic raw evidence: lighting required",
+                    "label": (
+                        "unqualified diagnostic raw evidence: "
+                        f"{exposure['status'].replace('_', ' ')}"
+                    ),
                 },
             },
         )

@@ -191,5 +191,44 @@ def test_lock_serializes_with_policy_identity_and_applied_controls(tmp_path):
 def test_static_exposure_policy_identity_is_pinned():
     """A lattice or gate change must be a deliberate, reviewed identity change."""
     assert se.static_exposure_policy_sha256() == (
-        "12c5310d66f3409d2bf7110052445e1e226f402e6d714f364980c664037e7bbf"
+        "0baafdca0b5fc543b6c04c0109be2185c959f2f3730ae0d8702035df874fd351"
     )
+
+
+def _ambiguous(step):
+    return se.assess_static_exposure(
+        _frames(160.0),
+        {"status": "ambiguous", "selected": None, "stable_count": 0},
+        requested=step,
+        applied_exposure_us=step.exposure_us,
+        applied_gain=step.gain,
+        black_floor_dn=15.0,
+    )
+
+
+def test_an_ambiguous_ball_is_reported_as_unidentified_not_as_too_dark():
+    """Several ball-like objects are an identification failure; more light cannot fix it."""
+    search = se.StaticExposureSearch(STEPS)
+    seen = []
+    for _ in range(200):
+        step = search.current_step
+        if step is None:
+            break
+        seen.append(step)
+        search.record(_ambiguous(step))
+
+    assert search.status == "ball_not_identified"
+    assert "could not be picked out" in search.reason
+    assert search.lock is None
+    assert len(seen) <= 8
+    assert all(item["reason"] != "ball_not_visible" for item in search.attempts)
+
+
+def test_ambiguity_does_not_prune_dimmer_settings_as_too_dark():
+    search = se.StaticExposureSearch(STEPS)
+    search.record(_ambiguous(search.current_step))
+    first_refine = search.current_step
+    search.record(_ambiguous(first_refine))
+
+    assert search.stage == "refine"
+    assert search.current_step == sorted(STEPS)[sorted(STEPS).index(first_refine) + 1]

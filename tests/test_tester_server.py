@@ -2629,6 +2629,7 @@ def _exposure(status="searching", *, last=None, locked=False):
             "optical_gates_failed",
         ),
         (_guided_status(exposure=_exposure("lighting_required")), "lighting_required"),
+        (_guided_status(exposure=_exposure("ball_not_identified")), "ball_not_identified"),
         (_guided_status(exposure=_exposure("locked", locked=True)), "exposure_locked"),
     ],
 )

@@ -40,6 +40,7 @@ type GuidedState =
   | 'ball_not_found'
   | 'optical_gates_failed'
   | 'lighting_required'
+  | 'ball_not_identified'
   | 'exposure_locked';
 
 function guidedDisplay(state: GuidedState, overrides: Record<string, unknown> = {}) {
@@ -782,6 +783,15 @@ const GUIDED_CAMERA_CASES = [
       exposure: { status: 'lighting_required', stage: 'refine', current_step: null, attempts: 30, lock: null },
     }),
     text: 'More light is needed on the ball: no visible setting passed the ball-pixel gates',
+    saveEnabled: false,
+    problem: true,
+  },
+  {
+    name: 'several ball-like objects',
+    display: guidedDisplay('ball_not_identified', {
+      reason: 'several ball-like objects are visible and the ball could not be picked out',
+    }),
+    text: 'Several ball-like objects are in view; the ball cannot be picked out',
     saveEnabled: false,
     problem: true,
   },

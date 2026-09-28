@@ -657,6 +657,28 @@ def test_a_dark_camera_view_can_be_kept_as_unqualified_raw_evidence(tmp_path, in
     assert live.running is False
 
 
+def test_an_ambiguous_ball_is_reported_as_unidentified_not_as_dark(tmp_path, inputs, monkeypatch):
+    live = FakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    ambiguous = replace(camera_result(1.2), status="ambiguous", selected=None)
+    monkeypatch.setattr(ts, "estimate_reference_ball_range", lambda *_args, **_kwargs: ambiguous)
+    client = app.test_client()
+    start_arm5(client, tester)
+
+    exposure = live.analyzer.status()
+    refused = post(client, tester, "evaluate_camera_arm5", "ambiguous-save")
+    kept = post(client, tester, "save_camera_arm5_diagnostic", "ambiguous-diagnostic")
+    state = phase(client, tester)
+
+    assert exposure["status"] == "ball_not_identified"
+    assert len(exposure["attempts"]) <= 8
+    assert refused.status_code == 409
+    assert "ball not identified" in refused.get_json()["error"]
+    assert kept.status_code == 200
+    assert state["phase"] == "raw_only"
+    assert state["solution"]["reason"] == "camera_arm5_ball_not_identified_raw_evidence_only"
+
+
 def test_the_diagnostic_save_is_refused_when_the_light_is_usable(tmp_path, inputs, monkeypatch):
     app, tester = app_for(tmp_path, inputs, monkeypatch)
     client = app.test_client()
@@ -665,7 +687,7 @@ def test_the_diagnostic_save_is_refused_when_the_light_is_usable(tmp_path, input
     response = post(client, tester, "save_camera_arm5_diagnostic", "usable-diagnostic")
 
     assert response.status_code == 409
-    assert "only for a lighting failure" in response.get_json()["error"]
+    assert "only for a lighting or ball-identification failure" in response.get_json()["error"]
     assert phase(client, tester)["phase"] == "camera_arm5_capturing"
 
 

@@ -32,6 +32,8 @@ _SETTLE_LIMIT = 4
 _STABILIZE_LIMIT = 6
 _REFINE_ATTEMPT_LIMIT = 48
 _DARK_GATES = frozenset({"signal", "contrast", "edge"})
+_IDENTIFY_LIMIT = 6
+_UNIDENTIFIED_STATUSES = frozenset({"ambiguous", "no_consistent_candidate"})
 
 
 def static_exposure_policy() -> dict[str, Any]:
@@ -49,6 +51,9 @@ def static_exposure_policy() -> dict[str, Any]:
             "settle_limit_observations": _SETTLE_LIMIT,
             "stabilize_limit_observations": _STABILIZE_LIMIT,
             "refine_attempt_limit": _REFINE_ATTEMPT_LIMIT,
+            "unidentified_ball": "not_a_brightness_signal_no_pruning",
+            "unidentified_statuses": sorted(_UNIDENTIFIED_STATUSES),
+            "identify_limit_observations": _IDENTIFY_LIMIT,
         },
         "gates": {
             "minimum_signal_above_floor_dn": _MIN_SIGNAL_ABOVE_FLOOR_DN,
@@ -103,6 +108,7 @@ class StaticExposureObservation:
     applied_exposure_us: float | None = None
     applied_gain: float | None = None
     failed_gates: tuple[str, ...] = ()
+    association_status: str | None = None
 
     @property
     def acceptable(self) -> bool:
@@ -197,7 +203,9 @@ def assess_static_exposure(  # pylint: disable=too-many-locals
             **applied,
         )
     selected = association.get("selected") if isinstance(association, Mapping) else None
-    if not isinstance(selected, Mapping) or association.get("status") != "selected":
+    detector = association.get("status") if isinstance(association, Mapping) else None
+    applied["association_status"] = detector
+    if not isinstance(selected, Mapping) or detector != "selected":
         return StaticExposureObservation(
             requested, "rejected", "no reference ball was detected", False, True, **applied
         )
@@ -286,6 +294,7 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
         self._settling = 0
         self._stabilizing = 0
         self._refine_attempts = 0
+        self._unidentified = 0
         self._ball_seen = False
 
     @property
@@ -317,13 +326,17 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
             self._refine_attempts += 1
         if self._queue and self._refine_attempts < _REFINE_ATTEMPT_LIMIT:
             return
-        self._queue = []
-        self.status = "lighting_required"
-        self.reason = (
+        self._finish(
+            "lighting_required",
             "no visible setting passed the ball-pixel gates"
             if self._ball_seen
-            else "reference ball not visible at the brightest static setting"
+            else "reference ball not visible at the brightest static setting",
         )
+
+    def _finish(self, status: str, reason: str) -> None:
+        self._queue = []
+        self.status = status
+        self.reason = reason
 
     def _enter_refine(self) -> None:
         self.stage = "refine"
@@ -345,6 +358,22 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
                 self._advance()
             return
         self._settling = 0
+        if not observation.ball_found and observation.association_status in _UNIDENTIFIED_STATUSES:
+            # Ball-like objects are visible but the ball cannot be picked out; more
+            # light does not resolve that, so it must not be read as darkness.
+            self._unidentified += 1
+            self._log(observation, "ball_not_identified")
+            if self._unidentified >= _IDENTIFY_LIMIT:
+                self._finish(
+                    "ball_not_identified",
+                    "several ball-like objects are visible and the ball could not be picked out",
+                )
+            elif self.stage == "bootstrap":
+                self._enter_refine()
+            else:
+                self._advance()
+            return
+        self._unidentified = 0
         if self.stage == "bootstrap":
             if not observation.ball_found:
                 self._log(observation, "ball_not_visible")

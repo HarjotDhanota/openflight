@@ -1495,6 +1495,7 @@
         ball_not_found: 'No reference ball at this exposure; trying a brighter setting',
         optical_gates_failed: 'Ball found, but its pixels are not usable at this exposure',
         lighting_required: 'More light is needed on the ball',
+        ball_not_identified: 'Several ball-like objects are in view; the ball cannot be picked out',
         exposure_locked: 'Exposure locked',
       };
 
@@ -1518,7 +1519,8 @@
         const applied = controls.match
           ? `Camera applied ${controlsText(controls.applied)}.`
           : `Requested ${controlsText(controls.requested)}; camera applied ${controlsText(controls.applied)}.`;
-        const blocked = ['lighting_required', 'camera_error', 'camera_unavailable'].includes(display.state);
+        const blocked = ['lighting_required', 'ball_not_identified', 'camera_error', 'camera_unavailable']
+          .includes(display.state);
         line.className = blocked ? 'problem' : 'note';
         line.dataset.state = display.state;
         line.textContent = `${label}${where}: ${display.reason}. ${applied} ${display.save_ready ? 'Ready to save.' : 'Save stays disabled.'}`;
@@ -1678,7 +1680,7 @@
         const action = el('tee-range-action');
         el('automatic-range').dataset.ready = String(teeRangeComplete());
         el('tee-range-restart').hidden = !state;
-        const diagnosticArm = guidedCameraDisplay?.state === 'lighting_required'
+        const diagnosticArm = ['lighting_required', 'ball_not_identified'].includes(guidedCameraDisplay?.state)
           ? guidedCameraContext()?.armId
           : null;
         const diagnostic = el('tee-range-diagnostic');
