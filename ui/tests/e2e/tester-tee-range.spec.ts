@@ -975,3 +975,47 @@ for (const viewport of KIOSK_VIEWPORTS) {
     await expect(diagnostic).toBeHidden();
   });
 }
+
+test('shows the 1280x800 exposure search while the radar records the ball', async ({ page }) => {
+  const state = {
+    epoch_id: 'epoch-parallel',
+    phase: 'ball_capturing',
+    reason: 'capturing_ball_present',
+    evidence: {
+      ball_present_capture_id: 'ball_present-000004',
+      camera_arm5_capture_setup: { started_during_radar_capture_id: 'ball_present-000004' },
+    },
+    solution: null,
+  };
+  const control = await base(page, state);
+  let display = guidedDisplay('lighting_required', {
+    reason: 'no visible setting passed the ball-pixel gates',
+  });
+  await page.route('**/api/tester/live', (route) =>
+    json(route, {
+      running: true,
+      arm_id: 'arm5',
+      owner: { kind: 'guided_tee_range', tester_id: '20260922-name', epoch_id: 'epoch-parallel', arm_id: 'arm5' },
+      stats: { mean: 70, p99: 140, max: 180, clipped_pct: 0 },
+      association: { status: 'selected', selected: null, save_eligible: display.save_ready },
+      guided_display: display,
+    })
+  );
+  await page.goto('/tester.html');
+
+  const action = page.locator('#tee-range-action');
+  const exposure = page.locator('#tee-range-camera-exposure');
+  await expect(action).toHaveText('Capturing ball…');
+  await expect(action).toBeDisabled();
+  await expect(page.locator('#tee-range-camera-preview')).toBeVisible();
+  await expect(exposure).toContainText('More light is needed on the ball');
+  await expect(exposure).toContainText('Save opens when the radar capture finishes.');
+  await expect(page.locator('#tee-range-diagnostic')).toBeHidden();
+
+  display = guidedDisplay('exposure_locked');
+  await expect(exposure).toContainText('Exposure locked at 1250 µs × 8.00');
+  control.setState({ ...state, phase: 'camera_arm5_capturing', reason: 'camera_arm5_searched_during_radar_capture' });
+  await expect(action).toHaveText('Save 1280×800 observation');
+  await expect(action).toBeEnabled();
+  await expect(exposure).toContainText('Ready to save.');
+});

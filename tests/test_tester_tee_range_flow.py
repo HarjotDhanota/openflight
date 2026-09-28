@@ -908,14 +908,18 @@ def test_guided_flow_resolves_and_survives_reload(tmp_path, inputs, monkeypatch)
     assert "iwr_camera_search_hint" not in identity["mode"]["controls"]
     guidance = state["evidence"]["camera_arm5_guidance"]
     live = guidance["live_readiness"]
-    hint = guidance["search_hint"]
     save = guidance["save_camera_only_analysis"]
     ranking = guidance["camera_to_iwr_ranking"]
     assert live["save_eligible"] is True
-    assert live["independent"] is False
-    assert live["promotion_eligible"] is False
-    assert live["dependency_facts"]["iwr_range_used"] is True
     assert live["timing"]["clock"] == "host_performance_counter_duration"
+    # 1280x800 searches during the radar ball capture, before any radar candidate exists.
+    assert guidance["search_hint"]["reason_code"] == "static_iwr_candidate_missing"
+    assert live["dependency_facts"]["iwr_range_used"] is False
+    hinted = state["evidence"]["camera_arm6_guidance"]["live_readiness"]
+    hint = state["evidence"]["camera_arm6_guidance"]["search_hint"]
+    assert hinted["independent"] is False
+    assert hinted["promotion_eligible"] is False
+    assert hinted["dependency_facts"]["iwr_range_used"] is True
     assert hint["status"] == "usable"
     assert hint["input_identity"]["active_epoch_id"] == state["epoch_id"]
     assert hint["input_identity"]["source_epoch_id"] == state["epoch_id"]
@@ -964,33 +968,43 @@ def test_guided_flow_resolves_and_survives_reload(tmp_path, inputs, monkeypatch)
 def test_conditioned_static_object_must_match_broad_save_before_promotion(
     tmp_path, inputs, monkeypatch
 ):
+    """The radar hint only exists once the radar has finished, so 640x400 is conditioned."""
     live = FakeLive()
-    live.other_bright_objects = [(260.0, 360.0, 24.0)]
+    live.other_bright_objects = [(260.0, 300.0, 12.0)]
     app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
-    guided_hinge = camera_result(1.2)
-    guided_hinge = replace(
-        guided_hinge,
-        selected=replace(guided_hinge.selected, x_px=260.0, y_px=360.0),
-        candidates=(replace(guided_hinge.candidates[0], x_px=260.0, y_px=360.0),),
-    )
-    independent_ball = camera_result(1.2)
 
-    def estimate(_frames, _camera, **kwargs):
-        return guided_hinge if "roi" in kwargs else independent_ball
+    def estimate(_frames, camera, **kwargs):
+        ball = camera_result(1.2, camera.image_width_px, camera.image_height_px)
+        if "roi" not in kwargs:
+            return ball
+        return replace(
+            ball,
+            selected=replace(ball.selected, x_px=260.0, y_px=300.0),
+            candidates=(replace(ball.candidates[0], x_px=260.0, y_px=300.0),),
+        )
 
     monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
     client = app.test_client()
-    for index, action in enumerate(("start", "capture_empty", "capture_ball", "start_camera_arm5")):
+    actions = (
+        "start",
+        "capture_empty",
+        "capture_ball",
+        "start_camera_arm5",
+        "evaluate_camera_arm5",
+        "start_camera_arm6",
+    )
+    for index, action in enumerate(actions):
         assert post(client, tester, action, f"hinge-{index}").status_code == 200
 
-    response = post(client, tester, "evaluate_camera_arm5", "hinge-save")
+    response = post(client, tester, "evaluate_camera_arm6", "hinge-save")
 
     assert response.status_code == 200
     state = response.get_json()["state"]
     assert state["phase"] == "retryable_failure"
-    assert "camera_arm5_candidate" not in state["evidence"]
+    assert "camera_arm5_candidate" in state["evidence"]
+    assert "camera_arm6_candidate" not in state["evidence"]
     attempt = next(
-        value for key, value in state["evidence"].items() if key.startswith("camera_arm5_attempt_")
+        value for key, value in state["evidence"].items() if key.startswith("camera_arm6_attempt_")
     )
     assert attempt["status"] == "association_withheld"
     assert attempt["live_guidance"]["dependency_facts"]["iwr_range_used"] is True
@@ -1191,7 +1205,10 @@ def test_missing_qualification_and_disagreement_remain_raw_only(tmp_path, inputs
     missing = drive(app.test_client(), tester)
     assert missing["phase"] == "raw_only"
     assert missing["solution"]["reason"] == "qualification_artifact_missing"
-    fallback = missing["evidence"]["camera_arm5_guidance"]
+    assert missing["evidence"]["camera_arm5_guidance"]["search_hint"]["reason_code"] == (
+        "static_iwr_candidate_missing"
+    )
+    fallback = missing["evidence"]["camera_arm6_guidance"]
     assert fallback["search_hint"]["status"] == "rejected"
     assert fallback["search_hint"]["reason_code"] == "static_iwr_candidate_rejected"
     assert fallback["live_readiness"]["discovery_mode"] == "broad_full_frame_unconditioned"
@@ -1689,3 +1706,133 @@ def test_concurrent_arm_and_placement_writes_keep_both_updates(tmp_path):
     assert [row["placement"] for row in rows] == [1, 2]
     assert len({row["frame"] for row in rows}) == 2
     assert all(row["frame_sha256"] for row in rows)
+
+
+class DeferredStaticManager(StaticManager):
+    """A radar job that keeps running until the test releases it."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.deferred = None
+
+    def start(self, action, commands, log_path, on_finish=None, **kwargs):
+        kind = commands[0][commands[0].index("--kind") + 1] if action == "tee_range" else None
+        if kind != "ball_present":
+            return super().start(action, commands, log_path, on_finish=on_finish, **kwargs)
+        self.deferred = (action, commands, log_path, on_finish)
+        self._status = {"state": "running", "action": "tee_range", "message": "capturing"}
+        return None
+
+    def release(self, *, fail=False):
+        action, commands, log_path, on_finish = self.deferred
+        self.deferred = None
+        self._status = {"state": "idle", "action": None, "message": "Ready"}
+        self.fail = fail
+        super().start(action, commands, log_path, on_finish=on_finish)
+
+
+def deferred_app(tmp_path, inputs, monkeypatch, live):
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    original = app.config["TEST_STATIC_MANAGER"]
+    manager = DeferredStaticManager(
+        config_hash=original.config_hash,
+        firmware_hash=original.firmware_hash,
+        rig_hash=original.rig_hash,
+        calibration_hash=original.calibration_hash,
+    )
+    monkeypatch.setattr(original, "start", manager.start)
+    monkeypatch.setattr(original, "status", manager.status)
+    return app, tester, manager
+
+
+def test_the_camera_finds_its_exposure_while_the_radar_records_the_ball(
+    tmp_path, inputs, monkeypatch
+):
+    live = FakeLive()
+    app, tester, manager = deferred_app(tmp_path, inputs, monkeypatch, live)
+    client = app.test_client()
+    for index, action in enumerate(("start", "capture_empty", "capture_ball")):
+        assert post(client, tester, action, f"parallel-{index}").status_code == 200
+
+    during = phase(client, tester)
+    setup = during["evidence"]["camera_arm5_capture_setup"]
+    display = client.get("/api/tester/live").get_json()["guided_display"]
+    assert during["phase"] == "ball_capturing"
+    assert setup["started_during_radar_capture_id"] == during["evidence"]["ball_present_capture_id"]
+    assert live.running is True
+    assert display["state"] == "exposure_locked"
+    assert post(client, tester, "evaluate_camera_arm5", "too-early").status_code == 409
+
+    manager.release()
+
+    after = phase(client, tester)
+    assert after["phase"] == "camera_arm5_capturing"
+    assert after["evidence"]["iwr_candidate"]
+    assert live.start_count == 1
+    assert post(client, tester, "start_camera_arm5", "no-op").status_code == 200
+    assert live.start_count == 1
+    assert post(client, tester, "evaluate_camera_arm5", "save").status_code == 200
+    assert phase(client, tester)["phase"] == "needs_camera_arm6"
+
+
+def test_a_failed_ball_capture_stops_the_parallel_camera_search(tmp_path, inputs, monkeypatch):
+    live = FakeLive()
+    app, tester, manager = deferred_app(tmp_path, inputs, monkeypatch, live)
+    client = app.test_client()
+    for index, action in enumerate(("start", "capture_empty", "capture_ball")):
+        assert post(client, tester, action, f"parallel-{index}").status_code == 200
+    assert live.running is True
+
+    manager.release(fail=True)
+
+    failed = phase(client, tester)
+    assert failed["phase"] == "retryable_failure"
+    assert failed["retry_phase"] == "needs_ball"
+    assert live.running is False
+    assert client.get("/api/tester/live").get_json()["owner"] is None
+    assert post(client, tester, "retry", "retry").status_code == 200
+    assert post(client, tester, "capture_ball", "again").status_code == 200
+    assert live.running is True
+
+
+def test_the_last_verified_lock_is_tried_first_next_time(tmp_path, inputs, monkeypatch):
+    live = FakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    first = drive(client, tester)
+    remembered = first["evidence"]["camera_arm5_static_exposure"]["lock"]
+
+    assert post(client, tester, "start_over", "again").status_code == 200
+    start_arm5(client, tester, prefix="second")
+
+    setup = phase(client, tester)["evidence"]["camera_arm5_capture_setup"]
+    saved = _search_evidence(tmp_path, client, tester)
+    assert setup["warm_start"] == {
+        "exposure_us": remembered["exposure_us"],
+        "gain": remembered["gain"],
+    }
+    assert setup["initial_step"] == setup["warm_start"]
+    assert saved["status"] == "locked"
+    assert [attempt["stage"] for attempt in saved["attempts"]] == ["warm_start"]
+    assert (saved["lock"]["exposure_us"], saved["lock"]["gain"]) == (
+        remembered["exposure_us"],
+        remembered["gain"],
+    )
+
+
+def test_a_remembered_lock_from_another_policy_is_not_used(tmp_path, inputs, monkeypatch):
+    live = FakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    drive(client, tester)
+    memory_path = ts.tester_root(tmp_path / "sessions", tester) / ts.STATIC_EXPOSURE_MEMORY_FILE
+    memory = json.loads(memory_path.read_text(encoding="utf-8"))
+    memory["arms"]["arm5"]["policy_sha256"] = "0" * 64
+    memory_path.write_text(json.dumps(memory), encoding="utf-8")
+
+    assert post(client, tester, "start_over", "again").status_code == 200
+    start_arm5(client, tester, prefix="second")
+
+    setup = phase(client, tester)["evidence"]["camera_arm5_capture_setup"]
+    assert setup["warm_start"] is None
+    assert _search_evidence(tmp_path, client, tester)["attempts"][0]["stage"] == "bootstrap"

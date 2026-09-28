@@ -1367,7 +1367,7 @@
         },
         ball_capturing: {
           label: 'Capturing ball…',
-          prompt: 'Radar is recording the ball at address. Stay still in the same spot and keep everything else still.',
+          prompt: 'Radar is recording the ball at address. Stay still in the same spot and keep everything else still. The 1280×800 camera finds its exposure at the same time.',
         },
         needs_camera_arm5: {
           label: 'Open 1280×800 camera',
@@ -1430,9 +1430,16 @@
         return `${kind} IWR capture failed at ${stage}${type}: ${message}.${remedy}`;
       }
 
+      // The 1280×800 search starts with the radar ball capture, so it is shown then too.
+      function parallelCameraSearch(state) {
+        const evidence = state?.evidence || {};
+        const started = evidence.camera_arm5_capture_setup?.started_during_radar_capture_id;
+        return state?.phase === 'ball_capturing' && Boolean(started) && started === evidence.ball_present_capture_id;
+      }
+
       function guidedCameraContext() {
         const phase = teeRangeState?.phase;
-        const armId = phase === 'camera_arm5_capturing'
+        const armId = phase === 'camera_arm5_capturing' || parallelCameraSearch(teeRangeState)
           ? 'arm5'
           : phase === 'camera_arm6_capturing'
             ? 'arm6'
@@ -1524,7 +1531,10 @@
           .includes(display.state);
         line.className = blocked ? 'problem' : 'note';
         line.dataset.state = display.state;
-        line.textContent = `${label}${where}: ${display.reason}. ${applied} ${display.save_ready ? 'Ready to save.' : 'Save stays disabled.'}`;
+        const save = parallelCameraSearch(teeRangeState)
+          ? 'Save opens when the radar capture finishes.'
+          : display.save_ready ? 'Ready to save.' : 'Save stays disabled.';
+        line.textContent = `${label}${where}: ${display.reason}. ${applied} ${save}`;
       }
 
       function guidedCameraStatus(message, problem = false) {
@@ -1627,6 +1637,10 @@
             guidedCameraAssociation = null;
             guidedCameraDisplay = null;
             renderTeeRange();
+            if (parallelCameraSearch(teeRangeState)) {
+              guidedCameraStatus('The camera opens after the radar capture.');
+              return;
+            }
             guidedCameraStatus('The guided camera is no longer owned by this range step. Retry or start over.', true);
             return;
           }
@@ -1682,6 +1696,7 @@
         el('automatic-range').dataset.ready = String(teeRangeComplete());
         el('tee-range-restart').hidden = !state;
         const diagnosticArm = ['lighting_required', 'ball_not_identified'].includes(guidedCameraDisplay?.state)
+          && phase?.startsWith('camera_')
           ? guidedCameraContext()?.armId
           : null;
         const diagnostic = el('tee-range-diagnostic');

@@ -250,6 +250,16 @@ as unqualified raw evidence, which finishes the setup raw-only. This lock is for
 the stationary ball only; it never sets swing-capture exposure. Its thresholds
 are provisional until the camera lighting study.
 
+Two things keep this search short. The 1280×800 search starts together with the
+radar ball capture, since the ball is already at address, so it is usually
+locked by the time the radar finishes; the page shows its progress during the
+capture, and Save opens once the radar result is in. This early search does not
+use the radar's range hint, which exists only after the radar finishes; the
+640×400 step still uses it. Each tester also remembers the last lock whose Save
+passed, per camera mode, in `static-exposure-memory.json` in the tester
+directory, and the next setup tries it first. It must pass every check again;
+any failure runs the full search. A policy or camera-mode change discards it.
+
 The setup admission is also frozen with the epoch: the approved configuration,
 operator confirmation and starting LIS3DH orientation must still match before
 each capture, evaluation, finalization and later ladder admission. A changed rig

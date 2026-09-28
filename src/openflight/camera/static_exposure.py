@@ -47,6 +47,7 @@ def static_exposure_policy() -> dict[str, Any]:
         "gains": list(GAINS),
         "objective": "minimum_exposure_then_gain",
         "search": {
+            "warm_start": "remembered_verified_lock_first_any_failure_runs_full_search",
             "bootstrap": "ascending_exposure_at_maximum_gain_until_ball_found",
             "refine": "lexicographic_with_monotone_signal_pruning",
             "settle_limit_observations": _SETTLE_LIMIT,
@@ -292,19 +293,31 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
     first one whose applied controls and ball pixels pass every gate. Ball level
     rises with exposure x gain, so a too-dark failure drops every queued step no
     brighter than it and a clipped failure drops every step no darker.
+
+    An optional warm start (the last verified lock for this tester and camera
+    mode) is tried first under the same gates. It locks only if it passes; any
+    failure discards it and runs the full search above.
     """
 
-    def __init__(self, steps: Sequence[StaticExposureStep]):
+    def __init__(
+        self,
+        steps: Sequence[StaticExposureStep],
+        warm_start: StaticExposureStep | None = None,
+    ):
         ordered = sorted(set(steps))
         if not ordered:
             raise ValueError("static exposure search needs at least one step")
         top_gain = max(step.gain for step in ordered)
         self._steps = tuple(ordered)
-        self._queue: list[StaticExposureStep] = [
+        self._bootstrap = [
             StaticExposureStep(exposure, top_gain)
             for exposure in sorted({step.exposure_us for step in ordered})
         ]
-        self.stage = "bootstrap"
+        self.warm_start = warm_start if warm_start in self._steps else None
+        self._queue: list[StaticExposureStep] = (
+            [self.warm_start] if self.warm_start else list(self._bootstrap)
+        )
+        self.stage = "warm_start" if self.warm_start else "bootstrap"
         self.status = "searching"
         self.reason: str | None = None
         self.lock: StaticExposureLock | None = None
@@ -335,6 +348,12 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
         )
 
     def _advance(self, prune: str | None = None) -> None:
+        if self.stage == "warm_start":
+            self.stage = "bootstrap"
+            self._queue = list(self._bootstrap)
+            self._settling = 0
+            self._stabilizing = 0
+            return
         failed = self._queue.pop(0)
         if prune == "dark":
             self._queue = [step for step in self._queue if step.signal > failed.signal]
@@ -464,6 +483,7 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
             "purpose": STATIC_EXPOSURE_PURPOSE,
             "status": self.status,
             "stage": self.stage,
+            "warm_start": asdict(self.warm_start) if self.warm_start else None,
             "reason": self.reason,
             "current_step": asdict(step) if step is not None else None,
             "lock": self.lock.to_dict() if self.lock else None,

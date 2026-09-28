@@ -1796,6 +1796,58 @@ def _detection_summary(association: Mapping | None) -> dict | None:
     }
 
 
+STATIC_EXPOSURE_MEMORY_FILE = "static-exposure-memory.json"
+STATIC_EXPOSURE_MEMORY_SCHEMA = "openflight.static_exposure_memory.v1"
+
+
+def read_static_exposure_warm_start(root: Path, arm_id: str, arm: Arm) -> StaticExposureStep | None:
+    """The last verified static lock for this camera mode, if it is still comparable.
+
+    It only orders the search: the step must pass every gate again before it locks.
+    A different policy, camera mode or an unreadable file means no warm start.
+    """
+    try:
+        memory = json.loads((root / STATIC_EXPOSURE_MEMORY_FILE).read_text(encoding="utf-8"))
+        entry = memory["arms"][arm_id]
+        if (
+            memory.get("schema") != STATIC_EXPOSURE_MEMORY_SCHEMA
+            or entry.get("policy_sha256") != _static_exposure_policy_sha256()
+            or entry.get("arm") != arm.as_dict()
+        ):
+            return None
+        return StaticExposureStep(int(entry["exposure_us"]), float(entry["gain"]))
+    except (OSError, AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def remember_static_exposure_lock(
+    root: Path, arm_id: str, arm: Arm, lock: Mapping, *, epoch_id: str, capture_id: str
+) -> None:
+    """Keep a lock whose Save frames passed, so the next setup tries it first."""
+    with session_bundle.snapshot_lock(root, timeout_s=session_bundle.WRITER_WAIT_S):
+        path = root / STATIC_EXPOSURE_MEMORY_FILE
+        try:
+            memory = json.loads(path.read_text(encoding="utf-8"))
+            arms = (
+                dict(memory["arms"])
+                if memory.get("schema") == STATIC_EXPOSURE_MEMORY_SCHEMA
+                else {}
+            )
+        except (OSError, AttributeError, KeyError, TypeError, ValueError):
+            arms = {}
+        arms[arm_id] = {
+            "exposure_us": int(lock["exposure_us"]),
+            "gain": float(lock["gain"]),
+            "policy_sha256": _static_exposure_policy_sha256(),
+            "arm": arm.as_dict(),
+            "epoch_id": epoch_id,
+            "capture_id": capture_id,
+            "saved_at_utc": datetime.now(timezone.utc).isoformat(),
+        }
+        payload = {"schema": STATIC_EXPOSURE_MEMORY_SCHEMA, "arms": arms}
+        atomic_write(path, (json.dumps(payload, indent=2) + "\n").encode("utf-8"))
+
+
 class StaticExposureController:
     """A guided analyzer that finds, locks and keeps checking static reference-ball exposure.
 
@@ -1813,6 +1865,7 @@ class StaticExposureController:
         change_controls: Callable[..., None],
         black_floor_dn: float | None,
         on_change: Callable[[dict], None] | None = None,
+        warm_start: StaticExposureStep | None = None,
     ):
         self._factory = analyzer_factory
         self._on_change = on_change
@@ -1822,7 +1875,7 @@ class StaticExposureController:
         self._black_floor_dn = black_floor_dn
         self._lock = threading.Lock()
         self._inner = analyzer_factory()
-        self._search = StaticExposureSearch(self._steps)
+        self._search = StaticExposureSearch(self._steps, warm_start=warm_start)
         self._last_observation: StaticExposureObservation | None = None
         self._lock_losses = 0
         self._invalidations: list[dict] = []
@@ -1834,6 +1887,14 @@ class StaticExposureController:
     @property
     def orientation(self) -> dict:
         return self._inner.orientation
+
+    @property
+    def black_floor_dn(self) -> float | None:
+        return self._black_floor_dn
+
+    @property
+    def warm_start(self) -> StaticExposureStep | None:
+        return self._search.warm_start
 
     @property
     def initial_step(self) -> StaticExposureStep:
@@ -3915,6 +3976,7 @@ def create_app(
         kind = "empty" if state.phase == "empty_capturing" else "ball_present"
         capture_id = state.evidence.get(f"{kind}_capture_id")
         if not isinstance(capture_id, str):
+            stop_guided_live(tester_id, state.epoch_id, "arm5")
             return store.transition(
                 state,
                 phase="retryable_failure",
@@ -3930,6 +3992,7 @@ def create_app(
         reservation = result_path.with_name(f".{capture_id}.reserve")
         if _detached_static_capture_active(reservation, state.updated_at_utc):
             return state
+        stop_guided_live(tester_id, state.epoch_id, "arm5")
         return store.transition(
             state,
             phase="retryable_failure",
@@ -3939,63 +4002,81 @@ def create_app(
 
     def _finish_static_capture(tester_id: str, epoch_id: str, kind: str, capture_id: str):
         with tee_range_lock:
-            store = range_store(tester_id)
-            state = store.load()
-            if state is None or state.epoch_id != epoch_id:
-                return state
-            key = "empty" if kind == "empty" else "ball_present"
-            result_path = store.epoch_dir(epoch_id) / "iwr" / f"{capture_id}.json"
-            if not result_path.is_file():
-                iwr_preflight[tester_id] = False
-                return store.transition(
-                    state,
-                    phase="retryable_failure",
-                    reason=f"{key}_capture_produced_no_result",
-                    retry_phase="needs_empty" if key == "empty" else "needs_ball",
-                )
-            record = json.loads(result_path.read_text(encoding="utf-8"))
-            evidence = {f"{key}_capture": record}
-            if not record.get("usable"):
-                iwr_preflight[tester_id] = False
-                return store.transition(
-                    state,
-                    phase="retryable_failure",
-                    reason=f"{key}_capture_unusable",
-                    evidence={
-                        **evidence,
-                        "capture_failure": _static_capture_failure(record, key),
-                    },
-                    retry_phase="needs_empty" if key == "empty" else "needs_ball",
-                )
-            if key == "empty":
-                return store.transition(
-                    state,
-                    phase="needs_ball",
-                    reason="place_ball_at_address_without_moving_rig",
-                    evidence=evidence,
-                )
-            try:
-                candidate = _guided_iwr_candidate(
-                    state.evidence["empty_capture"],
-                    record,
-                    epoch_id=epoch_id,
-                    calibration_path=iwr_calibration,
-                    qualification=qualification,
-                )
-            except (KeyError, TypeError, ValueError) as exc:
-                return store.transition(
-                    state,
-                    phase="retryable_failure",
-                    reason=f"static_profile_comparison_failed: {exc}",
-                    evidence=evidence,
-                    retry_phase="needs_empty",
-                )
+            state = _finish_static_capture_locked(tester_id, epoch_id, kind, capture_id)
+            if (
+                kind == "ball_present"
+                and state is not None
+                and state.epoch_id == epoch_id
+                and state.phase not in {"ball_capturing", "camera_arm5_capturing"}
+            ):
+                stop_guided_live(tester_id, epoch_id, "arm5")
+            return state
+
+    def _finish_static_capture_locked(tester_id: str, epoch_id: str, kind: str, capture_id: str):
+        store = range_store(tester_id)
+        state = store.load()
+        if state is None or state.epoch_id != epoch_id:
+            return state
+        key = "empty" if kind == "empty" else "ball_present"
+        result_path = store.epoch_dir(epoch_id) / "iwr" / f"{capture_id}.json"
+        if not result_path.is_file():
+            iwr_preflight[tester_id] = False
             return store.transition(
                 state,
-                phase="needs_camera_arm5",
-                reason="capture_reference_camera_mode_arm5",
+                phase="retryable_failure",
+                reason=f"{key}_capture_produced_no_result",
+                retry_phase="needs_empty" if key == "empty" else "needs_ball",
+            )
+        record = json.loads(result_path.read_text(encoding="utf-8"))
+        evidence = {f"{key}_capture": record}
+        if not record.get("usable"):
+            iwr_preflight[tester_id] = False
+            return store.transition(
+                state,
+                phase="retryable_failure",
+                reason=f"{key}_capture_unusable",
+                evidence={
+                    **evidence,
+                    "capture_failure": _static_capture_failure(record, key),
+                },
+                retry_phase="needs_empty" if key == "empty" else "needs_ball",
+            )
+        if key == "empty":
+            return store.transition(
+                state,
+                phase="needs_ball",
+                reason="place_ball_at_address_without_moving_rig",
+                evidence=evidence,
+            )
+        try:
+            candidate = _guided_iwr_candidate(
+                state.evidence["empty_capture"],
+                record,
+                epoch_id=epoch_id,
+                calibration_path=iwr_calibration,
+                qualification=qualification,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            return store.transition(
+                state,
+                phase="retryable_failure",
+                reason=f"static_profile_comparison_failed: {exc}",
+                evidence=evidence,
+                retry_phase="needs_empty",
+            )
+        if _parallel_search_running(tester_id, state):
+            return store.transition(
+                state,
+                phase="camera_arm5_capturing",
+                reason="camera_arm5_searched_during_radar_capture",
                 evidence={**evidence, "iwr_candidate": candidate.to_dict()},
             )
+        return store.transition(
+            state,
+            phase="needs_camera_arm5",
+            reason="capture_reference_camera_mode_arm5",
+            evidence={**evidence, "iwr_candidate": candidate.to_dict()},
+        )
 
     def _finalize_range_state(store: FlowStore, state):
         try:
@@ -4051,6 +4132,7 @@ def create_app(
             raise RuntimeError(f"tee-range setup is {state.phase if state else 'not_started'}")
         if request_id in state.request_ids:
             return state
+        stop_guided_live(tester_id, state.epoch_id)
         busy = _range_resources_busy()
         if busy:
             raise RuntimeError(busy)
@@ -4059,13 +4141,36 @@ def create_app(
                 raise ValueError(f"required tee-range input is missing: {required}")
         capture_id = f"{kind}-{state.sequence + 1:06d}"
         phase = "empty_capturing" if kind == "empty" else "ball_capturing"
+        evidence: dict = {f"{kind}_capture_id": capture_id}
+        camera = None
+        if kind == "ball_present":
+            # The ball is already at address, so the reference camera finds its static
+            # exposure during the radar capture instead of after it.
+            try:
+                camera = _camera_search(
+                    tester_id,
+                    state,
+                    "arm5",
+                    f"arm5-{state.sequence + 1:06d}",
+                    started_during_radar_capture_id=capture_id,
+                )
+                evidence["camera_arm5_capture_setup"] = camera[2]
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                evidence["camera_arm5_parallel_search_error"] = str(exc)
         state = store.transition(
             state,
             phase=phase,
             reason=f"capturing_{kind}",
             request_id=request_id,
-            evidence={f"{kind}_capture_id": capture_id},
+            evidence=evidence,
         )
+        if camera is not None:
+            try:
+                _launch_camera_search(tester_id, state.epoch_id, "arm5", camera[0], camera[1])
+            except (OSError, RuntimeError, ValueError) as exc:
+                # The camera step still runs on its own after the radar finishes.
+                logger.warning("Parallel camera exposure search did not start: %s", exc)
+                stop_guided_live(tester_id, state.epoch_id, "arm5")
         output = store.epoch_dir(state.epoch_id) / "iwr"
         command = _python_command(
             "scripts/iwr6843/capture_static_range.py",
@@ -4098,6 +4203,7 @@ def create_app(
                 output_to_log=True,
             )
         except (RuntimeError, SpawnError) as exc:
+            stop_guided_live(tester_id, state.epoch_id, "arm5")
             state = store.transition(
                 state,
                 phase="retryable_failure",
@@ -4106,17 +4212,9 @@ def create_app(
             )
         return state
 
-    def _start_camera_range(tester_id: str, arm_id: str, request_id: str):
+    def _camera_search(tester_id: str, state, arm_id: str, capture_id: str, **setup_facts):
+        """Build one arm's static-exposure analyzer and the evidence that describes it."""
         store = range_store(tester_id)
-        state = _range_state(tester_id)
-        expected = f"needs_camera_{arm_id}"
-        if state is None or state.phase != expected:
-            raise RuntimeError(f"tee-range setup is {state.phase if state else 'not_started'}")
-        if request_id in state.request_ids:
-            return state
-        busy = _range_resources_busy()
-        if busy:
-            raise RuntimeError(busy)
         params = TesterParameters(tester_id, arm_id, "indoors")
         black_floor = read_arm_state(sessions_root, tester_id, arm_id).get("black_floor_dn")
         tilt_snapshot = enclosure.reading()
@@ -4138,7 +4236,6 @@ def create_app(
         search_hint = _guided_iwr_camera_hint(
             state, model, camera_input_identity=camera_input_identity
         )
-        capture_id = f"{arm_id}-{state.sequence + 1:06d}"
         search_path = store.epoch_dir(state.epoch_id) / f"camera-{capture_id}-exposure-search.json"
         analyzer = StaticExposureController(
             lambda: GuidedRangeAnalyzer(
@@ -4150,44 +4247,86 @@ def create_app(
             on_change=lambda payload: atomic_write(
                 search_path, (json.dumps(payload, indent=2) + "\n").encode("utf-8")
             ),
+            warm_start=read_static_exposure_warm_start(store.tester_root, arm_id, params.arm),
         )
         first_step = analyzer.initial_step
-        state = store.transition(
-            state,
-            phase=f"camera_{arm_id}_capturing",
-            reason=f"camera_{arm_id}_warming",
-            request_id=request_id,
-            evidence={
-                f"camera_{arm_id}_capture_setup": {
-                    "capture_id": capture_id,
-                    "exposure_policy": STATIC_EXPOSURE_PURPOSE,
-                    "exposure_policy_sha256": _static_exposure_policy_sha256(),
-                    "initial_step": {
-                        "exposure_us": first_step.exposure_us,
-                        "gain": first_step.gain,
-                    },
-                    "black_floor_dn": black_floor,
-                    "exposure_search_file": search_path.name,
-                    "arm": params.arm.as_dict(),
-                    "orientation_at_start": tilt_snapshot,
-                    "camera_input_identity": camera_input_identity,
-                    "iwr_camera_search_hint": search_hint,
-                }
-            },
-        )
+        warm_start = analyzer.warm_start
+        capture_setup = {
+            "capture_id": capture_id,
+            "exposure_policy": STATIC_EXPOSURE_PURPOSE,
+            "exposure_policy_sha256": _static_exposure_policy_sha256(),
+            "initial_step": {"exposure_us": first_step.exposure_us, "gain": first_step.gain},
+            "warm_start": (
+                {"exposure_us": warm_start.exposure_us, "gain": warm_start.gain}
+                if warm_start is not None
+                else None
+            ),
+            "black_floor_dn": black_floor,
+            "exposure_search_file": search_path.name,
+            "arm": params.arm.as_dict(),
+            "orientation_at_start": tilt_snapshot,
+            "camera_input_identity": camera_input_identity,
+            "iwr_camera_search_hint": search_hint,
+            **setup_facts,
+        }
+        return params, analyzer, capture_setup
+
+    def _launch_camera_search(tester_id: str, epoch_id: str, arm_id: str, params, analyzer):
+        first_step = analyzer.initial_step
         start_guided_live(
             tester_id,
-            state.epoch_id,
+            epoch_id,
             arm_id,
             params.arm,
             first_step.exposure_us,
             first_step.gain,
-            black_floor,
+            analyzer.black_floor_dn,
             None,
             None,
             None,
             analyzer=analyzer,
         )
+
+    def _parallel_search_running(tester_id: str, state) -> bool:
+        """True while the camera search begun with this ball capture still owns the camera."""
+        setup = state.evidence.get("camera_arm5_capture_setup")
+        return bool(
+            isinstance(setup, Mapping)
+            and setup.get("started_during_radar_capture_id")
+            == state.evidence.get("ball_present_capture_id")
+            and live.running
+            and guided_live_matches(tester_id, state.epoch_id, "arm5")
+        )
+
+    def _start_camera_range(tester_id: str, arm_id: str, request_id: str):
+        store = range_store(tester_id)
+        state = _range_state(tester_id)
+        if (
+            state is not None
+            and arm_id == "arm5"
+            and state.phase == "camera_arm5_capturing"
+            and _parallel_search_running(tester_id, state)
+        ):
+            # The camera opened during the radar ball capture; there is nothing to start.
+            return state
+        expected = f"needs_camera_{arm_id}"
+        if state is None or state.phase != expected:
+            raise RuntimeError(f"tee-range setup is {state.phase if state else 'not_started'}")
+        if request_id in state.request_ids:
+            return state
+        busy = _range_resources_busy()
+        if busy:
+            raise RuntimeError(busy)
+        capture_id = f"{arm_id}-{state.sequence + 1:06d}"
+        params, analyzer, capture_setup = _camera_search(tester_id, state, arm_id, capture_id)
+        state = store.transition(
+            state,
+            phase=f"camera_{arm_id}_capturing",
+            reason=f"camera_{arm_id}_warming",
+            request_id=request_id,
+            evidence={f"camera_{arm_id}_capture_setup": capture_setup},
+        )
+        _launch_camera_search(tester_id, state.epoch_id, arm_id, params, analyzer)
         return state
 
     def _evaluate_camera_range(tester_id: str, arm_id: str, request_id: str):
@@ -4377,6 +4516,17 @@ def create_app(
             )
         finally:
             stop_guided_live(tester_id, state.epoch_id, arm_id)
+        try:
+            remember_static_exposure_lock(
+                store.tester_root,
+                arm_id,
+                ARMS[arm_id],
+                save_analysis["static_exposure"]["lock"],
+                epoch_id=state.epoch_id,
+                capture_id=capture_id,
+            )
+        except (OSError, RuntimeError) as exc:
+            logger.warning("Static exposure lock was not remembered: %s", exc)
         evidence = {
             f"camera_{arm_id}_candidate": candidate.to_dict(),
             f"camera_{arm_id}_static_exposure": save_analysis["static_exposure"],
@@ -4563,7 +4713,10 @@ def create_app(
                         reason="retry_requested",
                         request_id=request_id,
                     )
-                if not (state.phase.startswith("camera_") and state.phase.endswith("_capturing")):
+                if not (
+                    (state.phase.startswith("camera_") and state.phase.endswith("_capturing"))
+                    or state.phase == "ball_capturing"
+                ):
                     stop_guided_live(tester_id)
                 return jsonify(
                     {"state": state.to_dict(), "display": tee_range_display(state.to_dict())}

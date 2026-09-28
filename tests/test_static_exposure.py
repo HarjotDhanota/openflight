@@ -87,9 +87,11 @@ def test_a_passing_ball_waits_for_temporal_stability():
     assert observation.status == "stabilizing"
 
 
-def _driver(steps, brightness, *, applied_offset=None, clip_above=None, always_found=False):
+def _driver(
+    steps, brightness, *, applied_offset=None, clip_above=None, always_found=False, warm_start=None
+):
     """Run a search against a scene whose ball level scales with exposure x gain."""
-    search = se.StaticExposureSearch(steps)
+    search = se.StaticExposureSearch(steps, warm_start=warm_start)
     seen = []
     for _ in range(500):
         step = search.current_step
@@ -191,7 +193,7 @@ def test_lock_serializes_with_policy_identity_and_applied_controls(tmp_path):
 def test_static_exposure_policy_identity_is_pinned():
     """A lattice or gate change must be a deliberate, reviewed identity change."""
     assert se.static_exposure_policy_sha256() == (
-        "4ae68eab34732286d8eb5400b1d78c17a68cbda1aa03a80eebd8c4b5f2b108a8"
+        "08f835644ca138e91a895363b74405fda330c4c2f5ba4da09859d5d58a842b62"
     )
 
 
@@ -315,3 +317,51 @@ def test_ambiguity_in_a_lit_frame_is_still_reported_as_unidentified():
         )
 
     assert search.status == "ball_not_identified"
+
+
+def _lowest_lock(brightness):
+    search, _seen = _driver(STEPS, brightness=brightness)
+    return se.StaticExposureStep(search.lock.exposure_us, search.lock.gain)
+
+
+def test_a_remembered_lock_that_still_passes_locks_on_the_first_step():
+    remembered = _lowest_lock(0.02)
+
+    search, seen = _driver(STEPS, brightness=0.02, warm_start=remembered)
+
+    assert search.status == "locked"
+    assert seen == [remembered]
+    assert search.attempts[0]["stage"] == "warm_start"
+    assert search.to_dict()["warm_start"] == {
+        "exposure_us": remembered.exposure_us,
+        "gain": remembered.gain,
+    }
+
+
+def test_a_remembered_lock_that_fails_falls_back_to_the_full_search():
+    remembered = _lowest_lock(0.004)
+    cold, _seen = _driver(STEPS, brightness=0.02)
+
+    search, seen = _driver(STEPS, brightness=0.02, warm_start=remembered)
+
+    assert seen[0] == remembered
+    assert seen[1] == se.StaticExposureStep(STEPS[0].exposure_us, max(se.GAINS))
+    assert search.attempts[0]["stage"] == "warm_start"
+    assert search.attempts[1]["stage"] == "bootstrap"
+    assert (search.lock.exposure_us, search.lock.gain) == (cold.lock.exposure_us, cold.lock.gain)
+
+
+def test_a_remembered_lock_outside_the_lattice_is_ignored():
+    search = se.StaticExposureSearch(STEPS, warm_start=se.StaticExposureStep(1234, 3.3))
+
+    assert search.stage == "bootstrap"
+    assert search.to_dict()["warm_start"] is None
+
+
+def test_a_remembered_lock_in_the_dark_still_ends_in_lighting_required():
+    remembered = _lowest_lock(0.02)
+
+    search, _seen = _driver(STEPS, brightness=0.000001, warm_start=remembered)
+
+    assert search.status == "lighting_required"
+    assert search.lock is None
