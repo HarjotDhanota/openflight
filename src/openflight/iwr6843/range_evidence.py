@@ -52,6 +52,7 @@ def static_range_estimator_policy() -> dict[str, Any]:
             "minimum_fractional_excess": _STATIC_V2_MIN_FRACTIONAL_EXCESS,
             "minimum_absolute_score": _STATIC_V2_MIN_ABSOLUTE_SCORE,
             "cluster_membership": "contiguous_bins_meeting_minimum_fractional_excess",
+            "cluster_ranking": "gate_passing_bins_only",
             "scene_change": "reciprocal_fractional_loss_with_minimum_absolute_score",
             "minimum_frame_count": _STATIC_V2_MIN_FRAME_COUNT,
             "maximum_frame_mad_fraction": _STATIC_V2_MAX_FRAME_MAD_FRACTION,
@@ -680,7 +681,9 @@ def _compare_static_range_profiles_v2(  # pylint: disable=too-many-locals
     present_spread = np.asarray(present.frame_mad_fraction)
     first, last = int(search_indices[0]), int(search_indices[-1])
     for group in groups:
-        peak = int(group[np.argmax(fractional[group])])
+        # Rank by bins that cleared both gates; weaker members only widen the cluster.
+        seeds = group[passing[group]]
+        peak = int(seeds[np.argmax(fractional[seeds])])
         peaks.append(
             {
                 "peak_index": peak,

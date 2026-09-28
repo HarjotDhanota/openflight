@@ -651,5 +651,22 @@ def test_static_range_estimator_identity_is_pinned():
 
     assert policy["profile_schema"] == "openflight.iwr6843.static_range_profile.v2"
     assert static_range_estimator_sha256() == (
-        "566af877085e84c22e19820066d8f6d5c43a6cb59e35ff20a4a647fe28e4777f"
+        "881fab1124c89159e888043b5e561299d47ccbdfc4d30b4a58b32d53284aac19"
     )
+
+
+def test_v2_ranks_each_change_by_its_gate_passing_bins_only():
+    """A filled null next to a marginal change must not outrank the real reflector."""
+    rng = np.random.default_rng(1)
+    empty = 1000.0 + rng.normal(0.0, 15.0, 80)
+    empty[50] = 40.0
+    present = empty.copy()
+    present[30] = empty[30] * 1.6
+    present[49] = empty[49] * 1.55
+    present[50] = 100.0
+
+    result = _compare(empty, present, window=(0.5, 3.9))
+
+    assert not (result.status == "accepted" and abs(result.peak_bin - 49.0) < 1.5)
+    passing_peaks = {round(peak["peak_bin"]) for peak in result.alternate_peaks}
+    assert passing_peaks <= {30, 49}
