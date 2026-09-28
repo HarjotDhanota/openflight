@@ -324,9 +324,15 @@ class IWR6843Radar:
         if "Error" in response:
             raise RuntimeError(f"config rejected: {command!r}: {response.strip()}")
         if "Done" not in response:
+            # What came back separates a silent board from a partial or garbled reply.
+            reply = (
+                f"reply without Done: {response[-80:]!r}"
+                if response
+                else "no reply within the command window"
+            )
             raise RuntimeError(
                 f"IWR6843 did not acknowledge {command!r}; "
-                "the firmware may be wedged (press RESET and retry)"
+                f"the firmware may be wedged (press RESET and retry); {reply}"
             )
 
     def send_config(self, cfg_path: str) -> None:

@@ -23,6 +23,35 @@ def test_send_config_rejects_missing_cli_acknowledgement(tmp_path, monkeypatch):
         radar.send_config(str(config))
 
 
+@pytest.mark.parametrize(
+    ("reply", "described"),
+    [
+        ("", "no reply within"),
+        ("dfeDataOutputMode 1\r\n", "reply without Done: 'dfeDataOutputMode 1\\r\\n'"),
+    ],
+)
+def test_a_missing_acknowledgement_says_what_the_board_replied(
+    tmp_path, monkeypatch, reply, described
+):
+    config = tmp_path / "radar.cfg"
+    config.write_text("dfeDataOutputMode 1\n", encoding="utf-8")
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    monkeypatch.setattr(radar, "drain_stale_output", lambda: 0)
+    monkeypatch.setattr(
+        radar,
+        "cmd",
+        lambda line, *_args, **_kwargs: reply if line == "dfeDataOutputMode 1" else "Done",
+    )
+
+    with pytest.raises(RuntimeError) as error:
+        radar.send_config(str(config))
+
+    message = str(error.value)
+    assert message.startswith("IWR6843 did not acknowledge 'dfeDataOutputMode 1'")
+    assert "press RESET and retry" in message
+    assert described in message
+
+
 class FakeDeviceLock:
     """Fail on nested ownership so auto-detection lock scope is observable."""
 
