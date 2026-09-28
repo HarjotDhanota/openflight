@@ -911,3 +911,43 @@ def test_automatic_exposure_never_steps_past_the_armed_ceiling(tmp_path):
     runtime = _running_runtime(tmp_path, armed_profile=ARMED)
 
     assert max(step.exposure_us for step in runtime._auto_exposure_policy.steps) <= 400
+
+
+def test_automatic_exposure_never_steps_past_the_armed_gain_ceiling(tmp_path):
+    profile = {**ARMED, "exposure_ceiling_us": 800, "gain_ceiling": 8.0}
+    runtime = _running_runtime(tmp_path, armed_profile=profile)
+
+    steps = runtime._auto_exposure_policy.steps
+    assert steps
+    assert max(step.gain for step in steps) <= 8.0
+    assert max(step.exposure_us for step in steps) <= 800
+
+
+def test_a_saved_seed_outside_the_armed_profile_is_not_restored(tmp_path):
+    state = tmp_path / "camera-exposure.json"
+    state.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "width": 640,
+                "height": 400,
+                "fps": 300.0,
+                "exposure_us": 1000,
+                "gain": 20.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(
+            fps=300.0,
+            exposure_us=300,
+            gain=4.0,
+            armed_profile=ARMED,
+            auto_exposure_state_path=state,
+        ),
+    )
+
+    assert (runtime.settings.exposure_us, runtime.settings.gain) == (300, 4.0)

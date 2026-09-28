@@ -121,7 +121,7 @@ BALL_CLIP_PCT = 0.1
 
 
 def exposure_steps_for_fps(
-    fps: float, max_exposure_us: int | None = None
+    fps: float, max_exposure_us: int | None = None, max_gain: float | None = None
 ) -> tuple[ExposureStep, ...]:
     """Return ladder entries inside the frame period and any armed exposure ceiling."""
     if fps <= 0:
@@ -132,6 +132,7 @@ def exposure_steps_for_fps(
         for step in EXPOSURE_STEPS
         if step.exposure_us < frame_period_us
         and (max_exposure_us is None or step.exposure_us <= max_exposure_us)
+        and (max_gain is None or step.gain <= max_gain)
     )
     if not steps:
         raise ValueError(f"no exposure steps fit inside the {frame_period_us}us frame period")
@@ -223,10 +224,11 @@ class AutoExposurePolicy:
         fps: float,
         startup_max_adjustments: int = 3,
         max_exposure_us: int | None = None,
+        max_gain: float | None = None,
     ):
         if startup_max_adjustments < 1:
             raise ValueError("startup_max_adjustments must be positive")
-        self.steps = exposure_steps_for_fps(fps, max_exposure_us)
+        self.steps = exposure_steps_for_fps(fps, max_exposure_us, max_gain)
         self.startup_max_adjustments = startup_max_adjustments
         self._startup = True
         self._startup_adjustments = 0

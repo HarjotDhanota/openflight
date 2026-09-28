@@ -76,11 +76,12 @@ def test_a_capture_the_lighting_check_rejected_is_withheld():
     assert quality["reason"] == "lighting_not_eligible"
 
 
-def test_missing_per_frame_controls_are_reported_as_unverified():
+def test_missing_per_frame_controls_withhold_the_capture():
     quality = capture_optical_quality(_metadata(), {})
 
     assert quality["controls_match"] is None
-    assert quality["status"] == "usable"
+    assert quality["status"] == "withheld"
+    assert quality["reason"] == "applied_controls_unknown"
     assert quality["applied"] is None
 
 
@@ -99,7 +100,13 @@ def test_the_armed_profile_identity_is_carried_through():
 
 @pytest.mark.parametrize(
     ("applied", "expected"),
-    [((298, 8.0), True), ((310, 8.0), False), ((300, 8.2), False), ((None, 8.0), False)],
+    [
+        ((298, 8.0), True),
+        ((309, 8.0), True),
+        ((315, 8.0), False),
+        ((300, 8.2), False),
+        ((None, 8.0), False),
+    ],
 )
 def test_controls_match_uses_the_shared_tolerance(applied, expected):
     assert controls_match(300, 8.0, *applied) is expected

@@ -13,7 +13,9 @@ import numpy as np
 SCHEMA = "openflight.camera.optical_quality.v1"
 ARMED_PROFILE_SCHEMA = "openflight.camera.armed_exposure_profile.v1"
 APPLIED_EXPOSURE_TOLERANCE_FRACTION = 0.02
-APPLIED_EXPOSURE_TOLERANCE_US = 5.0
+# The sensor quantises exposure to whole lines; the Pi reported 298 us for 300 and
+# 1996 us for 2000, so allow a margin above that without accepting a different step.
+APPLIED_EXPOSURE_TOLERANCE_US = 10.0
 APPLIED_GAIN_TOLERANCE = 1 / 16
 
 
@@ -109,6 +111,8 @@ def capture_optical_quality(metadata: Mapping | None, archive: Mapping | None) -
         reason = "outside_armed_profile"
     elif matched is False:
         reason = "applied_controls_mismatch"
+    elif matched is None:
+        reason = "applied_controls_unknown"
     elif auto_exposure.get("analysis_eligible") is False:
         reason = "lighting_not_eligible"
     else:

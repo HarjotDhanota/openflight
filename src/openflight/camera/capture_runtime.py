@@ -356,6 +356,7 @@ class CameraCaptureRuntime:
         self._auto_exposure_policy = AutoExposurePolicy(
             fps=self.settings.fps,
             max_exposure_us=profile["exposure_ceiling_us"] if profile else None,
+            max_gain=profile["gain_ceiling"] if profile else None,
         )
         self._auto_exposure_stop = threading.Event()
         self._auto_exposure_lock = threading.Lock()
@@ -998,7 +999,14 @@ class CameraCaptureRuntime:
             exposure_us = int(saved["exposure_us"])
             gain = float(saved["gain"])
             frame_period_us = round(1_000_000 / self.settings.fps)
-            if same_mode and 0 < exposure_us < frame_period_us and gain > 0:
+            within = within_armed_profile(self.settings.enforced_profile, exposure_us, gain)
+            if same_mode and not within:
+                logger.info(
+                    "[CAMERA] Ignoring saved exposure seed outside the armed profile: %dus gain %.1f",
+                    exposure_us,
+                    gain,
+                )
+            if same_mode and within and 0 < exposure_us < frame_period_us and gain > 0:
                 self.settings = replace(
                     self.settings,
                     exposure_us=exposure_us,
