@@ -149,15 +149,19 @@ def pre_rung_check(frames: np.ndarray, black_floor: float, gain: float | None = 
             too_bright = True
             reason = f"too bright for the ball: {ball['clipped_pct']:.0f}% of it is clipped"
             if gain:
+                # always down: a half-sunlit ball can have a low median and still clip
                 suggested = (
                     gain * 0.5
                     if ball["median_dn"] >= 250
-                    else gain * BALL_TARGET_MEDIAN_DN / ball["median_dn"]
+                    else gain * min(0.8, BALL_TARGET_MEDIAN_DN / ball["median_dn"])
                 )
         elif ball["signal_dn"] < BALL_MIN_SIGNAL_DN:
             reason = f"too dark for the ball: {ball['signal_dn']:.0f} DN above black"
             if gain:
-                suggested = gain * BALL_TARGET_MEDIAN_DN / max(ball["median_dn"], 1.0)
+                # always up, measured above black
+                suggested = gain * max(
+                    1.25, BALL_TARGET_MEDIAN_DN / max(ball["median_dn"] - black_floor, 1.0)
+                )
         return {
             **base,
             "judged_on": "ball",
@@ -252,6 +256,18 @@ def swing_verdict(  # pylint: disable=too-many-locals
     }
 
 
+def _new_rung_entry(rung: Rung) -> dict:
+    return {
+        "arm_id": rung.arm_id,
+        "exposure_us": rung.exposure_us,
+        "status": "pending",
+        "gain": None,
+        "pre_check": None,
+        "reason": None,
+        "swings": [],
+    }
+
+
 class LadderState:
     """The ladder's progress for one tester, kept in ``ladder.json`` so a reload resumes it."""
 
@@ -264,20 +280,11 @@ class LadderState:
             self._data.setdefault("photo_target", None)
             self._data.setdefault("pending_photo", None)
             self._data.setdefault("ineligible_captures", [])
+            if self._add_missing_rungs():
+                self._save()
         else:
             self._data = {
-                "rungs": {
-                    rung.rung_id: {
-                        "arm_id": rung.arm_id,
-                        "exposure_us": rung.exposure_us,
-                        "status": "pending",
-                        "gain": None,
-                        "pre_check": None,
-                        "reason": None,
-                        "swings": [],
-                    }
-                    for rung in LADDER
-                },
+                "rungs": {rung.rung_id: _new_rung_entry(rung) for rung in LADDER},
                 "photos": {},
                 "photo_skips": {},
                 "photo_target": None,
@@ -286,6 +293,31 @@ class LadderState:
             }
             if persist_initial:
                 self._save()
+
+    def _add_missing_rungs(self) -> list[str]:
+        """Give a ladder file written before a rung existed that rung.
+
+        A rung the ladder has already moved past (a later rung has started) is
+        skipped, so an old ladder never switches back to a finished mode.
+        """
+        rungs = self._data.setdefault("rungs", {})
+        added = []
+        for index, rung in enumerate(LADDER):
+            if rung.rung_id in rungs:
+                continue
+            entry = _new_rung_entry(rung)
+            later = [r.rung_id for r in LADDER[index + 1 :] if r.rung_id in rungs]
+            if any(rungs[rung_id]["status"] != "pending" for rung_id in later):
+                entry["status"] = "skipped"
+                entry["reason"] = "added after this ladder had moved past it"
+            rungs[rung.rung_id] = entry
+            added.append(rung.rung_id)
+        if added:
+            self._data["migrated_added_rungs"] = [
+                *self._data.get("migrated_added_rungs", []),
+                *added,
+            ]
+        return added
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

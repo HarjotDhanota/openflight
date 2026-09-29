@@ -691,3 +691,73 @@ def test_a_clipped_background_is_only_amber_when_the_ball_is_well_exposed(tmp_pa
 
     assert verdict["color"] == "amber", verdict["reasons"]
     assert any("background" in reason for reason in verdict["reasons"])
+
+
+def _old_ladder_file(path, statuses):
+    """A ladder.json written before full-50 and full-30 existed."""
+    old = (
+        "full-300",
+        "full-200",
+        "full-150",
+        "full-100",
+        "full-75",
+        "half-300",
+        "half-150",
+        "half-75",
+    )
+    rungs = {
+        rung_id: {
+            "arm_id": "arm5" if rung_id.startswith("full") else "arm6",
+            "exposure_us": int(rung_id.split("-")[1]),
+            "status": statuses.get(rung_id, "pending"),
+            "gain": None,
+            "pre_check": None,
+            "reason": None,
+            "swings": [],
+        }
+        for rung_id in old
+    }
+    path.write_text(json.dumps({"rungs": rungs, "photos": {}}), encoding="utf-8")
+
+
+def test_a_ladder_file_from_before_the_sun_rungs_loads_with_them_pending(tmp_path):
+    path = tmp_path / "ladder.json"
+    _old_ladder_file(path, {"full-300": "active"})
+
+    state = sl.LadderState(path)
+
+    rungs = state.to_dict()["rungs"]
+    assert rungs["full-50"]["status"] == "pending"
+    assert rungs["full-30"]["status"] == "pending"
+    assert state.current.rung_id == "full-300"
+    assert json.loads(path.read_text())["migrated_added_rungs"] == ["full-50", "full-30"]
+
+
+def test_sun_rungs_added_after_the_ladder_moved_on_are_skipped_not_reopened(tmp_path):
+    path = tmp_path / "ladder.json"
+    done = {r: "done" for r in ("full-300", "full-200", "full-150", "full-100", "full-75")}
+    _old_ladder_file(path, {**done, "half-300": "active"})
+
+    state = sl.LadderState(path)
+
+    rungs = state.to_dict()["rungs"]
+    assert rungs["full-50"]["status"] == "skipped"
+    assert "added after" in rungs["full-50"]["reason"]
+    assert state.current.rung_id == "half-300"
+
+
+def test_a_too_bright_ball_always_gets_less_gain_and_a_dark_one_more():
+    # 29 Sept audit: a half-sunlit ball (median 120, 7.5 % clipped) at gain 2 was
+    # told to go up to 2.5
+    half_sunlit = _ball_frames(60, 120)
+    half_sunlit[:, 515:520, 630:650] = 255  # a clipped sunlit cap on the ball
+    check = sl.pre_rung_check(half_sunlit, black_floor=18.0, gain=2.0)
+    assert check["judged_on"] == "ball" and check["too_bright"] is True
+    assert check["suggested_gain"] <= 2.0 * 0.8
+
+    bright = sl.pre_rung_check(_ball_frames(60, 255), black_floor=18.0, gain=4.0)
+    assert bright["suggested_gain"] <= 4.0 * 0.8
+
+    dark = sl.pre_rung_check(_ball_frames(10, 30), black_floor=18.0, gain=4.0)
+    assert dark["judged_on"] == "ball" and dark["ok"] is False
+    assert dark["suggested_gain"] >= 4.0 * 1.25

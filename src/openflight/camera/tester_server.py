@@ -714,6 +714,26 @@ def resolve_gain(sessions_root: Path, params: TesterParameters) -> tuple[float, 
     return float(state["gain"]), arm.exposure_us
 
 
+def ladder_gain_facts(sessions_root: Path, params: TesterParameters) -> dict:
+    """What the ladder needs from this arm's gain screen.
+
+    ``gain_at_300_equivalent`` is the light-equivalent gain at the screen's 300 us,
+    below unity when even unity gain was too bright; the ladder scales it to each
+    rung. Without one recorded (older screens), the saved gain stands in.
+    """
+    results = latest_gain_results(arm_directory(sessions_root, params)) or []
+    facts = light_index(results) if results else {}
+    gain, _exposure = resolve_gain(sessions_root, params)
+    state = read_arm_state(sessions_root, params.tester_id, params.arm_id)
+    equivalent = state.get("gain_at_300_equivalent")
+    return {
+        "gain": gain,
+        **facts,
+        "gain_at_300_equivalent": float(equivalent) if equivalent is not None else gain,
+        "too_bright": bool(state.get("too_bright", False)),
+    }
+
+
 def next_run_directory(arm_dir: Path) -> Path:
     """Each capture run gets its own folder: a new kiosk is a new session."""
     existing = sorted((arm_dir / "paired").glob("run-*"))
@@ -5644,10 +5664,7 @@ def create_app(
         )
 
     def gain_facts(params_for_arm: TesterParameters) -> dict:
-        results = latest_gain_results(arm_directory(sessions_root, params_for_arm)) or []
-        facts = light_index(results) if results else {}
-        gain, _exposure = resolve_gain(sessions_root, params_for_arm)
-        return {"gain": gain, **facts}
+        return ladder_gain_facts(sessions_root, params_for_arm)
 
     def start_mode(tester_id: str, environment: str, arm_id: str) -> Path:
         """Start the ladder's kiosk for one mode; return the run folder it writes."""
@@ -5840,9 +5857,7 @@ def create_app(
             study_ladder.KioskClient(),
             run_dir=run_dir,
             black_floor=lambda arm_id: float(facts[arm_id].get("black_floor_dn") or 0.0),
-            gain_at_300=lambda arm_id: float(
-                facts[arm_id].get("gain_at_300_equivalent") or facts[arm_id]["gain"]
-            ),
+            gain_at_300=lambda arm_id: float(facts[arm_id]["gain_at_300_equivalent"]),
             light_index=lambda arm_id: float(facts[arm_id].get("light_index") or 0.05),
             photo_dir=root / "impact",
             on_mode_done=mode_done,

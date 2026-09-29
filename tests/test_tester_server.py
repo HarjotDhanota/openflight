@@ -2760,3 +2760,32 @@ def test_guided_camera_display_draws_no_outline_without_a_real_detection():
     )
 
     assert display["ball_outline"] is None
+
+
+def test_the_ladder_gets_the_gain_screens_light_equivalent_gain(tmp_path):
+    # 29 Sept audit: gain_facts dropped gain_at_300_equivalent, so in sun the ladder
+    # started every rung from the saved unity gain and short rungs got up to gain 10
+    params = ts.TesterParameters("sun", "arm5", "outdoors")
+    ts.write_arm_state(
+        tmp_path,
+        params,
+        gain=1.0,
+        gain_exposure_us=300,
+        too_bright=True,
+        gain_at_300_equivalent=0.45,
+    )
+
+    facts = ts.ladder_gain_facts(tmp_path, params)
+
+    assert facts["gain"] == 1.0
+    assert facts["gain_at_300_equivalent"] == 0.45
+    assert facts["too_bright"] is True
+
+
+def test_the_saved_gain_stands_in_when_no_equivalent_was_recorded(tmp_path):
+    params = ts.TesterParameters("indoor", "arm5", "indoors")
+    ts.write_arm_state(tmp_path, params, gain=6.0, gain_exposure_us=300)
+
+    facts = ts.ladder_gain_facts(tmp_path, params)
+
+    assert facts["gain_at_300_equivalent"] == 6.0
