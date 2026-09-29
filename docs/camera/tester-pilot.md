@@ -112,7 +112,10 @@ the physical setup. Then work down **Test suite**:
 1. **A. Check the hardware.** Ready means the software and camera answered.
 2. **B. Measure the light.** Runs the camera's light screen at both modes, about
    a minute each. Keep the room as you will hit in; it also proves each camera
-   mode streams.
+   mode streams. Each mode then reads "light sufficient", "more light needed"
+   (swings become evidence only), "too bright: shorter exposures used" or "mixed
+   light" (a sunlit patch clipped the brighter gains, so the gain stays below it).
+   The last two are normal outdoors.
 3. **C. Start the exposure ladder.** The page sets each exposure itself and shows
    which one you are on. Hit a normal shot, wait for the verdict, repeat. It moves
    on after 5 good swings, and skips exposures your light cannot support.
@@ -334,13 +337,29 @@ skips any rung whose hitting zone still clips. The setup exposure search reaches
 and unity gain, and says "too bright" when even that clips the ball. On 29 Sept the
 old rule saved gain 12 as "lighting required" and every swing clip came out white.
 
-Each ladder rung is judged on the resting ball whenever the camera can find it:
-the ball must have at least 20 DN of signal and at most 5 % clipped. If it clips or
-is too dark, the ladder corrects that rung's gain from the ball's own brightness
-(up to three times, between unity and 12) before judging it, and a clipped
-background behind a well-exposed ball is only amber in the swing verdicts. A rung
-that is too bright skips only itself, so the shorter rungs still get their chance;
-a rung that is too dark still skips the shorter rungs in its mode. On 29 Sept
+The light is measured above the sensor's black level, which the camera reports
+(16 DN on the OV9281), not above the darkest part of the picture: in sun nothing in
+view is dark, and the old floor read the scene's own shadows as black. The light
+index is the hitting zone's median per microsecond per unit gain, so a sunlit
+strip of background no longer hides it.
+
+Each ladder rung's check and every swing on it apply one light rule. The resting
+ball must have at least 20 DN of signal and at most 5 % clipped, and the hitting
+zone around it, which is the club's background, must have at least 10 DN: a dark
+zone fails the rung even when the ball is fine, because the club cannot be seen
+against it. A clipped background behind a well-exposed ball is only amber. The
+ball counts only where the setup found it and at about its size there, so a
+shadow or a second ball is not judged in its place. If the check fails, the ladder
+corrects that rung's gain (up to three times, between unity and 12): down for a
+clipped ball, up for a dark ball or zone, never so far that the ball clips. The
+check uses only frames the camera took at the controls just set; new controls take
+a few frames to arrive, and it waits up to a second for them.
+
+A rung that fails for being too bright, or on its swings for anything but
+darkness, skips only itself, so the shorter rungs still get their chance. A rung
+too dark skips the shorter rungs in its mode, since they are darker still. A swing
+taken while the ladder was correcting the gain or taking a photo is set aside: it
+is kept, but it neither counts towards the five nor fails the rung. On 29 Sept
 (Outdoors-test-3) the old zone rule failed every rung on a sunlit patio beyond the
 mat, and each failure skipped the rest of its mode. The 1280×800 mode now has two sunlight rungs after 75 µs, at 50 and 30 µs, and the setup search reaches 10 µs; the OV9281 accepts exposures down to 9 µs (one row). Indoors they are skipped with the rest once 75 µs is too dark.
 
@@ -397,8 +416,11 @@ every earlier frame and failure record for review.
 | Refreshing the page shows a held photo step | The ladder restored its durable boundary-photo checkpoint | Do not swing; use **Photograph face**, **Skip photo**, or **Resume ladder** if it says the ladder is stopped |
 | Ladder verdict red: `frames: ... fps delivered` or `gap(s)` | The Pi could not keep up with the camera mode | Close other programs, check the power supply, run **A** again |
 | Ladder verdict red: `controls: exposure ...` or `gain ...` | The camera did not take the exposure's setting | Press **C** again; the ladder carries on where it stopped |
-| Ladder verdict red: `light: too dark` | This exposure is below what your light supports | Expected on the shortest exposures; the ladder skips the rest |
-| Ladder verdict red: `light: ... clipped` | The ball area is washed out | Dim or move the light; this exposure will fail |
+| Ladder verdict red: `light: too dark ...` (the hitting zone or the ball) | This exposure is below what your light supports | Expected on the shortest exposures; the ladder skips the rest of the mode |
+| Ladder verdict red: `light: too bright for the ball ... clipped` | The ball area is washed out | Expected on the longest exposures in sun; this exposure fails and the shorter ones are still tried |
+| Ladder verdict red: `ladder: the camera did not apply ... within 1 s` | The kiosk has not taken the new exposure yet | Wait: the ladder retries every second. If it repeats for a minute, press **Stop**, then **C** |
+| A swing is listed as set aside, `taken at ... not this rung's ...` or `taken during a still_photo` | It was taken while the ladder was changing the camera's settings | Nothing is lost; hit the next swing once the rung shows as set |
+| `finish automatic tee range before capture (retryable_failure)` | The setup's range record no longer matches the one the ladder was admitted with | Press **Start over / ball moved** and run the setup again |
 | Ladder verdict amber: `resting ball not found` | The camera could not distinguish a plausible resting ball in that frame | The swing still counts; keep placing the ball in the same spot |
 | `run the gain step for both modes first` | Step **B** did not finish for both modes | Run **B** again |
 
