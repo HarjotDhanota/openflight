@@ -14,6 +14,7 @@ class GateKiosk:
         self.session_uuid = session_uuid
         self.config_hash = config_hash
         self.ready = True
+        self.controls = (0, 0.0)
 
     def setup_readiness(self):
         return {
@@ -26,13 +27,21 @@ class GateKiosk:
             },
         }
 
-    @staticmethod
-    def set_controls(exposure_us, gain):
+    def set_controls(self, exposure_us, gain):
+        self.controls = (exposure_us, gain)
         return {"exposure_us": exposure_us, "gain": gain}
 
     @staticmethod
     def frames(count):
         return np.full((count, 800, 1280), 60, dtype=np.uint8)
+
+    def frames_with_controls(self, count):
+        exposure, gain = self.controls
+        return {
+            "frames": self.frames(count),
+            "exposure_us": np.full(count, exposure, np.int32),
+            "gain": np.full(count, gain, np.float32),
+        }
 
 
 def make_runner(tmp_path, run, session_uuid, monkeypatch):
