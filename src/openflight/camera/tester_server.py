@@ -1467,8 +1467,8 @@ def _reference_ball_camera(
         image_height_px=arm.height,
         pitch_deg=float(tilt.get("camera_pitch_deg", rig.boresight_pitch_deg)),
         # The camera is level in the enclosure. The LIS3DH roll is recorded but not
-        # applied: on 2026-09-28 it read -2.9 deg while level lines in the frame
-        # showed under 1 deg, and its sign is not yet checked against the image.
+        # applied: this nominal path and the calibrated projection applied it with
+        # opposite signs, and the correct sign has not yet been derived from the mount.
         roll_correction_deg=0.0,
         mirror_horizontal=False,
         camera_origin_lfu=camera,
