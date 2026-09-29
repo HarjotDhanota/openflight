@@ -35,13 +35,20 @@ _STATIC_V2_SCALE_BASELINE_PERCENTILES = (10.0, 80.0)
 _STATIC_V2_SCALE_STABLE_FRACTION = 0.70
 _STATIC_V2_BOUNDARY_GUARD_BINS = 1
 _STATIC_V2_MIN_FRAME_COUNT = 12
+# A reflector that vanished between captures only matters if it can move the
+# ball's reading: if it touches the ball's cluster, or if its range-FFT leakage
+# into the ball's bins is a real share of the ball's own change. The firmware's
+# range FFT is unwindowed, so leakage follows the rectangular sidelobe envelope,
+# at most 1 / (pi^2 k^2) of the lost power at k bins (k taken half a bin closer).
+# A door or net moving a metre behind the ball is then ignored (Pi, 29 Sept).
+_STATIC_V2_LOSS_LEAK_LIMIT = 0.10
 
 
 def static_range_estimator_policy() -> dict[str, Any]:
     """Return the complete selector policy bound by qualification artifacts."""
     return {
         "name": "iwr_static_profile_selector",
-        "version": 2,
+        "version": 3,
         "profile_schema": STATIC_PROFILE_V2_SCHEMA,
         "normalization": {
             "method": "trimmed_median_per_bin_ratio",
@@ -54,6 +61,9 @@ def static_range_estimator_policy() -> dict[str, Any]:
             "cluster_membership": "contiguous_bins_meeting_minimum_fractional_excess",
             "cluster_ranking": "gate_passing_bins_only",
             "scene_change": "reciprocal_fractional_loss_with_minimum_absolute_score",
+            "scene_change_scope": "loss_touching_ball_cluster_or_leaking_into_it",
+            "scene_change_leak_model": "rectangular_sidelobe_envelope_1_over_pi2_k2",
+            "scene_change_leak_limit_fraction_of_ball": _STATIC_V2_LOSS_LEAK_LIMIT,
             "minimum_frame_count": _STATIC_V2_MIN_FRAME_COUNT,
             "maximum_frame_mad_fraction": _STATIC_V2_MAX_FRAME_MAD_FRACTION,
             "maximum_changed_fraction": _STATIC_MAX_CHANGED_FRACTION,
@@ -495,6 +505,8 @@ class StaticRangeDifferenceResult:
     peak_fractional_excess: float | None = None
     secondary_fractional_excess: float | None = None
     alternate_peaks: tuple[Mapping[str, Any], ...] = ()
+    # reflectors that vanished between captures but could not move the ball's reading
+    ignored_losses: tuple[Mapping[str, Any], ...] = ()
 
 
 def _matching_static_profiles(
@@ -541,6 +553,7 @@ def _static_result(  # pylint: disable=too-many-arguments
     peak_fractional_excess: float | None = None,
     secondary_fractional_excess: float | None = None,
     alternate_peaks: tuple[Mapping[str, Any], ...] = (),
+    ignored_losses: tuple[Mapping[str, Any], ...] = (),
 ) -> StaticRangeDifferenceResult:
     return StaticRangeDifferenceResult(
         status=status,
@@ -563,6 +576,7 @@ def _static_result(  # pylint: disable=too-many-arguments
         peak_fractional_excess=peak_fractional_excess,
         secondary_fractional_excess=secondary_fractional_excess,
         alternate_peaks=alternate_peaks,
+        ignored_losses=ignored_losses,
     )
 
 
@@ -593,6 +607,40 @@ def _v2_scale(baseline: np.ndarray, observed: np.ndarray, search: np.ndarray) ->
     cutoff = float(np.quantile(residual[pool], _STATIC_V2_SCALE_STABLE_FRACTION))
     stable = pool & (residual <= cutoff)
     return float(np.median(ratios[stable])) if np.any(stable) else initial
+
+
+def _blocking_loss(  # pylint: disable=too-many-arguments
+    lost: np.ndarray,
+    loss: np.ndarray,
+    ball_gain: np.ndarray,
+    group: np.ndarray,
+    ranges: np.ndarray,
+    expected: np.ndarray,
+    observed: np.ndarray,
+    first_bin: int,
+) -> tuple[int | None, tuple[dict[str, Any], ...]]:
+    """The lost bin that could move the ball's reading, else the harmless losses."""
+    lost_indices = np.flatnonzero(lost)
+    lo, hi = int(group[0]) - 1, int(group[-1]) + 1
+    touching = lost_indices[(lost_indices >= lo) & (lost_indices <= hi)]
+    if len(touching):
+        return int(touching[np.argmax(loss[touching])]), ()
+    excess = float(np.sum(ball_gain))
+    leaks = {}
+    for index in lost_indices:
+        distance = np.maximum(np.abs(group - index) - 0.5, 0.5)
+        leaks[int(index)] = float(np.sum(loss[index] / (math.pi**2 * distance**2)))
+    if excess <= 0.0 or sum(leaks.values()) > _STATIC_V2_LOSS_LEAK_LIMIT * excess:
+        return max(leaks, key=leaks.get), ()
+    return None, tuple(
+        {
+            "bin": float(index + first_bin),
+            "range_m": float(ranges[index]),
+            "fractional_loss": float(1.0 - observed[index] / max(expected[index], 1e-12)),
+            "leak_fraction_of_ball": leak / excess,
+        }
+        for index, leak in sorted(leaks.items())
+    )
 
 
 def _contiguous_groups(indices: np.ndarray) -> list[np.ndarray]:
@@ -657,21 +705,6 @@ def _compare_static_range_profiles_v2(  # pylint: disable=too-many-locals
         & (observed <= expected / (1.0 + _STATIC_V2_MIN_FRACTIONAL_EXCESS))
         & (absolute_score <= -_STATIC_V2_MIN_ABSOLUTE_SCORE)
     )
-    if np.any(lost):
-        lost_index = int(np.flatnonzero(lost)[np.argmin(absolute_score[lost])])
-        return _static_result(
-            "rejected_scene_changed",
-            "a static reflector disappeared between captures",
-            empty,
-            present,
-            changed_fraction=changed_fraction,
-            peak_score=float(absolute_score[lost_index]),
-            peak_bin=float(lost_index + empty.range_bin_start),
-            range_bin_uncertainty_m=empty.range_resolution_m,
-            estimator_sha256=estimator,
-            normalization_scale=scale,
-            peak_fractional_excess=float(fractional[lost_index]),
-        )
     members = search & (fractional >= _STATIC_V2_MIN_FRACTIONAL_EXCESS)
     groups = [
         group for group in _contiguous_groups(np.flatnonzero(members)) if np.any(passing[group])
@@ -722,6 +755,32 @@ def _compare_static_range_profiles_v2(  # pylint: disable=too-many-locals
         "secondary_fractional_excess": second["fractional_excess"] if second else 0.0,
         "alternate_peaks": diagnostic_peaks,
     }
+    if np.any(lost):
+        lost_index, ignored = _blocking_loss(
+            lost,
+            np.maximum(expected - observed, 0.0),
+            np.maximum(delta[best["indices"]] - center, 0.0),
+            best["indices"],
+            ranges,
+            expected,
+            observed,
+            empty.range_bin_start,
+        )
+        if lost_index is not None:
+            return _static_result(
+                "rejected_scene_changed",
+                "a static reflector disappeared between captures near enough to move the ball",
+                empty,
+                present,
+                changed_fraction=changed_fraction,
+                peak_score=float(absolute_score[lost_index]),
+                peak_bin=float(lost_index + empty.range_bin_start),
+                range_bin_uncertainty_m=empty.range_resolution_m,
+                estimator_sha256=estimator,
+                normalization_scale=scale,
+                peak_fractional_excess=float(fractional[lost_index]),
+            )
+        common["ignored_losses"] = ignored
     if changed_fraction > _STATIC_MAX_CHANGED_FRACTION:
         return _static_result(
             "rejected_clutter", "too much of the range profile changed", empty, present, **common

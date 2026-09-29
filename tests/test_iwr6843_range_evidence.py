@@ -275,7 +275,7 @@ def test_pi_static_range_regressions_do_not_confidently_accept_observed_false_pe
     ("epoch_id", "status", "peak_bin", "width"),
     [
         ("setup-20260925-fff56186f155", "accepted", 23.5007, 2),
-        ("setup-20260926-153ffb8aa4be", "rejected_scene_changed", 11.0, None),
+        ("setup-20260926-153ffb8aa4be", "rejected_ambiguous", 29.0, 1),
         ("setup-20260926-b9f4dd8b3a75", "accepted", 23.9376, 3),
     ],
 )
@@ -592,7 +592,21 @@ def test_v2_rejects_captures_with_too_few_frames():
     assert result.peak_bin is None
 
 
-def test_v2_rejects_a_scene_where_a_static_reflector_disappeared():
+def test_v2_rejects_a_reflector_that_disappeared_next_to_the_ball():
+    empty, present = _static_scene()
+    empty[27] *= 10.0
+    present[27] = empty[27] * 0.3
+    present = _added(present, empty, 1.0, [25])
+
+    result = _compare(empty, present)
+
+    assert result.status == "rejected_scene_changed"
+    assert result.peak_bin == pytest.approx(27.0)
+
+
+def test_v2_ignores_a_reflector_that_disappeared_too_far_away_to_move_the_ball():
+    # a door or net moving 15 bins (0.7 m) behind the ball: its range-FFT leakage
+    # into the ball's bins is a fraction of a percent of the ball's own change
     empty, present = _static_scene()
     empty[40] *= 10.0
     present[40] = empty[40] * 0.3
@@ -600,8 +614,45 @@ def test_v2_rejects_a_scene_where_a_static_reflector_disappeared():
 
     result = _compare(empty, present)
 
+    assert result.status == "accepted"
+    assert result.peak_bin == pytest.approx(25.0)
+    assert [loss["bin"] for loss in result.ignored_losses] == [40.0]
+    assert result.ignored_losses[0]["leak_fraction_of_ball"] < 0.01
+
+
+def test_v2_still_rejects_a_distant_loss_strong_enough_to_leak_into_the_ball():
+    empty, present = _static_scene()
+    empty[35] *= 3000.0
+    present[35] = empty[35] * 0.3
+    present = _added(present, empty, 1.0, [25])
+
+    result = _compare(empty, present)
+
     assert result.status == "rejected_scene_changed"
-    assert result.peak_bin == pytest.approx(40.0)
+    assert result.peak_bin == pytest.approx(35.0)
+
+
+def test_the_29_sept_door_setup_is_accepted_at_its_tape_range():
+    """Pi field capture: a ball 1.00 m out (tape) in front of a closed door whose
+    reflector 0.7 m behind the ball lost half its power between captures."""
+    fixture = _regression_fixture("field-20260929-door-1m")
+
+    def profile(capture):
+        recorded = dict(fixture[capture]["profile_v2"])
+        recorded["power"] = tuple(recorded["power"])
+        recorded["frame_mad_fraction"] = tuple(recorded["frame_mad_fraction"])
+        return StaticRangeProfileV2(**recorded)
+
+    bias = fixture["range_bias_const_m"]
+    result = compare_static_range_profiles(
+        profile("empty"), profile("present"), plausible_apparent_range_m=(0.5 + bias, 4.0 + bias)
+    )
+
+    assert result.status == "accepted"
+    assert result.apparent_range_m - bias == pytest.approx(
+        fixture["tape_ball_center_to_rx_m"], abs=0.05
+    )
+    assert any(abs(loss["range_m"] - 1.734) < 0.03 for loss in result.ignored_losses)
 
 
 def test_v2_searches_only_the_supplied_placement_envelope():
@@ -651,7 +702,7 @@ def test_static_range_estimator_identity_is_pinned():
 
     assert policy["profile_schema"] == "openflight.iwr6843.static_range_profile.v2"
     assert static_range_estimator_sha256() == (
-        "881fab1124c89159e888043b5e561299d47ccbdfc4d30b4a58b32d53284aac19"
+        "3c9fbc487ca91190644baa486734f300a3481e71299c0759650400938e1b45ea"
     )
 
 

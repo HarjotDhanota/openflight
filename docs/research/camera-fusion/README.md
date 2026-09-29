@@ -78,6 +78,7 @@ Conventions (**Code**):
 
 1. Pre-MTI range profiles from the empty capture and the ball capture are averaged as power.
 2. A selector looks for the range bins where the ball capture is brighter by both a fractional and an absolute margin. It rejects scene changes, boundary peaks, clutter and unstable frames.
+   - **Scene changes (changed 29 Sept).** A reflector that vanished between the captures rejects the setup only if it touches the ball's bins, or if its range-FFT leakage into them exceeds 10 % of the ball's own change. The firmware's FFT is unwindowed, so the leakage bound is the rectangular sidelobe envelope, 1/(π²k²) at k bins. Anything farther away is recorded as an ignored loss. On the Pi a door and hanging clothes 0.7 m behind a ball lost half their echo between captures and rejected a good reading; replayed with this rule, that setup gives 1.015 m against a 1.00 m tape (**Measured**, one setup). Two other setups that day are still rejected: the ball's echo never cleared the detection gates.
 3. It takes a power-weighted centroid of those bins and subtracts the 66 mm bias.
 4. The result is treated as the slant range from the receive antennas to the ball's centre.
 
