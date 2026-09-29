@@ -543,3 +543,26 @@ def test_back_to_back_captures_through_the_driver_lose_no_command(tmp_path, monk
         "stats",
     ]
     assert firmware.commands == one_capture + ["help"] + one_capture
+
+
+def test_each_stage_records_how_long_it_took(tmp_path):
+    fake = FakeRadar(_raw_dump())
+
+    result = capture_static_range(
+        _inputs(tmp_path),
+        radar_factory=_factory(fake),
+        wait_for_settle=lambda *_args: False,
+    )
+
+    seconds = result["stage_seconds"]
+    for stage in (
+        "connect",
+        "configure",
+        "settle",
+        "read_dump",
+        "post_dump_cli_health",
+        "derive_profile",
+        "cleanup",
+    ):
+        assert seconds[stage] >= 0.0
+    assert result["total_seconds"] >= sum(seconds.values()) - 1e-6

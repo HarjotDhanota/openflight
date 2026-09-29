@@ -8,6 +8,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -189,6 +190,7 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
 ) -> dict[str, Any]:
     """Capture one stable ring and persist raw bytes before deriving a profile."""
     _validate(inputs)
+    started = time.monotonic()
     input_manifest, config_bytes = _input_manifest(inputs)
     output_dir = inputs.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -216,6 +218,9 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
             "profile": None,
             "error": None,
             "cleanup_errors": [],
+            # wall time per stage, so a field log shows where the setup wait goes
+            "stage_seconds": {},
+            "total_seconds": None,
             "limitations": [
                 "firmware.sha256 identifies the declared image file; "
                 "the running board image is not read back",
@@ -225,6 +230,16 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
         radar = None
         cli_health_uncertain = False
         stage = "connect"
+        seconds = result["stage_seconds"]
+        mark = time.monotonic()
+
+        def enter(next_stage: str) -> str:
+            nonlocal mark
+            now = time.monotonic()
+            seconds[stage] = round(seconds.get(stage, 0.0) + now - mark, 4)
+            mark = now
+            return next_stage
+
         config_snapshot: str | None = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -239,14 +254,14 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
                 handle.flush()
                 os.fsync(handle.fileno())
             radar = radar_factory(port=inputs.port)
-            stage = "configure"
+            stage = enter("configure")
             radar.send_config(config_snapshot)
-            stage = "settle"
+            stage = enter("settle")
             if wait_for_settle(cancel, float(inputs.settle_s)) or cancel.is_set():
                 raise StaticCaptureCancelled(
                     "capture cancelled while waiting for a fresh stable ring"
                 )
-            stage = "read_dump"
+            stage = enter("read_dump")
             dump_recovery_error = None
             try:
                 raw = radar.read_dump()
@@ -256,7 +271,7 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
                 cli_health_uncertain = True
             if not isinstance(raw, bytes):
                 raise TypeError("IWR6843 read_dump must return bytes")
-            stage = "persist_raw"
+            stage = enter("persist_raw")
             declared_nbytes = _declared_dump_nbytes(raw)
             raw_complete = declared_nbytes == len(raw)
             if raw:
@@ -278,13 +293,13 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
             if cancel.is_set():
                 stage = "read_dump"
                 raise StaticCaptureCancelled("capture cancelled after raw evidence was saved")
-            stage = "post_dump_cli_health"
+            stage = enter("post_dump_cli_health")
             try:
                 radar.verify_post_dump_cli()
             except Exception:
                 cli_health_uncertain = True
                 raise
-            stage = "derive_profile"
+            stage = enter("derive_profile")
             profile = static_range_profile(
                 raw,
                 radar_profile_sha256=input_manifest["radar_config"]["sha256"],
@@ -300,10 +315,12 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
         except Exception as error:  # pylint: disable=broad-exception-caught
             result["error"] = _error(stage, error)
         finally:
+            enter("cleanup")
             if radar is not None:
                 result["cleanup_errors"] = _cleanup_radar(
                     radar, stop_sensor=not cli_health_uncertain
                 )
+            seconds["cleanup"] = round(time.monotonic() - mark, 4)
             if config_snapshot is not None:
                 Path(config_snapshot).unlink(missing_ok=True)
         if result["cleanup_errors"]:
@@ -313,6 +330,7 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
                 cleanup = RuntimeError("IWR6843 cleanup did not complete")
                 result["error"] = _error("cleanup", cleanup)
         result["completed_at_utc"] = _utc_now()
+        result["total_seconds"] = round(time.monotonic() - started, 4)
         _atomic_write_json(result_path, result)
         return result
     finally:

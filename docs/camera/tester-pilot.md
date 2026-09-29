@@ -296,6 +296,15 @@ ball can see; in simulation it moves the radar's vertical launch by up to about
 1° at low launch angles, which is within that model's present noise at this
 radar height.
 
+Each static radar capture (empty scene, then ball) takes roughly 11–13 s, most of
+it moving the 732 KB range ring over the radar's UART (7.0 s at 1,041,667 baud).
+Every capture record (`iwr/<capture>.json`) now lists `stage_seconds` for connect,
+configure, settle, read_dump, derive_profile and cleanup, plus `total_seconds`, so
+the Pi's real split is on file. A 14-frame profile with the same windows,
+`config/iwr6843_static_range_14f3ms_53bin_iq16.cfg`, moves 427 KB (about 4.1 s).
+It is opt-in (`--iwr-static-config` on the tester server) until an A/B on the Pi
+shows the same accepted range and frame stability as the 24-frame default.
+
 The ball search runs in worker processes (`--ball-search-workers`, default 2; 0
 runs it in the tester process) so it never holds up camera capture. To see what
 it costs on this Pi, run
