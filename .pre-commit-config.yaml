@@ -17,7 +17,7 @@ repos:
 
       - id: eslint
         name: eslint
-        entry: npm run lint
+        entry: npm --prefix ui run lint
         language: system
         files: ^ui/src/.*\.(ts|tsx)$
         pass_filenames: false
