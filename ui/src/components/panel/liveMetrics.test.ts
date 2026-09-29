@@ -259,6 +259,18 @@ describe('buildLiveMetrics', () => {
   });
 });
 
+describe('face angle', () => {
+  it('rides on the club path tile as a D-plane subtitle', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({ club_path_deg: -0.6, experimental_face_angle_deg: 1.5 }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(metrics, 'club_path').subtext).toBe('face +1.5° (D-plane)');
+    expect(metrics).toHaveLength(LIVE_METRIC_COUNT);
+  });
+});
+
 describe('pinSelectedMetric', () => {
   const metrics = buildLiveMetrics(makeShot(), 'imperial', emptySwingStats);
 

@@ -166,7 +166,9 @@ def test_search_reports_lighting_required_when_the_brightest_setting_hides_the_b
 def test_search_fails_when_no_visible_setting_passes_the_optical_gates():
     search, _seen = _driver(STEPS, brightness=0.004, clip_above=40.0)
 
-    assert search.status == "lighting_required"
+    # the ball clips before it is ever 12 DN brighter than its surroundings:
+    # that is a background problem, which more light would not fix
+    assert search.status == "low_contrast"
     assert search.lock is None
 
 
@@ -193,7 +195,7 @@ def test_lock_serializes_with_policy_identity_and_applied_controls(tmp_path):
 def test_static_exposure_policy_identity_is_pinned():
     """A lattice or gate change must be a deliberate, reviewed identity change."""
     assert se.static_exposure_policy_sha256() == (
-        "08f835644ca138e91a895363b74405fda330c4c2f5ba4da09859d5d58a842b62"
+        "25586a7cd8820ec679c687034d3fcfeee4fe14d91ae167b2a0bd470e7de54e47"
     )
 
 
@@ -365,3 +367,33 @@ def test_a_remembered_lock_in_the_dark_still_ends_in_lighting_required():
 
     assert search.status == "lighting_required"
     assert search.lock is None
+
+
+def _scene_search(ball_per_signal, background_per_signal, *, found=True):
+    """A scene where ball and background both scale with exposure x gain."""
+    search = se.StaticExposureSearch(STEPS)
+    for _ in range(500):
+        step = search.current_step
+        if step is None:
+            break
+        background = min(15.0 + background_per_signal * step.signal, 255.0)
+        ball = min(15.0 + ball_per_signal * step.signal, 255.0)
+        search.record(
+            _assess(step, _frames(ball, background), _association(stable_count=3, found=found))
+        )
+    return search
+
+
+def test_a_ball_that_never_stands_out_from_its_background_is_low_contrast_not_dark():
+    """White door behind the ball: brighter settings scale ball and door alike."""
+    search = _scene_search(0.0100, 0.0094)
+
+    assert search.status == "low_contrast"
+    assert "darker behind the ball" in search.reason
+
+
+def test_no_ball_in_a_well_lit_picture_is_not_reported_as_needing_light():
+    search = _scene_search(0.02, 0.02, found=False)
+
+    assert search.status == "ball_not_identified"
+    assert "well lit" in search.reason

@@ -65,6 +65,13 @@ function markEstimated(isEstimated: boolean): true | undefined {
   return isEstimated ? true : undefined;
 }
 
+/** The D-plane face angle rides on the club-path tile it is derived from. */
+function withFaceAngle(subtext: string | undefined, faceDeg: number | null | undefined): string | undefined {
+  if (faceDeg == null) return subtext;
+  const face = `face ${formatOptionalAngle(faceDeg, true)}° (D-plane)`;
+  return subtext ? `${subtext} · ${face}` : face;
+}
+
 function experimentalStatus(status: string | null | undefined): string {
   if (!status || status === 'candidate_available') return 'candidate';
   return status.replace(/^rejected_/, 'rejected: ').replaceAll('_', ' ');
@@ -164,7 +171,7 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       label: t('metric.clubPath'),
       value: formatOptionalAngle(clubPath, true),
       unit: angleUnit(clubPath),
-      subtext:
+      subtext: withFaceAngle(
         shot.club_path_deg !== null
           ? undefined
           : fusedDeliveryAttempted
@@ -174,6 +181,8 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
             : clubPathIsExperimental
               ? experimentalStatus(shot.experimental_club_path_status)
               : undefined,
+        shot.experimental_face_angle_deg
+      ),
       confidence: clubPathIsExperimental ? (shot.experimental_fused_club_path_confidence ?? 'experimental') : null,
       confidenceLabel: shot.experimental_fused_club_path_confidence ? 'experimental' : undefined,
     },

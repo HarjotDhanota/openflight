@@ -88,6 +88,16 @@ the sensor to the kiosk and takes it back afterwards. The OPS243 is expected on 
 elsewhere. The first `start-tester.sh` builds the environment and takes a few
 minutes; later starts are quick.
 
+**Test runs without qualification.** Until a range qualification exists, the
+automatic range always ends unqualified and swings get no tee range, so
+fusion, club path and face angle stay blank. For a test session, start the
+tester with `--use-unqualified-tee-range`:
+swings then get the static IWR range if its checks accepted it, otherwise the
+1280×800 camera range. The evidence and the page still say unqualified; the
+tester log names the value used. Face angle appears on the **Club path** tile
+as `face ±x.x° (D-plane)`: an estimate from start direction and path, not seen
+on the club.
+
 Use the numbered test suite for a normal collection: **1. Set up the rig**,
 **2. Check hardware and light**, **3. Automatic ball range**, **4. Capture the
 exposure ladder**, then **5. Review and package**. **Advanced: manual single-arm tools** is for a
@@ -249,6 +259,16 @@ the step reports that more light is needed: add light and retry, or keep the vie
 as unqualified raw evidence, which finishes the setup raw-only. This lock is for
 the stationary ball only; it never sets swing-capture exposure. Its thresholds
 are provisional until the camera lighting study.
+
+The ball search does not assume the lens height: feet sink into carpet and a
+unit may stand on something, so each candidate's implied camera height is
+solved from its apparent size and position, and only places where a resting
+ball could be (below the horizon, at a plausible height) are searched. Once
+found, each live look re-fits the ball where it was in a fraction of a second;
+Save still runs the full-frame search as the independent check. If the ball is
+found but never stands out from what is behind it (a white door, say), the
+step reports that instead of asking for more light: put something darker
+behind the ball.
 
 Two things keep this search short. The 1280×800 search starts together with the
 radar ball capture, since the ball is already at address, so it is usually

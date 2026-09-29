@@ -32,6 +32,10 @@ _SETTLE_LIMIT = 4
 _STABILIZE_LIMIT = 6
 _REFINE_ATTEMPT_LIMIT = 48
 _DARK_GATES = frozenset({"signal", "contrast", "edge"})
+# Failures that come from what is behind the ball, not from the light level.
+_BACKGROUND_GATES = frozenset({"contrast", "edge", "clipped"})
+# A frame this far above black is well lit; a ball missing from it is not dark.
+_WELL_LIT_FRAME_DN = 2.0 * _MIN_SIGNAL_ABOVE_FLOOR_DN
 _IDENTIFY_LIMIT = 6
 _UNIDENTIFIED_STATUSES = frozenset({"ambiguous", "no_consistent_candidate"})
 _DARK_DETECTOR_STATUSES = frozenset({"not_found", None})
@@ -60,6 +64,8 @@ def static_exposure_policy() -> dict[str, Any]:
             "unidentified_requires_frame_signal_dn": _MIN_SIGNAL_ABOVE_FLOOR_DN,
             "clipping_prunes_before_dark_gates": True,
             "pose_change": "retry_same_step_then_rig_moved",
+            "low_contrast": "contrast_failed_while_ball_signal_passed_and_only_background_gates",
+            "well_lit_frame_dn": _WELL_LIT_FRAME_DN,
         },
         "gates": {
             "minimum_signal_above_floor_dn": _MIN_SIGNAL_ABOVE_FLOOR_DN,
@@ -329,6 +335,8 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
         self._unidentified = 0
         self._pose_retries = 0
         self._ball_seen = False
+        self._lit_seen = False
+        self._ball_gate_failures: set[str] = set()
 
     @property
     def current_step(self) -> StaticExposureStep | None:
@@ -365,12 +373,27 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
             self._refine_attempts += 1
         if self._queue and self._refine_attempts < _REFINE_ATTEMPT_LIMIT:
             return
-        self._finish(
-            "lighting_required",
-            "no visible setting passed the ball-pixel gates"
-            if self._ball_seen
-            else "reference ball not visible at the brightest static setting",
-        )
+        if "contrast" in self._ball_gate_failures and self._ball_gate_failures <= _BACKGROUND_GATES:
+            # The ball was bright enough; it just does not stand out from what is
+            # behind it. More light scales both, so it cannot fix that.
+            self._finish(
+                "low_contrast",
+                "the ball was found but barely stands out from what is behind it; "
+                "put something darker behind the ball",
+            )
+        elif not self._ball_seen and self._lit_seen:
+            self._finish(
+                "ball_not_identified",
+                "no ball was found although the picture is well lit; "
+                "check the ball is in view and at address",
+            )
+        else:
+            self._finish(
+                "lighting_required",
+                "no visible setting passed the ball-pixel gates"
+                if self._ball_seen
+                else "reference ball not visible at the brightest static setting",
+            )
 
     def _finish(self, status: str, reason: str) -> None:
         self._queue = []
@@ -409,6 +432,18 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
             observation.frame_signal_dn is not None
             and observation.frame_signal_dn < _MIN_SIGNAL_ABOVE_FLOOR_DN
         )
+        if (
+            observation.frame_signal_dn is not None
+            and observation.frame_signal_dn >= _WELL_LIT_FRAME_DN
+        ):
+            self._lit_seen = True
+        if (
+            observation.ball_found
+            and observation.failed_gates
+            and "signal" not in observation.failed_gates
+        ):
+            # only a ball already bright enough says anything about its background
+            self._ball_gate_failures.update(observation.failed_gates)
         if (
             not observation.ball_found
             and observation.association_status in _UNIDENTIFIED_STATUSES

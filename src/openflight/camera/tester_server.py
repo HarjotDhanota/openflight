@@ -378,9 +378,44 @@ def pending_tee_range_solution(
     )
 
 
-def _tee_range_cli_args(solution: tee_range.TeeRangeSolution | None) -> list[str]:
+def unqualified_tee_range_choice(
+    solution: tee_range.TeeRangeSolution | None,
+) -> tee_range.TeeRangeCandidate | None:
+    """The range a test run may use when nothing qualified it: accepted IWR, else camera.
+
+    Only for explicit testing (``--use-unqualified-tee-range``); a tape value is
+    validation truth and is never used.
+    """
+    if solution is None:
+        return None
+    ranged = [item for item in solution.candidates if item.radar_slant_range_m is not None]
+    for item in ranged:
+        difference = (item.evidence or {}).get("difference")
+        if (
+            item.source_group == "iwr"
+            and isinstance(difference, Mapping)
+            and difference.get("status") == "accepted"
+        ):
+            return item
+    cameras = sorted(
+        (item for item in ranged if item.source_group == "camera"),
+        key=lambda item: "arm5" not in item.candidate_id,
+    )
+    return cameras[0] if cameras else None
+
+
+def _tee_range_cli_args(
+    solution: tee_range.TeeRangeSolution | None, *, use_unqualified: bool = False
+) -> list[str]:
     if solution is not None and solution.status == "resolved":
         return ["--iwr6843-tee-m", f"{solution.selected_range_m:.9g}"]
+    if use_unqualified and (choice := unqualified_tee_range_choice(solution)) is not None:
+        logger.warning(
+            "Using UNQUALIFIED tee range %.3f m from %s for this test run",
+            choice.radar_slant_range_m,
+            choice.candidate_id,
+        )
+        return ["--iwr6843-tee-m", f"{choice.radar_slant_range_m:.9g}"]
     return ["--iwr6843-tee-range-pending"]
 
 
@@ -576,6 +611,7 @@ def action_commands(
     tee_range_solution: tee_range.TeeRangeSolution | None = None,
     iwr_static_port: str | None = None,
     operator_reset: bool | None = None,
+    use_unqualified_tee_range: bool = False,
 ) -> tuple[list[list[str]], Path]:
     """Build an allowlisted command sequence and its log path."""
     if action not in ACTION_LABELS:
@@ -633,7 +669,7 @@ def action_commands(
                 "--camera-capture-manual-exposure",
                 "--debug",
                 "--iwr6843",
-                *_tee_range_cli_args(tee_range_solution),
+                *_tee_range_cli_args(tee_range_solution, use_unqualified=use_unqualified_tee_range),
                 "--inclinometer",
                 "--rig-geometry",
                 str(rig_geometry),
@@ -667,7 +703,7 @@ def action_commands(
                 "--camera-capture-manual-exposure",
                 "--debug",
                 "--iwr6843",
-                *_tee_range_cli_args(tee_range_solution),
+                *_tee_range_cli_args(tee_range_solution, use_unqualified=use_unqualified_tee_range),
                 "--inclinometer",
                 "--rig-geometry",
                 str(rig_geometry),
@@ -1506,13 +1542,37 @@ def _guided_camera_analysis(
     search_hint: Mapping | None = None,
     *,
     analysis_role: str = "live_preview",
+    follow: Mapping | None = None,
 ) -> tuple[ReferenceBallRangeResult, dict]:
-    """Run broad or explicitly non-promoting IWR-conditioned camera association."""
+    """Run broad or explicitly non-promoting IWR-conditioned camera association.
+
+    ``follow`` (a previous live selection) narrows a live look to that ball's
+    neighbourhood and size; Save never follows and always searches the full frame.
+    """
     if analysis_role not in {"live_preview", "independent_save_confirmation"}:
         raise ValueError("unknown guided camera analysis role")
     kwargs, usable_hint, fallback = _validated_guided_search_hint(
         search_hint, camera, analysis_role
     )
+    following = follow is not None and analysis_role == "live_preview"
+    if following:
+        diameter = float(follow["diameter_px"])
+        reach = max(40.0, FOLLOW_REACH_DIAMETERS * diameter)
+        x, y = float(follow["x_px"]), float(follow["y_px"])
+        kwargs["roi"] = (
+            max(0, int(x - reach)),
+            max(0, int(y - reach)),
+            min(camera.image_width_px, int(math.ceil(x + reach))),
+            min(camera.image_height_px, int(math.ceil(y + reach))),
+        )
+        kwargs["expected_diameter_range_px"] = (
+            diameter / FOLLOW_SIZE_FACTOR,
+            diameter * FOLLOW_SIZE_FACTOR,
+        )
+        # the strongest ball-sized spot where the ball just was is the ball: one fit,
+        # at the size the full-frame search measured, so looks stay comparable
+        kwargs["max_fits"] = 1
+        kwargs["hold_diameter_px"] = diameter
     started_at = time.perf_counter()
     result = estimate_reference_ball_range(
         frames,
@@ -1527,7 +1587,11 @@ def _guided_camera_analysis(
         ),
         "analysis_role": analysis_role,
         "discovery_mode": (
-            "radar_guided_provisional" if usable_hint else "broad_full_frame_unconditioned"
+            "follow_last_selection"
+            if following
+            else "radar_guided_provisional"
+            if usable_hint
+            else "broad_full_frame_unconditioned"
         ),
         "independent": not usable_hint,
         "promotion_eligible": False,
@@ -1562,6 +1626,29 @@ def _guided_camera_analysis(
     }
 
 
+# Once found, the resting ball is only looked for near where it was: a few
+# diameters around it and within this size factor. A miss falls back to the
+# full-frame search.
+FOLLOW_REACH_DIAMETERS = 2.5
+FOLLOW_SIZE_FACTOR = 1.3
+
+
+class BallFollowMemory:
+    """The last live selection, shared by every exposure step of one camera search."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._selected: dict | None = None
+
+    def get(self) -> dict | None:
+        with self._lock:
+            return dict(self._selected) if self._selected is not None else None
+
+    def set(self, selected: Mapping | None) -> None:
+        with self._lock:
+            self._selected = dict(selected) if selected is not None else None
+
+
 def _same_guided_candidate(first: Mapping, second: Mapping) -> bool:
     """Whether two independent analyses describe the same physical image object."""
     try:
@@ -1594,11 +1681,13 @@ class GuidedRangeAnalyzer:
         orientation: Mapping,
         orientation_reader: Callable[[], Mapping],
         search_hint: Mapping | None = None,
+        follow: BallFollowMemory | None = None,
     ):
         self.camera = camera
         self.orientation = dict(orientation)
         self._orientation_reader = orientation_reader
         self.search_hint = dict(search_hint) if search_hint is not None else None
+        self._follow = follow
         self._lock = threading.Lock()
         self._last: dict | None = None
         self._stable_anchor: dict | None = None
@@ -1657,7 +1746,19 @@ class GuidedRangeAnalyzer:
             ):
                 return dict(self._last) if self._last is not None else {}
         problem = self._orientation_problem()
-        _result, analysis = _guided_camera_analysis(frames, self.camera, self.search_hint)
+        anchor = self._follow.get() if self._follow is not None else None
+        _result, analysis = _guided_camera_analysis(
+            frames, self.camera, self.search_hint, follow=anchor
+        )
+        if anchor is not None and analysis["status"] != "selected":
+            _result, analysis = _guided_camera_analysis(frames, self.camera, self.search_hint)
+        if (
+            self._follow is not None
+            and analysis["status"] == "selected"
+            and analysis["discovery_mode"] != "follow_last_selection"
+        ):
+            # only a full search sizes the ball; following keeps that size
+            self._follow.set(analysis.get("selected"))
         if problem:
             analysis["estimator_status"] = analysis["status"]
             analysis["status"] = "pose_changed"
@@ -1775,7 +1876,9 @@ class GuidedRangeAnalyzer:
         return result, analysis, None
 
 
-STATIC_EXPOSURE_FAILURES = frozenset({"lighting_required", "ball_not_identified", "rig_moved"})
+STATIC_EXPOSURE_FAILURES = frozenset(
+    {"lighting_required", "ball_not_identified", "low_contrast", "rig_moved"}
+)
 
 
 def _detection_summary(association: Mapping | None) -> dict | None:
@@ -3488,6 +3591,7 @@ def create_app(
     iwr_firmware: Path = DEFAULT_IWR_FIRMWARE,
     iwr_calibration: Path = DEFAULT_IWR_CALIBRATION,
     tee_range_qualification: Path | None = None,
+    use_unqualified_tee_range: bool = False,
     require_tee_range_flow: bool = False,
     iwr_static_port: str | None = None,
     require_iwr_preflight: bool = False,
@@ -4237,9 +4341,10 @@ def create_app(
             state, model, camera_input_identity=camera_input_identity
         )
         search_path = store.epoch_dir(state.epoch_id) / f"camera-{capture_id}-exposure-search.json"
+        follow = BallFollowMemory()
         analyzer = StaticExposureController(
             lambda: GuidedRangeAnalyzer(
-                model, tilt_snapshot, enclosure.reading, search_hint=search_hint
+                model, tilt_snapshot, enclosure.reading, search_hint=search_hint, follow=follow
             ),
             exposure_steps_for_fps(params.arm.fps),
             live.change_controls,
@@ -4579,7 +4684,7 @@ def create_app(
         if analyzer is None:
             raise RuntimeError(f"camera {arm_id} has no guided exposure search")
         exposure = analyzer.status()
-        if exposure["status"] not in {"lighting_required", "ball_not_identified"}:
+        if exposure["status"] not in {"lighting_required", "ball_not_identified", "low_contrast"}:
             raise RuntimeError(
                 f"camera {arm_id} diagnostic save is only for a lighting or "
                 "ball-identification failure; use Save"
@@ -4855,6 +4960,7 @@ def create_app(
                 solution,
                 iwr_static_port,
                 operator_reset if action == "preflight" else None,
+                use_unqualified_tee_range=use_unqualified_tee_range,
             )
             write_arm_state(sessions_root, params)
             if action == "swings":
@@ -5242,6 +5348,7 @@ def create_app(
             camera_placement,
             solution,
             iwr_static_port,
+            use_unqualified_tee_range=use_unqualified_tee_range,
         )
         run = Path(commands[0][commands[0].index("--log-dir") + 1])
         with session_bundle.snapshot_lock(
@@ -5530,6 +5637,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--tee-range-qualification", type=Path, default=None)
+    parser.add_argument(
+        "--use-unqualified-tee-range",
+        action="store_true",
+        help=(
+            "TEST ONLY: when the automatic range is not qualified, give swings the "
+            "accepted IWR range (else the camera range). Evidence stays unqualified."
+        ),
+    )
     parser.add_argument("--radar-port", default=DEFAULT_RADAR_PORT, help="OPS243 serial port")
     parser.add_argument(
         "--no-inclinometer", action="store_true", help="Leave the LIS3DH unread (not on a Pi)"
@@ -5580,6 +5695,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             iwr_calibration=args.iwr_calibration,
             iwr_static_port=args.iwr_static_port,
             tee_range_qualification=args.tee_range_qualification,
+            use_unqualified_tee_range=args.use_unqualified_tee_range,
             require_tee_range_flow=True,
             require_iwr_preflight=True,
         ).run(host=args.host, port=args.port)

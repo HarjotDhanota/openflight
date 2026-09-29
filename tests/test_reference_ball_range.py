@@ -248,8 +248,12 @@ def test_mode_aware_search_recovers_range_without_a_tape(width, height, focal_px
     assert result.selected is not None
     expected_radar = np.linalg.norm(point - np.asarray(camera.radar_origin_lfu))
     expected_camera = np.linalg.norm(point - np.asarray(camera.camera_origin_lfu))
+    # range comes from apparent size (the camera height is solved, not assumed)
     assert abs(result.selected.floor_radar_range_m - expected_radar) <= max(
-        result.selected.floor_range_uncertainty_m, 0.03
+        2.0 * result.selected.floor_range_uncertainty_m, 0.03
+    )
+    assert abs(result.selected.camera_height_m - camera.camera_origin_lfu[2]) <= max(
+        2.0 * result.selected.camera_height_uncertainty_m, 0.01
     )
     assert abs(result.selected.size_camera_range_m - expected_camera) <= max(
         2.0 * result.selected.size_range_uncertainty_m, 0.03
@@ -284,11 +288,9 @@ def test_physical_floor_and_size_consistency_rejects_high_hinge_and_selects_floo
     assert result.status == "selected"
     assert result.selected is not None
     assert result.selected.y_px == pytest.approx(pixel[1], abs=2.0)
-    assert any(item.rejection_reason is not None for item in result.candidates)
-    assert any(
-        item.rejection_reason is not None and item.size_camera_range_m is not None
-        for item in result.candidates
-    )
+    # the hinge is above the horizon: a resting ball cannot be there, so it is
+    # never even fitted, let alone selected
+    assert all(abs(item.y_px - false_pixel[1]) > 5.0 for item in result.candidates)
 
 
 def test_high_hinge_alone_is_not_selected_as_a_floor_ball():
@@ -361,5 +363,32 @@ def test_camera_range_estimator_identity_is_pinned():
     """Any estimator constant change must be a deliberate, reviewed identity change."""
     assert camera_range_estimator_policy()["name"] == "camera_reference_ball_floor_plane"
     assert camera_range_estimator_sha256() == (
-        "48c758f5cda34f2b5fe96623b73ec1fa328d679b352208c1248f9bee9bcdf8bf"
+        "4dbeb81560f09173dc902b96555ab12d3a905fd9a10cabd317da831afdb75fcc"
     )
+
+
+def test_bright_things_above_the_horizon_do_not_crowd_out_a_dimmer_floor_ball():
+    """Field failure 2026-09-29: door knobs and clothes filled every fit slot."""
+    camera = _camera(640, 400, 466.6667, pitch_deg=1.75, camera_origin=(0.0, 0.0, 0.08))
+    point = np.asarray([0.02, 1.25, 0.021335])
+    pixel = _project_nominal(camera, point)
+    diameter = (
+        camera.focal_size_px
+        * BALL_DIAMETER_M
+        / np.linalg.norm(point - np.asarray(camera.camera_origin_lfu))
+    )
+    decoys = [
+        (60.0 + 55.0 * index, 40.0 + 12.0 * (index % 3), diameter / 2.0, 170.0)
+        for index in range(10)
+    ]
+    frames = _lit_spheres(400, 640, [*decoys, (pixel[0], pixel[1], diameter / 2.0, 70.0)])
+
+    result = estimate_reference_ball_range(
+        frames, camera, ball_center_height_m=point[2], plausible_radar_range_m=(0.6, 3.5)
+    )
+
+    assert result.status == "selected"
+    assert result.selected.x_px == pytest.approx(pixel[0], abs=2.0)
+    assert result.selected.y_px == pytest.approx(pixel[1], abs=2.0)
+    # the lens sits 80 mm up (feet in carpet), not at a configured height
+    assert result.selected.camera_height_m == pytest.approx(0.08, abs=0.02)

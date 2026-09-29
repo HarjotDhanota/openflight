@@ -10,7 +10,11 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from openflight.camera.club_motion import ReferenceBall, reference_ball_candidates
+from openflight.camera.club_motion import (
+    REFERENCE_SEED_FITS,
+    ReferenceBall,
+    reference_ball_candidates,
+)
 from openflight.camera.geometry import unit_world_rays
 
 GOLF_BALL_DIAMETER_M = 0.04267
@@ -22,14 +26,30 @@ _MAX_HINT_RANGE_WIDTH_M = 1.5
 _MAX_HINT_ROI_HEIGHT_FRACTION = 0.85
 _HINT_UNCERTAINTY_MULTIPLIER = 3.0
 _MIN_HINT_HALF_WIDTH_M = 0.12
+# The lens height is solved from the resting ball, not assumed: feet sink into
+# carpet and a unit may stand on a box. These bound what is physically plausible.
+_CAMERA_HEIGHT_RANGE_M = (0.03, 0.60)
+# How far the solved height may stray from the rig's nominal lens height before a
+# candidate ranks below one that sits where the rig says it should.
+_CAMERA_HEIGHT_PRIOR_SIGMA_M = 0.06
+_SEED_SIZE_TOLERANCE = 0.25
+# The ball sits at address in front of the unit, near its boresight.
+_LATERAL_SIGMA_M = 0.15
 
 
 def camera_range_estimator_policy() -> dict[str, Any]:
     """Return the camera range policy bound by qualification artifacts."""
     return {
         "name": "camera_reference_ball_floor_plane",
-        "version": 1,
-        "detector": "reference_ball_candidates_v1",
+        "version": 2,
+        "detector": "reference_ball_candidates_v2_merged_seeds",
+        "seed_fits": REFERENCE_SEED_FITS,
+        "search_region": "below_horizon_with_plausible_solved_camera_height",
+        "camera_height": "solved_from_apparent_size_and_ray",
+        "camera_height_range_m": list(_CAMERA_HEIGHT_RANGE_M),
+        "camera_height_prior_sigma_m": _CAMERA_HEIGHT_PRIOR_SIGMA_M,
+        "seed_size_tolerance": _SEED_SIZE_TOLERANCE,
+        "lateral_sigma_m": _LATERAL_SIGMA_M,
         "golf_ball_diameter_m": GOLF_BALL_DIAMETER_M,
         "diameter_hypotheses": _DIAMETER_HYPOTHESES,
         "ambiguity_score_margin": _AMBIGUITY_SCORE_MARGIN,
@@ -242,6 +262,8 @@ class ReferenceBallRangeCandidate:
     confidence: str
     score: float | None
     rejection_reason: str | None
+    camera_height_m: float | None = None
+    camera_height_uncertainty_m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -556,12 +578,39 @@ def _local_focal_size(camera: BallPlaneCamera, x_px: float, y_px: float) -> floa
     return math.sqrt(axes[0] * axes[1])
 
 
-def _candidate(
+def _withheld(ball: ReferenceBall, camera: BallPlaneCamera, reason: str, **ranges) -> Any:
+    return ReferenceBallRangeCandidate(
+        x_px=ball.x,
+        y_px=ball.y,
+        diameter_px=ball.diameter_px,
+        area_px=ball.area_px,
+        floor_point_lfu_m=None,
+        floor_radar_range_m=None,
+        floor_camera_range_m=None,
+        size_camera_range_m=ranges.get("size_range"),
+        floor_range_uncertainty_m=None,
+        size_range_uncertainty_m=ranges.get("size_uncertainty"),
+        range_disagreement_m=None,
+        consistency_sigma=None,
+        source=camera.source,
+        confidence="withheld",
+        score=None,
+        rejection_reason=reason,
+    )
+
+
+def _candidate(  # pylint: disable=too-many-locals
     ball: ReferenceBall,
     camera: BallPlaneCamera,
     ball_center_height_m: float,
     plausible_range: tuple[float, float],
 ) -> ReferenceBallRangeCandidate:
+    """Range from the ball's apparent size; the camera height it implies must be plausible.
+
+    The ball rests on the floor, so the camera sits ``range x sin(depression)``
+    above the ball's centre. That height is solved here rather than taken from
+    the rig, and a candidate whose implied height is impossible is rejected.
+    """
     try:
         local_focal = _local_focal_size(camera, ball.x, ball.y)
         angular_diameter = ball.diameter_px / local_focal
@@ -570,100 +619,89 @@ def _candidate(
         size_uncertainty = size_range * math.hypot(
             camera.focal_relative_uncertainty, diameter_relative_uncertainty
         )
+        ray = np.asarray(camera.ray_model.rays(np.asarray([ball.x, ball.y], dtype=float)))
+        if ray.shape != (3,) or not np.all(np.isfinite(ray)):
+            raise ValueError("camera model returned an invalid ray")
     except ValueError as error:
-        return ReferenceBallRangeCandidate(
-            x_px=ball.x,
-            y_px=ball.y,
-            diameter_px=ball.diameter_px,
-            area_px=ball.area_px,
-            floor_point_lfu_m=None,
-            floor_radar_range_m=None,
-            floor_camera_range_m=None,
-            size_camera_range_m=None,
-            floor_range_uncertainty_m=None,
-            size_range_uncertainty_m=None,
-            range_disagreement_m=None,
-            consistency_sigma=None,
-            source=camera.source,
-            confidence="withheld",
-            score=None,
-            rejection_reason=str(error),
-        )
-    try:
-        floor = ray_to_ball_center_plane(
-            camera,
-            (ball.x, ball.y),
-            ball_center_height_m=ball_center_height_m,
-        )
-    except ValueError as error:
-        return ReferenceBallRangeCandidate(
-            x_px=ball.x,
-            y_px=ball.y,
-            diameter_px=ball.diameter_px,
-            area_px=ball.area_px,
-            floor_point_lfu_m=None,
-            floor_radar_range_m=None,
-            floor_camera_range_m=None,
-            size_camera_range_m=size_range,
-            floor_range_uncertainty_m=None,
-            size_range_uncertainty_m=size_uncertainty,
-            range_disagreement_m=None,
-            consistency_sigma=None,
-            source=camera.source,
-            confidence="withheld",
-            score=None,
-            rejection_reason=str(error),
-        )
-    floor_uncertainty = _floor_range_uncertainty(camera, ball, ball_center_height_m, floor)
-    disagreement = size_range - floor.camera_range_m
-    combined = (
-        max(math.hypot(size_uncertainty, floor_uncertainty), 1e-6)
-        if floor_uncertainty is not None
-        else None
-    )
-    consistency = abs(disagreement) / combined if combined is not None else None
-    reason = "floor range is unstable at the declared angular uncertainty"
-    if floor_uncertainty is not None:
-        reason = None
-    if reason is None and not plausible_range[0] <= floor.radar_slant_range_m <= plausible_range[1]:
-        reason = "floor-derived radar range is outside the configured search interval"
-    elif (
-        reason is None
-        and combined is not None
-        and abs(disagreement) > max(3.0 * combined, 0.35 * floor.camera_range_m)
+        return _withheld(ball, camera, str(error))
+    ranges = {"size_range": size_range, "size_uncertainty": size_uncertainty}
+    angular = math.sin(math.radians(camera.angular_uncertainty_deg))
+    down = -float(ray[2])
+    if down <= -angular:
+        return _withheld(ball, camera, "a resting ball cannot sit above the horizon", **ranges)
+    camera_height = ball_center_height_m + size_range * down
+    height_uncertainty = math.hypot(size_uncertainty * abs(down), size_range * angular)
+    relative = ray * size_range
+    offset = np.asarray(camera.radar_origin_lfu) - np.asarray(camera.camera_origin_lfu)
+    radar_range = float(np.linalg.norm(relative - offset))
+    low, high = _CAMERA_HEIGHT_RANGE_M
+    reason = None
+    if (
+        camera_height + 2.0 * height_uncertainty < low
+        or camera_height - 2.0 * height_uncertainty > high
     ):
-        reason = "floor-derived and apparent-size ranges disagree"
-    lateral = abs(floor.point_lfu_m[0] - camera.radar_origin_lfu[0])
-    score = (
-        consistency + lateral / max(floor.radar_slant_range_m, 0.25)
-        if consistency is not None
-        else None
-    )
+        reason = "the camera height this ball implies is not physically plausible"
+    elif not plausible_range[0] <= radar_range <= plausible_range[1]:
+        reason = "size-derived radar range is outside the configured search interval"
+    height_sigma = abs(camera_height - camera.camera_origin_lfu[2]) / _CAMERA_HEIGHT_PRIOR_SIGMA_M
+    lateral = abs(float(relative[0] - offset[0]))
+    score = height_sigma + lateral / _LATERAL_SIGMA_M
     confidence = (
         "withheld"
         if reason is not None
         else "high"
-        if camera.accuracy_qualified and consistency is not None and consistency <= 1.0
+        if camera.accuracy_qualified and height_sigma <= 1.0
         else "experimental"
     )
+    origin = np.asarray(camera.camera_origin_lfu)
     return ReferenceBallRangeCandidate(
         x_px=ball.x,
         y_px=ball.y,
         diameter_px=ball.diameter_px,
         area_px=ball.area_px,
-        floor_point_lfu_m=floor.point_lfu_m,
-        floor_radar_range_m=floor.radar_slant_range_m,
-        floor_camera_range_m=floor.camera_range_m,
+        floor_point_lfu_m=(
+            float(origin[0] + relative[0]),
+            float(origin[1] + relative[1]),
+            float(ball_center_height_m),
+        ),
+        floor_radar_range_m=radar_range,
+        floor_camera_range_m=size_range,
         size_camera_range_m=size_range,
-        floor_range_uncertainty_m=floor_uncertainty,
+        floor_range_uncertainty_m=size_uncertainty,
         size_range_uncertainty_m=size_uncertainty,
-        range_disagreement_m=disagreement,
-        consistency_sigma=consistency,
+        range_disagreement_m=None,
+        consistency_sigma=height_sigma,
         source=camera.source,
         confidence=confidence,
-        score=score,
+        score=score if reason is None else None,
         rejection_reason=reason,
+        camera_height_m=camera_height,
+        camera_height_uncertainty_m=height_uncertainty,
     )
+
+
+def _seed_filter(camera: BallPlaneCamera, ball_center_height_m: float):
+    """Drop seeds where no plausible camera height could put a resting ball."""
+    angular = math.sin(math.radians(camera.angular_uncertainty_deg))
+    low, high = _CAMERA_HEIGHT_RANGE_M
+
+    def allowed(xs: np.ndarray, ys: np.ndarray, diameter: float) -> np.ndarray:
+        rays = np.asarray(camera.ray_model.rays(np.column_stack([xs, ys])), dtype=float)
+        down = -rays.reshape(-1, 3)[:, 2]
+        size_range = GOLF_BALL_DIAMETER_M * camera.focal_size_px / diameter
+        near, far = (
+            size_range * (1.0 - _SEED_SIZE_TOLERANCE),
+            size_range * (1.0 + _SEED_SIZE_TOLERANCE),
+        )
+        heights = [
+            ball_center_height_m + distance * (down + tilt)
+            for distance in (near, far)
+            for tilt in (-angular, angular)
+        ]
+        lowest, highest = np.min(heights, axis=0), np.max(heights, axis=0)
+        return (down > -angular) & (highest >= low) & (lowest <= high)
+
+    return allowed
 
 
 def estimate_reference_ball_range(
@@ -674,6 +712,8 @@ def estimate_reference_ball_range(
     plausible_radar_range_m: tuple[float, float] = (0.5, 4.0),
     roi: tuple[int, int, int, int] | None = None,
     expected_diameter_range_px: tuple[float, float] | None = None,
+    max_fits: int = REFERENCE_SEED_FITS,
+    hold_diameter_px: float | None = None,
 ) -> ReferenceBallRangeResult:
     """Rank stationary sphere candidates without requiring a tape distance."""
     if frames.ndim != 3 or frames.shape[1:] != (
@@ -700,6 +740,9 @@ def estimate_reference_ball_range(
         frames,
         expected_diameters_px=diameters,
         roi=roi,
+        seed_filter=_seed_filter(camera, ball_center_height_m),
+        max_fits=max_fits,
+        hold_diameter_px=hold_diameter_px,
     )
     candidates = tuple(
         _candidate(ball, camera, ball_center_height_m, (low, high)) for ball in observed

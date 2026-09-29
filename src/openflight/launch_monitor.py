@@ -268,6 +268,10 @@ class Shot:
     experimental_fused_attack_angle_confidence: Optional[str] = None
     experimental_fused_club_path_confidence: Optional[str] = None
     experimental_camera_trace_deg: Optional[float] = None
+    # D-plane face angle: derived from start direction and club path, not seen
+    # on the club. Experimental until checked against impact-tape truth.
+    experimental_face_angle_deg: Optional[float] = None
+    experimental_face_angle_status: Optional[str] = None
     experimental_aoa_offset_source: Optional[str] = None
     # Independent horizontal ball-flight evidence. The camera-assisted value
     # may become the displayed experimental result while the original IWR
@@ -429,6 +433,8 @@ class Shot:
                 self.experimental_fused_club_path_confidence
             ),
             "experimental_camera_trace_deg": self.experimental_camera_trace_deg,
+            "experimental_face_angle_deg": self.experimental_face_angle_deg,
+            "experimental_face_angle_status": self.experimental_face_angle_status,
             "experimental_aoa_offset_source": self.experimental_aoa_offset_source,
             "iwr6843_horizontal_deg": self.iwr6843_horizontal_deg,
             "iwr6843_horizontal_confidence": self.iwr6843_horizontal_confidence,

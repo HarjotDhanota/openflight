@@ -975,7 +975,12 @@ def test_conditioned_static_object_must_match_broad_save_before_promotion(
 
     def estimate(_frames, camera, **kwargs):
         ball = camera_result(1.2, camera.image_width_px, camera.image_height_px)
-        if "roi" not in kwargs:
+        roi = kwargs.get("roi")
+        # a follow look (one fit) sees whatever is inside its small region
+        if roi is None or (
+            kwargs.get("max_fits") == 1
+            and not (roi[0] <= 260 <= roi[2] and roi[1] <= 300 <= roi[3])
+        ):
             return ball
         return replace(
             ball,
@@ -1211,7 +1216,11 @@ def test_missing_qualification_and_disagreement_remain_raw_only(tmp_path, inputs
     fallback = missing["evidence"]["camera_arm6_guidance"]
     assert fallback["search_hint"]["status"] == "rejected"
     assert fallback["search_hint"]["reason_code"] == "static_iwr_candidate_rejected"
-    assert fallback["live_readiness"]["discovery_mode"] == "broad_full_frame_unconditioned"
+    # after the first full-frame find, live looks follow the ball
+    assert fallback["live_readiness"]["discovery_mode"] in {
+        "broad_full_frame_unconditioned",
+        "follow_last_selection",
+    }
     assert fallback["live_readiness"]["independent"] is True
     assert fallback["live_readiness"]["fallback"]["used"] is True
     assert fallback["live_readiness"]["fallback"]["reason_code"] == (
@@ -1836,3 +1845,34 @@ def test_a_remembered_lock_from_another_policy_is_not_used(tmp_path, inputs, mon
     setup = phase(client, tester)["evidence"]["camera_arm5_capture_setup"]
     assert setup["warm_start"] is None
     assert _search_evidence(tmp_path, client, tester)["attempts"][0]["stage"] == "bootstrap"
+
+
+def test_an_unqualified_range_reaches_swings_only_when_explicitly_enabled(
+    tmp_path, inputs, monkeypatch
+):
+    app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
+    state = drive(app.test_client(), tester)
+    solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
+    iwr = state["evidence"]["iwr_candidate"]
+
+    assert state["phase"] == "raw_only"
+    assert ts._tee_range_cli_args(solution) == ["--iwr6843-tee-range-pending"]
+    assert ts._tee_range_cli_args(solution, use_unqualified=True) == [
+        "--iwr6843-tee-m",
+        f"{iwr['radar_slant_range_m']:.9g}",
+    ]
+
+
+def test_without_an_accepted_radar_the_unqualified_range_is_the_camera_range(
+    tmp_path, inputs, monkeypatch
+):
+    app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
+    state = drive(app.test_client(), tester)
+    payload = dict(state["solution"])
+    payload["candidates"] = [
+        item for item in payload["candidates"] if item["source_group"] != "iwr"
+    ]
+    solution = tee_range.TeeRangeSolution.from_dict(payload)
+    camera = state["evidence"]["camera_arm5_candidate"]
+
+    assert ts.unqualified_tee_range_choice(solution).candidate_id == camera["candidate_id"]

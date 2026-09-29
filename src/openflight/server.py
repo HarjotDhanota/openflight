@@ -3555,6 +3555,38 @@ def _withhold_camera_metrics(shot: Shot, status: str, reason: str) -> None:
     }
 
 
+# D-plane: an iron's ball starts about 80% where the face points and 20% along
+# the club path. Per-club weights are future work; 0.8 is the mid-iron value.
+FACE_ANGLE_FACE_WEIGHT = 0.8
+
+
+def _attach_experimental_face_angle(shot: Shot) -> None:
+    """Derive face angle from the measured start direction and club path (D-plane)."""
+    shot.experimental_face_angle_deg = None
+    launch = shot.launch_angle_horizontal
+    if launch is None or shot.launch_angle_horizontal_source == "estimated":
+        shot.experimental_face_angle_status = "missing_measured_start_direction"
+        return
+    path = next(
+        (
+            value
+            for value in (
+                shot.club_path_deg,
+                shot.experimental_fused_club_path_deg,
+                shot.experimental_club_path_deg,
+            )
+            if value is not None
+        ),
+        None,
+    )
+    if path is None:
+        shot.experimental_face_angle_status = "missing_club_path"
+        return
+    weight = FACE_ANGLE_FACE_WEIGHT
+    shot.experimental_face_angle_deg = round((launch - (1.0 - weight) * path) / weight, 1)
+    shot.experimental_face_angle_status = "d_plane_estimate"
+
+
 def _fuse_camera_measurements(
     shot: Shot,
     camera_capture,
@@ -4113,6 +4145,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     if shot.mode != "mock":
         _fuse_camera_measurements(shot, camera_capture, camera_archive)
         camera_analysis_ms = (time.monotonic() - camera_analysis_started) * 1000.0
+    _attach_experimental_face_angle(shot)
 
     return _ShotEnrichmentResult(
         iwr6843_ms=iwr6843_ms,

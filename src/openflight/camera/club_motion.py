@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Callable, Sequence
 
 import numpy as np
 from scipy import ndimage
 
 from openflight.camera.ball_model import fit_lit_ball
+
+# (x_px, y_px, diameter_px) arrays -> which seeds a resting ball could be
+SeedFilter = Callable[[np.ndarray, np.ndarray, float], np.ndarray]
 
 # OpenCV's extension members are not visible to Pylint.
 # pylint: disable=no-member
@@ -117,6 +120,9 @@ def _brighter_all_round(
 
 
 BALL_CANDIDATES = 6
+# The resting-ball range search fits at most this many places, merged over
+# every size it tries; each lit-sphere fit costs a few tenths of a second.
+REFERENCE_SEED_FITS = 8
 # A ball's shaded underside can sit within a few DN of the carpet it rests on,
 # however bright its top: the ring need only be darker by more than the noise.
 ALL_ROUND_MARGIN_NOISE = 3.0
@@ -232,13 +238,23 @@ def _lit_ball_near_size(  # pylint: disable=too-many-arguments,too-many-position
     return candidates[0] if candidates else None
 
 
-def reference_ball_candidates(
+def reference_ball_candidates(  # pylint: disable=too-many-locals
     frames: np.ndarray,
     *,
     expected_diameters_px: Sequence[float],
     roi: tuple[int, int, int, int] | None = None,
+    seed_filter: SeedFilter | None = None,
+    max_fits: int = REFERENCE_SEED_FITS,
+    hold_diameter_px: float | None = None,
 ) -> list[ReferenceBall]:
-    """Enumerate distinct lit-sphere fits over a caller-supplied size range."""
+    """Enumerate distinct lit-sphere fits over a caller-supplied size range.
+
+    The cheap disk filter runs at every size; its peaks from all sizes are
+    merged first, so each place in the picture is fitted once, at the size it
+    matches best. ``seed_filter`` drops places a resting ball cannot be (above
+    the horizon, say) before they use up one of the ``max_fits`` fits.
+    ``hold_diameter_px`` holds the fitted size, for re-finding a ball already sized.
+    """
     if frames.dtype != np.uint8 or frames.ndim != 3 or frames.shape[0] < 3:
         raise ValueError("frames must be uint8 with shape (n, height, width) and n >= 3")
     diameters = sorted({float(value) for value in expected_diameters_px})
@@ -253,53 +269,83 @@ def reference_ball_candidates(
     factor = max(1, round(width / DISK_SEARCH_WIDTH_PX))
     image = background.astype(np.float32)
     coarse = _bin(image, factor)
-    window = tuple(value // factor for value in (x0, y0, x1, y1))
+    wx0, wy0, wx1, wy1 = (value // factor for value in (x0, y0, x1, y1))
     frame_noise = float(np.median(np.std(frames[: min(20, len(frames))], axis=0)))
     picture_noise = max(
         PICTURE_NOISE_FLOOR_DN,
         MEDIAN_NOISE_FACTOR * frame_noise / math.sqrt(min(20, len(frames))),
     )
+    floor = max(8.0, 3.0 * picture_noise / factor)
+
+    seeds: list[tuple[float, float, float, float, int, int]] = []
+    for diameter in diameters:
+        coarse_r = diameter / 2.0 / factor
+        score = _disk_contrast(coarse, coarse_r)[wy0:wy1, wx0:wx1]
+        peaks = (score == ndimage.maximum_filter(score, size=max(3, int(coarse_r)))) & (
+            score >= floor
+        )
+        rows, cols = np.nonzero(peaks)
+        if not rows.size:
+            continue
+        xs = (cols + wx0 + 0.5) * factor - 0.5
+        ys = (rows + wy0 + 0.5) * factor - 0.5
+        keep = (
+            np.asarray(seed_filter(xs, ys, diameter), dtype=bool)
+            if seed_filter is not None
+            else np.ones(rows.size, dtype=bool)
+        )
+        for index in np.flatnonzero(keep):
+            seeds.append(
+                (
+                    float(score[rows[index], cols[index]]),
+                    float(xs[index]),
+                    float(ys[index]),
+                    diameter / 2.0,
+                    int(rows[index] + wy0),
+                    int(cols[index] + wx0),
+                )
+            )
+
+    # an edge, like a door's foot over the gap beneath it, scores along its
+    # whole length; a ball is brighter than its surroundings all round
+    margin = ALL_ROUND_MARGIN_NOISE * picture_noise / factor
+    kept: list[tuple[float, float, float]] = []
+    for _score, x, y, radius, row, col in sorted(seeds, key=lambda item: item[0], reverse=True):
+        if any(math.hypot(x - kx, y - ky) <= max(radius, kr) for kx, ky, kr in kept):
+            continue
+        if not _brighter_all_round(coarse, row, col, radius / factor, margin):
+            continue
+        kept.append((x, y, radius))
+        if len(kept) >= max_fits:
+            break
 
     found: list[tuple[float, ReferenceBall]] = []
-    for diameter in diameters:
-        candidates = _lit_ball_candidates_near_size(
-            image,
-            coarse,
-            window,
-            factor,
-            diameter / 2.0,
-            picture_noise,
+    for x, y, radius in kept:
+        held = hold_diameter_px / 2.0 if hold_diameter_px is not None else None
+        fit = fit_lit_ball(
+            image, x, y, held or radius, noise_dn=picture_noise, expected_radius=held
         )
-        for candidate in candidates:
-            quality = 0.0
-            free_fit = fit_lit_ball(
-                image,
-                candidate.x,
-                candidate.y,
-                candidate.diameter_px / 2.0,
-                noise_dn=picture_noise,
-            )
-            if free_fit is not None:
-                quality = free_fit.quality
-                candidate = ReferenceBall(
-                    x=free_fit.x,
-                    y=free_fit.y,
-                    diameter_px=free_fit.diameter_px,
-                    area_px=int(round(math.pi * free_fit.radius_px**2)),
-                )
-            duplicate = next(
-                (
-                    index
-                    for index, (_prior_quality, prior) in enumerate(found)
-                    if math.hypot(candidate.x - prior.x, candidate.y - prior.y)
-                    <= max(2.0, 0.35 * min(candidate.diameter_px, prior.diameter_px))
-                ),
-                None,
-            )
-            if duplicate is None:
-                found.append((quality, candidate))
-            elif quality > found[duplicate][0]:
-                found[duplicate] = (quality, candidate)
+        if fit is None:
+            continue
+        candidate = ReferenceBall(
+            x=fit.x,
+            y=fit.y,
+            diameter_px=fit.diameter_px,
+            area_px=int(round(math.pi * fit.radius_px**2)),
+        )
+        duplicate = next(
+            (
+                index
+                for index, (_prior_quality, prior) in enumerate(found)
+                if math.hypot(candidate.x - prior.x, candidate.y - prior.y)
+                <= max(2.0, 0.35 * min(candidate.diameter_px, prior.diameter_px))
+            ),
+            None,
+        )
+        if duplicate is None:
+            found.append((fit.quality, candidate))
+        elif fit.quality > found[duplicate][0]:
+            found[duplicate] = (fit.quality, candidate)
     return [candidate for _quality, candidate in found]
 
 
