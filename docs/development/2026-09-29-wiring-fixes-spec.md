@@ -1,6 +1,6 @@
 # Wiring fixes: spec
 
-Date: 29 September 2026. Branch: `feat/tester-capture-pilot` (fork). Status: proposed; nothing implemented.
+Date: 29 September 2026. Branch: `feat/tester-capture-pilot` (fork). Status: approved 29 Sept (all seven decisions as recommended); nothing implemented. Plan: `2026-09-29-wiring-fixes-plan.md`.
 
 This spec answers every finding in the wiring audit (`2026-09-29-wiring-audit.md`, same folder) and in the five reviews behind it. The IDs are the audit's. A few findings from the reviews were not in the audit's tables; they get new IDs here, marked *(new)*.
 
@@ -710,9 +710,9 @@ It succeeds if:
 
 **After the face-angle group:** a replay of stored sessions shows that face angle and path come only from accepted, displayed paths, in one frame, with sources recorded.
 
-## 8. Decisions needed from Harjot
+## 8. Decisions (all approved as recommended, 29 Sept)
 
-| ID | Question | Recommendation |
+| ID | Question | Decision |
 |---|---|---|
 | D1 | Read the black level from libcamera metadata (`SensorBlackLevels`)? | Yes; confirm it is present with one command on the Pi. |
 | D2 | Which stored sessions are the replay reference for the range-space fix and the −2 ms constant? | The July TrackMan-scored sessions, plus the 21-shot August set. |
