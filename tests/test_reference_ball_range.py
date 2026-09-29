@@ -363,7 +363,7 @@ def test_camera_range_estimator_identity_is_pinned():
     """Any estimator constant change must be a deliberate, reviewed identity change."""
     assert camera_range_estimator_policy()["name"] == "camera_reference_ball_floor_plane"
     assert camera_range_estimator_sha256() == (
-        "cb04182f3abffc17561e3754004ee1fa696ad7e42eed32c2e28429f19171a4ae"
+        "33d4c5fe0dd878eb54948bb381422a1da0eb53ddb5ed463052204913b425e2df"
     )
 
 

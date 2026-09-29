@@ -79,7 +79,7 @@ def camera_range_estimator_policy() -> dict[str, Any]:
         "lens_above_surface_m": list(_LENS_ABOVE_SURFACE_M),
         "min_diameter_relative_uncertainty": _MIN_DIAMETER_RELATIVE_UNCERTAINTY,
         "max_selection_score": _MAX_SELECTION_SCORE,
-        "camera_height_reference": "ball_support",
+        "camera_height_reference": "hitting_surface",
         "golf_ball_diameter_m": GOLF_BALL_DIAMETER_M,
         "diameter_hypotheses": _DIAMETER_HYPOTHESES,
         "ambiguity_score_margin": _AMBIGUITY_SCORE_MARGIN,

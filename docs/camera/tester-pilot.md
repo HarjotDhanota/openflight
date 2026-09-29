@@ -278,18 +278,23 @@ would clip. Steps predicted to be clearly too dark or clearly clipped are
 skipped; the rest are still verified lowest exposure first, so the lock is the
 lowest passing setting. On synthetic scenes this takes 3–7 settings instead of 11–15.
 
-Heights are measured from the surface the ball rests on (ground, mat or tee
-top), not the floor: the ball's centre is then one radius up by definition, and
-every calculation downstream uses only height differences, so the unit can sit on
-the ground or a box and the ball on grass, a mat or a tee. Set the setup ball up
-exactly as it will be hit. When a ball is teed above the radar, the swing server
-lifts every height by the same amount so none goes negative.
+Heights are measured from the hitting surface, so the setup ball goes directly on
+the mat or grass, never on a tee: its centre is then one radius up. The radar's
+floor-bounce model (its vertical launch angle) needs the radar's height above the
+surface it reflects from, which a tee-top reference would get wrong.
 
-When the static radar accepted the ball, Save also solves the lens height from
-the radar's range along the ball's pixel ray, which is several times tighter than
-apparent size (the rest is the camera's tilt uncertainty). Swings are then started
-with `--solved-camera-height-m`, which replaces the rig file's nominal lens height
-for that session and moves the radar height with it; the kiosk log states both.
+The lens height normally comes from the rig file, which is right whenever the unit
+and the ball stand on the same surface. When the static radar accepted the ball,
+Save also solves the lens height from the radar's range along the ball's pixel
+ray. One ball solves it only to about ±25–65 mm, so the solve is a gross-error
+check: it replaces the rig file's height only when the two disagree by more than
+60 mm (for example a unit standing on a box). Swings are then started with
+`--solved-camera-height-m`, which moves the radar height with the lens; the kiosk
+log states both. A solve that would put the radar below the hitting surface is
+refused. A mat under the ball but not the unit (about 20–30 mm) is below what one
+ball can see; in simulation it moves the radar's vertical launch by up to about
+1° at low launch angles, which is within that model's present noise at this
+radar height.
 
 The ball search runs in worker processes (`--ball-search-workers`, default 2; 0
 runs it in the tester process) so it never holds up camera capture. To see what

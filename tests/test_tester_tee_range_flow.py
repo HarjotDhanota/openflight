@@ -1922,10 +1922,15 @@ def test_the_setup_solves_the_lens_height_from_the_radar_and_hands_it_to_swings(
     height = state["evidence"]["camera_arm5_candidate"]["evidence"]["camera_height"]
 
     assert height["size_solved_m"] == pytest.approx(0.081)
-    assert height["source"] == "static_iwr_range"
+    assert height["radar_solved_m"] is not None
     assert height["radar_uncertainty_m"] < height["size_uncertainty_m"]
+    assert height["reference"] == "hitting_surface"
     args = ts._tee_range_cli_args(solution, use_unqualified=True)
-    assert args[args.index("--solved-camera-height-m") + 1] == f"{height['height_m']:.6g}"
+    if height["source"] == "static_iwr_range":
+        assert args[args.index("--solved-camera-height-m") + 1] == f"{height['height_m']:.6g}"
+    else:
+        assert height["source"] == "rig_nominal"
+        assert "--solved-camera-height-m" not in args
     assert "--solved-camera-height-m" not in ts._tee_range_cli_args(solution)
 
 
@@ -1960,5 +1965,109 @@ def test_a_radar_height_outside_the_plausible_band_is_not_used():
 
     solved = ts._solved_camera_height(result, camera, iwr)
 
-    assert solved["source"] == "apparent_size"
-    assert "outside" in solved["radar_rejected"]
+    assert solved["source"] == "rig_nominal"
+    assert solved["height_m"] == pytest.approx(0.095)
+    assert "the selected ball may be wrong" in solved["radar_rejected"]
+
+
+def _level_camera():
+    return BallPlaneCamera.nominal(
+        focal_px=933.3333,
+        image_width_px=1280,
+        image_height_px=800,
+        pitch_deg=0.0,
+        roll_correction_deg=0.0,
+        mirror_horizontal=False,
+        camera_origin_lfu=(0.0, 0.0, 0.095),
+        radar_origin_lfu=(0.0, -0.03, 0.051),
+        angular_uncertainty_deg=1.0,
+        focal_relative_uncertainty=0.08,
+    )
+
+
+def _setup_ball_seen_from(lens_height_m, distance_m=1.4):
+    """Pixel and radar range of a surface ball when the lens is truly this high."""
+    camera = _level_camera()
+    radius = 0.021335
+    down = (lens_height_m - radius) / distance_m
+    y_px = 400.0 + 933.3333 * down
+    ray = np.asarray(camera.ray_model.rays(np.array([640.0, y_px])), dtype=float)
+    # along the ray to the ball's centre, which sits one radius above the surface
+    t = (lens_height_m - radius) / -ray[2]
+    lens = np.array([0.0, 0.0, lens_height_m])
+    radar = lens + (np.asarray(camera.radar_origin_lfu) - np.asarray(camera.camera_origin_lfu))
+    radar_range = float(np.linalg.norm(lens + t * ray - radar))
+    result = replace(
+        camera_result(1.2),
+        selected=replace(
+            camera_result(1.2).selected,
+            x_px=640.0,
+            y_px=y_px,
+            camera_height_m=lens_height_m,
+            camera_height_uncertainty_m=0.05,
+        ),
+    )
+    iwr = {
+        "radar_slant_range_m": radar_range,
+        "uncertainty_m": 0.01,
+        "evidence": {"difference": {"status": "accepted"}},
+    }
+    return camera, result, iwr
+
+
+def test_a_unit_on_the_hitting_surface_keeps_the_rig_lens_height():
+    # the unit stands on the same surface as the ball, 12 mm lower than nominal:
+    # inside what one ball can tell apart, so the rig file's height stands
+    camera, result, iwr = _setup_ball_seen_from(0.083)
+
+    solved = ts._solved_camera_height(result, camera, iwr)
+
+    assert solved["source"] == "rig_nominal"
+    assert solved["height_m"] == pytest.approx(0.095)
+    assert solved["nominal_m"] == pytest.approx(0.095)
+    assert solved["radar_solved_m"] == pytest.approx(0.083, abs=0.002)
+    assert solved["check"] == "consistent"
+    assert solved["reference"] == "hitting_surface"
+
+
+def test_a_unit_standing_on_a_box_uses_the_radar_solved_lens_height():
+    camera, result, iwr = _setup_ball_seen_from(0.40)
+
+    solved = ts._solved_camera_height(result, camera, iwr)
+
+    assert solved["source"] == "static_iwr_range"
+    assert solved["height_m"] == pytest.approx(0.40, abs=0.003)
+    assert solved["check"] == "unit_raised"
+    assert "above the hitting surface" in solved["note"]
+
+
+def test_a_lens_height_below_the_radar_is_refused():
+    # the radar sits 44 mm below the lens, so a lens 30 mm up would bury it
+    camera, result, iwr = _setup_ball_seen_from(0.030, distance_m=2.0)
+
+    solved = ts._solved_camera_height(result, camera, iwr)
+
+    assert solved["source"] == "rig_nominal"
+    assert solved["height_m"] == pytest.approx(0.095)
+    assert "below the hitting surface" in solved["radar_rejected"]
+
+
+def test_only_a_radar_solved_height_is_handed_to_swings():
+    camera, result, iwr = _setup_ball_seen_from(0.40)
+    boxed = ts._solved_camera_height(result, camera, iwr)
+    camera, result, iwr = _setup_ball_seen_from(0.090)
+    level = ts._solved_camera_height(result, camera, iwr)
+
+    def solution(height):
+        candidate = tee_range.TeeRangeCandidate(
+            candidate_id="camera-arm5-000001",
+            source="camera_reference_ball",
+            source_group="camera",
+            radar_slant_range_m=1.4,
+            uncertainty_m=0.03,
+            evidence={"camera_height": height},
+        )
+        return tee_range.TeeRangeSolution.unresolved((candidate,), reason="test")
+
+    assert ts._setup_camera_height_m(solution(boxed)) == pytest.approx(0.40, abs=0.003)
+    assert ts._setup_camera_height_m(solution(level)) is None

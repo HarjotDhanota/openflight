@@ -389,79 +389,117 @@ def pending_tee_range_solution(
     )
 
 
+# The lens height normally comes from the rig file: the unit and the setup ball
+# stand on the same surface. One ball's ray and radar range solve it only to about
+# +-25-65 mm (the ball is 2-3 deg below level, so each degree of tilt error is
+# ~22 mm at 1.25 m): too loose to see a mat or sunk feet, which move the radar's
+# vertical launch less than its own noise, but enough to catch a unit on a box.
+GROSS_LENS_HEIGHT_ERROR_M = 0.060
+# The radar must stay above the surface it reflects from.
+MIN_RADAR_CLEARANCE_M = 0.010
+
+
 def _solved_camera_height(
     result: ReferenceBallRangeResult, camera: BallPlaneCamera, iwr_candidate: Mapping | None
 ) -> dict | None:
-    """The lens height for this setup: from the radar range when it accepted the ball.
+    """The lens height above the hitting surface for this setup.
 
-    Feet sink into carpet and a unit may stand on something, so the height is
-    solved per setup; apparent size is the fallback and is several times looser.
+    The rig file's nominal height is kept unless the radar range to the setup ball
+    shows the unit clearly raised or lowered relative to the surface the ball rests
+    on. Apparent size is recorded but is several times too loose to decide it.
     """
     selected = result.selected
     if selected is None or selected.camera_height_m is None:
         return None
+    nominal = float(camera.camera_origin_lfu[2])
+    lens_above_radar = nominal - float(camera.radar_origin_lfu[2])
     solved = {
+        "nominal_m": nominal,
         "size_solved_m": selected.camera_height_m,
         "size_uncertainty_m": selected.camera_height_uncertainty_m,
         "radar_solved_m": None,
         "radar_uncertainty_m": None,
-        "height_m": selected.camera_height_m,
-        "uncertainty_m": selected.camera_height_uncertainty_m,
-        "reference": "ball_support",
-        "source": "apparent_size",
+        "height_m": nominal,
+        "uncertainty_m": None,
+        "reference": "hitting_surface",
+        "source": "rig_nominal",
+        "check": "not_checked",
     }
     iwr = iwr_candidate if isinstance(iwr_candidate, Mapping) else {}
     difference = (iwr.get("evidence") or {}).get("difference")
-    if (
+    if not (
         iwr.get("radar_slant_range_m") is not None
         and isinstance(difference, Mapping)
         and difference.get("status") == "accepted"
     ):
-        try:
-            height, uncertainty = solve_camera_height_from_radar(
-                camera,
-                (selected.x_px, selected.y_px),
-                radar_slant_range_m=float(iwr["radar_slant_range_m"]),
-                radar_uncertainty_m=float(iwr.get("uncertainty_m") or 0.05),
-                ball_center_height_m=BALL_DIAMETER_MM / 2000.0,
-            )
-        except ValueError:
-            return solved
-        low, high = _camera_height_bounds(camera)
-        if not low <= height <= high:
-            solved["radar_rejected"] = (
-                f"radar range puts the lens at {height * 1000:.0f} mm, outside "
-                f"{low * 1000:.0f}-{high * 1000:.0f} mm; the selected ball may be wrong"
-            )
-            return solved
+        return solved
+    try:
+        height, uncertainty = solve_camera_height_from_radar(
+            camera,
+            (selected.x_px, selected.y_px),
+            radar_slant_range_m=float(iwr["radar_slant_range_m"]),
+            radar_uncertainty_m=float(iwr.get("uncertainty_m") or 0.05),
+            ball_center_height_m=BALL_DIAMETER_MM / 2000.0,
+        )
+    except ValueError:
+        return solved
+    solved["radar_solved_m"] = height
+    solved["radar_uncertainty_m"] = uncertainty
+    low, high = _camera_height_bounds(camera)
+    lowest = lens_above_radar + MIN_RADAR_CLEARANCE_M
+    if height < lowest:
+        solved["radar_rejected"] = (
+            f"radar range puts the lens at {height * 1000:.0f} mm, which would put the radar "
+            "below the hitting surface; the selected ball may be wrong"
+        )
+        return solved
+    if not low <= height <= high:
+        solved["radar_rejected"] = (
+            f"radar range puts the lens at {height * 1000:.0f} mm, outside "
+            f"{low * 1000:.0f}-{high * 1000:.0f} mm; the selected ball may be wrong"
+        )
+        return solved
+    offset = height - nominal
+    if abs(offset) <= max(GROSS_LENS_HEIGHT_ERROR_M, 2.0 * uncertainty):
+        solved["check"] = "consistent"
+    else:
+        raised = offset > 0
         solved.update(
             {
-                "radar_solved_m": height,
-                "radar_uncertainty_m": uncertainty,
                 "height_m": height,
                 "uncertainty_m": uncertainty,
                 "source": "static_iwr_range",
+                "check": "unit_raised" if raised else "unit_lowered",
+                "note": (
+                    f"the unit stands about {abs(offset) * 1000:.0f} mm "
+                    f"{'above' if raised else 'below'} the hitting surface; "
+                    "the radar-solved lens height is used"
+                ),
             }
         )
-        size_height = solved["size_solved_m"]
-        spread = math.hypot(solved["size_uncertainty_m"] or 0.0, uncertainty)
-        if size_height - height > 2.0 * spread:
-            # the ball looks smaller than the radar says it should: grass or pile
-            # hiding its base, or a fit that shrank
-            solved["note"] = (
-                "ball looks smaller than its radar range implies; it may be partly hidden"
-            )
+    size_height = solved["size_solved_m"]
+    spread = math.hypot(solved["size_uncertainty_m"] or 0.0, uncertainty)
+    if size_height - height > 2.0 * spread:
+        # the ball looks smaller than the radar says it should: grass or pile
+        # hiding its base, or a fit that shrank
+        solved["size_note"] = (
+            "ball looks smaller than its radar range implies; it may be partly hidden"
+        )
     return solved
 
 
 def _setup_camera_height_m(solution: tee_range.TeeRangeSolution | None) -> float | None:
-    """The 1280x800 setup's solved lens height, if a camera step recorded one."""
+    """The 1280x800 setup's lens height, only when it overrides the rig file's."""
     for item in sorted(
         (solution.candidates if solution is not None else ()),
         key=lambda candidate: "arm5" not in candidate.candidate_id,
     ):
         solved = (item.evidence or {}).get("camera_height")
-        if item.source_group == "camera" and isinstance(solved, Mapping):
+        if (
+            item.source_group == "camera"
+            and isinstance(solved, Mapping)
+            and solved.get("source") == "static_iwr_range"
+        ):
             height = solved.get("height_m")
             if isinstance(height, (int, float)) and 0.0 < height < 1.0:
                 return float(height)
