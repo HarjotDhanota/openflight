@@ -2177,3 +2177,100 @@ def test_a_radar_reading_inside_the_camera_window_is_kept_as_is(tmp_path, inputs
     assert iwr["evidence"]["camera_window"]["outcome"] == "consistent"
     assert iwr["radar_slant_range_m"] == pytest.approx(1.2, abs=0.05)
     assert iwr["evidence"]["qualification"]["camera_range_used"] is False
+
+
+class HandedOverTilt(MutableTilt):
+    """The LIS3DH as the kiosk takes it: "off" once stopped, warming up after a restart."""
+
+    def __init__(self, warmup_readings=0):
+        super().__init__()
+        self.running = True
+        self.warmup_readings = warmup_readings
+        self._warming = 0
+
+    def stop(self):
+        self.running = False
+
+    def start(self):
+        self.running = True
+        self._warming = self.warmup_readings
+
+    def reading(self):
+        if not self.running:
+            return {"status": "off", "error": None}
+        if self._warming > 0:
+            self._warming -= 1
+            return {"status": "unstable", "camera_pitch_deg": self.pitch, "roll_deg": 0.0}
+        return super().reading()
+
+
+def test_a_finished_setup_survives_the_kiosk_taking_the_tilt_sensor(tmp_path, inputs, monkeypatch):
+    # 29 Sept (Outdoors-test-1 and -3): the page's poll re-validated the finished
+    # setup against the LIS3DH the ladder had just handed to the kiosk, and saved
+    # "start over required"
+    tilt = HandedOverTilt()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, tilt=tilt)
+    client = app.test_client()
+    finished = drive(client, tester)
+    assert finished["phase"] in ts.TERMINAL_PHASES
+
+    tilt.stop()
+    states = [phase(client, tester) for _ in range(5)]
+
+    assert all(state["phase"] == finished["phase"] for state in states)
+    assert all(state["sequence"] == finished["sequence"] for state in states)
+
+
+def _gain_both_arms(sessions, tester):
+    for arm_id in ("arm5", "arm6"):
+        ts.write_arm_state(
+            sessions,
+            ts.TesterParameters(tester, arm_id, "indoors"),
+            gain=4.0,
+            gain_exposure_us=ts.ARMS[arm_id].exposure_us,
+        )
+
+
+def test_a_real_rig_move_is_still_refused_when_capture_starts(tmp_path, inputs, monkeypatch):
+    tilt = HandedOverTilt()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, tilt=tilt)
+    client = app.test_client()
+    drive(client, tester)
+    _gain_both_arms(tmp_path / "sessions", tester)
+    tilt.pitch = ts.TEE_RANGE_ORIENTATION_DRIFT_DEG + 0.5
+
+    response = client.post(
+        "/api/tester/ladder/start",
+        json={"tester_id": tester, "arm_id": "arm5", "environment": "indoors"},
+    )
+
+    assert response.status_code == 409
+    assert "orientation changed" in response.get_json()["error"]
+
+
+def test_a_tilt_reading_is_given_time_to_settle_after_a_restart():
+    readings = iter([{"status": "unstable"}, {"status": "unstable"}, {"status": "stable", "x": 1}])
+    now = [0.0]
+
+    reading = ts.settle_reading(
+        lambda: next(readings),
+        timeout_s=3.0,
+        sleep=lambda s: now.__setitem__(0, now[0] + s),
+        clock=lambda: now[0],
+    )
+
+    assert reading == {"status": "stable", "x": 1}
+
+
+def test_a_tilt_reading_that_never_settles_is_returned_as_it_is():
+    now = [0.0]
+
+    reading = ts.settle_reading(
+        lambda: {"status": "off"},
+        timeout_s=3.0,
+        sleep=lambda s: now.__setitem__(0, now[0] + s),
+        clock=lambda: now[0],
+    )
+
+    assert reading == {"status": "off"}
+    assert now[0] >= 3.0

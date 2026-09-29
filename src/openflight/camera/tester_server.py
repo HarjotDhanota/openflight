@@ -246,6 +246,23 @@ KILL_GRACE_S = 8.0
 SPAWN_WAIT_S = 10.0
 
 
+# After the kiosk hands the LIS3DH back, the service needs a moment before it
+# reports a stable reading; a check made in that moment is not a rig move.
+READING_SETTLE_S = 3.0
+
+
+def settle_reading(
+    read, *, timeout_s: float = READING_SETTLE_S, sleep=time.sleep, clock=time.monotonic
+):
+    """The first stable LIS3DH reading within ``timeout_s``, else the last one."""
+    deadline = clock() + timeout_s
+    reading = read()
+    while reading.get("status") != "stable" and clock() < deadline:
+        sleep(0.1)
+        reading = read()
+    return reading
+
+
 class TeeRangeSetupAdmissionError(RuntimeError):
     """A guided-range request no longer matches its admitted physical setup."""
 
@@ -4090,7 +4107,7 @@ def create_app(
     def bound_range_setup(tester_id: str, state, action: str) -> tuple[dict, dict]:
         if state is None:
             raise RuntimeError("start automatic tee range before this step")
-        reading = enclosure.reading()
+        reading = settle_reading(enclosure.reading)
         eligibility = require_setup(tester_id, reading, f"tee_range_{action}")
         if not eligibility["eligible"]:
             raise TeeRangeSetupAdmissionError(
@@ -4101,6 +4118,34 @@ def create_app(
             raise TeeRangeSetupAdmissionError(mismatch, eligibility, start_over=True)
         return eligibility, reading
 
+    def _finished_setup_identity(store: FlowStore, flow):
+        """The finished setup's epoch, or a saved start-over when it no longer holds.
+
+        An identity failure (the current pointer moved to another epoch, or the
+        epoch is unreadable) is permanent, so it is saved; a sensor reading is not
+        judged here.
+        """
+        try:
+            final_payload = flow.evidence.get("final_reference")
+            if not isinstance(final_payload, Mapping):
+                raise ValueError("automatic tee-range terminal state has no final reference")
+            final_reference = tee_range_setup.TeeRangeEpochReference.from_dict(final_payload)
+            current_reference = tee_range_setup.load_current_reference(store.tester_root)
+            if current_reference != final_reference:
+                raise ValueError("final reference does not match current epoch")
+            tee_range_setup.load_epoch(store.tester_root, final_reference)
+            return final_reference
+        except (KeyError, OSError, TypeError, ValueError) as exc:
+            failed = store.transition(
+                flow,
+                phase="retryable_failure",
+                reason=f"tee_range_finalization_invalid_start_over_required: {exc}",
+                retry_phase=None,
+            )
+            raise RuntimeError(
+                f"finish automatic tee range before capture ({failed.phase}): {exc}"
+            ) from exc
+
     def admitted_range(tester_id: str):
         final_reference = None
         if require_tee_range_flow:
@@ -4108,11 +4153,8 @@ def create_app(
             if flow is None or flow.phase not in TERMINAL_PHASES:
                 phase = flow.phase if flow else "not_started"
                 raise RuntimeError(f"finish automatic tee range before capture ({phase})")
+            final_reference = _finished_setup_identity(range_store(tester_id), flow)
             bound_range_setup(tester_id, flow, "admission")
-            final_payload = flow.evidence.get("final_reference")
-            if not isinstance(final_payload, Mapping):
-                raise RuntimeError("automatic tee-range terminal state has no final reference")
-            final_reference = tee_range_setup.TeeRangeEpochReference.from_dict(final_payload)
         root = tester_root(sessions_root, tester_id)
         reference = tee_range_setup.load_current_reference(root)
         if final_reference is not None and reference != final_reference:
@@ -4290,21 +4332,10 @@ def create_app(
         if state is None or not reconcile:
             return state
         if state.phase in TERMINAL_PHASES:
-            final_payload = state.evidence.get("final_reference")
-            try:
-                final_reference = tee_range_setup.TeeRangeEpochReference.from_dict(final_payload)
-                current_reference = tee_range_setup.load_current_reference(store.tester_root)
-                if current_reference != final_reference:
-                    raise ValueError("final reference does not match current epoch")
-                tee_range_setup.load_epoch(store.tester_root, final_reference)
-                bound_range_setup(tester_id, state, "terminal_revalidation")
-            except (KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
-                return store.transition(
-                    state,
-                    phase="retryable_failure",
-                    reason=f"tee_range_finalization_invalid_start_over_required: {exc}",
-                    retry_phase=None,
-                )
+            # Reading a finished setup never changes it. The ladder and swings hand
+            # the LIS3DH to the kiosk, so a physical check here would fail for the
+            # whole run (29 Sept); capture start (admitted_range) re-checks the
+            # epoch and the rig when the setup is actually used.
             return state
         if state.phase == "evaluating":
             return _finalize_range_state(store, state)
@@ -5279,7 +5310,9 @@ def create_app(
             refuse_while_analysing()
             eligibility = None
             if action in {"gain", "swings"}:
-                eligibility = require_setup(params.tester_id, enclosure.reading(), action)
+                eligibility = require_setup(
+                    params.tester_id, settle_reading(enclosure.reading), action
+                )
                 if not eligibility["eligible"]:
                     return blocked_setup(eligibility)
             solution = None
@@ -5764,7 +5797,7 @@ def create_app(
                     "saved_attempt_scopes": attempt_scopes(sessions_root, params.tester_id),
                 }
             )
-        eligibility = require_setup(params.tester_id, enclosure.reading(), "ladder")
+        eligibility = require_setup(params.tester_id, settle_reading(enclosure.reading), "ladder")
         if not eligibility["eligible"]:
             return blocked_setup(eligibility)
         admitted_setup[params.tester_id] = eligibility
