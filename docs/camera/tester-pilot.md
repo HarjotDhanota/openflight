@@ -253,7 +253,7 @@ correctly rejected.
 Each camera step first finds its own static exposure: it raises exposure at full
 gain until the ball is visible, then locks the lowest exposure and gain whose
 applied camera metadata match the request and whose ball pixels pass the
-brightness, contrast, edge and clipping checks. Save stays disabled until that
+brightness and clipping checks. Save stays disabled until that
 lock holds, and the lock is dropped if the light changes. If no setting passes,
 the step reports that more light is needed: add light and retry, or keep the view
 as unqualified raw evidence, which finishes the setup raw-only. This lock is for
@@ -265,16 +265,18 @@ unit may stand on something, so each candidate's implied camera height is
 solved from its apparent size and position, and only places where a resting
 ball could be (below the horizon, at a plausible height) are searched. Once
 found, each live look re-fits the ball where it was in a fraction of a second;
-Save still runs the full-frame search as the independent check. If the ball is
-found but never stands out from what is behind it (a white door, say), the
-step reports that instead of asking for more light: put something darker
-behind the ball.
+Save still runs the full-frame search as the independent check. Contrast
+against the surroundings and edge sharpness are recorded but no longer gate the
+lock: in camera levels both grow with exposure exactly as the background does, so
+a fixed floor only pushed the search into clipping. On 29 Sept a white ball on a
+white door was found and fitted at 2 ms × 12 with 3 levels of contrast, and the
+old 12-level gate drove the search to 8 ms × 10 with 5 % of the ball clipped.
+Whether the ball stands out is the detector's call.
 
 The search does not walk every setting. Brightness on this sensor is
-proportional to exposure × gain, and so are the ball's signal, contrast and edge.
-So the first frame sets how far to jump while the ball is still invisible, and
-the first measured ball predicts where each check is just met and where the ball
-would clip. Steps predicted to be clearly too dark or clearly clipped are
+proportional to exposure × gain, and so is the ball's signal. So the first
+frame sets how far to jump while the ball is still invisible, and the first
+measured ball predicts where its signal is just enough and where it would clip. Steps predicted to be clearly too dark or clearly clipped are
 skipped; the rest are still verified lowest exposure first, so the lock is the
 lowest passing setting. On synthetic scenes this takes 3–7 settings instead of 11–15.
 

@@ -24,16 +24,19 @@ STATIC_EXPOSURE_SCHEMA = "openflight.camera.static_exposure_lock.v1"
 EXPOSURES_US = (100, 150, 200, 300, 500, 800, 1250, 2000, 3000, 4000, 6000, 8000)
 GAINS = (2.0, 4.0, 6.0, 8.0, 10.0, 12.0)
 _MIN_SIGNAL_ABOVE_FLOOR_DN = 20.0
-_MIN_LOCAL_CONTRAST_DN = 12.0
-_MIN_EDGE_GRADIENT_DN = 8.0
+# Contrast against the surroundings and edge sharpness are recorded but not
+# gated. In DN both scale with exposure x gain exactly as the background does, so
+# a fixed DN floor only pushed the search up into clipping (Pi, 29 Sept: a white
+# ball on a white door was selected and fitted at 2 ms x 12 with 3 DN contrast, and
+# the old 12 DN gate drove it to 8 ms x 10 and 5 % clipped). Whether the ball
+# stands out is the detector's call: a stable selection here and an independent
+# full-frame search at Save.
 _MAX_BALL_CLIPPED_PCT = 5.0
 _REQUIRED_STABLE_OBSERVATIONS = 3
 _SETTLE_LIMIT = 4
 _STABILIZE_LIMIT = 6
 _REFINE_ATTEMPT_LIMIT = 48
-_DARK_GATES = frozenset({"signal", "contrast", "edge"})
-# Failures that come from what is behind the ball, not from the light level.
-_BACKGROUND_GATES = frozenset({"contrast", "edge", "clipped"})
+_DARK_GATES = frozenset({"signal"})
 # A frame this far above black is well lit; a ball missing from it is not dark.
 _WELL_LIT_FRAME_DN = 2.0 * _MIN_SIGNAL_ABOVE_FLOOR_DN
 # Ball brightness, contrast and edge all scale with exposure x gain, so one
@@ -53,7 +56,7 @@ def static_exposure_policy() -> dict[str, Any]:
     """Return every static exposure setting and gate used for qualification."""
     return {
         "name": "stationary_reference_ball_exposure",
-        "version": 1,
+        "version": 2,
         "purpose": STATIC_EXPOSURE_PURPOSE,
         "exposures_us": list(EXPOSURES_US),
         "gains": list(GAINS),
@@ -78,14 +81,13 @@ def static_exposure_policy() -> dict[str, Any]:
             "unidentified_requires_frame_signal_dn": _MIN_SIGNAL_ABOVE_FLOOR_DN,
             "clipping_prunes_before_dark_gates": True,
             "pose_change": "retry_same_step_then_rig_moved",
-            "low_contrast": "contrast_failed_while_ball_signal_passed_and_only_background_gates",
+            "stand_out": "detector_stable_selection_then_independent_save_search",
             "well_lit_frame_dn": _WELL_LIT_FRAME_DN,
         },
         "gates": {
             "minimum_signal_above_floor_dn": _MIN_SIGNAL_ABOVE_FLOOR_DN,
-            "minimum_local_contrast_dn": _MIN_LOCAL_CONTRAST_DN,
-            "minimum_edge_gradient_dn": _MIN_EDGE_GRADIENT_DN,
             "maximum_ball_clipped_pct": _MAX_BALL_CLIPPED_PCT,
+            "recorded_not_gated": ["local_contrast_dn", "edge_gradient_dn"],
             "edge_region_radius_fraction": [0.8, 1.2],
             "background_ring_radius_fraction": [1.25, 1.8],
             "required_stable_observations": _REQUIRED_STABLE_OBSERVATIONS,
@@ -280,8 +282,6 @@ def assess_static_exposure(  # pylint: disable=too-many-locals
         name
         for name, passed in (
             ("signal", signal >= _MIN_SIGNAL_ABOVE_FLOOR_DN),
-            ("contrast", contrast >= _MIN_LOCAL_CONTRAST_DN),
-            ("edge", edge >= _MIN_EDGE_GRADIENT_DN),
             ("clipped", clipped <= _MAX_BALL_CLIPPED_PCT),
         )
         if not passed
@@ -357,7 +357,6 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
         self._lit_seen = False
         self._jumps = 0
         self.prediction: dict | None = None
-        self._ball_gate_failures: set[str] = set()
 
     @property
     def current_step(self) -> StaticExposureStep | None:
@@ -394,15 +393,7 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
             self._refine_attempts += 1
         if self._queue and self._refine_attempts < _REFINE_ATTEMPT_LIMIT:
             return
-        if "contrast" in self._ball_gate_failures and self._ball_gate_failures <= _BACKGROUND_GATES:
-            # The ball was bright enough; it just does not stand out from what is
-            # behind it. More light scales both, so it cannot fix that.
-            self._finish(
-                "low_contrast",
-                "the ball was found but barely stands out from what is behind it; "
-                "put something darker behind the ball",
-            )
-        elif not self._ball_seen and self._lit_seen:
+        if not self._ball_seen and self._lit_seen:
             self._finish(
                 "ball_not_identified",
                 "no ball was found although the picture is well lit; "
@@ -432,8 +423,6 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
         product = self._applied_product(observation)
         measured = {
             "signal": (observation.signal_above_floor_dn, _MIN_SIGNAL_ABOVE_FLOOR_DN),
-            "contrast": (observation.local_contrast_dn, _MIN_LOCAL_CONTRAST_DN),
-            "edge": (observation.edge_gradient_dn, _MIN_EDGE_GRADIENT_DN),
         }
         if product <= 0 or any(value is None for value, _ in measured.values()):
             return None
@@ -538,13 +527,6 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
             and observation.frame_signal_dn >= _WELL_LIT_FRAME_DN
         ):
             self._lit_seen = True
-        if (
-            observation.ball_found
-            and observation.failed_gates
-            and "signal" not in observation.failed_gates
-        ):
-            # only a ball already bright enough says anything about its background
-            self._ball_gate_failures.update(observation.failed_gates)
         if (
             not observation.ball_found
             and observation.association_status in _UNIDENTIFIED_STATUSES

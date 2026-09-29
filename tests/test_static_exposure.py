@@ -68,17 +68,25 @@ def test_a_missing_ball_is_rejected_even_when_the_frame_is_bright():
     ("ball_dn", "background_dn", "reason"),
     [
         (30.0, 20.0, "signal"),
-        (80.0, 75.0, "contrast"),
         (255.0, 40.0, "clipped"),
     ],
 )
-def test_ball_pixel_gates_reject_dark_low_contrast_and_clipped_balls(
-    ball_dn, background_dn, reason
-):
+def test_ball_pixel_gates_reject_dark_and_clipped_balls(ball_dn, background_dn, reason):
     observation = _assess(STEP, _frames(ball_dn, background_dn), _association())
 
     assert observation.status == "rejected"
     assert reason in observation.reason
+
+
+def test_a_low_contrast_ball_the_detector_holds_is_accepted_and_its_contrast_recorded():
+    # Pi, 29 Sept: a white ball against a white door, selected and fitted, but only
+    # 3 DN brighter than its surroundings. Contrast in DN scales with exposure like
+    # the background does, so it is recorded, not gated.
+    observation = _assess(STEP, _frames(58.0, 55.0), _association())
+
+    assert observation.status == "accepted"
+    assert observation.local_contrast_dn == pytest.approx(3.0)
+    assert not observation.failed_gates
 
 
 def test_a_passing_ball_waits_for_temporal_stability():
@@ -147,11 +155,13 @@ def test_search_bootstraps_an_initially_invisible_ball_without_qualifying_it():
 
 
 def test_a_ball_detectable_early_but_dim_still_reaches_a_long_passing_exposure():
-    """Night scene: detection works at the dimmest step, only ~3 ms passes the gates."""
+    """Night scene: detection works at the dimmest step, but only a long exposure
+    gives the ball 20 DN of signal."""
     search, seen = _driver(STEPS, brightness=0.0012, always_found=True)
 
     assert search.status == "locked"
-    assert search.lock.exposure_us >= 3000
+    assert search.lock.exposure_us >= 1250
+    assert search.lock.exposure_us * search.lock.gain * 0.0012 >= 20.0
     assert len(seen) <= 30
 
 
@@ -163,13 +173,11 @@ def test_search_reports_lighting_required_when_the_brightest_setting_hides_the_b
     assert "not visible" in search.reason
 
 
-def test_search_fails_when_no_visible_setting_passes_the_optical_gates():
+def test_a_ball_that_clips_early_locks_below_clipping():
     search, _seen = _driver(STEPS, brightness=0.004, clip_above=40.0)
 
-    # the ball clips before it is ever 12 DN brighter than its surroundings:
-    # that is a background problem, which more light would not fix
-    assert search.status == "low_contrast"
-    assert search.lock is None
+    assert search.status == "locked"
+    assert search.lock.exposure_us * search.lock.gain * 0.004 <= 40.0
 
 
 def test_controls_the_camera_never_applies_cannot_lock():
@@ -195,7 +203,7 @@ def test_lock_serializes_with_policy_identity_and_applied_controls(tmp_path):
 def test_static_exposure_policy_identity_is_pinned():
     """A lattice or gate change must be a deliberate, reviewed identity change."""
     assert se.static_exposure_policy_sha256() == (
-        "2cdbf1ee8259e66e1a1000efb80a21a1b01535c10b7b2b73b46722a58ab2c573"
+        "ea0fe55d0d711a949d82e7c067b777582403d2d72a6591b8ff51efb1b1b7d82f"
     )
 
 
@@ -256,7 +264,7 @@ def test_a_clipped_ball_never_walks_the_search_brighter():
     search.record(_observation(search.current_step, _association()))
     step = search.current_step
     clipped = _observation(step, _association(), frames=_frames(255.0, 250.0))
-    assert {"clipped", "contrast"} <= set(clipped.failed_gates)
+    assert "clipped" in clipped.failed_gates
 
     search.record(clipped)
 
@@ -345,16 +353,17 @@ def test_a_remembered_lock_that_still_passes_locks_on_the_first_step():
 
 
 def test_a_remembered_lock_that_fails_falls_back_to_the_full_search():
+    # remembered from a dim scene; in this bright one it clips the ball
     remembered = _lowest_lock(0.004)
-    cold, _seen = _driver(STEPS, brightness=0.02)
+    cold, _seen = _driver(STEPS, brightness=0.06)
 
-    search, seen = _driver(STEPS, brightness=0.02, warm_start=remembered)
+    search, seen = _driver(STEPS, brightness=0.06, warm_start=remembered)
 
     assert seen[0] == remembered
     assert search.attempts[0]["stage"] == "warm_start"
     # the failed remembered step still measured the ball, so the search jumps
     # from it, and still ends at the lowest passing setting
-    assert len(seen) < len(_driver(STEPS, brightness=0.02)[1]) + 2
+    assert len(seen) < len(_driver(STEPS, brightness=0.06)[1]) + 2
     assert (search.lock.exposure_us, search.lock.gain) == (cold.lock.exposure_us, cold.lock.gain)
 
 
@@ -389,12 +398,14 @@ def _scene_search(ball_per_signal, background_per_signal, *, found=True):
     return search
 
 
-def test_a_ball_that_never_stands_out_from_its_background_is_low_contrast_not_dark():
-    """White door behind the ball: brighter settings scale ball and door alike."""
+def test_a_ball_on_a_white_door_locks_low_instead_of_climbing_into_clipping():
+    """White door behind the ball: brighter settings scale ball and door alike, so
+    more exposure cannot make it stand out; the detector already holds it."""
     search = _scene_search(0.0100, 0.0094)
 
-    assert search.status == "low_contrast"
-    assert "darker behind the ball" in search.reason
+    assert search.status == "locked"
+    assert search.lock.observation.ball_clipped_pct == 0.0
+    assert search.lock.exposure_us * search.lock.gain * 0.0100 < 2.0 * 20.0
 
 
 def test_no_ball_in_a_well_lit_picture_is_not_reported_as_needing_light():
@@ -447,4 +458,33 @@ def test_one_measured_ball_predicts_the_setting_and_skips_the_walk(ball, backgro
     assert search.status == "locked"
     assert (search.lock.exposure_us, search.lock.gain) == (lowest.exposure_us, lowest.gain)
     assert len(seen) <= 8
-    assert search.to_dict()["prediction"]["binding_gate"] in {"signal", "contrast", "edge"}
+    assert search.to_dict()["prediction"]["binding_gate"] == "signal"
+
+
+def test_the_29_sept_field_search_locks_near_one_millisecond_not_eight():
+    """Replays the Pi search: ball found at 2 ms x 12 with signal 40 DN, contrast 3 DN.
+
+    That search needed 8 ms x 10 for a 12 DN contrast and clipped the ball; with
+    signal and clipping as the only exposure gates, one measured ball predicts
+    about half that product.
+    """
+    per_product = 40.31 / 23952.0  # signal DN per exposure-us x gain at 2 ms x 12
+    search = se.StaticExposureSearch(STEPS)
+    for _ in range(200):
+        step = search.current_step
+        if step is None:
+            break
+        signal = per_product * step.signal
+        ball = min(15.0 + signal, 255.0)
+        background = min(15.0 + signal * 0.925, 255.0)  # contrast 3 DN at 40 DN signal
+        search.record(
+            _assess(
+                step,
+                _frames(ball, background),
+                _association(stable_count=3, found=signal >= 10.0),
+            )
+        )
+
+    assert search.status == "locked"
+    assert search.lock.exposure_us <= 2000
+    assert search.lock.exposure_us * search.lock.gain < 23952.0

@@ -113,14 +113,14 @@ Conventions (**Code**):
 
 ### 3.3 Locking the exposure (Code)
 
-The lock is the shortest exposure, then the lowest gain, at which the ball passes four gates:
+The lock is the shortest exposure, then the lowest gain, at which the detector holds the ball steadily and its pixels pass two gates:
 
 - signal ≥ 20 DN above black;
-- contrast against a surrounding ring ≥ 12 DN;
-- edge gradient ≥ 8 DN;
 - ≤ 5 % of ball pixels clipped.
 
-The search assumes each gate value is proportional to exposure × gain (**Inferred**). Only the frame mean has been measured, in one room ([E2](#e2-28-sept-2026-evening-one-indoor-range-setup)). From one unclipped ball measurement at product P₀:
+Contrast against a surrounding ring and edge gradient are recorded but not gated (changed 29 Sept). In DN both scale with exposure × gain exactly as the background does, so a fixed floor could only push the search into clipping. On the Pi a white ball on a white door was selected and fitted at 2 ms × 12 with 3 DN of contrast; the old 12 DN contrast gate drove the search to 8 ms × 10 with 5.2 % of the ball clipped (**Measured**, setup-20260929-33644a87fccd).
+
+The search assumes the ball's signal is proportional to exposure × gain (**Inferred**). Only the frame mean has been measured, in one room ([E2](#e2-28-sept-2026-evening-one-indoor-range-setup)). From one unclipped ball measurement at product P₀:
 
 ```
 k_i    = value_i / P0
@@ -131,7 +131,7 @@ P_clip = P0 / (95th-percentile ball level / clip level)
 - **Skipping settings.** Settings predicted to be more than 1.5× too dark, or 1.5× past clipping, are skipped. The rest are verified lowest exposure first. If the prediction is off by more than 1.5×, the lowest passing setting can be skipped.
 - **Before the ball is visible,** the frame's own brightness sets the jump. A frame within 1 DN of black climbs at least 4× per step.
 - **Clipped measurements** never feed the prediction.
-- **End states:** locked; `low_contrast` (the ball was bright enough but never stood out); no ball in a well-lit picture; more light needed; rig moved.
+- **End states:** locked; no ball in a well-lit picture; more light needed; rig moved. (The `low_contrast` state was removed with the contrast gate.)
 
 ### 3.4 Lens height (Code)
 
