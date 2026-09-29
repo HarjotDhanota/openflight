@@ -680,6 +680,35 @@ def _candidate(  # pylint: disable=too-many-locals
     )
 
 
+def solve_camera_height_from_radar(
+    camera: BallPlaneCamera,
+    pixel_xy: Any,
+    *,
+    radar_slant_range_m: float,
+    radar_uncertainty_m: float,
+    ball_center_height_m: float,
+) -> tuple[float, float]:
+    """Camera height above the floor from the radar's range to the resting ball.
+
+    The ball lies on its pixel ray at the one distance whose range from the radar
+    (a fixed offset inside the enclosure) is the measured range. That is far
+    tighter than apparent size, which drifts with the fitted diameter; what is
+    left is mostly the camera's tilt uncertainty.
+    """
+    ray = np.asarray(camera.ray_model.rays(np.asarray(pixel_xy, dtype=float)), dtype=float)
+    offset = np.asarray(camera.radar_origin_lfu) - np.asarray(camera.camera_origin_lfu)
+    along = float(np.dot(ray, offset))
+    discriminant = along * along - float(np.dot(offset, offset)) + radar_slant_range_m**2
+    if discriminant < 0.0:
+        raise ValueError("radar range is shorter than the camera-to-radar offset")
+    distance = along + math.sqrt(discriminant)
+    down = -float(ray[2])
+    height = ball_center_height_m + distance * down
+    angular = math.sin(math.radians(camera.angular_uncertainty_deg))
+    uncertainty = math.hypot(radar_uncertainty_m * abs(down), distance * angular)
+    return float(height), float(uncertainty)
+
+
 def _seed_filter(camera: BallPlaneCamera, ball_center_height_m: float):
     """Drop seeds where no plausible camera height could put a resting ball."""
     angular = math.sin(math.radians(camera.angular_uncertainty_deg))

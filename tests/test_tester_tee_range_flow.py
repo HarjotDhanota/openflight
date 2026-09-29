@@ -1892,3 +1892,31 @@ def test_a_radar_that_stops_answering_mid_setup_is_told_to_replug_its_usb():
 
     assert "unplug the radar's USB cable" in failure["remedy"]
     assert "RESET does not clear" in failure["remedy"]
+
+
+def test_the_setup_solves_the_lens_height_from_the_radar_and_hands_it_to_swings(
+    tmp_path, inputs, monkeypatch
+):
+    app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
+    monkeypatch.setattr(
+        ts,
+        "estimate_reference_ball_range",
+        lambda _frames, camera, **_kwargs: (
+            lambda result: replace(
+                result,
+                selected=replace(
+                    result.selected, camera_height_m=0.081, camera_height_uncertainty_m=0.03
+                ),
+            )
+        )(camera_result(1.2, camera.image_width_px, camera.image_height_px)),
+    )
+    state = drive(app.test_client(), tester)
+    solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
+    height = state["evidence"]["camera_arm5_candidate"]["evidence"]["camera_height"]
+
+    assert height["size_solved_m"] == pytest.approx(0.081)
+    assert height["source"] == "static_iwr_range"
+    assert height["radar_uncertainty_m"] < height["size_uncertainty_m"]
+    args = ts._tee_range_cli_args(solution, use_unqualified=True)
+    assert args[args.index("--solved-camera-height-m") + 1] == f"{height['height_m']:.6g}"
+    assert "--solved-camera-height-m" not in ts._tee_range_cli_args(solution)

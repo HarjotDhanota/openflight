@@ -392,3 +392,23 @@ def test_bright_things_above_the_horizon_do_not_crowd_out_a_dimmer_floor_ball():
     assert result.selected.y_px == pytest.approx(pixel[1], abs=2.0)
     # the lens sits 80 mm up (feet in carpet), not at a configured height
     assert result.selected.camera_height_m == pytest.approx(0.08, abs=0.02)
+
+
+def test_the_radar_range_solves_the_camera_height_far_better_than_apparent_size():
+    from openflight.camera.reference_ball_range import solve_camera_height_from_radar
+
+    camera = _camera(1280, 800, 933.3333, pitch_deg=1.75, camera_origin=(0.0, 0.0, 0.08))
+    point = np.asarray([0.02, 1.25, 0.021335])
+    pixel = _project_nominal(camera, point)
+    radar_range = float(np.linalg.norm(point - np.asarray(camera.radar_origin_lfu)))
+
+    height, uncertainty = solve_camera_height_from_radar(
+        camera,
+        pixel,
+        radar_slant_range_m=radar_range,
+        radar_uncertainty_m=0.01,
+        ball_center_height_m=point[2],
+    )
+
+    assert height == pytest.approx(0.08, abs=0.002)
+    assert 0.0 < uncertainty < 0.03

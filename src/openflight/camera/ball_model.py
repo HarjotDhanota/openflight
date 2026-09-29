@@ -17,6 +17,8 @@ import numpy as np
 from scipy import ndimage, optimize
 
 EDGE_BLUR_PX = 0.7  # optics and focus soften the rim by about this much
+# Draw the finite-difference variants together (same steps as scipy's 2-point).
+BATCHED_JACOBIAN = True
 # The gates are in the picture's own noise, not in DN: a dim room or a low gain
 # leaves a real ball's lit top only 11 DN over its shade, and its contrast
 # rises and falls with the light while the noise sets what can be seen.
@@ -73,6 +75,52 @@ def _render(params: np.ndarray, yy: np.ndarray, xx: np.ndarray) -> np.ndarray:
     floor = ground + ground_x * (xx - xx.mean()) + ground_y * (yy - yy.mean())
     picture = ndimage.gaussian_filter(cover * ball + (1.0 - cover) * floor, EDGE_BLUR_PX)
     return np.clip(picture, 0.0, 255.0)
+
+
+def _render_batch(params: np.ndarray, yy: np.ndarray, xx: np.ndarray) -> np.ndarray:
+    """``_render`` for many parameter sets at once, as one (n, H, W) array.
+
+    The fit's patches are small, so per-call overhead dominates; drawing every
+    finite-difference variant in one call is several times cheaper on a Pi.
+    """
+    p = np.asarray(params, dtype=np.float64)[:, :, None, None]
+    cx, cy, radius, azimuth, tilt, shade, diffuse, ground, ground_x, ground_y = (
+        p[:, index] for index in range(10)
+    )
+    dx, dy = xx - cx, yy - cy
+    rho2 = (dx * dx + dy * dy) / (radius * radius)
+    nz = np.sqrt(np.clip(1.0 - rho2, 0.0, None))
+    light_x = np.sin(tilt) * np.cos(azimuth)
+    light_y = np.sin(tilt) * np.sin(azimuth)
+    light_z = np.cos(tilt)
+    lit = np.clip(dx / radius * light_x + dy / radius * light_y + nz * light_z, 0.0, None)
+    ball = shade + diffuse * lit
+    cover = np.clip(radius + 0.5 - np.sqrt(dx * dx + dy * dy), 0.0, 1.0)
+    floor = ground + ground_x * (xx - xx.mean()) + ground_y * (yy - yy.mean())
+    picture = ndimage.gaussian_filter(
+        cover * ball + (1.0 - cover) * floor, (0.0, EDGE_BLUR_PX, EDGE_BLUR_PX)
+    )
+    return np.clip(picture, 0.0, 255.0)
+
+
+def _batched_jacobian(yy, xx, patch, use, noise_dn, lower, upper):
+    """Forward differences with scipy's '2-point' steps, all variants drawn at once."""
+    lower, upper = np.asarray(lower, dtype=float), np.asarray(upper, dtype=float)
+    epsilon = np.sqrt(np.finfo(np.float64).eps)
+
+    def jacobian(params: np.ndarray) -> np.ndarray:
+        sign = np.where(params >= 0.0, 1.0, -1.0)
+        step = epsilon * sign * np.maximum(1.0, np.abs(params))
+        outside = (params + step > upper) | (params + step < lower)
+        step = np.where(outside, -step, step)
+        step = (params + step) - params
+        variants = np.vstack([params, params + np.diag(step)])
+        pictures = _render_batch(variants, yy, xx)
+        base = pictures[0][use]
+        changed = pictures[1:][:, use]
+        return ((changed - base) / step[:, None]).T / noise_dn
+
+    return jacobian
 
 
 def _bin2(image: np.ndarray) -> np.ndarray:
@@ -212,6 +260,11 @@ def fit_lit_ball(
             result = optimize.least_squares(
                 residuals,
                 initial,
+                jac=(
+                    _batched_jacobian(yy, xx, patch, use, noise_dn, lower, upper)
+                    if BATCHED_JACOBIAN
+                    else "2-point"
+                ),
                 bounds=(lower, upper),
                 # grass, carpet pile and the cast shadow hide parts of the
                 # ball: Cauchy lets those pixels go rather than drag the fit

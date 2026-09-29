@@ -278,6 +278,17 @@ would clip. Steps predicted to be clearly too dark or clearly clipped are
 skipped; the rest are still verified lowest exposure first, so the lock is the
 lowest passing setting. On synthetic scenes this takes 3–7 settings instead of 11–15.
 
+When the static radar accepted the ball, Save also solves the lens height from
+the radar's range along the ball's pixel ray, which is several times tighter than
+apparent size (the rest is the camera's tilt uncertainty). Swings are then started
+with `--solved-camera-height-m`, which replaces the rig file's nominal lens height
+for that session and moves the radar height with it; the kiosk log states both.
+
+The ball search runs in worker processes (`--ball-search-workers`, default 2; 0
+runs it in the tester process) so it never holds up camera capture. To see what
+it costs on this Pi, run
+`uv run python scripts/analysis/bench_ball_search.py <saved frame .pgm or .png> --pitch-deg <tilt>`.
+
 Two things keep this search short. The 1280×800 search starts together with the
 radar ball capture, since the ball is already at address, so it is usually
 locked by the time the radar finishes; the page shows its progress during the

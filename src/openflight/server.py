@@ -1085,6 +1085,23 @@ def init_rig_geometry(path) -> None:
         )
 
 
+def _apply_solved_camera_height(args, enclosure) -> None:
+    """Use the session's solved lens height; the radar keeps its offset below the lens."""
+    solved = float(args.solved_camera_height_m)
+    if not 0.0 < solved < 1.0:
+        raise ValueError("--solved-camera-height-m must be between 0 and 1 m")
+    nominal = getattr(enclosure, "camera_mount_height_m", None)
+    radar = getattr(enclosure, "radar_height_m", None)
+    if nominal is not None and radar is not None:
+        args.iwr6843_radar_height_m = solved - (nominal - radar)
+    args.camera_capture_mount_height_m = solved
+    logger.info(
+        "[SERVER] Camera height %.1f mm solved by this setup (rig file: %s)",
+        solved * 1000.0,
+        f"{nominal * 1000.0:.1f} mm" if nominal is not None else "none",
+    )
+
+
 def _rig_override(name: str, flag_value, rig_value):
     """Prefer the enclosure's measured value over a typed-in flag, and say so."""
     if rig_value is None:
@@ -5868,6 +5885,16 @@ def main():
         help="Override antenna-center height from the TI calibration JSON",
     )
     parser.add_argument(
+        "--solved-camera-height-m",
+        type=float,
+        default=None,
+        help=(
+            "Lens height above the floor solved by this session's range setup. Overrides "
+            "the rig file's nominal height (feet sink, units stand on things) and moves the "
+            "radar height with it, keeping their fixed offset inside the enclosure."
+        ),
+    )
+    parser.add_argument(
         "--iwr6843-ball-height-m",
         type=float,
         default=0.040,
@@ -6086,6 +6113,11 @@ def main():
         args.iwr6843_tilt_deg = _rig_override(
             "radar tilt", args.iwr6843_tilt_deg, enclosure.iwr_tilt_deg
         )
+    if args.solved_camera_height_m is not None:
+        try:
+            _apply_solved_camera_height(args, enclosure)
+        except ValueError as error:
+            parser.error(str(error))
 
     if args.camera_capture and (
         args.camera_capture_width <= 0

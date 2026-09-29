@@ -9,7 +9,9 @@ import io
 import json
 import logging
 import math
+import multiprocessing
 import os
+import pickle
 import re
 import shlex
 import signal
@@ -21,6 +23,8 @@ import time
 import zlib
 from collections import Counter, deque
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
@@ -31,7 +35,12 @@ import numpy as np
 from flask import Flask, Response, g, jsonify, request, send_file
 
 from openflight import session_bundle, tee_range, tee_range_setup
-from openflight.camera import attempt_ledger, session_review_routes as review_routes, study_ladder
+from openflight.camera import (
+    attempt_ledger,
+    reference_ball_range,
+    session_review_routes as review_routes,
+    study_ladder,
+)
 from openflight.camera.club_motion import detect_reference_ball
 from openflight.camera.fusion_diagnostics import register_fusion_diagnostics
 from openflight.camera.paired_eligibility import evaluate_paired_capture
@@ -42,6 +51,7 @@ from openflight.camera.reference_ball_range import (
     build_iwr_camera_search_hint,
     camera_range_estimator_sha256 as _camera_range_estimator_sha256,
     estimate_reference_ball_range,
+    solve_camera_height_from_radar,
 )
 from openflight.camera.setup_eligibility import SetupEligibility
 from openflight.camera.static_exposure import (
@@ -378,6 +388,69 @@ def pending_tee_range_solution(
     )
 
 
+def _solved_camera_height(
+    result: ReferenceBallRangeResult, camera: BallPlaneCamera, iwr_candidate: Mapping | None
+) -> dict | None:
+    """The lens height for this setup: from the radar range when it accepted the ball.
+
+    Feet sink into carpet and a unit may stand on something, so the height is
+    solved per setup; apparent size is the fallback and is several times looser.
+    """
+    selected = result.selected
+    if selected is None or selected.camera_height_m is None:
+        return None
+    solved = {
+        "size_solved_m": selected.camera_height_m,
+        "size_uncertainty_m": selected.camera_height_uncertainty_m,
+        "radar_solved_m": None,
+        "radar_uncertainty_m": None,
+        "height_m": selected.camera_height_m,
+        "uncertainty_m": selected.camera_height_uncertainty_m,
+        "source": "apparent_size",
+    }
+    iwr = iwr_candidate if isinstance(iwr_candidate, Mapping) else {}
+    difference = (iwr.get("evidence") or {}).get("difference")
+    if (
+        iwr.get("radar_slant_range_m") is not None
+        and isinstance(difference, Mapping)
+        and difference.get("status") == "accepted"
+    ):
+        try:
+            height, uncertainty = solve_camera_height_from_radar(
+                camera,
+                (selected.x_px, selected.y_px),
+                radar_slant_range_m=float(iwr["radar_slant_range_m"]),
+                radar_uncertainty_m=float(iwr.get("uncertainty_m") or 0.05),
+                ball_center_height_m=BALL_DIAMETER_MM / 2000.0,
+            )
+        except ValueError:
+            return solved
+        solved.update(
+            {
+                "radar_solved_m": height,
+                "radar_uncertainty_m": uncertainty,
+                "height_m": height,
+                "uncertainty_m": uncertainty,
+                "source": "static_iwr_range",
+            }
+        )
+    return solved
+
+
+def _setup_camera_height_m(solution: tee_range.TeeRangeSolution | None) -> float | None:
+    """The 1280x800 setup's solved lens height, if a camera step recorded one."""
+    for item in sorted(
+        (solution.candidates if solution is not None else ()),
+        key=lambda candidate: "arm5" not in candidate.candidate_id,
+    ):
+        solved = (item.evidence or {}).get("camera_height")
+        if item.source_group == "camera" and isinstance(solved, Mapping):
+            height = solved.get("height_m")
+            if isinstance(height, (int, float)) and 0.0 < height < 1.0:
+                return float(height)
+    return None
+
+
 def unqualified_tee_range_choice(
     solution: tee_range.TeeRangeSolution | None,
 ) -> tee_range.TeeRangeCandidate | None:
@@ -407,15 +480,17 @@ def unqualified_tee_range_choice(
 def _tee_range_cli_args(
     solution: tee_range.TeeRangeSolution | None, *, use_unqualified: bool = False
 ) -> list[str]:
+    height = _setup_camera_height_m(solution)
+    height_args = ["--solved-camera-height-m", f"{height:.6g}"] if height is not None else []
     if solution is not None and solution.status == "resolved":
-        return ["--iwr6843-tee-m", f"{solution.selected_range_m:.9g}"]
+        return ["--iwr6843-tee-m", f"{solution.selected_range_m:.9g}", *height_args]
     if use_unqualified and (choice := unqualified_tee_range_choice(solution)) is not None:
         logger.warning(
             "Using UNQUALIFIED tee range %.3f m from %s for this test run",
             choice.radar_slant_range_m,
             choice.candidate_id,
         )
-        return ["--iwr6843-tee-m", f"{choice.radar_slant_range_m:.9g}"]
+        return ["--iwr6843-tee-m", f"{choice.radar_slant_range_m:.9g}", *height_args]
     return ["--iwr6843-tee-range-pending"]
 
 
@@ -1536,6 +1611,43 @@ def _validated_guided_search_hint(
     )
 
 
+# The resting-ball search is pure numpy/scipy work. Run in the tester's own
+# process it holds the interpreter lock against the camera capture thread; a
+# worker process keeps capture smooth and uses the Pi's other cores.
+_BALL_SEARCH_POOL: ProcessPoolExecutor | None = None
+_BALL_SEARCH_POOL_LOCK = threading.Lock()
+
+
+def configure_ball_search_workers(workers: int) -> None:
+    """Start (or, with 0, stop) the worker processes that run the ball search."""
+    global _BALL_SEARCH_POOL  # pylint: disable=global-statement
+    with _BALL_SEARCH_POOL_LOCK:
+        if _BALL_SEARCH_POOL is not None:
+            _BALL_SEARCH_POOL.shutdown(wait=False, cancel_futures=True)
+            _BALL_SEARCH_POOL = None
+        if workers > 0:
+            # spawn, not fork: the tester has camera and web threads that a fork would copy
+            _BALL_SEARCH_POOL = ProcessPoolExecutor(
+                max_workers=workers, mp_context=multiprocessing.get_context("spawn")
+            )
+            for _ in range(workers):
+                _BALL_SEARCH_POOL.submit(int)  # import the worker's modules now, not on first use
+
+
+def _run_ball_search(
+    frames: np.ndarray, camera: BallPlaneCamera, kwargs: Mapping
+) -> ReferenceBallRangeResult:
+    pool = _BALL_SEARCH_POOL
+    if pool is not None:
+        try:
+            return pool.submit(
+                reference_ball_range.estimate_reference_ball_range, frames, camera, **kwargs
+            ).result()
+        except (BrokenProcessPool, pickle.PicklingError, TypeError, AttributeError) as exc:
+            logger.warning("Ball search worker unavailable (%s); searching in-process", exc)
+    return estimate_reference_ball_range(frames, camera, **kwargs)
+
+
 def _guided_camera_analysis(
     frames: np.ndarray,
     camera: BallPlaneCamera,
@@ -1574,11 +1686,7 @@ def _guided_camera_analysis(
         kwargs["max_fits"] = 1
         kwargs["hold_diameter_px"] = diameter
     started_at = time.perf_counter()
-    result = estimate_reference_ball_range(
-        frames,
-        camera,
-        **kwargs,
-    )
+    result = _run_ball_search(frames, camera, kwargs)
     elapsed_ms = (time.perf_counter() - started_at) * 1000.0
     return result, {
         **_camera_range_evidence(result),
@@ -4599,6 +4707,9 @@ def create_app(
                 evidence={
                     **candidate.evidence,
                     "save_camera_only_analysis": save_analysis,
+                    "camera_height": _solved_camera_height(
+                        result, model, state.evidence.get("iwr_candidate")
+                    ),
                 },
             )
             iwr_ranking = _camera_to_iwr_ranking(
@@ -5647,6 +5758,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--tee-range-qualification", type=Path, default=None)
     parser.add_argument(
+        "--ball-search-workers",
+        type=int,
+        default=2,
+        help="Worker processes for the resting-ball search (0 runs it in the tester process)",
+    )
+    parser.add_argument(
         "--use-unqualified-tee-range",
         action="store_true",
         help=(
@@ -5683,6 +5800,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.port,
         sessions_root,
     )
+    configure_ball_search_workers(max(0, args.ball_search_workers))
     enclosure = EnclosureTilt(
         args.rig_geometry,
         bus=args.inclinometer_bus,
