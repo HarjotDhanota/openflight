@@ -632,6 +632,32 @@ def test_v2_still_rejects_a_distant_loss_strong_enough_to_leak_into_the_ball():
     assert result.peak_bin == pytest.approx(35.0)
 
 
+def _field_profiles(epoch_fixture):
+    fixture = _regression_fixture(epoch_fixture)
+
+    def profile(capture):
+        recorded = dict(fixture[capture]["profile_v2"])
+        recorded["power"] = tuple(recorded["power"])
+        recorded["frame_mad_fraction"] = tuple(recorded["frame_mad_fraction"])
+        return StaticRangeProfileV2(**recorded)
+
+    return fixture, profile("empty"), profile("present")
+
+
+def test_a_ball_beside_a_strong_edge_is_rejected_not_read_short():
+    """Outdoors, 29 Sept: bins 3 either side of the ball lost half their echo when it
+    was placed (interference with a raised mat edge). The leakage-only rule accepted
+    1.903 m against a 2.02 m tape; a loss that close to the ball must reject."""
+    fixture, empty, present = _field_profiles("field-20260929-outdoor-mat-edge-2m")
+    bias = fixture["range_bias_const_m"]
+
+    result = compare_static_range_profiles(
+        empty, present, plausible_apparent_range_m=(0.5 + bias, 4.0 + bias)
+    )
+
+    assert result.status == "rejected_scene_changed"
+
+
 def test_the_29_sept_door_setup_is_accepted_at_its_tape_range():
     """Pi field capture: a ball 1.00 m out (tape) in front of a closed door whose
     reflector 0.7 m behind the ball lost half its power between captures."""
@@ -702,7 +728,7 @@ def test_static_range_estimator_identity_is_pinned():
 
     assert policy["profile_schema"] == "openflight.iwr6843.static_range_profile.v2"
     assert static_range_estimator_sha256() == (
-        "3c9fbc487ca91190644baa486734f300a3481e71299c0759650400938e1b45ea"
+        "c7051ff0142e38817655799841c10eb0fa2f450df644f7454e858c30e2a9d30d"
     )
 
 

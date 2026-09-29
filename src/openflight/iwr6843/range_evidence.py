@@ -42,13 +42,18 @@ _STATIC_V2_MIN_FRAME_COUNT = 12
 # at most 1 / (pi^2 k^2) of the lost power at k bins (k taken half a bin closer).
 # A door or net moving a metre behind the ball is then ignored (Pi, 29 Sept).
 _STATIC_V2_LOSS_LEAK_LIMIT = 0.10
+# A loss this close to the ball is the ball's echo interfering with a neighbouring
+# reflector, which moves the ball's centroid itself; sidelobe leakage does not
+# describe it, so it always rejects (outdoors, 29 Sept: losses 3 bins either side
+# of a ball beside a mat edge, and a reading 11 cm short of the tape).
+_STATIC_V2_LOSS_GUARD_BINS = 6
 
 
 def static_range_estimator_policy() -> dict[str, Any]:
     """Return the complete selector policy bound by qualification artifacts."""
     return {
         "name": "iwr_static_profile_selector",
-        "version": 3,
+        "version": 4,
         "profile_schema": STATIC_PROFILE_V2_SCHEMA,
         "normalization": {
             "method": "trimmed_median_per_bin_ratio",
@@ -64,6 +69,7 @@ def static_range_estimator_policy() -> dict[str, Any]:
             "scene_change_scope": "loss_touching_ball_cluster_or_leaking_into_it",
             "scene_change_leak_model": "rectangular_sidelobe_envelope_1_over_pi2_k2",
             "scene_change_leak_limit_fraction_of_ball": _STATIC_V2_LOSS_LEAK_LIMIT,
+            "scene_change_guard_bins": _STATIC_V2_LOSS_GUARD_BINS,
             "minimum_frame_count": _STATIC_V2_MIN_FRAME_COUNT,
             "maximum_frame_mad_fraction": _STATIC_V2_MAX_FRAME_MAD_FRACTION,
             "maximum_changed_fraction": _STATIC_MAX_CHANGED_FRACTION,
@@ -621,7 +627,8 @@ def _blocking_loss(  # pylint: disable=too-many-arguments
 ) -> tuple[int | None, tuple[dict[str, Any], ...]]:
     """The lost bin that could move the ball's reading, else the harmless losses."""
     lost_indices = np.flatnonzero(lost)
-    lo, hi = int(group[0]) - 1, int(group[-1]) + 1
+    lo = int(group[0]) - _STATIC_V2_LOSS_GUARD_BINS
+    hi = int(group[-1]) + _STATIC_V2_LOSS_GUARD_BINS
     touching = lost_indices[(lost_indices >= lo) & (lost_indices <= hi)]
     if len(touching):
         return int(touching[np.argmax(loss[touching])]), ()
