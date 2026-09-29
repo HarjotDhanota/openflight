@@ -720,6 +720,8 @@
       const REQUEST_TIMEOUT_MS = 5000;
       const ACTION_TIMEOUT_MS = 15000;
       const PACKAGE_TIMEOUT_MS = 300000;
+      // Save re-runs the full-frame ball search, which takes several seconds on a Pi.
+      const TEE_RANGE_ACTION_TIMEOUT_MS = 90000;
       try {
         const savedTesterId = localStorage.getItem(TESTER_ID_STORAGE_KEY);
         if (savedTesterId) el('tester-id').value = savedTesterId;
@@ -1784,7 +1786,7 @@
             tester_id: el('tester-id').value.trim(),
             action,
             request_id: newAttemptId(),
-          });
+          }, TEE_RANGE_ACTION_TIMEOUT_MS);
           teeRangeState = body.state;
           teeRangeDisplay = body.display || null;
           setTeeRangeActionError(null);
