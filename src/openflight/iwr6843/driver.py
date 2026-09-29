@@ -275,7 +275,10 @@ class IWR6843Radar:
         resp = b""
         deadline = time.time() + window
         while time.time() < deadline:
-            resp += self.ser.read(512)
+            # read(n) blocks for the whole port timeout until n bytes arrive, so ask
+            # only for what is waiting (or one byte, which returns as it lands);
+            # a fixed 512 cost 0.3 s per command, about 4.5 s per configuration.
+            resp += self.ser.read(max(1, self.ser.in_waiting))
             if b"Done" in resp or b"Error" in resp:
                 break
         return resp.decode(errors="replace")

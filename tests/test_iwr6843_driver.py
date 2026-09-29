@@ -595,3 +595,38 @@ def test_usb_serial_identity_reads_linux_sysfs(tmp_path, monkeypatch):
     assert driver._usb_serial_identity("/dev/ttyUSB0") == CP2105_ENHANCED
     assert driver._usb_serial_identity("/dev/ttyUSB1") == CP2105_STANDARD
     assert driver._usb_serial_identity("/dev/ttyACM0") is None
+
+
+def test_a_command_returns_without_waiting_for_a_full_read_buffer():
+    # pyserial's read(n) blocks for the whole port timeout (0.3 s) until n bytes
+    # arrive; a short "Done" reply must not pay that on every command.
+    from openflight.iwr6843 import driver
+
+    class ReplySerial:
+        def __init__(self):
+            self.pending = bytearray()
+            self.requests = []
+
+        @property
+        def in_waiting(self):
+            return len(self.pending)
+
+        def reset_input_buffer(self):
+            self.pending.clear()
+
+        def write(self, data):
+            self.pending.extend(data.strip() + b"\r\nDone\r\nmmwDemo:/>")
+
+        def read(self, size):
+            self.requests.append((size, len(self.pending)))
+            chunk = bytes(self.pending[:size])
+            del self.pending[:size]
+            return chunk
+
+    radar = driver.IWR6843Radar.__new__(driver.IWR6843Radar)
+    radar.ser = ReplySerial()
+
+    reply = radar.cmd("sensorStop", 3.0)
+
+    assert "Done" in reply
+    assert all(size <= max(1, available) for size, available in radar.ser.requests)
