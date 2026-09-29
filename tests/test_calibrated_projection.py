@@ -395,7 +395,7 @@ def test_live_adapter_and_replay_share_successful_calibrated_projection(tmp_path
         diameter_px=14.0,
         area_px=140,
     )
-    monkeypatch.setattr(ball_module, "detect_reference_ball", lambda _frames: anchor)
+    monkeypatch.setattr(ball_module, "detect_reference_ball", lambda _frames, **_kwargs: anchor)
     monkeypatch.setattr(
         ball_module,
         "_candidates",
@@ -404,7 +404,7 @@ def test_live_adapter_and_replay_share_successful_calibrated_projection(tmp_path
     monkeypatch.setattr(
         ball_module,
         "_pixel_paths",
-        lambda nodes, _anchor: [[(index, node[0]) for index, node in enumerate(nodes)]],
+        lambda nodes, _anchor, **_kwargs: [[(index, node[0]) for index, node in enumerate(nodes)]],
     )
     monkeypatch.setattr(
         fusion_module,

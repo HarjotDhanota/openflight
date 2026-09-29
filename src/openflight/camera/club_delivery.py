@@ -21,6 +21,7 @@ from typing import Any
 
 import numpy as np
 
+from openflight.camera import ball_pixels
 from openflight.camera.club_motion import ReferenceBall, detect_reference_ball
 from openflight.camera.geometry import (
     deroll_normalized_offsets,
@@ -201,17 +202,24 @@ class ReferenceBallTracker:
             area_px=int(round(np.median([ball.area_px for ball in self._samples]))),
         )
 
-    def resolve(self, candidate: ReferenceBall) -> tuple[ReferenceBall, str]:
-        """Accept a consistent observation or return the established anchor."""
+    def resolve(
+        self, candidate: ReferenceBall, *, pixel_scale: float = 1.0
+    ) -> tuple[ReferenceBall, str]:
+        """Accept a consistent observation or return the established anchor.
+
+        ``pixel_scale`` is the ball's size relative to the 640x400 mode the limits
+        were tuned in (2 at 1280x800).
+        """
         anchor = self._anchor()
-        plausible_size = 9.0 <= candidate.diameter_px <= 30.0
+        smallest, largest = ball_pixels.ball_diameter_bounds_px(pixel_scale)
+        plausible_size = smallest <= candidate.diameter_px <= largest
         consistent = plausible_size
         if anchor is not None:
             distance_px = math.hypot(candidate.x - anchor.x, candidate.y - anchor.y)
             size_ratio = candidate.diameter_px / anchor.diameter_px
             consistent = (
                 plausible_size
-                and distance_px <= max(40.0, 4.0 * anchor.diameter_px)
+                and distance_px <= max(40.0 * pixel_scale, 4.0 * anchor.diameter_px)
                 and 0.65 <= size_ratio <= 1.55
             )
         if consistent:
@@ -222,9 +230,11 @@ class ReferenceBallTracker:
             return anchor, "session_anchor"
         return candidate, "unverified"
 
-    def resolve_stable(self, candidate: ReferenceBall) -> tuple[ReferenceBall, str]:
+    def resolve_stable(
+        self, candidate: ReferenceBall, *, pixel_scale: float = 1.0
+    ) -> tuple[ReferenceBall, str]:
         """Return a rolling session anchor once enough valid observations exist."""
-        resolved, source = self.resolve(candidate)
+        resolved, source = self.resolve(candidate, pixel_scale=pixel_scale)
         anchor = self._anchor()
         if anchor is not None and len(self._samples) >= self.min_fallback_samples:
             return anchor, "session_anchor"
@@ -968,18 +978,19 @@ def estimate_chained_delivery(
     ball = reference_ball
     if ball is None and reference_ball_selected:
         return ChainedDelivery(status="rejected_no_ball", scene_p995=scene_p995)
+    scale = ball_pixels.pixel_scale(frames.shape[2])
     if ball is None:
         try:
-            ball = detect_reference_ball(frames)
+            ball = detect_reference_ball(frames, pixel_scale=scale)
         except ValueError:
             ball = ball_tracker.fallback() if ball_tracker is not None else None
             if ball is None:
                 return ChainedDelivery(status="rejected_no_ball", scene_p995=scene_p995)
         else:
             if ball_tracker is not None:
-                ball, _ball_source = ball_tracker.resolve(ball)
+                ball, _ball_source = ball_tracker.resolve(ball, pixel_scale=scale)
     elif ball_tracker is not None:
-        ball_tracker.resolve(ball)
+        ball_tracker.resolve(ball, pixel_scale=scale)
     yy, xx = np.mgrid[0 : frames.shape[1], 0 : frames.shape[2]]
     image_scale = _image_scale(frames.shape)
     ball_zone_radius = max(50.0, BALL_ZONE_RADIUS_PX * image_scale)
@@ -1297,7 +1308,11 @@ def estimate_delivery_trace(
         return TraceResult(status="low_light", scene_p995=scene_p995)
     saturated_global = float(np.mean(background >= 250))
     try:
-        ball = detect_reference_ball(frames, brightness_threshold=int(ball_threshold))
+        ball = detect_reference_ball(
+            frames,
+            brightness_threshold=int(ball_threshold),
+            pixel_scale=ball_pixels.pixel_scale(frames.shape[2]),
+        )
     except ValueError:
         status = "overexposed" if saturated_global > GLOBAL_SATURATION_HINT else "no_ball"
         return TraceResult(

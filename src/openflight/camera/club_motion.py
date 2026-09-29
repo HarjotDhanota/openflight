@@ -14,6 +14,7 @@ from typing import Callable, Sequence
 import numpy as np
 from scipy import ndimage
 
+from openflight.camera import ball_pixels
 from openflight.camera.ball_model import fit_lit_ball
 
 # (x_px, y_px, diameter_px) arrays -> which seeds a resting ball could be
@@ -564,8 +565,12 @@ def detect_reference_ball(
     brightness_threshold: int = 210,
     expected_diameter_px: float | None = None,
     expected_row_px: tuple[float, float] | None = None,
+    pixel_scale: float | None = None,
 ) -> ReferenceBall:
     """Find the stationary ball in bright- or dark-on-ground lighting.
+
+    ``pixel_scale`` is the ball's size relative to the 640x400 mode the pixel
+    limits were tuned in (2 at 1280x800); by default it follows the frame width.
 
     ``expected_diameter_px`` is the size the ball must have at the distance the
     radar or the tape gives, through the lens's focal length. With it, the ball
@@ -585,6 +590,9 @@ def detect_reference_ball(
     x0, y0, x1, y1 = roi or (0, 0, width, height)
     if not (0 <= x0 < x1 <= width and 0 <= y0 < y1 <= height):
         raise ValueError("ball ROI is outside the image")
+    scale = pixel_scale if pixel_scale is not None else ball_pixels.pixel_scale(width)
+    max_area = 600.0 * scale * scale
+    smallest, largest = ball_pixels.ball_diameter_bounds_px(scale)
 
     image_center = np.asarray((width / 2, height / 2))
 
@@ -605,7 +613,7 @@ def detect_reference_ball(
             ys, xs = np.nonzero(labels[box] == label)
             ys, xs = ys + box[0].start, xs + box[1].start
             area = len(xs)
-            if not min_area <= area <= 600:
+            if not min_area <= area <= max_area:
                 continue
             component_width = int(np.ptp(xs)) + 1
             component_height = int(np.ptp(ys)) + 1
@@ -657,7 +665,7 @@ def detect_reference_ball(
         plausible = [
             item
             for item in bright_candidates
-            if 9.0 <= item[1].diameter_px <= 30.0
+            if smallest <= item[1].diameter_px <= largest
             and width * 0.2 <= item[1].x <= width * 0.8
             and height * 0.45 <= item[1].y <= height * 0.9
         ]
@@ -717,7 +725,7 @@ def detect_reference_ball(
     )
     if dark_candidates:
         seed = min(dark_candidates, key=lambda item: item[0])[1]
-        radius = max(8, int(math.ceil(seed.diameter_px * 1.5)))
+        radius = max(int(round(8 * scale)), int(math.ceil(seed.diameter_px * 1.5)))
         patch_x0 = max(dark_x0, int(round(seed.x)) - radius)
         patch_x1 = min(dark_x1, int(round(seed.x)) + radius + 1)
         patch_y0 = max(dark_y0, int(round(seed.y)) - radius)
@@ -738,7 +746,7 @@ def detect_reference_ball(
             component_width = int(np.ptp(component_xs)) + 1
             component_height = int(np.ptp(component_ys)) + 1
             area = len(component_xs)
-            if 8 <= area <= 600:
+            if 8 <= area <= max_area:
                 return ReferenceBall(
                     x=float(component_xs.mean()),
                     y=float(component_ys.mean()),
@@ -752,12 +760,17 @@ def detect_reference_ball(
     raise ValueError("no stable reference ball found")
 
 
-def detect_impact_reference_ball(
+def detect_impact_reference_ball(  # pylint: disable=too-many-locals
     frames: np.ndarray,
     *,
     trigger_frame_index: int,
+    pixel_scale: float | None = None,
 ) -> ReferenceBall:  # pylint: disable=no-member
-    """Find the teed ball from the region that persistently departs after impact."""
+    """Find the teed ball from the region that persistently departs after impact.
+
+    Pixel limits were tuned at 640x400 and scale with ``pixel_scale`` (by default
+    from the frame width), areas with its square.
+    """
     if frames.ndim != 3 or len(frames) < 20:
         raise ValueError("frames must have shape (n, height, width) with n >= 20")
     if not 0 <= trigger_frame_index < len(frames):
@@ -778,6 +791,8 @@ def detect_impact_reference_ball(
     )
     difference = cv2.absdiff(before, after)
     height, width = before.shape
+    scale = pixel_scale if pixel_scale is not None else ball_pixels.pixel_scale(width)
+    area_scale = scale * scale
     departure_mask = (difference >= 45).astype(np.uint8)
     departure_mask[: int(height * 0.62)] = 0
     count, labels, stats, centroids = cv2.connectedComponentsWithStats(departure_mask, 8)
@@ -787,9 +802,9 @@ def detect_impact_reference_ball(
         x, y = centroids[label]
         aspect = component_width / max(component_height, 1)
         if not (
-            15 <= area <= 650
+            15 * area_scale <= area <= 650 * area_scale
             and 0.35 <= aspect <= 2.8
-            and 7 <= max(component_width, component_height) <= 32
+            and 7 * scale <= max(component_width, component_height) <= 32 * scale
             and width * 0.12 <= x <= width * 0.88
             and height * 0.62 <= y <= height * 0.95
         ):
@@ -802,7 +817,7 @@ def detect_impact_reference_ball(
             - brightness * 0.2
             - 20.0 * y / height
             + abs(math.log(aspect)) * 10.0
-            + abs(max(component_width, component_height) - 16.0)
+            + abs(max(component_width, component_height) - 16.0 * scale) / scale
         )
         candidates.append((score, float(x), float(y), int(area)))
     if not candidates:
@@ -819,14 +834,19 @@ def detect_impact_reference_ball(
         x, y = bright_centroids[label]
         aspect = component_width / max(component_height, 1)
         distance = math.hypot(x - seed_x, y - seed_y)
-        if 15 <= area <= 600 and 0.45 <= aspect <= 2.2 and distance <= 12.0:
+        if (
+            15 * area_scale <= area <= 600 * area_scale
+            and 0.45 <= aspect <= 2.2
+            and distance <= 12.0 * scale
+        ):
             refinements.append((distance, float(x), float(y), int(area)))
     if refinements:
         _distance, x, y, area = min(refinements)
     else:
         x, y, area = seed_x, seed_y, departure_area
     diameter = math.sqrt(4.0 * area / math.pi)
-    if not 9.0 <= diameter <= 30.0:
+    smallest, largest = ball_pixels.ball_diameter_bounds_px(scale)
+    if not smallest <= diameter <= largest:
         raise ValueError(f"impact-aware ball diameter is implausible: {diameter:.1f}")
     return ReferenceBall(x=x, y=y, diameter_px=diameter, area_px=area)
 

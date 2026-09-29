@@ -29,7 +29,7 @@ def _candidate(x, y):
 
 
 def test_agreeing_scene_and_impact_candidates_are_both_preserved(monkeypatch):
-    monkeypatch.setattr(ball_flight, "detect_reference_ball", lambda _frames: _ball())
+    monkeypatch.setattr(ball_flight, "detect_reference_ball", lambda _frames, **_kwargs: _ball())
     monkeypatch.setattr(
         ball_flight,
         "detect_impact_reference_ball",
@@ -51,7 +51,9 @@ def test_disagreement_uses_the_stable_session_anchor_and_records_delta(monkeypat
     tracker = ReferenceBallTracker(min_fallback_samples=2)
     tracker.resolve(_ball(50.0))
     tracker.resolve(_ball(50.5))
-    monkeypatch.setattr(ball_flight, "detect_reference_ball", lambda _frames: _ball(80.0))
+    monkeypatch.setattr(
+        ball_flight, "detect_reference_ball", lambda _frames, **_kwargs: _ball(80.0)
+    )
     monkeypatch.setattr(
         ball_flight,
         "detect_impact_reference_ball",
@@ -69,7 +71,9 @@ def test_disagreement_uses_the_stable_session_anchor_and_records_delta(monkeypat
 
 
 def test_disagreement_without_stable_evidence_is_withheld(monkeypatch):
-    monkeypatch.setattr(ball_flight, "detect_reference_ball", lambda _frames: _ball(25.0))
+    monkeypatch.setattr(
+        ball_flight, "detect_reference_ball", lambda _frames, **_kwargs: _ball(25.0)
+    )
     monkeypatch.setattr(
         ball_flight,
         "detect_impact_reference_ball",
@@ -86,7 +90,9 @@ def test_disagreement_without_stable_evidence_is_withheld(monkeypatch):
 
 
 def test_implausible_candidate_keeps_its_raw_observation_and_rejection_reason(monkeypatch):
-    monkeypatch.setattr(ball_flight, "detect_reference_ball", lambda _frames: _ball(96.0))
+    monkeypatch.setattr(
+        ball_flight, "detect_reference_ball", lambda _frames, **_kwargs: _ball(96.0)
+    )
     monkeypatch.setattr(
         ball_flight,
         "detect_impact_reference_ball",
@@ -133,13 +139,13 @@ def test_static_ball_has_no_impact_departure():
 
 
 def test_estimator_persists_detector_evidence_on_path_rejection(monkeypatch):
-    monkeypatch.setattr(ball_flight, "detect_reference_ball", lambda _frames: _ball())
+    monkeypatch.setattr(ball_flight, "detect_reference_ball", lambda _frames, **_kwargs: _ball())
     monkeypatch.setattr(
         ball_flight,
         "detect_impact_reference_ball",
         lambda _frames, **_kwargs: _ball(51.0, 70.0),
     )
-    monkeypatch.setattr(ball_flight, "_pixel_paths", lambda *_args: [])
+    monkeypatch.setattr(ball_flight, "_pixel_paths", lambda *_args, **_kwargs: [])
     frames = np.zeros((30, 100, 100), np.uint8)
     timestamps = np.arange(30, dtype=np.int64) * 1_000_000
 

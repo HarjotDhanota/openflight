@@ -132,7 +132,7 @@ def test_club_delivery_uses_established_anchor_when_detection_is_missing(monkeyp
     monkeypatch.setattr(
         club_delivery_module,
         "detect_reference_ball",
-        lambda _frames: (_ for _ in ()).throw(ValueError("not found")),
+        lambda _frames, **_kwargs: (_ for _ in ()).throw(ValueError("not found")),
     )
 
     result = estimate_chained_delivery(
@@ -594,7 +594,9 @@ class TestCameraOpsFallback:
         timestamps = np.arange(60, dtype=np.int64) * 2_000_000
         ball = ReferenceBall(10.0, 10.0, 12.0, 120)
         estimate = ApproachPairEstimate(3.0, -5.0, 1.0, 1.0, 12)
-        monkeypatch.setattr(club_delivery_module, "detect_reference_ball", lambda _frames: ball)
+        monkeypatch.setattr(
+            club_delivery_module, "detect_reference_ball", lambda _frames, **_kwargs: ball
+        )
         monkeypatch.setattr(
             club_delivery_module,
             "_detect_impact_index",

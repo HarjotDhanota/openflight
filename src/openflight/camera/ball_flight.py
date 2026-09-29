@@ -15,6 +15,7 @@ from typing import Any
 
 import numpy as np
 
+from openflight.camera import ball_pixels
 from openflight.camera.club_motion import (
     BALL_DIAMETER_MM,
     ReferenceBall,
@@ -31,8 +32,11 @@ from openflight.camera.geometry import (
 MPH_PER_MS = 2.23694
 PARAMETER_SWEEP_SIZE = 27
 MAX_IWR_FALLBACK_ABS_DEG = 20.0
-# The resting-ball gate: diameter in pixels, and centre as fractions of the frame.
-REFERENCE_BALL_DIAMETER_PX = (9.0, 30.0)
+# The resting-ball gate: diameter in pixels at the 640x400 tuning scale (scaled by
+# ball_pixels for other modes), and centre as fractions of the frame.
+REFERENCE_BALL_DIAMETER_PX = ball_pixels.REFERENCE_BALL_DIAMETER_PX
+# The per-frame motion limits below were tuned on 640x400 captures at about 300 fps.
+REFERENCE_FRAME_INTERVAL_S = 1.0 / 300.0
 REFERENCE_BALL_X_FRACTION = (0.1, 0.9)
 REFERENCE_BALL_Y_FRACTION = (0.4, 0.95)
 
@@ -237,6 +241,7 @@ def _candidates(
     bright_threshold: int,
     difference_threshold: int,
     min_area: int,
+    scale: float = 1.0,
 ) -> list[BallCandidate]:
     try:
         import cv2  # noqa: PLC0415  pylint: disable=import-outside-toplevel
@@ -253,11 +258,11 @@ def _candidates(
         aspect = width / max(height, 1)
         fill = area / max(width * height, 1)
         if not (
-            min_area <= area <= 400
+            min_area * scale * scale <= area <= 400 * scale * scale
             and 0.35 <= aspect <= 2.8
             and fill >= 0.18
-            and abs(x - anchor.x) < 160
-            and 10 < y < anchor.y + 15
+            and abs(x - anchor.x) < 160 * scale
+            and 10 < y < anchor.y + 15 * scale
         ):
             continue
         left = int(stats[label][cv2.CC_STAT_LEFT])
@@ -300,12 +305,16 @@ def _rough_path_score(path: list[tuple[int, BallCandidate]]) -> float:
 def _pixel_paths(
     nodes: list[list[BallCandidate]],
     anchor: ReferenceBall,
+    *,
+    scale: float = 1.0,
+    motion_scale: float = 1.0,
 ) -> list[list[tuple[int, BallCandidate]]]:
+    """Plausible launch paths; ``motion_scale`` is pixel scale x frame interval ratio."""
     all_paths: list[list[tuple[int, BallCandidate]]] = []
     frontier: list[list[tuple[int, BallCandidate]]] = []
     for frame in range(min(5, len(nodes))):
         for candidate in nodes[frame]:
-            if math.hypot(candidate.x - anchor.x, candidate.y - anchor.y) <= 70.0:
+            if math.hypot(candidate.x - anchor.x, candidate.y - anchor.y) <= 70.0 * scale:
                 frontier.append([(frame, candidate)])
     all_paths.extend(frontier)
     for _ in range(len(nodes)):
@@ -317,7 +326,8 @@ def _pixel_paths(
                 for candidate in nodes[frame]:
                     delta_x = candidate.x - previous.x
                     delta_y = candidate.y - previous.y
-                    if abs(delta_x) <= 30.0 * gap and -38.0 * gap <= delta_y <= -0.5 * gap:
+                    step = gap * motion_scale
+                    if abs(delta_x) <= 30.0 * step and -38.0 * step <= delta_y <= -0.5 * gap:
                         extended.append([*path, (frame, candidate)])
         if not extended:
             break
@@ -395,9 +405,14 @@ def _select_reference_ball(frames, trigger_frame: int, geometry, ball_tracker):
     """Choose between scene and impact evidence while retaining both observations."""
     candidates: dict[str, ReferenceBall | None] = {"scene": None, "impact": None}
     reasons: dict[str, str | None] = {"scene": None, "impact": None}
+    scale = ball_pixels.pixel_scale(geometry.image_width_px)
     for name, detector, kwargs in (
-        ("scene", detect_reference_ball, {}),
-        ("impact", detect_impact_reference_ball, {"trigger_frame_index": trigger_frame}),
+        ("scene", detect_reference_ball, {"pixel_scale": scale}),
+        (
+            "impact",
+            detect_impact_reference_ball,
+            {"trigger_frame_index": trigger_frame, "pixel_scale": scale},
+        ),
     ):
         try:
             candidates[name] = detector(frames, **kwargs)
@@ -407,7 +422,7 @@ def _select_reference_ball(frames, trigger_frame: int, geometry, ball_tracker):
     def plausible(candidate: ReferenceBall | None) -> bool:
         if candidate is None:
             return False
-        smallest, largest = REFERENCE_BALL_DIAMETER_PX
+        smallest, largest = ball_pixels.ball_diameter_bounds_px(scale)
         left, right = (geometry.image_width_px * f for f in REFERENCE_BALL_X_FRACTION)
         top, bottom = (geometry.image_height_px * f for f in REFERENCE_BALL_Y_FRACTION)
         basic = (
@@ -460,7 +475,10 @@ def _select_reference_ball(frames, trigger_frame: int, geometry, ball_tracker):
         selected_source = "scene_only" if scene is not None else "impact_only"
     if selected is not None and ball_tracker is not None:
         resolver = getattr(ball_tracker, "resolve_stable", ball_tracker.resolve)
-        selected, tracker_source = resolver(selected)
+        try:
+            selected, tracker_source = resolver(selected, pixel_scale=scale)
+        except TypeError:  # a tracker that predates per-mode pixel scales
+            selected, tracker_source = resolver(selected)
         selected_source = f"{selected_source}:{tracker_source}"
     if selected is None and ball_tracker is not None:
         selected = ball_tracker.fallback()
@@ -665,7 +683,9 @@ def estimate_camera_ball_flight(
             "rejected_reference_ball_not_found",
             reference_ball_diagnostics=reference_diagnostics,
         )
-    if not 9.0 <= anchor.diameter_px <= 30.0:
+    scale = ball_pixels.pixel_scale(geometry.image_width_px)
+    smallest, largest = ball_pixels.ball_diameter_bounds_px(scale)
+    if not smallest <= anchor.diameter_px <= largest:
         return CameraBallEstimate(
             "rejected_implausible_reference_ball",
             reference_ball_diagnostics=reference_diagnostics,
@@ -685,6 +705,9 @@ def estimate_camera_ball_flight(
             reference_ball_diagnostics=reference_diagnostics,
         )
     background = np.median(frames[: min(20, len(frames))], axis=0).astype(np.uint8)
+    intervals = np.diff(timestamps_ns.astype(np.int64)) / 1e9
+    frame_interval_s = float(np.median(intervals)) if len(intervals) else REFERENCE_FRAME_INTERVAL_S
+    motion_scale = scale * max(frame_interval_s, 1e-6) / REFERENCE_FRAME_INTERVAL_S
 
     def collect(depth_evidence) -> list[_PathEstimate]:
         found: list[_PathEstimate] = []
@@ -699,12 +722,15 @@ def estimate_camera_ball_flight(
                             bright_threshold=bright,
                             difference_threshold=difference,
                             min_area=min_area,
+                            scale=scale,
                         )
                         for frame in frame_indices
                     ]
                     options = [
                         result
-                        for raw_path in _pixel_paths(nodes, anchor)
+                        for raw_path in _pixel_paths(
+                            nodes, anchor, scale=scale, motion_scale=motion_scale
+                        )
                         if (
                             result := _path_estimate(
                                 path=_clean_launch_path(raw_path, frame_indices),

@@ -30,7 +30,7 @@ def test_ball_flight_uses_established_anchor_when_detection_is_missing(monkeypat
     monkeypatch.setattr(
         ball_flight_module,
         "detect_reference_ball",
-        lambda _frames: (_ for _ in ()).throw(ValueError("not found")),
+        lambda _frames, **_kwargs: (_ for _ in ()).throw(ValueError("not found")),
     )
 
     result = estimate_camera_ball_flight(
