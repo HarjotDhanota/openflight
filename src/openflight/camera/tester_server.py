@@ -65,6 +65,7 @@ from openflight.camera.static_exposure import (
     exposure_steps_for_fps,
     static_exposure_policy_sha256 as _static_exposure_policy_sha256,
 )
+from openflight.camera.static_radar_holder import HeldStaticRadar
 from openflight.camera.tee_range_flow import (
     CAPTURE_PHASES,
     TERMINAL_PHASES,
@@ -3776,12 +3777,31 @@ def create_app(
     require_tee_range_flow: bool = False,
     iwr_static_port: str | None = None,
     require_iwr_preflight: bool = False,
+    static_radar=None,
 ) -> Flask:
     """Build the standalone tester service."""
     if (optical_calibration is None) != (camera_placement is None):
         raise ValueError("calibrated camera fusion requires both calibration and placement")
     app = Flask(__name__)
     jobs = manager or TesterJobManager()
+    # Setup radar captures share one session so the port closes once per setup (the
+    # CP2105 close costs 5 s on the Pi). An injected job manager keeps running them
+    # itself, as before.
+    radar_jobs = static_radar or (
+        jobs
+        if manager is not None
+        else HeldStaticRadar(
+            session_script=REPO_ROOT / "scripts" / "iwr6843" / "static_range_session.py",
+            cwd=REPO_ROOT,
+            timeout_s=ACTION_TIMEOUT_S["tee_range"],
+        )
+    )
+
+    def release_static_radar() -> None:
+        """Close an idle setup radar session before another job needs the radar."""
+        if radar_jobs is not jobs:
+            radar_jobs.release()
+
     live = live_view or LiveView()
     enclosure = tilt or EnclosureTilt(rig_geometry)
     setup = setup_policy or SetupEligibility(
@@ -4271,7 +4291,7 @@ def create_app(
         result_path = store.epoch_dir(state.epoch_id) / "iwr" / f"{capture_id}.json"
         if result_path.is_file():
             return _finish_static_capture(tester_id, state.epoch_id, kind, capture_id)
-        job = jobs.status()
+        job = radar_jobs.status()
         if job.get("state") == "running" and job.get("action") == "tee_range":
             return state
         reservation = result_path.with_name(f".{capture_id}.reserve")
@@ -4398,9 +4418,10 @@ def create_app(
         return store.finalize(state, solution, qualification)
 
     def _range_resources_busy() -> str | None:
-        job = jobs.status()
-        if job.get("state") == "running":
-            return f"the {job.get('action')} job owns the hardware"
+        for owner in (jobs, radar_jobs):
+            job = owner.status()
+            if job.get("state") == "running":
+                return f"the {job.get('action')} job owns the hardware"
         if live.running:
             return "the live camera owns the hardware"
         if review_routes.analysis_running(sessions_root) is not None:
@@ -4480,7 +4501,7 @@ def create_app(
             _finish_static_capture(tester_id, state.epoch_id, kind, capture_id)
 
         try:
-            jobs.start(
+            radar_jobs.start(
                 "tee_range",
                 [command],
                 output / f"{capture_id}.log",
@@ -5195,6 +5216,7 @@ def create_app(
                     tee_range.write_solution(run_dir / "tee_range.json", solution)
                 active_runtime_dir["path"] = run_dir
             try:
+                release_static_radar()
                 jobs.start(action, commands, log_path, on_finish=on_finish)
             except Exception:
                 if action == "swings":
@@ -5429,6 +5451,8 @@ def create_app(
             for runner in runners:
                 runner.stop(wait=False)
             stopped = jobs.cancel() or stopped
+            if radar_jobs is not jobs:
+                stopped = radar_jobs.cancel() or stopped
         stopped = review_routes.stop_detached_analysis(sessions_root) or stopped
         for runner in runners:
             runner.stop()
@@ -5554,6 +5578,7 @@ def create_app(
         active_setup_tester["tester_id"] = tester_id
         active_runtime_dir["path"] = run
         try:
+            release_static_radar()
             jobs.start("ladder", commands, log_path, on_finish=ladder_finished)
         except Exception:
             active_setup_tester["tester_id"] = None

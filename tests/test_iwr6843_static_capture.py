@@ -566,3 +566,34 @@ def test_each_stage_records_how_long_it_took(tmp_path):
     ):
         assert seconds[stage] >= 0.0
     assert result["total_seconds"] >= sum(seconds.values()) - 1e-6
+
+
+def test_a_held_radar_is_stopped_but_left_open(tmp_path):
+    fake = FakeRadar(_raw_dump())
+
+    result = capture_static_range(
+        _inputs(tmp_path),
+        radar_factory=_factory(fake),
+        wait_for_settle=lambda *_args: False,
+        close_radar=False,
+    )
+
+    assert result["usable"] is True
+    assert result["radar_left_open"] is True
+    assert fake.calls[-1] == "stop_sensor"
+    assert "close" not in fake.calls
+
+
+def test_a_held_radar_whose_health_is_uncertain_is_closed(tmp_path):
+    fake = FakeRadar(_raw_dump(), health_error=RuntimeError("no stats reply"))
+
+    result = capture_static_range(
+        _inputs(tmp_path),
+        radar_factory=_factory(fake),
+        wait_for_settle=lambda *_args: False,
+        close_radar=False,
+    )
+
+    assert result["usable"] is False
+    assert result["radar_left_open"] is False
+    assert fake.calls[-1] == "close"

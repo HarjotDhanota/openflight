@@ -164,9 +164,11 @@ def _default_wait(cancel_event: threading.Event, seconds: float) -> bool:
     return cancel_event.wait(seconds)
 
 
-def _cleanup_radar(radar: Any, *, stop_sensor: bool = True) -> list[dict[str, str]]:
+def _cleanup_radar(
+    radar: Any, *, stop_sensor: bool = True, close: bool = True
+) -> list[dict[str, str]]:
     errors = []
-    operations = ("stop_sensor", "close") if stop_sensor else ("close",)
+    operations = (("stop_sensor",) if stop_sensor else ()) + (("close",) if close else ())
     for operation in operations:
         try:
             getattr(radar, operation)()
@@ -187,8 +189,15 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
     radar_factory: Callable[..., Any] = IWR6843Radar,
     cancel_event: threading.Event | None = None,
     wait_for_settle: Callable[[threading.Event, float], bool] = _default_wait,
+    close_radar: bool = True,
 ) -> dict[str, Any]:
-    """Capture one stable ring and persist raw bytes before deriving a profile."""
+    """Capture one stable ring and persist raw bytes before deriving a profile.
+
+    With ``close_radar=False`` a usable capture leaves the radar stopped but open,
+    so a held session can capture again without the CP2105 close, whose purge
+    request times out for 5 s after a capture. Anything less than a clean capture
+    still closes it.
+    """
     _validate(inputs)
     started = time.monotonic()
     input_manifest, config_bytes = _input_manifest(inputs)
@@ -218,6 +227,7 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
             "profile": None,
             "error": None,
             "cleanup_errors": [],
+            "radar_left_open": False,
             # wall time per stage, so a field log shows where the setup wait goes
             "stage_seconds": {},
             "total_seconds": None,
@@ -317,9 +327,15 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
         finally:
             enter("cleanup")
             if radar is not None:
-                result["cleanup_errors"] = _cleanup_radar(
-                    radar, stop_sensor=not cli_health_uncertain
+                keep_open = not close_radar and result["usable"] and not cli_health_uncertain
+                errors = _cleanup_radar(
+                    radar, stop_sensor=not cli_health_uncertain, close=not keep_open
                 )
+                if keep_open and errors:
+                    errors += _cleanup_radar(radar, stop_sensor=False)
+                    keep_open = False
+                result["cleanup_errors"] = errors
+                result["radar_left_open"] = keep_open
             seconds["cleanup"] = round(time.monotonic() - mark, 4)
             if config_snapshot is not None:
                 Path(config_snapshot).unlink(missing_ok=True)

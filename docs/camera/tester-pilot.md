@@ -296,14 +296,24 @@ ball can see; in simulation it moves the radar's vertical launch by up to about
 1° at low launch angles, which is within that model's present noise at this
 radar height.
 
-Each static radar capture (empty scene, then ball) takes roughly 11–13 s, most of
-it moving the 732 KB range ring over the radar's UART (7.0 s at 1,041,667 baud).
-Every capture record (`iwr/<capture>.json`) now lists `stage_seconds` for connect,
-configure, settle, read_dump, derive_profile and cleanup, plus `total_seconds`, so
-the Pi's real split is on file. A 14-frame profile with the same windows,
-`config/iwr6843_static_range_14f3ms_53bin_iq16.cfg`, moves 427 KB (about 4.1 s).
-It is opt-in (`--iwr-static-config` on the tester server) until an A/B on the Pi
-shows the same accepted range and frame stability as the 24-frame default.
+The setup's two static radar captures (empty scene, then ball) run through one
+radar session (`scripts/iwr6843/static_range_session.py`), started at the empty
+capture and closed after the ball capture. Closing the radar's CP2105 port after a
+capture costs 5 s on the Pi (the kernel's purge-on-close times out, logged as
+`cp210x ttyUSB0: failed set request 0x12 status: -110`; draining or clearing
+HUPCL first does not avoid it), so the port is now closed once per setup, after
+the ball capture has already reported. Before any other hardware job (hardware
+check, swings, ladder) the tester closes an idle session; an unused one closes
+itself after 10 minutes. Session messages go to `iwr/static-radar-session.log`.
+
+Measured on the Pi on 29 Sept, before these changes: 18.9 s per capture
+(configure 4.8, transfer 7.1, close 5.7, settle 1.0). Configure then waited out a
+0.3 s read timeout per command, which is fixed. Every capture record
+(`iwr/<capture>.json`) lists `stage_seconds` and `total_seconds`. A 14-frame
+profile with the same windows, `config/iwr6843_static_range_14f3ms_53bin_iq16.cfg`,
+moves 427 KB (about 4.1 s instead of 7.1 s). It is opt-in (`--iwr-static-config`
+on the tester server) until an A/B on the Pi shows the same accepted range and
+frame stability as the 24-frame default.
 
 The ball search runs in worker processes (`--ball-search-workers`, default 2; 0
 runs it in the tester process) so it never holds up camera capture. To see what

@@ -446,6 +446,7 @@ def app_for(
     tilt=None,
     require_iwr_preflight=False,
     legacy_profile=False,
+    held_radar=False,
 ):
     def camera_model(arm, *_args):
         return BallPlaneCamera.nominal(
@@ -477,6 +478,18 @@ def app_for(
         fail=fail,
         legacy_profile=legacy_profile,
     )
+    held = (
+        HeldRadarDouble(
+            config_hash=manager.config_hash,
+            firmware_hash=manager.firmware_hash,
+            rig_hash=manager.rig_hash,
+            calibration_hash=manager.calibration_hash,
+            fail=fail,
+            legacy_profile=legacy_profile,
+        )
+        if held_radar
+        else None
+    )
     app = ts.create_app(
         sessions_root=tmp_path / "sessions",
         rig_geometry=inputs["rig"],
@@ -493,8 +506,10 @@ def app_for(
         require_tee_range_flow=True,
         iwr_static_port="/dev/serial/by-id/iwr-if00-port0",
         require_iwr_preflight=require_iwr_preflight,
+        static_radar=held,
     )
     app.config["TEST_STATIC_MANAGER"] = manager
+    app.config["TEST_HELD_RADAR"] = held
     tester = "guided-fixture"
     for arm_id in ("arm5", "arm6"):
         params = ts.TesterParameters(tester, arm_id, "indoors")
@@ -525,6 +540,22 @@ def phase(client, tester):
     response = client.get("/api/tester/tee-range", query_string={"tester_id": tester})
     assert response.status_code == 200
     return response.get_json()["state"]
+
+
+class HeldRadarDouble(StaticManager):
+    """The held radar session: runs setup captures and records releases."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.releases = 0
+        self.cancels = 0
+
+    def release(self):
+        self.releases += 1
+
+    def cancel(self):
+        self.cancels += 1
+        return False
 
 
 def drive(client, tester):
@@ -2071,3 +2102,32 @@ def test_only_a_radar_solved_height_is_handed_to_swings():
 
     assert ts._setup_camera_height_m(solution(boxed)) == pytest.approx(0.40, abs=0.003)
     assert ts._setup_camera_height_m(solution(level)) is None
+
+
+def test_setup_captures_go_through_the_held_radar_session(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch, held_radar=True, qualified=False)
+    client = app.test_client()
+
+    for index, action in enumerate(("start", "capture_empty", "capture_ball")):
+        assert post(client, tester, action, f"held-{index}").status_code == 200
+
+    assert app.config["TEST_HELD_RADAR"].start_count == 2
+    assert app.config["TEST_STATIC_MANAGER"].start_count == 0
+    assert phase(client, tester)["phase"] in {"needs_camera_arm5", "camera_arm5_capturing"}
+
+
+def test_a_hardware_job_releases_the_held_radar_first(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch, held_radar=True)
+    body = {"tester_id": tester, "arm_id": "arm5", "environment": "indoors", "action": "preflight"}
+
+    assert app.test_client().post("/api/tester/run", json=body).status_code == 202
+
+    assert app.config["TEST_HELD_RADAR"].releases == 1
+
+
+def test_stop_also_cancels_a_held_radar_capture(tmp_path, inputs, monkeypatch):
+    app, _tester = app_for(tmp_path, inputs, monkeypatch, held_radar=True)
+
+    assert app.test_client().post("/api/tester/stop").status_code == 200
+
+    assert app.config["TEST_HELD_RADAR"].cancels == 1
