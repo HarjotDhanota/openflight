@@ -48,6 +48,8 @@ def test_the_ladder_is_the_agreed_rungs():
         ("arm5", 150),
         ("arm5", 100),
         ("arm5", 75),
+        ("arm5", 50),
+        ("arm5", 30),
         ("arm6", 300),
         ("arm6", 150),
         ("arm6", 75),
@@ -142,8 +144,11 @@ def test_a_dark_rung_skips_itself_and_the_shorter_ones_in_its_mode(tmp_path):
         state.record_swing(_verdict("green", f"a{i}"))
     state.begin("full-200", 4.5, {"ok": False, "reason": "too dark"})
     rungs = state.to_dict()["rungs"]
-    statuses = [rungs[r]["status"] for r in ("full-200", "full-150", "full-100", "full-75")]
-    assert statuses == ["skipped"] * 4
+    statuses = [
+        rungs[r]["status"]
+        for r in ("full-200", "full-150", "full-100", "full-75", "full-50", "full-30")
+    ]
+    assert statuses == ["skipped"] * 6
     assert state.current.rung_id == "half-300"
 
 
@@ -339,29 +344,29 @@ def test_final_full_mode_swing_waits_for_its_photo_before_handoff(tmp_path):
     assert done == ["arm5"]
 
 
-def test_fifth_accepted_full_75_swing_waits_for_its_exact_photo(tmp_path):
+def test_fifth_accepted_last_full_rung_swing_waits_for_its_exact_photo(tmp_path):
     run = tmp_path / "run-01" / "arm5" / "camera"
     run.mkdir(parents=True)
     state = sl.LadderState(tmp_path / "ladder.json")
     capture_number = 0
-    for rung_id in ("full-300", "full-200", "full-150", "full-100"):
+    for rung_id in ("full-300", "full-200", "full-150", "full-100", "full-75", "full-50"):
         state.begin(rung_id, 3.0, {"ok": True})
         for _ in range(5):
             state.record_swing(_verdict("green", f"old-{capture_number}"))
             capture_number += 1
-    state.begin("full-75", 12.0, {"ok": True})
+    state.begin("full-30", 12.0, {"ok": True})
     for index in range(4):
-        state.record_swing(_verdict("green", f"full75-{index}"))
+        state.record_swing(_verdict("green", f"full30-{index}"))
     done = []
     runner = _runner(tmp_path, FakeKiosk(), run_dir=tmp_path / "run-01", done=done)
     runner.start_rung()
-    _capture(run, exposure=75, gain=12.0, name="camera_final_75")
+    _capture(run, exposure=30, gain=12.0, name="camera_final_30")
 
     runner.poll_once()
 
     assert runner.state.to_dict()["pending_photo"] == {
-        "capture": "camera_final_75",
-        "rung_id": "full-75",
+        "capture": "camera_final_30",
+        "rung_id": "full-30",
     }
     assert done == []
 

@@ -203,7 +203,7 @@ def test_lock_serializes_with_policy_identity_and_applied_controls(tmp_path):
 def test_static_exposure_policy_identity_is_pinned():
     """A lattice or gate change must be a deliberate, reviewed identity change."""
     assert se.static_exposure_policy_sha256() == (
-        "56752f193d2d4574217b04324917060989dd23ba4a49c2c31db85b27355071a1"
+        "ae7e66a5ff1e908fe79bcbb107693d09bd84b5a3d453314a3340b0842a546a93"
     )
 
 
@@ -458,7 +458,7 @@ def test_one_measured_ball_predicts_the_setting_and_skips_the_walk(ball, backgro
 
     assert search.status == "locked"
     assert (search.lock.exposure_us, search.lock.gain) == (lowest.exposure_us, lowest.gain)
-    assert len(seen) <= 9  # the 30-75 us sunlight steps add one in a dim scene
+    assert len(seen) <= 10  # the 10-75 us sunlight steps add two in a dim scene
     assert search.to_dict()["prediction"]["binding_gate"] == "signal"
 
 

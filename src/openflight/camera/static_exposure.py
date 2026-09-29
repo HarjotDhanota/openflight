@@ -21,9 +21,29 @@ from openflight.camera.optical_quality import (
 
 STATIC_EXPOSURE_PURPOSE = "static_reference_ball"
 STATIC_EXPOSURE_SCHEMA = "openflight.camera.static_exposure_lock.v1"
-# 30-75 us and unity gain are for sunlight: outdoors on 29 Sept the old darkest
-# setting, 100 us x 2, still clipped 38 % of the ball.
-EXPOSURES_US = (30, 50, 75, 100, 150, 200, 300, 500, 800, 1250, 2000, 3000, 4000, 6000, 8000)
+# 10-75 us and unity gain are for sunlight: outdoors on 29 Sept the old darkest
+# setting, 100 us x 2, still clipped 38 % of the ball, and 50 us x 1 clipped 47 %.
+# The OV9281's shortest exposure is 9 us (one row) at 1280x800.
+EXPOSURES_US = (
+    10,
+    15,
+    20,
+    30,
+    50,
+    75,
+    100,
+    150,
+    200,
+    300,
+    500,
+    800,
+    1250,
+    2000,
+    3000,
+    4000,
+    6000,
+    8000,
+)
 GAINS = (1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0)
 _MIN_SIGNAL_ABOVE_FLOOR_DN = 20.0
 # Contrast against the surroundings and edge sharpness are recorded but not

@@ -63,8 +63,11 @@ class Rung:
     photos: bool
 
 
+# 50 and 30 us are for sunlight (outdoors 29 Sept a ball in sun clipped at 50 us x 1
+# during setup); indoors they are skipped with the rest once 75 us is too dark. The
+# sensor's shortest exposure is 9 us (one row) at 1280x800.
 LADDER: tuple[Rung, ...] = tuple(
-    [Rung(f"full-{e}", "arm5", e, True) for e in (300, 200, 150, 100, 75)]
+    [Rung(f"full-{e}", "arm5", e, True) for e in (300, 200, 150, 100, 75, 50, 30)]
     + [Rung(f"half-{e}", "arm6", e, False) for e in (300, 150, 75)]
 )
 RUNG_FPS = {"arm5": 120.0, "arm6": 288.0}

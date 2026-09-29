@@ -342,7 +342,7 @@ background behind a well-exposed ball is only amber in the swing verdicts. A run
 that is too bright skips only itself, so the shorter rungs still get their chance;
 a rung that is too dark still skips the shorter rungs in its mode. On 29 Sept
 (Outdoors-test-3) the old zone rule failed every rung on a sunlit patio beyond the
-mat, and each failure skipped the rest of its mode.
+mat, and each failure skipped the rest of its mode. The 1280×800 mode now has two sunlight rungs after 75 µs, at 50 and 30 µs, and the setup search reaches 10 µs; the OV9281 accepts exposures down to 9 µs (one row). Indoors they are skipped with the rest once 75 µs is too dark.
 
 Keep the ball in the camera's view on the live preview: with the lens about 95 mm off
 the ground, a raised mat edge or bumper between the unit and the ball hides it.
