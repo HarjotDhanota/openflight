@@ -363,7 +363,7 @@ def test_camera_range_estimator_identity_is_pinned():
     """Any estimator constant change must be a deliberate, reviewed identity change."""
     assert camera_range_estimator_policy()["name"] == "camera_reference_ball_floor_plane"
     assert camera_range_estimator_sha256() == (
-        "048abfac0455d9ff29d97917be87067ffb27e05e9e4858c50275ccdecefa2248"
+        "cb04182f3abffc17561e3754004ee1fa696ad7e42eed32c2e28429f19171a4ae"
     )
 
 
@@ -462,3 +462,55 @@ def test_size_range_uncertainty_is_at_least_a_fifth():
 
     selected = result.selected
     assert selected.size_range_uncertainty_m >= 0.2 * selected.size_camera_range_m
+
+
+def _render_floor_ball(camera, point, width, height, diffuse=90.0):
+    pixel = _project_nominal(camera, np.asarray(point))
+    diameter = (
+        camera.focal_size_px
+        * BALL_DIAMETER_M
+        / np.linalg.norm(np.asarray(point) - np.asarray(camera.camera_origin_lfu))
+    )
+    return pixel, _lit_spheres(height, width, [(pixel[0], pixel[1], diameter / 2.0, diffuse)])
+
+
+def test_a_ball_teed_above_the_lens_is_inside_the_hitting_area():
+    """Unit on the floor, ball on an 80 mm tee on a 25 mm mat: 30 mm above the lens."""
+    camera = _camera(640, 400, 466.6667, camera_origin=(0.0, 0.0, 0.095))
+    point = (0.0, 1.2, 0.025 + 0.080 + 0.021335)
+    pixel, frames = _render_floor_ball(camera, point, 640, 400)
+
+    result = estimate_reference_ball_range(
+        frames, camera, ball_center_height_m=0.021335, plausible_radar_range_m=(0.6, 3.5)
+    )
+
+    assert result.status == "selected"
+    assert result.selected.x_px == pytest.approx(pixel[0], abs=2.0)
+    assert result.selected.y_px == pytest.approx(pixel[1], abs=2.0)
+
+
+def test_a_ball_outside_the_hitting_area_is_refused_and_the_reason_says_where():
+    camera = _camera(640, 400, 466.6667, camera_origin=(0.0, 0.0, 0.095))
+    _pixel, frames = _render_floor_ball(camera, (0.38, 1.4, 0.021335), 640, 400)
+
+    result = estimate_reference_ball_range(
+        frames, camera, ball_center_height_m=0.021335, plausible_radar_range_m=(0.6, 3.5)
+    )
+
+    assert result.selected is None
+    assert any(
+        item.rejection_reason and "right of the radar axis" in item.rejection_reason
+        for item in result.candidates
+    )
+
+
+def test_a_unit_standing_on_a_box_still_finds_a_ball_on_the_floor():
+    camera = _camera(640, 400, 466.6667, camera_origin=(0.0, 0.0, 0.5 + 0.095))
+    pixel, frames = _render_floor_ball(camera, (0.05, 1.5, 0.021335), 640, 400)
+
+    result = estimate_reference_ball_range(
+        frames, camera, ball_center_height_m=0.021335, plausible_radar_range_m=(0.6, 3.5)
+    )
+
+    assert result.status == "selected"
+    assert result.selected.y_px == pytest.approx(pixel[1], abs=2.0)

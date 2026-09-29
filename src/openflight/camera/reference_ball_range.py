@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
 import numpy as np
@@ -45,6 +45,18 @@ _MIN_DIAMETER_RELATIVE_UNCERTAINTY = 0.20
 _MAX_SELECTION_SCORE = 2.5
 # The ball sits at address in front of the unit, near its boresight.
 _LATERAL_SIGMA_M = 0.15
+# The hitting area: where a ball at address can legitimately be, in the world
+# (commercial behind-the-ball units use a zone 0.6-1.2 m deep, +-0.15-0.3 m wide).
+# Distance and sideways offset are from the radar; heights are the ball centre
+# relative to the lens, allowing a ball 10 mm into grass up to a 90 mm tee, with
+# the lens 0-1 m above the hitting surface.
+_HITTING_RANGE_M = (1.0, 2.5)
+_HITTING_LATERAL_M = 0.30
+# First-pass seeds get extra sideways slack so a near miss is still fitted and
+# refused with a named reason instead of silently disappearing.
+_SEED_LATERAL_M = 0.45
+_BALL_ABOVE_SURFACE_M = (-0.010, 0.090)
+_LENS_ABOVE_SURFACE_M = (0.0, 1.0)
 
 
 def camera_range_estimator_policy() -> dict[str, Any]:
@@ -54,12 +66,17 @@ def camera_range_estimator_policy() -> dict[str, Any]:
         "version": 2,
         "detector": "reference_ball_candidates_v2_merged_seeds",
         "seed_fits": REFERENCE_SEED_FITS,
-        "search_region": "below_horizon_with_plausible_solved_camera_height",
+        "search_region": "hitting_area_in_world_coordinates",
         "camera_height": "solved_from_apparent_size_and_ray",
         "camera_height_range_m": list(_CAMERA_HEIGHT_RANGE_M),
         "camera_height_prior_sigma_m": _CAMERA_HEIGHT_PRIOR_SIGMA_M,
         "seed_size_tolerance": _SEED_SIZE_TOLERANCE,
         "lateral_sigma_m": _LATERAL_SIGMA_M,
+        "hitting_range_m": list(_HITTING_RANGE_M),
+        "hitting_lateral_m": _HITTING_LATERAL_M,
+        "seed_lateral_m": _SEED_LATERAL_M,
+        "ball_above_surface_m": list(_BALL_ABOVE_SURFACE_M),
+        "lens_above_surface_m": list(_LENS_ABOVE_SURFACE_M),
         "min_diameter_relative_uncertainty": _MIN_DIAMETER_RELATIVE_UNCERTAINTY,
         "max_selection_score": _MAX_SELECTION_SCORE,
         "camera_height_reference": "ball_support",
@@ -639,24 +656,15 @@ def _candidate(  # pylint: disable=too-many-locals
             raise ValueError("camera model returned an invalid ray")
     except ValueError as error:
         return _withheld(ball, camera, str(error))
-    ranges = {"size_range": size_range, "size_uncertainty": size_uncertainty}
     angular = math.sin(math.radians(camera.angular_uncertainty_deg))
     down = -float(ray[2])
-    if down <= -angular:
-        return _withheld(ball, camera, "a resting ball cannot sit above the horizon", **ranges)
     camera_height = ball_center_height_m + size_range * down
     height_uncertainty = math.hypot(size_uncertainty * abs(down), size_range * angular)
     relative = ray * size_range
     offset = np.asarray(camera.radar_origin_lfu) - np.asarray(camera.camera_origin_lfu)
     radar_range = float(np.linalg.norm(relative - offset))
-    low, high = _camera_height_bounds(camera)
-    reason = None
-    if (
-        camera_height + 2.0 * height_uncertainty < low
-        or camera_height - 2.0 * height_uncertainty > high
-    ):
-        reason = "the camera height this ball implies is not physically plausible"
-    elif not plausible_range[0] <= radar_range <= plausible_range[1]:
+    reason = _hitting_area_reason(ray, radar_range, size_uncertainty, camera, ball_center_height_m)
+    if reason is None and not plausible_range[0] <= radar_range <= plausible_range[1]:
         reason = "size-derived radar range is outside the configured search interval"
     height_sigma = abs(camera_height - camera.camera_origin_lfu[2]) / _CAMERA_HEIGHT_PRIOR_SIGMA_M
     lateral = abs(float(relative[0] - offset[0]))
@@ -729,26 +737,95 @@ def solve_camera_height_from_radar(
     return float(height), float(uncertainty)
 
 
-def _seed_filter(camera: BallPlaneCamera, ball_center_height_m: float):
-    """Drop seeds where no plausible camera height could put a resting ball."""
-    angular = math.sin(math.radians(camera.angular_uncertainty_deg))
-    low, high = _camera_height_bounds(camera)
+def _ball_height_below_lens_bounds(ball_center_height_m: float) -> tuple[float, float]:
+    """Ball centre height relative to the lens that any legitimate setup allows."""
+    low = ball_center_height_m + _BALL_ABOVE_SURFACE_M[0] - _LENS_ABOVE_SURFACE_M[1]
+    high = ball_center_height_m + _BALL_ABOVE_SURFACE_M[1] - _LENS_ABOVE_SURFACE_M[0]
+    return low, high
 
-    def allowed(xs: np.ndarray, ys: np.ndarray, diameter: float) -> np.ndarray:
-        rays = np.asarray(camera.ray_model.rays(np.column_stack([xs, ys])), dtype=float)
-        down = -rays.reshape(-1, 3)[:, 2]
-        size_range = GOLF_BALL_DIAMETER_M * camera.focal_size_px / diameter
-        near, far = (
-            size_range * (1.0 - _SEED_SIZE_TOLERANCE),
-            size_range * (1.0 + _SEED_SIZE_TOLERANCE),
+
+def _hitting_area_upper_distance(
+    rays: np.ndarray, camera: BallPlaneCamera, ball_center_height_m: float, lateral_m: float
+) -> np.ndarray:
+    """Farthest camera distance along each ray that stays inside the hitting area.
+
+    Each limit is linear in distance, so a ray is usable out to the smallest of
+    them. The camera's angular uncertainty is added as slack that grows with distance.
+    """
+    rays = np.asarray(rays, dtype=float).reshape(-1, 3)
+    slack = math.sin(math.radians(camera.angular_uncertainty_deg))
+    offset = np.asarray(camera.radar_origin_lfu) - np.asarray(camera.camera_origin_lfu)
+    low, high = _ball_height_below_lens_bounds(ball_center_height_m)
+    upper = np.full(len(rays), np.inf)
+    sideways = np.abs(rays[:, 0]) - slack
+    with np.errstate(divide="ignore", invalid="ignore"):
+        upper = np.where(
+            sideways > 0, np.minimum(upper, (lateral_m + abs(offset[0])) / sideways), upper
         )
-        heights = [
-            ball_center_height_m + distance * (down + tilt)
-            for distance in (near, far)
-            for tilt in (-angular, angular)
-        ]
-        lowest, highest = np.min(heights, axis=0), np.max(heights, axis=0)
-        return (down > -angular) & (highest >= low) & (lowest <= high)
+        rising = rays[:, 2] - slack
+        upper = np.where(rising > 0, np.minimum(upper, high / rising), upper)
+        falling = rays[:, 2] + slack
+        upper = np.where(falling < 0, np.minimum(upper, low / falling), upper)
+    return upper
+
+
+def _hitting_area_reason(
+    ray: np.ndarray,
+    distance: float,
+    distance_sigma: float,
+    camera: BallPlaneCamera,
+    ball_center_height_m: float,
+) -> str | None:
+    """Why a candidate at this distance cannot be the ball at address, if it cannot."""
+    offset = np.asarray(camera.radar_origin_lfu) - np.asarray(camera.camera_origin_lfu)
+    near = max(_HITTING_RANGE_M[0], distance - 2.0 * distance_sigma)
+    far = min(_HITTING_RANGE_M[1], distance + 2.0 * distance_sigma)
+    if near > far:
+        return f"outside the hitting area: about {distance:.1f} m from the radar"
+    reach = float(
+        _hitting_area_upper_distance(ray[None], camera, ball_center_height_m, _HITTING_LATERAL_M)[0]
+    )
+    if reach >= near:
+        return None
+    point = ray * min(max(distance, near), far)
+    sideways = float(point[0] - offset[0])
+    if abs(sideways) - math.sin(math.radians(camera.angular_uncertainty_deg)) * near > (
+        _HITTING_LATERAL_M
+    ):
+        side = "right" if sideways > 0 else "left"
+        return f"outside the hitting area: {abs(sideways):.2f} m {side} of the radar axis"
+    low, high = _ball_height_below_lens_bounds(ball_center_height_m)
+    if point[2] > high:
+        return "outside the hitting area: too high for a ball on a tee"
+    return "outside the hitting area: too low for a ball on the hitting surface"
+
+
+def _score_reason(candidate: ReferenceBallRangeCandidate, camera: BallPlaneCamera) -> str:
+    """Name the term that made a candidate score too badly to be the ball at address."""
+    point = candidate.floor_point_lfu_m
+    sideways = float(point[0] - camera.radar_origin_lfu[0]) if point is not None else 0.0
+    lateral_sigma = abs(sideways) / _LATERAL_SIGMA_M
+    if lateral_sigma >= (candidate.consistency_sigma or 0.0):
+        side = "right" if sideways > 0 else "left"
+        return (
+            f"probably outside the hitting area: about {abs(sideways):.2f} m {side} "
+            "of the radar axis (by apparent size)"
+        )
+    return "implied lens height is far from the rig's (by apparent size)"
+
+
+def _seed_filter(camera: BallPlaneCamera, ball_center_height_m: float):
+    """Drop seeds whose ray never passes through the hitting area.
+
+    The disk filter's seed size is not the ball's size, so the seed's distance is
+    not used; a seed survives if any distance in the hitting area fits its ray.
+    """
+    nearest = _HITTING_RANGE_M[0] - 0.1
+
+    def allowed(xs: np.ndarray, ys: np.ndarray, _diameter: float) -> np.ndarray:
+        rays = np.asarray(camera.ray_model.rays(np.column_stack([xs, ys])), dtype=float)
+        reach = _hitting_area_upper_distance(rays, camera, ball_center_height_m, _SEED_LATERAL_M)
+        return reach >= nearest
 
     return allowed
 
@@ -827,6 +904,14 @@ def estimate_reference_ball_range(
         return ReferenceBallRangeResult("ambiguous", "withheld", None, candidates, diagnostics)
     if plausible[0].score > _MAX_SELECTION_SCORE:
         diagnostics["best_score"] = plausible[0].score
+        candidates = tuple(
+            replace(item, rejection_reason=_score_reason(item, camera))
+            if item.rejection_reason is None
+            and item.score is not None
+            and item.score > _MAX_SELECTION_SCORE
+            else item
+            for item in candidates
+        )
         return ReferenceBallRangeResult(
             "no_consistent_candidate", "withheld", None, candidates, diagnostics
         )
