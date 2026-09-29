@@ -1,6 +1,6 @@
 # Setup geometry and next steps: spec
 
-Date: 29 September 2026. Branch: `feat/tester-capture-pilot` (fork). Status: proposed.
+Date: 29 September 2026. Branch: `feat/tester-capture-pilot` (fork). Status: A1 and A2a implemented (4cac9411, 59bcb616); setup radar timings recorded (7fb8bbcb); A2b–A4 open.
 
 This spec fixes the two known code problems from the camera-fusion research log (`docs/research/camera-fusion/README.md`, section 4) and orders the work that follows. Only measured rig geometry is a fixed input. Everything else is measured at setup or per shot, or it is a design constant listed here.
 
@@ -11,7 +11,7 @@ This spec fixes the two known code problems from the camera-fusion research log 
 
 ## 2. Work now (code only; testable without hardware)
 
-### A1. Hitting area replaces the level-line rule
+### A1. Hitting area replaces the level-line rule (implemented, 4cac9411)
 
 **What:** the resting ball must lie inside a hitting area. It is defined in the world, not in pixels, and projected into the image using the rig geometry and the LIS3DH pitch. It replaces the "not above the level line" rule in both the seed filter and the candidate check.
 
@@ -52,21 +52,38 @@ This already removes the door knobs and clothes in the 28 Sept field frame (well
 
 ### A2. Surface reference and per-shot tee height
 
-**A2a: setup semantics (now)**
+**A2a: setup semantics (implemented, 59bcb616)**
 
-- **Setup instruction:** "Place one ball directly on the hitting surface (mat or grass, not on a tee), in the hitting area." This replaces "exactly as you'll hit it".
-- **What the solved height means:** "lens height above the hitting surface". The radar's height above the surface is that minus 44 mm.
-- **Remove the uniform-lift workaround** in `server._apply_solved_camera_height`. With a surface reference the radar can no longer go below zero; a solved lens height under 49 mm is refused as implausible.
-- **Separate the heights the swing server receives:**
-  - `--solved-camera-height-m`: lens above the surface.
-  - radar above the surface (derived as above): used by the floor-bounce model.
-  - `--iwr6843-ball-height-m`: the ball centre above the surface at address. It defaults to one radius until a per-shot tee height exists.
-- **Record** the surface reference, and how it was solved, in the setup evidence and the session geometry.
+- **Setup instruction:** "Place one ball directly on the hitting surface (on the mat or grass, not on a tee) where you will hit from". This replaces "exactly as you'll hit it".
+- **Heights are above the hitting surface.** The radar's height above the surface is the lens height minus 44 mm.
+- **The rig file's lens height is the default.** It is exact whenever the unit and the ball stand on the same surface, which is also what TrackMan, Garmin and Rapsodo assume.
+- **The one-ball radar solve is a gross-error check, not a measurement.**
+  - It is only good to about ±25–65 mm, because the ball sits just 2–3° below level, so each degree of tilt error costs about 22 mm at 1.25 m.
+  - It replaces the rig height only when the two disagree by more than max(60 mm, 2σ), for example a unit on a box. Only then is `--solved-camera-height-m` handed to swings.
+  - The evidence records `nominal_m`, `radar_solved_m`, `check` (`consistent` / `unit_raised` / `unit_lowered` / `not_checked`), `source` and `reference: hitting_surface`.
+- **The uniform-lift workaround is removed.** A lens height that would put the radar less than 10 mm above the surface is refused, both at setup (`radar_rejected`) and by the server (`ValueError`).
+- **Heights the swing server receives:**
+  - `--solved-camera-height-m`: lens above the surface; only sent on a gross mismatch.
+  - Radar above the surface: derived, used by the floor-bounce model.
+  - `--iwr6843-ball-height-m`: ball centre above the surface. It stays one radius until A2b.
 
-**Tests:**
+**Why not more precision (the two-spot fit was dropped):**
+- The height only feeds the radar's vertical launch angle (floor-bounce model). Camera club data, impact location, ball speed and horizontal launch don't use it.
+- In a noise-free simulation with the radar truly 51 mm up:
+  - A 10–25 mm height error moves ball heights by +5 to +28 mm.
+  - Launch angle moves by 0 to 1.4°, erratically, at 8° launch, and under 0.2° at 20°.
+  - With the correct height the model already reads 8.8° for a true 8° in one case. That is the marginal floor-bounce geometry at 51 mm.
+- A mat under the ball but not the unit (20–30 mm) is therefore within the model's present noise.
+- A second ball placement would cost another radar capture (about 11–13 s) every setup.
+- If the floor-bounce model is ever tightened, the better route is a once-per-unit calibration: a ChArUco board (B8) plus one tilt-sensor offset measurement. It is not a per-session step.
+
+**Tests (all pass):**
 - The server derives the radar height from the lens height with no lift.
-- A teed ball height never changes the radar height given to the two-ray model.
-- The setup refuses a lens height below the radar depth.
+- A teed ball height never changes the radar height.
+- A lens height that would bury the radar is refused.
+- A level unit keeps the rig height.
+- A unit on a box uses the radar solve.
+- Only a radar-solved height is handed to swings.
 
 **A2b: per-shot tee height (next, after A2a)**
 
@@ -88,8 +105,43 @@ This already removes the door knobs and clothes in the 28 Sept field frame (well
 
 ### A4. Research, offline
 
-- **Radar spin axis:** research how TrackMan and FlightScope patents get the spin axis from radar. Then check the IWR's feasibility: sort the echo by Doppler, then measure each Doppler slice's angle by comparing phase across the receivers. Do a first offline look at existing IWR shot dumps for a spin spread.
+**Radar spin axis (research done 28 Sept; offline look still open).** The idea is to sort the echo by Doppler, then measure each Doppler slice's angle across the receivers.
+- **Physics:** sound, and inferred rather than measured. At 60 GHz the dimples form a Bragg ring at about 40° on the ball, whose top and bottom arcs give two Doppler lobes at ±0.64·ωr. The 24 GHz OPS243 never sees this.
+- **Prior art:**
+  - TrackMan US10850179B2 claims essentially this method: at least three non-collinear receivers, and a spin-axis line perpendicular to the Doppler components' angular positions. **A freedom-to-operate check is needed before shipping.**
+  - FlightScope US10151831B2 uses time delays between receiver pairs, which is the same physics.
+  - TrackMan US8845442B2 takes rate from sidebands and axis from the trajectory.
+- **As mounted, the board is poor for axis tilt.** The 8-element array is vertical, and the only horizontal baseline is TX2's λ/2 offset: about 2.2× below TrackMan's stated minimum, with milliseconds of dwell against TrackMan's seconds.
+- **Expected results:**
+
+  | | Spin rate | Spin axis |
+  |---|---|---|
+  | Unmarked ball | coarse (±5–20 %), useful to settle the OPS 1×/2× ambiguity | not feasible as mounted |
+  | Foil dot | about 1 % | ~6–20° as mounted; ~1.5–5° with the board rotated |
+
+- **Other limits:**
+  - The current 3-TX loop aliases the lobes above about 6,200 rpm. A 2-TX research profile clears about 9,300 rpm.
+  - Tilt error grows as R³.
+- **The board stays as mounted.** Rotating it would weaken the vertical array that launch angle and the floor-bounce model depend on. The camera with a marked ball remains the axis route.
+- **Next:**
+  - Offline look at the July TrackMan-scored dumps. Stop rule: driver lobes below 6 dB, or r < 0.5 against truth spin, ends unmarked IWR spin.
+  - Then bench B6.
+
+**Other items:**
 - **Range–Doppler coupling** (≈0.62 ms impact-time bias): prepare the correction behind a flag, but do not enable it until B4 data checks the sign.
+- **Check `iwr6843/shot.py` `NOTCH_SPACING_MS = 26.93`.** That is the 2-TX value (λ/(2·90 µs)). The 3-TX capture profiles have a 135 µs loop, which gives ≈17.9 m/s. It was tuned against TrackMan data, so verify on the July dumps before changing anything.
+
+### A5. Setup radar capture time (timings added, 7fb8bbcb)
+
+- **Cost:**
+  - Each static capture is roughly 11–13 s, and the setup takes two (empty, then ball).
+  - 7.0 s of each is the 732,812-byte ring crossing the UART at 1,041,667 baud. The rest is estimated: Python start-up and port search ~2–3 s, configure ~1 s, the fixed 1 s settle, and cleanup.
+- **Timings now on file:** every capture record carries `stage_seconds` and `total_seconds`, so the Pi's real split is recorded.
+- **Opt-in 14-frame profile:** `config/iwr6843_static_range_14f3ms_53bin_iq16.cfg` keeps the same windows and moves 427 KB (about 4.1 s). The static gate needs at least 12 frames. It stays opt-in (`--iwr-static-config`) until B9 passes.
+- **Further options, not started:**
+  - Keep one radar connection open across the empty and ball captures (~2–3 s each).
+  - IQ8 storage: halves the transfer, fidelity unvalidated.
+  - A firmware option to dump only a few frames.
 
 ## 3. Hardware steps (need the Pi or the rig)
 
@@ -103,6 +155,7 @@ This already removes the door knobs and clothes in the 28 Sept field frame (well
 | B6 | Harjot | Drill-spun ball in front of the IWR, plain and with foil dots, at known axis tilts: radar spin rate and axis feasibility. |
 | B7 | Harjot | Powered USB hub or short cable if the CP2105 stalls return: power or data. |
 | B8 | Harjot | Print a ChArUco board: camera intrinsics (focal length, principal point, distortion). |
+| B9 | Harjot | Five setups with the 24-frame and five with the 14-frame static profile, same ball and spot: does the 14-frame profile give the same accepted range (within 10 mm) and pass the frame-stability gate as often? Also reports the real per-stage timings. |
 
 ## 4. After the data
 
@@ -118,8 +171,24 @@ This already removes the door knobs and clothes in the 28 Sept field frame (well
 - **Face-angle D-plane weight per club** (from B4 truth).
 - **Push and PR:** push the fork branch only after A1–A3 pass on the Pi. Upstream gets only what's necessary; this research log stays on the fork, linked from the PR.
 
-## 5. Decisions needed from Harjot
+## 5. Decisions
 
-1. The hitting-area constants in A1: 1.0–2.5 m, ±0.30 m, tees to 90 mm.
-2. The setup ball goes on the surface, never on a tee (A2a).
-3. Whether the live-preview overlay ships on the fork now, with the patent note carried to any upstream PR.
+**Made (29 Sept):**
+1. **Hitting-area constants in A1:** 1.0–2.5 m, ±0.30 m, tees to 90 mm. Implemented.
+2. **Setup ball:** it goes on the surface, never on a tee (A2a). Implemented.
+3. **Lens height:** the rig file's height by default; the radar solve is a gross-error check only. The two-spot fit is dropped (see A2a).
+4. **IWR board:** stays as mounted. Axis tilt is not worth losing the vertical array.
+5. **Radar setup capture:** timings recorded; the 14-frame profile is opt-in until B9.
+
+**Still open:**
+- Whether the live-preview overlay ships on the fork now, with the patent note carried to any upstream PR.
+
+## 6. What other makers do (research, 28 Sept)
+
+- **Gravity:** every maker references gravity with an onboard tilt sensor. TrackMan 4 self-levels with motorised legs; Mevo, Rapsodo, Garmin and SkyTrak gate or compensate tilt.
+- **Vertical datum:** almost all define the unit's base as level with the hitting surface and tell the user to make it so. TrackMan's tolerance is ±5 cm (secondary source).
+  - FlightScope is the exception. Mevo stays on the floor with a typed hitting-surface offset of at most 76 mm, and must never be raised on a block, which suggests its radar model uses the floor in front of the unit.
+  - Voice Caddie tells users to raise the unit for tees over 1.5 in.
+- **Tee height:** no maker measures it per shot.
+- **Setup object:** high-end installs put a calibration object on the hitting surface (Uneekor board and bubble level, TrackMan iO board). For a portable behind-ball unit, the resting ball is that object; TrackMan's US8085188 (expires 24 June 2027) assumes the radar is "at a given height above the launch position".
+- **Consequence for OpenFlight:** the rig height by default plus a radar gross-error check is the TrackMan model, with no typed input. An envelope of −10 to +76 mm ball support relative to the feet matches Mevo's published limit.
