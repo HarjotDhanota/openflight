@@ -1,6 +1,6 @@
 # Behind-the-ball camera and 60 GHz radar fusion
 
-*Working research log, corrected 29 September 2026. For maintainers and engineers.*
+*Working research log, updated 29 September 2026. For maintainers and engineers.*
 
 OpenFlight is a Raspberry Pi golf launch monitor. This log covers its behind-the-ball subsystem: an OV9281 global-shutter camera and a TI IWR6843 radar in one enclosure. It keeps three kinds of statement apart:
 
@@ -8,7 +8,7 @@ OpenFlight is a Raspberry Pi golf launch monitor. This log covers its behind-the
 - what single tests showed;
 - what the research suggests.
 
-Nothing here is a validated accuracy figure yet. An earlier version overstated several results; see the [corrections log](#10-corrections-log).
+Nothing here is a validated accuracy figure yet. An earlier version overstated several results; see the [corrections log](#11-corrections-log).
 
 Evidence tags:
 
@@ -29,11 +29,12 @@ Evidence tags:
 4. [Known problems in the current code](#4-known-problems-in-the-current-code)
 5. [Experiment log](#5-experiment-log)
 6. [Research: where the radar sees the ball](#6-research-where-the-radar-sees-the-ball)
-7. [Research: impact location](#7-research-impact-location)
-8. [Research: spin and spin axis](#8-research-spin-and-spin-axis)
-9. [Status and next experiments](#9-status-and-next-experiments)
-10. [Corrections log](#10-corrections-log)
-11. [Reproducing the figures](#11-reproducing-the-figures)
+7. [Research: setup geometry and lens height](#7-research-setup-geometry-and-lens-height)
+8. [Research: impact location](#8-research-impact-location)
+9. [Research: spin and spin axis](#9-research-spin-and-spin-axis)
+10. [Status and next experiments](#10-status-and-next-experiments)
+11. [Corrections log](#11-corrections-log)
+12. [Reproducing the figures](#12-reproducing-the-figures)
 
 ## 1. What the subsystem does
 
@@ -55,7 +56,7 @@ Positions are relative to the camera lens, as seen from behind the unit looking 
 | Constant | Value | Source |
 |---|---|---|
 | Camera boresight | level | design |
-| Lens height above the unit's feet | 95 mm at the default foot setting | Tape, 22 Sept. The actual height depends on the surface and is solved at setup. |
+| Lens height above the unit's feet | 95 mm at the default foot setting | Tape, 22 Sept. Used as the lens height above the hitting surface unless the setup's radar check finds a gross mismatch ([section 7](#7-research-setup-geometry-and-lens-height)). |
 | IWR6843LEVM receive-antenna centre | in line with the lens sideways, 44 mm below, 30 mm behind | Tape, 22 Sept. Sideways alignment confirmed by the builder. |
 | IWR6843 and OPS243 tilt | 10° up | Design mount angle; not measured on this box. |
 | OPS243 | 85 mm left, 47 mm below, 20 mm behind | tape, 22 Sept |
@@ -68,7 +69,7 @@ Conventions (**Code**):
 
 - **Axes:** lateral is positive toward target-right, forward is down the target line, and up is against gravity.
 - **Pitch:** camera pitch is positive nose-up. This holds consistently through the LIS3DH, the camera rays, club delivery and the radar path.
-- **Heights:** see [known problems](#4-known-problems-in-the-current-code). The current code measures them from the ball's support, and that choice is being revised.
+- **Heights:** heights are above the hitting surface: the mat or grass the setup ball rests on. A ball on a tee is higher than that surface by the tee height.
 - **Handedness:** right-handed golfer by default. Left-handed is an explicit flip.
 
 ## 3. The range setup, step by step
@@ -82,11 +83,23 @@ Conventions (**Code**):
 
 **Open:** whether that really is the ball's centre. See [section 6](#6-research-where-the-radar-sees-the-ball).
 
+**Why it is slow.**
+
+- Each capture takes roughly 11–13 s, and the setup takes two: empty, then ball.
+- 7.0 s of each is the 732,812-byte range ring crossing the radar's UART at 1,041,667 baud (**Computed**). The rest (Python start-up and port search, configuration, a fixed 1 s settle, cleanup) is estimated.
+- Every capture record now lists `stage_seconds` and `total_seconds`, so the Pi's real split will be on file.
+- A 14-frame profile with the same range windows moves 427 KB, about 4.1 s; the static gate needs at least 12 frames. It is opt-in until a Pi comparison shows the same accepted range (**Code**).
+
 ### 3.2 Finding the resting ball (Code)
 
 1. **Find candidate spots.** A disk filter runs over the image, binned to 320 px wide, at 12 ball sizes. Its peaks from all sizes are merged, so each place is fitted once, at the size it matches best.
-2. **Drop impossible places.** A place is dropped if the ray through it points more than 1° above the camera's level line, or if its size and row imply a lens height outside 0–1 m above the ball's support. The first rule is wrong for teed balls; see [known problems](#4-known-problems-in-the-current-code).
-3. **Fit and rank.** At most 8 places get a physical lit-sphere fit. Candidates are ranked on two things:
+2. **Drop places outside the hitting area.** A place is dropped when no distance along its ray lies inside the **hitting area**. The area is defined in the world, not in pixels:
+   - 1.0–2.5 m from the radar;
+   - within ±0.30 m of its axis (±0.45 m for this first pass);
+   - a ball centre from 10 mm sunk into grass up to a 90 mm tee, with the lens 0–1 m above the surface.
+
+   It replaced a rule that dropped everything above the camera's level line, which excluded teed balls. The size ranges come from commercial units: TrackMan 4 sits 1.8–2.9 m behind the ball, Garmin R10 1.8–2.4 m, MLM2PRO 2.0–2.4 m; this rig's sensors are tuned nearer.
+3. **Fit, check and rank.** At most 8 places get a physical lit-sphere fit. A fitted candidate whose size-implied range puts it outside the hitting area is refused with the limit named, for example "0.67 m left of the radar axis" or "too high for a ball on a tee". The rest are ranked on two things:
    - their sideways offset from the radar (σ = 0.15 m, using the size-based range);
    - how far their implied lens height is from the rig's nominal 95 mm (σ = 60 mm).
 
@@ -131,19 +144,18 @@ h = r + t · down(û)
 
 Here û is the unit ray to the ball, o is the radar's position relative to the lens, R is the radar range, and r is the ball radius.
 
-The solve rests on four assumptions:
-- the radar range reaches the ball's centre (**Open**);
-- the nominal camera intrinsics;
-- the LIS3DH pitch;
-- roll not applied.
+The setup ball rests directly on the hitting surface, never on a tee, so h is the lens height above that surface. The ball is only 2–3° below the camera's level line, so every degree of tilt error moves h by about 22 mm at 1.25 m. With the tilt sensor's zero offset and the uncalibrated principal point, one ball solves h only to about ±25–65 mm (**Inferred**).
 
-Its stated uncertainty is about ±21 mm at 1.25 m. That comes from the camera model's 1° angular uncertainty, which covers pitch, principal point and distortion together.
+The solve is therefore a gross-error check, not a measurement:
+- The rig file's 95 mm stands unless the solve differs from it by more than 60 mm (or twice its own uncertainty, if larger). That catches a unit standing on a box.
+- A solve that would put the radar less than 10 mm above the surface is refused.
+- The setup records the nominal height, the solved height, which one was used, and why (`consistent`, `unit_raised` or `unit_lowered`).
 
-If the radar hasn't accepted the ball, an apparent-size solve is used instead. It's weaker, because the fitted size is unreliable.
+[Section 7](#7-research-setup-geometry-and-lens-height) explains why more precision wouldn't pay.
 
 ### 3.5 Hand-off to swings (Code)
 
-Swings receive `--iwr6843-tee-m`, `--solved-camera-height-m` and `--iwr6843-ball-height-m` when the range is qualified, or when the test switch `--use-unqualified-tee-range` is set. The swing server then:
+With a qualified range, or with the test switch `--use-unqualified-tee-range`, swings receive `--iwr6843-tee-m` and `--iwr6843-ball-height-m` (one ball radius until per-shot tee height exists). Only when the setup found a gross mismatch do they also receive `--solved-camera-height-m`. The swing server then:
 - replaces the rig file's lens height for the session;
 - moves the radar height with it;
 - records both in the session geometry.
@@ -152,10 +164,10 @@ Without the switch and without qualification, swings run with the range-dependen
 
 ## 4. Known problems in the current code
 
-- **The search region excludes teed balls.** Step 2 of the ball search drops anything more than 1° above the camera's level line. With the lens 80–95 mm above the floor, a ball on a tee on a mat can sit at or above lens height, especially a few metres out.
-  *Planned fix:* a hitting area like the commercial units use: a zone about 1.0–2.5 m out and ±0.15–0.3 m sideways, projected into the image with the tilt sensor and shown on the live preview. It narrows further once the radar range is known.
-- **Heights measured from the ball's support break the radar's floor-bounce model for teed balls.** Most of the swing geometry uses only height differences. But the two-ray multipath model in `trajectory.py` and the LCMF path uses the radar's height above the reflecting floor. Measuring heights from a tee top, and lifting every height when the radar would go negative, gives that model the wrong floor.
-  *Planned fix:* the setup ball rests on the hitting surface, as the surface reference. The radar's height above the floor comes from that setup. Tee height is measured per shot, from the camera frames before impact.
+- **Fixed 29 Sept: the search region excluded teed balls.** The ball search dropped anything more than 1° above the camera's level line, and a ball on a tee on a mat can sit at or above lens height. The hitting area (step 3.2) replaced that rule. A live-preview overlay of the area is not built yet.
+- **Fixed 29 Sept: heights from the ball's support broke the radar's floor-bounce model.** The two-ray multipath model in `trajectory.py` and the LCMF path use the radar's height above the reflecting floor. Measuring heights from a tee top, and lifting every height when the radar would go negative, gave that model the wrong floor.
+  *Fix:* heights are now above the hitting surface, the lift is gone, and a teed ball's height is a separate input that never moves the radar height. Tee height per shot, from the camera frames before impact, is next.
+- **The burst-MTI notch spacing may use the wrong loop time.** `iwr6843/shot.py` sets `NOTCH_SPACING_MS = 26.93`, which is λ/(2·90 µs), the 2-transmitter loop. The current 3-transmitter profiles have a 135 µs loop, which puts the notches every 17.9 m/s. The value was tuned against TrackMan data, so it will be checked on the July dumps before anything changes. **Inferred**
 - **The lit-sphere fit's size is unreliable.** On the field frame, the free fit stopped exactly at its upper size limit, twice the seed size (35.86 px from a 17.93 px seed). Fits held 12 % apart score the same. So size-based range carries at least 20 % uncertainty, and the ranking's sideways offset inherits it.
 - **Roll is recorded but not applied.** The nominal ray model and the calibrated projection applied the LIS3DH roll with opposite signs. Until the correct sign is derived from the known mount, roll is left out. The field frame can't settle it ([E2](#e2-28-sept-2026-evening-one-indoor-range-setup)).
 - **Range–Doppler coupling is not corrected.** An up-chirp FMCW radar reads a receding target long by v × f_c / S, about v × 0.62 ms here. Impact time compares the moving track with the static tee range, so it may carry a constant bias of about 0.62 ms. **Inferred**; the sign hasn't been checked on data.
@@ -249,7 +261,68 @@ A golf ball, though, is a layered dielectric. Titleist's radar ball puts its ref
   4. Report the front return plus one radius.
 - **The deciding experiment:** alternate a foil-wrapped ball (a known near-surface reflector) and a bare ball at taped spots, stepped 5–10 mm apart. Bare minus foil gives the ball's offset, and their power ratio places the ball in the table above.
 
-## 7. Research: impact location
+## 7. Research: setup geometry and lens height
+
+The question: how precisely does the setup need to know how high the unit sits above the hitting surface, and how do commercial units handle it?
+
+### What uses the lens height
+
+- **Not used:** camera club path, face angle, attack angle and impact location on the face. They come from camera rays, the radar range and gravity from the tilt sensor. Ball speed and horizontal launch don't use it either. **Code**
+- **Used:** the radar's vertical launch angle. With the board mounted vertically, the swing server uses the floor-bounce (two-ray) model, which needs the radar's height above the floor between the unit and the ball. **Code**
+- **Planned:** per-shot tee height, measured against the setup's surface.
+
+### How much a wrong height costs (Inferred)
+
+A noise-free simulation of the repo's two-ray solver (`trajectory._two_ray_solve`): the radar truly 51 mm above the floor, tilted 10°, floor reflection −0.5, the ball tracked from 1.6 to 4.5 m, and heights fitted with the assumed radar height.
+
+| Assumed height error | Launch error at 8° | at 14° | at 20° |
+|---|---|---|---|
+| −25 mm | +1.04° | +0.80° | −0.14° |
+| −10 mm | +1.35° | 0.00° | −0.06° |
+| +10 mm | −0.90° | −0.03° | +0.05° |
+| +25 mm | −1.06° | −0.09° | +0.11° |
+| +50 mm | −1.30° | −0.18° | +0.22° |
+
+- **Per point.** A 10 mm height error moves the fitted ball height by +5 to +12 mm, and 25 mm by +11 to +28 mm.
+- **Erratic, not proportional.** Even the correct height reads 8.8° for a true 8° launch. The solver is marginal at low launch with the radar only 51 mm up. The validated July rig had it at 152 mm, with about six times the phase separation between the direct and floor paths.
+- **So:** a height error of 10–25 mm (sunk feet, or a mat under the ball but not the unit) sits inside the model's present noise. An error of 100 mm or more (a unit on a box) does not.
+
+### What one ball can tell you (Inferred)
+
+The lens is about 69 mm above the ball's centre and the ball is 1.25–2 m away, so the ray to it points only 2–3° below level. Any single-ball height solve is h = r + t·sin(depression), and angle errors dominate:
+
+| Error source | Height error at 1.25 m | at 2 m |
+|---|---|---|
+| 1° of pitch (tilt-sensor offset is ±2.3° uncalibrated, datasheet) | 21.9 mm | 34.9 mm |
+| Principal point 20 px off (plausible uncalibrated) | 26.8 mm | 42.9 mm |
+| Floor sloping 1 % (a typical range tee line) | 12.5 mm | 20 mm |
+| Focal length +5 % | 3.3 mm | 3.3 mm |
+| Radar range +14 mm (estimator scalloping) | 0.8 mm | 0.5 mm |
+
+The range barely matters to height; the angle between the ray and the surface is everything. Combined, one ball gives about ±25–65 mm as built, and about 5–8 mm indoors after a once-per-unit calibration of the intrinsics and the tilt sensor.
+
+Placing the setup ball at two spots, near the unit and at the hitting spot, gives a line whose distance from the lens doesn't change under any common rotation. In simulation that is about ±3 mm with no calibration of pitch. It was considered and dropped: each spot needs its own radar capture (about 11–13 s), every setup, and its only consumer can't use that precision yet.
+
+### What commercial units do
+
+From makers' manuals, help centres and patents, read 28 Sept.
+
+| Unit | Level | Vertical datum | Tee height |
+|---|---|---|---|
+| TrackMan 4 | Inclinometer and self-levelling motorised legs | Unit on a surface level with the hitting area; ±5 cm tolerance (**Secondary**) | Not exposed; the launch point falls out of the radar and camera track |
+| FlightScope Mevo+ / Gen 2 | Tilt and roll indicators; fixed 12° kickstand | Unit on the floor with a typed hitting-surface offset of at most 76 mm; never raise the unit on a block | Typed; third-party advice on including the tee is inconsistent |
+| Full Swing KIT | "Level ground" | Same level as the hitting surface (**Secondary**) | Nothing published |
+| Garmin Approach R10 | "Tipped too far" tilt gate | Bottom edge of the unit above the mat | Not measured |
+| Rapsodo MLM2PRO | Accelerometer read at session start | Level ground | Not measured |
+| Voice Caddie SC4 | Not published | Level with the top of the hitting surface | Raise the unit for tees over 1.5 in |
+
+- **Common practice.** Every maker references gravity with an onboard tilt sensor. Most define the unit's base as level with the hitting surface and tell the user to make it so. None measures tee height per shot.
+- **Patents.** TrackMan's US 8,085,188 locates the launch point assuming "the radar is at a given height above the launch position". Google Patents projects its expiry as 24 June 2027. Ball-placement guidance (US 7,641,565) is live until 25 July 2027; any preview overlay needs a review before it goes upstream.
+- **FlightScope's floor.** Its "never on a block" rule suggests its radar model uses the floor in front of the unit, which fits the two-ray finding above. **Inferred**
+
+**Decision, 29 Sept (Code).** Use the rig's lens height by default, as the commercial units do, with no typed input. The one-ball radar solve replaces it only on a gross mismatch (over 60 mm). If the floor-bounce model is ever tightened, the next step is a once-per-unit calibration (a ChArUco board and the tilt sensor's offset), not a per-session step.
+
+## 8. Research: impact location
 
 At first touch the face is tangent to the ball, so the contact point is one ball radius along the face normal from the ball's centre. This is geometry, not an estimate:
 
@@ -288,7 +361,7 @@ P = B − r·n̂        n̂ = (cosΛ·cosF, cosΛ·sinF, sinΛ)        F: face a
   - *Sample size:* per club and camera mode, 15 calibration and 40 validation shots with deliberately spread strikes. That's about 220 shots for a 7-iron and a driver in both modes.
   - *Pass mark:* to claim ±3 mm, the observed 1σ over the 40 validation shots must be 2.4 mm or less.
 
-## 8. Research: spin and spin axis
+## 9. Research: spin and spin axis
 
 From behind, spin-axis tilt shows up as a rotation in the image plane, which a camera measures well. What this view rules out is tracking the ball's surface without markers: surface features rotate out of the visible half between frames. So measuring spin with the camera needs a marker that gives the ball's full orientation in every frame. **Inferred**
 
@@ -310,13 +383,32 @@ From behind, spin-axis tilt shows up as a rotation in the image plane, which a c
 | 2. IR strobe | 850 nm pulses of 10–20 µs from the sensor's STROBE output, a bandpass filter, a dot-coded ball, a 1:1 ROI mode | Rate 2–5 %, axis 3–6°; also freezes the club head |
 | 3. Longer lens or larger sensor | A 6–12 mm lens or an AR0234 sensor | Only for a 1–2° axis tier |
 
-## 9. Status and next experiments
+### Spin axis from the IWR6843 (Inferred)
+
+The idea: the top and bottom of a backspinning ball move at different speeds along the line of sight. Sorting the echo by Doppler and measuring each slice's angle across the receivers should therefore show the axis. If the axis is tilted, the fast and slow sides rotate with it.
+
+- **The physics holds at 60 GHz.** The dimples form a lattice with rows 3.6–3.9 mm apart, about 0.75–0.8 wavelengths. That gives a Bragg ring at about 40° on the ball, whose top and bottom arcs return two Doppler lobes at ±0.64·ωr: ±4.3 m/s at 3,000 rpm, 1.05° apart in angle at 1.5 m. At 24 GHz the dimples are too small to form the ring, so the OPS243 never had this. The lobes are expected about 30 dB below the ball's main echo, give or take 10 dB.
+- **The method is patented.** TrackMan US 10,850,179 claims three or more non-collinear receivers, frequency components of the spinning ball, the angular position of each, and the spin-axis projection as the line perpendicular to them. FlightScope US 10,151,831 measures time delays between receiver pairs, which is the same physics. A freedom-to-operate check is needed before shipping anything like it.
+- **As mounted, the board is poor for axis tilt.** The board is rotated 90°, so its 8-element virtual array runs vertically. That suits launch angle and top-versus-bottom separation. Tilt needs a sideways baseline, and the only one is a single half-wavelength transmitter offset: about 2.2× below TrackMan's stated design minimum, with tens of milliseconds of dwell where TrackMan integrates over seconds.
+- **Aliasing.** The current 3-transmitter loop (135 µs) covers ±8.97 m/s, so the lobes alias above about 6,200 rpm, which covers every wedge and short iron. A 2-transmitter research profile would clear about 9,300 rpm.
+- **Distance matters sharply.** Tilt error grows as the cube of range: a ball at 1.0 m instead of 1.5 m is 3.4× better.
+
+| Ball | Spin rate | Axis, board as mounted | Axis, board rotated 90° |
+|---|---|---|---|
+| Unmarked | Coarse, ±5–20 %; enough to settle the OPS243's 1× / 2× ambiguity | Not feasible | Marginal at 1 m, only if the lobes are at the strong end |
+| One or more foil dots | About 1 % | About 6–20° | About 1.5–5° |
+
+- **The board stays as mounted.** Rotating it would weaken the vertical array that launch angle and the floor-bounce model depend on. If a marked ball is acceptable, the camera stages above remain the better route to the axis.
+- **Next:** an offline look at the July TrackMan-scored dumps for the two lobes. Stop rule: if driver shots within 2.5 m show less than 6 dB of lobe-to-noise and a correlation below 0.5 with TrackMan spin, unmarked radar spin is closed. Then a drill-spun ball on a rod, bare and with foil dots, with a smooth 42 mm sphere as the control whose lobes must vanish.
+
+## 10. Status and next experiments
 
 **Established, with scope:**
 
 - The camera applies the requested exposure and gain (E2).
 - The rewritten search found the ball on one real frame where the old one failed (E2).
 - One static radar reading agreed with an approximate tape (E2).
+- In code, with tests: the hitting-area search, heights above the hitting surface, the rig lens height with a radar gross-error check, and per-stage timings on every radar setup capture.
 - Ball speed, club speed, smash and vertical launch were checked against TrackMan on the July rig (radar at 152 mm, a different enclosure). Not yet repeated on this box.
 
 **Open:**
@@ -326,17 +418,22 @@ From behind, spin-axis tilt shows up as a rotation in the image plane, which a c
 - The radar/camera horizontal offset on this box. About 5° was measured on the earlier rig.
 - Face angle, impact location and spin axis, against any truth.
 - Timing on the Pi, and the cause of the USB stall.
+- Whether the 14-frame radar setup profile matches the 24-frame one.
+- The burst-MTI notch spacing (section 4).
+- Whether the IWR6843 sees the dimple lobes on real shots (section 9).
 
 **Next, in order:**
 
-1. Compare a phone level on the enclosure with the LIS3DH roll, then derive and re-enable roll.
-2. Measure a foil-wrapped ball and a bare ball at taped radar ranges.
-3. Build the hitting-area search region and per-shot tee height. These fix the two code problems in section 4.
-4. Record a spray-marked session with an alignment stick in view, for impact and direction truth.
-5. Film an LED on the trigger line with the camera, to measure camera-timestamp latency against the trigger.
-6. Try the stripe ball on existing hardware, for a first spin-axis tilt.
+1. On the Pi: run the ball-search benchmark, and five setups each with the 24- and 14-frame radar profiles, which also records the real per-stage timings.
+2. Compare a phone level on the enclosure with the LIS3DH roll, then derive and re-enable roll.
+3. Measure a foil-wrapped ball and a bare ball at taped radar ranges.
+4. Measure per-shot tee height from the frames before impact.
+5. Offline: check the notch spacing and look for the dimple lobes on the July TrackMan-scored dumps.
+6. Record a spray-marked session with an alignment stick in view, for impact and direction truth.
+7. Film an LED on the trigger line with the camera, to measure camera-timestamp latency against the trigger.
+8. Try the stripe ball on existing hardware, for a first spin-axis tilt.
 
-## 10. Corrections log
+## 11. Corrections log
 
 These claims from the first version of this document (28–29 Sept) were wrong or overstated.
 
@@ -354,8 +451,10 @@ These claims from the first version of this document (28–29 Sept) were wrong o
 | A real ball reads −21 or +45 mm; 1–9 mm of lighting bias gives +0.5 to +1.1°. | The simulated range spans −21 to +53 mm, with a bimodal case. The +0.53° and +1.06° figures correspond to 2 mm and 4 mm. |
 | Radar spin rate works (measured). | This was one offline OPS243 session, with the threshold chosen on the same data. |
 | An LED on the trigger line settles contact timing. | It measures camera-timestamp latency against the trigger. |
+| The radar-solved lens height is good to about ±21 mm. | That figure assumed 1° of angular uncertainty. The tilt sensor's zero offset (±2.3° uncalibrated) and an uncalibrated principal point make it about ±25–65 mm, so the solve is now only a gross-error check (section 7). |
+| A radar setup capture takes about 20 s. (Said in discussion, not in this document.) | Roughly 11–13 s each, estimated from the code; the setup takes two. Per-stage timings are now recorded. |
 
-## 11. Reproducing the figures
+## 12. Reproducing the figures
 
 ```
 uv run python docs/research/camera-fusion/scripts/make_figures.py \
