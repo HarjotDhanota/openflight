@@ -158,6 +158,9 @@ rig_geometry = None  # the enclosure's RigGeometry when --rig-geometry was given
 rig_geometry_config: dict = {"enabled": False}
 # a ball resting on the surface: its centre is one radius up
 BALL_RADIUS_M = BALL_DIAMETER_MM / 2000.0
+# Lowest height any sensor is given on the ball-support scale (see
+# _apply_solved_camera_height); the geometry contract needs positive heights.
+MIN_DATUM_CLEARANCE_M = 0.010
 
 # Ballistic model toggle. Shot carry comes from the physics simulator whenever
 # a vertical launch angle is available. Operators can explicitly disable it;
@@ -1098,10 +1101,18 @@ def _apply_solved_camera_height(args, enclosure) -> None:
     if nominal is not None and radar is not None:
         args.iwr6843_radar_height_m = solved - (nominal - radar)
     args.camera_capture_mount_height_m = solved
-    if args.iwr6843_radar_height_m is not None and args.iwr6843_radar_height_m <= 0.0:
-        raise ValueError(
-            f"a {solved * 1000.0:.0f} mm lens height puts the radar at or below the floor"
-        )
+    # Heights are measured from the ball's support; only their differences matter. A
+    # ball teed higher than the radar would give the radar a negative height, so lift
+    # every height by the same amount instead, which leaves each difference unchanged.
+    shift = 0.0
+    if (
+        args.iwr6843_radar_height_m is not None
+        and args.iwr6843_radar_height_m < MIN_DATUM_CLEARANCE_M
+    ):
+        shift = MIN_DATUM_CLEARANCE_M - args.iwr6843_radar_height_m
+        args.iwr6843_radar_height_m += shift
+        args.camera_capture_mount_height_m += shift
+        args.iwr6843_ball_height_m = (args.iwr6843_ball_height_m or BALL_RADIUS_M) + shift
     derived = rig_geometry_config.get("derived") if isinstance(rig_geometry_config, dict) else None
     if isinstance(derived, dict):
         derived["camera_mount_height_m"] = solved
@@ -1110,6 +1121,8 @@ def _apply_solved_camera_height(args, enclosure) -> None:
             "camera_mount_height_m": solved,
             "radar_height_m": args.iwr6843_radar_height_m,
             "rig_nominal_camera_mount_height_m": nominal,
+            "reference": "ball_support",
+            "datum_shift_m": shift,
             "source": "range_setup",
         }
     logger.info(
@@ -5908,8 +5921,8 @@ def main():
         type=float,
         default=None,
         help=(
-            "Lens height above the floor solved by this session's range setup. Overrides "
-            "the rig file's nominal height (feet sink, units stand on things) and moves the "
+            "Lens height above the ball's support (ground, mat or tee top) solved by this "
+            "session's range setup. Overrides the rig file's nominal height and moves the "
             "radar height with it, keeping their fixed offset inside the enclosure."
         ),
     )

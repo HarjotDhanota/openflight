@@ -278,6 +278,13 @@ would clip. Steps predicted to be clearly too dark or clearly clipped are
 skipped; the rest are still verified lowest exposure first, so the lock is the
 lowest passing setting. On synthetic scenes this takes 3–7 settings instead of 11–15.
 
+Heights are measured from the surface the ball rests on (ground, mat or tee
+top), not the floor: the ball's centre is then one radius up by definition, and
+every calculation downstream uses only height differences, so the unit can sit on
+the ground or a box and the ball on grass, a mat or a tee. Set the setup ball up
+exactly as it will be hit. When a ball is teed above the radar, the swing server
+lifts every height by the same amount so none goes negative.
+
 When the static radar accepted the ball, Save also solves the lens height from
 the radar's range along the ball's pixel ray, which is several times tighter than
 apparent size (the rest is the camera's tilt uncertainty). Swings are then started

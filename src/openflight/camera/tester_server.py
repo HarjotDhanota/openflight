@@ -407,6 +407,7 @@ def _solved_camera_height(
         "radar_uncertainty_m": None,
         "height_m": selected.camera_height_m,
         "uncertainty_m": selected.camera_height_uncertainty_m,
+        "reference": "ball_support",
         "source": "apparent_size",
     }
     iwr = iwr_candidate if isinstance(iwr_candidate, Mapping) else {}

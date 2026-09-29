@@ -28,7 +28,11 @@ _HINT_UNCERTAINTY_MULTIPLIER = 3.0
 _MIN_HINT_HALF_WIDTH_M = 0.12
 # The lens height is solved from the resting ball, not assumed: feet sink into
 # carpet and a unit may stand on a box. These bound what is physically plausible.
-_CAMERA_HEIGHT_RANGE_M = (0.03, 0.60)
+# Heights are measured from the surface the ball rests on (ground, mat or tee top),
+# so the ball's centre is one radius up by definition and the setup can be on grass,
+# a mat, a tee or a box. The lens sits between just above that support (a high tee)
+# and a metre above it (a unit on a table).
+_CAMERA_HEIGHT_RANGE_M = (0.0, 1.0)
 # How far the solved height may stray from the rig's nominal lens height before a
 # candidate ranks below one that sits where the rig says it should.
 _CAMERA_HEIGHT_PRIOR_SIGMA_M = 0.06
@@ -39,8 +43,6 @@ _MIN_DIAMETER_RELATIVE_UNCERTAINTY = 0.20
 # A lone plausible candidate is still refused when it scores this badly: far off
 # the boresight or far from the rig's lens height.
 _MAX_SELECTION_SCORE = 2.5
-# The lens can sit no lower than the radar below it plus this.
-_LENS_ABOVE_RADAR_MARGIN_M = 0.005
 # The ball sits at address in front of the unit, near its boresight.
 _LATERAL_SIGMA_M = 0.15
 
@@ -60,8 +62,7 @@ def camera_range_estimator_policy() -> dict[str, Any]:
         "lateral_sigma_m": _LATERAL_SIGMA_M,
         "min_diameter_relative_uncertainty": _MIN_DIAMETER_RELATIVE_UNCERTAINTY,
         "max_selection_score": _MAX_SELECTION_SCORE,
-        "camera_height_floor": "radar_depth_below_lens_plus_margin",
-        "lens_above_radar_margin_m": _LENS_ABOVE_RADAR_MARGIN_M,
+        "camera_height_reference": "ball_support",
         "golf_ball_diameter_m": GOLF_BALL_DIAMETER_M,
         "diameter_hypotheses": _DIAMETER_HYPOTHESES,
         "ambiguity_score_margin": _AMBIGUITY_SCORE_MARGIN,
@@ -694,11 +695,9 @@ def _candidate(  # pylint: disable=too-many-locals
     )
 
 
-def _camera_height_bounds(camera: BallPlaneCamera) -> tuple[float, float]:
-    """Plausible lens heights; the lens cannot sit lower than the radar mounted below it."""
-    radar_depth = float(camera.camera_origin_lfu[2] - camera.radar_origin_lfu[2])
-    low = max(_CAMERA_HEIGHT_RANGE_M[0], radar_depth + _LENS_ABOVE_RADAR_MARGIN_M)
-    return low, _CAMERA_HEIGHT_RANGE_M[1]
+def _camera_height_bounds(_camera: BallPlaneCamera) -> tuple[float, float]:
+    """Plausible lens heights above the ball's support (not the floor)."""
+    return _CAMERA_HEIGHT_RANGE_M
 
 
 def solve_camera_height_from_radar(

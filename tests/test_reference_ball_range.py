@@ -363,7 +363,7 @@ def test_camera_range_estimator_identity_is_pinned():
     """Any estimator constant change must be a deliberate, reviewed identity change."""
     assert camera_range_estimator_policy()["name"] == "camera_reference_ball_floor_plane"
     assert camera_range_estimator_sha256() == (
-        "37856ed3e7270acdb4a3b31a2a47aea34feb882e0834fdfdc49295bec32985f3"
+        "048abfac0455d9ff29d97917be87067ffb27e05e9e4858c50275ccdecefa2248"
     )
 
 
@@ -434,16 +434,15 @@ def test_a_lone_candidate_far_off_the_boresight_is_not_selected():
     assert result.status == "no_consistent_candidate"
 
 
-def test_the_lens_cannot_sit_below_the_radar_mounted_under_it():
+def test_a_lens_just_above_a_high_tee_is_plausible():
+    """Heights are measured from the ball's support, so a tee top can sit near the lens."""
     from openflight.camera.reference_ball_range import _camera_height_bounds
 
-    camera = _camera(
-        640, 400, 466.6667, camera_origin=(0.0, 0.03, 0.095), radar_origin=(0.0, 0.0, 0.051)
-    )
+    camera = _camera(640, 400, 466.6667)
 
-    low, _high = _camera_height_bounds(camera)
+    low, high = _camera_height_bounds(camera)
 
-    assert low == pytest.approx(0.049)
+    assert low <= 0.02 < 0.9 <= high
 
 
 def test_size_range_uncertainty_is_at_least_a_fifth():
