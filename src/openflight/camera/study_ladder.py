@@ -51,6 +51,14 @@ MAX_GAIN_CORRECTIONS = 3
 # With no ball in view the hitting zone decides, and only a mostly clipped zone
 # counts as too bright: a clipped strip of background is normal outdoors.
 ZONE_TOO_BRIGHT_PCT = 50.0
+# A dark hitting zone is the club's background, so it fails a rung even when the
+# ball is fine; the pre-rung check aims it here when it can.
+ZONE_TARGET_SIGNAL_DN = 40.0
+BALL_CEILING_DN = 200.0  # a zone correction never pushes the ball's median past this
+# One light rule for the pre-rung check and the per-swing verdict (wiring audit B6).
+RED_LIGHT_CAUSES = frozenset({"ball_clipped", "ball_dark", "zone_dark", "zone_clipped_no_ball"})
+DARK_LIGHT_CAUSES = frozenset({"ball_dark", "zone_dark"})
+BRIGHT_LIGHT_CAUSES = frozenset({"ball_clipped", "zone_clipped_no_ball"})
 
 
 @dataclass(frozen=True)
@@ -164,6 +172,62 @@ def ball_light(
     }
 
 
+def judge_light(frames: np.ndarray, black_floor: float, expected_ball: dict | None = None) -> dict:
+    """The one light rule both the pre-rung check and the swing verdict apply.
+
+    ``cause`` is one of: ``ball_clipped``, ``ball_dark``, ``zone_dark`` (the club's
+    background), ``zone_clipped_no_ball``, ``background_clipped`` (amber only) or
+    ``ok``. The ball is judged first when it can be found.
+    """
+    frames = np.asarray(frames)
+    zone = _zone(np.median(frames, axis=0), black_floor)
+    ball = ball_light(frames, black_floor, expected_ball)
+    cause, message = "ok", None
+    if ball is not None and ball["clipped_pct"] > CLIPPED_MAX_PCT:
+        cause = "ball_clipped"
+        message = f"too bright for the ball: {ball['clipped_pct']:.0f}% of it is clipped"
+    elif ball is not None and ball["signal_dn"] < BALL_MIN_SIGNAL_DN:
+        cause = "ball_dark"
+        message = f"too dark for the ball: {ball['signal_dn']:.0f} DN above black"
+    elif zone["signal_dn"] < LIGHT_FLOOR_DN:
+        cause = "zone_dark"
+        message = (
+            f"too dark in this light: the hitting zone is {zone['signal_dn']:.0f} DN above "
+            f"black, under {LIGHT_FLOOR_DN:.0f}"
+        )
+    elif ball is None and zone["clipped_pct"] > ZONE_TOO_BRIGHT_PCT:
+        cause = "zone_clipped_no_ball"
+        message = (
+            f"too bright in this light: {zone['clipped_pct']:.0f}% of the hitting zone is "
+            "clipped; a shorter exposure follows"
+        )
+    elif zone["clipped_pct"] > CLIPPED_MAX_PCT:
+        cause = "background_clipped"
+        message = f"background: {zone['clipped_pct']:.0f}% of the hitting zone clipped" + (
+            " behind a well-exposed ball" if ball is not None else ""
+        )
+    return {"zone": zone, "ball": ball, "cause": cause, "message": message}
+
+
+def _suggested_gain(light: dict, gain: float, black_floor: float) -> float | None:
+    """The gain that would bring this rung's light back into range, if any."""
+    ball, zone, cause = light["ball"], light["zone"], light["cause"]
+    if cause == "ball_clipped":
+        # always down: a half-sunlit ball can have a low median and still clip
+        if ball["median_dn"] >= 250:
+            return gain * 0.5
+        return gain * min(0.8, BALL_TARGET_MEDIAN_DN / ball["median_dn"])
+    if cause == "ball_dark":
+        # always up, measured above black
+        return gain * max(1.25, BALL_TARGET_MEDIAN_DN / max(ball["median_dn"] - black_floor, 1.0))
+    if cause == "zone_dark":
+        wanted = gain * max(1.25, ZONE_TARGET_SIGNAL_DN / max(zone["signal_dn"], 1.0))
+        if ball is not None:
+            wanted = min(wanted, gain * BALL_CEILING_DN / max(ball["median_dn"], 1.0))
+        return wanted if wanted > gain * 1.05 else None
+    return None
+
+
 def pre_rung_check(
     frames: np.ndarray,
     black_floor: float,
@@ -173,66 +237,55 @@ def pre_rung_check(
 ) -> dict:
     """Whether this rung can work in this light, from a few raw frames and no swing.
 
-    The ball decides when it is visible; ``suggested_gain`` is the gain that would
-    bring it back into range at this exposure. ``too_bright`` marks a rung a shorter
-    exposure may still rescue.
+    It applies ``judge_light``, the same rule as the swing verdict.
+    ``suggested_gain`` is the gain that would bring the light back into range at
+    this exposure; ``too_bright`` marks a rung a shorter exposure may still rescue.
     """
     frames = np.asarray(frames)
-    stats = _zone(np.median(frames, axis=0), black_floor)
-    base = {**stats, "noise_dn": _zone_noise(frames)}
-    ball = ball_light(frames, black_floor, expected_ball)
-    if ball is not None:
-        reason = None
-        suggested = None
-        too_bright = False
-        if ball["clipped_pct"] > CLIPPED_MAX_PCT:
-            too_bright = True
-            reason = f"too bright for the ball: {ball['clipped_pct']:.0f}% of it is clipped"
-            if gain:
-                # always down: a half-sunlit ball can have a low median and still clip
-                suggested = (
-                    gain * 0.5
-                    if ball["median_dn"] >= 250
-                    else gain * min(0.8, BALL_TARGET_MEDIAN_DN / ball["median_dn"])
-                )
-        elif ball["signal_dn"] < BALL_MIN_SIGNAL_DN:
-            reason = f"too dark for the ball: {ball['signal_dn']:.0f} DN above black"
-            if gain:
-                # always up, measured above black
-                suggested = gain * max(
-                    1.25, BALL_TARGET_MEDIAN_DN / max(ball["median_dn"] - black_floor, 1.0)
-                )
-        return {
-            **base,
-            "judged_on": "ball",
-            "ball": ball,
-            "ok": reason is None,
-            "reason": reason,
-            "too_bright": too_bright,
-            "suggested_gain": suggested,
-        }
-    reason = None
-    too_bright = False
-    if stats["signal_dn"] < LIGHT_FLOOR_DN:
-        reason = (
-            f"too dark in this light: the hitting zone is {stats['signal_dn']:.0f} DN above "
-            f"black, under {LIGHT_FLOOR_DN:.0f}"
-        )
-    elif stats["clipped_pct"] > ZONE_TOO_BRIGHT_PCT:
-        too_bright = True
-        reason = (
-            f"too bright in this light: {stats['clipped_pct']:.0f}% of the hitting zone is "
-            "clipped; a shorter exposure follows"
-        )
+    light = judge_light(frames, black_floor, expected_ball)
+    cause = light["cause"]
+    red = cause in RED_LIGHT_CAUSES
     return {
-        **base,
-        "judged_on": "hitting_zone",
-        "ball": None,
-        "ok": reason is None,
-        "reason": reason,
-        "too_bright": too_bright,
-        "suggested_gain": None,
+        **light["zone"],
+        "noise_dn": _zone_noise(frames),
+        "judged_on": "ball" if light["ball"] is not None else "hitting_zone",
+        "ball": light["ball"],
+        "ok": not red,
+        "reason": light["message"] if red else None,
+        "note": light["message"] if not red else None,
+        "light_cause": cause,
+        "too_bright": cause in BRIGHT_LIGHT_CAUSES,
+        "too_dark": cause in DARK_LIGHT_CAUSES,
+        "suggested_gain": _suggested_gain(light, gain, black_floor) if gain and red else None,
     }
+
+
+def trigger_controls_mismatch(metadata: dict, rung: Rung, gain: float | None) -> str | None:
+    """Why a capture was not taken at this rung's controls, or None if it was.
+
+    The kiosk records the requested controls and their purpose at the trigger
+    (``auto_exposure``); swings taken during a gain correction, a still photo or
+    before the rung was set must not count for or against it (wiring audit T3).
+    Captures without that record are judged as before.
+    """
+    controls = metadata.get("auto_exposure")
+    if not isinstance(controls, dict):
+        return None
+    purpose = controls.get("controls_purpose") or "capture"
+    if purpose != "capture":
+        return f"taken during a {purpose}, not at this rung's controls"
+    exposure = controls.get("exposure_us")
+    tolerance = max(EXPOSURE_TOLERANCE_US, EXPOSURE_TOLERANCE_FRACTION * rung.exposure_us)
+    if exposure is not None and abs(float(exposure) - rung.exposure_us) > tolerance:
+        return f"taken at {float(exposure):.0f} us, not this rung's {rung.exposure_us} us"
+    requested_gain = controls.get("gain")
+    if (
+        gain
+        and requested_gain is not None
+        and abs(float(requested_gain) - gain) > GAIN_TOLERANCE_FRACTION * gain
+    ):
+        return f"taken at gain {float(requested_gain):.2f}, not this rung's {gain:.2f}"
+    return None
 
 
 def swing_verdict(  # pylint: disable=too-many-locals,too-many-arguments
@@ -264,24 +317,18 @@ def swing_verdict(  # pylint: disable=too-many-locals,too-many-arguments
     if abs(applied_gain - gain) > GAIN_TOLERANCE_FRACTION * gain:
         red.append(f"controls: gain {applied_gain:.2f}, not {gain:.2f}")
     resting = frames[: max(3, min(RESTING_FRAMES, len(frames)))]
-    stats = _zone(np.median(resting, axis=0), black_floor)
-    if stats["signal_dn"] < LIGHT_FLOOR_DN:
-        red.append(f"light: too dark, {stats['signal_dn']:.0f} DN above black")
-    lit = ball_light(resting, black_floor, expected_ball)
+    light = judge_light(resting, black_floor, expected_ball)
+    stats = light["zone"]
+    lit = light["ball"]
+    if light["cause"] in RED_LIGHT_CAUSES:
+        red.append(f"light: {light['message']}")
+    elif light["message"]:
+        amber.append(light["message"])
     ball = None
     if lit is None:
         amber.append("resting ball not found in the pre-impact frames")
-        if stats["clipped_pct"] > CLIPPED_MAX_PCT:
-            red.append(f"light: {stats['clipped_pct']:.0f}% of the hitting zone clipped")
     else:
         ball = {"x": lit["x"], "y": lit["y"], "diameter_px": lit["diameter_px"]}
-        if lit["clipped_pct"] > CLIPPED_MAX_PCT:
-            red.append(f"light: {lit['clipped_pct']:.0f}% of the ball clipped")
-        elif stats["clipped_pct"] > CLIPPED_MAX_PCT:
-            amber.append(
-                f"background: {stats['clipped_pct']:.0f}% of the hitting zone clipped "
-                "behind a well-exposed ball"
-            )
     if ball and previous_balls:
         x = float(np.median([b["x"] for b in previous_balls]))
         y = float(np.median([b["y"] for b in previous_balls]))
@@ -297,6 +344,7 @@ def swing_verdict(  # pylint: disable=too-many-locals,too-many-arguments
         "gain": applied_gain,
         "signal_dn": stats["signal_dn"],
         "clipped_pct": stats["clipped_pct"],
+        "light_cause": light["cause"],
         "ball": ball,
     }
 
@@ -402,15 +450,21 @@ class LadderState:
             *{item["capture"] for item in self._data["ineligible_captures"]},
         }
 
-    def record_ineligible_capture(self, capture: str, rung_id: str, readiness: dict) -> None:
-        """Retain a capture rejected by setup health without advancing or failing its rung."""
+    def record_ineligible_capture(
+        self,
+        capture: str,
+        rung_id: str,
+        readiness: dict,
+        reason: str = "runtime setup readiness blocked at capture review",
+    ) -> None:
+        """Retain a capture that must not count, without advancing or failing its rung."""
         if capture in self.seen_captures():
             return
         self._data["ineligible_captures"].append(
             {
                 "capture": capture,
                 "rung_id": rung_id,
-                "reason": "runtime setup readiness blocked at capture review",
+                "reason": reason,
                 "readiness": readiness,
             }
         )
@@ -468,9 +522,15 @@ class LadderState:
                 "rung_id": rung.rung_id,
             }
         first = entry["swings"][:EARLY_EXIT_SWINGS]
-        reds = sum(1 for swing in first if swing["color"] == "red")
-        if reds >= EARLY_EXIT_REDS:
-            self._skip_from(rung, "failed", f"{reds} of the first {len(first)} swings red")
+        reds = [swing for swing in first if swing["color"] == "red"]
+        if len(reds) >= EARLY_EXIT_REDS:
+            reason = f"{len(reds)} of the first {len(first)} swings red"
+            if any(swing.get("light_cause") in DARK_LIGHT_CAUSES for swing in reds):
+                # a shorter exposure is darker still
+                self._skip_from(rung, "failed", reason)
+            else:
+                entry["status"] = "failed"
+                entry["reason"] = reason
         elif self.accepted(rung.rung_id) >= SWINGS_PER_RUNG:
             entry["status"] = "done"
         self._require_boundary_photo(rung)
@@ -862,6 +922,21 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
             rung = self.state.current
             if self.stopped or rung is None or self._status(rung) != "active":
                 break
+            try:
+                trigger_metadata = json.loads(metadata.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                trigger_metadata = {}
+            mismatch = trigger_controls_mismatch(
+                trigger_metadata, rung, self.state.gain(rung.rung_id)
+            )
+            if mismatch is not None:
+                self.state.record_ineligible_capture(
+                    folder.name,
+                    rung.rung_id,
+                    {"trigger_controls": trigger_metadata.get("auto_exposure")},
+                    reason=mismatch,
+                )
+                continue
             rungs = self.state.to_dict()["rungs"]
             previous = [s["ball"] for s in rungs[rung.rung_id]["swings"] if s.get("ball")]
             verdict = swing_verdict(

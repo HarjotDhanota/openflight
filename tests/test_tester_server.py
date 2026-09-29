@@ -2377,9 +2377,13 @@ class TestTheLadderHoldsUp:
         )
         state = ts.study_ladder.LadderState(tmp_path / "20260922-name" / "ladder.json")
         state.begin("full-300", 3.0, {"ok": True})
-        state.record_swing({"capture": "red-first", "color": "red", "reasons": []})
+        state.record_swing(
+            {"capture": "red-first", "color": "red", "reasons": [], "light_cause": "zone_dark"}
+        )
         state.record_swing({"capture": "green-middle", "color": "green", "reasons": []})
-        state.record_swing({"capture": "camera_final", "color": "red", "reasons": []})
+        state.record_swing(
+            {"capture": "camera_final", "color": "red", "reasons": [], "light_cause": "zone_dark"}
+        )
         client, manager = self._client(tmp_path, monkeypatch)
         try:
             response = client.post("/api/tester/ladder/start", json=self.body)
@@ -2409,9 +2413,18 @@ class TestTheLadderHoldsUp:
             client.post("/api/tester/ladder/start", json=self.body)
             runner = runners[0]
             runner.state.begin("full-300", 3.0, {"ok": True})
-            runner.state.record_swing({"capture": "red-first", "color": "red", "reasons": []})
+            runner.state.record_swing(
+                {"capture": "red-first", "color": "red", "reasons": [], "light_cause": "zone_dark"}
+            )
             runner.state.record_swing({"capture": "green-middle", "color": "green", "reasons": []})
-            runner.state.record_swing({"capture": "camera_final", "color": "red", "reasons": []})
+            runner.state.record_swing(
+                {
+                    "capture": "camera_final",
+                    "color": "red",
+                    "reasons": [],
+                    "light_cause": "zone_dark",
+                }
+            )
             stale = client.post(
                 "/api/tester/ladder/photo",
                 json={

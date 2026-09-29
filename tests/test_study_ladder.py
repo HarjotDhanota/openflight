@@ -116,15 +116,16 @@ def test_no_resting_ball_is_only_amber(tmp_path):
     assert any("resting ball" in reason for reason in verdict["reasons"])
 
 
-def _verdict(color, name):
-    return {"capture": name, "color": color, "reasons": [], "ball": None}
+def _verdict(color, name, cause=None):
+    return {"capture": name, "color": color, "reasons": [], "ball": None, "light_cause": cause}
 
 
 def _make_pending_photo(state, capture="camera_final"):
+    # two dark reds fail the rung and the shorter ones: the 1280x800 mode ends
     state.begin("full-300", 3.0, {"ok": True})
-    state.record_swing(_verdict("red", "red-first"))
+    state.record_swing(_verdict("red", "red-first", "zone_dark"))
     state.record_swing(_verdict("green", "accepted-middle"))
-    state.record_swing(_verdict("red", capture))
+    state.record_swing(_verdict("red", capture, "zone_dark"))
 
 
 def test_five_accepted_swings_finish_a_rung_and_the_next_begins(tmp_path):
@@ -152,12 +153,12 @@ def test_a_dark_rung_skips_itself_and_the_shorter_ones_in_its_mode(tmp_path):
     assert state.current.rung_id == "half-300"
 
 
-def test_two_reds_in_the_first_three_fail_the_rung(tmp_path):
+def test_two_dark_reds_in_the_first_three_fail_the_rung_and_the_shorter_ones(tmp_path):
     state = sl.LadderState(tmp_path / "ladder.json")
     state.begin("full-300", 3.0, {"ok": True})
-    state.record_swing(_verdict("red", "r0"))
+    state.record_swing(_verdict("red", "r0", "zone_dark"))
     state.record_swing(_verdict("green", "r1"))
-    assert state.record_swing(_verdict("red", "r2")) == "failed"
+    assert state.record_swing(_verdict("red", "r2", "ball_dark")) == "failed"
     rungs = state.to_dict()["rungs"]
     assert rungs["full-300"]["status"] == "failed"
     assert rungs["full-75"]["status"] == "skipped"
@@ -325,7 +326,8 @@ def test_final_full_mode_swing_waits_for_its_photo_before_handoff(tmp_path):
     done = []
     runner = _runner(tmp_path, FakeKiosk(), run_dir=tmp_path / "run-01", done=done)
     runner.start_rung()
-    runner.state.record_swing(_verdict("red", "old-0"))
+    # a dark red earlier, so a second red fails the rung and ends the 1280x800 mode
+    runner.state.record_swing(_verdict("red", "old-0", "zone_dark"))
     runner.state.record_swing(_verdict("green", "old-1"))
     _capture(run, exposure=200, gain=3.0, name="camera_final")
 
@@ -408,9 +410,9 @@ def test_stop_during_photo_write_keeps_pending_and_publishes_no_photo(tmp_path, 
     done = []
     runner = _runner(tmp_path, FakeKiosk(), done=done)
     runner.state.begin("full-300", 3.0, {"ok": True})
-    runner.state.record_swing(_verdict("red", "c0"))
+    runner.state.record_swing(_verdict("red", "c0", "zone_dark"))
     runner.state.record_swing(_verdict("green", "c1"))
-    runner.state.record_swing(_verdict("red", "camera_final"))
+    runner.state.record_swing(_verdict("red", "camera_final", "zone_dark"))
     runner.mode = "arm5"
     runner.tick()
     writing = threading.Event()
@@ -806,3 +808,82 @@ def test_a_photo_without_a_light_index_keeps_the_rungs_brightness(tmp_path):
     photo = kiosk.calls[kiosk.purposes.index("still_photo")]
     # full-300 ran at gain 3.0: the same brightness at the photo gain of 2
     assert photo == (450, sl.PHOTO_GAIN)
+
+
+def test_a_rung_failed_for_anything_but_darkness_skips_only_itself(tmp_path):
+    # audit B6: two "too bright" reds failed the rung and took every shorter one
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.begin("full-300", 3.0, {"ok": True})
+    state.record_swing(_verdict("red", "r0", "ball_clipped"))
+    state.record_swing(_verdict("green", "r1"))
+
+    assert state.record_swing(_verdict("red", "r2", "ball_clipped")) == "failed"
+
+    rungs = state.to_dict()["rungs"]
+    assert rungs["full-300"]["status"] == "failed"
+    assert rungs["full-200"]["status"] == "pending"
+    assert state.current.rung_id == "full-200"
+
+
+def test_a_dark_zone_behind_a_bright_ball_fails_the_pre_check_as_it_fails_the_swings(tmp_path):
+    # audit B6: the pre-check passed on the ball while every swing went red for
+    # the dark zone, the club's background
+    frames = _ball_frames(22, 200)
+    check = sl.pre_rung_check(frames, 18.0, 4.0)
+    verdict = sl.swing_verdict(
+        _capture(tmp_path, level=22.0), sl.Rung("full-150", "arm5", 150, True), 8.0, 18.0, []
+    )
+
+    assert check["ok"] is False
+    assert check["light_cause"] == "zone_dark"
+    assert verdict["color"] == "red"
+    assert verdict["light_cause"] == "zone_dark"
+
+
+@pytest.mark.parametrize(
+    ("background", "ball", "bright_rows"),
+    [(60, 180, 0), (60, 255, 0), (22, 200, 0), (60, 180, 470), (60, 150, 0)],
+)
+def test_the_pre_check_and_the_swing_verdict_judge_light_alike(
+    tmp_path, background, ball, bright_rows
+):
+    check = sl.pre_rung_check(_ball_frames(background, ball, bright_rows=bright_rows), 18.0, 8.0)
+    verdict = sl.swing_verdict(
+        _capture(tmp_path, level=float(background), ball_level=ball, bright_rows=bright_rows),
+        sl.Rung("full-150", "arm5", 150, True),
+        8.0,
+        18.0,
+        [],
+    )
+
+    light_red = verdict["light_cause"] in sl.RED_LIGHT_CAUSES
+    assert check["ok"] is (not light_red)
+
+
+def _capture_with_trigger_controls(tmp_path, name, exposure, gain, purpose="capture"):
+    folder = _capture(tmp_path, exposure=exposure, gain=gain, name=name)
+    metadata = json.loads((folder / "metadata.json").read_text())
+    metadata["auto_exposure"] = {"exposure_us": exposure, "gain": gain, "controls_purpose": purpose}
+    (folder / "metadata.json").write_text(json.dumps(metadata))
+    return folder
+
+
+def test_a_swing_taken_at_other_controls_is_set_aside_not_counted(tmp_path):
+    # audit T3: swings taken during a gain correction or a still photo were judged
+    # against the rung and their "controls" reds failed it
+    run = tmp_path / "run-01" / "arm5" / "camera"
+    run.mkdir(parents=True)
+    runner = _runner(tmp_path, FakeKiosk(), run_dir=tmp_path / "run-01")
+    runner.start_rung()
+    gain = runner.state.gain("full-300")
+    _capture_with_trigger_controls(run, "camera_a", 300, gain * 2.0)
+    _capture_with_trigger_controls(run, "camera_b", 300, gain, purpose="still_photo")
+    _capture_with_trigger_controls(run, "camera_c", 300, gain)
+
+    runner.poll_once()
+
+    state = runner.state.to_dict()
+    counted = [swing["capture"] for swing in state["rungs"]["full-300"]["swings"]]
+    set_aside = {item["capture"] for item in state["ineligible_captures"]}
+    assert counted == ["camera_c"]
+    assert set_aside == {"camera_a", "camera_b"}
