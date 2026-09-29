@@ -761,3 +761,24 @@ def test_a_too_bright_ball_always_gets_less_gain_and_a_dark_one_more():
     dark = sl.pre_rung_check(_ball_frames(10, 30), black_floor=18.0, gain=4.0)
     assert dark["judged_on"] == "ball" and dark["ok"] is False
     assert dark["suggested_gain"] >= 4.0 * 1.25
+
+
+def test_a_shadow_of_the_wrong_size_is_not_taken_for_the_expected_ball():
+    rng = np.random.default_rng(3)
+    frames = np.clip(60 + rng.normal(0, 1.0, (5, 800, 1280)), 0, 255)
+    yy, xx = np.indices((800, 1280))
+    frames[:, np.hypot(xx - 640, yy - 520) <= 30] = 8  # a 60 px dark shadow, no ball
+    expected = {"x": 640.0, "y": 520.0, "diameter_px": 20.0}
+
+    check = sl.pre_rung_check(frames.astype(np.uint8), 18.0, 2.0, expected_ball=expected)
+
+    assert check["judged_on"] == "hitting_zone"
+
+
+def test_the_expected_ball_is_still_found_where_the_setup_saw_it():
+    expected = {"x": 640.0, "y": 520.0, "diameter_px": 20.0}
+
+    check = sl.pre_rung_check(_ball_frames(60, 180), 18.0, 2.0, expected_ball=expected)
+
+    assert check["judged_on"] == "ball"
+    assert check["ball"]["x"] == pytest.approx(640.0, abs=3.0)

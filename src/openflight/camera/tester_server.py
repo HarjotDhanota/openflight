@@ -751,6 +751,36 @@ def ladder_gain_facts(sessions_root: Path, params: TesterParameters) -> dict:
     }
 
 
+def expected_ladder_ball(solution: tee_range.TeeRangeSolution | None, arm_id: str) -> dict | None:
+    """Where the setup's camera saw the ball in this mode: x, y and diameter in pixels.
+
+    The 640x400 mode is the 1280x800 view 2x binned, so without its own
+    observation it takes the 1280x800 one halved.
+    """
+    if solution is None:
+        return None
+    seen: dict[str, dict] = {}
+    for item in solution.candidates:
+        if item.source_group != "camera":
+            continue
+        selected = ((item.evidence or {}).get("result") or {}).get("selected")
+        if not isinstance(selected, Mapping):
+            continue
+        for mode in ARMS:
+            if item.candidate_id.endswith(mode):
+                seen[mode] = {
+                    "x": float(selected["x_px"]),
+                    "y": float(selected["y_px"]),
+                    "diameter_px": float(selected["diameter_px"]),
+                }
+    if arm_id in seen:
+        return seen[arm_id]
+    if arm_id == "arm6" and "arm5" in seen:
+        ratio = ARMS["arm6"].width / ARMS["arm5"].width
+        return {key: value * ratio for key, value in seen["arm5"].items()}
+    return None
+
+
 def next_run_directory(arm_dir: Path) -> Path:
     """Each capture run gets its own folder: a new kiosk is a new session."""
     existing = sorted((arm_dir / "paired").glob("run-*"))
@@ -5894,6 +5924,9 @@ def create_app(
             light_index=lambda arm_id: float(facts[arm_id].get("light_index") or 0.05),
             photo_dir=root / "impact",
             on_mode_done=mode_done,
+            expected_ball=lambda arm_id: expected_ladder_ball(
+                admitted_tee_range.get(params.tester_id, (None, None))[0], arm_id
+            ),
         )
         try:
             run = start_mode(params.tester_id, params.environment, start_rung.arm_id)

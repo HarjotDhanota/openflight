@@ -2789,3 +2789,25 @@ def test_the_saved_gain_stands_in_when_no_equivalent_was_recorded(tmp_path):
     facts = ts.ladder_gain_facts(tmp_path, params)
 
     assert facts["gain_at_300_equivalent"] == 6.0
+
+
+def test_the_ladder_expects_the_ball_the_setup_saw():
+    from openflight import tee_range
+
+    selected = {"x_px": 612.0, "y_px": 505.0, "diameter_px": 34.0}
+    camera = tee_range.TeeRangeCandidate(
+        candidate_id="camera-setup-1-arm5",
+        source="camera_reference_ball_floor_plane",
+        source_group="camera",
+        radar_slant_range_m=1.2,
+        uncertainty_m=0.25,
+        evidence={"result": {"selected": selected}},
+    )
+    solution = tee_range.TeeRangeSolution.unresolved([camera], reason="test")
+
+    arm5 = ts.expected_ladder_ball(solution, "arm5")
+    arm6 = ts.expected_ladder_ball(solution, "arm6")
+
+    assert arm5 == {"x": 612.0, "y": 505.0, "diameter_px": 34.0}
+    assert arm6 == {"x": 306.0, "y": 252.5, "diameter_px": 17.0}
+    assert ts.expected_ladder_ball(None, "arm5") is None

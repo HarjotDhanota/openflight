@@ -107,13 +107,31 @@ def _zone_noise(frames: np.ndarray) -> float:
     return float(np.median(np.std(zone.astype(np.float32), axis=0)))
 
 
-def ball_light(frames: np.ndarray, black_floor: float) -> dict | None:
-    """The resting ball's brightness in these frames, if the ball can be found."""
+def ball_light(
+    frames: np.ndarray, black_floor: float, expected_ball: dict | None = None
+) -> dict | None:
+    """The resting ball's brightness in these frames, if the ball can be found.
+
+    ``expected_ball`` (x, y, diameter_px) is where the setup saw the ball in this
+    mode. With it, only a ball of that size near that spot counts, so a shadow
+    or a sun patch is not taken for it.
+    """
     stack = np.clip(np.asarray(frames), 0, 255).astype(np.uint8)
     try:
         found = detect_reference_ball(stack)
-    except ValueError:
+    except (RuntimeError, ValueError):
         return None
+    if expected_ball is not None:
+        # The detector's strict lit-sphere mode (given a size) refuses sunlit or
+        # half-shaded balls, so the result is checked against the setup instead.
+        diameter = float(expected_ball["diameter_px"])
+        reach = max(6.0 * diameter, 60.0)
+        if not (
+            0.6 * diameter <= found.diameter_px <= 1.6 * diameter
+            and abs(found.x - float(expected_ball["x"])) <= reach
+            and abs(found.y - float(expected_ball["y"])) <= max(4.0 * diameter, 40.0)
+        ):
+            return None
     image = np.median(stack, axis=0)
     yy, xx = np.indices(image.shape)
     core = image[np.hypot(xx - found.x, yy - found.y) <= 0.8 * found.diameter_px / 2.0]
@@ -130,7 +148,13 @@ def ball_light(frames: np.ndarray, black_floor: float) -> dict | None:
     }
 
 
-def pre_rung_check(frames: np.ndarray, black_floor: float, gain: float | None = None) -> dict:
+def pre_rung_check(
+    frames: np.ndarray,
+    black_floor: float,
+    gain: float | None = None,
+    *,
+    expected_ball: dict | None = None,
+) -> dict:
     """Whether this rung can work in this light, from a few raw frames and no swing.
 
     The ball decides when it is visible; ``suggested_gain`` is the gain that would
@@ -140,7 +164,7 @@ def pre_rung_check(frames: np.ndarray, black_floor: float, gain: float | None = 
     frames = np.asarray(frames)
     stats = _zone(np.median(frames, axis=0), black_floor)
     base = {**stats, "noise_dn": _zone_noise(frames)}
-    ball = ball_light(frames, black_floor)
+    ball = ball_light(frames, black_floor, expected_ball)
     if ball is not None:
         reason = None
         suggested = None
@@ -195,8 +219,13 @@ def pre_rung_check(frames: np.ndarray, black_floor: float, gain: float | None = 
     }
 
 
-def swing_verdict(  # pylint: disable=too-many-locals
-    capture_dir: Path, rung: Rung, gain: float, black_floor: float, previous_balls: list[dict]
+def swing_verdict(  # pylint: disable=too-many-locals,too-many-arguments
+    capture_dir: Path,
+    rung: Rung,
+    gain: float,
+    black_floor: float,
+    previous_balls: list[dict],
+    expected_ball: dict | None = None,
 ) -> dict:
     """Green, amber or red for one saved swing, from its own pictures and timing."""
     metadata = json.loads((capture_dir / "metadata.json").read_text(encoding="utf-8"))
@@ -222,7 +251,7 @@ def swing_verdict(  # pylint: disable=too-many-locals
     stats = _zone(np.median(resting, axis=0), black_floor)
     if stats["signal_dn"] < LIGHT_FLOOR_DN:
         red.append(f"light: too dark, {stats['signal_dn']:.0f} DN above black")
-    lit = ball_light(resting, black_floor)
+    lit = ball_light(resting, black_floor, expected_ball)
     ball = None
     if lit is None:
         amber.append("resting ball not found in the pre-impact frames")
@@ -554,6 +583,7 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
         photo_dir: Path,
         on_mode_done,
         ready_timeout_s: float = 90.0,
+        expected_ball=None,
     ):
         self.state = state
         self.client = client
@@ -561,6 +591,8 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
         self._black_floor = black_floor
         self._gain_at_300 = gain_at_300
         self._light_index = light_index
+        # arm id -> where the setup saw the ball in that mode, or None
+        self._expected_ball = expected_ball or (lambda _arm_id: None)
         self.photo_dir = photo_dir
         self._on_mode_done = on_mode_done
         self.ready_timeout_s = ready_timeout_s
@@ -670,7 +702,8 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                 if self._stop.wait(SETTLE_S):
                     return None
                 black = self._black_floor(rung.arm_id)
-                check = pre_rung_check(self.client.frames(5), black, gain)
+                expected = self._expected_ball(rung.arm_id)
+                check = pre_rung_check(self.client.frames(5), black, gain, expected_ball=expected)
                 for _ in range(MAX_GAIN_CORRECTIONS):
                     suggested = check.get("suggested_gain")
                     if check["ok"] or suggested is None:
@@ -682,7 +715,9 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                     self.client.set_controls(rung.exposure_us, gain)
                     if self._stop.wait(SETTLE_S):
                         return None
-                    check = pre_rung_check(self.client.frames(5), black, gain)
+                    check = pre_rung_check(
+                        self.client.frames(5), black, gain, expected_ball=expected
+                    )
                 if self.stopped:
                     return None
                 self.state.begin(rung.rung_id, gain, check)
@@ -819,6 +854,7 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                 self.state.gain(rung.rung_id),
                 self._black_floor(rung.arm_id),
                 previous,
+                self._expected_ball(rung.arm_id),
             )
             if self.stopped:
                 break
