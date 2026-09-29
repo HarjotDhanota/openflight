@@ -90,7 +90,10 @@ class TestABallSizedHighlightIsNotGood:
         from openflight.camera import tester_server
 
         results = [{"gain": 4.0, "mean": 120.0, "clipped_pct": auto_exposure.BALL_CLIP_PCT + 0.05}]
-        assert tester_server.choose_gain(results)["lighting_required"] is True
+        # in band but clipped past the gate: too bright, never "needs light"
+        choice = tester_server.choose_gain(results)
+        assert choice["too_bright"] is True
+        assert choice["lighting_required"] is False
 
 
 class TestBallSpeedContract:

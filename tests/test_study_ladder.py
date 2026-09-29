@@ -48,6 +48,10 @@ def test_the_ladder_is_the_agreed_rungs():
 def test_gain_keeps_the_brightness_until_the_ceiling():
     assert sl.rung_gain(3.0, 150) == pytest.approx(6.0)
     assert sl.rung_gain(5.0, 75) == pytest.approx(12.0)  # 20 capped
+    # in sun the light-equivalent gain at 300 us is under 1: short rungs still work,
+    # and no rung asks the sensor for less than unity gain
+    assert sl.rung_gain(0.6, 75) == pytest.approx(2.4)
+    assert sl.rung_gain(0.6, 300) == pytest.approx(1.0)
 
 
 def test_photo_exposure_stays_under_the_frame_period():
@@ -595,3 +599,12 @@ def test_stop_interrupts_waiting_for_the_kiosk(tmp_path):
         assert runner.last_verdict is None
     finally:
         runner.stop()
+
+
+def test_a_rung_that_clips_the_hitting_zone_is_too_bright():
+    frames = np.full((5, 800, 1280), 252.0)
+
+    check = sl.pre_rung_check(frames, black_floor=18.0)
+
+    assert check["ok"] is False
+    assert "too bright" in check["reason"]

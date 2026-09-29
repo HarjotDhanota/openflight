@@ -181,7 +181,16 @@ def score_result(result: dict, args: argparse.Namespace) -> float:
 
 
 def summarize_images(images: np.ndarray, exposure_us: int, gain: float) -> dict:
-    """Calculate image exposure statistics for one setting."""
+    """Calculate image exposure statistics for one setting.
+
+    The hitting zone (the centre-lower region the live exposure meter uses) is
+    recorded too: outdoors the sky clips at any usable setting, so whole-frame
+    clipping alone would call every setting too bright.
+    """
+    height, width = images.shape[1:3]
+    zone = images[
+        :, round(height * 0.45) : round(height * 0.9), round(width * 0.2) : round(width * 0.8)
+    ]
     return {
         "exposure_us": exposure_us,
         "gain": gain,
@@ -192,6 +201,8 @@ def summarize_images(images: np.ndarray, exposure_us: int, gain: float) -> dict:
         "p99": float(np.percentile(images, 99)),
         "clipped_pct": float(np.mean(images >= 250) * 100.0),
         "dark_pct": float(np.mean(images <= 5) * 100.0),
+        "zone_median": float(np.median(zone)),
+        "zone_clipped_pct": float(np.mean(zone >= 250) * 100.0),
     }
 
 

@@ -944,7 +944,7 @@
             : `0 / ${a.target}`;
           li.innerHTML = `<span class="n">${a.arm_id.replace('arm', '')}</span>
             <span class="t"><span>${a.label}</span>
-            <small>${a.isolates} · ${a.exposure_us} µs · ${gainText}${a.lighting_required ? ' · <b>lighting required</b>' : ''}</small></span>
+            <small>${a.isolates} · ${a.exposure_us} µs · ${gainText}${a.lighting_required ? ' · <b>lighting required</b>' : ''}${a.too_bright ? ' · <b>too bright at this exposure</b>' : ''}</small></span>
             <span class="p ${progressClass(a)}">${prog}</span>`;
           li.addEventListener('click', () => {
             currentArm = a.arm_id;
@@ -961,7 +961,7 @@
         const li = a.light_index;
         el('light').innerHTML =
           li != null
-            ? `<span>light index <b>${li.toExponential(2)}</b></span><span>${a.lighting_required ? 'This arm needs more light than you have; its swings will still be recorded as evidence.' : 'Light is sufficient for this arm.'}</span>`
+            ? `<span>light index <b>${li.toExponential(2)}</b></span><span>${a.lighting_required ? 'This arm needs more light than you have; its swings will still be recorded as evidence.' : a.too_bright ? 'Too bright here even at unity gain; the ladder uses its shorter exposures, and longer ones it cannot darken are skipped.' : 'Light is sufficient for this arm.'}</span>`
             : '';
         if (a.solved_range_m != null) {
           el('light').innerHTML += `<span>camera-solved range <b>${Math.round(a.solved_range_m * 1000)} mm</b></span>`;
@@ -1341,7 +1341,7 @@
           const verdicts = [['arm5', '1280×800'], ['arm6', '640×400']].map(([armId, size]) => {
             const arm = arms.find((item) => item.arm_id === armId);
             if (!arm || arm.lighting_required == null) return [size, 'no result'];
-            return [size, arm.lighting_required ? 'more light needed' : 'light sufficient'];
+            return [size, arm.lighting_required ? 'more light needed' : arm.too_bright ? 'too bright: shorter exposures used' : 'light sufficient'];
           });
           const dark = verdicts.some(([, verdict]) => verdict !== 'light sufficient');
           el('light-verdict').className = dark ? 'problem' : '';
@@ -1504,6 +1504,7 @@
         ball_not_found: 'No reference ball at this exposure; trying a brighter setting',
         optical_gates_failed: 'Ball found, but its pixels are not usable at this exposure',
         lighting_required: 'More light is needed on the ball',
+        too_bright: 'Too bright: the ball clips even at the darkest setting; shade the ball or turn the unit so the sun is behind or beside it',
         low_contrast: 'The ball does not stand out from what is behind it',
         ball_not_identified: 'Several ball-like objects are in view; the ball cannot be picked out',
         rig_moved: 'The rig moved during the search; start this camera step again',
@@ -1530,7 +1531,7 @@
         const applied = controls.match
           ? `Camera applied ${controlsText(controls.applied)}.`
           : `Requested ${controlsText(controls.requested)}; camera applied ${controlsText(controls.applied)}.`;
-        const blocked = ['lighting_required', 'ball_not_identified', 'low_contrast', 'rig_moved', 'camera_error', 'camera_unavailable']
+        const blocked = ['lighting_required', 'too_bright', 'ball_not_identified', 'low_contrast', 'rig_moved', 'camera_error', 'camera_unavailable']
           .includes(display.state);
         line.className = blocked ? 'problem' : 'note';
         line.dataset.state = display.state;
@@ -1698,7 +1699,7 @@
         const action = el('tee-range-action');
         el('automatic-range').dataset.ready = String(teeRangeComplete());
         el('tee-range-restart').hidden = !state;
-        const diagnosticArm = ['lighting_required', 'ball_not_identified', 'low_contrast'].includes(guidedCameraDisplay?.state)
+        const diagnosticArm = ['lighting_required', 'too_bright', 'ball_not_identified', 'low_contrast'].includes(guidedCameraDisplay?.state)
           && phase?.startsWith('camera_')
           ? guidedCameraContext()?.armId
           : null;

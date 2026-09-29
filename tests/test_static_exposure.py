@@ -203,7 +203,7 @@ def test_lock_serializes_with_policy_identity_and_applied_controls(tmp_path):
 def test_static_exposure_policy_identity_is_pinned():
     """A lattice or gate change must be a deliberate, reviewed identity change."""
     assert se.static_exposure_policy_sha256() == (
-        "ea0fe55d0d711a949d82e7c067b777582403d2d72a6591b8ff51efb1b1b7d82f"
+        "56752f193d2d4574217b04324917060989dd23ba4a49c2c31db85b27355071a1"
     )
 
 
@@ -291,7 +291,8 @@ def test_a_bootstrap_settle_timeout_is_not_taken_as_darkness():
     search.record(_observation(search.current_step, _association()))
 
     assert search.stage == "refine"
-    assert search.current_step == sorted(STEPS)[0]
+    # not taken as darkness: the refine still starts at the shortest exposure
+    assert search.current_step.exposure_us == sorted(STEPS)[0].exposure_us
 
 
 def test_noise_candidates_in_a_black_frame_are_darkness_not_ambiguity():
@@ -457,7 +458,7 @@ def test_one_measured_ball_predicts_the_setting_and_skips_the_walk(ball, backgro
 
     assert search.status == "locked"
     assert (search.lock.exposure_us, search.lock.gain) == (lowest.exposure_us, lowest.gain)
-    assert len(seen) <= 8
+    assert len(seen) <= 9  # the 30-75 us sunlight steps add one in a dim scene
     assert search.to_dict()["prediction"]["binding_gate"] == "signal"
 
 
@@ -488,3 +489,18 @@ def test_the_29_sept_field_search_locks_near_one_millisecond_not_eight():
     assert search.status == "locked"
     assert search.lock.exposure_us <= 2000
     assert search.lock.exposure_us * search.lock.gain < 23952.0
+
+
+def test_the_lattice_reaches_short_exposures_and_unity_gain_for_sunlight():
+    steps = se.exposure_steps_for_fps(120.0)
+
+    assert min(step.exposure_us for step in steps) <= 30
+    assert min(step.gain for step in steps) == 1.0
+
+
+def test_a_ball_clipped_even_at_the_darkest_setting_is_too_bright():
+    """Outdoors 29 Sept: the old darkest setting, 100 us x 2, clipped 38 % of the ball."""
+    search, _seen = _driver(STEPS, brightness=50.0)
+
+    assert search.status == "too_bright"
+    assert "sun" in search.reason or "bright" in search.reason

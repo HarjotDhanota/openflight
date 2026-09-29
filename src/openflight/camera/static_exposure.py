@@ -21,8 +21,10 @@ from openflight.camera.optical_quality import (
 
 STATIC_EXPOSURE_PURPOSE = "static_reference_ball"
 STATIC_EXPOSURE_SCHEMA = "openflight.camera.static_exposure_lock.v1"
-EXPOSURES_US = (100, 150, 200, 300, 500, 800, 1250, 2000, 3000, 4000, 6000, 8000)
-GAINS = (2.0, 4.0, 6.0, 8.0, 10.0, 12.0)
+# 30-75 us and unity gain are for sunlight: outdoors on 29 Sept the old darkest
+# setting, 100 us x 2, still clipped 38 % of the ball.
+EXPOSURES_US = (30, 50, 75, 100, 150, 200, 300, 500, 800, 1250, 2000, 3000, 4000, 6000, 8000)
+GAINS = (1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0)
 _MIN_SIGNAL_ABOVE_FLOOR_DN = 20.0
 # Contrast against the surroundings and edge sharpness are recorded but not
 # gated. In DN both scale with exposure x gain exactly as the background does, so
@@ -56,7 +58,7 @@ def static_exposure_policy() -> dict[str, Any]:
     """Return every static exposure setting and gate used for qualification."""
     return {
         "name": "stationary_reference_ball_exposure",
-        "version": 2,
+        "version": 3,
         "purpose": STATIC_EXPOSURE_PURPOSE,
         "exposures_us": list(EXPOSURES_US),
         "gains": list(GAINS),
@@ -82,6 +84,7 @@ def static_exposure_policy() -> dict[str, Any]:
             "clipping_prunes_before_dark_gates": True,
             "pose_change": "retry_same_step_then_rig_moved",
             "stand_out": "detector_stable_selection_then_independent_save_search",
+            "too_bright": "ball_seen_only_clipped_never_dim",
             "well_lit_frame_dn": _WELL_LIT_FRAME_DN,
         },
         "gates": {
@@ -355,6 +358,9 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
         self._pose_retries = 0
         self._ball_seen = False
         self._lit_seen = False
+        # the ball was seen clipped, and seen too dim: only the first means too bright
+        self._clipped_seen = False
+        self._dim_seen = False
         self._jumps = 0
         self.prediction: dict | None = None
 
@@ -393,7 +399,13 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
             self._refine_attempts += 1
         if self._queue and self._refine_attempts < _REFINE_ATTEMPT_LIMIT:
             return
-        if not self._ball_seen and self._lit_seen:
+        if self._clipped_seen and not self._dim_seen:
+            self._finish(
+                "too_bright",
+                "the ball clips even at the darkest setting; shade the ball or turn the unit "
+                "so the sun is behind or beside it",
+            )
+        elif not self._ball_seen and self._lit_seen:
             self._finish(
                 "ball_not_identified",
                 "no ball was found although the picture is well lit; "
@@ -567,6 +579,12 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
             return
         if observation.ball_found:
             self._ball_seen = True
+            failed = set(observation.failed_gates)
+            self._clipped_seen |= "clipped" in failed
+            self._dim_seen |= "signal" in failed or observation.status in {
+                "accepted",
+                "stabilizing",
+            }
         if observation.status == "stabilizing":
             self._stabilizing += 1
             if self._stabilizing < _STABILIZE_LIMIT:

@@ -156,6 +156,69 @@ class TestGainChoice:
         choice = ts.choose_gain(results)
         assert choice["gain"] == 12.0 and choice["lighting_required"] is True
 
+    def test_sun_too_bright_at_every_gain_is_too_bright_not_lighting_required(self):
+        # Outdoors 29 Sept: at 300 us even gain 2 left the hitting zone at median 144
+        # with 20 % clipped, and the old rule saved gain 12 as "lighting required"
+        results = [
+            {
+                "gain": 2.0,
+                "mean": 184.2,
+                "clipped_pct": 45.5,
+                "zone_median": 144.0,
+                "zone_clipped_pct": 20.6,
+            },
+            {
+                "gain": 4.0,
+                "mean": 228.5,
+                "clipped_pct": 65.6,
+                "zone_median": 255.0,
+                "zone_clipped_pct": 59.8,
+            },
+            {
+                "gain": 12.0,
+                "mean": 254.6,
+                "clipped_pct": 99.3,
+                "zone_median": 255.0,
+                "zone_clipped_pct": 98.7,
+            },
+        ]
+
+        choice = ts.choose_gain(results)
+
+        assert choice["too_bright"] is True
+        assert choice["lighting_required"] is False
+        assert choice["gain"] == 2.0
+        # the light needs well under gain 2 at 300 us: shorter exposures carry it
+        assert choice["gain_at_300_equivalent"] < 2.0
+
+    def test_the_hitting_zone_decides_when_the_screen_recorded_it(self):
+        # a clipped sky no longer disqualifies a hitting zone that is in band
+        results = [
+            {
+                "gain": 1.0,
+                "mean": 170.0,
+                "clipped_pct": 40.0,
+                "zone_median": 110.0,
+                "zone_clipped_pct": 1.0,
+            },
+            {
+                "gain": 2.0,
+                "mean": 200.0,
+                "clipped_pct": 55.0,
+                "zone_median": 200.0,
+                "zone_clipped_pct": 30.0,
+            },
+        ]
+
+        choice = ts.choose_gain(results)
+
+        assert choice["gain"] == 1.0
+        assert choice["too_bright"] is False and choice["lighting_required"] is False
+        assert choice["gain_at_300_equivalent"] == 1.0
+
+    def test_the_gain_screen_starts_at_unity_gain(self):
+        assert ts.GAIN_SCREEN.split(",")[0] == "1"
+
     def test_empty_screen_is_an_error(self):
         with pytest.raises(ValueError):
             ts.choose_gain([])

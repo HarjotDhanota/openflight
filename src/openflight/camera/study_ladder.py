@@ -28,6 +28,7 @@ from openflight.camera.paired_eligibility import evaluate_paired_capture
 
 SWINGS_PER_RUNG = 5
 GAIN_CEILING = 12.0
+GAIN_FLOOR = 1.0  # unity analogue gain: the sensor cannot go lower
 LIGHT_FLOOR_DN = 10.0  # hitting-zone signal above the black floor
 CLIPPED_MAX_PCT = 5.0
 FPS_MIN_FRACTION = 0.9
@@ -61,8 +62,12 @@ RUNG_FPS = {"arm5": 120.0, "arm6": 288.0}
 
 
 def rung_gain(gain_at_300: float, exposure_us: int) -> float:
-    """The gain that keeps the gain screen's brightness at this exposure, up to the ceiling."""
-    return round(min(GAIN_CEILING, gain_at_300 * 300.0 / exposure_us), 3)
+    """The gain that keeps the gain screen's brightness at this exposure, within the sensor.
+
+    In sunlight the light-equivalent gain at 300 us is below unity; a short rung
+    then still gets a real gain, and a long rung sits at unity and may be too bright.
+    """
+    return round(max(GAIN_FLOOR, min(GAIN_CEILING, gain_at_300 * 300.0 / exposure_us)), 3)
 
 
 def photo_exposure_us(light_index: float, black_floor: float, fps: float) -> int:
@@ -94,18 +99,18 @@ def pre_rung_check(frames: np.ndarray, black_floor: float) -> dict:
     """Whether this rung can work in this light, from a few raw frames and no swing."""
     frames = np.asarray(frames)
     stats = _zone(np.median(frames, axis=0), black_floor)
-    ok = stats["signal_dn"] >= LIGHT_FLOOR_DN
-    return {
-        **stats,
-        "noise_dn": _zone_noise(frames),
-        "ok": ok,
-        "reason": None
-        if ok
-        else (
+    reason = None
+    if stats["signal_dn"] < LIGHT_FLOOR_DN:
+        reason = (
             f"too dark in this light: the hitting zone is {stats['signal_dn']:.0f} DN above "
             f"black, under {LIGHT_FLOOR_DN:.0f}"
-        ),
-    }
+        )
+    elif stats["clipped_pct"] > CLIPPED_MAX_PCT:
+        reason = (
+            f"too bright in this light: {stats['clipped_pct']:.0f}% of the hitting zone is "
+            "clipped; a shorter exposure follows"
+        )
+    return {**stats, "noise_dn": _zone_noise(frames), "ok": reason is None, "reason": reason}
 
 
 def swing_verdict(  # pylint: disable=too-many-locals

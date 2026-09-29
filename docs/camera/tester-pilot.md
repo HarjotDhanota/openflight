@@ -325,6 +325,18 @@ Both results are recorded in the setup evidence. Something ball-sized at the sam
 distance as the ball, such as a shoe beside it, is not separated, so the prompt asks
 you to step at least 2 m away before each capture.
 
+Outdoors in sun the scene can be too bright rather than too dark. The gain screen
+now starts at unity gain and judges the hitting zone (the sky clips at any usable
+setting). If even unity gain is too bright at the screen's 300 µs, the arm is marked
+too bright and stores a light-equivalent gain below 1; the ladder then gives each
+shorter rung a real gain from it (for example 75 µs at about 2–3× in full sun) and
+skips any rung whose hitting zone still clips. The setup exposure search reaches 30 µs
+and unity gain, and says "too bright" when even that clips the ball. On 29 Sept the
+old rule saved gain 12 as "lighting required" and every swing clip came out white.
+
+Keep the ball in the camera's view on the live preview: with the lens about 95 mm off
+the ground, a raised mat edge or bumper between the unit and the ball hides it.
+
 The ball search runs in worker processes (`--ball-search-workers`, default 2; 0
 runs it in the tester process) so it never holds up camera capture. To see what
 it costs on this Pi, run

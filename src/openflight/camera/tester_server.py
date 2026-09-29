@@ -117,7 +117,8 @@ EXPOSURE_CEILING_US = 300
 # same 6 um; 1:1 doubles it.
 FOCAL_PX_2X = 466.6667
 FOCAL_PX_1X = 933.3333
-GAIN_SCREEN = "2,4,6,8,10,12,14,15.9"  # OV9282 analogue gain caps at 0xFF/16
+# OV9282 analogue gain runs from 1 (unity) to 0xFF/16; unity matters in sunlight
+GAIN_SCREEN = "1,2,4,6,8,10,12,14,15.9"
 # Above ~12x the black floor lifts and column stripes appear: more offset, not
 # more signal. The screen still records the top gains; the pick stops here.
 GAIN_CEILING = 12.0
@@ -556,6 +557,10 @@ def _tee_range_cli_args(
     return ["--iwr6843-tee-range-pending"]
 
 
+# The hitting zone may clip this much (sun patches, a white ball) and still be usable.
+ZONE_MAX_CLIPPED_PCT = 5.0
+
+
 def choose_gain(
     results: Sequence[Mapping],
     *,
@@ -564,36 +569,57 @@ def choose_gain(
     max_clipped_pct: float = 0.1,
     gain_ceiling: float = GAIN_CEILING,
 ) -> dict:
-    """Lowest gain in band without clipping, up to the ceiling; else ``lighting_required``."""
+    """Lowest gain in band without clipping, up to the ceiling.
+
+    When the screen recorded the hitting zone, that decides: outdoors the sky
+    clips at every usable setting. If even the lowest gain is too bright the
+    result is ``too_bright`` with a light-equivalent gain at the screen's exposure
+    below it (shorter exposures carry that light); if even the ceiling is too dark
+    it is ``lighting_required``.
+    """
     usable = [
         r for r in results if "gain" in r and "mean" in r and float(r["gain"]) <= gain_ceiling
     ]
     if not usable:
         raise ValueError("gain screen produced no results")
+    zoned = all("zone_median" in r for r in usable)
+
+    def level(r):
+        return float(r["zone_median"] if zoned else r["mean"])
+
+    def clipped(r):
+        return float(r.get("zone_clipped_pct", 0.0) if zoned else r.get("clipped_pct", 0.0))
+
+    clip_limit = ZONE_MAX_CLIPPED_PCT if zoned else max_clipped_pct
     acceptable = sorted(
-        (
-            r
-            for r in usable
-            if mean_low <= float(r["mean"]) <= mean_high
-            and float(r.get("clipped_pct", 0.0)) <= max_clipped_pct
-        ),
+        (r for r in usable if mean_low <= level(r) <= mean_high and clipped(r) <= clip_limit),
         key=lambda r: float(r["gain"]),
     )
-    if acceptable:
-        pick = acceptable[0]
+
+    def result(pick, **flags):
         return {
             "gain": float(pick["gain"]),
             "mean": float(pick["mean"]),
             "clipped_pct": float(pick.get("clipped_pct", 0.0)),
+            "zone_median": pick.get("zone_median"),
+            "zone_clipped_pct": pick.get("zone_clipped_pct"),
             "lighting_required": False,
+            "too_bright": False,
+            "gain_at_300_equivalent": float(pick["gain"]),
+            **flags,
         }
-    darkest_ok = max(usable, key=lambda r: float(r["gain"]))
-    return {
-        "gain": float(darkest_ok["gain"]),
-        "mean": float(darkest_ok["mean"]),
-        "clipped_pct": float(darkest_ok.get("clipped_pct", 0.0)),
-        "lighting_required": True,
-    }
+
+    if acceptable:
+        return result(acceptable[0])
+    lowest = min(usable, key=lambda r: float(r["gain"]))
+    if level(lowest) > mean_high or clipped(lowest) > clip_limit:
+        # scale the lowest gain to the middle of the band; a clipped level
+        # under-reads the light, so this errs bright and the ladder's check catches it
+        target = 0.5 * (mean_low + mean_high)
+        equivalent = float(lowest["gain"]) * target / max(level(lowest), 1.0)
+        return result(lowest, too_bright=True, gain_at_300_equivalent=round(equivalent, 3))
+    brightest = max(usable, key=lambda r: float(r["gain"]))
+    return result(brightest, lighting_required=True)
 
 
 def latest_gain_results(arm_dir: Path) -> list[dict] | None:
@@ -2050,7 +2076,7 @@ class GuidedRangeAnalyzer:
 
 
 STATIC_EXPOSURE_FAILURES = frozenset(
-    {"lighting_required", "ball_not_identified", "low_contrast", "rig_moved"}
+    {"lighting_required", "too_bright", "ball_not_identified", "low_contrast", "rig_moved"}
 )
 
 
@@ -4181,7 +4207,11 @@ def create_app(
             gain_inclinometer=enclosure.reading(),
             gain_mean=choice["mean"],
             gain_clipped_pct=choice["clipped_pct"],
+            gain_zone_median=choice["zone_median"],
+            gain_zone_clipped_pct=choice["zone_clipped_pct"],
             lighting_required=choice["lighting_required"],
+            too_bright=choice["too_bright"],
+            gain_at_300_equivalent=choice["gain_at_300_equivalent"],
             **light_index(results),
             **solved_range(arm_directory(sessions_root, params), params.arm, choice, rig_geometry),
         )
@@ -4969,7 +4999,12 @@ def create_app(
         if analyzer is None:
             raise RuntimeError(f"camera {arm_id} has no guided exposure search")
         exposure = analyzer.status()
-        if exposure["status"] not in {"lighting_required", "ball_not_identified", "low_contrast"}:
+        if exposure["status"] not in {
+            "lighting_required",
+            "too_bright",
+            "ball_not_identified",
+            "low_contrast",
+        }:
             raise RuntimeError(
                 f"camera {arm_id} diagnostic save is only for a lighting or "
                 "ball-identification failure; use Save"
@@ -5805,7 +5840,9 @@ def create_app(
             study_ladder.KioskClient(),
             run_dir=run_dir,
             black_floor=lambda arm_id: float(facts[arm_id].get("black_floor_dn") or 0.0),
-            gain_at_300=lambda arm_id: float(facts[arm_id]["gain"]),
+            gain_at_300=lambda arm_id: float(
+                facts[arm_id].get("gain_at_300_equivalent") or facts[arm_id]["gain"]
+            ),
             light_index=lambda arm_id: float(facts[arm_id].get("light_index") or 0.05),
             photo_dir=root / "impact",
             on_mode_done=mode_done,
