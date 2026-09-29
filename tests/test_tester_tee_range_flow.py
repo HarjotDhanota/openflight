@@ -297,6 +297,8 @@ class StaticManager:
         self.fail = fail
         self.legacy_profile = legacy_profile
         self.ball_return = 30.0
+        # (bin, extra power) for something else that appeared with the ball
+        self.other_return: tuple[int, float] | None = None
         self.last_command = None
         self.start_count = 0
         self._status = {"state": "idle", "action": None, "message": "Ready"}
@@ -322,7 +324,10 @@ class StaticManager:
         output = Path(value("--output-dir"))
         output.mkdir(parents=True, exist_ok=True)
         empty = np.ones(96).tolist()
-        present = (np.ones(96) + np.where(np.arange(96) == 30, self.ball_return, 0.0)).tolist()
+        present = np.ones(96) + np.where(np.arange(96) == 30, self.ball_return, 0.0)
+        if self.other_return is not None:
+            present[self.other_return[0]] += self.other_return[1]
+        present = present.tolist()
         record = {
             "capture_id": capture_id,
             "capture_kind": kind,
@@ -2131,3 +2136,44 @@ def test_stop_also_cancels_a_held_radar_capture(tmp_path, inputs, monkeypatch):
     assert app.test_client().post("/api/tester/stop").status_code == 200
 
     assert app.config["TEST_HELD_RADAR"].cancels == 1
+
+
+def test_the_camera_window_is_its_range_plus_minus_two_sigma_with_a_20_percent_floor():
+    selected = camera_result(1.2).selected
+
+    low, high = ts.camera_radar_window(selected)
+
+    # floor uncertainty is 0.02 m, below the 20 % floor, so the window is +-0.48 m
+    assert low == pytest.approx(1.2 - 0.48)
+    assert high == pytest.approx(1.2 + 0.48)
+    assert ts.camera_radar_window(replace(selected, floor_radar_range_m=None)) is None
+
+
+def test_the_camera_steers_the_radar_away_from_a_person_behind_the_ball(
+    tmp_path, inputs, monkeypatch
+):
+    app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
+    radar = app.config["TEST_STATIC_MANAGER"]
+    # a still person 2.8 m out adds ten times the ball's echo
+    radar.other_return = (70, 300.0)
+
+    state = drive(app.test_client(), tester)
+
+    iwr = state["evidence"]["iwr_candidate"]
+    window = iwr["evidence"]["camera_window"]
+    assert window["outcome"] == "reselected"
+    assert window["full_window"]["range_m"] == pytest.approx(2.8, abs=0.05)
+    assert iwr["radar_slant_range_m"] == pytest.approx(1.2, abs=0.05)
+    assert iwr["evidence"]["qualification"]["camera_range_used"] is True
+    assert iwr["evidence"]["qualification"]["accuracy_qualified"] is False
+
+
+def test_a_radar_reading_inside_the_camera_window_is_kept_as_is(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
+
+    state = drive(app.test_client(), tester)
+
+    iwr = state["evidence"]["iwr_candidate"]
+    assert iwr["evidence"]["camera_window"]["outcome"] == "consistent"
+    assert iwr["radar_slant_range_m"] == pytest.approx(1.2, abs=0.05)
+    assert iwr["evidence"]["qualification"]["camera_range_used"] is False

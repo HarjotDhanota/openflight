@@ -2673,6 +2673,28 @@ def _static_profile(result: Mapping) -> StaticRangeProfile | StaticRangeProfileV
     return StaticRangeProfile(**payload)
 
 
+# The camera's range to the resting ball bounds where the radar may look for it:
+# its own estimate +-2 sigma, with sigma never under 20 % (apparent size and the
+# nominal focal length leave it that loose). A still person, club or net at a
+# different distance then cannot be taken for the ball.
+CAMERA_WINDOW_SIGMAS = 2.0
+CAMERA_WINDOW_MIN_RELATIVE_SIGMA = 0.20
+
+
+def camera_radar_window(selected) -> tuple[float, float] | None:
+    """Radar slant-range interval (m) the camera's selected ball allows, if any."""
+    value = getattr(selected, "floor_radar_range_m", None)
+    if value is None or not math.isfinite(float(value)) or float(value) <= 0.0:
+        return None
+    value = float(value)
+    sigma = max(
+        float(getattr(selected, "floor_range_uncertainty_m", None) or 0.0),
+        CAMERA_WINDOW_MIN_RELATIVE_SIGMA * value,
+    )
+    half = CAMERA_WINDOW_SIGMAS * sigma
+    return value - half, value + half
+
+
 def _guided_iwr_candidate(
     empty_record: Mapping,
     present_record: Mapping,
@@ -2680,6 +2702,7 @@ def _guided_iwr_candidate(
     epoch_id: str,
     calibration_path: Path,
     qualification: tee_range.TeeRangeQualification | None,
+    camera_window_m: tuple[float, float] | None = None,
 ) -> tee_range.TeeRangeCandidate:
     calibration_sha = _file_sha256(calibration_path)
     calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
@@ -2691,6 +2714,11 @@ def _guided_iwr_candidate(
         if qualification is not None
         else (TEE_RANGE_MM[0] / 1000.0, TEE_RANGE_MM[1] / 1000.0)
     )
+    if camera_window_m is not None:
+        corrected_interval = (
+            max(corrected_interval[0], camera_window_m[0]),
+            min(corrected_interval[1], camera_window_m[1]),
+        )
     apparent_interval = tuple(value + bias_m for value in corrected_interval)
     result = compare_static_range_profiles(
         empty, present, plausible_apparent_range_m=apparent_interval
@@ -2720,6 +2748,8 @@ def _guided_iwr_candidate(
         and bias_uncertainty_valid
         and qualification
         and qualification.accuracy_qualified
+        # a camera-steered reading is no longer independent of the camera
+        and camera_window_m is None
     )
     if result.status == "accepted" and result.apparent_range_m is not None:
         qualified_result = replace(result, radar_profile_qualified=qualified)
@@ -2768,9 +2798,10 @@ def _guided_iwr_candidate(
                 "iwr_static_estimator_sha256": result.estimator_sha256,
                 "scope": qualification.scope if qualification else "tester_setup",
                 "manual_range_used": False,
-                "camera_range_used": False,
+                "camera_range_used": camera_window_m is not None,
                 "moving_iwr_used": False,
             },
+            "search_window_m": list(corrected_interval),
             "bias_uncertainty": (
                 {"value_m": bias_uncertainty_m, "source": "hashed_range_calibration"}
                 if bias_uncertainty_valid
@@ -4417,6 +4448,48 @@ def create_app(
         )
         return store.finalize(state, solution, qualification)
 
+    def _camera_steered_iwr(state, selected, iwr_evidence) -> dict | None:
+        """The radar candidate checked against, or re-selected inside, the camera's window."""
+        window = camera_radar_window(selected)
+        if window is None or not isinstance(iwr_evidence, Mapping):
+            return None
+        difference = (iwr_evidence.get("evidence") or {}).get("difference") or {}
+        value = iwr_evidence.get("radar_slant_range_m")
+        full = {"status": difference.get("status"), "range_m": value}
+        facts = {"camera_window_m": list(window), "full_window": full}
+        if (
+            difference.get("status") == "accepted"
+            and value is not None
+            and window[0] <= float(value) <= window[1]
+        ):
+            return {
+                **iwr_evidence,
+                "evidence": {
+                    **iwr_evidence["evidence"],
+                    "camera_window": {**facts, "outcome": "consistent"},
+                },
+            }
+        try:
+            steered = _guided_iwr_candidate(
+                state.evidence["empty_capture"],
+                state.evidence["ball_present_capture"],
+                epoch_id=state.epoch_id,
+                calibration_path=iwr_calibration,
+                qualification=qualification,
+                camera_window_m=window,
+            ).to_dict()
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning("Camera-steered radar re-selection failed: %s", exc)
+            return {
+                **iwr_evidence,
+                "evidence": {
+                    **(iwr_evidence.get("evidence") or {}),
+                    "camera_window": {**facts, "outcome": "not_rechecked", "error": str(exc)},
+                },
+            }
+        steered["evidence"]["camera_window"] = {**facts, "outcome": "reselected"}
+        return steered
+
     def _range_resources_busy() -> str | None:
         for owner in (jobs, radar_jobs):
             job = owner.status()
@@ -4787,19 +4860,25 @@ def create_app(
                 qualification=qualification,
                 static_exposure=save_analysis["static_exposure"],
             )
+            iwr_evidence = state.evidence.get("iwr_candidate")
+            steered = (
+                _camera_steered_iwr(state, result.selected, iwr_evidence)
+                if arm_id == "arm5"
+                else None
+            )
+            if steered is not None:
+                iwr_evidence = steered
             candidate = replace(
                 candidate,
                 evidence={
                     **candidate.evidence,
                     "save_camera_only_analysis": save_analysis,
-                    "camera_height": _solved_camera_height(
-                        result, model, state.evidence.get("iwr_candidate")
-                    ),
+                    "camera_height": _solved_camera_height(result, model, iwr_evidence),
                 },
             )
             iwr_ranking = _camera_to_iwr_ranking(
                 result,
-                state.evidence.get("iwr_candidate", {}),
+                iwr_evidence or {},
                 epoch_id=state.epoch_id,
                 camera_candidate_id=candidate.candidate_id,
                 saved_frame_sha256=frame_sha256,
@@ -4838,6 +4917,7 @@ def create_app(
         except (OSError, RuntimeError) as exc:
             logger.warning("Static exposure lock was not remembered: %s", exc)
         evidence = {
+            **({"iwr_candidate": steered} if steered is not None else {}),
             f"camera_{arm_id}_candidate": candidate.to_dict(),
             f"camera_{arm_id}_static_exposure": save_analysis["static_exposure"],
             f"camera_{arm_id}_guidance": {

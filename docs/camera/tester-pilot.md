@@ -317,6 +317,14 @@ moves 427 KB (about 4.1 s instead of 7.1 s). It is opt-in (`--iwr-static-config`
 on the tester server) until an A/B on the Pi shows the same accepted range and
 frame stability as the 24-frame default.
 
+At Save the camera's own range to the ball (from its apparent size, found without
+the radar's hint) sets a window of ±2σ, at least ±40 %, around it. If the radar
+chose something outside that window, such as a person, a club or a net at another
+distance, the radar selection is re-run inside the window from the saved profiles.
+Both results are recorded in the setup evidence. Something ball-sized at the same
+distance as the ball, such as a shoe beside it, is not separated, so the prompt asks
+you to step at least 2 m away before each capture.
+
 The ball search runs in worker processes (`--ball-search-workers`, default 2; 0
 runs it in the tester process) so it never holds up camera capture. To see what
 it costs on this Pi, run
