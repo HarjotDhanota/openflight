@@ -42,6 +42,15 @@ PHOTO_GAIN = 2.0
 PHOTO_EXPOSURE_US = (100, 8000)
 BALL_MOVED_RADII = 3.0
 RESTING_FRAMES = 10  # the first pre-impact frames, before the club arrives
+# Outdoors the background beyond the ball can be 30x brighter than the ball's
+# surroundings (29 Sept: a sunlit patio clipped at every setting while the shaded
+# mat sat at 71 DN), so a rung is judged on the ball whenever it is visible.
+BALL_MIN_SIGNAL_DN = 20.0
+BALL_TARGET_MEDIAN_DN = 150.0
+MAX_GAIN_CORRECTIONS = 3
+# With no ball in view the hitting zone decides, and only a mostly clipped zone
+# counts as too bright: a clipped strip of background is normal outdoors.
+ZONE_TOO_BRIGHT_PCT = 50.0
 
 
 @dataclass(frozen=True)
@@ -95,22 +104,88 @@ def _zone_noise(frames: np.ndarray) -> float:
     return float(np.median(np.std(zone.astype(np.float32), axis=0)))
 
 
-def pre_rung_check(frames: np.ndarray, black_floor: float) -> dict:
-    """Whether this rung can work in this light, from a few raw frames and no swing."""
+def ball_light(frames: np.ndarray, black_floor: float) -> dict | None:
+    """The resting ball's brightness in these frames, if the ball can be found."""
+    stack = np.clip(np.asarray(frames), 0, 255).astype(np.uint8)
+    try:
+        found = detect_reference_ball(stack)
+    except ValueError:
+        return None
+    image = np.median(stack, axis=0)
+    yy, xx = np.indices(image.shape)
+    core = image[np.hypot(xx - found.x, yy - found.y) <= 0.8 * found.diameter_px / 2.0]
+    if not core.size:
+        return None
+    median = float(np.median(core))
+    return {
+        "x": float(found.x),
+        "y": float(found.y),
+        "diameter_px": float(found.diameter_px),
+        "median_dn": median,
+        "signal_dn": median - black_floor,
+        "clipped_pct": float(np.mean(core >= 250) * 100.0),
+    }
+
+
+def pre_rung_check(frames: np.ndarray, black_floor: float, gain: float | None = None) -> dict:
+    """Whether this rung can work in this light, from a few raw frames and no swing.
+
+    The ball decides when it is visible; ``suggested_gain`` is the gain that would
+    bring it back into range at this exposure. ``too_bright`` marks a rung a shorter
+    exposure may still rescue.
+    """
     frames = np.asarray(frames)
     stats = _zone(np.median(frames, axis=0), black_floor)
+    base = {**stats, "noise_dn": _zone_noise(frames)}
+    ball = ball_light(frames, black_floor)
+    if ball is not None:
+        reason = None
+        suggested = None
+        too_bright = False
+        if ball["clipped_pct"] > CLIPPED_MAX_PCT:
+            too_bright = True
+            reason = f"too bright for the ball: {ball['clipped_pct']:.0f}% of it is clipped"
+            if gain:
+                suggested = (
+                    gain * 0.5
+                    if ball["median_dn"] >= 250
+                    else gain * BALL_TARGET_MEDIAN_DN / ball["median_dn"]
+                )
+        elif ball["signal_dn"] < BALL_MIN_SIGNAL_DN:
+            reason = f"too dark for the ball: {ball['signal_dn']:.0f} DN above black"
+            if gain:
+                suggested = gain * BALL_TARGET_MEDIAN_DN / max(ball["median_dn"], 1.0)
+        return {
+            **base,
+            "judged_on": "ball",
+            "ball": ball,
+            "ok": reason is None,
+            "reason": reason,
+            "too_bright": too_bright,
+            "suggested_gain": suggested,
+        }
     reason = None
+    too_bright = False
     if stats["signal_dn"] < LIGHT_FLOOR_DN:
         reason = (
             f"too dark in this light: the hitting zone is {stats['signal_dn']:.0f} DN above "
             f"black, under {LIGHT_FLOOR_DN:.0f}"
         )
-    elif stats["clipped_pct"] > CLIPPED_MAX_PCT:
+    elif stats["clipped_pct"] > ZONE_TOO_BRIGHT_PCT:
+        too_bright = True
         reason = (
             f"too bright in this light: {stats['clipped_pct']:.0f}% of the hitting zone is "
             "clipped; a shorter exposure follows"
         )
-    return {**stats, "noise_dn": _zone_noise(frames), "ok": reason is None, "reason": reason}
+    return {
+        **base,
+        "judged_on": "hitting_zone",
+        "ball": None,
+        "ok": reason is None,
+        "reason": reason,
+        "too_bright": too_bright,
+        "suggested_gain": None,
+    }
 
 
 def swing_verdict(  # pylint: disable=too-many-locals
@@ -140,14 +215,21 @@ def swing_verdict(  # pylint: disable=too-many-locals
     stats = _zone(np.median(resting, axis=0), black_floor)
     if stats["signal_dn"] < LIGHT_FLOOR_DN:
         red.append(f"light: too dark, {stats['signal_dn']:.0f} DN above black")
-    if stats["clipped_pct"] > CLIPPED_MAX_PCT:
-        red.append(f"light: {stats['clipped_pct']:.0f}% of the hitting zone clipped")
+    lit = ball_light(resting, black_floor)
     ball = None
-    try:
-        found = detect_reference_ball(resting)
-        ball = {"x": found.x, "y": found.y, "diameter_px": found.diameter_px}
-    except ValueError:
+    if lit is None:
         amber.append("resting ball not found in the pre-impact frames")
+        if stats["clipped_pct"] > CLIPPED_MAX_PCT:
+            red.append(f"light: {stats['clipped_pct']:.0f}% of the hitting zone clipped")
+    else:
+        ball = {"x": lit["x"], "y": lit["y"], "diameter_px": lit["diameter_px"]}
+        if lit["clipped_pct"] > CLIPPED_MAX_PCT:
+            red.append(f"light: {lit['clipped_pct']:.0f}% of the ball clipped")
+        elif stats["clipped_pct"] > CLIPPED_MAX_PCT:
+            amber.append(
+                f"background: {stats['clipped_pct']:.0f}% of the hitting zone clipped "
+                "behind a well-exposed ball"
+            )
     if ball and previous_balls:
         x = float(np.median([b["x"] for b in previous_balls]))
         y = float(np.median([b["y"] for b in previous_balls]))
@@ -271,6 +353,10 @@ class LadderState:
         entry["pre_check"] = check
         if check.get("ok"):
             entry["status"] = "active"
+        elif check.get("too_bright"):
+            # shorter exposures in this mode are darker and may still work
+            entry["status"] = "skipped"
+            entry["reason"] = check.get("reason") or "too bright"
         else:
             self._skip_from(rung, "skipped", check.get("reason") or "failed the pre-rung check")
         self._require_boundary_photo(rung)
@@ -548,7 +634,20 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                 self.client.set_controls(rung.exposure_us, gain)
                 if self._stop.wait(SETTLE_S):
                     return None
-                check = pre_rung_check(self.client.frames(5), self._black_floor(rung.arm_id))
+                black = self._black_floor(rung.arm_id)
+                check = pre_rung_check(self.client.frames(5), black, gain)
+                for _ in range(MAX_GAIN_CORRECTIONS):
+                    suggested = check.get("suggested_gain")
+                    if check["ok"] or suggested is None:
+                        break
+                    corrected = round(max(GAIN_FLOOR, min(GAIN_CEILING, suggested)), 3)
+                    if abs(corrected - gain) < 0.05:
+                        break  # at unity or the ceiling: this exposure cannot be fixed
+                    gain = corrected
+                    self.client.set_controls(rung.exposure_us, gain)
+                    if self._stop.wait(SETTLE_S):
+                        return None
+                    check = pre_rung_check(self.client.frames(5), black, gain)
                 if self.stopped:
                     return None
                 self.state.begin(rung.rung_id, gain, check)

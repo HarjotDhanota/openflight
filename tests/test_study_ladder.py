@@ -10,15 +10,26 @@ from openflight.camera import study_ladder as sl
 
 
 def _capture(
-    tmp_path, *, level=60.0, exposure=150, gain=8.0, fps=120.0, gaps=0, name="camera_1", ball=True
+    tmp_path,
+    *,
+    level=60.0,
+    exposure=150,
+    gain=8.0,
+    fps=120.0,
+    gaps=0,
+    name="camera_1",
+    ball=True,
+    ball_level=200,
+    bright_rows=0,
 ):
     folder = tmp_path / name
     folder.mkdir()
     rng = np.random.default_rng(0)
     frames = np.clip(level + rng.normal(0, 1.5, (12, 800, 1280)), 0, 255)
+    frames[:, :bright_rows] = 255  # a sunlit background beyond the ball
     if ball:
         yy, xx = np.indices((800, 1280))
-        frames[:, (np.hypot(xx - 640, yy - 520) <= 10)] = 200
+        frames[:, (np.hypot(xx - 640, yy - 520) <= 10)] = ball_level
     np.savez(
         folder / "frames.npz",
         frames=frames.astype(np.uint8),
@@ -86,7 +97,7 @@ def test_a_good_swing_is_green(tmp_path):
         ({"exposure": 300}, "exposure"),
         ({"gain": 4.0}, "gain"),
         ({"level": 22.0}, "dark"),
-        ({"level": 254.0}, "clipped"),
+        ({"ball_level": 255}, "ball"),
     ],
 )
 def test_each_picture_failure_is_red_and_named(tmp_path, kwargs, word):
@@ -608,3 +619,70 @@ def test_a_rung_that_clips_the_hitting_zone_is_too_bright():
 
     assert check["ok"] is False
     assert "too bright" in check["reason"]
+
+
+def _ball_frames(background, ball, *, count=5, bright_rows=0):
+    rng = np.random.default_rng(2)
+    frames = np.clip(background + rng.normal(0, 1.0, (count, 800, 1280)), 0, 255)
+    frames[:, :bright_rows] = 255
+    yy, xx = np.indices((800, 1280))
+    frames[:, np.hypot(xx - 640, yy - 520) <= 10] = ball
+    return frames.astype(np.uint8)
+
+
+def test_a_clipped_ball_fails_the_pre_rung_check_and_asks_for_less_gain():
+    check = sl.pre_rung_check(_ball_frames(60, 255), black_floor=18.0, gain=4.0)
+
+    assert check["ok"] is False
+    assert check["judged_on"] == "ball"
+    assert check["too_bright"] is True
+    assert check["suggested_gain"] < 4.0
+
+
+def test_a_clipped_background_behind_a_good_ball_passes():
+    # outdoors 29 Sept: the sunlit patio beyond the mat clipped at every setting
+    check = sl.pre_rung_check(_ball_frames(60, 180, bright_rows=470), black_floor=18.0, gain=2.0)
+
+    assert check["ok"] is True
+    assert check["judged_on"] == "ball"
+
+
+def test_a_too_bright_rung_skips_only_itself(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+
+    state.begin("full-300", 1.0, {"ok": False, "too_bright": True, "reason": "too bright"})
+
+    rungs = state.to_dict()["rungs"]
+    assert rungs["full-300"]["status"] == "skipped"
+    assert rungs["full-200"]["status"] == "pending"
+    assert state.current.rung_id == "full-200"
+
+
+class BallKiosk(FakeKiosk):
+    """A lit ball whose level scales with gain: 90 DN per unit gain."""
+
+    def frames(self, count):
+        gain = self.calls[-1][1] if self.calls else 3.0
+        return _ball_frames(min(20.0 * gain, 255.0), min(90.0 * gain, 255.0), count=count)
+
+
+def test_the_runner_lowers_the_gain_until_the_ball_stops_clipping(tmp_path):
+    kiosk = BallKiosk()
+    runner = _runner(tmp_path, kiosk)
+
+    runner.start_rung()
+
+    rung = runner.state.to_dict()["rungs"]["full-300"]
+    assert rung["status"] == "active"
+    assert rung["gain"] < 3.0
+    assert 90.0 * rung["gain"] < 250.0
+    assert len(kiosk.calls) >= 2
+
+
+def test_a_clipped_background_is_only_amber_when_the_ball_is_well_exposed(tmp_path):
+    rung = sl.Rung("full-150", "arm5", 150, True)
+
+    verdict = sl.swing_verdict(_capture(tmp_path, bright_rows=470), rung, 8.0, 18.0, [])
+
+    assert verdict["color"] == "amber", verdict["reasons"]
+    assert any("background" in reason for reason in verdict["reasons"])

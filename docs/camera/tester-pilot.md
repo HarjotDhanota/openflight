@@ -334,6 +334,16 @@ skips any rung whose hitting zone still clips. The setup exposure search reaches
 and unity gain, and says "too bright" when even that clips the ball. On 29 Sept the
 old rule saved gain 12 as "lighting required" and every swing clip came out white.
 
+Each ladder rung is judged on the resting ball whenever the camera can find it:
+the ball must have at least 20 DN of signal and at most 5 % clipped. If it clips or
+is too dark, the ladder corrects that rung's gain from the ball's own brightness
+(up to three times, between unity and 12) before judging it, and a clipped
+background behind a well-exposed ball is only amber in the swing verdicts. A rung
+that is too bright skips only itself, so the shorter rungs still get their chance;
+a rung that is too dark still skips the shorter rungs in its mode. On 29 Sept
+(Outdoors-test-3) the old zone rule failed every rung on a sunlit patio beyond the
+mat, and each failure skipped the rest of its mode.
+
 Keep the ball in the camera's view on the live preview: with the lens about 95 mm off
 the ground, a raised mat edge or bumper between the unit and the ball hides it.
 
