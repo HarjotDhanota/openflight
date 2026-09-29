@@ -33,6 +33,14 @@ _CAMERA_HEIGHT_RANGE_M = (0.03, 0.60)
 # candidate ranks below one that sits where the rig says it should.
 _CAMERA_HEIGHT_PRIOR_SIGMA_M = 0.06
 _SEED_SIZE_TOLERANCE = 0.25
+# The lit-ball fit cannot tell a resting ball's size to better than about a fifth
+# (fits held 12 % apart score alike on real frames); size range says no more.
+_MIN_DIAMETER_RELATIVE_UNCERTAINTY = 0.20
+# A lone plausible candidate is still refused when it scores this badly: far off
+# the boresight or far from the rig's lens height.
+_MAX_SELECTION_SCORE = 2.5
+# The lens can sit no lower than the radar below it plus this.
+_LENS_ABOVE_RADAR_MARGIN_M = 0.005
 # The ball sits at address in front of the unit, near its boresight.
 _LATERAL_SIGMA_M = 0.15
 
@@ -50,6 +58,10 @@ def camera_range_estimator_policy() -> dict[str, Any]:
         "camera_height_prior_sigma_m": _CAMERA_HEIGHT_PRIOR_SIGMA_M,
         "seed_size_tolerance": _SEED_SIZE_TOLERANCE,
         "lateral_sigma_m": _LATERAL_SIGMA_M,
+        "min_diameter_relative_uncertainty": _MIN_DIAMETER_RELATIVE_UNCERTAINTY,
+        "max_selection_score": _MAX_SELECTION_SCORE,
+        "camera_height_floor": "radar_depth_below_lens_plus_margin",
+        "lens_above_radar_margin_m": _LENS_ABOVE_RADAR_MARGIN_M,
         "golf_ball_diameter_m": GOLF_BALL_DIAMETER_M,
         "diameter_hypotheses": _DIAMETER_HYPOTHESES,
         "ambiguity_score_margin": _AMBIGUITY_SCORE_MARGIN,
@@ -615,7 +627,9 @@ def _candidate(  # pylint: disable=too-many-locals
         local_focal = _local_focal_size(camera, ball.x, ball.y)
         angular_diameter = ball.diameter_px / local_focal
         size_range = GOLF_BALL_DIAMETER_M / (2.0 * math.sin(angular_diameter / 2.0))
-        diameter_relative_uncertainty = max(0.5 / ball.diameter_px, 0.03)
+        diameter_relative_uncertainty = max(
+            0.5 / ball.diameter_px, _MIN_DIAMETER_RELATIVE_UNCERTAINTY
+        )
         size_uncertainty = size_range * math.hypot(
             camera.focal_relative_uncertainty, diameter_relative_uncertainty
         )
@@ -634,7 +648,7 @@ def _candidate(  # pylint: disable=too-many-locals
     relative = ray * size_range
     offset = np.asarray(camera.radar_origin_lfu) - np.asarray(camera.camera_origin_lfu)
     radar_range = float(np.linalg.norm(relative - offset))
-    low, high = _CAMERA_HEIGHT_RANGE_M
+    low, high = _camera_height_bounds(camera)
     reason = None
     if (
         camera_height + 2.0 * height_uncertainty < low
@@ -680,6 +694,13 @@ def _candidate(  # pylint: disable=too-many-locals
     )
 
 
+def _camera_height_bounds(camera: BallPlaneCamera) -> tuple[float, float]:
+    """Plausible lens heights; the lens cannot sit lower than the radar mounted below it."""
+    radar_depth = float(camera.camera_origin_lfu[2] - camera.radar_origin_lfu[2])
+    low = max(_CAMERA_HEIGHT_RANGE_M[0], radar_depth + _LENS_ABOVE_RADAR_MARGIN_M)
+    return low, _CAMERA_HEIGHT_RANGE_M[1]
+
+
 def solve_camera_height_from_radar(
     camera: BallPlaneCamera,
     pixel_xy: Any,
@@ -691,9 +712,9 @@ def solve_camera_height_from_radar(
     """Camera height above the floor from the radar's range to the resting ball.
 
     The ball lies on its pixel ray at the one distance whose range from the radar
-    (a fixed offset inside the enclosure) is the measured range. That is far
-    tighter than apparent size, which drifts with the fitted diameter; what is
-    left is mostly the camera's tilt uncertainty.
+    (a fixed offset inside the enclosure) is the measured range. Unlike apparent
+    size it does not depend on the fitted diameter, which the pixels leave loose;
+    both are limited mostly by the camera's tilt uncertainty.
     """
     ray = np.asarray(camera.ray_model.rays(np.asarray(pixel_xy, dtype=float)), dtype=float)
     offset = np.asarray(camera.radar_origin_lfu) - np.asarray(camera.camera_origin_lfu)
@@ -712,7 +733,7 @@ def solve_camera_height_from_radar(
 def _seed_filter(camera: BallPlaneCamera, ball_center_height_m: float):
     """Drop seeds where no plausible camera height could put a resting ball."""
     angular = math.sin(math.radians(camera.angular_uncertainty_deg))
-    low, high = _CAMERA_HEIGHT_RANGE_M
+    low, high = _camera_height_bounds(camera)
 
     def allowed(xs: np.ndarray, ys: np.ndarray, diameter: float) -> np.ndarray:
         rays = np.asarray(camera.ray_model.rays(np.column_stack([xs, ys])), dtype=float)
@@ -805,6 +826,11 @@ def estimate_reference_ball_range(
         )
     if margin is not None and margin < _AMBIGUITY_SCORE_MARGIN:
         return ReferenceBallRangeResult("ambiguous", "withheld", None, candidates, diagnostics)
+    if plausible[0].score > _MAX_SELECTION_SCORE:
+        diagnostics["best_score"] = plausible[0].score
+        return ReferenceBallRangeResult(
+            "no_consistent_candidate", "withheld", None, candidates, diagnostics
+        )
     selected = plausible[0]
     return ReferenceBallRangeResult(
         "selected", selected.confidence, selected, candidates, diagnostics

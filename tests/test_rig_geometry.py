@@ -226,3 +226,13 @@ def test_the_v3_unit_declares_its_turned_lis3dh():
     assert rig.lis3dh_mount_yaw_deg == 180.0
     # the expectation is in the enclosure's axes, so the turn does not move it
     assert rig.expected_inclinometer_orientation().pitch_deg == 0.0
+
+
+def test_an_offset_to_the_right_of_the_lens_is_positive_lateral_like_the_camera_rays():
+    """OPS sits 85 mm target-left of the lens; lateral is target-right positive."""
+    from openflight.rig_geometry import camera_rdf_offset_to_target_lfu
+
+    assert camera_rdf_offset_to_target_lfu((75.0, 44.0, -30.0)) == pytest.approx(
+        (0.075, -0.030, -0.044)
+    )
+    assert camera_rdf_offset_to_target_lfu((-85.0, 47.0, -20.0))[0] == pytest.approx(-0.085)

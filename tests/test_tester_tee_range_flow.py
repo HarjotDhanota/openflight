@@ -962,7 +962,12 @@ def test_guided_flow_resolves_and_survives_reload(tmp_path, inputs, monkeypatch)
     )
     assert reloaded == state
     solution = tee_range_setup.load_current_epoch(tmp_path / "sessions" / tester).solution
-    assert ts._tee_range_cli_args(solution) == ["--iwr6843-tee-m", "1.2"]
+    assert ts._tee_range_cli_args(solution) == [
+        "--iwr6843-tee-m",
+        "1.2",
+        "--iwr6843-ball-height-m",
+        "0.021335",
+    ]
 
 
 def test_conditioned_static_object_must_match_broad_save_before_promotion(
@@ -1860,6 +1865,8 @@ def test_an_unqualified_range_reaches_swings_only_when_explicitly_enabled(
     assert ts._tee_range_cli_args(solution, use_unqualified=True) == [
         "--iwr6843-tee-m",
         f"{iwr['radar_slant_range_m']:.9g}",
+        "--iwr6843-ball-height-m",
+        "0.021335",
     ]
 
 
@@ -1920,3 +1927,38 @@ def test_the_setup_solves_the_lens_height_from_the_radar_and_hands_it_to_swings(
     args = ts._tee_range_cli_args(solution, use_unqualified=True)
     assert args[args.index("--solved-camera-height-m") + 1] == f"{height['height_m']:.6g}"
     assert "--solved-camera-height-m" not in ts._tee_range_cli_args(solution)
+
+
+def test_a_radar_height_outside_the_plausible_band_is_not_used():
+    camera = BallPlaneCamera.nominal(
+        focal_px=933.3333,
+        image_width_px=1280,
+        image_height_px=800,
+        pitch_deg=0.0,
+        roll_correction_deg=0.0,
+        mirror_horizontal=False,
+        camera_origin_lfu=(0.0, 0.0, 0.095),
+        radar_origin_lfu=(0.0, -0.03, 0.051),
+        angular_uncertainty_deg=1.0,
+        focal_relative_uncertainty=0.08,
+    )
+    # a "ball" far above the horizon row: no floor ball could sit there
+    result = replace(
+        camera_result(1.2),
+        selected=replace(
+            camera_result(1.2).selected,
+            y_px=120.0,
+            camera_height_m=0.09,
+            camera_height_uncertainty_m=0.02,
+        ),
+    )
+    iwr = {
+        "radar_slant_range_m": 1.2,
+        "uncertainty_m": 0.02,
+        "evidence": {"difference": {"status": "accepted"}},
+    }
+
+    solved = ts._solved_camera_height(result, camera, iwr)
+
+    assert solved["source"] == "apparent_size"
+    assert "outside" in solved["radar_rejected"]

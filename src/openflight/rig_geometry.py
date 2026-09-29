@@ -27,9 +27,13 @@ EDGE_MARGIN_RADII = 1.0
 
 
 def camera_rdf_offset_to_target_lfu(offset_mm) -> tuple[float, float, float]:
-    """Convert a camera-relative right/down/forward offset to target left/forward/up."""
+    """Convert a camera-relative right/down/forward offset to target lateral/forward/up.
+
+    Lateral is positive toward target-right, the same as the camera's world rays
+    (``unit_world_rays``) and ``enclosure_setup``.
+    """
     right, down, forward = (float(value) / 1000.0 for value in offset_mm)
-    return (-right, forward, -down)
+    return (right, forward, -down)
 
 
 def geometry_fingerprint(parameters: Mapping) -> str:

@@ -1589,7 +1589,8 @@ class TestTheCameraSaysHowFar:
 
         assert (camera.image_width_px, camera.image_height_px) == (1280, 800)
         assert camera.ray_model.pitch_rad == pytest.approx(math.radians(3.25))
-        assert camera.ray_model.roll_correction_deg == pytest.approx(-2.5)
+        # roll is recorded, not applied, until its sign is checked against the image
+        assert camera.ray_model.roll_correction_deg == 0.0
         assert camera.camera_origin_lfu == pytest.approx((0.0, 0.0, 0.095))
         assert camera.radar_origin_lfu == pytest.approx((0.0, -0.030, 0.051))
         assert camera.source == "nominal_uncalibrated"

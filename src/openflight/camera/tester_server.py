@@ -48,6 +48,7 @@ from openflight.camera.reference_ball_range import (
     IWR_CAMERA_HINT_SCHEMA,
     BallPlaneCamera,
     ReferenceBallRangeResult,
+    _camera_height_bounds,
     build_iwr_camera_search_hint,
     camera_range_estimator_sha256 as _camera_range_estimator_sha256,
     estimate_reference_ball_range,
@@ -425,6 +426,13 @@ def _solved_camera_height(
             )
         except ValueError:
             return solved
+        low, high = _camera_height_bounds(camera)
+        if not low <= height <= high:
+            solved["radar_rejected"] = (
+                f"radar range puts the lens at {height * 1000:.0f} mm, outside "
+                f"{low * 1000:.0f}-{high * 1000:.0f} mm; the selected ball may be wrong"
+            )
+            return solved
         solved.update(
             {
                 "radar_solved_m": height,
@@ -434,6 +442,14 @@ def _solved_camera_height(
                 "source": "static_iwr_range",
             }
         )
+        size_height = solved["size_solved_m"]
+        spread = math.hypot(solved["size_uncertainty_m"] or 0.0, uncertainty)
+        if size_height - height > 2.0 * spread:
+            # the ball looks smaller than the radar says it should: grass or pile
+            # hiding its base, or a fit that shrank
+            solved["note"] = (
+                "ball looks smaller than its radar range implies; it may be partly hidden"
+            )
     return solved
 
 
@@ -481,7 +497,13 @@ def _tee_range_cli_args(
     solution: tee_range.TeeRangeSolution | None, *, use_unqualified: bool = False
 ) -> list[str]:
     height = _setup_camera_height_m(solution)
-    height_args = ["--solved-camera-height-m", f"{height:.6g}"] if height is not None else []
+    # The setup ball rests on the surface, so its centre is one radius up; swings
+    # must use the same ball height the setup solved the lens height with.
+    height_args = [
+        "--iwr6843-ball-height-m",
+        f"{BALL_DIAMETER_MM / 2000.0:.6g}",
+        *(["--solved-camera-height-m", f"{height:.6g}"] if height is not None else []),
+    ]
     if solution is not None and solution.status == "resolved":
         return ["--iwr6843-tee-m", f"{solution.selected_range_m:.9g}", *height_args]
     if use_unqualified and (choice := unqualified_tee_range_choice(solution)) is not None:
@@ -1443,7 +1465,10 @@ def _reference_ball_camera(
         image_width_px=arm.width,
         image_height_px=arm.height,
         pitch_deg=float(tilt.get("camera_pitch_deg", rig.boresight_pitch_deg)),
-        roll_correction_deg=float(tilt.get("roll_deg", 0.0)),
+        # The camera is level in the enclosure. The LIS3DH roll is recorded but not
+        # applied: on 2026-09-28 it read -2.9 deg while level lines in the frame
+        # showed under 1 deg, and its sign is not yet checked against the image.
+        roll_correction_deg=0.0,
         mirror_horizontal=False,
         camera_origin_lfu=camera,
         radar_origin_lfu=camera + offset,

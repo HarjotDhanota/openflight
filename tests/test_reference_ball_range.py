@@ -363,7 +363,7 @@ def test_camera_range_estimator_identity_is_pinned():
     """Any estimator constant change must be a deliberate, reviewed identity change."""
     assert camera_range_estimator_policy()["name"] == "camera_reference_ball_floor_plane"
     assert camera_range_estimator_sha256() == (
-        "4dbeb81560f09173dc902b96555ab12d3a905fd9a10cabd317da831afdb75fcc"
+        "37856ed3e7270acdb4a3b31a2a47aea34feb882e0834fdfdc49295bec32985f3"
     )
 
 
@@ -412,3 +412,54 @@ def test_the_radar_range_solves_the_camera_height_far_better_than_apparent_size(
 
     assert height == pytest.approx(0.08, abs=0.002)
     assert 0.0 < uncertainty < 0.03
+
+
+def test_a_lone_candidate_far_off_the_boresight_is_not_selected():
+    """Field frame with the ball missing: a baseboard spot 0.7 m to the side won."""
+    camera = _camera(640, 400, 466.6667)
+    point = np.asarray([0.75, 1.40, 0.021335])
+    pixel = _project_nominal(camera, point)
+    diameter = (
+        camera.focal_size_px
+        * BALL_DIAMETER_M
+        / np.linalg.norm(point - np.asarray(camera.camera_origin_lfu))
+    )
+    frames = _lit_spheres(400, 640, [(pixel[0], pixel[1], diameter / 2.0, 90.0)])
+
+    result = estimate_reference_ball_range(
+        frames, camera, ball_center_height_m=point[2], plausible_radar_range_m=(0.6, 3.5)
+    )
+
+    assert result.selected is None
+    assert result.status == "no_consistent_candidate"
+
+
+def test_the_lens_cannot_sit_below_the_radar_mounted_under_it():
+    from openflight.camera.reference_ball_range import _camera_height_bounds
+
+    camera = _camera(
+        640, 400, 466.6667, camera_origin=(0.0, 0.03, 0.095), radar_origin=(0.0, 0.0, 0.051)
+    )
+
+    low, _high = _camera_height_bounds(camera)
+
+    assert low == pytest.approx(0.049)
+
+
+def test_size_range_uncertainty_is_at_least_a_fifth():
+    camera = _camera(1280, 800, 933.3333)
+    point = np.asarray([0.0, 1.25, 0.021335])
+    pixel = _project_nominal(camera, point)
+    diameter = (
+        camera.focal_size_px
+        * BALL_DIAMETER_M
+        / np.linalg.norm(point - np.asarray(camera.camera_origin_lfu))
+    )
+    frames = _lit_spheres(800, 1280, [(pixel[0], pixel[1], diameter / 2.0, 90.0)])
+
+    result = estimate_reference_ball_range(
+        frames, camera, ball_center_height_m=point[2], plausible_radar_range_m=(0.6, 3.5)
+    )
+
+    selected = result.selected
+    assert selected.size_range_uncertainty_m >= 0.2 * selected.size_camera_range_m

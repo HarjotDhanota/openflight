@@ -47,6 +47,7 @@ from .ops243 import (
 )
 from .power import SUPPORTED_BATTERY_PROVIDERS, PowerMonitor, PowerStatus
 from .profiles import ProfileStore
+from .rig_geometry import BALL_DIAMETER_MM
 from .rolling_buffer.monitor import estimate_carry_with_spin, get_optimal_spin_for_ball_speed
 from .session_logger import get_session_logger, init_session_logger, log_session_error
 from .sim import (
@@ -155,6 +156,8 @@ inclinometer_service = None
 inclinometer_runtime_config: dict = {"enabled": False}
 rig_geometry = None  # the enclosure's RigGeometry when --rig-geometry was given
 rig_geometry_config: dict = {"enabled": False}
+# a ball resting on the surface: its centre is one radius up
+BALL_RADIUS_M = BALL_DIAMETER_MM / 2000.0
 
 # Ballistic model toggle. Shot carry comes from the physics simulator whenever
 # a vertical launch angle is available. Operators can explicitly disable it;
@@ -1095,6 +1098,20 @@ def _apply_solved_camera_height(args, enclosure) -> None:
     if nominal is not None and radar is not None:
         args.iwr6843_radar_height_m = solved - (nominal - radar)
     args.camera_capture_mount_height_m = solved
+    if args.iwr6843_radar_height_m is not None and args.iwr6843_radar_height_m <= 0.0:
+        raise ValueError(
+            f"a {solved * 1000.0:.0f} mm lens height puts the radar at or below the floor"
+        )
+    derived = rig_geometry_config.get("derived") if isinstance(rig_geometry_config, dict) else None
+    if isinstance(derived, dict):
+        derived["camera_mount_height_m"] = solved
+        derived["radar_height_m"] = args.iwr6843_radar_height_m
+        rig_geometry_config["solved_camera_height"] = {
+            "camera_mount_height_m": solved,
+            "radar_height_m": args.iwr6843_radar_height_m,
+            "rig_nominal_camera_mount_height_m": nominal,
+            "source": "range_setup",
+        }
     logger.info(
         "[SERVER] Camera height %.1f mm solved by this setup (rig file: %s)",
         solved * 1000.0,
@@ -1112,6 +1129,8 @@ def _rig_override(name: str, flag_value, rig_value):
         logger.info(
             "[SERVER] %s: rig geometry %s overrides command-line %s", name, rig_value, flag_value
         )
+    else:
+        logger.info("[SERVER] %s: %s from rig geometry", name, rig_value)
     return rig_value
 
 
@@ -5897,8 +5916,11 @@ def main():
     parser.add_argument(
         "--iwr6843-ball-height-m",
         type=float,
-        default=0.040,
-        help="Ball-center height above the floor/mat (default: 0.040)",
+        default=BALL_RADIUS_M,
+        help=(
+            "Ball-centre height above the surface it rests on (default: one ball radius, "
+            "a ball on the ground; a teed ball sits higher)"
+        ),
     )
     parser.add_argument(
         "--iwr6843-tx-order",
