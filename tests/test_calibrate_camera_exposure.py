@@ -30,3 +30,12 @@ def test_a_clipped_sky_does_not_hide_a_well_exposed_hitting_zone():
     assert summary["clipped_pct"] > 40.0
     assert summary["zone_median"] == pytest.approx(110.0)
     assert summary["zone_clipped_pct"] == pytest.approx(0.0)
+
+
+def test_the_sensor_black_level_is_read_from_frame_metadata():
+    module = _module()
+
+    assert module.black_level_dn({"SensorBlackLevels": (4096, 4096, 4096, 4096)}) == pytest.approx(
+        16.0
+    )
+    assert module.black_level_dn({}) is None

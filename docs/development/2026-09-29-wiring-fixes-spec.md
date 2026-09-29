@@ -104,6 +104,11 @@ Items marked **Decision** need Harjot's choice before they are built. They are a
 
 **Size:** M. **Decision D1:** confirm `SensorBlackLevels` from the Pi (one command).
 
+**As built (74eb65c9 and later):**
+- The Pi reports `SensorBlackLevels` 4096 on a 16-bit scale, which is 16 DN in the raw R8 stream every analysis uses.
+- Where no floor was measured, the setup search and the ladder use that sensor value (`SENSOR_BLACK_LEVEL_DN`) rather than refusing. It is a property of the sensor, not of the scene.
+- The ring median is never used.
+
 ### B6. One light rule for the pre-check and the swing verdict; only darkness skips shorter rungs
 
 **Requirement:** the pre-rung check and the per-swing verdict judge light the same way. A rung that fails for any reason other than being too dark skips only itself.

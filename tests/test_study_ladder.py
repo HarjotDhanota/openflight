@@ -782,3 +782,27 @@ def test_the_expected_ball_is_still_found_where_the_setup_saw_it():
 
     assert check["judged_on"] == "ball"
     assert check["ball"]["x"] == pytest.approx(640.0, abs=3.0)
+
+
+def test_a_photo_without_a_light_index_keeps_the_rungs_brightness(tmp_path):
+    kiosk = FakeKiosk()
+    state = sl.LadderState(tmp_path / "ladder.json")
+    runner = sl.LadderRunner(
+        state,
+        kiosk,
+        run_dir=lambda: None,
+        black_floor=lambda arm: 16.0,
+        gain_at_300=lambda arm: 3.0,
+        light_index=lambda arm: None,
+        photo_dir=tmp_path / "impact",
+        on_mode_done=lambda arm: None,
+        ready_timeout_s=1.0,
+    )
+    _make_pending_photo(runner.state, "c4")
+    runner._configured_rung = "full-300"  # pylint: disable=protected-access
+
+    runner.photograph("c4", "full-300")
+
+    photo = kiosk.calls[kiosk.purposes.index("still_photo")]
+    # full-300 ran at gain 3.0: the same brightness at the photo gain of 2
+    assert photo == (450, sl.PHOTO_GAIN)

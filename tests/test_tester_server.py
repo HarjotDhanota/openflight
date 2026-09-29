@@ -2811,3 +2811,120 @@ def test_the_ladder_expects_the_ball_the_setup_saw():
     assert arm5 == {"x": 612.0, "y": 505.0, "diameter_px": 34.0}
     assert arm6 == {"x": 306.0, "y": 252.5, "diameter_px": 17.0}
     assert ts.expected_ladder_ball(None, "arm5") is None
+
+
+# Outdoors-test-3 (29 Sept), 1280x800 gain screen at 300 us: the hitting zone's
+# median stayed unclipped while a sunlit patio beyond the mat clipped.
+OUTDOOR_SCREEN = [
+    {
+        "gain": g,
+        "exposure_us": 300,
+        "metadata_exposure_us": 298,
+        "metadata_gain": g,
+        "mean": m,
+        "clipped_pct": c,
+        "zone_median": zm,
+        "zone_clipped_pct": zc,
+    }
+    for g, m, c, zm, zc in (
+        (1.0, 149.5, 34.2, 71.0, 23.1),
+        (2.0, 183.7, 50.0, 128.0, 30.7),
+        (4.0, 218.1, 60.5, 227.0, 42.9),
+        (6.0, 240.6, 75.1, 255.0, 79.0),
+        (12.0, 254.7, 99.1, 255.0, 99.6),
+    )
+]
+
+
+def test_a_sun_patch_in_the_shade_is_mixed_light_not_a_request_for_gain_12():
+    # audit B4: shaded mat at 71 DN with a sun patch that clips from gain 2
+    results = [
+        {
+            "gain": 1.0,
+            "mean": 90.0,
+            "clipped_pct": 5.0,
+            "zone_median": 71.0,
+            "zone_clipped_pct": 3.0,
+        },
+        {
+            "gain": 2.0,
+            "mean": 150.0,
+            "clipped_pct": 20.0,
+            "zone_median": 142.0,
+            "zone_clipped_pct": 12.0,
+        },
+        {
+            "gain": 4.0,
+            "mean": 230.0,
+            "clipped_pct": 70.0,
+            "zone_median": 250.0,
+            "zone_clipped_pct": 60.0,
+        },
+    ]
+
+    choice = ts.choose_gain(results)
+
+    assert choice["gain"] == 1.0
+    assert choice["mixed_light"] is True
+    assert choice["lighting_required"] is False
+    assert choice["too_bright"] is False
+
+
+def test_the_outdoor_screen_is_too_bright_and_never_asks_for_more_gain():
+    choice = ts.choose_gain(OUTDOOR_SCREEN)
+
+    assert choice["too_bright"] is True
+    assert choice["gain"] == 1.0
+    assert choice["gain_at_300_equivalent"] <= 1.0
+
+
+def test_a_clipped_zone_with_a_dark_median_still_asks_for_less_gain():
+    results = [
+        {
+            "gain": 1.0,
+            "mean": 90.0,
+            "clipped_pct": 9.0,
+            "zone_median": 71.0,
+            "zone_clipped_pct": 8.0,
+        }
+    ]
+
+    choice = ts.choose_gain(results)
+
+    assert choice["too_bright"] is True
+    assert choice["gain_at_300_equivalent"] <= 1.0
+
+
+def test_a_dim_scene_unclipped_at_every_gain_needs_light():
+    results = [
+        {
+            "gain": g,
+            "mean": 5.0 * g,
+            "clipped_pct": 0.0,
+            "zone_median": 5.0 * g,
+            "zone_clipped_pct": 0.0,
+        }
+        for g in (1.0, 2.0, 4.0, 8.0, 12.0)
+    ]
+
+    choice = ts.choose_gain(results)
+
+    assert choice["lighting_required"] is True
+    assert choice["gain"] == 12.0
+    assert choice["mixed_light"] is False
+
+
+def test_the_outdoor_light_index_comes_from_the_zone_median_above_black():
+    light = ts.light_index([{**row, "metadata_black_level_dn": 16.0} for row in OUTDOOR_SCREEN])
+
+    assert light["light_index"] == pytest.approx((71.0 - 16.0) / 298.0, rel=0.05)
+    assert light["black_floor_dn"] == pytest.approx(16.0)
+    assert light["black_floor_source"] == "sensor_metadata"
+
+
+def test_a_zoned_screen_without_a_recorded_black_level_uses_the_sensors():
+    light = ts.light_index(OUTDOOR_SCREEN)
+
+    assert light["black_floor_dn"] == pytest.approx(16.0)
+    assert light["black_floor_source"] == "sensor_default"
+    assert light["light_index"] is not None

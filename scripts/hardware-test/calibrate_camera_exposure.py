@@ -180,6 +180,18 @@ def score_result(result: dict, args: argparse.Namespace) -> float:
     return penalty
 
 
+def black_level_dn(metadata: dict) -> float | None:
+    """The sensor black level in 8-bit raw DN, from libcamera's SensorBlackLevels.
+
+    libcamera reports it on a 16-bit scale (4096 on the OV9281, i.e. 16 DN in the
+    R8 stream every analysis uses).
+    """
+    levels = metadata.get("SensorBlackLevels")
+    if not levels:
+        return None
+    return float(np.mean(levels)) / 256.0
+
+
 def summarize_images(images: np.ndarray, exposure_us: int, gain: float) -> dict:
     """Calculate image exposure statistics for one setting.
 
@@ -302,6 +314,7 @@ def main() -> int:
                 result["score"] = score_result(result, args)
                 result["metadata_exposure_us"] = int(metadata[-1].get("ExposureTime", exposure_us))
                 result["metadata_gain"] = float(metadata[-1].get("AnalogueGain", gain))
+                result["metadata_black_level_dn"] = black_level_dn(metadata[-1])
                 results.append(result)
 
                 stem = f"exp{exposure_us:04d}_gain{gain:g}".replace(".", "p")

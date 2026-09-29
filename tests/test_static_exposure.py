@@ -203,7 +203,7 @@ def test_lock_serializes_with_policy_identity_and_applied_controls(tmp_path):
 def test_static_exposure_policy_identity_is_pinned():
     """A lattice or gate change must be a deliberate, reviewed identity change."""
     assert se.static_exposure_policy_sha256() == (
-        "ae7e66a5ff1e908fe79bcbb107693d09bd84b5a3d453314a3340b0842a546a93"
+        "29872dd294346caeb41ede33c3c5aa0b402ea9b0b63003cac4ff963774cab1ba"
     )
 
 
@@ -504,3 +504,19 @@ def test_a_ball_clipped_even_at_the_darkest_setting_is_too_bright():
 
     assert search.status == "too_bright"
     assert "sun" in search.reason or "bright" in search.reason
+
+
+def test_an_unknown_black_floor_uses_the_sensor_black_level_not_the_background():
+    # audit B5: with no floor the ring median stood in, which made the signal gate a
+    # contrast gate again; a 190 DN ball on a 180 DN background was refused
+    observation = se.assess_static_exposure(
+        _frames(190.0, 180.0),
+        _association(),
+        requested=STEP,
+        applied_exposure_us=STEP.exposure_us,
+        applied_gain=STEP.gain,
+        black_floor_dn=None,
+    )
+
+    assert "signal" not in observation.failed_gates
+    assert observation.signal_above_floor_dn == pytest.approx(190.0 - se.SENSOR_BLACK_LEVEL_DN)

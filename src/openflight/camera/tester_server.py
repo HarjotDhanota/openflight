@@ -56,6 +56,7 @@ from openflight.camera.reference_ball_range import (
 )
 from openflight.camera.setup_eligibility import SetupEligibility
 from openflight.camera.static_exposure import (
+    SENSOR_BLACK_LEVEL_DN,
     STATIC_EXPOSURE_PURPOSE,
     StaticExposureObservation,
     StaticExposureSearch,
@@ -586,13 +587,21 @@ def choose_gain(
     max_clipped_pct: float = 0.1,
     gain_ceiling: float = GAIN_CEILING,
 ) -> dict:
-    """Lowest gain in band without clipping, up to the ceiling.
+    """The gain the arm captures at, and what the screen says about the light.
 
-    When the screen recorded the hitting zone, that decides: outdoors the sky
-    clips at every usable setting. If even the lowest gain is too bright the
-    result is ``too_bright`` with a light-equivalent gain at the screen's exposure
-    below it (shorter exposures carry that light); if even the ceiling is too dark
-    it is ``lighting_required``.
+    When the screen recorded the hitting zone, that decides: outdoors the sky clips
+    at every usable setting. A gain is usable when the zone is not clipped.
+
+    - In-band usable gains: the lowest one.
+    - Usable gains all above the band: ``too_bright``, the lowest usable gain.
+    - Usable gains below the band: the brightest usable one; ``lighting_required``
+      only if the brightest tested gain was itself unclipped (truly dim), else
+      ``mixed_light`` (a sun patch clipped the brighter gains).
+    - No usable gain: ``too_bright``.
+
+    ``gain_at_300_equivalent`` is the gain that would put the zone mid-band at the
+    screen's exposure; when too bright it is never above the lowest gain, and the
+    ladder carries it to shorter exposures (wiring audit B4, 29 Sept).
     """
     usable = [
         r for r in results if "gain" in r and "mean" in r and float(r["gain"]) <= gain_ceiling
@@ -622,21 +631,38 @@ def choose_gain(
             "zone_clipped_pct": pick.get("zone_clipped_pct"),
             "lighting_required": False,
             "too_bright": False,
+            "mixed_light": False,
             "gain_at_300_equivalent": float(pick["gain"]),
             **flags,
         }
 
+    target = 0.5 * (mean_low + mean_high)
     if acceptable:
         return result(acceptable[0])
+    unclipped = sorted(
+        (r for r in usable if clipped(r) <= clip_limit), key=lambda r: float(r["gain"])
+    )
     lowest = min(usable, key=lambda r: float(r["gain"]))
-    if level(lowest) > mean_high or clipped(lowest) > clip_limit:
-        # scale the lowest gain to the middle of the band; a clipped level
-        # under-reads the light, so this errs bright and the ladder's check catches it
-        target = 0.5 * (mean_low + mean_high)
-        equivalent = float(lowest["gain"]) * target / max(level(lowest), 1.0)
+    if not unclipped:
+        # a clipped zone under-reads the light: never ask for more than the lowest
+        # gain, and less the more of the zone clipped
+        share = clipped(lowest) / 100.0
+        equivalent = (
+            float(lowest["gain"])
+            * min(1.0, target / max(level(lowest), 1.0))
+            * max(0.1, 1.0 - 2.0 * share)
+        )
         return result(lowest, too_bright=True, gain_at_300_equivalent=round(equivalent, 3))
-    brightest = max(usable, key=lambda r: float(r["gain"]))
-    return result(brightest, lighting_required=True)
+    if all(level(r) > mean_high for r in unclipped):
+        first = unclipped[0]
+        equivalent = float(first["gain"]) * target / max(level(first), 1.0)
+        return result(first, too_bright=True, gain_at_300_equivalent=round(equivalent, 3))
+    brightest_usable = unclipped[-1]
+    brightest_tested = max(usable, key=lambda r: float(r["gain"]))
+    if clipped(brightest_tested) <= clip_limit:
+        return result(brightest_usable, lighting_required=True)
+    # a brighter gain clipped: shade with a sun patch, not a dark scene
+    return result(brightest_usable, mixed_light=True)
 
 
 def latest_gain_results(arm_dir: Path) -> list[dict] | None:
@@ -649,11 +675,44 @@ def latest_gain_results(arm_dir: Path) -> list[dict] | None:
 def light_index(results: Sequence[Mapping]) -> dict:
     """Scene signal per microsecond per unit gain, above the black floor.
 
-    A line through the screen's unclipped gains up to the ceiling: the slope is
-    the light, the intercept the floor, so neither depends on the gain picked.
-    The camera applies exposure in whole rows and gain in 1/16 steps, so the
-    applied values are used, not the requested ones.
+    With hitting-zone metrics (screens since 29 Sept) it is the zone's median above
+    the sensor black level, per applied exposure x gain; a median stays valid while
+    less than half the zone clips, so a sunlit background does not hide the light
+    (wiring audit B5). The black level is the one the frames' metadata reported,
+    else the sensor's.
+
+    Older screens fit a line through the unclipped whole-frame means: the slope is
+    the light, the intercept the floor. The camera applies exposure in whole rows
+    and gain in 1/16 steps, so the applied values are used, not the requested ones.
     """
+    zoned = [
+        r
+        for r in results
+        if "gain" in r and "zone_median" in r and float(r["gain"]) <= GAIN_CEILING
+    ]
+    if zoned:
+        blacks = [
+            float(r["metadata_black_level_dn"])
+            for r in zoned
+            if r.get("metadata_black_level_dn") is not None
+        ]
+        black = float(np.median(blacks)) if blacks else SENSOR_BLACK_LEVEL_DN
+        indices = [
+            (float(r["zone_median"]) - black)
+            / (
+                float(r.get("metadata_gain", r["gain"]))
+                * float(r.get("metadata_exposure_us", r.get("exposure_us", 0)))
+            )
+            for r in zoned
+            if black + 5.0 < float(r["zone_median"]) < 245.0
+            and float(r.get("metadata_exposure_us", r.get("exposure_us", 0))) > 0
+        ]
+        return {
+            "light_index": float(np.median(indices)) if indices else None,
+            "black_floor_dn": black,
+            "black_floor_source": "sensor_metadata" if blacks else "sensor_default",
+            "light_index_source": "hitting_zone_median",
+        }
     points = [
         (
             float(r.get("metadata_gain", r["gain"])),
@@ -5919,9 +5978,13 @@ def create_app(
             state,
             study_ladder.KioskClient(),
             run_dir=run_dir,
-            black_floor=lambda arm_id: float(facts[arm_id].get("black_floor_dn") or 0.0),
+            black_floor=lambda arm_id: float(
+                facts[arm_id]["black_floor_dn"]
+                if facts[arm_id].get("black_floor_dn") is not None
+                else SENSOR_BLACK_LEVEL_DN
+            ),
             gain_at_300=lambda arm_id: float(facts[arm_id]["gain_at_300_equivalent"]),
-            light_index=lambda arm_id: float(facts[arm_id].get("light_index") or 0.05),
+            light_index=lambda arm_id: facts[arm_id].get("light_index"),
             photo_dir=root / "impact",
             on_mode_done=mode_done,
             expected_ball=lambda arm_id: expected_ladder_ball(

@@ -54,6 +54,11 @@ _MIN_SIGNAL_ABOVE_FLOOR_DN = 20.0
 # stands out is the detector's call: a stable selection here and an independent
 # full-frame search at Save.
 _MAX_BALL_CLIPPED_PCT = 5.0
+# The OV9281's black level in the raw R8 stream every analysis uses: libcamera's
+# SensorBlackLevels reports 4096 on a 16-bit scale (read on the Pi, 29 Sept). It
+# stands in when no floor was measured; the ring around the ball never does, as
+# that turned the signal gate back into a contrast gate (wiring audit B5).
+SENSOR_BLACK_LEVEL_DN = 16.0
 _REQUIRED_STABLE_OBSERVATIONS = 3
 _SETTLE_LIMIT = 4
 _STABILIZE_LIMIT = 6
@@ -78,7 +83,7 @@ def static_exposure_policy() -> dict[str, Any]:
     """Return every static exposure setting and gate used for qualification."""
     return {
         "name": "stationary_reference_ball_exposure",
-        "version": 3,
+        "version": 4,
         "purpose": STATIC_EXPOSURE_PURPOSE,
         "exposures_us": list(EXPOSURES_US),
         "gains": list(GAINS),
@@ -110,6 +115,7 @@ def static_exposure_policy() -> dict[str, Any]:
         "gates": {
             "minimum_signal_above_floor_dn": _MIN_SIGNAL_ABOVE_FLOOR_DN,
             "maximum_ball_clipped_pct": _MAX_BALL_CLIPPED_PCT,
+            "black_floor_fallback_dn": SENSOR_BLACK_LEVEL_DN,
             "recorded_not_gated": ["local_contrast_dn", "edge_gradient_dn"],
             "edge_region_radius_fraction": [0.8, 1.2],
             "background_ring_radius_fraction": [1.25, 1.8],
@@ -263,7 +269,7 @@ def assess_static_exposure(  # pylint: disable=too-many-locals
         images = np.asarray(frames)
         frame_signal = (
             float(np.median(images))
-            - (float(black_floor_dn) if black_floor_dn is not None else 0.0)
+            - (float(black_floor_dn) if black_floor_dn is not None else SENSOR_BLACK_LEVEL_DN)
             if images.size
             else None
         )
@@ -292,7 +298,7 @@ def assess_static_exposure(  # pylint: disable=too-many-locals
         )
     ball_level = float(np.median(image[ball]))
     ring_level = float(np.median(image[ring]))
-    floor = float(black_floor_dn) if black_floor_dn is not None else ring_level
+    floor = float(black_floor_dn) if black_floor_dn is not None else SENSOR_BLACK_LEVEL_DN
     signal = ball_level - floor
     contrast = ball_level - ring_level
     gradient_y, gradient_x = np.gradient(image)

@@ -82,10 +82,26 @@ def rung_gain(gain_at_300: float, exposure_us: int) -> float:
     return round(max(GAIN_FLOOR, min(GAIN_CEILING, gain_at_300 * 300.0 / exposure_us)), 3)
 
 
-def photo_exposure_us(light_index: float, black_floor: float, fps: float) -> int:
-    """An exposure that puts the hitting zone near 100 DN at gain 2, under the frame period."""
+def photo_exposure_us(
+    light_index: float | None,
+    black_floor: float,
+    fps: float,
+    *,
+    rung_exposure_us: int | None = None,
+    rung_gain: float | None = None,
+) -> int:
+    """An exposure that puts the hitting zone near 100 DN at gain 2, under the frame period.
+
+    Without a light index (a screen that measured none), the photo keeps the rung's
+    own brightness: its exposure x gain at the photo gain.
+    """
     frame_limit = int(1_000_000 / fps) - 300
-    wanted = (PHOTO_TARGET_DN - black_floor) / max(light_index * PHOTO_GAIN, 1e-9)
+    if light_index is None:
+        if rung_exposure_us is None or rung_gain is None:
+            raise ValueError("a photo needs a light index or the rung's controls")
+        wanted = rung_exposure_us * rung_gain / PHOTO_GAIN
+    else:
+        wanted = (PHOTO_TARGET_DN - black_floor) / max(light_index * PHOTO_GAIN, 1e-9)
     return int(max(PHOTO_EXPOSURE_US[0], min(PHOTO_EXPOSURE_US[1], frame_limit, wanted)))
 
 
@@ -886,10 +902,13 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
             )
             if configured is None or configured.arm_id != rung.arm_id:
                 raise RuntimeError("the pending photo camera is not ready")
+            light = self._light_index(rung.arm_id)
             still = photo_exposure_us(
-                self._light_index(rung.arm_id),
+                float(light) if light is not None else None,
                 self._black_floor(rung.arm_id),
                 RUNG_FPS[rung.arm_id],
+                rung_exposure_us=configured.exposure_us,
+                rung_gain=self.state.gain(configured.rung_id),
             )
             try:
                 self.client.set_controls(still, PHOTO_GAIN, purpose="still_photo")

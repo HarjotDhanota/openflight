@@ -452,6 +452,7 @@ def app_for(
     require_iwr_preflight=False,
     legacy_profile=False,
     held_radar=False,
+    black_floor_dn=None,
 ):
     def camera_model(arm, *_args):
         return BallPlaneCamera.nominal(
@@ -518,8 +519,15 @@ def app_for(
     tester = "guided-fixture"
     for arm_id in ("arm5", "arm6"):
         params = ts.TesterParameters(tester, arm_id, "indoors")
+        # The fake camera's background does not scale with exposure x gain, so by
+        # default it is that camera's black level, as a gain screen would have
+        # measured it; a test about a lit background passes its own black level.
         ts.write_arm_state(
-            tmp_path / "sessions", params, gain=4.0, gain_exposure_us=params.arm.exposure_us
+            tmp_path / "sessions",
+            params,
+            gain=4.0,
+            gain_exposure_us=params.arm.exposure_us,
+            black_floor_dn=FakeLive.background if black_floor_dn is None else black_floor_dn,
         )
     return app, tester
 
@@ -611,7 +619,7 @@ def test_static_exposure_locks_the_lowest_passing_setting_before_camera_save(
             requested=step,
             applied_exposure_us=step.exposure_us,
             applied_gain=step.gain,
-            black_floor_dn=None,
+            black_floor_dn=FakeLive.background,  # the black level app_for records
         ).acceptable
 
     lowest_passing = next(
@@ -671,7 +679,10 @@ def test_the_exposure_search_is_saved_to_disk_without_any_save(
 ):
     live = FakeLive()
     live.ball_per_signal = ball_per_signal
-    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    # the ambiguous case is a lit scene: its background is light above a black of 0
+    app, tester = app_for(
+        tmp_path, inputs, monkeypatch, live_view=live, black_floor_dn=0.0 if ambiguous else None
+    )
     if ambiguous:
         result = replace(camera_result(1.2), status="ambiguous", selected=None)
         monkeypatch.setattr(ts, "estimate_reference_ball_range", lambda *_args, **_kwargs: result)
@@ -738,7 +749,8 @@ def test_a_dark_camera_view_can_be_kept_as_unqualified_raw_evidence(tmp_path, in
 
 def test_an_ambiguous_ball_is_reported_as_unidentified_not_as_dark(tmp_path, inputs, monkeypatch):
     live = FakeLive()
-    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    # a lit scene: the background is light above a black level of 0
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live, black_floor_dn=0.0)
     ambiguous = replace(camera_result(1.2), status="ambiguous", selected=None)
     monkeypatch.setattr(ts, "estimate_reference_ball_range", lambda *_args, **_kwargs: ambiguous)
     client = app.test_client()
