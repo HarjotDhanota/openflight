@@ -36,6 +36,14 @@ _DARK_GATES = frozenset({"signal", "contrast", "edge"})
 _BACKGROUND_GATES = frozenset({"contrast", "edge", "clipped"})
 # A frame this far above black is well lit; a ball missing from it is not dark.
 _WELL_LIT_FRAME_DN = 2.0 * _MIN_SIGNAL_ABOVE_FLOOR_DN
+# Ball brightness, contrast and edge all scale with exposure x gain, so one
+# measured ball predicts the setting where each gate is just met.
+_CLIP_LEVEL_DN = 250.0
+# While the ball is not yet visible, aim the frame at this level above black.
+_BOOTSTRAP_TARGET_FRAME_DN = 60.0
+_MAX_JUMPS = 3
+# How far a linear prediction may be off before a step is skipped on its word.
+_PREDICTION_TOLERANCE = 1.5
 _IDENTIFY_LIMIT = 6
 _UNIDENTIFIED_STATUSES = frozenset({"ambiguous", "no_consistent_candidate"})
 _DARK_DETECTOR_STATUSES = frozenset({"not_found", None})
@@ -52,6 +60,12 @@ def static_exposure_policy() -> dict[str, Any]:
         "objective": "minimum_exposure_then_gain",
         "search": {
             "warm_start": "remembered_verified_lock_first_any_failure_runs_full_search",
+            "jump": "linear_response_predicts_lowest_exposure_then_gain_step_then_verify",
+            "bootstrap_target_frame_dn": _BOOTSTRAP_TARGET_FRAME_DN,
+            "clip_level_dn": _CLIP_LEVEL_DN,
+            "max_jumps": _MAX_JUMPS,
+            "prediction_tolerance": _PREDICTION_TOLERANCE,
+            "near_black_frame_climb": "at_least_4x_per_bootstrap_step",
             "bootstrap": "ascending_exposure_at_maximum_gain_until_ball_found",
             "refine": "lexicographic_with_monotone_signal_pruning",
             "settle_limit_observations": _SETTLE_LIMIT,
@@ -122,6 +136,8 @@ class StaticExposureObservation:
     failed_gates: tuple[str, ...] = ()
     association_status: str | None = None
     frame_signal_dn: float | None = None
+    # 95th-percentile ball brightness above black as a fraction of the clip level
+    ball_peak_fraction: float | None = None
 
     @property
     def acceptable(self) -> bool:
@@ -256,7 +272,9 @@ def assess_static_exposure(  # pylint: disable=too-many-locals
     contrast = ball_level - ring_level
     gradient_y, gradient_x = np.gradient(image)
     edge = float(np.percentile(np.hypot(gradient_x, gradient_y)[edge_region], 75))
-    clipped = float(np.mean(image[ball] >= 250.0) * 100.0)
+    clipped = float(np.mean(image[ball] >= _CLIP_LEVEL_DN) * 100.0)
+    black = float(black_floor_dn) if black_floor_dn is not None else 0.0
+    peak_fraction = (float(np.percentile(image[ball], 95)) - black) / (_CLIP_LEVEL_DN - black)
     stable = int(association.get("stable_count", 0))
     failed = [
         name
@@ -287,6 +305,7 @@ def assess_static_exposure(  # pylint: disable=too-many-locals
         stable,
         **applied,
         failed_gates=tuple(failed),
+        ball_peak_fraction=round(peak_fraction, 4),
     )
 
 
@@ -336,6 +355,8 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
         self._pose_retries = 0
         self._ball_seen = False
         self._lit_seen = False
+        self._jumps = 0
+        self.prediction: dict | None = None
         self._ball_gate_failures: set[str] = set()
 
     @property
@@ -399,6 +420,86 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
         self._queue = []
         self.status = status
         self.reason = reason
+
+    @staticmethod
+    def _applied_product(observation: StaticExposureObservation) -> float:
+        if observation.applied_exposure_us is not None and observation.applied_gain is not None:
+            return float(observation.applied_exposure_us) * float(observation.applied_gain)
+        return observation.step.signal
+
+    def _predict(self, observation: StaticExposureObservation) -> dict | None:
+        """Exposure x gain at which each gate is just met, and where the ball clips."""
+        product = self._applied_product(observation)
+        measured = {
+            "signal": (observation.signal_above_floor_dn, _MIN_SIGNAL_ABOVE_FLOOR_DN),
+            "contrast": (observation.local_contrast_dn, _MIN_LOCAL_CONTRAST_DN),
+            "edge": (observation.edge_gradient_dn, _MIN_EDGE_GRADIENT_DN),
+        }
+        if product <= 0 or any(value is None for value, _ in measured.values()):
+            return None
+        if (observation.ball_clipped_pct or 0.0) > 0.0 or (
+            observation.ball_peak_fraction or 0.0
+        ) >= 1.0:
+            # a clipped ball under-reads its own brightness; only prune brighter steps
+            return None
+        if any(value <= 0 for value, _ in measured.values()):
+            return None
+        needed = {
+            gate: threshold * product / value for gate, (value, threshold) in measured.items()
+        }
+        binding = max(needed, key=needed.get)
+        peak = observation.ball_peak_fraction
+        ceiling = product / peak if peak is not None and peak > 0 else math.inf
+        return {
+            "from_step": asdict(observation.step),
+            "applied_product": product,
+            "needed_product": {gate: round(value, 1) for gate, value in needed.items()},
+            "binding_gate": binding,
+            "minimum_product": needed[binding],
+            "clip_product": ceiling,
+        }
+
+    def _jump(self, observation: StaticExposureObservation) -> bool:
+        """Re-order the queue around the predicted lowest passing step; False if no prediction."""
+        if self._jumps >= _MAX_JUMPS:
+            return False
+        prediction = self._predict(observation)
+        if prediction is None:
+            return False
+        self._jumps += 1
+        self.prediction = prediction
+        # Drop only steps predicted to be clearly too dark or clearly clipped; the
+        # lowest-exposure-first walk then verifies what is left, so a slightly
+        # wrong prediction costs a step, never the lowest passing setting.
+        low = prediction["minimum_product"] / _PREDICTION_TOLERANCE
+        high = prediction["clip_product"] * _PREDICTION_TOLERANCE
+        window = [
+            step
+            for step in self._steps
+            if max(low, self._dark_signal) <= step.signal <= high
+            and step.signal > self._dark_signal
+        ]
+        prediction["window"] = [asdict(step) for step in window[:3]]
+        if not window:
+            # no step is predicted to pass; the verified search decides why
+            return False
+        self._log(observation, "exposure_predicted")
+        self.stage = "refine"
+        self._queue = window
+        self._settling = 0
+        self._stabilizing = 0
+        return True
+
+    def _skip_dark_bootstrap(self, observation: StaticExposureObservation) -> None:
+        """Jump the visibility search to where the frame itself is mid-range."""
+        frame = observation.frame_signal_dn
+        if frame is None or len(self._queue) <= 1:
+            return
+        product = self._applied_product(observation)
+        # a frame within a DN of black is too dark to scale from: climb 4x per step
+        target = 8.0 * product if frame <= 1.0 else _BOOTSTRAP_TARGET_FRAME_DN * product / frame
+        ahead = [step for step in self._queue if step.signal >= 0.5 * target]
+        self._queue = ahead or self._queue[-1:]
 
     def _enter_refine(self) -> None:
         self.stage = "refine"
@@ -474,10 +575,13 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
                 if dark:
                     self._dark_signal = step.signal
                 self._advance()
+                if dark and self.stage == "bootstrap" and self.status == "searching":
+                    self._skip_dark_bootstrap(observation)
                 return
             self._ball_seen = True
             self._log(observation, "ball_visible")
-            self._enter_refine()
+            if not self._jump(observation):
+                self._enter_refine()
             return
         if observation.ball_found:
             self._ball_seen = True
@@ -490,6 +594,8 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
             return
         if observation.status != "accepted":
             self._log(observation, observation.reason)
+            if observation.ball_found and observation.failed_gates and self._jump(observation):
+                return
             if "clipped" in observation.failed_gates:
                 self._advance(prune="bright")
             elif dark or _DARK_GATES & set(observation.failed_gates):
@@ -520,6 +626,7 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
             "stage": self.stage,
             "warm_start": asdict(self.warm_start) if self.warm_start else None,
             "reason": self.reason,
+            "prediction": self.prediction,
             "current_step": asdict(step) if step is not None else None,
             "lock": self.lock.to_dict() if self.lock else None,
             "attempts": list(self.attempts),

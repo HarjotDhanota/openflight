@@ -1876,3 +1876,19 @@ def test_without_an_accepted_radar_the_unqualified_range_is_the_camera_range(
     camera = state["evidence"]["camera_arm5_candidate"]
 
     assert ts.unqualified_tee_range_choice(solution).candidate_id == camera["candidate_id"]
+
+
+def test_a_radar_that_stops_answering_mid_setup_is_told_to_replug_its_usb():
+    record = {
+        "error": {
+            "stage": "configure",
+            "type": "RuntimeError",
+            "message": "IWR6843 did not acknowledge 'dfeDataOutputMode 1'; the firmware may be "
+            "wedged (press RESET and retry); no reply within the command window",
+        }
+    }
+
+    failure = ts._static_capture_failure(record, "empty")
+
+    assert "unplug the radar's USB cable" in failure["remedy"]
+    assert "RESET does not clear" in failure["remedy"]

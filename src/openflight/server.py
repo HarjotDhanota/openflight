@@ -1547,7 +1547,10 @@ def _iwr6843_startup_recovery(error: object) -> str:
     """Translate a known TI initialization failure into operator guidance."""
     normalized_error = str(error or "").casefold()
     if "press reset and retry" in normalized_error or "firmware may be wedged" in normalized_error:
-        return "Press RESET on the TI radar, then relaunch OpenFlight."
+        return (
+            "Press RESET on the TI radar; if it still fails, unplug and replug its USB "
+            "cable, then relaunch OpenFlight."
+        )
     return "Check the TI radar USB and power connections, then relaunch OpenFlight."
 
 

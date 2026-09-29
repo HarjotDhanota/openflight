@@ -338,7 +338,8 @@ def test_server_publishes_ops_failure_and_cleans_up(tmp_path, monkeypatch):
         (
             "IWR6843 did not acknowledge 'sensorStop'; the firmware may be wedged "
             "(press RESET and retry)",
-            "Press RESET on the TI radar, then relaunch OpenFlight.",
+            "Press RESET on the TI radar; if it still fails, unplug and replug its USB "
+            "cable, then relaunch OpenFlight.",
         ),
         (
             "IWR6843 serial port is unavailable",

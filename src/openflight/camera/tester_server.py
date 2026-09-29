@@ -2936,6 +2936,15 @@ def _static_capture_failure(record: Mapping, capture_kind: str) -> dict[str, str
             "Verify the IWR6843 uses the CP2105 Enhanced/UARTA interface (if00), stop any "
             "other serial owner, press RESET, and retry."
         )
+    elif stage in {"configure", "cleanup"} and "did not acknowledge" in message:
+        # Field 2026-09-28: the kernel logged cp210x purge timeouts at each failure;
+        # RESET restarts the radar, not the CP2105 USB bridge that stopped answering.
+        remedy = (
+            "The radar stopped answering partway through setup. This is usually its USB "
+            "bridge chip locking up, which RESET does not clear: unplug the radar's USB "
+            "cable for 5 s, plug it back in, rerun Check the hardware, then retry this "
+            "capture step."
+        )
     elif stage == "read_dump":
         remedy = (
             "The dump transfer did not complete; any bytes received were preserved and "

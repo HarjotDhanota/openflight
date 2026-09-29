@@ -270,6 +270,14 @@ found but never stands out from what is behind it (a white door, say), the
 step reports that instead of asking for more light: put something darker
 behind the ball.
 
+The search does not walk every setting. Brightness on this sensor is
+proportional to exposure × gain, and so are the ball's signal, contrast and edge.
+So the first frame sets how far to jump while the ball is still invisible, and
+the first measured ball predicts where each check is just met and where the ball
+would clip. Steps predicted to be clearly too dark or clearly clipped are
+skipped; the rest are still verified lowest exposure first, so the lock is the
+lowest passing setting. On synthetic scenes this takes 3–7 settings instead of 11–15.
+
 Two things keep this search short. The 1280×800 search starts together with the
 radar ball capture, since the ball is already at address, so it is usually
 locked by the time the radar finishes; the page shows its progress during the
@@ -299,6 +307,7 @@ every earlier frame and failure record for review.
 
 | What you see | Cause | Fix |
 | --- | --- | --- |
+| `IWR6843 did not acknowledge '<config line>'`, at a different line each time, and RESET does not help | The radar board's CP2105 USB bridge stopped answering; `dmesg` shows `cp210x ttyUSB0: failed set request 0x12 status: -110` at each failure. RESET restarts the radar, not the bridge | Unplug the radar's USB cable for 5 s, plug it back in, run **Check the hardware**, then retry. If it keeps happening, try a short thick cable or a powered USB hub |
 | `fatal: ambiguous argument 'origin/feat/tester-capture-pilot'` | `origin` is the upstream repository; the study branch is on the fork | Add the fork as shown in *Before your first run* |
 | `Failed to build lgpio` … `swig: No such file or directory` | Build tools missing | `sudo apt install -y swig liblgpio-dev python3-dev`, then start again |
 | Find gain fails with `IndexError: list index out of range` in `Picamera2()`, or `rpicam-hello --list-cameras` has no `320x200` | The camera or its high-speed driver is not set up on this Pi | Follow the [camera README](README.md#raspberry-pi-packages) setup, then reboot |

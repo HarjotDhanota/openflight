@@ -195,7 +195,7 @@ def test_lock_serializes_with_policy_identity_and_applied_controls(tmp_path):
 def test_static_exposure_policy_identity_is_pinned():
     """A lattice or gate change must be a deliberate, reviewed identity change."""
     assert se.static_exposure_policy_sha256() == (
-        "25586a7cd8820ec679c687034d3fcfeee4fe14d91ae167b2a0bd470e7de54e47"
+        "2cdbf1ee8259e66e1a1000efb80a21a1b01535c10b7b2b73b46722a58ab2c573"
     )
 
 
@@ -292,6 +292,8 @@ def test_noise_candidates_in_a_black_frame_are_darkness_not_ambiguity():
     search = se.StaticExposureSearch(STEPS)
     for _ in range(8):
         step = search.current_step
+        if step is None:
+            break
         search.record(
             _observation(
                 step,
@@ -300,10 +302,12 @@ def test_noise_candidates_in_a_black_frame_are_darkness_not_ambiguity():
             )
         )
 
-    assert search.status == "searching"
+    # it keeps brightening (jumping ahead on the dark frame) and never calls the
+    # noise an unidentifiable ball
     assert search.stage == "bootstrap"
+    assert search.status in {"searching", "lighting_required"}
     assert all(item["reason"] == "ball_not_visible" for item in search.attempts)
-    assert search.current_step.exposure_us > STEPS[0].exposure_us
+    assert search.attempts[-1]["exposure_us"] > STEPS[0].exposure_us
 
 
 def test_ambiguity_in_a_lit_frame_is_still_reported_as_unidentified():
@@ -347,9 +351,10 @@ def test_a_remembered_lock_that_fails_falls_back_to_the_full_search():
     search, seen = _driver(STEPS, brightness=0.02, warm_start=remembered)
 
     assert seen[0] == remembered
-    assert seen[1] == se.StaticExposureStep(STEPS[0].exposure_us, max(se.GAINS))
     assert search.attempts[0]["stage"] == "warm_start"
-    assert search.attempts[1]["stage"] == "bootstrap"
+    # the failed remembered step still measured the ball, so the search jumps
+    # from it, and still ends at the lowest passing setting
+    assert len(seen) < len(_driver(STEPS, brightness=0.02)[1]) + 2
     assert (search.lock.exposure_us, search.lock.gain) == (cold.lock.exposure_us, cold.lock.gain)
 
 
@@ -397,3 +402,49 @@ def test_no_ball_in_a_well_lit_picture_is_not_reported_as_needing_light():
 
     assert search.status == "ball_not_identified"
     assert "well lit" in search.reason
+
+
+def _physical_frames(ball_per_signal, background_per_signal, step):
+    return _frames(
+        min(15.0 + ball_per_signal * step.signal, 255.0),
+        min(15.0 + background_per_signal * step.signal, 255.0),
+    )
+
+
+def _physical_search(ball_per_signal, background_per_signal):
+    """Ball and background both brighten with exposure x gain, as on a real sensor."""
+    search = se.StaticExposureSearch(STEPS)
+    seen = []
+    for _ in range(200):
+        step = search.current_step
+        if step is None:
+            break
+        seen.append(step)
+        found = ball_per_signal * step.signal >= 25.0
+        search.record(
+            _assess(
+                step,
+                _physical_frames(ball_per_signal, background_per_signal, step),
+                _association(stable_count=3, found=found),
+            )
+        )
+    return search, seen
+
+
+@pytest.mark.parametrize(("ball", "background"), [(0.02, 0.006), (0.004, 0.0012), (0.0012, 0.0004)])
+def test_one_measured_ball_predicts_the_setting_and_skips_the_walk(ball, background):
+    search, seen = _physical_search(ball, background)
+    lowest = next(
+        step
+        for step in sorted(STEPS)
+        if _assess(
+            step,
+            _physical_frames(ball, background, step),
+            _association(found=ball * step.signal >= 25.0),
+        ).acceptable
+    )
+
+    assert search.status == "locked"
+    assert (search.lock.exposure_us, search.lock.gain) == (lowest.exposure_us, lowest.gain)
+    assert len(seen) <= 8
+    assert search.to_dict()["prediction"]["binding_gate"] in {"signal", "contrast", "edge"}
