@@ -35,6 +35,10 @@ FPS_MIN_FRACTION = 0.9
 EXPOSURE_TOLERANCE_US = 15  # exposure applies in whole rows
 EXPOSURE_TOLERANCE_FRACTION = 0.10
 GAIN_TOLERANCE_FRACTION = 0.10
+# New controls reach the sensor a few frames late: a check waits this long for
+# frames taken at them, and judges on no fewer than this many (wiring audit T7).
+CONTROLS_WAIT_S = 1.0
+MIN_MATCHED_FRAMES = 3
 EARLY_EXIT_SWINGS = 3
 EARLY_EXIT_REDS = 2
 PHOTO_TARGET_DN = 100.0
@@ -260,6 +264,17 @@ def pre_rung_check(
     }
 
 
+def exposure_matches(applied_us: float, wanted_us: float) -> bool:
+    """Whether an exposure is the wanted one, allowing for whole-row steps."""
+    tolerance = max(EXPOSURE_TOLERANCE_US, EXPOSURE_TOLERANCE_FRACTION * wanted_us)
+    return abs(float(applied_us) - float(wanted_us)) <= tolerance
+
+
+def gain_matches(applied: float, wanted: float) -> bool:
+    """Whether a gain is the wanted one, allowing for the sensor's 1/16 steps."""
+    return abs(float(applied) - float(wanted)) <= GAIN_TOLERANCE_FRACTION * float(wanted)
+
+
 def trigger_controls_mismatch(metadata: dict, rung: Rung, gain: float | None) -> str | None:
     """Why a capture was not taken at this rung's controls, or None if it was.
 
@@ -275,15 +290,10 @@ def trigger_controls_mismatch(metadata: dict, rung: Rung, gain: float | None) ->
     if purpose != "capture":
         return f"taken during a {purpose}, not at this rung's controls"
     exposure = controls.get("exposure_us")
-    tolerance = max(EXPOSURE_TOLERANCE_US, EXPOSURE_TOLERANCE_FRACTION * rung.exposure_us)
-    if exposure is not None and abs(float(exposure) - rung.exposure_us) > tolerance:
+    if exposure is not None and not exposure_matches(exposure, rung.exposure_us):
         return f"taken at {float(exposure):.0f} us, not this rung's {rung.exposure_us} us"
     requested_gain = controls.get("gain")
-    if (
-        gain
-        and requested_gain is not None
-        and abs(float(requested_gain) - gain) > GAIN_TOLERANCE_FRACTION * gain
-    ):
+    if gain and requested_gain is not None and not gain_matches(requested_gain, gain):
         return f"taken at gain {float(requested_gain):.2f}, not this rung's {gain:.2f}"
     return None
 
@@ -636,9 +646,17 @@ class KioskClient:
         with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
             return json.loads(response.read())
 
-    def frames(self, count: int) -> np.ndarray:
+    def frames_with_controls(self, count: int) -> dict:
+        """The next frames, with the exposure and gain the sensor applied to each."""
         with np.load(io.BytesIO(self._get(f"/api/camera/study/frames?n={int(count)}"))) as data:
-            return data["frames"]
+            return {
+                "frames": data["frames"],
+                "exposure_us": data["exposure_us"],
+                "gain": data["analogue_gain"],
+            }
+
+    def frames(self, count: int) -> np.ndarray:
+        return self.frames_with_controls(count)["frames"]
 
 
 SETTLE_S = 0.5  # new controls take a few frames to reach the sensor
@@ -779,7 +797,7 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                     return None
                 black = self._black_floor(rung.arm_id)
                 expected = self._expected_ball(rung.arm_id)
-                check = pre_rung_check(self.client.frames(5), black, gain, expected_ball=expected)
+                check = self._pre_check(rung, gain, black, expected)
                 for _ in range(MAX_GAIN_CORRECTIONS):
                     suggested = check.get("suggested_gain")
                     if check["ok"] or suggested is None:
@@ -791,9 +809,7 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                     self.client.set_controls(rung.exposure_us, gain)
                     if self._stop.wait(SETTLE_S):
                         return None
-                    check = pre_rung_check(
-                        self.client.frames(5), black, gain, expected_ball=expected
-                    )
+                    check = self._pre_check(rung, gain, black, expected)
                 if self.stopped:
                     return None
                 self.state.begin(rung.rung_id, gain, check)
@@ -805,6 +821,47 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                     self._finish_mode(rung.arm_id)
                     return None
         return None
+
+    def _frames_at(self, exposure_us: int, gain: float, count: int) -> tuple[np.ndarray, dict]:
+        """Frames the sensor took at these controls, waiting up to a second for them.
+
+        Frames read too soon after a change were judged at the old controls
+        (wiring audit T7). Raises when too few arrive in time; ``tick`` shows it and
+        tries again.
+        """
+        needed = min(count, MIN_MATCHED_FRAMES)
+        deadline = time.monotonic() + CONTROLS_WAIT_S
+        while True:
+            taken = self.client.frames_with_controls(count)
+            applied = list(zip(taken["exposure_us"], taken["gain"]))
+            matched = [
+                index
+                for index, (exposure, applied_gain) in enumerate(applied)
+                if exposure_matches(exposure, exposure_us) and gain_matches(applied_gain, gain)
+            ]
+            if len(matched) == len(applied) or (
+                len(matched) >= needed and time.monotonic() >= deadline
+            ):
+                frames = np.asarray(taken["frames"])[matched]
+                return frames, {
+                    "exposure_us": float(np.median([applied[i][0] for i in matched])),
+                    "gain": float(np.median([applied[i][1] for i in matched])),
+                    "frames": len(matched),
+                }
+            if time.monotonic() >= deadline:
+                last_exposure, last_gain = applied[-1] if applied else (None, None)
+                raise RuntimeError(
+                    f"the camera did not apply {exposure_us} us x {gain:.2f} within "
+                    f"{CONTROLS_WAIT_S:.0f} s (last frame {last_exposure} us x {last_gain})"
+                )
+            if self._stop.wait(0.05):
+                raise RuntimeError("the ladder is stopped")
+
+    def _pre_check(self, rung: Rung, gain: float, black: float, expected: dict | None) -> dict:
+        frames, applied = self._frames_at(rung.exposure_us, gain, 5)
+        check = pre_rung_check(frames, black, gain, expected_ball=expected)
+        check["applied_controls"] = applied
+        return check
 
     def poll_once(self) -> list[dict]:
         """Verdict every complete capture not yet seen, and move on when a rung finishes."""
@@ -989,7 +1046,7 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                 self.client.set_controls(still, PHOTO_GAIN, purpose="still_photo")
                 if self._stop.wait(SETTLE_S):
                     raise RuntimeError("the ladder is stopped")
-                image = self.client.frames(1)[0]
+                image = self._frames_at(still, PHOTO_GAIN, 1)[0][0]
                 if self.stopped:
                     raise RuntimeError("the ladder is stopped")
             finally:

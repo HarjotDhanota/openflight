@@ -455,6 +455,25 @@ class TestProgressCountsAcceptedNotFiles:
         assert by_id["arm2"]["gain"] == 6.0 and by_id["arm2"]["light_index"] == 0.2
         assert by_id["arm1"]["gain"] is None
 
+    def test_overview_carries_the_screens_light_flags(self, tmp_path):
+        # wiring audit T1: the page had "too bright" text the overview never sent
+        ts.write_arm_state(
+            tmp_path,
+            params(arm_id="arm5"),
+            gain=1.0,
+            lighting_required=False,
+            too_bright=True,
+            mixed_light=False,
+            gain_at_300_equivalent=0.45,
+            light_index=None,
+        )
+        arm5 = next(
+            a for a in ts.study_overview(tmp_path, "20260922-name")["arms"] if a["arm_id"] == "arm5"
+        )
+        assert arm5["too_bright"] is True
+        assert arm5["mixed_light"] is False
+        assert arm5["gain_at_300_equivalent"] == 0.45
+
 
 class TestPackage:
     def test_bundle_carries_every_arm_state(self, tmp_path):
@@ -2242,14 +2261,35 @@ class _Forever:
 
 
 class _LitKiosk:
+    controls = (0, 0.0)
+
     def ready(self):
         return True
 
-    def set_controls(self, exposure_us, gain):
+    def set_controls(self, exposure_us, gain, purpose="capture"):
+        del purpose
+        self.controls = (exposure_us, gain)
         return {"exposure_us": exposure_us, "gain": gain}
 
     def frames(self, count):
         return np.full((count, 800, 1280), 60, np.uint8)
+
+    def frames_with_controls(self, count):
+        exposure, gain = self.controls
+        return {
+            "frames": self.frames(count),
+            "exposure_us": np.full(count, exposure, np.int32),
+            "gain": np.full(count, gain, np.float32),
+        }
+
+
+def test_a_new_run_is_numbered_past_the_highest_not_the_count(tmp_path):
+    # wiring audit T2: run-01 and run-03 made the next run "run-03" again
+    for name in ("run-01", "run-03", "notes"):
+        (tmp_path / "paired" / name).mkdir(parents=True)
+
+    assert ts.next_run_directory(tmp_path).name == "run-04"
+    assert ts.next_run_directory(tmp_path / "empty").name == "run-01"
 
 
 class TestTheLadderHoldsUp:
@@ -2295,6 +2335,34 @@ class TestTheLadderHoldsUp:
             assert status["run_dir"].endswith("run-02")
         finally:
             manager.cancel()
+
+    def test_a_failed_ladder_start_hands_the_inclinometer_back(self, tmp_path, monkeypatch):
+        # wiring audit T2: a failure between stopping the LIS3DH and starting the
+        # kiosk left the page's tilt reading off for the rest of the session
+        for arm in ("arm5", "arm6"):
+            ts.write_arm_state(
+                tmp_path,
+                ts.TesterParameters("20260922-name", arm, "indoors"),
+                gain=3.0,
+                gain_exposure_us=300,
+            )
+        monkeypatch.setattr(ts.study_ladder, "KioskClient", _LitKiosk)
+        tilt = ts.EnclosureTilt(RIG, service_factory=lambda: FakeTiltService(0.0))
+        tilt.start()
+
+        def collide(*_args, **_kwargs):
+            raise FileExistsError("run-02 already exists")
+
+        monkeypatch.setattr(ts, "write_setup_admission", collide)
+        manager = ts.TesterJobManager(popen=_Forever)
+        app = eligible_app(sessions_root=tmp_path, rig_geometry=RIG, manager=manager, tilt=tilt)
+
+        response = app.test_client().post("/api/tester/ladder/start", json=self.body)
+
+        assert response.status_code == 409
+        assert "already exists" in response.get_json()["error"]
+        assert tilt.reading()["status"] != "off"
+        assert manager.status()["state"] != "running"
 
     def test_stop_cancels_the_ladder_and_a_pending_mode_restart(self, tmp_path, monkeypatch):
         runners = []

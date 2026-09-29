@@ -841,9 +841,17 @@ def expected_ladder_ball(solution: tee_range.TeeRangeSolution | None, arm_id: st
 
 
 def next_run_directory(arm_dir: Path) -> Path:
-    """Each capture run gets its own folder: a new kiosk is a new session."""
-    existing = sorted((arm_dir / "paired").glob("run-*"))
-    return arm_dir / "paired" / f"run-{len(existing) + 1:02d}"
+    """Each capture run gets its own folder: a new kiosk is a new session.
+
+    Numbered one past the highest existing run, so a gap (a deleted run-02) never
+    points a new run at a folder that already exists (wiring audit T2).
+    """
+    numbers = [
+        int(match.group(1))
+        for path in (arm_dir / "paired").glob("run-*")
+        if (match := re.fullmatch(r"run-(\d+)", path.name))
+    ]
+    return arm_dir / "paired" / f"run-{max(numbers, default=0) + 1:02d}"
 
 
 def write_setup_admission(
@@ -3930,7 +3938,11 @@ def study_overview(sessions_root: Path, tester_id: str) -> dict:
                 "gain": state.get("gain"),
                 "gain_source": state.get("gain_source"),
                 "lighting_required": state.get("lighting_required"),
+                "too_bright": state.get("too_bright"),
+                "mixed_light": state.get("mixed_light"),
+                "gain_at_300_equivalent": state.get("gain_at_300_equivalent"),
                 "light_index": state.get("light_index"),
+                "light_index_source": state.get("light_index_source"),
                 "solved_range_m": state.get("solved_range_m"),
                 "tee_range_m": state.get("tee_range_m"),
                 "tee_range_solution": state.get("tee_range_solution"),
@@ -4362,6 +4374,7 @@ def create_app(
             gain_zone_clipped_pct=choice["zone_clipped_pct"],
             lighting_required=choice["lighting_required"],
             too_bright=choice["too_bright"],
+            mixed_light=choice["mixed_light"],
             gain_at_300_equivalent=choice["gain_at_300_equivalent"],
             **light_index(results),
             **solved_range(arm_directory(sessions_root, params), params.arm, choice, rig_geometry),
@@ -5798,47 +5811,56 @@ def create_app(
         if tester_id not in admitted_tee_range:
             raise RuntimeError("automatic tee-range admission was not frozen")
         solution, reference = admitted_tee_range[tester_id]
-        enclosure.stop()  # the kiosk reads the LIS3DH itself during the ladder
-        commands, log_path = action_commands(
-            "ladder",
-            params_for_arm,
-            sessions_root,
-            rig_geometry,
-            radar_port,
-            setup_command_config({"config_hash": config_hash}),
-            optical_calibration,
-            camera_placement,
-            solution,
-            iwr_static_port,
-            use_unqualified_tee_range=use_unqualified_tee_range,
-        )
-        run = Path(commands[0][commands[0].index("--log-dir") + 1])
-        with session_bundle.snapshot_lock(
-            tester_root(sessions_root, tester_id),
-            timeout_s=session_bundle.WRITER_WAIT_S,
-        ):
-            write_setup_admission(run, tester_id, admitted_setup[tester_id], solution, reference)
-            tee_range.write_solution(
-                run / "tee_range.json",
-                solution,
-            )
-
-        def ladder_finished(_action, _return_code):
-            if active_runtime_dir["path"] == run:
-                active_setup_tester["tester_id"] = None
-                active_runtime_dir["path"] = None
-                enclosure.start()
-
-        active_setup_tester["tester_id"] = tester_id
-        active_runtime_dir["path"] = run
+        # The kiosk reads the LIS3DH itself during the ladder. Any failure before its
+        # job starts hands the sensor back, or the page's reading goes stale for the
+        # rest of the session (wiring audit T2).
+        enclosure.stop()
+        started = claimed = False
         try:
+            commands, log_path = action_commands(
+                "ladder",
+                params_for_arm,
+                sessions_root,
+                rig_geometry,
+                radar_port,
+                setup_command_config({"config_hash": config_hash}),
+                optical_calibration,
+                camera_placement,
+                solution,
+                iwr_static_port,
+                use_unqualified_tee_range=use_unqualified_tee_range,
+            )
+            run = Path(commands[0][commands[0].index("--log-dir") + 1])
+            with session_bundle.snapshot_lock(
+                tester_root(sessions_root, tester_id),
+                timeout_s=session_bundle.WRITER_WAIT_S,
+            ):
+                write_setup_admission(
+                    run, tester_id, admitted_setup[tester_id], solution, reference
+                )
+                tee_range.write_solution(
+                    run / "tee_range.json",
+                    solution,
+                )
+
+            def ladder_finished(_action, _return_code):
+                if active_runtime_dir["path"] == run:
+                    active_setup_tester["tester_id"] = None
+                    active_runtime_dir["path"] = None
+                    enclosure.start()
+
+            active_setup_tester["tester_id"] = tester_id
+            active_runtime_dir["path"] = run
+            claimed = True
             release_static_radar()
             jobs.start("ladder", commands, log_path, on_finish=ladder_finished)
-        except Exception:
-            active_setup_tester["tester_id"] = None
-            active_runtime_dir["path"] = None
-            enclosure.start()
-            raise
+            started = True
+        finally:
+            if not started:
+                if claimed:
+                    active_setup_tester["tester_id"] = None
+                    active_runtime_dir["path"] = None
+                enclosure.start()
         return run
 
     @app.post("/api/tester/ladder/start")

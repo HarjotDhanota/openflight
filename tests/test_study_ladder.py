@@ -207,6 +207,15 @@ class FakeKiosk:
         noisy = self.level + rng.normal(0, 1.0, (count, 800, 1280))
         return np.clip(noisy, 0, 255).astype(np.uint8)
 
+    def frames_with_controls(self, count):
+        """Frames at the last controls set: this kiosk applies them at once."""
+        exposure, gain = self.calls[-1] if self.calls else (0, 0.0)
+        return {
+            "frames": self.frames(count),
+            "exposure_us": np.full(count, exposure, np.int32),
+            "gain": np.full(count, gain, np.float32),
+        }
+
 
 def _runner(tmp_path, kiosk, run_dir=None, done=None):
     state = sl.LadderState(tmp_path / "ladder.json")
@@ -887,3 +896,56 @@ def test_a_swing_taken_at_other_controls_is_set_aside_not_counted(tmp_path):
     set_aside = {item["capture"] for item in state["ineligible_captures"]}
     assert counted == ["camera_c"]
     assert set_aside == {"camera_a", "camera_b"}
+
+
+class LateKiosk(FakeKiosk):
+    """Applies new controls after a few reads; frames before then are at the old ones."""
+
+    def __init__(self, stale_reads=2, **kwargs):
+        super().__init__(**kwargs)
+        self.stale_reads = stale_reads
+        self.read_levels = []
+
+    def frames_with_controls(self, count):
+        exposure, gain = self.calls[-1]
+        if self.stale_reads > 0:
+            # the previous rung's controls, and a dark picture taken at them
+            self.stale_reads -= 1
+            self.read_levels.append("stale")
+            return {
+                "frames": _ball_frames(12, 30, count=count),
+                "exposure_us": np.full(count, 999, np.int32),
+                "gain": np.full(count, gain, np.float32),
+            }
+        self.read_levels.append("applied")
+        return {
+            "frames": _ball_frames(60, 180, count=count),
+            "exposure_us": np.full(count, exposure - 4, np.int32),  # whole-row steps
+            "gain": np.full(count, gain, np.float32),
+        }
+
+
+def test_the_pre_check_is_judged_on_frames_at_the_controls_it_set(tmp_path):
+    # wiring audit T7: the check read frames 0.5 s after new controls, some still
+    # at the old ones, and judged the rung on them
+    kiosk = LateKiosk(stale_reads=2)
+    runner = _runner(tmp_path, kiosk)
+
+    runner.start_rung()
+
+    rung = runner.state.to_dict()["rungs"]["full-300"]
+    assert kiosk.read_levels == ["stale", "stale", "applied"]
+    assert rung["status"] == "active"
+    assert rung["pre_check"]["applied_controls"]["exposure_us"] == 296.0
+    assert rung["pre_check"]["applied_controls"]["frames"] == 5
+
+
+def test_controls_that_never_apply_leave_the_rung_unjudged(tmp_path, monkeypatch):
+    monkeypatch.setattr(sl, "CONTROLS_WAIT_S", 0.2)
+    kiosk = LateKiosk(stale_reads=10_000)
+    runner = _runner(tmp_path, kiosk)
+
+    runner.tick()
+
+    assert runner.state.to_dict()["rungs"]["full-300"]["status"] == "pending"
+    assert "did not apply 300 us" in runner.last_verdict["reasons"][0]

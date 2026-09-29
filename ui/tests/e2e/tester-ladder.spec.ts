@@ -203,11 +203,24 @@ test('changing tester ID cancels the remaining light-measurement sequence', asyn
   await expect(page.locator('#light-verdict')).toContainText('cancelled');
 });
 
-for (const [arm5Dark, arm6Dark, verdict, problem] of [
-  [false, false, '1280×800: light sufficient · 640×400: light sufficient', false],
-  [true, false, '1280×800: more light needed · 640×400: light sufficient — swings are still recorded, as evidence only', true],
+const LIT = { lighting_required: false };
+for (const [arm5, arm6, verdict, problem] of [
+  [LIT, LIT, '1280×800: light sufficient · 640×400: light sufficient', false],
+  [
+    { lighting_required: true },
+    LIT,
+    '1280×800: more light needed · 640×400: light sufficient — swings are still recorded, as evidence only',
+    true,
+  ],
+  // wiring audit T1: outdoors the screen's "too bright" never reached the page
+  [
+    { lighting_required: false, too_bright: true },
+    { lighting_required: false, mixed_light: true },
+    '1280×800: too bright: shorter exposures used · 640×400: mixed light: gain kept below the sunlit patch',
+    false,
+  ],
 ] as const) {
-  test(`the light verdict reports each mode's result (${verdict.slice(0, 30)})`, async ({ page }) => {
+  test(`the light verdict reports each mode's result (${verdict.slice(0, 40)})`, async ({ page }) => {
     await mockBaseApis(page, () => ladderState(null));
     await page.route('**/api/tester/run', (route) => fulfillJson(route, {}));
     await page.route('**/api/tester/status?**', (route) =>
@@ -215,8 +228,8 @@ for (const [arm5Dark, arm6Dark, verdict, problem] of [
         job: { state: 'complete', message: 'done' },
         study: {
           arms: [
-            { arm_id: 'arm5', lighting_required: arm5Dark },
-            { arm_id: 'arm6', lighting_required: arm6Dark },
+            { arm_id: 'arm5', ...arm5 },
+            { arm_id: 'arm6', ...arm6 },
           ],
         },
       })
@@ -229,6 +242,37 @@ for (const [arm5Dark, arm6Dark, verdict, problem] of [
     else await expect(page.locator('#light-verdict')).not.toHaveClass('problem');
   });
 }
+
+test('a too-bright arm shows its light panel without a light index', async ({ page }) => {
+  await mockBaseApis(page, () => ladderState(null));
+  await page.unroute('**/api/tester/status**');
+  await page.route('**/api/tester/status**', (route) =>
+    fulfillJson(route, {
+      study: {
+        arms: [
+          {
+            arm_id: 'arm1',
+            label: 'Full 1280×800',
+            isolates: 'blur',
+            exposure_us: 300,
+            gain: 1.0,
+            lighting_required: false,
+            too_bright: true,
+            mixed_light: false,
+            gain_at_300_equivalent: 0.45,
+            light_index: null,
+          },
+        ],
+      },
+    })
+  );
+  await page.goto('/tester.html');
+
+  await expect(page.locator('#arms')).toContainText('too bright at this exposure');
+  await expect(page.locator('#light')).toContainText('light-equivalent gain at 300 µs 0.45');
+  await expect(page.locator('#light')).toContainText('the ladder uses its shorter exposures');
+  await expect(page.locator('#light')).not.toContainText('light index');
+});
 
 test('Stop cancels the remaining light-measurement sequence', async ({ page }) => {
   await mockBaseApis(page, () => ladderState(null));

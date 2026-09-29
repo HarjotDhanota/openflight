@@ -944,7 +944,7 @@
             : `0 / ${a.target}`;
           li.innerHTML = `<span class="n">${a.arm_id.replace('arm', '')}</span>
             <span class="t"><span>${a.label}</span>
-            <small>${a.isolates} · ${a.exposure_us} µs · ${gainText}${a.lighting_required ? ' · <b>lighting required</b>' : ''}${a.too_bright ? ' · <b>too bright at this exposure</b>' : ''}</small></span>
+            <small>${a.isolates} · ${a.exposure_us} µs · ${gainText}${a.lighting_required ? ' · <b>lighting required</b>' : ''}${a.too_bright ? ' · <b>too bright at this exposure</b>' : ''}${a.mixed_light ? ' · <b>mixed light</b>' : ''}</small></span>
             <span class="p ${progressClass(a)}">${prog}</span>`;
           li.addEventListener('click', () => {
             currentArm = a.arm_id;
@@ -959,15 +959,32 @@
         el('btn-gain').textContent = `Find gain for arm ${currentArm.replace('arm', '')}`;
         el('btn-swings').textContent = `Capture swings for arm ${currentArm.replace('arm', '')}`;
         const li = a.light_index;
-        el('light').innerHTML =
-          li != null
-            ? `<span>light index <b>${li.toExponential(2)}</b></span><span>${a.lighting_required ? 'This arm needs more light than you have; its swings will still be recorded as evidence.' : a.too_bright ? 'Too bright here even at unity gain; the ladder uses its shorter exposures, and longer ones it cannot darken are skipped.' : 'Light is sufficient for this arm.'}</span>`
-            : '';
+        const measured = li != null || a.lighting_required != null;
+        const equivalent = a.too_bright && a.gain_at_300_equivalent != null
+          ? `<span>light-equivalent gain at 300 µs <b>${Number(a.gain_at_300_equivalent).toFixed(2)}</b></span>`
+          : '';
+        el('light').innerHTML = measured
+          ? `${li != null ? `<span>light index <b>${li.toExponential(2)}</b></span>` : ''}${equivalent}<span>${lightMessage(a)}</span>`
+          : '';
         if (a.solved_range_m != null) {
           el('light').innerHTML += `<span>camera-solved range <b>${Math.round(a.solved_range_m * 1000)} mm</b></span>`;
         }
         const ranged = [...arms].reverse().find((item) => item.tee_range_camera_evidence);
         if (ranged) renderAutomaticRange(ranged.tee_range_camera_evidence, ranged.tee_range_solution);
+      }
+
+      function lightVerdict(a) {
+        if (a.lighting_required) return 'more light needed';
+        if (a.too_bright) return 'too bright: shorter exposures used';
+        if (a.mixed_light) return 'mixed light: gain kept below the sunlit patch';
+        return 'light sufficient';
+      }
+
+      function lightMessage(a) {
+        if (a.lighting_required) return 'This arm needs more light than you have; its swings will still be recorded as evidence.';
+        if (a.too_bright) return 'Too bright here even at unity gain; the ladder uses its shorter exposures, and longer ones it cannot darken are skipped.';
+        if (a.mixed_light) return 'Sun and shade in the hitting zone: brighter gains clipped a sunlit patch, so the gain stays below them.';
+        return 'Light is sufficient for this arm.';
       }
 
       function render(body) {
@@ -1341,9 +1358,11 @@
           const verdicts = [['arm5', '1280×800'], ['arm6', '640×400']].map(([armId, size]) => {
             const arm = arms.find((item) => item.arm_id === armId);
             if (!arm || arm.lighting_required == null) return [size, 'no result'];
-            return [size, arm.lighting_required ? 'more light needed' : arm.too_bright ? 'too bright: shorter exposures used' : 'light sufficient'];
+            return [size, lightVerdict(arm)];
           });
-          const dark = verdicts.some(([, verdict]) => verdict !== 'light sufficient');
+          // only too little light makes swings evidence-only; too bright and mixed
+          // light are handled by the ladder's shorter exposures and chosen gain
+          const dark = verdicts.some(([, verdict]) => verdict === 'more light needed' || verdict === 'no result');
           el('light-verdict').className = dark ? 'problem' : '';
           el('light-verdict').textContent = verdicts.map(([size, verdict]) => `${size}: ${verdict}`).join(' · ') +
             (dark ? ' — swings are still recorded, as evidence only' : '');
