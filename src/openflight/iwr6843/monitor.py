@@ -168,6 +168,18 @@ class IWR6843CaptureMonitor:
         self._armed = True
         logger.info("[IWR6843] Armed on BCM%d", self.gpio_pin)
 
+    def add_trigger_observer(self, observer: Callable[[float], None]) -> None:
+        """Also tell ``observer`` about each accepted GPIO edge (added once)."""
+        with self._condition:
+            if observer not in self._trigger_observers:
+                self._trigger_observers.append(observer)
+
+    def remove_trigger_observer(self, observer: Callable[[float], None]) -> None:
+        """Stop telling ``observer`` about GPIO edges; unknown observers are ignored."""
+        with self._condition:
+            if observer in self._trigger_observers:
+                self._trigger_observers.remove(observer)
+
     def notify_trigger(self, timestamp: float | None = None) -> bool:
         """Queue a GPIO edge without doing serial work in the callback."""
         if not self._running or not self._armed:
@@ -186,7 +198,8 @@ class IWR6843CaptureMonitor:
             self._last_edge_timestamp = edge_timestamp
             self._events.put_nowait(edge_timestamp)
             self._condition.notify_all()
-        for observer in self._trigger_observers:
+            observers = tuple(self._trigger_observers)
+        for observer in observers:
             try:
                 observer(edge_timestamp)
             except Exception:  # pylint: disable=broad-exception-caught

@@ -205,6 +205,15 @@ class OPS243Radar:
     # drain must bail out loudly instead of hanging the monitor thread.
     REARM_DRAIN_TIMEOUT_S = 5.0
 
+    # A GATE edge reaches the first dump byte in ~0.08 s (Outdoors-test-7).
+    # An edge with no dump after this long means the board is not armed.
+    GATE_EDGE_DUMP_TIMEOUT_S = 0.3
+
+    # More markerless bytes than any CLI or clock reply: the body of a dump
+    # whose start was lost. The board sits idle after it until re-armed.
+    DISCARDED_DUMP_MIN_BYTES = 1024
+    DISCARDED_DUMP_QUIET_S = 0.5
+
     # Common USB identifiers for OPS243
     VENDOR_IDS = [0x0483]  # STMicroelectronics
 
@@ -1532,6 +1541,7 @@ class OPS243Radar:
         dump_grace: Optional[float] = None,
         cancel_event: Optional[threading.Event] = None,
         on_first_byte: Optional[Callable[[], None]] = None,
+        gate_edge_time: Optional[Callable[[], Optional[float]]] = None,
     ) -> str:
         """
         Wait for hardware trigger to fire and read the buffer dump.
@@ -1550,9 +1560,15 @@ class OPS243Radar:
             cancel_event: Stops an idle wait promptly during shutdown. Once a
                 dump has started, it is allowed to finish normally.
             on_first_byte: Called once when a hardware-triggered dump begins.
+            gate_edge_time: Returns the host epoch of the latest BCM17 GATE edge
+                (the edge that drives HOST_INT), or None. An edge seen during
+                this wait with no dump within GATE_EDGE_DUMP_TIMEOUT_S ends the
+                wait, so the caller can re-arm a board that is not armed.
 
         Returns:
-            Raw response string containing JSON lines, or empty string on timeout
+            Raw response string containing JSON lines, or empty string on timeout.
+            ``last_hardware_trigger_outcome`` says why: "capture", "timeout",
+            "cancelled", "missed_edge" or "discarded_dump".
         """
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Not connected to radar")
@@ -1560,8 +1576,9 @@ class OPS243Radar:
         if dump_grace is None:
             dump_grace = self.transfer_budget_s(floor=8.0)
 
-        # Clear any stale data
-        self.serial.reset_input_buffer()
+        # No flush here (P7-1): a dump that an edge started during the re-arm
+        # is already in the buffer, and flushing its start marker lost it for
+        # good. Stale CLI and clock replies are discarded below until a marker.
 
         response_lines = []
         idle_bytes = bytearray()
@@ -1570,7 +1587,11 @@ class OPS243Radar:
         deadline = start_time + timeout
         last_data_time = None
         bytes_received = 0
+        discarded_bytes = 0
+        last_discard_time = None
+        outcome = "timeout"
         self.last_hardware_trigger_first_byte_timestamp = None
+        self.last_hardware_trigger_missed_edge_timestamp = None
         recovery_required = bool(getattr(self, "_hardware_trigger_recovery_required", False))
         capture_started = False
         if recovery_required:
@@ -1578,12 +1599,15 @@ class OPS243Radar:
                 "[OPS] Re-arm recovery: discarding trailing output until a fresh capture starts"
             )
 
+        # Bytes already here can be a dump an edge started during the re-arm.
+        pending_at_start = self.serial.in_waiting
         while time.time() < deadline:
             waiting = self.serial.in_waiting
             if waiting:
                 chunk = self.serial.read(waiting)
                 first_byte_timestamp = None
                 if not capture_started:
+                    first_read = not idle_bytes and bytes_received == 0 and not discarded_bytes
                     idle_bytes.extend(chunk)
                     marker_offsets = [idle_bytes.find(marker) for marker in capture_markers]
                     marker_offsets = [offset for offset in marker_offsets if offset >= 0]
@@ -1592,16 +1616,26 @@ class OPS243Radar:
                         # across reads, while discarding unsolicited CLI/clock noise.
                         max_marker = max(len(marker) for marker in capture_markers)
                         if len(idle_bytes) > max_marker:
+                            discarded_bytes += len(idle_bytes) - max_marker
                             del idle_bytes[:-max_marker]
+                        last_discard_time = time.time()
                         time.sleep(0.01)
                         continue
                     capture_start = min(marker_offsets)
+                    discarded_bytes += capture_start
                     chunk = bytes(idle_bytes[capture_start:])
                     idle_bytes.clear()
                     capture_started = True
                     if recovery_required:
                         self._hardware_trigger_recovery_required = False
                         logger.info("[OPS] Re-arm recovery: fresh capture boundary found")
+                    if first_read and pending_at_start:
+                        # Its first byte arrived before this wait: the time below is late.
+                        logger.info(
+                            "[OPS] Hardware trigger: dump was already arriving when the wait "
+                            "began (%d bytes); an edge raced the re-arm",
+                            pending_at_start,
+                        )
                     first_byte_timestamp = time.time()
 
                 response_lines.append(chunk.decode("ascii", errors="ignore"))
@@ -1639,18 +1673,62 @@ class OPS243Radar:
             else:
                 if cancel_event is not None and cancel_event.is_set() and last_data_time is None:
                     logger.info("[OPS] Hardware trigger wait cancelled before capture")
+                    outcome = "cancelled"
                     break
                 # If we've started receiving data, use shorter timeout
                 if last_data_time and (time.time() - last_data_time) > 0.5:
                     full_response = "".join(response_lines)
                     if '"Q"' in full_response:
                         break
+                if not capture_started:
+                    now = time.time()
+                    # The body of a dump whose start was lost: the board is
+                    # idle now, so end the wait and let the caller re-arm.
+                    if (
+                        discarded_bytes >= self.DISCARDED_DUMP_MIN_BYTES
+                        and last_discard_time is not None
+                        and now - last_discard_time > self.DISCARDED_DUMP_QUIET_S
+                    ):
+                        outcome = "discarded_dump"
+                        break
+                    edge_time = gate_edge_time() if gate_edge_time is not None else None
+                    if (
+                        edge_time is not None
+                        and edge_time >= start_time
+                        and now - edge_time > self.GATE_EDGE_DUMP_TIMEOUT_S
+                    ):
+                        self.last_hardware_trigger_missed_edge_timestamp = edge_time
+                        outcome = "missed_edge"
+                        break
                 time.sleep(0.02)
 
         full_response = "".join(response_lines) if capture_started else ""
+        if not capture_started:
+            discarded_bytes += len(idle_bytes)
+        elif outcome == "timeout":
+            outcome = "capture"
+        self.last_hardware_trigger_outcome = outcome
+        self.last_hardware_trigger_discarded_bytes = discarded_bytes
 
-        if not full_response:
-            logger.info("[OPS] Hardware trigger: no data received within %.0fs", timeout)
+        if outcome == "discarded_dump":
+            logger.warning(
+                "[OPS] Hardware trigger: discarded %d bytes with no capture marker "
+                "(a dump lost its start); the board needs a re-arm",
+                discarded_bytes,
+            )
+        elif outcome == "missed_edge":
+            logger.warning(
+                "[OPS] Hardware trigger: GATE edge at %.3f produced no dump within %.1fs; "
+                "the board needs a re-arm",
+                self.last_hardware_trigger_missed_edge_timestamp,
+                self.GATE_EDGE_DUMP_TIMEOUT_S,
+            )
+        elif not full_response:
+            logger.info(
+                "[OPS] Hardware trigger: no data received within %.0fs (%d bytes discarded)",
+                timeout,
+                discarded_bytes,
+            )
         else:
             logger.info(
                 "[OPS] Hardware trigger: %d bytes in %.1fs",
@@ -1746,7 +1824,9 @@ class OPS243Radar:
             )
             return
 
-        self.serial.reset_input_buffer()
+        # No flush here (P7-1): the first PA restarts sampling, so an edge
+        # during the commands above starts a dump whose start marker a flush
+        # would discard. The next wait skips the command replies itself.
         logger.info("[OPS] Rolling buffer re-armed (S#%d)", pre_trigger_segments)
 
     def _drain_rearm_serial(self, quiet_period: float = 0.2):

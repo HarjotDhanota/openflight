@@ -363,6 +363,58 @@ class SoundTrigger(TriggerStrategy):
                 The trigger does NOT configure rolling buffer mode itself.
         """
         super().__init__(pre_trigger_segments=pre_trigger_segments)
+        self._gate_edge_lock = threading.Lock()
+        self._last_gate_edge_time: Optional[float] = None
+
+    def notify_gate_edge(self, timestamp: Optional[float] = None) -> None:
+        """Record a BCM17 GATE edge, the same edge that drives the OPS HOST_INT.
+
+        Called from the GPIO observer, so it only stores the time. The wait uses
+        it to catch a board that saw the edge but was not armed to dump.
+        """
+        edge_time = time.time() if timestamp is None else float(timestamp)
+        with self._gate_edge_lock:
+            self._last_gate_edge_time = edge_time
+
+    def _gate_edge_time(self) -> Optional[float]:
+        with self._gate_edge_lock:
+            return self._last_gate_edge_time
+
+    def _rearm_after_empty_wait(self, radar: "OPS243Radar", capture_timer: OpsCaptureTimer):
+        """Re-arm after a wait that ended without a capture (P7-1).
+
+        After a dump the board sits idle until PA. If that dump was lost (its
+        start flushed, or an edge the board never answered), only a re-arm
+        brings the board back; in Outdoors-test-7 nothing did, for 154 s.
+        """
+        outcome = getattr(radar, "last_hardware_trigger_outcome", None)
+        if outcome == "missed_edge":
+            edge_time = getattr(radar, "last_hardware_trigger_missed_edge_timestamp", None)
+            logger.warning("[TRIGGER] GATE edge produced no OPS dump — re-arming the radar")
+            self._append_diagnostic(
+                accepted=False,
+                reason="edge_without_dump",
+                ops_timing=capture_timer.ops_section(time.monotonic_ns()),
+            )
+            self._diagnostics[-1]["gate_edge_timestamp"] = edge_time
+        elif outcome == "discarded_dump":
+            discarded = getattr(radar, "last_hardware_trigger_discarded_bytes", 0)
+            logger.warning(
+                "[TRIGGER] OPS dump arrived without its start (%d bytes) — re-arming the radar",
+                discarded,
+            )
+            self._append_diagnostic(
+                accepted=False,
+                reason="dump_discarded",
+                response_bytes=discarded,
+                ops_timing=capture_timer.ops_section(time.monotonic_ns()),
+            )
+        else:
+            logger.info("[TRIGGER] Sound trigger timeout — no hardware trigger received; re-arming")
+        try:
+            radar.rearm_rolling_buffer(self.pre_trigger_segments)
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning("[TRIGGER] Re-arm after an empty wait failed", exc_info=True)
 
     @staticmethod
     def _clock_sync_last_read_host_time(clock_sync: dict) -> Optional[float]:
@@ -589,11 +641,15 @@ class SoundTrigger(TriggerStrategy):
             timeout=timeout,
             cancel_event=cancel_event,
             on_first_byte=lambda: capture_timer.first_marker_callback(capture_started_callback),
+            gate_edge_time=self._gate_edge_time,
         )
         capture_timer.response_completed()
 
         if not response:
-            logger.info("[TRIGGER] Sound trigger timeout — no hardware trigger received")
+            if cancel_event is not None and cancel_event.is_set():
+                logger.info("[TRIGGER] Sound trigger wait cancelled")
+                return None
+            self._rearm_after_empty_wait(radar, capture_timer)
             return None
 
         response_len = len(response)

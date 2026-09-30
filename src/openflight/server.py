@@ -5389,8 +5389,34 @@ def start_monitor(
         )
         if iwr6843_runtime is not None:
             iwr6843_runtime.capture_monitor.arm()
+            _attach_gate_edge_listener()
     else:
         monitor.start(shot_callback=on_shot_detected, live_callback=on_live_reading)
+
+
+def _gate_edge_listener():
+    """The running sound trigger's BCM17 edge hook, when there is one."""
+    return getattr(getattr(monitor, "trigger", None), "notify_gate_edge", None)
+
+
+def _attach_gate_edge_listener() -> None:
+    """Let the OPS wait hear each BCM17 edge the IWR monitor sees (P7-1).
+
+    The edge that drives HOST_INT reaches the Pi on BCM17 too; an edge with no
+    dump behind it means the OPS is not armed, and the trigger re-arms it.
+    """
+    listener = _gate_edge_listener()
+    iwr_monitor = getattr(iwr6843_runtime, "capture_monitor", None)
+    if listener is not None and iwr_monitor is not None:
+        iwr_monitor.add_trigger_observer(listener)
+
+
+def _detach_gate_edge_listener() -> None:
+    """Stop feeding BCM17 edges to a sound trigger that is being stopped."""
+    listener = _gate_edge_listener()
+    iwr_monitor = getattr(iwr6843_runtime, "capture_monitor", None)
+    if listener is not None and iwr_monitor is not None:
+        iwr_monitor.remove_trigger_observer(listener)
 
 
 def _fire_cloud_push(session_logger):
@@ -5479,6 +5505,7 @@ def stop_monitor():
         _fire_cloud_push(session_logger)
 
     if monitor:
+        _detach_gate_edge_listener()
         monitor.stop()
         monitor.disconnect()
         monitor = None

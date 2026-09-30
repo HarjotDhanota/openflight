@@ -390,3 +390,28 @@ def test_capture_monitor_force_closes_serial_when_dump_never_finishes(tmp_path, 
 
     assert radar.shutdown_events == ["close"]
     assert radar.closed
+
+
+def test_trigger_observers_can_be_added_and_removed_after_start(tmp_path):
+    """P7-1: the OPS trigger listens to BCM17 through the IWR monitor's edges."""
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+    observed = []
+    monitor = IWR6843CaptureMonitor(
+        config_path=config,
+        output_dir=tmp_path / "dumps",
+        radar=FakeRadar(_raw_dump()),
+        button_factory=FakeButton,
+    )
+    monitor.start()
+
+    monitor.add_trigger_observer(observed.append)
+    monitor.add_trigger_observer(observed.append)
+    assert monitor.notify_trigger(10.0)
+    monitor.remove_trigger_observer(observed.append)
+    monitor.remove_trigger_observer(observed.append)
+    assert monitor.capture_for_shot(10.0, timeout_s=1.0) is not None
+    assert monitor.notify_trigger(20.0)
+
+    assert observed == [10.0]
+    monitor.stop()
