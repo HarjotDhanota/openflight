@@ -1185,3 +1185,17 @@ def test_ticking_1280x800_again_before_its_photo_keeps_the_mode_open(tmp_path):
     assert state.current.rung_id == "full-200"
     assert state.to_dict()["pending_photo"] is None
     assert state.to_dict()["photo_target"] == {"capture": "c4", "rung_id": "full-300"}
+
+
+def test_a_ladder_that_starts_at_its_first_ticked_setting_has_not_moved_on(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    assert state.moved_on is False
+    state.select(["full-150", "full-100"])
+    assert state.current.rung_id == "full-150"
+    assert state.moved_on is False
+    state.begin("full-150", 6.0, {"ok": True})
+    assert state.moved_on is False  # as before: the first setting running is not moving on
+    for i in range(5):
+        state.record_swing(_verdict("green", f"c{i}"))
+    assert state.current.rung_id == "full-100"
+    assert state.moved_on is True

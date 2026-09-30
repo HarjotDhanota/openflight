@@ -472,12 +472,20 @@ class LadderState:
         return None
 
     @property
-    def started(self) -> bool:
-        """Whether any setting has run or been judged; unticking one does not count."""
+    def moved_on(self) -> bool:
+        """Whether the current setting comes after one the ladder ran or judged.
+
+        Settings the tester unticked do not count: a ladder that starts at its
+        first ticked setting has not moved on.
+        """
+        current = self.current
+        if current is None:
+            return False
         return any(
-            entry["status"] != "pending"
-            and not (entry["status"] == "skipped" and entry["reason"] == NOT_SELECTED)
-            for entry in self._data["rungs"].values()
+            not (entry["status"] == "skipped" and entry["reason"] == NOT_SELECTED)
+            for entry in (
+                self._data["rungs"][rung.rung_id] for rung in LADDER[: LADDER.index(current)]
+            )
         )
 
     def select(self, rung_ids) -> None:

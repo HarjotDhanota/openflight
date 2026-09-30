@@ -2683,6 +2683,183 @@ class TestTheLadderHoldsUp:
         assert (tmp_path / "20260922-name" / "comparator" / saved).is_file()
 
 
+FULL_RUNGS = ["full-300", "full-200", "full-150", "full-100", "full-75", "full-50", "full-30"]
+HALF_RUNGS = ["half-300", "half-150", "half-75"]
+
+
+class TestTheTesterChoosesTheSettings:
+    body = {"tester_id": "20260922-name", "arm_id": "arm5", "environment": "indoors"}
+
+    def _client(self, tmp_path, monkeypatch, arms=("arm5", "arm6"), **screens):
+        for arm in arms:
+            ts.write_arm_state(
+                tmp_path,
+                ts.TesterParameters("20260922-name", arm, self.body["environment"]),
+                gain=3.0,
+                gain_exposure_us=300,
+                **screens.get(arm, {}),
+            )
+        monkeypatch.setattr(ts.study_ladder, "KioskClient", _LitKiosk)
+        monkeypatch.setattr(ts, "KILL_GRACE_S", 0.05, raising=False)
+        monkeypatch.setattr(
+            ts.os,
+            "killpg",
+            lambda _pid, _signal: (_ for _ in ()).throw(OSError("test process has no real group")),
+            raising=False,
+        )
+        runners = []
+        monkeypatch.setattr(
+            ts.study_ladder.LadderRunner, "start", lambda runner: runners.append(runner)
+        )
+        manager = ts.TesterJobManager(popen=_Forever)
+        app = eligible_app(sessions_root=tmp_path, rig_geometry=RIG, manager=manager)
+        return app.test_client(), manager, runners
+
+    def _stop(self, client, manager):
+        client.post("/api/tester/stop")
+        deadline = time.monotonic() + 2
+        while manager.status()["state"] == "running" and time.monotonic() < deadline:
+            time.sleep(0.01)
+        manager._state["state"] = "stopped"  # pylint: disable=protected-access
+
+    @pytest.mark.parametrize(
+        "rungs, message",
+        [([], "choose at least one setting"), (["full-300", "full-1"], "full-1"), ("all", "list")],
+    )
+    def test_start_refuses_an_empty_or_unknown_choice(self, tmp_path, monkeypatch, rungs, message):
+        client, manager, runners = self._client(tmp_path, monkeypatch)
+
+        response = client.post("/api/tester/ladder/start", json={**self.body, "rungs": rungs})
+
+        assert response.status_code == 400
+        assert message in response.get_json()["error"]
+        assert manager.status()["state"] == "idle" and runners == []
+        assert not (tmp_path / "20260922-name" / "ladder.json").exists()
+
+    def test_only_640x400_settings_start_in_arm6_without_a_1280x800_screen(
+        self, tmp_path, monkeypatch
+    ):
+        client, manager, runners = self._client(tmp_path, monkeypatch, arms=("arm6",))
+        try:
+            response = client.post(
+                "/api/tester/ladder/start", json={**self.body, "rungs": HALF_RUNGS}
+            )
+            data = response.get_json()
+            assert response.status_code == 200, data
+            assert "arm6" in data["run_dir"]
+            assert runners[0].mode == "arm6"
+            assert data["ladder"]["current"] == "half-300"
+            assert data["ladder"]["selected_rungs"] == HALF_RUNGS
+            for rung_id in FULL_RUNGS:
+                assert data["ladder"]["rungs"][rung_id]["reason"] == ts.study_ladder.NOT_SELECTED
+            assert data["pending_photo"] is None
+        finally:
+            self._stop(client, manager)
+            manager.cancel()
+
+    def test_the_light_step_is_required_only_for_the_ticked_modes(self, tmp_path, monkeypatch):
+        client, manager, _runners = self._client(tmp_path, monkeypatch, arms=("arm5",))
+        try:
+            both = client.post("/api/tester/ladder/start", json=self.body)
+            assert both.status_code == 409
+            assert "gain step" in both.get_json()["error"]
+            half = client.post("/api/tester/ladder/start", json={**self.body, "rungs": ["half-75"]})
+            assert half.status_code == 409
+            assert "640×400" in half.get_json()["error"]
+            full = client.post(
+                "/api/tester/ladder/start", json={**self.body, "rungs": ["full-150"]}
+            )
+            assert full.status_code == 200, full.get_json()
+            assert "arm5" in full.get_json()["run_dir"]
+        finally:
+            self._stop(client, manager)
+            manager.cancel()
+
+    def test_a_stale_screen_blocks_only_a_mode_with_a_ticked_setting(self, tmp_path, monkeypatch):
+        self.body = {**self.body, "environment": "outdoors"}
+        old = (datetime.now(timezone.utc) - timedelta(minutes=40)).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
+        client, manager, _runners = self._client(
+            tmp_path,
+            monkeypatch,
+            arm5={"gain_screened_at": now, "gain_environment": "outdoors"},
+            arm6={"gain_screened_at": old, "gain_environment": "outdoors"},
+        )
+        try:
+            both = client.post("/api/tester/ladder/start", json=self.body)
+            assert both.status_code == 409 and both.get_json()["gain_screen_stale"] is True
+            full = client.post("/api/tester/ladder/start", json={**self.body, "rungs": FULL_RUNGS})
+            assert full.status_code == 200, full.get_json()
+        finally:
+            self._stop(client, manager)
+            manager.cancel()
+
+    def test_no_640x400_settings_end_the_ladder_without_a_mode_restart(self, tmp_path, monkeypatch):
+        client, manager, runners = self._client(tmp_path, monkeypatch)
+        try:
+            started = client.post(
+                "/api/tester/ladder/start", json={**self.body, "rungs": ["full-300"]}
+            )
+            assert started.status_code == 200
+            runner = runners[0]
+            runner.state.begin("full-300", 3.0, {"ok": False, "reason": "too dark"})
+            runner._on_mode_done("arm5")  # pylint: disable=protected-access
+
+            assert runner.stopped
+            assert not any(t.name == "ladder-next-mode" for t in threading.enumerate())
+            status = client.get("/api/tester/ladder", query_string=self.body).get_json()
+            assert status["ladder"]["current"] is None
+            assert status["run_dir"] == started.get_json()["run_dir"]
+        finally:
+            self._stop(client, manager)
+            manager.cancel()
+
+    def test_resuming_applies_the_new_choice_to_settings_not_yet_run(self, tmp_path, monkeypatch):
+        client, manager, runners = self._client(tmp_path, monkeypatch)
+        try:
+            client.post("/api/tester/ladder/start", json={**self.body, "rungs": ["full-300"]})
+            runners[0].state.begin("full-300", 3.0, {"ok": True})
+            walking = client.post(
+                "/api/tester/ladder/start", json={**self.body, "rungs": ["half-150"]}
+            )
+            assert walking.status_code == 200
+            # a walking ladder shows where it is and ignores the choice
+            assert walking.get_json()["ladder"]["selected_rungs"] == ["full-300"]
+            self._stop(client, manager)
+
+            resumed = client.post(
+                "/api/tester/ladder/start", json={**self.body, "rungs": ["full-200", "half-150"]}
+            )
+
+            rungs = resumed.get_json()["ladder"]["rungs"]
+            assert resumed.status_code == 200
+            assert rungs["full-300"]["status"] == "active"  # never changed
+            assert rungs["full-200"]["status"] == "pending"
+            assert rungs["half-150"]["status"] == "pending"
+            assert rungs["half-300"]["reason"] == ts.study_ladder.NOT_SELECTED
+            assert "arm5" in resumed.get_json()["run_dir"]
+        finally:
+            self._stop(client, manager)
+            manager.cancel()
+
+    def test_a_start_without_a_choice_makes_every_setting_not_yet_run_eligible(
+        self, tmp_path, monkeypatch
+    ):
+        state = ts.study_ladder.LadderState(tmp_path / "20260922-name" / "ladder.json")
+        state.select(HALF_RUNGS)
+        client, manager, runners = self._client(tmp_path, monkeypatch)
+        try:
+            response = client.post("/api/tester/ladder/start", json=self.body)
+            data = response.get_json()
+            assert response.status_code == 200
+            assert data["ladder"]["current"] == "full-300"
+            assert all(r["status"] == "pending" for r in data["ladder"]["rungs"].values())
+            assert "arm5" in data["run_dir"] and runners[0].mode == "arm5"
+        finally:
+            self._stop(client, manager)
+            manager.cancel()
+
+
 class TestAttemptLedgerRoutes:
     def _client(self, tmp_path):
         run = tmp_path / "tester" / "arm1" / "paired" / "run-01"
