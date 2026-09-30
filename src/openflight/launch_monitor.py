@@ -306,6 +306,9 @@ class Shot:
     # Trigger evidence a tester shot lacked but was kept without, as
     # [{"id", "reason"}]; None when nothing was missing (P7-3).
     missing_trigger_evidence: Optional[list] = None
+    # What blocked or mismatched trigger evidence said about a tester shot the
+    # kiosk kept anyway (D15), as [{"id", "reason"}]; None when it said nothing.
+    trigger_evidence_notes: Optional[list] = None
     server_callback_started_monotonic_ns: Optional[int] = field(
         default=None,
         repr=False,
@@ -459,6 +462,7 @@ class Shot:
             "camera_replay": dict(self.camera_replay) if self.camera_replay else None,
             "stage_timing": deepcopy(self.stage_timing),
             "missing_trigger_evidence": deepcopy(self.missing_trigger_evidence),
+            "trigger_evidence_notes": deepcopy(self.trigger_evidence_notes),
             "camera_fusion_context": (
                 dict(self.camera_fusion_context) if self.camera_fusion_context else None
             ),

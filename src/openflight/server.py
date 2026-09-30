@@ -2146,6 +2146,44 @@ def _tester_trigger_evidence_problem(evidence: object) -> str | None:
     return None
 
 
+# Readiness blockers that stay hard stops under D15: a sensor that is not
+# connected or running, and a rig that moved (the LIS3DH placement guard).
+_HARD_STOP_BLOCKERS = frozenset({"ops", "camera", "iwr6843", "lis3dh"})
+
+
+def _tester_trigger_hard_stop(evidence: dict) -> str | None:
+    """Why trigger evidence must still refuse the shot (D15), or None to keep it.
+
+    Only an unconnected sensor, a moved rig, or evidence from another session
+    refuses; everything else the evidence says becomes a note on the shot.
+    """
+    for blocker in evidence.get("blockers") or []:
+        if isinstance(blocker, dict) and blocker.get("id") in _HARD_STOP_BLOCKERS:
+            return f"{blocker.get('id')}: {blocker.get('reason')}"
+    runtime = (evidence.get("observations") or {}).get("runtime") or {}
+    active_logger = get_session_logger()
+    active_uuid = active_logger.active_session_uuid if active_logger is not None else None
+    recorded_uuid = runtime.get("session_uuid")
+    if recorded_uuid and active_uuid and recorded_uuid != active_uuid:
+        return "trigger readiness belongs to a different logging session"
+    active_run_dir = (
+        str(active_logger.log_dir.expanduser().resolve()) if active_logger is not None else None
+    )
+    recorded_run_dir = runtime.get("run_dir")
+    if recorded_run_dir and active_run_dir and recorded_run_dir != active_run_dir:
+        return "trigger readiness belongs to a different runtime log directory"
+    return None
+
+
+def _tester_trigger_evidence_notes(evidence: dict, problem: str) -> list[dict]:
+    """What a kept shot's trigger evidence said against the setup, as notes (P8-7)."""
+    notes = [{"id": "trigger_readiness", "reason": problem}]
+    for blocker in evidence.get("blockers") or []:
+        if isinstance(blocker, dict):
+            notes.append({"id": str(blocker.get("id")), "reason": str(blocker.get("reason"))})
+    return notes
+
+
 @app.route("/api/camera/study/controls", methods=["POST"])
 def study_camera_controls():
     """Set exposure and gain live, without restarting the rolling buffer."""
@@ -5224,6 +5262,16 @@ def _handle_shot_detected(shot: Shot) -> None:
             logger.warning(
                 "[SERVER] Tester shot kept without camera trigger evidence (%.1f mph)",
                 shot.ball_speed_mph,
+            )
+        elif evidence_problem is not None and _tester_trigger_hard_stop(readiness) is None:
+            # D15: measure and label. A blocked or mismatched setup is noted on
+            # the shot; only a hard stop below still drops it (P8-7).
+            shot.trigger_evidence_notes = _tester_trigger_evidence_notes(
+                readiness, evidence_problem
+            )
+            logger.warning(
+                "[SERVER] Tester shot kept with trigger readiness notes: %s",
+                shot.trigger_evidence_notes,
             )
         elif evidence_problem is not None:
             evidence = readiness or {

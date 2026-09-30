@@ -538,3 +538,27 @@ def test_shot_kept_without_trigger_evidence_is_reviewed_as_a_flagged_shot(tmp_pa
         "Shot kept without trigger evidence: camera_trigger "
         "(no matching trigger readiness evidence)" in report_markdown(review)
     )
+
+
+def test_a_shot_kept_with_blocked_trigger_readiness_carries_its_notes(tmp_path):
+    """D15 (P8-7): the kiosk keeps the shot; the review names what readiness said."""
+    root = _tester_tree(tmp_path)
+    session = next((root / "t1" / "arm5" / "paired" / "run-01").glob("session_*.jsonl"))
+    notes = [
+        {"id": "trigger_readiness", "reason": "trigger readiness was blocked"},
+        {"id": "geometry", "reason": "setup fingerprint differs"},
+    ]
+    with session.open("a", encoding="utf-8") as handle:
+        event = {
+            "type": "shot_detected",
+            "shot_number": 3,
+            "ball_speed_mph": 91.2,
+            "trigger_evidence_notes": notes,
+        }
+        handle.write(json.dumps(event) + "\n")
+
+    review = build_session_review(root, "t1", analysis={})
+
+    attempt = next(a for a in review["attempts"] if a["attempt_id"] == "session-one:3")
+    assert attempt["trigger_evidence_notes"] == notes
+    assert "Trigger readiness note: geometry: setup fingerprint differs" in report_markdown(review)

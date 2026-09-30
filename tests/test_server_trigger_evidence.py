@@ -3,6 +3,8 @@
 from datetime import datetime
 from types import SimpleNamespace
 
+import pytest
+
 from openflight import server
 from openflight.launch_monitor import Shot
 from openflight.rolling_buffer.trigger import SoundTrigger
@@ -84,9 +86,61 @@ def test_ops_shot_without_camera_trigger_evidence_is_kept_and_flagged(monkeypatc
     assert shot.to_dict()["missing_trigger_evidence"] == shot.missing_trigger_evidence
 
 
-def test_blocked_trigger_readiness_still_rejects_the_shot(monkeypatch):
-    """Evidence that says the setup was blocked is the gate working, not missing."""
-    readiness = {"schema_version": 1, "required": True, "ready": False, "blockers": []}
+def test_blocked_trigger_readiness_keeps_the_shot_with_a_note(monkeypatch):
+    """D15: a blocked setup is labelled on the shot, not a reason to drop it (P8-7)."""
+    readiness = {
+        "schema_version": 1,
+        "required": True,
+        "ready": False,
+        "blockers": [{"id": "geometry", "reason": "setup fingerprint differs"}],
+    }
+    shot, finished, errors = _drive_tester_shot(monkeypatch, readiness)
+
+    assert finished == [shot]
+    assert errors == []
+    reasons = [note["reason"] for note in shot.trigger_evidence_notes]
+    assert "trigger readiness was blocked" in reasons
+    assert any("setup fingerprint differs" in reason for reason in reasons)
+    assert shot.to_dict()["trigger_evidence_notes"] == shot.trigger_evidence_notes
+
+
+def test_a_wrong_setup_hash_is_a_note_not_a_refusal(monkeypatch):
+    monkeypatch.setattr(server, "tester_config_hash", "a" * 64)
+    readiness = {"schema_version": 1, "required": True, "ready": True, "config_hash": "b" * 64}
+    shot, finished, _errors = _drive_tester_shot(monkeypatch, readiness)
+
+    assert finished == [shot]
+    assert any("setup hash" in note["reason"] for note in shot.trigger_evidence_notes)
+
+
+@pytest.mark.parametrize(
+    "blocker",
+    [
+        {"id": "ops", "reason": "OPS capture transport is not running"},
+        {"id": "camera", "reason": "camera is not running"},
+        {"id": "iwr6843", "reason": "IWR6843 serial link is unavailable"},
+        {"id": "lis3dh", "reason": "placement moved 6 degrees"},
+    ],
+)
+def test_an_unconnected_sensor_or_a_moved_rig_still_refuses(monkeypatch, blocker):
+    """The hard stops D15 keeps: a sensor that is not connected, a rig that moved."""
+    readiness = {"schema_version": 1, "required": True, "ready": False, "blockers": [blocker]}
+    _shot, finished, errors = _drive_tester_shot(monkeypatch, readiness)
+
+    assert finished == []
+    assert len(errors) == 1
+
+
+def test_a_shot_from_another_session_still_refuses(monkeypatch):
+    active = SimpleNamespace(active_session_uuid="session-now", log_dir=server.Path("/tmp/run-now"))
+    monkeypatch.setattr(server, "get_session_logger", lambda: active)
+    readiness = {
+        "schema_version": 1,
+        "required": True,
+        "ready": True,
+        "config_hash": server.tester_config_hash,
+        "observations": {"runtime": {"session_uuid": "session-before", "run_dir": "/x"}},
+    }
     _shot, finished, errors = _drive_tester_shot(monkeypatch, readiness)
 
     assert finished == []
