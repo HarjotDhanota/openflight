@@ -410,6 +410,25 @@
       .ladder-choice label.off {
         opacity: 0.45;
       }
+      .ladder-jump {
+        display: grid;
+        gap: 6px;
+        margin: 8px 0;
+      }
+      .ladder-jump div {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.9rem;
+      }
+      .ladder-jump button {
+        padding: 6px 10px;
+      }
+      .ladder-jump button.now {
+        border-color: var(--accent);
+        font-weight: 700;
+      }
       .setup-confirm {
         display: grid;
         grid-template-columns: auto minmax(0, 1fr);
@@ -548,6 +567,9 @@
             <div class="ladder-choice" id="ladder-choice"></div>
             <p class="note" id="ladder-choice-hint" hidden>The ladder is running: press Stop to change the settings.</p>
             <button type="button" id="step-ladder">C. Start the exposure ladder</button>
+            <p class="note">Or press a setting to switch to it now, ticked or not. The ticked order continues after it.</p>
+            <div class="ladder-jump" id="ladder-jump"></div>
+            <p class="problem" id="ladder-jump-error" role="alert" hidden></p>
             <div class="light" id="ladder-panel"></div>
             <div id="face-guide" hidden style="position: relative; width: 640px; max-width: 100%">
               <img id="face-preview" alt="Camera preview" style="width: 100%; display: block" />
@@ -715,6 +737,8 @@
       let photoError = null;
       let ladderRequestVersion = 0;
       let ladderRequestRunning = false;
+      let ladderRungs = {}; // the last ladder state's settings, for the setting buttons
+      let ladderNow = null;
       let statusRequestRunning = false;
       let statusRequestVersion = 0;
       let liveRequestRunning = false;
@@ -2245,6 +2269,56 @@
         return rungs.length ? { ...suiteBody('arm5'), rungs } : null;
       }
 
+      // P7-13 (D12): a button per setting switches to it now, ticked or not, and can
+      // start the ladder on it. The ticks still decide the order that follows.
+      function buildLadderJump() {
+        for (const [size, prefix, exposures] of LADDER_MODES) {
+          const row = document.createElement('div');
+          row.append(`${size}:`);
+          for (const us of exposures) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.dataset.rung = `${prefix}-${us}`;
+            button.textContent = String(us);
+            button.setAttribute('aria-label', `Switch to ${size} at ${us} µs`);
+            button.addEventListener('click', () => jumpTo(button.dataset.rung));
+            row.append(button);
+          }
+          row.append('µs');
+          el('ladder-jump').append(row);
+        }
+      }
+      buildLadderJump();
+      function renderLadderJump() {
+        const blocked = photoActionPending || !setupReady() || !teeRangeComplete();
+        for (const button of el('ladder-jump').querySelectorAll('button')) {
+          const rung = ladderRungs[button.dataset.rung];
+          // a setting with its good swings can't be pressed
+          const done = rung?.status === 'done';
+          button.textContent = `${button.dataset.rung.split('-')[1]}${done ? ' done' : ''}`;
+          button.classList.toggle('now', button.dataset.rung === ladderNow && rung?.status === 'active');
+          button.disabled = blocked || done;
+        }
+      }
+      async function jumpTo(rungId) {
+        if (photoActionPending) return;
+        const ticked = tickedRungs();
+        const body = { ...suiteBody('arm5'), rungs: ticked.length ? ticked : [rungId], rung_id: rungId };
+        el('ladder-jump-error').hidden = true;
+        try {
+          if (!(await requireSetupEligibility())) return;
+          liveShown(false); // the kiosk takes the camera
+          const version = ++ladderRequestVersion;
+          const state = await post('/api/tester/ladder/jump', body);
+          if (version === ladderRequestVersion) renderLadder(state);
+          clearInterval(ladderTimer);
+          ladderTimer = setInterval(ladderTick, 1500);
+        } catch (e) {
+          el('ladder-jump-error').textContent = e.message;
+          el('ladder-jump-error').hidden = false;
+        }
+      }
+
       function renderLadder(s) {
         const l = s.ladder,
           v = s.last_verdict;
@@ -2259,10 +2333,13 @@
           return;
         }
         renderLadderChoice(l.rungs, s.stopped === false);
+        ladderRungs = l.rungs;
+        ladderNow = l.current;
         const rows = Object.entries(l.rungs)
           .map(([id, r]) => {
             const ok = r.swings.filter((w) => w.color !== 'red').length;
-            return `<span>${id}: <b>${r.status}</b> ${ok}/5 usable pictures${r.reason ? ` — ${r.reason}` : ''}</span>`;
+            const warning = r.light_warning ? ` — runs anyway: ${r.light_warning}` : '';
+            return `<span>${id}: <b>${r.status}</b> ${ok}/5 usable pictures${r.reason ? ` — ${r.reason}` : ''}${warning}</span>`;
           })
           .join('');
         const last = v
@@ -2307,6 +2384,7 @@
       }
       function renderPhotoHandoff() {
         el('step-ladder').disabled = photoActionPending || !setupReady() || !teeRangeComplete();
+        renderLadderJump();
         el('photo-handoff').hidden = !photoTarget;
         if (!photoTarget) return;
         el('photo-message').textContent = photoStopped

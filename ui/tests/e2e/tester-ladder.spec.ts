@@ -725,7 +725,161 @@ test('a refused start shows the server message', async ({ page }) => {
   await expect(page.locator('#ladder-panel')).toHaveText('choose at least one setting');
 });
 
+// P7-13 (D12): "let me switch between them freely. this is separate from the checkbox system."
+const settingButton = (page: Page, size: string, us: number) =>
+  page.getByRole('button', { name: `Switch to ${size} at ${us} µs` });
+
+function jumpState(
+  statuses: Record<string, [string, string | null]>,
+  current: string | null,
+  stopped: boolean,
+  extra: Record<string, Record<string, unknown>> = {}
+) {
+  const base = choiceState(statuses, stopped) as { ladder: { rungs: Record<string, object> } };
+  const rungs = Object.fromEntries(
+    Object.entries(base.ladder.rungs).map(([id, rung]) => [id, { ...rung, ...(extra[id] || {}) }])
+  );
+  return { ...base, ladder: { ...base.ladder, rungs, current } };
+}
+
+test('pressing a setting on a running ladder switches to it and sends the ticked order', async ({ page }) => {
+  let state = jumpState({ 'full-300': ['active', null] }, 'full-300', false);
+  const jumpBodies: Record<string, unknown>[] = [];
+  await mockBaseApis(page, () => state);
+  await page.route('**/api/tester/ladder/jump', async (route) => {
+    jumpBodies.push(route.request().postDataJSON());
+    state = jumpState({ 'full-300': ['pending', null], 'half-150': ['active', null] }, 'half-150', false);
+    await fulfillJson(route, state);
+  });
+  await page.goto('/tester.html');
+
+  await expect(page.locator('#ladder-jump button')).toHaveCount(14);
+  await expect(settingButton(page, '1280×800', 300)).toHaveClass(/now/);
+  await settingButton(page, '640×400', 150).tap();
+
+  await expect.poll(() => jumpBodies.length).toBe(1);
+  expect(jumpBodies[0]).toEqual({
+    tester_id: '20260922-name',
+    arm_id: 'arm5',
+    environment: 'indoors',
+    rungs: ALL_RUNGS,
+    rung_id: 'half-150',
+  });
+  await expect(settingButton(page, '640×400', 150)).toHaveClass(/now/);
+  await expect(settingButton(page, '1280×800', 300)).not.toHaveClass(/now/);
+  await expect(page.locator('#ladder-panel')).toContainText('now: half-150');
+});
+
+test('a setting button starts a stopped ladder on that setting, ticked or not', async ({ page }) => {
+  await mockBaseApis(page, () => jumpState({}, 'full-300', true));
+  const jumpBodies: Record<string, unknown>[] = [];
+  let startRequests = 0;
+  await page.route('**/api/tester/ladder/start', async (route) => {
+    startRequests += 1;
+    await fulfillJson(route, jumpState({}, 'full-300', false));
+  });
+  await page.route('**/api/tester/ladder/jump', async (route) => {
+    jumpBodies.push(route.request().postDataJSON());
+    await fulfillJson(route, jumpState({ 'full-50': ['active', null] }, 'full-50', false));
+  });
+  await page.goto('/tester.html');
+  await setting(page, '1280×800', 50).uncheck();
+  await setting(page, '640×400', 75).uncheck();
+
+  await settingButton(page, '1280×800', 50).tap();
+
+  await expect.poll(() => jumpBodies.length).toBe(1);
+  expect(jumpBodies[0]).toEqual({
+    tester_id: '20260922-name',
+    arm_id: 'arm5',
+    environment: 'indoors',
+    rungs: ALL_RUNGS.filter((id) => id !== 'full-50' && id !== 'half-75'),
+    rung_id: 'full-50',
+  });
+  expect(startRequests).toBe(0);
+});
+
+test('with nothing ticked a pressed setting is sent as the only one', async ({ page }) => {
+  await mockBaseApis(page, () => jumpState({}, 'full-300', true));
+  const jumpBodies: Record<string, unknown>[] = [];
+  await page.route('**/api/tester/ladder/jump', async (route) => {
+    jumpBodies.push(route.request().postDataJSON());
+    await fulfillJson(route, jumpState({ 'half-30': ['active', null] }, 'half-30', false));
+  });
+  await page.goto('/tester.html');
+  for (const box of await page.locator('#ladder-choice input').all()) await box.uncheck();
+
+  await settingButton(page, '640×400', 30).tap();
+
+  await expect.poll(() => jumpBodies.length).toBe(1);
+  expect(jumpBodies[0]).toMatchObject({ rungs: ['half-30'], rung_id: 'half-30' });
+});
+
+test('a setting with its good swings shows done and cannot be pressed; failed ones can', async ({ page }) => {
+  await mockBaseApis(page, () =>
+    jumpState(
+      {
+        'full-300': ['done', null],
+        'full-200': ['failed', '3 red swings'],
+        'full-150': ['skipped', 'too bright for the ball: 40% of it is clipped'],
+        'full-100': ['active', null],
+      },
+      'full-100',
+      false
+    )
+  );
+  await page.goto('/tester.html');
+
+  await expect(settingButton(page, '1280×800', 300)).toBeDisabled();
+  await expect(settingButton(page, '1280×800', 300)).toHaveText('300 done');
+  await expect(settingButton(page, '1280×800', 200)).toBeEnabled();
+  await expect(settingButton(page, '1280×800', 150)).toBeEnabled();
+  await expect(settingButton(page, '640×400', 300)).toBeEnabled();
+});
+
+test('a refused press shows why and keeps saying so while the ladder polls', async ({ page }) => {
+  await mockBaseApis(page, () => jumpState({ 'full-300': ['active', null] }, 'full-300', false));
+  await page.route('**/api/tester/ladder/jump', (route) =>
+    fulfillJson(route, { error: 'the ladder is changing camera mode; press the setting again in a moment' }, 409)
+  );
+  await page.goto('/tester.html');
+
+  await settingButton(page, '640×400', 300).tap();
+
+  const error = page.locator('#ladder-jump-error');
+  await expect(error).toHaveText('the ladder is changing camera mode; press the setting again in a moment');
+  await page.waitForTimeout(1700);
+  await expect(error).toBeVisible();
+});
+
+test("a pressed setting's bad light is shown as a warning", async ({ page }) => {
+  await mockBaseApis(page, () =>
+    jumpState({ 'full-10': ['active', null] }, 'full-10', false, {
+      'full-10': { light_warning: 'too dark for the ball: 5 DN above black' },
+    })
+  );
+  await page.goto('/tester.html');
+
+  await expect(page.locator('#ladder-panel')).toContainText(
+    'full-10: active 0/5 usable pictures — runs anyway: too dark for the ball: 5 DN above black'
+  );
+});
+
 for (const viewport of KIOSK_VIEWPORTS) {
+  test(`the setting buttons fit at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await mockBaseApis(page, () => jumpState({ 'full-300': ['done', null] }, 'full-200', false));
+    await page.goto('/tester.html');
+
+    const buttons = page.locator('#ladder-jump');
+    await buttons.scrollIntoViewIfNeeded();
+    await expect(settingButton(page, '1280×800', 300)).toBeDisabled();
+    const outside = await buttons
+      .locator('button')
+      .evaluateAll((items) => items.some((item) => item.getBoundingClientRect().right > window.innerWidth));
+    expect(outside).toBe(false);
+  });
+
   test(`photo handoff controls fit at ${viewport.width}x${viewport.height}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await mockBaseApis(page, () => ladderState({ capture: 'camera-final-layout', rung_id: 'full-300' }));
