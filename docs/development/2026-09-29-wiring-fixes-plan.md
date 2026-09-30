@@ -2,6 +2,29 @@
 
 Date: 29 September 2026. Branch: `feat/tester-capture-pilot`. It implements `2026-09-29-wiring-fixes-spec.md`. All seven decisions (D1-D7) are approved as recommended.
 
+## Status (29 Sept, evening)
+
+55 of the 59 items are done on `feat/tester-capture-pilot`: Phase 1 (pushed as e3308529) and Phases 2-5 (merged locally in e59dcfac). Each phase was built test first on its own branch, reviewed, merged, and checked with the full suite against the Windows baseline, the UI unit tests and the tester page tests.
+
+**Left, each waiting on something outside the code:**
+
+| Item | Waits for |
+|---|---|
+| F3 (range spaces and the −2 ms constant) | The Outdoors-test-5 swings, scored as D2 says. The contact-time function it needs (F7) is built. |
+| F8's horizontal reference | An alignment-stick session (D3). Until then radar horizontal and the IWR path are marked `azimuth_uncalibrated` and face angle uses camera paths only. |
+| F11's phase-centre offset | Which way the IWR board is turned in the v3 enclosure. The offset is ±8 mm; the rig file doesn't record the rotation, so it is marked unknown. |
+| C8's roll correction | A phone-level check against the LIS3DH roll (setup spec B2). The sign is derived and pinned by a test, but roll stays unapplied in both camera paths until the check. |
+
+**Where the build departs from this plan or the spec, and why:**
+- C2: focal length scales by the camera's binning, not by the mode's width, because 320×200 is a crop of the 640×400 mode. The approved-rig list keys on the parameter fingerprint, since the file's bytes change with line endings.
+- C6: the legacy DTL trace estimator keeps its frame-size scale; its search window cannot fit a 200-row frame otherwise. The live chained-delivery windows use the focal scale.
+- C7: the static radar configuration sees only to about 2.9 m, so a net further out is not measured and the 4.6 m default is used and flagged.
+- C12: 320×200 is refused for measurement rather than corrected, since nothing records the strip offset's sign.
+- S8: the interim leak term uses the RMS cross term (√2·|c|·|ℓ|). The spec's 2·|c|·|ℓ| rejected the door fixture, whose tape-confirmed range must stay accepted; the door keeps about 17 % margin.
+- T8: old failures are hidden by the transition that set them, not deleted, so the only copy of a camera error is kept.
+- T11: the admission is written before the job starts, because the kiosk creates the run folder itself; a start refused late removes the folder.
+- S7, S8 and S11 change the camera and IWR estimator hashes, so any stored qualification pinned to the old ones is invalid. None exists in the field yet.
+
 ## How the work runs
 
 - **One item at a time, test first:**
@@ -111,10 +134,10 @@ T4, T5, T8-T14 (T14 with D5), S7, S8 (unless complex radar subtraction lands fir
 | Phase | Effort | Blocked on |
 |---|---|---|
 | 1 | done 29 Sept | — |
-| 2 | half a day | nothing |
-| 3 | about a day, plus the replay | the field session's swings, for step 4 |
-| 4 | half a day | nothing |
-| 5 | half a day | nothing |
+| 2 | done 29 Sept | — |
+| 3 | done 29 Sept except F3 | the Outdoors-test-5 swings, for F3 |
+| 4 | done 29 Sept | — |
+| 5 | done 29 Sept | — |
 
 ## Risks
 
