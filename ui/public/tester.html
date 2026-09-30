@@ -435,8 +435,127 @@
         }
       }
     </style>
+    <style id="ready-light-style">
+      /* The ready light (P7-14): pinned to the top while the ladder runs. It takes
+         no pointer events, so it never blocks a tap; with no kiosk running it
+         shrinks to a strip, leaving the setup view and its placement box clear. */
+      .ready-light {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin: -24px -16px 16px;
+        padding: 10px 16px;
+        min-height: 88px;
+        overflow: hidden;
+        pointer-events: none;
+        font-weight: 800;
+        line-height: 1.15;
+        background: #5b6270;
+        color: #ffffff;
+      }
+      .ready-light[data-state='green'] {
+        background: #1b8a3a;
+        color: #ffffff;
+      }
+      .ready-light[data-state='amber'] {
+        background: #ffb300;
+        color: #000000;
+      }
+      .ready-light[data-state='red'] {
+        background: #c62828;
+        color: #ffffff;
+      }
+      .ready-light__word {
+        flex-shrink: 0;
+        font-size: 2.6rem;
+        font-weight: 900;
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+      }
+      .ready-light__cause {
+        flex: 1;
+        min-width: 0;
+        font-size: 1.15rem;
+      }
+      .ready-light__swing {
+        flex-shrink: 0;
+        max-width: 40%;
+        font-size: 1.15rem;
+        text-align: right;
+      }
+      .ready-light--compact {
+        min-height: 0;
+        padding: 4px 16px;
+      }
+      .ready-light--compact .ready-light__word {
+        font-size: 1rem;
+      }
+      .ready-light--compact .ready-light__cause {
+        font-size: 0.9rem;
+      }
+      .ready-light__flash {
+        position: absolute;
+        inset: 0;
+        background: #ffffff;
+        opacity: 0;
+      }
+      .ready-light__flash--on {
+        animation: ready-light-flash 1.2s ease-out 1;
+      }
+      @keyframes ready-light-flash {
+        0%,
+        30% {
+          opacity: 0.85;
+        }
+        100% {
+          opacity: 0;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .ready-light__flash--on {
+          animation: none;
+          opacity: 1;
+          background: transparent;
+          box-shadow: inset 0 0 0 8px #ffffff;
+        }
+      }
+      @media (max-height: 480px) {
+        .ready-light {
+          margin-top: -12px; /* the body's shorter top padding here */
+        }
+      }
+      @media (max-width: 560px) {
+        .ready-light {
+          flex-wrap: wrap;
+          gap: 4px 12px;
+        }
+        .ready-light__word {
+          font-size: 2rem;
+        }
+        .ready-light__swing {
+          max-width: none;
+          text-align: left;
+        }
+      }
+    </style>
   </head>
   <body>
+    <div
+      class="ready-light"
+      id="ready-light"
+      data-state="unknown"
+      role="status"
+      aria-live="polite"
+      aria-label="Ready light"
+    >
+      <span class="ready-light__flash" id="ready-light-flash" aria-hidden="true"></span>
+      <strong class="ready-light__word" id="ready-light-word">…</strong>
+      <span class="ready-light__cause" id="ready-light-cause">Checking the kiosk</span>
+      <span class="ready-light__swing" id="ready-light-swing"></span>
+    </div>
     <main>
       <h1>OpenFlight tester</h1>
       <p class="lede">
@@ -2541,6 +2660,79 @@
       setInterval(refreshSetupEligibility, 2000);
       setInterval(refreshTeeRange, 1000);
       setInterval(guidedCameraTick, 350);
+    </script>
+    <script id="ready-light-script">
+      // The ready light (P7-14): polls the tester server, which relays the kiosk's
+      // light and adds what only it knows (kiosk down or restarting, the ladder's
+      // phase). Self-contained: its own poller, timeout and elements.
+      (() => {
+        const POLL_MS = 700;
+        const TIMEOUT_MS = 2500;
+        const FLASH_RECENT_S = 3; // a swing this recent, on the kiosk's clock, flashes
+        const SAFE_TESTER_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
+        const WORDS = { red: 'NOT READY', amber: 'WAIT', green: 'SWING', off: 'NO LIGHT' };
+        const band = document.getElementById('ready-light');
+        const flash = document.getElementById('ready-light-flash');
+        const word = document.getElementById('ready-light-word');
+        const cause = document.getElementById('ready-light-cause');
+        const swingText = document.getElementById('ready-light-swing');
+        let lastSwingId = null;
+        let polling = false;
+
+        function setText(node, text) {
+          if (node.textContent !== text) node.textContent = text;
+        }
+
+        function render(light) {
+          const state = WORDS[light.state] ? light.state : 'red';
+          band.dataset.state = state;
+          band.classList.toggle('ready-light--compact', light.source === 'tester' && light.cause === 'kiosk not running');
+          setText(word, WORDS[state]);
+          const seconds = light.time_left_s == null ? '' : ` (about ${Math.ceil(light.time_left_s)} s)`;
+          setText(cause, `${light.cause || ''}${seconds}`);
+          const swing = light.swing;
+          const fresh = Boolean(swing) && light.checked_at - swing.at <= FLASH_RECENT_S;
+          let text = '';
+          if (swing && swing.result) text = `Last swing: ${swing.result.text}`;
+          else if (fresh) text = 'Swing picked up';
+          setText(swingText, text);
+          if (!fresh) flash.classList.remove('ready-light__flash--on');
+          if (swing && swing.id !== lastSwingId) {
+            lastSwingId = swing.id;
+            if (fresh) {
+              flash.classList.remove('ready-light__flash--on');
+              void flash.offsetWidth; // restart the animation for this swing
+              flash.classList.add('ready-light__flash--on');
+            }
+          }
+        }
+
+        async function tick() {
+          if (polling || document.hidden) return;
+          polling = true;
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+          try {
+            const testerId = (document.getElementById('tester-id')?.value || '').trim();
+            const query = SAFE_TESTER_ID.test(testerId) ? `?tester_id=${encodeURIComponent(testerId)}` : '';
+            const response = await fetch(`/api/tester/ready-light${query}`, {
+              cache: 'no-store',
+              signal: controller.signal,
+            });
+            const light = await response.json();
+            if (!response.ok || typeof light.state !== 'string') throw new Error(light.error || 'no light');
+            render(light);
+          } catch {
+            render({ state: 'red', cause: 'tester server not answering', time_left_s: null, swing: null });
+          } finally {
+            clearTimeout(timer);
+            polling = false;
+          }
+        }
+
+        tick();
+        setInterval(tick, POLL_MS);
+      })();
     </script>
   </body>
 </html>

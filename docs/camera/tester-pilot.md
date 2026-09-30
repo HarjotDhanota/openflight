@@ -111,6 +111,21 @@ one the radar solved, and the ball height, which is one radius (assumed on the
 surface). The kiosk's `session_start` repeats the same values and both rig-file
 hashes.
 
+**The ready light.** A band pinned to the top of the study page, and the same
+band across the top of the unit's own screen, says when to swing. **SWING**
+(green) only when the OPS243 is armed and waiting, the IWR6843 is idle and
+armed, and the camera is running in the current setting with no clip being
+saved. **WAIT** (amber) names what is busy, with a rough time left: the OPS243
+dumping, draining or re-arming, the IWR6843 dumping (about 7 s), or the camera
+saving a clip. **NOT READY** (red) names the cause: no admitted setup, a
+sensor missing or failed, the kiosk starting or restarting between settings,
+the ladder's light check, a face photo owed, or the ladder stopped or
+finished. The kiosk reads each state from the sensors themselves, not from
+timers, and logs every change with its time (`[READY]` lines). A swing it
+picks up flashes the band once, then the band shows the result: the ball
+speed, **No radar shot** or **Not a shot**. Wait for SWING before each swing;
+a swing on amber or red may not count.
+
 Use the numbered test suite for a normal collection: **1. Set up the rig**,
 **2. Check hardware and light**, **3. Automatic ball range**, **4. Capture the
 exposure ladder**, then **5. Review and package**. **Advanced: manual single-arm tools** is for a
