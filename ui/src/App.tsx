@@ -13,6 +13,7 @@ import { DebugPanel } from './components/DebugPanel';
 import { DisplayMode } from './components/DisplayMode';
 import { SimShotBadges } from './components/SimShotBadges';
 import { ShotProcessingArea } from './components/ShotProcessingArea';
+import { ReadyLightBar } from './components/ReadyLight';
 import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog';
 import { CameraReplayDialog } from './components/CameraReplayDialog';
 import {
@@ -268,6 +269,9 @@ function AppContent() {
   return (
     <div className={`panel-app ${isLaunchDaddyMode ? 'app--launch-daddy' : ''} ${isExploding ? 'app--exploding' : ''}`}>
       <LaunchDaddyOverlay />
+
+      {/* In the flow above the panels, so it never covers the camera feed (P7-14). */}
+      <ReadyLightBar />
 
       {iwr6843Alert && (
         <div className="iwr-alert" role="alert">

@@ -26,6 +26,14 @@ export const fr: Messages = {
   'live.dismiss': 'Fermer',
   'live.dismissAlert': 'Fermer l’alerte radar TI',
 
+  'ready.label': 'Voyant prêt',
+  'ready.swing': 'FRAPPEZ',
+  'ready.wait': 'ATTENDEZ',
+  'ready.notReady': 'PAS PRÊT',
+  'ready.timeLeft': 'environ {seconds} s',
+  'ready.lastSwing': 'Dernier swing : {result}',
+  'ready.swingPickedUp': 'Swing détecté',
+
   'replay.open': 'Ralenti',
   'replay.title': 'Ralenti du coup',
   'replay.preparing': 'Préparation du ralenti',

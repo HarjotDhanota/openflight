@@ -26,6 +26,14 @@ export const es: Messages = {
   'live.dismiss': 'Cerrar',
   'live.dismissAlert': 'Cerrar alerta del radar TI',
 
+  'ready.label': 'Luz de listo',
+  'ready.swing': 'GOLPEA',
+  'ready.wait': 'ESPERA',
+  'ready.notReady': 'NO LISTO',
+  'ready.timeLeft': 'unos {seconds} s',
+  'ready.lastSwing': 'Último swing: {result}',
+  'ready.swingPickedUp': 'Swing detectado',
+
   'replay.open': 'Repetición',
   'replay.title': 'Repetición del golpe',
   'replay.preparing': 'Preparando repetición',

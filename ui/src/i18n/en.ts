@@ -24,6 +24,14 @@ export const en = {
   'live.dismiss': 'Dismiss',
   'live.dismissAlert': 'Dismiss TI radar alert',
 
+  'ready.label': 'Ready light',
+  'ready.swing': 'SWING',
+  'ready.wait': 'WAIT',
+  'ready.notReady': 'NOT READY',
+  'ready.timeLeft': 'about {seconds} s',
+  'ready.lastSwing': 'Last swing: {result}',
+  'ready.swingPickedUp': 'Swing picked up',
+
   'replay.open': 'Replay',
   'replay.title': 'Shot replay',
   'replay.preparing': 'Preparing replay',

@@ -1,0 +1,92 @@
+/*
+ * The ready light (P7-14): a full-width band read from about 2 m at address.
+ * Solid fills with black or white text for contrast in sun, and the word says
+ * the state too, so colour is never the only signal.
+ */
+.ready-light {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-shrink: 0;
+  min-height: 96px;
+  padding: 0.5rem 1.25rem;
+  overflow: hidden;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.ready-light--green {
+  background: #1b8a3a;
+  color: #ffffff;
+}
+
+.ready-light--amber {
+  background: #ffb300;
+  color: #000000;
+}
+
+.ready-light--red {
+  background: #c62828;
+  color: #ffffff;
+}
+
+.ready-light__word {
+  flex-shrink: 0;
+  font-size: 64px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.ready-light__cause {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  font-size: 28px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ready-light__time {
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.ready-light__swing {
+  flex-shrink: 0;
+  max-width: 40%;
+  font-size: 30px;
+  text-align: right;
+}
+
+/* A swing picked up: one bright pulse over the band, replayed per swing. */
+.ready-light__flash {
+  position: absolute;
+  inset: 0;
+  background: #ffffff;
+  opacity: 0;
+  pointer-events: none;
+  animation: ready-light-flash 1.2s ease-out 1;
+}
+
+@keyframes ready-light-flash {
+  0%,
+  30% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* no pulse: a white frame while the swing is fresh */
+  .ready-light__flash {
+    animation: none;
+    opacity: 1;
+    background: transparent;
+    box-shadow: inset 0 0 0 8px #ffffff;
+  }
+}
