@@ -1554,16 +1554,24 @@ def init_iwr6843(
     net_range_m: float | None,
     tx_order: str,
     capture_timeout_s: float,
-    tilt_deg: float | None = None,
-    radar_height_m: float | None = None,
+    tilt_deg: float,
+    radar_height_m: float,
     ball_height_m: float = 0.04,
     azimuth_offset_deg: float = 0.0,
     horizontal_phase_reference_rad: float | None = None,
     save_dumps: bool = False,
     lateral_tee_offset_m: float = 0.0,
 ) -> bool:
-    """Initialize GPIO-triggered TI capture and the frozen LCMF-v1 estimator."""
+    """Initialize GPIO-triggered TI capture and the frozen LCMF-v1 estimator.
+
+    ``tilt_deg`` and ``radar_height_m`` are the enclosure's, from the rig file (or
+    the setup's solved height); the board calibration's July mount never stands in
+    for them (wiring audit C1).
+    """
     global iwr6843_runtime, iwr6843_runtime_config  # pylint: disable=global-statement
+    for name, value in (("tilt_deg", tilt_deg), ("radar_height_m", radar_height_m)):
+        if value is None or not math.isfinite(float(value)):
+            raise ValueError(f"init_iwr6843 needs the rig's {name}, got {value!r}")
     try:
         from .iwr6843 import Calibration
         from .iwr6843.monitor import IWR6843CaptureMonitor, tx_order_from_config
@@ -1596,10 +1604,8 @@ def init_iwr6843(
         calibration = Calibration.load(calibration_path)
         calibration.tee_range_m = tee_range_m
         calibration.tee_ball_height_m = ball_height_m
-        if tilt_deg is not None:
-            calibration.tilt_rad = math.radians(tilt_deg)
-        if radar_height_m is not None:
-            calibration.meta["radar_height_m"] = radar_height_m
+        calibration.tilt_rad = math.radians(float(tilt_deg))
+        calibration.meta["radar_height_m"] = float(radar_height_m)
         calibration.lateral_tee_offset_m = float(lateral_tee_offset_m)
 
         capture_monitor = IWR6843CaptureMonitor(
@@ -5835,8 +5841,11 @@ def main():
     parser.add_argument(
         "--camera-capture-mount-height-m",
         type=float,
-        default=0.20955,
-        help="Camera optical-center height above the hitting surface (default: 8.25 in).",
+        default=None,
+        help=(
+            "Camera optical-center height above the hitting surface. No default: "
+            "--rig-geometry supplies it and overrides this flag (wiring audit C1)."
+        ),
     )
     parser.add_argument(
         "--camera-capture-horizontal-offset-deg",
@@ -6036,9 +6045,10 @@ def main():
         "--rig-geometry",
         default=None,
         help=(
-            "Enclosure geometry JSON (RigGeometry.to_json). When given, the camera mount "
-            "height, camera lateral offset, radar height and radar tilt come from it and "
-            "override the flags below (logged)."
+            "Enclosure geometry JSON (RigGeometry.to_json). The camera mount height, camera "
+            "lateral offset, radar height and radar tilt come from it and override the flags "
+            "below (logged). Required with --iwr6843; start-kiosk.sh passes "
+            "config/enclosure_v3_rig_geometry.json unless another file is given."
         ),
     )
     parser.add_argument(
@@ -6101,13 +6111,19 @@ def main():
         "--iwr6843-tilt-deg",
         type=float,
         default=None,
-        help="Override mount tilt from the TI calibration JSON",
+        help=(
+            "Superseded: --iwr6843 requires --rig-geometry, whose radar tilt overrides "
+            "this (logged). The TI calibration JSON's tilt is never used."
+        ),
     )
     parser.add_argument(
         "--iwr6843-radar-height-m",
         type=float,
         default=None,
-        help="Override antenna-center height from the TI calibration JSON",
+        help=(
+            "Superseded: --iwr6843 requires --rig-geometry, whose radar height overrides "
+            "this (logged). The TI calibration JSON's height is never used."
+        ),
     )
     parser.add_argument(
         "--solved-camera-height-m",
@@ -6327,7 +6343,17 @@ def main():
         (args.iwr6843_tee_m is not None and args.iwr6843_tee_m <= 0) or args.iwr6843_net_m <= 0
     ):
         parser.error("--iwr6843-tee-m and --iwr6843-net-m must be positive")
-    init_rig_geometry(args.rig_geometry)
+    # Without the rig file the radar would run on the board calibration's July
+    # mount (0.1524 m, 10.4 deg); start-kiosk.sh always passes one (decision D6).
+    if args.iwr6843 and args.rig_geometry is None:
+        parser.error(
+            "--iwr6843 requires --rig-geometry: the radar's height, tilt and offset come "
+            "only from the enclosure's rig file (config/enclosure_v3_rig_geometry.json)"
+        )
+    try:
+        init_rig_geometry(args.rig_geometry)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        parser.error(f"--rig-geometry: {error}")
     try:
         init_camera_calibrated_fusion(
             args.camera_optical_calibration,
@@ -6357,6 +6383,18 @@ def main():
         )
         args.iwr6843_tilt_deg = _rig_override(
             "radar tilt", args.iwr6843_tilt_deg, enclosure.iwr_tilt_deg
+        )
+    radar_needs = ("lens_height_above_floor_mm", "iwr_offset_mm", "iwr_boresight_pitch_deg")
+    lacking = [name for name in radar_needs if enclosure is not None and name in enclosure.missing]
+    if args.iwr6843 and lacking:
+        parser.error(
+            f"--rig-geometry {args.rig_geometry} cannot place the IWR: it lacks "
+            + ", ".join(lacking)
+        )
+    if args.camera_capture and args.camera_capture_mount_height_m is None:
+        parser.error(
+            "--camera-capture needs the camera height: pass --rig-geometry "
+            "(or --camera-capture-mount-height-m); there is no default height"
         )
     if args.solved_camera_height_m is not None:
         try:

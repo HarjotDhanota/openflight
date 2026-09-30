@@ -173,7 +173,7 @@ def fit_two_ray(
     the line through the tee (exact in floor coordinates).
     """
     if radar_height_m is None:
-        radar_height_m = float(cal.meta.get("radar_height_m", 0.152))
+        radar_height_m = cal.radar_height_m
     grid = np.arange(-0.02, 1.30, grid_step_m)
     xs: list[float] = []
     hs: list[float] = []

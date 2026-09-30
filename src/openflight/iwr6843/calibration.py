@@ -43,8 +43,17 @@ class Calibration:
 
     @property
     def radar_height_m(self) -> float:
-        """Antenna center height above the floor (from the cal solve)."""
-        return float(self.meta.get("radar_height_m", 0.152))
+        """Antenna centre height above the floor, installed from the enclosure's rig file.
+
+        The board calibration's own ``radar_height_m`` is the July corner-reflector
+        mount, not this enclosure, so ``load`` never carries it here and there is
+        no default (wiring audit C1).
+        """
+        if self.meta.get("radar_height_m") is None:
+            raise ValueError(
+                "IWR6843 radar height is not set; it comes from the enclosure's rig file"
+            )
+        return float(self.meta["radar_height_m"])
 
     @property
     def tee_anchor_h_m(self) -> float:
@@ -57,12 +66,15 @@ class Calibration:
         with open(path, encoding="utf-8") as fh:
             raw = json.load(fh)
         corr = np.exp(-1j * np.asarray(raw["elem_phase_rad"])) / np.asarray(raw["elem_gain"])
+        # The solve's mount height describes the rig it was measured on; the
+        # installed height is set from the rig file (wiring audit C1).
+        meta = {key: value for key, value in raw.items() if key != "radar_height_m"}
         return cls(
             elem_correction=corr,
             tilt_rad=float(np.radians(raw["tilt_deg"])),
             range_bias_m=float(raw["range_bias_const_m"]),
             source=path,
-            meta=raw,
+            meta=meta,
         )
 
     @classmethod

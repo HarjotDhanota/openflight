@@ -552,6 +552,8 @@ class TestIWR6843ShotIntegration:
             net_range_m=4.6,
             tx_order="auto",
             capture_timeout_s=12.0,
+            tilt_deg=10.0,
+            radar_height_m=0.051,
         )
 
         assert "freeze_delay_s" not in captured
@@ -605,6 +607,8 @@ class TestIWR6843ShotIntegration:
             net_range_m=4.6,
             tx_order="auto",
             capture_timeout_s=12.0,
+            tilt_deg=10.0,
+            radar_height_m=0.051,
             azimuth_offset_deg=1.5,
             horizontal_phase_reference_rad=-0.5,
         )
@@ -649,6 +653,8 @@ class TestIWR6843ShotIntegration:
             net_range_m=4.6,
             tx_order="auto",
             capture_timeout_s=12.0,
+            tilt_deg=10.0,
+            radar_height_m=0.051,
             lateral_tee_offset_m=0.0,
         )
 
@@ -4839,6 +4845,8 @@ class TestIwrTeeRangeConfiguration:
             [
                 "openflight-server",
                 "--iwr6843",
+                "--rig-geometry",
+                "config/enclosure_v3_rig_geometry.json",
                 "--no-logging",
                 "--profiles-path",
                 str(tmp_path / "profiles.json"),
@@ -4904,6 +4912,8 @@ class TestIwrTeeRangeConfiguration:
             [
                 "openflight-server",
                 "--camera-capture",
+                "--rig-geometry",
+                "config/enclosure_v3_rig_geometry.json",
                 "--camera-capture-exposure-us",
                 "1250",
                 "--camera-armed-profile",
@@ -4948,6 +4958,8 @@ class TestIwrTeeRangeConfiguration:
             [
                 "openflight-server",
                 "--camera-capture",
+                "--rig-geometry",
+                "config/enclosure_v3_rig_geometry.json",
                 "--study-mode",
                 "--no-logging",
                 "--profiles-path",
@@ -5001,6 +5013,8 @@ class TestIwrTeeRangeConfiguration:
             net_range_m=4.6,
             tx_order="auto",
             capture_timeout_s=12.0,
+            tilt_deg=10.0,
+            radar_height_m=0.051,
         )
 
         runtime = server_module.iwr6843_runtime

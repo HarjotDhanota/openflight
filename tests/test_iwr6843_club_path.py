@@ -166,6 +166,9 @@ def _synth_club(
 def _cal(tee_range_m=1.372):
     cal = Calibration.load("config/iwr6843_calibration_reference.json")
     cal.tee_range_m = tee_range_m
+    # the July mount these synthetic tracks were built for; the board file no
+    # longer carries a height (wiring audit C1)
+    cal.meta["radar_height_m"] = 0.1524
     return cal
 
 

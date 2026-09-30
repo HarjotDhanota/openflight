@@ -14,6 +14,8 @@ pytestmark = pytest.mark.skipif(
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts/start-kiosk.sh"
+# start-kiosk.sh always hands the server a rig file (wiring audit C1, decision D6)
+RIG = ["--rig-geometry", str(REPO_ROOT / "config/enclosure_v3_rig_geometry.json")]
 
 
 def _dry_run(*args: str) -> list[str]:
@@ -24,7 +26,14 @@ def _dry_run(*args: str) -> list[str]:
         capture_output=True,
         text=True,
     )
-    return shlex.split(result.stdout)
+    command = shlex.split(result.stdout)
+    # PROJECT_DIR comes from `pwd`, which may spell the checkout differently
+    # (a symlink, or /c/... under Git Bash); the script's own config file is RIG
+    if "--rig-geometry" in command:
+        index = command.index("--rig-geometry") + 1
+        if command[index].endswith("/config/enclosure_v3_rig_geometry.json"):
+            command[index] = RIG[1]
+    return command
 
 
 def _script() -> str:
@@ -84,7 +93,24 @@ printf 'prepared\\n'
 
 
 def test_default_command_is_minimal():
-    assert _dry_run() == ["openflight-server", "--web-port", "8080"]
+    assert _dry_run() == ["openflight-server", "--web-port", "8080", *RIG]
+
+
+def test_the_v3_rig_file_is_passed_with_the_radar():
+    command = _dry_run("--iwr6843")
+    assert command[command.index("--rig-geometry") + 1] == RIG[1]
+    assert Path(RIG[1]).is_file()
+
+
+@pytest.mark.parametrize("form", ["separate", "joined"])
+def test_a_named_rig_file_is_kept_and_not_doubled(form):
+    arguments = (
+        ["--rig-geometry", "/tmp/other_rig.json"]
+        if form == "separate"
+        else ["--rig-geometry=/tmp/other_rig.json"]
+    )
+    command = _dry_run("--iwr6843", *arguments)
+    assert command == ["openflight-server", "--web-port", "8080", "--iwr6843", *arguments]
 
 
 def test_server_arguments_pass_through_unchanged():
@@ -98,7 +124,7 @@ def test_server_arguments_pass_through_unchanged():
         "--no-ballistics",
     ]
 
-    assert _dry_run(*arguments) == ["openflight-server", "--web-port", "8080", *arguments]
+    assert _dry_run(*arguments) == ["openflight-server", "--web-port", "8080", *arguments, *RIG]
 
 
 def test_hardware_trigger_arguments_pass_through_unchanged():
@@ -113,7 +139,7 @@ def test_hardware_trigger_arguments_pass_through_unchanged():
         "6",
     ]
 
-    assert _dry_run(*arguments) == ["openflight-server", "--web-port", "8080", *arguments]
+    assert _dry_run(*arguments) == ["openflight-server", "--web-port", "8080", *arguments, *RIG]
 
 
 @pytest.mark.parametrize("alias", ["--radar-port", "--ops-port"])
@@ -124,6 +150,7 @@ def test_radar_alias_is_distinct_from_web_port(alias):
         "9090",
         "--port",
         "/dev/serial0",
+        *RIG,
     ]
 
 
@@ -138,6 +165,7 @@ def test_buffer_split_alias(preset, segments):
         "8080",
         "--sound-pre-trigger",
         segments,
+        *RIG,
     ]
 
 
@@ -150,6 +178,7 @@ def test_short_kiosk_aliases_are_translated():
         "--debug",
         "--session-location",
         "garage",
+        *RIG,
     ]
 
 
@@ -160,6 +189,7 @@ def test_mock_swing_speed_alias_is_preserved(arguments):
         "--web-port",
         "8080",
         "--mock-swing-speed",
+        *RIG,
     ]
 
 
