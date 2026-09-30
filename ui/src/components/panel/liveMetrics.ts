@@ -72,6 +72,13 @@ function withFaceAngle(subtext: string | undefined, faceDeg: number | null | und
   return subtext ? `${subtext} · ${face}` : face;
 }
 
+/** Subtext naming a camera-derived horizontal launch source; radar and estimates get none. */
+const HORIZONTAL_SOURCE_LABELS: Record<string, string> = {
+  camera_assisted_experimental: 'camera assisted',
+  camera_only_experimental: 'camera only',
+  camera_legacy_fallback: 'camera legacy',
+};
+
 function experimentalStatus(status: string | null | undefined): string {
   if (!status || status === 'candidate_available') return 'candidate';
   return status.replace(/^rejected_/, 'rejected: ').replaceAll('_', ' ');
@@ -82,7 +89,20 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
   const carry = shot.carry_spin_adjusted ?? shot.estimated_carry_yards;
   const angleConfidence = launchAngleQuality(shot.launch_angle_confidence);
   const angleEstimated = shot.angle_source === 'estimated';
-  const horizontalLaunchIsCameraAssisted = shot.launch_angle_horizontal_source === 'camera_assisted_experimental';
+  // The horizontal tile reads its own axis (audit F5). Shots recorded before
+  // the per-axis fields existed fall back to the shared ones.
+  const horizontalConfidence = launchAngleQuality(
+    shot.launch_angle_horizontal_confidence !== undefined
+      ? shot.launch_angle_horizontal_confidence
+      : shot.launch_angle_confidence
+  );
+  const horizontalEstimated =
+    shot.launch_angle_horizontal_source !== undefined
+      ? shot.launch_angle_horizontal_source === 'estimated'
+      : angleEstimated;
+  const horizontalSourceLabel = shot.launch_angle_horizontal_source
+    ? HORIZONTAL_SOURCE_LABELS[shot.launch_angle_horizontal_source]
+    : undefined;
   const fusedDeliveryAttempted = shot.experimental_fused_status != null;
   const attackAngle =
     shot.club_angle_deg ??
@@ -146,10 +166,10 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       label: t('metric.hLaunch'),
       value: formatOptionalAngle(shot.launch_angle_horizontal, true),
       unit: angleUnit(shot.launch_angle_horizontal),
-      subtext: horizontalLaunchIsCameraAssisted ? 'camera assisted' : undefined,
-      estimated: markEstimated(shot.launch_angle_horizontal !== null && angleEstimated),
-      confidence: shot.launch_angle_horizontal === null ? null : angleConfidence,
-      confidenceLabel: horizontalLaunchIsCameraAssisted ? 'experimental' : undefined,
+      subtext: horizontalSourceLabel,
+      estimated: markEstimated(shot.launch_angle_horizontal !== null && horizontalEstimated),
+      confidence: shot.launch_angle_horizontal === null ? null : horizontalConfidence,
+      confidenceLabel: horizontalSourceLabel ? 'experimental' : undefined,
     },
     {
       id: 'spin',

@@ -221,6 +221,82 @@ describe('buildLiveMetrics', () => {
     });
   });
 
+  describe('horizontal launch tile reads its own axis (audit F5)', () => {
+    it('shows the horizontal confidence, not the vertical one', () => {
+      const metrics = buildLiveMetrics(
+        makeShot({
+          launch_angle_confidence: 0.9,
+          launch_angle_vertical_confidence: 0.9,
+          launch_angle_horizontal_confidence: 0.3,
+          launch_angle_horizontal_source: 'camera_only_experimental',
+        }),
+        'imperial',
+        emptySwingStats
+      );
+
+      expect(byId(metrics, 'launch_v').confidence).toBe('high');
+      expect(byId(metrics, 'launch_h').confidence).toBe('low');
+    });
+
+    it('flags only the axis that is estimated', () => {
+      const verticalEstimated = buildLiveMetrics(
+        makeShot({
+          angle_source: 'estimated',
+          launch_angle_vertical_source: 'estimated',
+          launch_angle_horizontal_source: 'radar',
+          launch_angle_horizontal_confidence: 0.8,
+        }),
+        'imperial',
+        emptySwingStats
+      );
+      expect(byId(verticalEstimated, 'launch_v').estimated).toBe(true);
+      expect(byId(verticalEstimated, 'launch_h').estimated).toBeUndefined();
+
+      const horizontalEstimated = buildLiveMetrics(
+        makeShot({
+          angle_source: 'radar',
+          launch_angle_vertical_source: 'radar',
+          launch_angle_horizontal: 0.0,
+          launch_angle_horizontal_source: 'estimated',
+          launch_angle_horizontal_confidence: 0.5,
+        }),
+        'imperial',
+        emptySwingStats
+      );
+      expect(byId(horizontalEstimated, 'launch_h').estimated).toBe(true);
+      expect(byId(horizontalEstimated, 'launch_h').confidence).toBe('medium');
+    });
+
+    it.each([
+      ['camera_assisted_experimental', 'camera assisted'],
+      ['camera_only_experimental', 'camera only'],
+      ['camera_legacy_fallback', 'camera legacy'],
+    ])('labels %s as experimental', (source, subtext) => {
+      const metrics = buildLiveMetrics(
+        makeShot({ launch_angle_horizontal_source: source, launch_angle_horizontal_confidence: 0.3 }),
+        'imperial',
+        emptySwingStats
+      );
+
+      expect(byId(metrics, 'launch_h')).toMatchObject({
+        subtext,
+        confidence: 'low',
+        confidenceLabel: 'experimental',
+      });
+    });
+
+    it('falls back to the shared fields for shots recorded before per-axis fields', () => {
+      const metrics = buildLiveMetrics(
+        makeShot({ launch_angle_confidence: 0.9, angle_source: 'radar' }),
+        'imperial',
+        emptySwingStats
+      );
+
+      expect(byId(metrics, 'launch_h').confidence).toBe('high');
+      expect(byId(metrics, 'launch_h').subtext).toBeUndefined();
+    });
+  });
+
   it('marks estimated launch and spin with a flag, not provenance subtext', () => {
     const measured = buildLiveMetrics(makeShot(), 'imperial', emptySwingStats);
     expect(byId(measured, 'launch_v').subtext).toBeUndefined();
