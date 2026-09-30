@@ -128,3 +128,14 @@ def test_ball_flight_selects_a_1280_reference_ball():
 
     assert anchor is not None, diagnostics
     assert anchor.x == pytest.approx(x, abs=3.0)
+
+
+@pytest.mark.parametrize(
+    ("shape", "scale"),
+    [((24, 200, 320), 1.0), ((24, 400, 640), 1.0), ((24, 800, 1280), 2.0)],
+)
+def test_club_windows_scale_with_focal_length_not_image_size(shape, scale):
+    """C6: 320x200 is a crop with 640x400's focal, so its windows are not halved."""
+    from openflight.camera.club_delivery import _image_scale  # noqa: PLC0415
+
+    assert _image_scale(shape) == pytest.approx(scale)
