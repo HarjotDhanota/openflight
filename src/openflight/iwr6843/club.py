@@ -48,7 +48,7 @@ from openflight.iwr6843.shot import (
 
 logger = logging.getLogger(__name__)
 
-MPH_PER_MS = 2.23694
+MPH_PER_MS = tracking.MPH_PER_MS
 
 # The search gate is ASYMMETRIC about the tee, because the clubhead cannot be
 # beyond the ball before it strikes the ball. Admitting the post-tee region

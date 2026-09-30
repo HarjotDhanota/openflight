@@ -160,3 +160,24 @@ def test_accepted_range_evidence_passes_only_accepted_tracks():
     assert accepted_range_evidence(rejected) is None
     assert accepted_range_evidence(None) is None
     assert accepted_range_evidence(legacy) is legacy
+
+
+def test_one_ms_to_mph_constant():
+    """F13: the track's mph uses the shared 2.23694, not a rounded 2.237."""
+    from openflight.iwr6843 import club, lcmf, tracking  # noqa: PLC0415
+
+    track = tracking.BallTrack(
+        speed_ms=40.0,
+        slope_bins=0.0,
+        intercept_bins=0.0,
+        rms_bins=0.0,
+        n_inliers=0,
+        t_first=0.0,
+        t_last=0.0,
+        low_confidence=False,
+    )
+
+    assert tracking.MPH_PER_MS == 2.23694
+    assert track.speed_mph == 40.0 * 2.23694
+    assert lcmf.MPH_PER_MS is tracking.MPH_PER_MS
+    assert club.MPH_PER_MS is tracking.MPH_PER_MS

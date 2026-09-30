@@ -30,6 +30,8 @@ FAST_TRACK_MS = 26.5  # RADIAL m/s: slowest real SW ball reads ~27.5
 #                               (66 mph x cos projection); flying tee ~25
 FAST_SUPPORT_FRAC = 0.55  # of the most-inliers candidate
 MAX_RADIAL_ACCEL = 200.0  # m/s^2 sanity for the quadratic refit
+# The one m/s-to-mph factor for the IWR package (audit F13).
+MPH_PER_MS = 2.23694
 
 
 def accepted_range_evidence(evidence):
@@ -134,7 +136,7 @@ class BallTrack:
     @property
     def speed_mph(self) -> float:
         """Ball speed in mph."""
-        return self.speed_ms * 2.237
+        return self.speed_ms * MPH_PER_MS
 
     def bin_at(self, t_s: float) -> float:
         """Predicted (fractional) range bin at time t."""
