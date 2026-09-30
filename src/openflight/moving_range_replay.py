@@ -313,8 +313,13 @@ def replay_moving_camera_iwr_anchor(
     shot_event: Mapping[str, Any],
     iwr_ranges: TimedIwrRangeSeries | None,
     ops_ball_speed_mph: Any,
+    camera_unavailable_reason: str | None = None,
 ) -> dict[str, Any]:
-    """Run the moving camera/IWR diagnostic only after every input is qualified."""
+    """Run the moving camera/IWR diagnostic only after every input is qualified.
+
+    ``camera_unavailable_reason`` is why the camera replay loaded no frames, so a
+    shot without a fusion context is not reported as having misaligned frames.
+    """
     evidence = _mapping(shot_event.get("moving_range_evidence"))
     camera, camera_reason = (
         _qualified_camera(context or {})
@@ -347,6 +352,10 @@ def replay_moving_camera_iwr_anchor(
                 "saved frames, host timestamps, and trigger timestamp are aligned"
                 if saved_camera
                 else "saved camera frames/timestamps/trigger are missing or misaligned"
+                if archive is not None
+                else f"camera frames were not replayed: {camera_unavailable_reason}"
+                if camera_unavailable_reason
+                else "no camera frames were loaded for this shot"
             ),
             "camera frames.npz",
         ),

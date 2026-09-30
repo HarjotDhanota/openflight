@@ -685,3 +685,32 @@ def test_recorded_unresolved_range_preserves_raw_capture_without_estimating(tmp_
     assert moving["status"] == "withheld_track_error"
     assert moving["promotion_allowed"] is False
     assert moving["tee_range_candidate"] is None
+
+
+def test_the_moving_anchor_names_why_the_camera_replay_did_not_run(tmp_path, monkeypatch):
+    """P6-6: a shot with no fusion context was reported as having misaligned frames."""
+    session = _session(tmp_path)
+
+    def no_context(*_args, **_kwargs):
+        raise ValueError(
+            "shot has no replayable camera fusion context: "
+            "capture-time lighting was not analysis eligible"
+        )
+
+    monkeypatch.setattr(
+        cli,
+        "replay_ops_capture",
+        lambda *_args, **_kwargs: {
+            "status": "ok",
+            "canonical_capture_payload_sha256": "b" * 64,
+            "result": {"ball_speed_mph": 101.0, "club_speed_mph": 77.0},
+            "overlapping_readings": [],
+        },
+    )
+    monkeypatch.setattr(cli, "replay_frozen_shot", no_context)
+
+    result = cli.replay(_args(tmp_path, session, camera=True))
+
+    anchor = result["stages"]["moving_camera_iwr_anchor"]
+    assert "missing or misaligned" not in anchor["reason"]
+    assert "lighting was not analysis eligible" in anchor["reason"]

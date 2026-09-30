@@ -181,7 +181,7 @@ sim_connectors: List = []
 # Seed the shot counter from the clock so ShotNumber strictly increases across
 # server restarts. Some sims (e.g. OpenGolfSim's Developer API) reject any
 # ShotNumber <= the highest they've seen, and that counter persists across
-# reconnects â€” a per-run reset to 1 would get every shot dropped. Uses epoch
+# reconnects — a per-run reset to 1 would get every shot dropped. Uses epoch
 # *seconds* (see initial_shot_counter): epoch millis overflow GSPro's 32-bit
 # ShotNumber field and every shot comes back 501 "Bad format".
 sim_player_state = SimPlayerState(shot_counter=initial_shot_counter())
@@ -666,7 +666,7 @@ def estimate_launch_angle(
     """
     physics = get_club_physics(club)
 
-    # Slower than average â†’ higher launch, faster â†’ lower launch
+    # Slower than average → higher launch, faster → lower launch
     speed_delta = ball_speed_mph - physics.average_ball_speed_mph
     adjustment = -speed_delta * physics.launch_deg_per_mph
 
@@ -948,7 +948,7 @@ def _ensure_user_facing_launch_angles(shot: Shot) -> None:
         shot.launch_angle_vertical_source = "estimated"
         shot.angle_source = "estimated"
         logger.info(
-            "[SERVER] Angle source: estimated (%.1fÂ°, conf=%.0f%%)",
+            "[SERVER] Angle source: estimated (%.1f°, conf=%.0f%%)",
             estimated[0],
             estimated[1] * 100,
         )
@@ -973,7 +973,7 @@ def _ensure_user_facing_launch_angles(shot: Shot) -> None:
         shot.launch_angle_horizontal_source = "estimated"
         if shot.angle_source is None:
             shot.angle_source = "estimated"
-        logger.info("[SERVER] Horizontal angle source: neutral estimate (0.0Â°)")
+        logger.info("[SERVER] Horizontal angle source: neutral estimate (0.0°)")
 
 
 # K-LD7 produces ~34 RADC frames/sec at 3 Mbaud. With buffer_seconds=6
@@ -1037,7 +1037,7 @@ def _warn_if_kld7_buffer_underfilled(orientation: str, frame_count: int) -> None
         return
     if frame_count < expected * _KLD7_BUFFER_UNDERFILL_FRAC:
         logger.warning(
-            "[SERVER] K-LD7 %s buffer underfilled: %d/%d frames (%.0f%%) â€” "
+            "[SERVER] K-LD7 %s buffer underfilled: %d/%d frames (%.0f%%) — "
             "stream rate dropped, check USB cabling and contention.",
             orientation,
             frame_count,
@@ -1820,7 +1820,7 @@ def init_kld7(
         if tracker.connect():
             tracker.start()
             logger.info(
-                "[SERVER] K-LD7 %s initialized (port=%s, offset=%.1fÂ°, RBFR=%d)",
+                "[SERVER] K-LD7 %s initialized (port=%s, offset=%.1f°, RBFR=%d)",
                 orientation,
                 port or "auto",
                 angle_offset_deg,
@@ -2535,7 +2535,7 @@ def _emit_sim_snapshot() -> None:
     The UI builds its connector buttons from ``sim_status`` events, which
     otherwise only fire on connection-state *changes* (see _sim_on_status). A
     client that connects or refreshes after a connector already reached its
-    state would miss those events and show no button â€” the intermittent
+    state would miss those events and show no button — the intermittent
     "sometimes the sim status shows, sometimes it doesn't". Replaying a snapshot
     on connect guarantees a button for every enabled connector (sim_connectors
     holds only the enabled ones) carrying its live state.
@@ -2967,7 +2967,7 @@ def _forward_shot_to_simulators(shot: Shot) -> None:
             measured = sum(1 for p in resolved.provenance.values() if p == "measured")
             estimated = len(resolved.provenance) - measured
             logger.info(
-                "[sim] â†’ %s shot #%d: ball=%.1f vla=%.1f hla=%.1f spin=%.0f axis=%.1f "
+                "[sim] → %s shot #%d: ball=%.1f vla=%.1f hla=%.1f spin=%.0f axis=%.1f "
                 "carry=%.1f (%dM/%dE)",
                 connector.name,
                 resolved.shot_number,
@@ -2989,7 +2989,7 @@ def _sim_on_status(target: str, event) -> None:
         logger.info("[sim] %s connected (%s:%s)", target, event.host, event.port)
     elif state == "reconnecting":
         logger.info(
-            "[sim] %s reconnecting â€” attempt %s, retry in %.0fs",
+            "[sim] %s reconnecting — attempt %s, retry in %.0fs",
             target,
             event.attempt,
             event.next_retry_in_s,
@@ -3028,7 +3028,7 @@ def _sim_on_inbound(target: str, event) -> None:
     if isinstance(event, PlayerUpdate):
         sim_player_state.apply(event)
         club_value = sim_player_state.club.value
-        logger.info("[sim] â† %s player update: club=%s", target, club_value)
+        logger.info("[sim] ← %s player update: club=%s", target, club_value)
         socketio.emit(
             "sim_player",
             {"target": target, "handed": sim_player_state.handed, "club": club_value},
@@ -3045,15 +3045,13 @@ def _sim_on_inbound(target: str, event) -> None:
                 logger.exception("[sim] monitor.set_club failed")
         socketio.emit("club_changed", {"club": club_value})
     elif isinstance(event, SimError):
-        logger.warning("[sim] â† %s error: %s", target, event.message)
+        logger.warning("[sim] ← %s error: %s", target, event.message)
         socketio.emit("sim_status", {"target": target, "state": "error", "message": event.message})
     elif isinstance(event, ShotAck):
         if not event.ok:
-            logger.info(
-                "[sim] â† %s rejected shot %s: %s", target, event.shot_number, event.message
-            )
+            logger.info("[sim] ← %s rejected shot %s: %s", target, event.shot_number, event.message)
         elif debug_mode:
-            logger.info("[sim] â† %s ack: shot %s ok", target, event.shot_number)
+            logger.info("[sim] ← %s ack: shot %s ok", target, event.shot_number)
 
 
 def _apply_calculated_spin(shot: Shot) -> bool:
@@ -3332,14 +3330,14 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 shot.launch_angle_horizontal_source = "radar"
                 shot.launch_angle_horizontal_status = _iwr_azimuth_status()
                 logger.info(
-                    "[SERVER] IWR6843 TX2 horizontal proxy: %.2fÂ° (coherence %.0f%%, status=%s)",
+                    "[SERVER] IWR6843 TX2 horizontal proxy: %.2f° (coherence %.0f%%, status=%s)",
                     horizontal_deg,
                     (horizontal_confidence or 0.0) * 100,
                     horizontal_status,
                 )
             logger.info(
-                "[SERVER] IWR6843 LCMF-v1 launch: %.2fÂ° "
-                "(%d snapshots/%d frames, component std %.2fÂ°)",
+                "[SERVER] IWR6843 LCMF-v1 launch: %.2f° "
+                "(%d snapshots/%d frames, component std %.2f°)",
                 measurement.angle_deg,
                 measurement.n_snapshots,
                 measurement.n_frames,
@@ -3394,7 +3392,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 shot.experimental_attack_angle_deg = round(candidate_attack, 1)
             if accepted_path is not None:
                 logger.info(
-                    "[SERVER] Experimental IWR6843 club path: %.2fÂ° (confidence %.2f, %d frames)",
+                    "[SERVER] Experimental IWR6843 club path: %.2f° (confidence %.2f, %d frames)",
                     accepted_path,
                     club_path.confidence or 0.0,
                     club_path.n_frames,
@@ -4174,8 +4172,8 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                     selection_reason = vertical_selection_details["selection_reason"]
                     if not accepted:
                         logger.warning(
-                            "[SERVER] Vertical angle %.1fÂ° rejected: %s "
-                            "(expected=%sÂ°, delta=%sÂ°, conf=%.0f%%)",
+                            "[SERVER] Vertical angle %.1f° rejected: %s "
+                            "(expected=%s°, delta=%s°, conf=%.0f%%)",
                             kld7_angle.vertical_deg,
                             selection_reason,
                             vertical_selection_details.get("expected_launch_deg"),
@@ -4194,7 +4192,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                         shot.launch_angle_vertical_source = "radar"
                         shot.angle_source = "radar"
                         logger.info(
-                            "[SERVER] Vertical angle: %.1fÂ° (conf=%.0f%%, %d frames, %s)",
+                            "[SERVER] Vertical angle: %.1f° (conf=%.0f%%, %d frames, %s)",
                             kld7_angle.vertical_deg,
                             kld7_angle.confidence * 100,
                             kld7_angle.num_frames,
@@ -4214,17 +4212,17 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                         # but AoA is the club's attack direction (descending = negative).
                         candidate_aoa = -club_angle_v.vertical_deg
                         # Reject physically impossible AoA values.
-                        # Real AoA ranges from ~-15Â° (steep iron) to ~+8Â° (ascending driver).
+                        # Real AoA ranges from ~-15° (steep iron) to ~+8° (ascending driver).
                         if -15.0 <= candidate_aoa <= 8.0:
                             shot.club_angle_deg = candidate_aoa
                             logger.info(
-                                "[SERVER] Club AoA: %.1fÂ° (conf=%.0f%%)",
+                                "[SERVER] Club AoA: %.1f° (conf=%.0f%%)",
                                 shot.club_angle_deg,
                                 club_angle_v.confidence * 100,
                             )
                         else:
                             logger.warning(
-                                "[SERVER] Club AoA rejected: %.1fÂ° outside plausible range",
+                                "[SERVER] Club AoA rejected: %.1f° outside plausible range",
                                 candidate_aoa,
                             )
 
@@ -4269,7 +4267,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                         if shot.launch_angle_confidence is None:
                             shot.launch_angle_confidence = kld7_angle_h.confidence
                         logger.info(
-                            "[SERVER] Horizontal angle: %.1fÂ° (conf=%.0f%%, %d frames, %s)",
+                            "[SERVER] Horizontal angle: %.1f° (conf=%.0f%%, %d frames, %s)",
                             kld7_angle_h.horizontal_deg,
                             kld7_angle_h.confidence * 100,
                             kld7_angle_h.num_frames,
@@ -4277,8 +4275,8 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                         )
                     else:
                         logger.warning(
-                            "[SERVER] Horizontal angle %.1fÂ° rejected: %s "
-                            "(limit=Â±%.0fÂ°, conf=%.0f%%)",
+                            "[SERVER] Horizontal angle %.1f° rejected: %s "
+                            "(limit=±%.0f°, conf=%.0f%%)",
                             kld7_angle_h.horizontal_deg,
                             selection_reason_h,
                             horizontal_limit,
@@ -4296,7 +4294,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                     if club_angle_h and club_angle_h.horizontal_deg is not None:
                         shot.club_path_deg = club_angle_h.horizontal_deg
                         logger.info(
-                            "[SERVER] Club path: %.1fÂ° (conf=%.0f%%)",
+                            "[SERVER] Club path: %.1f° (conf=%.0f%%)",
                             club_angle_h.horizontal_deg,
                             club_angle_h.confidence * 100,
                         )
@@ -4331,7 +4329,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
             ):
                 shot.spin_axis_deg = round(shot.launch_angle_horizontal - shot.club_path_deg, 1)
                 logger.info(
-                    "[SERVER] Spin axis: %+.1fÂ° (face=%+.1fÂ° - path=%+.1fÂ°)",
+                    "[SERVER] Spin axis: %+.1f° (face=%+.1f° - path=%+.1f°)",
                     shot.spin_axis_deg,
                     shot.launch_angle_horizontal,
                     shot.club_path_deg,
@@ -4462,6 +4460,21 @@ def _attach_ball_speed_contract(shot: Shot) -> None:
         )
 
 
+def _carry_log_text(shot: Shot, source: str | None) -> str:
+    """The carry the UI shows, named, beside the table estimate it replaces (P6-6).
+
+    The UI shows ``carry_spin_adjusted`` when set, else ``estimated_carry_yards``;
+    logging the latter unlabelled once made one shot read as having three carries.
+    """
+    table = shot.estimated_carry_yards
+    if shot.carry_spin_adjusted is None:
+        return f"carry shown={table:.0f} yds (table estimate)"
+    return (
+        f"carry shown={shot.carry_spin_adjusted:.0f} yds ({source or 'spin-adjusted'}), "
+        f"table estimate={table:.0f} yds"
+    )
+
+
 def _finalize_shot_detected(
     shot: Shot,
     *,
@@ -4492,13 +4505,15 @@ def _finalize_shot_detected(
     # Compute carry. Prefer the physics simulator (drag + Magnus, RK4) when
     # ballistics is enabled and a vertical launch angle is available; fall
     # back to the table estimator otherwise (either ballistics disabled or
-    # angle missing â†’ resolve_launch returns None).
+    # angle missing → resolve_launch returns None).
     _MIN_RELIABLE_SPIN_CONF = 0.6
+    carry_source = None
     if shot.carry_spin_adjusted is None and shot.mode != "mock":
         conditions = resolve_launch(shot) if ballistics_enabled else None
         if conditions is not None:
             trajectory = simulate(conditions)
             shot.carry_spin_adjusted = trajectory.carry_yards
+            carry_source = "ballistic"
             logger.info(
                 "[SERVER] Ballistic carry: %.0f yds (spin: %.0f rpm, source: %s)",
                 shot.carry_spin_adjusted,
@@ -4523,6 +4538,7 @@ def _finalize_shot_detected(
                 shot.club,
                 club_speed_mph=shot.club_speed_mph,
             )
+            carry_source = "table with spin"
             reason = "ballistics disabled" if not ballistics_enabled else "no launch angle"
             logger.info(
                 "[SERVER] Table carry (%s): %.0f yds (spin: %.0f rpm%s)",
@@ -4645,11 +4661,11 @@ def _finalize_shot_detected(
         # Log shot info
         angle_str = ""
         if shot.launch_angle_vertical is not None:
-            angle_str = ", Launch: %.1fÂ°" % shot.launch_angle_vertical
+            angle_str = ", Launch: %.1f°" % shot.launch_angle_vertical
         logger.info(
-            "[SERVER] Shot: ball=%.1f mph, carry=%.0f yds%s",
+            "[SERVER] Shot: ball=%.1f mph, %s%s",
             shot.ball_speed_mph,
-            shot.estimated_carry_yards,
+            _carry_log_text(shot, carry_source),
             angle_str,
         )
     except Exception as e:
@@ -6302,7 +6318,7 @@ def main():
         type=float,
         default=os.getenv("KLD7_MOUNT_TILT"),
         help=(
-            "K-LD7 vertical radar mount tilt in degrees. REQUIRED with --kld7 â€” "
+            "K-LD7 vertical radar mount tilt in degrees. REQUIRED with --kld7 — "
             "measure it with a phone inclinometer against the radar face; there is "
             "no default because a wrong tilt silently corrupts the launch angle"
         ),
@@ -6752,7 +6768,7 @@ def main():
             vertical_flight_window_net_distance_ft=args.net_distance,
         ):
             offset_str = (
-                f", offset: {args.kld7_angle_offset:+.1f}Â°" if args.kld7_angle_offset else ""
+                f", offset: {args.kld7_angle_offset:+.1f}°" if args.kld7_angle_offset else ""
             )
             print(f"K-LD7 vertical radar enabled (launch angle{offset_str})")
             startup_status.ready("kld7_vertical", "K-LD7 launch radar connected")
@@ -6775,7 +6791,7 @@ def main():
             base_freq=2,
         ):
             offset_str = (
-                f", offset: {args.kld7_horizontal_offset:+.1f}Â°"
+                f", offset: {args.kld7_horizontal_offset:+.1f}°"
                 if args.kld7_horizontal_offset
                 else ""
             )

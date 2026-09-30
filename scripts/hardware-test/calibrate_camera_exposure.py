@@ -180,6 +180,43 @@ def score_result(result: dict, args: argparse.Namespace) -> float:
     return penalty
 
 
+def miss_reason(best: dict, results: list[dict], args: argparse.Namespace) -> str:
+    """Why no tested setting was acceptable, in the direction the best one missed.
+
+    A dusk scene whose brighter settings clip the sky was once told to reduce
+    its brightness; the advice follows what the best setting got wrong.
+    """
+    problems = []
+    too_dark = best["mean"] < args.target_mean_low
+    too_bright = best["mean"] > args.target_mean_high
+    if too_dark:
+        problems.append(f"too dark (mean {best['mean']:.1f}, target {args.target_mean_low:g}+)")
+    elif too_bright:
+        problems.append(
+            f"too bright (mean {best['mean']:.1f}, target up to {args.target_mean_high:g})"
+        )
+    if best["clipped_pct"] > args.max_clipped_pct:
+        problems.append(f"{best['clipped_pct']:.2f}% clipped (limit {args.max_clipped_pct:g}%)")
+    if best["dark_pct"] > args.max_dark_pct:
+        problems.append(f"{best['dark_pct']:.2f}% near black (limit {args.max_dark_pct:g}%)")
+    if too_dark:
+        brighter_clip = any(
+            result["mean"] > best["mean"] and result["clipped_pct"] > args.max_clipped_pct
+            for result in results
+        )
+        advice = (
+            "brighter settings clip, so the view spans more light than one setting covers: "
+            "light the hitting area or keep bright sky out of view"
+            if brighter_clip
+            else "add light, or sweep a longer exposure or higher gain"
+        )
+    elif too_bright or best["clipped_pct"] > args.max_clipped_pct:
+        advice = "run a lower exposure sweep or reduce scene brightness"
+    else:
+        advice = "add light to the dark parts of the view"
+    return f"the best setting is {', '.join(problems) or 'outside the target'}; {advice}."
+
+
 def black_level_dn(metadata: dict) -> float | None:
     """The sensor black level in 8-bit raw DN, from libcamera's SensorBlackLevels.
 
@@ -356,8 +393,8 @@ def main() -> int:
     )
     if not acceptable:
         print(
-            "  Reason: every tested setting missed the target window. "
-            "Run a lower exposure sweep or reduce scene brightness."
+            "  Reason: every tested setting missed the target window: "
+            + miss_reason(best, results, args)
         )
     print(f"Saved previews and results: {session_dir}")
     return 0

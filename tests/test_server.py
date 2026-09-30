@@ -5681,3 +5681,26 @@ class TestIwrAzimuthCalibration:
         server_module._apply_camera_horizontal_decision(shot, 2.25, 0.9, "radar")
 
         assert shot.launch_angle_horizontal_status == "azimuth_uncalibrated"
+
+
+class TestShotCarryLogText:
+    """P6-6: the shot line names the carry the UI shows and the table estimate beside it."""
+
+    def test_the_shown_ballistic_carry_is_named_beside_the_table_estimate(self):
+        shot = Shot(ball_speed_mph=75.8, club_speed_mph=50.6, timestamp=datetime.now())
+        shot.launch_angle_vertical = 27.8
+        shot.launch_angle_confidence = 0.5
+        shot.carry_spin_adjusted = 88.0
+
+        text = server_module._carry_log_text(shot, "ballistic")
+
+        assert text == (
+            f"carry shown=88 yds (ballistic), table estimate={shot.estimated_carry_yards:.0f} yds"
+        )
+
+    def test_without_a_spin_adjusted_carry_the_table_estimate_is_the_one_shown(self):
+        shot = Shot(ball_speed_mph=75.8, club_speed_mph=50.6, timestamp=datetime.now())
+
+        text = server_module._carry_log_text(shot, None)
+
+        assert text == f"carry shown={shot.estimated_carry_yards:.0f} yds (table estimate)"

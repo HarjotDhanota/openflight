@@ -804,12 +804,17 @@ class RollingBufferMonitor:
                         self._shot_callback(shot)
                         callback_ms = (time.time() - callback_start) * 1000
                         total_ms = (time.time() - trigger_start) * 1000
+                        # The server logs the carry it shows later, after enrichment;
+                        # this is the table estimate at detection (P6-6).
                         logger.info(
-                            "[SHOT] #%d: ball=%.1f mph, club=%s, carry=%s yds | "
+                            "[SHOT] #%d: ball=%.1f mph, club=%s, %s=%s yds | "
                             "trigger=%.0fms, process=%.0fms, callback=%.0fms, total=%.0fms",
                             shot.shot_number,
                             shot.ball_speed_mph,
                             "%.1f" % shot.club_speed_mph if shot.club_speed_mph else "N/A",
+                            "table carry (before launch angle)"
+                            if shot.launch_angle_vertical is None
+                            else "table carry",
                             "%.0f" % shot.estimated_carry_yards
                             if shot.estimated_carry_yards
                             else "N/A",
