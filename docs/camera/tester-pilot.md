@@ -128,32 +128,40 @@ picks up flashes the band once, then the band shows the result: the ball
 speed, **No radar shot** or **Not a shot**. Wait for SWING before each swing;
 a swing on amber or red may not count.
 
-Use the numbered test suite for a normal collection: **1. Set up the rig**,
-**2. Check hardware and light**, **3. Automatic ball range**, **4. Capture the
-exposure ladder**, then **5. Review and package**. **Advanced: manual single-arm tools** is for a
-maintainer-directed investigation of one mode; it is not the normal pilot and
-does not replace the ladder.
+Use the numbered test suite for a normal collection: **1. Set up the rig and
+place the box**, **2. Check hardware and light**, **3. Automatic ball range**,
+**4. Capture the exposure ladder**, then **5. Review and package**. **Advanced:
+manual single-arm tools** is for a maintainer-directed investigation of one mode;
+it is not the normal pilot and does not replace the ladder.
 
-**3. Automatic ball range** starts with the placement box: set the unit down
-where it will stay, drag the yellow box on the live picture to where you will
-hit from, and press **Confirm the box**. The camera and radar checks that follow
-all work from it (see [Automatic ball range](#automatic-ball-range)).
+**The placement box is step 1.** Set the unit down where it will stay and confirm
+the physical setup; the live 1280×800 picture then opens by itself under **Place
+the box**. Drag the yellow box to where you will hit from and press **Confirm the
+box**. Everything after it works from the box, and stays locked until it is
+confirmed: the hardware check (A), the light measurement (B), which is judged
+inside the box, the ball range and the ladder. The box is also the camera's first
+check: if the picture does not open, the step says the camera did not answer and
+offers **Show the camera** (see [Automatic ball range](#automatic-ball-range)).
 
 ## Test suite
 
 On the study page, fill in **Who and where**, review the setup checks and confirm
-the physical setup. Then work down **Test suite**:
+the physical setup. Then place the box (step 1, above) and work down **Test
+suite**:
 
 1. **A. Check the hardware.** Ready means the software and camera answered.
 2. **B. Measure the light.** Runs the camera's light screen at both modes, about
    a minute each. Keep the room as you will hit in; it also proves each camera
-   mode streams. Each mode then reads "light sufficient", "more light needed"
-   (swings become evidence only), "too bright: shorter exposures used" or "mixed
-   light" (a sunlit patch clipped the brighter gains, so the gain stays below it).
-   The last two are normal outdoors. Under the button the page shows how long
-   ago the light was measured. Outdoors a measurement lasts 30 minutes; indoors
-   it lasts the day. After that, or if you move between indoors and outdoors,
-   the page asks you to measure the light again, and **C** waits until you do.
+   mode streams. The light is judged inside the box you confirmed (halved for
+   640×400), not over a fixed part of the picture, so a bright sky or a dark
+   fence elsewhere does not decide it. Each mode then reads "light sufficient",
+   "more light needed" (swings become evidence only), "too bright: shorter
+   exposures used" or "mixed light" (a sunlit patch clipped the brighter gains,
+   so the gain stays below it). The last two are normal outdoors. Under the
+   button the page shows how long ago the light was measured. Outdoors a
+   measurement lasts 30 minutes; indoors it lasts the day. After that, if you
+   move between indoors and outdoors, or if you move the box, the page asks you
+   to measure the light again, and **C** waits until you do.
 3. **C. Start the exposure ladder.** The page sets each exposure itself and shows
    which one you are on. Hit a normal shot, wait for the verdict, repeat. It moves
    on after 5 good swings, and skips exposures your light cannot support. An
@@ -312,23 +320,48 @@ check, not proof of absolute accuracy.
 
 ### Automatic ball range
 
-**First, the placement box.** Set the unit down where it will stay. The page
-shows the live 1280×800 picture with a yellow box straight ahead of the unit;
-drag it (mouse or finger) over the spot you will hit from, then press **Confirm
-the box**. Nothing is captured before that: the radar captures, both camera
-steps and the ladder's ball checks all work from this box, and every camera
-search looks only inside it (640×400 uses the same box halved). The box has a
-fixed size on every unit, about 0.20 m wide at 1.35 m, and tall enough for a
-ball on the surface or on a raised mat; you only move it. It does not measure
-distance: at the lens's 95 mm the whole 1.2–1.5 m zone is about 11 rows of the
-picture. A ball found in the box still has to pass the hitting-area checks
-(distance, height above the surface, size), so a box dragged onto the net or the
-sky finds nothing and says so. With no ball in it the page says "no ball in the
-box: put the ball in the box". A new setup (**Start over**, or after the rig or
-its tilt changed) asks for the box again, starting where you last confirmed it.
-If the picture is missing, press **Show the camera**.
+**First, the placement box (step 1).** Set the unit down where it will stay and
+confirm the physical setup. The page then opens the live 1280×800 picture under
+**Place the box**, with a yellow box straight ahead of the unit, or where you last
+confirmed it; drag it (mouse or finger) over the spot you will hit from, then
+press **Confirm the box**. Nothing is checked or captured before that: the
+hardware check, the light measurement, the radar captures, both camera steps and
+the ladder's ball checks all work from this box, and every camera search looks
+only inside it (640×400 uses the same box halved). The box has a fixed size on
+every unit, about 0.20 m wide at 1.35 m, and tall enough for a ball on the surface
+or on a raised mat; you only move it. It does not measure distance: at the lens's
+95 mm the whole 1.2–1.5 m zone is about 11 rows of the picture. A ball found in
+the box still has to pass the hitting-area checks (distance, height above the
+surface, size), so a box dragged onto the net or the sky finds nothing and says
+so. With no ball in it the page says "no ball in the box: put the ball in the
+box". The picture sets its own brightness while it is open, so the scene shows in
+sun or at dusk before the light has been measured; "Adjusting brightness…" shows
+under it until it settles, usually within two to four looks. That brightness is
+for viewing only: it is logged as `box_preview` and never used as a light
+measurement, a lock or a starting point for the camera checks. If the picture does
+not open, the step says the camera did not answer (the first camera check of the session); fix the cable or close whatever holds the
+camera, then press **Show the camera**. After a restart of the tester, or a new
+physical setup confirmation, the page asks for the box again, starting where you
+last confirmed it; confirming it in the same spot changes nothing.
 
-Then the workflow asks for empty/ball IWR captures, an Arm 5 reference frame and
+**The box is the hitting zone.** Wherever the tester judges the hitting zone it
+uses the confirmed box instead of the fixed centre-lower part of the picture
+(rows 45–90 %, columns 20–80 %): the light screens (B), the ladder's light checks
+("N% of the box clipped") and the kiosk's capture-time exposure rating when it has
+no setup ball. The fixed zone remains only when no box was confirmed, and every
+stored zone result says which was used (`zone_source`: `placement_box` or
+`fixed`).
+
+**Moving the box later.** Press **Move the box**, drag it and confirm it. A box
+moved more than a few pixels (4 at 1280×800) makes the light measurement stale
+(B asks to be run again, and **C** waits for it) and starts the ball range over,
+the same as **Ball or rig moved: start over**; the new setup records the move, the
+previous setup and the time (`started_by`), and `placement-box.json` keeps the
+history of every confirmation with its time. Stop the ladder first: a move is
+refused while a capture holds the camera or radar. Confirming the box in the same
+spot changes nothing.
+
+Step 3 then begins directly with the camera and radar checks. The workflow asks for empty/ball IWR captures, an Arm 5 reference frame and
 an Arm 6 validation frame. Each setup epoch is immutable; **Start over / ball
 moved** preserves it and creates a new one, while refresh resumes the saved step.
 Without a qualification the setup finishes **experimental** when the 1280×800
@@ -587,7 +620,7 @@ every earlier frame and failure record for review.
 | The 640×400 step cannot lock, or says `keep only the ball in the box` | Its view is too dark, too bright or holds more than one ball-like thing in the box | The check is advisory: press **Skip the 640×400 check and save**, or keep its raw evidence; the setup still saves. Spare balls in the box also confuse the 1280×800 step, so move them out before the next setup |
 | `the LIS3DH reading has no camera pitch` | The inclinometer is off or still settling (for example just after the kiosk handed it back) | Wait a few seconds for a stable reading, then press the step again |
 | `The camera hasn't found the ball, so the ladder can't judge your swings` when pressing **C** | The setup's camera never picked out the ball in its box (a spare ball or a white cloth in the box, or the ball outside it, too far, dark or raised) in the mode the ladder starts in. A setup whose radar range is unresolved still runs once the camera found the ball | Run the setup again: drag the box over the spot you hit from, put the ball inside it on the hitting surface, keep spare balls and white things out of the box, then press **C** |
-| `no ball in the box: put the ball in the box` during a camera step | The camera looks only inside the box you confirmed, and nothing ball-like is there | Move the ball into the box. If the box is in the wrong place, press **Start over** and drag it over the ball |
+| `no ball in the box: put the ball in the box` during a camera step | The camera looks only inside the box you confirmed, and nothing ball-like is there | Move the ball into the box. If the box is in the wrong place, press **Move the box** in step 1 and drag it over the ball (the ball range then starts over) |
 | **Confirm the box** stays greyed out, or `The camera is not showing` | The live picture is not running, so there is no box to place | Press **Show the camera**; if it still fails, run **A. Check the hardware** |
 | Ladder verdict red: `ball: the setup has no ball position for this camera mode` | The setup's camera never found the ball, so a swing's pictures cannot be checked against it | Press **Stop**, run the setup again until the camera finds the ball, then press **C** |
 | Ladder verdict amber: `resting ball not found` | The camera could not distinguish a plausible resting ball in that frame | The swing still counts; keep placing the ball in the same spot |

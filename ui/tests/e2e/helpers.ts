@@ -240,4 +240,40 @@ export async function overflowingLiveMetricMetadata(page: Page): Promise<string[
   });
 }
 
+/** Step 1's placement box as the tester server reports it (P7-15). */
+export function placementBoxState(testerId: string, state = 'confirmed', overrides: object = {}) {
+  return {
+    tester_id: testerId,
+    state,
+    previewing: false,
+    setup_blockers: [],
+    box: {
+      arm_id: 'arm5',
+      frame_size_px: [1280, 800],
+      box_px: [562, 361, 718, 491],
+      size_px: [156, 130],
+      default_box_px: [562, 361, 718, 491],
+      source: state === 'confirmed' ? 'tester_dragged' : 'default_straight_ahead',
+    },
+    confirmed_at_utc: state === 'confirmed' ? '2026-09-30T18:00:00+00:00' : null,
+    ...overrides,
+  };
+}
+
+/**
+ * The box already confirmed for whichever tester the page asks about, so the steps
+ * after it (hardware, light, ball range, ladder) are open, as they are once a
+ * tester has placed it.
+ */
+export async function mockConfirmedPlacementBox(page: Page) {
+  await page.route('**/api/tester/placement-box**', (route) => {
+    const testerId = new URL(route.request().url()).searchParams.get('tester_id') ?? '20260922-name';
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(placementBoxState(testerId)),
+    });
+  });
+}
+
 export { expect };

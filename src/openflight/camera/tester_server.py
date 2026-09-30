@@ -45,6 +45,7 @@ from openflight.camera import (
     tester_ready_light,
     worker_lifetime,
 )
+from openflight.camera.auto_exposure import hitting_zone
 from openflight.camera.club_motion import detect_reference_ball
 from openflight.camera.fusion_diagnostics import register_fusion_diagnostics
 from openflight.camera.paired_eligibility import evaluate_paired_capture
@@ -960,6 +961,19 @@ def setup_placement_box(solution: tee_range.TeeRangeSolution | None) -> dict | N
     return None
 
 
+def ladder_zone_box(
+    solution: tee_range.TeeRangeSolution | None, arm_id: str
+) -> tuple[int, int, int, int] | None:
+    """The hitting zone the ladder and the kiosk judge: the setup's box in this mode.
+
+    None (the fixed box) when the setup recorded no confirmed box (P7-15).
+    """
+    arm = ARMS.get(arm_id)
+    if arm is None:
+        return None
+    return mode_placement_box(setup_placement_box(solution), arm)
+
+
 def tee_range_handoff(
     solution: tee_range.TeeRangeSolution | None,
     *,
@@ -1136,6 +1150,9 @@ def choose_gain(
             "clipped_pct": float(pick.get("clipped_pct", 0.0)),
             "zone_median": pick.get("zone_median"),
             "zone_clipped_pct": pick.get("zone_clipped_pct"),
+            # the tester's placement box, or the fixed box on older screens (P7-15)
+            "zone_source": pick.get("zone_source", "fixed" if zoned else None),
+            "zone_box_px": pick.get("zone_box_px"),
             "lighting_required": False,
             "too_bright": False,
             "mixed_light": False,
@@ -1345,17 +1362,36 @@ def _screen_folder_time(arm_dir: Path) -> datetime | None:
         return None
 
 
+def _screen_box_reason(state: Mapping, placement_box: Mapping | None) -> str | None:
+    """Why a screen no longer describes the tester's confirmed box, if it does not (P7-15).
+
+    The light is judged inside the box, so a screen measured over the fixed zone,
+    or in a box the tester has since moved, is measured again. Re-confirming the
+    same spot changes nothing.
+    """
+    if not isinstance(placement_box, Mapping) or placement_box.get("box_px") is None:
+        return None
+    screened = state.get("gain_placement_box_px")
+    if screened is None:
+        return "was measured over the fixed hitting zone, not your box"
+    if placement_box_moved({"box_px": screened}, placement_box):
+        return "was measured in a box you have since moved"
+    return None
+
+
 def gain_screen_age(
     state: Mapping,
     arm_dir: Path,
     environment: str | None,
     *,
     now: datetime | None = None,
+    placement_box: Mapping | None = None,
 ) -> dict:
     """How old this arm's gain screen is, where it was measured, and whether it is stale.
 
     Screens recorded before the time was saved (wiring audit T14) are dated by
-    their folder; with neither, the age is unknown and nothing is asked.
+    their folder; with neither, the age is unknown and nothing is asked. A screen
+    measured anywhere but the tester's confirmed ``placement_box`` is stale too.
     """
     screened_in = state.get("gain_environment")
     try:
@@ -1372,6 +1408,8 @@ def gain_screen_age(
         pass
     elif environment and screened_in and environment != screened_in:
         reason = f"was measured {screened_in} and you are {environment} now"
+    elif box_reason := _screen_box_reason(state, placement_box):
+        reason = box_reason
     elif light == "outdoors" and age_s > GAIN_SCREEN_OUTDOOR_MAX_AGE_S:
         reason = f"is {round(age_s / 60)} min old, and outdoor light changes within half an hour"
     elif light == "indoors" and when.astimezone().date() != now.astimezone().date():
@@ -1402,7 +1440,12 @@ def ladder_gain_facts(sessions_root: Path, params: TesterParameters) -> dict:
         **facts,
         "gain_at_300_equivalent": float(equivalent) if equivalent is not None else gain,
         "too_bright": bool(state.get("too_bright", False)),
-        "screen": gain_screen_age(state, arm_directory(sessions_root, params), params.environment),
+        "screen": gain_screen_age(
+            state,
+            arm_directory(sessions_root, params),
+            params.environment,
+            placement_box=read_last_placement_box(tester_root(sessions_root, params.tester_id)),
+        ),
     }
 
 
@@ -1608,11 +1651,14 @@ def action_commands(
     use_unqualified_tee_range: bool = False,
     handed_to_swings: Mapping | None = None,
     iwr_calibration: Path = DEFAULT_IWR_CALIBRATION,
+    zone_box: Sequence[int] | None = None,
 ) -> tuple[list[list[str]], Path]:
     """Build an allowlisted command sequence and its log path.
 
     ``handed_to_swings`` (from ``tee_range_handoff``) supplies the tee-range
     arguments, so the kiosk runs with exactly what the tester records.
+    ``zone_box`` is the tester's confirmed box in this arm's pixels: the gain
+    screen measures its hitting zone there (P7-15).
     """
     if action not in ACTION_LABELS:
         raise ValueError("unknown tester action")
@@ -1660,6 +1706,11 @@ def action_commands(
                 "--no-prompt",
                 "--outdir",
                 root / "gain",
+                *(
+                    ["--zone-box", ",".join(str(int(value)) for value in zone_box)]
+                    if zone_box is not None
+                    else []
+                ),
             )
         ]
     elif action == "ladder":
@@ -1747,6 +1798,12 @@ def action_commands(
                     "--camera-setup-ball",
                     ",".join(f"{setup_ball[key]:.1f}" for key in ("x", "y", "diameter_px")),
                 ]
+            )
+        # and the hitting zone is the setup's placement box in this mode (P7-15)
+        hitting_zone = ladder_zone_box(tee_range_solution, params.arm_id)
+        if hitting_zone is not None:
+            commands[0].extend(
+                ["--camera-hitting-zone", ",".join(str(int(value)) for value in hitting_zone)]
             )
         commands[0].extend(
             [
@@ -2448,6 +2505,116 @@ PLACEMENT_BOX_SCHEMA = "openflight.tester_placement_box.v1"
 # The box is placed on the 1280x800 view; 640x400 is the same view 2x binned.
 PLACEMENT_BOX_ARM = "arm5"
 PUT_BALL_IN_BOX = "no ball in the box: put the ball in the box"
+# A re-confirmed box within this many pixels (1280x800) of the last one has not
+# moved: the light and the ball range stand (P7-15).
+PLACEMENT_BOX_MOVE_TOLERANCE_PX = 4
+PLACEMENT_BOX_REQUIRED = (
+    "confirm the placement box first (step 1): drag it over the spot you will hit from"
+)
+# The ladder's modes: their light screens and the ball range need the box (P7-15).
+PLACEMENT_BOX_REQUIRED_ARMS = frozenset({"arm5", "arm6"})
+# The setup checks the box waits for are all but the hardware check, which follows it.
+PLACEMENT_BOX_DEFERRED_BLOCKERS = frozenset({"iwr6843_cli"})
+PLACEMENT_BOX_SETUP_REQUIRED = "confirm the physical setup first: the box follows it"
+
+
+def placement_box_binding(eligibility: Mapping) -> dict:
+    """The physical setup confirmation a box belongs to; a new one asks for it again."""
+    confirmation = eligibility.get("operator_confirmation") or {}
+    return {
+        "tester_id": eligibility.get("tester_id"),
+        "config_hash": eligibility.get("config_hash"),
+        "operator_confirmed_at": confirmation.get("confirmed_at"),
+    }
+
+
+def placement_box_setup_blockers(eligibility: Mapping) -> list:
+    """The setup blockers that stop the box step (all but the later hardware check)."""
+    return [
+        blocker
+        for blocker in eligibility.get("blockers") or []
+        if blocker.get("id") not in PLACEMENT_BOX_DEFERRED_BLOCKERS
+    ]
+
+
+def placement_box_shift_px(previous: Mapping | None, current: Mapping | None) -> float | None:
+    """How far a box moved: the largest change of any edge, in 1280x800 pixels."""
+    try:
+        before = [float(value) for value in previous["box_px"]]  # type: ignore[index]
+        after = [float(value) for value in current["box_px"]]  # type: ignore[index]
+    except (KeyError, TypeError, ValueError):
+        return None
+    if len(before) != 4 or len(after) != 4:
+        return None
+    return max(abs(a - b) for a, b in zip(before, after))
+
+
+def placement_box_moved(previous: Mapping | None, current: Mapping | None) -> bool:
+    """Whether a box is somewhere else, beyond a few pixels (or cannot be compared)."""
+    shift = placement_box_shift_px(previous, current)
+    return shift is None or shift > PLACEMENT_BOX_MOVE_TOLERANCE_PX
+
+
+def placement_box_evidence(record: Mapping) -> dict:
+    """The confirmed box as a setup's evidence: the record without its history."""
+    return {key: value for key, value in record.items() if key not in {"history", "schema"}}
+
+
+def confirmed_placement_box(root: Path, eligibility: Mapping) -> dict | None:
+    """The box confirmed under this physical setup confirmation, if any (P7-15)."""
+    record = read_last_placement_box(root)
+    if record is None or record.get("setup_binding") != placement_box_binding(eligibility):
+        return None
+    return record
+
+
+def confirm_placement_box(
+    root: Path, record: Mapping, binding: Mapping, *, request_id: str | None = None
+) -> tuple[dict, str]:
+    """Save the tester's confirmed box, and say what changed (P7-15).
+
+    ``unchanged``: the same spot (within the tolerance) under the same setup;
+    nothing is written. ``reconfirmed``: the same spot under a new physical setup
+    confirmation; the spot is kept. ``first`` or ``moved``: a new spot. Every
+    change is appended to the file's history with its time, and a move with its
+    distance.
+    """
+    last = read_last_placement_box(root)
+    same_spot = last is not None and not placement_box_moved(last, record)
+    if same_spot and last.get("setup_binding") == dict(binding):
+        return last, "unchanged"
+    now = str(record.get("confirmed_at_utc") or datetime.now(timezone.utc).isoformat())
+    history = list(last.get("history") or []) if last is not None else []
+    if same_spot:
+        change = "reconfirmed"
+        saved = {**last, "setup_binding": dict(binding), "reconfirmed_at_utc": now}
+        entry = {}
+    else:
+        change = "first" if last is None else "moved"
+        saved = {**dict(record), "setup_binding": dict(binding)}
+        saved.pop("moved_from_box_px", None)
+        saved.pop("moved_px", None)
+        saved.pop("reconfirmed_at_utc", None)
+        entry = {}
+        if last is not None:
+            entry = {
+                "moved_from_box_px": list(last["box_px"]),
+                "moved_px": placement_box_shift_px(last, record),
+            }
+            saved.update(entry)
+    history.append(
+        {
+            "change": change,
+            "at_utc": now,
+            "box_px": list(saved["box_px"]),
+            "request_id": request_id,
+            **entry,
+        }
+    )
+    saved["change"] = change
+    saved["history"] = history
+    remember_placement_box(root, saved)
+    return read_last_placement_box(root) or saved, change
 
 
 def _placement_roll_deg(rig_geometry: Path, tilt: Mapping) -> float | None:
@@ -2553,9 +2720,157 @@ def mode_placement_box(record: Mapping | None, arm: Arm) -> tuple[int, int, int,
     return reference_ball_range.scale_placement_box(box, factor)
 
 
-def placement_preview_controls(state: Mapping) -> tuple[int, float]:
-    """Exposure and gain for the box preview, from the light screen (step B)."""
+# The box step's preview sets its own brightness, for viewing only (P7-15b): it
+# runs before the light screen, and a fixed start is white in sun and black at dusk.
+BOX_PREVIEW_PURPOSE = "box_preview"
+BOX_PREVIEW_MEDIAN_DN = (90.0, 120.0)
+BOX_PREVIEW_TARGET_DN = 105.0
+BOX_PREVIEW_MAX_CLIPPED_PCT = 5.0
+BOX_PREVIEW_EXPOSURE_MIN_US = 9  # the sensor's one row
+BOX_PREVIEW_GAIN_MAX = 15.9
+BOX_PREVIEW_FRAME_MARGIN_US = 300
+BOX_PREVIEW_MAX_STEP = 16.0  # the most one step changes exposure x gain, either way
+
+
+class BoxPreviewExposure:
+    """Walks the box preview's exposure x gain into a viewing band (P7-15b).
+
+    It is the live view's analyzer while the box step shows the picture. Each look
+    measures the frame's median and clipped share (over the placed box when there
+    is one, else the whole frame) on frames the sensor took at the last request,
+    and asks for the exposure x gain that the linear response (signal ~ exposure x
+    gain above black) puts at the band's middle. Short exposures with more gain
+    are preferred. Display only: nothing it chooses is saved, and the setup, the
+    light screen and the ladder never read it; its log lines say so.
+    """
+
+    def __init__(
+        self,
+        live,
+        arm: Arm,
+        start: tuple[int, float],
+        *,
+        box_px: Sequence[int] | None = None,
+        black_dn: float = SENSOR_BLACK_LEVEL_DN,
+    ):
+        self._live = live
+        self._arm = arm
+        self._box = tuple(int(value) for value in box_px) if box_px is not None else None
+        self._black = float(black_dn)
+        self._exposure_max = max(
+            BOX_PREVIEW_EXPOSURE_MIN_US,
+            int(1_000_000 / arm.fps) - BOX_PREVIEW_FRAME_MARGIN_US,
+        )
+        self._lock = threading.Lock()
+        self._requested = (int(start[0]), float(start[1]))
+        self._state = "adjusting"
+        self._steps = 0
+        self._measured: dict | None = None
+
+    def split(self, product: float) -> tuple[int, float]:
+        """Exposure and gain for this exposure x gain: the shortest exposure, then gain."""
+        exposure = max(
+            BOX_PREVIEW_EXPOSURE_MIN_US, math.ceil(float(product) / BOX_PREVIEW_GAIN_MAX)
+        )
+        exposure = min(exposure, self._exposure_max)
+        gain = min(BOX_PREVIEW_GAIN_MAX, max(1.0, float(product) / exposure))
+        return int(exposure), round(gain, 2)
+
+    def status(self) -> dict:
+        with self._lock:
+            exposure, gain = self._requested
+            return {
+                "purpose": BOX_PREVIEW_PURPOSE,
+                "display_only": True,
+                "state": self._state,
+                "steps": self._steps,
+                "requested": {"exposure_us": exposure, "gain": gain},
+                "region": "placement_box" if self._box is not None else "frame",
+                "measured": dict(self._measured) if self._measured else None,
+            }
+
+    def _matches(self, applied) -> bool:
+        exposure, gain = applied if applied is not None else (None, None)
+        wanted_exposure, wanted_gain = self._requested
+        if exposure is not None and abs(float(exposure) - wanted_exposure) > max(
+            15.0, 0.1 * wanted_exposure
+        ):
+            return False
+        return gain is None or abs(float(gain) - wanted_gain) <= 0.1 * wanted_gain
+
+    def __call__(self, frames: np.ndarray, frame_sequence: int, applied=None) -> dict:
+        frames = np.asarray(frames)
+        applied = list(applied or [])
+        with self._lock:
+            matched = [
+                index
+                for index in range(len(frames))
+                if self._matches(applied[index] if index < len(applied) else None)
+            ]
+            if not matched:
+                return {"status": BOX_PREVIEW_PURPOSE, "preview_exposure": self._state}
+            image = np.median(frames[matched], axis=0)
+            height, width = image.shape
+            (x0, y0, x1, y1), _source = hitting_zone(height, width, self._box)
+            if self._box is None:
+                x0, y0, x1, y1 = 0, 0, width, height
+            region = image[y0:y1, x0:x1]
+            median = float(np.median(region))
+            clipped = float(np.mean(region >= 250) * 100.0)
+            self._measured = {"median_dn": round(median, 1), "clipped_pct": round(clipped, 2)}
+            low, high = BOX_PREVIEW_MEDIAN_DN
+            if low <= median <= high and clipped < BOX_PREVIEW_MAX_CLIPPED_PCT:
+                self._state = "settled"
+                return {"status": BOX_PREVIEW_PURPOSE, "preview_exposure": self._state}
+            signal = median - self._black
+            if median >= 250.0:
+                factor = 1.0 / 8.0  # clipped: the level says nothing but "less"
+            elif signal < 2.0:
+                factor = BOX_PREVIEW_MAX_STEP  # black: the level says nothing but "more"
+            else:
+                factor = (BOX_PREVIEW_TARGET_DN - self._black) / signal
+                if clipped >= BOX_PREVIEW_MAX_CLIPPED_PCT:
+                    factor = min(factor, 0.5)
+            factor = min(BOX_PREVIEW_MAX_STEP, max(1.0 / BOX_PREVIEW_MAX_STEP, factor))
+            exposure, gain = self._requested
+            wanted = self.split(exposure * gain * factor)
+            if wanted == self._requested:
+                # the sensor can go no further: the picture is as good as it gets
+                self._state = "limit"
+                return {"status": BOX_PREVIEW_PURPOSE, "preview_exposure": self._state}
+            self._requested = wanted
+            self._state = "adjusting"
+            self._steps += 1
+        logger.info(
+            "[BOX_PREVIEW] purpose=%s (display only, never a light measurement): "
+            "median %.0f DN, %.1f%% clipped at %d us x %.2f -> %d us x %.2f",
+            BOX_PREVIEW_PURPOSE,
+            median,
+            clipped,
+            exposure,
+            gain,
+            wanted[0],
+            wanted[1],
+        )
+        try:
+            self._live.change_controls(wanted[0], wanted[1], owner=self)
+        except RuntimeError as exc:
+            logger.info("[BOX_PREVIEW] the preview stopped before its controls changed: %s", exc)
+        return {"status": BOX_PREVIEW_PURPOSE, "preview_exposure": "adjusting"}
+
+
+def placement_preview_controls(
+    state: Mapping, remembered: StaticExposureStep | None = None
+) -> tuple[int, float]:
+    """Exposure and gain for the box preview.
+
+    The box comes before the light screen (P7-15), so a tester's first preview
+    has no screen: the last verified ball lock for 1280x800 (``remembered``) sets
+    it, else the default. A screen from earlier in the session sets it as before.
+    """
     arm = ARMS[PLACEMENT_BOX_ARM]
+    if remembered is not None and "gain_at_300_equivalent" not in state and "gain" not in state:
+        return int(remembered.exposure_us), float(remembered.gain)
     try:
         equivalent = float(state.get("gain_at_300_equivalent", state.get("gain", 4.0)))
     except (TypeError, ValueError):
@@ -5162,6 +5477,10 @@ def arm_progress(sessions_root: Path, params: TesterParameters) -> dict:
 def study_overview(sessions_root: Path, tester_id: str, environment: str | None = None) -> dict:
     """Every arm's state for this tester, for the page's walkthrough."""
     arms = []
+    try:
+        box = read_last_placement_box(tester_root(sessions_root, tester_id))
+    except ValueError:
+        box = None
     for arm_id in ARM_ORDER:
         arm = ARMS[arm_id]
         state = read_arm_state(sessions_root, tester_id, arm_id)
@@ -5170,7 +5489,9 @@ def study_overview(sessions_root: Path, tester_id: str, environment: str | None 
             probe = TesterParameters(tester_id, arm_id, "indoors")
             progress = arm_progress(sessions_root, probe)
             if state.get("gain") is not None:
-                screen = gain_screen_age(state, arm_directory(sessions_root, probe), environment)
+                screen = gain_screen_age(
+                    state, arm_directory(sessions_root, probe), environment, placement_box=box
+                )
         except ValueError:
             progress = {}
         arms.append(
@@ -5262,6 +5583,8 @@ def create_app(
     live_owner_lock = threading.RLock()
     live_owner: dict[str, dict[str, str] | None] = {"guided": None}
     guided_analyzer: dict[str, GuidedRangeAnalyzer | None] = {"value": None}
+    # the box step's viewing brightness; read by nothing but the page's note (P7-15b)
+    box_preview_exposure: dict[str, BoxPreviewExposure | None] = {"value": None}
     iwr_preflight: dict[str, bool] = {}
 
     def live_owner_snapshot() -> dict[str, str] | None:
@@ -5601,11 +5924,13 @@ def create_app(
             "stopped": runner.stopped,
         }
 
-    def record_gain(params: TesterParameters) -> None:
+    def record_gain(params: TesterParameters, box: Mapping | None = None) -> None:
+        """Save the screen's choice, and the zone it judged: ``box`` is the confirmed box."""
         results = latest_gain_results(arm_directory(sessions_root, params))
         if not results:
             return
         choice = choose_gain(results)
+        boxed = choice.get("zone_source") == "placement_box" and isinstance(box, Mapping)
         write_arm_state(
             sessions_root,
             params,
@@ -5620,6 +5945,13 @@ def create_app(
             gain_clipped_pct=choice["clipped_pct"],
             gain_zone_median=choice["zone_median"],
             gain_zone_clipped_pct=choice["zone_clipped_pct"],
+            # which zone the light was judged on, so a moved box makes it stale (P7-15)
+            gain_zone_source=choice.get("zone_source"),
+            gain_zone_box_px=choice.get("zone_box_px"),
+            gain_placement_box_px=list(box["box_px"]) if boxed else None,
+            gain_placement_box_confirmed_at=(
+                (box.get("reconfirmed_at_utc") or box.get("confirmed_at_utc")) if boxed else None
+            ),
             lighting_required=choice["lighting_required"],
             too_bright=choice["too_bright"],
             mixed_light=choice["mixed_light"],
@@ -5684,24 +6016,51 @@ def create_app(
         )
         return placement_box_geometry_for(model, rig_geometry, reading)
 
-    def placement_box_display(tester_id: str, state) -> dict | None:
-        """The box the page draws: to drag and confirm, or as confirmed for this setup."""
-        if state is None:
+    BOX_DISPLAY_KEYS = ("arm_id", "frame_size_px", "box_px", "size_px", "default_box_px", "source")
+
+    def placement_box_display(state) -> dict | None:
+        """The box this setup searches, drawn (not dragged) over its camera steps."""
+        confirmed = state.evidence.get("placement_box") if state is not None else None
+        if not isinstance(confirmed, Mapping):
             return None
-        confirmed = state.evidence.get("placement_box")
-        if state.phase != "needs_box":
-            if not isinstance(confirmed, Mapping):
-                return None
-            keys = ("arm_id", "frame_size_px", "box_px", "size_px", "default_box_px", "source")
-            return {**{key: confirmed.get(key) for key in keys}, "state": "confirmed"}
+        return {**{key: confirmed.get(key) for key in BOX_DISPLAY_KEYS}, "state": "confirmed"}
+
+    def placement_box_status(tester_id: str, eligibility: Mapping) -> dict:
+        """Step 1's box: confirmed for this setup, or where to start dragging it (P7-15)."""
+        root = tester_root(sessions_root, tester_id)
+        blockers = placement_box_setup_blockers(eligibility)
+        owner = live_owner_snapshot()
+        payload = {
+            "tester_id": tester_id,
+            "previewing": bool(
+                owner
+                and owner.get("kind") == "placement_box"
+                and owner.get("tester_id") == tester_id
+            ),
+            "setup_blockers": blockers,
+        }
+        confirmed = confirmed_placement_box(root, eligibility)
+        if confirmed is not None:
+            return {
+                **payload,
+                "state": "confirmed",
+                "box": {key: confirmed.get(key) for key in BOX_DISPLAY_KEYS},
+                "confirmed_at_utc": confirmed.get("confirmed_at_utc"),
+                "reconfirmed_at_utc": confirmed.get("reconfirmed_at_utc"),
+                "change": confirmed.get("change"),
+            }
         try:
             geometry = box_geometry()
         except (OSError, TypeError, ValueError, KeyError) as exc:
-            return {"state": "unavailable", "reason": str(exc)}
-        last = read_last_placement_box(range_store(tester_id).tester_root)
-        return {**proposed_placement_box(geometry, last), "state": "needs_confirmation"}
+            return {**payload, "state": "unavailable", "box": None, "reason": str(exc)}
+        proposed = proposed_placement_box(geometry, read_last_placement_box(root))
+        return {
+            **payload,
+            "state": "setup_not_confirmed" if blockers else "needs_confirmation",
+            "box": proposed,
+        }
 
-    def start_box_preview(tester_id: str, state, *, take_over: bool = False) -> None:
+    def start_box_preview(tester_id: str, *, take_over: bool = False) -> None:
         """Show the 1280x800 view so the tester can drag the box over the hitting spot.
 
         A live view someone else opened is only replaced when the tester asks.
@@ -5710,38 +6069,151 @@ def create_app(
         if busy:
             raise RuntimeError(busy)
         exposure_us, gain = placement_preview_controls(
-            read_arm_state(sessions_root, tester_id, PLACEMENT_BOX_ARM)
+            read_arm_state(sessions_root, tester_id, PLACEMENT_BOX_ARM),
+            read_static_exposure_warm_start(
+                tester_root(sessions_root, tester_id),
+                PLACEMENT_BOX_ARM,
+                ARMS[PLACEMENT_BOX_ARM],
+            ),
         )
+        arm = ARMS[PLACEMENT_BOX_ARM]
+        placed = read_last_placement_box(tester_root(sessions_root, tester_id))
+        box = (
+            placed["box_px"]
+            if placed is not None
+            and list(placed.get("frame_size_px") or []) == [arm.width, arm.height]
+            else None
+        )
+        # the picture's brightness is set for viewing only, never recorded (P7-15b)
+        brightness = BoxPreviewExposure(live, arm, (exposure_us, gain), box_px=box)
         with live_owner_lock:
-            live.start(ARMS[PLACEMENT_BOX_ARM], exposure_us, gain)
+            live.start(arm, exposure_us, gain, analyzer=brightness)
             guided_analyzer["value"] = None
+            box_preview_exposure["value"] = brightness
             live_owner["guided"] = {
                 "kind": "placement_box",
                 "tester_id": tester_id,
-                "epoch_id": state.epoch_id,
+                "epoch_id": None,
                 "arm_id": PLACEMENT_BOX_ARM,
             }
 
-    def _confirm_placement_box(tester_id: str, state, request_id: str, requested):
-        if state is None or state.phase != "needs_box":
-            raise RuntimeError(f"tee-range setup is {state.phase if state else 'not_started'}")
-        if request_id in state.request_ids:
-            return state
-        store = range_store(tester_id)
+    def stop_box_preview(tester_id: str) -> None:
+        with live_owner_lock:
+            owner = live_owner["guided"]
+            if (
+                owner
+                and owner.get("kind") == "placement_box"
+                and owner.get("tester_id") == tester_id
+            ):
+                live.stop()
+                live_owner["guided"] = None
+                guided_analyzer["value"] = None
+
+    def _confirm_box(tester_id: str, eligibility: Mapping, request_id: str, requested) -> dict:
+        """Confirm step 1's box; a box moved beyond a few pixels starts the ball range over.
+
+        The light screens measured in the old box read stale by themselves (their
+        box no longer matches); the same spot again changes nothing (P7-15).
+        """
+        root = tester_root(sessions_root, tester_id)
         record = placement_box_record(box_geometry(), requested)
-        stop_guided_live(tester_id, state.epoch_id)
-        state = store.transition(
-            state,
-            phase="needs_empty",
-            reason="remove_ball_and_keep_setup_still",
-            request_id=request_id,
-            evidence={"placement_box": record},
+        store = range_store(tester_id)
+        flow = store.load()
+        flow_box = flow.evidence.get("placement_box") if flow is not None else None
+        if (
+            flow is not None
+            and flow.phase != "needs_box"
+            and placement_box_moved(flow_box, record)
+            and placement_box_moved(read_last_placement_box(root), record)
+        ):
+            busy = _range_resources_busy(live_yields=True)
+            if busy:
+                raise RuntimeError(
+                    f"stop first: moving the box starts the ball range over, and {busy}"
+                )
+        saved, change = confirm_placement_box(
+            root, record, placement_box_binding(eligibility), request_id=request_id
         )
+        stop_box_preview(tester_id)
+        evidence = placement_box_evidence(saved)
+        restarted = None
+        if flow is not None and flow.phase == "needs_box":
+            # a setup started before the box moved to step 1 takes the box now
+            flow = store.transition(
+                flow,
+                phase="needs_empty",
+                reason="remove_ball_and_keep_setup_still",
+                request_id=f"{request_id}-box",
+                evidence={"placement_box": evidence},
+            )
+        elif flow is not None and placement_box_moved(flow_box, saved):
+            moved = {
+                "reason": "placement_box_moved",
+                "previous_epoch_id": flow.epoch_id,
+                "previous_box_px": list(flow_box["box_px"])
+                if isinstance(flow_box, Mapping) and flow_box.get("box_px") is not None
+                else None,
+                "box_px": list(saved["box_px"]),
+                "moved_px": placement_box_shift_px(flow_box, saved),
+                "at_utc": datetime.now(timezone.utc).isoformat(),
+            }
+            stop_guided_live(tester_id)
+            flow = store.start(
+                f"{request_id}-restart",
+                setup_admission={
+                    **_tee_range_setup_binding(eligibility, enclosure.reading()),
+                    "tester_id": tester_id,
+                },
+                placement_box=evidence,
+                evidence={"started_by": moved},
+            )
+            restarted = moved
+            logger.info(
+                "Placement box moved %.0f px: ball range restarted as %s (was %s)",
+                moved["moved_px"] or -1.0,
+                flow.epoch_id,
+                moved["previous_epoch_id"],
+            )
+        return {"change": change, "range_restarted": restarted is not None, "restart": restarted}
+
+    @app.route("/api/tester/placement-box", methods=["GET", "POST"])
+    def placement_box_route():
+        """Step 1's placement box: show the live view, and confirm where the tester dragged it."""
+        payload = request.get_json(silent=True) if request.method == "POST" else request.args
+        payload = payload or {}
+        if not isinstance(payload, Mapping):
+            return jsonify({"error": "request body must be an object"}), 400
+        tester_id = str(payload.get("tester_id", "")).strip()
+        if not SAFE_SEGMENT.fullmatch(tester_id):
+            return jsonify({"error": "unknown tester"}), 400
         try:
-            remember_placement_box(store.tester_root, record)
-        except OSError as exc:
-            logger.warning("The placement box was not remembered for the next setup: %s", exc)
-        return state
+            with tee_range_lock:
+                eligibility = with_iwr_preflight(setup.evaluate(tester_id, enclosure.reading()))
+                if request.method == "GET":
+                    return jsonify(placement_box_status(tester_id, eligibility))
+                action = str(payload.get("action", ""))
+                if action not in {"show", "confirm"}:
+                    raise ValueError("unknown placement-box action")
+                refuse_while_analysing()
+                if placement_box_setup_blockers(eligibility):
+                    return jsonify(
+                        {
+                            "error": PLACEMENT_BOX_SETUP_REQUIRED,
+                            "setup_eligibility": eligibility,
+                        }
+                    ), 409
+                if action == "show":
+                    start_box_preview(tester_id, take_over=True)
+                    return jsonify(placement_box_status(tester_id, eligibility))
+                request_id = str(payload.get("request_id", "")).strip()
+                if not request_id or len(request_id) > 128:
+                    raise ValueError("request_id is required and must be at most 128 characters")
+                result = _confirm_box(tester_id, eligibility, request_id, payload.get("box_px"))
+                return jsonify({**placement_box_status(tester_id, eligibility), **result})
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 409
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            return jsonify({"error": str(exc)}), 400
 
     def _range_state(tester_id: str, *, reconcile: bool = True):
         store = range_store(tester_id)
@@ -6708,7 +7180,7 @@ def create_app(
                             "display": tee_range_display(
                                 state.to_dict() if state else None,
                                 use_unqualified=use_unqualified_tee_range,
-                                placement_box=placement_box_display(tester_id, state),
+                                placement_box=placement_box_display(state),
                             ),
                             "qualification_available": qualification is not None,
                             "qualification_status": {
@@ -6728,8 +7200,6 @@ def create_app(
                     "start",
                     "start_over",
                     "ball_moved",
-                    "confirm_box",
-                    "open_box_preview",
                     "capture_empty",
                     "capture_ball",
                     "start_camera_arm5",
@@ -6751,6 +7221,12 @@ def create_app(
                     eligibility = require_setup(tester_id, reading, f"tee_range_{action}")
                     if not eligibility["eligible"]:
                         return blocked_setup(eligibility)
+                    # every setup works from the box confirmed in step 1 (P7-15)
+                    box = confirmed_placement_box(store.tester_root, eligibility)
+                    if box is None:
+                        return jsonify(
+                            {"error": PLACEMENT_BOX_REQUIRED, "placement_box_required": True}
+                        ), 409
                     stop_guided_live(tester_id)
                     state = store.start(
                         request_id,
@@ -6758,22 +7234,8 @@ def create_app(
                             **_tee_range_setup_binding(eligibility, reading),
                             "tester_id": tester_id,
                         },
+                        placement_box=placement_box_evidence(box),
                     )
-                    try:
-                        start_box_preview(tester_id, state)
-                    except (OSError, RuntimeError, ValueError) as exc:
-                        # the page offers the preview again; the box can still be placed
-                        logger.warning("Placement box preview did not start: %s", exc)
-                elif action == "confirm_box":
-                    bound_range_setup(tester_id, state, action)
-                    state = _confirm_placement_box(
-                        tester_id, state, request_id, payload.get("box_px")
-                    )
-                elif action == "open_box_preview":
-                    bound_range_setup(tester_id, state, action)
-                    if state is None or state.phase != "needs_box":
-                        raise RuntimeError("the box preview is only for placing the box")
-                    start_box_preview(tester_id, state, take_over=True)
                 elif action == "capture_empty":
                     bound_range_setup(tester_id, state, action)
                     state = _start_static_capture(tester_id, "empty", request_id)
@@ -6804,7 +7266,7 @@ def create_app(
                     )
                 if not (
                     (state.phase.startswith("camera_") and state.phase.endswith("_capturing"))
-                    or state.phase in {"ball_capturing", "needs_box"}
+                    or state.phase == "ball_capturing"
                 ):
                     stop_guided_live(tester_id)
                 return jsonify(
@@ -6813,7 +7275,7 @@ def create_app(
                         "display": tee_range_display(
                             state.to_dict(),
                             use_unqualified=use_unqualified_tee_range,
-                            placement_box=placement_box_display(tester_id, state),
+                            placement_box=placement_box_display(state),
                         ),
                     }
                 )
@@ -6937,6 +7399,20 @@ def create_app(
                 )
                 if not eligibility["eligible"]:
                     return blocked_setup(eligibility)
+            box = None
+            if action == "gain":
+                # the light is judged inside the confirmed box; the ladder's modes need it
+                box = confirmed_placement_box(
+                    tester_root(sessions_root, params.tester_id), eligibility
+                )
+                if box is None and params.arm_id in PLACEMENT_BOX_REQUIRED_ARMS:
+                    return jsonify(
+                        {
+                            "error": PLACEMENT_BOX_REQUIRED,
+                            "placement_box_required": True,
+                            "job": jobs.status(),
+                        }
+                    ), 409
             solution = None
             reference = None
             if action == "swings":
@@ -6968,6 +7444,7 @@ def create_app(
                 use_unqualified_tee_range=use_unqualified_tee_range,
                 handed_to_swings=handed,
                 iwr_calibration=iwr_calibration,
+                zone_box=mode_placement_box(box, params.arm) if action == "gain" else None,
             )
             busy = _range_resources_busy(live_yields=True)
             if busy:
@@ -6976,7 +7453,7 @@ def create_app(
             if action == "swings":
                 gain, exposure_us = resolve_gain(sessions_root, params)
             if action == "gain":
-                on_finish = lambda _a, rc: record_gain(params) if rc == 0 else None  # noqa: E731
+                on_finish = lambda _a, rc: record_gain(params, box) if rc == 0 else None  # noqa: E731
             elif action == "swings":
                 # the kiosk runs its own inclinometer service for the swings
                 enclosure.stop()
@@ -7090,6 +7567,12 @@ def create_app(
     def placement():
         try:
             params = TesterParameters.from_payload(request.get_json(silent=True))
+            owner = live_owner_snapshot()
+            if owner is not None and owner.get("kind") == "placement_box":
+                # its exposure is set for viewing, not measured (P7-15b)
+                raise RuntimeError(
+                    "the box preview is for placing the box; open the live view to record"
+                )
             arm, frames = live.recent_frames()
             if frames is None:
                 raise RuntimeError("start the live view first")
@@ -7217,8 +7700,10 @@ def create_app(
         status = live.snapshot()[1]
         owner = live_owner_snapshot()
         guided = owner is not None and owner.get("kind") == "guided_tee_range"
+        boxing = owner is not None and owner.get("kind") == "placement_box"
         with live_owner_lock:
             analyzer = guided_analyzer["value"]
+            brightness = box_preview_exposure["value"] if boxing else None
         box = getattr(analyzer, "placement_box", None) if guided else None
         arm = ARMS.get(str(owner.get("arm_id"))) if guided and owner else None
         return jsonify(
@@ -7226,6 +7711,8 @@ def create_app(
                 **status,
                 "owner": owner,
                 "guided_display": guided_camera_display(status) if guided else None,
+                # the box preview's viewing brightness, for the page's note (P7-15b)
+                "preview_exposure": brightness.status() if brightness is not None else None,
                 # the box this camera step searches, drawn over its view (P7-4)
                 "placement_box": (
                     {
@@ -7677,6 +8164,9 @@ def create_app(
             ),
             gain_basis=lambda arm_id: ladder_gain_basis(
                 admitted_tee_range.get(params.tester_id, (None, None))[0], arm_id, facts
+            ),
+            zone_box=lambda arm_id: ladder_zone_box(
+                admitted_tee_range.get(params.tester_id, (None, None))[0], arm_id
             ),
         )
         try:

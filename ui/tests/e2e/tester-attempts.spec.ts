@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { KIOSK_VIEWPORTS } from './helpers';
+import { KIOSK_VIEWPORTS, mockConfirmedPlacementBox } from './helpers';
 
 test.use({ hasTouch: true });
 
@@ -65,6 +65,7 @@ async function fulfillJson(route: Route, payload: object, status = 200) {
 }
 
 async function mockPage(page: Page, scopes: Scope[], states: Map<string, ReturnType<typeof attemptState>>) {
+  await mockConfirmedPlacementBox(page);
   await page.route('**/api/tester/setup-eligibility?**', (route) =>
     fulfillJson(route, {
       schema_version: 1,

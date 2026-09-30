@@ -1412,6 +1412,7 @@ def init_camera_capture(
     armed_profile: dict | None = None,
     diagnostic_capture: bool = False,
     setup_ball: dict | None = None,
+    hitting_zone: tuple[int, int, int, int] | None = None,
 ) -> bool:
     """Initialize passive high-speed camera capture for offline alignment."""
     global camera_capture_runtime, camera_capture_config  # pylint: disable=global-statement
@@ -1442,6 +1443,7 @@ def init_camera_capture(
             armed_profile=armed_profile,
             diagnostic_capture=diagnostic_capture,
             setup_ball=setup_ball,
+            hitting_zone=hitting_zone,
         )
         camera_capture_runtime = CameraCaptureRuntime(
             output_dir=output_dir,
@@ -1494,6 +1496,7 @@ def init_camera_capture(
             "alignment_x_pct": 50.0,
             "alignment_y_pct": 50.0,
             "setup_ball": dict(settings.setup_ball) if settings.setup_ball else None,
+            "hitting_zone": list(settings.hitting_zone) if settings.hitting_zone else None,
         }
         logger.info("[SERVER] Camera capture initialized: %s", camera_capture_config)
         return True
@@ -6145,6 +6148,16 @@ def main():
         ),
     )
     parser.add_argument(
+        "--camera-hitting-zone",
+        default=None,
+        metavar="X0,Y0,X1,Y1",
+        help=(
+            "The tester's confirmed placement box in this camera mode, in pixels. The "
+            "exposure meter and the capture-time zone rule judge it instead of the fixed "
+            "centre-lower box (P7-15)"
+        ),
+    )
+    parser.add_argument(
         "--club",
         choices=[club.value for club in ClubType],
         help="Club selected at startup (default: the monitor's own default)",
@@ -6782,6 +6795,14 @@ def main():
             camera_setup_ball = parse_setup_ball(args.camera_setup_ball)
         except ValueError as exc:
             parser.error(f"--camera-setup-ball: {exc}")
+    camera_hitting_zone = None
+    if args.camera_hitting_zone:
+        from .camera.capture_runtime import parse_hitting_zone  # noqa: PLC0415
+
+        try:
+            camera_hitting_zone = parse_hitting_zone(args.camera_hitting_zone)
+        except ValueError as exc:
+            parser.error(f"--camera-hitting-zone: {exc}")
     camera_capture_scaler_crop = None
     if args.camera_capture_scaler_crop:
         try:
@@ -6939,6 +6960,7 @@ def main():
             armed_profile=armed_profile,
             diagnostic_capture=bool(args.study_mode),
             setup_ball=camera_setup_ball,
+            hitting_zone=camera_hitting_zone,
         ):
             print("Camera capture unavailable - running without high-speed camera capture")
             startup_status.skip("camera", "High-speed camera unavailable; continuing")

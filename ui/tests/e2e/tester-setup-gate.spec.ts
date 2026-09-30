@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { KIOSK_VIEWPORTS } from './helpers';
+import { KIOSK_VIEWPORTS, mockConfirmedPlacementBox } from './helpers';
 
 test.use({ hasTouch: true });
 
@@ -84,6 +84,7 @@ async function json(route: Route, payload: object, status = 200) {
 }
 
 async function mockBase(page: Page) {
+  await mockConfirmedPlacementBox(page);
   await page.route('**/api/tester/tee-range?**', (route) =>
     json(route, {
       state: {

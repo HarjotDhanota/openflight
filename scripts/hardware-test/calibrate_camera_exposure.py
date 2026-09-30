@@ -56,6 +56,22 @@ def parse_scaler_crop(value: str | None) -> tuple[int, int, int, int] | None:
     return x, y, width, height
 
 
+def parse_zone_box(value: str | None) -> tuple[int, int, int, int] | None:
+    """Parse the tester's placement box, X0,Y0,X1,Y1 in this mode's pixels."""
+    if value is None:
+        return None
+    parts = [part.strip() for part in value.split(",")]
+    if len(parts) != 4:
+        raise argparse.ArgumentTypeError("--zone-box must be X0,Y0,X1,Y1")
+    try:
+        x0, y0, x1, y1 = (int(part) for part in parts)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("--zone-box must contain integers") from exc
+    if min(x0, y0) < 0 or x1 <= x0 or y1 <= y0:
+        raise argparse.ArgumentTypeError("--zone-box must have X1 > X0 >= 0 and Y1 > Y0 >= 0")
+    return x0, y0, x1, y1
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -94,6 +110,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=parse_scaler_crop,
         metavar="X,Y,W,H",
         help="Optional Picamera2 ScalerCrop in sensor coordinates",
+    )
+    parser.add_argument(
+        "--zone-box",
+        type=parse_zone_box,
+        metavar="X0,Y0,X1,Y1",
+        help=(
+            "The tester's confirmed placement box in this mode's pixels: the hitting "
+            "zone is measured there instead of the fixed centre-lower box"
+        ),
     )
     parser.add_argument("--target-mean-low", type=float, default=80.0)
     parser.add_argument("--target-mean-high", type=float, default=150.0)
@@ -229,17 +254,34 @@ def black_level_dn(metadata: dict) -> float | None:
     return float(np.mean(levels)) / 256.0
 
 
-def summarize_images(images: np.ndarray, exposure_us: int, gain: float) -> dict:
+def summarize_images(
+    images: np.ndarray,
+    exposure_us: int,
+    gain: float,
+    zone_box: tuple[int, int, int, int] | None = None,
+) -> dict:
     """Calculate image exposure statistics for one setting.
 
-    The hitting zone (the centre-lower region the live exposure meter uses) is
-    recorded too: outdoors the sky clips at any usable setting, so whole-frame
-    clipping alone would call every setting too bright.
+    The hitting zone is recorded too: outdoors the sky clips at any usable
+    setting, so whole-frame clipping alone would call every setting too bright.
+    It is the tester's placement box when given (``zone_box``), else the fixed
+    centre-lower region (rows 45-90 %, columns 20-80 %); ``zone_source`` says
+    which.
     """
     height, width = images.shape[1:3]
-    zone = images[
-        :, round(height * 0.45) : round(height * 0.9), round(width * 0.2) : round(width * 0.8)
-    ]
+    if zone_box is not None:
+        x0, y0, x1, y1 = (
+            min(max(int(zone_box[0]), 0), width),
+            min(max(int(zone_box[1]), 0), height),
+            min(max(int(zone_box[2]), 0), width),
+            min(max(int(zone_box[3]), 0), height),
+        )
+        source = "placement_box"
+    else:
+        x0, y0 = round(width * 0.2), round(height * 0.45)
+        x1, y1 = round(width * 0.8), round(height * 0.9)
+        source = "fixed"
+    zone = images[:, y0:y1, x0:x1]
     return {
         "exposure_us": exposure_us,
         "gain": gain,
@@ -252,6 +294,8 @@ def summarize_images(images: np.ndarray, exposure_us: int, gain: float) -> dict:
         "dark_pct": float(np.mean(images <= 5) * 100.0),
         "zone_median": float(np.median(zone)),
         "zone_clipped_pct": float(np.mean(zone >= 250) * 100.0),
+        "zone_source": source,
+        "zone_box_px": [x0, y0, x1, y1],
     }
 
 
@@ -347,7 +391,7 @@ def main() -> int:
                         request.release()
 
                 stack = np.stack(images)
-                result = summarize_images(stack, exposure_us, gain)
+                result = summarize_images(stack, exposure_us, gain, args.zone_box)
                 result["score"] = score_result(result, args)
                 result["metadata_exposure_us"] = int(metadata[-1].get("ExposureTime", exposure_us))
                 result["metadata_gain"] = float(metadata[-1].get("AnalogueGain", gain))

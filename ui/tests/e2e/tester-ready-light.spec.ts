@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
+import { mockConfirmedPlacementBox } from './helpers';
 
 test.use({ hasTouch: true });
 
@@ -25,6 +26,7 @@ async function fulfillJson(route: Route, payload: object, status = 200) {
 }
 
 async function mockPage(page: Page, readLight: () => { status?: number; body: object }) {
+  await mockConfirmedPlacementBox(page);
   await page.route('**/api/tester/tee-range?**', (route) =>
     fulfillJson(route, {
       state: {

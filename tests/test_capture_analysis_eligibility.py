@@ -148,7 +148,11 @@ def test_a_manual_clip_is_judged_on_the_setup_ball_when_the_kiosk_has_one(tmp_pa
     judged = written["auto_exposure"]["analysis_eligibility"]
     assert judged["rule"] == "setup_ball"
     assert judged["setup_ball"] == setup
-    assert judged["zone_rule"] == {"analysis_eligible": False, "status": "too_dark"}
+    assert judged["zone_rule"] == {
+        "analysis_eligible": False,
+        "status": "too_dark",
+        "zone_source": "fixed",
+    }
 
 
 def test_without_a_setup_ball_the_zone_rule_stands(tmp_path):

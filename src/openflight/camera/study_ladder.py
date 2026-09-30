@@ -23,7 +23,7 @@ from pathlib import Path
 
 import numpy as np
 
-from openflight.camera.auto_exposure import measure_exposure
+from openflight.camera.auto_exposure import hitting_zone, measure_exposure
 from openflight.camera.club_motion import detect_reference_ball
 from openflight.camera.paired_eligibility import evaluate_paired_capture
 
@@ -188,22 +188,33 @@ def photo_controls(
     return exposure, gain
 
 
-def _zone(image: np.ndarray, black_floor: float) -> dict:
-    observation = measure_exposure(np.clip(np.asarray(image), 0, 255).astype(np.uint8))
+def _zone(image: np.ndarray, black_floor: float, zone_box=None) -> dict:
+    """The hitting zone's light: the tester's box when given, else the fixed box (P7-15)."""
+    observation = measure_exposure(
+        np.clip(np.asarray(image), 0, 255).astype(np.uint8), zone_box=zone_box
+    )
     median = float(observation.median or 0.0)
     return {
         "median_dn": median,
         "signal_dn": median - black_floor,
         "clipped_pct": float(observation.clipped_pct or 0.0),
+        "zone_source": observation.zone_source,
+        "zone_box_px": (
+            list(observation.zone_box_px) if observation.zone_box_px is not None else None
+        ),
     }
 
 
-def _zone_noise(frames: np.ndarray) -> float:
+def _zone_noise(frames: np.ndarray, zone_box=None) -> float:
     height, width = frames.shape[1:]
-    zone = frames[
-        :, round(height * 0.45) : round(height * 0.9), round(width * 0.2) : round(width * 0.8)
-    ]
+    (x0, y0, x1, y1), _source = hitting_zone(height, width, zone_box)
+    zone = frames[:, y0:y1, x0:x1]
     return float(np.median(np.std(zone.astype(np.float32), axis=0)))
+
+
+def _zone_name(zone: dict) -> str:
+    """How a verdict names the zone it judged: the tester's box, or the fixed zone."""
+    return "the box" if zone.get("zone_source") == "placement_box" else "the hitting zone"
 
 
 def _ball_core(image: np.ndarray, x: float, y: float, diameter: float) -> np.ndarray:
@@ -272,15 +283,22 @@ def ball_light(
     }
 
 
-def judge_light(frames: np.ndarray, black_floor: float, expected_ball: dict | None = None) -> dict:
+def judge_light(
+    frames: np.ndarray,
+    black_floor: float,
+    expected_ball: dict | None = None,
+    zone_box=None,
+) -> dict:
     """The one light rule both the pre-rung check and the swing verdict apply.
 
     ``cause`` is one of: ``ball_clipped``, ``ball_dark``, ``zone_dark`` (the club's
     background), ``zone_clipped_no_ball``, ``background_clipped`` (amber only) or
-    ``ok``. The ball is judged first when it can be found.
+    ``ok``. The ball is judged first when it can be found. The zone is the
+    tester's placement box in this mode (``zone_box``), else the fixed box (P7-15).
     """
     frames = np.asarray(frames)
-    zone = _zone(np.median(frames, axis=0), black_floor)
+    zone = _zone(np.median(frames, axis=0), black_floor, zone_box)
+    where = _zone_name(zone)
     ball = ball_light(frames, black_floor, expected_ball)
     cause, message = "ok", None
     if ball is not None and ball["clipped_pct"] > CLIPPED_MAX_PCT:
@@ -292,18 +310,18 @@ def judge_light(frames: np.ndarray, black_floor: float, expected_ball: dict | No
     elif zone["signal_dn"] < LIGHT_FLOOR_DN:
         cause = "zone_dark"
         message = (
-            f"too dark in this light: the hitting zone is {zone['signal_dn']:.0f} DN above "
+            f"too dark in this light: {where} is {zone['signal_dn']:.0f} DN above "
             f"black, under {LIGHT_FLOOR_DN:.0f}"
         )
     elif ball is None and zone["clipped_pct"] > ZONE_TOO_BRIGHT_PCT:
         cause = "zone_clipped_no_ball"
         message = (
-            f"too bright in this light: {zone['clipped_pct']:.0f}% of the hitting zone is "
+            f"too bright in this light: {zone['clipped_pct']:.0f}% of {where} is "
             "clipped; a shorter exposure follows"
         )
     elif zone["clipped_pct"] > CLIPPED_MAX_PCT:
         cause = "background_clipped"
-        message = f"background: {zone['clipped_pct']:.0f}% of the hitting zone clipped" + (
+        message = f"background: {zone['clipped_pct']:.0f}% of {where} clipped" + (
             " behind a well-exposed ball" if ball is not None else ""
         )
     return {"zone": zone, "ball": ball, "cause": cause, "message": message}
@@ -315,7 +333,7 @@ def resting_frames(frames: np.ndarray) -> np.ndarray:
 
 
 def capture_analysis_eligibility(
-    frames: np.ndarray, black_floor: float, expected_ball: dict
+    frames: np.ndarray, black_floor: float, expected_ball: dict, zone_box=None
 ) -> dict:
     """Whether a clip's light permits camera analysis, judged on the setup's ball (P7-8).
 
@@ -326,7 +344,7 @@ def capture_analysis_eligibility(
     about 20 % clipped, and at the setup's own sun lock the zone reads too dark).
     No ball where the setup saw it is not eligible.
     """
-    light = judge_light(resting_frames(np.asarray(frames)), black_floor, expected_ball)
+    light = judge_light(resting_frames(np.asarray(frames)), black_floor, expected_ball, zone_box)
     ball = light["ball"]
     if ball is None:
         reason = "the resting ball was not found where the setup saw it"
@@ -373,6 +391,7 @@ def pre_rung_check(
     gain: float | None = None,
     *,
     expected_ball: dict | None = None,
+    zone_box=None,
 ) -> dict:
     """Whether this rung can work in this light, from a few raw frames and no swing.
 
@@ -382,11 +401,11 @@ def pre_rung_check(
     Without the setup's ball position it never passes (P6-1).
     """
     frames = np.asarray(frames)
-    light = judge_light(frames, black_floor, expected_ball)
+    light = judge_light(frames, black_floor, expected_ball, zone_box)
     if expected_ball is None:
         return {
             **light["zone"],
-            "noise_dn": _zone_noise(frames),
+            "noise_dn": _zone_noise(frames, zone_box),
             "judged_on": "nothing",
             "ball": None,
             "ok": False,
@@ -401,7 +420,7 @@ def pre_rung_check(
     red = cause in RED_LIGHT_CAUSES
     return {
         **light["zone"],
-        "noise_dn": _zone_noise(frames),
+        "noise_dn": _zone_noise(frames, zone_box),
         "judged_on": (
             "hitting_zone"
             if light["ball"] is None
@@ -459,8 +478,13 @@ def swing_verdict(  # pylint: disable=too-many-locals,too-many-arguments
     black_floor: float,
     previous_balls: list[dict],
     expected_ball: dict | None = None,
+    zone_box=None,
 ) -> dict:
-    """Green, amber or red for one saved swing, from its own pictures and timing."""
+    """Green, amber or red for one saved swing, from its own pictures and timing.
+
+    The zone is the setup's placement box in this mode (``zone_box``), else the
+    fixed box; the verdict says which (P7-15).
+    """
     metadata = json.loads((capture_dir / "metadata.json").read_text(encoding="utf-8"))
     with np.load(capture_dir / "frames.npz") as data:
         frames = data["frames"]
@@ -480,7 +504,7 @@ def swing_verdict(  # pylint: disable=too-many-locals,too-many-arguments
         red.append(f"controls: exposure {applied_exposure:.0f} us, not {rung.exposure_us}")
     if abs(applied_gain - gain) > GAIN_TOLERANCE_FRACTION * gain:
         red.append(f"controls: gain {applied_gain:.2f}, not {gain:.2f}")
-    light = judge_light(resting_frames(frames), black_floor, expected_ball)
+    light = judge_light(resting_frames(frames), black_floor, expected_ball, zone_box)
     stats = light["zone"]
     lit = light["ball"]
     if light["cause"] in RED_LIGHT_CAUSES:
@@ -509,6 +533,7 @@ def swing_verdict(  # pylint: disable=too-many-locals,too-many-arguments
         "gain": applied_gain,
         "signal_dn": stats["signal_dn"],
         "clipped_pct": stats["clipped_pct"],
+        "zone_source": stats["zone_source"],
         "light_cause": light["cause"],
         "ball": ball,
     }
@@ -1049,6 +1074,7 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
         ready_timeout_s: float = 90.0,
         expected_ball=None,
         gain_basis=None,
+        zone_box=None,
     ):
         self.state = state
         self.client = client
@@ -1060,6 +1086,8 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
         self._expected_ball = expected_ball or (lambda _arm_id: None)
         # arm id -> the setup's ball lock a rung's gain starts from, or None (P7-12)
         self._gain_basis = gain_basis or (lambda _arm_id: None)
+        # arm id -> the setup's placement box in that mode, or None for the fixed zone
+        self._zone_box = zone_box or (lambda _arm_id: None)
         self.photo_dir = photo_dir
         self._on_mode_done = on_mode_done
         self.ready_timeout_s = ready_timeout_s
@@ -1275,7 +1303,9 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
 
     def _pre_check(self, rung: Rung, gain: float, black: float, expected: dict | None) -> dict:
         frames, applied = self._frames_at(rung.exposure_us, gain, 5)
-        check = pre_rung_check(frames, black, gain, expected_ball=expected)
+        check = pre_rung_check(
+            frames, black, gain, expected_ball=expected, zone_box=self._zone_box(rung.arm_id)
+        )
         check["applied_controls"] = applied
         return check
 
@@ -1435,6 +1465,7 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                 self._black_floor(rung.arm_id),
                 previous,
                 self._expected_ball(rung.arm_id),
+                self._zone_box(rung.arm_id),
             )
             if self.stopped:
                 break
