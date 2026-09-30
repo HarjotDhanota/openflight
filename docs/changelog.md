@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **IWR vertical launch: per-antenna floor-bounce model (LCMF-v2).** The
+  estimator now places each IWR6843LEVM antenna (RX1-RX4, TX1, TX3) from the
+  enclosure's rig file -- board rotation, aim, RX-row position, camera height
+  in use -- and fits exact direct and floor-bounced path lengths for every
+  TX/RX pair, instead of one shared radar height on idealised element
+  indices. On the v3 enclosure the TX pair sits ~16 mm above the RX row, and
+  the element order now follows the board's rotation. Results are recorded as
+  `lcmf_v2_per_antenna`. It replaces LCMF-v1 outright: the July TrackMan
+  validation no longer describes this hardware. Replays of sessions without a
+  rig file read their single radar height as the RX-row centre of a board
+  turned +90 deg and give different angles from the ones they recorded.
+
 ### Added
 - **Enclosure geometry file.** `--rig-geometry` derives camera mount height,
   camera lateral offset, radar height and radar tilt from a measured enclosure

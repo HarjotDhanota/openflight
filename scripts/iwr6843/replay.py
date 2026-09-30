@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay saved IWR6843 L3 captures through LCMF-v1."""
+"""Replay saved IWR6843 L3 captures through the LCMF launch estimator."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from openflight.iwr6843.replay import (
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Replay a session JSONL or single .l3dump through IWR6843 LCMF-v1."
+        description="Replay a session JSONL or single .l3dump through IWR6843 LCMF."
     )
     parser.add_argument("--input", required=True, type=Path, help="Session JSONL or .l3dump file")
     parser.add_argument("--ball-speed-mph", type=float, help="Required for a single .l3dump")
@@ -32,7 +32,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="IWR6843 array calibration JSON",
     )
     parser.add_argument("--tilt-deg", type=float, default=None, help="Override mount tilt")
-    parser.add_argument("--radar-height-m", type=float, default=None, help="Antenna-center height")
+    parser.add_argument(
+        "--radar-height-m",
+        type=float,
+        default=None,
+        help="Single radar height, read as the RX-row centre of a +90 deg board (legacy)",
+    )
     parser.add_argument("--ball-height-m", type=float, default=0.040, help="Ball-center height")
     parser.add_argument(
         "--cfg",
@@ -49,7 +54,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--tdm-sign-policy",
         choices=("positive", "negative", "auto"),
         default="positive",
-        help="TDM sign policy; positive matches server LCMF-v1",
+        help="TDM sign policy; positive matches the server",
     )
     parser.add_argument("--grid-step-deg", type=float, default=0.5)
     parser.add_argument("--out", type=Path, default=None, help="Optional CSV or JSONL output path")

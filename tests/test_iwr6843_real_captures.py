@@ -17,6 +17,14 @@ is accurate, and passing it is not evidence that it is: if the estimator is
 systematically wrong today, these baselines are wrong by exactly the same
 amount and the test still passes. Validating accuracy needs a paired session
 against a reference instrument, which is separate outstanding work.
+
+**Estimator version.** The per-shot figures quoted below are LCMF-v1's
+(``lcmf_v1``). LCMF-v2 (``lcmf_v2_per_antenna``) places each antenna itself,
+and this session has no rig file: its 0.229 m radar height is now read as the
+RX-row centre of a board turned +90 deg, so v2's per-shot angles differ from
+v1's. The bounds are about plausibility, not v1's exact numbers, and stay as
+they are; the figures in the docstrings are v1's until re-run on the machine
+that holds these captures.
 """
 
 import json

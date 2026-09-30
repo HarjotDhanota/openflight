@@ -201,6 +201,27 @@ class TestTheSwingServerNeedsTheRigFile:
         assert received["radar_height_m"] == pytest.approx(0.05885, abs=1e-5)
         assert received["tilt_deg"] == pytest.approx(10.0)
 
+    def test_the_board_rotation_comes_from_the_rig_file(self, monkeypatch, tmp_path):
+        """LCMF places each antenna off the phase centre by the board's turn."""
+        received = self._main(monkeypatch, tmp_path, ["--iwr6843", "--rig-geometry", V3])
+        assert received["board_rotation_deg"] == 90.0
+
+    def test_a_solved_camera_height_moves_the_antennas_with_it(self, monkeypatch, tmp_path):
+        from openflight.iwr6843 import antennas  # noqa: PLC0415
+
+        received = self._main(
+            monkeypatch,
+            tmp_path,
+            ["--iwr6843", "--rig-geometry", V3, "--solved-camera-height-m", "0.195"],
+        )
+        layout = antennas.layout_from_phase_centre(
+            phase_centre_height_m=received["radar_height_m"],
+            board_rotation_deg=received["board_rotation_deg"],
+            boresight_pitch_deg=received["tilt_deg"],
+        )
+        # the RX row stays the rig's 44 mm below the lens, now 195 mm up
+        assert layout.rx_row_height_m == pytest.approx(0.195 - 0.044, abs=1e-6)
+
     def test_the_camera_has_no_default_height(self, monkeypatch, tmp_path, capsys):
         # the 0.20955 m (8.25 in) July height is gone: no rig, no height, no start
         with pytest.raises(SystemExit):
@@ -258,6 +279,74 @@ class TestTheBoardCalibrationCarriesNoInstallation:
         assert calibration.radar_height_m == pytest.approx(0.05885, abs=1e-5)
         assert math.degrees(calibration.tilt_rad) == pytest.approx(10.0)
         server.iwr6843_runtime = None
+
+    @staticmethod
+    def _init_v3(monkeypatch, tmp_path, **overrides):
+        class FakeCaptureMonitor:
+            def __init__(self, **kwargs):
+                self.port = "/dev/ttyUSB0"
+
+            def start(self, *, armed=True):
+                return None
+
+            def stop(self):
+                return None
+
+        monkeypatch.setattr("openflight.iwr6843.monitor.IWR6843CaptureMonitor", FakeCaptureMonitor)
+        monkeypatch.setattr(
+            "openflight.iwr6843.monitor.tx_order_from_config", lambda _path: "normal"
+        )
+        monkeypatch.setattr(server, "iwr6843_runtime", None)
+        config_path = tmp_path / "snapshot.cfg"
+        config_path.write_text("profileCfg 0\n", encoding="utf-8")
+        setup = RigGeometry.from_json(V3).enclosure_setup()
+        kwargs = {
+            "port": "/dev/ttyUSB0",
+            "config_path": str(config_path),
+            "calibration_path": "config/iwr6843_calibration_reference.json",
+            "output_dir": tmp_path,
+            "trigger_pin": 17,
+            "tee_range_m": 1.3,
+            "net_range_m": 4.6,
+            "tx_order": "auto",
+            "capture_timeout_s": 12.0,
+            "tilt_deg": setup.iwr_tilt_deg,
+            "radar_height_m": setup.radar_height_m,
+            "board_rotation_deg": setup.iwr_board_rotation_deg,
+            **overrides,
+        }
+        assert server.init_iwr6843(**kwargs)
+        runtime = server.iwr6843_runtime
+        server.iwr6843_runtime = None
+        return runtime
+
+    def test_the_server_installs_the_rigs_antenna_layout(self, monkeypatch, tmp_path):
+        from openflight.iwr6843 import antennas, lcmf  # noqa: PLC0415
+
+        runtime = self._init_v3(monkeypatch, tmp_path)
+        layout = runtime.calibration.antennas
+        assert layout.basis == antennas.RIG_BASIS
+        assert layout.board_rotation_deg == 90.0
+        assert layout.rx_row_height_m == pytest.approx(0.051)
+        # the server's radar height stays the phase centre's, which others read
+        assert runtime.calibration.radar_height_m == pytest.approx(0.05885, abs=1e-5)
+        effective = runtime.calibration_provenance["effective"]
+        assert effective["iwr_board_rotation_deg"] == 90.0
+        assert effective["antenna_layout"] == layout.as_dict()
+        assert server.iwr6843_runtime_config["estimator"] == lcmf.NAME
+        assert server.iwr6843_runtime_config["antenna_layout"] == layout.as_dict()
+
+    def test_a_rig_without_the_rotation_reads_its_height_as_the_rx_row(self, monkeypatch, tmp_path):
+        """Such a rig's radar height IS the RX row (EnclosureSetup, F11), and
+        the board is taken as turned +90 deg, as the legacy reading does."""
+        from openflight.iwr6843 import antennas  # noqa: PLC0415
+
+        runtime = self._init_v3(
+            monkeypatch, tmp_path, radar_height_m=0.051, board_rotation_deg=None
+        )
+        layout = runtime.calibration.antennas
+        assert layout == antennas.legacy_layout(0.051)
+        assert runtime.calibration_provenance["effective"]["iwr_board_rotation_deg"] is None
 
     def test_the_server_will_not_start_the_iwr_without_them(self, monkeypatch, tmp_path):
         def no_hardware(**_kwargs):

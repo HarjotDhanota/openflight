@@ -16,8 +16,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:  # the layout module imports doa, which imports this one
+    from openflight.iwr6843.antennas import AntennaLayout
 
 DEFAULT_CAL_PATH = "config/iwr6843_calibration_reference.json"
 
@@ -40,6 +44,10 @@ class Calibration:
     # The tee's lateral offset from the RX row, from the rig (0 for the v3
     # enclosure). It replaces the July rig's fixed 64 mm (audit F10).
     lateral_tee_offset_m: float = 0.0
+    # Where each LEVM antenna sits (an ``antennas.AntennaLayout``), from the
+    # rig. None means the session recorded only ``radar_height_m``: LCMF then
+    # takes that height as the RX-row centre of a board turned +90 deg.
+    antennas: AntennaLayout | None = None
 
     @property
     def radar_height_m(self) -> float:

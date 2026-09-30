@@ -15,7 +15,7 @@ from openflight.iwr6843.calibration_session import (
     clone_calibration,
     estimated_track_start_range_m,
 )
-from openflight.iwr6843.lcmf import LCMFResult, estimate_lcmf_v1
+from openflight.iwr6843.lcmf import LCMFResult, antenna_layout, estimate_lcmf_v1
 from openflight.iwr6843.shot import process_dump
 
 
@@ -50,6 +50,10 @@ class ReplayRecord:
     track_inliers: int | None = None
     track_start_range_m: float | None = None
     error: str | None = None
+    # Which estimator produced the angle and where it placed the antennas: a
+    # replay of an older session runs today's model, not the one it recorded.
+    estimator: str | None = None
+    antenna_basis: str | None = None
 
     @property
     def accepted(self) -> bool:
@@ -75,6 +79,8 @@ class ReplayRecord:
             "track_inliers": self.track_inliers,
             "track_start_range_m": self.track_start_range_m,
             "error": self.error,
+            "estimator": self.estimator,
+            "antenna_basis": self.antenna_basis,
         }
 
 
@@ -162,6 +168,14 @@ def input_from_dump(
     )
 
 
+def _antenna_basis(calibration: Calibration) -> str | None:
+    """How LCMF will place this calibration's antennas, if it can place them."""
+    try:
+        return antenna_layout(calibration).basis
+    except ValueError:  # no rig layout and no radar height either
+        return None
+
+
 def replay_capture(
     replay_input: ReplayInput,
     calibration: Calibration,
@@ -172,7 +186,7 @@ def replay_capture(
     grid_step_deg: float = 0.5,
     estimator=estimate_lcmf_v1,
 ) -> ReplayRecord:
-    """Run LCMF-v1 on one saved dump."""
+    """Run the LCMF estimator on one saved dump."""
     if not replay_input.capture_path.is_file():
         return ReplayRecord(
             source=replay_input.source,
@@ -219,6 +233,10 @@ def replay_capture(
             track_rms_bins=measurement.track_rms_bins,
             track_inliers=measurement.track_inliers,
             track_start_range_m=estimated_track_start_range_m(track_measurement, calibration),
+            estimator=(
+                measurement.to_dict().get("estimator") if hasattr(measurement, "to_dict") else None
+            ),
+            antenna_basis=_antenna_basis(calibration),
         )
     except Exception as error:  # pylint: disable=broad-exception-caught
         return ReplayRecord(
@@ -239,14 +257,22 @@ def build_replay_calibration(
     tilt_deg: float | None,
     radar_height_m: float | None,
     ball_height_m: float,
+    board_rotation_deg: float | None = None,
 ) -> Calibration:
-    """Load array calibration and apply replay geometry overrides."""
+    """Load array calibration and apply replay geometry overrides.
+
+    Without ``board_rotation_deg`` the radar height is a legacy single height
+    (July/August sessions, no rig): LCMF reads it as the RX-row centre of a
+    board turned +90 deg (`lcmf.antenna_layout`). With it, the height is the
+    rig-derived phase centre's, as sessions since F11 record it.
+    """
     return clone_calibration(
         Calibration.load(str(calibration_path)),
         tee_range_m=tee_range_m,
         tilt_deg=tilt_deg,
         radar_height_m=radar_height_m,
         ball_height_m=ball_height_m,
+        board_rotation_deg=board_rotation_deg,
     )
 
 

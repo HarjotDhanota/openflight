@@ -22,6 +22,7 @@ from openflight.camera.fusion_processing import process_camera_fusion
 from openflight.camera.geometry_contract import geometry_fingerprint
 from openflight.clubs import ClubType
 from openflight.iwr6843.club import ClubWindowPolicy
+from openflight.iwr6843.lcmf import antenna_layout
 from openflight.iwr6843.monitor import tx_order_from_config
 from openflight.iwr6843.replay import build_replay_calibration
 from openflight.iwr6843.runtime import horizontal_confidence_from
@@ -56,6 +57,17 @@ def _one(events, event_type):
 
 def _is_sha256(value) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def _antenna_layout_record(calibration) -> dict | None:
+    """Where LCMF placed the antennas for this replay; None when it cannot say.
+
+    A description only: an artifact must not fail for want of it.
+    """
+    try:
+        return antenna_layout(calibration).as_dict()
+    except (AttributeError, ValueError):
+        return None
 
 
 def _mapping(value) -> dict:
@@ -436,6 +448,8 @@ def replay(args, *, frozen_session=None) -> dict:
                 tilt_deg = args.iwr_tilt_deg
                 radar_height_m = args.iwr_radar_height_m
                 ball_height_m = args.ball_height_m
+                # legacy flags: one height, read as the RX row of a +90 deg board
+                board_rotation_deg = None
             elif isinstance(calibration_snapshot, dict):
                 calibration_bytes = json.dumps(
                     calibration_snapshot["source_payload"], allow_nan=False
@@ -450,6 +464,8 @@ def replay(args, *, frozen_session=None) -> dict:
                 tilt_deg = per_shot_tilt if per_shot_tilt is not None else effective["tilt_deg"]
                 radar_height_m = effective["radar_height_m"]
                 ball_height_m = effective["ball_height_m"]
+                # recorded since LCMF-v2; older sessions fall back to the legacy reading
+                board_rotation_deg = effective.get("iwr_board_rotation_deg")
             else:
                 raise ValueError("recorded calibration is absent; supply legacy calibration flags")
             if args.iwr_config:
@@ -483,6 +499,7 @@ def replay(args, *, frozen_session=None) -> dict:
                     tilt_deg=tilt_deg,
                     radar_height_m=radar_height_m,
                     ball_height_m=ball_height_m,
+                    board_rotation_deg=board_rotation_deg,
                 )
                 tx_order = tx_order_from_config(frozen_radar_config)
             capture_path, capture_resolution, raw = (
@@ -559,6 +576,9 @@ def replay(args, *, frozen_session=None) -> dict:
                     **measurement.to_dict(),
                     "club_path": club_path.to_dict() if club_path is not None else None,
                     **capture_evidence,
+                    # the replay runs today's estimator (to_dict names it) on
+                    # this layout, not necessarily what the session recorded
+                    "antenna_layout": _antenna_layout_record(calibration),
                     "equivalence_status": (
                         "production_pipeline_replayed_caller_config_source_revision_not_proven"
                     ),
@@ -746,7 +766,11 @@ def parser():
     result.add_argument("--iwr-runtime-config", type=Path)
     result.add_argument("--iwr-tee-m", type=float)
     result.add_argument("--iwr-tilt-deg", type=float)
-    result.add_argument("--iwr-radar-height-m", type=float)
+    result.add_argument(
+        "--iwr-radar-height-m",
+        type=float,
+        help="Single radar height, read as the RX-row centre of a +90 deg board (legacy)",
+    )
     result.add_argument("--ball-height-m", type=float, default=0.040)
     result.add_argument("--output", type=Path)
     result.add_argument(

@@ -31,6 +31,52 @@ EDGE_MARGIN_RADII = 1.0
 # vertical array uses TX1 and TX3 with all four RX.
 LEVM_RX_PATCHES_MM = ((24.037, 45.851), (26.455, 45.851), (28.872, 45.851), (31.290, 45.851))
 LEVM_LCMF_TX_PATCHES_MM = ((38.767, 42.136), (48.437, 42.136))
+# TX2 sits midway along the TX1/TX3 line and lambda/2 off it toward the RX
+# row: the baseline HLCMF's horizontal phase reads.
+LEVM_TX2_PATCH_MM = (43.602, 44.553)
+# Every LEVM antenna by name. Each is really a pair of small patches along its
+# footprint's 3.7 mm length, and these are the footprint centres; an unequal
+# series feed between the two patches could move the electrical centre along
+# that length by tenths of a millimetre.
+LEVM_ANTENNA_PATCHES_MM = {
+    **{f"RX{index + 1}": patch for index, patch in enumerate(LEVM_RX_PATCHES_MM)},
+    "TX1": LEVM_LCMF_TX_PATCHES_MM[0],
+    "TX2": LEVM_TX2_PATCH_MM,
+    "TX3": LEVM_LCMF_TX_PATCHES_MM[1],
+}
+
+
+def _board_plane_mm(x_mm: float, y_mm: float, board_rotation_deg: float) -> tuple[float, float]:
+    """An ECAD-frame vector in the board's plane seen from the front: (toward
+    the viewer's right, up) mm.
+
+    The antennas face the front, so the ECAD frame is seen unmirrored, turned
+    ``board_rotation_deg`` counter-clockwise.
+    """
+    angle = math.radians(board_rotation_deg)
+    return (
+        x_mm * math.cos(angle) - y_mm * math.sin(angle),
+        x_mm * math.sin(angle) + y_mm * math.cos(angle),
+    )
+
+
+def _board_plane_to_camera_mm(
+    right_mm: float, up_mm: float, boresight_pitch_deg: float
+) -> tuple[float, float, float]:
+    """A board-plane (right, up) vector in camera image axes, mm.
+
+    The viewer facing the front has target-left on their right, so the board's
+    rightward offset is camera -x. Aimed ``boresight_pitch_deg`` up, the board
+    leans back: its own "up" gains a component away from the target (audit F11).
+    """
+    pitch = math.radians(boresight_pitch_deg)
+    return (-right_mm, -up_mm * math.cos(pitch), -up_mm * math.sin(pitch))
+
+
+def _levm_rx_row_centre_mm() -> tuple[float, float]:
+    rx_x = sum(x for x, _y in LEVM_RX_PATCHES_MM) / len(LEVM_RX_PATCHES_MM)
+    rx_y = sum(y for _x, y in LEVM_RX_PATCHES_MM) / len(LEVM_RX_PATCHES_MM)
+    return rx_x, rx_y
 
 
 def _levm_board_plane_offset_mm(board_rotation_deg: float) -> tuple[float, float]:
@@ -38,20 +84,35 @@ def _levm_board_plane_offset_mm(board_rotation_deg: float) -> tuple[float, float
     the front: (toward the viewer's right, up) mm.
 
     Each TX/RX pair's phase centre is midway between its two patches, so the
-    array's is half the vector from the RX row to the TX pair. The antennas
-    face the front, so the ECAD frame is seen unmirrored, turned
-    ``board_rotation_deg`` counter-clockwise.
+    array's is half the vector from the RX row to the TX pair.
     """
-    rx_x = sum(x for x, _y in LEVM_RX_PATCHES_MM) / len(LEVM_RX_PATCHES_MM)
-    rx_y = sum(y for _x, y in LEVM_RX_PATCHES_MM) / len(LEVM_RX_PATCHES_MM)
+    rx_x, rx_y = _levm_rx_row_centre_mm()
     tx_x = sum(x for x, _y in LEVM_LCMF_TX_PATCHES_MM) / len(LEVM_LCMF_TX_PATCHES_MM)
     tx_y = sum(y for _x, y in LEVM_LCMF_TX_PATCHES_MM) / len(LEVM_LCMF_TX_PATCHES_MM)
-    half_x, half_y = 0.5 * (tx_x - rx_x), 0.5 * (tx_y - rx_y)
-    angle = math.radians(board_rotation_deg)
-    return (
-        half_x * math.cos(angle) - half_y * math.sin(angle),
-        half_x * math.sin(angle) + half_y * math.cos(angle),
-    )
+    return _board_plane_mm(0.5 * (tx_x - rx_x), 0.5 * (tx_y - rx_y), board_rotation_deg)
+
+
+def levm_antenna_offsets_mm(
+    board_rotation_deg: float,
+    boresight_pitch_deg: float,
+    patches_mm: Mapping[str, tuple[float, float]] | None = None,
+) -> dict[str, tuple[float, float, float]]:
+    """Each LEVM antenna from the RX-row centre in camera image axes, mm.
+
+    The same turn and lean as the phase centre's (`levm_phase_centre_offset_mm`),
+    applied to each footprint centre instead of the pairs' midpoint.
+    ``patches_mm`` replaces the ECAD table (a test's idealised array); the RX
+    row it is measured from stays the named RX1-RX4 of that table.
+    """
+    patches = LEVM_ANTENNA_PATCHES_MM if patches_mm is None else patches_mm
+    rows = [patches[f"RX{index}"] for index in range(1, 5)]
+    rx_x = sum(x for x, _y in rows) / len(rows)
+    rx_y = sum(y for _x, y in rows) / len(rows)
+    offsets = {}
+    for name, (x_mm, y_mm) in patches.items():
+        right, up = _board_plane_mm(x_mm - rx_x, y_mm - rx_y, board_rotation_deg)
+        offsets[name] = _board_plane_to_camera_mm(right, up, boresight_pitch_deg)
+    return offsets
 
 
 def levm_vertical_phase_centre_offset_mm(board_rotation_deg: float) -> float:
@@ -71,13 +132,10 @@ def levm_phase_centre_offset_mm(
 ) -> tuple[float, float, float]:
     """The LCMF phase centre from the RX-row centre in camera image axes, mm.
 
-    The viewer facing the front has target-left on their right, so the board's
-    rightward offset is camera -x. Aimed ``boresight_pitch_deg`` up, the board
-    leans back: its own "up" gains a component away from the target (audit F11).
+    See `_board_plane_to_camera_mm` for the turn into camera axes (audit F11).
     """
     right, up = _levm_board_plane_offset_mm(board_rotation_deg)
-    pitch = math.radians(boresight_pitch_deg)
-    return (-right, -up * math.cos(pitch), -up * math.sin(pitch))
+    return _board_plane_to_camera_mm(right, up, boresight_pitch_deg)
 
 
 def camera_rdf_offset_to_target_lfu(offset_mm) -> tuple[float, float, float]:
@@ -213,6 +271,7 @@ class RigGeometry:
                 "derived_from_board_rotation" if derived else "unknown_iwr_board_orientation"
             ),
             radar_rx_row_height_m=rx_row_height,
+            iwr_board_rotation_deg=self.iwr_board_rotation_deg,
         )
 
     def ops_ball_geometry_m(
@@ -389,6 +448,9 @@ class EnclosureSetup:
     radar_phase_centre_offset_m: float | None = None
     radar_phase_centre_status: str = "unknown_iwr_board_orientation"
     radar_rx_row_height_m: float | None = None
+    # How the board is turned, so LCMF can place each antenna off the phase
+    # centre ``radar_height_m`` names; None when the rig does not record it.
+    iwr_board_rotation_deg: float | None = None
 
     @property
     def tee_lateral_offset_m(self) -> float | None:
@@ -411,6 +473,7 @@ class EnclosureSetup:
             "radar_phase_centre_offset_m": self.radar_phase_centre_offset_m,
             "radar_phase_centre_status": self.radar_phase_centre_status,
             "radar_rx_row_height_m": self.radar_rx_row_height_m,
+            "iwr_board_rotation_deg": self.iwr_board_rotation_deg,
             "iwr_tilt_deg": self.iwr_tilt_deg,
             "missing": list(self.missing),
             "provenance": self.provenance,

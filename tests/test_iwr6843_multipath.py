@@ -194,8 +194,13 @@ class TestLateralTeeOffset:
         )
 
         assert geometry["lateral_offset_m"] == 0.08
+        # The tee range starts at the phase centre. This calibration records
+        # only a radar height, which LCMF-v2 takes as the RX-row centre of a
+        # +90 deg board, so the range origin sits ~8 mm above 0.051 m.
+        centre = geometry["phase_centre_height_m"]
+        assert centre == pytest.approx(0.051 + 0.00797, abs=1e-5)
         assert geometry["tee_x_m"] == pytest.approx(
-            math.sqrt(1.5**2 - (0.02135 - 0.051) ** 2 - 0.08**2)
+            math.sqrt(1.5**2 - (0.02135 - centre) ** 2 - 0.08**2)
         )
 
     def test_dropping_the_july_offset_moves_the_inversion_under_2_mm(self):

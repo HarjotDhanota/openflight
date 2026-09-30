@@ -2,7 +2,7 @@
 
 This module is intentionally production-shaped: OPS detects the shot and
 provides radial speed, then the IWR6843 runtime matches the same sound-trigger
-edge and runs LCMF-v1. The terminal script layers operator summaries on top.
+edge and runs LCMF. The terminal script layers operator summaries on top.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from typing import Iterable
 import numpy as np
 
 from openflight.clubs import ClubType
+from openflight.iwr6843.antennas import layout_from_phase_centre
 from openflight.iwr6843.calibration import Calibration
 from openflight.iwr6843.lcmf import LCMFResult, estimate_lcmf_v1
 from openflight.iwr6843.shot import ShotMeasurement
@@ -84,8 +85,15 @@ def clone_calibration(
     tilt_deg: float | None = None,
     radar_height_m: float | None = None,
     ball_height_m: float | None = None,
+    board_rotation_deg: float | None = None,
 ) -> Calibration:
-    """Copy calibration constants while replacing session geometry."""
+    """Copy calibration constants while replacing session geometry.
+
+    A new ``radar_height_m`` is the phase centre's when ``board_rotation_deg``
+    comes with it (a rig-derived height, placed at the resulting tilt);
+    without one it is a legacy single height, and the antenna layout is
+    dropped so LCMF reads it as the RX-row centre (`lcmf.antenna_layout`).
+    """
     del net_range_m
     cloned = Calibration(
         elem_correction=np.array(calibration.elem_correction, dtype=complex, copy=True),
@@ -96,6 +104,7 @@ def clone_calibration(
         tee_ball_height_m=calibration.tee_ball_height_m,
         meta=copy.deepcopy(calibration.meta),
         lateral_tee_offset_m=calibration.lateral_tee_offset_m,
+        antennas=calibration.antennas,
     )
     if tee_range_m is not None:
         cloned.tee_range_m = tee_range_m
@@ -103,6 +112,17 @@ def clone_calibration(
         cloned.tilt_rad = math.radians(tilt_deg)
     if radar_height_m is not None:
         cloned.meta["radar_height_m"] = radar_height_m
+        cloned.antennas = (
+            layout_from_phase_centre(
+                phase_centre_height_m=radar_height_m,
+                board_rotation_deg=board_rotation_deg,
+                boresight_pitch_deg=math.degrees(cloned.tilt_rad),
+            )
+            if board_rotation_deg is not None
+            else None
+        )
+    elif board_rotation_deg is not None:
+        raise ValueError("board_rotation_deg places the antennas off a radar_height_m")
     if ball_height_m is not None:
         cloned.tee_ball_height_m = ball_height_m
     return cloned

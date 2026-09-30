@@ -36,7 +36,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Run a production-shaped calibration session: OPS sound trigger/speed "
-            "plus matched IWR6843 L3 capture and LCMF-v1 diagnostics."
+            "plus matched IWR6843 L3 capture and LCMF diagnostics."
         )
     )
     parser.add_argument("--shots", type=int, default=20, help="Accepted OPS shots to record")
@@ -57,7 +57,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tee-m", type=float, required=True, help="Radar-to-ball slant range")
     parser.add_argument("--net-m", type=float, default=None, help="Radar-to-net range")
     parser.add_argument("--tilt-deg", type=float, default=None, help="Measured mount tilt")
-    parser.add_argument("--radar-height-m", type=float, default=None, help="Antenna center height")
+    parser.add_argument(
+        "--radar-height-m",
+        type=float,
+        default=None,
+        help="Single radar height, read as the RX-row centre of a +90 deg board (legacy)",
+    )
     parser.add_argument("--ball-height-m", type=float, default=0.040, help="Ball center height")
     parser.add_argument(
         "--tx-order",
