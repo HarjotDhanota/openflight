@@ -188,13 +188,16 @@ Items marked **Decision** need Harjot's choice before they are built. They are a
 - IWR evidence types carry `range_space`.
 - `club.find_club` gates and scores against `tee + bias` (apparent), or corrects the track first.
 - The camera's ray-sphere intersections use corrected ranges.
-- Remove the −2 ms `club_impact_correction_s` at the same time, then re-fit it. It only stays if an offline replay shows a residual.
+- Remove the −2 ms `club_impact_correction_s` at the same time, then re-fit it against the camera's contact time. It only stays if the replay shows a residual.
 
 **Tests:**
 - Unit: club gate edges in apparent space.
-- Replay: the stored August and July sessions before and after, with path, AoA and impact time. It is accepted only if TrackMan-scored metrics do not get worse.
+- Replay (D2): the swings of the first field session after Phase 1, before and after the change. No stored session has a reference for club path or attack angle, so the change is scored on the two things it alters, each against a measurement already in every capture:
+  - **Impact time** against the camera's contact time (F7: the first frame the ball has moved, from the ball, not the trigger). The constant is re-fitted as the median residual and stays only if that median is outside its 95 % interval around zero. The 640×400 swings give the finer clock (3.5 ms frames against 8.3 ms).
+  - **The club's range at impact** against the tee range solved at setup. At contact the head is at the ball, so in one space they agree; a mixed space shows as a constant offset the size of the IWR range bias. Accepted if the median offset lies within the calibration file's range-bias uncertainty and is no larger than before.
+  - Path and attack angle are reported before and after for every swing. A shift over 1° must be explained by the two checks above.
 
-**Size:** L. **Decision D2:** which stored sessions count as the replay reference.
+**Size:** L. **Decision D2:** what the replay is scored against.
 
 ### F4. Rejected radar evidence is never used as depth
 
@@ -691,7 +694,7 @@ The order reflects dependencies and field value, not severity alone.
 
    Then one field session.
 2. **Setup:** S1, S2 (D4), S4, S5, S6, S9, S10, then S3 with C3, C4, C5.
-3. **Face angle:** F1, F4, F5, F6 (S each), then F2, F7, F9, F10, F11-F13, then F3 with the replay (D2), then F8 (D3).
+3. **Face angle:** F1, F4, F5, F6 (S each), then F2, F7, F9, F10, F11-F13, then F3 with the replay (D2, after the field session), then F8 (D3).
 4. **Rig-file discipline:** C1 (D6), C2, C9, C10, C11; C7 (D7); C12.
 5. **The rest:** T4, T5, T8-T14, S7, S8, S11, C6.
 
@@ -713,14 +716,14 @@ It succeeds if:
 - the swing verdicts find the ball at 1280×800;
 - the clips are not clipped on the ball.
 
-**After the face-angle group:** a replay of stored sessions shows that face angle and path come only from accepted, displayed paths, in one frame, with sources recorded.
+**After the face-angle group:** a replay of the field session shows that face angle and path come only from accepted, displayed paths, in one frame, with sources recorded.
 
-## 8. Decisions (all approved as recommended, 29 Sept)
+## 8. Decisions (all approved as recommended, 29 Sept; D2 revised the same day)
 
 | ID | Question | Decision |
 |---|---|---|
 | D1 | Read the black level from libcamera metadata (`SensorBlackLevels`)? | Yes; confirm it is present with one command on the Pi. |
-| D2 | Which stored sessions are the replay reference for the range-space fix and the −2 ms constant? | The July TrackMan-scored sessions, plus the 21-shot August set. |
+| D2 | What is the replay for the range-space fix and the −2 ms constant scored against? | The camera's contact time and the setup's tee range, on the first field session after Phase 1 (see F3). Revised 29 Sept: no TrackMan data exists for these metrics. The July TrackMan baseline scored ball speed, club speed, smash and launch, which F3 does not touch; the 25 August session had no TrackMan; and the TM4 export in `session_logs/` predates the IWR and camera, so it has no raw recording to replay. Club path, attack angle and face angle accuracy need a side-by-side session with a TM4, Full Swing KIT or Mevo Gen 2 that reports club data, which the wiring fixes do not wait for. |
 | D3 | How to calibrate the IWR horizontal zero? | In-situ, from camera ball tracks during the alignment-stick session. |
 | D4 | With no accepted radar range, pass swings nothing (pending) rather than the camera's size estimate? | Pending. |
 | D5 | How old may a gain screen be before the tester asks for a new one? | 30 minutes outdoors, same day indoors. |

@@ -29,13 +29,9 @@ cd ~/openflight
 
 Paste the output. If `SensorBlackLevels` is missing, B5 falls back to the tuning file's value (`/usr/share/libcamera/ipa/rpi/pisp/ov9281_mono.json`, `rpi.black_level`), which is recorded with its source.
 
-**P2 (D2): find the replay reference data for Phase 3.** This isn't needed until Phase 3. Nothing on the PC has it: the only radar dumps here are the 29 Sept ones. Run:
+Answered 29 Sept: `SensorBlackLevels` is 4096 on a 16-bit scale, 16 DN in the raw 8-bit stream.
 
-```
-find ~ \( -name "*.l3dump" -o -iname "*trackman*" -o -iname "*.csv" \) -newermt 2026-07-01 ! -newermt 2026-09-01 2>/dev/null | sed 's|/[^/]*$||' | sort | uniq -c | sort -rn | head -20
-```
-
-This looks for July-August radar dumps and TrackMan exports. If they're on another machine or drive, say where.
+**P2 (D2) is withdrawn.** It asked for TrackMan-scored sessions to replay F3 against. None exist for the metrics F3 changes (see D2 in the spec), so F3 is scored against the camera's contact time and the setup's tee range on the first field session instead.
 
 ## Phase 1: blockers (then one field session)
 
@@ -86,11 +82,11 @@ Copy the session over afterwards. It succeeds if:
 | 1 | F1, F4, F5, F6 | small and independent: path selection, accepted evidence only, per-axis tile, precedence |
 | 2 | F2, F9, F10, F11, F12, F13 | one club-path frame; offset handling; July lateral constant; phase centre; OPS offsets; mph constant |
 | 3 | F7 | ball-flight timing from the departure frame |
-| 4 | F3 | range spaces plus removing the −2 ms constant. Needs P2's data: replay before and after, and keep the change only if TrackMan-scored metrics don't get worse. |
+| 4 | F3 | range spaces plus removing the −2 ms constant, after F7 (it needs the contact time). Replay the field session before and after; keep the change only if impact time moves no further from the camera's contact time and the club's range at impact lands on the tee range (D2). |
 | 5 | F8 (D3) | status `azimuth_uncalibrated` now; the in-situ calibration after the alignment-stick session |
 
 **Done when:**
-- A replay of the stored sessions shows face angle and path only from accepted, displayed paths, in one frame, with their sources recorded.
+- A replay of the field session shows face angle and path only from accepted, displayed paths, in one frame, with their sources recorded.
 - F3's replay report is attached to its commit.
 
 Step 1 touches server.py and the UI; step 2 touches the camera and IWR modules. They could run in parallel worktrees, but this phase has shared server.py edits, so sequential is safer.
@@ -114,9 +110,9 @@ T4, T5, T8-T14 (T14 with D5), S7, S8 (unless complex radar subtraction lands fir
 
 | Phase | Effort | Blocked on |
 |---|---|---|
-| 1 | about a day | P1 for step 5 only |
+| 1 | done 29 Sept | — |
 | 2 | half a day | nothing |
-| 3 | about a day, plus the replay | P2 for step 4 |
+| 3 | about a day, plus the replay | the field session's swings, for step 4 |
 | 4 | half a day | nothing |
 | 5 | half a day | nothing |
 
