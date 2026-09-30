@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -111,6 +112,61 @@ def _frames() -> np.ndarray:
     return frames
 
 
+# The synthetic flight: the IWR dump's ball (45 m/s, 18 deg up) leaving a tee 1.5 m
+# out at the radar's height, seen from the kiosk's camera block.
+FLIGHT_HORIZONTAL_DEG = 2.0
+_RADAR_HEIGHT_M = 0.152
+_CAMERA_ORIGIN = np.array([0.0, 0.03, 0.095])
+
+
+def _flight_frames() -> np.ndarray:
+    """The resting setup ball, then the flight projected through the camera it implies.
+
+    The camera model is the one the ball-flight estimator infers from the resting
+    ball (``reference_ball_camera_model``), so the rendered flight is physically
+    consistent with the geometry, the OPS speed and the IWR track.
+    """
+    from openflight.camera.geometry import reference_ball_camera_model  # noqa: PLC0415
+
+    ball = np.array([0.0, 1.5, _RADAR_HEIGHT_M])
+    focal, pitch, _ = reference_ball_camera_model(
+        ball_x_px=SETUP_BALL["x"],
+        ball_y_px=SETUP_BALL["y"],
+        ball_diameter_px=SETUP_BALL["diameter_px"],
+        ball_diameter_m=0.04267,
+        image_width_px=WIDTH,
+        image_height_px=HEIGHT,
+        horizontal_pixel_sign=1.0,
+        roll_correction_deg=0.0,
+        camera_origin_lfu=_CAMERA_ORIGIN,
+        radar_origin_lfu=np.array([0.0, 0.0, _RADAR_HEIGHT_M]),
+        ball_position_lfu=ball,
+    )
+    elevation, azimuth = math.radians(LAUNCH_DEG), math.radians(FLIGHT_HORIZONTAL_DEG)
+    velocity = BALL_SPEED_MS * np.array(
+        [
+            math.cos(elevation) * math.sin(azimuth),
+            math.cos(elevation) * math.cos(azimuth),
+            math.sin(elevation),
+        ]
+    )
+    frames = np.full((FRAMES, HEIGHT, WIDTH), 70, np.uint8)
+    rows, columns = np.mgrid[:HEIGHT, :WIDTH]
+    for index in range(FRAMES):
+        # contact half a frame before the first post-trigger exposure
+        elapsed = max(0.0, (index - PRE_TRIGGER + 0.5) * 1 / 120.0)
+        offset = ball + velocity * elapsed - _CAMERA_ORIGIN
+        forward = offset[1] * math.cos(pitch) + offset[2] * math.sin(pitch)
+        up = -offset[1] * math.sin(pitch) + offset[2] * math.cos(pitch)
+        x = WIDTH / 2 + focal * offset[0] / forward
+        y = HEIGHT / 2 - focal * up / forward
+        radius = 0.5 * focal * 0.04267 / float(np.linalg.norm(offset))
+        if index < PRE_TRIGGER:
+            x, y, radius = SETUP_BALL["x"], SETUP_BALL["y"], SETUP_BALL["diameter_px"] / 2
+        frames[index][(columns - x) ** 2 + (rows - y) ** 2 <= radius**2] = 230
+    return frames
+
+
 def _capture_metadata(capture_path: str) -> dict:
     settings = {
         "width": WIDTH,
@@ -161,12 +217,84 @@ def _capture_metadata(capture_path: str) -> dict:
     }
 
 
-def capture_tree(root: Path, shots=(1, 2)) -> Path:
+def _tester_setup_config() -> dict:
+    """What a tester setup hands the kiosk: the box, the setup ball and an experimental tee.
+
+    The camera block carries what ``server.init_camera_capture`` records, including
+    the setup ball and placement box (P7-8, P7-15); the tee range is the setup's
+    experimental save (D11), handed over as ``tester_server`` does.
+    """
+    return {
+        "camera_capture": {
+            "fps": 120.0,
+            "mount_height_m": 0.095,
+            "lateral_offset_m": 0.0,
+            "forward_offset_m": 0.03,
+            "horizontal_offset_deg": 0.0,
+            "roll_correction_deg": 0.0,
+            "auto_exposure_enabled": False,
+            "setup_ball": dict(SETUP_BALL),
+            "hitting_zone": list(SETUP_BOX),
+        },
+        "iwr6843": {
+            "tee_slant_range_m": 1.5,
+            "radar_height_m": 0.152,
+            "ball_height_m": 0.152,
+            "horizontal_phase_reference_rad": None,
+        },
+        "tee_range_handoff": {
+            "tee_slant_range_m": 1.5,
+            "status": "configured",
+            "source": "unqualified_static_iwr",
+            "candidate_id": "iwr-static-fixture",
+        },
+    }
+
+
+# Where the synthetic setup saw the resting ball, and the box it confirmed.
+SETUP_BALL = {"x": 160.0, "y": 140.0, "diameter_px": 12.0}
+SETUP_BOX = (130, 110, 190, 170)
+
+
+def _tester_capture_metadata(metadata: dict, frames: np.ndarray) -> dict:
+    """Trigger readiness bound to the session, and eligibility judged on the setup ball."""
+    from openflight.camera.capture_runtime import CameraCaptureRuntime  # noqa: PLC0415
+
+    metadata = json.loads(json.dumps(metadata))
+    setup = metadata["tester_setup"]
+    setup["required"] = True
+    setup["observations"]["runtime"] = {"run_dir": PI_RUN, "session_uuid": SESSION_UUID}
+    manual = {
+        "status": "manual",
+        "analysis_eligible": True,
+        "observation": {"status": "good", "clipped_pct": 0.0, "zone_source": "placement_box"},
+        "enabled": False,
+        "exposure_us": 300,
+        "gain": 4.0,
+    }
+    settings = SimpleNamespace(
+        setup_ball=dict(SETUP_BALL), auto_exposure=False, hitting_zone=SETUP_BOX
+    )
+    # the capture runtime's own judgement when it saves the clip (P7-8)
+    runtime = SimpleNamespace(settings=settings)
+    metadata["auto_exposure"] = CameraCaptureRuntime._judged_on_setup_ball(  # pylint: disable=protected-access
+        runtime, manual, frames
+    )
+    return metadata
+
+
+def capture_tree(root: Path, shots=(1, 2), *, tester_setup: bool = False) -> Path:
+    """A tester folder; ``tester_setup`` adds what a full tester session records.
+
+    With it the session carries the setup's box, setup ball and experimental tee
+    range, the clips' setup-ball eligibility and session-bound trigger readiness,
+    and the run's setup admission, so the pipeline check reaches every stage.
+    """
     run = root / TESTER / "arm5" / "paired" / "run-01"
     (run / "iwr6843").mkdir(parents=True)
     runtime = _iwr_runtime()
     dump = synth_shot(speed_ms=BALL_SPEED_MS, launch_deg=LAUNCH_DEG, tee_m=1.5, tilt_deg=10.4)
-    frames = _frames()
+    frames = _flight_frames() if tester_setup else _frames()
     geometry = EffectiveCameraGeometryInputs(
         camera_height_m=0.095,
         radar_height_m=0.051,
@@ -181,6 +309,12 @@ def capture_tree(root: Path, shots=(1, 2)) -> Path:
         ball_horizontal_output_offset_deg=0.0,
         ball_diameter_m=0.04267,
     )
+    if tester_setup:
+        # the geometry the kiosk builds from its camera block and IWR calibration
+        geometry = EffectiveCameraGeometryInputs.from_live(
+            {"width": WIDTH, "height": HEIGHT, **_tester_setup_config()["camera_capture"]},
+            SimpleNamespace(tee_range_m=1.5, radar_height_m=0.152, tee_ball_height_m=0.152),
+        )
     events = [
         {
             "type": "session_start",
@@ -209,6 +343,24 @@ def capture_tree(root: Path, shots=(1, 2)) -> Path:
             },
         }
     ]
+    if tester_setup:
+        config = events[0]["config"]
+        setup = _tester_setup_config()
+        config["camera_capture"].update(setup["camera_capture"])
+        config["iwr6843"] = setup["iwr6843"]
+        config["tee_range_handoff"] = setup["tee_range_handoff"]
+        (run / "setup_admission.json").write_text(
+            json.dumps(
+                {
+                    "type": "setup_admission",
+                    "tester_id": TESTER,
+                    "config_hash": SETUP_HASH,
+                    "blockers": [],
+                    "warnings": [],
+                }
+            ),
+            encoding="utf-8",
+        )
     for shot in shots:
         name = f"camera_00{shot}"
         capture = run / "arm5" / "camera" / name
@@ -225,6 +377,8 @@ def capture_tree(root: Path, shots=(1, 2)) -> Path:
             trigger_epoch_timestamp=np.float64(1790301037.2129),
         )
         metadata = _capture_metadata(f"{PI_RUN}/arm5/camera/{name}")
+        if tester_setup:
+            metadata = _tester_capture_metadata(metadata, frames)
         (capture / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
         for label, index in (("first", 0), ("trigger", PRE_TRIGGER - 1), ("last", FRAMES - 1)):
             pgm(capture / f"{label}.pgm", frames[index])
