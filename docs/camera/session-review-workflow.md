@@ -181,7 +181,9 @@ it, named in `blocked_by`) and names its cause, from recorded evidence only:
 `DATA` (the capture cannot support it), `CODE` (a hand-off or label breaks),
 `PENDING` (a named dependency is not built) or `UNKNOWN` (an estimator refused
 and the facts are listed; no cause is claimed). Each failing row names the gate
-that stopped it.
+that stopped it. Since D15 (P8-7) most gates label rather than refuse: a stage
+that produced its value with a note (a clipped ball, low consensus, an
+uncalibrated azimuth) is `labelled`, which counts as reached.
 
 Sessions recorded before the setup could save a range or a box can be replayed
 with injected setup values. They are printed in a banner, marked `(INJECTED)` on
@@ -192,8 +194,6 @@ uv run --extra camera python scripts/analysis/check_pipeline.py pi-handoff/Outdo
   --inject-tee-range 1.581 --inject-setup-ball 778,463,31 --inject-box 700,396,856,531
 ```
 
-`--bypass-gate lighting` (or `optical_quality`) steps past that gate to show what
-the next one does; the gate's row keeps its verdict and is marked `(BYPASSED)`.
 The regression test `tests/test_pipeline_check.py` runs the check on the
 synthetic tester session (`capture_tree(..., tester_setup=True)`), where every
 stage its data supports must pass.

@@ -56,8 +56,6 @@ except ModuleNotFoundError:  # Direct execution places scripts/analysis first on
     from analyze_tester_session import _replay_args  # type: ignore[no-redef]
 
 INJECTED_SOURCE = "injected_by_pipeline_check"
-# Gates the check can step past to show what the next gate does (read-only; labelled).
-BYPASSABLE_GATES = ("lighting", "optical_quality")
 
 
 class Injection(SimpleNamespace):
@@ -66,7 +64,6 @@ class Injection(SimpleNamespace):
     tee_range_m: float | None = None
     setup_ball: dict | None = None
     box: tuple[int, int, int, int] | None = None
-    bypass: frozenset = frozenset()
 
     @property
     def active(self) -> bool:
@@ -80,10 +77,6 @@ class Injection(SimpleNamespace):
             "setup_ball": self.setup_ball,
             "box": list(self.box) if self.box else None,
         }
-
-    def bypasses(self, gate: str) -> bool:
-        """Whether the operator asked the check to step past this gate."""
-        return gate in self.bypass
 
 
 def _read_json(path: Path) -> Any:
@@ -294,13 +287,6 @@ def _lighting(
         "manual_exposure": manual,
         "ball": eligibility.get("ball"),
     }
-    if injection.bypasses("optical_quality"):
-        # without a recorded judgement the kiosk runs neither this gate nor optical quality
-        judgement["bypassed"] = not judgement["eligible"]
-        return judgement, {k: v for k, v in metadata.items() if k != "auto_exposure"}
-    if injection.bypasses("lighting") and not judgement["eligible"]:
-        judgement["bypassed"] = True
-        auto_exposure = {**auto_exposure, "analysis_eligible": True}
     return judgement, {**metadata, "auto_exposure": auto_exposure}
 
 
@@ -470,9 +456,7 @@ def _shot_rows(  # pylint: disable=too-many-arguments,too-many-locals
             injection=injection,
         )
     recorded_context = mapping(mapping(shot_event).get("camera_fusion_context"))
-    rebuilt = ran_kiosk and (
-        injection.active or bool(injection.bypass) or recorded_context.get("available") is not True
-    )
+    rebuilt = ran_kiosk and (injection.active or recorded_context.get("available") is not True)
     if rebuilt and mapping(live.get("context")).get("available") is True:
         # the review path replays the context the kiosk would have frozen
         shot_event["camera_fusion_context"] = live["context"]
@@ -551,12 +535,8 @@ def _shot_rows(  # pylint: disable=too-many-arguments,too-many-locals
         if recomputed.get("status") == "replayed" and not rebuilt:
             result = mapping(recomputed.get("result"))
         camera_config = mapping(config.get("camera_capture"))
-        size = (camera_config.get("width"), camera_config.get("height"))
         rows["camera_ball"] = check.camera_ball(
-            result,
-            rows,
-            setup_ball=camera_config.get("setup_ball"),
-            image_size=size if all(size) else None,
+            result, rows, setup_ball=camera_config.get("setup_ball")
         )
         rows["camera_club"] = check.camera_club(
             result, rows, ops_club_speed=ops_result.get("club_speed_mph")
@@ -759,7 +739,6 @@ def check_tester(tester_dir: Path, injection: Injection | None = None) -> dict[s
         "schema": check.SCHEMA,
         "tester_id": tester_dir.name,
         "injected": injection.as_dict() if injection.active else None,
-        "bypassed_gates": sorted(injection.bypass),
         "runs": runs,
         "setup_only": setup_only(tester_dir) if not runs else None,
     }
@@ -783,12 +762,6 @@ def format_report(report: Mapping[str, Any]) -> str:
         values = ", ".join(f"{key}={value}" for key, value in injected.items() if value is not None)
         banner = f"*** INJECTED SETUP VALUES, NOT RECORDED BY THE SESSION: {values} ***"
         lines += ["*" * len(banner), banner, "*" * len(banner)]
-    if report.get("bypassed_gates"):
-        lines.append(
-            "*** GATES STEPPED PAST (diagnostic only; the kiosk would stop here): "
-            + ", ".join(report["bypassed_gates"])
-            + " ***"
-        )
     if report.get("setup_only"):
         lines += ["", "Setup only (no swing runs):", check.format_table(report["setup_only"])]
     for run in report["runs"]:
@@ -823,13 +796,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--inject-tee-range", type=_tee, metavar="M")
     parser.add_argument("--inject-setup-ball", metavar="X,Y,D")
     parser.add_argument("--inject-box", metavar="X0,Y0,X1,Y1")
-    parser.add_argument(
-        "--bypass-gate",
-        action="append",
-        choices=BYPASSABLE_GATES,
-        default=[],
-        help="step past this gate to see the next one (the row stays failed, marked BYPASSED)",
-    )
     parser.add_argument("--output", type=Path, help="write the JSON report here")
     args = parser.parse_args(argv)
     try:
@@ -837,7 +803,6 @@ def main(argv: list[str] | None = None) -> int:
             tee_range_m=args.inject_tee_range,
             setup_ball=parse_setup_ball(args.inject_setup_ball),
             box=parse_hitting_zone(args.inject_box),
-            bypass=frozenset(args.bypass_gate),
         )
     except ValueError as error:
         parser.error(str(error))

@@ -15,6 +15,9 @@ and a stage that does not pass names its cause:
 - ``UNKNOWN``: an estimator refused and the recorded facts do not say why; the
   facts are given and no cause is claimed.
 
+Since D15 (P8-7) most gates label rather than refuse: a stage that produced its
+value with a note is ``labelled``, which counts as reached.
+
 A cause is named only from evidence the stage recorded. Nothing here judges
 accuracy, and nothing here changes a gate: each failing stage names the gate
 (``gate``, a code location) that stopped it.
@@ -26,12 +29,13 @@ from __future__ import annotations
 import math
 from typing import Any, Iterable, Mapping
 
-from openflight.camera import ball_pixels
-from openflight.camera.ball_flight import REFERENCE_BALL_X_FRACTION, REFERENCE_BALL_Y_FRACTION
 from openflight.review_metrics import QUALIFIED_TEE_SOURCES, finite, mapping
 
 SCHEMA = "openflight.pipeline_check.v1"
 PASS, FAIL, NOT_REACHED, NOT_REQUESTED = "pass", "fail", "not_reached", "not_requested"
+# D15 (P8-7): a value produced with a note on it (a clipped ball, low consensus,
+# an uncalibrated azimuth). It counts as reached; the evidence carries the label.
+LABELLED = "labelled"
 CAUSES = ("DATA", "CODE", "PENDING", "UNKNOWN")
 
 # Where each stage can stop a shot on its way to a metric, in pipeline order.
@@ -94,15 +98,9 @@ def stage(  # pylint: disable=too-many-arguments
     gate: str | None = None,
     blocked_by: str | None = None,
     injected: bool = False,
-    bypassed: bool = False,
 ) -> dict[str, Any]:
-    """One row of the table; a failure without a cause is refused.
-
-    ``bypassed`` marks a gate the operator asked the check to step past
-    (``--bypass-gate``): the row keeps its verdict and downstream stages run as
-    if it had passed, to show what the next gate would do.
-    """
-    if status not in (PASS, FAIL, NOT_REACHED, NOT_REQUESTED):
+    """One row of the table; a failure without a cause is refused."""
+    if status not in (PASS, LABELLED, FAIL, NOT_REACHED, NOT_REQUESTED):
         raise ValueError(f"unknown stage status {status!r}")
     if status in (FAIL, NOT_REACHED) and cause not in CAUSES:
         raise ValueError(f"stage {stage_id} did not pass and names no cause")
@@ -116,7 +114,6 @@ def stage(  # pylint: disable=too-many-arguments
         "gate": GATES.get(gate, gate) if gate else None,
         "blocked_by": blocked_by,
         "injected": injected,
-        "bypassed": bypassed and status == FAIL,
     }
 
 
@@ -134,7 +131,7 @@ def _blocked(stage_id: str, upstream: Mapping[str, Any], **extra) -> dict[str, A
 
 def passed(row: Mapping[str, Any] | None) -> bool:
     """Whether a stage row passed, or was a gate the check was told to step past."""
-    return bool(row) and (row["status"] == PASS or bool(row.get("bypassed")))
+    return bool(row) and row["status"] in (PASS, LABELLED)
 
 
 def _round(value: Any, digits: int = 3) -> float | None:
@@ -425,6 +422,16 @@ def trigger_evidence(
             evidence="shot kept without trigger evidence: "
             + "; ".join(f"{mapping(m).get('id')} ({mapping(m).get('reason')})" for m in missing),
         )
+    notes = list(shot.get("trigger_evidence_notes") or [])
+    if notes:
+        return stage(
+            "trigger_evidence",
+            LABELLED,
+            value="kept with notes",
+            evidence="; ".join(
+                f"{mapping(n).get('id')}: {mapping(n).get('reason')}" for n in notes
+            ),
+        )
     if trigger_setup.get("required") and trigger_setup.get("ready") is not True:
         return stage(
             "trigger_evidence",
@@ -460,10 +467,7 @@ def clip_matched(outcome: Mapping[str, Any], clip_on_disk: bool) -> dict:
 
 def lighting(judgement: Mapping[str, Any], *, config_has_setup_ball: bool) -> dict:
     """Capture-time analysis eligibility: on the setup's ball (P7-8) or the zone rule."""
-    row = _lighting(judgement, config_has_setup_ball=config_has_setup_ball)
-    if judgement.get("bypassed") and row["status"] == FAIL:
-        row["bypassed"] = True
-    return row
+    return _lighting(judgement, config_has_setup_ball=config_has_setup_ball)
 
 
 def _lighting(judgement: Mapping[str, Any], *, config_has_setup_ball: bool) -> dict:
@@ -492,20 +496,19 @@ def _lighting(judgement: Mapping[str, Any], *, config_has_setup_ball: bool) -> d
             evidence=reason,
             injected=injected,
         )
+    # a note on the camera's values, no longer a stop (D15, P8-7)
     if rule == "setup_ball":
         return stage(
             "lighting",
-            FAIL,
-            cause="DATA",
-            gate="lighting",
+            LABELLED,
+            value="not eligible (noted)",
             injected=injected,
             evidence=f"judged on the setup ball: {reason}",
         )
     return stage(
         "lighting",
-        FAIL,
-        cause="DATA",
-        gate="lighting",
+        LABELLED,
+        value="not eligible (noted)",
         injected=injected,
         evidence=f"judged on the hitting-zone box ({reason}); the session has no setup ball "
         "for the ball rule",
@@ -619,33 +622,6 @@ def replay_agrees(
     return stage("replay_agrees", PASS, value="same inputs")
 
 
-def _near_setup_ball(candidate: Mapping[str, Any], setup_ball: Mapping[str, Any]) -> bool:
-    x, y = finite(candidate.get("x")), finite(candidate.get("y"))
-    if x is None or y is None:
-        return False
-    return math.hypot(x - setup_ball["x"], y - setup_ball["y"]) <= max(
-        8.0, setup_ball["diameter_px"]
-    )
-
-
-def _gate_admits(ball: Mapping[str, Any], width: int, height: int) -> list[str]:
-    """Why the fixed resting-ball gate would refuse a ball at the setup's position."""
-    smallest, largest = ball_pixels.ball_diameter_bounds_px(ball_pixels.pixel_scale(width))
-    refusals = []
-    if not smallest <= ball["diameter_px"] <= largest:
-        refusals.append(
-            f"diameter {ball['diameter_px']:.1f} px outside {smallest:.1f}-{largest:.1f} px"
-        )
-    left, right = (width * f for f in REFERENCE_BALL_X_FRACTION)
-    top, bottom = (height * f for f in REFERENCE_BALL_Y_FRACTION)
-    if not left <= ball["x"] <= right or not top <= ball["y"] <= bottom:
-        refusals.append(
-            f"centre ({ball['x']:.0f}, {ball['y']:.0f}) outside x {left:.0f}-{right:.0f}, "
-            f"y {top:.0f}-{bottom:.0f}"
-        )
-    return refusals
-
-
 def _reference_facts(diagnostics: Mapping[str, Any]) -> str:
     parts = []
     for name in ("scene", "impact"):
@@ -666,23 +642,24 @@ def camera_ball(  # pylint: disable=too-many-return-statements
     upstream: Mapping[str, dict],
     *,
     setup_ball: Mapping[str, Any] | None,
-    image_size: tuple[int, int] | None,
 ) -> dict:
     """The camera's ball-flight estimate for the shot."""
     if not passed(upstream["context"]):
         return _blocked("camera_ball", upstream["context"], gate="context")
     estimate = mapping(result.get("ball_estimate"))
     status = str(estimate.get("status") or "not recorded")
-    if status.startswith("accepted"):
+    notes = [str(note) for note in result.get("notes") or ()]
+    if finite(estimate.get("horizontal_deg")) is not None and not status.startswith("rejected"):
         return stage(
             "camera_ball",
-            PASS,
+            PASS if status == "accepted" and not notes else LABELLED,
             value=(
                 f"{status}: horizontal {_round(estimate.get('horizontal_deg'), 2)}, "
                 f"vertical {_round(estimate.get('vertical_deg'), 2)} "
                 f"({estimate.get('confidence_tier')}, depth {estimate.get('depth_source')}, "
                 f"timing {estimate.get('timing_anchor')})"
             ),
+            evidence="; ".join(notes) or None,
         )
     error = mapping(result.get("errors")).get("ball")
     diagnostics = mapping(estimate.get("reference_ball_diagnostics"))
@@ -695,34 +672,18 @@ def camera_ball(  # pylint: disable=too-many-return-statements
         return _blocked("camera_ball", upstream["lcmf"], gate="ball_flight")
     if status in ("rejected_reference_ball_not_found", "rejected_implausible_reference_ball"):
         facts = f"{status} ({_reference_facts(diagnostics)})"
-        if setup_ball and image_size:
-            refusals = _gate_admits(setup_ball, *image_size)
-            if refusals:
-                return stage(
-                    "camera_ball",
-                    FAIL,
-                    cause="CODE",
-                    gate="reference_ball",
-                    evidence=f"{facts}; the gate refuses the setup's own ball: "
-                    + "; ".join(refusals),
-                )
-            near = [
-                name
-                for name in ("scene", "impact")
-                if _near_setup_ball(
-                    mapping(mapping(diagnostics.get(name)).get("candidate")), setup_ball
-                )
-                and mapping(diagnostics.get(name)).get("reason")
-            ]
-            if near:
-                return stage(
-                    "camera_ball",
-                    FAIL,
-                    cause="CODE",
-                    gate="reference_ball",
-                    evidence=f"{facts}; the {', '.join(near)} candidate sits on the setup ball "
-                    "and was refused",
-                )
+        gate = mapping(diagnostics.get("gate"))
+        if setup_ball and gate.get("source") != "setup_ball":
+            return stage(
+                "camera_ball",
+                FAIL,
+                cause="CODE",
+                gate="reference_ball",
+                evidence=f"{facts}; the session has a setup ball but the gate used "
+                f"{gate.get('source') or 'no recorded gate'}",
+            )
+        if gate.get("source") == "setup_ball":
+            facts += f"; gate: the setup ball, region {gate.get('region_px')}"
         return stage("camera_ball", FAIL, cause="UNKNOWN", gate="reference_ball", evidence=facts)
     details = ", ".join(
         f"{key} {estimate.get(key)}"
@@ -759,14 +720,16 @@ def camera_club(  # pylint: disable=too-many-return-statements
         return _blocked("camera_club", upstream["context"], gate="context")
     delivery = mapping(result.get("club_delivery"))
     status = str(delivery.get("status") or "not recorded")
+    notes = [*(str(n) for n in result.get("notes") or ()), *(delivery.get("notes") or ())]
     if delivered(delivery):
         return stage(
             "camera_club",
-            PASS,
+            PASS if status in ("chained_high", "approach_high") and not notes else LABELLED,
             value=(
                 f"{status}: path {delivery.get('club_path_deg')}, "
                 f"attack {delivery.get('attack_angle_deg')}"
             ),
+            evidence="; ".join(str(n) for n in notes) or None,
         )
     if status == "rejected_no_ball":
         if passed(upstream["camera_ball"]):
@@ -861,7 +824,24 @@ def lcmf(  # pylint: disable=too-many-return-statements
     angle = finite(report_stage.get("launch_angle_deg"))
     if status.startswith("accepted") and angle is not None:
         channel = " one channel" if report_stage.get("single_channel") else ""
-        return stage("lcmf", PASS, value=f"{status}: {angle:.2f} deg{channel}")
+        labels = [
+            text
+            for applies, text in (
+                (bool(channel), "one receive channel"),
+                ("warning" in status, status),
+                (
+                    report_stage.get("tracker_quality") in ("low", "reject"),
+                    f"tracker quality {report_stage.get('tracker_quality')}",
+                ),
+            )
+            if applies
+        ]
+        return stage(
+            "lcmf",
+            LABELLED if labels else PASS,
+            value=f"{status}: {angle:.2f} deg{channel}",
+            evidence="; ".join(labels) or None,
+        )
     details = ", ".join(
         f"{key} {report_stage.get(key)}"
         for key in (
@@ -956,7 +936,13 @@ def metric_stage(  # pylint: disable=too-many-return-statements
                 evidence="the kiosk marks this value azimuth_uncalibrated (no horizontal phase "
                 "reference, audit F8); the review labels it accepted",
             )
-        return stage(stage_id, PASS, label=label, value=value, evidence=metric.get("reason"))
+        return stage(
+            stage_id,
+            PASS if status == "accepted" else LABELLED,
+            label=label,
+            value=value,
+            evidence=metric.get("reason"),
+        )
     parent = upstream.get(_METRIC_UPSTREAM.get(key, ""))
     if key.startswith("camera_club") or key.startswith("camera_attack"):
         if delivered(estimator.get("club_delivery", {})):
@@ -1027,13 +1013,17 @@ def face_angle_stage(live: Mapping[str, Any], upstream: Mapping[str, dict]) -> d
     status = live.get("face_angle_status")
     value = finite(live.get("face_angle_deg"))
     label = "Face angle (D-plane, kiosk)"
-    if status == "d_plane_estimate" and value is not None:
+    if str(status).startswith("d_plane_estimate") and value is not None:
+        uncalibrated = status == "d_plane_estimate_azimuth_uncalibrated"
         return stage(
             "metric:face_angle_deg",
-            PASS,
+            LABELLED if uncalibrated else PASS,
             label=label,
             value=f"{value:.1f} deg (path {live.get('face_angle_path_source')}, "
             f"launch {live.get('face_angle_launch_source')})",
+            evidence="azimuth uncalibrated: the radar start direction has its own zero"
+            if uncalibrated
+            else None,
         )
     if status == "start_direction_azimuth_uncalibrated":
         return stage(
@@ -1072,7 +1062,7 @@ def summarize(rows: Iterable[Mapping[str, Any]]) -> dict[str, int]:
     for row in rows:
         key = (
             row["status"]
-            if row["status"] in (PASS, NOT_REQUESTED)
+            if row["status"] in (PASS, LABELLED, NOT_REQUESTED)
             else (f"{row['status']}:{row['cause']}")
         )
         counts[key] = counts.get(key, 0) + 1
@@ -1088,8 +1078,6 @@ def format_table(rows: Iterable[Mapping[str, Any]], width: int = 110) -> str:
             verdict += f" {row['cause']}"
         if row.get("injected"):
             verdict += " (INJECTED)"
-        if row.get("bypassed"):
-            verdict += " (BYPASSED)"
         detail = row.get("evidence") or ""
         if row.get("blocked_by"):
             detail = f"blocked by {row['blocked_by']}"

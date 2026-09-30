@@ -50,7 +50,7 @@ def _rows(report) -> dict[str, dict]:
 
 def test_every_stage_the_synthetic_session_supports_passes(synthetic):
     rows = _rows(synthetic)
-    failed = {sid: rows[sid] for sid in SUPPORTED if rows[sid]["status"] != check.PASS}
+    failed = {sid: rows[sid] for sid in SUPPORTED if not check.passed(rows[sid])}
     assert not failed, failed
     assert synthetic["injected"] is None
 
@@ -185,7 +185,7 @@ def test_a_session_with_a_setup_ball_judged_on_the_zone_is_a_code_break():
     assert (row["status"], row["cause"]) == (check.FAIL, "CODE")
 
 
-def test_a_clipped_setup_ball_is_data():
+def test_a_clipped_setup_ball_is_a_label():
     row = check.lighting(
         {
             "eligible": False,
@@ -195,7 +195,7 @@ def test_a_clipped_setup_ball_is_data():
         },
         config_has_setup_ball=True,
     )
-    assert (row["status"], row["cause"]) == (check.FAIL, "DATA")
+    assert row["status"] == check.LABELLED and "83% of it is clipped" in row["evidence"]
 
 
 def _upstream(**overrides):
@@ -217,7 +217,7 @@ def _upstream(**overrides):
     return rows
 
 
-def _not_found(candidate):
+def _not_found(candidate, gate_source="fixed_fractions"):
     return {
         "ball_estimate": {
             "status": "rejected_reference_ball_not_found",
@@ -228,37 +228,27 @@ def _not_found(candidate):
                     "candidate": candidate,
                 },
                 "impact": {"status": "rejected", "reason": "ValueError: none", "candidate": None},
+                "gate": {"source": gate_source, "region_px": [685.0, 370.0, 871.0, 556.0]},
             },
         }
     }
 
 
-def test_the_ball_gate_refusing_the_setups_own_ball_is_a_code_break():
-    setup_ball = {"x": 640.0, "y": 250.0, "diameter_px": 30.0}  # above the 0.40 row limit
-    row = check.camera_ball(
-        _not_found(None), _upstream(), setup_ball=setup_ball, image_size=(1280, 800)
-    )
+SETUP_BALL = {"x": 778.0, "y": 463.0, "diameter_px": 31.0}
+
+
+def test_a_setup_ball_the_ball_gate_never_received_is_a_code_break():
+    row = check.camera_ball(_not_found(None, "fixed_fractions"), _upstream(), setup_ball=SETUP_BALL)
     assert (row["status"], row["cause"]) == (check.FAIL, "CODE")
-    assert "refuses the setup's own ball" in row["evidence"]
+    assert "gate used fixed_fractions" in row["evidence"]
 
 
-def test_a_refused_candidate_on_the_setup_ball_is_a_code_break():
-    setup_ball = {"x": 778.0, "y": 463.0, "diameter_px": 31.0}
-    candidate = {"x": 780.0, "y": 465.0, "diameter_px": 29.0}
-    row = check.camera_ball(
-        _not_found(candidate), _upstream(), setup_ball=setup_ball, image_size=(1280, 800)
-    )
-    assert (row["status"], row["cause"]) == (check.FAIL, "CODE")
-
-
-def test_a_ball_not_found_away_from_the_setup_ball_is_unknown_with_facts():
-    setup_ball = {"x": 778.0, "y": 463.0, "diameter_px": 31.0}
+def test_a_ball_not_found_at_the_setup_ball_is_unknown_with_facts():
     candidate = {"x": 659.0, "y": 192.0, "diameter_px": 5.0}
-    row = check.camera_ball(
-        _not_found(candidate), _upstream(), setup_ball=setup_ball, image_size=(1280, 800)
-    )
+    row = check.camera_ball(_not_found(candidate, "setup_ball"), _upstream(), setup_ball=SETUP_BALL)
     assert (row["status"], row["cause"]) == (check.FAIL, "UNKNOWN")
     assert "(659, 192)" in row["evidence"]
+    assert "gate: the setup ball" in row["evidence"]
 
 
 def test_a_shown_club_delivery_the_review_calls_rejected_is_a_code_break():
@@ -293,20 +283,17 @@ def test_an_uncalibrated_iwr_horizontal_labelled_accepted_is_a_code_break():
     assert (row["status"], row["cause"]) == (check.FAIL, "CODE")
 
 
-def test_a_bypassed_gate_keeps_its_verdict_and_lets_the_next_stage_run():
+def test_ineligible_lighting_is_a_label_and_the_context_still_builds():
     judged = check.lighting(
         {
             "eligible": False,
             "rule": "setup_ball",
             "reason": "clipped",
-            "bypassed": True,
             "manual_exposure": True,
         },
         config_has_setup_ball=True,
     )
-    assert judged["status"] == check.FAIL and judged["bypassed"] is True
-    assert check.passed(judged)
-    assert "(BYPASSED)" in check.format_table([judged])
+    assert judged["status"] == check.LABELLED and check.passed(judged)
     row = check.context(
         {"context": {"available": True, "sha256": "ab" * 32}, "context_source": "rebuilt"},
         _upstream(lighting=judged),
