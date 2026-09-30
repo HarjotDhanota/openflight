@@ -905,6 +905,54 @@ for (const viewport of KIOSK_VIEWPORTS) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
+  test(`the summary says what swings get and flags a 640x400 disagreement at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    const state = {
+      epoch_id: 'epoch-pending-swings',
+      phase: 'raw_only',
+      reason: 'qualification_artifact_missing',
+      evidence: {},
+      solution: { status: 'unresolved', selected_range_m: null },
+    };
+    const pending = { state: 'pending', range_m: null, diagnostic_range_m: null, reason: null };
+    await base(page, state);
+    await page.route('**/api/tester/tee-range**', (route) =>
+      json(route, {
+        state,
+        display: {
+          iwr: { ...pending, label: 'bias-corrected IWR slant range' },
+          camera: { arm5: pending, arm6: pending },
+          canonical: { state: 'withheld', range_m: null, reason: 'qualification_artifact_missing' },
+          swings: {
+            state: 'pending',
+            range_m: null,
+            message:
+              'Swings start with the tee range pending: no radar range was accepted, so launch and club metrics that need it are withheld.',
+          },
+          validation: {
+            state: 'validation_disagrees',
+            message: '640x400 1.500 m vs 1280x800 1.200 m (10.6 sigma); the setup is flagged, not blocked.',
+          },
+        },
+      })
+    );
+    await page.goto('/tester.html');
+
+    const swings = page.locator('#automatic-range-values [data-state="swings-pending"]');
+    await swings.scrollIntoViewIfNeeded();
+    await expect(swings).toContainText('swings get tee range pending');
+    await expect(swings).toContainText('withheld');
+    const validation = page.locator('#automatic-range-values [data-state="validation_disagrees"]');
+    await expect(validation).toContainText('640×400 check disagrees');
+    await expect(validation).toContainText('flagged, not blocked');
+    await expect(validation).toHaveClass('problem');
+    for (const line of [swings, validation]) {
+      const box = await line.boundingBox();
+      expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
+
   test(`withheld fusion states its reason at ${viewport.width}x${viewport.height}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await base(page, {
