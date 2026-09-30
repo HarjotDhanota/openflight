@@ -1008,22 +1008,42 @@ def metric_stage(  # pylint: disable=too-many-return-statements
     return stage(stage_id, FAIL, label=label, value=value, cause="UNKNOWN", evidence=reason)
 
 
+# Start directions shown only as labelled values (P8-7).
+_LOW_LAUNCH_SOURCES = frozenset({"camera_low_consensus", "radar_low_coherence"})
+
+
 def face_angle_stage(live: Mapping[str, Any], upstream: Mapping[str, dict]) -> dict:
     """The kiosk's D-plane face angle (server._attach_experimental_face_angle)."""
     status = live.get("face_angle_status")
     value = finite(live.get("face_angle_deg"))
     label = "Face angle (D-plane, kiosk)"
     if str(status).startswith("d_plane_estimate") and value is not None:
-        uncalibrated = status == "d_plane_estimate_azimuth_uncalibrated"
+        labels = [
+            text
+            for applies, text in (
+                (
+                    status == "d_plane_estimate_azimuth_uncalibrated",
+                    "azimuth uncalibrated: the radar start direction has its own zero",
+                ),
+                (
+                    live.get("face_angle_launch_source") in _LOW_LAUNCH_SOURCES,
+                    f"start direction {live.get('face_angle_launch_source')}",
+                ),
+                (
+                    passed(upstream["camera_club"])
+                    and upstream["camera_club"]["status"] == LABELLED,
+                    "club path labelled",
+                ),
+            )
+            if applies
+        ]
         return stage(
             "metric:face_angle_deg",
-            LABELLED if uncalibrated else PASS,
+            LABELLED if labels else PASS,
             label=label,
             value=f"{value:.1f} deg (path {live.get('face_angle_path_source')}, "
             f"launch {live.get('face_angle_launch_source')})",
-            evidence="azimuth uncalibrated: the radar start direction has its own zero"
-            if uncalibrated
-            else None,
+            evidence="; ".join(labels) or None,
         )
     if status == "start_direction_azimuth_uncalibrated":
         return stage(

@@ -311,3 +311,15 @@ def test_a_blocked_stage_inherits_the_root_cause():
         "DATA",
         "tee_range",
     )
+
+
+def test_a_face_angle_on_a_low_consensus_start_direction_is_labelled():
+    live = {
+        "face_angle_status": "d_plane_estimate",
+        "face_angle_deg": -12.1,
+        "face_angle_path_source": "camera_fused_ops",
+        "face_angle_launch_source": "camera_low_consensus",
+    }
+    row = check.face_angle_stage(live, _upstream())
+    assert row["status"] == check.LABELLED
+    assert "camera_low_consensus" in row["evidence"]
