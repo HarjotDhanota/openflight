@@ -74,6 +74,8 @@ def camera_range_estimator_policy() -> dict[str, Any]:
         "lateral_sigma_m": _LATERAL_SIGMA_M,
         "hitting_range_m": list(_HITTING_RANGE_M),
         "hitting_lateral_m": _HITTING_LATERAL_M,
+        # the area's ray tests measure along the lens ray, not the radar's slant (S7)
+        "hitting_area_ray_distance": "lens",
         "seed_lateral_m": _SEED_LATERAL_M,
         "ball_above_surface_m": list(_BALL_ABOVE_SURFACE_M),
         "lens_above_surface_m": list(_LENS_ABOVE_SURFACE_M),
@@ -663,7 +665,9 @@ def _candidate(  # pylint: disable=too-many-locals
     relative = ray * size_range
     offset = np.asarray(camera.radar_origin_lfu) - np.asarray(camera.camera_origin_lfu)
     radar_range = float(np.linalg.norm(relative - offset))
-    reason = _hitting_area_reason(ray, radar_range, size_uncertainty, camera, ball_center_height_m)
+    reason = _hitting_area_reason(
+        ray, radar_range, size_range, size_uncertainty, camera, ball_center_height_m
+    )
     if reason is None and not plausible_range[0] <= radar_range <= plausible_range[1]:
         reason = "size-derived radar range is outside the configured search interval"
     height_sigma = abs(camera_height - camera.camera_origin_lfu[2]) / _CAMERA_HEIGHT_PRIOR_SIGMA_M
@@ -769,25 +773,33 @@ def _hitting_area_upper_distance(
     return upper
 
 
-def _hitting_area_reason(
+def _hitting_area_reason(  # pylint: disable=too-many-arguments
     ray: np.ndarray,
     distance: float,
+    lens_distance: float,
     distance_sigma: float,
     camera: BallPlaneCamera,
     ball_center_height_m: float,
 ) -> str | None:
-    """Why a candidate at this distance cannot be the ball at address, if it cannot."""
+    """Why a candidate at this distance cannot be the ball at address, if it cannot.
+
+    The area's range limits are radar slant ranges (``distance``); the ray tests
+    are distances along the lens ray (``lens_distance``), so the window found in
+    radar range is moved onto the ray by their difference (wiring audit S7).
+    """
     offset = np.asarray(camera.radar_origin_lfu) - np.asarray(camera.camera_origin_lfu)
     near = max(_HITTING_RANGE_M[0], distance - 2.0 * distance_sigma)
     far = min(_HITTING_RANGE_M[1], distance + 2.0 * distance_sigma)
     if near > far:
         return f"outside the hitting area: about {distance:.1f} m from the radar"
+    to_lens = lens_distance - distance
+    near, far = near + to_lens, far + to_lens
     reach = float(
         _hitting_area_upper_distance(ray[None], camera, ball_center_height_m, _HITTING_LATERAL_M)[0]
     )
     if reach >= near:
         return None
-    point = ray * min(max(distance, near), far)
+    point = ray * min(max(lens_distance, near), far)
     sideways = float(point[0] - offset[0])
     if abs(sideways) - math.sin(math.radians(camera.angular_uncertainty_deg)) * near > (
         _HITTING_LATERAL_M

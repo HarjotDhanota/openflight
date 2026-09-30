@@ -363,7 +363,7 @@ def test_camera_range_estimator_identity_is_pinned():
     """Any estimator constant change must be a deliberate, reviewed identity change."""
     assert camera_range_estimator_policy()["name"] == "camera_reference_ball_floor_plane"
     assert camera_range_estimator_sha256() == (
-        "33d4c5fe0dd878eb54948bb381422a1da0eb53ddb5ed463052204913b425e2df"
+        "83dc88d97cd76a671ff59f594b43fa911d206f5304e6971d5ee5c5e7d219ab7c"
     )
 
 
@@ -514,3 +514,28 @@ def test_a_unit_standing_on_a_box_still_finds_a_ball_on_the_floor():
 
     assert result.status == "selected"
     assert result.selected.y_px == pytest.approx(pixel[1], abs=2.0)
+
+
+def test_the_hitting_area_edge_is_judged_by_distance_along_the_lens_ray():
+    """Wiring audit S7: the ray tests mixed the radar's slant range with distance
+    along the lens ray, which moved the area's edges by about 3 cm."""
+    # pylint: disable=import-outside-toplevel,protected-access
+    from openflight.camera import reference_ball_range as rbr
+
+    camera = _camera(
+        1280, 800, 933.33, camera_origin=(0.0, 0.0, 0.095), radar_origin=(0.0, -0.03, 0.051)
+    )
+    ray = np.asarray(camera.ray_model.rays(np.asarray([830.0, 446.0])))
+    height = BALL_DIAMETER_M / 2.0
+    # the analytic lens-frame answer: the farthest lens distance inside the area
+    reach = float(rbr._hitting_area_upper_distance(ray[None], camera, height, 0.30)[0])
+    assert 1.2 < reach < 2.0
+
+    def judged(lens_distance):
+        offset = np.asarray(camera.radar_origin_lfu) - np.asarray(camera.camera_origin_lfu)
+        radar_range = float(np.linalg.norm(ray * lens_distance - offset))
+        assert radar_range - lens_distance > 0.02  # the radar sits behind and below the lens
+        return rbr._hitting_area_reason(ray, radar_range, lens_distance, 0.001, camera, height)
+
+    assert judged(reach - 0.01) is None
+    assert "outside the hitting area" in judged(reach + 0.01)
