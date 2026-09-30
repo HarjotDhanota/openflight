@@ -269,6 +269,28 @@ describe('face angle', () => {
     expect(byId(metrics, 'club_path').subtext).toBe('face +1.5° (D-plane)');
     expect(metrics).toHaveLength(LIVE_METRIC_COUNT);
   });
+
+  it('rides on the camera path the server built it from, not an accepted IWR path', () => {
+    // Server displayed_club_path() mirrors this precedence (audit F1).
+    const metrics = buildLiveMetrics(
+      makeShot({
+        club_path_deg: null,
+        experimental_fused_club_path_deg: -4.0,
+        experimental_fused_status: 'chained_high',
+        experimental_club_path_deg: 6.0,
+        experimental_club_path_status: 'accepted',
+        experimental_face_angle_deg: 3.5,
+        experimental_face_angle_path_source: 'camera_fused_chained',
+      }),
+      'imperial',
+      emptySwingStats
+    );
+
+    expect(byId(metrics, 'club_path')).toMatchObject({
+      value: '-4.0',
+      subtext: 'camera fused · face +3.5° (D-plane)',
+    });
+  });
 });
 
 describe('pinSelectedMetric', () => {

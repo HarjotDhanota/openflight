@@ -3614,31 +3614,56 @@ def _withhold_camera_metrics(shot: Shot, status: str, reason: str) -> None:
 FACE_ANGLE_FACE_WEIGHT = 0.8
 
 
+def displayed_club_path(shot: Shot) -> tuple[float | None, str | None]:
+    """Return the club path the kiosk shows, when it is accepted, and its source.
+
+    The precedence mirrors the kiosk's club-path tile (ui liveMetrics.ts): the
+    canonical field, then the camera-fused path, and the IWR path only when
+    camera fusion did not run (the kiosk hides it otherwise). Candidate,
+    out-of-bounds, noisy, rejected and withheld paths return (None, None), so
+    face angle is never built on a path the kiosk does not show as a
+    measurement (audit F1).
+    """
+    if shot.club_path_deg is not None:
+        return shot.club_path_deg, "canonical"
+    fused_status = shot.experimental_fused_status or ""
+    if shot.experimental_fused_club_path_deg is not None:
+        if (
+            fused_status.startswith("rejected")
+            or fused_status == "error"
+            or shot.experimental_fused_club_path_confidence == "withheld"
+        ):
+            return None, None
+        source = (
+            "camera_fused_ops" if fused_status == "camera_ops_fallback" else "camera_fused_chained"
+        )
+        return shot.experimental_fused_club_path_deg, source
+    if shot.experimental_fused_status is not None:
+        return None, None
+    iwr_status = shot.experimental_club_path_status or ""
+    if shot.experimental_club_path_deg is not None and iwr_status.startswith("accepted"):
+        return shot.experimental_club_path_deg, "iwr"
+    return None, None
+
+
 def _attach_experimental_face_angle(shot: Shot) -> None:
     """Derive face angle from the measured start direction and club path (D-plane)."""
     shot.experimental_face_angle_deg = None
+    shot.experimental_face_angle_path_source = None
+    shot.experimental_face_angle_launch_source = None
     launch = shot.launch_angle_horizontal
     if launch is None or shot.launch_angle_horizontal_source == "estimated":
         shot.experimental_face_angle_status = "missing_measured_start_direction"
         return
-    path = next(
-        (
-            value
-            for value in (
-                shot.club_path_deg,
-                shot.experimental_fused_club_path_deg,
-                shot.experimental_club_path_deg,
-            )
-            if value is not None
-        ),
-        None,
-    )
+    path, path_source = displayed_club_path(shot)
     if path is None:
-        shot.experimental_face_angle_status = "missing_club_path"
+        shot.experimental_face_angle_status = "missing_accepted_club_path"
         return
     weight = FACE_ANGLE_FACE_WEIGHT
     shot.experimental_face_angle_deg = round((launch - (1.0 - weight) * path) / weight, 1)
     shot.experimental_face_angle_status = "d_plane_estimate"
+    shot.experimental_face_angle_path_source = path_source
+    shot.experimental_face_angle_launch_source = shot.launch_angle_horizontal_source
 
 
 def _fuse_camera_measurements(

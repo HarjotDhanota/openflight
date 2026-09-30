@@ -272,6 +272,9 @@ class Shot:
     # on the club. Experimental until checked against impact-tape truth.
     experimental_face_angle_deg: Optional[float] = None
     experimental_face_angle_status: Optional[str] = None
+    # Which displayed club path and horizontal launch the face angle used.
+    experimental_face_angle_path_source: Optional[str] = None
+    experimental_face_angle_launch_source: Optional[str] = None
     experimental_aoa_offset_source: Optional[str] = None
     # Independent horizontal ball-flight evidence. The camera-assisted value
     # may become the displayed experimental result while the original IWR
@@ -435,6 +438,8 @@ class Shot:
             "experimental_camera_trace_deg": self.experimental_camera_trace_deg,
             "experimental_face_angle_deg": self.experimental_face_angle_deg,
             "experimental_face_angle_status": self.experimental_face_angle_status,
+            "experimental_face_angle_path_source": self.experimental_face_angle_path_source,
+            "experimental_face_angle_launch_source": self.experimental_face_angle_launch_source,
             "experimental_aoa_offset_source": self.experimental_aoa_offset_source,
             "iwr6843_horizontal_deg": self.iwr6843_horizontal_deg,
             "iwr6843_horizontal_confidence": self.iwr6843_horizontal_confidence,
