@@ -2429,6 +2429,7 @@ class TestTheLadderHoldsUp:
                 gain=3.0,
                 gain_exposure_us=300,
             )
+        setup_saw_ball(tmp_path)
         monkeypatch.setattr(ts.study_ladder, "KioskClient", _LitKiosk)
         tilt = ts.EnclosureTilt(RIG, service_factory=lambda: FakeTiltService(0.0))
         tilt.start()
@@ -3143,7 +3144,7 @@ def test_the_ladder_expects_the_ball_the_setup_saw():
         source_group="camera",
         radar_slant_range_m=1.2,
         uncertainty_m=0.25,
-        evidence={"result": {"selected": selected}},
+        evidence={"result": {"status": "selected", "selected": selected}},
     )
     solution = tee_range.TeeRangeSolution.unresolved([camera], reason="test")
 
@@ -3153,6 +3154,143 @@ def test_the_ladder_expects_the_ball_the_setup_saw():
     assert arm5 == {"x": 612.0, "y": 505.0, "diameter_px": 34.0}
     assert arm6 == {"x": 306.0, "y": 252.5, "diameter_px": 17.0}
     assert ts.expected_ladder_ball(None, "arm5") is None
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"status": "no_consistent_candidate", "selected": None},
+        {"status": "ambiguous", "selected": {"x_px": 612.0, "y_px": 505.0, "diameter_px": 34.0}},
+        {"status": "not_found", "selected": None},
+        {"selected": {"x_px": 612.0, "y_px": 505.0, "diameter_px": 34.0}},
+        {"status": "selected", "selected": {"x_px": 612.0, "y_px": 505.0, "diameter_px": 0.0}},
+    ],
+)
+def test_only_a_camera_association_that_selected_the_ball_is_the_setups_ball(result):
+    """P6-2: a withheld, ambiguous or never-selected association is no position."""
+    from openflight import tee_range
+
+    camera = tee_range.TeeRangeCandidate(
+        candidate_id="camera-setup-1-arm5",
+        source="camera_reference_ball_size_range",
+        source_group="camera",
+        radar_slant_range_m=None,
+        uncertainty_m=None,
+        selectable=False,
+        evidence={"result": result},
+    )
+    solution = tee_range.TeeRangeSolution.unresolved([camera], reason="test")
+
+    assert ts.expected_ladder_ball(solution, "arm5") is None
+    assert ts.expected_ladder_ball(solution, "arm6") is None
+
+
+class TestTheLadderNeedsTheSetupsBall:
+    """P6-2 (D8): C refuses a ladder whose setup camera never found the ball."""
+
+    body = {"tester_id": "20260922-name", "arm_id": "arm5", "environment": "indoors"}
+
+    def _client(self, tmp_path, monkeypatch):
+        for arm in ("arm5", "arm6"):
+            ts.write_arm_state(
+                tmp_path,
+                ts.TesterParameters("20260922-name", arm, "indoors"),
+                gain=3.0,
+                gain_exposure_us=300,
+            )
+        monkeypatch.setattr(ts.study_ladder, "KioskClient", _LitKiosk)
+        monkeypatch.setattr(ts, "KILL_GRACE_S", 0.05, raising=False)
+        monkeypatch.setattr(
+            ts.os,
+            "killpg",
+            lambda _pid, _signal: (_ for _ in ()).throw(OSError("test process has no real group")),
+            raising=False,
+        )
+        runners = []
+        monkeypatch.setattr(
+            ts.study_ladder.LadderRunner, "start", lambda runner: runners.append(runner)
+        )
+        manager = ts.TesterJobManager(popen=_Forever)
+        app = eligible_app(sessions_root=tmp_path, rig_geometry=RIG, manager=manager)
+        return app.test_client(), manager, runners
+
+    @staticmethod
+    def _runs(tmp_path):
+        return sorted((tmp_path / "20260922-name").glob("arm*/paired/run-*"))
+
+    def _assert_refused(self, response, manager, tmp_path):
+        assert response.status_code == 409
+        data = response.get_json()
+        assert data["setup_ball_missing"] is True
+        assert "camera hasn't found the ball" in data["error"]
+        for words in ("1.0 to 1.3 m", "same surface as the unit", "spare balls"):
+            assert words in data["error"]
+        assert manager.status()["state"] == "idle"
+        assert self._runs(tmp_path) == []
+
+    @pytest.mark.parametrize("setup", ["none", "no_consistent_candidate", "ambiguous"])
+    def test_c_is_refused_when_the_setups_camera_never_found_the_ball(
+        self, tmp_path, monkeypatch, setup
+    ):
+        client, manager, runners = self._client(tmp_path, monkeypatch)
+        if setup != "none":
+            setup_saw_ball(tmp_path, status=setup)
+
+        response = client.post("/api/tester/ladder/start", json=self.body)
+
+        self._assert_refused(response, manager, tmp_path)
+        assert runners == []
+
+    def test_an_unresolved_radar_range_does_not_stop_a_ladder_whose_camera_found_the_ball(
+        self, tmp_path, monkeypatch
+    ):
+        client, manager, runners = self._client(tmp_path, monkeypatch)
+        setup_saw_ball(tmp_path)
+        try:
+            response = client.post("/api/tester/ladder/start", json=self.body)
+            assert response.status_code == 200, response.get_json()
+            assert runners[0].mode == "arm5"
+        finally:
+            client.post("/api/tester/stop")
+            manager.cancel()
+
+    def test_the_mode_of_the_first_setting_still_to_run_decides(self, tmp_path, monkeypatch):
+        client, manager, _runners = self._client(tmp_path, monkeypatch)
+        setup_saw_ball(tmp_path, arms=("arm6",))
+        try:
+            everything = client.post("/api/tester/ladder/start", json=self.body)
+            self._assert_refused(everything, manager, tmp_path)
+            half = client.post(
+                "/api/tester/ladder/start",
+                json={**self.body, "rungs": ["half-300", "half-150", "half-75"]},
+            )
+            assert half.status_code == 200, half.get_json()
+            assert "arm6" in half.get_json()["run_dir"]
+        finally:
+            client.post("/api/tester/stop")
+            manager.cancel()
+
+    def test_resuming_is_refused_once_the_setup_has_no_ball(self, tmp_path, monkeypatch):
+        client, manager, runners = self._client(tmp_path, monkeypatch)
+        setup_saw_ball(tmp_path)
+        try:
+            assert client.post("/api/tester/ladder/start", json=self.body).status_code == 200
+            runners[0].state.begin("full-300", 3.0, {"ok": True})
+            client.post("/api/tester/stop")
+            deadline = time.monotonic() + 2
+            while manager.status()["state"] == "running" and time.monotonic() < deadline:
+                time.sleep(0.01)
+            manager._state["state"] = "stopped"  # pylint: disable=protected-access
+            (tmp_path / "20260922-name" / "calibration" / "tee-range" / "current.json").unlink()
+
+            resumed = client.post("/api/tester/ladder/start", json=self.body)
+
+            assert resumed.status_code == 409
+            assert resumed.get_json()["setup_ball_missing"] is True
+            assert len(runners) == 1
+        finally:
+            client.post("/api/tester/stop")
+            manager.cancel()
 
 
 # Outdoors-test-3 (29 Sept), 1280x800 gain screen at 300 us: the hitting zone's
@@ -3339,6 +3477,7 @@ class TestOwnershipBeforeSideEffects:
     def test_a_ladder_start_refused_by_the_radar_leaves_no_run_folder(self, tmp_path, monkeypatch):
         for arm in ("arm5", "arm6"):
             screened(tmp_path, ts.TesterParameters("20260922-name", arm, "indoors"), gain=3.0)
+        setup_saw_ball(tmp_path)
         monkeypatch.setattr(ts.study_ladder, "KioskClient", _LitKiosk)
         manager = ts.TesterJobManager(popen=_Forever)
         client = eligible_app(
@@ -3351,6 +3490,7 @@ class TestOwnershipBeforeSideEffects:
         response = client.post("/api/tester/ladder/start", json=self.body)
 
         assert response.status_code == 409
+        assert "setup_ball_missing" not in response.get_json()
         assert self._runs(tmp_path) == []
         assert manager.status()["state"] == "idle"
 

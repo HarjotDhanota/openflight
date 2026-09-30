@@ -135,6 +135,9 @@ the physical setup. Then work down **Test suite**:
 3. **C. Start the exposure ladder.** The page sets each exposure itself and shows
    which one you are on. Hit a normal shot, wait for the verdict, repeat. It moves
    on after 5 good swings, and skips exposures your light cannot support.
+   **C** starts only when the setup's camera found the ball in the mode it
+   starts in: without the ball's position no swing can be judged, so the page
+   says to run the setup again instead.
    On the 1280×800 exposures: spray the face before each swing; after it, hold
    the face about 0.5 m from the lens inside the dashed box, press
    **Photograph face**, then wipe it. Before leaving full resolution, the page
@@ -276,7 +279,7 @@ The main workflow asks for empty/ball IWR captures, an Arm 5 reference frame and
 an Arm 6 validation frame. Each setup epoch is immutable; **Start over / ball
 moved** preserves it and creates a new one, while refresh resumes the saved step.
 Missing qualification or disagreement ends in raw-only mode: the ladder remains
-available but range metrics stay withheld. A qualified Arm 5/IWR pair freezes
+available, as long as the camera found the ball, but range metrics stay withheld. A qualified Arm 5/IWR pair freezes
 one range for both modes; Arm 6 cannot change it. Advanced tape is validation only.
 
 For the two radar captures, stand in one spot outside the radar's view (behind
@@ -292,7 +295,8 @@ applied camera metadata match the request and whose ball pixels pass the
 brightness and clipping checks. Save stays disabled until that
 lock holds, and the lock is dropped if the light changes. If no setting passes,
 the step reports that more light is needed: add light and retry, or keep the view
-as unqualified raw evidence, which finishes the setup raw-only. This lock is for
+as unqualified raw evidence, which finishes the setup raw-only; with no ball
+found at 1280×800 the ladder then refuses to start. This lock is for
 the stationary ball only; it never sets swing-capture exposure. Its thresholds
 are provisional until the camera lighting study.
 
@@ -484,6 +488,7 @@ every earlier frame and failure record for review.
 | Range summary: IWR `rejected — camera_window_disjoint` or `not_rechecked` | The radar picked something outside the camera's range window and nothing inside it replaced it | Redo the setup: step well away from the rig during both radar captures and keep the ball in the camera's view |
 | Range summary: **640×400 check disagrees** | The two camera modes put the ball at different ranges | Make sure the ball did not move between the two Saves; if it did, **Start over / ball moved**. The setup is not blocked |
 | `the LIS3DH reading has no camera pitch` | The inclinometer is off or still settling (for example just after the kiosk handed it back) | Wait a few seconds for a stable reading, then press the step again |
+| `The camera hasn't found the ball, so the ladder can't judge your swings` when pressing **C** | The setup's camera never picked out the ball (it saw spare balls or a white cloth, or the ball was too far, dark or raised) in the mode the ladder starts in. A setup whose radar range is unresolved still runs once the camera found the ball | Run the setup again with the ball 1.0 to 1.3 m from the lens, on the same surface as the unit (not a raised mat), and nothing ball-like or white in view, then press **C** |
 | Ladder verdict red: `ball: the setup has no ball position for this camera mode` | The setup's camera never found the ball, so a swing's pictures cannot be checked against it | Press **Stop**, run the setup again until the camera finds the ball, then press **C** |
 | Ladder verdict amber: `resting ball not found` | The camera could not distinguish a plausible resting ball in that frame | The swing still counts; keep placing the ball in the same spot |
 | `run the gain step for both modes first` (or for one mode) | Step **B** did not finish for a mode that has a ticked exposure | Run **B** again |

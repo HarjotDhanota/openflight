@@ -662,6 +662,22 @@ test('Start with nothing ticked asks for a setting and is refused', async ({ pag
   expect(startRequests).toBe(0);
 });
 
+test('Start shows why the ladder needs the setup to find the ball', async ({ page }) => {
+  // P6-2 (D8): Outdoors-test-5 started a ladder whose setup camera never found the ball
+  const refusal =
+    "The camera hasn't found the ball, so the ladder can't judge your swings. Run the setup again with the ball " +
+    '1.0 to 1.3 m from the lens, on the same surface as the unit (not a raised mat), and nothing ball-like or ' +
+    'white in view (spare balls, a cloth).';
+  await mockBaseApis(page, () => choiceState({}, true));
+  await page.route('**/api/tester/ladder/start', (route) =>
+    fulfillJson(route, { error: refusal, setup_ball_missing: true }, 409)
+  );
+  await page.goto('/tester.html');
+  await page.getByRole('button', { name: 'C. Start the exposure ladder' }).tap();
+
+  await expect(page.locator('#ladder-panel')).toHaveText(refusal);
+});
+
 test('with no 640×400 setting to follow, the last photo finishes the ladder', async ({ page }) => {
   const target = { capture: 'camera-final-21', rung_id: 'full-30' };
   const base = ladderState(target);
