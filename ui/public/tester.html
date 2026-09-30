@@ -1762,11 +1762,18 @@
         const swingsLine = swings
           ? `<span data-state="swings-${escapeHtml(swings.state)}">swings get <b>${swings.state === 'pending' ? 'tee range pending' : metres(swings.range_m)}</b> — ${escapeHtml(swings.message)}</span>`
           : '';
+        // The 640×400 check against the 1280×800 search: a disagreement is flagged,
+        // never blocking.
+        const validation = display?.validation;
+        const validationLine = validation
+          ? `<span${validation.state === 'validation_disagrees' ? ' class="problem"' : ''} data-state="${escapeHtml(validation.state)}">640×400 check <b>${validation.state === 'validation_disagrees' ? 'disagrees' : validation.state.replaceAll('_', ' ')}</b> — ${escapeHtml(validation.message)}</span>`
+          : '';
         el('automatic-range-values').innerHTML = state
           ? `<span>setup epoch <b>${escapeHtml(state.epoch_id)}</b></span>` +
             describe(escapeHtml(display?.iwr?.label || 'bias-corrected IWR slant range'), display?.iwr) +
             describe('camera arm 5', display?.camera?.arm5) +
             describe('camera arm 6 validation', display?.camera?.arm6) +
+            validationLine +
             (canonical?.state === 'resolved'
               ? `<span data-state="resolved">canonical range <b>${metres(canonical.range_m)}</b></span>`
               : `<span data-state="withheld">canonical range <b>withheld</b>${canonical?.reason ? ` — ${escapeHtml(canonical.reason.replaceAll('_', ' '))}` : ''}</span>`) +

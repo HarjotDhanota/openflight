@@ -526,6 +526,42 @@ def _solved_camera_height(
     return solved
 
 
+# The 640x400 validation sees the same ball through the same lens, 2x binned. A
+# range further from the 1280x800 search's than twice their combined 1-sigma
+# uncertainty flags the setup; it is recorded and shown, not blocking (wiring
+# audit S9).
+ARM6_VALIDATION_SIGMAS = 2.0
+
+
+def camera_validation_agreement(
+    arm5: tee_range.TeeRangeCandidate | None, arm6: tee_range.TeeRangeCandidate | None
+) -> dict:
+    """Whether the 640x400 validation's range agrees with the 1280x800 search's."""
+    facts = {
+        "arm5_range_m": arm5.radar_slant_range_m if arm5 is not None else None,
+        "arm5_uncertainty_m": arm5.uncertainty_m if arm5 is not None else None,
+        "arm6_range_m": arm6.radar_slant_range_m if arm6 is not None else None,
+        "arm6_uncertainty_m": arm6.uncertainty_m if arm6 is not None else None,
+        "sigmas": ARM6_VALIDATION_SIGMAS,
+        "blocking": False,
+    }
+    if any(
+        facts[key] is None
+        for key in ("arm5_range_m", "arm5_uncertainty_m", "arm6_range_m", "arm6_uncertainty_m")
+    ):
+        return {**facts, "status": "not_compared", "reason": "a camera mode found no range"}
+    residual = abs(facts["arm6_range_m"] - facts["arm5_range_m"])
+    combined = math.hypot(facts["arm5_uncertainty_m"], facts["arm6_uncertainty_m"])
+    normalized = residual / combined
+    return {
+        **facts,
+        "status": "agrees" if normalized <= ARM6_VALIDATION_SIGMAS else "validation_disagrees",
+        "residual_m": residual,
+        "combined_uncertainty_m": combined,
+        "normalized_sigma": normalized,
+    }
+
+
 def _setup_camera_height(solution: tee_range.TeeRangeSolution | None) -> Mapping | None:
     """The 1280x800 setup's lens-height evidence.
 
@@ -3321,6 +3357,22 @@ def _swings_display(solution: Mapping, *, use_unqualified: bool) -> dict | None:
     }
 
 
+def _validation_display(agreement: Mapping | None) -> dict | None:
+    """The 640x400 check against the 1280x800 search, for the range summary (S9)."""
+    if not isinstance(agreement, Mapping):
+        return None
+    status = agreement.get("status")
+    if status == "not_compared":
+        return {"state": status, "message": "640x400 validation not compared: no range"}
+    message = (
+        f"640x400 {agreement['arm6_range_m']:.3f} m vs 1280x800 "
+        f"{agreement['arm5_range_m']:.3f} m ({agreement['normalized_sigma']:.1f} sigma)"
+    )
+    if status == "validation_disagrees":
+        message += "; the setup is flagged, not blocked. Check the ball did not move."
+    return {"state": status, "message": message}
+
+
 def tee_range_display(state: Mapping | None, *, use_unqualified: bool = False) -> dict:
     """Backend states for the range summary; rejected numbers are diagnostics only."""
     evidence = (state or {}).get("evidence") or {}
@@ -3360,6 +3412,7 @@ def tee_range_display(state: Mapping | None, *, use_unqualified: bool = False) -
             "reason": None if resolved else (solution.get("reason") or (state or {}).get("reason")),
         },
         "swings": _swings_display(solution, use_unqualified=use_unqualified),
+        "validation": _validation_display(evidence.get("validation_agreement")),
     }
 
 
@@ -4709,7 +4762,12 @@ def create_app(
             if qualification is not None
             else tee_range.TeeRangeSolution.unresolved(candidates, reason=qualification_reason)
         )
-        return store.finalize(state, solution, qualification)
+        return store.finalize(
+            state,
+            solution,
+            qualification,
+            evidence={"validation_agreement": camera_validation_agreement(*candidates[1:])},
+        )
 
     def _camera_steered_iwr(state, selected, iwr_evidence) -> dict | None:
         """The radar candidate checked against, or re-selected inside, the camera's window."""

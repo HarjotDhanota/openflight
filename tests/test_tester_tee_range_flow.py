@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -2253,6 +2254,66 @@ def test_the_lens_height_comes_from_the_1280x800_search_only():
     assert level["check"] == "consistent"
     assert boxed["check"] == "unit_raised"
     assert ts._setup_camera_height_m(solution) is None
+
+
+def _arm6_at(monkeypatch, arm6_m):
+    """The 640x400 validation sees the ball at another range than 1280x800 (1.2 m)."""
+    monkeypatch.setattr(
+        ts,
+        "estimate_reference_ball_range",
+        lambda _frames, camera, **_kwargs: camera_result(
+            1.2 if camera.image_width_px == 1280 else arm6_m,
+            camera.image_width_px,
+            camera.image_height_px,
+        ),
+    )
+
+
+def test_an_agreeing_640x400_validation_is_recorded(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    _arm6_at(monkeypatch, 1.22)
+
+    state = drive(app.test_client(), tester)
+
+    agreement = state["evidence"]["validation_agreement"]
+    assert agreement["status"] == "agrees"
+    assert agreement["residual_m"] == pytest.approx(0.02)
+    assert agreement["combined_uncertainty_m"] == pytest.approx(math.hypot(0.02, 0.02))
+    assert ts.tee_range_display(state)["validation"]["state"] == "agrees"
+
+
+def test_a_disagreeing_640x400_validation_flags_the_setup_without_blocking_it(
+    tmp_path, inputs, monkeypatch
+):
+    # wiring audit S9: the 640x400 validation only had to exist
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    _arm6_at(monkeypatch, 1.5)
+
+    state = drive(app.test_client(), tester)
+
+    agreement = state["evidence"]["validation_agreement"]
+    assert agreement["status"] == "validation_disagrees"
+    assert agreement["normalized_sigma"] > ts.ARM6_VALIDATION_SIGMAS
+    assert agreement["blocking"] is False
+    assert state["phase"] == "resolved"
+    validation = ts.tee_range_display(state)["validation"]
+    assert validation["state"] == "validation_disagrees"
+    assert "1.500" in validation["message"] and "1.200" in validation["message"]
+
+
+def test_a_validation_without_a_range_is_not_compared():
+    arm5 = _camera_candidate("arm5", None, range_m=1.2)
+    arm6 = tee_range.TeeRangeCandidate(
+        candidate_id="camera-setup-1-arm6",
+        source="camera_reference_ball",
+        source_group="camera",
+        radar_slant_range_m=None,
+        uncertainty_m=None,
+        selectable=False,
+        evidence={},
+    )
+
+    assert ts.camera_validation_agreement(arm5, arm6)["status"] == "not_compared"
 
 
 def test_a_pending_range_still_hands_swings_the_solved_lens_height():
