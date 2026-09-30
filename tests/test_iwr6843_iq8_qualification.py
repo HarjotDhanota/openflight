@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from openflight.iwr6843 import iq8_qualification as qualification
+from openflight.iwr6843 import iq8_qualification as qualification, lcmf
 from openflight.iwr6843.dump import (
     SAMPLE_RANGE_FFT_IQ8_VARIABLE_TIMED,
     SAMPLE_RANGE_FFT_IQ16_VARIABLE_TIMED,
@@ -245,7 +245,8 @@ def test_synthetic_pair_runs_the_complete_current_estimator_path(tmp_path):
     assert pair["status"] == "compared", pair.get("failure")
     for representation in ("iq16", "iq8"):
         estimators = pair[representation]["estimators"]
-        assert estimators["ball"]["estimator"] == "lcmf_v1"
+        # the ball estimator is whatever version lcmf ships (per-antenna since v2)
+        assert estimators["ball"]["estimator"] == lcmf.NAME
         assert estimators["ball"]["status"]
         assert estimators["club"]["status"]
         assert "processing_s" not in pair[representation]

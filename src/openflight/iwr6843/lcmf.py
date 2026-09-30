@@ -1,9 +1,18 @@
-"""Late-Flight Complex Multipath Fusion (LCMF-v1) launch estimator.
+"""Late-Flight Complex Multipath Fusion launch estimator, per-antenna paths (LCMF-v2).
 
-This module is the production form of the frozen 2026-07-16 TrackMan
-candidate.  The model consumes an IWR6843 L3 dump plus an independently
-measured OPS243 ball speed.  Its constants are intentionally fixed: changing
-them requires a new estimator version and independent validation.
+The model consumes an IWR6843 L3 dump plus an independently measured OPS243
+ball speed, and fits the calibrated eight-channel snapshots along the ball's
+range walk with a dictionary of direct and floor-bounced paths.
+
+This is no longer the frozen 2026-07-16 TrackMan candidate (LCMF-v1). v1 put
+every antenna at one radar height on idealised lambda/2 indices; v2 places
+each LEVM antenna from the rig (`openflight.iwr6843.antennas`) and uses exact
+path lengths for DD, DG, GD and GG, so the TX pair and the RX row, about 16 mm
+apart on the v3 enclosure, meet the floor bounce at their own angles, and the
+element order follows the board's rotation. The July TrackMan validation does
+not carry over: v2 is unvalidated against a reference instrument until a new
+paired session exists. The remaining constants (gates, grid, channel models)
+are v1's.
 """
 
 from __future__ import annotations
@@ -13,7 +22,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from openflight.iwr6843 import doa, tracking
+from openflight.iwr6843 import antennas, doa, tracking
 from openflight.iwr6843.calibration import Calibration
 from openflight.iwr6843.dump import is_range_snapshot, parse_dump, project_tx_pair
 from openflight.iwr6843.multipath import (
@@ -33,8 +42,8 @@ from openflight.iwr6843.shot import (
 )
 from openflight.iwr6843.tracking import BallTrack
 
-NAME = "lcmf_v1"
-DISPLAY_NAME = "Late-Flight Complex Multipath Fusion v1"
+NAME = "lcmf_v2_per_antenna"
+DISPLAY_NAME = "Late-Flight Complex Multipath Fusion v2 (per-antenna paths)"
 # The July 14 development session used +2.8387689102 degrees. Independent
 # validation showed that offset did not transfer across physical bay alignment,
 # so production exposes the fused radar estimate without a truth-fitted shift.
@@ -76,7 +85,7 @@ class BallRangeEvidence:
 
 @dataclass
 class LCMFResult:
-    """One LCMF-v1 estimate with enough evidence for session replay."""
+    """One LCMF estimate with enough evidence for session replay."""
 
     status: str
     angle_deg: float | None = None
@@ -232,7 +241,7 @@ def _snapshot_cache(
     cube = prepared.cube
     geometry = prepared.geometry
     if meta["n_tx"] != 2:
-        raise ValueError(f"LCMF-v1 requires two TX channels, got {meta['n_tx']}")
+        raise ValueError(f"LCMF requires two TX channels, got {meta['n_tx']}")
 
     scope = "window" if shot.notch_recovered else "burst"
     mti = prepared.mti(scope)
@@ -304,9 +313,22 @@ def _candidate_trajectory(
         speed_ms=geometry["speed_ms"],
         tee_x_m=geometry["tee_x_m"],
         launch_height_m=geometry["ball_height_m"],
-        radar_height_m=geometry["radar_height_m"],
+        radar_height_m=geometry["phase_centre_height_m"],
         lateral_offset_m=geometry["lateral_offset_m"],
     )
+
+
+def antenna_layout(cal: Calibration) -> antennas.AntennaLayout:
+    """The calibration's antenna layout, or the legacy one its radar height implies.
+
+    A session with a rig carries its layout (`init_iwr6843`). One without --
+    July/August, offline tools given only a height and a tilt -- has its
+    height taken as the RX-row centre of a board turned +90 deg
+    (`antennas.legacy_layout`), so its replays differ from what it recorded.
+    """
+    if cal.antennas is not None:
+        return cal.antennas
+    return antennas.legacy_layout(cal.radar_height_m)
 
 
 def _model_geometry(
@@ -314,21 +336,44 @@ def _model_geometry(
 ) -> dict:
     """The setup geometry the multipath dictionary is built on.
 
-    The tee's lateral offset comes from the calibration (the rig), and both the
-    range inversion and the tee's forward position use it (audit F10).
+    Every antenna is placed from the layout at the calibration's aim, which a
+    shot's inclinometer reading may have moved. The tee range starts at the
+    virtual array's phase centre: the static range estimate is the bistatic
+    mean over the eight TX/RX pairs, which differs from the distance to the
+    phase centre by hundredths of a millimetre at the tee. The ball sits at
+    its measured height and the rig's lateral offset from that phase centre;
+    both the range inversion and the tee's forward position use the offset
+    (audit F10).
     """
-    vertical_delta_m = cal.tee_ball_height_m - cal.radar_height_m
+    layout = antenna_layout(cal)
+    positions = layout.positions_m(cal.tilt_rad)
+    tx_positions, rx_positions = antennas.channel_positions_m(positions, tx_order)
+    phase_centre_height_m = layout.phase_centre_height_m(cal.tilt_rad)
+    vertical_delta_m = cal.tee_ball_height_m - phase_centre_height_m
     lateral_m = cal.lateral_tee_offset_m
     return {
         "speed_ms": ball_speed_mph / MPH_PER_MS,
         "tee_x_m": math.sqrt(max(cal.tee_range_m**2 - vertical_delta_m**2 - lateral_m**2, 0.25)),
         "ball_height_m": cal.tee_ball_height_m,
-        "radar_height_m": cal.radar_height_m,
+        "phase_centre_height_m": phase_centre_height_m,
         "lateral_offset_m": lateral_m,
-        "tilt_rad": cal.tilt_rad,
+        "antenna_layout": layout,
+        "tx_positions_m": tx_positions,
+        "rx_positions_m": rx_positions,
         "tx_order": tx_order,
         "tdm_tau_s": tdm_tau_s,
     }
+
+
+def _candidate_paths(
+    launch_rad: float, range_m: np.ndarray, geometry: dict
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Exact DD/DG/GD/GG path lengths per snapshot and channel, with the
+    trajectory's direct and floor-image range rates."""
+    x_m, height_m, direct_vr, image_vr = _candidate_trajectory(launch_rad, range_m, geometry)
+    ball = np.stack([x_m, np.full_like(x_m, geometry["lateral_offset_m"]), height_m], axis=-1)
+    paths = antennas.channel_paths_m(geometry["tx_positions_m"], geometry["rx_positions_m"], ball)
+    return paths, direct_vr, image_vr
 
 
 def _spatial_dictionary(
@@ -338,22 +383,17 @@ def _spatial_dictionary(
     geometry: dict,
     tdm_tau_s: float,
 ) -> np.ndarray:
-    """Build the exact frozen DD/DG/GD/GG moving-ball dictionary."""
-    tx_order = doa.validate_tx_order(geometry["tx_order"])
-    x_m, height_m, direct_vr, image_vr = _candidate_trajectory(launch_rad, range_m, geometry)
-    tilt_rad = geometry["tilt_rad"]
-    radar_height_m = geometry["radar_height_m"]
-    direct = np.arctan2(height_m - radar_height_m, x_m) - tilt_rad
-    image = np.arctan2(-(height_m + radar_height_m), x_m) - tilt_rad
+    """Build the DD/DG/GD/GG moving-ball dictionary from exact per-antenna paths.
 
-    tx = np.repeat(np.array([0.0, 4.0]), 4)[None, :]
-    rx = np.tile(np.arange(4, dtype=float), 2)[None, :]
-    sin_direct = np.sin(direct)[:, None]
-    sin_image = np.sin(image)[:, None]
-    dd = np.exp(1j * np.pi * (tx * sin_direct + rx * sin_direct))
-    dg = np.exp(1j * np.pi * (tx * sin_direct + rx * sin_image))
-    gd = np.exp(1j * np.pi * (tx * sin_image + rx * sin_direct))
-    gg = np.exp(1j * np.pi * (tx * sin_image + rx * sin_image))
+    With ' an antenna mirrored in the hitting surface and B the candidate ball,
+    DD = |TX-B| + |B-RX|, DG = |TX-B| + |B-RX'|, GD = |TX'-B| + |B-RX| and
+    GG = |TX'-B| + |B-RX'|, each steered as exp(+j*2*pi*path/lambda), the
+    data's convention (`antennas.PHASE_SIGN`).
+    """
+    tx_order = doa.validate_tx_order(geometry["tx_order"])
+    paths, direct_vr, image_vr = _candidate_paths(launch_rad, range_m, geometry)
+    steering = antennas.steering(paths)
+    dd, dg, gd, gg = (steering[..., column].copy() for column in range(4))
 
     if model == "four4_path_tdm":
         cross_phase = 2.0 * np.pi * (image_vr - direct_vr) * tdm_tau_s / LAM
@@ -555,20 +595,11 @@ def _fast_design(
     window: np.ndarray,
 ) -> np.ndarray:
     spatial = _spatial_dictionary("four4", launch_rad, range_m, geometry, geometry["tdm_tau_s"])
-    x_m, height_m, _direct_vr, _image_vr = _candidate_trajectory(launch_rad, range_m, geometry)
-    radar_height_m = geometry["radar_height_m"]
-    direct_distance = np.hypot(x_m, height_m - radar_height_m)
-    image_distance = np.hypot(x_m, height_m + radar_height_m)
-    delta_bins = (image_distance - direct_distance) / range_res_m
-    path_bins = center_native_bins[:, None] + np.stack(
-        [
-            np.zeros_like(delta_bins),
-            0.5 * delta_bins,
-            0.5 * delta_bins,
-            delta_bins,
-        ],
-        axis=1,
-    )
+    paths, _direct_vr, _image_vr = _candidate_paths(launch_rad, range_m, geometry)
+    # A path's apparent range is half its round trip; each bounced path sits
+    # past the direct one by its mean excess over the eight channels.
+    excess_bins = np.mean(paths - paths[..., :1], axis=1) / (2.0 * range_res_m)
+    path_bins = center_native_bins[:, None] + excess_bins
     sample = np.arange(n_samples)
     tones = np.exp(2j * np.pi * path_bins[:, :, None] * sample / n_samples)
     response = np.fft.fft(tones * window[None, None, :], n=n_fft, axis=-1)
@@ -807,14 +838,15 @@ def estimate_lcmf_v1(
 ) -> LCMFResult:
     """Estimate vertical launch from one TI dump and OPS ball speed.
 
-    ``track_override`` is an offline-research hook for evaluating an
-    independently selected range walk. Normal production calls leave it
-    unset and retain the frozen LCMF-v1 behavior.
+    The entry point keeps its v1 name for its callers; the estimator behind
+    it is ``NAME`` (per-antenna paths). ``track_override`` is an
+    offline-research hook for evaluating an independently selected range
+    walk. Normal production calls leave it unset.
     """
     if ball_speed_mph <= 0:
         raise ValueError("ball_speed_mph must be positive")
     if cal.tee_range_m is None:
-        raise ValueError("LCMF-v1 requires the measured tee slant range")
+        raise ValueError("LCMF requires the measured tee slant range")
     full_raw = raw
     if prepared is None:
         prepared = prepare_lcmf_capture(raw)
@@ -976,6 +1008,7 @@ __all__ = [
     "DISPLAY_NAME",
     "LCMFResult",
     "NAME",
+    "antenna_layout",
     "estimate_lcmf_v1",
     "prepare_lcmf_capture",
 ]
