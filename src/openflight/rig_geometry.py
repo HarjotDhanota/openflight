@@ -25,6 +25,30 @@ SPEED_OF_SOUND_M_S = 343.0  # 20 C; the acoustic walk-back's default
 MIN_BALL_DIAMETER_PX = 8.0
 EDGE_MARGIN_RADII = 1.0
 
+# TI xWR6843LEVM (PROC116A) patch centres in the board's ECAD frame, mm, from
+# TI's swrr178/swrr179 design files (assembly markers, STEP placements and
+# the 3D PDF's copper agree to 0.1 mm). RX1-4 are one lambda/2 row; LCMF's
+# vertical array uses TX1 and TX3 with all four RX.
+LEVM_RX_PATCHES_MM = ((24.037, 45.851), (26.455, 45.851), (28.872, 45.851), (31.290, 45.851))
+LEVM_LCMF_TX_PATCHES_MM = ((38.767, 42.136), (48.437, 42.136))
+
+
+def levm_vertical_phase_centre_offset_mm(board_rotation_deg: float) -> float:
+    """Height of the LCMF virtual array's phase centre above the RX-row centre.
+
+    Each TX/RX pair's phase centre is midway between its two patches, so the
+    array's is half the vector from the RX row to the TX pair. The board is
+    seen from the front, turned ``board_rotation_deg`` counter-clockwise from
+    its ECAD frame (0: ECAD +Y up; +90: ECAD +X up, the v42 mount). The two-ray
+    model's radar height is the RX-row height plus this (audit F11).
+    """
+    rx_x = sum(x for x, _y in LEVM_RX_PATCHES_MM) / len(LEVM_RX_PATCHES_MM)
+    rx_y = sum(y for _x, y in LEVM_RX_PATCHES_MM) / len(LEVM_RX_PATCHES_MM)
+    tx_x = sum(x for x, _y in LEVM_LCMF_TX_PATCHES_MM) / len(LEVM_LCMF_TX_PATCHES_MM)
+    tx_y = sum(y for _x, y in LEVM_LCMF_TX_PATCHES_MM) / len(LEVM_LCMF_TX_PATCHES_MM)
+    angle = math.radians(board_rotation_deg)
+    return 0.5 * ((tx_x - rx_x) * math.sin(angle) + (tx_y - rx_y) * math.cos(angle))
+
 
 def camera_rdf_offset_to_target_lfu(offset_mm) -> tuple[float, float, float]:
     """Convert a camera-relative right/down/forward offset to target lateral/forward/up.
@@ -182,6 +206,14 @@ class EnclosureSetup:
     missing: tuple[str, ...] = ()
     provenance: str = ""
     camera_forward_offset_m: float | None = None
+    # The two-ray model wants the virtual array's vertical phase centre, but
+    # the rig file gives the RX-row centre and not how the board is turned.
+    # With the RX row vertical, as LCMF needs, the phase centre sits about
+    # 8 mm above or below it, so the offset stays unknown until the board's
+    # orientation is measured (audit F11; levm_vertical_phase_centre_offset_mm).
+    radar_height_reference: str = "iwr_rx_row_centre"
+    radar_phase_centre_offset_m: float | None = None
+    radar_phase_centre_status: str = "unknown_iwr_board_orientation"
 
     @property
     def tee_lateral_offset_m(self) -> float | None:
@@ -200,6 +232,9 @@ class EnclosureSetup:
             "tee_lateral_offset_m": self.tee_lateral_offset_m,
             "camera_forward_offset_m": self.camera_forward_offset_m,
             "radar_height_m": self.radar_height_m,
+            "radar_height_reference": self.radar_height_reference,
+            "radar_phase_centre_offset_m": self.radar_phase_centre_offset_m,
+            "radar_phase_centre_status": self.radar_phase_centre_status,
             "iwr_tilt_deg": self.iwr_tilt_deg,
             "missing": list(self.missing),
             "provenance": self.provenance,
