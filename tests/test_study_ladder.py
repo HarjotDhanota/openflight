@@ -1454,3 +1454,160 @@ def test_the_early_exit_is_unchanged(tmp_path):
     assert _swing_through(state, "rgr") == "failed"
     assert state.to_dict()["rungs"]["full-300"]["reason"] == "2 of the first 3 swings red"
     assert state.to_dict()["rungs"]["full-200"]["status"] == "pending"
+
+
+# P7-12: each rung starts from the setup's ball lock, not the zone gain screen.
+
+
+def test_a_rung_keeps_the_setup_locks_exposure_times_gain():
+    lock = {"source": "setup_lock", "signal_us": 7.0}
+    assert sl.starting_gain(10, 0.547, lock) == (1.0, {**lock})
+    indoor = {"source": "setup_lock", "signal_us": 300.0 * 2.0}
+    assert sl.starting_gain(75, 5.0, indoor)[0] == pytest.approx(8.0)
+    assert sl.starting_gain(10, 5.0, indoor)[0] == sl.GAIN_CEILING
+    gain, basis = sl.starting_gain(75, 0.6, None)
+    assert gain == sl.rung_gain(0.6, 75)
+    assert basis == {"source": "gain_screen", "gain_at_300": 0.6}
+
+
+def test_the_runner_starts_a_rung_at_the_locks_gain_and_records_why(tmp_path):
+    kiosk = FakeKiosk()
+    state = sl.LadderState(tmp_path / "ladder.json")
+    runner = sl.LadderRunner(
+        state,
+        kiosk,
+        run_dir=lambda: None,
+        black_floor=lambda arm: 18.0,
+        gain_at_300=lambda arm: pytest.fail("the gain screen is not read when a lock exists"),
+        light_index=lambda arm: 0.05,
+        photo_dir=tmp_path / "impact",
+        on_mode_done=lambda arm: None,
+        ready_timeout_s=1.0,
+        expected_ball=lambda arm: SETUP_BALL,
+        gain_basis=lambda arm: {"source": "setup_lock", "signal_us": 600.0},
+    )
+
+    runner.start_rung()
+
+    assert kiosk.calls[0] == (300, 2.0)
+    rung = runner.state.to_dict()["rungs"]["full-300"]
+    assert rung["gain_source"] == "setup_lock"
+    assert rung["gain_basis"] == {"source": "setup_lock", "signal_us": 600.0}
+    assert sl.LadderState(tmp_path / "ladder.json").to_dict()["rungs"]["full-300"][
+        "gain_source"
+    ] == ("setup_lock")
+
+
+def test_without_a_lock_the_runner_keeps_the_gain_screen_rule(tmp_path):
+    kiosk = FakeKiosk()
+    runner = _runner(tmp_path, kiosk)
+
+    runner.start_rung()
+
+    assert kiosk.calls[0] == (300, 3.0)
+    assert runner.state.to_dict()["rungs"]["full-300"]["gain_source"] == "gain_screen"
+
+
+class SunKiosk(FakeKiosk):
+    """Outdoors-test-7's 7 us x 1 setup lock, scaled linearly by exposure x gain.
+
+    The light is the fixture's lock crop pasted where it was, above the 16 DN
+    black level; 640x400 is the same view 2x2 binned and brighter by the gain
+    screens' ratio (0.547 / 0.229).
+    """
+
+    HALF_BRIGHTER = 0.547 / 0.229
+
+    def __init__(self, mode="arm5"):
+        super().__init__()
+        self.mode = mode
+        with np.load(SUN_FIXTURE) as data:
+            crop = data["lock_crop"].astype(np.float32)
+            x0, y0 = (int(v) for v in data["lock_origin_xy"])
+            base = np.full((800, 1280), float(data["lock_zone_median_dn"]), np.float32)
+        base[y0 : y0 + crop.shape[0], x0 : x0 + crop.shape[1]] = crop
+        if mode == "arm6":
+            base = base.reshape(400, 2, 640, 2).mean(axis=(1, 3))
+        self.base = base
+
+    def frames(self, count):
+        exposure, gain = self.calls[-1]
+        scale = exposure * gain / 7.0 * (self.HALF_BRIGHTER if self.mode == "arm6" else 1.0)
+        rng = np.random.default_rng(len(self.calls))
+        light = 16.0 + (self.base - 16.0) * scale
+        noisy = light + rng.normal(0, 0.7, (count, *light.shape))
+        return np.clip(noisy, 0, 255).astype(np.uint8)
+
+
+def _sun_runner(tmp_path, kiosk, mode):
+    _frames, full_ball = _sun_frames("lock")
+    ball = full_ball if mode == "arm5" else {k: v / 2.0 for k, v in full_ball.items()}
+    basis = (
+        {"source": "setup_lock", "signal_us": 7.0}
+        if mode == "arm5"
+        else {"source": "setup_lock_scaled", "signal_us": 7.0 * 0.229 / 0.547}
+    )
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.select(FULL_IDS if mode == "arm5" else HALF_IDS)
+    runner = sl.LadderRunner(
+        state,
+        kiosk,
+        run_dir=lambda: None,
+        black_floor=lambda arm: 16.0,
+        gain_at_300=lambda arm: {"arm5": 0.547, "arm6": 0.229}[arm],
+        light_index=lambda arm: 0.276,
+        photo_dir=tmp_path / "impact",
+        on_mode_done=lambda arm: None,
+        ready_timeout_s=1.0,
+        expected_ball=lambda arm: ball,
+        gain_basis=lambda arm: basis,
+    )
+    return runner
+
+
+def test_the_30_sept_sun_skips_the_long_rungs_and_runs_full_10_near_unity(tmp_path, monkeypatch):
+    monkeypatch.setattr(sl, "SETTLE_S", 0)
+    kiosk = SunKiosk("arm5")
+    runner = _sun_runner(tmp_path, kiosk, "arm5")
+
+    active = runner.start_rung()
+
+    rungs = runner.state.to_dict()["rungs"]
+    # full-300 at gain 1 is 43x the lock: the ball clips and each long rung is
+    # skipped on its pre-check, before any swing
+    for rung_id in ("full-300", "full-200", "full-150", "full-100", "full-75", "full-50"):
+        assert rungs[rung_id]["status"] == "skipped", rung_id
+        assert rungs[rung_id]["pre_check"]["too_bright"] is True
+        assert rungs[rung_id]["gain"] == 1.0
+        assert rungs[rung_id]["gain_source"] == "setup_lock"
+    # the sunlit cap of the ball clips from about 3x the lock (20 us) up
+    assert rungs["full-30"]["status"] == "skipped"
+    assert rungs["full-20"]["status"] == "skipped"
+    assert "too bright for the ball" in rungs["full-20"]["reason"]
+    # full-10 starts at unity. Its mat is under the 10 DN zone floor there and the
+    # ball's cap clips past about 1.35, so the pre-check (no swings) settles in
+    # between: up for the mat, back down for the ball.
+    assert active is not None and rungs["full-10"]["status"] == "active"
+    tried = [gain for exposure, gain in kiosk.calls if exposure == 10]
+    assert tried[0] == 1.0 and len(tried) <= 1 + sl.MAX_GAIN_CORRECTIONS
+    assert 1.2 <= rungs["full-10"]["gain"] <= 1.35
+    assert rungs["full-10"]["gain_source"] == "setup_lock"
+    assert rungs["full-10"]["swings"] == []
+
+
+def test_the_30_sept_sun_runs_no_640x400_rung_below_the_sensors_floor(tmp_path, monkeypatch):
+    """640x400 in that sun needs about 2.9 us at unity; its shortest rung is 15 us."""
+    monkeypatch.setattr(sl, "SETTLE_S", 0)
+    kiosk = SunKiosk("arm6")
+    runner = _sun_runner(tmp_path, kiosk, "arm6")
+
+    assert runner.start_rung() is None
+
+    rungs = runner.state.to_dict()["rungs"]
+    for rung_id in HALF_IDS:
+        assert rungs[rung_id]["status"] == "skipped", rung_id
+        assert rungs[rung_id]["pre_check"]["too_bright"] is True
+        assert rungs[rung_id]["gain"] == 1.0
+        assert rungs[rung_id]["gain_source"] == "setup_lock_scaled"
+    # each was tried once at unity: nothing lower exists to correct to
+    assert [gain for _exposure, gain in kiosk.calls] == [1.0] * len(HALF_IDS)

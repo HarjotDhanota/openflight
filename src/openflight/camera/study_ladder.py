@@ -125,6 +125,29 @@ def rung_gain(gain_at_300: float, exposure_us: int) -> float:
     return round(max(GAIN_FLOOR, min(GAIN_CEILING, gain_at_300 * 300.0 / exposure_us)), 3)
 
 
+def starting_gain(
+    exposure_us: int, gain_at_300: float | None, basis: dict | None
+) -> tuple[float, dict]:
+    """A rung's first gain, and what set it (P7-12).
+
+    ``basis`` is the setup's ball lock for this mode: ``signal_us`` is its applied
+    exposure x gain, and each rung keeps that product, so the ball is as bright
+    at every rung and the study compares blur, not brightness. ``source`` is
+    ``setup_lock`` or ``setup_lock_scaled`` (the 1280x800 lock scaled to a mode
+    without its own). Without one the zone gain screen decides, as before; in sun
+    that started full-10 at gain 12 while the ball needed about 1.
+    """
+    if basis is not None:
+        wanted = float(basis["signal_us"]) / float(exposure_us)
+        return round(max(GAIN_FLOOR, min(GAIN_CEILING, wanted)), 3), dict(basis)
+    if gain_at_300 is None:
+        raise ValueError("a rung needs the setup's lock or a gain screen")
+    return rung_gain(gain_at_300, exposure_us), {
+        "source": "gain_screen",
+        "gain_at_300": float(gain_at_300),
+    }
+
+
 def photo_controls(
     light_index: float | None,
     black_floor: float,
@@ -675,11 +698,15 @@ class LadderState:
                 entries[other.rung_id]["status"] = "skipped"
                 entries[other.rung_id]["reason"] = f"{rung.rung_id} {status}: {reason}"
 
-    def begin(self, rung_id: str, gain: float, check: dict) -> None:
+    def begin(self, rung_id: str, gain: float, check: dict, gain_basis: dict | None = None) -> None:
         rung = next(r for r in LADDER if r.rung_id == rung_id)
         entry = self._data["rungs"][rung_id]
         entry["gain"] = gain
         entry["pre_check"] = check
+        if gain_basis is not None:
+            # what set the rung's first gain (P7-12); a pre-check may correct it
+            entry["gain_source"] = gain_basis["source"]
+            entry["gain_basis"] = gain_basis
         if check.get("ok"):
             entry["status"] = "active"
         elif check.get("too_bright"):
@@ -889,6 +916,7 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
         on_mode_done,
         ready_timeout_s: float = 90.0,
         expected_ball=None,
+        gain_basis=None,
     ):
         self.state = state
         self.client = client
@@ -898,6 +926,8 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
         self._light_index = light_index
         # arm id -> where the setup saw the ball in that mode, or None
         self._expected_ball = expected_ball or (lambda _arm_id: None)
+        # arm id -> the setup's ball lock a rung's gain starts from, or None (P7-12)
+        self._gain_basis = gain_basis or (lambda _arm_id: None)
         self.photo_dir = photo_dir
         self._on_mode_done = on_mode_done
         self.ready_timeout_s = ready_timeout_s
@@ -1014,7 +1044,12 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                     self.state.record_resume_check(rung.rung_id, check)
                     self._configured_rung = rung.rung_id
                     return self.state.to_dict()["rungs"][rung.rung_id]
-                gain = rung_gain(self._gain_at_300(rung.arm_id), rung.exposure_us)
+                basis = self._gain_basis(rung.arm_id)
+                gain, basis = starting_gain(
+                    rung.exposure_us,
+                    self._gain_at_300(rung.arm_id) if basis is None else None,
+                    basis,
+                )
                 self.client.set_controls(rung.exposure_us, gain)
                 if self._stop.wait(SETTLE_S):
                     return None
@@ -1035,7 +1070,7 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                     check = self._pre_check(rung, gain, black, expected)
                 if self.stopped:
                     return None
-                self.state.begin(rung.rung_id, gain, check)
+                self.state.begin(rung.rung_id, gain, check, basis)
                 if check["ok"]:
                     self._configured_rung = rung.rung_id
                     return self.state.to_dict()["rungs"][rung.rung_id]
