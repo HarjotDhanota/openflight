@@ -144,6 +144,16 @@ Outdoors-test-5 ran at dusk (18:45-19:01) on e3308529. Capture worked end to end
 
 P6-1 to P6-3 touch the same ladder code as the setting selection, so they follow it; P6-4 to P6-6 run in parallel.
 
+**What P6-4 and P6-5 found (merged 29 Sept):**
+- The "7-26 ms before the trigger" was mostly a late timestamp. The trigger's time was taken after the evidence gathering, which holds the frame lock and stalled frame delivery by 14-31 ms. Bounded by when frame 18 was blocked, contact sits roughly −5 to +3 ms around the trigger, in line with the earlier 0.5-4 ms. GPIO latency, rolling-shutter row offset and SensorTimestamp's exact meaning remain open for F3.
+- On 4 of the 6 swings the club head already covers the ball in frame 18, so the departure detector says 17: the contact time comes out one frame (8.7 ms) early. That is a property of the behind-ball view in any light, and F3's scoring must allow for it.
+
+| ID | Problem | Fix |
+|---|---|---|
+| P6-7 | `notify_trigger` holds the frame lock while it gathers evidence and copies it, so frame delivery stalls 14-31 ms at every trigger. | Gather and copy outside the lock; hold it only to freeze the ring and queue the trigger's records. |
+| P6-8 | Chained club delivery still times frames by host arrival, which the stall distorts by up to 31 ms around impact. | Time frames by sensor timestamps where the clip has them, as ball flight and the trigger split now do. |
+
+
 ## Rough effort (agent time)
 
 | Phase | Effort | Blocked on |
