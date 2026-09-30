@@ -195,6 +195,7 @@ Outdoors-test-6 and -7 ran in full sun on 30 Sept (10:10-10:26) on 63b69be9. Har
 | P7-9 | The shortest settings are too long for sun, and the pre-check can match clutter up to 6 ball diameters away (`study_ladder.py:185-190`). | Add full-20, full-10, half-30 and half-15. Tighten the ball match to about one diameter, so the too-bright skip judges the real ball. |
 | P7-10 | Clips with no OPS shot stay "pending" forever, and the review calls real swings "Not a shot" (`paired_eligibility.py:168-172`). | Time them out as "no radar shot" and say so in the review. |
 | P7-11 | The review labels any `accepted*` IWR launch "accepted", whatever the tee's source (`review_metrics.py:230`). With a guessed tee, the launch moves 4-28° per ±0.25 m. | Label it experimental whenever the tee is unqualified or the status is single-channel, and carry the tee's range and source. |
+| P7-12 | Each rung's starting gain comes from the zone gain screen (`rung_gain`, `study_ladder.py:119-125`). In sun it starts full-10 at gain 12 when the ball needs about 1, and the ladder takes three swings to correct. (Found while building P7-9.) | Start each rung at the setup's ball lock, keeping its exposure × gain. A mode without its own lock scales the 1280×800 lock by the gain screens' mode ratio. With no lock, keep the gain-screen rule. Record the source per rung. |
 
 **Harjot, before the next session:** put a foam windscreen on the microphone, and check the GATE LED stays quiet in wind before swinging.
 
