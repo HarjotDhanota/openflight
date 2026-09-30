@@ -379,8 +379,8 @@ def camera_result(value: float, width: int = 1280, height: int = 800) -> Referen
         y_px=y,
         diameter_px=diameter,
         area_px=450,
-        floor_point_lfu_m=(0.0, value, 0.021),
-        floor_radar_range_m=value,
+        size_point_lfu_m=(0.0, value, 0.021),
+        size_radar_range_m=value,
         floor_camera_range_m=value,
         size_camera_range_m=value,
         floor_range_uncertainty_m=0.02,
@@ -2388,7 +2388,7 @@ def test_the_camera_window_is_its_range_plus_minus_two_sigma_with_a_20_percent_f
     # floor uncertainty is 0.02 m, below the 20 % floor, so the window is +-0.48 m
     assert low == pytest.approx(1.2 - 0.48)
     assert high == pytest.approx(1.2 + 0.48)
-    assert ts.camera_radar_window(replace(selected, floor_radar_range_m=None)) is None
+    assert ts.camera_radar_window(replace(selected, size_radar_range_m=None)) is None
 
 
 def test_the_camera_steers_the_radar_away_from_a_person_behind_the_ball(

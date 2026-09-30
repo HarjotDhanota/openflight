@@ -1325,8 +1325,8 @@ def _guided_result(*, status="selected", x=160.0, y=140.0, diameter=14.0, range_
         y_px=y,
         diameter_px=diameter,
         area_px=150,
-        floor_point_lfu_m=(0.0, range_m, ts.BALL_DIAMETER_MM / 2000.0),
-        floor_radar_range_m=range_m,
+        size_point_lfu_m=(0.0, range_m, ts.BALL_DIAMETER_MM / 2000.0),
+        size_radar_range_m=range_m,
         floor_camera_range_m=range_m,
         size_camera_range_m=range_m,
         floor_range_uncertainty_m=0.02,
@@ -1424,7 +1424,7 @@ class TestGuidedRangeAnalyzer:
         assert calls[0][2]["expected_diameter_range_px"] == pytest.approx(
             hint["expected_diameter_px"]
         )
-        assert analysis["method"] == "iwr_conditioned_camera_floor_plane_v1"
+        assert analysis["method"] == "iwr_conditioned_camera_size_range_v1"
         assert analysis["discovery_mode"] == "radar_guided_provisional"
         assert analysis["independent"] is False
         assert analysis["promotion_eligible"] is False
@@ -1759,8 +1759,8 @@ class TestTheCameraSaysHowFar:
             y_px=470.0,
             diameter_px=38.0,
             area_px=1100,
-            floor_point_lfu_m=(0.0, 1.1, 0.021335),
-            floor_radar_range_m=1.101,
+            size_point_lfu_m=(0.0, 1.1, 0.021335),
+            size_radar_range_m=1.101,
             floor_camera_range_m=1.073,
             size_camera_range_m=1.08,
             floor_range_uncertainty_m=0.04,
@@ -1793,7 +1793,7 @@ class TestTheCameraSaysHowFar:
             .splitlines()[0]
         )
         assert row["tee_mm"] is None
-        assert row["automatic_range"]["selected"]["floor_radar_range_m"] == pytest.approx(1.101)
+        assert row["automatic_range"]["selected"]["size_radar_range_m"] == pytest.approx(1.101)
 
 
 class FakeTiltService:
@@ -2902,7 +2902,7 @@ def test_the_ladder_expects_the_ball_the_setup_saw():
     selected = {"x_px": 612.0, "y_px": 505.0, "diameter_px": 34.0}
     camera = tee_range.TeeRangeCandidate(
         candidate_id="camera-setup-1-arm5",
-        source="camera_reference_ball_floor_plane",
+        source="camera_reference_ball_size_range",
         source_group="camera",
         radar_slant_range_m=1.2,
         uncertainty_m=0.25,
@@ -3287,3 +3287,12 @@ def test_a_stale_gain_screen_is_measured_again_before_the_ladder(tmp_path, monke
     assert body["gain_screen_stale"] is True
     assert "Measure the light again" in body["error"] and "40 min old" in body["error"]
     assert manager.status()["state"] == "idle"
+
+
+def test_a_stored_pre_s11_candidate_still_matches_a_new_one():
+    """Wiring audit S11: evidence saved under floor_radar_range_m is still read."""
+    base = {"x_px": 640.0, "y_px": 500.0, "diameter_px": 30.0, "floor_range_uncertainty_m": 0.02}
+    old = {**base, "floor_radar_range_m": 1.50}
+    new = {**base, "size_radar_range_m": 1.51}
+    assert ts._same_guided_candidate(old, new) is True
+    assert ts._same_guided_candidate(old, {**new, "size_radar_range_m": 1.9}) is False

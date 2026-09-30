@@ -1205,9 +1205,11 @@
         }
         const metres = (value) => (value == null ? '?' : `${value.toFixed(3)} m`);
         const tape = Number(el('tee-mm').value) / 1000;
-        const residual = Number.isFinite(tape) && tape > 0 ? selected.floor_radar_range_m - tape : null;
+        // named floor_radar_range_m before wiring audit S11; arm records keep the old name
+        const radarRange = selected.size_radar_range_m ?? selected.floor_radar_range_m;
+        const residual = Number.isFinite(tape) && tape > 0 && radarRange != null ? radarRange - tape : null;
         el('automatic-range-values').innerHTML =
-          `<span>floor range <b>${metres(selected.floor_radar_range_m)}</b> ± ${metres(selected.floor_range_uncertainty_m)}</span>` +
+          `<span>radar range from size <b>${metres(radarRange)}</b> ± ${metres(selected.floor_range_uncertainty_m)}</span>` +
           `<span>apparent-size range <b>${metres(selected.size_camera_range_m)}</b> ± ${metres(selected.size_range_uncertainty_m)}</span>` +
           `<span>disagreement <b>${metres(selected.range_disagreement_m)}</b> · consistency <b>${selected.consistency_sigma?.toFixed(2) ?? '?'}σ</b></span>` +
           `<span>confidence <b>${selected.confidence}</b> · canonical status <b>${solution?.status ?? 'unresolved'}</b></span>` +
@@ -1640,7 +1642,7 @@
         const numeric = (value) => value != null && Number.isFinite(Number(value));
         const coordinate = (value) => numeric(value) ? Number(value).toFixed(1) : '?';
         const diameter = numeric(ball.diameter_px) ? `${Number(ball.diameter_px).toFixed(1)} px` : 'unavailable';
-        const range = numeric(ball.floor_radar_range_m) ? ` · range ${Number(ball.floor_radar_range_m).toFixed(3)} m` : '';
+        const range = numeric(ball.size_radar_range_m) ? ` · range ${Number(ball.size_radar_range_m).toFixed(3)} m` : '';
         const readiness = association.save_eligible
           ? ' · stable and ready to save'
           : ` · stabilizing ${association.stable_count || 0}/3`;

@@ -249,7 +249,7 @@ def test_mode_aware_search_recovers_range_without_a_tape(width, height, focal_px
     expected_radar = np.linalg.norm(point - np.asarray(camera.radar_origin_lfu))
     expected_camera = np.linalg.norm(point - np.asarray(camera.camera_origin_lfu))
     # range comes from apparent size (the camera height is solved, not assumed)
-    assert abs(result.selected.floor_radar_range_m - expected_radar) <= max(
+    assert abs(result.selected.size_radar_range_m - expected_radar) <= max(
         2.0 * result.selected.floor_range_uncertainty_m, 0.03
     )
     assert abs(result.selected.camera_height_m - camera.camera_origin_lfu[2]) <= max(
@@ -361,9 +361,9 @@ def test_existing_detector_behavior_remains_compatible():
 
 def test_camera_range_estimator_identity_is_pinned():
     """Any estimator constant change must be a deliberate, reviewed identity change."""
-    assert camera_range_estimator_policy()["name"] == "camera_reference_ball_floor_plane"
+    assert camera_range_estimator_policy()["name"] == "camera_reference_ball_size_range"
     assert camera_range_estimator_sha256() == (
-        "83dc88d97cd76a671ff59f594b43fa911d206f5304e6971d5ee5c5e7d219ab7c"
+        "4eb8609adf8afe4ae27e38e89d2a374e59f86d5b3bd1d5db2c7c17d6a80ce7c1"
     )
 
 
@@ -539,3 +539,18 @@ def test_the_hitting_area_edge_is_judged_by_distance_along_the_lens_ray():
 
     assert judged(reach - 0.01) is None
     assert "outside the hitting area" in judged(reach + 0.01)
+
+
+def test_stored_candidates_are_read_under_their_old_names_too():
+    """Wiring audit S11: the size-derived fields were called floor_* before policy 3."""
+    # pylint: disable=import-outside-toplevel
+    from openflight.camera.reference_ball_range import stored_candidate_value
+
+    assert camera_range_estimator_policy()["version"] == 3
+    old = {"floor_radar_range_m": 1.52, "floor_point_lfu_m": [0.0, 1.5, 0.021]}
+    new = {"size_radar_range_m": 1.49, "size_point_lfu_m": [0.0, 1.47, 0.021]}
+    assert stored_candidate_value(old, "size_radar_range_m") == 1.52
+    assert stored_candidate_value(old, "size_point_lfu_m") == [0.0, 1.5, 0.021]
+    assert stored_candidate_value(new, "size_radar_range_m") == 1.49
+    with pytest.raises(KeyError):
+        stored_candidate_value({}, "size_radar_range_m")

@@ -53,6 +53,7 @@ from openflight.camera.reference_ball_range import (
     camera_range_estimator_sha256 as _camera_range_estimator_sha256,
     estimate_reference_ball_range,
     solve_camera_height_from_radar,
+    stored_candidate_value,
 )
 from openflight.camera.setup_eligibility import SetupEligibility
 from openflight.camera.static_exposure import (
@@ -2235,7 +2236,7 @@ def _guided_camera_analysis(
     return result, {
         **_camera_range_evidence(result),
         "method": (
-            "iwr_conditioned_camera_floor_plane_v1" if usable_hint else "camera_floor_plane_v1"
+            "iwr_conditioned_camera_size_range_v1" if usable_hint else "camera_size_range_v1"
         ),
         "analysis_role": analysis_role,
         "discovery_mode": (
@@ -2311,7 +2312,8 @@ def _same_guided_candidate(first: Mapping, second: Mapping) -> bool:
         )
         diameter_delta = abs(float(first["diameter_px"]) - float(second["diameter_px"]))
         range_delta = abs(
-            float(first["floor_radar_range_m"]) - float(second["floor_radar_range_m"])
+            float(stored_candidate_value(first, "size_radar_range_m"))
+            - float(stored_candidate_value(second, "size_radar_range_m"))
         )
         first_uncertainty = float(first.get("floor_range_uncertainty_m") or 0.0)
         second_uncertainty = float(second.get("floor_range_uncertainty_m") or 0.0)
@@ -2858,9 +2860,9 @@ def _camera_tee_candidates(
                 candidate_id=f"camera-placement-{placement:02d}-{index:02d}",
                 source=item.source,
                 source_group="camera",
-                radar_slant_range_m=item.floor_radar_range_m,
+                radar_slant_range_m=item.size_radar_range_m,
                 uncertainty_m=(
-                    max(float(uncertainty), 0.001) if item.floor_radar_range_m is not None else None
+                    max(float(uncertainty), 0.001) if item.size_radar_range_m is not None else None
                 ),
                 selectable=False,
                 evidence={
@@ -3041,7 +3043,7 @@ def _guided_camera_candidate(
     static_exposure: Mapping | None = None,
 ) -> tee_range.TeeRangeCandidate:
     selected = result.selected
-    accepted = selected is not None and selected.floor_radar_range_m is not None
+    accepted = selected is not None and selected.size_radar_range_m is not None
     rig_sha = _file_sha256(rig_geometry)
     camera_sha = _file_sha256(optical_calibration) if optical_calibration else None
     placement_sha = _file_sha256(camera_placement) if camera_placement else None
@@ -3113,12 +3115,12 @@ def _guided_camera_candidate(
     }
     uncertainty = None
     value = None
-    if selected is not None and selected.floor_radar_range_m is not None:
-        value = float(selected.floor_radar_range_m)
+    if selected is not None and selected.size_radar_range_m is not None:
+        value = float(selected.size_radar_range_m)
         uncertainty = max(float(selected.floor_range_uncertainty_m or 0.001), 0.001)
     return tee_range.TeeRangeCandidate(
         candidate_id=f"camera-{epoch_id}-{arm.arm_id}",
-        source="camera_reference_ball_floor_plane",
+        source="camera_reference_ball_size_range",
         source_group="camera",
         radar_slant_range_m=value,
         uncertainty_m=uncertainty,
@@ -3162,7 +3164,7 @@ CAMERA_WINDOW_MIN_RELATIVE_SIGMA = 0.20
 
 def camera_radar_window(selected) -> tuple[float, float] | None:
     """Radar slant-range interval (m) the camera's selected ball allows, if any."""
-    value = getattr(selected, "floor_radar_range_m", None)
+    value = getattr(selected, "size_radar_range_m", None)
     if value is None or not math.isfinite(float(value)) or float(value) <= 0.0:
         return None
     value = float(value)
@@ -3405,7 +3407,7 @@ def _camera_to_iwr_ranking(
     hypotheses = []
     rejection_reasons = []
     try:
-        camera_range = float(selected.floor_radar_range_m) if selected is not None else math.nan
+        camera_range = float(selected.size_radar_range_m) if selected is not None else math.nan
         camera_uncertainty = (
             float(selected.floor_range_uncertainty_m) if selected is not None else math.nan
         )
@@ -3455,7 +3457,7 @@ def _camera_to_iwr_ranking(
             "epoch_id": epoch_id,
             "camera_candidate_id": camera_candidate_id,
             "saved_frame_sha256": saved_frame_sha256,
-            "camera_estimator": "camera_floor_plane_v1",
+            "camera_estimator": "camera_size_range_v1",
             "radar_candidate_id": iwr_candidate.get("candidate_id"),
             "radar_source": iwr_candidate.get("source"),
             "radar_source_group": iwr_candidate.get("source_group"),
@@ -6062,8 +6064,8 @@ def create_app(
                         "from_size_mm": round(selected.size_camera_range_m * 1000)
                         if selected.size_camera_range_m is not None
                         else None,
-                        "from_floor_mm": round(selected.floor_radar_range_m * 1000)
-                        if selected.floor_radar_range_m is not None
+                        "from_floor_mm": round(selected.size_radar_range_m * 1000)
+                        if selected.size_radar_range_m is not None
                         else None,
                     },
                 }

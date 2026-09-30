@@ -136,7 +136,7 @@ async function base(page: Page, initial: FlowState | null = null) {
               x_px: 641.2,
               y_px: 502.7,
               diameter_px: 24.4,
-              floor_radar_range_m: 1.527,
+              size_radar_range_m: 1.527,
             },
             candidates: [],
             stable_count: 3,
@@ -249,7 +249,7 @@ test('shows the server-owned guided camera frame without starting another live v
               x_px: 641.2,
               y_px: 502.7,
               diameter_px: 24.4,
-              floor_radar_range_m: 1.527,
+              size_radar_range_m: 1.527,
             },
             candidates: [],
             stable_count: 3,
@@ -401,7 +401,7 @@ test('labels radar-conditioned readiness as provisional until independent Save',
           x_px: 641.2,
           y_px: 502.7,
           diameter_px: 24.4,
-          floor_radar_range_m: 1.527,
+          size_radar_range_m: 1.527,
         },
         stable_count: 3,
         stable_span_s: 1,
@@ -729,6 +729,46 @@ test('an earlier failure never resurfaces beside a newer one', async ({ page }) 
   await expect(summary).not.toContainText('IWR capture failed');
   await expect(summary).not.toContainText('camera cable disconnected');
 });
+
+for (const key of ['size_radar_range_m', 'floor_radar_range_m']) {
+  test(`camera range evidence recorded as ${key} is shown`, async ({ page }) => {
+    // wiring audit S11: arm records written before the rename keep floor_radar_range_m.
+    // The arm record's panel shows when the guided range endpoint does not answer.
+    await base(page);
+    await page.route('**/api/tester/tee-range**', (route) => json(route, { error: 'unavailable' }, 503));
+    await page.route('**/api/tester/status**', (route) =>
+      json(route, {
+        study: {
+          arms: [
+            {
+              arm_id: 'arm5',
+              label: 'Arm 5',
+              isolates: 'reference',
+              exposure_us: 300,
+              target: 10,
+              tee_range_camera_evidence: {
+                status: 'selected',
+                confidence: 'experimental',
+                candidates: [{}],
+                selected: {
+                  [key]: 1.234,
+                  floor_range_uncertainty_m: 0.02,
+                  size_camera_range_m: 1.2,
+                  size_range_uncertainty_m: 0.02,
+                  range_disagreement_m: null,
+                  consistency_sigma: 0.4,
+                  confidence: 'experimental',
+                },
+              },
+            },
+          ],
+        },
+      })
+    );
+    await page.goto('/tester.html');
+    await expect(page.locator('#automatic-range-values')).toContainText('radar range from size 1.234 m');
+  });
+}
 
 test('legacy camera evidence polling never overwrites the guided failure', async ({ page }) => {
   await base(page, {

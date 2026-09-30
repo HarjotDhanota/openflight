@@ -62,8 +62,10 @@ _LENS_ABOVE_SURFACE_M = (0.0, 1.0)
 def camera_range_estimator_policy() -> dict[str, Any]:
     """Return the camera range policy bound by qualification artifacts."""
     return {
-        "name": "camera_reference_ball_floor_plane",
-        "version": 2,
+        # version 3: the range fields are named for the ball's size they come from
+        # (wiring audit S11); they were "floor_*" though nothing uses the floor
+        "name": "camera_reference_ball_size_range",
+        "version": 3,
         "detector": "reference_ball_candidates_v2_merged_seeds",
         "seed_fits": REFERENCE_SEED_FITS,
         "search_region": "hitting_area_in_world_coordinates",
@@ -274,6 +276,24 @@ class BallPlaneIntersection:
     accuracy_qualified: bool
 
 
+# Evidence stored before wiring audit S11 carries the old names; readers of stored
+# candidates accept either (``stored_candidate_value``).
+LEGACY_CANDIDATE_FIELDS = {
+    "size_radar_range_m": "floor_radar_range_m",
+    "size_point_lfu_m": "floor_point_lfu_m",
+}
+
+
+def stored_candidate_value(candidate: Mapping[str, Any], name: str) -> Any:
+    """A field of a stored candidate, under its current name or its pre-S11 one."""
+    if name in candidate:
+        return candidate[name]
+    legacy = LEGACY_CANDIDATE_FIELDS.get(name)
+    if legacy is None or legacy not in candidate:
+        raise KeyError(name)
+    return candidate[legacy]
+
+
 @dataclass(frozen=True)
 class ReferenceBallRangeCandidate:
     """One sphere observation and the two range estimates it implies."""
@@ -282,8 +302,8 @@ class ReferenceBallRangeCandidate:
     y_px: float
     diameter_px: float
     area_px: int
-    floor_point_lfu_m: tuple[float, float, float] | None
-    floor_radar_range_m: float | None
+    size_point_lfu_m: tuple[float, float, float] | None
+    size_radar_range_m: float | None
     floor_camera_range_m: float | None
     size_camera_range_m: float | None
     floor_range_uncertainty_m: float | None
@@ -616,8 +636,8 @@ def _withheld(ball: ReferenceBall, camera: BallPlaneCamera, reason: str, **range
         y_px=ball.y,
         diameter_px=ball.diameter_px,
         area_px=ball.area_px,
-        floor_point_lfu_m=None,
-        floor_radar_range_m=None,
+        size_point_lfu_m=None,
+        size_radar_range_m=None,
         floor_camera_range_m=None,
         size_camera_range_m=ranges.get("size_range"),
         floor_range_uncertainty_m=None,
@@ -686,12 +706,12 @@ def _candidate(  # pylint: disable=too-many-locals
         y_px=ball.y,
         diameter_px=ball.diameter_px,
         area_px=ball.area_px,
-        floor_point_lfu_m=(
+        size_point_lfu_m=(
             float(origin[0] + relative[0]),
             float(origin[1] + relative[1]),
             float(ball_center_height_m),
         ),
-        floor_radar_range_m=radar_range,
+        size_radar_range_m=radar_range,
         floor_camera_range_m=size_range,
         size_camera_range_m=size_range,
         floor_range_uncertainty_m=size_uncertainty,
@@ -814,7 +834,7 @@ def _hitting_area_reason(  # pylint: disable=too-many-arguments
 
 def _score_reason(candidate: ReferenceBallRangeCandidate, camera: BallPlaneCamera) -> str:
     """Name the term that made a candidate score too badly to be the ball at address."""
-    point = candidate.floor_point_lfu_m
+    point = candidate.size_point_lfu_m
     sideways = float(point[0] - camera.radar_origin_lfu[0]) if point is not None else 0.0
     lateral_sigma = abs(sideways) / _LATERAL_SIGMA_M
     if lateral_sigma >= (candidate.consistency_sigma or 0.0):
