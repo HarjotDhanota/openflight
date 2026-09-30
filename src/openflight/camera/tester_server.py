@@ -38,6 +38,7 @@ from openflight import session_bundle, tee_range, tee_range_setup
 from openflight.camera import (
     attempt_ledger,
     ball_pixels,
+    camera_roll,
     reference_ball_range,
     session_review_routes as review_routes,
     study_ladder,
@@ -1833,10 +1834,9 @@ class EnclosureTilt:
             {
                 "pitch_deg": round(snapshot.calibrated_pitch_deg, 2),
                 # the service keeps pitch only; the lean across is from the same
-                # still window, about the sensor's x axis
+                # still window, in the convention both camera paths share (C8)
                 "roll_deg": round(
-                    math.degrees(math.atan2(snapshot.x_g, math.hypot(snapshot.y_g, snapshot.z_g))),
-                    2,
+                    camera_roll.lis3dh_roll_deg(snapshot.x_g, snapshot.y_g, snapshot.z_g), 2
                 ),
                 "expected_pitch_deg": round(expected, 2),
                 "camera_pitch_deg": round(rig.boresight_pitch_deg + departure, 2),
@@ -2008,11 +2008,17 @@ def _reference_ball_camera(
         saved = artifact.get("candidate", artifact).get("mode_profile", {}).get("saved_image", {})
         if (saved.get("width"), saved.get("height")) != (arm.width, arm.height):
             raise ValueError("calibrated camera mode does not match the active capture mode")
+        # one roll convention with the nominal path (wiring audit C8)
+        reference_roll = (placement.get("reference_pose_deg") or {}).get("roll")
         model = build_calibrated_camera_model(
             artifact,
             placement,
             observed_pitch_deg=tilt.get("pitch_deg"),
-            observed_roll_deg=tilt.get("roll_deg"),
+            observed_roll_deg=(
+                camera_roll.calibrated_observed_roll_deg(tilt.get("roll_deg"), reference_roll)
+                if isinstance(reference_roll, (int, float))
+                else tilt.get("roll_deg")
+            ),
         )
         return BallPlaneCamera.calibrated(model)
     rig = RigGeometry.from_json(rig_geometry)
@@ -2033,10 +2039,14 @@ def _reference_ball_camera(
         image_width_px=arm.width,
         image_height_px=arm.height,
         pitch_deg=float(pitch),
-        # The camera is level in the enclosure. The LIS3DH roll is recorded but not
-        # applied: this nominal path and the calibrated projection applied it with
-        # opposite signs, and the correct sign has not yet been derived from the mount.
-        roll_correction_deg=0.0,
+        # The camera is level in the enclosure; the LIS3DH roll goes through the one
+        # convention both paths share, which records it but does not yet apply it
+        # (wiring audit C8, camera_roll).
+        roll_correction_deg=camera_roll.nominal_roll_correction_deg(
+            camera_roll.applied_camera_roll_deg(
+                tilt.get("roll_deg"), rig.expected_inclinometer_orientation().roll_deg or 0.0
+            )
+        ),
         mirror_horizontal=False,
         camera_origin_lfu=camera,
         radar_origin_lfu=camera + offset,

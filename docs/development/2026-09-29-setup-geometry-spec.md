@@ -102,6 +102,7 @@ This already removes the door knobs and clothes in the 28 Sept field frame (well
 - **Derive** the correct LIS3DH roll sign from the mounting (flat, yaw 180°) and the two camera paths (nominal rays and calibrated projection). Make both paths use one convention.
 - **Test** with a synthetic rolled camera: render a level scene through a camera rolled +3°, apply the LIS3DH-derived correction, and check that level world lines come out level.
 - **Re-enable** roll on the nominal path only after that test passes, and only once a phone-level reading confirms the direction on the real unit (step B2).
+- **Status (wiring fix C8, 29 Sept):** both paths now take the roll from `camera/camera_roll.py`. With the board face up (the unit reads z_g = +1.06) and +Y forward after the 180° yaw, a positive `atan2(x_g, hypot(y_g, z_g))` is the target-right side up *if the LIS3DH axes are right-handed*; the calibrated projection then takes the roll as read and the nominal rays take −roll. `tests/test_camera_roll.py` renders a level line through a camera rolled ±3° and pins both. The roll stays recorded, not applied, in both paths (`LIS3DH_ROLL_APPLIED = False`): handedness is the datasheet's, not measured here, and the 28 Sept −2.9° reading against a frame under 1° says the board has a mount roll the rig file lacks. B2 settles the sign; a level line in the frame at the same placement gives `lis3dh_mount_roll_deg`.
 
 ### A4. Research, offline
 

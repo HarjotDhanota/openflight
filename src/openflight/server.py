@@ -3973,8 +3973,13 @@ def _fuse_camera_measurements(
                     for value in gravity
                 ):
                     raise ValueError("calibrated camera fusion requires finite LIS3DH gravity")
-                observed_roll = math.degrees(
-                    math.atan2(float(gravity[0]), math.hypot(float(gravity[1]), float(gravity[2])))
+                from openflight.camera import camera_roll  # noqa: PLC0415
+
+                # one roll convention with the tester and the nominal rays; recorded,
+                # not applied, until its direction is confirmed on the unit (C8)
+                observed_roll = camera_roll.calibrated_observed_roll_deg(
+                    camera_roll.lis3dh_roll_deg(*gravity),
+                    (camera_placement.get("reference_pose_deg") or {}).get("roll", 0.0),
                 )
                 model = build_calibrated_camera_model(
                     camera_optical_calibration,

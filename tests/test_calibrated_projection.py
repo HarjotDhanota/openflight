@@ -924,6 +924,12 @@ class TestTheTesterRunsTheServersPlacementChecks:
         camera = self._camera(*self._files(tmp_path))
         assert camera.source == "calibrated_candidate_unqualified"
 
+    def test_the_lis3dh_roll_is_recorded_not_applied(self, tmp_path, monkeypatch):
+        # C8: the calibrated path used to turn by the raw LIS3DH roll
+        monkeypatch.setattr(self, "TILT", {**self.TILT, "roll_deg": -2.9})
+        camera = self._camera(*self._files(tmp_path))
+        assert camera.ray_model.snapshot["observed_pose_deg"]["roll"] == 0.0
+
     def test_a_placement_for_another_rig_is_refused(self, tmp_path):
         with pytest.raises(ValueError, match="rig_geometry_sha256"):
             self._camera(*self._files(tmp_path, rig_geometry_sha256="another-rig"))
