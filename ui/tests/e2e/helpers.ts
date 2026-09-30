@@ -240,19 +240,51 @@ export async function overflowingLiveMetricMetadata(page: Page): Promise<string[
   });
 }
 
-/** Step 1's placement box as the tester server reports it (P7-15). */
+/** The camera model the page drags the patch through (P8-1): the v3 rig, level. */
+export const PATCH_PROJECTION = {
+  focal_px: 933.3334,
+  image_size_px: [1280, 800],
+  principal_point_px: [640, 400],
+  pitch_deg: 0,
+  roll_correction_deg: 0,
+  horizontal_pixel_sign: 1,
+  camera_origin_lfu_m: [0, 0, 0.095],
+  radar_origin_lfu_m: [0, -0.0014, 0.0588],
+  ball_center_height_m: 0.021335,
+  size_m: 0.61,
+  centre_distance_m: [0.8, 3.0],
+  approximate: false,
+};
+
+/** Step 1's patch as the tester server reports it (P8-1; the P7-15 box before it). */
 export function placementBoxState(testerId: string, state = 'confirmed', overrides: object = {}) {
   return {
     tester_id: testerId,
     state,
     previewing: false,
     setup_blockers: [],
+    projection: PATCH_PROJECTION,
     box: {
       arm_id: 'arm5',
       frame_size_px: [1280, 800],
-      box_px: [562, 361, 718, 491],
-      size_px: [156, 130],
-      default_box_px: [562, 361, 718, 491],
+      patch: { centre_lfu_m: [0, 1.2486], size_m: 0.61 },
+      distance_m: 1.2506,
+      ground_distance_m: 1.25,
+      side_offset_m: 0,
+      outline_px: [
+        [338.3, 494.0],
+        [941.7, 494.0],
+        [823.2, 457.1],
+        [456.8, 457.1],
+      ],
+      search_outline_px: [
+        [338.3, 548.6],
+        [941.7, 548.6],
+        [823.2, 372.6],
+        [456.8, 372.6],
+      ],
+      box_px: [338, 372, 943, 550],
+      camera_tilt: { status: 'uncalibrated', search_pad_deg: 4, window_pad_deg: 4, roll_pad_deg: 1 },
       source: state === 'confirmed' ? 'tester_dragged' : 'default_straight_ahead',
     },
     confirmed_at_utc: state === 'confirmed' ? '2026-09-30T18:00:00+00:00' : null,

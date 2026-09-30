@@ -274,18 +274,33 @@
         height: auto;
         object-fit: fill;
       }
-      .placement-box {
+      /* P8-1: the 2 ft x 2 ft ground patch, drawn in true perspective over the
+         picture. The SVG's coordinates are the frame's pixels. */
+      .patch-overlay {
         position: absolute;
-        box-sizing: border-box;
-        border: 2px dashed #ffd400;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
         pointer-events: none;
       }
-      .placement-box[data-draggable='true'] {
+      .patch-overlay .patch-ground {
+        fill: rgba(255, 212, 0, 0.14);
+        stroke: #ffd400;
+        stroke-width: 3;
+        vector-effect: non-scaling-stroke;
+      }
+      .patch-overlay .patch-search {
+        fill: none;
+        stroke: #ffd400;
+        stroke-width: 1.5;
+        stroke-dasharray: 6 5;
+        vector-effect: non-scaling-stroke;
+      }
+      .patch-overlay[data-draggable='true'] .patch-ground {
         pointer-events: auto;
         touch-action: none;
         cursor: move;
-        border-style: solid;
-        background: rgba(255, 212, 0, 0.12);
       }
       .photo-handoff {
         margin: 10px 0;
@@ -602,7 +617,7 @@
     <main>
       <h1>OpenFlight tester</h1>
       <p class="lede">
-        Set up the measured rig and place the box where you will hit, check hardware and light, let the sensors find
+        Set up the measured rig and place the patch where you will hit, check hardware and light, let the sensors find
         the ball range, capture the exposure ladder, then review and package the evidence. An accepted capture is saved evidence; it does not establish
         measurement accuracy.
       </p>
@@ -620,7 +635,7 @@
       </section>
 
       <section>
-        <h2>1. Set up the rig and place the box</h2>
+        <h2>1. Set up the rig and place the patch</h2>
         <form class="controls" id="controls">
           <label>Tester ID<input id="tester-id" value="20260922-name" autocomplete="off" /></label>
           <label
@@ -669,33 +684,40 @@
         <!-- P7-15: the box is the first step after the setup and it is the hitting zone:
              the hardware check, the light and the ball range all work from it. -->
         <div class="setup-gate" id="placement" data-ready="false">
-          <h3>Place the box</h3>
+          <h3>Place the patch</h3>
           <p id="placement-summary" class="note" role="status">
-            Confirm the physical setup first; the camera then opens here so you can place the box.
+            Confirm the physical setup first; the camera then opens here so you can place the patch.
           </p>
           <div class="guided-camera-preview" id="placement-preview" hidden>
             <p class="note" id="placement-camera-status" role="status">Waiting for the first camera frame…</p>
             <p class="note" id="placement-brightness" role="status" hidden>Adjusting brightness…</p>
             <div class="box-stage" id="placement-stage">
-              <img id="placement-camera-frame" alt="Live 1280×800 view for placing the box" hidden />
-              <div
-                class="placement-box"
+              <img id="placement-camera-frame" alt="Live 1280×800 view for placing the patch" hidden />
+              <svg
+                class="patch-overlay"
                 id="placement-box"
+                viewBox="0 0 1280 800"
+                preserveAspectRatio="none"
                 role="img"
-                aria-label="Placement box: the hitting zone the checks and the light are judged in"
+                aria-label="The 2 ft ground patch: the camera and radar look for the ball only here"
                 hidden
-              ></div>
+              >
+                <polygon class="patch-search" id="placement-search" points=""></polygon>
+                <polygon class="patch-ground" id="placement-ground" points=""></polygon>
+              </svg>
             </div>
+            <p class="note" id="placement-distance" role="status"></p>
           </div>
           <div class="steps">
             <button type="button" id="placement-show" hidden>Show the camera</button>
-            <button type="button" id="placement-confirm" hidden disabled>Confirm the box</button>
-            <button type="button" id="placement-move" hidden>Move the box</button>
+            <button type="button" id="placement-confirm" hidden disabled>Confirm the patch</button>
+            <button type="button" id="placement-move" hidden>Move the patch</button>
           </div>
           <p class="note">
-            Set the unit down where it will stay, then drag the yellow box over the spot you will hit from. Everything
-            after this works from the box: the hardware check, the light measurement (judged inside the box) and the
-            camera and radar checks. Moving the box later means measuring the light again and starting the ball range
+            Set the unit down where it will stay, then drag the yellow patch (2 ft × 2 ft of ground, drawn in
+            perspective) over the spot you will hit from, near or far. Everything after this works from the patch: the
+            hardware check, the light measurement (judged on the patch) and the camera and radar checks, which look for
+            the ball only there. Moving the patch later means measuring the light again and starting the ball range
             over.
           </p>
         </div>
@@ -708,7 +730,7 @@
         </div>
         <div class="status" id="status" data-state="unavailable">Connecting to the local runner…</div>
         <p class="problem" id="suite-box-hint" hidden>
-          Place and confirm the box in step 1 first: every check works from it.
+          Place and confirm the patch in step 1 first: every check works from it.
         </p>
         <ol class="suite-steps">
           <li>
@@ -724,7 +746,7 @@
             <h3>3. Automatic ball range</h3>
             <div class="setup-gate" id="automatic-range" data-ready="false">
               <p id="automatic-range-summary" class="note">
-                The camera and radar checks work from the box you confirmed in step 1. No tape measurement is required.
+                The camera and radar checks work from the patch you confirmed in step 1. No tape measurement is required.
               </p>
               <div class="light" id="automatic-range-values"></div>
               <div class="guided-camera-preview" id="tee-range-camera-preview" hidden>
@@ -733,13 +755,18 @@
                 <p class="note" id="tee-range-camera-detector" role="status">Ball detector is warming up…</p>
                 <div class="box-stage" id="tee-range-stage">
                   <img id="tee-range-camera-frame" alt="Live raw frame for automatic ball range" hidden />
-                  <div
-                    class="placement-box"
+                  <svg
+                    class="patch-overlay"
                     id="tee-range-placement-box"
+                    viewBox="0 0 1280 800"
+                    preserveAspectRatio="none"
                     role="img"
-                    aria-label="Placement box: the setup looks for the ball only inside it"
+                    aria-label="The patch: the setup looks for the ball only inside it"
                     hidden
-                  ></div>
+                  >
+                    <polygon class="patch-search" id="tee-range-patch-search" points=""></polygon>
+                    <polygon class="patch-ground" id="tee-range-patch-ground" points=""></polygon>
+                  </svg>
                 </div>
               </div>
               <div class="steps">
@@ -1691,27 +1718,129 @@
       const placementPlacing = () =>
         placementState?.state === 'needs_confirmation' || (boxConfirmed() && placementMoving);
 
-      function placementDraftBox() {
+      // P8-1: the patch is 2 ft × 2 ft of ground, drawn through the same pinhole
+      // model the server searches with (the rig file, the LIS3DH and the camera
+      // tilt): the server sends the model, and the page projects the patch itself
+      // while it is dragged. The server re-projects it exactly on Confirm.
+      const DEG = Math.PI / 180;
+      function patchRay(model, x, y) {
+        const [cx, cy] = model.principal_point_px;
+        const f = model.focal_px;
+        const h0 = (model.horizontal_pixel_sign * (x - cx)) / f;
+        const v0 = -(y - cy) / f;
+        const roll = (model.roll_correction_deg || 0) * DEG;
+        const h = Math.cos(roll) * h0 + Math.sin(roll) * v0;
+        const v = -Math.sin(roll) * h0 + Math.cos(roll) * v0;
+        const pitch = (model.pitch_deg || 0) * DEG;
+        return [h, Math.cos(pitch) - v * Math.sin(pitch), Math.sin(pitch) + v * Math.cos(pitch)];
+      }
+      function patchPixel(model, point) {
+        const origin = model.camera_origin_lfu_m;
+        const d = [point[0] - origin[0], point[1] - origin[1], point[2] - origin[2]];
+        const pitch = (model.pitch_deg || 0) * DEG;
+        const forward = Math.cos(pitch) * d[1] + Math.sin(pitch) * d[2];
+        const up = -Math.sin(pitch) * d[1] + Math.cos(pitch) * d[2];
+        const h = d[0] / forward;
+        const v = up / forward;
+        const roll = (model.roll_correction_deg || 0) * DEG;
+        const h0 = Math.cos(roll) * h - Math.sin(roll) * v;
+        const v0 = Math.sin(roll) * h + Math.cos(roll) * v;
+        const [cx, cy] = model.principal_point_px;
+        return [cx + model.horizontal_pixel_sign * h0 * model.focal_px, cy - v0 * model.focal_px];
+      }
+      // the patch centre stays within the distances the sensors support
+      function clampPatchCentre(model, lateral, forward) {
+        const radar = model.radar_origin_lfu_m;
+        const [low, high] = model.centre_distance_m;
+        const dx = lateral - radar[0];
+        const dy = Math.max(forward - radar[1], 1e-6);
+        const distance = Math.hypot(dx, dy);
+        const kept = Math.min(Math.max(distance, low), high);
+        const heading = Math.atan2(dx, dy);
+        return [radar[0] + kept * Math.sin(heading), radar[1] + kept * Math.cos(heading)];
+      }
+      function patchCentreFromPixel(model, x, y) {
+        const ray = patchRay(model, x, y);
+        const origin = model.camera_origin_lfu_m;
+        if (ray[2] < -1e-9) {
+          const t = -origin[2] / ray[2];
+          return clampPatchCentre(model, origin[0] + t * ray[0], origin[1] + t * ray[1]);
+        }
+        const heading = Math.atan2(ray[0], Math.max(ray[1], 1e-6));
+        const far = model.centre_distance_m[1];
+        return clampPatchCentre(model, far * Math.sin(heading), far * Math.cos(heading));
+      }
+      function patchCorners(centre, size, height) {
+        const half = size / 2;
+        const [x, y] = centre;
+        return [
+          [x - half, y - half, height],
+          [x + half, y - half, height],
+          [x + half, y + half, height],
+          [x - half, y + half, height],
+        ];
+      }
+      // the drawn patch, and where the ball centres it holds are searched: rows padded
+      // for the camera tilt's uncertainty and the unapplied roll, columns exact
+      function patchOutlines(model, centre, tilt) {
+        const ground = patchCorners(centre, model.size_m, 0).map((point) => patchPixel(model, point));
+        const ball = patchCorners(centre, model.size_m, model.ball_center_height_m).map((point) =>
+          patchPixel(model, point)
+        );
+        const pad = model.focal_px * Math.tan((tilt?.search_pad_deg ?? 4) * DEG);
+        const roll = Math.tan((tilt?.roll_pad_deg ?? 3) * DEG);
+        const middle = model.principal_point_px[0];
+        const search = ball.map(([x, y], index) => {
+          const rows = pad + Math.abs(x - middle) * roll;
+          return [x, index < 2 ? y + rows : y - rows];
+        });
+        return { ground, search };
+      }
+      function patchDistanceText(model, centre) {
+        const radar = model.radar_origin_lfu_m;
+        const ball = [centre[0], centre[1], model.ball_center_height_m];
+        const distance = Math.hypot(ball[0] - radar[0], ball[1] - radar[1], ball[2] - radar[2]);
+        const side = centre[0] - radar[0];
+        const aside = Math.abs(side) < 0.005 ? 'straight ahead' : `${Math.abs(side).toFixed(2)} m ${side > 0 ? 'right' : 'left'}`;
+        return `Patch centre ${distance.toFixed(2)} m from the radar, ${aside}.`;
+      }
+      const polygonPoints = (points, scale = 1) =>
+        points.map(([x, y]) => `${(x * scale).toFixed(1)},${(y * scale).toFixed(1)}`).join(' ');
+
+      function placementDraftPatch() {
         const shown = placementState?.box;
-        if (!shown?.box_px || !shown?.size_px || !shown?.frame_size_px) return null;
+        const model = placementState?.projection;
+        const centre = shown?.patch?.centre_lfu_m;
+        if (!model || !centre || !shown?.frame_size_px) return null;
         const key = `${el('tester-id').value.trim()}|${placementState.state}|${placementMoving}`;
         if (placementDraftKey !== key || !placementDraft) {
-          placementDraft = [shown.box_px[0], shown.box_px[1]];
+          placementDraft = [...centre];
           placementDraftKey = key;
         }
-        const [width, height] = shown.size_px;
-        const [x0, y0] = placementDraft;
-        return { box: [x0, y0, x0 + width, y0 + height], frame: shown.frame_size_px };
+        const outlines = patchOutlines(model, placementDraft, shown.camera_tilt);
+        return { centre: placementDraft, frame: shown.frame_size_px, model, ...outlines };
+      }
+
+      function drawPatch(svg, groundNode, searchNode, frame, ground, search, draggable) {
+        svg.setAttribute('viewBox', `0 0 ${frame[0]} ${frame[1]}`);
+        groundNode.setAttribute('points', polygonPoints(ground));
+        searchNode.setAttribute('points', search ? polygonPoints(search) : '');
+        svg.dataset.draggable = String(draggable);
+        svg.dataset.outline = ground.map(([x, y]) => `${Math.round(x)},${Math.round(y)}`).join(' ');
+        svg.hidden = false;
       }
 
       function renderPlacementDraft() {
         const node = el('placement-box');
-        const view = placementPlacing() ? placementDraftBox() : null;
+        const view = placementPlacing() ? placementDraftPatch() : null;
         if (!view || el('placement-camera-frame').hidden) {
           node.hidden = true;
+          el('placement-distance').textContent = '';
           return;
         }
-        drawBox(node, view.box, view.frame, true);
+        drawPatch(node, el('placement-ground'), el('placement-search'), view.frame, view.ground, view.search, true);
+        node.dataset.centre = view.centre.map((value) => value.toFixed(3)).join(',');
+        el('placement-distance').textContent = patchDistanceText(view.model, view.centre);
       }
 
       function placementCameraStatus(message, problem = false) {
@@ -1738,24 +1867,24 @@
           text = placementError;
           problem = true;
         } else if (!placementState) {
-          text = 'Checking the placement box…';
+          text = 'Checking the patch…';
         } else if (state === 'setup_not_confirmed') {
-          text = 'Confirm the physical setup first; the camera then opens here so you can place the box.';
+          text = 'Confirm the physical setup first; the camera then opens here so you can place the patch.';
         } else if (state === 'unavailable') {
-          text = `The box can't be placed yet: ${placementState.reason || 'the camera model is unavailable'}.`;
+          text = `The patch can't be placed yet: ${placementState.reason || 'the camera model is unavailable'}.`;
           problem = true;
         } else if (placementMoving) {
           text =
-            'Drag the box to its new spot and confirm it, or confirm it where it is to keep it. A box moved ' +
+            'Drag the patch to its new spot and confirm it, or confirm it where it is to keep it. A patch moved ' +
             'elsewhere means measuring the light again and starting the ball range over.';
         } else if (state === 'needs_confirmation') {
           text =
-            'Set the unit down where it will stay. Drag the yellow box on the live picture over the spot you ' +
-            'will hit from, then press Confirm the box.';
+            'Set the unit down where it will stay. Drag the yellow patch on the live picture over the spot you ' +
+            'will hit from, near or far, then press Confirm the patch.';
         } else {
           const when = placementState.reconfirmed_at_utc || placementState.confirmed_at_utc;
           text =
-            `Box confirmed${when ? ` at ${clockTime(when)}` : ''}. The hardware check, the light and the ` +
+            `Patch confirmed${when ? ` at ${clockTime(when)}` : ''}${placementState.box?.distance_m != null ? `, ${Number(placementState.box.distance_m).toFixed(2)} m from the radar` : ''}. The hardware check, the light and the ` +
             'ball range work from it.' +
             (placementNotice ? ` ${placementNotice}` : '');
         }
@@ -1765,7 +1894,7 @@
         el('placement-show').hidden = !placing || placementPreviewShowing;
         el('placement-show').disabled = placementActionPending;
         el('placement-confirm').hidden = !placing;
-        el('placement-confirm').disabled = placementActionPending || !placementDraftBox();
+        el('placement-confirm').disabled = placementActionPending || !placementDraftPatch();
         el('placement-move').hidden = !confirmed || placementMoving;
         el('placement-move').disabled = placementActionPending;
         // A (hardware), B (light), the ball range and the ladder wait for the box
@@ -1838,7 +1967,7 @@
               renderPlacement();
             }
             if (!placementActionPending) {
-              placementCameraStatus('The camera is not showing. Press “Show the camera” to place the box.', true);
+              placementCameraStatus('The camera is not showing. Press “Show the camera” to place the patch.', true);
             }
             return;
           }
@@ -1852,7 +1981,7 @@
             placementCameraStatus(
               status.error || status.failed
                 ? `The camera is not answering: ${status.error || status.failed}. Check the camera cable and that nothing else is using the camera, then press “Show the camera”.`
-                : 'The camera stopped. Press “Show the camera” to place the box.',
+                : 'The camera stopped. Press “Show the camera” to place the patch.',
               true
             );
             placementPreviewShowing = false;
@@ -1873,7 +2002,7 @@
             }
             return;
           }
-          placementCameraStatus('Live 1280×800 view: drag the box over the spot you will hit from.');
+          placementCameraStatus('Live 1280×800 view: drag the patch over the spot you will hit from.');
           // the preview sets its own brightness for viewing (P7-15b); say so while it does
           el('placement-brightness').hidden = status.preview_exposure?.state !== 'adjusting';
           if (!placementFrameLoading) loadPlacementFrame(version);
@@ -1898,7 +2027,7 @@
           );
           const body = await readJson(response);
           if (version !== placementRequestVersion || testerId !== el('tester-id').value.trim()) return;
-          if (!response.ok) throw new Error(body.error || `box check failed (${response.status})`);
+          if (!response.ok) throw new Error(body.error || `patch check failed (${response.status})`);
           placementState = body;
           if (body.state !== 'confirmed') placementMoving = false;
           if (!body.previewing) placementPreviewShowing = false;
@@ -1907,7 +2036,7 @@
         } catch (error) {
           if (version === placementRequestVersion && testerId === el('tester-id').value.trim()) {
             el('placement-summary').className = 'problem';
-            el('placement-summary').textContent = `The box step is unavailable: ${error.message}`;
+            el('placement-summary').textContent = `The patch step is unavailable: ${error.message}`;
           }
         } finally {
           placementRequestRunning = false;
@@ -1946,7 +2075,7 @@
             placementPreviewShowing = false;
             placementNotice =
               body.change === 'moved'
-                ? `The box moved${body.range_restarted ? ', so the ball range has started over (step 3)' : ''}; a light measurement from the old spot must be taken again (B).`
+                ? `The patch moved${body.range_restarted ? ', so the ball range has started over (step 3)' : ''}; a light measurement from the old spot must be taken again (B).`
                 : body.change === 'unchanged'
                   ? 'Same spot as before: nothing changed.'
                   : null;
@@ -1959,7 +2088,7 @@
             placementPreviewShowing = false;
             placementError = `The camera did not start: ${error.message}. Check the camera cable and that nothing else is using the camera, then press “Show the camera”.`;
           } else {
-            placementError = `The box was not confirmed: ${error.message}`;
+            placementError = `The patch was not confirmed: ${error.message}`;
           }
         } finally {
           placementActionPending = false;
@@ -1969,8 +2098,8 @@
 
       el('placement-show').addEventListener('click', () => submitPlacement('show'));
       el('placement-confirm').addEventListener('click', () => {
-        const view = placementDraftBox();
-        if (view) submitPlacement('confirm', { box_px: view.box, request_id: newAttemptId() });
+        const view = placementDraftPatch();
+        if (view) submitPlacement('confirm', { centre_m: view.centre, request_id: newAttemptId() });
       });
       el('placement-move').addEventListener('click', () => {
         placementMoving = true;
@@ -1981,51 +2110,51 @@
         submitPlacement('show');
       });
 
-      // Dragging the box works with a mouse, a pen or a finger (pointer events), and
-      // it never leaves the picture.
-      const placementBoxNode = el('placement-box');
-      placementBoxNode.addEventListener('pointerdown', (event) => {
-        if (!placementPlacing() || !placementDraft) return;
+      // Dragging the patch works with a mouse, a pen or a finger (pointer events):
+      // the pixel under the patch centre moves with the pointer, and the patch is
+      // redrawn in perspective at the ground point under it, within the supported
+      // distances. Its distance and side offset show while it moves.
+      const placementPatchNode = el('placement-ground');
+      placementPatchNode.addEventListener('pointerdown', (event) => {
+        const view = placementPlacing() ? placementDraftPatch() : null;
+        if (!view) return;
         event.preventDefault();
         try {
-          placementBoxNode.setPointerCapture(event.pointerId);
+          placementPatchNode.setPointerCapture(event.pointerId);
         } catch {
-          // A pointer the browser no longer tracks still drags while it stays on the box.
+          // A pointer the browser no longer tracks still drags while it stays on the patch.
         }
         placementDrag = {
           pointerId: event.pointerId,
           x: event.clientX,
           y: event.clientY,
-          origin: [...placementDraft],
+          origin: patchPixel(view.model, [view.centre[0], view.centre[1], 0]),
         };
       });
-      placementBoxNode.addEventListener('pointermove', (event) => {
+      placementPatchNode.addEventListener('pointermove', (event) => {
         if (!placementDrag || event.pointerId !== placementDrag.pointerId) return;
         const shown = placementState?.box;
+        const model = placementState?.projection;
         const picture = el('placement-camera-frame').getBoundingClientRect();
-        if (!shown?.frame_size_px || !shown?.size_px || !picture.width || !picture.height) return;
+        if (!shown?.frame_size_px || !model || !picture.width || !picture.height) return;
         event.preventDefault();
         const [frameWidth, frameHeight] = shown.frame_size_px;
-        const [width, height] = shown.size_px;
-        const dx = ((event.clientX - placementDrag.x) * frameWidth) / picture.width;
-        const dy = ((event.clientY - placementDrag.y) * frameHeight) / picture.height;
-        placementDraft = [
-          Math.round(Math.min(Math.max(placementDrag.origin[0] + dx, 0), frameWidth - width)),
-          Math.round(Math.min(Math.max(placementDrag.origin[1] + dy, 0), frameHeight - height)),
-        ];
+        const x = placementDrag.origin[0] + ((event.clientX - placementDrag.x) * frameWidth) / picture.width;
+        const y = placementDrag.origin[1] + ((event.clientY - placementDrag.y) * frameHeight) / picture.height;
+        placementDraft = patchCentreFromPixel(model, x, y);
         renderPlacementDraft();
       });
       const endPlacementDrag = (event) => {
         if (placementDrag && event.pointerId === placementDrag.pointerId) placementDrag = null;
       };
-      placementBoxNode.addEventListener('pointerup', endPlacementDrag);
-      placementBoxNode.addEventListener('pointercancel', endPlacementDrag);
+      placementPatchNode.addEventListener('pointerup', endPlacementDrag);
+      placementPatchNode.addEventListener('pointercancel', endPlacementDrag);
 
       const TEE_RANGE_STEPS = {
         // a setup begun before the box moved to step 1 takes the box confirmed there
         needs_box: {
-          label: 'Confirm the box in step 1',
-          prompt: 'This setup is waiting for the box: confirm it in step 1, and the checks continue from it.',
+          label: 'Confirm the patch in step 1',
+          prompt: 'This setup is waiting for the patch: confirm it in step 1, and the checks continue from it.',
         },
         needs_empty: {
           label: 'Capture empty hitting area',
@@ -2038,7 +2167,7 @@
         },
         needs_ball: {
           label: 'Capture ball at address',
-          prompt: 'Place one ball inside the box you confirmed, directly on the hitting surface (on the mat or grass, not on a tee). Do not move the rig, mat, cables, clubs or the ball tray. Step at least 2 m away from the ball and the unit, back to the same spot as for the empty capture, keep still, then capture it.',
+          prompt: 'Place one ball inside the patch you confirmed, directly on the hitting surface (on the mat or grass, not on a tee). Do not move the rig, mat, cables, clubs or the ball tray. Step at least 2 m away from the ball and the unit, back to the same spot as for the empty capture, keep still, then capture it.',
           action: 'capture_ball',
         },
         ball_capturing: {
@@ -2258,7 +2387,7 @@
           const labels = {
             ambiguous: 'Multiple candidates remain plausible',
             not_found: association.placement_box_px
-              ? 'No ball in the box: put the ball in the box'
+              ? 'No ball found in the patch. The ball may be outside it: move the ball or the patch'
               : 'No reference ball was found',
             no_consistent_candidate: 'Visible candidates do not agree with the floor and apparent-size geometry',
           };
@@ -2387,28 +2516,25 @@
         }
       }
 
-      // A box over a picture, in percentages of the frame it is measured in.
-      function drawBox(node, box, frame, draggable) {
-        const [x0, y0, x1, y1] = box;
-        const [width, height] = frame;
-        node.style.left = `${(100 * x0) / width}%`;
-        node.style.top = `${(100 * y0) / height}%`;
-        node.style.width = `${(100 * (x1 - x0)) / width}%`;
-        node.style.height = `${(100 * (y1 - y0)) / height}%`;
-        node.dataset.draggable = String(draggable);
-        node.dataset.box = box.join(',');
-        node.hidden = false;
-      }
-
-      // The confirmed box a camera step searches, drawn (not dragged) over its view.
+      // The confirmed patch a camera step searches, drawn (not dragged) over its view:
+      // the patch on the ground, and the dashed outline its ball search covers.
       function renderPlacementBox() {
         const node = el('tee-range-placement-box');
-        const shown = guidedCameraContext() && guidedCameraBox?.box_px && guidedCameraBox?.frame_size_px;
+        const shown =
+          guidedCameraContext() && guidedCameraBox?.outline_px?.length && guidedCameraBox?.frame_size_px;
         if (!shown || el('tee-range-camera-frame').hidden) {
           node.hidden = true;
           return;
         }
-        drawBox(node, guidedCameraBox.box_px, guidedCameraBox.frame_size_px, false);
+        drawPatch(
+          node,
+          el('tee-range-patch-ground'),
+          el('tee-range-patch-search'),
+          guidedCameraBox.frame_size_px,
+          guidedCameraBox.outline_px,
+          guidedCameraBox.search_outline_px || null,
+          false
+        );
       }
 
       function renderTeeRange() {
@@ -2447,8 +2573,8 @@
         el('automatic-range-summary').textContent = teeRangeActionError || teeRangeFailureSummary(state) || (state
           ? `${startOverRequired ? state.reason : (step?.prompt || state.reason)} ${!startOverRequired && state.reason && state.reason !== step?.prompt ? `(${state.reason.replaceAll('_', ' ')})` : ''}`
           : boxConfirmed()
-            ? 'The camera and radar checks work from the box you confirmed in step 1. No tape measurement is required.'
-            : 'Confirm the box in step 1 first: the camera and radar checks work from it.');
+            ? 'The camera and radar checks work from the patch you confirmed in step 1. No tape measurement is required.'
+            : 'Confirm the patch in step 1 first: the camera and radar checks work from it.');
         const display = teeRangeDisplay;
         const metres = (value) => `${Number(value).toFixed(3)} m`;
         const describe = (label, item) => {

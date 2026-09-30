@@ -587,20 +587,16 @@ def box_display(client, tester):
     return box_state(client, tester)["box"]
 
 
-def confirm_box(client, tester, request_id, origin=None, size=None):
-    """Drop the box with its top-left corner at ``origin`` (where it starts, by default)."""
+def confirm_box(client, tester, request_id, origin=None, centre=None):
+    """Drop the patch (P8-1): its centre under the pixel ``origin``, or at the ground
+    point ``centre`` (rig frame, metres), or where it starts, by default."""
     shown = box_display(client, tester)
-    x0, y0 = origin if origin is not None else shown["box_px"][:2]
-    width, height = size if size is not None else shown["size_px"]
-    return client.post(
-        "/api/tester/placement-box",
-        json={
-            "tester_id": tester,
-            "action": "confirm",
-            "request_id": request_id,
-            "box_px": [x0, y0, x0 + width, y0 + height],
-        },
-    )
+    payload = {"tester_id": tester, "action": "confirm", "request_id": request_id}
+    if origin is not None:
+        payload["centre_px"] = list(origin)
+    else:
+        payload["centre_m"] = list(centre if centre is not None else shown["patch"]["centre_lfu_m"])
+    return client.post("/api/tester/placement-box", json=payload)
 
 
 def phase(client, tester):
@@ -3068,12 +3064,8 @@ def _app_camera(width=1280, height=800):
     )
 
 
-def _app_box_geometry():
-    from openflight.camera.reference_ball_range import placement_box_geometry
-
-    return placement_box_geometry(
-        _app_camera(), ball_center_height_m=ts.BALL_DIAMETER_MM / 2000.0, roll_deg=0.0
-    )
+def _centre(record):
+    return record["patch"]["centre_lfu_m"]
 
 
 def test_the_box_step_shows_the_live_preview_before_anything_else(tmp_path, inputs, monkeypatch):
@@ -3084,15 +3076,23 @@ def test_the_box_step_shows_the_live_preview_before_anything_else(tmp_path, inpu
     shown = box_state(client, tester)
     opened = client.post("/api/tester/placement-box", json={"tester_id": tester, "action": "show"})
 
-    geometry = _app_box_geometry()
     assert shown["state"] == "needs_confirmation"
     box = shown["box"]
     assert box["arm_id"] == "arm5"
     assert box["frame_size_px"] == [1280, 800]
-    assert box["size_px"] == list(geometry.size_px)
-    # it starts straight ahead, where the rig file and the LIS3DH put the zone
-    assert box["box_px"] == list(geometry.default_box_px)
+    # P8-1: a 2 ft ground patch, 1.25 m straight ahead of the radar to start with
+    assert box["patch"]["size_m"] == 0.61
+    assert box["distance_m"] == pytest.approx(1.25, abs=0.01)
+    assert box["side_offset_m"] == pytest.approx(0.0, abs=1e-6)
     assert box["source"] == "default_straight_ahead"
+    assert len(box["outline_px"]) == 4 and len(box["search_outline_px"]) == 4
+    # box_px, the hitting zone, bounds what is drawn and searched
+    xs = [x for x, _y in box["outline_px"] + box["search_outline_px"]]
+    assert box["box_px"][0] <= min(xs) and max(xs) <= box["box_px"][2]
+    # the page drags it through the same camera model, in true perspective
+    assert shown["projection"]["focal_px"] == pytest.approx(933.0)
+    assert shown["projection"]["size_m"] == 0.61
+    assert box["camera_tilt"]["status"] == "uncalibrated"
     # the 1280x800 preview runs so the tester can see where to drag it
     assert opened.status_code == 200, opened.get_json()
     assert opened.get_json()["previewing"] is True
@@ -3112,31 +3112,28 @@ def test_the_box_step_shows_the_live_preview_before_anything_else(tmp_path, inpu
     assert app.config["TEST_STATIC_MANAGER"].start_count == 0
 
 
-def test_a_dragged_box_keeps_its_fixed_size_and_stays_inside_the_frame(
-    tmp_path, inputs, monkeypatch
-):
+def test_a_dragged_patch_is_kept_within_the_supported_distances(tmp_path, inputs, monkeypatch):
     live = FakeLive()
     app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
     client = app.test_client()
     client.post("/api/tester/placement-box", json={"tester_id": tester, "action": "show"})
-    geometry = _app_box_geometry()
 
-    # dragged past the frame's corner, and sent at another size
-    response = confirm_box(client, tester, "box", origin=(1250, 760), size=(300, 40))
+    # dragged 5 m out, beyond anything the sensors support
+    response = confirm_box(client, tester, "box", centre=(0.4, 5.0))
     assert response.status_code == 200, response.get_json()
     assert response.get_json()["change"] == "first"
-    # the setup then starts at the radar captures, from that box
+    # the setup then starts at the radar captures, from that patch
     state = post(client, tester, "start", "start").get_json()["state"]
 
     record = state["evidence"]["placement_box"]
-    width, height = geometry.size_px
     assert state["phase"] == "needs_empty"
     assert record["arm_id"] == "arm5"
     assert record["frame_size_px"] == [1280, 800]
-    assert record["box_px"] == [1280 - width, 800 - height, 1280, 800]
-    assert record["size_px"] == [width, height]
+    assert record["ground_distance_m"] == pytest.approx(3.0, abs=1e-3)
+    # the drag's heading is kept: to the right
+    assert record["side_offset_m"] > 0.2
     assert record["source"] == "tester_dragged"
-    assert record["default_box_px"] == list(geometry.default_box_px)
+    assert record["requested"] == {"centre_m": [0.4, 5.0]}
     assert "history" not in record
     assert box_state(client, tester)["state"] == "confirmed"
     # the preview is released once the box is confirmed
@@ -3146,14 +3143,14 @@ def test_a_dragged_box_keeps_its_fixed_size_and_stays_inside_the_frame(
 def test_starting_over_keeps_the_confirmed_box(tmp_path, inputs, monkeypatch):
     app, tester = app_for(tmp_path, inputs, monkeypatch)
     client = app.test_client()
-    assert confirm_box(client, tester, "box", origin=(300, 420)).status_code == 200
+    assert confirm_box(client, tester, "box", centre=(-0.3, 1.8)).status_code == 200
     first = post(client, tester, "start", "start").get_json()["state"]
 
     restarted = post(client, tester, "start_over", "again").get_json()["state"]
 
     assert restarted["epoch_id"] != first["epoch_id"]
     assert restarted["phase"] == "needs_empty"
-    assert restarted["evidence"]["placement_box"]["box_px"][:2] == [300, 420]
+    assert _centre(restarted["evidence"]["placement_box"]) == pytest.approx([-0.3, 1.8])
 
 
 def test_a_new_physical_confirmation_asks_for_the_box_again_where_it_was(
@@ -3162,14 +3159,15 @@ def test_a_new_physical_confirmation_asks_for_the_box_again_where_it_was(
     setup = ReconfirmedSetup()
     app, tester = app_for(tmp_path, inputs, monkeypatch, setup_policy=setup)
     client = app.test_client()
-    assert confirm_box(client, tester, "box", origin=(300, 420)).status_code == 200
+    assert confirm_box(client, tester, "box", centre=(-0.3, 1.8)).status_code == 200
     assert box_state(client, tester)["state"] == "confirmed"
 
     setup.confirmed_at = "second-server"
     shown = box_state(client, tester)
 
+    # the last patch is pre-filled, at the same place on the ground
     assert shown["state"] == "needs_confirmation"
-    assert shown["box"]["box_px"][:2] == [300, 420]
+    assert _centre(shown["box"]) == pytest.approx([-0.3, 1.8])
     assert shown["box"]["source"] == "last_confirmed"
 
 
@@ -3229,7 +3227,9 @@ def test_no_ball_in_the_box_tells_the_tester_to_put_it_there(tmp_path, inputs, m
 
     association = analyzer.observe(np.zeros((3, 800, 1280), dtype=np.uint8), 1)
 
-    assert association["readiness_reason"] == "no ball in the box: put the ball in the box"
+    assert association["readiness_reason"] == (
+        "No ball found in the patch. The ball may be outside it: move the ball or the patch."
+    )
     assert association["placement_box_px"] == [500, 380, 656, 510]
 
 
@@ -3247,12 +3247,15 @@ def test_the_live_view_serves_the_box_it_searches_in_both_modes(tmp_path, inputs
         assert post(client, tester, action, f"live-arm6-{index}").status_code == 200
     arm6 = client.get("/api/tester/live").get_json()["placement_box"]
 
-    assert arm5 == {"box_px": box, "frame_size_px": [1280, 800], "arm_id": "arm5"}
-    assert arm6 == {
-        "box_px": [box[0] // 2, box[1] // 2, -(-box[2] // 2), -(-box[3] // 2)],
-        "frame_size_px": [640, 400],
-        "arm_id": "arm6",
-    }
+    record = phase(client, tester)["evidence"]["placement_box"]
+    assert arm5["box_px"] == box
+    assert arm5["frame_size_px"] == [1280, 800] and arm5["arm_id"] == "arm5"
+    flat = lambda points: [value for point in points for value in point]  # noqa: E731
+    assert flat(arm5["outline_px"]) == pytest.approx(flat(record["outline_px"]))
+    assert arm6["box_px"] == [box[0] // 2, box[1] // 2, -(-box[2] // 2), -(-box[3] // 2)]
+    assert arm6["frame_size_px"] == [640, 400] and arm6["arm_id"] == "arm6"
+    halved = [[x / 2.0, y / 2.0] for x, y in record["outline_px"]]
+    assert flat(arm6["outline_px"]) == pytest.approx(flat(halved))
 
 
 def test_the_swings_record_says_where_the_box_was(tmp_path, inputs, monkeypatch):
@@ -3776,7 +3779,7 @@ def test_the_light_and_the_ball_range_wait_for_the_box(tmp_path, inputs, monkeyp
     for refused in (light, rng):
         assert refused.status_code == 409
         assert refused.get_json()["placement_box_required"] is True
-        assert "placement box" in refused.get_json()["error"]
+        assert "patch" in refused.get_json()["error"]
     assert manager.start_count == 0
     assert phase(client, tester) is None
 
@@ -3859,11 +3862,11 @@ def test_confirming_the_same_spot_again_changes_nothing(tmp_path, inputs, monkey
 def test_moving_the_box_starts_the_ball_range_over_and_is_recorded(tmp_path, inputs, monkeypatch):
     app, tester = app_for(tmp_path, inputs, monkeypatch)
     client = app.test_client()
-    assert confirm_box(client, tester, "box", origin=(560, 440)).status_code == 200
+    assert confirm_box(client, tester, "box", centre=(0.0, 1.3)).status_code == 200
     finished = drive(client, tester)
     assert finished["phase"] in tee_range_flow.TERMINAL_PHASES
 
-    moved = confirm_box(client, tester, "moved", origin=(610, 440))
+    moved = confirm_box(client, tester, "moved", centre=(0.05, 1.3))
 
     assert moved.status_code == 200, moved.get_json()
     body = moved.get_json()
@@ -3872,16 +3875,17 @@ def test_moving_the_box_starts_the_ball_range_over_and_is_recorded(tmp_path, inp
     state = phase(client, tester)
     assert state["epoch_id"] != finished["epoch_id"]
     assert state["phase"] == "needs_empty"
-    assert state["evidence"]["placement_box"]["box_px"][:2] == [610, 440]
+    assert _centre(state["evidence"]["placement_box"]) == pytest.approx([0.05, 1.3])
     started_by = state["evidence"]["started_by"]
     assert started_by["reason"] == "placement_box_moved"
     assert started_by["previous_epoch_id"] == finished["epoch_id"]
-    assert started_by["moved_px"] == pytest.approx(50.0)
+    assert started_by["moved_m"] == pytest.approx(0.05)
     assert started_by["at_utc"]
     history = json.loads(_box_file(tmp_path, tester).read_text(encoding="utf-8"))["history"]
     assert [entry["change"] for entry in history] == ["first", "moved"]
-    assert history[-1]["moved_px"] == pytest.approx(50.0)
-    assert history[-1]["moved_from_box_px"][:2] == [560, 440]
+    assert history[-1]["moved_m"] == pytest.approx(0.05)
+    assert history[-1]["moved_from_centre_lfu_m"] == pytest.approx([0.0, 1.3])
+    assert history[-1]["centre_lfu_m"] == pytest.approx([0.05, 1.3])
     assert history[-1]["at_utc"]
     # the ladder cannot start on the old setup
     ladder = client.post(
@@ -3896,16 +3900,16 @@ def test_moving_the_box_is_refused_while_a_capture_holds_the_hardware(
 ):
     app, tester = app_for(tmp_path, inputs, monkeypatch)
     client = app.test_client()
-    assert confirm_box(client, tester, "box", origin=(560, 440)).status_code == 200
+    assert confirm_box(client, tester, "box", centre=(0.0, 1.3)).status_code == 200
     post(client, tester, "start", "start")
     manager = app.config["TEST_STATIC_MANAGER"]
     manager._status = {"state": "running", "action": "ladder", "message": "busy"}
 
-    moved = confirm_box(client, tester, "moved", origin=(660, 440))
+    moved = confirm_box(client, tester, "moved", centre=(0.2, 1.3))
 
     assert moved.status_code == 409
     assert "stop first" in moved.get_json()["error"]
-    assert box_display(client, tester)["box_px"][:2] == [560, 440]
+    assert _centre(box_display(client, tester)) == pytest.approx([0.0, 1.3])
 
 
 def _screened(tmp_path, tester, box_px, arm_id="arm5"):
@@ -3933,15 +3937,15 @@ def _screen(client, tester, arm_id="arm5"):
 def test_moving_the_box_makes_the_light_measurement_stale(tmp_path, inputs, monkeypatch):
     app, tester = app_for(tmp_path, inputs, monkeypatch)
     client = app.test_client()
-    assert confirm_box(client, tester, "box", origin=(560, 440)).status_code == 200
+    assert confirm_box(client, tester, "box", centre=(0.0, 1.3)).status_code == 200
     box = box_display(client, tester)["box_px"]
     for arm_id in ("arm5", "arm6"):
         _screened(tmp_path, tester, box, arm_id)
     assert _screen(client, tester)["stale"] is False
-    assert confirm_box(client, tester, "same", origin=(562, 441)).status_code == 200
+    assert confirm_box(client, tester, "same", centre=(0.01, 1.3)).status_code == 200
     assert _screen(client, tester)["stale"] is False
 
-    assert confirm_box(client, tester, "moved", origin=(700, 440)).status_code == 200
+    assert confirm_box(client, tester, "moved", centre=(0.3, 1.3)).status_code == 200
 
     screen = _screen(client, tester)
     assert screen["stale"] is True
@@ -4031,12 +4035,12 @@ def test_a_setup_begun_before_the_box_moved_to_step_one_takes_the_confirmed_box(
     legacy = store.start("legacy", setup_admission={**binding, "tester_id": tester})
     assert legacy.phase == "needs_box"
 
-    assert confirm_box(client, tester, "box", origin=(560, 440)).status_code == 200
+    assert confirm_box(client, tester, "box", centre=(0.0, 1.3)).status_code == 200
 
     state = phase(client, tester)
     assert state["epoch_id"] == legacy.epoch_id
     assert state["phase"] == "needs_empty"
-    assert state["evidence"]["placement_box"]["box_px"][:2] == [560, 440]
+    assert _centre(state["evidence"]["placement_box"]) == pytest.approx([0.0, 1.3])
 
 
 def test_the_first_preview_uses_the_last_ball_lock_before_any_light_screen():
@@ -4062,3 +4066,32 @@ def test_a_camera_that_does_not_answer_is_said_plainly(tmp_path, inputs, monkeyp
     assert opened.status_code == 409
     assert "no camera found" in opened.get_json()["error"]
     assert box_state(client, tester)["previewing"] is False
+
+
+def test_both_setup_captures_use_the_profile_the_patch_needs(tmp_path, inputs, monkeypatch):
+    """P8-1/P8-3: a far patch's captures take the wider profile, the same for both."""
+    far = tmp_path / "far.cfg"
+    far.write_text("far profile", encoding="utf-8")
+    seen = []
+
+    def choose(patch, default, _far, bias_m):
+        seen.append((patch, default, bias_m))
+        return far, {"chosen": "far", "path": str(far)}
+
+    monkeypatch.setattr(ts, "static_config_for_patch", choose)
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    assert confirm_box(client, tester, "box", centre=(0.0, 2.6)).status_code == 200
+    manager = app.config["TEST_STATIC_MANAGER"]
+    commands = []
+    for index, action in enumerate(("start", "capture_empty", "capture_ball")):
+        assert post(client, tester, action, f"far-{index}").status_code == 200
+        if action != "start":
+            commands.append(list(manager.last_command))
+
+    for command in commands:
+        assert command[command.index("--config") + 1] == str(far)
+    # chosen once, from the confirmed patch, and recorded with the setup
+    assert len(seen) == 1
+    assert seen[0][0]["patch"]["centre_lfu_m"] == pytest.approx([0.0, 2.6])
+    assert phase(client, tester)["evidence"]["iwr_static_config"]["chosen"] == "far"
