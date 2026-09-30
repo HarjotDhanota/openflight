@@ -6,7 +6,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Deque, Optional, Sequence
+from typing import Any, Deque, Mapping, Optional, Sequence
 
 import numpy as np
 
@@ -37,6 +37,33 @@ class TriggeredCapture:
     def post_trigger_count(self) -> int:
         """Number of frames captured after the trigger."""
         return len(self.frames) - self.pre_trigger_count
+
+
+def pre_trigger_count_by_exposure(
+    sensor_timestamps_ns: Sequence[int] | np.ndarray, trigger_sensor_clock_ns: int
+) -> int:
+    """Frames whose exposure began at or before the trigger, on the sensor's clock.
+
+    ``TriggeredCapture.pre_trigger_count`` counts the frames that had ARRIVED
+    before the trigger, which a host stall moves; this counts by exposure.
+    """
+    timestamps = np.asarray(sensor_timestamps_ns, dtype=np.int64)
+    return int(np.count_nonzero(timestamps <= int(trigger_sensor_clock_ns)))
+
+
+def exposure_trigger_index(archive: Mapping[str, Any], frame_count: int) -> int | None:
+    """The last frame exposed at or before the trigger, when the clip records it (P6-5).
+
+    Clips saved before ``pre_trigger_count_by_exposure`` existed return None, so
+    their callers keep the index they always used and replay as they did.
+    """
+    if "pre_trigger_count_by_exposure" not in archive:
+        return None
+    try:
+        count = int(np.asarray(archive["pre_trigger_count_by_exposure"]))
+    except (TypeError, ValueError):
+        return None
+    return count - 1 if 1 <= count <= frame_count else None
 
 
 class TriggeredFrameBuffer:

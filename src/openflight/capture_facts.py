@@ -159,6 +159,11 @@ def capture_facts(
         "pre_trigger_frames": pre,
         "post_trigger_frames": metadata.get("post_trigger_frames"),
         "trigger_frame_index": trigger_index,
+        # By exposure, not arrival (P6-5); clips saved before it existed have none.
+        "pre_trigger_frames_by_exposure": metadata.get("pre_trigger_frames_by_exposure"),
+        "trigger_boottime_minus_monotonic_ns": mapping(metadata.get("trigger_clocks")).get(
+            "boottime_minus_monotonic_ns"
+        ),
         "trigger_timestamp_epoch_s": finite(metadata.get("trigger_timestamp")),
         "trigger_host_timestamp_ns": metadata.get("trigger_host_timestamp_ns"),
         "trigger_minus_shot_ms": finite(camera_event.get("trigger_delta_ms")),

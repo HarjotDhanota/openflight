@@ -3531,6 +3531,9 @@ def _fuse_camera_club_delivery(
         from openflight.camera.geometry_contract import (  # noqa: PLC0415
             EffectiveCameraGeometryInputs,
         )
+        from openflight.camera.triggered_buffer import (  # noqa: PLC0415
+            exposure_trigger_index,
+        )
 
         fused = ChainedDelivery(status="rejected_no_camera_capture")
         if camera_capture is not None and camera_capture.valid and camera_capture.path:
@@ -3544,11 +3547,11 @@ def _fuse_camera_club_delivery(
                 if archive is None:
                     fused = ChainedDelivery(status="rejected_missing_camera_frames")
                 else:
-                    trigger_index = (
-                        int(archive["pre_trigger_count"]) - 1
-                        if "pre_trigger_count" in archive
-                        else None
-                    )
+                    # Impact is compared against the frame exposed at the trigger
+                    # when the clip records it (P6-5); older clips keep their split.
+                    trigger_index = exposure_trigger_index(archive, len(archive["frames"]))
+                    if trigger_index is None and "pre_trigger_count" in archive:
+                        trigger_index = int(archive["pre_trigger_count"]) - 1
                     if iwr6843_runtime is None:
                         fused = ChainedDelivery(status="rejected_no_iwr_runtime")
                     else:
@@ -3656,6 +3659,9 @@ def _fuse_camera_ball_flight(
         from openflight.camera.geometry_contract import (  # noqa: PLC0415
             EffectiveCameraGeometryInputs,
         )
+        from openflight.camera.triggered_buffer import (  # noqa: PLC0415
+            exposure_trigger_index,
+        )
 
         estimate = CameraBallEstimate(status="rejected_no_camera_capture")
         if camera_capture is not None and camera_capture.valid and camera_capture.path:
@@ -3698,6 +3704,9 @@ def _fuse_camera_ball_flight(
                                 iwr_vertical_deg=shot.launch_angle_vertical,
                                 ball_tracker=camera_ball_flight_reference_tracker,
                                 sensor_timestamps_ns=archive.get("sensor_timestamp_ns"),
+                                trigger_frame_index=exposure_trigger_index(
+                                    archive, len(archive["frames"])
+                                ),
                             )
 
         decision = select_camera_assisted_horizontal(
