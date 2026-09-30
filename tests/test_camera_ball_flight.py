@@ -758,3 +758,50 @@ def test_ball_flight_without_a_departure_does_not_time_the_radar_from_the_trigge
     assert estimate.timing_anchor == "no_ball_departure"
     assert estimate.depth_source == "camera_size"
     assert estimate.timestamp_source == "host_timestamp_ns"
+
+
+def test_a_low_consensus_flight_is_measured_and_labelled_not_refused(monkeypatch):
+    """D15 (P8-7): a scattered sweep still reports its median, as low consensus."""
+    seen = []
+    _stub_the_sweep(monkeypatch, seen)
+    monkeypatch.setattr(
+        ball_flight_module,
+        "_path_estimate",
+        lambda **_kwargs: (
+            1.0,
+            ball_flight_module._PathEstimate(3.0, 20.0, 100.0, 0.0, 0.001, 0.5, 4.0, 6, 20, 25),
+        ),
+    )
+    host = np.arange(40, dtype=np.int64) * 3_500_000
+
+    estimate = estimate_camera_ball_flight(
+        _departing_ball_clip(19),
+        host,
+        trigger_ns=int(host[20]),
+        range_evidence=None,
+        geometry=_GEOMETRY_320,
+        ops_ball_speed_mph=100.0,
+    )
+
+    assert estimate.status == "low_consensus"
+    assert estimate.confidence_tier == "low"
+    assert estimate.horizontal_deg == pytest.approx(3.0)
+    assert estimate.vertical_deg == pytest.approx(20.0)
+
+
+def test_a_low_consensus_camera_never_replaces_the_radar_horizontal():
+    decision = select_camera_assisted_horizontal(
+        _estimate("low", 6.0), iwr_horizontal_deg=1.0, iwr_confidence=0.6
+    )
+    assert decision.selected_deg == 1.0 and decision.source == "radar"
+    assert decision.camera_horizontal_deg == 6.0
+    assert decision.status == "camera_low_consensus_iwr_preferred"
+
+
+def test_a_low_consensus_camera_stands_in_labelled_when_there_is_no_radar():
+    decision = select_camera_assisted_horizontal(
+        _estimate("low", 6.0), iwr_horizontal_deg=None, iwr_confidence=None
+    )
+    assert decision.selected_deg == 6.0
+    assert decision.source == "camera_low_consensus"
+    assert decision.status == "camera_low_consensus"

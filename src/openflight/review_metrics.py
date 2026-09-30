@@ -23,6 +23,20 @@ STATUSES = (
     "processing_failed",
 )
 ACCEPTED_DELIVERY_STATUSES = frozenset({"ok", "fused", "chained_high", "approach_high"})
+# Refusals carry no value; every other delivery status is a value the kiosk shows
+# (server.displayed_club_path), so the review shows it too, labelled (P8-7, D15).
+_REFUSED_DELIVERY_PREFIXES = ("rejected", "error")
+
+
+def delivery_shown(status: str) -> bool:
+    """Whether a club delivery status carries a value the kiosk displays."""
+    return (
+        bool(status)
+        and status != "not recorded"
+        and not status.startswith(_REFUSED_DELIVERY_PREFIXES)
+    )
+
+
 # Replay stage errors that mean an input was never recorded, not that processing broke.
 _ABSENT_INPUT_MARKERS = (
     "found 0",
@@ -33,6 +47,13 @@ _ABSENT_INPUT_MARKERS = (
     "records a capture error",
     "has no recorded",
     "no OPS ball speed",
+    "no tee range",
+)
+# What a swing without a tee range cannot have, said the same way on every metric
+# it prevents (P8-7 gate 2; the setup side owns handing one over).
+NO_TEE_RANGE = (
+    "no tee range: the setup handed the swings none, and the IWR launch and the "
+    "camera's geometry both need one"
 )
 
 
@@ -214,6 +235,12 @@ def _iwr_metrics(stage: Any, tee_range: Mapping[str, Any] | None = None) -> list
         ("iwr_attack_angle_deg", "Attack angle (IWR)", "deg"),
     )
     state, reason = _stage_state(stage, "IWR6843")
+    if (
+        state is None
+        and stage.get("status") == "withheld"
+        and stage.get("reason") == "tee_range_unresolved"
+    ):
+        state, reason = "unavailable", NO_TEE_RANGE
     if state is not None:
         return [
             _metric(key, label, unit, state, source=source, reason=reason)
@@ -224,6 +251,7 @@ def _iwr_metrics(stage: Any, tee_range: Mapping[str, Any] | None = None) -> list
     vertical = finite(stage.get("launch_angle_deg"))
     tee = _tee_details(tee_range)
     single_channel = stage.get("single_channel") is True or "single_channel" in status
+    reject_track = stage.get("tracker_quality") == "reject"
     # what makes an accepted launch experimental rather than accepted (P7-11)
     experimental_because = [
         text
@@ -233,6 +261,8 @@ def _iwr_metrics(stage: Any, tee_range: Mapping[str, Any] | None = None) -> list
                 f"tee range {tee['tee_range_source']} is not qualified",
             ),
             (single_channel, "one receive channel only"),
+            # a launch measured on a reject-quality track (D15, P8-7)
+            (reject_track, "track quality reject"),
         )
         if applies
     ]
@@ -280,16 +310,23 @@ def _iwr_metrics(stage: Any, tee_range: Mapping[str, Any] | None = None) -> list
     ]
     horizontal = finite(stage.get("horizontal_deg"))
     horizontal_status = stage.get("horizontal_status")
+    # a low-coherence horizontal is measured and labelled (P8-7)
+    horizontal_because = [
+        *experimental_because,
+        *([str(horizontal_status)] if horizontal_status == "hlcmf_v1_low_coherence" else []),
+    ]
     metrics.append(
         _metric(
             "iwr_launch_horizontal_deg",
             "Horizontal launch (IWR)",
             "deg",
-            launch_status if accepted and horizontal is not None else "rejected",
+            ("experimental" if horizontal_because else "accepted")
+            if accepted and horizontal is not None
+            else "rejected",
             source=source,
             value=horizontal,
             confidence=stage.get("horizontal_confidence"),
-            reason=("; ".join(experimental_because) or None)
+            reason=("; ".join(horizontal_because) or None)
             if accepted and horizontal is not None
             else f"withheld: {horizontal_status or status or 'no horizontal estimate'}",
             recorded_status=horizontal_status,
@@ -416,7 +453,14 @@ def _camera_metrics(stage: Any) -> tuple[list[dict[str, Any]], Mapping[str, Any]
         "support": ball.get("support"),
         "depth_source": ball.get("depth_source"),
     }
-    if ball_status.startswith("accepted"):
+    if ball_status == "low_consensus":
+        # measured, not refused (P8-7): the sweep's spread is the label
+        ball_state = "experimental"
+        ball_reason = (
+            f"low consensus: parameter MAD {ball.get('parameter_mad_deg')} deg, "
+            f"window MAD {ball.get('window_mad_deg')} deg"
+        )
+    elif ball_status.startswith("accepted"):
         ball_state = "accepted" if tier == "high" and ball_status == "accepted" else "experimental"
         ball_reason = None if ball_state == "accepted" else f"confidence tier {tier}"
     else:
@@ -446,9 +490,15 @@ def _camera_metrics(stage: Any) -> tuple[list[dict[str, Any]], Mapping[str, Any]
     ):
         value = finite(delivery.get(field))
         field_tier = delivery.get(tier_field)
-        if delivery_status in ACCEPTED_DELIVERY_STATUSES and value is not None:
-            status = "accepted" if field_tier == "high" else "experimental"
-            why = None if status == "accepted" else f"confidence tier {field_tier}"
+        if delivery_shown(delivery_status) and value is not None:
+            status = (
+                "accepted"
+                if field_tier == "high" and delivery_status in ACCEPTED_DELIVERY_STATUSES
+                else "experimental"
+            )
+            why = (
+                None if status == "accepted" else f"{delivery_status}: confidence tier {field_tier}"
+            )
         else:
             status = "rejected"
             why = delivery_status
@@ -470,7 +520,23 @@ def _camera_metrics(stage: Any) -> tuple[list[dict[str, Any]], Mapping[str, Any]
                 },
             )
         )
+    _label_with_notes(metrics[2:], [str(note) for note in delivery.get("notes") or ()])
+    _label_with_notes(metrics, [str(note) for note in result.get("notes") or ()])
+    if mapping(stage.get("recorded_context")).get("context_source") == "reconstructed":
+        # the kiosk froze no context; replay rebuilt it from the clip and session (P8-7)
+        _label_with_notes(metrics, ["context reconstructed from the clip and session records"])
     return metrics, result, context_source
+
+
+def _label_with_notes(metrics: list[dict[str, Any]], notes: list[str]) -> None:
+    """Carry the capture's notes on every camera value (D15): a noted value is experimental."""
+    if not notes:
+        return
+    for metric in metrics:
+        if metric["status"] == "accepted":
+            metric["status"] = "experimental"
+        metric["reason"] = "; ".join([*([metric["reason"]] if metric["reason"] else []), *notes])
+        metric["details"]["notes"] = [*metric["details"].get("notes", []), *notes]
 
 
 def _total_speed_metric(stage: Any) -> dict[str, Any]:
@@ -535,15 +601,23 @@ def overlay(result: Mapping[str, Any]) -> dict[str, Any]:
                 "reason": diagnostics.get("selected_source"),
             }
         )
-    return {
-        "expected_region": {
+    gate = mapping(diagnostics.get("gate"))
+    if gate:
+        # the gate the ball stage used: the setup's ball, or the fixed fractions (P8-7)
+        expected = {
+            "source": gate.get("source"),
+            "region_px": list(gate.get("region_px") or []),
+            "diameter_px": list(gate.get("diameter_px") or []),
+            "setup_ball": gate.get("setup_ball"),
+        }
+    else:
+        expected = {
             "x_fraction": list(REFERENCE_BALL_X_FRACTION),
             "y_fraction": list(REFERENCE_BALL_Y_FRACTION),
             "diameter_px": list(REFERENCE_BALL_DIAMETER_PX),
             "source": "openflight.camera.ball_flight reference-ball gate",
-        },
-        "candidates": candidates,
-    }
+        }
+    return {"expected_region": expected, "candidates": candidates}
 
 
 def _comparison(  # pylint: disable=too-many-arguments,too-many-positional-arguments

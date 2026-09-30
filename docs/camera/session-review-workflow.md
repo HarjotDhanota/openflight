@@ -153,6 +153,51 @@ Fusion diagnostics still show only the live snapshot allowlist; the full
 replayed evidence is in the session review. The live snapshot schema was left
 unchanged.
 
+## End-to-end pipeline check (P8-6)
+
+`scripts/analysis/check_pipeline.py` replays a whole tester folder through the
+code the Pi runs and prints one table per shot, stage by stage; `--output`
+writes the same table as JSON (`openflight.pipeline_check.v1`). Nothing in the
+session folder is written.
+
+```bash
+uv run --extra camera python scripts/analysis/check_pipeline.py \
+  ~/openflight_sessions/tester_pilot/<tester> --output check.json
+```
+
+Per shot it runs the kiosk's own hand-offs (`server._process_iwr6843_angle`,
+`_fuse_camera_measurements`, `_attach_experimental_face_angle`, with the
+replayed IWR result and the saved clip standing in for the hardware) and the
+review path (`replay_raw_fusion.replay`, `review_metrics`). The stages are: setup
+admitted; placement box and setup ball; tee range with its source and label;
+camera vertical offset (P8-3, absent until built); OPS shot; trigger evidence;
+clip matched; lighting eligibility; effective camera geometry; camera fusion
+context; whether the review replay hands the camera the kiosk's inputs; camera
+ball; camera club; IWR capture; LCMF status; then every review metric and the
+kiosk's D-plane face angle, each with value, status and label.
+
+A stage that does not pass is `fail` or `not_reached` (an upstream stage stopped
+it, named in `blocked_by`) and names its cause, from recorded evidence only:
+`DATA` (the capture cannot support it), `CODE` (a hand-off or label breaks),
+`PENDING` (a named dependency is not built) or `UNKNOWN` (an estimator refused
+and the facts are listed; no cause is claimed). Each failing row names the gate
+that stopped it. Since D15 (P8-7) most gates label rather than refuse: a stage
+that produced its value with a note (a clipped ball, low consensus, an
+uncalibrated azimuth) is `labelled`, which counts as reached.
+
+Sessions recorded before the setup could save a range or a box can be replayed
+with injected setup values. They are printed in a banner, marked `(INJECTED)` on
+every row they touch, and recorded as `injected` in the JSON:
+
+```bash
+uv run --extra camera python scripts/analysis/check_pipeline.py pi-handoff/Outdoors-test-7 \
+  --inject-tee-range 1.581 --inject-setup-ball 778,463,31 --inject-box 700,396,856,531
+```
+
+The regression test `tests/test_pipeline_check.py` runs the check on the
+synthetic tester session (`capture_tree(..., tester_setup=True)`), where every
+stage its data supports must pass.
+
 ## Estimator questions blocked on frames or hardware
 
 1. Camera reference ball, session 1: all scene candidates sit at y 193-246 on

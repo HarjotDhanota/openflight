@@ -16,7 +16,10 @@ from typing import Any
 
 import numpy as np
 
-from openflight.camera.fusion_processing import process_camera_fusion
+from openflight.camera.club_delivery import ReferenceBallTracker
+from openflight.camera.fusion_processing import build_context, lighting_note, process_camera_fusion
+from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
+from openflight.clubs import ClubType
 from openflight.raw_radar_replay import locate_recorded_capture
 
 
@@ -108,13 +111,10 @@ def replay_frozen_shot(
         "shot_detected event",
     )
     context = shot.get("camera_fusion_context")
-    if not isinstance(context, dict) or context.get("available") is not True:
-        cause = context.get("reason") if isinstance(context, dict) else None
-        raise ValueError(
-            "shot has no replayable camera fusion context"
-            + (f": {cause}" if isinstance(cause, str) and cause else "")
-        )
-    if context.get("session_uuid") != session_uuid or context.get("shot_number") != shot_number:
+    recorded_context = isinstance(context, dict) and context.get("available") is True
+    if recorded_context and (
+        context.get("session_uuid") != session_uuid or context.get("shot_number") != shot_number
+    ):
         raise ValueError("camera fusion context identity does not match the session and shot")
     capture_event = _one(
         [
@@ -133,30 +133,120 @@ def replay_frozen_shot(
     capture_path = _capture_file(recorded_path, run_dir, capture)
     capture_bytes = capture_path.read_bytes()
     capture_hash = hashlib.sha256(capture_bytes).hexdigest()
-    if capture_hash != context.get("capture_npz_sha256"):
-        raise ValueError("camera capture hash does not match the recorded context")
+    reconstruction: list[str] = []
+    if recorded_context:
+        if capture_hash != context.get("capture_npz_sha256"):
+            raise ValueError("camera capture hash does not match the recorded context")
+    else:
+        # D15 (P8-7): only missing frames refuse; the rest is rebuilt, labelled
+        context, reconstruction = reconstruct_context(start, shot, capture_event, capture_hash)
     with np.load(io.BytesIO(capture_bytes), allow_pickle=False) as source:
         archive = {name: source[name] for name in source.files}
     archive["_capture_npz_sha256"] = capture_hash
     replay = process_camera_fusion(context, archive)
-    recorded = shot.get("camera_fusion_processing")
+    recorded = shot.get("camera_fusion_processing") if recorded_context else None
     mismatches = _comparison_mismatches(recorded, replay) if isinstance(recorded, dict) else None
     return {
         "session_uuid": session_uuid,
         "shot_number": shot_number,
         "capture_path": str(capture_path),
         "capture_npz_sha256": capture_hash,
+        "context_source": "recorded" if recorded_context else "reconstructed",
+        "reconstruction": reconstruction,
         "replay": replay,
         "recorded": recorded,
         "matches_recorded": not mismatches if mismatches is not None else None,
         "comparison": {
-            "status": "compared" if mismatches is not None else "recorded_result_unavailable",
+            "status": (
+                "compared"
+                if mismatches is not None
+                else "recorded_result_unavailable"
+                if recorded_context
+                else "reconstructed_context_not_compared"
+            ),
             "float_absolute_tolerance": 1e-9,
             "mismatches": mismatches,
         },
         "_context": context,
         "_archive": archive,
     }
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _reconstructed_geometry(config: dict[str, Any]) -> EffectiveCameraGeometryInputs:
+    """The geometry the kiosk would have frozen, from what the session recorded."""
+    recorded = _mapping(config.get("effective_camera_geometry"))
+    if recorded.get("available") is True:
+        return EffectiveCameraGeometryInputs.from_recorded_session(
+            {"effective_camera_geometry": recorded}
+        )
+    iwr = _mapping(config.get("iwr6843"))
+    if iwr.get("tee_slant_range_m") is None:
+        handoff = _mapping(config.get("tee_range_handoff"))
+        raise ValueError(
+            "cannot reconstruct the camera context: the session recorded no tee range "
+            f"(tee_range_handoff status {handoff.get('status')!r}, source "
+            f"{handoff.get('source')!r}); the camera's geometry needs one"
+        )
+    return EffectiveCameraGeometryInputs.from_recorded_session(
+        {"camera_capture": _mapping(config.get("camera_capture")), "iwr6843": iwr}
+    )
+
+
+def reconstruct_context(
+    start: dict[str, Any], shot: dict[str, Any], capture_event: dict[str, Any], capture_hash: str
+) -> tuple[dict[str, Any], list[str]]:
+    """Rebuild a shot's camera fusion context from the clip, its metadata and the session.
+
+    A kiosk that withheld camera fusion froze no context (Outdoors-test-5, -7).
+    Everything the kiosk would have frozen is recorded elsewhere, except the
+    IWR range tracks (the replay's own IWR stage supplies them) and the
+    trackers' state from earlier shots. Each gap is named.
+    """
+    config = _mapping(start.get("config"))
+    camera = _mapping(config.get("camera_capture"))
+    recorded = _mapping(shot.get("camera_fusion_context"))
+    notes = [
+        "context reconstructed from the saved clip, its metadata and the session records; "
+        f"the kiosk froze none ({recorded.get('reason') or 'no reason recorded'})",
+        "the resting-ball trackers start empty: earlier shots' state was not recorded",
+        "IWR range evidence is not in the session log; the replay's IWR stage supplies it",
+    ]
+    geometry = _reconstructed_geometry(config)
+    auto_exposure = _mapping(_mapping(capture_event.get("metadata")).get("auto_exposure"))
+    eligible = bool(auto_exposure.get("analysis_eligible", True))
+    club = shot.get("club")
+    if not isinstance(club, str) or not club:
+        club = ClubType.DRIVER.value
+        notes.append("the shot recorded no club; driver assumed")
+    vertical = (
+        shot.get("launch_angle_vertical")
+        if shot.get("launch_angle_vertical_source") == "radar"
+        else None
+    )
+    context = build_context(
+        geometry=geometry,
+        lighting_eligible=eligible,
+        ball_tracker=ReferenceBallTracker(),
+        club_tracker=ReferenceBallTracker(),
+        ball_range_evidence=None,
+        club_range_evidence=None,
+        ops_ball_speed_mph=shot.get("ball_speed_raw_mph") or shot.get("ball_speed_mph"),
+        ops_club_speed_mph=shot.get("club_speed_mph"),
+        iwr_vertical_deg=vertical,
+        iwr_horizontal_deg=shot.get("iwr6843_horizontal_deg"),
+        iwr_horizontal_confidence=shot.get("iwr6843_horizontal_confidence"),
+        club=ClubType(club),
+        capture_npz_sha256=capture_hash,
+        session_uuid=start["session_uuid"],
+        shot_number=shot["shot_number"],
+        notes=[] if eligible else [lighting_note(auto_exposure)],
+        setup_ball=camera.get("setup_ball"),
+    )
+    return context, notes
 
 
 def _write_output(path: Path, result: dict[str, Any], protected: set[Path]) -> None:

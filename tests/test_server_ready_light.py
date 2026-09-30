@@ -371,7 +371,12 @@ def test_a_shot_the_tester_gate_refuses_says_it_was_not_counted(sensors, monkeyp
         server,
         "camera_capture_runtime",
         SimpleNamespace(
-            trigger_evidence_for_shot=lambda _impact: {"schema_version": 1, "ready": False},
+            # an unconnected sensor is a hard stop (D15)
+            trigger_evidence_for_shot=lambda _impact: {
+                "schema_version": 1,
+                "ready": False,
+                "blockers": [{"id": "iwr6843", "reason": "serial link unavailable"}],
+            },
             ready_snapshot=lambda: sensors.camera,
             settings=SimpleNamespace(auto_exposure=False),
         ),

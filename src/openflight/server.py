@@ -2146,6 +2146,44 @@ def _tester_trigger_evidence_problem(evidence: object) -> str | None:
     return None
 
 
+# Readiness blockers that stay hard stops under D15: a sensor that is not
+# connected or running, and a rig that moved (the LIS3DH placement guard).
+_HARD_STOP_BLOCKERS = frozenset({"ops", "camera", "iwr6843", "lis3dh"})
+
+
+def _tester_trigger_hard_stop(evidence: dict) -> str | None:
+    """Why trigger evidence must still refuse the shot (D15), or None to keep it.
+
+    Only an unconnected sensor, a moved rig, or evidence from another session
+    refuses; everything else the evidence says becomes a note on the shot.
+    """
+    for blocker in evidence.get("blockers") or []:
+        if isinstance(blocker, dict) and blocker.get("id") in _HARD_STOP_BLOCKERS:
+            return f"{blocker.get('id')}: {blocker.get('reason')}"
+    runtime = (evidence.get("observations") or {}).get("runtime") or {}
+    active_logger = get_session_logger()
+    active_uuid = active_logger.active_session_uuid if active_logger is not None else None
+    recorded_uuid = runtime.get("session_uuid")
+    if recorded_uuid and active_uuid and recorded_uuid != active_uuid:
+        return "trigger readiness belongs to a different logging session"
+    active_run_dir = (
+        str(active_logger.log_dir.expanduser().resolve()) if active_logger is not None else None
+    )
+    recorded_run_dir = runtime.get("run_dir")
+    if recorded_run_dir and active_run_dir and recorded_run_dir != active_run_dir:
+        return "trigger readiness belongs to a different runtime log directory"
+    return None
+
+
+def _tester_trigger_evidence_notes(evidence: dict, problem: str) -> list[dict]:
+    """What a kept shot's trigger evidence said against the setup, as notes (P8-7)."""
+    notes = [{"id": "trigger_readiness", "reason": problem}]
+    for blocker in evidence.get("blockers") or []:
+        if isinstance(blocker, dict):
+            notes.append({"id": str(blocker.get("id")), "reason": str(blocker.get("reason"))})
+    return notes
+
+
 @app.route("/api/camera/study/controls", methods=["POST"])
 def study_camera_controls():
     """Set exposure and gain live, without restarting the rolling buffer."""
@@ -3523,14 +3561,24 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             horizontal_deg = getattr(measurement, "horizontal_deg", None)
             horizontal_confidence = getattr(measurement, "horizontal_confidence", None)
             horizontal_status = getattr(measurement, "horizontal_status", None)
-            if horizontal_deg is not None:
-                shot.iwr6843_horizontal_deg = horizontal_deg
-                shot.iwr6843_horizontal_confidence = horizontal_confidence_from(
+            from .iwr6843.runtime import camera_horizontal_input  # noqa: PLC0415
+
+            fused_horizontal, fused_confidence = camera_horizontal_input(measurement)
+            if fused_horizontal is not None:
+                shot.iwr6843_horizontal_deg = fused_horizontal
+                shot.iwr6843_horizontal_confidence = fused_confidence
+                shot.launch_angle_horizontal = fused_horizontal
+                shot.launch_angle_horizontal_confidence = fused_confidence
+                shot.launch_angle_horizontal_source = "radar"
+                shot.launch_angle_horizontal_status = _iwr_azimuth_status()
+            elif horizontal_deg is not None:
+                # a low-coherence horizontal is shown under its own source and
+                # never handed to the camera as the IWR's evidence (P8-7)
+                shot.launch_angle_horizontal = horizontal_deg
+                shot.launch_angle_horizontal_confidence = horizontal_confidence_from(
                     horizontal_confidence
                 )
-                shot.launch_angle_horizontal = horizontal_deg
-                shot.launch_angle_horizontal_confidence = shot.iwr6843_horizontal_confidence
-                shot.launch_angle_horizontal_source = "radar"
+                shot.launch_angle_horizontal_source = "radar_low_coherence"
                 shot.launch_angle_horizontal_status = _iwr_azimuth_status()
                 logger.info(
                     "[SERVER] IWR6843 TX2 horizontal proxy: %.2f° (coherence %.0f%%, status=%s)",
@@ -3818,8 +3866,12 @@ def _fuse_camera_club_delivery(
 # outranks a radar horizontal, and size-only camera depth ranks below it.
 _HORIZONTAL_SOURCE_RANK = {
     "estimated": -1,
+    # a low-coherence IWR horizontal: shown, but any camera horizontal outranks it
+    "radar_low_coherence": -0.5,
     "camera_only_experimental": 0,
     "camera_legacy_fallback": 0,
+    # a scattered camera sweep, shown labelled but never over the radar (P8-7)
+    "camera_low_consensus": 0,
     "radar": 1,
     "camera_assisted_experimental": 2,
 }
@@ -4018,18 +4070,18 @@ def _attach_experimental_face_angle(shot: Shot) -> None:
     if launch is None or shot.launch_angle_horizontal_source == "estimated":
         shot.experimental_face_angle_status = "missing_measured_start_direction"
         return
-    # An uncalibrated radar start direction has its own zero; with any path it
-    # would mix two frames (audit F8).
-    if shot.launch_angle_horizontal_status == "azimuth_uncalibrated":
-        shot.experimental_face_angle_status = "start_direction_azimuth_uncalibrated"
-        return
+    # An uncalibrated radar start direction has its own zero, so with any path
+    # it mixes two frames (audit F8). D15 (P8-7): compute it and say so.
+    azimuth_uncalibrated = shot.launch_angle_horizontal_status == "azimuth_uncalibrated"
     path, path_source = displayed_club_path(shot)
     if path is None:
         shot.experimental_face_angle_status = "missing_accepted_club_path"
         return
     weight = FACE_ANGLE_FACE_WEIGHT
     shot.experimental_face_angle_deg = round((launch - (1.0 - weight) * path) / weight, 1)
-    shot.experimental_face_angle_status = "d_plane_estimate"
+    shot.experimental_face_angle_status = (
+        "d_plane_estimate_azimuth_uncalibrated" if azimuth_uncalibrated else "d_plane_estimate"
+    )
     shot.experimental_face_angle_path_source = path_source
     shot.experimental_face_angle_launch_source = shot.launch_angle_horizontal_source
 
@@ -4086,16 +4138,15 @@ def _fuse_camera_measurements(
             else True
         )
     )
+    # D15 (P8-7): the lighting and optical-quality verdicts label the camera's
+    # values; they no longer withhold them. analysis_eligible stays recorded.
+    from openflight.camera.fusion_processing import lighting_note  # noqa: PLC0415
+
+    camera_notes: list[str] = []
     if not analysis_eligible:
-        _withhold_camera_metrics(
-            shot,
-            "rejected_lighting_quality",
-            "capture-time lighting was not analysis eligible",
-        )
-        logger.warning(
-            "[SERVER] Camera analysis withheld for lighting quality; using radar fallback"
-        )
-        return
+        camera_notes.append(lighting_note(captured_auto_exposure))
+        logger.warning("[SERVER] Camera analysis runs with a lighting note: %s", camera_notes[-1])
+    shot.camera_notes = camera_notes or None
     strip_refusal = _strip_offset_refusal(camera_capture)
     if strip_refusal is not None:
         _withhold_camera_metrics(shot, "rejected_strip_offset_not_modelled", strip_refusal)
@@ -4110,17 +4161,14 @@ def _fuse_camera_measurements(
 
         quality = capture_optical_quality(camera_capture.metadata, camera_archive)
         shot.camera_optical_quality = quality
-        if quality["status"] == "withheld":
-            _withhold_camera_metrics(
-                shot,
-                f"rejected_{quality['reason']}",
-                f"capture optical quality withheld: {quality['reason']}",
-            )
+        # lighting_not_eligible repeats the lighting note above
+        if quality["status"] == "withheld" and quality["reason"] != "lighting_not_eligible":
+            camera_notes.append(f"optical quality: {quality['reason']}")
+            shot.camera_notes = camera_notes
             logger.warning(
-                "[SERVER] Camera analysis withheld (%s); using radar fallback",
+                "[SERVER] Camera analysis runs with an optical-quality note: %s",
                 quality["reason"],
             )
-            return
     if (
         camera_archive is not None
         and iwr6843_runtime is not None
@@ -4234,10 +4282,15 @@ def _fuse_camera_measurements(
                 capture_npz_sha256=camera_archive["_capture_npz_sha256"],
                 session_uuid=session_uuid,
                 shot_number=shot_number,
+                notes=camera_notes,
+                setup_ball=camera_capture_config.get("setup_ball"),
             )
             shot.camera_fusion_context = context
             result = process_camera_fusion(context, camera_archive)
             shot.camera_fusion_processing = result
+            # the club stage's labels ride beside its values (D15, P8-7)
+            club_notes = [f"club: {note}" for note in result["club_delivery"].get("notes") or ()]
+            shot.camera_notes = [*camera_notes, *club_notes] or None
             shot.calibrated_camera_status = (
                 "experimental_unqualified"
                 if getattr(geometry, "calibrated_model_snapshot", None) is not None
@@ -4290,6 +4343,12 @@ def _fuse_camera_measurements(
             if camera_optical_calibration is not None:
                 shot.calibrated_camera_status = "rejected"
                 shot.calibrated_camera_reason = f"{type(error).__name__}: {error}"
+            if "tee_slant_range_m" in str(error):
+                # the tee contract stands (P8-7 gate 2); the shot names what it lacked
+                from openflight.review_metrics import NO_TEE_RANGE  # noqa: PLC0415
+
+                camera_notes.append(NO_TEE_RANGE)
+                shot.camera_notes = camera_notes
             logger.warning("[SERVER] Shared camera fusion failed: %s", error, exc_info=True)
     _fuse_camera_ball_flight(shot, camera_capture, camera_archive)
     _fuse_camera_club_delivery(shot, camera_capture, camera_archive)
@@ -5224,6 +5283,16 @@ def _handle_shot_detected(shot: Shot) -> None:
             logger.warning(
                 "[SERVER] Tester shot kept without camera trigger evidence (%.1f mph)",
                 shot.ball_speed_mph,
+            )
+        elif evidence_problem is not None and _tester_trigger_hard_stop(readiness) is None:
+            # D15: measure and label. A blocked or mismatched setup is noted on
+            # the shot; only a hard stop below still drops it (P8-7).
+            shot.trigger_evidence_notes = _tester_trigger_evidence_notes(
+                readiness, evidence_problem
+            )
+            logger.warning(
+                "[SERVER] Tester shot kept with trigger readiness notes: %s",
+                shot.trigger_evidence_notes,
             )
         elif evidence_problem is not None:
             evidence = readiness or {

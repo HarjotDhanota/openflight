@@ -195,7 +195,10 @@ def _result_from_track(
     cal: Calibration,
     effective_tdm_tau_s: float = doa.TDM_TAU_S,
     effective_loop_period_s: float = tracking.LOOP_PRI_S,
+    evidence_status: str | None = None,
 ) -> LCMFResult:
+    """``evidence_status`` overrides the range evidence's status: a launch measured
+    on a reject-quality track is shown, but its range never becomes depth."""
     track = shot.track
     impact_t_s = impact_time_s(
         track,
@@ -212,7 +215,7 @@ def _result_from_track(
         track_span_s=(track.t_last - track.t_first) if track is not None else None,
         impact_t_s=impact_t_s,
         range_evidence=(
-            BallRangeEvidence(track, shot.geometry, impact_t_s, status=status)
+            BallRangeEvidence(track, shot.geometry, impact_t_s, status=evidence_status or status)
             if track is not None and impact_t_s is not None
             else None
         ),
@@ -817,7 +820,8 @@ def _tx2_horizontal_proxy(
         phase_reference_rad=phase_reference_rad,
     )
     if coherence < HORIZONTAL_COHERENCE_MIN:
-        return None, coherence, "hlcmf_v1_low_coherence"
+        # measured and labelled (D15, P8-7); consumers read the status
+        return angle_deg, coherence, "hlcmf_v1_low_coherence"
     return angle_deg, coherence, "hlcmf_v1_accepted"
 
 
@@ -891,17 +895,14 @@ def estimate_lcmf_v1(
             effective_tdm_tau_s=tdm_tau_s,
             effective_loop_period_s=loop_period_s,
         )
-    if shot.quality == "reject":
-        return _result_from_track(
-            "rejected_track_quality",
-            shot,
-            cal=cal,
-            effective_tdm_tau_s=tdm_tau_s,
-            effective_loop_period_s=loop_period_s,
-        )
+    # D15 (P8-7): a reject-quality track is measured and labelled, not refused;
+    # its range evidence stays rejected so the camera never uses it as depth.
+    track_warning = shot.quality == "reject"
+    evidence_status = "rejected_track_quality" if track_warning else None
     if shot.tdm_sign_used not in (-1, 1):
+        # a reject-quality track is never signed: no value exists, say why
         return _result_from_track(
-            "rejected_missing_tdm_sign",
+            "rejected_track_quality" if track_warning else "rejected_missing_tdm_sign",
             shot,
             cal=cal,
             effective_tdm_tau_s=tdm_tau_s,
@@ -967,6 +968,7 @@ def estimate_lcmf_v1(
             cal=cal,
             effective_tdm_tau_s=tdm_tau_s,
             effective_loop_period_s=loop_period_s,
+            evidence_status=evidence_status,
         )
 
     raw_angle_deg, channels_used, single_channel = combine_channels(
@@ -979,10 +981,13 @@ def estimate_lcmf_v1(
             cal=cal,
             effective_tdm_tau_s=tdm_tau_s,
             effective_loop_period_s=loop_period_s,
+            evidence_status=evidence_status,
         )
     measured = measured_channels(channel_components, channel_evidence)
     status = "accepted_low_confidence_recovery" if recovery_override else "accepted"
-    result = _result_from_track(status, shot, cal=cal)
+    if track_warning:
+        status = "accepted_warning_track_quality"
+    result = _result_from_track(status, shot, cal=cal, evidence_status=evidence_status)
     result.angle_deg = raw_angle_deg + ANGLE_CORRECTION_DEG
     result.raw_angle_deg = raw_angle_deg
     result.components_deg = components

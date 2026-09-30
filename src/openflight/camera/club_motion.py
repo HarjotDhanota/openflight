@@ -765,11 +765,14 @@ def detect_impact_reference_ball(  # pylint: disable=too-many-locals
     *,
     trigger_frame_index: int,
     pixel_scale: float | None = None,
+    region: tuple[int, int, int, int] | None = None,
 ) -> ReferenceBall:  # pylint: disable=no-member
     """Find the teed ball from the region that persistently departs after impact.
 
     Pixel limits were tuned at 640x400 and scale with ``pixel_scale`` (by default
-    from the frame width), areas with its square.
+    from the frame width), areas with its square. ``region`` (x0, y0, x1, y1) is
+    where the setup saw the ball (P8-7); without it the fixed lower band
+    (rows 62-95 %, columns 12-88 %) stands in.
     """
     if frames.ndim != 3 or len(frames) < 20:
         raise ValueError("frames must have shape (n, height, width) with n >= 20")
@@ -793,8 +796,19 @@ def detect_impact_reference_ball(  # pylint: disable=too-many-locals
     height, width = before.shape
     scale = pixel_scale if pixel_scale is not None else ball_pixels.pixel_scale(width)
     area_scale = scale * scale
+    if region is not None:
+        x_lo, y_lo, x_hi, y_hi = (float(value) for value in region)
+    else:
+        x_lo, y_lo, x_hi, y_hi = width * 0.12, height * 0.62, width * 0.88, height * 0.95
     departure_mask = (difference >= 45).astype(np.uint8)
-    departure_mask[: int(height * 0.62)] = 0
+    if region is None:
+        departure_mask[: int(height * 0.62)] = 0
+    else:
+        inside = np.zeros_like(departure_mask)
+        rows = slice(max(0, int(y_lo)), min(height, int(math.ceil(y_hi)) + 1))
+        columns = slice(max(0, int(x_lo)), min(width, int(math.ceil(x_hi)) + 1))
+        inside[rows, columns] = 1
+        departure_mask &= inside
     count, labels, stats, centroids = cv2.connectedComponentsWithStats(departure_mask, 8)
     candidates = []
     for label in range(1, count):
@@ -805,8 +819,8 @@ def detect_impact_reference_ball(  # pylint: disable=too-many-locals
             15 * area_scale <= area <= 650 * area_scale
             and 0.35 <= aspect <= 2.8
             and 7 * scale <= max(component_width, component_height) <= 32 * scale
-            and width * 0.12 <= x <= width * 0.88
-            and height * 0.62 <= y <= height * 0.95
+            and x_lo <= x <= x_hi
+            and y_lo <= y <= y_hi
         ):
             continue
         component = labels == label

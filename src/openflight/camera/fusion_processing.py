@@ -29,6 +29,23 @@ from openflight.rig_geometry import geometry_fingerprint
 
 SCHEMA = "openflight.camera.fusion_context"
 VERSION = 1
+LIGHTING_NOT_ELIGIBLE = "capture-time lighting was not analysis eligible"
+
+
+def lighting_note(auto_exposure: Mapping[str, Any] | None) -> str:
+    """The capture's lighting verdict as a short label, e.g. the ball's clipped share."""
+    auto_exposure = auto_exposure if isinstance(auto_exposure, Mapping) else {}
+    judged = auto_exposure.get("analysis_eligibility")
+    judged = judged if isinstance(judged, Mapping) else {}
+    if judged.get("reason"):
+        return f"lighting: {judged['reason']}"
+    observation = auto_exposure.get("observation")
+    observation = observation if isinstance(observation, Mapping) else {}
+    if observation.get("status"):
+        clipped = observation.get("clipped_pct")
+        share = f", {clipped:.0f}% of the zone clipped" if isinstance(clipped, (int, float)) else ""
+        return f"lighting: zone {observation['status']}{share}"
+    return f"lighting: {LIGHTING_NOT_ELIGIBLE}"
 
 
 def _integer_scalar(value: Any, name: str) -> int:
@@ -122,8 +139,14 @@ def build_context(
     capture_npz_sha256: str,
     session_uuid: str,
     shot_number: int,
+    notes: list[str] | None = None,
+    setup_ball: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Freeze every non-archive input before either stateful tracker changes."""
+    """Freeze every non-archive input before either stateful tracker changes.
+
+    ``notes`` are the capture's labels that no longer block the estimators
+    (D15): the lighting and optical-quality verdicts, as the kiosk judged them.
+    """
     payload = {
         "schema": SCHEMA,
         "version": VERSION,
@@ -143,6 +166,9 @@ def build_context(
         "capture_npz_sha256": capture_npz_sha256,
         "session_uuid": session_uuid,
         "shot_number": shot_number,
+        "notes": [str(note) for note in notes or ()],
+        # where the setup saw the resting ball; the ball gate follows it (P8-7)
+        "setup_ball": dict(setup_ball) if setup_ball else None,
     }
     payload = _json_value(payload)
     payload["sha256"] = geometry_fingerprint(payload)
@@ -174,54 +200,56 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
     ball_tracker = ReferenceBallTracker.from_snapshot(context["ball_tracker"])
     club_tracker = ReferenceBallTracker.from_snapshot(context["club_tracker"])
     errors = {}
-    if context["lighting_eligible"] is not True:
-        ball = CameraBallEstimate(status="rejected_lighting_quality")
-        club = ChainedDelivery(status="rejected_lighting_quality")
-    else:
-        try:
-            ball = estimate_camera_ball_flight(
-                frames,
-                timestamps,
-                trigger_ns=trigger_ns,
-                range_evidence=_restore_range(context["ball_range_evidence"], "ball"),
-                geometry=geometry.ball_geometry(),
-                ops_ball_speed_mph=float(context["ops_ball_speed_mph"]),
-                iwr_vertical_deg=context["iwr_vertical_deg"],
-                ball_tracker=ball_tracker,
-                sensor_timestamps_ns=_sensor_timestamps(archive),
-                trigger_frame_index=exposure_trigger_index(archive, len(frames)),
-            )
-        except Exception as error:  # stage isolation is part of the persisted contract
-            ball = CameraBallEstimate(status="error")
-            errors["ball"] = f"{type(error).__name__}: {error}"
-        try:
-            pre_trigger_count = _integer_scalar(archive["pre_trigger_count"], "pre-trigger count")
-            if not 1 <= pre_trigger_count <= len(frames):
-                raise ValueError("camera archive pre-trigger count is outside the frame range")
-            # Impact is compared against the frame exposed at the trigger when the
-            # clip records it (P6-5); older clips keep their arrival split.
-            by_exposure = exposure_trigger_index(archive, len(frames))
-            trigger_index = pre_trigger_count - 1 if by_exposure is None else by_exposure
-            reference_ball = None
-            diagnostics = ball.reference_ball_diagnostics or {}
-            selected_candidate = diagnostics.get("selected_candidate")
-            if isinstance(selected_candidate, Mapping):
-                reference_ball = ReferenceBall(**dict(selected_candidate))
-            club = estimate_chained_delivery(
-                frames,
-                timestamps,
-                trigger_index=trigger_index,
-                range_evidence=_restore_range(context["club_range_evidence"], "club"),
-                geometry=geometry.delivery_geometry(),
-                ops_club_speed_mph=context["ops_club_speed_mph"],
-                ball_tracker=club_tracker,
-                reference_ball=reference_ball,
-                reference_ball_selected=bool(diagnostics),
-                sensor_timestamp_ns=_sensor_timestamps(archive),
-            )
-        except Exception as error:  # stage isolation is part of the persisted contract
-            club = ChainedDelivery(status="error")
-            errors["club"] = f"{type(error).__name__}: {error}"
+    notes = [str(note) for note in context.get("notes") or ()]
+    # Lighting labels the result and never blocks it (D15, P8-7). A context
+    # frozen before notes existed still says its lighting was not eligible.
+    if context["lighting_eligible"] is not True and not notes:
+        notes.append(f"lighting: {LIGHTING_NOT_ELIGIBLE}")
+    try:
+        ball = estimate_camera_ball_flight(
+            frames,
+            timestamps,
+            trigger_ns=trigger_ns,
+            range_evidence=_restore_range(context["ball_range_evidence"], "ball"),
+            geometry=geometry.ball_geometry(),
+            ops_ball_speed_mph=float(context["ops_ball_speed_mph"]),
+            iwr_vertical_deg=context["iwr_vertical_deg"],
+            ball_tracker=ball_tracker,
+            sensor_timestamps_ns=_sensor_timestamps(archive),
+            trigger_frame_index=exposure_trigger_index(archive, len(frames)),
+            setup_ball=context.get("setup_ball"),
+        )
+    except Exception as error:  # stage isolation is part of the persisted contract
+        ball = CameraBallEstimate(status="error")
+        errors["ball"] = f"{type(error).__name__}: {error}"
+    try:
+        pre_trigger_count = _integer_scalar(archive["pre_trigger_count"], "pre-trigger count")
+        if not 1 <= pre_trigger_count <= len(frames):
+            raise ValueError("camera archive pre-trigger count is outside the frame range")
+        # Impact is compared against the frame exposed at the trigger when the
+        # clip records it (P6-5); older clips keep their arrival split.
+        by_exposure = exposure_trigger_index(archive, len(frames))
+        trigger_index = pre_trigger_count - 1 if by_exposure is None else by_exposure
+        reference_ball = None
+        diagnostics = ball.reference_ball_diagnostics or {}
+        selected_candidate = diagnostics.get("selected_candidate")
+        if isinstance(selected_candidate, Mapping):
+            reference_ball = ReferenceBall(**dict(selected_candidate))
+        club = estimate_chained_delivery(
+            frames,
+            timestamps,
+            trigger_index=trigger_index,
+            range_evidence=_restore_range(context["club_range_evidence"], "club"),
+            geometry=geometry.delivery_geometry(),
+            ops_club_speed_mph=context["ops_club_speed_mph"],
+            ball_tracker=club_tracker,
+            reference_ball=reference_ball,
+            reference_ball_selected=bool(diagnostics),
+            sensor_timestamp_ns=_sensor_timestamps(archive),
+        )
+    except Exception as error:  # stage isolation is part of the persisted contract
+        club = ChainedDelivery(status="error")
+        errors["club"] = f"{type(error).__name__}: {error}"
     decision = select_camera_assisted_horizontal(
         ball,
         iwr_horizontal_deg=context["iwr_horizontal_deg"],
@@ -237,5 +265,6 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
             "next_ball_tracker": ball_tracker.snapshot(),
             "next_club_tracker": club_tracker.snapshot(),
             "errors": errors,
+            "notes": notes,
         }
     )

@@ -486,7 +486,8 @@ def test_unified_camera_recomputation_receives_replayed_radar_context(tmp_path, 
         accepted=True,
         angle_deg=18.0,
         horizontal_deg=1.0,
-        horizontal_coherence=0.81234,
+        # the LCMF field the kiosk reads (server._process_iwr6843_angle)
+        horizontal_confidence=0.81234,
         range_evidence=None,
         to_dict=lambda: {
             "status": "accepted",

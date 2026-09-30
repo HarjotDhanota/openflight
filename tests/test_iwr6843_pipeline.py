@@ -9,6 +9,8 @@ flip, header-driven geometry and time order.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -1018,7 +1020,11 @@ def test_lcmf_v1_rejects_empty_capture_without_inventing_angle(cal):
 
 
 def test_lcmf_v1_reports_rejected_track_quality(cal):
-    """A detected but thin track must not be mislabeled as a TDM-sign failure."""
+    """A detected but thin track must not be mislabeled as a TDM-sign failure.
+
+    D15 (P8-7): the estimator still runs on a reject-quality track, but this one
+    was never given a TDM sign, so no value exists and the status says why.
+    """
     raw = synth_shot(n_frames=3, trigger_frame=0, tee_m=2.3)
 
     result = estimate_lcmf_v1(raw, cal, ball_speed_mph=100.0, club="9i")
@@ -1028,6 +1034,27 @@ def test_lcmf_v1_reports_rejected_track_quality(cal):
     assert result.track_inliers is not None
     assert result.tracker_quality == "reject"
     assert result.status == "rejected_track_quality"
+
+
+def test_lcmf_v1_measures_on_a_reject_quality_track_and_labels_it(cal, monkeypatch):
+    """D15 (P8-7): a launch from a poor track is shown, labelled; its range is never depth."""
+    raw = synth_shot(speed_ms=45.0, launch_deg=18.0, tee_m=1.5)
+    real = lcmf.process_dump
+
+    def poor_track(*args, **kwargs):
+        shot = real(*args, **kwargs)
+        shot.quality = "reject"
+        return shot
+
+    monkeypatch.setattr(lcmf, "process_dump", poor_track)
+
+    result = estimate_lcmf_v1(raw, cal, ball_speed_mph=100.7, club="9i")
+
+    assert result.status == "accepted_warning_track_quality"
+    assert result.accepted and result.angle_deg is not None
+    assert result.tracker_quality == "reject"
+    assert result.range_evidence is not None
+    assert result.range_evidence.status == "rejected_track_quality"
 
 
 def test_lcmf_v1_uses_tx2_effective_timing_on_three_tx_capture(cal):
@@ -1241,6 +1268,7 @@ def test_horizontal_proxy_withholds_incoherent_frames(monkeypatch):
 
     angle_deg, coherence, status = _tx2_horizontal_proxy(raw, shot, tdm_sign=1)
 
-    assert angle_deg is None
+    # D15 (P8-7): the value is kept and labelled by its status and coherence
+    assert angle_deg is not None and math.isfinite(angle_deg)
     assert coherence is not None and coherence < HORIZONTAL_COHERENCE_MIN
     assert status == "hlcmf_v1_low_coherence"

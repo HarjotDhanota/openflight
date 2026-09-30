@@ -325,6 +325,8 @@ def _shot_attempt(
         "capture_id": capture_name,
         # Trigger evidence the server kept this shot without (P7-3).
         "missing_trigger_evidence": list((shot or {}).get("missing_trigger_evidence") or []),
+        # what blocked trigger evidence said about a shot the kiosk kept (D15)
+        "trigger_evidence_notes": list((shot or {}).get("trigger_evidence_notes") or []),
         "evidence": {
             "session_file": run.summary["session_file"],
             "camera_capture": run.relative(capture_dir),
@@ -573,6 +575,8 @@ def report_markdown(review: Mapping[str, Any]) -> str:
                     f"Shot kept without trigger evidence: {missing.get('id')} "
                     f"({missing.get('reason')})"
                 )
+            for note in attempt.get("trigger_evidence_notes") or []:
+                lines.append(f"Trigger readiness note: {note.get('id')}: {note.get('reason')}")
             outcome = attempt["evidence"].get("camera_outcome") or {}
             if outcome and outcome.get("category") != "captured":
                 detail = f" ({outcome['detail']})" if outcome.get("detail") else ""

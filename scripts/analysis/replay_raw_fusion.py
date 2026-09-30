@@ -25,7 +25,7 @@ from openflight.iwr6843.club import ClubWindowPolicy
 from openflight.iwr6843.lcmf import antenna_layout
 from openflight.iwr6843.monitor import tx_order_from_config
 from openflight.iwr6843.replay import build_replay_calibration
-from openflight.iwr6843.runtime import horizontal_confidence_from
+from openflight.iwr6843.runtime import camera_horizontal_input
 from openflight.moving_range_replay import (
     replay_moving_camera_iwr_anchor,
     replay_moving_iwr_range,
@@ -640,12 +640,11 @@ def replay(args, *, frozen_session=None) -> dict:
                 recomputed["iwr_vertical_deg"] = (
                     getattr(iwr_measurement, "angle_deg", None) if accepted else None
                 )
-                recomputed["iwr_horizontal_deg"] = (
-                    getattr(iwr_measurement, "horizontal_deg", None) if accepted else None
-                )
-                recomputed["iwr_horizontal_confidence"] = horizontal_confidence_from(
-                    getattr(iwr_measurement, "horizontal_coherence", None) if accepted else None
-                )
+                # as the kiosk hands it: the coherent LCMF horizontal and confidence
+                (
+                    recomputed["iwr_horizontal_deg"],
+                    recomputed["iwr_horizontal_confidence"],
+                ) = camera_horizontal_input(iwr_measurement)
                 recomputed["ball_range_evidence"] = None
                 recomputed["club_range_evidence"] = None
                 if iwr_measurement.range_evidence is not None:

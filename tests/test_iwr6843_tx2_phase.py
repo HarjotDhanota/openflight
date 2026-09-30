@@ -55,3 +55,23 @@ def test_circular_median_does_not_degrade_to_a_linear_median():
     median = doa.circular_median(values)
     assert abs(median) > 3.0, "collapsed toward zero, i.e. averaged through the wrap"
     assert median in values, "a median returns one of its inputs, never a synthesised value"
+
+
+def test_only_a_coherent_iwr_horizontal_is_handed_to_the_camera():
+    """P8-7: kiosk and replay share one rule; a low-coherence value is display only."""
+    from types import SimpleNamespace
+
+    from openflight.iwr6843.runtime import camera_horizontal_input
+
+    coherent = SimpleNamespace(
+        accepted=True,
+        horizontal_deg=2.0,
+        horizontal_confidence=0.9,
+        horizontal_status="hlcmf_v1_accepted",
+    )
+    assert camera_horizontal_input(coherent) == (2.0, 0.9)
+    low = SimpleNamespace(**{**vars(coherent), "horizontal_status": "hlcmf_v1_low_coherence"})
+    assert camera_horizontal_input(low) == (None, None)
+    refused = SimpleNamespace(**{**vars(coherent), "accepted": False})
+    assert camera_horizontal_input(refused) == (None, None)
+    assert camera_horizontal_input(None) == (None, None)

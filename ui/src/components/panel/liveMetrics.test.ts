@@ -271,6 +271,8 @@ describe('buildLiveMetrics', () => {
       ['camera_assisted_experimental', 'camera assisted'],
       ['camera_only_experimental', 'camera only'],
       ['camera_legacy_fallback', 'camera legacy'],
+      ['camera_low_consensus', 'camera, low consensus'],
+      ['radar_low_coherence', 'radar, low coherence'],
     ])('labels %s as experimental', (source, subtext) => {
       const metrics = buildLiveMetrics(
         makeShot({ launch_angle_horizontal_source: source, launch_angle_horizontal_confidence: 0.3 }),
@@ -370,6 +372,19 @@ describe('buildLiveMetrics', () => {
 });
 
 describe('face angle', () => {
+  it('labels a face angle whose start direction is azimuth uncalibrated', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({
+        club_path_deg: -0.6,
+        experimental_face_angle_deg: 1.5,
+        experimental_face_angle_status: 'd_plane_estimate_azimuth_uncalibrated',
+      }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(metrics, 'club_path').subtext).toBe('face +1.5° (D-plane, azimuth uncalibrated)');
+  });
+
   it('rides on the club path tile as a D-plane subtitle', () => {
     const metrics = buildLiveMetrics(
       makeShot({ club_path_deg: -0.6, experimental_face_angle_deg: 1.5 }),

@@ -1822,13 +1822,102 @@ class TestShotToDict:
             replay["horizontal_decision"]["status"]
         )
 
-    def test_live_camera_fusion_withholds_dark_frames_and_preserves_iwr(self, monkeypatch):
+    def test_live_camera_fusion_carries_the_club_stage_notes(self, monkeypatch, tmp_path):
+        """D15 (P8-7): the club stage's labels reach the shot beside its values."""
+        from openflight.camera.club_delivery import ReferenceBallTracker
+
+        np.savez(
+            tmp_path / "frames.npz",
+            frames=np.zeros((24, 6, 8), dtype=np.uint8),
+            host_timestamp_ns=np.arange(24, dtype=np.int64),
+            trigger_host_timestamp_ns=np.int64(10),
+            pre_trigger_count=np.int32(10),
+        )
+        capture = SimpleNamespace(valid=True, path=tmp_path, metadata={})
+        calibration = SimpleNamespace(
+            tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.021
+        )
+        monkeypatch.setattr(
+            server_module, "camera_capture_runtime", SimpleNamespace(camera_analysis_eligible=True)
+        )
+        monkeypatch.setattr(
+            server_module, "iwr6843_runtime", SimpleNamespace(calibration=calibration)
+        )
+        monkeypatch.setattr(
+            server_module,
+            "camera_capture_config",
+            {"mount_height_m": 0.095, "width": 8, "height": 6, "forward_offset_m": 0.03},
+        )
+        monkeypatch.setattr(
+            server_module, "camera_ball_flight_reference_tracker", ReferenceBallTracker()
+        )
+        monkeypatch.setattr(server_module, "camera_reference_ball_tracker", ReferenceBallTracker())
+        monkeypatch.setattr(server_module, "tester_setup_required", False)
+        shot = Shot(
+            ball_speed_mph=100.0, club_speed_mph=80.0, timestamp=datetime.now(), shot_number=4
+        )
+        shot.camera_fusion_session_uuid = "session-a"
+
+        server_module._fuse_camera_measurements(shot, capture)
+
+        notes = shot.camera_fusion_processing["club_delivery"]["notes"]
+        assert any(note.startswith("scene dim") for note in notes)
+        assert [f"club: {note}" for note in notes] == [
+            note for note in shot.camera_notes if note.startswith("club: ")
+        ]
+
+    def test_a_swing_without_a_tee_range_names_it_on_the_camera(self, monkeypatch, tmp_path):
+        """P8-7 gate 2: the tee contract stands; the shot says plainly what it lacked."""
+        from openflight.camera.club_delivery import ReferenceBallTracker
+        from openflight.review_metrics import NO_TEE_RANGE
+
+        np.savez(
+            tmp_path / "frames.npz",
+            frames=np.zeros((20, 6, 8), dtype=np.uint8),
+            host_timestamp_ns=np.arange(20, dtype=np.int64),
+            trigger_host_timestamp_ns=np.int64(10),
+            pre_trigger_count=np.int32(10),
+        )
+        monkeypatch.setattr(
+            server_module, "camera_capture_runtime", SimpleNamespace(camera_analysis_eligible=True)
+        )
+        monkeypatch.setattr(
+            server_module,
+            "iwr6843_runtime",
+            SimpleNamespace(
+                calibration=SimpleNamespace(
+                    tee_range_m=None, radar_height_m=0.051, tee_ball_height_m=0.021
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            server_module,
+            "camera_capture_config",
+            {"mount_height_m": 0.095, "width": 8, "height": 6},
+        )
+        monkeypatch.setattr(
+            server_module, "camera_ball_flight_reference_tracker", ReferenceBallTracker()
+        )
+        monkeypatch.setattr(server_module, "camera_reference_ball_tracker", ReferenceBallTracker())
+        shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), shot_number=4)
+        shot.camera_fusion_session_uuid = "session-a"
+
+        server_module._fuse_camera_measurements(
+            shot, SimpleNamespace(valid=True, path=tmp_path, metadata={})
+        )
+
+        assert shot.camera_fusion_context["available"] is False
+        assert NO_TEE_RANGE in shot.camera_notes
+
+    def test_live_camera_fusion_labels_dark_frames_and_preserves_iwr(self, monkeypatch):
+        """D15 (P8-7): ineligible lighting is a note; the camera stages still run."""
         runtime = SimpleNamespace(camera_analysis_eligible=False)
         monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
+        decoded = []
         monkeypatch.setattr(
             server_module,
             "_load_camera_capture_archive",
-            lambda _capture: pytest.fail("dark camera frames should not be decoded"),
+            lambda _capture: decoded.append(True),
         )
         shot = Shot(
             ball_speed_mph=110.0,
@@ -1842,12 +1931,12 @@ class TestShotToDict:
 
         server_module._fuse_camera_measurements(shot, SimpleNamespace(valid=True))
 
+        assert decoded == [True]
         assert shot.launch_angle_horizontal == -1.8
         assert shot.launch_angle_horizontal_source == "radar"
-        assert shot.experimental_camera_horizontal_status == "rejected_lighting_quality"
-        assert shot.experimental_fused_status == "rejected_lighting_quality"
-        assert shot.experimental_fused_attack_angle_deg is None
-        assert shot.experimental_fused_club_path_deg is None
+        assert shot.camera_notes == ["lighting: capture-time lighting was not analysis eligible"]
+        assert shot.experimental_fused_status != "rejected_lighting_quality"
+        assert shot_to_dict(shot)["camera_notes"] == shot.camera_notes
 
     def test_requested_calibrated_fusion_rejects_missing_mode_evidence_without_stopping_baseline(
         self, monkeypatch
@@ -1909,20 +1998,26 @@ class TestShotToDict:
     def test_camera_fusion_uses_capture_time_exposure_state(self, monkeypatch):
         runtime = SimpleNamespace(camera_analysis_eligible=True)
         monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
-        monkeypatch.setattr(
-            server_module,
-            "_load_camera_capture_archive",
-            lambda _capture: pytest.fail("ineligible capture should not be decoded"),
-        )
+        monkeypatch.setattr(server_module, "_load_camera_capture_archive", lambda _capture: None)
         shot = Shot(ball_speed_mph=110.0, timestamp=datetime.now())
         capture = SimpleNamespace(
             valid=True,
-            metadata={"auto_exposure": {"analysis_eligible": False}},
+            metadata={
+                "auto_exposure": {
+                    "analysis_eligible": False,
+                    "analysis_eligibility": {
+                        "rule": "setup_ball",
+                        "reason": "too bright for the ball: 83% of it is clipped",
+                    },
+                }
+            },
         )
 
         server_module._fuse_camera_measurements(shot, capture)
 
-        assert shot.experimental_fused_status == "rejected_lighting_quality"
+        # the clip's own judgement, not the runtime's current one, labels the shot
+        assert "lighting: too bright for the ball: 83% of it is clipped" in shot.camera_notes
+        assert shot.experimental_fused_status != "rejected_lighting_quality"
 
     @pytest.mark.parametrize(
         ("auto_exposure", "applied_exposure_us", "status"),
@@ -1949,9 +2044,10 @@ class TestShotToDict:
             ),
         ],
     )
-    def test_camera_metrics_are_withheld_when_optical_provenance_fails(
+    def test_optical_provenance_failures_label_the_camera_metrics(
         self, monkeypatch, auto_exposure, applied_exposure_us, status
     ):
+        """D15 (P8-7): the optical-quality verdict is recorded and noted, not a refusal."""
         monkeypatch.setattr(
             server_module, "camera_capture_runtime", SimpleNamespace(camera_analysis_eligible=True)
         )
@@ -1965,8 +2061,8 @@ class TestShotToDict:
         server_module._fuse_camera_measurements(shot, capture, archive)
         result = shot_to_dict(shot)
 
-        assert shot.experimental_fused_status == status
-        assert shot.experimental_fused_club_path_deg is None
+        assert shot.experimental_fused_status != status
+        assert f"optical quality: {status.removeprefix('rejected_')}" in shot.camera_notes
         assert result["camera_optical_quality"]["status"] == "withheld"
         assert result["camera_optical_quality"]["applied"]["exposure_us"] == applied_exposure_us
 
@@ -5573,13 +5669,20 @@ class TestIwrAzimuthCalibration:
     """F8: without a horizontal phase reference the IWR's azimuth is uncalibrated."""
 
     @staticmethod
-    def _run(monkeypatch, *, phase_reference, horizontal_deg=2.25, club_accepted=True):
+    def _run(
+        monkeypatch,
+        *,
+        phase_reference,
+        horizontal_deg=2.25,
+        club_accepted=True,
+        horizontal_status="hlcmf_v1_accepted",
+    ):
         measurement = SimpleNamespace(
             accepted=True,
             angle_deg=18.5,
             horizontal_deg=horizontal_deg,
             horizontal_confidence=0.93,
-            horizontal_status="hlcmf_v1_accepted",
+            horizontal_status=horizontal_status,
             n_snapshots=18,
             n_frames=5,
             component_std_deg=1.4,
@@ -5624,6 +5727,19 @@ class TestIwrAzimuthCalibration:
         server_module._process_iwr6843_angle(shot)
         return shot
 
+    def test_a_low_coherence_radar_horizontal_is_shown_labelled_not_fused(self, monkeypatch):
+        """D15 (P8-7): shown under its own source, never handed to the camera as IWR's."""
+        shot = self._run(
+            monkeypatch, phase_reference=-0.5, horizontal_status="hlcmf_v1_low_coherence"
+        )
+
+        assert shot.launch_angle_horizontal == pytest.approx(2.25)
+        assert shot.launch_angle_horizontal_source == "radar_low_coherence"
+        assert shot.iwr6843_horizontal_deg is None
+        # any camera horizontal outranks it
+        server_module._apply_camera_horizontal_decision(shot, 4.0, 0.3, "camera_only_experimental")
+        assert shot.launch_angle_horizontal == pytest.approx(4.0)
+
     def test_uncalibrated_radar_horizontal_and_path_are_marked(self, monkeypatch):
         shot = self._run(monkeypatch, phase_reference=None)
 
@@ -5664,16 +5780,33 @@ class TestIwrAzimuthCalibration:
         assert shot.experimental_face_angle_deg == pytest.approx(3.5)
         assert shot.experimental_face_angle_path_source == "camera_fused_chained"
 
-    def test_an_uncalibrated_radar_start_direction_gives_no_face_angle(self, monkeypatch):
-        # A radar start direction and a camera path would mix two zeros.
+    def test_an_uncalibrated_radar_start_direction_gives_a_labelled_face_angle(self, monkeypatch):
+        """D15 (P8-7): computed, and labelled with the mixed zeros and the path source."""
         shot = self._run(monkeypatch, phase_reference=None)
         shot.experimental_fused_club_path_deg = -4.0
         shot.experimental_fused_status = "chained_high"
 
         server_module._attach_experimental_face_angle(shot)
 
-        assert shot.experimental_face_angle_deg is None
-        assert shot.experimental_face_angle_status == "start_direction_azimuth_uncalibrated"
+        assert shot.experimental_face_angle_deg == pytest.approx((2.25 + 0.2 * 4.0) / 0.8, abs=0.1)
+        assert shot.experimental_face_angle_status == "d_plane_estimate_azimuth_uncalibrated"
+        assert shot.experimental_face_angle_path_source == "camera_fused_chained"
+        assert shot.experimental_face_angle_launch_source == "radar"
+
+    def test_a_low_consensus_camera_horizontal_ranks_below_the_radar(self, monkeypatch):
+        """P8-7: shown, labelled, and never displacing a radar horizontal."""
+        monkeypatch.setattr(
+            server_module, "iwr6843_runtime", SimpleNamespace(horizontal_phase_reference_rad=None)
+        )
+        shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
+        server_module._apply_camera_horizontal_decision(shot, 6.0, 0.15, "camera_low_consensus")
+        assert shot.launch_angle_horizontal == 6.0
+        assert shot.launch_angle_horizontal_source == "camera_low_consensus"
+
+        server_module._apply_camera_horizontal_decision(shot, 1.0, 0.6, "radar")
+        assert shot.launch_angle_horizontal == 1.0
+        server_module._apply_camera_horizontal_decision(shot, 6.0, 0.15, "camera_low_consensus")
+        assert shot.launch_angle_horizontal == 1.0
 
     def test_camera_fallback_to_the_radar_horizontal_keeps_its_mark(self, monkeypatch):
         monkeypatch.setattr(

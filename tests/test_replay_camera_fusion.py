@@ -180,17 +180,83 @@ def test_replay_entry_reads_actual_session_logger_capture_contract(tmp_path):
     assert result["session_uuid"] == logger.active_session_uuid
 
 
-def test_a_shot_without_a_fusion_context_says_why_it_had_none(tmp_path):
-    """P6-6: Outdoors-test-5 recorded the cause beside the missing context."""
-    session_file, _ = _write_replay_fixture(tmp_path)
+def _without_context(session_file, *, config=None, shot_fields=None, metadata=None):
+    """The fixture as a kiosk that froze no context recorded it (Outdoors-test-5, -7)."""
     events = [json.loads(line) for line in session_file.read_text(encoding="utf-8").splitlines()]
-    events[-1]["camera_fusion_context"] = {
-        "schema": "openflight.camera.fusion_context",
-        "version": 1,
-        "available": False,
-        "reason": "capture-time lighting was not analysis eligible",
+    events[0]["config"] = (
+        config
+        if config is not None
+        else {
+            "camera_capture": {
+                "mount_height_m": 0.095,
+                "width": 8,
+                "height": 6,
+                "forward_offset_m": 0.03,
+                "setup_ball": {"x": 4.0, "y": 3.0, "diameter_px": 2.0},
+            },
+            "iwr6843": {"tee_slant_range_m": 1.5, "radar_height_m": 0.051, "ball_height_m": 0.021},
+        }
+    )
+    events[1]["metadata"] = metadata or {
+        "auto_exposure": {
+            "analysis_eligible": False,
+            "analysis_eligibility": {"reason": "too bright for the ball: 83% of it is clipped"},
+        }
+    }
+    events[-1] = {
+        "type": "shot_detected",
+        "shot_number": 3,
+        "ball_speed_mph": 101.1,
+        "club_speed_mph": 75.1,
+        "club": "7-iron",
+        "camera_fusion_context": {
+            "schema": "openflight.camera.fusion_context",
+            "version": 1,
+            "available": False,
+            "reason": "capture-time lighting was not analysis eligible",
+        },
+        **(shot_fields or {}),
     }
     session_file.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="lighting was not analysis eligible"):
+
+def test_a_shot_without_a_fusion_context_is_replayed_from_a_reconstructed_one(tmp_path):
+    """D15 (P8-7): rebuilt from the clip, its metadata and the session, and labelled."""
+    session_file, capture_path = _write_replay_fixture(tmp_path)
+    _without_context(session_file)
+
+    result = replay_recorded_shot(session_file, 3)
+
+    assert result["context_source"] == "reconstructed"
+    assert result["capture_npz_sha256"] == hashlib.sha256(capture_path.read_bytes()).hexdigest()
+    assert result["replay"]["ball_estimate"]["status"]
+    assert "lighting: too bright for the ball: 83% of it is clipped" in result["replay"]["notes"]
+    assert any("reconstructed" in note for note in result["reconstruction"])
+    assert "capture-time lighting was not analysis eligible" in " ".join(result["reconstruction"])
+
+
+def test_a_reconstructed_context_says_when_the_session_has_no_tee_range(tmp_path):
+    session_file, _ = _write_replay_fixture(tmp_path)
+    _without_context(
+        session_file,
+        config={
+            "camera_capture": {"mount_height_m": 0.095, "width": 8, "height": 6},
+            "iwr6843": {
+                "tee_slant_range_m": None,
+                "radar_height_m": 0.051,
+                "ball_height_m": 0.021,
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="no tee range"):
+        replay_recorded_shot(session_file, 3)
+
+
+def test_a_shot_whose_frames_are_missing_still_refuses(tmp_path):
+    session_file, capture_path = _write_replay_fixture(tmp_path)
+    _without_context(session_file)
+    capture_path.unlink()
+
+    with pytest.raises(ValueError, match="not in the session folder|frames"):
         replay_recorded_shot(session_file, 3)
