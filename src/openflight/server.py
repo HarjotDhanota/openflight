@@ -5027,7 +5027,22 @@ def _handle_shot_detected(shot: Shot) -> None:
             else None
         )
         evidence_problem = _tester_trigger_evidence_problem(readiness)
-        if evidence_problem is not None:
+        if readiness is None and evidence_problem is not None:
+            # No camera trigger near this impact (P7-3): the edge never reached
+            # the camera, which says nothing against the setup. Keep the OPS
+            # shot and name the gap, instead of dropping a real swing.
+            shot.missing_trigger_evidence = [
+                {
+                    "id": "camera_trigger",
+                    "reason": f"{evidence_problem}: the camera recorded no trigger "
+                    "near this impact",
+                }
+            ]
+            logger.warning(
+                "[SERVER] Tester shot kept without camera trigger evidence (%.1f mph)",
+                shot.ball_speed_mph,
+            )
+        elif evidence_problem is not None:
             evidence = readiness or {
                 "schema_version": 1,
                 "required": True,

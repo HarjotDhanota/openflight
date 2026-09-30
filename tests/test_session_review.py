@@ -445,3 +445,30 @@ def test_refused_camera_triggers_are_counted_by_reason_even_without_a_shot(tmp_p
     attempt = next(a for a in review["attempts"] if a["attempt_id"] == "session-one:1")
     assert attempt["evidence"]["camera_outcome"]["category"] == "captured"
     assert "camera refused triggers: 2 ring_busy, 1 save_backlog_full" in report_markdown(review)
+
+
+def test_shot_kept_without_trigger_evidence_is_reviewed_as_a_flagged_shot(tmp_path):
+    """P7-3: an OPS shot the camera never heard is a shot, with the gap named."""
+    root = _tester_tree(tmp_path)
+    session = next((root / "t1" / "arm5" / "paired" / "run-01").glob("session_*.jsonl"))
+    missing = [{"id": "camera_trigger", "reason": "no matching trigger readiness evidence"}]
+    with session.open("a", encoding="utf-8") as handle:
+        event = {
+            "type": "shot_detected",
+            "shot_number": 3,
+            "ball_speed_mph": 91.2,
+            "missing_trigger_evidence": missing,
+        }
+        handle.write(json.dumps(event) + "\n")
+
+    review = build_session_review(root, "t1", analysis={})
+
+    attempt = next(a for a in review["attempts"] if a["attempt_id"] == "session-one:3")
+    assert attempt["kind"] == "shot"
+    assert attempt["missing_trigger_evidence"] == missing
+    first = next(a for a in review["attempts"] if a["attempt_id"] == "session-one:1")
+    assert first["missing_trigger_evidence"] == []
+    assert (
+        "Shot kept without trigger evidence: camera_trigger "
+        "(no matching trigger readiness evidence)" in report_markdown(review)
+    )
