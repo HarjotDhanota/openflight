@@ -2856,6 +2856,10 @@ class TestTheNetRange:
 
 
 def test_the_swing_server_flags_an_unmeasured_net(tmp_path, monkeypatch):
+    from openflight import server  # noqa: PLC0415
+
+    # the tester records the default the swing server will assume
+    assert ts.DEFAULT_NET_RANGE_M == server.DEFAULT_NET_RANGE_M
     command = ["--iwr6843", "--iwr6843-tee-range-pending", "--inclinometer"]
     session = _session_start_for(command, Path(ts.DEFAULT_RIG_GEOMETRY), tmp_path, monkeypatch)
     assert session["net_range"] == {
