@@ -1527,6 +1527,8 @@ def init_camera_calibrated_fusion(calibration_path: str | None, placement_path: 
         check_placement_against_rig,
     )
 
+    # a placement measures the RX row, so it is checked against the rig's RX
+    # row, not the phase centre derived from it (audit F11)
     check_placement_against_rig(
         placement,
         rig_params_sha256=(rig_geometry_config.get("snapshot") or {}).get("sha256"),

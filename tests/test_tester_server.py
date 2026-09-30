@@ -1750,7 +1750,9 @@ class TestGuidedRangeAnalyzer:
 
 class TestTheTapeGivesTheBallsSize:
     def test_the_tape_runs_from_the_radar_window_behind_the_lens(self):
-        # 1071 mm from the radar window is 1041 mm from the lens in the v3 rig
+        # 1071 mm from the radar window is 1041 mm from the lens in the v3 rig;
+        # the window is a physical face, so the tape keeps the RX row's depth
+        # rather than the phase centre's (audit F11)
         expected = ts.expected_ball_diameter_px(ts.ARMS["arm5"], 1071.0, RIG)
         assert expected == pytest.approx(933.3333 * ts.BALL_DIAMETER_MM / 1041.0)
         assert ts.expected_ball_diameter_px(ts.ARMS["arm5"], None, RIG) is None
@@ -1782,7 +1784,9 @@ class TestTheCameraSaysHowFar:
         # roll is recorded, not applied, until its sign is checked against the image
         assert camera.ray_model.roll_correction_deg == 0.0
         assert camera.camera_origin_lfu == pytest.approx((0.0, 0.0, 0.095))
-        assert camera.radar_origin_lfu == pytest.approx((0.0, -0.030, 0.051))
+        # the radar's ranges start at the IWR's phase centre, not the RX row:
+        # 1.86 mm target-left, 1.38 mm further back and 7.85 mm up (audit F11)
+        assert camera.radar_origin_lfu == pytest.approx((-0.001858, -0.031384, 0.058848), abs=1e-6)
         assert camera.source == "nominal_uncalibrated"
         assert camera.accuracy_qualified is False
 
