@@ -798,3 +798,56 @@ def test_club_search_does_not_fit_the_ball():
         "the fixture's mover must be trackable with gates that admit it, "
         f"proving the club search (not a broken dump) excluded it; got {wide}"
     )
+
+
+class TestRangeEvidenceStatus:
+    """F4: the club range track carries its own identity verdict to camera fusion."""
+
+    def test_accepted_track_evidence_is_accepted(self):
+        result = club.estimate_club_path(
+            _synth_club(4.0),
+            _cal(),
+            ops_club_speed_mph=OPS_CLUB_MPH,
+            impact_t_s=IMPACT_S,
+            tdm_sign=1,
+        )
+        assert result.status == "accepted"
+        assert result.range_evidence.status == "accepted"
+
+    def test_speed_mismatch_marks_the_track_rejected(self):
+        result = club.estimate_club_path(
+            _synth_club(0.0), _cal(), ops_club_speed_mph=20.0, impact_t_s=IMPACT_S, tdm_sign=1
+        )
+        assert result.range_evidence is not None
+        assert result.range_evidence.status == "rejected_club_speed_mismatch"
+
+    def test_impact_contact_mismatch_marks_the_track_rejected(self, monkeypatch):
+        real_find_club = club.find_club
+
+        def shifted_selection(*args, **kwargs):
+            selection = real_find_club(*args, **kwargs)
+            selection.impact_error_m = club.CLUB_MAX_IMPACT_ERROR_M + 0.01
+            return selection
+
+        monkeypatch.setattr(club, "find_club", shifted_selection)
+        result = club.estimate_club_path(
+            _synth_club(4.0),
+            _cal(),
+            ops_club_speed_mph=OPS_CLUB_MPH,
+            impact_t_s=IMPACT_S,
+            tdm_sign=1,
+        )
+        assert result.range_evidence.status == "rejected_impact_contact_mismatch"
+
+    def test_a_rejected_azimuth_does_not_reject_the_range_track(self, monkeypatch):
+        # Camera fusion uses only the IWR range; a phase failure says nothing about it.
+        monkeypatch.setattr(club, "CLUB_MAX_PHASE_SPAN_RAD", 1e-9)
+        result = club.estimate_club_path(
+            _synth_club(4.0),
+            _cal(),
+            ops_club_speed_mph=OPS_CLUB_MPH,
+            impact_t_s=IMPACT_S,
+            tdm_sign=1,
+        )
+        assert result.status == "rejected_phase_span"
+        assert result.range_evidence.status == "accepted"

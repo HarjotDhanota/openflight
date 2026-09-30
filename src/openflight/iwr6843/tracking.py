@@ -32,6 +32,20 @@ FAST_SUPPORT_FRAC = 0.55  # of the most-inliers candidate
 MAX_RADIAL_ACCEL = 200.0  # m/s^2 sanity for the quadratic refit
 
 
+def accepted_range_evidence(evidence):
+    """Return fitted range evidence only when its radar estimator accepted the track.
+
+    Rejected tracks keep their evidence, and its status, for replay and
+    diagnostics, but they never become camera depth (audit F4). Evidence
+    recorded before it carried a status is treated as accepted, as it was
+    then.
+    """
+    if evidence is None:
+        return None
+    status = getattr(evidence, "status", "accepted")
+    return evidence if isinstance(status, str) and status.startswith("accepted") else None
+
+
 @dataclass
 class Geometry:
     """Per-dump capture geometry, derived from the dump header."""

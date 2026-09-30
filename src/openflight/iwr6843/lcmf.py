@@ -62,11 +62,17 @@ SINGLE_CHANNEL_CONFIDENCE_FACTOR = 0.7
 
 @dataclass(frozen=True)
 class BallRangeEvidence:
-    """Transient fitted ball trajectory shared with camera fusion."""
+    """Transient fitted ball trajectory shared with camera fusion.
+
+    ``status`` is the LCMF status of the estimate that produced the track;
+    camera fusion uses the track as depth only when it starts with
+    "accepted" (``tracking.accepted_range_evidence``).
+    """
 
     track: tracking.BallTrack
     geometry: tracking.Geometry
     impact_t_s: float
+    status: str = "accepted"
 
 
 @dataclass
@@ -198,7 +204,7 @@ def _result_from_track(
         track_span_s=(track.t_last - track.t_first) if track is not None else None,
         impact_t_s=impact_t_s,
         range_evidence=(
-            BallRangeEvidence(track, shot.geometry, impact_t_s)
+            BallRangeEvidence(track, shot.geometry, impact_t_s, status=status)
             if track is not None and impact_t_s is not None
             else None
         ),

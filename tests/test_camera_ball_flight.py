@@ -481,3 +481,94 @@ def test_lcmf_ball_range_evidence_is_transient():
 
     assert result.range_evidence is evidence
     assert "range_evidence" not in result.to_dict()
+
+
+def test_lcmf_range_evidence_carries_the_estimator_status(monkeypatch):
+    """F4: a rejected ball track keeps its evidence, marked rejected."""
+    from openflight.iwr6843 import lcmf  # noqa: PLC0415
+
+    monkeypatch.setattr(lcmf, "impact_time_s", lambda *_args, **_kwargs: 0.012)
+    shot = SimpleNamespace(
+        track=SimpleNamespace(
+            speed_mph=100.0, rms_bins=0.2, n_inliers=12, t_first=0.0, t_last=0.02
+        ),
+        geometry=SimpleNamespace(range_res_m=0.046875),
+        quality="reject",
+        tdm_sign_used=1,
+    )
+    cal = SimpleNamespace(tee_range_m=1.5, range_bias_m=0.0)
+
+    rejected = lcmf._result_from_track("rejected_track_quality", shot, cal=cal)
+    accepted = lcmf._result_from_track("accepted", shot, cal=cal)
+
+    assert rejected.range_evidence.status == "rejected_track_quality"
+    assert accepted.range_evidence.status == "accepted"
+
+
+def test_rejected_iwr_ball_track_is_not_used_as_camera_depth(monkeypatch):
+    """F4: the camera falls back to its own size-based depth and says so."""
+    anchor = ReferenceBall(160.0, 150.0, 14.0, 150)
+    seen = []
+    monkeypatch.setattr(
+        ball_flight_module,
+        "_select_reference_ball",
+        lambda *_args, **_kwargs: (anchor, {"selected_source": "test"}),
+    )
+    monkeypatch.setattr(
+        ball_flight_module, "_camera_model", lambda *_args, **_kwargs: (480.0, 0.0, None)
+    )
+    candidate = BallCandidate(160.0, 140.0, 150, 14, 14, 0.8, 0.9, 220.0)
+    monkeypatch.setattr(ball_flight_module, "_candidates", lambda *_a, **_k: [candidate])
+    monkeypatch.setattr(
+        ball_flight_module,
+        "_pixel_paths",
+        lambda nodes, *_a, **_k: [[(index, candidate) for index in range(4)]],
+    )
+    monkeypatch.setattr(ball_flight_module, "_clean_launch_path", lambda path, _frames: path)
+
+    def path_estimate(*, range_evidence, **_kwargs):
+        seen.append(range_evidence)
+        return 1.0, ball_flight_module._PathEstimate(
+            horizontal_deg=3.0,
+            vertical_deg=20.0,
+            speed_mph=100.0,
+            speed_error_mph=0.0,
+            fit_median_m=0.001,
+            step_speed_mad_mph=0.5,
+            window_mad_deg=0.2,
+            n_points=6,
+            first_frame=10,
+            last_frame=15,
+        )
+
+    monkeypatch.setattr(ball_flight_module, "_path_estimate", path_estimate)
+    rejected = BallRangeEvidence(
+        track=SimpleNamespace(),
+        geometry=SimpleNamespace(range_res_m=0.046875),
+        impact_t_s=0.012,
+        status="rejected_track_quality",
+    )
+
+    estimate = estimate_camera_ball_flight(
+        np.zeros((30, 200, 320), dtype=np.uint8),
+        np.arange(30, dtype=np.int64) * 3_500_000,
+        trigger_ns=10 * 3_500_000,
+        range_evidence=rejected,
+        geometry=CameraBallGeometry(
+            camera_height_m=0.095,
+            radar_height_m=0.051,
+            tee_range_m=1.5,
+            ball_height_m=0.02135,
+            image_width_px=320,
+            image_height_px=200,
+        ),
+        ops_ball_speed_mph=100.0,
+    )
+    decision = select_camera_assisted_horizontal(
+        estimate, iwr_horizontal_deg=None, iwr_confidence=None
+    )
+
+    assert seen and all(evidence is None for evidence in seen)
+    assert estimate.depth_source == "camera_size"
+    assert estimate.range_evidence_status == "rejected_track_quality"
+    assert decision.source == "camera_only_experimental"

@@ -125,11 +125,17 @@ CLUB_MAX_PHASE_DEVIATION_RAD = 0.6
 
 @dataclass(frozen=True)
 class ClubRangeEvidence:
-    """Transient club range trajectory shared with camera fusion."""
+    """Transient club range trajectory shared with camera fusion.
+
+    ``status`` is the verdict of the track's own identity gates (OPS speed
+    projection and tee contact), not of the phase-based path: camera fusion
+    uses only the range, so an azimuth rejection leaves the track accepted.
+    """
 
     track: tracking.BallTrack
     geometry: tracking.Geometry
     impact_t_s: float
+    status: str = "accepted"
 
 
 @dataclass
@@ -659,6 +665,18 @@ def estimate_club_path(
     if selection is None:
         return ClubPathResult(status="rejected_no_club_track")
     track = selection.track
+    low, high = CLUB_SPEED_PROJECTION_RANGE
+    speed_mismatch = not low <= selection.speed_ratio <= high
+    impact_mismatch = selection.impact_error_m > CLUB_MAX_IMPACT_ERROR_M
+    # A track that fails its identity gates is kept for replay but must never
+    # become camera depth (audit F4).
+    track_status = (
+        "rejected_club_speed_mismatch"
+        if speed_mismatch
+        else "rejected_impact_contact_mismatch"
+        if impact_mismatch
+        else "accepted"
+    )
 
     result = ClubPathResult(
         status="pending",
@@ -680,6 +698,7 @@ def estimate_club_path(
             track=track,
             geometry=geo,
             impact_t_s=impact_t_s,
+            status=track_status,
         ),
     )
 
@@ -713,10 +732,6 @@ def estimate_club_path(
         track.n_inliers,
         track.rms_bins,
     )
-
-    low, high = CLUB_SPEED_PROJECTION_RANGE
-    speed_mismatch = not low <= selection.speed_ratio <= high
-    impact_mismatch = selection.impact_error_m > CLUB_MAX_IMPACT_ERROR_M
 
     (
         result.candidate_attack_angle_deg,

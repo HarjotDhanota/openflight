@@ -32,6 +32,10 @@ from openflight.camera.geometry import (
 )
 from openflight.clubs import ClubType
 from openflight.clubs.physics import get_club_physics
+from openflight.iwr6843.tracking import accepted_range_evidence
+
+# OpenCV's extension members are not visible to Pylint.
+# pylint: disable=no-member
 
 # --- scene / mask constants -------------------------------------------------
 # Scene brightness gate: background 99.5th percentile. The 2026-08-07 session
@@ -171,6 +175,8 @@ class ChainedDelivery:
     path_window_mad_deg: float | None = None
     path_confidence_tier: str = "withheld"
     attack_confidence_tier: str = "withheld"
+    # The IWR club track's own status; a rejected track is never camera depth.
+    range_evidence_status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -963,6 +969,10 @@ def estimate_chained_delivery(
     reference_ball_selected: bool = False,
 ) -> ChainedDelivery:
     """Estimate final-approach club delivery from camera, IWR, and OPS."""
+    range_evidence_status = (
+        getattr(range_evidence, "status", "accepted") if range_evidence is not None else None
+    )
+    range_evidence = accepted_range_evidence(range_evidence)
     if ops_club_speed_mph is None:
         return ChainedDelivery(status="rejected_no_ops_speed")
     if frames.ndim != 3 or len(frames) < 20:
@@ -1075,6 +1085,7 @@ def estimate_chained_delivery(
         ),
         "scene_p995": round(scene_p995, 1),
         "head_thickness_px": (round(head_thickness, 2) if head_thickness is not None else None),
+        "range_evidence_status": range_evidence_status,
     }
     if not pair_estimates:
         return ChainedDelivery(

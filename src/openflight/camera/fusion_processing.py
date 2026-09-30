@@ -61,6 +61,7 @@ def _range_snapshot(evidence: Any, kind: str) -> dict[str, Any] | None:
             "track": asdict(evidence.track),
             "geometry": asdict(evidence.geometry),
             "impact_t_s": float(evidence.impact_t_s),
+            "status": getattr(evidence, "status", "accepted"),
         }
     )
 
@@ -91,7 +92,10 @@ def _restore_range(snapshot: Any, kind: str):
             geometry_data[name] = tuple(geometry_data[name])
     geometry = Geometry(**geometry_data)
     evidence_type = BallRangeEvidence if kind == "ball" else ClubRangeEvidence
-    return evidence_type(track, geometry, float(snapshot["impact_t_s"]))
+    # Contexts frozen before evidence carried a status replay as they ran then.
+    return evidence_type(
+        track, geometry, float(snapshot["impact_t_s"]), status=snapshot.get("status", "accepted")
+    )
 
 
 def build_context(

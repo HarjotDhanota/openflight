@@ -142,3 +142,21 @@ def test_time_window_excludes_a_later_mover():
         time_window_s=(0.050, 0.072),
     )
     assert late_only is None or late_only.t_first >= 0.050 - 1e-9
+
+
+def test_accepted_range_evidence_passes_only_accepted_tracks():
+    """F4: camera depth takes only tracks their radar estimator accepted."""
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from openflight.iwr6843.tracking import accepted_range_evidence  # noqa: PLC0415
+
+    accepted = SimpleNamespace(status="accepted")
+    recovered = SimpleNamespace(status="accepted_low_confidence_recovery")
+    rejected = SimpleNamespace(status="rejected_track_quality")
+    legacy = SimpleNamespace()  # recorded before evidence carried a status
+
+    assert accepted_range_evidence(accepted) is accepted
+    assert accepted_range_evidence(recovered) is recovered
+    assert accepted_range_evidence(rejected) is None
+    assert accepted_range_evidence(None) is None
+    assert accepted_range_evidence(legacy) is legacy

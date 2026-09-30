@@ -28,6 +28,7 @@ from openflight.camera.geometry import (
     reference_ball_camera_model,
     unit_world_rays,
 )
+from openflight.iwr6843.tracking import accepted_range_evidence
 
 MPH_PER_MS = 2.23694
 PARAMETER_SWEEP_SIZE = 27
@@ -118,6 +119,8 @@ class CameraBallEstimate:
     last_frame: int | None = None
     depth_source: str | None = None
     reference_ball_diagnostics: dict[str, Any] | None = None
+    # The IWR ball track's own status; a rejected track is never camera depth.
+    range_evidence_status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -670,6 +673,10 @@ def estimate_camera_ball_flight(
     ball_tracker=None,
 ) -> CameraBallEstimate:
     """Estimate horizontal flight with a frozen detector-consensus sweep."""
+    range_evidence_status = (
+        getattr(range_evidence, "status", "accepted") if range_evidence is not None else None
+    )
+    range_evidence = accepted_range_evidence(range_evidence)
     if frames.ndim != 3 or len(frames) < 4 or len(timestamps_ns) != len(frames):
         return CameraBallEstimate("rejected_invalid_camera_frames")
     if geometry.calibrated_model is not None and range_evidence is None:
@@ -814,6 +821,7 @@ def estimate_camera_ball_flight(
         last_frame=representative.last_frame,
         depth_source=depth_source,
         reference_ball_diagnostics=reference_diagnostics,
+        range_evidence_status=range_evidence_status,
     )
 
 

@@ -972,3 +972,59 @@ class TestVelocityAngleProjection:
         path_deg, _attack_deg = club_delivery_module._velocity_angles(velocity)
 
         assert path_deg == pytest.approx(math.degrees(math.atan2(5.0, 20.0)))
+
+
+def test_rejected_iwr_club_track_is_not_used_as_camera_depth(monkeypatch):
+    """F4: a rejected club track downgrades delivery to the camera+OPS fallback."""
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from openflight.iwr6843.club import ClubRangeEvidence  # noqa: PLC0415
+
+    ball = ReferenceBall(10.0, 10.0, 12.0, 120)
+    estimate = ApproachPairEstimate(3.0, -5.0, 1.0, 1.0, 12)
+    monkeypatch.setattr(
+        club_delivery_module, "detect_reference_ball", lambda _frames, **_kwargs: ball
+    )
+    monkeypatch.setattr(
+        club_delivery_module, "_detect_impact_index", lambda _frames, _ball, trigger_index: 40
+    )
+    monkeypatch.setattr(
+        club_delivery_module,
+        "_clubhead_pair_tracks",
+        lambda *_args, **_kwargs: (np.zeros((12, 2, 2)), 5.0),
+    )
+    monkeypatch.setattr(
+        club_delivery_module,
+        "camera_ops_delivery_from_feature_pair",
+        lambda *_args, **_kwargs: estimate,
+    )
+
+    def iwr_pair(*_args, **_kwargs):
+        raise AssertionError("a rejected IWR club track must not supply camera depth")
+
+    monkeypatch.setattr(club_delivery_module, "_delivery_from_feature_pair", iwr_pair)
+    rejected = ClubRangeEvidence(
+        track=SimpleNamespace(range_at=lambda *_args: 1.2),
+        geometry=SimpleNamespace(range_res_m=0.046875),
+        impact_t_s=0.02,
+        status="rejected_club_speed_mismatch",
+    )
+
+    result = estimate_chained_delivery(
+        np.full((60, 20, 20), 150, dtype=np.uint8),
+        np.arange(60, dtype=np.int64) * 2_000_000,
+        trigger_index=40,
+        range_evidence=rejected,
+        geometry=CameraDeliveryGeometry(
+            camera_height_m=0.2032,
+            radar_height_m=0.1524,
+            tee_range_m=1.524,
+            ball_height_m=0.04,
+            image_width_px=20,
+            image_height_px=20,
+        ),
+        ops_club_speed_mph=80.0,
+    )
+
+    assert result.status == "camera_ops_fallback"
+    assert result.range_evidence_status == "rejected_club_speed_mismatch"
