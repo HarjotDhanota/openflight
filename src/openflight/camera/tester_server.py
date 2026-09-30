@@ -4827,6 +4827,12 @@ def create_app(
         if state is None or state.epoch_id != epoch_id:
             return state
         key = "empty" if kind == "empty" else "ball_present"
+        # The GET reconcile and the job's own completion can both deliver a result,
+        # and a late callback can arrive after the next capture started: only the
+        # capture this phase is waiting for is finished, once (wiring audit T9).
+        capturing = "empty_capturing" if key == "empty" else "ball_capturing"
+        if state.phase != capturing or state.evidence.get(f"{key}_capture_id") != capture_id:
+            return state
         result_path = store.epoch_dir(epoch_id) / "iwr" / f"{capture_id}.json"
         if not result_path.is_file():
             iwr_preflight[tester_id] = False

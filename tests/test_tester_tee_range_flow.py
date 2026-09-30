@@ -1401,6 +1401,7 @@ def test_requests_are_idempotent_and_failures_retry_without_erasing_evidence(
             "misses it, restart the tester with --iwr-static-port set to its stable "
             "/dev/serial/by-id/...-if00-port0 path."
         ),
+        "sequence": failed["sequence"],
     }
     retried = post(client, tester, "retry", "retry").get_json()["state"]
     assert retried["phase"] == "needs_empty"
@@ -1761,6 +1762,7 @@ def test_interrupted_guided_camera_preserves_its_live_error(tmp_path, inputs, mo
         "stage": "live_view",
         "message": "camera cable disconnected",
         "remedy": "Check the camera connection, then retry this camera step.",
+        "sequence": state["sequence"],
     }
     assert client.get("/api/tester/live").get_json()["owner"] is None
 
@@ -2712,3 +2714,59 @@ def test_a_camera_steered_hand_off_says_so():
     assert handed["tee_range_source"] == "unqualified_static_iwr_camera_steered"
     assert handed["camera_window"] == {"outcome": "reselected", "camera_window_m": [0.72, 1.68]}
     assert args[args.index("--iwr6843-tee-range-candidate") + 1] == steered.candidate_id
+
+
+def test_a_failure_message_belongs_to_the_transition_that_set_it(tmp_path, inputs, monkeypatch):
+    """Wiring audit T8: fail, retry and succeed, then a different failure; the page
+    shows a failure only when it was set in the current transition."""
+    live = FakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    manager = app.config["TEST_STATIC_MANAGER"]
+    client = app.test_client()
+    for index, action in enumerate(("start", "capture_empty")):
+        assert post(client, tester, action, f"t8-{index}").status_code == 200
+    manager.fail = True
+    assert post(client, tester, "capture_ball", "t8-ball-fails").status_code == 200
+    failed = phase(client, tester)
+    assert failed["evidence"]["capture_failure"]["sequence"] == failed["sequence"]
+
+    manager.fail = False
+    for index, action in enumerate(("retry", "capture_ball", "start_camera_arm5")):
+        assert post(client, tester, action, f"t8-again-{index}").status_code == 200
+    live.error = "camera cable disconnected"
+    live.running = False
+    state = phase(client, tester)
+
+    assert state["phase"] == "retryable_failure"
+    assert state["evidence"]["camera_capture_failure"]["sequence"] == state["sequence"]
+    # the radar failure is still on record, but it is not this transition's
+    assert state["evidence"]["capture_failure"]["sequence"] < state["sequence"]
+
+
+def test_a_late_empty_capture_callback_during_the_ball_capture_changes_nothing(
+    tmp_path, inputs, monkeypatch
+):
+    """Wiring audit T9: a capture result is finished once, by its own capture."""
+    live = FakeLive()
+    app, tester, manager = deferred_app(tmp_path, inputs, monkeypatch, live)
+    original = app.config["TEST_STATIC_MANAGER"]
+    callbacks = []
+
+    def recording_start(action, commands, log_path, on_finish=None, **kwargs):
+        callbacks.append(on_finish)
+        return manager.start(action, commands, log_path, on_finish=on_finish, **kwargs)
+
+    monkeypatch.setattr(original, "start", recording_start)
+    client = app.test_client()
+    for index, action in enumerate(("start", "capture_empty", "capture_ball")):
+        assert post(client, tester, action, f"t9-{index}").status_code == 200
+    during = phase(client, tester)
+    assert during["phase"] == "ball_capturing"
+
+    callbacks[0]("tee_range", 0)  # the empty capture's completion, delivered again
+
+    after = phase(client, tester)
+    assert after["phase"] == "ball_capturing"
+    assert after["sequence"] == during["sequence"]
+    manager.release()
+    assert phase(client, tester)["phase"] == "camera_arm5_capturing"

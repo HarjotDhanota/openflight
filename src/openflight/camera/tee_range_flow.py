@@ -24,6 +24,10 @@ from openflight.tee_range_setup import (
 SCHEMA = "openflight.tester_tee_range_flow.v1"
 TERMINAL_PHASES = frozenset({"resolved", "raw_only"})
 CAPTURE_PHASES = frozenset({"empty_capturing", "ball_capturing"})
+# The operator-facing failure summaries. Each carries the sequence of the transition
+# that set it, so the page shows only the current one; an earlier failure stays on
+# record instead of resurfacing beside a later, different one (wiring audit T8).
+FAILURE_SUMMARY_KEYS = ("capture_failure", "camera_capture_failure")
 
 
 def _canonical(payload: Mapping) -> bytes:
@@ -215,6 +219,9 @@ class FlowStore:
         merged = dict(state.evidence)
         if evidence:
             merged.update(dict(evidence))
+            for key in FAILURE_SUMMARY_KEYS:
+                if isinstance(evidence.get(key), Mapping):
+                    merged[key] = {**evidence[key], "sequence": state.sequence + 1}
         requests = (*state.request_ids, request_id) if request_id else state.request_ids
         return FlowState(
             epoch_id=state.epoch_id,

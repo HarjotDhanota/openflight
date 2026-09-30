@@ -1440,15 +1440,23 @@
         teeRangeActionErrorKey = message ? teeRangeStateKey(teeRangeState) : null;
       }
 
+      // A failure summary is shown only by the transition that set it; an older one
+      // stays on record but never resurfaces beside a newer failure (wiring audit T8).
+      // Records written before the stamp have no sequence and are shown as before.
+      function currentFailure(state, failure) {
+        if (!failure) return null;
+        return failure.sequence == null || failure.sequence === state.sequence ? failure : null;
+      }
+
       function teeRangeFailureSummary(state) {
         if (state?.phase !== 'retryable_failure') return null;
-        const cameraFailure = state?.evidence?.camera_capture_failure;
+        const cameraFailure = currentFailure(state, state?.evidence?.camera_capture_failure);
         if (cameraFailure) {
           const arm = cameraFailure.arm_id === 'arm6' ? '640×400' : '1280×800';
           const remedy = cameraFailure.remedy ? ` Remedy: ${cameraFailure.remedy}` : '';
           return `${arm} camera failed at ${cameraFailure.stage || 'live view'}: ${cameraFailure.message || 'the live camera stopped'}.${remedy}`;
         }
-        const failure = state?.evidence?.capture_failure;
+        const failure = currentFailure(state, state?.evidence?.capture_failure);
         if (!failure) return null;
         const kind = failure.capture_kind === 'ball_present' ? 'Ball-present' : 'Empty';
         const stage = failure.stage || 'unknown stage';
