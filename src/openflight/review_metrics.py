@@ -188,7 +188,24 @@ def _spin_metric(spin: Any, source: str) -> dict[str, Any]:
     )
 
 
-def _iwr_metrics(stage: Any) -> list[dict[str, Any]]:
+# Only a range the setup qualified counts as a measured tee. A guessed tee moved
+# the vertical launch 4-28 deg per +-0.25 m, and the setup's experimental range
+# (D11) is unqualified, so a launch on any other tee is experimental (P7-11).
+QUALIFIED_TEE_SOURCES = frozenset({"qualified_static_iwr"})
+
+
+def _tee_details(tee_range: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The tee range a launch stands on, where it came from, and whether it is qualified."""
+    tee = mapping(tee_range)
+    source = tee.get("source") if isinstance(tee.get("source"), str) else None
+    return {
+        "tee_range_m": finite(tee.get("tee_slant_range_m")),
+        "tee_range_source": source or "unknown",
+        "tee_range_qualified": source in QUALIFIED_TEE_SOURCES,
+    }
+
+
+def _iwr_metrics(stage: Any, tee_range: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
     source = "iwr6843_raw_replay"
     specs = (
         ("iwr_launch_vertical_deg", "Vertical launch (IWR)", "deg"),
@@ -205,19 +222,45 @@ def _iwr_metrics(stage: Any) -> list[dict[str, Any]]:
     status = str(stage.get("status") or "")
     accepted = status.startswith("accepted")
     vertical = finite(stage.get("launch_angle_deg"))
+    tee = _tee_details(tee_range)
+    single_channel = stage.get("single_channel") is True or "single_channel" in status
+    # what makes an accepted launch experimental rather than accepted (P7-11)
+    experimental_because = [
+        text
+        for applies, text in (
+            (
+                not tee["tee_range_qualified"],
+                f"tee range {tee['tee_range_source']} is not qualified",
+            ),
+            (single_channel, "one receive channel only"),
+        )
+        if applies
+    ]
+    launch_status = "experimental" if experimental_because else "accepted"
     details = {
-        key: stage.get(key)
-        for key in ("status", "tracker_quality", "single_channel", "n_frames", "component_std_deg")
+        **{
+            key: stage.get(key)
+            for key in (
+                "status",
+                "tracker_quality",
+                "single_channel",
+                "n_frames",
+                "component_std_deg",
+            )
+        },
+        **tee,
     }
     if accepted and vertical is not None:
         cautions = [
-            text
-            for applies, text in (
-                ("warning" in status, f"accepted with estimator warning {status}"),
-                (stage.get("single_channel") is True, "one receive channel only"),
-                (stage.get("tracker_quality") == "low", "tracker quality low"),
-            )
-            if applies
+            *experimental_because,
+            *(
+                text
+                for applies, text in (
+                    ("warning" in status, f"accepted with estimator warning {status}"),
+                    (stage.get("tracker_quality") == "low", "tracker quality low"),
+                )
+                if applies
+            ),
         ]
         vertical_reason = "; ".join(cautions) or None
     else:
@@ -227,7 +270,7 @@ def _iwr_metrics(stage: Any) -> list[dict[str, Any]]:
             "iwr_launch_vertical_deg",
             "Vertical launch (IWR)",
             "deg",
-            "accepted" if accepted and vertical is not None else "rejected",
+            launch_status if accepted and vertical is not None else "rejected",
             source=source,
             value=vertical,
             reason=vertical_reason,
@@ -242,14 +285,15 @@ def _iwr_metrics(stage: Any) -> list[dict[str, Any]]:
             "iwr_launch_horizontal_deg",
             "Horizontal launch (IWR)",
             "deg",
-            "accepted" if accepted and horizontal is not None else "rejected",
+            launch_status if accepted and horizontal is not None else "rejected",
             source=source,
             value=horizontal,
             confidence=stage.get("horizontal_confidence"),
-            reason=None
+            reason=("; ".join(experimental_because) or None)
             if accepted and horizontal is not None
             else f"withheld: {horizontal_status or status or 'no horizontal estimate'}",
             recorded_status=horizontal_status,
+            details=tee,
         )
     )
     club = stage.get("club_path")
@@ -578,8 +622,17 @@ def _agreements(
     return rows
 
 
-def review_replay(report: Mapping[str, Any] | None, live: Mapping[str, Any]) -> dict[str, Any]:
-    """Metrics, stage states, overlay and agreements from one replay report."""
+def review_replay(
+    report: Mapping[str, Any] | None,
+    live: Mapping[str, Any],
+    *,
+    tee_range: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Metrics, stage states, overlay and agreements from one replay report.
+
+    ``tee_range`` is the session's tee-range handoff (range, status, source): the
+    IWR launch is accepted only on a qualified tee (P7-11).
+    """
     if report is None:
         reviewed = review_replay({"stages": {}}, live)
         for metric in reviewed["metrics"]:
@@ -590,7 +643,7 @@ def review_replay(report: Mapping[str, Any] | None, live: Mapping[str, Any]) -> 
     metrics = [
         *_ops_metrics(stages.get("ops")),
         _total_speed_metric(stages.get("measured_total_speed_candidate")),
-        *_iwr_metrics(stages.get("iwr6843")),
+        *_iwr_metrics(stages.get("iwr6843"), tee_range),
         *camera_metrics,
     ]
     stage_states = {}

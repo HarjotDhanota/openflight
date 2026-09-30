@@ -306,7 +306,11 @@ def _shot_attempt(
     )
     report, report_error = _load_report(report_path)
     live = _live_values(shot or {})
-    reviewed = review_replay(report, live)
+    reviewed = review_replay(
+        report,
+        live,
+        tee_range=mapping(mapping(run.start.get("config")).get("tee_range_handoff")) or None,
+    )
     if report_error:
         for metric in reviewed["metrics"]:
             metric.update(status="processing_failed", value=None, reason=report_error)

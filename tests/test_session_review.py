@@ -179,6 +179,14 @@ def _report(shot, spin, confidence, iwr_status, club_status, scene):
     }
 
 
+QUALIFIED_TEE = {
+    "tee_slant_range_m": 1.42,
+    "status": "configured",
+    "source": "qualified_static_iwr",
+    "candidate_id": "iwr-static-1",
+}
+
+
 def _by_key(metrics):
     return {metric["key"]: metric for metric in metrics}
 
@@ -186,7 +194,7 @@ def _by_key(metrics):
 @pytest.mark.parametrize("shape", SESSION_ONE, ids=[f"shot-{row[0]}" for row in SESSION_ONE])
 def test_session_one_shapes_render_every_status_with_its_reason(shape):
     shot, spin, confidence, iwr_status, club_status, scene = shape
-    reviewed = review_replay(_report(*shape), {"ball_speed_mph": 72.1})
+    reviewed = review_replay(_report(*shape), {"ball_speed_mph": 72.1}, tee_range=QUALIFIED_TEE)
     metrics = _by_key(reviewed["metrics"])
     assert all(metric["status"] in STATUSES for metric in reviewed["metrics"])
 
@@ -198,7 +206,9 @@ def test_session_one_shapes_render_every_status_with_its_reason(shape):
     assert spin_metric["confidence"] == pytest.approx(confidence)
     assert "candidate only" in spin_metric["reason"]
 
-    assert metrics["iwr_launch_vertical_deg"]["status"] == "accepted"
+    # P7-11: a single-channel launch is experimental even on a qualified tee
+    expected = "experimental" if "single_channel" in iwr_status else "accepted"
+    assert metrics["iwr_launch_vertical_deg"]["status"] == expected
     assert metrics["iwr_launch_vertical_deg"]["recorded_status"] == iwr_status
     assert "tracker quality low" in metrics["iwr_launch_vertical_deg"]["reason"]
     if "warning" in iwr_status:
@@ -399,6 +409,28 @@ def test_review_outputs_are_readable_without_a_viewer(tmp_path):
     markdown = report_markdown(review)
     assert "| Spin (OPS) | experimental | 3076.2 rpm | 0.25 |" in markdown
     assert "Impact photo: t1/impact/camera_001.pgm" in markdown
+
+
+@pytest.mark.parametrize(
+    "source, expected",
+    [("qualified_static_iwr", "accepted"), ("unqualified_static_iwr", "experimental")],
+)
+def test_the_iwr_launch_is_labelled_by_the_tee_the_session_started_with(tmp_path, source, expected):
+    """P7-11: the tee range and its source come from the session's own handoff."""
+    root = _tester_tree(tmp_path)
+    session = next((root / "t1" / "arm5" / "paired" / "run-01").glob("session_*.jsonl"))
+    lines = session.read_text(encoding="utf-8").splitlines()
+    start = json.loads(lines[0])
+    start["config"] = {"tee_range_handoff": {**QUALIFIED_TEE, "source": source}}
+    session.write_text("\n".join([json.dumps(start), *lines[1:]]) + "\n", encoding="utf-8")
+
+    review = build_session_review(root, "t1", analysis={})
+
+    first = next(a for a in review["attempts"] if a["attempt_id"] == "session-one:1")
+    vertical = _by_key(first["metrics"])["iwr_launch_vertical_deg"]
+    assert vertical["status"] == expected
+    assert vertical["details"]["tee_range_m"] == pytest.approx(1.42)
+    assert vertical["details"]["tee_range_source"] == source
 
 
 def test_a_real_swing_the_radar_missed_reads_no_radar_shot_not_not_a_shot(tmp_path):

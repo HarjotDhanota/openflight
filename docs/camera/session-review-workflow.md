@@ -56,7 +56,7 @@ Every metric in the review carries exactly one of:
 | Status | Meaning |
 |---|---|
 | `accepted` | The production estimator accepted the value under its own rule. Not an accuracy claim. |
-| `experimental` | A value exists but is a candidate (for example spin quality `experimental`); shown, never promoted. |
+| `experimental` | A value exists but is a candidate (for example spin quality `experimental`); shown, never promoted. An IWR launch the estimator accepted is `experimental` whenever its tee range is not qualified (any source but `qualified_static_iwr`, including the setup's experimental range) or it used one receive channel; its details carry the tee's range and source (P7-11). |
 | `rejected` | The estimator ran and refused; the recorded reason and evidence are shown. |
 | `not_requested` | The stage was not asked for (for example the total-speed projection without a manifest). |
 | `unavailable` | A required input is absent (no capture, no event, or an upstream stage produced nothing). |
