@@ -288,9 +288,11 @@
         border-radius: 7px;
         background: var(--panel);
       }
-      .attempts h3 {
-        font-size: 1rem;
-        margin: 0 0 6px;
+      .attempts summary {
+        min-height: 44px;
+        padding: 10px 0;
+        font-weight: 700;
+        cursor: pointer;
       }
       .attempt-scope {
         display: grid;
@@ -532,8 +534,12 @@
                 <button type="button" id="photo-skip">Skip photo</button>
               </div>
             </div>
-            <div class="attempts" id="attempts">
-              <h3>Independent swing tally</h3>
+            <details class="attempts" id="attempts">
+              <summary>Measure capture rate (optional)</summary>
+              <p class="note">
+                Not needed for the ladder: every swing is captured and judged automatically. Use this only when asked
+                to count your swings, to measure how often the system misses one.
+              </p>
               <div class="attempt-scope">
                 <label
                   >Run<select id="attempt-run">
@@ -564,7 +570,7 @@
                 <button type="button" id="attempt-undo">Undo last</button>
               </div>
               <p class="problem" id="attempt-error" role="alert" hidden></p>
-            </div>
+            </details>
             <p class="note">
               Before each 1280×800 swing, spray the face. After it, hold the face about 0.5 m from the lens inside the
               dashed box, press <strong>Photograph face</strong>, then wipe it.
@@ -692,6 +698,7 @@
       let setupActionPending = false;
       const TESTER_ID_STORAGE_KEY = 'openflight-tester-id';
       const ATTEMPT_SELECTION_STORAGE_KEY = 'openflight-tester-attempt-scope';
+      const CAPTURE_RATE_OPEN_STORAGE_KEY = 'openflight-tester-capture-rate-open';
       const ATTEMPT_PENDING_STORAGE_KEY = 'openflight-tester-attempt-pending';
       let attemptScopes = [];
       let selectedAttemptScope = null;
@@ -1910,6 +1917,8 @@
         el('attempt-undo').disabled = !hasScope || !activeEntries.length || Boolean(attemptPending);
         el('attempt-retry').hidden = !attemptPending;
         el('attempt-retry').disabled = !pendingHere;
+        // an entry that may not have saved needs the tester's answer, so show it
+        if (attemptPending) el('attempts').open = true;
         if (pendingHere) {
           const retryLabel =
             attemptPending.payload.action === 'void'
@@ -2061,6 +2070,10 @@
           operator_missed: operatorMissed,
         });
       }
+      el('attempts').open = readAttemptValue(CAPTURE_RATE_OPEN_STORAGE_KEY) === true;
+      el('attempts').addEventListener('toggle', () =>
+        saveAttemptValue(CAPTURE_RATE_OPEN_STORAGE_KEY, el('attempts').open || null)
+      );
       el('attempt-swing').addEventListener('click', () => addAttempt('swing'));
       el('attempt-missed').addEventListener('click', () => addAttempt('swing', true));
       el('attempt-retry').addEventListener('click', () => submitAttempt(null));

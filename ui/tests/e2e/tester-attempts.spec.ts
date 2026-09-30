@@ -22,6 +22,15 @@ const runTwo: Scope = {
   rung_id: 'half-300',
 };
 
+async function openTesterPage(page: Page) {
+  await page.goto('/tester.html');
+  // the tally is optional and starts folded away; opening it is remembered
+  const section = page.locator('#attempts');
+  if (!(await section.evaluate((node) => (node as HTMLDetailsElement).open))) {
+    await page.getByText('Measure capture rate (optional)').tap();
+  }
+}
+
 function attemptState(scope: Scope, entries: Entry[] = [], sensorShots = 0) {
   const active = entries.filter((entry) => entry.status !== 'void');
   const swings = active.filter((entry) => entry.kind === 'swing');
@@ -109,7 +118,7 @@ test('retries the exact scoped request and undoes through the append-only API', 
     expect(body.target_entry_id).toBe(requests[0].entry_id);
     return fulfillJson(route, attemptState(runOne, [], 0), 201);
   });
-  await page.goto('/tester.html');
+  await openTesterPage(page);
 
   await expect(page.locator('#attempt-scope')).toContainText('arm5 · run-01');
   await page.getByRole('button', { name: 'Record swing' }).tap();
@@ -155,7 +164,7 @@ test('a rapid double tap submits one attempt request', async ({ page }) => {
       201
     );
   });
-  await page.goto('/tester.html');
+  await openTesterPage(page);
 
   await page.evaluate(() => {
     (window as Window & { addAttempt?: (kind: string) => void }).addAttempt?.('swing');
@@ -175,7 +184,7 @@ test('ongoing ladder polling refreshes counters for sensor shots', async ({ page
     if (!url.searchParams.get('run_dir')) return fulfillJson(route, { schema_version: 1, scopes: [runOne] });
     return fulfillJson(route, attemptState(runOne, [], sensorShots));
   });
-  await page.goto('/tester.html');
+  await openTesterPage(page);
   await expect(page.locator('#attempt-counts')).toContainText('logged sensor shots 0');
 
   sensorShots = 1;
@@ -207,7 +216,7 @@ test('a delayed response cannot move an entry or counters to a newly selected ru
     };
     await fulfillJson(route, attemptState(scope, [entry], scope === runTwo ? 3 : 0), 201);
   });
-  await page.goto('/tester.html');
+  await openTesterPage(page);
   await expect(page.locator('#attempt-scope')).toContainText('run-01');
 
   await page.getByRole('button', { name: 'Record swing' }).tap();
@@ -231,7 +240,7 @@ test('same-run ladder advancement does not infer a rung for a manual swing', asy
     const entry = { entry_id: String(posted.entry_id), kind: 'swing', operator_missed: false, status: 'active' };
     await fulfillJson(route, attemptState(scope, [entry]), 201);
   });
-  await page.goto('/tester.html');
+  await openTesterPage(page);
   await expect(page.locator('#attempt-scope')).toHaveText('arm5 · run-01');
   await expect(page.locator('#attempt-reconciliation')).toContainText('physical availability');
 
@@ -256,7 +265,7 @@ test('restores a saved stopped run and its counters after reload', async ({ page
   );
   const states = new Map([[runOne.run_dir, saved]]);
   await mockPage(page, [runOne], states);
-  await page.goto('/tester.html');
+  await openTesterPage(page);
   await expect(page.locator('#attempt-counts')).toContainText('recorded swings 2');
   await page.reload();
 
@@ -283,7 +292,7 @@ for (const viewport of KIOSK_VIEWPORTS) {
       const entry = { entry_id: body.entry_id, kind: 'swing', operator_missed: true, status: 'active' };
       await fulfillJson(route, attemptState(runOne, [entry]), 201);
     });
-    await page.goto('/tester.html');
+    await openTesterPage(page);
     const panel = page.locator('#attempts');
     await panel.scrollIntoViewIfNeeded();
     const badControls = await panel.locator('button, select').evaluateAll((controls) =>
@@ -300,3 +309,18 @@ for (const viewport of KIOSK_VIEWPORTS) {
     await expect(page.locator('#attempt-counts')).toContainText('reported misses 1');
   });
 }
+
+test('the capture-rate tally starts folded away and says the ladder does not need it', async ({ page }) => {
+  const states = new Map([[runOne.run_dir, attemptState(runOne)]]);
+  await mockPage(page, [runOne], states);
+  await page.goto('/tester.html');
+
+  await expect(page.locator('#attempts')).not.toHaveAttribute('open', '');
+  await expect(page.getByRole('button', { name: 'Record swing' })).toBeHidden();
+  await page.getByText('Measure capture rate (optional)').tap();
+  await expect(page.locator('#attempts')).toContainText('every swing is captured and judged automatically');
+  await expect(page.getByRole('button', { name: 'Record swing' })).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Record swing' })).toBeVisible();
+});

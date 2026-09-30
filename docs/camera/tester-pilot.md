@@ -160,11 +160,16 @@ capture across Stop and Resume; photograph that same strike mark, or skip it
 if the face has already been wiped or used for another swing. Skipped photos
 are recorded with the capture in the session bundle.
 
-### Record every attempt
+### Measure capture rate (optional)
 
-Use the operator tally during either the ladder or a single-arm capture. Check
-the selected arm and run, then press **Record swing** once for each physical
-swing. If the system missed it, use **Record missed shot** instead; do not press
+You do not need this for the ladder: the kiosk captures every swing it hears
+and the ladder judges it by itself. The tally, folded away under **Measure
+capture rate (optional)**, is only for when a maintainer asks you to count your
+swings, to measure how often the system misses one. It currently compares
+totals only; a later version will match each press to a capture by time.
+
+To use it during either the ladder or a single-arm capture, check the selected
+arm and run, then press **Record swing** once for each physical swing. If the system missed it, use **Record missed shot** instead; do not press
 both for the same swing. Record warmups and false triggers with **Other event**.
 **Undo last** removes the latest observation from the tally while preserving
 its audit record in the package.
