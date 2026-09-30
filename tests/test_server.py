@@ -1822,6 +1822,50 @@ class TestShotToDict:
             replay["horizontal_decision"]["status"]
         )
 
+    def test_live_camera_fusion_carries_the_club_stage_notes(self, monkeypatch, tmp_path):
+        """D15 (P8-7): the club stage's labels reach the shot beside its values."""
+        from openflight.camera.club_delivery import ReferenceBallTracker
+
+        np.savez(
+            tmp_path / "frames.npz",
+            frames=np.zeros((24, 6, 8), dtype=np.uint8),
+            host_timestamp_ns=np.arange(24, dtype=np.int64),
+            trigger_host_timestamp_ns=np.int64(10),
+            pre_trigger_count=np.int32(10),
+        )
+        capture = SimpleNamespace(valid=True, path=tmp_path, metadata={})
+        calibration = SimpleNamespace(
+            tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.021
+        )
+        monkeypatch.setattr(
+            server_module, "camera_capture_runtime", SimpleNamespace(camera_analysis_eligible=True)
+        )
+        monkeypatch.setattr(
+            server_module, "iwr6843_runtime", SimpleNamespace(calibration=calibration)
+        )
+        monkeypatch.setattr(
+            server_module,
+            "camera_capture_config",
+            {"mount_height_m": 0.095, "width": 8, "height": 6, "forward_offset_m": 0.03},
+        )
+        monkeypatch.setattr(
+            server_module, "camera_ball_flight_reference_tracker", ReferenceBallTracker()
+        )
+        monkeypatch.setattr(server_module, "camera_reference_ball_tracker", ReferenceBallTracker())
+        monkeypatch.setattr(server_module, "tester_setup_required", False)
+        shot = Shot(
+            ball_speed_mph=100.0, club_speed_mph=80.0, timestamp=datetime.now(), shot_number=4
+        )
+        shot.camera_fusion_session_uuid = "session-a"
+
+        server_module._fuse_camera_measurements(shot, capture)
+
+        notes = shot.camera_fusion_processing["club_delivery"]["notes"]
+        assert any(note.startswith("scene dim") for note in notes)
+        assert [f"club: {note}" for note in notes] == [
+            note for note in shot.camera_notes if note.startswith("club: ")
+        ]
+
     def test_live_camera_fusion_labels_dark_frames_and_preserves_iwr(self, monkeypatch):
         """D15 (P8-7): ineligible lighting is a note; the camera stages still run."""
         runtime = SimpleNamespace(camera_analysis_eligible=False)

@@ -206,17 +206,40 @@ class ChainedDelivery:
     # Every club path is measured from the unit's boresight (audit F2); the
     # target-line correction comes later, from the alignment stick.
     club_path_frame: str = "unit_boresight"
+    # Labels on the values that no longer withhold them (D15, P8-7): a dim
+    # scene, a trigger-derived contact, an unchecked or implausible speed.
+    notes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class ApproachPairEstimate:
-    """One short camera/IWR velocity interval around impact."""
+    """One short camera/IWR velocity interval around impact.
+
+    ``speed_ratio_ops`` is None when there was no OPS club speed to check it by.
+    """
 
     path_deg: float
     attack_angle_deg: float
-    speed_ratio_ops: float
+    speed_ratio_ops: float | None
     velocity_mad_mph: float
     n_features: int
+
+
+def _ratio_within(ratio: float | None, bounds: tuple[float, float]) -> bool:
+    """Whether an OPS speed ratio was measured and lies within bounds."""
+    return ratio is not None and bounds[0] <= ratio <= bounds[1]
+
+
+def _window_facts(estimate: ApproachPairEstimate) -> str:
+    ratio = (
+        f"speed ratio {estimate.speed_ratio_ops:.2f}"
+        if estimate.speed_ratio_ops is not None
+        else "speed ratio unchecked"
+    )
+    return (
+        f"{ratio}, velocity MAD {estimate.velocity_mad_mph:.1f} mph, "
+        f"path {estimate.path_deg:.1f} deg, attack {estimate.attack_angle_deg:.1f} deg"
+    )
 
 
 class ReferenceBallTracker:
@@ -429,10 +452,11 @@ def combine_approach_estimates(
     timing_plausible: bool,
 ) -> ChainedDelivery:
     """Combine independent impact windows without coupling path and AoA."""
+    notes: list[str] = []
     path_candidates = [
         estimate
         for estimate in path_estimates
-        if CHAINED_SPEED_RATIO_RANGE[0] <= estimate.speed_ratio_ops <= CHAINED_SPEED_RATIO_RANGE[1]
+        if _ratio_within(estimate.speed_ratio_ops, CHAINED_SPEED_RATIO_RANGE)
         and estimate.velocity_mad_mph <= CHAINED_VELOCITY_MAD_MAX_MPH
         and CHAINED_PATH_RANGE_DEG[0] <= estimate.path_deg <= CHAINED_PATH_RANGE_DEG[1]
     ]
@@ -444,9 +468,7 @@ def combine_approach_estimates(
         values = np.asarray([estimate.path_deg for estimate in path_candidates])
         path_mad = float(np.median(np.abs(values - path_deg))) if len(values) else None
         preferred_quality = (
-            CHAINED_SPEED_RATIO_RANGE[0]
-            <= preferred_path_estimate.speed_ratio_ops
-            <= CHAINED_SPEED_RATIO_RANGE[1]
+            _ratio_within(preferred_path_estimate.speed_ratio_ops, CHAINED_SPEED_RATIO_RANGE)
             and preferred_path_estimate.velocity_mad_mph <= CHAINED_VELOCITY_MAD_MAX_MPH
             and CHAINED_PATH_RANGE_DEG[0]
             <= preferred_path_estimate.path_deg
@@ -456,6 +478,10 @@ def combine_approach_estimates(
             path_confidence = "high" if path_mad is not None and path_mad <= 2.0 else "medium"
         else:
             path_confidence = "low"
+        if not preferred_quality:
+            notes.append(
+                "path outside plausible bounds (" + _window_facts(preferred_path_estimate) + ")"
+            )
     elif len(path_candidates) >= APPROACH_MIN_PATH_WINDOWS:
         values = np.asarray([estimate.path_deg for estimate in path_candidates])
         median = float(np.median(values))
@@ -468,14 +494,16 @@ def combine_approach_estimates(
         path_deg = float(np.median(values))
         path_mad = float(np.median(np.abs(values - path_deg)))
         path_confidence = "low"
+        notes.append(
+            f"path from {len(path_estimates)} window(s) outside plausible bounds "
+            f"or scattered (MAD {path_mad:.1f} deg)"
+        )
 
     attack_angle_deg = attack_estimate.attack_angle_deg if attack_estimate else None
     attack_confidence = "withheld"
     strict_attack = (
         attack_estimate is not None
-        and CHAINED_SPEED_RATIO_RANGE[0]
-        <= attack_estimate.speed_ratio_ops
-        <= CHAINED_SPEED_RATIO_RANGE[1]
+        and _ratio_within(attack_estimate.speed_ratio_ops, CHAINED_SPEED_RATIO_RANGE)
         and attack_estimate.velocity_mad_mph <= APPROACH_ATTACK_VELOCITY_MAD_MAX_MPH
         and APPROACH_AOA_RANGE_DEG[0]
         <= attack_estimate.attack_angle_deg
@@ -483,9 +511,7 @@ def combine_approach_estimates(
     )
     medium_attack = (
         attack_estimate is not None
-        and APPROACH_MEDIUM_SPEED_RATIO_RANGE[0]
-        <= attack_estimate.speed_ratio_ops
-        <= APPROACH_MEDIUM_SPEED_RATIO_RANGE[1]
+        and _ratio_within(attack_estimate.speed_ratio_ops, APPROACH_MEDIUM_SPEED_RATIO_RANGE)
         and attack_estimate.velocity_mad_mph <= APPROACH_MEDIUM_VELOCITY_MAD_MAX_MPH
         and APPROACH_MEDIUM_AOA_RANGE_DEG[0]
         <= attack_estimate.attack_angle_deg
@@ -497,6 +523,10 @@ def combine_approach_estimates(
         attack_confidence = "medium"
     elif attack_estimate is not None:
         attack_confidence = "low"
+    if attack_estimate is not None and not medium_attack:
+        notes.append(
+            "attack angle outside plausible bounds (" + _window_facts(attack_estimate) + ")"
+        )
 
     common = {
         "attack_angle_deg": (round(attack_angle_deg, 2) if attack_angle_deg is not None else None),
@@ -506,11 +536,16 @@ def combine_approach_estimates(
         "path_confidence_tier": path_confidence,
         "attack_confidence_tier": attack_confidence,
         "speed_mph": None,
-        "speed_ratio_ops": (round(attack_estimate.speed_ratio_ops, 3) if attack_estimate else None),
+        "speed_ratio_ops": (
+            round(attack_estimate.speed_ratio_ops, 3)
+            if attack_estimate and attack_estimate.speed_ratio_ops is not None
+            else None
+        ),
         "velocity_mad_mph": (
             round(attack_estimate.velocity_mad_mph, 2) if attack_estimate else None
         ),
         "n_features": attack_estimate.n_features if attack_estimate else 0,
+        "notes": tuple(notes),
     }
     if path_deg is not None and attack_angle_deg is not None:
         high = path_confidence == "high" and attack_confidence == "high"
@@ -574,8 +609,8 @@ def delivery_from_feature_tracks(
         )
     if times.shape != (3,) or ranges.shape != (3,) or np.any(np.diff(times) <= 0.0):
         return ChainedDelivery(status="rejected_invalid_timing", n_features=len(pixels))
-    if not ops_club_speed_mph or not math.isfinite(ops_club_speed_mph):
-        return ChainedDelivery(status="rejected_no_ops_speed", n_features=len(pixels))
+    # The radar gives the depth here; OPS only checks the speed (P8-7).
+    ops_known = bool(ops_club_speed_mph) and math.isfinite(ops_club_speed_mph)
 
     # IWR supplies one depth history for the club candidate. Never project
     # static camera texture through that changing depth: it would acquire a
@@ -629,11 +664,11 @@ def delivery_from_feature_tracks(
     speed_mad_mph = float(
         np.median(np.linalg.norm(central_velocity - velocity_center, axis=1)) * 2.23694
     )
-    speed_ratio = speed_mph / ops_club_speed_mph
+    speed_ratio = speed_mph / ops_club_speed_mph if ops_known else None
 
     diagnostics = {
         "speed_mph": round(speed_mph, 2),
-        "speed_ratio_ops": round(speed_ratio, 3),
+        "speed_ratio_ops": round(speed_ratio, 3) if speed_ratio is not None else None,
         "velocity_mad_mph": round(speed_mad_mph, 2),
         "n_features": int(plausible.sum()),
         "pre_path_deg": round(pre_path, 2),
@@ -641,13 +676,33 @@ def delivery_from_feature_tracks(
         "cross_path_deg": round(cross_path, 2),
         "cross_attack_angle_deg": round(cross_aoa, 2),
     }
-    result_speed_lo, result_speed_hi = CHAINED_SPEED_RATIO_RANGE
-    if not result_speed_lo <= speed_ratio <= result_speed_hi:
-        return ChainedDelivery(status="rejected_speed_ratio", **diagnostics)
+    # D15 (P8-7): implausible speed, spread or angles label the values; the
+    # values stay (status chained_outside_bounds, tier low).
+    notes = []
+    if speed_ratio is None:
+        notes.append("no OPS club speed: speed ratio unchecked")
+    elif not _ratio_within(speed_ratio, CHAINED_SPEED_RATIO_RANGE):
+        notes.append(f"outside plausible bounds: speed ratio {speed_ratio:.2f}")
     if speed_mad_mph > CHAINED_VELOCITY_MAD_MAX_MPH:
-        return ChainedDelivery(status="rejected_velocity_dispersion", **diagnostics)
+        notes.append(f"outside plausible bounds: velocity MAD {speed_mad_mph:.1f} mph")
     if not _bounded_angles(path_deg, attack_angle_deg):
-        return ChainedDelivery(status="rejected_angle_bounds", **diagnostics)
+        notes.append(
+            f"outside plausible bounds: path {path_deg:.1f} deg, attack {attack_angle_deg:.1f} deg"
+        )
+    if notes:
+        return _in_output_frame(
+            ChainedDelivery(
+                status="chained_outside_bounds",
+                attack_angle_deg=round(attack_angle_deg, 2),
+                club_path_deg=round(path_deg, 2),
+                confidence_tier="low",
+                path_confidence_tier="low",
+                attack_confidence_tier="low",
+                notes=tuple(notes),
+                **diagnostics,
+            ),
+            geometry.horizontal_offset_deg,
+        )
 
     intervals_agree = (
         _bounded_angles(pre_path, pre_aoa)
@@ -686,7 +741,7 @@ def _delivery_from_feature_pair(
     if len(pixels) < 3 or times.shape != (2,) or ranges.shape != (2,):
         return None
     elapsed = float(times[1] - times[0])
-    if elapsed <= 0.0 or not ops_club_speed_mph:
+    if elapsed <= 0.0:
         return None
     positions = np.stack(
         [
@@ -716,7 +771,7 @@ def _delivery_from_feature_pair(
     return ApproachPairEstimate(
         path_deg=path_deg,
         attack_angle_deg=attack_angle_deg,
-        speed_ratio_ops=speed_mph / ops_club_speed_mph,
+        speed_ratio_ops=speed_mph / ops_club_speed_mph if ops_club_speed_mph else None,
         velocity_mad_mph=velocity_mad_mph,
         n_features=len(velocity),
     )
@@ -1032,8 +1087,13 @@ def estimate_chained_delivery(
         getattr(range_evidence, "status", "accepted") if range_evidence is not None else None
     )
     range_evidence = accepted_range_evidence(range_evidence)
+    notes: list[str] = []
     if ops_club_speed_mph is None:
-        return ChainedDelivery(status="rejected_no_ops_speed")
+        # Without the IWR range the camera + OPS solution closes depth with the
+        # OPS club speed, so it has no input; with the range, OPS only checks it.
+        if range_evidence is None:
+            return ChainedDelivery(status="rejected_no_ops_speed")
+        notes.append("no OPS club speed: speed ratio unchecked")
     if frames.ndim != 3 or len(frames) < 20:
         return ChainedDelivery(status="rejected_invalid_frames")
     if np.asarray(host_timestamp_ns).shape != (len(frames),):
@@ -1043,10 +1103,10 @@ def estimate_chained_delivery(
     background = np.median(frames[:15], axis=0).astype(np.uint8)
     scene_p995, _ball_threshold, bright_now, dark_bg = _adaptive_thresholds(background)
     if scene_p995 < SCENE_P995_MIN:
-        return ChainedDelivery(status="rejected_low_light", scene_p995=scene_p995)
+        notes.append(f"scene dim: p99.5 {scene_p995:.0f} DN, below {SCENE_P995_MIN:.0f}")
     ball = reference_ball
     if ball is None and reference_ball_selected:
-        return ChainedDelivery(status="rejected_no_ball", scene_p995=scene_p995)
+        return ChainedDelivery(status="rejected_no_ball", scene_p995=scene_p995, notes=tuple(notes))
     scale = ball_pixels.pixel_scale(frames.shape[2])
     if ball is None:
         try:
@@ -1054,7 +1114,9 @@ def estimate_chained_delivery(
         except ValueError:
             ball = ball_tracker.fallback() if ball_tracker is not None else None
             if ball is None:
-                return ChainedDelivery(status="rejected_no_ball", scene_p995=scene_p995)
+                return ChainedDelivery(
+                    status="rejected_no_ball", scene_p995=scene_p995, notes=tuple(notes)
+                )
         else:
             if ball_tracker is not None:
                 ball, _ball_source = ball_tracker.resolve(ball, pixel_scale=scale)
@@ -1074,8 +1136,21 @@ def estimate_chained_delivery(
         trigger_index=trigger_index,
         timestamp_source=timestamp_source,
     )
-    if contact is None:
-        return ChainedDelivery(status="rejected_no_impact", scene_p995=scene_p995)
+    trigger_contact = contact is None
+    if trigger_contact:
+        if trigger_index is None or not 0 <= trigger_index < len(frames) - 1:
+            return ChainedDelivery(
+                status="rejected_no_impact", scene_p995=scene_p995, notes=tuple(notes)
+            )
+        # D15 (P8-7): the trigger fires 0.5-4 ms after contact, so the frame
+        # exposed at the trigger stands in for the unseen departure, labelled.
+        contact = CameraContact(
+            impact_frame=int(trigger_index),
+            contact_ns=float(timestamps_ns[trigger_index]),
+            timestamp_source=timestamp_source,
+            contact_vs_trigger_frame_ms=0.0,
+        )
+        notes.append("contact from the trigger frame: no ball departure was seen")
     impact_idx = contact.impact_frame
     impact_vs_trigger_ms = None
     timing_plausible = trigger_index is None and camera_quality_clean
@@ -1083,10 +1158,14 @@ def estimate_chained_delivery(
         impact_vs_trigger_ms = (
             int(timestamps_ns[impact_idx]) - int(timestamps_ns[trigger_index])
         ) / 1e6
-        timing_plausible = camera_quality_clean and (
-            trigger_index - IMPACT_PRE_TRIGGER_MAX
-            <= impact_idx
-            <= trigger_index + IMPACT_POST_TRIGGER_MAX
+        timing_plausible = (
+            camera_quality_clean
+            and not trigger_contact
+            and (
+                trigger_index - IMPACT_PRE_TRIGGER_MAX
+                <= impact_idx
+                <= trigger_index + IMPACT_POST_TRIGGER_MAX
+            )
         )
 
     contact_camera_s = contact.contact_ns / 1e9
@@ -1152,6 +1231,7 @@ def estimate_chained_delivery(
         "scene_p995": round(scene_p995, 1),
         "head_thickness_px": (round(head_thickness, 2) if head_thickness is not None else None),
         "range_evidence_status": range_evidence_status,
+        "notes": tuple(notes),
     }
     if not pair_estimates:
         return ChainedDelivery(
@@ -1168,6 +1248,7 @@ def estimate_chained_delivery(
         preferred_path_estimate=_preferred_path_estimate(pair_estimates),
         timing_plausible=timing_plausible,
     )
+    common["notes"] = (*notes, *result.notes)
     if range_evidence is None and (
         result.attack_angle_deg is not None or result.club_path_deg is not None
     ):

@@ -130,3 +130,25 @@ def test_a_low_consensus_ball_is_shown_as_experimental_with_its_label():
         assert metrics[key]["status"] == "experimental"
         assert metrics[key]["value"] == value
         assert "low consensus" in metrics[key]["reason"]
+
+
+def test_club_stage_notes_label_the_club_metrics_only():
+    delivery = {
+        "status": "approach_mixed",
+        "club_path_deg": 1.5,
+        "attack_angle_deg": -4.0,
+        "path_confidence_tier": "low",
+        "attack_confidence_tier": "low",
+        "notes": ["contact from the trigger frame: no ball departure was seen"],
+    }
+    ball = {
+        "status": "accepted",
+        "confidence_tier": "high",
+        "horizontal_deg": 2.0,
+        "vertical_deg": 17.0,
+    }
+    metrics = _metrics(_report(delivery, ball))
+    for key in ("camera_club_path_deg", "camera_attack_angle_deg"):
+        assert "contact from the trigger frame" in metrics[key]["reason"]
+        assert metrics[key]["details"]["notes"] == delivery["notes"]
+    assert metrics["camera_launch_horizontal_deg"]["reason"] is None

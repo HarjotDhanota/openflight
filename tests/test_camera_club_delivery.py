@@ -186,7 +186,9 @@ def test_shared_anchor_is_not_replaced_by_the_club_trackers_anchor(monkeypatch):
         reference_ball_selected=True,
     )
 
-    assert result.status == "rejected_no_impact"
+    # no departure found: the trigger frame stands in, labelled (P8-7)
+    assert result.impact_frame == 40
+    assert any("contact from the trigger" in note for note in result.notes)
     assert seen["ball"] is shared
 
 
@@ -392,7 +394,8 @@ class TestChainedImpactDelivery:
         assert result.attack_angle_deg == pytest.approx(-16.0)
         assert result.attack_confidence_tier == "medium"
 
-    def test_ops_speed_mismatch_withholds_both_angles(self):
+    def test_ops_speed_mismatch_labels_both_angles(self):
+        """D15 (P8-7): an implausible speed ratio is a label on the values, not a refusal."""
         tracks, times, ranges, ball, geometry = _project_impact_tracks(
             path_deg=3.0,
             aoa_deg=-4.0,
@@ -408,9 +411,11 @@ class TestChainedImpactDelivery:
             timing_plausible=True,
         )
 
-        assert result.status == "rejected_speed_ratio"
-        assert result.club_path_deg is None
-        assert result.attack_angle_deg is None
+        assert result.status == "chained_outside_bounds"
+        assert result.confidence_tier == "low"
+        assert result.club_path_deg == pytest.approx(3.0, abs=0.5)
+        assert result.attack_angle_deg == pytest.approx(-4.0, abs=0.5)
+        assert any("speed ratio" in note for note in result.notes)
 
     def test_static_image_features_do_not_steal_the_club_track(self):
         tracks, times, ranges, ball, geometry = _project_impact_tracks(

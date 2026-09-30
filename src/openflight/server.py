@@ -4276,6 +4276,9 @@ def _fuse_camera_measurements(
             shot.camera_fusion_context = context
             result = process_camera_fusion(context, camera_archive)
             shot.camera_fusion_processing = result
+            # the club stage's labels ride beside its values (D15, P8-7)
+            club_notes = [f"club: {note}" for note in result["club_delivery"].get("notes") or ()]
+            shot.camera_notes = [*camera_notes, *club_notes] or None
             shot.calibrated_camera_status = (
                 "experimental_unqualified"
                 if getattr(geometry, "calibrated_model_snapshot", None) is not None
