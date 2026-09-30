@@ -44,7 +44,6 @@ FAST_MODELS = ("direct1", "two2", "four4")
 MIN_SNR = 8.0
 MAX_RANGE_M = 4.7
 MAX_PER_FRAME = 4
-LATERAL_TEE_OFFSET_M = 0.064
 MPH_PER_MS = 2.23694
 HORIZONTAL_TAIL_FRAMES = 8
 HORIZONTAL_COHERENCE_MIN = 0.90
@@ -306,8 +305,30 @@ def _candidate_trajectory(
         tee_x_m=geometry["tee_x_m"],
         launch_height_m=geometry["ball_height_m"],
         radar_height_m=geometry["radar_height_m"],
-        lateral_offset_m=LATERAL_TEE_OFFSET_M,
+        lateral_offset_m=geometry["lateral_offset_m"],
     )
+
+
+def _model_geometry(
+    cal: Calibration, *, ball_speed_mph: float, tx_order: str, tdm_tau_s: float
+) -> dict:
+    """The setup geometry the multipath dictionary is built on.
+
+    The tee's lateral offset comes from the calibration (the rig), and both the
+    range inversion and the tee's forward position use it (audit F10).
+    """
+    vertical_delta_m = cal.tee_ball_height_m - cal.radar_height_m
+    lateral_m = cal.lateral_tee_offset_m
+    return {
+        "speed_ms": ball_speed_mph / MPH_PER_MS,
+        "tee_x_m": math.sqrt(max(cal.tee_range_m**2 - vertical_delta_m**2 - lateral_m**2, 0.25)),
+        "ball_height_m": cal.tee_ball_height_m,
+        "radar_height_m": cal.radar_height_m,
+        "lateral_offset_m": lateral_m,
+        "tilt_rad": cal.tilt_rad,
+        "tx_order": tx_order,
+        "tdm_tau_s": tdm_tau_s,
+    }
 
 
 def _spatial_dictionary(
@@ -879,17 +900,9 @@ def estimate_lcmf_v1(
             prepared=vertical,
         )
         indices = _balanced_indices(cache)
-        vertical_delta_m = cal.tee_ball_height_m - cal.radar_height_m
-        tee_x_m = math.sqrt(max(cal.tee_range_m**2 - vertical_delta_m**2, 0.25))
-        model_geometry = {
-            "speed_ms": ball_speed_mph / MPH_PER_MS,
-            "tee_x_m": tee_x_m,
-            "ball_height_m": cal.tee_ball_height_m,
-            "radar_height_m": cal.radar_height_m,
-            "tilt_rad": cal.tilt_rad,
-            "tx_order": tx_order,
-            "tdm_tau_s": tdm_tau_s,
-        }
+        model_geometry = _model_geometry(
+            cal, ball_speed_mph=ball_speed_mph, tx_order=tx_order, tdm_tau_s=tdm_tau_s
+        )
         grid_deg = np.arange(-5.0, 45.0 + grid_step_deg / 2.0, grid_step_deg)
         channel_components, channel_evidence = _channel_estimates(
             cache, indices, model_geometry, grid_deg

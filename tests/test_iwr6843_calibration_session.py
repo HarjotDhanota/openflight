@@ -27,6 +27,7 @@ def test_clone_calibration_overrides_geometry_without_mutating_original():
         tee_range_m=1.5,
         tee_ball_height_m=0.04,
         meta={"radar_height_m": 0.152},
+        lateral_tee_offset_m=0.03,
     )
 
     cloned = clone_calibration(
@@ -44,6 +45,7 @@ def test_clone_calibration_overrides_geometry_without_mutating_original():
     assert math.degrees(cloned.tilt_rad) == 11.8
     assert cloned.radar_height_m == 0.20
     assert cloned.tee_ball_height_m == 0.065
+    assert cloned.lateral_tee_offset_m == 0.03
 
 
 def test_calibration_summary_reports_coverage_and_medians():

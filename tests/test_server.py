@@ -614,6 +614,49 @@ class TestIWR6843ShotIntegration:
         assert server_module.iwr6843_runtime_config["horizontal_phase_reference_rad"] == -0.5
         server_module.iwr6843_runtime = None
 
+    def test_init_iwr6843_takes_the_tee_lateral_offset_from_the_rig(self, monkeypatch, tmp_path):
+        """F10: the LCMF inversion's lateral offset is the rig's, recorded, not July's."""
+        calibration = Calibration.identity()
+
+        class FakeCaptureMonitor:
+            def __init__(self, **kwargs):
+                self.port = "/dev/ttyUSB0"
+
+            def start(self, *, armed=True):
+                return None
+
+            def stop(self):
+                return None
+
+        monkeypatch.setattr(Calibration, "load", lambda _path: calibration)
+        monkeypatch.setattr("openflight.iwr6843.monitor.IWR6843CaptureMonitor", FakeCaptureMonitor)
+        monkeypatch.setattr(
+            "openflight.iwr6843.monitor.tx_order_from_config", lambda _path: "normal"
+        )
+        config_path = tmp_path / "snapshot.cfg"
+        calibration_path = tmp_path / "cal.json"
+        config_path.write_text("profileCfg 0\n", encoding="utf-8")
+        calibration_path.write_text("{}", encoding="utf-8")
+
+        assert server_module.init_iwr6843(
+            port="/dev/ttyUSB0",
+            config_path=str(config_path),
+            calibration_path=str(calibration_path),
+            output_dir=tmp_path,
+            trigger_pin=17,
+            tee_range_m=1.3,
+            net_range_m=4.6,
+            tx_order="auto",
+            capture_timeout_s=12.0,
+            lateral_tee_offset_m=0.0,
+        )
+
+        assert server_module.iwr6843_runtime.calibration.lateral_tee_offset_m == 0.0
+        assert server_module.iwr6843_runtime_config["lateral_tee_offset_m"] == 0.0
+        effective = server_module.iwr6843_runtime.calibration_provenance["effective"]
+        assert effective["lateral_tee_offset_m"] == 0.0
+        server_module.iwr6843_runtime = None
+
     def test_accepted_lcmf_angle_is_applied_to_existing_shot_contract(self, monkeypatch):
         emitted = []
         measurement = SimpleNamespace(

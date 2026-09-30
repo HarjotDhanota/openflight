@@ -1465,6 +1465,7 @@ def init_iwr6843(
     azimuth_offset_deg: float = 0.0,
     horizontal_phase_reference_rad: float | None = None,
     save_dumps: bool = False,
+    lateral_tee_offset_m: float = 0.0,
 ) -> bool:
     """Initialize GPIO-triggered TI capture and the frozen LCMF-v1 estimator."""
     global iwr6843_runtime, iwr6843_runtime_config  # pylint: disable=global-statement
@@ -1504,6 +1505,7 @@ def init_iwr6843(
             calibration.tilt_rad = math.radians(tilt_deg)
         if radar_height_m is not None:
             calibration.meta["radar_height_m"] = radar_height_m
+        calibration.lateral_tee_offset_m = float(lateral_tee_offset_m)
 
         capture_monitor = IWR6843CaptureMonitor(
             config_path=config_path,
@@ -1543,6 +1545,7 @@ def init_iwr6843(
                     "tee_slant_range_m": calibration.tee_range_m,
                     "radar_height_m": calibration.radar_height_m,
                     "ball_height_m": calibration.tee_ball_height_m,
+                    "lateral_tee_offset_m": calibration.lateral_tee_offset_m,
                 },
             },
             radar_config_provenance={
@@ -1567,6 +1570,7 @@ def init_iwr6843(
             "tilt_deg": math.degrees(calibration.tilt_rad),
             "radar_height_m": calibration.radar_height_m,
             "ball_height_m": calibration.tee_ball_height_m,
+            "lateral_tee_offset_m": calibration.lateral_tee_offset_m,
             "azimuth_offset_deg": azimuth_offset_deg,
             "horizontal_phase_reference_rad": horizontal_phase_reference_rad,
             "capture_timeout_s": capture_timeout_s,
@@ -6429,6 +6433,13 @@ def main():
             azimuth_offset_deg=args.iwr6843_azimuth_offset_deg,
             horizontal_phase_reference_rad=args.iwr6843_horizontal_phase_reference_rad,
             save_dumps=args.debug,
+            # The tee sits on the camera's axis; without a rig it is assumed
+            # directly downrange of the IWR, never July's 64 mm (audit F10).
+            lateral_tee_offset_m=(
+                enclosure.tee_lateral_offset_m
+                if enclosure is not None and enclosure.tee_lateral_offset_m is not None
+                else 0.0
+            ),
         ):
             calibration = iwr6843_runtime.calibration
             if args.iwr6843_tee_m is not None:

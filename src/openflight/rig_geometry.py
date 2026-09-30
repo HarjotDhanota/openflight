@@ -183,10 +183,21 @@ class EnclosureSetup:
     provenance: str = ""
     camera_forward_offset_m: float | None = None
 
+    @property
+    def tee_lateral_offset_m(self) -> float | None:
+        """The tee's lateral offset from the IWR RX row, for the LCMF inversion.
+
+        The ball is teed on the camera's axis, so it is the camera's own
+        lateral offset: 0 for the v3 enclosure, whose lens sits centred above
+        the RX row (audit F10).
+        """
+        return self.camera_lateral_offset_m
+
     def as_dict(self) -> dict:
         return {
             "camera_mount_height_m": self.camera_mount_height_m,
             "camera_lateral_offset_m": self.camera_lateral_offset_m,
+            "tee_lateral_offset_m": self.tee_lateral_offset_m,
             "camera_forward_offset_m": self.camera_forward_offset_m,
             "radar_height_m": self.radar_height_m,
             "iwr_tilt_deg": self.iwr_tilt_deg,

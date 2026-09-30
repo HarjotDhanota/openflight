@@ -122,6 +122,15 @@ class TestTheEnclosureSetup:
     def test_as_dict_is_json_safe(self):
         json.dumps(rig().enclosure_setup().as_dict())
 
+    def test_the_tee_lateral_offset_comes_from_the_rig_not_july(self):
+        # F10: the ball is teed on the camera's axis, so its lateral offset from
+        # the IWR is the camera's; the v3 lens sits centred above the RX row.
+        assert RigGeometry.from_json(V3).enclosure_setup().tee_lateral_offset_m == 0.0
+        offset = rig(iwr_offset_mm=(75.0, 44.0, 0.0)).enclosure_setup()
+        assert offset.tee_lateral_offset_m == pytest.approx(-0.075)
+        assert offset.as_dict()["tee_lateral_offset_m"] == pytest.approx(-0.075)
+        assert rig(iwr_offset_mm=None).enclosure_setup().tee_lateral_offset_m is None
+
 
 class TestSolveSetup:
     def test_range_from_angular_size_is_exact_on_axis(self):

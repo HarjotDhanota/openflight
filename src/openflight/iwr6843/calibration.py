@@ -37,6 +37,9 @@ class Calibration:
     # (SW read -12 deg). Floor-referenced + radar height fixes the anchor.
     tee_ball_height_m: float = 0.04
     meta: dict = field(default_factory=dict)
+    # The tee's lateral offset from the RX row, from the rig (0 for the v3
+    # enclosure). It replaces the July rig's fixed 64 mm (audit F10).
+    lateral_tee_offset_m: float = 0.0
 
     @property
     def radar_height_m(self) -> float:
