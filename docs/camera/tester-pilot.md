@@ -88,15 +88,17 @@ the sensor to the kiosk and takes it back afterwards. The OPS243 is expected on 
 elsewhere. The first `start-tester.sh` builds the environment and takes a few
 minutes; later starts are quick.
 
-**Test runs without qualification.** Until a range qualification exists, the
-automatic range always ends unqualified and swings get no tee range, so
-fusion, club path and face angle stay blank. For a test session, start the
-tester with `--use-unqualified-tee-range`:
-swings then get the static IWR range if its checks accepted it, including one
-the camera's window re-selected. The camera's own range is never handed over as
-the tee range: without an accepted radar range, swings start with the tee range
-pending even in a test session. The range summary's **swings get** line says
-which it will be before you start. Face angle appears on the **Club path** tile
+**The setup saves as experimental.** No range qualification exists yet, so the
+automatic range is saved as **experimental** when the 1280×800 camera locked the
+ball inside the box: swings get the radar's range when it agrees with the
+camera's size range within twice their combined uncertainty, and the camera's
+own range when the radar found no ball. If the two disagree, nothing is saved
+and swings start with the tee range pending. The page, the run's records
+(`handed_to_swings` says `experimental: true` and which source it used) and the
+session review all say experimental: nothing has qualified this range, so
+nothing built on it is a measurement yet. The range summary's **swings get**
+line says which it will be before you start. `--use-unqualified-tee-range` only
+matters for a setup finished before this change. Face angle appears on the **Club path** tile
 as `face ±x.x° (D-plane)`: an estimate from start direction and path, not seen
 on the club. It uses only the path the tile shows, and only when it is
 accepted. The IWR's horizontal zero is not calibrated yet, so a radar
@@ -302,9 +304,12 @@ If the picture is missing, press **Show the camera**.
 Then the workflow asks for empty/ball IWR captures, an Arm 5 reference frame and
 an Arm 6 validation frame. Each setup epoch is immutable; **Start over / ball
 moved** preserves it and creates a new one, while refresh resumes the saved step.
-Missing qualification or disagreement ends in raw-only mode: the ladder remains
-available, as long as the camera found the ball, but range metrics stay withheld. A qualified Arm 5/IWR pair freezes
-one range for both modes; Arm 6 cannot change it. Advanced tape is validation only.
+Without a qualification the setup finishes **experimental** when the 1280×800
+camera locked the ball in the box and the radar agreed with it (or found no
+ball); a radar that disagrees, or no ball locked in the box, ends in raw-only mode:
+the ladder remains available, as long as the camera found the ball, but range
+metrics stay withheld. A qualified Arm 5/IWR pair freezes one range for both
+modes; Arm 6 cannot change it. Advanced tape is validation only.
 
 For the two radar captures, stand in one spot outside the radar's view (behind
 the rig) for both, keep still, and keep others away. The ball is a weak radar
@@ -432,11 +437,15 @@ marked rejected: it is not handed to swings and does not set the lens height.
 Something ball-sized at the same distance as the ball, such as a shoe beside it, is
 not separated, so the prompt asks you to step at least 2 m away before each capture.
 
-The 640×400 step checks the 1280×800 one. Their ranges should agree within twice
-their combined uncertainty; the summary's **640×400 check** line says whether they
-do. A disagreement is flagged in red but does not stop the setup: check that the
-ball did not move between the two Saves, and start over if it did. Only the
-1280×800 step decides the lens height; 640×400's solve is recorded as a check.
+The 640×400 step checks the 1280×800 one, and it is advisory: **Skip the 640×400
+check and save** finishes the setup without it, and a 640×400 view that cannot
+find the ball can be kept as raw evidence while the setup still saves. Their
+ranges should agree within twice their combined uncertainty; the summary's
+**640×400 check** line says whether they do. A disagreement is flagged in red but
+does not stop the setup: check that the ball did not move between the two Saves,
+and start over if it did. Only the 1280×800 step decides the lens height;
+640×400's solve is recorded as a check, and the ladder's 640×400 settings always
+use the 1280×800 ball halved.
 
 Each camera step needs a pitch reading from the enclosure's inclinometer. If the
 LIS3DH is off or still settling, the step is refused with "the LIS3DH reading has
@@ -542,10 +551,12 @@ every earlier frame and failure record for review.
 | After resuming the ladder, a rung's swing count is back to 0 | The light no longer passed that exposure's check, so the rung started again | Nothing to fix; keep swinging. The earlier swings are kept for review but no longer count |
 | A swing is listed as set aside, `taken at ... not this rung's ...` or `taken during a still_photo` | It was taken while the ladder was changing the camera's settings | Nothing is lost; hit the next swing once the rung shows as set |
 | `finish automatic tee range before capture (retryable_failure)` | The setup's range record no longer matches the one the ladder was admitted with | Press **Start over / ball moved** and run the setup again |
-| Range summary: **swings get tee range pending** | No radar range was accepted (or none is qualified and the tester was not started with `--use-unqualified-tee-range`). The camera's own range is never used as the tee range | Swings still record; launch and club metrics that need the range are withheld. For a test session with a range, redo the setup with everyone clear of the radar |
+| Range summary: **swings get tee range pending** | The setup saved no range: the radar disagreed with the camera (`experimental range withheld radar disagrees`) or the 1280×800 camera never locked the ball in the box | Swings still record; launch and club metrics that need the range are withheld. Redo the setup with the ball inside the box, everyone at least 2 m away during the radar captures, and the ball not moved between the captures and Save |
+| Range summary: **experimental range**, swings get `EXPERIMENTAL` | The normal result until a range qualification exists: the camera locked the ball in the box and the radar agreed with it, or found no ball | Nothing to fix. Numbers built on it are labelled experimental |
 | Range summary: IWR `rejected — rejected_ambiguous`, `rejected_clutter` or `rejected_scene_changed` | More than one thing changed between the two radar captures at ground level (a person, a club, a second ball), the change was spread too wide to be one ball, or something beside the ball moved | Redo the setup: stand in the same spot, at least 2 m away, for both captures, and keep clubs, spare balls and bags still and away from the box |
 | Range summary: IWR `rejected — camera_window_disjoint` or `not_rechecked` | The radar picked something outside the camera's range window and nothing inside it replaced it | Redo the setup: step well away from the rig during both radar captures and keep the ball in the camera's view |
 | Range summary: **640×400 check disagrees** | The two camera modes put the ball at different ranges | Make sure the ball did not move between the two Saves; if it did, **Start over / ball moved**. The setup is not blocked |
+| The 640×400 step cannot lock, or says `keep only the ball in the box` | Its view is too dark, too bright or holds more than one ball-like thing in the box | The check is advisory: press **Skip the 640×400 check and save**, or keep its raw evidence; the setup still saves. Spare balls in the box also confuse the 1280×800 step, so move them out before the next setup |
 | `the LIS3DH reading has no camera pitch` | The inclinometer is off or still settling (for example just after the kiosk handed it back) | Wait a few seconds for a stable reading, then press the step again |
 | `The camera hasn't found the ball, so the ladder can't judge your swings` when pressing **C** | The setup's camera never picked out the ball in its box (a spare ball or a white cloth in the box, or the ball outside it, too far, dark or raised) in the mode the ladder starts in. A setup whose radar range is unresolved still runs once the camera found the ball | Run the setup again: drag the box over the spot you hit from, put the ball inside it on the hitting surface, keep spare balls and white things out of the box, then press **C** |
 | `no ball in the box: put the ball in the box` during a camera step | The camera looks only inside the box you confirmed, and nothing ball-like is there | Move the ball into the box. If the box is in the wrong place, press **Start over** and drag it over the ball |

@@ -646,6 +646,142 @@ def unqualified_tee_range_choice(
     return None
 
 
+# Decision D11 (P7-7): the setup saves an experimental range when the 1280x800
+# camera locked the ball in the box, taking the radar's range when it agrees with
+# the camera's size range within twice their combined uncertainty, and the
+# camera's own when the radar has none. Nothing qualifies it; every number built
+# on it is labelled experimental.
+EXPERIMENTAL_SAVED_REASON = "experimental_range_saved"
+EXPERIMENTAL_WITHHELD_PREFIX = "experimental_range_withheld_"
+EXPERIMENTAL_AGREEMENT_SIGMAS = 2.0
+_EXPERIMENTAL_SOURCES = {
+    "static_iwr": "unqualified_static_iwr",
+    "static_iwr_camera_steered": "unqualified_static_iwr_camera_steered",
+    "camera_size_range": "unqualified_camera_size_range",
+}
+
+
+def _camera_ball_locked_in_box(candidate: tee_range.TeeRangeCandidate | None) -> bool:
+    """Whether the 1280x800 camera selected a ball inside the box at a verified lock."""
+    if candidate is None or candidate.radar_slant_range_m is None or not candidate.uncertainty_m:
+        return False
+    evidence = candidate.evidence or {}
+    result = evidence.get("result") or {}
+    facts = evidence.get("qualification") or {}
+    box = evidence.get("placement_box") or {}
+    return bool(
+        result.get("status") == "selected"
+        and facts.get("static_exposure_lock_verified") is True
+        and box.get("box_px") is not None
+    )
+
+
+def experimental_tee_range_decision(
+    candidates: Sequence[tee_range.TeeRangeCandidate],
+) -> dict:
+    """Which range a setup saves as experimental, or why it saves none (D11)."""
+    camera = next(
+        (
+            item
+            for item in candidates
+            if item.source_group == "camera" and item.candidate_id.endswith(f"-{PLACEMENT_BOX_ARM}")
+        ),
+        None,
+    )
+    iwr = next(
+        (
+            item
+            for item in candidates
+            if item.source_group == "iwr" and item.source == "iwr_static_profile_difference"
+        ),
+        None,
+    )
+    usable = iwr is not None and iwr_range_usable(iwr.radar_slant_range_m, iwr.evidence)
+    facts = {
+        "schema": "openflight.tester_experimental_range.v1",
+        "label": "experimental",
+        "sigmas": EXPERIMENTAL_AGREEMENT_SIGMAS,
+        "camera_candidate_id": camera.candidate_id if camera is not None else None,
+        "camera_range_m": camera.radar_slant_range_m if camera is not None else None,
+        "camera_uncertainty_m": camera.uncertainty_m if camera is not None else None,
+        "iwr_candidate_id": iwr.candidate_id if iwr is not None else None,
+        "iwr_range_m": iwr.radar_slant_range_m if usable else None,
+        "iwr_uncertainty_m": iwr.uncertainty_m if usable else None,
+        "iwr_usable": usable,
+        "agreement": None,
+    }
+    if not _camera_ball_locked_in_box(camera):
+        return {
+            **facts,
+            "status": "withheld",
+            "reason_code": "camera_ball_not_locked_in_box",
+            "reason": "the 1280x800 camera has no ball locked in the box",
+        }
+    if not usable:
+        return {
+            **facts,
+            "status": "saved",
+            "reason_code": "camera_range_without_radar",
+            "reason": "the radar found no ball, so the camera's size range is used",
+            "source": "camera_size_range",
+            "candidate_id": camera.candidate_id,
+            "range_m": camera.radar_slant_range_m,
+            "uncertainty_m": camera.uncertainty_m,
+        }
+    residual = abs(float(iwr.radar_slant_range_m) - float(camera.radar_slant_range_m))
+    combined = math.hypot(float(iwr.uncertainty_m or 0.0), float(camera.uncertainty_m or 0.0))
+    agreement = {
+        "residual_m": residual,
+        "combined_uncertainty_m": combined,
+        "normalized_sigma": residual / combined if combined > 0.0 else math.inf,
+    }
+    facts["agreement"] = agreement
+    if not residual <= EXPERIMENTAL_AGREEMENT_SIGMAS * combined:
+        return {
+            **facts,
+            "status": "withheld",
+            "reason_code": "radar_disagrees",
+            "reason": (
+                f"the radar's {iwr.radar_slant_range_m:.3f} m and the camera's "
+                f"{camera.radar_slant_range_m:.3f} m disagree "
+                f"({agreement['normalized_sigma']:.1f} sigma)"
+            ),
+        }
+    steered = (iwr.evidence.get("camera_window") or {}).get("outcome") == "reselected"
+    return {
+        **facts,
+        "status": "saved",
+        "reason_code": "radar_agrees_with_camera",
+        "reason": "the radar's range agrees with the camera's",
+        "source": "static_iwr_camera_steered" if steered else "static_iwr",
+        "candidate_id": iwr.candidate_id,
+        "range_m": iwr.radar_slant_range_m,
+        "uncertainty_m": iwr.uncertainty_m,
+    }
+
+
+def experimental_tee_range_choice(
+    solution: tee_range.TeeRangeSolution | None,
+) -> tuple[tee_range.TeeRangeCandidate | None, dict | None]:
+    """The candidate a saved experimental setup hands to swings, and its decision.
+
+    Only a setup finalized as experimental: an epoch finished before D11 keeps
+    what it said.
+    """
+    if solution is None or solution.status == "resolved":
+        return None, None
+    if solution.reason != EXPERIMENTAL_SAVED_REASON:
+        return None, None
+    decision = experimental_tee_range_decision(solution.candidates)
+    if decision["status"] != "saved":
+        return None, decision
+    candidate = next(
+        (item for item in solution.candidates if item.candidate_id == decision["candidate_id"]),
+        None,
+    )
+    return candidate, decision
+
+
 def rig_geometry_hashes(rig_geometry: Path | None) -> dict:
     """Both rig-file hashes, under names that say what each one hashes (wiring audit C3).
 
@@ -836,12 +972,23 @@ def tee_range_handoff(
     so the tester's files say what the kiosk ran with (wiring audit S3).
     """
     candidate = None
+    experimental, decision = experimental_tee_range_choice(solution)
     if solution is not None and solution.status == "resolved":
         status, source = "resolved", "qualified_static_iwr"
         candidate = next(
             item
             for item in solution.candidates
             if item.candidate_id == solution.selected_candidate_id
+        )
+    elif experimental is not None and decision is not None:
+        # D11: the setup saved this range as experimental; the kiosk starts with it
+        candidate = experimental
+        status, source = "unqualified", _EXPERIMENTAL_SOURCES[decision["source"]]
+        logger.warning(
+            "Using EXPERIMENTAL tee range %.3f m from %s (%s)",
+            candidate.radar_slant_range_m,
+            candidate.candidate_id,
+            decision["source"],
         )
     elif use_unqualified and (candidate := unqualified_tee_range_choice(solution)) is not None:
         logger.warning(
@@ -903,6 +1050,8 @@ def tee_range_handoff(
         "tee_m": tee_m,
         "candidate_id": candidate.candidate_id if candidate is not None else None,
         "qualified": status == "resolved",
+        "experimental": status != "resolved" and candidate is not None,
+        "experimental_range": decision,
         "camera_window": (
             {
                 "outcome": window.get("outcome"),
@@ -1294,12 +1443,12 @@ def expected_ladder_ball(solution: tee_range.TeeRangeSolution | None, arm_id: st
         for mode in ARMS:
             if item.candidate_id.endswith(mode):
                 seen[mode] = ball
-    if arm_id in seen:
-        return seen[arm_id]
     if arm_id == "arm6" and "arm5" in seen:
+        # the 640x400 check is advisory (P7-7): its settings follow the 1280x800
+        # ball, halved, whatever the check itself picked
         ratio = ARMS["arm6"].width / ARMS["arm5"].width
         return {key: value * ratio for key, value in seen["arm5"].items()}
-    return None
+    return seen.get(arm_id)
 
 
 def next_run_directory(arm_dir: Path) -> Path:
@@ -4166,25 +4315,45 @@ def _swings_display(solution: Mapping, *, use_unqualified: bool) -> dict | None:
             "message": "Swings use the qualified radar tee range.",
         }
     try:
-        choice = unqualified_tee_range_choice(tee_range.TeeRangeSolution.from_dict(solution))
+        parsed = tee_range.TeeRangeSolution.from_dict(solution)
     except (KeyError, TypeError, ValueError):
-        choice = None
+        parsed = None
+    experimental, decision = experimental_tee_range_choice(parsed)
+    if experimental is not None and decision is not None:
+        basis = (
+            "the camera's range: the radar found no ball"
+            if decision["source"] == "camera_size_range"
+            else "the radar's range, which agrees with the camera's"
+        )
+        return {
+            "state": "experimental",
+            "range_m": experimental.radar_slant_range_m,
+            "message": (
+                f"EXPERIMENTAL: swings use {basis}. Nothing has qualified it, so every "
+                "number built on it is labelled experimental."
+            ),
+        }
+    choice = unqualified_tee_range_choice(parsed) if parsed is not None else None
     if choice is not None and use_unqualified:
         return {
             "state": "unqualified",
             "range_m": choice.radar_slant_range_m,
             "message": "TEST ONLY: swings use this unqualified radar range.",
         }
+    withheld = str(solution.get("reason") or "")
     because = (
-        "the radar range is not qualified" if choice is not None else "no radar range was accepted"
+        withheld.removeprefix(EXPERIMENTAL_WITHHELD_PREFIX).replace("_", " ")
+        if withheld.startswith(EXPERIMENTAL_WITHHELD_PREFIX)
+        else "the radar range is not qualified"
+        if choice is not None
+        else "no radar range was accepted"
     )
     return {
         "state": "pending",
         "range_m": None,
         "message": (
             f"Swings start with the tee range pending: {because}, so launch and club "
-            "metrics that need it are withheld. The camera's own estimate is never "
-            "used as the tee range."
+            "metrics that need it are withheld."
         ),
     }
 
@@ -4241,16 +4410,29 @@ def tee_range_display(
         )
     solution = (state or {}).get("solution") or {}
     resolved = solution.get("status") == "resolved"
+    swings = _swings_display(solution, use_unqualified=use_unqualified)
+    experimental = bool(swings and swings.get("state") == "experimental")
     return {
         "schema": "openflight.tester_tee_range_display.v1",
         "iwr": {**iwr_display, "label": "bias-corrected IWR slant range"},
         "camera": cameras,
         "canonical": {
-            "state": "resolved" if resolved else "withheld",
-            "range_m": solution.get("selected_range_m") if resolved else None,
-            "reason": None if resolved else (solution.get("reason") or (state or {}).get("reason")),
+            "state": "resolved" if resolved else "experimental" if experimental else "withheld",
+            "range_m": (
+                solution.get("selected_range_m")
+                if resolved
+                else swings.get("range_m")
+                if experimental and swings
+                else None
+            ),
+            "reason": (
+                None
+                if resolved or experimental
+                else (solution.get("reason") or (state or {}).get("reason"))
+            ),
         },
-        "swings": _swings_display(solution, use_unqualified=use_unqualified),
+        "experimental": evidence.get("experimental_range"),
+        "swings": swings,
         "validation": _validation_display(evidence.get("validation_agreement")),
         "placement_box": dict(placement_box) if placement_box is not None else None,
     }
@@ -5701,26 +5883,55 @@ def create_app(
             candidates = [
                 tee_range.TeeRangeCandidate.from_dict(state.evidence["iwr_candidate"]),
                 tee_range.TeeRangeCandidate.from_dict(state.evidence["camera_arm5_candidate"]),
-                tee_range.TeeRangeCandidate.from_dict(state.evidence["camera_arm6_candidate"]),
             ]
+            # the 640x400 check is advisory (P7-7): the setup saves without it
+            arm6 = (
+                tee_range.TeeRangeCandidate.from_dict(state.evidence["camera_arm6_candidate"])
+                if isinstance(state.evidence.get("camera_arm6_candidate"), Mapping)
+                else None
+            )
         except (KeyError, TypeError, ValueError) as exc:
             return store.transition(
                 state,
                 phase="retryable_failure",
                 reason=f"cross_sensor_evidence_incomplete: {exc}",
-                retry_phase="needs_camera_arm6",
+                retry_phase="needs_camera_arm5",
             )
+        if arm6 is not None:
+            candidates.append(arm6)
         solution = (
             tee_range.resolve_qualified_tee_range(state.epoch_id, candidates, qualification)
             if qualification is not None
-            else tee_range.TeeRangeSolution.unresolved(candidates, reason=qualification_reason)
+            else None
         )
+        phase = None
+        experimental = None
+        if solution is None or solution.status != "resolved":
+            # D11: without a qualified range the setup saves as experimental
+            experimental = {
+                **experimental_tee_range_decision(candidates),
+                "qualification_outcome": (
+                    solution.reason if solution is not None else qualification_reason
+                ),
+            }
+            saved = experimental["status"] == "saved"
+            solution = tee_range.TeeRangeSolution.unresolved(
+                candidates,
+                reason=(
+                    EXPERIMENTAL_SAVED_REASON
+                    if saved
+                    else f"{EXPERIMENTAL_WITHHELD_PREFIX}{experimental['reason_code']}"
+                ),
+            )
+            phase = "experimental" if saved else "raw_only"
         return store.finalize(
             state,
             solution,
             qualification,
+            phase=phase,
             evidence={
-                "validation_agreement": camera_validation_agreement(*candidates[1:]),
+                "experimental_range": experimental,
+                "validation_agreement": camera_validation_agreement(candidates[1], arm6),
                 # the setup's scene and both rig hashes, which join it to the
                 # swing sessions' session_start (wiring audit C3, C4, C5)
                 "scene": setup_scene(solution, rig_geometry),
@@ -6296,8 +6507,40 @@ def create_app(
         )
         return _finalize_range_state(store, completed)
 
+    def _skip_camera_arm6(tester_id: str, request_id: str):
+        """Finish without the advisory 640x400 check (P7-7)."""
+        store = range_store(tester_id)
+        state = _range_state(tester_id)
+        skippable = state is not None and (
+            state.phase in {"needs_camera_arm6", "camera_arm6_capturing"}
+            or (state.phase == "retryable_failure" and state.retry_phase == "needs_camera_arm6")
+        )
+        if not skippable:
+            raise RuntimeError(f"tee-range setup is {state.phase if state else 'not_started'}")
+        if request_id in state.request_ids:
+            return state
+        stop_guided_live(tester_id, state.epoch_id, "arm6")
+        completed = store.transition(
+            state,
+            phase="evaluating",
+            reason="camera_arm6_skipped_advisory",
+            request_id=request_id,
+            evidence={
+                "camera_arm6_skipped": {
+                    "reason": "advisory_check_skipped",
+                    "skipped_at_phase": state.phase,
+                    "skipped_at_utc": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
+        return _finalize_range_state(store, completed)
+
     def _save_camera_diagnostic(tester_id: str, arm_id: str, request_id: str):
-        """Keep an unusable camera view as unqualified raw evidence and finish raw-only."""
+        """Keep an unusable camera view as unqualified raw evidence.
+
+        Without the 1280x800 ball the setup finishes raw-only; the 640x400 check is
+        advisory, so its raw evidence is kept and the setup still saves (P7-7).
+        """
         store = range_store(tester_id)
         state = _range_state(tester_id)
         expected = f"camera_{arm_id}_capturing"
@@ -6337,6 +6580,30 @@ def create_app(
         if not path.exists():
             atomic_write(path, payload)
         reason = f"camera_{arm_id}_{exposure['status']}_raw_evidence_only"
+        kept = {
+            f"camera_{arm_id}_static_exposure": exposure,
+            f"camera_{arm_id}_diagnostic_capture": {
+                "capture_id": capture_id,
+                "file": path.name,
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "frame_count": int(len(frames)),
+                "applied_controls": applied,
+                "qualified": False,
+                "label": (
+                    f"unqualified diagnostic raw evidence: {exposure['status'].replace('_', ' ')}"
+                ),
+            },
+        }
+        if arm_id != PLACEMENT_BOX_ARM:
+            stop_guided_live(tester_id, state.epoch_id, arm_id)
+            completed = store.transition(
+                state,
+                phase="evaluating",
+                reason=reason,
+                request_id=request_id,
+                evidence=kept,
+            )
+            return _finalize_range_state(store, completed)
         candidates = [
             tee_range.TeeRangeCandidate.from_dict(state.evidence[key])
             for key in ("iwr_candidate", "camera_arm5_candidate")
@@ -6346,21 +6613,7 @@ def create_app(
             state,
             tee_range.TeeRangeSolution.unresolved(candidates, reason=reason),
             request_id=request_id,
-            evidence={
-                f"camera_{arm_id}_static_exposure": exposure,
-                f"camera_{arm_id}_diagnostic_capture": {
-                    "capture_id": capture_id,
-                    "file": path.name,
-                    "sha256": hashlib.sha256(payload).hexdigest(),
-                    "frame_count": int(len(frames)),
-                    "applied_controls": applied,
-                    "qualified": False,
-                    "label": (
-                        "unqualified diagnostic raw evidence: "
-                        f"{exposure['status'].replace('_', ' ')}"
-                    ),
-                },
-            },
+            evidence=kept,
         )
 
     @app.route("/api/tester/tee-range", methods=["GET", "POST"])
@@ -6412,6 +6665,7 @@ def create_app(
                     "evaluate_camera_arm6",
                     "save_camera_arm5_diagnostic",
                     "save_camera_arm6_diagnostic",
+                    "skip_camera_arm6",
                     "retry",
                 }
                 if action not in actions:
@@ -6459,6 +6713,9 @@ def create_app(
                 elif action in {"evaluate_camera_arm5", "evaluate_camera_arm6"}:
                     bound_range_setup(tester_id, state, action)
                     state = _evaluate_camera_range(tester_id, action[-4:], request_id)
+                elif action == "skip_camera_arm6":
+                    bound_range_setup(tester_id, state, action)
+                    state = _skip_camera_arm6(tester_id, request_id)
                 elif action in {"save_camera_arm5_diagnostic", "save_camera_arm6_diagnostic"}:
                     bound_range_setup(tester_id, state, action)
                     state = _save_camera_diagnostic(tester_id, action.split("_")[2], request_id)

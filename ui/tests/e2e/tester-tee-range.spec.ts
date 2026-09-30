@@ -1347,3 +1347,75 @@ test('each camera step draws the box it searches', async ({ page }) => {
     'No ball in the box: put the ball in the box'
   );
 });
+
+// P7-7 (D11): without a qualified range the setup saves as experimental.
+test('a setup saved as experimental says so and lets the ladder start', async ({ page }) => {
+  const mocks = await base(page, {
+    epoch_id: 'epoch-experimental',
+    phase: 'experimental',
+    reason: 'experimental_range_saved',
+    evidence: {
+      iwr_candidate: { radar_slant_range_m: 1.581 },
+      camera_arm5_candidate: { radar_slant_range_m: 1.34 },
+    },
+    solution: { status: 'unresolved', selected_range_m: null },
+  });
+  await page.route('**/api/tester/tee-range**', (route) =>
+    json(route, {
+      state: mocks.state(),
+      display: {
+        ...rangeDisplay(mocks.state()),
+        canonical: { state: 'experimental', range_m: 1.581, reason: null },
+        swings: {
+          state: 'experimental',
+          range_m: 1.581,
+          message: 'EXPERIMENTAL: swings use the radar’s range, which agrees with the camera’s.',
+        },
+      },
+    })
+  );
+  await page.goto('/tester.html');
+
+  await expect(page.locator('#tee-range-action')).toHaveText('Setup saved — experimental range');
+  await expect(page.locator('#automatic-range-summary')).toContainText('Saved as EXPERIMENTAL');
+  await expect(page.locator('#automatic-range')).toContainText('experimental range 1.581 m — not qualified');
+  await expect(page.locator('#automatic-range')).toContainText('swings get 1.581 m — EXPERIMENTAL');
+  await expect(page.getByRole('button', { name: 'C. Start the exposure ladder' })).toBeEnabled();
+});
+
+test('the advisory 640×400 check can be skipped', async ({ page }) => {
+  const posts: string[] = [];
+  await base(page, {
+    epoch_id: 'epoch-skip',
+    phase: 'needs_camera_arm6',
+    reason: 'validate_shared_range_in_camera_arm6',
+    evidence: {},
+    solution: null,
+  });
+  await page.route('**/api/tester/tee-range**', (route) => {
+    if (route.request().method() === 'GET') {
+      const state = {
+        epoch_id: 'epoch-skip',
+        phase: posts.includes('skip_camera_arm6') ? 'experimental' : 'needs_camera_arm6',
+        reason: 'x',
+        evidence: {},
+        solution: null,
+      };
+      return json(route, { state, display: rangeDisplay(state) });
+    }
+    const action = route.request().postDataJSON().action as string;
+    posts.push(action);
+    const state = { epoch_id: 'epoch-skip', phase: 'experimental', reason: 'x', evidence: {}, solution: null };
+    return json(route, { state, display: rangeDisplay(state) });
+  });
+  await page.goto('/tester.html');
+
+  const skip = page.locator('#tee-range-skip-arm6');
+  await expect(page.locator('#automatic-range-summary')).toContainText('The check is advisory');
+  await expect(skip).toBeVisible();
+  await skip.click();
+
+  await expect(page.locator('#tee-range-action')).toHaveText('Setup saved — experimental range');
+  expect(posts).toEqual(['skip_camera_arm6']);
+  await expect(skip).toBeHidden();
+});

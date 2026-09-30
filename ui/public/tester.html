@@ -573,6 +573,7 @@
                 <button type="button" id="tee-range-action">Start automatic range</button>
                 <button type="button" id="tee-range-restart" hidden>Ball or rig moved: start over</button>
                 <button type="button" id="tee-range-diagnostic" hidden>Keep raw evidence and continue without a range (unqualified)</button>
+                <button type="button" id="tee-range-skip-arm6" hidden>Skip the 640×400 check and save</button>
               </div>
             </div>
             <p class="note">No tape measurement is required. Keep the enclosure and nearby objects still between radar captures, and stand in the same spot, at least 2 m from the ball and the unit, for both of them: a person, club or shoe near the ball changes the radar picture more than the ball does.</p>
@@ -893,7 +894,7 @@
         );
       }
 
-      const teeRangeComplete = () => ['resolved', 'raw_only'].includes(teeRangeState?.phase);
+      const teeRangeComplete = () => ['resolved', 'experimental', 'raw_only'].includes(teeRangeState?.phase);
 
       function renderSetupEligibility() {
         const ready = setupReady();
@@ -1518,7 +1519,7 @@
         camera_arm5_evaluating: { label: 'Evaluating 1280×800…', prompt: 'Checking the saved reference frame.' },
         needs_camera_arm6: {
           label: 'Open 640×400 camera',
-          prompt: 'Do not move the ball or rig. Open the second camera mode to validate this same setup.',
+          prompt: 'Do not move the ball or rig. Open the second camera mode to check this same setup. The check is advisory: you can skip it and the setup still saves.',
           action: 'start_camera_arm6',
         },
         camera_arm6_capturing: {
@@ -1534,9 +1535,13 @@
           action: 'retry',
         },
         resolved: { label: 'Automatic range complete', prompt: 'The qualified camera and radar evidence agree.' },
+        experimental: {
+          label: 'Setup saved — experimental range',
+          prompt: 'Saved as EXPERIMENTAL: the camera locked the ball in the box, and the radar agreed with it (or found no ball, so the camera’s range is used). Nothing has qualified this range, so every number built on it is labelled experimental. The ladder can start.',
+        },
         raw_only: {
           label: 'Evidence complete — raw-only mode',
-          prompt: 'raw-only: the evidence is saved, but policy did not qualify a canonical range. The ladder can continue with range-dependent metrics withheld.',
+          prompt: 'raw-only: the evidence is saved but no range: the camera did not lock the ball in the box, or the radar disagreed with it. The ladder can continue with range-dependent metrics withheld.',
         },
       };
 
@@ -1928,6 +1933,15 @@
         diagnostic.hidden = !diagnosticArm;
         diagnostic.disabled = teeRangeRequestRunning || !diagnosticArm;
         diagnostic.dataset.action = diagnosticArm ? `save_camera_${diagnosticArm}_diagnostic` : '';
+        // the 640×400 check is advisory: its raw evidence is kept and the setup still saves
+        diagnostic.textContent = diagnosticArm === 'arm6'
+          ? 'Keep raw evidence and save without the 640×400 check'
+          : 'Keep raw evidence and continue without a range (unqualified)';
+        const skipArm6 = el('tee-range-skip-arm6');
+        const arm6Step = ['needs_camera_arm6', 'camera_arm6_capturing'].includes(phase)
+          || (phase === 'retryable_failure' && state?.retry_phase === 'needs_camera_arm6');
+        skipArm6.hidden = !arm6Step || Boolean(diagnosticArm);
+        skipArm6.disabled = teeRangeRequestRunning;
         action.textContent = startOverRequired ? 'Start over required' : (step?.label || 'Start automatic range');
         const boxMissing = phase === 'needs_box' && !currentPlacementBox();
         action.disabled = teeRangeRequestRunning || startOverRequired || guidedSaveBlocked || boxMissing || Boolean(state && !step?.action);
@@ -1972,7 +1986,9 @@
             validationLine +
             (canonical?.state === 'resolved'
               ? `<span data-state="resolved">canonical range <b>${metres(canonical.range_m)}</b></span>`
-              : `<span data-state="withheld">canonical range <b>withheld</b>${canonical?.reason ? ` — ${escapeHtml(canonical.reason.replaceAll('_', ' '))}` : ''}</span>`) +
+              : canonical?.state === 'experimental'
+                ? `<span data-state="experimental">experimental range <b>${metres(canonical.range_m)}</b> — not qualified</span>`
+                : `<span data-state="withheld">canonical range <b>withheld</b>${canonical?.reason ? ` — ${escapeHtml(canonical.reason.replaceAll('_', ' '))}` : ''}</span>`) +
             swingsLine
           : '<span>No setup epoch yet.</span>';
         syncGuidedCameraPreview();
@@ -2052,6 +2068,7 @@
         submitTeeRange(action);
       });
       el('tee-range-box-preview').addEventListener('click', () => submitTeeRange('open_box_preview'));
+      el('tee-range-skip-arm6').addEventListener('click', () => submitTeeRange('skip_camera_arm6'));
 
       // Dragging the box works with a mouse, a pen or a finger (pointer events), and
       // it never leaves the picture.
