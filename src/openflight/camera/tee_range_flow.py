@@ -153,24 +153,44 @@ class FlowStore:
             raise ValueError("guided tee-range state digest mismatch")
         return FlowState.from_dict(json.loads(content))
 
-    def start(self, request_id: str, *, setup_admission: Mapping[str, Any]) -> FlowState:
+    def start(
+        self,
+        request_id: str,
+        *,
+        setup_admission: Mapping[str, Any],
+        placement_box: Mapping[str, Any] | None = None,
+        evidence: Mapping[str, Any] | None = None,
+    ) -> FlowState:
+        """Open a new setup epoch.
+
+        With the tester's confirmed ``placement_box`` (P7-15: the box is step 1)
+        the epoch starts at the radar captures and keeps the box as its evidence;
+        without one it waits for the box (P7-4's order).
+        """
         with session_bundle.snapshot_lock(self.tester_root, timeout_s=session_bundle.WRITER_WAIT_S):
             current = self.load()
             if current is not None and request_id in current.request_ids:
                 return current
             now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             epoch_id = f"setup-{now[:10].replace('-', '')}-{uuid.uuid4().hex[:12]}"
+            if placement_box is not None:
+                phase, reason = "needs_empty", "remove_ball_and_keep_setup_still"
+            else:
+                # the tester places the box first; every check works from it (P7-4)
+                phase, reason = "needs_box", "drag_the_box_to_where_you_will_hit"
             return self._save_unlocked(
                 FlowState(
                     epoch_id=epoch_id,
                     sequence=1,
-                    # the tester places the box first; every check works from it (P7-4)
-                    phase="needs_box",
-                    reason="drag_the_box_to_where_you_will_hit",
+                    phase=phase,
+                    reason=reason,
                     created_at_utc=now,
                     updated_at_utc=now,
                     request_ids=(request_id,),
-                    evidence={},
+                    evidence={
+                        **dict(evidence or {}),
+                        **({"placement_box": dict(placement_box)} if placement_box else {}),
+                    },
                     setup_admission=dict(setup_admission),
                 )
             )

@@ -602,8 +602,8 @@
     <main>
       <h1>OpenFlight tester</h1>
       <p class="lede">
-        Set up the measured rig, check hardware and light, let the sensors find the ball range, capture the exposure
-        ladder, then review and package the evidence. An accepted capture is saved evidence; it does not establish
+        Set up the measured rig and place the box where you will hit, check hardware and light, let the sensors find
+        the ball range, capture the exposure ladder, then review and package the evidence. An accepted capture is saved evidence; it does not establish
         measurement accuracy.
       </p>
 
@@ -620,7 +620,7 @@
       </section>
 
       <section>
-        <h2>1. Set up the rig</h2>
+        <h2>1. Set up the rig and place the box</h2>
         <form class="controls" id="controls">
           <label>Tester ID<input id="tester-id" value="20260922-name" autocomplete="off" /></label>
           <label
@@ -666,6 +666,38 @@
           </div>
           <p class="note" id="setup-authority">No server confirmation loaded.</p>
         </div>
+        <!-- P7-15: the box is the first step after the setup and it is the hitting zone:
+             the hardware check, the light and the ball range all work from it. -->
+        <div class="setup-gate" id="placement" data-ready="false">
+          <h3>Place the box</h3>
+          <p id="placement-summary" class="note" role="status">
+            Confirm the physical setup first; the camera then opens here so you can place the box.
+          </p>
+          <div class="guided-camera-preview" id="placement-preview" hidden>
+            <p class="note" id="placement-camera-status" role="status">Waiting for the first camera frame…</p>
+            <div class="box-stage" id="placement-stage">
+              <img id="placement-camera-frame" alt="Live 1280×800 view for placing the box" hidden />
+              <div
+                class="placement-box"
+                id="placement-box"
+                role="img"
+                aria-label="Placement box: the hitting zone the checks and the light are judged in"
+                hidden
+              ></div>
+            </div>
+          </div>
+          <div class="steps">
+            <button type="button" id="placement-show" hidden>Show the camera</button>
+            <button type="button" id="placement-confirm" hidden disabled>Confirm the box</button>
+            <button type="button" id="placement-move" hidden>Move the box</button>
+          </div>
+          <p class="note">
+            Set the unit down where it will stay, then drag the yellow box over the spot you will hit from. Everything
+            after this works from the box: the hardware check, the light measurement (judged inside the box) and the
+            camera and radar checks. Moving the box later means measuring the light again and starting the ball range
+            over.
+          </p>
+        </div>
       </section>
 
       <section id="suite">
@@ -674,13 +706,16 @@
           <button type="button" id="stop">Stop all tester activity</button>
         </div>
         <div class="status" id="status" data-state="unavailable">Connecting to the local runner…</div>
+        <p class="problem" id="suite-box-hint" hidden>
+          Place and confirm the box in step 1 first: every check works from it.
+        </p>
         <ol class="suite-steps">
           <li>
-            <button type="button" id="step-check">A. Check the hardware</button> <span id="check-verdict"></span>
+            <button type="button" id="step-check" disabled>A. Check the hardware</button> <span id="check-verdict"></span>
             <label class="setup-confirm"><input type="checkbox" id="iwr-reset-pressed" /> I pressed RESET on the IWR6843 board since the last check</label>
           </li>
           <li>
-            <button type="button" id="step-light">B. Measure the light (both modes)</button>
+            <button type="button" id="step-light" disabled>B. Measure the light (both modes)</button>
             <span id="light-verdict"></span>
             <p id="light-age" class="note" hidden></p>
           </li>
@@ -688,7 +723,7 @@
             <h3>3. Automatic ball range</h3>
             <div class="setup-gate" id="automatic-range" data-ready="false">
               <p id="automatic-range-summary" class="note">
-                Each camera step finds its own exposure for the resting ball. No tape measurement is required.
+                The camera and radar checks work from the box you confirmed in step 1. No tape measurement is required.
               </p>
               <div class="light" id="automatic-range-values"></div>
               <div class="guided-camera-preview" id="tee-range-camera-preview" hidden>
@@ -707,7 +742,6 @@
                 </div>
               </div>
               <div class="steps">
-                <button type="button" id="tee-range-box-preview" hidden>Show the camera</button>
                 <button type="button" id="tee-range-action">Start automatic range</button>
                 <button type="button" id="tee-range-restart" hidden>Ball or rig moved: start over</button>
                 <button type="button" id="tee-range-diagnostic" hidden>Keep raw evidence and continue without a range (unqualified)</button>
@@ -934,13 +968,31 @@
       let guidedCameraPendingFrame = null;
       let guidedCameraAssociation = null;
       let guidedCameraDisplay = null;
-      // The placement box (P7-4): where the tester has dragged it (top-left corner in
-      // 1280×800 pixels) before confirming, and the box a camera step searches.
-      let placementBoxDraft = null;
-      let placementBoxDraftEpoch = null;
-      let placementDrag = null;
+      // The box a camera step searches, drawn over its view (P7-4).
       let guidedCameraBox = null;
-      let boxPreviewShowing = false;
+      // Step 1's placement box (P7-15): the server's answer, where the tester has
+      // dragged it (top-left corner in 1280×800 pixels) before confirming, and its view.
+      let placementState = null;
+      let placementRequestRunning = false;
+      let placementRequestVersion = 0;
+      let placementActionPending = false;
+      let placementError = null;
+      let placementNotice = null;
+      let placementMoving = false;
+      let placementDraft = null;
+      let placementDraftKey = null;
+      let placementDrag = null;
+      let placementAutoShown = null;
+      let placementPreviewShowing = false;
+      let placementPreviewStartedAt = 0;
+      let placementPreviewKey = null;
+      let placementPreviewVersion = 0;
+      let placementFrameLoading = false;
+      let placementPendingFrame = null;
+      let placementTickRunning = false;
+      let placementLocksShown = null;
+      // A camera that shows nothing for this long is not answering.
+      const PLACEMENT_NO_PICTURE_MS = 10000;
       const REQUEST_TIMEOUT_MS = 5000;
       const ACTION_TIMEOUT_MS = 15000;
       const PACKAGE_TIMEOUT_MS = 300000;
@@ -1038,6 +1090,9 @@
       }
 
       const teeRangeComplete = () => ['resolved', 'experimental', 'raw_only'].includes(teeRangeState?.phase);
+      // Everything after step 1 waits for the box (P7-15).
+      const boxConfirmed = () =>
+        placementState?.state === 'confirmed' && placementState?.tester_id === el('tester-id').value.trim();
 
       function renderSetupEligibility() {
         const ready = setupReady();
@@ -1046,10 +1101,9 @@
           : [];
         el('setup-gate').dataset.ready = String(ready);
         el('setup-gate').dataset.warning = String(Boolean(warnings.length));
-        el('step-light').disabled = !ready;
         el('btn-gain').disabled = !ready;
         el('btn-swings').disabled = !ready;
-        el('step-ladder').disabled = photoActionPending || !ready || !teeRangeComplete();
+        renderPlacement(); // the box step, and the steps that wait for it
         if (photoTarget) renderPhotoHandoff();
         if (!setupEligibility) {
           el('setup-summary').textContent = 'Setup eligibility is unknown. Recheck the server before acquisition.';
@@ -1517,6 +1571,8 @@
         teeRangeState = null;
         teeRangeDisplay = null;
         syncGuidedCameraPreview();
+        placementPreviewShowing = false;
+        renderPlacement();
         render(await request('/api/tester/stop', { method: 'POST' }));
       });
       el('package').addEventListener('click', async () => {
@@ -1573,6 +1629,7 @@
         }
       }
       el('step-check').addEventListener('click', async () => {
+        if (!boxConfirmed()) return;
         const context = suiteContext();
         const version = ++suiteActionVersion;
         el('check-verdict').textContent = 'checking…';
@@ -1593,6 +1650,7 @@
         }
       });
       el('step-light').addEventListener('click', async () => {
+        if (!boxConfirmed()) return;
         const context = suiteContext();
         const version = ++suiteActionVersion;
         try {
@@ -1625,11 +1683,345 @@
         }
       });
 
+      // --- step 1: the placement box (P7-15) ---
+      // The tester sets the unit down, confirms the setup, then drags the box over
+      // the spot they will hit from. The hardware check, the light (judged inside the
+      // box) and the ball range all follow it.
+      const placementPlacing = () =>
+        placementState?.state === 'needs_confirmation' || (boxConfirmed() && placementMoving);
+
+      function placementDraftBox() {
+        const shown = placementState?.box;
+        if (!shown?.box_px || !shown?.size_px || !shown?.frame_size_px) return null;
+        const key = `${el('tester-id').value.trim()}|${placementState.state}|${placementMoving}`;
+        if (placementDraftKey !== key || !placementDraft) {
+          placementDraft = [shown.box_px[0], shown.box_px[1]];
+          placementDraftKey = key;
+        }
+        const [width, height] = shown.size_px;
+        const [x0, y0] = placementDraft;
+        return { box: [x0, y0, x0 + width, y0 + height], frame: shown.frame_size_px };
+      }
+
+      function renderPlacementDraft() {
+        const node = el('placement-box');
+        const view = placementPlacing() ? placementDraftBox() : null;
+        if (!view || el('placement-camera-frame').hidden) {
+          node.hidden = true;
+          return;
+        }
+        drawBox(node, view.box, view.frame, true);
+      }
+
+      function placementCameraStatus(message, problem = false) {
+        const status = el('placement-camera-status');
+        status.className = problem ? 'problem' : 'note';
+        status.textContent = message;
+      }
+
+      function clockTime(iso) {
+        const when = new Date(iso);
+        return Number.isNaN(when.getTime())
+          ? iso
+          : when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+
+      function renderPlacement() {
+        const state = placementState?.state;
+        const confirmed = boxConfirmed();
+        const placing = placementPlacing();
+        el('placement').dataset.ready = String(confirmed);
+        let text;
+        let problem = false;
+        if (placementError) {
+          text = placementError;
+          problem = true;
+        } else if (!placementState) {
+          text = 'Checking the placement box…';
+        } else if (state === 'setup_not_confirmed') {
+          text = 'Confirm the physical setup first; the camera then opens here so you can place the box.';
+        } else if (state === 'unavailable') {
+          text = `The box can't be placed yet: ${placementState.reason || 'the camera model is unavailable'}.`;
+          problem = true;
+        } else if (placementMoving) {
+          text =
+            'Drag the box to its new spot and confirm it, or confirm it where it is to keep it. A box moved ' +
+            'elsewhere means measuring the light again and starting the ball range over.';
+        } else if (state === 'needs_confirmation') {
+          text =
+            'Set the unit down where it will stay. Drag the yellow box on the live picture over the spot you ' +
+            'will hit from, then press Confirm the box.';
+        } else {
+          const when = placementState.reconfirmed_at_utc || placementState.confirmed_at_utc;
+          text =
+            `Box confirmed${when ? ` at ${clockTime(when)}` : ''}. The hardware check, the light and the ` +
+            'ball range work from it.' +
+            (placementNotice ? ` ${placementNotice}` : '');
+        }
+        el('placement-summary').className = problem ? 'problem' : 'note';
+        el('placement-summary').textContent = text;
+        el('placement-preview').hidden = !placing;
+        el('placement-show').hidden = !placing || placementPreviewShowing;
+        el('placement-show').disabled = placementActionPending;
+        el('placement-confirm').hidden = !placing;
+        el('placement-confirm').disabled = placementActionPending || !placementDraftBox();
+        el('placement-move').hidden = !confirmed || placementMoving;
+        el('placement-move').disabled = placementActionPending;
+        // A (hardware), B (light), the ball range and the ladder wait for the box
+        el('suite-box-hint').hidden = confirmed;
+        el('step-check').disabled = !confirmed;
+        el('step-light').disabled = !setupReady() || !confirmed;
+        syncPlacementPreview();
+        renderPlacementDraft();
+        if (placementLocksShown !== confirmed) {
+          // the ball range and the ladder open or lock with the box
+          placementLocksShown = confirmed;
+          renderTeeRange();
+          renderPhotoHandoff();
+        }
+      }
+
+      function syncPlacementPreview() {
+        const key = placementPlacing() ? el('tester-id').value.trim() : null;
+        if (key === placementPreviewKey) return;
+        placementPreviewKey = key;
+        placementPreviewVersion += 1;
+        placementFrameLoading = false;
+        placementPendingFrame = null;
+        const frame = el('placement-camera-frame');
+        frame.hidden = true;
+        frame.removeAttribute('src');
+        if (key !== null) {
+          placementCameraStatus('Opening the camera…');
+          queueMicrotask(placementTick);
+        }
+      }
+
+      // The next frame loads off the page and replaces the shown one only once it
+      // has arrived, so the picture and the box dragged over it never blink out.
+      function loadPlacementFrame(version) {
+        const frame = el('placement-camera-frame').cloneNode(false);
+        placementPendingFrame = frame;
+        placementFrameLoading = true;
+        frame.addEventListener('load', () => {
+          if (frame !== placementPendingFrame) return;
+          placementPendingFrame = null;
+          placementFrameLoading = false;
+          if (version === placementPreviewVersion && placementPlacing()) {
+            frame.hidden = false;
+            el('placement-camera-frame').replaceWith(frame);
+            renderPlacementDraft();
+          }
+        });
+        frame.addEventListener('error', () => {
+          if (frame !== placementPendingFrame) return;
+          placementPendingFrame = null;
+          placementFrameLoading = false;
+        });
+        frame.src = `/api/tester/live.png?sequence=${Date.now()}`;
+      }
+
+      async function placementTick() {
+        if (!placementPlacing() || placementTickRunning) return;
+        const version = placementPreviewVersion;
+        const testerId = el('tester-id').value.trim();
+        placementTickRunning = true;
+        try {
+          const status = await request('/api/tester/live');
+          if (version !== placementPreviewVersion || testerId !== el('tester-id').value.trim()) return;
+          const owner = status.owner;
+          if (owner?.kind !== 'placement_box' || owner?.tester_id !== testerId) {
+            if (placementPreviewShowing) {
+              placementPreviewShowing = false;
+              renderPlacement();
+            }
+            if (!placementActionPending) {
+              placementCameraStatus('The camera is not showing. Press “Show the camera” to place the box.', true);
+            }
+            return;
+          }
+          if (!placementPreviewShowing) {
+            placementPreviewShowing = true;
+            if (!placementPreviewStartedAt) placementPreviewStartedAt = Date.now();
+            renderPlacement();
+          }
+          if (status.error || status.failed || !status.running) {
+            // the first camera check: say plainly that the camera did not answer
+            placementCameraStatus(
+              status.error || status.failed
+                ? `The camera is not answering: ${status.error || status.failed}. Check the camera cable and that nothing else is using the camera, then press “Show the camera”.`
+                : 'The camera stopped. Press “Show the camera” to place the box.',
+              true
+            );
+            placementPreviewShowing = false;
+            renderPlacement();
+            return;
+          }
+          if (!status.stats) {
+            const waited = Date.now() - placementPreviewStartedAt;
+            placementCameraStatus(
+              waited > PLACEMENT_NO_PICTURE_MS
+                ? `The camera is not answering: no picture after ${Math.round(waited / 1000)} s. Check the camera cable, then press “Show the camera”.`
+                : 'Camera is warming up. Waiting for the first frame…',
+              waited > PLACEMENT_NO_PICTURE_MS
+            );
+            if (waited > PLACEMENT_NO_PICTURE_MS && placementPreviewShowing) {
+              placementPreviewShowing = false;
+              renderPlacement();
+            }
+            return;
+          }
+          placementCameraStatus('Live 1280×800 view: drag the box over the spot you will hit from.');
+          if (!placementFrameLoading) loadPlacementFrame(version);
+        } catch (error) {
+          if (version === placementPreviewVersion) {
+            placementCameraStatus(`Live camera status unavailable: ${error.message}`, true);
+          }
+        } finally {
+          placementTickRunning = false;
+        }
+      }
+
+      async function refreshPlacement() {
+        if (placementRequestRunning || placementActionPending) return;
+        const testerId = el('tester-id').value.trim();
+        const version = ++placementRequestVersion;
+        placementRequestRunning = true;
+        try {
+          const response = await fetchWithTimeout(
+            '/api/tester/placement-box?' + new URLSearchParams({ tester_id: testerId }),
+            { cache: 'no-store' }
+          );
+          const body = await readJson(response);
+          if (version !== placementRequestVersion || testerId !== el('tester-id').value.trim()) return;
+          if (!response.ok) throw new Error(body.error || `box check failed (${response.status})`);
+          placementState = body;
+          if (body.state !== 'confirmed') placementMoving = false;
+          if (!body.previewing) placementPreviewShowing = false;
+          renderPlacement();
+          maybeOpenPlacementPreview();
+        } catch (error) {
+          if (version === placementRequestVersion && testerId === el('tester-id').value.trim()) {
+            el('placement-summary').className = 'problem';
+            el('placement-summary').textContent = `The box step is unavailable: ${error.message}`;
+          }
+        } finally {
+          placementRequestRunning = false;
+        }
+      }
+
+      // The box step opens its own live view once the setup is confirmed, the same
+      // way “Show the camera” does; if it fails, that button is there.
+      function maybeOpenPlacementPreview() {
+        if (placementState?.state !== 'needs_confirmation' || placementState.previewing || placementActionPending) {
+          return;
+        }
+        const key = `${el('tester-id').value.trim()}|${setupEligibility?.operator_confirmation?.confirmed_at ?? ''}`;
+        if (placementAutoShown === key) return;
+        placementAutoShown = key;
+        submitPlacement('show');
+      }
+
+      async function submitPlacement(action, extra = {}) {
+        if (placementActionPending) return;
+        const testerId = el('tester-id').value.trim();
+        placementActionPending = true;
+        placementRequestVersion += 1; // a poll in flight must not overwrite this answer
+        if (action === 'show') placementError = null;
+        renderPlacement();
+        try {
+          const body = await post('/api/tester/placement-box', { tester_id: testerId, action, ...extra });
+          if (testerId !== el('tester-id').value.trim()) return;
+          placementState = body;
+          placementError = null;
+          if (action === 'show') {
+            placementPreviewShowing = Boolean(body.previewing);
+            placementPreviewStartedAt = Date.now();
+          } else {
+            placementMoving = false;
+            placementPreviewShowing = false;
+            placementNotice =
+              body.change === 'moved'
+                ? `The box moved${body.range_restarted ? ', so the ball range has started over (step 3)' : ''}; a light measurement from the old spot must be taken again (B).`
+                : body.change === 'unchanged'
+                  ? 'Same spot as before: nothing changed.'
+                  : null;
+            refreshTeeRange();
+            refresh();
+          }
+        } catch (error) {
+          if (testerId !== el('tester-id').value.trim()) return;
+          if (action === 'show') {
+            placementPreviewShowing = false;
+            placementError = `The camera did not start: ${error.message}. Check the camera cable and that nothing else is using the camera, then press “Show the camera”.`;
+          } else {
+            placementError = `The box was not confirmed: ${error.message}`;
+          }
+        } finally {
+          placementActionPending = false;
+          renderPlacement();
+        }
+      }
+
+      el('placement-show').addEventListener('click', () => submitPlacement('show'));
+      el('placement-confirm').addEventListener('click', () => {
+        const view = placementDraftBox();
+        if (view) submitPlacement('confirm', { box_px: view.box, request_id: newAttemptId() });
+      });
+      el('placement-move').addEventListener('click', () => {
+        placementMoving = true;
+        placementNotice = null;
+        placementError = null;
+        placementDraftKey = null;
+        renderPlacement();
+        submitPlacement('show');
+      });
+
+      // Dragging the box works with a mouse, a pen or a finger (pointer events), and
+      // it never leaves the picture.
+      const placementBoxNode = el('placement-box');
+      placementBoxNode.addEventListener('pointerdown', (event) => {
+        if (!placementPlacing() || !placementDraft) return;
+        event.preventDefault();
+        try {
+          placementBoxNode.setPointerCapture(event.pointerId);
+        } catch {
+          // A pointer the browser no longer tracks still drags while it stays on the box.
+        }
+        placementDrag = {
+          pointerId: event.pointerId,
+          x: event.clientX,
+          y: event.clientY,
+          origin: [...placementDraft],
+        };
+      });
+      placementBoxNode.addEventListener('pointermove', (event) => {
+        if (!placementDrag || event.pointerId !== placementDrag.pointerId) return;
+        const shown = placementState?.box;
+        const picture = el('placement-camera-frame').getBoundingClientRect();
+        if (!shown?.frame_size_px || !shown?.size_px || !picture.width || !picture.height) return;
+        event.preventDefault();
+        const [frameWidth, frameHeight] = shown.frame_size_px;
+        const [width, height] = shown.size_px;
+        const dx = ((event.clientX - placementDrag.x) * frameWidth) / picture.width;
+        const dy = ((event.clientY - placementDrag.y) * frameHeight) / picture.height;
+        placementDraft = [
+          Math.round(Math.min(Math.max(placementDrag.origin[0] + dx, 0), frameWidth - width)),
+          Math.round(Math.min(Math.max(placementDrag.origin[1] + dy, 0), frameHeight - height)),
+        ];
+        renderPlacementDraft();
+      });
+      const endPlacementDrag = (event) => {
+        if (placementDrag && event.pointerId === placementDrag.pointerId) placementDrag = null;
+      };
+      placementBoxNode.addEventListener('pointerup', endPlacementDrag);
+      placementBoxNode.addEventListener('pointercancel', endPlacementDrag);
+
       const TEE_RANGE_STEPS = {
+        // a setup begun before the box moved to step 1 takes the box confirmed there
         needs_box: {
-          label: 'Confirm the box',
-          prompt: 'Set the unit down where it will stay. Drag the yellow box on the live picture over the spot you will hit from, then confirm it. The camera and radar checks only look inside it.',
-          action: 'confirm_box',
+          label: 'Confirm the box in step 1',
+          prompt: 'This setup is waiting for the box: confirm it in step 1, and the checks continue from it.',
         },
         needs_empty: {
           label: 'Capture empty hitting area',
@@ -1731,16 +2123,6 @@
 
       function guidedCameraContext() {
         const phase = teeRangeState?.phase;
-        if (phase === 'needs_box') {
-          const testerId = el('tester-id').value.trim();
-          return {
-            testerId,
-            epochId: teeRangeState.epoch_id,
-            armId: 'arm5',
-            box: true,
-            key: `${testerId}|${teeRangeState.epoch_id}|box`,
-          };
-        }
         const armId = phase === 'camera_arm5_capturing' || parallelCameraSearch(teeRangeState)
           ? 'arm5'
           : phase === 'camera_arm6_capturing'
@@ -1768,7 +2150,6 @@
           guidedCameraAssociation = null;
           guidedCameraDisplay = null;
           guidedCameraBox = null;
-          boxPreviewShowing = false;
           preview.hidden = true;
           frame.hidden = true;
           frame.removeAttribute('src');
@@ -1790,14 +2171,8 @@
         el('tee-range-camera-status').className = 'note';
         el('tee-range-camera-status').textContent = 'Camera is warming up. Waiting for the first frame…';
         el('tee-range-camera-detector').className = 'note';
-        el('tee-range-camera-detector').textContent = context.box
-          ? 'Drag the box over the spot you will hit from, then press Confirm the box.'
-          : 'Ball detector is warming up…';
+        el('tee-range-camera-detector').textContent = 'Ball detector is warming up…';
         guidedCameraExposureStatus(null);
-        if (context.box) {
-          el('tee-range-camera-exposure').textContent =
-            'The camera finds its exposure for the ball after you confirm the box.';
-        }
         queueMicrotask(guidedCameraTick);
       }
 
@@ -1951,19 +2326,14 @@
           ) return;
           const owner = status.owner;
           if (
-            owner?.kind !== (context.box ? 'placement_box' : 'guided_tee_range') ||
+            owner?.kind !== 'guided_tee_range' ||
             owner?.tester_id !== context.testerId ||
             owner?.epoch_id !== context.epochId ||
             owner?.arm_id !== context.armId
           ) {
             guidedCameraAssociation = null;
             guidedCameraDisplay = null;
-            boxPreviewShowing = false;
             renderTeeRange();
-            if (context.box) {
-              guidedCameraStatus('The camera is not showing. Press “Show the camera” to place the box.', true);
-              return;
-            }
             if (parallelCameraSearch(teeRangeState)) {
               guidedCameraStatus('The camera opens after the radar capture.');
               return;
@@ -1988,14 +2358,10 @@
             return;
           }
           guidedCameraBox = status.placement_box || null;
-          if (context.box) {
-            boxPreviewShowing = true;
-          } else {
-            guidedCameraAssociation = status.association || null;
-            guidedCameraDisplay = status.guided_display || null;
-            guidedCameraDetectorStatus(guidedCameraAssociation, Boolean(status.stats));
-            guidedCameraExposureStatus(guidedCameraDisplay);
-          }
+          guidedCameraAssociation = status.association || null;
+          guidedCameraDisplay = status.guided_display || null;
+          guidedCameraDetectorStatus(guidedCameraAssociation, Boolean(status.stats));
+          guidedCameraExposureStatus(guidedCameraDisplay);
           renderTeeRange();
           if (!status.stats) {
             guidedCameraStatus('Camera is warming up. Waiting for the first frame…');
@@ -2017,45 +2383,28 @@
         }
       }
 
-      function placementBoxView() {
-        if (teeRangeState?.phase === 'needs_box') {
-          const shown = teeRangeDisplay?.placement_box;
-          if (!shown?.box_px || !shown?.size_px || !shown?.frame_size_px) return null;
-          if (placementBoxDraftEpoch !== teeRangeState.epoch_id || !placementBoxDraft) {
-            placementBoxDraft = [shown.box_px[0], shown.box_px[1]];
-            placementBoxDraftEpoch = teeRangeState.epoch_id;
-          }
-          const [width, height] = shown.size_px;
-          const [x0, y0] = placementBoxDraft;
-          return { box: [x0, y0, x0 + width, y0 + height], frame: shown.frame_size_px, draggable: true };
-        }
-        if (guidedCameraContext() && guidedCameraBox?.box_px && guidedCameraBox?.frame_size_px) {
-          return { box: guidedCameraBox.box_px, frame: guidedCameraBox.frame_size_px, draggable: false };
-        }
-        return null;
-      }
-
-      function renderPlacementBox() {
-        const node = el('tee-range-placement-box');
-        const view = placementBoxView();
-        if (!view || el('tee-range-camera-frame').hidden) {
-          node.hidden = true;
-          return;
-        }
-        const [x0, y0, x1, y1] = view.box;
-        const [width, height] = view.frame;
+      // A box over a picture, in percentages of the frame it is measured in.
+      function drawBox(node, box, frame, draggable) {
+        const [x0, y0, x1, y1] = box;
+        const [width, height] = frame;
         node.style.left = `${(100 * x0) / width}%`;
         node.style.top = `${(100 * y0) / height}%`;
         node.style.width = `${(100 * (x1 - x0)) / width}%`;
         node.style.height = `${(100 * (y1 - y0)) / height}%`;
-        node.dataset.draggable = String(view.draggable);
-        node.dataset.box = view.box.join(',');
+        node.dataset.draggable = String(draggable);
+        node.dataset.box = box.join(',');
         node.hidden = false;
       }
 
-      function currentPlacementBox() {
-        const view = teeRangeState?.phase === 'needs_box' ? placementBoxView() : null;
-        return view ? view.box : null;
+      // The confirmed box a camera step searches, drawn (not dragged) over its view.
+      function renderPlacementBox() {
+        const node = el('tee-range-placement-box');
+        const shown = guidedCameraContext() && guidedCameraBox?.box_px && guidedCameraBox?.frame_size_px;
+        if (!shown || el('tee-range-camera-frame').hidden) {
+          node.hidden = true;
+          return;
+        }
+        drawBox(node, guidedCameraBox.box_px, guidedCameraBox.frame_size_px, false);
       }
 
       function renderTeeRange() {
@@ -2068,6 +2417,7 @@
         const action = el('tee-range-action');
         el('automatic-range').dataset.ready = String(teeRangeComplete());
         el('tee-range-restart').hidden = !state;
+        el('tee-range-restart').disabled = !boxConfirmed();
         const diagnosticArm = ['lighting_required', 'too_bright', 'ball_not_identified', 'low_contrast'].includes(guidedCameraDisplay?.state)
           && phase?.startsWith('camera_')
           ? guidedCameraContext()?.armId
@@ -2086,13 +2436,15 @@
         skipArm6.hidden = !arm6Step || Boolean(diagnosticArm);
         skipArm6.disabled = teeRangeRequestRunning;
         action.textContent = startOverRequired ? 'Start over required' : (step?.label || 'Start automatic range');
-        const boxMissing = phase === 'needs_box' && !currentPlacementBox();
-        action.disabled = teeRangeRequestRunning || startOverRequired || guidedSaveBlocked || boxMissing || Boolean(state && !step?.action);
+        // the ball range works from step 1's box (P7-15)
+        action.disabled = teeRangeRequestRunning || startOverRequired || guidedSaveBlocked || !boxConfirmed() || Boolean(state && !step?.action);
         action.dataset.action = startOverRequired ? '' : (step?.action || 'start');
         el('automatic-range-summary').className = phase === 'retryable_failure' ? 'problem' : 'note';
         el('automatic-range-summary').textContent = teeRangeActionError || teeRangeFailureSummary(state) || (state
           ? `${startOverRequired ? state.reason : (step?.prompt || state.reason)} ${!startOverRequired && state.reason && state.reason !== step?.prompt ? `(${state.reason.replaceAll('_', ' ')})` : ''}`
-          : 'Each camera step finds its own exposure for the resting ball. No tape measurement is required.');
+          : boxConfirmed()
+            ? 'The camera and radar checks work from the box you confirmed in step 1. No tape measurement is required.'
+            : 'Confirm the box in step 1 first: the camera and radar checks work from it.');
         const display = teeRangeDisplay;
         const metres = (value) => `${Number(value).toFixed(3)} m`;
         const describe = (label, item) => {
@@ -2134,12 +2486,13 @@
                 : `<span data-state="withheld">canonical range <b>withheld</b>${canonical?.reason ? ` — ${escapeHtml(canonical.reason.replaceAll('_', ' '))}` : ''}</span>`) +
             swingsLine
           : '<span>No setup epoch yet.</span>';
+        // without a guided setup, an arm record's camera evidence keeps the panel
+        if (!state && !teeRangeActionError && lastAutomaticRange) {
+          renderAutomaticRange(lastAutomaticRange.evidence, lastAutomaticRange.solution);
+        }
         syncGuidedCameraPreview();
-        const boxPreview = el('tee-range-box-preview');
-        boxPreview.hidden = phase !== 'needs_box' || boxPreviewShowing;
-        boxPreview.disabled = teeRangeRequestRunning;
         renderPlacementBox();
-        el('step-ladder').disabled = photoActionPending || !setupReady() || !teeRangeComplete();
+        el('step-ladder').disabled = photoActionPending || !setupReady() || !teeRangeComplete() || !boxConfirmed();
       }
 
       async function refreshTeeRange() {
@@ -2202,56 +2555,9 @@
         }
       }
       el('tee-range-action').addEventListener('click', () => {
-        const action = el('tee-range-action').dataset.action || 'start';
-        if (action === 'confirm_box') {
-          const box = currentPlacementBox();
-          if (box) submitTeeRange(action, { box_px: box });
-          return;
-        }
-        submitTeeRange(action);
+        submitTeeRange(el('tee-range-action').dataset.action || 'start');
       });
-      el('tee-range-box-preview').addEventListener('click', () => submitTeeRange('open_box_preview'));
       el('tee-range-skip-arm6').addEventListener('click', () => submitTeeRange('skip_camera_arm6'));
-
-      // Dragging the box works with a mouse, a pen or a finger (pointer events), and
-      // it never leaves the picture.
-      const placementBoxNode = el('tee-range-placement-box');
-      placementBoxNode.addEventListener('pointerdown', (event) => {
-        if (teeRangeState?.phase !== 'needs_box' || !placementBoxDraft) return;
-        event.preventDefault();
-        try {
-          placementBoxNode.setPointerCapture(event.pointerId);
-        } catch {
-          // A pointer the browser no longer tracks still drags while it stays on the box.
-        }
-        placementDrag = {
-          pointerId: event.pointerId,
-          x: event.clientX,
-          y: event.clientY,
-          origin: [...placementBoxDraft],
-        };
-      });
-      placementBoxNode.addEventListener('pointermove', (event) => {
-        if (!placementDrag || event.pointerId !== placementDrag.pointerId) return;
-        const shown = teeRangeDisplay?.placement_box;
-        const picture = el('tee-range-camera-frame').getBoundingClientRect();
-        if (!shown?.frame_size_px || !shown?.size_px || !picture.width || !picture.height) return;
-        event.preventDefault();
-        const [frameWidth, frameHeight] = shown.frame_size_px;
-        const [width, height] = shown.size_px;
-        const dx = ((event.clientX - placementDrag.x) * frameWidth) / picture.width;
-        const dy = ((event.clientY - placementDrag.y) * frameHeight) / picture.height;
-        placementBoxDraft = [
-          Math.round(Math.min(Math.max(placementDrag.origin[0] + dx, 0), frameWidth - width)),
-          Math.round(Math.min(Math.max(placementDrag.origin[1] + dy, 0), frameHeight - height)),
-        ];
-        renderPlacementBox();
-      });
-      const endPlacementDrag = (event) => {
-        if (placementDrag && event.pointerId === placementDrag.pointerId) placementDrag = null;
-      };
-      placementBoxNode.addEventListener('pointerup', endPlacementDrag);
-      placementBoxNode.addEventListener('pointercancel', endPlacementDrag);
       el('tee-range-restart').addEventListener('click', () => submitTeeRange('start_over'));
       el('tee-range-diagnostic').addEventListener('click', () => {
         const action = el('tee-range-diagnostic').dataset.action;
@@ -2607,7 +2913,7 @@
       }
       buildLadderJump();
       function renderLadderJump() {
-        const blocked = photoActionPending || !setupReady() || !teeRangeComplete();
+        const blocked = photoActionPending || !setupReady() || !teeRangeComplete() || !boxConfirmed();
         for (const button of el('ladder-jump').querySelectorAll('button')) {
           const rung = ladderRungs[button.dataset.rung];
           // a setting with its good swings can't be pressed
@@ -2700,7 +3006,7 @@
         preview.src = `http://${location.hostname}:8080/api/camera/preview.jpg?width=640&t=${Date.now()}`;
       }
       function renderPhotoHandoff() {
-        el('step-ladder').disabled = photoActionPending || !setupReady() || !teeRangeComplete();
+        el('step-ladder').disabled = photoActionPending || !setupReady() || !teeRangeComplete() || !boxConfirmed();
         renderLadderJump();
         el('photo-handoff').hidden = !photoTarget;
         if (!photoTarget) return;
@@ -2830,6 +3136,14 @@
         teeRangeDisplay = null;
         teeRangeRequestRunning = false;
         setTeeRangeActionError(null);
+        placementState = null;
+        placementRequestVersion += 1;
+        placementRequestRunning = false;
+        placementError = null;
+        placementNotice = null;
+        placementMoving = false;
+        placementAutoShown = null;
+        placementPreviewShowing = false;
         renderTeeRange();
         invalidateSetupEligibility('Tester ID changed. Server setup eligibility must be rechecked.');
         photoActionPending = false;
@@ -2848,6 +3162,7 @@
           discoverAttemptScopes();
           ladderTick();
           refreshSetupEligibility();
+          refreshPlacement();
           refreshTeeRange();
           refresh();
         }, 300);
@@ -2886,6 +3201,7 @@
           physicalConfirmationDraft = false;
           setupEligibility = body;
           renderSetupEligibility();
+          refreshPlacement(); // the box step opens its camera now
         } catch (error) {
           if (version === setupRequestVersion && testerId === el('tester-id').value.trim()) {
             invalidateSetupEligibility(`Physical setup confirmation was not accepted: ${error.message}`);
@@ -2928,6 +3244,7 @@
 
       refresh();
       refreshSetupEligibility();
+      refreshPlacement();
       refreshTeeRange();
       ladderTick();
       ladderTimer = setInterval(ladderTick, 1500);
@@ -2936,6 +3253,8 @@
       setInterval(refreshSetupEligibility, 2000);
       setInterval(refreshTeeRange, 1000);
       setInterval(guidedCameraTick, 350);
+      setInterval(refreshPlacement, 2000);
+      setInterval(placementTick, 350);
     </script>
     <script id="ready-light-script">
       // The ready light (P7-14): polls the tester server, which relays the kiosk's

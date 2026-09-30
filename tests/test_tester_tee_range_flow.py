@@ -316,6 +316,11 @@ class StaticManager:
             if on_finish:
                 on_finish(action, 0)
             return
+        if action == "gain":
+            # the light screen: its command and what records its result
+            self.last_command = list(commands[0])
+            self.last_on_finish = on_finish
+            return
         if action in {"swings", "ladder"}:
             # the kiosk command is what the swing server would be started with
             self.last_command = list(commands[0])
@@ -558,24 +563,25 @@ def test_guided_static_capture_uses_the_configured_iwr_port(tmp_path, inputs, mo
 
 
 def post(client, tester, action, request_id):
-    if action == "capture_empty":
-        # every setup first asks for the placement box (P7-4); tests that are not
-        # about the box confirm it where it starts
-        current = client.get("/api/tester/tee-range", query_string={"tester_id": tester})
-        if (current.get_json().get("state") or {}).get("phase") == "needs_box":
-            response = confirm_box(client, tester, f"{request_id}-box")
-            if response.status_code != 200:
-                return response  # the box step refused for the same reason capture would
+    if action in {"start", "start_over", "ball_moved"}:
+        # every setup works from the box confirmed in step 1 (P7-15); tests that
+        # are not about the box confirm it where it starts
+        if box_state(client, tester)["state"] == "needs_confirmation":
+            confirm_box(client, tester, f"{request_id}-box")
     return client.post(
         "/api/tester/tee-range",
         json={"tester_id": tester, "action": action, "request_id": request_id},
     )
 
 
+def box_state(client, tester):
+    response = client.get("/api/tester/placement-box", query_string={"tester_id": tester})
+    assert response.status_code == 200, response.get_json()
+    return response.get_json()
+
+
 def box_display(client, tester):
-    response = client.get("/api/tester/tee-range", query_string={"tester_id": tester})
-    assert response.status_code == 200
-    return response.get_json()["display"]["placement_box"]
+    return box_state(client, tester)["box"]
 
 
 def confirm_box(client, tester, request_id, origin=None, size=None):
@@ -584,10 +590,10 @@ def confirm_box(client, tester, request_id, origin=None, size=None):
     x0, y0 = origin if origin is not None else shown["box_px"][:2]
     width, height = size if size is not None else shown["size_px"]
     return client.post(
-        "/api/tester/tee-range",
+        "/api/tester/placement-box",
         json={
             "tester_id": tester,
-            "action": "confirm_box",
+            "action": "confirm",
             "request_id": request_id,
             "box_px": [x0, y0, x0 + width, y0 + height],
         },
@@ -1150,13 +1156,11 @@ def test_start_over_stops_only_the_guided_camera_owner(tmp_path, inputs, monkeyp
     response = post(client, tester, "start_over", "restart")
 
     assert response.status_code == 200
-    assert response.get_json()["state"]["phase"] == "needs_box"
-    # the guided camera stopped; the new setup's box preview took the camera
+    # the new setup keeps the confirmed box and starts at the radar captures (P7-15)
+    assert response.get_json()["state"]["phase"] == "needs_empty"
     assert live.stop_count >= 1
-    assert live.analyzer is None
-    owner = client.get("/api/tester/live").get_json()["owner"]
-    assert owner["kind"] == "placement_box"
-    assert owner["epoch_id"] == response.get_json()["state"]["epoch_id"]
+    assert live.running is False
+    assert client.get("/api/tester/live").get_json()["owner"] is None
 
 
 def test_backend_refuses_save_before_camera_only_selection_is_stable(tmp_path, inputs, monkeypatch):
@@ -1922,10 +1926,10 @@ def test_the_camera_finds_its_exposure_while_the_radar_records_the_ball(
     after = phase(client, tester)
     assert after["phase"] == "camera_arm5_capturing"
     assert after["evidence"]["iwr_candidate"]
-    # the box preview, then the one camera search begun with the ball capture
-    assert live.start_count == 2
+    # the one camera search, begun with the ball capture (the box was placed in step 1)
+    assert live.start_count == 1
     assert post(client, tester, "start_camera_arm5", "no-op").status_code == 200
-    assert live.start_count == 2
+    assert live.start_count == 1
     assert post(client, tester, "evaluate_camera_arm5", "save").status_code == 200
     assert phase(client, tester)["phase"] == "needs_camera_arm6"
 
@@ -3069,32 +3073,37 @@ def _app_box_geometry():
     )
 
 
-def test_the_setup_starts_with_the_placement_box_on_a_live_preview(tmp_path, inputs, monkeypatch):
+def test_the_box_step_shows_the_live_preview_before_anything_else(tmp_path, inputs, monkeypatch):
     live = FakeLive()
     app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
     client = app.test_client()
 
-    state = post(client, tester, "start", "start").get_json()["state"]
-    shown = box_display(client, tester)
+    shown = box_state(client, tester)
+    opened = client.post("/api/tester/placement-box", json={"tester_id": tester, "action": "show"})
 
     geometry = _app_box_geometry()
-    assert state["phase"] == "needs_box"
     assert shown["state"] == "needs_confirmation"
-    assert shown["arm_id"] == "arm5"
-    assert shown["frame_size_px"] == [1280, 800]
-    assert shown["size_px"] == list(geometry.size_px)
+    box = shown["box"]
+    assert box["arm_id"] == "arm5"
+    assert box["frame_size_px"] == [1280, 800]
+    assert box["size_px"] == list(geometry.size_px)
     # it starts straight ahead, where the rig file and the LIS3DH put the zone
-    assert shown["box_px"] == list(geometry.default_box_px)
-    assert shown["source"] == "default_straight_ahead"
+    assert box["box_px"] == list(geometry.default_box_px)
+    assert box["source"] == "default_straight_ahead"
     # the 1280x800 preview runs so the tester can see where to drag it
+    assert opened.status_code == 200, opened.get_json()
+    assert opened.get_json()["previewing"] is True
     assert live.running is True and live.arm == ts.ARMS["arm5"] and live.analyzer is None
-    assert client.get("/api/tester/live").get_json()["owner"]["kind"] == "placement_box"
-    # nothing is captured until the box is confirmed
+    owner = client.get("/api/tester/live").get_json()["owner"]
+    assert owner["kind"] == "placement_box" and owner["epoch_id"] is None
+    # the ball range does not start until the box is confirmed
     refused = client.post(
         "/api/tester/tee-range",
-        json={"tester_id": tester, "action": "capture_empty", "request_id": "early"},
+        json={"tester_id": tester, "action": "start", "request_id": "early"},
     )
     assert refused.status_code == 409
+    assert refused.get_json()["placement_box_required"] is True
+    assert phase(client, tester) is None
     assert app.config["TEST_STATIC_MANAGER"].start_count == 0
 
 
@@ -3104,14 +3113,16 @@ def test_a_dragged_box_keeps_its_fixed_size_and_stays_inside_the_frame(
     live = FakeLive()
     app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
     client = app.test_client()
-    post(client, tester, "start", "start")
+    client.post("/api/tester/placement-box", json={"tester_id": tester, "action": "show"})
     geometry = _app_box_geometry()
 
     # dragged past the frame's corner, and sent at another size
     response = confirm_box(client, tester, "box", origin=(1250, 760), size=(300, 40))
-
     assert response.status_code == 200, response.get_json()
-    state = response.get_json()["state"]
+    assert response.get_json()["change"] == "first"
+    # the setup then starts at the radar captures, from that box
+    state = post(client, tester, "start", "start").get_json()["state"]
+
     record = state["evidence"]["placement_box"]
     width, height = geometry.size_px
     assert state["phase"] == "needs_empty"
@@ -3121,26 +3132,40 @@ def test_a_dragged_box_keeps_its_fixed_size_and_stays_inside_the_frame(
     assert record["size_px"] == [width, height]
     assert record["source"] == "tester_dragged"
     assert record["default_box_px"] == list(geometry.default_box_px)
-    assert box_display(client, tester)["state"] == "confirmed"
-    # the preview is released for the radar captures
+    assert "history" not in record
+    assert box_state(client, tester)["state"] == "confirmed"
+    # the preview is released once the box is confirmed
     assert live.running is False
 
 
-def test_a_new_setup_asks_for_the_box_again_where_it_was_last_confirmed(
-    tmp_path, inputs, monkeypatch
-):
+def test_starting_over_keeps_the_confirmed_box(tmp_path, inputs, monkeypatch):
     app, tester = app_for(tmp_path, inputs, monkeypatch)
     client = app.test_client()
-    post(client, tester, "start", "start")
     assert confirm_box(client, tester, "box", origin=(300, 420)).status_code == 200
+    first = post(client, tester, "start", "start").get_json()["state"]
 
     restarted = post(client, tester, "start_over", "again").get_json()["state"]
-    shown = box_display(client, tester)
 
-    assert restarted["phase"] == "needs_box"
+    assert restarted["epoch_id"] != first["epoch_id"]
+    assert restarted["phase"] == "needs_empty"
+    assert restarted["evidence"]["placement_box"]["box_px"][:2] == [300, 420]
+
+
+def test_a_new_physical_confirmation_asks_for_the_box_again_where_it_was(
+    tmp_path, inputs, monkeypatch
+):
+    setup = ReconfirmedSetup()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, setup_policy=setup)
+    client = app.test_client()
+    assert confirm_box(client, tester, "box", origin=(300, 420)).status_code == 200
+    assert box_state(client, tester)["state"] == "confirmed"
+
+    setup.confirmed_at = "second-server"
+    shown = box_state(client, tester)
+
     assert shown["state"] == "needs_confirmation"
-    assert shown["box_px"][:2] == [300, 420]
-    assert shown["source"] == "last_confirmed"
+    assert shown["box"]["box_px"][:2] == [300, 420]
+    assert shown["box"]["source"] == "last_confirmed"
 
 
 def test_every_setup_search_looks_only_inside_the_confirmed_box(tmp_path, inputs, monkeypatch):
@@ -3153,8 +3178,8 @@ def test_every_setup_search_looks_only_inside_the_confirmed_box(tmp_path, inputs
 
     monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
     client = app.test_client()
-    post(client, tester, "start", "start")
     assert confirm_box(client, tester, "box", origin=(500, 380)).status_code == 200
+    post(client, tester, "start", "start")
     box = phase(client, tester)["evidence"]["placement_box"]["box_px"]
 
     state = drive_after_box(client, tester)
@@ -3206,8 +3231,8 @@ def test_no_ball_in_the_box_tells_the_tester_to_put_it_there(tmp_path, inputs, m
 def test_the_live_view_serves_the_box_it_searches_in_both_modes(tmp_path, inputs, monkeypatch):
     app, tester = app_for(tmp_path, inputs, monkeypatch)
     client = app.test_client()
-    post(client, tester, "start", "start")
     assert confirm_box(client, tester, "box", origin=(500, 380)).status_code == 200
+    post(client, tester, "start", "start")
     box = phase(client, tester)["evidence"]["placement_box"]["box_px"]
     for index, action in enumerate(("capture_empty", "capture_ball", "start_camera_arm5")):
         assert post(client, tester, action, f"live-{index}").status_code == 200
@@ -3228,8 +3253,8 @@ def test_the_live_view_serves_the_box_it_searches_in_both_modes(tmp_path, inputs
 def test_the_swings_record_says_where_the_box_was(tmp_path, inputs, monkeypatch):
     app, tester = app_for(tmp_path, inputs, monkeypatch)
     client = app.test_client()
-    post(client, tester, "start", "start")
     assert confirm_box(client, tester, "box", origin=(520, 370)).status_code == 200
+    post(client, tester, "start", "start")
     state = drive_after_box(client, tester)
     solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
 
@@ -3429,8 +3454,8 @@ def test_the_640x400_check_starts_from_the_1280x800_lock_and_ball(tmp_path, inpu
 
     monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
     client = app.test_client()
-    post(client, tester, "start", "start")
     assert confirm_box(client, tester, "box", origin=(560, 440)).status_code == 200
+    post(client, tester, "start", "start")
     for index, action in enumerate(
         ("capture_empty", "capture_ball", "start_camera_arm5", "evaluate_camera_arm5")
     ):
@@ -3710,3 +3735,325 @@ def test_a_coherent_radar_pick_inside_the_camera_window_is_kept_and_saved(
     decision = state["evidence"]["experimental_range"]
     assert decision["source"] == "static_iwr"
     assert decision["range_m"] == pytest.approx(1.581, abs=0.01)
+
+
+# P7-15: the placement box is step 1, and it is the hitting zone.
+
+
+def _run(client, tester, action, arm_id="arm5", **extra):
+    return client.post(
+        "/api/tester/run",
+        json={
+            "tester_id": tester,
+            "arm_id": arm_id,
+            "environment": "indoors",
+            "action": action,
+            **extra,
+        },
+    )
+
+
+def _box_file(tmp_path, tester):
+    return tmp_path / "sessions" / tester / ts.PLACEMENT_BOX_FILE
+
+
+def test_the_light_and_the_ball_range_wait_for_the_box(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    manager = app.config["TEST_STATIC_MANAGER"]
+
+    light = _run(client, tester, "gain")
+    rng = client.post(
+        "/api/tester/tee-range",
+        json={"tester_id": tester, "action": "start", "request_id": "early"},
+    )
+
+    for refused in (light, rng):
+        assert refused.status_code == 409
+        assert refused.get_json()["placement_box_required"] is True
+        assert "placement box" in refused.get_json()["error"]
+    assert manager.start_count == 0
+    assert phase(client, tester) is None
+
+    assert confirm_box(client, tester, "box").status_code == 200
+
+    assert _run(client, tester, "gain").status_code == 202
+    started = client.post(
+        "/api/tester/tee-range",
+        json={"tester_id": tester, "action": "start", "request_id": "after"},
+    )
+    assert started.status_code == 200, started.get_json()
+    state = started.get_json()["state"]
+    # the ball range begins straight at the radar captures, in the confirmed box
+    assert state["phase"] == "needs_empty"
+    assert state["evidence"]["placement_box"]["box_px"] == box_display(client, tester)["box_px"]
+
+
+def test_the_box_is_confirmed_before_the_hardware_check(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch, require_iwr_preflight=True)
+    client = app.test_client()
+
+    assert box_state(client, tester)["state"] == "needs_confirmation"
+    assert confirm_box(client, tester, "box").status_code == 200
+    # the range still waits for the hardware check, which follows the box
+    blocked = client.post(
+        "/api/tester/tee-range",
+        json={"tester_id": tester, "action": "start", "request_id": "no-check"},
+    )
+    assert blocked.status_code == 409
+    assert _run(client, tester, "preflight").status_code == 202
+
+    assert post(client, tester, "start", "checked").status_code == 200
+
+
+def test_the_box_waits_for_the_physical_setup(tmp_path, inputs, monkeypatch):
+    live = FakeLive()
+    app, tester = app_for(
+        tmp_path, inputs, monkeypatch, setup_policy=IneligibleSetup(), live_view=live
+    )
+    client = app.test_client()
+
+    shown = box_state(client, tester)
+    opened = client.post("/api/tester/placement-box", json={"tester_id": tester, "action": "show"})
+    confirmed = client.post(
+        "/api/tester/placement-box",
+        json={
+            "tester_id": tester,
+            "action": "confirm",
+            "request_id": "box",
+            "box_px": shown["box"]["box_px"],
+        },
+    )
+
+    assert shown["state"] == "setup_not_confirmed"
+    assert shown["setup_blockers"] == [{"id": "lis3dh"}]
+    for refused in (opened, confirmed):
+        assert refused.status_code == 409
+        assert "physical setup" in refused.get_json()["error"]
+    assert live.running is False
+    assert not _box_file(tmp_path, tester).exists()
+
+
+def test_confirming_the_same_spot_again_changes_nothing(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    origin = box_display(client, tester)["box_px"][:2]
+    assert confirm_box(client, tester, "box", origin=origin).status_code == 200
+    first = post(client, tester, "start", "start").get_json()["state"]
+    saved = _box_file(tmp_path, tester).read_bytes()
+
+    again = confirm_box(client, tester, "again", origin=(origin[0] + 3, origin[1] - 2))
+
+    assert again.status_code == 200
+    assert again.get_json()["change"] == "unchanged"
+    assert again.get_json()["range_restarted"] is False
+    assert _box_file(tmp_path, tester).read_bytes() == saved
+    assert phase(client, tester)["epoch_id"] == first["epoch_id"]
+
+
+def test_moving_the_box_starts_the_ball_range_over_and_is_recorded(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    assert confirm_box(client, tester, "box", origin=(560, 440)).status_code == 200
+    finished = drive(client, tester)
+    assert finished["phase"] in tee_range_flow.TERMINAL_PHASES
+
+    moved = confirm_box(client, tester, "moved", origin=(610, 440))
+
+    assert moved.status_code == 200, moved.get_json()
+    body = moved.get_json()
+    assert body["change"] == "moved"
+    assert body["range_restarted"] is True
+    state = phase(client, tester)
+    assert state["epoch_id"] != finished["epoch_id"]
+    assert state["phase"] == "needs_empty"
+    assert state["evidence"]["placement_box"]["box_px"][:2] == [610, 440]
+    started_by = state["evidence"]["started_by"]
+    assert started_by["reason"] == "placement_box_moved"
+    assert started_by["previous_epoch_id"] == finished["epoch_id"]
+    assert started_by["moved_px"] == pytest.approx(50.0)
+    assert started_by["at_utc"]
+    history = json.loads(_box_file(tmp_path, tester).read_text(encoding="utf-8"))["history"]
+    assert [entry["change"] for entry in history] == ["first", "moved"]
+    assert history[-1]["moved_px"] == pytest.approx(50.0)
+    assert history[-1]["moved_from_box_px"][:2] == [560, 440]
+    assert history[-1]["at_utc"]
+    # the ladder cannot start on the old setup
+    ladder = client.post(
+        "/api/tester/ladder/start",
+        json={"tester_id": tester, "arm_id": "arm5", "environment": "indoors"},
+    )
+    assert ladder.status_code == 409
+
+
+def test_moving_the_box_is_refused_while_a_capture_holds_the_hardware(
+    tmp_path, inputs, monkeypatch
+):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    assert confirm_box(client, tester, "box", origin=(560, 440)).status_code == 200
+    post(client, tester, "start", "start")
+    manager = app.config["TEST_STATIC_MANAGER"]
+    manager._status = {"state": "running", "action": "ladder", "message": "busy"}
+
+    moved = confirm_box(client, tester, "moved", origin=(660, 440))
+
+    assert moved.status_code == 409
+    assert "stop first" in moved.get_json()["error"]
+    assert box_display(client, tester)["box_px"][:2] == [560, 440]
+
+
+def _screened(tmp_path, tester, box_px, arm_id="arm5"):
+    params = ts.TesterParameters(tester, arm_id, "indoors")
+    ts.write_arm_state(
+        tmp_path / "sessions",
+        params,
+        gain=4.0,
+        gain_exposure_us=params.arm.exposure_us,
+        gain_screened_at=ts.datetime.now(ts.timezone.utc).isoformat(),
+        gain_environment="indoors",
+        gain_zone_source="placement_box",
+        gain_placement_box_px=list(box_px),
+    )
+
+
+def _screen(client, tester, arm_id="arm5"):
+    status = client.get(
+        "/api/tester/status",
+        query_string={"tester_id": tester, "arm_id": arm_id, "environment": "indoors"},
+    ).get_json()
+    return next(arm for arm in status["study"]["arms"] if arm["arm_id"] == arm_id)["gain_screen"]
+
+
+def test_moving_the_box_makes_the_light_measurement_stale(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    assert confirm_box(client, tester, "box", origin=(560, 440)).status_code == 200
+    box = box_display(client, tester)["box_px"]
+    for arm_id in ("arm5", "arm6"):
+        _screened(tmp_path, tester, box, arm_id)
+    assert _screen(client, tester)["stale"] is False
+    assert confirm_box(client, tester, "same", origin=(562, 441)).status_code == 200
+    assert _screen(client, tester)["stale"] is False
+
+    assert confirm_box(client, tester, "moved", origin=(700, 440)).status_code == 200
+
+    screen = _screen(client, tester)
+    assert screen["stale"] is True
+    assert "box you have since moved" in screen["prompt"]
+    assert screen["prompt"].startswith("Measure the light again (B)")
+    ladder = client.post(
+        "/api/tester/ladder/start",
+        json={"tester_id": tester, "arm_id": "arm5", "environment": "indoors"},
+    )
+    assert ladder.status_code == 409
+    assert ladder.get_json()["gain_screen_stale"] is True
+
+
+def test_a_screen_over_the_fixed_zone_is_stale_once_a_box_is_confirmed(tmp_path):
+    state = {
+        "gain": 4.0,
+        "gain_screened_at": ts.datetime.now(ts.timezone.utc).isoformat(),
+        "gain_environment": "indoors",
+    }
+    box = {"box_px": [560, 440, 716, 570]}
+
+    without = ts.gain_screen_age(state, tmp_path, "indoors")
+    fixed = ts.gain_screen_age(state, tmp_path, "indoors", placement_box=box)
+    inside = ts.gain_screen_age(
+        {**state, "gain_placement_box_px": [561, 440, 717, 570]},
+        tmp_path,
+        "indoors",
+        placement_box=box,
+    )
+
+    assert without["stale"] is False
+    assert fixed["stale"] is True and "fixed hitting zone" in fixed["prompt"]
+    assert inside["stale"] is False
+
+
+@pytest.mark.parametrize("arm_id, factor", [("arm5", 1), ("arm6", 2)])
+def test_the_light_screen_is_measured_and_recorded_inside_the_box(
+    tmp_path, inputs, monkeypatch, arm_id, factor
+):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    assert confirm_box(client, tester, "box", origin=(560, 440)).status_code == 200
+    box = box_display(client, tester)["box_px"]
+    expected = ts.mode_placement_box({"box_px": box, "frame_size_px": [1280, 800]}, ts.ARMS[arm_id])
+    manager = app.config["TEST_STATIC_MANAGER"]
+
+    assert _run(client, tester, "gain", arm_id).status_code == 202
+
+    command = manager.last_command
+    assert command[command.index("--zone-box") + 1] == ",".join(str(v) for v in expected)
+    assert expected[0] == box[0] // factor
+    # the screen writes its results; finishing records the zone it judged
+    params = ts.TesterParameters(tester, arm_id, "indoors")
+    run = ts.arm_directory(tmp_path / "sessions", params) / "gain" / "20260930_120000"
+    run.mkdir(parents=True)
+    rows = [
+        {
+            "exposure_us": 300,
+            "gain": gain,
+            "mean": 50.0 * gain,
+            "zone_median": 45.0 * gain,
+            "zone_clipped_pct": 0.0,
+            "zone_source": "placement_box",
+            "zone_box_px": list(expected),
+        }
+        for gain in (1.0, 2.0, 3.0)
+    ]
+    (run / "results.json").write_text(json.dumps(rows), encoding="utf-8")
+    manager.last_on_finish("gain", 0)
+
+    state = ts.read_arm_state(tmp_path / "sessions", tester, arm_id)
+    assert state["gain_zone_source"] == "placement_box"
+    assert state["gain_zone_box_px"] == list(expected)
+    assert state["gain_placement_box_px"] == box
+    assert _screen(client, tester, arm_id)["stale"] is False
+
+
+def test_a_setup_begun_before_the_box_moved_to_step_one_takes_the_confirmed_box(
+    tmp_path, inputs, monkeypatch
+):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    store = tee_range_flow.FlowStore(tmp_path / "sessions" / tester)
+    binding = ts._tee_range_setup_binding(
+        EligibleSetup().require(tester, {}, "start"), FakeTilt().reading()
+    )
+    legacy = store.start("legacy", setup_admission={**binding, "tester_id": tester})
+    assert legacy.phase == "needs_box"
+
+    assert confirm_box(client, tester, "box", origin=(560, 440)).status_code == 200
+
+    state = phase(client, tester)
+    assert state["epoch_id"] == legacy.epoch_id
+    assert state["phase"] == "needs_empty"
+    assert state["evidence"]["placement_box"]["box_px"][:2] == [560, 440]
+
+
+def test_the_first_preview_uses_the_last_ball_lock_before_any_light_screen():
+    remembered = ts.StaticExposureStep(20, 1.5)
+
+    assert ts.placement_preview_controls({}, remembered) == (20, 1.5)
+    assert ts.placement_preview_controls({}, None) == (300, 4.0)
+    # a light screen from this session decides, as before
+    assert ts.placement_preview_controls({"gain_at_300_equivalent": 2.0}, remembered) == (300, 2.0)
+
+
+class DeadCameraLive(FakeLive):
+    def start(self, *_args, **_kwargs):
+        raise RuntimeError("no camera found on the CSI port")
+
+
+def test_a_camera_that_does_not_answer_is_said_plainly(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=DeadCameraLive())
+    client = app.test_client()
+
+    opened = client.post("/api/tester/placement-box", json={"tester_id": tester, "action": "show"})
+
+    assert opened.status_code == 409
+    assert "no camera found" in opened.get_json()["error"]
+    assert box_state(client, tester)["previewing"] is False
