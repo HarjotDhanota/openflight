@@ -979,11 +979,12 @@ class TestIWR6843ShotIntegration:
             sequence=1,
         )
         runtime = SimpleNamespace(
+            horizontal_phase_reference_rad=-0.5,
             process_shot=lambda **kwargs: SimpleNamespace(
                 capture=capture,
                 measurement=measurement,
                 club_path=club_path,
-            )
+            ),
         )
         monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
@@ -5549,3 +5550,120 @@ def test_live_speed_candidate_withholds_estimated_fallback(monkeypatch):
     assert shot.ball_speed_mph == 108.0
     assert shot.experimental_ball_speed_total["status"] == "withheld"
     assert "measured" in shot.experimental_ball_speed_total["reason"]
+
+
+class TestIwrAzimuthCalibration:
+    """F8: without a horizontal phase reference the IWR's azimuth is uncalibrated."""
+
+    @staticmethod
+    def _run(monkeypatch, *, phase_reference, horizontal_deg=2.25, club_accepted=True):
+        measurement = SimpleNamespace(
+            accepted=True,
+            angle_deg=18.5,
+            horizontal_deg=horizontal_deg,
+            horizontal_confidence=0.93,
+            horizontal_status="hlcmf_v1_accepted",
+            n_snapshots=18,
+            n_frames=5,
+            component_std_deg=1.4,
+            to_dict=lambda: {},
+        )
+        club_path = SimpleNamespace(
+            accepted=club_accepted,
+            status="accepted" if club_accepted else "rejected_phase_span",
+            path_deg=1.5 if club_accepted else None,
+            confidence=0.8,
+            n_frames=5,
+            candidate_path_deg=1.5,
+            candidate_path_status="candidate_available",
+            candidate_attack_angle_deg=-4.0,
+            attack_angle_status="candidate_available",
+            to_dict=lambda: {},
+        )
+        capture = SimpleNamespace(
+            trigger_timestamp=100.01,
+            path=None,
+            raw=b"raw",
+            dump_duration_s=4.5,
+            error=None,
+            valid=True,
+            sequence=1,
+        )
+        runtime = SimpleNamespace(
+            horizontal_phase_reference_rad=phase_reference,
+            process_shot=lambda **kwargs: SimpleNamespace(
+                capture=capture, measurement=measurement, club_path=club_path
+            ),
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        shot = Shot(
+            ball_speed_mph=100.0,
+            club_speed_mph=80.0,
+            timestamp=datetime.now(),
+            impact_timestamp=100.0,
+            club=ClubType.IRON_9,
+        )
+        server_module._process_iwr6843_angle(shot)
+        return shot
+
+    def test_uncalibrated_radar_horizontal_and_path_are_marked(self, monkeypatch):
+        shot = self._run(monkeypatch, phase_reference=None)
+
+        assert shot.launch_angle_horizontal == pytest.approx(2.25)
+        assert shot.launch_angle_horizontal_source == "radar"
+        assert shot.launch_angle_horizontal_status == "azimuth_uncalibrated"
+        assert shot.experimental_club_path_deg == pytest.approx(1.5)
+        assert shot.experimental_club_path_status == "azimuth_uncalibrated"
+        assert shot.to_dict()["launch_angle_horizontal_status"] == "azimuth_uncalibrated"
+
+    def test_a_phase_reference_clears_the_marks(self, monkeypatch):
+        shot = self._run(monkeypatch, phase_reference=-0.5)
+
+        assert shot.launch_angle_horizontal_status is None
+        assert shot.experimental_club_path_status == "accepted"
+
+    def test_a_rejected_path_keeps_its_own_status(self, monkeypatch):
+        shot = self._run(monkeypatch, phase_reference=None, club_accepted=False)
+
+        assert shot.experimental_club_path_status == "rejected_phase_span"
+
+    def test_without_a_reference_face_angle_uses_camera_paths_only(self, monkeypatch):
+        shot = self._run(monkeypatch, phase_reference=None)
+        # The camera horizontal (camera bearing on accepted IWR depth) outranks
+        # the radar one and carries no azimuth mark.
+        server_module._apply_camera_horizontal_decision(
+            shot, 2.0, 0.75, "camera_assisted_experimental"
+        )
+        assert shot.launch_angle_horizontal_status is None
+
+        server_module._attach_experimental_face_angle(shot)
+        assert shot.experimental_face_angle_deg is None
+        assert shot.experimental_face_angle_status == "missing_accepted_club_path"
+
+        shot.experimental_fused_club_path_deg = -4.0
+        shot.experimental_fused_status = "chained_high"
+        server_module._attach_experimental_face_angle(shot)
+        assert shot.experimental_face_angle_deg == pytest.approx(3.5)
+        assert shot.experimental_face_angle_path_source == "camera_fused_chained"
+
+    def test_an_uncalibrated_radar_start_direction_gives_no_face_angle(self, monkeypatch):
+        # A radar start direction and a camera path would mix two zeros.
+        shot = self._run(monkeypatch, phase_reference=None)
+        shot.experimental_fused_club_path_deg = -4.0
+        shot.experimental_fused_status = "chained_high"
+
+        server_module._attach_experimental_face_angle(shot)
+
+        assert shot.experimental_face_angle_deg is None
+        assert shot.experimental_face_angle_status == "start_direction_azimuth_uncalibrated"
+
+    def test_camera_fallback_to_the_radar_horizontal_keeps_its_mark(self, monkeypatch):
+        monkeypatch.setattr(
+            server_module, "iwr6843_runtime", SimpleNamespace(horizontal_phase_reference_rad=None)
+        )
+        shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
+
+        server_module._apply_camera_horizontal_decision(shot, 2.25, 0.9, "radar")
+
+        assert shot.launch_angle_horizontal_status == "azimuth_uncalibrated"

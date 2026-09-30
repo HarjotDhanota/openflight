@@ -103,6 +103,11 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
   const horizontalSourceLabel = shot.launch_angle_horizontal_source
     ? HORIZONTAL_SOURCE_LABELS[shot.launch_angle_horizontal_source]
     : undefined;
+  // A radar horizontal without the board's phase reference has its own zero (audit F8).
+  const horizontalSubtext =
+    shot.launch_angle_horizontal_status === 'azimuth_uncalibrated'
+      ? 'azimuth uncalibrated'
+      : horizontalSourceLabel;
   const fusedDeliveryAttempted = shot.experimental_fused_status != null;
   const attackAngle =
     shot.club_angle_deg ??
@@ -166,7 +171,7 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       label: t('metric.hLaunch'),
       value: formatOptionalAngle(shot.launch_angle_horizontal, true),
       unit: angleUnit(shot.launch_angle_horizontal),
-      subtext: horizontalSourceLabel,
+      subtext: horizontalSubtext,
       estimated: markEstimated(shot.launch_angle_horizontal !== null && horizontalEstimated),
       confidence: shot.launch_angle_horizontal === null ? null : horizontalConfidence,
       confidenceLabel: horizontalSourceLabel ? 'experimental' : undefined,

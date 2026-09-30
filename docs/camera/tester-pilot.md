@@ -96,7 +96,10 @@ swings then get the static IWR range if its checks accepted it, otherwise the
 1280×800 camera range. The evidence and the page still say unqualified; the
 tester log names the value used. Face angle appears on the **Club path** tile
 as `face ±x.x° (D-plane)`: an estimate from start direction and path, not seen
-on the club.
+on the club. It uses only the path the tile shows, and only when it is
+accepted. The IWR's horizontal zero is not calibrated yet, so a radar
+horizontal launch or IWR club path reads *azimuth uncalibrated* and gives no
+face angle; face angle comes from camera paths until that calibration exists.
 
 Use the numbered test suite for a normal collection: **1. Set up the rig**,
 **2. Check hardware and light**, **3. Automatic ball range**, **4. Capture the

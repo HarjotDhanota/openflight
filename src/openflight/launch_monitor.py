@@ -218,6 +218,9 @@ class Shot:
     launch_angle_horizontal_confidence: Optional[float] = None
     launch_angle_vertical_source: Optional[str] = None
     launch_angle_horizontal_source: Optional[str] = None
+    # "azimuth_uncalibrated" when the displayed horizontal is an IWR value
+    # measured without a horizontal phase reference (audit F8).
+    launch_angle_horizontal_status: Optional[str] = None
     spin_rpm: Optional[float] = None
     spin_confidence: Optional[float] = None
     # Raw radar-measured spin, kept when --calculated-spin rewrites
@@ -419,6 +422,7 @@ class Shot:
             "launch_angle_horizontal_confidence": self.launch_angle_horizontal_confidence,
             "launch_angle_vertical_source": self.launch_angle_vertical_source,
             "launch_angle_horizontal_source": self.launch_angle_horizontal_source,
+            "launch_angle_horizontal_status": self.launch_angle_horizontal_status,
             "angle_source": self.angle_source,
             "club_angle_deg": self.club_angle_deg,
             "club_path_deg": self.club_path_deg,

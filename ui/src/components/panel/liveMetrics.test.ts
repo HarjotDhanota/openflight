@@ -285,6 +285,40 @@ describe('buildLiveMetrics', () => {
       });
     });
 
+    it('labels an uncalibrated radar horizontal (audit F8)', () => {
+      const metrics = buildLiveMetrics(
+        makeShot({
+          launch_angle_horizontal_source: 'radar',
+          launch_angle_horizontal_status: 'azimuth_uncalibrated',
+          launch_angle_horizontal_confidence: 0.9,
+        }),
+        'imperial',
+        emptySwingStats
+      );
+
+      expect(byId(metrics, 'launch_h')).toMatchObject({
+        subtext: 'azimuth uncalibrated',
+        confidence: 'high',
+      });
+    });
+
+    it('labels an uncalibrated IWR club path (audit F8)', () => {
+      const metrics = buildLiveMetrics(
+        makeShot({
+          club_path_deg: null,
+          experimental_club_path_deg: 1.5,
+          experimental_club_path_status: 'azimuth_uncalibrated',
+        }),
+        'imperial',
+        emptySwingStats
+      );
+
+      expect(byId(metrics, 'club_path')).toMatchObject({
+        value: '+1.5',
+        subtext: 'azimuth uncalibrated',
+      });
+    });
+
     it('falls back to the shared fields for shots recorded before per-axis fields', () => {
       const metrics = buildLiveMetrics(
         makeShot({ launch_angle_confidence: 0.9, angle_source: 'radar' }),

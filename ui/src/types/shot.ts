@@ -31,6 +31,7 @@ export interface Shot {
   launch_angle_horizontal_confidence?: number | null;
   launch_angle_vertical_source?: string | null;
   launch_angle_horizontal_source?: string | null;
+  launch_angle_horizontal_status?: string | null;
   angle_source: 'radar' | 'camera' | 'estimated' | null;
   club_angle_deg: number | null;
   club_path_deg: number | null;

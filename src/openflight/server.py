@@ -3137,6 +3137,18 @@ def _calibrated_pose_evidence(pose: dict, placement: dict) -> dict:
     return evidence
 
 
+def _iwr_azimuth_status() -> str | None:
+    """Mark IWR horizontal values while the board has no horizontal phase reference.
+
+    An electrical phase bias shifts the radar horizontal and rotates the IWR
+    club path, so neither shares the camera's zero until the reference is
+    calibrated in situ from camera tracks (audit F8, decision D3).
+    """
+    if getattr(iwr6843_runtime, "horizontal_phase_reference_rad", None) is None:
+        return "azimuth_uncalibrated"
+    return None
+
+
 def _process_iwr6843_angle(shot: Shot) -> float | None:
     """Apply a correlated LCMF-v1 result without risking the OPS shot."""
     if iwr6843_runtime is None or shot.mode == "mock":
@@ -3248,6 +3260,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 shot.launch_angle_horizontal = horizontal_deg
                 shot.launch_angle_horizontal_confidence = shot.iwr6843_horizontal_confidence
                 shot.launch_angle_horizontal_source = "radar"
+                shot.launch_angle_horizontal_status = _iwr_azimuth_status()
                 logger.info(
                     "[SERVER] IWR6843 TX2 horizontal proxy: %.2fÂ° (coherence %.0f%%, status=%s)",
                     horizontal_deg,
@@ -3294,7 +3307,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             candidate_attack = getattr(club_path, "candidate_attack_angle_deg", None)
             candidate_path_status = getattr(club_path, "candidate_path_status", None)
             shot.experimental_club_path_status = (
-                club_path.status
+                (_iwr_azimuth_status() or club_path.status)
                 if accepted_path is not None
                 else (
                     candidate_path_status
@@ -3554,6 +3567,8 @@ def _apply_camera_horizontal_decision(
     shot.launch_angle_horizontal = selected_deg
     shot.launch_angle_horizontal_confidence = confidence
     shot.launch_angle_horizontal_source = source
+    # A camera decision that falls back to radar hands back the IWR's value.
+    shot.launch_angle_horizontal_status = _iwr_azimuth_status() if source == "radar" else None
 
 
 def _fuse_camera_ball_flight(
@@ -3688,7 +3703,9 @@ def displayed_club_path(shot: Shot) -> tuple[float | None, str | None]:
     camera fusion did not run (the kiosk hides it otherwise). Candidate,
     out-of-bounds, noisy, rejected and withheld paths return (None, None), so
     face angle is never built on a path the kiosk does not show as a
-    measurement (audit F1).
+    measurement (audit F1). An IWR path without a horizontal phase reference
+    carries status "azimuth_uncalibrated", not "accepted", so it is left out
+    too (audit F8).
     """
     if shot.club_path_deg is not None:
         return shot.club_path_deg, "canonical"
@@ -3720,6 +3737,11 @@ def _attach_experimental_face_angle(shot: Shot) -> None:
     launch = shot.launch_angle_horizontal
     if launch is None or shot.launch_angle_horizontal_source == "estimated":
         shot.experimental_face_angle_status = "missing_measured_start_direction"
+        return
+    # An uncalibrated radar start direction has its own zero; with any path it
+    # would mix two frames (audit F8).
+    if shot.launch_angle_horizontal_status == "azimuth_uncalibrated":
+        shot.experimental_face_angle_status = "start_direction_azimuth_uncalibrated"
         return
     path, path_source = displayed_club_path(shot)
     if path is None:
@@ -4121,6 +4143,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                         shot.launch_angle_horizontal = kld7_angle_h.horizontal_deg
                         shot.launch_angle_horizontal_confidence = kld7_angle_h.confidence
                         shot.launch_angle_horizontal_source = "radar"
+                        shot.launch_angle_horizontal_status = None
                         if shot.angle_source is None:
                             shot.angle_source = "radar"
                         if shot.launch_angle_confidence is None:
