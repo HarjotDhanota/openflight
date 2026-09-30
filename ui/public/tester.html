@@ -2205,11 +2205,11 @@
         resolved: { label: 'Automatic range complete', prompt: 'The qualified camera and radar evidence agree.' },
         experimental: {
           label: 'Setup saved — experimental range',
-          prompt: 'Saved as EXPERIMENTAL: the camera locked the ball in the box, and the radar agreed with it (or found no ball, so the camera’s range is used). Nothing has qualified this range, so every number built on it is labelled experimental. The ladder can start.',
+          prompt: 'Saved as EXPERIMENTAL: the camera’s ball in the patch and the radar’s distance to it (or what one of them found alone, with a warning below). Nothing has qualified this range, so every number built on it is labelled experimental. The ladder can start.',
         },
         raw_only: {
-          label: 'Evidence complete — raw-only mode',
-          prompt: 'raw-only: the evidence is saved but no range: the camera did not lock the ball in the box, or the radar disagreed with it. The ladder can continue with range-dependent metrics withheld.',
+          label: 'Evidence complete — no ball found',
+          prompt: 'No ball found in the patch. The ball may be outside it: move the ball or the patch, then start over. The ladder can continue with range-dependent metrics withheld.',
         },
       };
 
@@ -2616,8 +2616,35 @@
         const validationLine = validation
           ? `<span${validation.state === 'validation_disagrees' ? ' class="problem"' : ''} data-state="${escapeHtml(validation.state)}">640×400 check <b>${validation.state === 'validation_disagrees' ? 'disagrees' : validation.state.replaceAll('_', ' ')}</b> — ${escapeHtml(validation.message)}</span>`
           : '';
+        // P8-4: the camera's ball and the radar's candidates, and what they agreed on
+        const ball = display?.patch_ball;
+        const ballLabels = {
+          validated: 'camera and radar agree',
+          camera_only: 'camera only',
+          radar_only: 'radar only',
+          disagree: 'camera and radar disagree',
+          no_ball: 'no ball in the patch',
+        };
+        const side = (value) => value == null || Math.abs(value) < 0.005
+          ? ''
+          : ` · ${Math.abs(value).toFixed(2)} m ${value > 0 ? 'right' : 'left'}`;
+        const ballLine = ball
+          ? `<span data-state="ball-${escapeHtml(ball.status)}"${ball.warning ? ' class="problem"' : ''}>ball <b>${ball.range_m == null ? 'not found' : metres(ball.range_m)}</b> — ${escapeHtml(ballLabels[ball.status] || ball.status)}` +
+            (ball.camera_range_m != null ? ` · camera ${metres(ball.camera_range_m)}` : '') +
+            (ball.radar_range_m != null ? ` · radar ${metres(ball.radar_range_m)} (${escapeHtml(ball.radar_method || '')})` : '') +
+            side(ball.side_offset_m) +
+            (ball.warning ? ` — ${escapeHtml(ball.warning)}` : '') +
+            '</span>'
+          : '';
+        const radarLine = ball?.radar_candidates?.length
+          ? `<span data-state="radar-candidates">radar candidates in the patch <b>${ball.radar_candidates
+              .map((item) => `${metres(item.range_m)} ${escapeHtml(item.method)}`)
+              .join(', ')}</b></span>`
+          : '';
         el('automatic-range-values').innerHTML = state
           ? `<span>setup epoch <b>${escapeHtml(state.epoch_id)}</b></span>` +
+            ballLine +
+            radarLine +
             describe(escapeHtml(display?.iwr?.label || 'bias-corrected IWR slant range'), display?.iwr) +
             describe('camera arm 5', display?.camera?.arm5) +
             describe('camera arm 6 validation', display?.camera?.arm6) +

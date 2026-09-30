@@ -208,7 +208,7 @@ test('walks the main automatic-range prompts and reconstructs after reload', asy
   await expect(action).toHaveText('Save 640×400 observation');
   await action.tap();
 
-  await expect(action).toHaveText('Evidence complete — raw-only mode');
+  await expect(action).toHaveText('Evidence complete — no ball found');
   await expect(page.locator('#automatic-range')).toContainText(
     'bias-corrected IWR slant range unqualified — not qualified for promotion on this setup · diagnostic 1.520 m, not used'
   );
@@ -1480,7 +1480,7 @@ test('moving the patch later makes the light stale and starts the ball range ove
     solution: { status: 'unresolved', selected_range_m: null },
   });
   await page.goto('/tester.html');
-  await expect(page.locator('#tee-range-action')).toHaveText('Evidence complete — raw-only mode');
+  await expect(page.locator('#tee-range-action')).toHaveText('Evidence complete — no ball found');
   // a confirmed patch opens no camera by itself
   await expect(page.locator('#placement-box')).toBeHidden();
   expect(mocks.posts).toEqual([]);
@@ -1561,6 +1561,91 @@ test('the camera step draws the patch it searches', async ({ page }) => {
     '338.3,548.6 941.7,548.6 823.2,372.6 456.8,372.6'
   );
   await expect(page.locator('#tee-range-camera-detector')).toContainText('No ball found in the patch');
+});
+
+// P8-4: the camera's ball and the radar's candidates validate each other; the summary
+// shows both distances and what they agreed on, with a warning when they did not.
+const PAIR_STATE = {
+  epoch_id: 'epoch-pair',
+  phase: 'experimental',
+  reason: 'patch_ball_saved',
+  evidence: {},
+  solution: { status: 'unresolved', selected_range_m: null },
+};
+
+async function pairStep(page: Page, patchBall: Record<string, unknown>) {
+  const mocks = await base(page, PAIR_STATE);
+  await page.route('**/api/tester/tee-range**', (route) =>
+    json(route, {
+      state: mocks.state(),
+      display: {
+        ...rangeDisplay(mocks.state()),
+        canonical: { state: 'experimental', range_m: patchBall.range_m, reason: null },
+        swings: {
+          state: 'experimental',
+          range_m: patchBall.range_m,
+          message: 'EXPERIMENTAL: swings use the setup’s distance.',
+        },
+        patch_ball: patchBall,
+      },
+    })
+  );
+  await page.goto('/tester.html');
+}
+
+test('an agreeing pair shows both distances and where the ball sits aside', async ({ page }) => {
+  await pairStep(page, {
+    status: 'validated',
+    warning: null,
+    range_m: 1.176,
+    side_offset_m: 0.1,
+    source: 'static_iwr_magnitude',
+    camera_range_m: 1.25,
+    camera_uncertainty_m: 0.27,
+    radar_range_m: 1.176,
+    radar_method: 'magnitude',
+    radar_candidates: [
+      { method: 'magnitude', range_m: 1.176, score: 0.8, elevation_deg: -16 },
+      { method: 'coherent', range_m: 1.575, score: 49, elevation_deg: -9.5 },
+    ],
+    radar_warnings: [],
+  });
+
+  const ball = page.locator('[data-state="ball-validated"]');
+  await expect(ball).toContainText('ball 1.176 m — camera and radar agree');
+  await expect(ball).toContainText('camera 1.250 m');
+  await expect(ball).toContainText('radar 1.176 m (magnitude)');
+  await expect(ball).toContainText('0.10 m right');
+  await expect(ball).not.toHaveClass('problem');
+  await expect(page.locator('[data-state="radar-candidates"]')).toContainText(
+    '1.176 m magnitude, 1.575 m coherent'
+  );
+  await expect(page.getByRole('button', { name: 'C. Start the exposure ladder' })).toBeEnabled();
+});
+
+test('disagreeing sensors are saved with a warning that names both distances', async ({ page }) => {
+  const warning =
+    'The camera puts the ball at 1.50 m and the radar at 1.20 m: they disagree. Check for other objects in the patch. The camera’s distance is used.';
+  await pairStep(page, {
+    status: 'disagree',
+    warning,
+    range_m: 1.5,
+    side_offset_m: 0,
+    source: 'camera_size_range',
+    camera_range_m: 1.5,
+    camera_uncertainty_m: 0.02,
+    radar_range_m: 1.2,
+    radar_method: 'coherent',
+    radar_candidates: [{ method: 'coherent', range_m: 1.2, score: 30, elevation_deg: -11 }],
+    radar_warnings: [],
+  });
+
+  const ball = page.locator('[data-state="ball-disagree"]');
+  await expect(ball).toHaveClass('problem');
+  await expect(ball).toContainText('camera and radar disagree');
+  await expect(ball).toContainText(warning);
+  // measure, label, don't block (D15): the ladder can still start
+  await expect(page.getByRole('button', { name: 'C. Start the exposure ladder' })).toBeEnabled();
 });
 
 // P7-7 (D11): without a qualified range the setup saves as experimental.

@@ -40,6 +40,7 @@ from openflight.camera import (
     ball_pixels,
     camera_roll,
     ground_patch,
+    patch_pairing,
     reference_ball_range,
     session_review_routes as review_routes,
     study_ladder,
@@ -526,9 +527,23 @@ def _solved_camera_height(
         )
     except ValueError:
         return solved
+    return _check_solved_lens_height(
+        solved, height, uncertainty, lens_above_radar, _camera_height_bounds(camera)
+    )
+
+
+def _check_solved_lens_height(
+    solved: dict,
+    height: float,
+    uncertainty: float,
+    lens_above_radar: float,
+    bounds: tuple[float, float],
+) -> dict:
+    """Keep the rig's lens height unless the radar-solved one shows a gross error."""
+    nominal = solved["nominal_m"]
     solved["radar_solved_m"] = height
     solved["radar_uncertainty_m"] = uncertainty
-    low, high = _camera_height_bounds(camera)
+    low, high = bounds
     lowest = lens_above_radar + MIN_RADAR_CLEARANCE_M
     if height < lowest:
         solved["radar_rejected"] = (
@@ -779,6 +794,18 @@ def experimental_tee_range_choice(
     """
     if solution is None or solution.status == "resolved":
         return None, None
+    if solution.reason == PATCH_BALL_SAVED_REASON:
+        # P8-4: the pair (or what one sensor found), saved with its decision
+        saved = next(
+            (item for item in solution.candidates if item.candidate_id.startswith("patch-ball-")),
+            None,
+        )
+        if saved is None:
+            return None, None
+        decision = tee_range._thaw_json(  # pylint: disable=protected-access
+            (saved.evidence or {}).get("patch_ball") or {}
+        )
+        return saved, {**decision, "candidate_id": saved.candidate_id}
     if solution.reason != EXPERIMENTAL_SAVED_REASON:
         return None, None
     decision = experimental_tee_range_decision(solution.candidates)
@@ -789,6 +816,102 @@ def experimental_tee_range_choice(
         None,
     )
     return candidate, decision
+
+
+# P8-4: the setup's range is the camera's and radar's agreeing pair, or whatever one
+# of them found, labelled experimental (D15). The saved candidate carries the
+# decision; the solution's reason says whether anything was saved.
+PATCH_BALL_SAVED_REASON = "patch_ball_saved"
+PATCH_BALL_WITHHELD_PREFIX = "patch_ball_withheld_"
+
+
+def patch_ball_decision(camera_candidate: Mapping | None, iwr_candidate: Mapping | None) -> dict:
+    """Pair the camera's ball with the radar's candidates in the patch (P8-4)."""
+    evidence = (camera_candidate or {}).get("evidence") or {}
+    ball = evidence.get("patch_ball_camera") if isinstance(evidence, Mapping) else None
+    result = evidence.get("result") if isinstance(evidence, Mapping) else None
+    if not isinstance(result, Mapping) or result.get("status") != "selected":
+        ball = None
+    radar_evidence = (iwr_candidate or {}).get("evidence") or {}
+    found = radar_evidence.get("patch_candidates") if isinstance(radar_evidence, Mapping) else None
+    radar = list((found or {}).get("candidates") or []) if isinstance(found, Mapping) else []
+    decision = patch_pairing.pair_patch_ball(ball if isinstance(ball, Mapping) else None, radar)
+    return {
+        **decision,
+        "radar_warnings": list((found or {}).get("warnings") or [])
+        if isinstance(found, Mapping)
+        else [],
+        "radar_window_m": (found or {}).get("window_m") if isinstance(found, Mapping) else None,
+    }
+
+
+def patch_pair_lens_height(save_height: Mapping | None, decision: Mapping) -> dict | None:
+    """The lens height the pair implies: the ball's ray meets the radar's distance (P8-4).
+
+    Only a validated pair checks the rig's lens height; otherwise it stands.
+    """
+    if not isinstance(save_height, Mapping):
+        return None
+    solved = dict(save_height)
+    camera = decision.get("camera")
+    if decision.get("status") != "validated" or not isinstance(camera, Mapping):
+        return solved
+    ray = camera.get("ray_lfu")
+    if ray is None:
+        return solved
+    ray = np.asarray(ray, dtype=float)
+    lens = np.asarray(camera["camera_origin_lfu"], dtype=float)
+    radar = np.asarray(camera["radar_origin_lfu"], dtype=float)
+    offset = radar - lens
+    along = float(np.dot(ray, offset))
+    radar_range = float(decision["range_m"])
+    discriminant = along * along - float(np.dot(offset, offset)) + radar_range**2
+    if discriminant < 0.0:
+        return solved
+    distance = along + math.sqrt(discriminant)
+    down = -float(ray[2])
+    height = BALL_DIAMETER_MM / 2000.0 + distance * down
+    angular = math.sin(math.radians(float(solved.get("angular_uncertainty_deg") or 1.0)))
+    uncertainty = math.hypot(float(decision["uncertainty_m"]) * abs(down), distance * angular)
+    nominal = float(solved["nominal_m"])
+    solved["radar_range_m"] = radar_range
+    solved["radar_range_source"] = decision.get("source")
+    return _check_solved_lens_height(
+        solved, height, uncertainty, nominal - float(radar[2]), (0.0, 1.0)
+    )
+
+
+def patch_ball_solution(
+    epoch_id: str,
+    candidates: Sequence[tee_range.TeeRangeCandidate],
+    decision: Mapping,
+    placement_box: Mapping | None,
+) -> tee_range.TeeRangeSolution:
+    """The setup's unqualified solution, with the saved pair (if any) as a candidate."""
+    saved = []
+    if decision.get("range_m") is not None and decision.get("uncertainty_m"):
+        saved.append(
+            tee_range.TeeRangeCandidate(
+                candidate_id=f"patch-ball-{epoch_id}",
+                source=f"patch_ball_{decision['source']}",
+                source_group="camera" if decision["source"] == "camera_size_range" else "iwr",
+                radar_slant_range_m=float(decision["range_m"]),
+                uncertainty_m=max(float(decision["uncertainty_m"]), 0.001),
+                selectable=False,
+                evidence={
+                    "patch_ball": dict(decision),
+                    "placement_box": {"confirmed": dict(placement_box or {})},
+                },
+            )
+        )
+    return tee_range.TeeRangeSolution.unresolved(
+        [*candidates, *saved],
+        reason=(
+            PATCH_BALL_SAVED_REASON
+            if saved
+            else f"{PATCH_BALL_WITHHELD_PREFIX}{decision.get('status') or 'no_ball'}"
+        ),
+    )
 
 
 def rig_geometry_hashes(rig_geometry: Path | None) -> dict:
@@ -957,9 +1080,9 @@ def setup_placement_box(solution: tee_range.TeeRangeSolution | None) -> dict | N
     """The box the tester confirmed for this setup, as the 1280x800 search recorded it."""
     for item in solution.candidates if solution is not None else ():
         box = (item.evidence or {}).get("placement_box")
-        if item.source_group == "camera" and isinstance(box, Mapping):
+        if isinstance(box, Mapping):
             confirmed = box.get("confirmed")
-            if isinstance(confirmed, Mapping):
+            if isinstance(confirmed, Mapping) and confirmed.get("box_px") is not None:
                 # the patch (P8-1): its ground position, distance, the camera tilt it was
                 # drawn at, and box_px, the hitting zone as the P7-4 box was
                 keys = (
@@ -1017,9 +1140,14 @@ def tee_range_handoff(
             if item.candidate_id == solution.selected_candidate_id
         )
     elif experimental is not None and decision is not None:
-        # D11: the setup saved this range as experimental; the kiosk starts with it
+        # D11, P8-4: the setup saved this range as experimental; the kiosk starts with it
         candidate = experimental
-        status, source = "unqualified", _EXPERIMENTAL_SOURCES[decision["source"]]
+        status = "unqualified"
+        source = (
+            patch_pairing.SOURCES.get(decision["source"], f"unqualified_{decision['source']}")
+            if decision.get("schema") == patch_pairing.DECISION_SCHEMA
+            else _EXPERIMENTAL_SOURCES[decision["source"]]
+        )
         logger.warning(
             "Using EXPERIMENTAL tee range %.3f m from %s (%s)",
             candidate.radar_slant_range_m,
@@ -1105,6 +1233,28 @@ def tee_range_handoff(
         "scene": scene,
         "net_range": net,
         "placement_box": setup_placement_box(solution),
+        # P8-4: how camera and radar agreed on the ball, and where it sits aside
+        "patch_ball": (
+            {
+                key: decision.get(key)
+                for key in (
+                    "status",
+                    "warning",
+                    "source",
+                    "range_m",
+                    "uncertainty_m",
+                    "side_offset_m",
+                    "label",
+                )
+            }
+            if decision is not None and decision.get("schema") == patch_pairing.DECISION_SCHEMA
+            else None
+        ),
+        "tee_side_offset_m": (
+            decision.get("side_offset_m")
+            if decision is not None and decision.get("schema") == patch_pairing.DECISION_SCHEMA
+            else None
+        ),
         **rig_geometry_hashes(rig_geometry),
         "cli_args": args,
     }
@@ -4891,6 +5041,25 @@ def _swings_display(solution: Mapping, *, use_unqualified: bool) -> dict | None:
         parsed = None
     experimental, decision = experimental_tee_range_choice(parsed)
     if experimental is not None and decision is not None:
+        if decision.get("schema") == patch_pairing.DECISION_SCHEMA:
+            # P8-4: what the camera and the radar agreed on, or what one found alone
+            basis = {
+                "validated": "the radar's distance, which the camera's ball in the patch confirms",
+                "camera_only": "the camera's distance",
+                "disagree": "the camera's distance",
+                "radar_only": "the radar's distance, unconfirmed by the camera",
+            }.get(str(decision.get("status")), "the setup's distance")
+            warning = f" {decision['warning']}" if decision.get("warning") else ""
+            return {
+                "state": "experimental",
+                "range_m": experimental.radar_slant_range_m,
+                "patch_ball_status": decision.get("status"),
+                "warning": decision.get("warning"),
+                "message": (
+                    f"EXPERIMENTAL: swings use {basis}.{warning} Nothing has qualified it, "
+                    "so every number built on it is labelled experimental."
+                ),
+            }
         basis = (
             "the camera's range: the radar found no ball"
             if decision["source"] == "camera_size_range"
@@ -4912,6 +5081,16 @@ def _swings_display(solution: Mapping, *, use_unqualified: bool) -> dict | None:
             "message": "TEST ONLY: swings use this unqualified radar range.",
         }
     withheld = str(solution.get("reason") or "")
+    if withheld.startswith(PATCH_BALL_WITHHELD_PREFIX):
+        return {
+            "state": "pending",
+            "range_m": None,
+            "warning": patch_pairing.NO_BALL_MESSAGE,
+            "message": (
+                f"Swings start with the tee range pending: {patch_pairing.NO_BALL_MESSAGE} "
+                "Launch and club metrics that need it are withheld."
+            ),
+        }
     because = (
         withheld.removeprefix(EXPERIMENTAL_WITHHELD_PREFIX).replace("_", " ")
         if withheld.startswith(EXPERIMENTAL_WITHHELD_PREFIX)
@@ -4943,6 +5122,31 @@ def _validation_display(agreement: Mapping | None) -> dict | None:
     if status == "validation_disagrees":
         message += "; the setup is flagged, not blocked. Check the ball did not move."
     return {"state": status, "message": message}
+
+
+def _patch_ball_display(decision: Mapping | None) -> dict | None:
+    """The pairing's verdict for the range summary: both sensors' distances, and why."""
+    if not isinstance(decision, Mapping):
+        return None
+    camera = decision.get("camera") if isinstance(decision.get("camera"), Mapping) else None
+    radar = decision.get("radar_candidate")
+    return {
+        "status": decision.get("status"),
+        "warning": decision.get("warning"),
+        "range_m": decision.get("range_m"),
+        "side_offset_m": decision.get("side_offset_m"),
+        "source": decision.get("source"),
+        "camera_range_m": camera.get("range_m") if camera else None,
+        "camera_uncertainty_m": camera.get("uncertainty_m") if camera else None,
+        "radar_range_m": radar.get("range_m") if isinstance(radar, Mapping) else None,
+        "radar_method": radar.get("method") if isinstance(radar, Mapping) else None,
+        "radar_candidates": [
+            {key: item.get(key) for key in ("method", "range_m", "score", "elevation_deg")}
+            for item in decision.get("radar_candidates") or []
+            if isinstance(item, Mapping)
+        ],
+        "radar_warnings": list(decision.get("radar_warnings") or []),
+    }
 
 
 def tee_range_display(
@@ -5003,6 +5207,8 @@ def tee_range_display(
             ),
         },
         "experimental": evidence.get("experimental_range"),
+        # P8-4: the camera's ball and the radar's candidates, and what they agreed on
+        "patch_ball": _patch_ball_display(evidence.get("patch_ball")),
         "swings": swings,
         "validation": _validation_display(evidence.get("validation_agreement")),
         "placement_box": dict(placement_box) if placement_box is not None else None,
@@ -6635,10 +6841,13 @@ def create_app(
                 retry_phase=None,
             )
         try:
-            candidates = [
-                tee_range.TeeRangeCandidate.from_dict(state.evidence["iwr_candidate"]),
-                tee_range.TeeRangeCandidate.from_dict(state.evidence["camera_arm5_candidate"]),
-            ]
+            iwr = tee_range.TeeRangeCandidate.from_dict(state.evidence["iwr_candidate"])
+            # the camera may have found no ball: the radar's candidates still count (P8-4)
+            camera = (
+                tee_range.TeeRangeCandidate.from_dict(state.evidence["camera_arm5_candidate"])
+                if isinstance(state.evidence.get("camera_arm5_candidate"), Mapping)
+                else None
+            )
             # the 640x400 check is advisory (P7-7): the setup saves without it
             arm6 = (
                 tee_range.TeeRangeCandidate.from_dict(state.evidence["camera_arm6_candidate"])
@@ -6652,108 +6861,66 @@ def create_app(
                 reason=f"cross_sensor_evidence_incomplete: {exc}",
                 retry_phase="needs_camera_arm5",
             )
-        if arm6 is not None:
-            candidates.append(arm6)
+        # P8-4: after both have finished, the camera's ball and the radar's candidates
+        # validate each other; whatever exists is saved, labelled experimental
+        decision = patch_ball_decision(
+            camera.to_dict() if camera is not None else None, iwr.to_dict()
+        )
+        if camera is not None:
+            camera = replace(
+                camera,
+                evidence={
+                    **tee_range._thaw_json(camera.evidence),  # pylint: disable=protected-access
+                    "camera_height": patch_pair_lens_height(
+                        tee_range._thaw_json(  # pylint: disable=protected-access
+                            (camera.evidence or {}).get("camera_height")
+                        ),
+                        decision,
+                    ),
+                },
+            )
+        candidates = [item for item in (iwr, camera, arm6) if item is not None]
         solution = (
             tee_range.resolve_qualified_tee_range(state.epoch_id, candidates, qualification)
-            if qualification is not None
+            if qualification is not None and camera is not None
             else None
         )
         phase = None
-        experimental = None
+        qualification_outcome = solution.reason if solution is not None else qualification_reason
         if solution is None or solution.status != "resolved":
-            # D11: without a qualified range the setup saves as experimental
-            experimental = {
-                **experimental_tee_range_decision(candidates),
-                "qualification_outcome": (
-                    solution.reason if solution is not None else qualification_reason
-                ),
-            }
-            saved = experimental["status"] == "saved"
-            solution = tee_range.TeeRangeSolution.unresolved(
-                candidates,
-                reason=(
-                    EXPERIMENTAL_SAVED_REASON
-                    if saved
-                    else f"{EXPERIMENTAL_WITHHELD_PREFIX}{experimental['reason_code']}"
-                ),
+            solution = patch_ball_solution(
+                state.epoch_id, candidates, decision, state.evidence.get("placement_box")
             )
-            phase = "experimental" if saved else "raw_only"
+            phase = "experimental" if solution.reason == PATCH_BALL_SAVED_REASON else "raw_only"
+        logger.info(
+            "[SETUP] patch ball %s: %s%s",
+            decision["status"],
+            f"{decision['range_m']:.3f} m from {decision['source']}"
+            if decision.get("range_m") is not None
+            else "no range",
+            f" ({decision['warning']})" if decision.get("warning") else "",
+        )
         return store.finalize(
             state,
             solution,
             qualification,
             phase=phase,
             evidence={
-                "experimental_range": experimental,
-                "validation_agreement": camera_validation_agreement(candidates[1], arm6),
+                "patch_ball": decision,
+                # the camera's candidate with the lens height the pair checked
+                **({"camera_arm5_candidate": camera.to_dict()} if camera is not None else {}),
+                # the old D11 key, kept for readers of earlier setups' records
+                "experimental_range": {
+                    **decision,
+                    "qualification_outcome": qualification_outcome,
+                },
+                "validation_agreement": camera_validation_agreement(camera, arm6),
                 # the setup's scene and both rig hashes, which join it to the
                 # swing sessions' session_start (wiring audit C3, C4, C5)
                 "scene": setup_scene(solution, rig_geometry),
                 "rig_geometry": rig_geometry_hashes(rig_geometry),
             },
         )
-
-    def _camera_steered_iwr(tester_id: str, state, selected, iwr_evidence) -> dict | None:
-        """The radar candidate checked against, or re-selected inside, the camera's window."""
-        window = camera_radar_window(selected)
-        if window is None or not isinstance(iwr_evidence, Mapping):
-            return None
-        difference = (iwr_evidence.get("evidence") or {}).get("difference") or {}
-        value = iwr_evidence.get("radar_slant_range_m")
-        full = {"status": difference.get("status"), "range_m": value}
-        facts = {"camera_window_m": list(window), "full_window": full}
-        if (
-            difference.get("status") in IWR_ACCEPTED_STATUSES
-            and value is not None
-            and window[0] <= float(value) <= window[1]
-        ):
-            return {
-                **iwr_evidence,
-                "evidence": {
-                    **iwr_evidence["evidence"],
-                    "camera_window": {**facts, "outcome": "consistent"},
-                },
-            }
-        search = iwr_search_interval_m(qualification)
-        if window[1] < search[0] or window[0] > search[1]:
-            # The camera puts the ball where the radar may not look, so the radar's
-            # pick is unusable rather than kept unchecked (wiring audit S5).
-            return {
-                **iwr_evidence,
-                "evidence": {
-                    **(iwr_evidence.get("evidence") or {}),
-                    "camera_window": {
-                        **facts,
-                        "outcome": "camera_window_disjoint",
-                        "search_window_m": list(search),
-                    },
-                },
-            }
-        try:
-            steered = _guided_iwr_candidate(
-                state.evidence["empty_capture"],
-                state.evidence["ball_present_capture"],
-                epoch_id=state.epoch_id,
-                calibration_path=iwr_calibration,
-                qualification=qualification,
-                camera_window_m=window,
-                iwr_dir=range_store(tester_id).epoch_dir(state.epoch_id) / "iwr",
-                rig_geometry=rig_geometry,
-            ).to_dict()
-        except (KeyError, TypeError, ValueError) as exc:
-            # The pick outside the window stays on record but is unusable for swings
-            # and the lens-height solve (UNUSABLE_CAMERA_WINDOW_OUTCOMES).
-            logger.warning("Camera-steered radar re-selection failed: %s", exc)
-            return {
-                **iwr_evidence,
-                "evidence": {
-                    **(iwr_evidence.get("evidence") or {}),
-                    "camera_window": {**facts, "outcome": "not_rechecked", "error": str(exc)},
-                },
-            }
-        steered["evidence"]["camera_window"] = {**facts, "outcome": "reselected"}
-        return steered
 
     def _range_resources_busy(*, live_yields: bool = False, ladder_yields: bool = False):
         """Who owns the camera or radar, or None when a new job may take them.
@@ -7184,20 +7351,18 @@ def create_app(
                 qualification=qualification,
                 static_exposure=save_analysis["static_exposure"],
             )
+            # the radar's candidates are paired with this ball only once both have
+            # finished (P8-4); nothing here re-selects the radar's pick
             iwr_evidence = state.evidence.get("iwr_candidate")
-            steered = (
-                _camera_steered_iwr(tester_id, state, result.selected, iwr_evidence)
-                if arm_id == "arm5"
-                else None
-            )
-            if steered is not None:
-                iwr_evidence = steered
             candidate = replace(
                 candidate,
                 evidence={
                     **candidate.evidence,
                     "save_camera_only_analysis": save_analysis,
-                    "camera_height": _solved_camera_height(result, model, iwr_evidence),
+                    # the rig's lens height until the pair checks it (P8-4, P8-5)
+                    "camera_height": _solved_camera_height(result, model, None),
+                    # the ball's pixel, size distance and ray, for the pairing (P8-4)
+                    "patch_ball_camera": patch_pairing.camera_ball(result.selected, model),
                     # the box this mode searched, and the one the tester confirmed
                     "placement_box": {
                         "arm_id": arm_id,
@@ -7247,7 +7412,6 @@ def create_app(
         except (OSError, RuntimeError) as exc:
             logger.warning("Static exposure lock was not remembered: %s", exc)
         evidence = {
-            **({"iwr_candidate": steered} if steered is not None else {}),
             f"camera_{arm_id}_candidate": candidate.to_dict(),
             f"camera_{arm_id}_static_exposure": save_analysis["static_exposure"],
             f"camera_{arm_id}_guidance": {
@@ -7364,27 +7528,17 @@ def create_app(
                 ),
             },
         }
-        if arm_id != PLACEMENT_BOX_ARM:
-            stop_guided_live(tester_id, state.epoch_id, arm_id)
-            completed = store.transition(
-                state,
-                phase="evaluating",
-                reason=reason,
-                request_id=request_id,
-                evidence=kept,
-            )
-            return _finalize_range_state(store, completed)
-        candidates = [
-            tee_range.TeeRangeCandidate.from_dict(state.evidence[key])
-            for key in ("iwr_candidate", "camera_arm5_candidate")
-            if isinstance(state.evidence.get(key), Mapping)
-        ]
-        return store.finalize(
+        # the camera found no ball it could lock: its raw evidence is kept, and the
+        # radar's candidates alone decide what is saved, with a warning (P8-4)
+        stop_guided_live(tester_id, state.epoch_id, arm_id)
+        completed = store.transition(
             state,
-            tee_range.TeeRangeSolution.unresolved(candidates, reason=reason),
+            phase="evaluating",
+            reason=reason,
             request_id=request_id,
             evidence=kept,
         )
+        return _finalize_range_state(store, completed)
 
     @app.route("/api/tester/tee-range", methods=["GET", "POST"])
     def guided_tee_range():

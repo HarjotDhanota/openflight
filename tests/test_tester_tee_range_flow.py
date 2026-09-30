@@ -385,7 +385,9 @@ class StaticManager:
         return False
 
 
-def camera_result(value: float, width: int = 1280, height: int = 800) -> ReferenceBallRangeResult:
+def camera_result(
+    value: float, width: int = 1280, height: int = 800, uncertainty: float = 0.02
+) -> ReferenceBallRangeResult:
     x, y, diameter = ball_pixels(width, height)
     candidate = ReferenceBallRangeCandidate(
         x_px=x,
@@ -396,8 +398,8 @@ def camera_result(value: float, width: int = 1280, height: int = 800) -> Referen
         size_radar_range_m=value,
         floor_camera_range_m=value,
         size_camera_range_m=value,
-        floor_range_uncertainty_m=0.02,
-        size_range_uncertainty_m=0.03,
+        floor_range_uncertainty_m=uncertainty,
+        size_range_uncertainty_m=max(uncertainty, 0.03),
         range_disagreement_m=0.0,
         consistency_sigma=0.0,
         source="calibrated_qualified",
@@ -762,18 +764,19 @@ def test_a_dark_camera_view_can_be_kept_as_unqualified_raw_evidence(tmp_path, in
         / saved["file"]
     )
     assert response.status_code == 200
-    assert state["phase"] == "raw_only"
+    # P8-4: the camera's raw evidence is kept and the radar's ball is saved alone,
+    # labelled experimental with a warning (D15)
+    assert state["phase"] == "experimental"
     assert state["solution"]["status"] == "unresolved"
-    assert state["solution"]["reason"] == "camera_arm5_lighting_required_raw_evidence_only"
+    assert state["solution"]["reason"] == "patch_ball_saved"
+    decision = state["evidence"]["patch_ball"]
+    assert decision["status"] == "radar_only"
+    assert decision["range_m"] == pytest.approx(1.2, abs=0.03)
+    assert "camera did not find the ball" in decision["warning"]
     assert saved["qualified"] is False
     assert saved["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
     assert "camera_arm5_candidate" not in state["evidence"]
     assert live.running is False
-    phases = [
-        json.loads(item.read_text(encoding="utf-8"))["phase"]
-        for item in path.parent.glob("state-*.json")
-    ]
-    assert "evaluating" not in phases
 
 
 def test_an_ambiguous_ball_is_reported_as_unidentified_not_as_dark(tmp_path, inputs, monkeypatch):
@@ -795,8 +798,8 @@ def test_an_ambiguous_ball_is_reported_as_unidentified_not_as_dark(tmp_path, inp
     assert refused.status_code == 409
     assert "ball not identified" in refused.get_json()["error"]
     assert kept.status_code == 200
-    assert state["phase"] == "raw_only"
-    assert state["solution"]["reason"] == "camera_arm5_ball_not_identified_raw_evidence_only"
+    assert state["phase"] == "experimental"
+    assert state["evidence"]["patch_ball"]["status"] == "radar_only"
 
 
 def test_the_diagnostic_save_is_refused_when_the_light_is_usable(tmp_path, inputs, monkeypatch):
@@ -1276,9 +1279,9 @@ def test_changed_camera_placement_cannot_match_a_qualified_artifact(tmp_path, in
 def test_missing_qualification_and_disagreement_remain_raw_only(tmp_path, inputs, monkeypatch):
     app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
     missing = drive(app.test_client(), tester)
-    # D11 (P7-7): unqualified, the agreeing ranges save as experimental
+    # P8-4: unqualified, the agreeing pair saves as experimental
     assert missing["phase"] == "experimental"
-    assert missing["solution"]["reason"] == "experimental_range_saved"
+    assert missing["solution"]["reason"] == "patch_ball_saved"
     assert missing["evidence"]["experimental_range"]["qualification_outcome"] == (
         "qualification_artifact_missing"
     )
@@ -1286,16 +1289,16 @@ def test_missing_qualification_and_disagreement_remain_raw_only(tmp_path, inputs
     # after the first whole-patch find, live looks follow the ball
     assert arm6["live_readiness"]["discovery_mode"] in {"whole_patch", "follow_last_selection"}
     assert arm6["live_readiness"]["independent"] is True
-    iwr = missing["evidence"]["iwr_candidate"]
+    pair = missing["evidence"]["patch_ball"]
     assert ts._tee_range_cli_args(tee_range.TeeRangeSolution.from_dict(missing["solution"])) == [
         "--iwr6843-tee-m",
-        f"{iwr['radar_slant_range_m']:.9g}",
+        f"{pair['range_m']:.9g}",
         "--iwr6843-ball-height-m",
         "0.021335",
         "--iwr6843-tee-range-source",
-        "unqualified_static_iwr",
+        "patch_validated_static_iwr_magnitude",
         "--iwr6843-tee-range-candidate",
-        iwr["candidate_id"],
+        f"patch-ball-{missing['epoch_id']}",
         # no net in the fake empty capture: the default is flagged (C7)
         "--iwr6843-net-range-source",
         "default_not_measured",
@@ -1303,8 +1306,9 @@ def test_missing_qualification_and_disagreement_remain_raw_only(tmp_path, inputs
     other_root = tmp_path / "other"
     app, tester = app_for(other_root, inputs, monkeypatch, camera_m=1.5)
     disagreed = drive(app.test_client(), tester)
-    assert disagreed["phase"] == "raw_only"
-    assert disagreed["solution"]["reason"] == "experimental_range_withheld_radar_disagrees"
+    # D15: measure, label, don't block: the camera's distance is saved, with a warning
+    assert disagreed["phase"] == "experimental"
+    assert disagreed["evidence"]["patch_ball"]["status"] == "disagree"
     assert disagreed["evidence"]["experimental_range"]["qualification_outcome"] == (
         "absolute_residual_exceeds_policy"
     )
@@ -1929,7 +1933,7 @@ def test_a_saved_experimental_range_reaches_swings_without_the_test_flag(
     app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
     state = drive(app.test_client(), tester)
     solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
-    iwr = state["evidence"]["iwr_candidate"]
+    pair = state["evidence"]["patch_ball"]
 
     assert state["phase"] == "experimental"
     assert ts._tee_range_cli_args(solution) == ts._tee_range_cli_args(
@@ -1937,20 +1941,20 @@ def test_a_saved_experimental_range_reaches_swings_without_the_test_flag(
     )
     assert ts._tee_range_cli_args(solution, use_unqualified=True) == [
         "--iwr6843-tee-m",
-        f"{iwr['radar_slant_range_m']:.9g}",
+        f"{pair['range_m']:.9g}",
         "--iwr6843-ball-height-m",
         "0.021335",
         "--iwr6843-tee-range-source",
-        "unqualified_static_iwr",
+        "patch_validated_static_iwr_magnitude",
         "--iwr6843-tee-range-candidate",
-        iwr["candidate_id"],
+        f"patch-ball-{state['epoch_id']}",
         # no net in the fake empty capture: the default is flagged (C7)
         "--iwr6843-net-range-source",
         "default_not_measured",
     ]
     swings = ts.tee_range_display(state)["swings"]
     assert swings["state"] == "experimental"
-    assert swings["range_m"] == pytest.approx(iwr["radar_slant_range_m"])
+    assert swings["range_m"] == pytest.approx(pair["range_m"])
 
 
 def test_without_an_accepted_radar_the_experimental_range_is_the_camera_s(
@@ -1970,7 +1974,7 @@ def test_without_an_accepted_radar_the_experimental_range_is_the_camera_s(
     assert args[:2] == ["--iwr6843-tee-m", f"{camera['radar_slant_range_m']:.9g}"]
     swings = ts.tee_range_display(state)["swings"]
     assert swings["state"] == "experimental"
-    assert "the radar found no ball" in swings["message"]
+    assert "The radar found no ball" in swings["message"]
 
 
 def test_a_radar_that_stops_answering_mid_setup_is_told_to_replug_its_usb():
@@ -2243,25 +2247,24 @@ def test_a_radar_pick_the_camera_could_not_recheck_is_unusable(outcome):
     assert solved["radar_solved_m"] is None
 
 
-def test_a_qualification_interval_disjoint_from_the_camera_window_rejects(
+def test_a_person_behind_the_ball_is_a_radar_candidate_the_pair_does_not_pick(
     tmp_path, inputs, monkeypatch
 ):
-    # a person 2.8 m out is the only change inside a 2.0-4.0 m qualification window,
-    # while the camera puts the ball at 1.2 m (window 0.72-1.68 m)
-    artifact = replace(qualification(inputs), plausible_range_m=(2.0, 4.0))
-    inputs["qualification"].write_text(json.dumps(artifact.to_dict()), encoding="utf-8")
-    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    """P8-4: a still person 2.8 m out adds ten times the ball's echo; both are radar
+    candidates in the patch's window, and the camera's ball chooses the ball."""
+    app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
     app.config["TEST_STATIC_MANAGER"].other_return = (70, 300.0)
 
     state = drive(app.test_client(), tester)
 
-    iwr = state["evidence"]["iwr_candidate"]
-    assert iwr["evidence"]["camera_window"]["outcome"] == "camera_window_disjoint"
-    solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
-    assert ts.unqualified_tee_range_choice(solution) is None
-    display = ts.tee_range_display(state)
-    assert display["iwr"]["state"] == "rejected"
-    assert "camera" in display["iwr"]["reason"]
+    decision = state["evidence"]["patch_ball"]
+    radar = {round(item["range_m"], 1) for item in decision["radar_candidates"]}
+    assert {1.2, 2.8} <= radar
+    assert decision["status"] == "validated"
+    assert decision["range_m"] == pytest.approx(1.2, abs=0.05)
+    person = next(item for item in decision["weighed"] if item["radar_range_m"] > 2.5)
+    assert person["agrees"] is False
+    assert state["phase"] == "experimental"
 
 
 def test_the_lens_height_comes_from_the_1280x800_search_only():
@@ -2392,28 +2395,8 @@ def test_the_camera_window_is_its_range_plus_minus_two_sigma_with_a_20_percent_f
     assert ts.camera_radar_window(replace(selected, size_radar_range_m=None)) is None
 
 
-def test_the_camera_steers_the_radar_away_from_a_person_behind_the_ball(
-    tmp_path, inputs, monkeypatch
-):
-    app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
-    radar = app.config["TEST_STATIC_MANAGER"]
-    # a still person 2.8 m out adds ten times the ball's echo
-    radar.other_return = (70, 300.0)
-
-    state = drive(app.test_client(), tester)
-
-    iwr = state["evidence"]["iwr_candidate"]
-    window = iwr["evidence"]["camera_window"]
-    assert window["outcome"] == "reselected"
-    assert window["full_window"]["range_m"] == pytest.approx(2.8, abs=0.05)
-    assert iwr["radar_slant_range_m"] == pytest.approx(1.2, abs=0.05)
-    assert iwr["evidence"]["qualification"]["camera_range_used"] is True
-    assert iwr["evidence"]["qualification"]["accuracy_qualified"] is False
-
-
-def test_the_camera_rescues_a_three_bin_ball_at_one_metre(tmp_path, inputs, monkeypatch):
-    # wiring audit S1: re-selecting inside the 0.6-1.4 m camera window judged clutter
-    # over that window alone, where the ball's three bins are 3 of 21
+def test_a_three_bin_ball_at_one_metre_pairs_with_the_camera(tmp_path, inputs, monkeypatch):
+    # wiring audit S1's case: the ball's three bins beside a strong person far out
     app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False, camera_m=1.0)
     radar = app.config["TEST_STATIC_MANAGER"]
     radar.ball_bins = (24, 25, 26)
@@ -2421,23 +2404,9 @@ def test_the_camera_rescues_a_three_bin_ball_at_one_metre(tmp_path, inputs, monk
 
     state = drive(app.test_client(), tester)
 
-    iwr = state["evidence"]["iwr_candidate"]
-    assert iwr["evidence"]["camera_window"]["outcome"] == "reselected"
-    assert iwr["evidence"]["difference"]["status"] == "accepted"
-    assert iwr["radar_slant_range_m"] == pytest.approx(1.0, abs=0.03)
-    # the search stays the whole qualification window; the camera only picks the cluster
-    assert iwr["evidence"]["search_window_m"] == [0.5, 4.0]
-
-
-def test_a_radar_reading_inside_the_camera_window_is_kept_as_is(tmp_path, inputs, monkeypatch):
-    app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
-
-    state = drive(app.test_client(), tester)
-
-    iwr = state["evidence"]["iwr_candidate"]
-    assert iwr["evidence"]["camera_window"]["outcome"] == "consistent"
-    assert iwr["radar_slant_range_m"] == pytest.approx(1.2, abs=0.05)
-    assert iwr["evidence"]["qualification"]["camera_range_used"] is False
+    decision = state["evidence"]["patch_ball"]
+    assert decision["status"] == "validated"
+    assert decision["range_m"] == pytest.approx(1.0, abs=0.03)
 
 
 class HandedOverTilt(MutableTilt):
@@ -2612,14 +2581,14 @@ def test_every_record_and_session_start_say_what_swings_used(tmp_path, inputs, m
     handed = arm["handed_to_swings"]
     assert admission["handed_to_swings"] == handed
     assert contract["handed_to_swings"] == handed
-    iwr = state["evidence"]["iwr_candidate"]
+    pair = state["evidence"]["patch_ball"]
     assert handed["epoch_id"] == state["epoch_id"]
     assert handed["tee_range_status"] == "unqualified"
-    assert handed["tee_range_source"] == "unqualified_static_iwr"
-    assert handed["tee_m"] == pytest.approx(iwr["radar_slant_range_m"])
-    assert handed["candidate_id"] == iwr["candidate_id"]
+    assert handed["tee_range_source"] == "patch_validated_static_iwr_magnitude"
+    assert handed["tee_m"] == pytest.approx(pair["range_m"])
+    assert handed["candidate_id"] == f"patch-ball-{state['epoch_id']}"
     assert handed["qualified"] is False
-    assert handed["camera_window"]["outcome"] == "consistent"
+    assert handed["patch_ball"]["status"] == "validated"
     assert arm["tee_range_m"] == handed["tee_m"]
     assert arm["tee_range_source"] == handed["tee_range_source"]
     scene = handed["scene"]
@@ -3558,23 +3527,29 @@ def test_an_agreeing_radar_range_is_saved_as_experimental_and_handed_to_swings(
 
     state = drive(app.test_client(), tester)
 
-    decision = state["evidence"]["experimental_range"]
+    decision = state["evidence"]["patch_ball"]
     assert state["phase"] == "experimental"
     assert state["solution"]["status"] == "unresolved"
-    assert state["solution"]["reason"] == "experimental_range_saved"
-    assert decision["status"] == "saved"
+    assert state["solution"]["reason"] == "patch_ball_saved"
+    assert decision["status"] == "validated"
     assert decision["label"] == "experimental"
-    assert decision["source"] == "static_iwr"
+    assert decision["source"] == "static_iwr_magnitude"
     assert decision["range_m"] == pytest.approx(1.2)
-    assert decision["agreement"]["normalized_sigma"] <= 2.0
-    assert decision["qualification_outcome"] == "qualification_artifact_missing"
+    assert decision["pair"]["normalized_residual"] <= 2.0
+    assert state["evidence"]["experimental_range"]["qualification_outcome"] == (
+        "qualification_artifact_missing"
+    )
     solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
     args, handed = ts.tee_range_handoff(solution)
     assert args[:2] == ["--iwr6843-tee-m", "1.2"]
-    assert args[args.index("--iwr6843-tee-range-source") + 1] == "unqualified_static_iwr"
+    assert args[args.index("--iwr6843-tee-range-source") + 1] == (
+        "patch_validated_static_iwr_magnitude"
+    )
     assert handed["tee_range_status"] == "unqualified"
     assert handed["experimental"] is True
-    assert handed["experimental_range"]["source"] == "static_iwr"
+    assert handed["experimental_range"]["source"] == "static_iwr_magnitude"
+    assert handed["patch_ball"]["status"] == "validated"
+    assert handed["tee_side_offset_m"] is not None
     display = ts.tee_range_display(state)
     assert display["swings"]["state"] == "experimental"
     assert display["swings"]["range_m"] == pytest.approx(1.2)
@@ -3582,18 +3557,28 @@ def test_an_agreeing_radar_range_is_saved_as_experimental_and_handed_to_swings(
     assert display["canonical"]["state"] == "experimental"
 
 
-def test_a_radar_that_disagrees_with_the_camera_saves_no_range(tmp_path, inputs, monkeypatch):
-    # the camera's size range 1.5 m +- 0.02, the radar's 1.2 m +- 0.02: 10 sigma apart
+def test_a_radar_that_disagrees_with_the_camera_is_saved_with_both_distances_named(
+    tmp_path, inputs, monkeypatch
+):
+    # the camera's size range 1.5 m +- 0.02, the radar's 1.2 m +- 0.02: 10 sigma apart.
+    # D15: the camera's distance is saved, experimental, with a warning naming both
     app, tester = _unqualified_app(tmp_path, inputs, monkeypatch, camera_m=1.5)
 
     state = drive(app.test_client(), tester)
 
-    assert state["phase"] == "raw_only"
-    assert state["solution"]["reason"] == "experimental_range_withheld_radar_disagrees"
-    assert state["evidence"]["experimental_range"]["status"] == "withheld"
+    decision = state["evidence"]["patch_ball"]
+    assert state["phase"] == "experimental"
+    assert decision["status"] == "disagree"
+    assert decision["range_m"] == pytest.approx(1.5)
+    assert "1.50 m" in decision["warning"] and "1.20 m" in decision["warning"]
+    assert "other objects in the patch" in decision["warning"]
     solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
-    assert ts.tee_range_handoff(solution)[0][0] == "--iwr6843-tee-range-pending"
-    assert ts.tee_range_display(state)["swings"]["state"] == "pending"
+    args, handed = ts.tee_range_handoff(solution)
+    assert args[:2] == ["--iwr6843-tee-m", "1.5"]
+    assert handed["patch_ball"]["warning"] == decision["warning"]
+    display = ts.tee_range_display(state)
+    assert display["swings"]["state"] == "experimental"
+    assert decision["warning"] in display["swings"]["message"]
 
 
 def test_without_a_radar_range_the_camera_range_is_saved_as_experimental(
@@ -3604,16 +3589,39 @@ def test_without_a_radar_range_the_camera_range_is_saved_as_experimental(
 
     state = drive(app.test_client(), tester)
 
-    decision = state["evidence"]["experimental_range"]
+    decision = state["evidence"]["patch_ball"]
     assert state["phase"] == "experimental"
+    assert decision["status"] == "camera_only"
     assert decision["source"] == "camera_size_range"
-    assert decision["iwr_usable"] is False
+    assert "radar found no ball" in decision["warning"]
     solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
     args, handed = ts.tee_range_handoff(solution)
     assert args[:2] == ["--iwr6843-tee-m", "1.2"]
     assert args[args.index("--iwr6843-tee-range-source") + 1] == "unqualified_camera_size_range"
-    assert handed["candidate_id"].endswith("-arm5")
+    assert handed["candidate_id"] == f"patch-ball-{state['epoch_id']}"
     assert handed["experimental"] is True
+
+
+def test_no_ball_in_the_patch_saves_nothing_and_says_so(tmp_path, inputs, monkeypatch):
+    live = FakeLive()
+    live.ball_per_signal = 0.0001
+    app, tester = _unqualified_app(tmp_path, inputs, monkeypatch, live_view=live)
+    app.config["TEST_STATIC_MANAGER"].ball_return = 0.0
+    client = app.test_client()
+    start_arm5(client, tester)
+
+    response = post(client, tester, "save_camera_arm5_diagnostic", "nothing")
+
+    assert response.status_code == 200, response.get_json()
+    state = phase(client, tester)
+    assert state["phase"] == "raw_only"
+    assert state["solution"]["reason"] == "patch_ball_withheld_no_ball"
+    assert state["evidence"]["patch_ball"]["warning"] == (
+        "No ball found in the patch. The ball may be outside it: move the ball or the patch."
+    )
+    solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
+    assert ts.tee_range_handoff(solution)[0][0] == "--iwr6843-tee-range-pending"
+    assert ts.tee_range_display(state)["swings"]["state"] == "pending"
 
 
 def test_the_640x400_check_can_be_skipped_and_the_setup_still_saves(tmp_path, inputs, monkeypatch):
@@ -3707,18 +3715,26 @@ def test_the_640x400_settings_use_the_1280x800_ball_halved():
     }
 
 
-def test_a_coherent_radar_pick_inside_the_camera_window_is_kept_and_saved(
+def test_the_indoor_setup_pairs_the_ball_at_the_tape_not_the_coherent_pick(
     tmp_path, inputs, monkeypatch
 ):
-    """End to end on the Outdoors-test-7 captures: the capture-time pick lies inside
-    the camera's window, so it is kept as it is, and it agrees with the camera."""
+    """End to end on harjot-indoor-test-1's radar captures (P8-4): the coherent
+    difference's 1.575 m and the magnitude's 1.2 m are both candidates, and a camera
+    ball at the tape's 1.25 m (its size uncertainty, about 21 %) picks the 1.2 m."""
     inputs["rig"].write_text(V3_RIG.read_text(encoding="utf-8"), encoding="utf-8")
     inputs["calibration"].write_text(
         REFERENCE_CALIBRATION.read_text(encoding="utf-8"), encoding="utf-8"
     )
-    app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False, camera_m=1.55)
+    app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
+    monkeypatch.setattr(
+        ts,
+        "estimate_patch_ball",
+        lambda _frames, camera, **_kwargs: camera_result(
+            1.25, camera.image_width_px, camera.image_height_px, uncertainty=0.27
+        ),
+    )
     manager = app.config["TEST_STATIC_MANAGER"]
-    empty, present = _coherent_records()
+    empty, present = _indoor_records()
     original = manager.start
 
     def start(action, commands, log_path, on_finish=None, **kwargs):
@@ -3745,13 +3761,16 @@ def test_a_coherent_radar_pick_inside_the_camera_window_is_kept_and_saved(
     state = drive(app.test_client(), tester)
 
     iwr = state["evidence"]["iwr_candidate"]
+    # the coherent difference alone still says 1.575 m, as it did in the field
     assert iwr["evidence"]["difference"]["status"] == "accepted_unqualified"
-    assert iwr["evidence"]["camera_window"]["outcome"] == "consistent"
-    assert iwr["radar_slant_range_m"] == pytest.approx(1.581, abs=0.01)
+    assert iwr["radar_slant_range_m"] == pytest.approx(1.575, abs=0.01)
+    decision = state["evidence"]["patch_ball"]
+    assert decision["status"] == "validated"
+    assert decision["source"] == "static_iwr_magnitude"
+    assert 1.15 <= decision["range_m"] <= 1.26
     assert state["phase"] == "experimental"
-    decision = state["evidence"]["experimental_range"]
-    assert decision["source"] == "static_iwr"
-    assert decision["range_m"] == pytest.approx(1.581, abs=0.01)
+    args = ts._tee_range_cli_args(tee_range.TeeRangeSolution.from_dict(state["solution"]))
+    assert 1.15 <= float(args[1]) <= 1.26
 
 
 # P7-15: the placement box is step 1, and it is the hitting zone.
@@ -4104,3 +4123,33 @@ def test_both_setup_captures_use_the_profile_the_patch_needs(tmp_path, inputs, m
     assert len(seen) == 1
     assert seen[0][0]["patch"]["centre_lfu_m"] == pytest.approx([0.0, 2.6])
     assert phase(client, tester)["evidence"]["iwr_static_config"]["chosen"] == "far"
+
+
+def test_a_patch_2_m_out_works_end_to_end(tmp_path, inputs, monkeypatch):
+    """P8-1..P8-4 on a synthetic 2 m setup: the patch, both captures, the camera's
+    ball, the pair and what swings are started with."""
+    app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
+    monkeypatch.setattr(
+        ts,
+        "estimate_patch_ball",
+        lambda _frames, camera, **_kwargs: camera_result(
+            2.02, camera.image_width_px, camera.image_height_px, uncertainty=0.43
+        ),
+    )
+    app.config["TEST_STATIC_MANAGER"].ball_bins = (50,)  # 2.0 m at 0.04 m per bin
+    client = app.test_client()
+    assert confirm_box(client, tester, "far", centre=(0.2, 2.0)).status_code == 200
+    patch = box_display(client, tester)
+    assert patch["ground_distance_m"] == pytest.approx(2.0, abs=0.05)
+
+    state = drive(client, tester)
+
+    window = state["evidence"]["iwr_candidate"]["evidence"]["patch_window"]["window_m"]
+    assert window[0] < 2.0 < window[1]
+    decision = state["evidence"]["patch_ball"]
+    assert decision["status"] == "validated"
+    assert decision["range_m"] == pytest.approx(2.0, abs=0.03)
+    assert state["phase"] == "experimental"
+    args, handed = ts.tee_range_handoff(tee_range.TeeRangeSolution.from_dict(state["solution"]))
+    assert float(args[1]) == pytest.approx(2.0, abs=0.03)
+    assert handed["placement_box"]["patch"]["centre_lfu_m"] == pytest.approx([0.2, 2.0])

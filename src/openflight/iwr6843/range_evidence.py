@@ -1379,8 +1379,10 @@ def compare_static_channel_profiles(  # pylint: disable=too-many-locals,too-many
     static = np.sum(np.abs(e) ** 2, axis=(0, 1))
     excluded = allowed
     if fit_exclusion_m is not None:
+        # the caller's span alone: a patch's window padded for an uncalibrated
+        # tilt can cover the whole capture, leaving no still reflector to fit (P8-3)
         low, high = (_finite(value, "fit exclusion") for value in fit_exclusion_m)
-        excluded = allowed | ((ranges >= low) & (ranges <= high))
+        excluded = (ranges >= low) & (ranges <= high)
     factors, reference = _robust_channel_factors(e, p, _reference_bins(static, search, excluded))
     expected = factors[..., None] * e
     residual = p - expected
@@ -1626,9 +1628,6 @@ PATCH_MAGNITUDE_MAX_CANDIDATES = 3
 PATCH_COHERENT_MAX_CANDIDATES = 4
 # a peak this many bins inside the capture's first or last bin has both neighbours
 PATCH_EDGE_GUARD_BINS = 1
-# at least this many bins outside the fit exclusion keep the channel fit on still
-# reflectors; a wider exclusion falls back to the caller's narrower one
-PATCH_MIN_REFERENCE_POOL_BINS = 12
 
 
 def static_patch_candidates_policy() -> dict[str, Any]:
@@ -1781,10 +1780,10 @@ def static_patch_candidates(  # pylint: disable=too-many-locals,too-many-argumen
     residual_power = elevations = None
     if have_channels:
         correction = np.asarray(element_correction, dtype=complex)
-        exclusion = (low, high)
-        outside = search & ~((ranges - bias_m >= exclusion[0]) & (ranges - bias_m <= exclusion[1]))
-        if np.count_nonzero(outside) < PATCH_MIN_REFERENCE_POOL_BINS and fit_exclusion_m:
-            exclusion = tuple(float(value) for value in fit_exclusion_m)
+        # still reflectors for the channel fit lie outside the patch's own span
+        exclusion = (
+            tuple(float(value) for value in fit_exclusion_m) if fit_exclusion_m else (low, high)
+        )
         coherent = compare_static_channel_profiles(
             empty_channels,
             present_channels,
