@@ -41,6 +41,8 @@ CONTROLS_WAIT_S = 1.0
 MIN_MATCHED_FRAMES = 3
 EARLY_EXIT_SWINGS = 3
 EARLY_EXIT_REDS = 2
+MAX_RED_SWINGS = 3  # at any point (D9)
+DARK_REDS_IN_A_ROW = 2  # the light has fallen (D9)
 PHOTO_TARGET_DN = 100.0
 # A photo prefers unity gain (the least noise) and raises it only as far as 2 when
 # the exposure would pass the frame period. In sun it needs tens of microseconds:
@@ -629,6 +631,33 @@ class LadderState:
         ):
             self._data["pending_photo"] = target
 
+    @staticmethod
+    def _failure(swings: list[dict]) -> tuple[str, bool] | None:
+        """Why these swings fail their setting, and whether the light fell, or None.
+
+        The early exit (2 reds in the first 3) stands; two dark reds in a row mean
+        the light has fallen; and 3 reds at any point end a setting that would
+        otherwise never finish (D9, Outdoors-test-5).
+        """
+        first = swings[:EARLY_EXIT_SWINGS]
+        early = [swing for swing in first if swing["color"] == "red"]
+        reds = [swing for swing in swings if swing["color"] == "red"]
+
+        def dark(items: list[dict]) -> bool:
+            return any(swing.get("light_cause") in DARK_LIGHT_CAUSES for swing in items)
+
+        if len(early) >= EARLY_EXIT_REDS:
+            return f"{len(early)} of the first {len(first)} swings red", dark(early)
+        last = swings[-DARK_REDS_IN_A_ROW:]
+        if len(last) == DARK_REDS_IN_A_ROW and all(
+            swing["color"] == "red" and swing.get("light_cause") in DARK_LIGHT_CAUSES
+            for swing in last
+        ):
+            return f"{DARK_REDS_IN_A_ROW} dark red swings in a row", True
+        if len(reds) >= MAX_RED_SWINGS:
+            return f"{len(reds)} red swings", dark(reds)
+        return None
+
     def record_swing(self, verdict: dict) -> str:
         rung = self.current
         if rung is None:
@@ -642,11 +671,10 @@ class LadderState:
                 "capture": verdict["capture"],
                 "rung_id": rung.rung_id,
             }
-        first = entry["swings"][:EARLY_EXIT_SWINGS]
-        reds = [swing for swing in first if swing["color"] == "red"]
-        if len(reds) >= EARLY_EXIT_REDS:
-            reason = f"{len(reds)} of the first {len(first)} swings red"
-            if any(swing.get("light_cause") in DARK_LIGHT_CAUSES for swing in reds):
+        failure = self._failure(entry["swings"])
+        if failure is not None:
+            reason, dark = failure
+            if dark:
                 # a shorter exposure is darker still
                 self._skip_from(rung, "failed", reason)
             else:

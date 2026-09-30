@@ -1256,3 +1256,77 @@ def test_a_mode_without_a_setup_ball_position_is_skipped_not_swung(tmp_path):
     assert sl.NO_SETUP_BALL in rungs["full-300"]["reason"]
     assert runner.state.current.rung_id == "half-300"
     assert done == ["arm5"]
+
+
+def _swing_through(state, colors, rung_id="full-300"):
+    """Record swings on a begun rung: 'r' red (frames), 'd' dark red, 'g' green."""
+    state.begin(rung_id, 3.0, {"ok": True})
+    status = None
+    for index, color in enumerate(colors):
+        if color == "g":
+            status = state.record_swing(_verdict("green", f"{rung_id}-{index}"))
+        else:
+            cause = "zone_dark" if color == "d" else "frames"
+            status = state.record_swing(_verdict("red", f"{rung_id}-{index}", cause))
+    return status
+
+
+def test_three_red_swings_spread_out_fail_a_setting(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+
+    assert _swing_through(state, "rggrg") == "active"
+    assert state.record_swing(_verdict("red", "last", "frames")) == "failed"
+
+    rungs = state.to_dict()["rungs"]
+    assert rungs["full-300"]["reason"] == "3 red swings"
+    assert rungs["full-200"]["status"] == "pending"  # no dark red: only itself
+    assert state.current.rung_id == "full-200"
+
+
+def test_the_field_stall_ends_red_green_green_red_red(tmp_path):
+    # Outdoors-test-5: full-300 stuck at 2 of 5 and 640x400 never ran
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.select(["full-300", *HALF_IDS])
+
+    assert _swing_through(state, "rggrr") == "failed"
+    assert state.current.rung_id == "half-300"
+
+
+def test_two_dark_reds_in_a_row_fail_a_setting_and_its_shorter_ones(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.select([r for r in [*FULL_IDS, *HALF_IDS] if r != "full-100"])
+
+    assert _swing_through(state, "ggg") == "active"
+    assert state.record_swing(_verdict("red", "d1", "ball_dark")) == "active"
+    assert state.record_swing(_verdict("red", "d2", "zone_dark")) == "failed"
+
+    rungs = state.to_dict()["rungs"]
+    assert rungs["full-300"]["reason"] == "2 dark red swings in a row"
+    assert rungs["full-200"]["status"] == "skipped"
+    assert rungs["full-200"]["reason"] == "full-300 failed: 2 dark red swings in a row"
+    assert rungs["full-100"]["reason"] == sl.NOT_SELECTED  # unticked stays as it is
+    assert state.current.rung_id == "half-300"
+
+
+def test_two_dark_reds_apart_do_not_end_a_setting(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    assert _swing_through(state, "gdgd") == "active"
+    assert state.accepted("full-300") == 2
+
+
+def test_a_three_red_failure_with_a_dark_red_skips_the_shorter_settings(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+
+    assert _swing_through(state, "rggdgr") == "failed"
+
+    rungs = state.to_dict()["rungs"]
+    assert rungs["full-300"]["reason"] == "3 red swings"
+    assert rungs["full-200"]["reason"] == "full-300 failed: 3 red swings"
+    assert state.current.rung_id == "half-300"
+
+
+def test_the_early_exit_is_unchanged(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    assert _swing_through(state, "rgr") == "failed"
+    assert state.to_dict()["rungs"]["full-300"]["reason"] == "2 of the first 3 swings red"
+    assert state.to_dict()["rungs"]["full-200"]["status"] == "pending"

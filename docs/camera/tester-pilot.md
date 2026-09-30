@@ -134,7 +134,10 @@ the physical setup. Then work down **Test suite**:
    the page asks you to measure the light again, and **C** waits until you do.
 3. **C. Start the exposure ladder.** The page sets each exposure itself and shows
    which one you are on. Hit a normal shot, wait for the verdict, repeat. It moves
-   on after 5 good swings, and skips exposures your light cannot support.
+   on after 5 good swings, and skips exposures your light cannot support. An
+   exposure fails after 3 red swings at any point, 2 red among its first 3, or 2
+   too-dark reds in a row; when darkness failed it, the shorter exposures of
+   that mode are skipped too, since they are darker still.
    **C** starts only when the setup's camera found the ball in the mode it
    starts in: without the ball's position no swing can be judged, so the page
    says to run the setup again instead.
@@ -476,6 +479,8 @@ every earlier frame and failure record for review.
 | Refreshing the page shows a held photo step | The ladder restored its durable boundary-photo checkpoint | Do not swing; use **Photograph face**, **Skip photo**, or **Resume ladder** if it says the ladder is stopped |
 | Ladder verdict red: `frames: ... fps delivered` or `gap(s)` | The Pi could not keep up with the camera mode | Close other programs, check the power supply, run **A** again |
 | Ladder verdict red: `controls: exposure ...` or `gain ...` | The camera did not take the exposure's setting | Press **C** again; the ladder carries on where it stopped |
+| An exposure reads `failed … — 3 red swings`, or a shorter one `skipped … — full-300 failed: 3 red swings` | Three of its swings went red, whatever the order, so the ladder moved on rather than wait for 5 good ones | Read the red swings' reasons; the ladder continues on its own. A red for darkness also skips the shorter exposures of that mode |
+| An exposure reads `failed … — 2 dark red swings in a row` | The light fell during the exposure (dusk, a cloud) | The shorter exposures of that mode are skipped; add light and measure it again (**B**) before another ladder |
 | Ladder verdict red: `light: too dark ...` (the hitting zone or the ball) | This exposure is below what your light supports | Expected on the shortest exposures; the ladder skips the rest of the mode |
 | Ladder verdict red: `light: too bright for the ball ... clipped` | The ball area is washed out | Expected on the longest exposures in sun; this exposure fails and the shorter ones are still tried |
 | Ladder verdict red: `ladder: the camera did not apply ... within 1 s` | The kiosk has not taken the new exposure yet | Wait: the ladder retries every second. If it repeats for a minute, press **Stop**, then **C** |
