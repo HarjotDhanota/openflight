@@ -640,11 +640,15 @@ def replay(args, *, frozen_session=None) -> dict:
                 recomputed["iwr_vertical_deg"] = (
                     getattr(iwr_measurement, "angle_deg", None) if accepted else None
                 )
-                recomputed["iwr_horizontal_deg"] = (
-                    getattr(iwr_measurement, "horizontal_deg", None) if accepted else None
-                )
-                recomputed["iwr_horizontal_confidence"] = horizontal_confidence_from(
-                    getattr(iwr_measurement, "horizontal_coherence", None) if accepted else None
+                horizontal = getattr(iwr_measurement, "horizontal_deg", None) if accepted else None
+                recomputed["iwr_horizontal_deg"] = horizontal
+                # as the kiosk hands it: the LCMF confidence, only with a horizontal
+                recomputed["iwr_horizontal_confidence"] = (
+                    horizontal_confidence_from(
+                        getattr(iwr_measurement, "horizontal_confidence", None)
+                    )
+                    if horizontal is not None
+                    else None
                 )
                 recomputed["ball_range_evidence"] = None
                 recomputed["club_range_evidence"] = None

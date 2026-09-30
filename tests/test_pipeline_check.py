@@ -84,16 +84,10 @@ def test_what_the_synthetic_data_cannot_support_is_named_not_hidden(synthetic):
             assert row["cause"] in check.CAUSES, row
 
 
-def test_no_code_break_outside_the_known_replay_hand_off(synthetic):
-    breaks = [row["id"] for row in synthetic["code_breaks"]]
-    assert set(breaks) <= {"replay_agrees"}, synthetic["code_breaks"]
+def test_no_code_break_in_the_synthetic_session(synthetic):
+    assert synthetic["code_breaks"] == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="replay_raw_fusion reads measurement.horizontal_coherence, which LCMF does not "
-    "have, and hands 0.0 where the kiosk hands None; fix held for the simplification",
-)
 def test_the_review_replay_hands_the_camera_what_the_kiosk_does(synthetic):
     assert _rows(synthetic)["replay_agrees"]["status"] == check.PASS
 
