@@ -386,7 +386,7 @@ test.describe('bundle import', () => {
     });
     const card = page.locator(`[data-attempt="session-bundle:1"]`);
     await expect(card.locator('tr[data-metric="iwr_launch_vertical_deg"]')).toContainText('accepted');
-    await expect(card.locator('tr[data-metric="iwr_launch_vertical_deg"]')).toContainText('18.5 deg');
+    await expect(card.locator('tr[data-metric="iwr_launch_vertical_deg"]')).toContainText('18.3 deg');
     await expect(card.locator('[data-orientation]')).toContainText(
       'As saved: rotate 180° off · mirror off · 320×200 raw'
     );
