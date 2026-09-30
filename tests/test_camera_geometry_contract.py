@@ -71,10 +71,11 @@ def test_legacy_record_uses_only_recorded_fields_and_explicit_legacy_defaults():
     assert effective.ball_horizontal_output_offset_deg == 0
 
 
-def test_ball_output_offset_is_not_applied_to_club_geometry():
+def test_horizontal_offset_rotates_ball_and_club_geometry_together():
+    # F9: a target-line correction is a frame rotation, so path turns with launch.
     effective = _inputs(ball_horizontal_output_offset_deg=3.25)
     assert effective.ball_geometry().horizontal_offset_deg == 3.25
-    assert not hasattr(effective.delivery_geometry(), "horizontal_offset_deg")
+    assert effective.delivery_geometry().horizontal_offset_deg == 3.25
 
 
 @pytest.mark.parametrize(

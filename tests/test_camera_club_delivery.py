@@ -1150,3 +1150,46 @@ def test_both_club_path_branches_share_the_unit_boresight_zero(path_deg, offset_
 
 def test_every_camera_club_path_names_its_frame():
     assert ChainedDelivery(status="chained_high").club_path_frame == "unit_boresight"
+
+
+@pytest.mark.parametrize(("offset_deg", "frame"), [(0.0, "unit_boresight"), (2.0, "target_line")])
+def test_horizontal_offset_turns_club_path_like_launch(monkeypatch, offset_deg, frame):
+    """F9: the camera's target-line correction applies to club path too."""
+    ball = ReferenceBall(10.0, 10.0, 12.0, 120)
+    monkeypatch.setattr(
+        club_delivery_module, "detect_reference_ball", lambda _frames, **_kwargs: ball
+    )
+    monkeypatch.setattr(
+        club_delivery_module, "_detect_impact_index", lambda _frames, _ball, trigger_index: 40
+    )
+    monkeypatch.setattr(
+        club_delivery_module,
+        "_clubhead_pair_tracks",
+        lambda *_args, **_kwargs: (np.zeros((12, 2, 2)), 5.0),
+    )
+    monkeypatch.setattr(
+        club_delivery_module,
+        "camera_ops_delivery_from_feature_pair",
+        lambda *_args, **_kwargs: ApproachPairEstimate(3.0, -5.0, 1.0, 1.0, 12),
+    )
+
+    result = estimate_chained_delivery(
+        np.full((60, 20, 20), 150, dtype=np.uint8),
+        np.arange(60, dtype=np.int64) * 2_000_000,
+        trigger_index=40,
+        range_evidence=None,
+        geometry=CameraDeliveryGeometry(
+            camera_height_m=0.2032,
+            radar_height_m=0.1524,
+            tee_range_m=1.524,
+            ball_height_m=0.04,
+            image_width_px=20,
+            image_height_px=20,
+            horizontal_offset_deg=offset_deg,
+        ),
+        ops_club_speed_mph=80.0,
+    )
+
+    assert result.club_path_deg == pytest.approx(3.0 + offset_deg)
+    assert result.attack_angle_deg == pytest.approx(-5.0)
+    assert result.club_path_frame == frame

@@ -16,7 +16,7 @@ but the OpenFlight server no longer uses their per-club correction offsets.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
@@ -131,6 +131,9 @@ class CameraDeliveryGeometry:
     roll_correction_deg: float = 0.0
     camera_forward_offset_m: float = 0.0
     calibrated_model: Any = None
+    # The camera's target-line correction. It turns club path exactly as it
+    # turns the camera's horizontal launch, so both stay in one frame (F9).
+    horizontal_offset_deg: float = 0.0
 
     @property
     def ball_forward_m(self) -> float:
@@ -362,6 +365,29 @@ def _velocity_angles(velocity: np.ndarray) -> tuple[float, float]:
     return (
         math.degrees(math.atan2(lateral, forward)),
         math.degrees(math.atan2(vertical, math.hypot(lateral, forward))),
+    )
+
+
+def _in_output_frame(delivery: ChainedDelivery, offset_deg: float) -> ChainedDelivery:
+    """Turn every reported path by the camera's target-line correction (audit F9).
+
+    The gates above judge path in the measurement frame; only the published
+    values move. A zero correction leaves the unit's boresight as the zero.
+    """
+    if offset_deg == 0.0:
+        return delivery
+
+    def turned(value: float | None) -> float | None:
+        if value is None:
+            return None
+        return round((value + offset_deg + 180.0) % 360.0 - 180.0, 2)
+
+    return replace(
+        delivery,
+        club_path_deg=turned(delivery.club_path_deg),
+        pre_path_deg=turned(delivery.pre_path_deg),
+        cross_path_deg=turned(delivery.cross_path_deg),
+        club_path_frame="target_line",
     )
 
 
@@ -607,12 +633,15 @@ def delivery_from_feature_tracks(
         and abs(pre_aoa - cross_aoa) <= CHAINED_INTERVAL_AGREEMENT_DEG
     )
     high = timing_plausible and intervals_agree
-    return ChainedDelivery(
-        status="chained_high" if high else "chained_experimental",
-        attack_angle_deg=round(attack_angle_deg, 2),
-        club_path_deg=round(path_deg, 2),
-        confidence_tier="high" if high else "experimental",
-        **diagnostics,
+    return _in_output_frame(
+        ChainedDelivery(
+            status="chained_high" if high else "chained_experimental",
+            attack_angle_deg=round(attack_angle_deg, 2),
+            club_path_deg=round(path_deg, 2),
+            confidence_tier="high" if high else "experimental",
+            **diagnostics,
+        ),
+        geometry.horizontal_offset_deg,
     )
 
 
@@ -1106,19 +1135,26 @@ def estimate_chained_delivery(
         # Camera+OPS closes the geometry, but TrackMan has not validated this
         # fallback yet. Keep every recovered value visible and explicitly low
         # confidence rather than inheriting the primary estimator's tiers.
-        return ChainedDelivery(
-            **{
-                **vars(result),
-                **common,
-                "status": "camera_ops_fallback",
-                "confidence_tier": "experimental",
-                "path_confidence_tier": ("low" if result.club_path_deg is not None else "withheld"),
-                "attack_confidence_tier": (
-                    "low" if result.attack_angle_deg is not None else "withheld"
-                ),
-            }
+        return _in_output_frame(
+            ChainedDelivery(
+                **{
+                    **vars(result),
+                    **common,
+                    "status": "camera_ops_fallback",
+                    "confidence_tier": "experimental",
+                    "path_confidence_tier": (
+                        "low" if result.club_path_deg is not None else "withheld"
+                    ),
+                    "attack_confidence_tier": (
+                        "low" if result.attack_angle_deg is not None else "withheld"
+                    ),
+                }
+            ),
+            geometry.horizontal_offset_deg,
         )
-    return ChainedDelivery(**{**vars(result), **common})
+    return _in_output_frame(
+        ChainedDelivery(**{**vars(result), **common}), geometry.horizontal_offset_deg
+    )
 
 
 # Measured AoA offsets (TrackMan July baseline minus radar candidate median,

@@ -252,6 +252,9 @@ class EffectiveCameraGeometryInputs:
             roll_correction_deg=self.roll_correction_deg,
             ball_diameter_m=self.ball_diameter_m,
             calibrated_model=self.calibrated_model(),
+            # The recorded name predates it, but the target-line correction
+            # turns club path with the ball's horizontal launch (audit F9).
+            horizontal_offset_deg=self.ball_horizontal_output_offset_deg,
         )
 
     def ball_geometry(self) -> CameraBallGeometry:

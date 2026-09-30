@@ -147,3 +147,23 @@ def test_displayed_club_path_withholds_a_withheld_camera_path():
     )
 
     assert server.displayed_club_path(shot) == (None, None)
+
+
+def test_a_frame_rotation_moves_face_with_launch_and_path():
+    """F9: turning launch and path by the same offset turns face angle with them.
+
+    Face-to-path, the quantity the offset must not change, stays the same.
+    """
+    faces = []
+    for offset in (0.0, 2.0):
+        shot = _measured_start(
+            experimental_fused_club_path_deg=-4.0 + offset,
+            experimental_fused_status="chained_high",
+        )
+        shot.launch_angle_horizontal = 2.0 + offset
+        server._attach_experimental_face_angle(shot)
+        faces.append((shot.experimental_face_angle_deg, shot.experimental_fused_club_path_deg))
+
+    (face_0, path_0), (face_2, path_2) = faces
+    assert face_2 == pytest.approx(face_0 + 2.0)
+    assert face_2 - path_2 == pytest.approx(face_0 - path_0)
