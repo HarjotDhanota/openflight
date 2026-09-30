@@ -1002,3 +1002,200 @@ def test_a_resumed_rung_whose_light_has_gone_starts_again(tmp_path):
     assert rung["swings"] == []
     assert rung["status"] != "active" or resumed.state.accepted("full-300") == 0
     assert "c0" in resumed.state.seen_captures()  # kept, and never verdicted again
+
+
+FULL_IDS = ["full-300", "full-200", "full-150", "full-100", "full-75", "full-50", "full-30"]
+HALF_IDS = ["half-300", "half-150", "half-75"]
+
+
+def _statuses(state):
+    return {rung_id: entry["status"] for rung_id, entry in state.to_dict()["rungs"].items()}
+
+
+def test_unticked_settings_that_have_not_run_are_skipped_as_not_selected(tmp_path):
+    path = tmp_path / "ladder.json"
+    state = sl.LadderState(path)
+
+    state.select(["half-300", "full-150"])
+
+    rungs = sl.LadderState(path).to_dict()["rungs"]
+    assert [r for r in rungs if rungs[r]["status"] == "pending"] == ["full-150", "half-300"]
+    for rung_id in ("full-300", "full-200", "full-30", "half-150", "half-75"):
+        assert rungs[rung_id]["status"] == "skipped"
+        assert rungs[rung_id]["reason"] == sl.NOT_SELECTED
+    assert state.current.rung_id == "full-150"
+    assert sl.LadderState(path).to_dict()["selected_rungs"] == ["full-150", "half-300"]
+
+
+def test_a_setting_ticked_again_before_it_runs_returns_to_pending(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.select(["full-300"])
+    state.select([*FULL_IDS, *HALF_IDS])
+
+    rungs = state.to_dict()["rungs"]
+    assert all(entry["status"] == "pending" for entry in rungs.values())
+    assert all(entry["reason"] is None for entry in rungs.values())
+    assert state.to_dict()["selected_rungs"] == [*FULL_IDS, *HALF_IDS]
+
+
+def test_settings_that_ran_or_were_skipped_for_light_are_never_changed(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.begin("full-300", 3.0, {"ok": True})
+    for i in range(5):
+        state.record_swing(_verdict("green", f"a{i}"))
+    state.begin("full-200", 4.5, {"ok": False, "too_bright": True, "reason": "too bright"})
+    state.begin("full-150", 6.0, {"ok": True})
+    state.record_swing(_verdict("red", "b0", "frames"))
+    state.record_swing(_verdict("red", "b1", "frames"))  # failed: only itself
+    state.begin("full-100", 9.0, {"ok": True})
+    before = state.to_dict()["rungs"]
+
+    state.select(["half-150"])
+    state.select([*FULL_IDS, *HALF_IDS])
+    state.select(["half-150"])
+
+    rungs = state.to_dict()["rungs"]
+    for rung_id in ("full-300", "full-200", "full-150", "full-100"):
+        assert rungs[rung_id] == before[rung_id]
+    assert _statuses(state) == {
+        "full-300": "done",
+        "full-200": "skipped",
+        "full-150": "failed",
+        "full-100": "active",
+        "full-75": "skipped",
+        "full-50": "skipped",
+        "full-30": "skipped",
+        "half-300": "skipped",
+        "half-150": "pending",
+        "half-75": "skipped",
+    }
+    assert rungs["full-200"]["reason"] == "too bright"
+    assert rungs["full-75"]["reason"] == sl.NOT_SELECTED
+    assert state.current.rung_id == "full-100"  # the active one stays until it ends
+
+
+def test_a_setting_added_late_stays_skipped_when_ticked(tmp_path):
+    path = tmp_path / "ladder.json"
+    done = {r: "done" for r in ("full-300", "full-200", "full-150", "full-100", "full-75")}
+    _old_ladder_file(path, {**done, "half-300": "active"})
+    state = sl.LadderState(path)
+
+    state.select([*FULL_IDS, *HALF_IDS])
+
+    assert state.to_dict()["rungs"]["full-50"]["status"] == "skipped"
+    assert "added after" in state.to_dict()["rungs"]["full-50"]["reason"]
+
+
+def test_a_ladder_file_without_a_selection_loads_with_every_setting_selected(tmp_path):
+    path = tmp_path / "ladder.json"
+    _old_ladder_file(path, {"full-300": "active"})
+
+    state = sl.LadderState(path)
+
+    assert state.to_dict()["selected_rungs"] == [*FULL_IDS, *HALF_IDS]
+    assert state.current.rung_id == "full-300"
+    assert sl.LadderState(tmp_path / "new.json").to_dict()["selected_rungs"] == [
+        *FULL_IDS,
+        *HALF_IDS,
+    ]
+
+
+@pytest.mark.parametrize(
+    "choice, message",
+    [([], "choose at least one setting"), (["full-300", "full-999"], "full-999")],
+)
+def test_an_empty_or_unknown_selection_is_refused(tmp_path, choice, message):
+    path = tmp_path / "ladder.json"
+    state = sl.LadderState(path)
+    saved = path.read_text(encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        state.select(choice)
+
+    assert path.read_text(encoding="utf-8") == saved
+    assert all(status == "pending" for status in _statuses(state).values())
+
+
+def test_unticking_the_rest_of_1280x800_still_asks_for_its_last_photo(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.begin("full-300", 3.0, {"ok": True})
+    for i in range(5):
+        state.record_swing(_verdict("green", f"c{i}"))
+    assert state.to_dict()["pending_photo"] is None  # full-200 was still to come
+
+    state.select(["full-300", *HALF_IDS])
+
+    assert state.current.rung_id == "half-300"
+    assert state.to_dict()["pending_photo"] == {"capture": "c4", "rung_id": "full-300"}
+
+
+def test_a_ladder_without_640x400_settings_ends_after_1280x800(tmp_path):
+    run = tmp_path / "run-01" / "arm5" / "camera"
+    run.mkdir(parents=True)
+    done = []
+    runner = _runner(tmp_path, FakeKiosk(), run_dir=tmp_path / "run-01", done=done)
+    runner.state.select(["full-300"])
+    runner.start_rung()
+    for index in range(4):
+        runner.state.record_swing(_verdict("green", f"old-{index}"))
+    _capture(run, exposure=300, gain=3.0, name="camera_last")
+
+    runner.poll_once()
+    assert runner.state.current is None
+    assert runner.state.to_dict()["pending_photo"] == {
+        "capture": "camera_last",
+        "rung_id": "full-300",
+    }
+    runner.photograph("camera_last", "full-300")
+
+    assert done == ["arm5"]
+    assert runner.state.current is None
+
+
+def test_a_ladder_of_only_640x400_settings_starts_there_and_asks_for_no_photo(tmp_path):
+    kiosk = FakeKiosk()
+    done = []
+    runner = _runner(tmp_path, kiosk, done=done)
+    runner.state.select(HALF_IDS)
+
+    runner.start_rung()
+
+    assert kiosk.calls == [(300, 3.0)]
+    assert runner.state.current.rung_id == "half-300"
+    for rung_id in HALF_IDS:
+        runner.state.begin(rung_id, 3.0, {"ok": True})
+        for i in range(5):
+            runner.state.record_swing(_verdict("green", f"{rung_id}-{i}"))
+    state = runner.state.to_dict()
+    assert runner.state.current is None
+    assert state["pending_photo"] is None and state["photo_target"] is None
+    assert kiosk.purposes == ["capture"]
+
+
+def test_ticking_1280x800_again_before_its_photo_keeps_the_mode_open(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.select(["full-300", *HALF_IDS])
+    state.begin("full-300", 3.0, {"ok": True})
+    for i in range(5):
+        state.record_swing(_verdict("green", f"c{i}"))
+    assert state.to_dict()["pending_photo"] == {"capture": "c4", "rung_id": "full-300"}
+
+    state.select(["full-300", "full-200", *HALF_IDS])
+
+    assert state.current.rung_id == "full-200"
+    assert state.to_dict()["pending_photo"] is None
+    assert state.to_dict()["photo_target"] == {"capture": "c4", "rung_id": "full-300"}
+
+
+def test_a_ladder_that_starts_at_its_first_ticked_setting_has_not_moved_on(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    assert state.moved_on is False
+    state.select(["full-150", "full-100"])
+    assert state.current.rung_id == "full-150"
+    assert state.moved_on is False
+    state.begin("full-150", 6.0, {"ok": True})
+    assert state.moved_on is False  # as before: the first setting running is not moving on
+    for i in range(5):
+        state.record_swing(_verdict("green", f"c{i}"))
+    assert state.current.rung_id == "full-100"
+    assert state.moved_on is True

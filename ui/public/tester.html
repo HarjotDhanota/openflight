@@ -383,6 +383,33 @@
       .setup-warning {
         color: var(--warn);
       }
+      .ladder-choice {
+        display: grid;
+        gap: 6px;
+        margin: 8px 0;
+      }
+      .ladder-choice div {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px 14px;
+        font-size: 0.9rem;
+      }
+      .ladder-choice label {
+        flex-direction: row;
+        align-items: center;
+        gap: 6px;
+        color: var(--fg);
+        font-size: 0.9rem;
+      }
+      .ladder-choice input {
+        width: 24px;
+        min-height: 24px;
+        margin: 0;
+      }
+      .ladder-choice label.off {
+        opacity: 0.45;
+      }
       .setup-confirm {
         display: grid;
         grid-template-columns: auto minmax(0, 1fr);
@@ -518,6 +545,8 @@
           </li>
           <li>
             <h3>4. Capture the exposure ladder</h3>
+            <div class="ladder-choice" id="ladder-choice"></div>
+            <p class="note" id="ladder-choice-hint" hidden>The ladder is running: press Stop to change the settings.</p>
             <button type="button" id="step-ladder">C. Start the exposure ladder</button>
             <div class="light" id="ladder-panel"></div>
             <div id="face-guide" hidden style="position: relative; width: 640px; max-width: 100%">
@@ -680,6 +709,7 @@
       let liveArm = null;
       let photoTarget = null;
       let photoIsHandoff = false;
+      let photoEndsLadder = false; // no 640×400 setting follows the handoff
       let photoStopped = false;
       let photoActionPending = false;
       let photoError = null;
@@ -2155,6 +2185,66 @@
       attemptPending = readAttemptValue(ATTEMPT_PENDING_STORAGE_KEY);
       renderAttemptState();
 
+      // Step C's settings: the tester unticks the ones not to run. The server skips
+      // them as "not selected"; settings that already ran cannot be changed.
+      const LADDER_CHOICE_STORAGE_KEY = 'openflight-tester-ladder-rungs';
+      const NOT_SELECTED = 'not selected by the tester';
+      const LADDER_MODES = [
+        ['1280×800', 'full', [300, 200, 150, 100, 75, 50, 30]],
+        ['640×400', 'half', [300, 150, 75]],
+      ];
+      function readLadderChoice() {
+        try {
+          const saved = JSON.parse(localStorage.getItem(LADDER_CHOICE_STORAGE_KEY) || 'null');
+          return Array.isArray(saved) ? saved : null;
+        } catch {
+          return null;
+        }
+      }
+      function tickedRungs() {
+        return [...el('ladder-choice').querySelectorAll('input')].filter((box) => box.checked).map((box) => box.value);
+      }
+      function buildLadderChoice() {
+        const saved = readLadderChoice();
+        for (const [size, prefix, exposures] of LADDER_MODES) {
+          const row = document.createElement('div');
+          row.append(`${size}:`);
+          for (const us of exposures) {
+            const label = document.createElement('label');
+            const box = document.createElement('input');
+            box.type = 'checkbox';
+            box.value = `${prefix}-${us}`;
+            box.checked = !saved || saved.includes(box.value);
+            box.setAttribute('aria-label', `${size} at ${us} µs`);
+            label.append(box, String(us));
+            row.append(label);
+          }
+          row.append('µs');
+          el('ladder-choice').append(row);
+        }
+      }
+      buildLadderChoice();
+      el('ladder-choice').addEventListener('change', () => {
+        try {
+          localStorage.setItem(LADDER_CHOICE_STORAGE_KEY, JSON.stringify(tickedRungs()));
+        } catch {
+          // The choice still applies for this page load when browser storage is unavailable.
+        }
+      });
+      function renderLadderChoice(rungs, walking) {
+        for (const box of el('ladder-choice').querySelectorAll('input')) {
+          const rung = rungs[box.value];
+          const ran = rung && rung.status !== 'pending' && !(rung.status === 'skipped' && rung.reason === NOT_SELECTED);
+          box.disabled = walking || Boolean(ran);
+          box.parentElement.classList.toggle('off', box.disabled);
+        }
+        el('ladder-choice-hint').hidden = !walking;
+      }
+      function ladderStartBody() {
+        const rungs = tickedRungs();
+        return rungs.length ? { ...suiteBody('arm5'), rungs } : null;
+      }
+
       function renderLadder(s) {
         const l = s.ladder,
           v = s.last_verdict;
@@ -2168,6 +2258,7 @@
           if (s.error) el('ladder-panel').textContent = s.error;
           return;
         }
+        renderLadderChoice(l.rungs, s.stopped === false);
         const rows = Object.entries(l.rungs)
           .map(([id, r]) => {
             const ok = r.swings.filter((w) => w.color !== 'red').length;
@@ -2187,6 +2278,7 @@
         if (oldTarget !== newTarget) photoError = null;
         photoTarget = target;
         photoIsHandoff = Boolean(l.pending_photo);
+        photoEndsLadder = !l.current;
         photoStopped = Boolean(s.stopped);
         renderPhotoHandoff();
         el('face-guide').hidden = !target;
@@ -2220,7 +2312,7 @@
         el('photo-message').textContent = photoStopped
           ? `Photo held for ${photoTarget.rung_id}. Resume the ladder to use the camera.`
           : photoIsHandoff
-            ? `Arm 5 is complete. Do not swing. Photograph or skip the face image for ${photoTarget.rung_id} (${photoTarget.capture}) to continue to Arm 6.`
+            ? `Arm 5 is complete. Do not swing. Photograph or skip the face image for ${photoTarget.rung_id} (${photoTarget.capture}) ${photoEndsLadder ? 'to finish the ladder' : 'to continue to Arm 6'}.`
             : `Impact photo available for ${photoTarget.rung_id} (${photoTarget.capture}).`;
         el('photo-pause').textContent = photoStopped ? 'Resume ladder' : 'Pause ladder';
         el('photo-pause').hidden = !photoIsHandoff;
@@ -2253,11 +2345,16 @@
       }
       el('step-ladder').addEventListener('click', async () => {
         if (photoActionPending) return;
+        const body = ladderStartBody();
+        if (!body) {
+          el('ladder-panel').textContent = 'Choose at least one setting.';
+          return;
+        }
         try {
           if (!(await requireSetupEligibility())) return;
           liveShown(false); // the kiosk takes the camera
           const version = ++ladderRequestVersion;
-          const state = await post('/api/tester/ladder/start', suiteBody('arm5'));
+          const state = await post('/api/tester/ladder/start', body);
           if (version === ladderRequestVersion) renderLadder(state);
           clearInterval(ladderTimer);
           ladderTimer = setInterval(ladderTick, 1500);
@@ -2302,12 +2399,14 @@
         renderPhotoHandoff();
         try {
           if (photoStopped) {
+            const body = ladderStartBody();
+            if (!body) throw new Error('Choose at least one setting.');
             if (!(await requireSetupEligibility())) {
               photoActionPending = false;
               renderPhotoHandoff();
               return;
             }
-            await post('/api/tester/ladder/start', suiteBody('arm5'));
+            await post('/api/tester/ladder/start', body);
           } else await post('/api/tester/stop', {});
           if (version !== ladderRequestVersion || testerId !== el('tester-id').value.trim()) return;
           photoActionPending = false;

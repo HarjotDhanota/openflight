@@ -6563,23 +6563,41 @@ def create_app(
     @app.post("/api/tester/ladder/start")
     def ladder_start():  # pylint: disable=too-many-locals
         try:
-            params = TesterParameters.from_payload(request.get_json(silent=True))
-            facts = {
-                arm_id: gain_facts(TesterParameters(params.tester_id, arm_id, params.environment))
-                for arm_id in ("arm5", "arm6")
-            }
-        except RuntimeError as exc:
-            return jsonify({"error": f"run the gain step for both modes first ({exc})"}), 409
+            payload = request.get_json(silent=True)
+            params = TesterParameters.from_payload(payload)
+            # Without a choice (an older page) every setting that has not run is eligible.
+            selected = study_ladder.validate_selection(
+                payload.get("rungs", [rung.rung_id for rung in study_ladder.LADDER])
+            )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
+        # The light step is needed only for a mode with a ticked setting.
+        modes = [
+            arm_id
+            for arm_id in ("arm5", "arm6")
+            if any(r.arm_id == arm_id and r.rung_id in selected for r in study_ladder.LADDER)
+        ]
+        facts = {}
+        for arm_id in ("arm5", "arm6"):
+            try:
+                facts[arm_id] = gain_facts(
+                    TesterParameters(params.tester_id, arm_id, params.environment)
+                )
+            except RuntimeError as exc:
+                if arm_id not in modes:
+                    continue  # a photo still owed to it falls back to its rung's controls
+                which = "both modes" if len(modes) == 2 else ARM_SIZES[arm_id]
+                return jsonify({"error": f"run the gain step for {which} first ({exc})"}), 409
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
         with ladder_lock:
             try:
                 refuse_while_analysing()
             except RuntimeError as exc:
                 return jsonify({"error": str(exc)}), 409
-            return start_ladder(params, facts)
+            return start_ladder(params, facts, selected, modes)
 
-    def start_ladder(params: TesterParameters, facts: dict):
+    def start_ladder(params: TesterParameters, facts: dict, selected: list[str], modes: list[str]):
         existing = ladder_runners.get(params.tester_id)
         job = jobs.status()
         if (
@@ -6610,7 +6628,7 @@ def create_app(
         stale = [
             f"{ARM_SIZES[arm_id]}: {fact['screen']['prompt']}"
             for arm_id, fact in facts.items()
-            if fact["screen"]["stale"]
+            if arm_id in modes and fact["screen"]["stale"]
         ]
         if stale:
             return jsonify({"error": " ".join(stale), "gain_screen_stale": True}), 409
@@ -6630,12 +6648,11 @@ def create_app(
         for previous in ladder_runners.values():
             previous.stop(wait=False)
         state = ladder_state(params.tester_id)
+        state.select(selected)
         rung = state.current
         pending_photo = state.to_dict().get("pending_photo")
         _solution, frozen_reference = admitted_tee_range[params.tester_id]
-        continuing = pending_photo is not None or (
-            rung is not None and rung.rung_id != study_ladder.LADDER[0].rung_id
-        )
+        continuing = pending_photo is not None or state.moved_on
         if continuing and frozen_reference is not None:
             admissions = sorted(
                 tester_root(sessions_root, params.tester_id).glob(
@@ -6705,17 +6722,18 @@ def create_app(
 
             threading.Thread(target=restart, daemon=True, name="ladder-next-mode").start()
 
+        def black_floor(arm_id: str) -> float:
+            # a mode with nothing ticked may have no light step; only its owed photo reads it
+            value = facts.get(arm_id, {}).get("black_floor_dn")
+            return float(value if value is not None else SENSOR_BLACK_LEVEL_DN)
+
         runner = study_ladder.LadderRunner(
             state,
             study_ladder.KioskClient(),
             run_dir=run_dir,
-            black_floor=lambda arm_id: float(
-                facts[arm_id]["black_floor_dn"]
-                if facts[arm_id].get("black_floor_dn") is not None
-                else SENSOR_BLACK_LEVEL_DN
-            ),
+            black_floor=black_floor,
             gain_at_300=lambda arm_id: float(facts[arm_id]["gain_at_300_equivalent"]),
-            light_index=lambda arm_id: facts[arm_id].get("light_index"),
+            light_index=lambda arm_id: facts.get(arm_id, {}).get("light_index"),
             photo_dir=root / "impact",
             on_mode_done=mode_done,
             expected_ball=lambda arm_id: expected_ladder_ball(
