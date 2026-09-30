@@ -5,8 +5,18 @@ test.use({ hasTouch: true });
 
 type PhotoTarget = { capture: string; rung_id: string };
 
-const FULL_RUNGS = ['full-300', 'full-200', 'full-150', 'full-100', 'full-75', 'full-50', 'full-30'];
-const HALF_RUNGS = ['half-300', 'half-150', 'half-75'];
+const FULL_RUNGS = [
+  'full-300',
+  'full-200',
+  'full-150',
+  'full-100',
+  'full-75',
+  'full-50',
+  'full-30',
+  'full-20',
+  'full-10',
+];
+const HALF_RUNGS = ['half-300', 'half-150', 'half-75', 'half-30', 'half-15'];
 const ALL_RUNGS = [...FULL_RUNGS, ...HALF_RUNGS];
 const NOT_SELECTED = 'not selected by the tester';
 
@@ -548,7 +558,7 @@ test('every setting is ticked by default and the ticked ones are sent on Start',
   await expect(page.locator('#ladder-choice')).toContainText('1280×800');
   await expect(page.locator('#ladder-choice')).toContainText('640×400');
   for (const box of await page.locator('#ladder-choice input').all()) await expect(box).toBeChecked();
-  await expect(page.locator('#ladder-choice input')).toHaveCount(10);
+  await expect(page.locator('#ladder-choice input')).toHaveCount(14);
 
   await setting(page, '1280×800', 50).uncheck();
   await setting(page, '640×400', 75).uncheck();
@@ -559,7 +569,20 @@ test('every setting is ticked by default and the ticked ones are sent on Start',
     tester_id: '20260922-name',
     arm_id: 'arm5',
     environment: 'indoors',
-    rungs: ['full-300', 'full-200', 'full-150', 'full-100', 'full-75', 'full-30', 'half-300', 'half-150'],
+    rungs: [
+      'full-300',
+      'full-200',
+      'full-150',
+      'full-100',
+      'full-75',
+      'full-30',
+      'full-20',
+      'full-10',
+      'half-300',
+      'half-150',
+      'half-30',
+      'half-15',
+    ],
   });
 });
 

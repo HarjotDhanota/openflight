@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from openflight.camera import attempt_ledger
+from openflight.camera.paired_eligibility import NO_RADAR_SHOT
 from openflight.capture_facts import capture_facts
 from openflight.raw_radar_replay import load_session_events
 from openflight.review_metrics import STATUSES, finite, mapping, overlay, review_replay
@@ -305,7 +306,11 @@ def _shot_attempt(
     )
     report, report_error = _load_report(report_path)
     live = _live_values(shot or {})
-    reviewed = review_replay(report, live)
+    reviewed = review_replay(
+        report,
+        live,
+        tee_range=mapping(mapping(run.start.get("config")).get("tee_range_handoff")) or None,
+    )
     if report_error:
         for metric in reviewed["metrics"]:
             metric.update(status="processing_failed", value=None, reason=report_error)
@@ -337,6 +342,26 @@ def _shot_attempt(
         "identity": mapping((report or {}).get("source_identity")),
         "identity_evidence": mapping((report or {}).get("source_identity_evidence")),
         **reviewed,
+    }
+
+
+# A camera trigger the ladder never judged: nothing logged a shot for it.
+NO_RADAR_SHOT_REASON = f"{NO_RADAR_SHOT}: no OPS243 shot was logged for this camera trigger"
+
+
+def _rejection(ineligible: Mapping[str, Any]) -> dict[str, Any]:
+    """Why a camera trigger counts as no shot, headed "No radar shot" when the OPS243 logged none.
+
+    Real swings the radar missed were headed "Not a shot" (P7-10).
+    """
+    reason = str(ineligible.get("reason") or NO_RADAR_SHOT_REASON)
+    prefix = f"{NO_RADAR_SHOT}: "
+    no_radar_shot = reason.startswith(prefix)
+    return {
+        "label": "No radar shot" if no_radar_shot else "Not a shot",
+        "detail": reason[len(prefix) :] if no_radar_shot else reason,
+        "reason": reason,
+        "readiness": ineligible.get("readiness"),
     }
 
 
@@ -372,11 +397,7 @@ def _stray_capture_attempt(run: _Run, name: str, folder: Path) -> dict[str, Any]
         "overlay": overlay({}),
         "agreements": [],
         "moving_range_diagnostics": {"iwr_range": {}, "camera_iwr_anchor": {}},
-        "rejection": {
-            "reason": ineligible.get("reason")
-            or "no sensor shot was logged for this camera trigger",
-            "readiness": ineligible.get("readiness"),
-        },
+        "rejection": _rejection(ineligible),
     }
 
 
@@ -544,7 +565,9 @@ def report_markdown(review: Mapping[str, Any]) -> str:
                     f"Picture: {verdict['color']} ({verdict['rung_id']}) {reasons}".rstrip()
                 )
             if attempt.get("rejection"):
-                lines.append(f"Not a shot: {attempt['rejection']['reason']}")
+                rejection = attempt["rejection"]
+                label = rejection.get("label") or "Not a shot"
+                lines.append(f"{label}: {rejection.get('detail') or rejection['reason']}")
             for missing in attempt.get("missing_trigger_evidence") or []:
                 lines.append(
                     f"Shot kept without trigger evidence: {missing.get('id')} "

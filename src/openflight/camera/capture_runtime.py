@@ -28,6 +28,8 @@ from openflight.camera.auto_exposure import (
     motion_blur_risk,
 )
 from openflight.camera.optical_quality import within_armed_profile
+from openflight.camera.static_exposure import SENSOR_BLACK_LEVEL_DN
+from openflight.camera.study_ladder import capture_analysis_eligibility
 from openflight.camera.triggered_buffer import (
     CameraFrame,
     TriggeredCapture,
@@ -104,6 +106,10 @@ class CameraCaptureSettings:
     auto_exposure_state_path: Path | None = None
     armed_profile: Mapping | None = None
     diagnostic_capture: bool = False
+    # Where the tester setup saw the resting ball in this mode (x, y, diameter_px).
+    # With it, a manual-exposure clip's analysis eligibility is judged on the ball,
+    # not the hitting-zone box (P7-8).
+    setup_ball: Mapping | None = None
 
     @property
     def enforced_profile(self) -> Mapping | None:
@@ -152,6 +158,24 @@ def parse_scaler_crop(value: str | None) -> tuple[int, int, int, int] | None:
     if width <= 0 or height <= 0:
         raise ValueError("ScalerCrop width and height must be positive")
     return x, y, width, height
+
+
+def parse_setup_ball(value: str | None) -> dict[str, float] | None:
+    """Parse ``x,y,diameter`` in pixels, where the setup saw the resting ball."""
+    if value is None:
+        return None
+    parts = [part.strip() for part in value.split(",")]
+    if len(parts) != 3:
+        raise ValueError("setup ball must be x,y,diameter in pixels")
+    try:
+        x, y, diameter = (float(part) for part in parts)
+    except ValueError as exc:
+        raise ValueError("setup ball values must be numbers") from exc
+    if not all(math.isfinite(item) for item in (x, y, diameter)):
+        raise ValueError("setup ball values must be finite")
+    if x < 0 or y < 0 or diameter <= 0:
+        raise ValueError("setup ball must lie in the frame with a positive diameter")
+    return {"x": x, "y": y, "diameter_px": diameter}
 
 
 def _save_pgm(path: Path, image: np.ndarray) -> None:
@@ -946,6 +970,38 @@ class CameraCaptureRuntime:
                     return None
                 self._condition.wait(timeout=remaining)
 
+    def _judged_on_setup_ball(self, auto_exposure: dict, images: np.ndarray) -> dict:
+        """A manual clip's analysis eligibility, judged on the setup's ball (P7-8).
+
+        The zone rule (8 % of the hitting-zone box clipped) withheld every sunny
+        clip on 30 Sept; with the setup's ball the ladder's light rule decides, and
+        the zone rule's answer is kept beside it. Without a setup ball, or under
+        automatic exposure, the zone rule stands.
+        """
+        ball = self.settings.setup_ball
+        if ball is None or self.settings.auto_exposure:
+            return auto_exposure
+        observation = auto_exposure.get("observation")
+        zone_rule = {
+            "analysis_eligible": auto_exposure.get("analysis_eligible"),
+            "status": observation.get("status") if isinstance(observation, Mapping) else None,
+        }
+        try:
+            judged = capture_analysis_eligibility(images, SENSOR_BLACK_LEVEL_DN, dict(ball))
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("[CAMERA] Setup-ball light judgement failed", exc_info=True)
+            judged = {
+                "rule": "setup_ball",
+                "eligible": False,
+                "reason": f"setup-ball judgement failed: {type(exc).__name__}: {exc}",
+                "setup_ball": dict(ball),
+            }
+        return {
+            **auto_exposure,
+            "analysis_eligible": judged["eligible"],
+            "analysis_eligibility": {**judged, "zone_rule": zone_rule},
+        }
+
     def _start_gpio_trigger(self) -> None:
         button_factory = self._button_factory
         if button_factory is None:
@@ -1268,7 +1324,9 @@ class CameraCaptureRuntime:
         ):
             _save_pgm(shot_dir / f"{label}.pgm", images[index])
 
-        auto_exposure = auto_exposure or self.auto_exposure_status()
+        auto_exposure = self._judged_on_setup_ball(
+            auto_exposure or self.auto_exposure_status(), images
+        )
         trigger_index = max(0, capture.pre_trigger_count - 1)
         summary = timing_summary(capture.frames)
         summary.update(

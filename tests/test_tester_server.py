@@ -2139,6 +2139,46 @@ class TestTheLadder:
         assert command[command.index("--inclinometer-address") + 1] == "0x18"
         assert command[command.index("--camera-capture-exposure-us") + 1] == "300"
 
+    @pytest.mark.parametrize(
+        "arm_id, expected",
+        [("arm5", "612.0,505.0,34.0"), ("arm6", "306.0,252.5,17.0")],
+    )
+    def test_a_ladder_kiosk_is_told_where_the_setup_saw_the_ball(self, tmp_path, arm_id, expected):
+        """P7-8: the kiosk judges each clip's analysis eligibility on the setup's ball."""
+        from openflight import tee_range
+
+        camera = tee_range.TeeRangeCandidate(
+            candidate_id="camera-setup-1-arm5",
+            source="camera_reference_ball_size_range",
+            source_group="camera",
+            radar_slant_range_m=1.2,
+            uncertainty_m=0.25,
+            evidence={
+                "result": {
+                    "status": "selected",
+                    "selected": {"x_px": 612.0, "y_px": 505.0, "diameter_px": 34.0},
+                }
+            },
+        )
+        solution = tee_range.TeeRangeSolution.unresolved([camera], reason="test")
+        params = ts.TesterParameters("20260922-name", arm_id, "indoors")
+        ts.write_arm_state(tmp_path, params, gain=3.0, gain_exposure_us=300)
+        for action in ("ladder", "swings"):
+            with_ball = ts.action_commands(
+                action,
+                params,
+                tmp_path,
+                RIG,
+                tester_setup=TESTER_SETUP,
+                tee_range_solution=solution,
+            )[0][0]
+            without = ts.action_commands(action, params, tmp_path, RIG, tester_setup=TESTER_SETUP)[
+                0
+            ][0]
+
+            assert with_ball[with_ball.index("--camera-setup-ball") + 1] == expected
+            assert "--camera-setup-ball" not in without
+
     def test_the_ladder_needs_both_gain_screens_first(self, tmp_path):
         client = eligible_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
         response = client.post("/api/tester/ladder/start", json=self.body)
@@ -2771,8 +2811,18 @@ class TestTheLadderHoldsUp:
         assert (tmp_path / "20260922-name" / "comparator" / saved).is_file()
 
 
-FULL_RUNGS = ["full-300", "full-200", "full-150", "full-100", "full-75", "full-50", "full-30"]
-HALF_RUNGS = ["half-300", "half-150", "half-75"]
+FULL_RUNGS = [
+    "full-300",
+    "full-200",
+    "full-150",
+    "full-100",
+    "full-75",
+    "full-50",
+    "full-30",
+    "full-20",
+    "full-10",
+]
+HALF_RUNGS = ["half-300", "half-150", "half-75", "half-30", "half-15"]
 
 
 class TestTheTesterChoosesTheSettings:
@@ -3207,6 +3257,90 @@ def test_the_ladder_expects_the_ball_the_setup_saw():
     assert arm5 == {"x": 612.0, "y": 505.0, "diameter_px": 34.0}
     assert arm6 == {"x": 306.0, "y": 252.5, "diameter_px": 17.0}
     assert ts.expected_ladder_ball(None, "arm5") is None
+
+
+def _camera_lock_candidate(mode, lock, status="selected"):
+    from openflight import tee_range
+
+    return tee_range.TeeRangeCandidate(
+        candidate_id=f"camera-setup-1-{mode}",
+        source="camera_reference_ball_size_range",
+        source_group="camera",
+        radar_slant_range_m=1.2,
+        uncertainty_m=0.25,
+        evidence={
+            "result": {
+                "status": status,
+                "selected": {"x_px": 612.0, "y_px": 505.0, "diameter_px": 34.0},
+            },
+            "static_exposure_lock": lock,
+        },
+    )
+
+
+# Outdoors-test-7's lock: 10 us requested, 7 applied, at unity gain
+SUN_LOCK = {"exposure_us": 10, "gain": 1.0, "applied_exposure_us": 7, "applied_gain": 1.0}
+SUN_FACTS = {"arm5": {"gain_at_300_equivalent": 0.547}, "arm6": {"gain_at_300_equivalent": 0.229}}
+
+
+def test_each_mode_starts_from_its_own_setup_lock_applied_controls():
+    """P7-12: exposure x gain as applied, not as requested."""
+    from openflight import tee_range
+
+    solution = tee_range.TeeRangeSolution.unresolved(
+        [
+            _camera_lock_candidate("arm5", SUN_LOCK),
+            _camera_lock_candidate(
+                "arm6", {**SUN_LOCK, "applied_exposure_us": 9, "applied_gain": 2.0}
+            ),
+        ],
+        reason="test",
+    )
+
+    arm5 = ts.ladder_gain_basis(solution, "arm5", SUN_FACTS)
+    arm6 = ts.ladder_gain_basis(solution, "arm6", SUN_FACTS)
+
+    assert arm5["source"] == "setup_lock" and arm5["signal_us"] == pytest.approx(7.0)
+    assert arm5["lock"] == {"arm_id": "arm5", "exposure_us": 7.0, "gain": 1.0}
+    assert arm6["source"] == "setup_lock" and arm6["signal_us"] == pytest.approx(18.0)
+
+
+def test_640x400_without_a_lock_scales_the_1280x800_lock_by_the_gain_screens():
+    from openflight import tee_range
+
+    solution = tee_range.TeeRangeSolution.unresolved(
+        [_camera_lock_candidate("arm5", SUN_LOCK)], reason="test"
+    )
+
+    arm6 = ts.ladder_gain_basis(solution, "arm6", SUN_FACTS)
+
+    assert arm6["source"] == "setup_lock_scaled"
+    assert arm6["brightness_ratio"] == pytest.approx(0.229 / 0.547)
+    assert arm6["signal_us"] == pytest.approx(7.0 * 0.229 / 0.547)
+    assert arm6["lock"]["arm_id"] == "arm5"
+    # no gain screens to scale by: today's rule
+    assert ts.ladder_gain_basis(solution, "arm6", {"arm5": SUN_FACTS["arm5"]}) is None
+
+
+@pytest.mark.parametrize(
+    "lock, status",
+    [
+        (None, "selected"),
+        ({"applied_exposure_us": 0, "applied_gain": 1.0}, "selected"),
+        ({"applied_exposure_us": 7, "applied_gain": "x"}, "selected"),
+        (SUN_LOCK, "ambiguous"),
+    ],
+)
+def test_no_usable_lock_keeps_the_gain_screen_rule(lock, status):
+    from openflight import tee_range
+
+    solution = tee_range.TeeRangeSolution.unresolved(
+        [_camera_lock_candidate("arm5", lock, status)], reason="test"
+    )
+
+    assert ts.ladder_gain_basis(solution, "arm5", SUN_FACTS) is None
+    assert ts.ladder_gain_basis(solution, "arm6", SUN_FACTS) is None
+    assert ts.ladder_gain_basis(None, "arm5", SUN_FACTS) is None
 
 
 @pytest.mark.parametrize(

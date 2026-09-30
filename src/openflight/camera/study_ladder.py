@@ -68,6 +68,11 @@ ZONE_TARGET_SIGNAL_DN = 40.0
 BALL_CEILING_DN = 200.0  # a zone correction never pushes the ball's median past this
 # One light rule for the pre-rung check and the per-swing verdict (wiring audit B6).
 RED_LIGHT_CAUSES = frozenset({"ball_clipped", "ball_dark", "zone_dark", "zone_clipped_no_ball"})
+# The ball is searched for this many diameters around where the setup saw it, and
+# must lie within about one diameter of that spot (P7-9).
+BALL_SEARCH_DIAMETERS = 2.0
+BALL_SEARCH_MIN_PX = 30.0
+BALL_MATCH_DIAMETERS = 1.0
 DARK_LIGHT_CAUSES = frozenset({"ball_dark", "zone_dark"})
 # No verdict without the setup's ball position (P6-1): without it the ball
 # cannot be told from a speck, a spare ball or a white cloth.
@@ -86,11 +91,13 @@ class Rung:
 
 
 # 50 and 30 us are for sunlight (outdoors 29 Sept a ball in sun clipped at 50 us x 1
-# during setup); indoors they are skipped with the rest once 75 us is too dark. The
-# sensor's shortest exposure is 9 us (one row) at 1280x800.
+# during setup); indoors they are skipped with the rest once 75 us is too dark. In
+# full sun on 30 Sept the setup locked the ball at 10 us (7 applied) and 30 us was
+# marginal, so 20 and 10 us follow, and 30 and 15 us at 640x400 (P7-9). The
+# sensor's shortest exposure is 9 us (one row); both modes took 10 us and applied 7.
 LADDER: tuple[Rung, ...] = tuple(
-    [Rung(f"full-{e}", "arm5", e, True) for e in (300, 200, 150, 100, 75, 50, 30)]
-    + [Rung(f"half-{e}", "arm6", e, False) for e in (300, 150, 75)]
+    [Rung(f"full-{e}", "arm5", e, True) for e in (300, 200, 150, 100, 75, 50, 30, 20, 10)]
+    + [Rung(f"half-{e}", "arm6", e, False) for e in (300, 150, 75, 30, 15)]
 )
 RUNG_FPS = {"arm5": 120.0, "arm6": 288.0}
 # A setting the tester unticked: review and analysis must not read it as a light failure.
@@ -116,6 +123,29 @@ def rung_gain(gain_at_300: float, exposure_us: int) -> float:
     then still gets a real gain, and a long rung sits at unity and may be too bright.
     """
     return round(max(GAIN_FLOOR, min(GAIN_CEILING, gain_at_300 * 300.0 / exposure_us)), 3)
+
+
+def starting_gain(
+    exposure_us: int, gain_at_300: float | None, basis: dict | None
+) -> tuple[float, dict]:
+    """A rung's first gain, and what set it (P7-12).
+
+    ``basis`` is the setup's ball lock for this mode: ``signal_us`` is its applied
+    exposure x gain, and each rung keeps that product, so the ball is as bright
+    at every rung and the study compares blur, not brightness. ``source`` is
+    ``setup_lock`` or ``setup_lock_scaled`` (the 1280x800 lock scaled to a mode
+    without its own). Without one the zone gain screen decides, as before; in sun
+    that started full-10 at gain 12 while the ball needed about 1.
+    """
+    if basis is not None:
+        wanted = float(basis["signal_us"]) / float(exposure_us)
+        return round(max(GAIN_FLOOR, min(GAIN_CEILING, wanted)), 3), dict(basis)
+    if gain_at_300 is None:
+        raise ValueError("a rung needs the setup's lock or a gain screen")
+    return rung_gain(gain_at_300, exposure_us), {
+        "source": "gain_screen",
+        "gain_at_300": float(gain_at_300),
+    }
 
 
 def photo_controls(
@@ -162,46 +192,69 @@ def _zone_noise(frames: np.ndarray) -> float:
     return float(np.median(np.std(zone.astype(np.float32), axis=0)))
 
 
+def _ball_core(image: np.ndarray, x: float, y: float, diameter: float) -> np.ndarray:
+    yy, xx = np.indices(image.shape)
+    return image[np.hypot(xx - x, yy - y) <= 0.8 * diameter / 2.0]
+
+
 def ball_light(
     frames: np.ndarray, black_floor: float, expected_ball: dict | None = None
 ) -> dict | None:
     """The resting ball's brightness in these frames, if the ball can be found.
 
     ``expected_ball`` (x, y, diameter_px) is where the setup saw the ball in this
-    mode. Only a ball of that size near that spot counts, so a shadow or a sun
-    patch is not taken for it. Without it nothing is searched: a whole-frame
-    search took a 5 px speck for the ball (Outdoors-test-5, P6-1).
+    mode. The ball is searched for only around that spot, and only a ball of that
+    size within about one diameter of it counts (P7-9: a six-diameter match took
+    fence clutter 175 px away for the ball in sun). Without it nothing is
+    searched: a whole-frame search took a 5 px speck for the ball (P6-1).
+
+    A ball in a sunlit, clipped patch of mat melts into it and cannot be found;
+    when the setup's spot is itself clipped, that spot is judged (``found_by`` is
+    ``setup_position``), since a ball placed there clips too.
     """
     if expected_ball is None:
         return None
     stack = np.clip(np.asarray(frames), 0, 255).astype(np.uint8)
-    try:
-        found = detect_reference_ball(stack)
-    except (RuntimeError, ValueError):
-        return None
-    # The detector's strict lit-sphere mode (given a size) refuses sunlit or
-    # half-shaded balls, so the result is checked against the setup instead.
     diameter = float(expected_ball["diameter_px"])
-    reach = max(6.0 * diameter, 60.0)
-    if not (
-        0.6 * diameter <= found.diameter_px <= 1.6 * diameter
-        and abs(found.x - float(expected_ball["x"])) <= reach
-        and abs(found.y - float(expected_ball["y"])) <= max(4.0 * diameter, 40.0)
-    ):
-        return None
+    expected_x, expected_y = float(expected_ball["x"]), float(expected_ball["y"])
+    height, width = stack.shape[1:]
+    half = max(BALL_SEARCH_DIAMETERS * diameter, BALL_SEARCH_MIN_PX)
+    roi = (
+        max(0, int(expected_x - half)),
+        max(0, int(expected_y - half)),
+        min(width, int(math.ceil(expected_x + half))),
+        min(height, int(math.ceil(expected_y + half))),
+    )
     image = np.median(stack, axis=0)
-    yy, xx = np.indices(image.shape)
-    core = image[np.hypot(xx - found.x, yy - found.y) <= 0.8 * found.diameter_px / 2.0]
+    try:
+        # The detector's strict lit-sphere mode (given a size) refuses sunlit or
+        # half-shaded balls, so the result is checked against the setup instead.
+        found = detect_reference_ball(stack, roi=roi)
+    except (RuntimeError, ValueError):
+        found = None
+    if found is not None and (
+        0.6 * diameter <= found.diameter_px <= 1.6 * diameter
+        and math.hypot(found.x - expected_x, found.y - expected_y)
+        <= BALL_MATCH_DIAMETERS * diameter
+    ):
+        x, y, size, found_by = float(found.x), float(found.y), float(found.diameter_px), "detector"
+    else:
+        x, y, size, found_by = expected_x, expected_y, diameter, "setup_position"
+    core = _ball_core(image, x, y, size)
     if not core.size:
         return None
+    clipped = float(np.mean(core >= 250) * 100.0)
+    if found_by == "setup_position" and clipped <= CLIPPED_MAX_PCT:
+        return None  # no ball there, and nothing clipped where it should be
     median = float(np.median(core))
     return {
-        "x": float(found.x),
-        "y": float(found.y),
-        "diameter_px": float(found.diameter_px),
+        "x": x,
+        "y": y,
+        "diameter_px": size,
         "median_dn": median,
         "signal_dn": median - black_floor,
-        "clipped_pct": float(np.mean(core >= 250) * 100.0),
+        "clipped_pct": clipped,
+        "found_by": found_by,
     }
 
 
@@ -240,6 +293,45 @@ def judge_light(frames: np.ndarray, black_floor: float, expected_ball: dict | No
             " behind a well-exposed ball" if ball is not None else ""
         )
     return {"zone": zone, "ball": ball, "cause": cause, "message": message}
+
+
+def resting_frames(frames: np.ndarray) -> np.ndarray:
+    """A clip's first frames, before the club arrives: what the ball is judged on."""
+    return frames[: max(3, min(RESTING_FRAMES, len(frames)))]
+
+
+def capture_analysis_eligibility(
+    frames: np.ndarray, black_floor: float, expected_ball: dict
+) -> dict:
+    """Whether a clip's light permits camera analysis, judged on the setup's ball (P7-8).
+
+    The same ``judge_light`` as the ladder, on the clip's resting frames. Only the
+    ball decides: its core clipped ``CLIPPED_MAX_PCT`` or less and
+    ``BALL_MIN_SIGNAL_DN`` or more above black. A clipped background or a dark
+    hitting zone does not withhold the camera (outdoors a sunny mat is always
+    about 20 % clipped, and at the setup's own sun lock the zone reads too dark).
+    No ball where the setup saw it is not eligible.
+    """
+    light = judge_light(resting_frames(np.asarray(frames)), black_floor, expected_ball)
+    ball = light["ball"]
+    if ball is None:
+        reason = "the resting ball was not found where the setup saw it"
+    elif ball["clipped_pct"] > CLIPPED_MAX_PCT:
+        reason = f"too bright for the ball: {ball['clipped_pct']:.0f}% of it is clipped"
+    elif ball["signal_dn"] < BALL_MIN_SIGNAL_DN:
+        reason = f"too dark for the ball: {ball['signal_dn']:.0f} DN above black"
+    else:
+        reason = None
+    return {
+        "rule": "setup_ball",
+        "eligible": reason is None,
+        "reason": reason,
+        "light_cause": light["cause"],
+        "ball": ball,
+        "zone": light["zone"],
+        "setup_ball": dict(expected_ball),
+        "black_floor_dn": float(black_floor),
+    }
 
 
 def _suggested_gain(light: dict, gain: float, black_floor: float) -> float | None:
@@ -296,7 +388,11 @@ def pre_rung_check(
     return {
         **light["zone"],
         "noise_dn": _zone_noise(frames),
-        "judged_on": "ball" if light["ball"] is not None else "hitting_zone",
+        "judged_on": (
+            "hitting_zone"
+            if light["ball"] is None
+            else ("setup_position" if light["ball"]["found_by"] == "setup_position" else "ball")
+        ),
         "ball": light["ball"],
         "ok": not red,
         "reason": light["message"] if red else None,
@@ -370,8 +466,7 @@ def swing_verdict(  # pylint: disable=too-many-locals,too-many-arguments
         red.append(f"controls: exposure {applied_exposure:.0f} us, not {rung.exposure_us}")
     if abs(applied_gain - gain) > GAIN_TOLERANCE_FRACTION * gain:
         red.append(f"controls: gain {applied_gain:.2f}, not {gain:.2f}")
-    resting = frames[: max(3, min(RESTING_FRAMES, len(frames)))]
-    light = judge_light(resting, black_floor, expected_ball)
+    light = judge_light(resting_frames(frames), black_floor, expected_ball)
     stats = light["zone"]
     lit = light["ball"]
     if light["cause"] in RED_LIGHT_CAUSES:
@@ -383,7 +478,7 @@ def swing_verdict(  # pylint: disable=too-many-locals,too-many-arguments
         red.append(f"ball: {NO_SETUP_BALL}")
     elif lit is None:
         amber.append("resting ball not found in the pre-impact frames")
-    else:
+    elif lit["found_by"] == "detector":
         ball = {"x": lit["x"], "y": lit["y"], "diameter_px": lit["diameter_px"]}
     if ball and previous_balls:
         x = float(np.median([b["x"] for b in previous_balls]))
@@ -603,11 +698,15 @@ class LadderState:
                 entries[other.rung_id]["status"] = "skipped"
                 entries[other.rung_id]["reason"] = f"{rung.rung_id} {status}: {reason}"
 
-    def begin(self, rung_id: str, gain: float, check: dict) -> None:
+    def begin(self, rung_id: str, gain: float, check: dict, gain_basis: dict | None = None) -> None:
         rung = next(r for r in LADDER if r.rung_id == rung_id)
         entry = self._data["rungs"][rung_id]
         entry["gain"] = gain
         entry["pre_check"] = check
+        if gain_basis is not None:
+            # what set the rung's first gain (P7-12); a pre-check may correct it
+            entry["gain_source"] = gain_basis["source"]
+            entry["gain_basis"] = gain_basis
         if check.get("ok"):
             entry["status"] = "active"
         elif check.get("too_bright"):
@@ -817,6 +916,7 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
         on_mode_done,
         ready_timeout_s: float = 90.0,
         expected_ball=None,
+        gain_basis=None,
     ):
         self.state = state
         self.client = client
@@ -826,6 +926,8 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
         self._light_index = light_index
         # arm id -> where the setup saw the ball in that mode, or None
         self._expected_ball = expected_ball or (lambda _arm_id: None)
+        # arm id -> the setup's ball lock a rung's gain starts from, or None (P7-12)
+        self._gain_basis = gain_basis or (lambda _arm_id: None)
         self.photo_dir = photo_dir
         self._on_mode_done = on_mode_done
         self.ready_timeout_s = ready_timeout_s
@@ -942,7 +1044,12 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                     self.state.record_resume_check(rung.rung_id, check)
                     self._configured_rung = rung.rung_id
                     return self.state.to_dict()["rungs"][rung.rung_id]
-                gain = rung_gain(self._gain_at_300(rung.arm_id), rung.exposure_us)
+                basis = self._gain_basis(rung.arm_id)
+                gain, basis = starting_gain(
+                    rung.exposure_us,
+                    self._gain_at_300(rung.arm_id) if basis is None else None,
+                    basis,
+                )
                 self.client.set_controls(rung.exposure_us, gain)
                 if self._stop.wait(SETTLE_S):
                     return None
@@ -963,7 +1070,7 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                     check = self._pre_check(rung, gain, black, expected)
                 if self.stopped:
                     return None
-                self.state.begin(rung.rung_id, gain, check)
+                self.state.begin(rung.rung_id, gain, check, basis)
                 if check["ok"]:
                     self._configured_rung = rung.rung_id
                     return self.state.to_dict()["rungs"][rung.rung_id]
@@ -1084,6 +1191,23 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                     continue
                 paired = evaluate_paired_capture(run_dir, folder)
                 if paired["status"] == "pending":
+                    continue
+                no_shot = next(
+                    (item for item in paired["blockers"] if item["id"] == "no_radar_shot"), None
+                )
+                if no_shot is not None:
+                    # a real swing, perhaps, that the OPS243 never logged (P7-10)
+                    self.state.record_ineligible_capture(
+                        folder.name,
+                        current.rung_id,
+                        {
+                            "ready": False,
+                            "config_hash": self._required_config_hash,
+                            "checks": paired["checks"],
+                            "blockers": paired["blockers"],
+                        },
+                        reason=no_shot["reason"],
+                    )
                     continue
                 observations = trigger_setup.get("observations")
                 runtime_identity = (

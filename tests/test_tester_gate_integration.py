@@ -170,3 +170,32 @@ def test_invalid_trigger_stays_ineligible_after_runtime_health_recovers(tmp_path
     assert rung["status"] == "active"
     assert rung["swings"] == []
     assert runner.state.accepted("full-300") == 0
+
+
+def test_a_swing_the_radar_never_logged_is_set_aside_as_no_radar_shot(tmp_path, monkeypatch):
+    """P7-10: it no longer waits forever, and says why instead of blaming the setup."""
+    from openflight.camera import paired_eligibility  # noqa: PLC0415
+
+    run = tmp_path / "run-01"
+    run.mkdir()
+    session_uuid = str(uuid.uuid4())
+    runner, _kiosk = make_runner(tmp_path, run, session_uuid, monkeypatch)
+    capture = make_capture(run, session_uuid)
+    metadata = json.loads((capture / "metadata.json").read_text(encoding="utf-8"))
+    metadata["trigger_timestamp"] = 1_000.0
+    (capture / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    write_entries(run, [{"type": "session_start", "session_uuid": session_uuid}])
+    clock = {"now": 1_010.0}
+    monkeypatch.setattr(paired_eligibility.time, "time", lambda: clock["now"])
+
+    assert runner.poll_once() == []
+    assert runner.state.seen_captures() == set()  # still inside the radar's wait
+
+    clock["now"] = 1_000.0 + paired_eligibility.NO_RADAR_SHOT_TIMEOUT_S + 1.0
+    assert runner.poll_once() == []
+
+    [set_aside] = runner.state.to_dict()["ineligible_captures"]
+    assert set_aside["capture"] == capture.name
+    assert set_aside["reason"].startswith("no radar shot")
+    assert [item["id"] for item in set_aside["readiness"]["blockers"]] == ["no_radar_shot"]
+    assert runner.state.accepted("full-300") == 0

@@ -199,6 +199,13 @@ def capture_tree(root: Path, shots=(1, 2)) -> Path:
                         "sha256": rig_geometry.geometry_fingerprint(RIG_PARAMETERS),
                     }
                 },
+                # a qualified setup handed the kiosk its tee (the review needs its source)
+                "tee_range_handoff": {
+                    "tee_slant_range_m": 1.5,
+                    "status": "configured",
+                    "source": "qualified_static_iwr",
+                    "candidate_id": "iwr-static-fixture",
+                },
             },
         }
     ]

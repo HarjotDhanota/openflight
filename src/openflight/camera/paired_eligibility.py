@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import math
 import os
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -12,6 +14,14 @@ MAX_SESSION_FILES = 32
 MAX_SESSION_BYTES = 16 * 1024 * 1024
 MAX_TOTAL_BYTES = 32 * 1024 * 1024
 MAX_SESSION_LINES = 20_000
+MAX_METADATA_BYTES = 1024 * 1024
+# A clip's shot records (camera, IWR and terminal) are logged together once the
+# IWR dump ends: 7.1-7.2 s after the trigger on all 11 shots of Outdoors-test-1,
+# -5 and -7. A clip with no camera record this long after its trigger never got
+# an OPS shot (P7-10): four times that wait, room for a dump queued behind a
+# false trigger's 7 s one.
+NO_RADAR_SHOT_TIMEOUT_S = 30.0
+NO_RADAR_SHOT = "no radar shot"
 
 
 def _check(check_id: str, status: str, reason: str | None = None) -> dict[str, Any]:
@@ -110,8 +120,35 @@ def _capture_path(value: Any, run_dir: Path) -> Path | None:
     return resolved if _contained(resolved, run_dir) else None
 
 
-def evaluate_paired_capture(run_dir: str | Path, capture_dir: str | Path) -> dict[str, Any]:
-    """Return whether one saved camera capture has complete paired shot evidence."""
+def _trigger_age_s(capture: Path, now: float | None) -> float | None:
+    """Seconds since the clip's trigger, from its own metadata, or None if unknown."""
+    path = capture / "metadata.json"
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_METADATA_BYTES + 1)
+        if len(raw) > MAX_METADATA_BYTES:
+            return None
+        trigger = json.loads(raw).get("trigger_timestamp")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if isinstance(trigger, bool) or not isinstance(trigger, (int, float)):
+        return None
+    if not math.isfinite(trigger):
+        return None
+    return (time.time() if now is None else float(now)) - float(trigger)
+
+
+def evaluate_paired_capture(
+    run_dir: str | Path, capture_dir: str | Path, *, now: float | None = None
+) -> dict[str, Any]:
+    """Return whether one saved camera capture has complete paired shot evidence.
+
+    A clip no record names stays pending while the radar may still log its shot,
+    then is ineligible as ``no_radar_shot`` (P7-10). ``now`` is the epoch time to
+    judge that by; the clip's trigger time comes from its metadata.
+    """
     supplied_run = Path(run_dir)
     if supplied_run.is_symlink():
         return _result("ineligible", [_check("run", "block", "run directory is unavailable")])
@@ -166,6 +203,19 @@ def evaluate_paired_capture(run_dir: str | Path, capture_dir: str | Path) -> dic
                 matches.append((session_uuid, shot, entries))
 
     if not matches:
+        age = _trigger_age_s(capture, now)
+        if age is not None and age > NO_RADAR_SHOT_TIMEOUT_S:
+            return _result(
+                "ineligible",
+                [
+                    _check(
+                        "no_radar_shot",
+                        "block",
+                        f"{NO_RADAR_SHOT}: the OPS243 logged no shot within "
+                        f"{NO_RADAR_SHOT_TIMEOUT_S:.0f} s of this camera trigger",
+                    )
+                ],
+            )
         return _result(
             "pending",
             [_check("camera_capture", "pending", "camera capture record is not complete")],

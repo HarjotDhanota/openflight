@@ -1275,6 +1275,67 @@ def expected_ladder_ball(solution: tee_range.TeeRangeSolution | None, arm_id: st
     return None
 
 
+def _setup_static_lock(solution: tee_range.TeeRangeSolution | None, arm_id: str) -> dict | None:
+    """The applied exposure and gain the setup locked the ball at in this mode, if any.
+
+    Read beside the ball position ``expected_ladder_ball`` uses: the camera
+    candidate's ``evidence.static_exposure_lock``, from an association that
+    selected a ball.
+    """
+    if solution is None:
+        return None
+    for item in solution.candidates:
+        if item.source_group != "camera" or not item.candidate_id.endswith(arm_id):
+            continue
+        evidence = item.evidence or {}
+        result = evidence.get("result") or {}
+        lock = evidence.get("static_exposure_lock")
+        if result.get("status") != "selected" or not isinstance(lock, Mapping):
+            continue
+        try:
+            exposure = float(lock["applied_exposure_us"])
+            gain = float(lock["applied_gain"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if math.isfinite(exposure) and math.isfinite(gain) and exposure > 0 and gain > 0:
+            return {"arm_id": arm_id, "exposure_us": exposure, "gain": gain}
+    return None
+
+
+def ladder_gain_basis(
+    solution: tee_range.TeeRangeSolution | None, arm_id: str, facts: Mapping
+) -> dict | None:
+    """The setup lock a rung's first gain keeps, as exposure x gain (P7-12).
+
+    A mode without its own lock (640x400 is advisory) scales the 1280x800 lock by
+    the two gain screens' brightness ratio. None means the gain screen decides.
+    """
+    lock = _setup_static_lock(solution, arm_id)
+    if lock is not None:
+        return {
+            "source": "setup_lock",
+            "signal_us": lock["exposure_us"] * lock["gain"],
+            "lock": lock,
+        }
+    full = _setup_static_lock(solution, "arm5") if arm_id != "arm5" else None
+    if full is None:
+        return None
+    try:
+        ratio = float(facts[arm_id]["gain_at_300_equivalent"]) / float(
+            facts["arm5"]["gain_at_300_equivalent"]
+        )
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return None
+    if not math.isfinite(ratio) or ratio <= 0:
+        return None
+    return {
+        "source": "setup_lock_scaled",
+        "signal_us": full["exposure_us"] * full["gain"] * ratio,
+        "lock": full,
+        "brightness_ratio": ratio,
+    }
+
+
 def next_run_directory(arm_dir: Path) -> Path:
     """Each capture run gets its own folder: a new kiosk is a new session.
 
@@ -1501,6 +1562,15 @@ def action_commands(
             commands[0].extend(["--iwr6843-port", iwr_static_port])
         # the same board calibration the setup's static ranges used (wiring audit C10)
         commands[0].extend(["--iwr6843-cal", str(iwr_calibration)])
+        # each clip's analysis eligibility is judged on the setup's ball (P7-8)
+        setup_ball = expected_ladder_ball(tee_range_solution, params.arm_id)
+        if setup_ball is not None:
+            commands[0].extend(
+                [
+                    "--camera-setup-ball",
+                    ",".join(f"{setup_ball[key]:.1f}" for key in ("x", "y", "diameter_px")),
+                ]
+            )
         commands[0].extend(
             [
                 "--tester-setup-required",
@@ -6784,6 +6854,9 @@ def create_app(
             on_mode_done=mode_done,
             expected_ball=lambda arm_id: expected_ladder_ball(
                 admitted_tee_range.get(params.tester_id, (None, None))[0], arm_id
+            ),
+            gain_basis=lambda arm_id: ladder_gain_basis(
+                admitted_tee_range.get(params.tester_id, (None, None))[0], arm_id, facts
             ),
         )
         try:
