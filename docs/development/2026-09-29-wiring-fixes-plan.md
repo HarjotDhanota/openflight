@@ -209,6 +209,12 @@ Outdoors-test-6 and -7 ran in full sun on 30 Sept (10:10-10:26) on 63b69be9. Har
 |---|---|
 | P7-14 | The kiosk computes one readiness state from what its sensors report, and serves it to both the tester page and its own screen as a large light.<br><br>**Red, "Not ready", naming the cause:**<ul><li>no admitted setup;</li><li>a sensor missing or failed;</li><li>the kiosk starting, or restarting between settings;</li><li>the ladder's light check running;</li><li>the ladder stopped or finished.</li></ul>**Amber, "Wait", with the cause and a rough time left:**<ul><li>the OPS243 dumping, draining or re-arming;</li><li>the IWR dumping, about 7 s;</li><li>the camera saving a clip.</li></ul>**Green, "Swing":** the OPS243 is armed, the IWR is idle and armed, the camera ring is running in the ladder's current setting, and no clip is being saved.<br><br>**A swing picked up** (a trigger) flashes the light, with the shot's result when it arrives. The state is computed from the sensors' real states, never from timers alone, and each change is logged with its time. |
 
+**The box comes first (Harjot, 30 Sept):**
+
+| ID | Fix |
+|---|---|
+| P7-15 | The placement box moves from the start of step 3 into step 1, straight after the setup checklist. The tester sets the unit down, confirms the setup, then drags and confirms the box. The hardware check, the light measurement and the ball range follow.<br><br>**The hitting zone becomes the box.** Wherever the tester judges it, the confirmed box replaces the fixed box (rows 45-90 %, columns 20-80 %), halved for 640×400:<ul><li>the light screens;</li><li>the ladder's zone floor;</li><li>the capture-time zone fallback.</li></ul>The fixed box remains only when no box has been confirmed.<br><br>**Moving the box later** makes the light measurement stale and the ball range redo, as a rig change does. |
+
 **Harjot, before the next session:** put a foam windscreen on the microphone, and check the GATE LED stays quiet in wind before swinging.
 
 The three workstreams run in parallel on their own branches. S owns the tester page and runs the Playwright specs; T and L run pytest and vitest only.
