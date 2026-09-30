@@ -129,6 +129,21 @@ Step 1 touches server.py and the UI; step 2 touches the camera and IWR modules. 
 
 T4, T5, T8-T14 (T14 with D5), S7, S8 (unless complex radar subtraction lands first), S11, C6, C8 (the existing roll item A3).
 
+## Phase 6: what Outdoors-test-5 exposed (added 29 Sept, evening)
+
+Outdoors-test-5 ran at dusk (18:45-19:01) on e3308529. Capture worked end to end, but nothing fused: the camera never found the ball, which sat about 1.8 m out on a raised mat at 15-30 DN, so the setup stayed raw-only. The field analysis is the Claude Doc "Outdoors-test-5 field analysis — handoff". Harjot decided D8 and D9 on 29 Sept.
+
+| ID | Problem seen in the field | Fix |
+|---|---|---|
+| P6-1 | A swing went green on a 5 px speck: with no ball position from the setup, the verdict searched the whole frame. | No green or amber without the setup's ball position. |
+| P6-2 | The ladder started on a setup whose camera never found the ball, so its swings could only yield speeds. | **D8:** C refuses to start or resume, and says the camera can't see the ball and what to fix: distance, a flat surface, no spare balls or white objects in view. |
+| P6-3 | A setting could not end after its first 3 swings: full-300 stuck at 2 of 5 and 640×400 never ran. | **D9:** a setting fails once it has 3 red swings in total, at any point. The Phase 1 early exit (2 reds in the first 3) stays. Two dark reds in a row also fail it and skip the shorter settings in that mode. |
+| P6-4 | The ball-departure detector's fixed 30 DN threshold (`BALL_PRESENT_DELTA`) exceeds the ball's whole contrast in dim light, so the contact time (F7) returns nothing. | Scale the threshold to the clip's measured noise, with a regression fixture cropped from Outdoors-test-5. |
+| P6-5 | Frames are split before and after the trigger by arrival, not exposure (a ~40 ms host stall moved frames 18-20 across), and the trigger's timestamp is taken after a deepcopy. | Timestamp the trigger first. Record the split by sensor exposure time as a new field, without changing what the existing field means, and use it where the code compares against the trigger. Contact appeared 7-26 ms before the trigger here, against 0.5-4 ms earlier; F3 waits until that is settled. |
+| P6-6 | Misleading messages. | "Reduce scene brightness" when the scene was dark; a false "frames missing" in the analysis report when the cause was no fusion context; three carries logged for one shot; a gain screen's solved range marked "clean" on the wrong object; the degree sign garbled if the log's encoding is at fault. |
+
+P6-1 to P6-3 touch the same ladder code as the setting selection, so they follow it; P6-4 to P6-6 run in parallel.
+
 ## Rough effort (agent time)
 
 | Phase | Effort | Blocked on |
