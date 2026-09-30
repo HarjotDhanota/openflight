@@ -190,3 +190,26 @@ def test_a_reject_quality_track_launch_is_shown_experimental():
     assert vertical["value"] == 18.0
     assert vertical["status"] == "experimental"
     assert "track quality reject" in vertical["reason"]
+
+
+def test_camera_metrics_from_a_reconstructed_context_say_so():
+    report = _report(
+        {
+            "status": "chained_high",
+            "club_path_deg": 1.0,
+            "attack_angle_deg": -2.0,
+            "path_confidence_tier": "high",
+            "attack_confidence_tier": "high",
+        },
+        {
+            "status": "accepted",
+            "confidence_tier": "high",
+            "horizontal_deg": 2.0,
+            "vertical_deg": 17.0,
+        },
+    )
+    report["stages"]["camera"]["recorded_context"] = {"context_source": "reconstructed"}
+    metrics = _metrics(report)
+    for key in ("camera_launch_horizontal_deg", "camera_club_path_deg"):
+        assert metrics[key]["status"] == "experimental"
+        assert "context reconstructed" in metrics[key]["reason"]

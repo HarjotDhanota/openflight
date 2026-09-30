@@ -509,6 +509,9 @@ def _camera_metrics(stage: Any) -> tuple[list[dict[str, Any]], Mapping[str, Any]
         )
     _label_with_notes(metrics[2:], [str(note) for note in delivery.get("notes") or ()])
     _label_with_notes(metrics, [str(note) for note in result.get("notes") or ()])
+    if mapping(stage.get("recorded_context")).get("context_source") == "reconstructed":
+        # the kiosk froze no context; replay rebuilt it from the clip and session (P8-7)
+        _label_with_notes(metrics, ["context reconstructed from the clip and session records"])
     return metrics, result, context_source
 
 
