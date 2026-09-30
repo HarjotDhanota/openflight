@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from typing import Literal
 
@@ -16,6 +17,10 @@ ExposureQualityStatus = Literal[
     "unavailable",
 ]
 ExposureRecommendation = Literal["brighter", "darker", "hold"]
+ZoneSource = Literal["placement_box", "fixed"]
+# The fallback hitting zone when no placement box was confirmed: rows 45-90 %,
+# columns 20-80 % of the frame.
+FIXED_ZONE_FRACTIONS = (0.2, 0.45, 0.8, 0.9)  # x0, y0, x1, y1
 AutoExposureStatus = Literal[
     "ready",
     "adjusting",
@@ -74,6 +79,10 @@ class ExposureObservation:
     contrast: float | None = None
     clipped_pct: float | None = None
     dark_pct: float | None = None
+    # Which hitting zone was rated: the tester's confirmed placement box, or the
+    # fixed centre-lower box when none was given (P7-15).
+    zone_source: ZoneSource = "fixed"
+    zone_box_px: tuple[int, int, int, int] | None = None
 
     @property
     def acceptable(self) -> bool:
@@ -82,7 +91,10 @@ class ExposureObservation:
 
     def to_dict(self) -> dict:
         """Serialize the observation for logs and the operator UI."""
-        return asdict(self)
+        payload = asdict(self)
+        if self.zone_box_px is not None:
+            payload["zone_box_px"] = list(self.zone_box_px)
+        return payload
 
 
 @dataclass(frozen=True)
@@ -139,8 +151,41 @@ def exposure_steps_for_fps(
     return steps
 
 
-def measure_exposure(image: np.ndarray) -> ExposureObservation:
-    """Rate exposure in the center-lower hitting zone of one grayscale frame."""
+def hitting_zone(
+    height: int, width: int, zone_box: Sequence[int] | None = None
+) -> tuple[tuple[int, int, int, int], ZoneSource]:
+    """The hitting zone in this frame's pixels (x0, y0, x1, y1) and where it came from.
+
+    ``zone_box`` is the tester's confirmed placement box in this mode's pixels; it
+    is kept inside the frame. Without one the fixed centre-lower box stands in
+    (P7-15).
+    """
+    if zone_box is not None:
+        x0, y0, x1, y1 = (int(value) for value in zone_box)
+        return (
+            (
+                min(max(x0, 0), width),
+                min(max(y0, 0), height),
+                min(max(x1, 0), width),
+                min(max(y1, 0), height),
+            ),
+            "placement_box",
+        )
+    fx0, fy0, fx1, fy1 = FIXED_ZONE_FRACTIONS
+    return (
+        (round(width * fx0), round(height * fy0), round(width * fx1), round(height * fy1)),
+        "fixed",
+    )
+
+
+def measure_exposure(
+    image: np.ndarray, zone_box: Sequence[int] | None = None
+) -> ExposureObservation:
+    """Rate exposure in the hitting zone of one grayscale frame.
+
+    The zone is the tester's placement box when one is given, else the fixed
+    centre-lower box (P7-15).
+    """
     pixels = np.asarray(image)
     if pixels.ndim != 2 or not pixels.size:
         return ExposureObservation(
@@ -151,16 +196,16 @@ def measure_exposure(image: np.ndarray) -> ExposureObservation:
         )
 
     height, width = pixels.shape
-    region = pixels[
-        round(height * 0.45) : round(height * 0.9),
-        round(width * 0.2) : round(width * 0.8),
-    ]
+    (x0, y0, x1, y1), zone_source = hitting_zone(height, width, zone_box)
+    region = pixels[y0:y1, x0:x1]
+    zone = {"zone_source": zone_source, "zone_box_px": (x0, y0, x1, y1)}
     if not region.size:
         return ExposureObservation(
             sample_available=False,
             status="unavailable",
             recommendation="hold",
             message="Impact-area exposure region is unavailable",
+            **zone,
         )
 
     p10, median, p90 = (float(np.percentile(region, value)) for value in (10, 50, 90))
@@ -203,6 +248,7 @@ def measure_exposure(image: np.ndarray) -> ExposureObservation:
         contrast=round(contrast, 1),
         clipped_pct=round(clipped_pct, 2),
         dark_pct=round(dark_pct, 2),
+        **zone,
     )
 
 

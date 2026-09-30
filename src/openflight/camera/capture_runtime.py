@@ -110,6 +110,10 @@ class CameraCaptureSettings:
     # With it, a manual-exposure clip's analysis eligibility is judged on the ball,
     # not the hitting-zone box (P7-8).
     setup_ball: Mapping | None = None
+    # The tester's confirmed placement box in this mode (x0, y0, x1, y1): the
+    # hitting zone the exposure meter and the zone rule judge. Without it the
+    # fixed centre-lower box stands in (P7-15).
+    hitting_zone: tuple[int, int, int, int] | None = None
 
     @property
     def enforced_profile(self) -> Mapping | None:
@@ -176,6 +180,22 @@ def parse_setup_ball(value: str | None) -> dict[str, float] | None:
     if x < 0 or y < 0 or diameter <= 0:
         raise ValueError("setup ball must lie in the frame with a positive diameter")
     return {"x": x, "y": y, "diameter_px": diameter}
+
+
+def parse_hitting_zone(value: str | None) -> tuple[int, int, int, int] | None:
+    """Parse ``x0,y0,x1,y1`` in pixels: the tester's placement box in this mode."""
+    if value is None:
+        return None
+    parts = [part.strip() for part in value.split(",")]
+    if len(parts) != 4:
+        raise ValueError("hitting zone must be x0,y0,x1,y1 in pixels")
+    try:
+        x0, y0, x1, y1 = (int(part) for part in parts)
+    except ValueError as exc:
+        raise ValueError("hitting zone values must be whole pixels") from exc
+    if min(x0, y0) < 0 or x1 <= x0 or y1 <= y0:
+        raise ValueError("hitting zone must lie in the frame with x1 > x0 and y1 > y0")
+    return x0, y0, x1, y1
 
 
 def _save_pgm(path: Path, image: np.ndarray) -> None:
@@ -560,7 +580,7 @@ class CameraCaptureRuntime:
         """Rate exposure in the center-lower hitting zone of the latest frame."""
         frame = self._ring.latest_frame
         image = frame.image if frame is not None else np.asarray([])
-        return measure_exposure(image).to_dict()
+        return measure_exposure(image, zone_box=self.settings.hitting_zone).to_dict()
 
     @property
     def camera_analysis_eligible(self) -> bool:
@@ -605,7 +625,10 @@ class CameraCaptureRuntime:
         settings = snapshot["settings"]
         if not settings.auto_exposure:
             frame = snapshot["frame"]
-            observation = measure_exposure(frame.image if frame is not None else np.asarray([]))
+            observation = measure_exposure(
+                frame.image if frame is not None else np.asarray([]),
+                zone_box=settings.hitting_zone,
+            )
             payload.update(
                 {
                     "status": "manual",
@@ -623,7 +646,10 @@ class CameraCaptureRuntime:
 
     def _manual_exposure_observation(self) -> ExposureObservation:
         frame = self._ring.latest_frame
-        return measure_exposure(frame.image if frame is not None else np.asarray([]))
+        return measure_exposure(
+            frame.image if frame is not None else np.asarray([]),
+            zone_box=self.settings.hitting_zone,
+        )
 
     def update_image_controls(
         self, *, exposure_us: int, gain: float, purpose: str = "capture"
@@ -1023,9 +1049,15 @@ class CameraCaptureRuntime:
         zone_rule = {
             "analysis_eligible": auto_exposure.get("analysis_eligible"),
             "status": observation.get("status") if isinstance(observation, Mapping) else None,
+            # the placement box, or the fixed box without one (P7-15)
+            "zone_source": (
+                observation.get("zone_source") if isinstance(observation, Mapping) else None
+            ),
         }
         try:
-            judged = capture_analysis_eligibility(images, SENSOR_BLACK_LEVEL_DN, dict(ball))
+            judged = capture_analysis_eligibility(
+                images, SENSOR_BLACK_LEVEL_DN, dict(ball), zone_box=self.settings.hitting_zone
+            )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("[CAMERA] Setup-ball light judgement failed", exc_info=True)
             judged = {
@@ -1113,6 +1145,7 @@ class CameraCaptureRuntime:
             frame = self._ring.latest_frame
             observation = measure_exposure(
                 frame.image if frame is not None else np.asarray([]),
+                zone_box=self.settings.hitting_zone,
             )
             decision = self._auto_exposure_policy.evaluate(
                 observation,
