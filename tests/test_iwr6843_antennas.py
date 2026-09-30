@@ -110,7 +110,7 @@ def test_offsets_use_the_rigs_phase_centre_convention():
     np.testing.assert_allclose(centre, levm_phase_centre_offset_mm(90.0, PITCH_DEG), atol=1e-9)
 
 
-def test_layout_from_the_v3_rig_file_places_the_rx_row_at_49_mm():
+def test_layout_from_the_v3_rig_file_places_the_rx_row_at_its_measured_height():
     rig = RigGeometry.from_json(V3_RIG)
     setup = rig.enclosure_setup()
     layout = antennas.layout_from_phase_centre(
@@ -118,7 +118,7 @@ def test_layout_from_the_v3_rig_file_places_the_rx_row_at_49_mm():
         board_rotation_deg=setup.iwr_board_rotation_deg,
         boresight_pitch_deg=setup.iwr_tilt_deg,
     )
-    assert layout.rx_row_height_m == pytest.approx(0.049)
+    assert layout.rx_row_height_m == pytest.approx(0.0444)
     assert layout.board_rotation_deg == 90.0
     assert layout.basis == antennas.RIG_BASIS
     assert layout.phase_centre_height_m(math.radians(PITCH_DEG)) == pytest.approx(

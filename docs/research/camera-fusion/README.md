@@ -57,7 +57,7 @@ Positions are relative to the camera lens, as seen from behind the unit looking 
 |---|---|---|
 | Camera boresight | level | design |
 | Lens height above the unit's feet | 95 mm at the default foot setting | Tape, 22 Sept. Used as the lens height above the hitting surface unless the setup's radar check finds a gross mismatch ([section 7](#7-research-setup-geometry-and-lens-height)). |
-| IWR6843LEVM receive-antenna centre | in line with the lens sideways, 46 mm below (49 mm above the surface), 30 mm behind | Tape, 22 Sept; the drop re-measured 30 Sept (it was 44 mm). Sideways alignment confirmed by the builder. |
+| IWR6843LEVM receive-antenna centre | in line with the lens sideways, 50.6 mm below (44.4 mm above the surface), 30 mm behind | Tape, 22 Sept; the height re-measured 30 Sept from the receive column's ends and middle, 40.2, 44.3 and 48.6 mm (it was 44 mm below the lens). Sideways alignment confirmed by the builder. |
 | IWR6843 and OPS243 tilt | 10° up | Design mount angle; not measured on this box. |
 | OPS243 | 85 mm left, 47 mm below, 20 mm behind | tape, 22 Sept |
 | Microphone | 80 mm left, level with the lens | tape, 22 Sept |

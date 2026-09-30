@@ -896,12 +896,16 @@ class TestTheTesterRunsTheServersPlacementChecks:
     def _files(self, tmp_path, **changes):
         from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
 
+        rig = RigGeometry.from_json(self.RIG)
+        right_mm, down_mm, forward_mm = rig.iwr_offset_mm
+        lens_mm = rig.lens_height_above_floor_mm
         placement = _placement(
-            rig_geometry_sha256=RigGeometry.from_json(self.RIG).snapshot()["sha256"],
+            rig_geometry_sha256=rig.snapshot()["sha256"],
             enclosure_to_target_lfu=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
-            # the v3 file's IWR offset (0, 44, -30) mm through the declared mount
-            camera_origin_lfu=[0.0, 0.0, 0.095],
-            radar_origin_lfu=[0.0, -0.03, 0.051],
+            # the v3 file's IWR receive-row offset through the declared mount, read
+            # from the file so a re-measured rig keeps this placement consistent
+            camera_origin_lfu=[0.0, 0.0, lens_mm / 1000.0],
+            radar_origin_lfu=[right_mm / 1000.0, forward_mm / 1000.0, (lens_mm - down_mm) / 1000.0],
             reference_pose_deg={"pitch": 0.0, "roll": 0.0},
         )
         placement.update(changes)

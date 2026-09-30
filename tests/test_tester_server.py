@@ -1786,7 +1786,7 @@ class TestTheCameraSaysHowFar:
         assert camera.camera_origin_lfu == pytest.approx((0.0, 0.0, 0.095))
         # the radar's ranges start at the IWR's phase centre, not the RX row:
         # 1.86 mm target-left, 1.38 mm further back and 7.85 mm up (audit F11)
-        assert camera.radar_origin_lfu == pytest.approx((-0.001858, -0.031384, 0.056848), abs=1e-6)
+        assert camera.radar_origin_lfu == pytest.approx((-0.001858, -0.031384, 0.052248), abs=1e-6)
         assert camera.source == "nominal_uncalibrated"
         assert camera.accuracy_qualified is False
 
