@@ -48,7 +48,7 @@ class _EligibleSetup:
     def evaluate(self, tester_id, _reading):
         return self._result(tester_id)
 
-    def require(self, tester_id, _reading, _action):
+    def require(self, tester_id, _reading, _action, **_kwargs):
         return self._result(tester_id)
 
     def confirmation_valid(self, _tester_id):

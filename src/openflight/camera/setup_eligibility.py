@@ -8,7 +8,7 @@ import math
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from openflight.rig_geometry import RigGeometry
 
@@ -300,8 +300,23 @@ class SetupEligibility:
             self._confirmations[tester_id] = confirmation
         return self.evaluate(tester_id, reading)
 
-    def require(self, tester_id: str, reading, action: str) -> dict[str, Any]:
+    def require(
+        self,
+        tester_id: str,
+        reading,
+        action: str,
+        *,
+        adjust: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Evaluate for an action and record the outcome; polls call ``evaluate``.
+
+        ``adjust`` applies the caller's own checks (the tester's IWR hardware check)
+        before the record is written, so a refusal is logged as refused (wiring
+        audit T12).
+        """
         result = self.evaluate(tester_id, reading)
+        if adjust is not None:
+            result = adjust(result)
         self.record(
             tester_id,
             "admitted" if result["eligible"] else "blocked",

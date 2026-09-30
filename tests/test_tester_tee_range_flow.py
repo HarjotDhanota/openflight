@@ -25,7 +25,7 @@ class EligibleSetup:
     def evaluate(self, tester_id, _reading):
         return self.require(tester_id, _reading, "read")
 
-    def require(self, tester_id, _reading, _action):
+    def require(self, tester_id, _reading, _action, **_kwargs):
         return {
             "eligible": True,
             "tester_id": tester_id,
@@ -210,8 +210,8 @@ class StaleFakeLive(FakeLive):
 
 
 class IneligibleSetup(EligibleSetup):
-    def require(self, tester_id, _reading, _action):
-        result = super().require(tester_id, _reading, _action)
+    def require(self, tester_id, _reading, _action, **_kwargs):
+        result = super().require(tester_id, _reading, _action, **_kwargs)
         return {**result, "eligible": False, "blockers": [{"id": "lis3dh"}]}
 
 
@@ -219,8 +219,8 @@ class MutableSetup(EligibleSetup):
     def __init__(self):
         self.eligible = True
 
-    def require(self, tester_id, _reading, _action):
-        result = super().require(tester_id, _reading, _action)
+    def require(self, tester_id, _reading, _action, **_kwargs):
+        result = super().require(tester_id, _reading, _action, **_kwargs)
         return {
             **result,
             "eligible": self.eligible,
@@ -232,8 +232,8 @@ class ReconfirmedSetup(EligibleSetup):
     def __init__(self):
         self.confirmed_at = "first-server"
 
-    def require(self, tester_id, _reading, _action):
-        result = super().require(tester_id, _reading, _action)
+    def require(self, tester_id, _reading, _action, **_kwargs):
+        result = super().require(tester_id, _reading, _action, **_kwargs)
         return {
             **result,
             "operator_confirmation": {

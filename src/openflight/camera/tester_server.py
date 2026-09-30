@@ -4415,7 +4415,10 @@ def create_app(
         return {**result, "checks": checks, "blockers": blockers, "eligible": not blockers}
 
     def require_setup(tester_id: str, reading: Mapping, action: str) -> dict:
-        return with_iwr_preflight(setup.require(tester_id, reading, action))
+        # the policy records after the IWR check (T12); applying it again is a no-op
+        return with_iwr_preflight(
+            setup.require(tester_id, reading, action, adjust=with_iwr_preflight)
+        )
 
     @app.before_request
     def start_request_timer():

@@ -284,3 +284,61 @@ def test_confirmation_rejects_wrong_hash_false_ack_and_invalid_tester(tmp_path):
         ).status_code
         == 400
     )
+
+
+def _records(tmp_path):
+    path = tmp_path / TESTER / "setup_eligibility.jsonl"
+    if not path.is_file():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def _confirmed_client(tmp_path, **kwargs):
+    client = ts.create_app(
+        sessions_root=tmp_path, rig_geometry=RIG, tilt=StaticTilt(), **kwargs
+    ).test_client()
+    eligibility = client.get(
+        "/api/tester/setup-eligibility", query_string={"tester_id": TESTER}
+    ).get_json()
+    client.post(
+        "/api/tester/setup-eligibility",
+        json={
+            "tester_id": TESTER,
+            "action": "confirm",
+            "config_hash": eligibility["config_hash"],
+            "physical_rig_confirmed": True,
+        },
+    )
+    return client
+
+
+def test_polls_evaluate_without_recording(tmp_path):
+    """Wiring audit T12: the page's polls add nothing to setup_eligibility.jsonl."""
+    client = _confirmed_client(tmp_path)
+    before = _records(tmp_path)
+    query = {"tester_id": TESTER}
+    for _ in range(10):
+        assert client.get("/api/tester/setup-eligibility", query_string=query).status_code == 200
+        assert client.get("/api/tester/tee-range", query_string=query).status_code == 200
+        body = {**query, "arm_id": "arm5", "environment": "indoors"}
+        assert client.post("/api/tester/status", json=body).status_code == 200
+
+    assert _records(tmp_path) == before
+
+
+def test_an_action_refused_by_the_hardware_check_is_logged_as_refused(tmp_path):
+    """Wiring audit T12: the record is written after the IWR check is applied."""
+    client = _confirmed_client(tmp_path, require_iwr_preflight=True)
+    params = ts.TesterParameters(TESTER, "arm5", "indoors")
+    ts.write_arm_state(tmp_path, params, gain=4.0, gain_exposure_us=params.arm.exposure_us)
+
+    response = client.post(
+        "/api/tester/run",
+        json={"tester_id": TESTER, "arm_id": "arm5", "environment": "indoors", "action": "gain"},
+    )
+
+    assert response.status_code == 409
+    last = _records(tmp_path)[-1]
+    assert last["outcome"] == "blocked"
+    assert last["action"] == "gain"
+    assert [blocker["id"] for blocker in last["blockers"]] == ["iwr6843_cli"]
