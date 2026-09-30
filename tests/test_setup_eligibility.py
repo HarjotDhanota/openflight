@@ -284,3 +284,98 @@ def test_confirmation_rejects_wrong_hash_false_ack_and_invalid_tester(tmp_path):
         ).status_code
         == 400
     )
+
+
+def _rig_with(tmp_path, **changes):
+    data = json.loads(RIG.read_text(encoding="utf-8"))
+    data.update(changes)
+    path = tmp_path / "rig-new.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def _approve(tmp_path, *rigs):
+    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+    path = tmp_path / "approved.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "openflight.approved_rig_geometry.v1",
+                "approved": [
+                    {
+                        "rig_geometry_params_sha256": RigGeometry.from_json(rig).snapshot()[
+                            "sha256"
+                        ],
+                        "file": rig.name,
+                    }
+                    for rig in rigs
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+class TestTheApprovedRigList:
+    """C2: admission checks the rig file against an approved-hash list in config/."""
+
+    def test_the_list_starts_with_the_measured_v3_file(self):
+        from openflight.camera.setup_eligibility import (  # noqa: PLC0415
+            DEFAULT_APPROVED_RIGS,
+            approved_rig_hashes,
+        )
+        from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+        assert DEFAULT_APPROVED_RIGS.parent.name == "config"
+        approved = approved_rig_hashes(DEFAULT_APPROVED_RIGS)
+        assert approved[0] == RigGeometry.from_json(RIG).snapshot()["sha256"]
+        assert inspect_geometry(RIG)[1]["status"] == "pass"
+
+    def test_a_new_focal_with_an_approved_hash_is_admitted_and_used(self, tmp_path):
+        rig = _rig_with(tmp_path, focal_px=480.0)
+        gate = SetupEligibility(
+            rig,
+            tmp_path,
+            inclinometer_bus=1,
+            inclinometer_address=0x18,
+            inclinometer_zero_offset_deg=0.0,
+            approved_rigs=_approve(tmp_path, RIG, rig),
+        )
+        admission = gate.evaluate(TESTER, STABLE)
+        assert admission["checks"][0]["status"] == "pass"
+        assert admission["config_hash"] is not None
+
+        # the tester's models take the new focal, per binning: 1280x800 is 1:1
+        arm5, arm6 = ts.ARMS["arm5"], ts.ARMS["arm6"]
+        assert ts.mode_focal_px(arm5, rig) == pytest.approx(960.0)
+        assert ts.mode_focal_px(arm6, rig) == pytest.approx(480.0)
+        camera = ts._reference_ball_camera(  # pylint: disable=protected-access
+            arm5, rig, {"camera_pitch_deg": 0.0}, None, None
+        )
+        assert camera.focal_size_px == pytest.approx(960.0)
+        assert ts.expected_ball_diameter_px(arm5, 1071.0, rig) == pytest.approx(
+            960.0 * ts.BALL_DIAMETER_MM / 1041.0
+        )
+
+    def test_an_unapproved_file_is_refused(self, tmp_path):
+        rig = _rig_with(tmp_path, focal_px=480.0)
+        fingerprint, check = inspect_geometry(rig)
+        assert fingerprint is None
+        assert check["status"] == "block"
+        assert "approved" in check["reason"]
+
+    def test_the_remedy_reads_its_heights_from_the_rig(self, tmp_path):
+        rig = _rig_with(tmp_path, lens_height_above_floor_mm=110.0)
+        gate = SetupEligibility(
+            rig,
+            tmp_path,
+            inclinometer_bus=1,
+            inclinometer_address=0x18,
+            inclinometer_zero_offset_deg=0.0,
+            approved_rigs=_approve(tmp_path, rig),
+        )
+        operator = gate.evaluate(TESTER, STABLE)["checks"][2]
+        assert "110 mm" in operator["remedy"]
+        assert "95 mm" not in operator["remedy"]

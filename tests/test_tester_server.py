@@ -342,6 +342,21 @@ class TestCommands:
         assert command[command.index("--log-dir") + 1].endswith("run-01")
 
     @pytest.mark.parametrize("action", ["swings", "ladder"])
+    def test_the_kiosk_uses_the_testers_iwr_calibration(self, tmp_path, action):
+        # C10: a --iwr-calibration override used to stop at the setup
+        p = params(arm_id="arm4", tee_mm=1524)
+        screened(tmp_path, p)
+        calibration = tmp_path / "board-7-calibration.json"
+
+        chosen = ts.action_commands(
+            action, p, tmp_path, RIG, tester_setup=TESTER_SETUP, iwr_calibration=calibration
+        )[0][0]
+        default = ts.action_commands(action, p, tmp_path, RIG, tester_setup=TESTER_SETUP)[0][0]
+
+        assert chosen[chosen.index("--iwr6843-cal") + 1] == str(calibration)
+        assert default[default.index("--iwr6843-cal") + 1] == str(ts.DEFAULT_IWR_CALIBRATION)
+
+    @pytest.mark.parametrize("action", ["swings", "ladder"])
     def test_kiosk_runs_own_the_iwr_port_the_hardware_check_verified(self, tmp_path, action):
         p = params(arm_id="arm4", tee_mm=1524)
         screened(tmp_path, p)
@@ -1282,7 +1297,7 @@ def _ball_frames(ground, ball, n=5, width=320, height=200, diameter=12.0):
 
 class TestLiveBall:
     def test_a_well_lit_ball_is_found_with_its_size_and_range(self):
-        readout = ts.ball_readout(_ball_frames(110, 230), ts.FOCAL_PX_2X)
+        readout = ts.ball_readout(_ball_frames(110, 230), 466.6667)
         assert readout["found"] is True
         assert readout["diameter_px"] == pytest.approx(12.0, abs=1.0)
         # 466.67 px x 42.67 mm / 12 px
@@ -1292,12 +1307,12 @@ class TestLiveBall:
 
     def test_a_dim_ball_is_found_by_its_contrast(self):
         # nowhere near saturation, but it stands out from the ground
-        readout = ts.ball_readout(_ball_frames(40, 70), ts.FOCAL_PX_2X)
+        readout = ts.ball_readout(_ball_frames(40, 70), 466.6667)
         assert readout["found"] is True
         assert readout["diameter_px"] == pytest.approx(12.0, abs=1.5)
 
     def test_no_ball_says_why(self):
-        readout = ts.ball_readout(_ball_frames(40, 40), ts.FOCAL_PX_2X)
+        readout = ts.ball_readout(_ball_frames(40, 40), 466.6667)
         assert readout["found"] is False and readout["reason"]
 
     def test_the_ring_sits_just_outside_the_ball(self):
@@ -1655,18 +1670,18 @@ class TestTheTapeGivesTheBallsSize:
     def test_the_tape_runs_from_the_radar_window_behind_the_lens(self):
         # 1071 mm from the radar window is 1041 mm from the lens in the v3 rig
         expected = ts.expected_ball_diameter_px(ts.ARMS["arm5"], 1071.0, RIG)
-        assert expected == pytest.approx(ts.FOCAL_PX_1X * ts.BALL_DIAMETER_MM / 1041.0)
+        assert expected == pytest.approx(933.3333 * ts.BALL_DIAMETER_MM / 1041.0)
         assert ts.expected_ball_diameter_px(ts.ARMS["arm5"], None, RIG) is None
 
     def test_the_readout_puts_the_tape_beside_the_picture(self):
-        readout = ts.ball_readout(_ball_frames(110, 230), ts.FOCAL_PX_2X, 12.0)
+        readout = ts.ball_readout(_ball_frames(110, 230), 466.6667, 12.0)
         assert readout["found"] is True
         assert readout["expected_diameter_px"] == 12.0
         assert readout["image_only_diameter_px"] == pytest.approx(12.0, abs=1.5)
         assert "size_check" not in readout
 
     def test_a_tape_far_from_the_picture_names_the_suspects(self):
-        readout = ts.ball_readout(_ball_frames(110, 230), ts.FOCAL_PX_2X, 24.0)
+        readout = ts.ball_readout(_ball_frames(110, 230), 466.6667, 24.0)
         assert "check the tape" in readout.get("size_check", "")
 
 
@@ -1701,7 +1716,7 @@ class TestTheCameraSaysHowFar:
     def test_both_routes_agree_with_the_tape_on_a_level_camera(self):
         # a ball 1041 mm from the lens, on the floor, centred: where a level
         # 2.8 mm camera 95 mm up would see it
-        focal, drop = ts.FOCAL_PX_1X, 95.0 - ts.BALL_DIAMETER_MM / 2
+        focal, drop = 933.3333, 95.0 - ts.BALL_DIAMETER_MM / 2
         along = (1041.0**2 - drop**2) ** 0.5
         ball = {
             "x": 640.0,
@@ -1853,7 +1868,7 @@ class TestTheInclinometerRunsBesideThePage:
 
     def test_the_floor_agrees_with_the_tape_once_the_measured_pitch_is_applied(self):
         # where a camera pitched 3.5 deg up, 95 mm high, sees a ball 1041 mm away
-        focal, drop, pitch = ts.FOCAL_PX_1X, 95.0 - ts.BALL_DIAMETER_MM / 2, math.radians(3.5)
+        focal, drop, pitch = 933.3333, 95.0 - ts.BALL_DIAMETER_MM / 2, math.radians(3.5)
         along = (1041.0**2 - drop**2) ** 0.5
         ball = {"x": 640.0, "y": 400.0 + focal * math.tan(pitch + math.atan(drop / along))}
         ball["diameter_px"] = focal * ts.BALL_DIAMETER_MM / 1041.0
@@ -1935,11 +1950,21 @@ class BallCamera(FakeCamera):
         return request_
 
 
+class BallCamera640(FakeCamera):
+    """The same ball in the 640x400 mode: 320x200 is refused for measurement (C12)."""
+
+    def capture_request(self):
+        time.sleep(0.002)
+        request_ = FakeRequest(640, 400, 0)
+        request_.raw[:, 1::2] = _ball_frames(110, 230, n=1, width=640, height=400, diameter=24.0)[0]
+        return request_
+
+
 class TestEachPlacementKeepsOptionalTapeSeparate:
-    body = {"tester_id": "20260922-name", "arm_id": "arm1", "environment": "indoors"}
+    body = {"tester_id": "20260922-name", "arm_id": "arm4", "environment": "indoors"}
 
     def _client(self, tmp_path):
-        live = ts.LiveView(camera_factory=BallCamera)
+        live = ts.LiveView(camera_factory=BallCamera640)
         app = eligible_app(
             sessions_root=tmp_path, rig_geometry=RIG, live_view=live, tilt=_level_tilt()
         )
@@ -2000,7 +2025,7 @@ def test_no_ball_on_a_floor_clipped_white_says_to_lower_the_exposure():
     frames = np.full((5, 800, 1280), 40, dtype=np.uint8)
     frames[:, 420:, :] = 255
 
-    ball = ts.ball_readout(frames, ts.FOCAL_PX_1X, 19.7, (486.0, 90.0))
+    ball = ts.ball_readout(frames, 933.3333, 19.7, (486.0, 90.0))
 
     assert ball["found"] is False
     assert "clipped white" in ball["reason"]

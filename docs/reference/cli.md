@@ -62,7 +62,8 @@ The supported angle radar.
 
 | Flag | Type / default | Description |
 | --- | --- | --- |
-| `--iwr6843` | flag | Enable TI IWR6843 L3 capture and LCMF-v1 vertical launch angle |
+| `--iwr6843` | flag | Enable TI IWR6843 L3 capture and LCMF-v1 vertical launch angle. Requires `--rig-geometry`. |
+| `--rig-geometry` | path; no default in the server | Enclosure rig file; the radar's height, tilt and offset and the camera's height come only from it. `start-kiosk.sh` passes `config/enclosure_v3_rig_geometry.json` unless another file is given. |
 | `--iwr6843-port` | — | TI serial port (auto-detect by default) |
 | `--iwr6843-config` | default `config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg` | TI RF config matching the flashed L3 firmware |
 | `--iwr6843-cal` | default `config/iwr6843_calibration_reference.json` | TI complex array/range calibration JSON |
@@ -70,8 +71,8 @@ The supported angle radar.
 | `--iwr6843-tee-m` | float; no default | Measured antenna-center to tee slant range in metres. If omitted, OpenFlight saves raw TI captures but withholds range-dependent metrics. |
 | `--iwr6843-tee-range-pending` | flag | Explicitly mark the tee range unresolved and run raw-only, even if another launch wrapper supplied a range. |
 | `--iwr6843-net-m` | float; default `4.6` | Antenna-center to net range in metres (default: 4.6) |
-| `--iwr6843-tilt-deg` | float | Override mount tilt from the TI calibration JSON |
-| `--iwr6843-radar-height-m` | float | Override antenna-center height from the TI calibration JSON |
+| `--iwr6843-tilt-deg` | float | Superseded: the rig file's radar tilt overrides it. The TI calibration JSON's tilt is never used. |
+| `--iwr6843-radar-height-m` | float | Superseded: the rig file's radar height overrides it. The TI calibration JSON's height is never used. |
 | `--iwr6843-ball-height-m` | float; default `0.04` | Ball-center height above the floor/mat (default: 0.040) |
 | `--iwr6843-tx-order` | choices: `auto`, `normal`, `reversed`; default `auto` | TI TDM chirp order; auto reads the chirp masks from the cfg |
 | `--iwr6843-capture-timeout` | float; default `16.0` | Maximum seconds an OPS shot waits for its TI UART dump |
@@ -149,7 +150,7 @@ Optional rolling-buffer capture and replay. See [camera setup](../camera/README.
 | `--camera-capture-exposure-us` | int; default `1000` | Exposure seed for startup calibration |
 | `--camera-capture-gain` | float; default `4.0` | Analogue-gain seed for startup calibration |
 | `--camera-armed-profile` | path | Qualified armed exposure profile. Production capture refuses exposure or gain above its ceiling; `--study-mode` captures stay diagnostic and their out-of-ceiling metrics are withheld. There is no default ceiling. |
-| `--camera-capture-mount-height-m` | float; default `0.20955` | Camera optical-center height above the hitting surface |
+| `--camera-capture-mount-height-m` | float; no default | Camera optical-center height above the hitting surface; `--rig-geometry` supplies and overrides it |
 | `--camera-capture-horizontal-offset-deg` | float; default `0` | Target-line correction added to horizontal launch angles |
 | `--camera-capture-lateral-offset-m` | float; default `0` | Camera position relative to radar center; positive is target-right |
 | `--camera-capture-roll-deg` | float; default `0` | Clockwise image-roll correction for preview and geometry |

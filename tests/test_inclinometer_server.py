@@ -4,6 +4,7 @@ import json
 import math
 import sys
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -192,7 +193,11 @@ def test_init_inclinometer_reads_a_turned_board_in_the_enclosures_axes(monkeypat
     monkeypatch.setattr("openflight.inclinometer.LIS3DH", Board)
     monkeypatch.setattr("openflight.inclinometer.InclinometerService", Service)
     monkeypatch.setattr(
-        server, "rig_geometry", RigGeometry(focal_px=466.67, lis3dh_mount_yaw_deg=180.0)
+        server,
+        "rig_geometry",
+        RigGeometry.from_json(
+            Path(__file__).resolve().parents[1] / "config" / "enclosure_v3_rig_geometry.json"
+        ),
     )
     # init_inclinometer installs its service for the whole server: put it back after
     monkeypatch.setattr(server, "inclinometer_service", None)

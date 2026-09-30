@@ -13,23 +13,13 @@ from typing import Any, Mapping
 from openflight.rig_geometry import RigGeometry
 
 SCHEMA_VERSION = 1
-APPROVED_CONFIG_HASH = "79870a2be3475a405260fa2ff8d00b8f5fe501632da634369fd4a800382cbaa1"
-APPROVED_NUMERIC_PARAMETERS = {
-    "focal_px": 466.6667,
-    "image_width": 320,
-    "image_height": 200,
-    "boresight_pitch_deg": 0.0,
-    "ops_offset_mm": [-85.0, 47.0, -20.0],
-    "iwr_offset_mm": [0.0, 44.0, -30.0],
-    "mic_offset_mm": [-80.0, 0.0, 0.0],
-    "lens_height_above_floor_mm": 95.0,
-    "iwr_boresight_pitch_deg": 10.0,
-    "ops_boresight_pitch_deg": 10.0,
-    "housing_tilt_deg": 0.0,
-    "lis3dh_mount_pitch_deg": 0.0,
-    "lis3dh_mount_roll_deg": 0.0,
-    "lis3dh_mount_yaw_deg": 180.0,
-}
+# The rig files the tester may capture with, by parameter fingerprint. It starts
+# with the measured v3 file; a calibrated or re-measured rig file is admitted by
+# adding its fingerprint there, not by changing code (wiring audit C2).
+DEFAULT_APPROVED_RIGS = (
+    Path(__file__).resolve().parents[3] / "config" / "approved_rig_geometry.json"
+)
+APPROVED_RIGS_SCHEMA = "openflight.approved_rig_geometry.v1"
 RUNTIME_REQUIREMENTS = ["ops", "camera", "iwr6843", "lis3dh"]
 PLACEMENT_TOLERANCE_DEG = 2.0
 
@@ -121,36 +111,42 @@ def setup_config_hash(
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def inspect_geometry(path: Path) -> tuple[str | None, dict[str, Any]]:
-    """Validate strict measured-v3 numeric identity and return its loaded fingerprint."""
+def approved_rig_hashes(path: Path = DEFAULT_APPROVED_RIGS) -> list[str]:
+    """The approved rig fingerprints, in the order the list gives them."""
+    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(document, Mapping) or document.get("schema") != APPROVED_RIGS_SCHEMA:
+        raise ValueError(f"{path} is not an {APPROVED_RIGS_SCHEMA} list")
+    entries = document.get("approved")
+    if not isinstance(entries, list):
+        raise ValueError(f"{path} has no approved list")
+    hashes = []
+    for entry in entries:
+        value = entry.get("rig_geometry_params_sha256") if isinstance(entry, Mapping) else None
+        if not isinstance(value, str) or len(value) != 64:
+            raise ValueError(f"{path} has an approved entry without a params fingerprint")
+        hashes.append(value)
+    return hashes
+
+
+def inspect_geometry(
+    path: Path, approved_rigs: Path = DEFAULT_APPROVED_RIGS
+) -> tuple[str | None, dict[str, Any]]:
+    """Validate the rig file and admit it only if its fingerprint is approved.
+
+    The fingerprint is the loaded parameters' (``RigGeometry.snapshot``), the one
+    the swing server records as ``rig_geometry_params_sha256``.
+    """
+    label = "Approved rig geometry"
     try:
-        raw = json.loads(Path(path).read_text(encoding="utf-8"))
-        if not isinstance(raw, Mapping):
-            raise ValueError("geometry document is not an object")
-        for key, expected in APPROVED_NUMERIC_PARAMETERS.items():
-            actual = raw.get(key)
-            values = actual if isinstance(expected, list) else [actual]
-            expected_values = expected if isinstance(expected, list) else [expected]
-            if not isinstance(values, list) or len(values) != len(expected_values):
-                raise ValueError(f"{key} does not match the measured-v3 parameter shape")
-            for value, expected_value in zip(values, expected_values):
-                if (
-                    isinstance(value, bool)
-                    or not isinstance(value, (int, float))
-                    or not math.isfinite(float(value))
-                    or not math.isclose(float(value), float(expected_value), abs_tol=1e-9)
-                ):
-                    raise ValueError(f"{key} does not match the approved measured-v3 value")
-        loaded = dict(raw)
-        for key in ("ops_offset_mm", "iwr_offset_mm", "mic_offset_mm"):
-            if loaded.get(key) is not None:
-                loaded[key] = tuple(float(value) for value in loaded[key])
-        fingerprint = RigGeometry(**loaded).snapshot()["sha256"]
-        if fingerprint != APPROVED_CONFIG_HASH:
-            raise ValueError("geometry fingerprint does not match the approved measured-v3 file")
+        fingerprint = RigGeometry.from_json(path).snapshot()["sha256"]
+        if fingerprint not in approved_rig_hashes(approved_rigs):
+            raise ValueError(
+                f"rig geometry {Path(path).name} ({fingerprint[:12]}) is not on the approved "
+                f"list {Path(approved_rigs).name}"
+            )
         return fingerprint, {
             "id": "geometry",
-            "label": "Measured v3 geometry",
+            "label": label,
             "status": "pass",
             "reason": None,
             "remedy": None,
@@ -158,11 +154,33 @@ def inspect_geometry(path: Path) -> tuple[str | None, dict[str, Any]]:
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         return None, {
             "id": "geometry",
-            "label": "Measured v3 geometry",
+            "label": label,
             "status": "block",
             "reason": str(exc),
-            "remedy": "Restore the approved measured-v3 geometry before acquiring tester data.",
+            "remedy": (
+                "Use an approved rig file, or add this file's fingerprint to "
+                "config/approved_rig_geometry.json once it is approved, before acquiring "
+                "tester data."
+            ),
         }
+
+
+def _operator_remedy(path: Path) -> str:
+    """What the operator confirms, in the rig file's own numbers."""
+    try:
+        rig = RigGeometry.from_json(path)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return "Confirm the physical rig, sensor mounts and test setup match the rig file."
+    parts = []
+    if rig.lens_height_above_floor_mm is not None:
+        parts.append(
+            f"the {rig.lens_height_above_floor_mm:.0f} mm lens height at the rig file's "
+            "foot extension"
+        )
+    if rig.lis3dh_mount_yaw_deg is not None:
+        parts.append(f"LIS3DH yaw {rig.lis3dh_mount_yaw_deg:.0f}\u00b0")
+    parts.append("sensor mounts, and test setup")
+    return "Confirm " + ", ".join(parts) + "."
 
 
 class SetupEligibility:
@@ -176,8 +194,10 @@ class SetupEligibility:
         inclinometer_bus: int,
         inclinometer_address: int,
         inclinometer_zero_offset_deg: float,
+        approved_rigs: Path = DEFAULT_APPROVED_RIGS,
     ):
         self.geometry_path = Path(geometry_path)
+        self.approved_rigs = Path(approved_rigs)
         self.sessions_root = Path(sessions_root)
         self.inclinometer_bus = int(inclinometer_bus)
         self.inclinometer_address = int(inclinometer_address)
@@ -230,7 +250,7 @@ class SetupEligibility:
         }
 
     def evaluate(self, tester_id: str, reading: Mapping[str, Any]) -> dict[str, Any]:
-        geometry_hash, geometry = inspect_geometry(self.geometry_path)
+        geometry_hash, geometry = inspect_geometry(self.geometry_path, self.approved_rigs)
         config_hash = self._config_hash(geometry_hash)
         inclinometer = self._inclinometer_check(reading)
         with self._lock:
@@ -247,9 +267,7 @@ class SetupEligibility:
             "reason": None
             if confirmed
             else "confirm the physical v3 rig and setup for this tester and configuration",
-            "remedy": None
-            if confirmed
-            else "Confirm the 95 mm default foot extension, LIS3DH yaw 180°, sensor mounts, and test setup.",
+            "remedy": None if confirmed else _operator_remedy(self.geometry_path),
         }
         checks = [geometry, inclinometer, operator]
         blockers = [
@@ -281,7 +299,7 @@ class SetupEligibility:
         }
 
     def confirm(self, tester_id: str, config_hash: Any, physical_confirmed: Any, reading) -> dict:
-        geometry_hash, geometry = inspect_geometry(self.geometry_path)
+        geometry_hash, geometry = inspect_geometry(self.geometry_path, self.approved_rigs)
         current_hash = self._config_hash(geometry_hash)
         if geometry["status"] != "pass" or config_hash != current_hash:
             raise ValueError(
@@ -316,7 +334,7 @@ class SetupEligibility:
         return result
 
     def confirmation_valid(self, tester_id: str) -> bool:
-        geometry_hash, _check = inspect_geometry(self.geometry_path)
+        geometry_hash, _check = inspect_geometry(self.geometry_path, self.approved_rigs)
         current_hash = self._config_hash(geometry_hash)
         with self._lock:
             confirmation = self._confirmations.get(tester_id)
@@ -328,7 +346,7 @@ class SetupEligibility:
 
     def current_config_hash(self) -> str | None:
         """Return the current approved configuration identity, if valid."""
-        geometry_hash, _check = inspect_geometry(self.geometry_path)
+        geometry_hash, _check = inspect_geometry(self.geometry_path, self.approved_rigs)
         return self._config_hash(geometry_hash)
 
     def record(self, tester_id: str, outcome: str, detail: Mapping[str, Any]) -> None:

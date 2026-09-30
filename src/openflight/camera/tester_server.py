@@ -37,6 +37,8 @@ from flask import Flask, Response, g, jsonify, request, send_file
 from openflight import session_bundle, tee_range, tee_range_setup
 from openflight.camera import (
     attempt_ledger,
+    ball_pixels,
+    camera_roll,
     reference_ball_range,
     session_review_routes as review_routes,
     study_ladder,
@@ -114,10 +116,6 @@ SWINGS_PER_ARM = 5
 # depth, so that is about a third of head speed. The budget is in millimetres,
 # so the exposure is the same in every mode.
 EXPOSURE_CEILING_US = 300
-# The 2x-decimated modes share one focal because each output pixel spans the
-# same 6 um; 1:1 doubles it.
-FOCAL_PX_2X = 466.6667
-FOCAL_PX_1X = 933.3333
 # OV9282 analogue gain runs from 1 (unity) to 0xFF/16; unity matters in sunlight
 GAIN_SCREEN = "1,2,4,6,8,10,12,14,15.9"
 # Above ~12x the black floor lifts and column stripes appear: more offset, not
@@ -227,6 +225,18 @@ ARMS: dict[str, Arm] = {
     )
 }
 ARM_ORDER = tuple(ARMS)
+
+
+def mode_focal_px(arm: Arm, rig_geometry: Path) -> float:
+    """The arm's focal length from the rig file, by its binning (wiring audit C2).
+
+    The 2x-binned modes share one focal because each output pixel spans the same
+    two sensor pixels (320x200 is a crop of 640x400); 1:1 doubles it.
+    """
+    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+    return ball_pixels.mode_focal_px(arm.width, RigGeometry.from_json(rig_geometry))
+
 
 ACTION_LABELS = {
     "preflight": "Hardware and software preflight",
@@ -471,12 +481,23 @@ def _solved_camera_height(
     iwr = iwr_candidate if isinstance(iwr_candidate, Mapping) else {}
     if not iwr_range_usable(iwr.get("radar_slant_range_m"), iwr.get("evidence")):
         return solved
+    # The radar's uncertainty comes from its own evidence; without one the
+    # lens-height test has no scale, so it is not run (wiring audit C10).
+    radar_uncertainty = iwr.get("uncertainty_m")
+    if (
+        isinstance(radar_uncertainty, bool)
+        or not isinstance(radar_uncertainty, (int, float))
+        or not math.isfinite(radar_uncertainty)
+        or radar_uncertainty <= 0.0
+    ):
+        solved["radar_rejected"] = "the radar range carries no uncertainty of its own"
+        return solved
     try:
         height, uncertainty = solve_camera_height_from_radar(
             camera,
             (selected.x_px, selected.y_px),
             radar_slant_range_m=float(iwr["radar_slant_range_m"]),
-            radar_uncertainty_m=float(iwr.get("uncertainty_m") or 0.05),
+            radar_uncertainty_m=float(radar_uncertainty),
             ball_center_height_m=BALL_DIAMETER_MM / 2000.0,
         )
     except ValueError:
@@ -675,6 +696,102 @@ def setup_scene(
 
 HANDED_TO_SWINGS_SCHEMA = "openflight.tester_handed_to_swings.v1"
 
+# The net, or whatever stands behind the hitting area, is the strongest still
+# reflector beyond the ball's usual range. The empty static capture sees it when
+# it lies inside the capture's window, and the swing server stops its ball gates
+# 0.25 m short of it (wiring audit C7, decision D7). Ranges are apparent, as the
+# swing server's gates are.
+NET_SEARCH_WINDOW_M = (2.0, 6.0)
+# A reflector must stand this far above the window's median to count as the net;
+# the tail of nearer clutter (a door at 1.73 m on 29 Sept) reaches about 6.5 dB.
+NET_MIN_PEAK_DB = 10.0
+# The swing server's assumption when no net is measured; flagged when it is used.
+DEFAULT_NET_RANGE_M = 4.6
+
+
+def empty_capture_net_range(record: Mapping) -> dict:
+    """The net's apparent range from an empty static capture, or why none was found."""
+    facts = {
+        "source": "empty_static_capture",
+        "range_space": "apparent",
+        "window_m": list(NET_SEARCH_WINDOW_M),
+        "capture_id": record.get("capture_id") if isinstance(record, Mapping) else None,
+        "net_range_m": None,
+    }
+    try:
+        profile = _static_profile(record)
+    except (AttributeError, TypeError, ValueError) as exc:
+        return {**facts, "status": "not_found", "reason": f"no usable empty profile: {exc}"}
+    power = np.maximum(np.asarray(profile.power, dtype=float), 1e-12)
+    ranges = (profile.range_bin_start + np.arange(profile.range_bin_count)) * (
+        profile.range_resolution_m
+    )
+    inside = np.flatnonzero((ranges >= NET_SEARCH_WINDOW_M[0]) & (ranges <= NET_SEARCH_WINDOW_M[1]))
+    if inside.size < 3:
+        return {
+            **facts,
+            "status": "not_found",
+            "reason": (
+                f"the empty capture covers {ranges[0]:.2f}-{ranges[-1]:.2f} m, "
+                f"not the {NET_SEARCH_WINDOW_M[0]:g}-{NET_SEARCH_WINDOW_M[1]:g} m window"
+            ),
+        }
+    level_db = 10.0 * np.log10(power)
+    peak = int(inside[np.argmax(level_db[inside])])
+    prominence = float(level_db[peak] - np.median(level_db[inside]))
+    facts.update(
+        {
+            "searched_m": [round(float(ranges[inside[0]]), 3), round(float(ranges[inside[-1]]), 3)],
+            "strongest_m": round(float(ranges[peak]), 3),
+            "peak_to_median_db": round(prominence, 1),
+        }
+    )
+    if peak in (0, profile.range_bin_count - 1):
+        return {
+            **facts,
+            "status": "not_found",
+            "reason": (
+                f"the strongest return is at the capture's edge ({ranges[peak]:.2f} m); "
+                "the net may lie beyond it"
+            ),
+        }
+    if level_db[peak] < level_db[peak - 1] or level_db[peak] < level_db[peak + 1]:
+        return {
+            **facts,
+            "status": "not_found",
+            "reason": "the strongest return in the window is the tail of a nearer reflector",
+        }
+    if prominence < NET_MIN_PEAK_DB:
+        return {
+            **facts,
+            "status": "not_found",
+            "reason": (
+                f"no reflector stands {NET_MIN_PEAK_DB:g} dB above the window "
+                f"(strongest {prominence:.1f} dB at {ranges[peak]:.2f} m)"
+            ),
+        }
+    # sub-bin vertex of the parabola through the peak's log powers
+    before, top, after = level_db[peak - 1 : peak + 2]
+    curvature = before - 2.0 * top + after
+    offset = 0.5 * (before - after) / curvature if curvature < 0.0 else 0.0
+    net = (profile.range_bin_start + peak + offset) * profile.range_resolution_m
+    return {**facts, "status": "measured", "net_range_m": round(float(net), 3)}
+
+
+def setup_net_range(solution: tee_range.TeeRangeSolution | None) -> dict:
+    """The net range this setup's empty static capture measured, if any."""
+    for item in solution.candidates if solution is not None else ():
+        empty = (item.evidence or {}).get("empty_result")
+        if item.source_group == "iwr" and isinstance(empty, Mapping):
+            return empty_capture_net_range(empty)
+    return {
+        "source": "empty_static_capture",
+        "range_space": "apparent",
+        "net_range_m": None,
+        "status": "not_found",
+        "reason": "this setup has no empty static capture",
+    }
+
 
 def tee_range_handoff(
     solution: tee_range.TeeRangeSolution | None,
@@ -709,6 +826,10 @@ def tee_range_handoff(
         status = source = "pending"
     tee_m = candidate.radar_slant_range_m if candidate is not None else None
     scene = setup_scene(solution, rig_geometry)
+    net = setup_net_range(solution)
+    measured_net = net["status"] == "measured"
+    if not measured_net:
+        net["default_m"] = DEFAULT_NET_RANGE_M
     height = _setup_camera_height_m(solution)
     solved = scene["lens_height_solved_m"]
     uncertainty = scene["lens_height_solved_uncertainty_m"]
@@ -738,6 +859,10 @@ def tee_range_handoff(
             if solved is not None and uncertainty is not None
             else []
         ),
+        # the net the empty capture saw; the swing server's 4.6 m otherwise, flagged
+        *(["--net-range-m", f"{net['net_range_m']:.3g}"] if measured_net else []),
+        "--iwr6843-net-range-source",
+        "empty_static_capture" if measured_net else "default_not_measured",
     ]
     window = candidate.evidence.get("camera_window") if candidate is not None else None
     record = {
@@ -763,6 +888,7 @@ def tee_range_handoff(
         "solved_camera_height_m": height,
         "solved_camera_height_source": "static_iwr_range" if height is not None else None,
         "scene": scene,
+        "net_range": net,
         **rig_geometry_hashes(rig_geometry),
         "cli_args": args,
     }
@@ -965,9 +1091,10 @@ def solved_range(arm_dir: Path, arm: Arm, choice: Mapping, rig_geometry: Path) -
     try:
         image = _read_pgm(pgm)
         ball = detect_reference_ball(np.stack([image] * 3))
+        loaded = RigGeometry.from_json(rig_geometry)
         rig = replace(
-            RigGeometry.from_json(rig_geometry),
-            focal_px=FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X,
+            loaded,
+            focal_px=ball_pixels.mode_focal_px(arm.width, loaded),
             image_width=arm.width,
             image_height=arm.height,
         )
@@ -1113,6 +1240,7 @@ def action_commands(
     operator_reset: bool | None = None,
     use_unqualified_tee_range: bool = False,
     handed_to_swings: Mapping | None = None,
+    iwr_calibration: Path = DEFAULT_IWR_CALIBRATION,
 ) -> tuple[list[list[str]], Path]:
     """Build an allowlisted command sequence and its log path.
 
@@ -1242,6 +1370,8 @@ def action_commands(
         if iwr_static_port:
             # The kiosk must own the same interface the hardware check verified.
             commands[0].extend(["--iwr6843-port", iwr_static_port])
+        # the same board calibration the setup's static ranges used (wiring audit C10)
+        commands[0].extend(["--iwr6843-cal", str(iwr_calibration)])
         commands[0].extend(
             [
                 "--tester-setup-required",
@@ -1518,8 +1648,7 @@ def expected_ball_diameter_px(arm: Arm, tee_mm: float | None, rig_geometry: Path
     offset = RigGeometry.from_json(rig_geometry).iwr_offset_mm
     # the tape runs from the radar window, which sits this far behind the lens
     camera_mm = tee_mm + (offset[2] if offset else 0.0)
-    focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
-    return focal * BALL_DIAMETER_MM / camera_mm
+    return mode_focal_px(arm, rig_geometry) * BALL_DIAMETER_MM / camera_mm
 
 
 def expected_ball_row_px(
@@ -1538,20 +1667,21 @@ def expected_ball_row_px(
     rig = RigGeometry.from_json(rig_geometry)
     if rig.lens_height_above_floor_mm is None:
         return None
-    focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
+    focal = ball_pixels.mode_focal_px(arm.width, rig)
     camera_mm = tee_mm + (rig.iwr_offset_mm[2] if rig.iwr_offset_mm else 0.0)
     drop = rig.lens_height_above_floor_mm - BALL_DIAMETER_MM / 2.0
     along = math.sqrt(max(camera_mm**2 - drop**2, 1.0))
     measured = (tilt or {}).get("camera_pitch_deg")
     pitch = rig.boresight_pitch_deg if measured is None else measured
     row = arm.height / 2.0 + focal * math.tan(math.radians(pitch) + math.atan(drop / along))
-    band = (90.0 if measured is not None else 150.0) * focal / FOCAL_PX_1X
+    # the band is in 1:1 pixels; a binned mode sees half as many
+    band = (90.0 if measured is not None else 150.0) / ball_pixels.binning_factor(arm.width)
     return row, band
 
 
 def ball_readout(
     frames: np.ndarray,
-    focal_px: float,
+    focal_px: float | None,
     expected_diameter_px: float | None = None,
     expected_row: tuple[float, float] | None = None,
 ) -> dict:
@@ -1590,7 +1720,11 @@ def ball_readout(
         "x": round(ball.x, 1),
         "y": round(ball.y, 1),
         "diameter_px": round(ball.diameter_px, 1),
-        "range_m": round(focal_px * BALL_DIAMETER_MM / ball.diameter_px / 1000.0, 2),
+        "range_m": (
+            round(focal_px * BALL_DIAMETER_MM / ball.diameter_px / 1000.0, 2)
+            if focal_px is not None
+            else None
+        ),
         "ball_dn": round(float(np.median(inside)), 1),
         "around_dn": round(float(np.median(around)), 1) if around.size else None,
         "edge_dn_per_px": round(float(edge.mean()), 1) if edge.size else None,
@@ -1700,10 +1834,9 @@ class EnclosureTilt:
             {
                 "pitch_deg": round(snapshot.calibrated_pitch_deg, 2),
                 # the service keeps pitch only; the lean across is from the same
-                # still window, about the sensor's x axis
+                # still window, in the convention both camera paths share (C8)
                 "roll_deg": round(
-                    math.degrees(math.atan2(snapshot.x_g, math.hypot(snapshot.y_g, snapshot.z_g))),
-                    2,
+                    camera_roll.lis3dh_roll_deg(snapshot.x_g, snapshot.y_g, snapshot.z_g), 2
                 ),
                 "expected_pitch_deg": round(expected, 2),
                 "camera_pitch_deg": round(rig.boresight_pitch_deg + departure, 2),
@@ -1736,7 +1869,7 @@ def distance_cues(
     from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
 
     rig = RigGeometry.from_json(rig_geometry)
-    focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
+    focal = ball_pixels.mode_focal_px(arm.width, rig)
     cx, cy = arm.width / 2.0, arm.height / 2.0
     # with a tape, the ring's size IS the tape's: only the picture's own reading
     # of the same ball is an independent estimate, and without one there is none
@@ -1853,21 +1986,39 @@ def _reference_ball_camera(
         camera_rdf_offset_to_target_lfu,
     )
 
+    if (arm.width, arm.height) == (320, 200):
+        # a movable strip whose offset the models do not apply (wiring audit C12)
+        raise ValueError("320x200 is refused for measurement: its strip offset is not modelled")
+
     if optical_calibration is not None and camera_placement is not None:
         from openflight.camera.calibrated_projection import (  # noqa: PLC0415
             build_calibrated_camera_model,
+            check_placement_against_rig,
         )
 
         artifact = json.loads(optical_calibration.read_text(encoding="utf-8"))
         placement = json.loads(camera_placement.read_text(encoding="utf-8"))
+        # the kiosk's own placement checks, run at setup (wiring audit C11)
+        rig = RigGeometry.from_json(rig_geometry)
+        check_placement_against_rig(
+            placement,
+            rig_params_sha256=rig.snapshot()["sha256"],
+            iwr_offset_mm=rig.iwr_offset_mm,
+        )
         saved = artifact.get("candidate", artifact).get("mode_profile", {}).get("saved_image", {})
         if (saved.get("width"), saved.get("height")) != (arm.width, arm.height):
             raise ValueError("calibrated camera mode does not match the active capture mode")
+        # one roll convention with the nominal path (wiring audit C8)
+        reference_roll = (placement.get("reference_pose_deg") or {}).get("roll")
         model = build_calibrated_camera_model(
             artifact,
             placement,
             observed_pitch_deg=tilt.get("pitch_deg"),
-            observed_roll_deg=tilt.get("roll_deg"),
+            observed_roll_deg=(
+                camera_roll.calibrated_observed_roll_deg(tilt.get("roll_deg"), reference_roll)
+                if isinstance(reference_roll, (int, float))
+                else tilt.get("roll_deg")
+            ),
         )
         return BallPlaneCamera.calibrated(model)
     rig = RigGeometry.from_json(rig_geometry)
@@ -1884,14 +2035,18 @@ def _reference_ball_camera(
     camera = np.asarray((0.0, 0.0, rig.lens_height_above_floor_mm / 1000.0))
     offset = np.asarray(camera_rdf_offset_to_target_lfu(rig.iwr_offset_mm or (0.0, 0.0, 0.0)))
     return BallPlaneCamera.nominal(
-        focal_px=FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X,
+        focal_px=ball_pixels.mode_focal_px(arm.width, rig),
         image_width_px=arm.width,
         image_height_px=arm.height,
         pitch_deg=float(pitch),
-        # The camera is level in the enclosure. The LIS3DH roll is recorded but not
-        # applied: this nominal path and the calibrated projection applied it with
-        # opposite signs, and the correct sign has not yet been derived from the mount.
-        roll_correction_deg=0.0,
+        # The camera is level in the enclosure; the LIS3DH roll goes through the one
+        # convention both paths share, which records it but does not yet apply it
+        # (wiring audit C8, camera_roll).
+        roll_correction_deg=camera_roll.nominal_roll_correction_deg(
+            camera_roll.applied_camera_roll_deg(
+                tilt.get("roll_deg"), rig.expected_inclinometer_orientation().roll_deg or 0.0
+            )
+        ),
         mirror_horizontal=False,
         camera_origin_lfu=camera,
         radar_origin_lfu=camera + offset,
@@ -3087,6 +3242,21 @@ def iwr_search_interval_m(
     return TEE_RANGE_MM[0] / 1000.0, TEE_RANGE_MM[1] / 1000.0
 
 
+def iwr_range_bias_m(calibration: Mapping) -> float:
+    """The static range bias the IWR calibration states, or a refusal.
+
+    No fallback to ``range_offset_m`` and then to zero: a calibration without its
+    bias would move every tee range by the board's 66 mm (wiring audit C10).
+    """
+    value = calibration.get("range_bias_const_m") if isinstance(calibration, Mapping) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(
+            "the IWR range calibration has no finite range_bias_const_m; "
+            "re-run the range calibration or pass the board's own --iwr-calibration"
+        )
+    return float(value)
+
+
 def _guided_iwr_candidate(
     empty_record: Mapping,
     present_record: Mapping,
@@ -3098,7 +3268,7 @@ def _guided_iwr_candidate(
 ) -> tee_range.TeeRangeCandidate:
     calibration_sha = _file_sha256(calibration_path)
     calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
-    bias_m = float(calibration.get("range_bias_const_m", calibration.get("range_offset_m", 0.0)))
+    bias_m = iwr_range_bias_m(calibration)
     empty = _static_profile(empty_record)
     present = _static_profile(present_record)
     corrected_interval = iwr_search_interval_m(qualification)
@@ -3647,8 +3817,15 @@ def live_controls(arm: Arm, exposure_us: int, gain: float) -> dict:
 class LiveView:
     """One arm's readout mode streamed to the page; exposure and gain change live."""
 
-    def __init__(self, camera_factory: Callable[[], object] | None = None):
+    def __init__(
+        self,
+        camera_factory: Callable[[], object] | None = None,
+        focal_px_for: Callable[[Arm], float] | None = None,
+    ):
         self._camera_factory = camera_factory
+        # the arm's focal length from the rig file; without it the live readout
+        # gives no size range rather than a nominal one (wiring audit C2)
+        self._focal_px_for = focal_px_for
         self._lock = threading.Lock()
         self._active_stop: threading.Event | None = None
         self._run_generation = 0
@@ -3826,7 +4003,10 @@ class LiveView:
             self._prune_retired_locked()
 
     def _look(self, arm: Arm, stop_event: threading.Event, generation: int) -> None:
-        focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
+        try:
+            focal = self._focal_px_for(arm) if self._focal_px_for is not None else None
+        except (OSError, TypeError, ValueError):
+            focal = None
         last_context, last_sequence, last_at, context_started = None, 0, 0.0, 0.0
         while not stop_event.wait(min(0.1, LIVE_BALL_EVERY_S)):
             with self._lock:
@@ -4287,7 +4467,7 @@ def create_app(
         if radar_jobs is not jobs:
             radar_jobs.release()
 
-    live = live_view or LiveView()
+    live = live_view or LiveView(focal_px_for=lambda arm: mode_focal_px(arm, rig_geometry))
     enclosure = tilt or EnclosureTilt(rig_geometry)
     setup = setup_policy or SetupEligibility(
         rig_geometry,
@@ -4851,6 +5031,8 @@ def create_app(
                 retry_phase="needs_empty" if key == "empty" else "needs_ball",
             )
         if key == "empty":
+            # the net is measured from the scene without the ball (wiring audit C7)
+            evidence["net_range"] = empty_capture_net_range(record)
             return store.transition(
                 state,
                 phase="needs_ball",
@@ -5019,6 +5201,8 @@ def create_app(
         for required in (iwr_static_config, iwr_firmware, iwr_calibration, rig_geometry):
             if not required.is_file():
                 raise ValueError(f"required tee-range input is missing: {required}")
+        # refused before the radar runs, not after both captures (wiring audit C10)
+        iwr_range_bias_m(json.loads(iwr_calibration.read_text(encoding="utf-8")))
         capture_id = f"{kind}-{state.sequence + 1:06d}"
         phase = "empty_capturing" if kind == "empty" else "ball_capturing"
         evidence: dict = {f"{kind}_capture_id": capture_id}
@@ -5773,6 +5957,7 @@ def create_app(
                 operator_reset if action == "preflight" else None,
                 use_unqualified_tee_range=use_unqualified_tee_range,
                 handed_to_swings=handed,
+                iwr_calibration=iwr_calibration,
             )
             write_arm_state(sessions_root, params)
             if action == "swings":
@@ -6173,6 +6358,7 @@ def create_app(
                 iwr_static_port,
                 use_unqualified_tee_range=use_unqualified_tee_range,
                 handed_to_swings=handed,
+                iwr_calibration=iwr_calibration,
             )
             run = Path(commands[0][commands[0].index("--log-dir") + 1])
             with session_bundle.snapshot_lock(

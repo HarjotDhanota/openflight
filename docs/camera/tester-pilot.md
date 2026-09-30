@@ -338,6 +338,13 @@ moves 427 KB (about 4.1 s instead of 7.1 s). It is opt-in (`--iwr-static-config`
 on the tester server) until an A/B on the Pi shows the same accepted range and
 frame stability as the 24-frame default.
 
+The empty capture also measures the net: the strongest still reflector 2-6 m out,
+at least 10 dB above the rest of that window, is recorded as `net_range` in the
+setup evidence and handed to swings as `--net-range-m`, so the swing server's ball
+gates stop 0.25 m short of it. The static capture's window ends near 2.9 m
+(apparent), so a net further away is not seen; swings then assume 4.6 m, and
+`session_start`'s `net_range` says the value was assumed.
+
 At Save the camera's own range to the ball (from its apparent size, found without
 the radar's hint) sets a window of ±2σ, at least ±40 %, around it. If the radar
 chose something outside that window, such as a person, a club or a net at another

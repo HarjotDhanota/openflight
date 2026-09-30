@@ -26,12 +26,18 @@ def rig(**overrides) -> RigGeometry:
         focal_px=466.6667,
         image_width=320,
         image_height=200,
+        boresight_pitch_deg=0.0,
+        ops_offset_mm=(-85.0, 47.0, -20.0),
         iwr_offset_mm=(0.0, 44.0, -30.0),
         mic_offset_mm=(-80.0, 0.0, 0.0),
+        provenance="test",
         lens_height_above_floor_mm=95.0,
         iwr_boresight_pitch_deg=10.0,
+        ops_boresight_pitch_deg=10.0,
         housing_tilt_deg=0.0,
-        provenance="test",
+        lis3dh_mount_pitch_deg=None,
+        lis3dh_mount_roll_deg=None,
+        lis3dh_mount_yaw_deg=None,
     )
     base.update(overrides)
     return RigGeometry(**base)
@@ -60,14 +66,54 @@ class TestTheFile:
         assert isinstance(loaded.iwr_offset_mm, tuple)
         assert loaded.ops_offset_mm is None
 
-    def test_older_files_without_the_mount_fields_still_load(self, tmp_path):
+    def test_a_missing_field_is_refused_not_defaulted(self, tmp_path):
+        # C9: a file without iwr_boresight_pitch_deg used to load with None
         data = dataclasses.asdict(rig())
-        for key in ("lis3dh_mount_pitch_deg", "lis3dh_mount_roll_deg", "housing_tilt_deg"):
-            data.pop(key)
+        data.pop("iwr_boresight_pitch_deg")
         path = tmp_path / "old.json"
         path.write_text(json.dumps(data))
+        with pytest.raises(ValueError, match="iwr_boresight_pitch_deg"):
+            RigGeometry.from_json(path)
+
+    def test_an_unknown_field_is_refused(self, tmp_path):
+        data = {**dataclasses.asdict(rig()), "radar_height_mm": 51.0}
+        path = tmp_path / "extra.json"
+        path.write_text(json.dumps(data))
+        with pytest.raises(ValueError, match="radar_height_mm"):
+            RigGeometry.from_json(path)
+
+    def test_an_explicit_null_names_an_unmeasured_value(self, tmp_path):
+        path = tmp_path / "rig.json"
+        rig(ops_offset_mm=None, lis3dh_mount_roll_deg=None).to_json(path)
         loaded = RigGeometry.from_json(path)
-        assert loaded.housing_tilt_deg is None
+        assert loaded.ops_offset_mm is None
+        assert loaded.lis3dh_mount_roll_deg is None
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("focal_px", None),
+            ("focal_px", -466.0),
+            ("image_width", 320.5),
+            ("image_height", True),
+            ("boresight_pitch_deg", None),
+            ("provenance", None),
+            ("iwr_offset_mm", [0.0, 44.0]),
+            ("iwr_offset_mm", [0.0, "44", -30.0]),
+            ("lens_height_above_floor_mm", "95"),
+            ("housing_tilt_deg", float("nan")),
+        ],
+    )
+    def test_a_malformed_value_is_refused(self, tmp_path, field, value):
+        data = {**dataclasses.asdict(rig()), field: value}
+        path = tmp_path / "bad.json"
+        path.write_text(json.dumps(data))
+        with pytest.raises(ValueError, match=field):
+            RigGeometry.from_json(path)
+
+    def test_the_dataclass_has_no_silent_defaults(self):
+        with pytest.raises(TypeError):
+            RigGeometry(focal_px=466.6667)  # pylint: disable=no-value-for-parameter
 
     def test_the_shipped_v3_file_derives_the_measured_numbers(self):
         setup = RigGeometry.from_json(V3).enclosure_setup()

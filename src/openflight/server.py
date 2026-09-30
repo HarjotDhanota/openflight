@@ -158,7 +158,10 @@ rig_geometry = None  # the enclosure's RigGeometry when --rig-geometry was given
 rig_geometry_config: dict = {"enabled": False}
 # What the range setup handed this session (tee range, lens and ball heights) and
 # where each value came from; recorded in session_start (wiring audit S3, C4, C5).
-setup_handoff_config: dict = {"tee_range": None, "scene": None}
+setup_handoff_config: dict = {"tee_range": None, "scene": None, "net_range": None}
+# The net's apparent range when the range setup measured none; flagged when used
+# (wiring audit C7, decision D7).
+DEFAULT_NET_RANGE_M = 4.6
 # a ball resting on the surface: its centre is one radius up
 BALL_RADIUS_M = BALL_DIAMETER_MM / 2000.0
 # Heights are above the hitting surface. The radar's floor-bounce model needs the
@@ -1184,7 +1187,19 @@ def init_setup_handoff(args, enclosure) -> None:
                 else "command_line"
             ),
         },
+        "net_range": {
+            "net_range_m": args.iwr6843_net_m,
+            "source": args.iwr6843_net_range_source,
+            "range_space": "apparent",
+            "assumed": args.iwr6843_net_range_source == "default_not_measured",
+        },
     }
+    if setup_handoff_config["net_range"]["assumed"] and args.iwr6843:
+        logger.warning(
+            "[SERVER] Net range %.2f m is ASSUMED: the range setup measured none; a nearer "
+            "net can enter the ball gates",
+            args.iwr6843_net_m,
+        )
     logger.info(
         "[SERVER] Tee range %s (%s); ball height %.1f mm, %s",
         f"{tee:.3f} m" if tee is not None else "pending",
@@ -1234,6 +1249,7 @@ def _session_start_config() -> dict:
     config["rig_geometry"] = deepcopy(rig_geometry_config)
     config["tee_range_handoff"] = deepcopy(setup_handoff_config["tee_range"])
     config["scene"] = deepcopy(setup_handoff_config["scene"])
+    config["net_range"] = deepcopy(setup_handoff_config.get("net_range"))
     from .camera.geometry_contract import EffectiveCameraGeometryInputs, unavailable_snapshot
 
     if not camera_capture_config.get("enabled"):
@@ -1506,31 +1522,16 @@ def init_camera_calibrated_fusion(calibration_path: str | None, placement_path: 
     placement = json.loads(Path(placement_path).read_text(encoding="utf-8"))
     if not isinstance(calibration, dict) or not isinstance(placement, dict):
         raise ValueError("camera calibration and placement files must contain JSON objects")
-    loaded_rig_hash = (rig_geometry_config.get("snapshot") or {}).get("sha256")
-    if not loaded_rig_hash or placement.get("rig_geometry_sha256") != loaded_rig_hash:
-        raise ValueError("camera placement rig_geometry_sha256 does not match the loaded rig")
-    if rig_geometry is None or rig_geometry.iwr_offset_mm is None:
-        raise ValueError("loaded rig lacks the measured IWR-to-camera offset")
-    mount = np.asarray(placement.get("optical_to_enclosure_lfu"), dtype=float)
-    alignment = np.asarray(placement.get("enclosure_to_target_lfu"), dtype=float)
-    expected_offset = (
-        alignment @ mount @ (np.asarray(rig_geometry.iwr_offset_mm, dtype=float) / 1000.0)
+    from .camera.calibrated_projection import (
+        build_calibrated_camera_model,
+        check_placement_against_rig,
     )
-    declared_offset = np.asarray(placement.get("radar_origin_lfu"), dtype=float) - np.asarray(
-        placement.get("camera_origin_lfu"), dtype=float
+
+    check_placement_against_rig(
+        placement,
+        rig_params_sha256=(rig_geometry_config.get("snapshot") or {}).get("sha256"),
+        iwr_offset_mm=getattr(rig_geometry, "iwr_offset_mm", None),
     )
-    tolerance = float(placement.get("rig_offset_consistency_tolerance_m", -1))
-    if (
-        expected_offset.shape != (3,)
-        or declared_offset.shape != (3,)
-        or tolerance < 0
-        or not np.all(np.isfinite(expected_offset))
-        or not np.all(np.isfinite(declared_offset))
-        or not math.isfinite(tolerance)
-        or np.linalg.norm(expected_offset - declared_offset) > tolerance
-    ):
-        raise ValueError("camera placement origins contradict the loaded rig offset")
-    from .camera.calibrated_projection import build_calibrated_camera_model
 
     reference = placement.get("reference_pose_deg") or {}
     build_calibrated_camera_model(
@@ -1554,16 +1555,24 @@ def init_iwr6843(
     net_range_m: float | None,
     tx_order: str,
     capture_timeout_s: float,
-    tilt_deg: float | None = None,
-    radar_height_m: float | None = None,
+    tilt_deg: float,
+    radar_height_m: float,
     ball_height_m: float = 0.04,
     azimuth_offset_deg: float = 0.0,
     horizontal_phase_reference_rad: float | None = None,
     save_dumps: bool = False,
     lateral_tee_offset_m: float = 0.0,
 ) -> bool:
-    """Initialize GPIO-triggered TI capture and the frozen LCMF-v1 estimator."""
+    """Initialize GPIO-triggered TI capture and the frozen LCMF-v1 estimator.
+
+    ``tilt_deg`` and ``radar_height_m`` are the enclosure's, from the rig file (or
+    the setup's solved height); the board calibration's July mount never stands in
+    for them (wiring audit C1).
+    """
     global iwr6843_runtime, iwr6843_runtime_config  # pylint: disable=global-statement
+    for name, value in (("tilt_deg", tilt_deg), ("radar_height_m", radar_height_m)):
+        if value is None or not math.isfinite(float(value)):
+            raise ValueError(f"init_iwr6843 needs the rig's {name}, got {value!r}")
     try:
         from .iwr6843 import Calibration
         from .iwr6843.monitor import IWR6843CaptureMonitor, tx_order_from_config
@@ -1596,10 +1605,8 @@ def init_iwr6843(
         calibration = Calibration.load(calibration_path)
         calibration.tee_range_m = tee_range_m
         calibration.tee_ball_height_m = ball_height_m
-        if tilt_deg is not None:
-            calibration.tilt_rad = math.radians(tilt_deg)
-        if radar_height_m is not None:
-            calibration.meta["radar_height_m"] = radar_height_m
+        calibration.tilt_rad = math.radians(float(tilt_deg))
+        calibration.meta["radar_height_m"] = float(radar_height_m)
         calibration.lateral_tee_offset_m = float(lateral_tee_offset_m)
 
         capture_monitor = IWR6843CaptureMonitor(
@@ -3817,6 +3824,37 @@ def _attach_experimental_face_angle(shot: Shot) -> None:
     shot.experimental_face_angle_launch_source = shot.launch_angle_horizontal_source
 
 
+# 320x200 is a vertically movable strip of the 2x-binned mode (the OV9281
+# driver's strip_y_offset). The camera models put the principal point at the
+# image centre, so a moved strip would tilt every elevation by its offset over
+# the focal length (70 px is 8.5 deg). Applying the offset needs its sign and
+# scale confirmed on the unit, and the mode is not in use, so it is refused for
+# measurement unless the capture's startup offset reads 0 (wiring audit C12).
+STRIP_CROP_MODE = (320, 200)
+
+
+def _strip_offset_refusal(camera_capture) -> str | None:
+    """Why this capture's 320x200 strip cannot be measured, or None."""
+    mode = (camera_capture_config.get("width"), camera_capture_config.get("height"))
+    if mode != STRIP_CROP_MODE:
+        return None
+    metadata = getattr(camera_capture, "metadata", None)
+    capture_mode = metadata.get("capture_mode") if isinstance(metadata, dict) else None
+    capture_mode = capture_mode if isinstance(capture_mode, dict) else {}
+    offsets = []
+    for context in capture_mode.get("contexts") or ():
+        startup = context.get("startup") if isinstance(context, dict) else None
+        driver = startup.get("driver") if isinstance(startup, dict) else None
+        strip = driver.get("strip_y_offset") if isinstance(driver, dict) else None
+        offsets.append(strip.get("value_px") if isinstance(strip, dict) else None)
+    if capture_mode.get("context_status") == "uniform" and offsets == [0]:
+        return None
+    return (
+        f"320x200 strip offset {offsets or 'unrecorded'} px is not applied to the "
+        "principal point; the mode is refused for measurement"
+    )
+
+
 def _fuse_camera_measurements(
     shot: Shot,
     camera_capture,
@@ -3847,6 +3885,11 @@ def _fuse_camera_measurements(
         logger.warning(
             "[SERVER] Camera analysis withheld for lighting quality; using radar fallback"
         )
+        return
+    strip_refusal = _strip_offset_refusal(camera_capture)
+    if strip_refusal is not None:
+        _withhold_camera_metrics(shot, "rejected_strip_offset_not_modelled", strip_refusal)
+        logger.warning("[SERVER] Camera analysis withheld: %s", strip_refusal)
         return
     if camera_archive is _CAMERA_ARCHIVE_UNSET:
         camera_archive = _load_camera_capture_archive(camera_capture)
@@ -3930,8 +3973,13 @@ def _fuse_camera_measurements(
                     for value in gravity
                 ):
                     raise ValueError("calibrated camera fusion requires finite LIS3DH gravity")
-                observed_roll = math.degrees(
-                    math.atan2(float(gravity[0]), math.hypot(float(gravity[1]), float(gravity[2])))
+                from openflight.camera import camera_roll  # noqa: PLC0415
+
+                # one roll convention with the tester and the nominal rays; recorded,
+                # not applied, until its direction is confirmed on the unit (C8)
+                observed_roll = camera_roll.calibrated_observed_roll_deg(
+                    camera_roll.lis3dh_roll_deg(*gravity),
+                    (camera_placement.get("reference_pose_deg") or {}).get("roll", 0.0),
                 )
                 model = build_calibrated_camera_model(
                     camera_optical_calibration,
@@ -5835,8 +5883,11 @@ def main():
     parser.add_argument(
         "--camera-capture-mount-height-m",
         type=float,
-        default=0.20955,
-        help="Camera optical-center height above the hitting surface (default: 8.25 in).",
+        default=None,
+        help=(
+            "Camera optical-center height above the hitting surface. No default: "
+            "--rig-geometry supplies it and overrides this flag (wiring audit C1)."
+        ),
     )
     parser.add_argument(
         "--camera-capture-horizontal-offset-deg",
@@ -6036,9 +6087,10 @@ def main():
         "--rig-geometry",
         default=None,
         help=(
-            "Enclosure geometry JSON (RigGeometry.to_json). When given, the camera mount "
-            "height, camera lateral offset, radar height and radar tilt come from it and "
-            "override the flags below (logged)."
+            "Enclosure geometry JSON (RigGeometry.to_json). The camera mount height, camera "
+            "lateral offset, radar height and radar tilt come from it and override the flags "
+            "below (logged). Required with --iwr6843; start-kiosk.sh passes "
+            "config/enclosure_v3_rig_geometry.json unless another file is given."
         ),
     )
     parser.add_argument(
@@ -6093,21 +6145,40 @@ def main():
     _add_iwr_tee_range_arguments(parser)
     parser.add_argument(
         "--iwr6843-net-m",
+        "--net-range-m",
+        dest="iwr6843_net_m",
         type=float,
-        default=4.6,
-        help="Antenna-center to net range in metres (default: 4.6)",
+        default=None,
+        help=(
+            "Apparent radar range to the net in metres, as the tester's empty static "
+            "capture measured it. Without it 4.6 m is assumed and flagged in session_start."
+        ),
+    )
+    parser.add_argument(
+        "--iwr6843-net-range-source",
+        default=None,
+        help=(
+            "Where --net-range-m came from (empty_static_capture), or "
+            "default_not_measured; recorded in session_start"
+        ),
     )
     parser.add_argument(
         "--iwr6843-tilt-deg",
         type=float,
         default=None,
-        help="Override mount tilt from the TI calibration JSON",
+        help=(
+            "Superseded: --iwr6843 requires --rig-geometry, whose radar tilt overrides "
+            "this (logged). The TI calibration JSON's tilt is never used."
+        ),
     )
     parser.add_argument(
         "--iwr6843-radar-height-m",
         type=float,
         default=None,
-        help="Override antenna-center height from the TI calibration JSON",
+        help=(
+            "Superseded: --iwr6843 requires --rig-geometry, whose radar height overrides "
+            "this (logged). The TI calibration JSON's height is never used."
+        ),
     )
     parser.add_argument(
         "--solved-camera-height-m",
@@ -6323,11 +6394,26 @@ def main():
         parser.error("--camera-capture cannot be used with --mock")
     if args.tester_setup_required and not args.tester_config_hash:
         parser.error("--tester-setup-required requires --tester-config-hash")
+    if args.iwr6843_net_m is None:
+        args.iwr6843_net_m = DEFAULT_NET_RANGE_M
+        args.iwr6843_net_range_source = "default_not_measured"
+    elif args.iwr6843_net_range_source is None:
+        args.iwr6843_net_range_source = "command_line"
     if args.iwr6843 and (
         (args.iwr6843_tee_m is not None and args.iwr6843_tee_m <= 0) or args.iwr6843_net_m <= 0
     ):
         parser.error("--iwr6843-tee-m and --iwr6843-net-m must be positive")
-    init_rig_geometry(args.rig_geometry)
+    # Without the rig file the radar would run on the board calibration's July
+    # mount (0.1524 m, 10.4 deg); start-kiosk.sh always passes one (decision D6).
+    if args.iwr6843 and args.rig_geometry is None:
+        parser.error(
+            "--iwr6843 requires --rig-geometry: the radar's height, tilt and offset come "
+            "only from the enclosure's rig file (config/enclosure_v3_rig_geometry.json)"
+        )
+    try:
+        init_rig_geometry(args.rig_geometry)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        parser.error(f"--rig-geometry: {error}")
     try:
         init_camera_calibrated_fusion(
             args.camera_optical_calibration,
@@ -6357,6 +6443,18 @@ def main():
         )
         args.iwr6843_tilt_deg = _rig_override(
             "radar tilt", args.iwr6843_tilt_deg, enclosure.iwr_tilt_deg
+        )
+    radar_needs = ("lens_height_above_floor_mm", "iwr_offset_mm", "iwr_boresight_pitch_deg")
+    lacking = [name for name in radar_needs if enclosure is not None and name in enclosure.missing]
+    if args.iwr6843 and lacking:
+        parser.error(
+            f"--rig-geometry {args.rig_geometry} cannot place the IWR: it lacks "
+            + ", ".join(lacking)
+        )
+    if args.camera_capture and args.camera_capture_mount_height_m is None:
+        parser.error(
+            "--camera-capture needs the camera height: pass --rig-geometry "
+            "(or --camera-capture-mount-height-m); there is no default height"
         )
     if args.solved_camera_height_m is not None:
         try:

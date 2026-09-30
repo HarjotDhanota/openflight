@@ -27,6 +27,14 @@ profile does not establish a physical match. Different enclosures, board
 orientations or foot extensions require their own measured and reviewed setup
 profile before joining this study.
 
+The server admits a rig file only when its parameter fingerprint
+(`rig_geometry_params_sha256`) is on the approved list,
+`config/approved_rig_geometry.json`, which starts with the measured v3 file. A
+reviewed rig file with a calibrated focal length or re-measured offsets is
+admitted by adding its fingerprint to that list; no code changes. The tester's
+camera models take their focal length from the admitted file, converted to each
+mode by its binning.
+
 Deliberately tilting the intact rig is allowed for correction tests. Keep its
 sensor mounts and optical configuration fixed, and record any resulting change
 to placement or ball setup. The nominal 95 mm reference height is not proof

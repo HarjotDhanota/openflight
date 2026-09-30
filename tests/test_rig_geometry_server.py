@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -138,3 +139,194 @@ class TestTheFileTravelsWithItsProvenance:
         assert "lens_height_above_floor_mm" in setup.missing
         assert setup.camera_mount_height_m is None
         assert setup.radar_height_m is None
+
+
+class TestTheSwingServerNeedsTheRigFile:
+    """C1 (decision D6): no swing server run falls back to July or August geometry."""
+
+    @staticmethod
+    def _main(monkeypatch, tmp_path, argv):
+        class Started(Exception):
+            pass
+
+        received = {}
+
+        def fake_init_iwr6843(**kwargs):
+            received.update(kwargs)
+            raise Started
+
+        def started(*_args, **_kwargs):
+            raise Started
+
+        monkeypatch.setattr(server, "init_iwr6843", fake_init_iwr6843)
+        # nothing past argument handling may reach hardware or serve
+        monkeypatch.setattr(server, "init_camera_capture", started)
+        monkeypatch.setattr(server, "start_monitor", started)
+        monkeypatch.setattr(server.socketio, "run", started)
+        monkeypatch.setattr(server, "init_session_logger", lambda **kwargs: None)
+        monkeypatch.setattr(server, "ball_speed_correction_enabled", None)
+        monkeypatch.setattr(server, "profile_store", None)
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "openflight-server",
+                "--no-logging",
+                "--profiles-path",
+                str(tmp_path / "profiles.json"),
+                *argv,
+            ],
+        )
+        try:
+            server.main()
+        except Started:
+            return received
+        raise AssertionError("the server should have reached the IWR start")
+
+    def test_the_iwr_is_refused_without_a_rig_file(self, monkeypatch, tmp_path, capsys):
+        with pytest.raises(SystemExit):
+            self._main(monkeypatch, tmp_path, ["--iwr6843"])
+        assert "--rig-geometry" in capsys.readouterr().err
+
+    def test_a_rig_file_that_cannot_place_the_radar_is_refused(self, monkeypatch, tmp_path, capsys):
+        path = tmp_path / "rig.json"
+        dataclasses.replace(RigGeometry.from_json(V3), iwr_offset_mm=None).to_json(path)
+        with pytest.raises(SystemExit):
+            self._main(monkeypatch, tmp_path, ["--iwr6843", "--rig-geometry", str(path)])
+        assert "iwr_offset_mm" in capsys.readouterr().err
+
+    def test_the_radar_height_and_tilt_come_from_the_rig_file(self, monkeypatch, tmp_path):
+        received = self._main(monkeypatch, tmp_path, ["--iwr6843", "--rig-geometry", V3])
+        assert received["radar_height_m"] == pytest.approx(0.051)
+        assert received["tilt_deg"] == pytest.approx(10.0)
+
+    def test_the_camera_has_no_default_height(self, monkeypatch, tmp_path, capsys):
+        # the 0.20955 m (8.25 in) July height is gone: no rig, no height, no start
+        with pytest.raises(SystemExit):
+            self._main(monkeypatch, tmp_path, ["--camera-capture"])
+        assert "--rig-geometry" in capsys.readouterr().err
+
+
+class TestTheBoardCalibrationCarriesNoInstallation:
+    """C1: the corner-reflector JSON's July mount (0.1524 m, 10.4 deg) is not the rig."""
+
+    def test_its_radar_height_never_reaches_the_calibration(self):
+        from openflight.iwr6843.calibration import Calibration  # noqa: PLC0415
+
+        calibration = Calibration.load("config/iwr6843_calibration_reference.json")
+        assert "radar_height_m" not in calibration.meta
+        with pytest.raises(ValueError, match="rig"):
+            _ = calibration.radar_height_m
+
+    def test_the_server_installs_the_rigs_height_and_tilt(self, monkeypatch, tmp_path):
+        import math  # noqa: PLC0415
+
+        class FakeCaptureMonitor:
+            def __init__(self, **kwargs):
+                self.port = "/dev/ttyUSB0"
+
+            def start(self, *, armed=True):
+                return None
+
+            def stop(self):
+                return None
+
+        monkeypatch.setattr("openflight.iwr6843.monitor.IWR6843CaptureMonitor", FakeCaptureMonitor)
+        monkeypatch.setattr(
+            "openflight.iwr6843.monitor.tx_order_from_config", lambda _path: "normal"
+        )
+        monkeypatch.setattr(server, "iwr6843_runtime", None)
+        config_path = tmp_path / "snapshot.cfg"
+        config_path.write_text("profileCfg 0\n", encoding="utf-8")
+        setup = RigGeometry.from_json(V3).enclosure_setup()
+
+        assert server.init_iwr6843(
+            port="/dev/ttyUSB0",
+            config_path=str(config_path),
+            calibration_path="config/iwr6843_calibration_reference.json",
+            output_dir=tmp_path,
+            trigger_pin=17,
+            tee_range_m=1.3,
+            net_range_m=4.6,
+            tx_order="auto",
+            capture_timeout_s=12.0,
+            tilt_deg=setup.iwr_tilt_deg,
+            radar_height_m=setup.radar_height_m,
+        )
+        calibration = server.iwr6843_runtime.calibration
+        assert calibration.radar_height_m == pytest.approx(0.051)
+        assert math.degrees(calibration.tilt_rad) == pytest.approx(10.0)
+        server.iwr6843_runtime = None
+
+    def test_the_server_will_not_start_the_iwr_without_them(self, monkeypatch, tmp_path):
+        def no_hardware(**_kwargs):
+            raise AssertionError("the IWR must not be opened without its rig geometry")
+
+        monkeypatch.setattr("openflight.iwr6843.monitor.IWR6843CaptureMonitor", no_hardware)
+        with pytest.raises(TypeError):
+            server.init_iwr6843(  # pylint: disable=missing-kwoa
+                port=None,
+                config_path="config/iwr6843_static_range_24f3ms_53bin_iq16.cfg",
+                calibration_path="config/iwr6843_calibration_reference.json",
+                output_dir=tmp_path,
+                trigger_pin=17,
+                tee_range_m=None,
+                net_range_m=4.6,
+                tx_order="auto",
+                capture_timeout_s=12.0,
+            )
+
+
+class TestThe320x200StripIsRefusedForMeasurement:
+    """C12: 320x200 is a movable crop whose strip offset the camera models do not apply."""
+
+    @staticmethod
+    def _capture(*offsets, status="uniform"):
+        contexts = [
+            {"startup": {"driver": {"strip_y_offset": {"value_px": value}}}} for value in offsets
+        ]
+        return SimpleNamespace(
+            valid=True,
+            metadata={"capture_mode": {"context_status": status, "contexts": contexts}},
+        )
+
+    @pytest.fixture
+    def strip_mode(self, monkeypatch):
+        monkeypatch.setattr(server, "camera_capture_config", {"width": 320, "height": 200})
+
+    def test_a_centred_strip_is_measured(self, strip_mode):
+        assert server._strip_offset_refusal(self._capture(0)) is None
+
+    @pytest.mark.parametrize("offsets", [(30,), (-70,), (None,), ()])
+    def test_a_moved_or_unrecorded_strip_is_refused(self, strip_mode, offsets):
+        reason = server._strip_offset_refusal(self._capture(*offsets))
+        assert reason is not None and "strip" in reason
+
+    def test_other_modes_have_no_strip(self, monkeypatch):
+        monkeypatch.setattr(server, "camera_capture_config", {"width": 640, "height": 400})
+        assert server._strip_offset_refusal(self._capture(30)) is None
+
+    def test_the_shot_keeps_its_radar_values_and_says_why(self, strip_mode, monkeypatch):
+        from datetime import datetime  # noqa: PLC0415
+
+        from openflight.launch_monitor import Shot  # noqa: PLC0415
+
+        monkeypatch.setattr(
+            server,
+            "_load_camera_capture_archive",
+            lambda _capture: pytest.fail("a refused mode should not be decoded"),
+        )
+        shot = Shot(ball_speed_mph=110.0, timestamp=datetime.now())
+
+        server._fuse_camera_measurements(shot, self._capture(40))
+
+        assert shot.experimental_fused_status == "rejected_strip_offset_not_modelled"
+        assert shot.ball_speed_mph == 110.0
+
+
+def test_the_tester_refuses_320x200_for_measurement():
+    from openflight.camera import tester_server as ts  # noqa: PLC0415
+
+    with pytest.raises(ValueError, match="320x200"):
+        ts._reference_ball_camera(  # pylint: disable=protected-access
+            ts.ARMS["arm1"], V3, {"camera_pitch_deg": 0.0}, None, None
+        )

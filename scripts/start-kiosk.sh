@@ -117,6 +117,20 @@ normalize_mock_swing_speed() {
 
 normalize_mock_swing_speed
 
+# The swing server takes the enclosure's geometry only from a rig file and
+# refuses --iwr6843 without one (wiring audit C1, decision D6). Default to the
+# measured v3 enclosure unless the caller names another file.
+DEFAULT_RIG_GEOMETRY="$PROJECT_DIR/config/enclosure_v3_rig_geometry.json"
+has_rig_geometry=false
+for argument in "${SERVER_ARGS[@]}"; do
+    case "$argument" in
+        --rig-geometry|--rig-geometry=*) has_rig_geometry=true ;;
+    esac
+done
+if [ "$has_rig_geometry" = false ]; then
+    SERVER_ARGS+=(--rig-geometry "$DEFAULT_RIG_GEOMETRY")
+fi
+
 if [ "$STARTUP_SPLASH" = true ]; then
     STARTUP_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}/openflight-startup-splash-${WEB_PORT}-$$"
     STARTUP_STATUS_FILE="$STARTUP_RUNTIME_DIR/status.json"

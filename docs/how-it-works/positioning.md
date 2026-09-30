@@ -39,8 +39,8 @@ You must measure and supply:
 | Antenna-centre to tee slant range | `--iwr6843-tee-m` |
 | Antenna-centre to net range | `--iwr6843-net-m` |
 | Ball-centre height above the mat | `--iwr6843-ball-height-m` |
-| Mount tilt | from the calibration JSON, or `--iwr6843-tilt-deg` |
-| Antenna-centre height | from the calibration JSON, or `--iwr6843-radar-height-m` |
+| Mount tilt | from the enclosure's rig file (`--rig-geometry`) |
+| Antenna-centre height | from the enclosure's rig file (`--rig-geometry`) |
 
 Full procedure: **[mounting, aiming, and measuring](../iwr6843/mounting.md)**.
 

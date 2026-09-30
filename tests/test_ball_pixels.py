@@ -4,6 +4,9 @@ The detectors were tuned on the 640x400 mode; at 1280x800 the same ball is twice
 as wide, and a ball 1.0-1.3 m out (31-40 px) failed every fixed 9-30 px gate.
 """
 
+from dataclasses import replace
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -14,6 +17,9 @@ from openflight.camera.club_motion import (
     detect_impact_reference_ball,
     detect_reference_ball,
 )
+from openflight.rig_geometry import RigGeometry
+
+V3 = Path(__file__).resolve().parents[1] / "config" / "enclosure_v3_rig_geometry.json"
 
 
 def test_pixel_scale_follows_the_mode_not_the_crop():
@@ -21,7 +27,25 @@ def test_pixel_scale_follows_the_mode_not_the_crop():
     assert ball_pixels.pixel_scale(640) == pytest.approx(1.0)
     # 320x200 is a crop of the 2x-binned 640x400 mode: same focal length
     assert ball_pixels.pixel_scale(320) == pytest.approx(1.0)
-    assert ball_pixels.pixel_scale(1280, focal_px=700.0) == pytest.approx(1.5)
+    rig = RigGeometry.from_json(V3)
+    assert ball_pixels.pixel_scale(1280, focal_px=700.0, rig=rig) == pytest.approx(1.5)
+
+
+def test_mode_focal_follows_binning_from_the_rig_file():
+    """C2: focal follows the sensor's binning, not the output width."""
+    rig = RigGeometry.from_json(V3)
+    # the v3 file's 466.67 px is the 2x-binned pitch its 320x200 crop is read at
+    assert (rig.image_width, rig.image_height) == (320, 200)
+    assert ball_pixels.mode_focal_px(1280, rig) == pytest.approx(933.3334)
+    assert ball_pixels.mode_focal_px(640, rig) == pytest.approx(466.6667)
+    assert ball_pixels.mode_focal_px(320, rig) == pytest.approx(466.6667)
+    calibrated = replace(rig, focal_px=480.0)
+    assert ball_pixels.mode_focal_px(1280, calibrated) == pytest.approx(960.0)
+    assert ball_pixels.mode_focal_px(320, calibrated) == pytest.approx(480.0)
+    # a file measured at 1:1 converts the other way
+    full = replace(rig, focal_px=940.0, image_width=1280, image_height=800)
+    assert ball_pixels.mode_focal_px(640, full) == pytest.approx(470.0)
+    assert ball_pixels.mode_focal_px(320, full) == pytest.approx(470.0)
 
 
 def test_diameter_bounds_keep_the_640_limits_and_double_at_1280():
@@ -104,3 +128,14 @@ def test_ball_flight_selects_a_1280_reference_ball():
 
     assert anchor is not None, diagnostics
     assert anchor.x == pytest.approx(x, abs=3.0)
+
+
+@pytest.mark.parametrize(
+    ("shape", "scale"),
+    [((24, 200, 320), 1.0), ((24, 400, 640), 1.0), ((24, 800, 1280), 2.0)],
+)
+def test_club_windows_scale_with_focal_length_not_image_size(shape, scale):
+    """C6: 320x200 is a crop with 640x400's focal, so its windows are not halved."""
+    from openflight.camera.club_delivery import _image_scale  # noqa: PLC0415
+
+    assert _image_scale(shape) == pytest.approx(scale)

@@ -209,6 +209,9 @@ def test_startup_passes_measured_offset_or_explicit_fallback(
             "--rig-geometry",
             str(Path(__file__).resolve().parents[1] / "config/enclosure_v3_rig_geometry.json"),
         ]
+    else:
+        # without a rig file there is no default camera height (wiring audit C1)
+        argv += ["--camera-capture-mount-height-m", "0.095"]
     if flag is not None:
         argv += ["--camera-capture-forward-offset-m", str(flag)]
     monkeypatch.setattr(sys, "argv", argv)

@@ -102,13 +102,27 @@ APPROACH_MEDIUM_VELOCITY_MAD_MAX_MPH = 18.0
 PREFERRED_PATH_OFFSETS = ((-2, 1), (-4, -1))
 APPROACH_PATH_OFFSETS = (*PREFERRED_PATH_OFFSETS, (-1, 0), (-2, 0), (-3, -1), (-3, 0))
 GOLF_BALL_DIAMETER_M = 0.04267
-REFERENCE_IMAGE_SIZE = (640, 400)
 
 
 def _image_scale(shape: tuple[int, ...]) -> float:
-    """Scale legacy 640x400 pixel windows to the active camera crop."""
+    """Scale pixel windows tuned at 640x400 to the active mode's focal length.
+
+    The scale follows the focal length, not the frame size: 320x200 is a crop of
+    the 640x400 mode and keeps its windows, 1280x800 doubles them (wiring audit C6).
+    """
+    return ball_pixels.pixel_scale(shape[-1])
+
+
+# The DTL trace's search window bounds motion inside a 640x400 frame, and at
+# 110 px it cannot fit a 200-row crop, so that legacy estimator keeps scaling
+# with the frame size (wiring audit C6 applies to the chained delivery).
+_TRACE_REFERENCE_FRAME = (640, 400)
+
+
+def _frame_scale(shape: tuple[int, ...]) -> float:
+    """Scale the DTL trace's frame-bound windows to the active frame."""
     height, width = shape[-2:]
-    return min(width / REFERENCE_IMAGE_SIZE[0], height / REFERENCE_IMAGE_SIZE[1])
+    return min(width / _TRACE_REFERENCE_FRAME[0], height / _TRACE_REFERENCE_FRAME[1])
 
 
 @dataclass(frozen=True)
@@ -1428,7 +1442,7 @@ def estimate_delivery_trace(
             status=status, scene_p995=scene_p995, detail=f"saturated_frac={saturated_global:.3f}"
         )
     yy, xx = np.mgrid[0 : frames.shape[1], 0 : frames.shape[2]]
-    image_scale = _image_scale(frames.shape)
+    image_scale = _frame_scale(frames.shape)
     ball_zone_radius = max(50.0, BALL_ZONE_RADIUS_PX * image_scale)
     ball_zone = (xx - ball.x) ** 2 + (yy - ball.y) ** 2 <= ball_zone_radius**2
     saturated_zone = float(np.mean(background[ball_zone] >= 250))
