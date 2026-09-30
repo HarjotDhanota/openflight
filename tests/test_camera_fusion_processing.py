@@ -31,24 +31,28 @@ def _geometry():
     )
 
 
+def _context_kwargs(ball_tracker=None, club_tracker=None) -> dict:
+    return {
+        "geometry": _geometry(),
+        "lighting_eligible": True,
+        "ball_tracker": ball_tracker or ReferenceBallTracker(),
+        "club_tracker": club_tracker or ReferenceBallTracker(),
+        "ball_range_evidence": None,
+        "club_range_evidence": None,
+        "ops_ball_speed_mph": 100.0,
+        "ops_club_speed_mph": 75.0,
+        "iwr_vertical_deg": 18.0,
+        "iwr_horizontal_deg": 1.0,
+        "iwr_horizontal_confidence": 0.8,
+        "club": ClubType.IRON_7,
+        "capture_npz_sha256": "capture-hash",
+        "session_uuid": "session-a",
+        "shot_number": 3,
+    }
+
+
 def _context(ball_tracker=None, club_tracker=None):
-    return fp.build_context(
-        geometry=_geometry(),
-        lighting_eligible=True,
-        ball_tracker=ball_tracker or ReferenceBallTracker(),
-        club_tracker=club_tracker or ReferenceBallTracker(),
-        ball_range_evidence=None,
-        club_range_evidence=None,
-        ops_ball_speed_mph=100.0,
-        ops_club_speed_mph=75.0,
-        iwr_vertical_deg=18.0,
-        iwr_horizontal_deg=1.0,
-        iwr_horizontal_confidence=0.8,
-        club=ClubType.IRON_7,
-        capture_npz_sha256="capture-hash",
-        session_uuid="session-a",
-        shot_number=3,
-    )
+    return fp.build_context(**_context_kwargs(ball_tracker, club_tracker))
 
 
 def _archive():
@@ -323,3 +327,52 @@ def test_context_recorded_before_range_status_replays_as_accepted(monkeypatch):
     del snapshot["status"]
 
     assert fp._restore_range(snapshot, "ball").status == "accepted"
+
+
+def test_ineligible_lighting_is_a_note_and_both_stages_still_run(monkeypatch):
+    """D15 (P8-7): the capture-time lighting verdict labels the result; it never blocks."""
+    ran = []
+    monkeypatch.setattr(
+        fp,
+        "estimate_camera_ball_flight",
+        lambda *_a, **_k: ran.append("ball") or CameraBallEstimate(status="accepted"),
+    )
+    monkeypatch.setattr(
+        fp,
+        "estimate_chained_delivery",
+        lambda *_a, **_k: ran.append("club") or ChainedDelivery(status="chained_experimental"),
+    )
+    context = fp.build_context(
+        **{
+            **_context_kwargs(),
+            "lighting_eligible": False,
+            "notes": ["lighting: too bright for the ball: 83% of it is clipped"],
+        }
+    )
+    result = fp.process_camera_fusion(context, _archive())
+
+    assert ran == ["ball", "club"]
+    assert result["ball_estimate"]["status"] == "accepted"
+    assert result["club_delivery"]["status"] == "chained_experimental"
+    assert result["notes"] == ["lighting: too bright for the ball: 83% of it is clipped"]
+
+
+def test_a_context_recorded_before_notes_names_its_ineligible_lighting(monkeypatch):
+    monkeypatch.setattr(
+        fp, "estimate_camera_ball_flight", lambda *_a, **_k: CameraBallEstimate(status="x")
+    )
+    monkeypatch.setattr(
+        fp, "estimate_chained_delivery", lambda *_a, **_k: ChainedDelivery(status="y")
+    )
+    context = fp.build_context(**{**_context_kwargs(), "lighting_eligible": False})
+    context.pop("notes")
+    context.pop("sha256")
+    context["sha256"] = fp.geometry_fingerprint(context)
+
+    result = fp.process_camera_fusion(context, _archive())
+
+    assert result["notes"] == ["lighting: capture-time lighting was not analysis eligible"]
+
+
+def test_eligible_lighting_carries_no_notes():
+    assert fp.process_camera_fusion(_context(), _archive())["notes"] == []

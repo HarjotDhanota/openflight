@@ -309,6 +309,9 @@ class Shot:
     # What blocked or mismatched trigger evidence said about a tester shot the
     # kiosk kept anyway (D15), as [{"id", "reason"}]; None when it said nothing.
     trigger_evidence_notes: Optional[list] = None
+    # Labels on the camera's values that no longer withhold them (D15): the
+    # capture's lighting and optical-quality verdicts; None when there are none.
+    camera_notes: Optional[list] = None
     server_callback_started_monotonic_ns: Optional[int] = field(
         default=None,
         repr=False,
@@ -463,6 +466,7 @@ class Shot:
             "stage_timing": deepcopy(self.stage_timing),
             "missing_trigger_evidence": deepcopy(self.missing_trigger_evidence),
             "trigger_evidence_notes": deepcopy(self.trigger_evidence_notes),
+            "camera_notes": list(self.camera_notes) if self.camera_notes else None,
             "camera_fusion_context": (
                 dict(self.camera_fusion_context) if self.camera_fusion_context else None
             ),

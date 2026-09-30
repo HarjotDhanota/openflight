@@ -1822,13 +1822,15 @@ class TestShotToDict:
             replay["horizontal_decision"]["status"]
         )
 
-    def test_live_camera_fusion_withholds_dark_frames_and_preserves_iwr(self, monkeypatch):
+    def test_live_camera_fusion_labels_dark_frames_and_preserves_iwr(self, monkeypatch):
+        """D15 (P8-7): ineligible lighting is a note; the camera stages still run."""
         runtime = SimpleNamespace(camera_analysis_eligible=False)
         monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
+        decoded = []
         monkeypatch.setattr(
             server_module,
             "_load_camera_capture_archive",
-            lambda _capture: pytest.fail("dark camera frames should not be decoded"),
+            lambda _capture: decoded.append(True),
         )
         shot = Shot(
             ball_speed_mph=110.0,
@@ -1842,12 +1844,12 @@ class TestShotToDict:
 
         server_module._fuse_camera_measurements(shot, SimpleNamespace(valid=True))
 
+        assert decoded == [True]
         assert shot.launch_angle_horizontal == -1.8
         assert shot.launch_angle_horizontal_source == "radar"
-        assert shot.experimental_camera_horizontal_status == "rejected_lighting_quality"
-        assert shot.experimental_fused_status == "rejected_lighting_quality"
-        assert shot.experimental_fused_attack_angle_deg is None
-        assert shot.experimental_fused_club_path_deg is None
+        assert shot.camera_notes == ["lighting: capture-time lighting was not analysis eligible"]
+        assert shot.experimental_fused_status != "rejected_lighting_quality"
+        assert shot_to_dict(shot)["camera_notes"] == shot.camera_notes
 
     def test_requested_calibrated_fusion_rejects_missing_mode_evidence_without_stopping_baseline(
         self, monkeypatch
@@ -1909,20 +1911,26 @@ class TestShotToDict:
     def test_camera_fusion_uses_capture_time_exposure_state(self, monkeypatch):
         runtime = SimpleNamespace(camera_analysis_eligible=True)
         monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
-        monkeypatch.setattr(
-            server_module,
-            "_load_camera_capture_archive",
-            lambda _capture: pytest.fail("ineligible capture should not be decoded"),
-        )
+        monkeypatch.setattr(server_module, "_load_camera_capture_archive", lambda _capture: None)
         shot = Shot(ball_speed_mph=110.0, timestamp=datetime.now())
         capture = SimpleNamespace(
             valid=True,
-            metadata={"auto_exposure": {"analysis_eligible": False}},
+            metadata={
+                "auto_exposure": {
+                    "analysis_eligible": False,
+                    "analysis_eligibility": {
+                        "rule": "setup_ball",
+                        "reason": "too bright for the ball: 83% of it is clipped",
+                    },
+                }
+            },
         )
 
         server_module._fuse_camera_measurements(shot, capture)
 
-        assert shot.experimental_fused_status == "rejected_lighting_quality"
+        # the clip's own judgement, not the runtime's current one, labels the shot
+        assert "lighting: too bright for the ball: 83% of it is clipped" in shot.camera_notes
+        assert shot.experimental_fused_status != "rejected_lighting_quality"
 
     @pytest.mark.parametrize(
         ("auto_exposure", "applied_exposure_us", "status"),
@@ -1949,9 +1957,10 @@ class TestShotToDict:
             ),
         ],
     )
-    def test_camera_metrics_are_withheld_when_optical_provenance_fails(
+    def test_optical_provenance_failures_label_the_camera_metrics(
         self, monkeypatch, auto_exposure, applied_exposure_us, status
     ):
+        """D15 (P8-7): the optical-quality verdict is recorded and noted, not a refusal."""
         monkeypatch.setattr(
             server_module, "camera_capture_runtime", SimpleNamespace(camera_analysis_eligible=True)
         )
@@ -1965,8 +1974,8 @@ class TestShotToDict:
         server_module._fuse_camera_measurements(shot, capture, archive)
         result = shot_to_dict(shot)
 
-        assert shot.experimental_fused_status == status
-        assert shot.experimental_fused_club_path_deg is None
+        assert shot.experimental_fused_status != status
+        assert f"optical quality: {status.removeprefix('rejected_')}" in shot.camera_notes
         assert result["camera_optical_quality"]["status"] == "withheld"
         assert result["camera_optical_quality"]["applied"]["exposure_us"] == applied_exposure_us
 

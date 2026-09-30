@@ -490,7 +490,19 @@ def _camera_metrics(stage: Any) -> tuple[list[dict[str, Any]], Mapping[str, Any]
                 },
             )
         )
+    _label_with_notes(metrics, [str(note) for note in result.get("notes") or ()])
     return metrics, result, context_source
+
+
+def _label_with_notes(metrics: list[dict[str, Any]], notes: list[str]) -> None:
+    """Carry the capture's notes on every camera value (D15): a noted value is experimental."""
+    if not notes:
+        return
+    for metric in metrics:
+        if metric["status"] == "accepted":
+            metric["status"] = "experimental"
+        metric["reason"] = "; ".join([*([metric["reason"]] if metric["reason"] else []), *notes])
+        metric["details"]["notes"] = list(notes)
 
 
 def _total_speed_metric(stage: Any) -> dict[str, Any]:

@@ -69,3 +69,33 @@ def test_a_refused_delivery_stays_rejected():
     metrics = _metrics(_report({"status": "rejected_no_impact"}))
     assert metrics["camera_club_path_deg"]["status"] == "rejected"
     assert metrics["camera_club_path_deg"]["value"] is None
+
+
+def test_camera_notes_label_every_camera_metric():
+    """D15 (P8-7): a lighting note rides on the values it qualifies, never blanks them."""
+    delivery = {
+        "status": "chained_high",
+        "club_path_deg": 1.0,
+        "attack_angle_deg": -2.0,
+        "path_confidence_tier": "high",
+        "attack_confidence_tier": "high",
+    }
+    ball = {
+        "status": "accepted",
+        "confidence_tier": "high",
+        "horizontal_deg": 2.0,
+        "vertical_deg": 17.0,
+    }
+    note = "lighting: too bright for the ball: 83% of it is clipped"
+    metrics = _metrics(_report(delivery, ball, notes=[note]))
+    for key in (
+        "camera_launch_horizontal_deg",
+        "camera_launch_vertical_deg",
+        "camera_club_path_deg",
+        "camera_attack_angle_deg",
+    ):
+        metric = metrics[key]
+        assert metric["value"] is not None, key
+        assert metric["status"] == "experimental", key
+        assert note in metric["reason"], key
+        assert metric["details"]["notes"] == [note]

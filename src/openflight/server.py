@@ -4124,16 +4124,15 @@ def _fuse_camera_measurements(
             else True
         )
     )
+    # D15 (P8-7): the lighting and optical-quality verdicts label the camera's
+    # values; they no longer withhold them. analysis_eligible stays recorded.
+    from openflight.camera.fusion_processing import lighting_note  # noqa: PLC0415
+
+    camera_notes: list[str] = []
     if not analysis_eligible:
-        _withhold_camera_metrics(
-            shot,
-            "rejected_lighting_quality",
-            "capture-time lighting was not analysis eligible",
-        )
-        logger.warning(
-            "[SERVER] Camera analysis withheld for lighting quality; using radar fallback"
-        )
-        return
+        camera_notes.append(lighting_note(captured_auto_exposure))
+        logger.warning("[SERVER] Camera analysis runs with a lighting note: %s", camera_notes[-1])
+    shot.camera_notes = camera_notes or None
     strip_refusal = _strip_offset_refusal(camera_capture)
     if strip_refusal is not None:
         _withhold_camera_metrics(shot, "rejected_strip_offset_not_modelled", strip_refusal)
@@ -4148,17 +4147,14 @@ def _fuse_camera_measurements(
 
         quality = capture_optical_quality(camera_capture.metadata, camera_archive)
         shot.camera_optical_quality = quality
-        if quality["status"] == "withheld":
-            _withhold_camera_metrics(
-                shot,
-                f"rejected_{quality['reason']}",
-                f"capture optical quality withheld: {quality['reason']}",
-            )
+        # lighting_not_eligible repeats the lighting note above
+        if quality["status"] == "withheld" and quality["reason"] != "lighting_not_eligible":
+            camera_notes.append(f"optical quality: {quality['reason']}")
+            shot.camera_notes = camera_notes
             logger.warning(
-                "[SERVER] Camera analysis withheld (%s); using radar fallback",
+                "[SERVER] Camera analysis runs with an optical-quality note: %s",
                 quality["reason"],
             )
-            return
     if (
         camera_archive is not None
         and iwr6843_runtime is not None
@@ -4272,6 +4268,7 @@ def _fuse_camera_measurements(
                 capture_npz_sha256=camera_archive["_capture_npz_sha256"],
                 session_uuid=session_uuid,
                 shot_number=shot_number,
+                notes=camera_notes,
             )
             shot.camera_fusion_context = context
             result = process_camera_fusion(context, camera_archive)
