@@ -41,6 +41,8 @@ CONTROLS_WAIT_S = 1.0
 MIN_MATCHED_FRAMES = 3
 EARLY_EXIT_SWINGS = 3
 EARLY_EXIT_REDS = 2
+MAX_RED_SWINGS = 3  # at any point (D9)
+DARK_REDS_IN_A_ROW = 2  # the light has fallen (D9)
 PHOTO_TARGET_DN = 100.0
 # A photo prefers unity gain (the least noise) and raises it only as far as 2 when
 # the exposure would pass the frame period. In sun it needs tens of microseconds:
@@ -67,6 +69,9 @@ BALL_CEILING_DN = 200.0  # a zone correction never pushes the ball's median past
 # One light rule for the pre-rung check and the per-swing verdict (wiring audit B6).
 RED_LIGHT_CAUSES = frozenset({"ball_clipped", "ball_dark", "zone_dark", "zone_clipped_no_ball"})
 DARK_LIGHT_CAUSES = frozenset({"ball_dark", "zone_dark"})
+# No verdict without the setup's ball position (P6-1): without it the ball
+# cannot be told from a speck, a spare ball or a white cloth.
+NO_SETUP_BALL = "the setup has no ball position for this camera mode, so it can't be judged"
 BRIGHT_LIGHT_CAUSES = frozenset({"ball_clipped", "zone_clipped_no_ball"})
 
 
@@ -163,25 +168,27 @@ def ball_light(
     """The resting ball's brightness in these frames, if the ball can be found.
 
     ``expected_ball`` (x, y, diameter_px) is where the setup saw the ball in this
-    mode. With it, only a ball of that size near that spot counts, so a shadow
-    or a sun patch is not taken for it.
+    mode. Only a ball of that size near that spot counts, so a shadow or a sun
+    patch is not taken for it. Without it nothing is searched: a whole-frame
+    search took a 5 px speck for the ball (Outdoors-test-5, P6-1).
     """
+    if expected_ball is None:
+        return None
     stack = np.clip(np.asarray(frames), 0, 255).astype(np.uint8)
     try:
         found = detect_reference_ball(stack)
     except (RuntimeError, ValueError):
         return None
-    if expected_ball is not None:
-        # The detector's strict lit-sphere mode (given a size) refuses sunlit or
-        # half-shaded balls, so the result is checked against the setup instead.
-        diameter = float(expected_ball["diameter_px"])
-        reach = max(6.0 * diameter, 60.0)
-        if not (
-            0.6 * diameter <= found.diameter_px <= 1.6 * diameter
-            and abs(found.x - float(expected_ball["x"])) <= reach
-            and abs(found.y - float(expected_ball["y"])) <= max(4.0 * diameter, 40.0)
-        ):
-            return None
+    # The detector's strict lit-sphere mode (given a size) refuses sunlit or
+    # half-shaded balls, so the result is checked against the setup instead.
+    diameter = float(expected_ball["diameter_px"])
+    reach = max(6.0 * diameter, 60.0)
+    if not (
+        0.6 * diameter <= found.diameter_px <= 1.6 * diameter
+        and abs(found.x - float(expected_ball["x"])) <= reach
+        and abs(found.y - float(expected_ball["y"])) <= max(4.0 * diameter, 40.0)
+    ):
+        return None
     image = np.median(stack, axis=0)
     yy, xx = np.indices(image.shape)
     core = image[np.hypot(xx - found.x, yy - found.y) <= 0.8 * found.diameter_px / 2.0]
@@ -266,9 +273,24 @@ def pre_rung_check(
     It applies ``judge_light``, the same rule as the swing verdict.
     ``suggested_gain`` is the gain that would bring the light back into range at
     this exposure; ``too_bright`` marks a rung a shorter exposure may still rescue.
+    Without the setup's ball position it never passes (P6-1).
     """
     frames = np.asarray(frames)
     light = judge_light(frames, black_floor, expected_ball)
+    if expected_ball is None:
+        return {
+            **light["zone"],
+            "noise_dn": _zone_noise(frames),
+            "judged_on": "nothing",
+            "ball": None,
+            "ok": False,
+            "reason": NO_SETUP_BALL,
+            "note": None,
+            "light_cause": "no_setup_ball",
+            "too_bright": False,
+            "too_dark": False,
+            "suggested_gain": None,
+        }
     cause = light["cause"]
     red = cause in RED_LIGHT_CAUSES
     return {
@@ -357,7 +379,9 @@ def swing_verdict(  # pylint: disable=too-many-locals,too-many-arguments
     elif light["message"]:
         amber.append(light["message"])
     ball = None
-    if lit is None:
+    if expected_ball is None:
+        red.append(f"ball: {NO_SETUP_BALL}")
+    elif lit is None:
         amber.append("resting ball not found in the pre-impact frames")
     else:
         ball = {"x": lit["x"], "y": lit["y"], "diameter_px": lit["diameter_px"]}
@@ -607,6 +631,33 @@ class LadderState:
         ):
             self._data["pending_photo"] = target
 
+    @staticmethod
+    def _failure(swings: list[dict]) -> tuple[str, bool] | None:
+        """Why these swings fail their setting, and whether the light fell, or None.
+
+        The early exit (2 reds in the first 3) stands; two dark reds in a row mean
+        the light has fallen; and 3 reds at any point end a setting that would
+        otherwise never finish (D9, Outdoors-test-5).
+        """
+        first = swings[:EARLY_EXIT_SWINGS]
+        early = [swing for swing in first if swing["color"] == "red"]
+        reds = [swing for swing in swings if swing["color"] == "red"]
+
+        def dark(items: list[dict]) -> bool:
+            return any(swing.get("light_cause") in DARK_LIGHT_CAUSES for swing in items)
+
+        if len(early) >= EARLY_EXIT_REDS:
+            return f"{len(early)} of the first {len(first)} swings red", dark(early)
+        last = swings[-DARK_REDS_IN_A_ROW:]
+        if len(last) == DARK_REDS_IN_A_ROW and all(
+            swing["color"] == "red" and swing.get("light_cause") in DARK_LIGHT_CAUSES
+            for swing in last
+        ):
+            return f"{DARK_REDS_IN_A_ROW} dark red swings in a row", True
+        if len(reds) >= MAX_RED_SWINGS:
+            return f"{len(reds)} red swings", dark(reds)
+        return None
+
     def record_swing(self, verdict: dict) -> str:
         rung = self.current
         if rung is None:
@@ -620,11 +671,10 @@ class LadderState:
                 "capture": verdict["capture"],
                 "rung_id": rung.rung_id,
             }
-        first = entry["swings"][:EARLY_EXIT_SWINGS]
-        reds = [swing for swing in first if swing["color"] == "red"]
-        if len(reds) >= EARLY_EXIT_REDS:
-            reason = f"{len(reds)} of the first {len(first)} swings red"
-            if any(swing.get("light_cause") in DARK_LIGHT_CAUSES for swing in reds):
+        failure = self._failure(entry["swings"])
+        if failure is not None:
+            reason, dark = failure
+            if dark:
                 # a shorter exposure is darker still
                 self._skip_from(rung, "failed", reason)
             else:

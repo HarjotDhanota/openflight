@@ -1229,11 +1229,20 @@ def ladder_gain_facts(sessions_root: Path, params: TesterParameters) -> dict:
     }
 
 
+SETUP_BALL_MISSING = (
+    "The camera hasn't found the ball, so the ladder can't judge your swings. Run the setup "
+    "again with the ball 1.0 to 1.3 m from the lens, on the same surface as the unit (not a "
+    "raised mat), and nothing ball-like or white in view (spare balls, a cloth)."
+)
+
+
 def expected_ladder_ball(solution: tee_range.TeeRangeSolution | None, arm_id: str) -> dict | None:
     """Where the setup's camera saw the ball in this mode: x, y and diameter in pixels.
 
     The 640x400 mode is the 1280x800 view 2x binned, so without its own
-    observation it takes the 1280x800 one halved.
+    observation it takes the 1280x800 one halved. Only a camera association that
+    selected a ball counts: one withheld, ambiguous or never selected is no
+    position, whatever the radar did (P6-2).
     """
     if solution is None:
         return None
@@ -1241,16 +1250,23 @@ def expected_ladder_ball(solution: tee_range.TeeRangeSolution | None, arm_id: st
     for item in solution.candidates:
         if item.source_group != "camera":
             continue
-        selected = ((item.evidence or {}).get("result") or {}).get("selected")
-        if not isinstance(selected, Mapping):
+        result = (item.evidence or {}).get("result") or {}
+        selected = result.get("selected")
+        if result.get("status") != "selected" or not isinstance(selected, Mapping):
+            continue
+        try:
+            ball = {
+                "x": float(selected["x_px"]),
+                "y": float(selected["y_px"]),
+                "diameter_px": float(selected["diameter_px"]),
+            }
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not all(math.isfinite(value) for value in ball.values()) or ball["diameter_px"] <= 0:
             continue
         for mode in ARMS:
             if item.candidate_id.endswith(mode):
-                seen[mode] = {
-                    "x": float(selected["x_px"]),
-                    "y": float(selected["y_px"]),
-                    "diameter_px": float(selected["diameter_px"]),
-                }
+                seen[mode] = ball
     if arm_id in seen:
         return seen[arm_id]
     if arm_id == "arm6" and "arm5" in seen:
@@ -6672,7 +6688,10 @@ def create_app(
         state.select(selected)
         rung = state.current
         pending_photo = state.to_dict().get("pending_photo")
-        _solution, frozen_reference = admitted_tee_range[params.tester_id]
+        solution, frozen_reference = admitted_tee_range[params.tester_id]
+        # D8: without the setup's ball a swing cannot be judged, so none is taken
+        if rung is not None and expected_ladder_ball(solution, rung.arm_id) is None:
+            return jsonify({"error": SETUP_BALL_MISSING, "setup_ball_missing": True}), 409
         continuing = pending_photo is not None or state.moved_on
         if continuing and frozen_reference is not None:
             admissions = sorted(

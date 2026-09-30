@@ -8,6 +8,9 @@ import pytest
 
 from openflight.camera import study_ladder as sl
 
+# where the setup saw the ball: _capture and _ball_frames draw it here
+SETUP_BALL = {"x": 640.0, "y": 520.0, "diameter_px": 20.0}
+
 
 def _capture(
     tmp_path,
@@ -93,19 +96,19 @@ def test_a_photo_in_sun_without_a_light_index_scales_from_a_short_rung():
 
 def test_a_dark_rung_is_skipped_before_any_swing():
     frames = np.full((5, 800, 1280), 25.0) + np.random.default_rng(1).normal(0, 1, (5, 800, 1280))
-    check = sl.pre_rung_check(frames, black_floor=18.0)
+    check = sl.pre_rung_check(frames, black_floor=18.0, expected_ball=SETUP_BALL)
     assert check["ok"] is False and "too dark" in check["reason"]
 
 
 def test_a_lit_rung_passes_the_pre_rung_check():
     frames = np.full((5, 800, 1280), 60.0) + np.random.default_rng(1).normal(0, 1, (5, 800, 1280))
-    check = sl.pre_rung_check(frames, black_floor=18.0)
+    check = sl.pre_rung_check(frames, black_floor=18.0, expected_ball=SETUP_BALL)
     assert check["ok"] is True and check["signal_dn"] == pytest.approx(42.0, abs=1.0)
 
 
 def test_a_good_swing_is_green(tmp_path):
     rung = sl.Rung("full-150", "arm5", 150, True)
-    verdict = sl.swing_verdict(_capture(tmp_path), rung, 8.0, 18.0, [])
+    verdict = sl.swing_verdict(_capture(tmp_path), rung, 8.0, 18.0, [], SETUP_BALL)
     assert verdict["color"] == "green", verdict["reasons"]
 
 
@@ -122,14 +125,14 @@ def test_a_good_swing_is_green(tmp_path):
 )
 def test_each_picture_failure_is_red_and_named(tmp_path, kwargs, word):
     rung = sl.Rung("full-150", "arm5", 150, True)
-    verdict = sl.swing_verdict(_capture(tmp_path, **kwargs), rung, 8.0, 18.0, [])
+    verdict = sl.swing_verdict(_capture(tmp_path, **kwargs), rung, 8.0, 18.0, [], SETUP_BALL)
     assert verdict["color"] == "red"
     assert any(word in reason for reason in verdict["reasons"])
 
 
 def test_no_resting_ball_is_only_amber(tmp_path):
     rung = sl.Rung("full-150", "arm5", 150, True)
-    verdict = sl.swing_verdict(_capture(tmp_path, ball=False), rung, 8.0, 18.0, [])
+    verdict = sl.swing_verdict(_capture(tmp_path, ball=False), rung, 8.0, 18.0, [], SETUP_BALL)
     assert verdict["color"] == "amber"
     assert any("resting ball" in reason for reason in verdict["reasons"])
 
@@ -235,7 +238,7 @@ class FakeKiosk:
         }
 
 
-def _runner(tmp_path, kiosk, run_dir=None, done=None):
+def _runner(tmp_path, kiosk, run_dir=None, done=None, expected_ball=None):
     state = sl.LadderState(tmp_path / "ladder.json")
     return sl.LadderRunner(
         state,
@@ -247,6 +250,7 @@ def _runner(tmp_path, kiosk, run_dir=None, done=None):
         photo_dir=tmp_path / "impact",
         on_mode_done=(done.append if done is not None else (lambda arm: None)),
         ready_timeout_s=1.0,
+        expected_ball=expected_ball or (lambda arm: SETUP_BALL),
     )
 
 
@@ -650,7 +654,7 @@ def test_stop_interrupts_waiting_for_the_kiosk(tmp_path):
 def test_a_rung_that_clips_the_hitting_zone_is_too_bright():
     frames = np.full((5, 800, 1280), 252.0)
 
-    check = sl.pre_rung_check(frames, black_floor=18.0)
+    check = sl.pre_rung_check(frames, black_floor=18.0, expected_ball=SETUP_BALL)
 
     assert check["ok"] is False
     assert "too bright" in check["reason"]
@@ -666,7 +670,9 @@ def _ball_frames(background, ball, *, count=5, bright_rows=0):
 
 
 def test_a_clipped_ball_fails_the_pre_rung_check_and_asks_for_less_gain():
-    check = sl.pre_rung_check(_ball_frames(60, 255), black_floor=18.0, gain=4.0)
+    check = sl.pre_rung_check(
+        _ball_frames(60, 255), black_floor=18.0, gain=4.0, expected_ball=SETUP_BALL
+    )
 
     assert check["ok"] is False
     assert check["judged_on"] == "ball"
@@ -676,7 +682,9 @@ def test_a_clipped_ball_fails_the_pre_rung_check_and_asks_for_less_gain():
 
 def test_a_clipped_background_behind_a_good_ball_passes():
     # outdoors 29 Sept: the sunlit patio beyond the mat clipped at every setting
-    check = sl.pre_rung_check(_ball_frames(60, 180, bright_rows=470), black_floor=18.0, gain=2.0)
+    check = sl.pre_rung_check(
+        _ball_frames(60, 180, bright_rows=470), black_floor=18.0, gain=2.0, expected_ball=SETUP_BALL
+    )
 
     assert check["ok"] is True
     assert check["judged_on"] == "ball"
@@ -717,7 +725,7 @@ def test_the_runner_lowers_the_gain_until_the_ball_stops_clipping(tmp_path):
 def test_a_clipped_background_is_only_amber_when_the_ball_is_well_exposed(tmp_path):
     rung = sl.Rung("full-150", "arm5", 150, True)
 
-    verdict = sl.swing_verdict(_capture(tmp_path, bright_rows=470), rung, 8.0, 18.0, [])
+    verdict = sl.swing_verdict(_capture(tmp_path, bright_rows=470), rung, 8.0, 18.0, [], SETUP_BALL)
 
     assert verdict["color"] == "amber", verdict["reasons"]
     assert any("background" in reason for reason in verdict["reasons"])
@@ -781,14 +789,18 @@ def test_a_too_bright_ball_always_gets_less_gain_and_a_dark_one_more():
     # told to go up to 2.5
     half_sunlit = _ball_frames(60, 120)
     half_sunlit[:, 515:520, 630:650] = 255  # a clipped sunlit cap on the ball
-    check = sl.pre_rung_check(half_sunlit, black_floor=18.0, gain=2.0)
+    check = sl.pre_rung_check(half_sunlit, black_floor=18.0, gain=2.0, expected_ball=SETUP_BALL)
     assert check["judged_on"] == "ball" and check["too_bright"] is True
     assert check["suggested_gain"] <= 2.0 * 0.8
 
-    bright = sl.pre_rung_check(_ball_frames(60, 255), black_floor=18.0, gain=4.0)
+    bright = sl.pre_rung_check(
+        _ball_frames(60, 255), black_floor=18.0, gain=4.0, expected_ball=SETUP_BALL
+    )
     assert bright["suggested_gain"] <= 4.0 * 0.8
 
-    dark = sl.pre_rung_check(_ball_frames(10, 30), black_floor=18.0, gain=4.0)
+    dark = sl.pre_rung_check(
+        _ball_frames(10, 30), black_floor=18.0, gain=4.0, expected_ball=SETUP_BALL
+    )
     assert dark["judged_on"] == "ball" and dark["ok"] is False
     assert dark["suggested_gain"] >= 4.0 * 1.25
 
@@ -827,6 +839,7 @@ def test_a_photo_without_a_light_index_keeps_the_rungs_brightness(tmp_path):
         photo_dir=tmp_path / "impact",
         on_mode_done=lambda arm: None,
         ready_timeout_s=1.0,
+        expected_ball=lambda arm: SETUP_BALL,
     )
     _make_pending_photo(runner.state, "c4")
     runner._configured_rung = "full-300"  # pylint: disable=protected-access
@@ -857,9 +870,14 @@ def test_a_dark_zone_behind_a_bright_ball_fails_the_pre_check_as_it_fails_the_sw
     # audit B6: the pre-check passed on the ball while every swing went red for
     # the dark zone, the club's background
     frames = _ball_frames(22, 200)
-    check = sl.pre_rung_check(frames, 18.0, 4.0)
+    check = sl.pre_rung_check(frames, 18.0, 4.0, expected_ball=SETUP_BALL)
     verdict = sl.swing_verdict(
-        _capture(tmp_path, level=22.0), sl.Rung("full-150", "arm5", 150, True), 8.0, 18.0, []
+        _capture(tmp_path, level=22.0),
+        sl.Rung("full-150", "arm5", 150, True),
+        8.0,
+        18.0,
+        [],
+        SETUP_BALL,
     )
 
     assert check["ok"] is False
@@ -875,13 +893,16 @@ def test_a_dark_zone_behind_a_bright_ball_fails_the_pre_check_as_it_fails_the_sw
 def test_the_pre_check_and_the_swing_verdict_judge_light_alike(
     tmp_path, background, ball, bright_rows
 ):
-    check = sl.pre_rung_check(_ball_frames(background, ball, bright_rows=bright_rows), 18.0, 8.0)
+    check = sl.pre_rung_check(
+        _ball_frames(background, ball, bright_rows=bright_rows), 18.0, 8.0, expected_ball=SETUP_BALL
+    )
     verdict = sl.swing_verdict(
         _capture(tmp_path, level=float(background), ball_level=ball, bright_rows=bright_rows),
         sl.Rung("full-150", "arm5", 150, True),
         8.0,
         18.0,
         [],
+        SETUP_BALL,
     )
 
     light_red = verdict["light_cause"] in sl.RED_LIGHT_CAUSES
@@ -1199,3 +1220,113 @@ def test_a_ladder_that_starts_at_its_first_ticked_setting_has_not_moved_on(tmp_p
         state.record_swing(_verdict("green", f"c{i}"))
     assert state.current.rung_id == "full-100"
     assert state.moved_on is True
+
+
+def test_a_swing_without_the_setups_ball_position_is_red_and_says_why(tmp_path):
+    # Outdoors-test-5: with no setup position a 5 px speck near a fence top went green
+    rung = sl.Rung("full-300", "arm5", 300, True)
+    capture = _capture(tmp_path, exposure=300, gain=3.0)
+
+    verdict = sl.swing_verdict(capture, rung, 3.0, 18.0, [], None)
+
+    assert verdict["color"] == "red"
+    assert verdict["reasons"] == [f"ball: {sl.NO_SETUP_BALL}"]
+    assert verdict["ball"] is None
+    assert sl.swing_verdict(capture, rung, 3.0, 18.0, [], SETUP_BALL)["color"] == "green"
+
+
+def test_the_pre_check_never_passes_on_a_blind_whole_frame_search():
+    check = sl.pre_rung_check(_ball_frames(60, 180), 18.0, 2.0)
+
+    assert check["ok"] is False
+    assert check["ball"] is None and check["judged_on"] == "nothing"
+    assert sl.NO_SETUP_BALL in check["reason"]
+    assert check["too_bright"] is False and check["suggested_gain"] is None
+
+
+def test_a_mode_without_a_setup_ball_position_is_skipped_not_swung(tmp_path):
+    done = []
+    kiosk = BallKiosk()
+    runner = _runner(tmp_path, kiosk, done=done, expected_ball=lambda arm: None)
+
+    runner.start_rung()
+
+    rungs = runner.state.to_dict()["rungs"]
+    assert all(rungs[r]["status"] == "skipped" for r in FULL_IDS)
+    assert sl.NO_SETUP_BALL in rungs["full-300"]["reason"]
+    assert runner.state.current.rung_id == "half-300"
+    assert done == ["arm5"]
+
+
+def _swing_through(state, colors, rung_id="full-300"):
+    """Record swings on a begun rung: 'r' red (frames), 'd' dark red, 'g' green."""
+    state.begin(rung_id, 3.0, {"ok": True})
+    status = None
+    for index, color in enumerate(colors):
+        if color == "g":
+            status = state.record_swing(_verdict("green", f"{rung_id}-{index}"))
+        else:
+            cause = "zone_dark" if color == "d" else "frames"
+            status = state.record_swing(_verdict("red", f"{rung_id}-{index}", cause))
+    return status
+
+
+def test_three_red_swings_spread_out_fail_a_setting(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+
+    assert _swing_through(state, "rggrg") == "active"
+    assert state.record_swing(_verdict("red", "last", "frames")) == "failed"
+
+    rungs = state.to_dict()["rungs"]
+    assert rungs["full-300"]["reason"] == "3 red swings"
+    assert rungs["full-200"]["status"] == "pending"  # no dark red: only itself
+    assert state.current.rung_id == "full-200"
+
+
+def test_the_field_stall_ends_red_green_green_red_red(tmp_path):
+    # Outdoors-test-5: full-300 stuck at 2 of 5 and 640x400 never ran
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.select(["full-300", *HALF_IDS])
+
+    assert _swing_through(state, "rggrr") == "failed"
+    assert state.current.rung_id == "half-300"
+
+
+def test_two_dark_reds_in_a_row_fail_a_setting_and_its_shorter_ones(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.select([r for r in [*FULL_IDS, *HALF_IDS] if r != "full-100"])
+
+    assert _swing_through(state, "ggg") == "active"
+    assert state.record_swing(_verdict("red", "d1", "ball_dark")) == "active"
+    assert state.record_swing(_verdict("red", "d2", "zone_dark")) == "failed"
+
+    rungs = state.to_dict()["rungs"]
+    assert rungs["full-300"]["reason"] == "2 dark red swings in a row"
+    assert rungs["full-200"]["status"] == "skipped"
+    assert rungs["full-200"]["reason"] == "full-300 failed: 2 dark red swings in a row"
+    assert rungs["full-100"]["reason"] == sl.NOT_SELECTED  # unticked stays as it is
+    assert state.current.rung_id == "half-300"
+
+
+def test_two_dark_reds_apart_do_not_end_a_setting(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    assert _swing_through(state, "gdgd") == "active"
+    assert state.accepted("full-300") == 2
+
+
+def test_a_three_red_failure_with_a_dark_red_skips_the_shorter_settings(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+
+    assert _swing_through(state, "rggdgr") == "failed"
+
+    rungs = state.to_dict()["rungs"]
+    assert rungs["full-300"]["reason"] == "3 red swings"
+    assert rungs["full-200"]["reason"] == "full-300 failed: 3 red swings"
+    assert state.current.rung_id == "half-300"
+
+
+def test_the_early_exit_is_unchanged(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    assert _swing_through(state, "rgr") == "failed"
+    assert state.to_dict()["rungs"]["full-300"]["reason"] == "2 of the first 3 swings red"
+    assert state.to_dict()["rungs"]["full-200"]["status"] == "pending"
