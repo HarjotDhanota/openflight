@@ -40,6 +40,7 @@ from openflight.camera import (
     reference_ball_range,
     session_review_routes as review_routes,
     study_ladder,
+    worker_lifetime,
 )
 from openflight.camera.club_motion import detect_reference_ball
 from openflight.camera.fusion_diagnostics import register_fusion_diagnostics
@@ -2173,7 +2174,11 @@ def configure_ball_search_workers(workers: int) -> None:
         if workers > 0:
             # spawn, not fork: the tester has camera and web threads that a fork would copy
             _BALL_SEARCH_POOL = ProcessPoolExecutor(
-                max_workers=workers, mp_context=multiprocessing.get_context("spawn")
+                max_workers=workers,
+                mp_context=multiprocessing.get_context("spawn"),
+                # a killed server never shuts the pool down; its workers must not
+                # outlive it (29 Sept: two orphans per test run)
+                initializer=worker_lifetime.exit_with_parent,
             )
             for _ in range(workers):
                 _BALL_SEARCH_POOL.submit(int)  # import the worker's modules now, not on first use
@@ -6721,6 +6726,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise
     finally:
         enclosure.stop()
+        configure_ball_search_workers(0)
         logger.info("Tester server stopped")
         handler.flush()
     return 0
