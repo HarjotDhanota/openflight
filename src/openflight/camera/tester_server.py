@@ -1658,13 +1658,21 @@ def _reference_ball_camera(
     rig = RigGeometry.from_json(rig_geometry)
     if rig.lens_height_above_floor_mm is None:
         raise ValueError("rig geometry lacks the measured lens height")
+    # A stopped or settling LIS3DH has no pitch; the rig's boresight would pass for
+    # a measurement and move every floor range (wiring audit S10).
+    pitch = tilt.get("camera_pitch_deg")
+    if isinstance(pitch, bool) or not isinstance(pitch, (int, float)) or not math.isfinite(pitch):
+        raise ValueError(
+            "the LIS3DH reading has no camera pitch "
+            f"(status {tilt.get('status') or 'unknown'}); wait for a stable reading"
+        )
     camera = np.asarray((0.0, 0.0, rig.lens_height_above_floor_mm / 1000.0))
     offset = np.asarray(camera_rdf_offset_to_target_lfu(rig.iwr_offset_mm or (0.0, 0.0, 0.0)))
     return BallPlaneCamera.nominal(
         focal_px=FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X,
         image_width_px=arm.width,
         image_height_px=arm.height,
-        pitch_deg=float(tilt.get("camera_pitch_deg", rig.boresight_pitch_deg)),
+        pitch_deg=float(pitch),
         # The camera is level in the enclosure. The LIS3DH roll is recorded but not
         # applied: this nominal path and the calibrated projection applied it with
         # opposite signs, and the correct sign has not yet been derived from the mount.
