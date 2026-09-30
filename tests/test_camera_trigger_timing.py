@@ -313,7 +313,7 @@ def test_the_live_path_times_against_the_exposure_split_when_recorded(
 def test_ball_flight_takes_the_exposure_trigger_frame_over_the_nearest_arrival(monkeypatch):
     seen = {}
 
-    def select(_frames, trigger_frame, _geometry, _tracker):
+    def select(_frames, trigger_frame, _geometry, _tracker, **_kwargs):
         seen["trigger_frame"] = trigger_frame
         return None, {}
 
