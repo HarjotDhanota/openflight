@@ -5,6 +5,11 @@ test.use({ hasTouch: true });
 
 type PhotoTarget = { capture: string; rung_id: string };
 
+const FULL_RUNGS = ['full-300', 'full-200', 'full-150', 'full-100', 'full-75', 'full-50', 'full-30'];
+const HALF_RUNGS = ['half-300', 'half-150', 'half-75'];
+const ALL_RUNGS = [...FULL_RUNGS, ...HALF_RUNGS];
+const NOT_SELECTED = 'not selected by the tester';
+
 function ladderState(photoTarget: PhotoTarget | null, stopped = false) {
   return {
     ladder: {
@@ -499,7 +504,12 @@ test('reloads a stopped handoff, resumes it, and skips the exact target', async 
   await page.getByRole('button', { name: 'Skip photo' }).tap();
 
   expect(ladderTesterIds).toContain(restoredTesterId);
-  expect(startBody).toEqual({ tester_id: restoredTesterId, arm_id: 'arm5', environment: 'indoors' });
+  expect(startBody).toEqual({
+    tester_id: restoredTesterId,
+    arm_id: 'arm5',
+    environment: 'indoors',
+    rungs: ALL_RUNGS,
+  });
   expect(skipBody).toEqual({
     tester_id: restoredTesterId,
     capture: 'camera-final-19',
@@ -507,6 +517,153 @@ test('reloads a stopped handoff, resumes it, and skips the exact target', async 
     action: 'skip',
   });
   await expect(page.locator('#photo-handoff')).toBeHidden();
+});
+
+function choiceState(
+  statuses: Record<string, [string, string | null]>,
+  stopped: boolean
+): Record<string, unknown> {
+  const rungs = Object.fromEntries(
+    ALL_RUNGS.map((id) => {
+      const [status, reason] = statuses[id] || ['pending', null];
+      return [id, { status, reason, swings: [] }];
+    })
+  );
+  return {
+    ladder: { current: 'full-150', pending_photo: null, rungs },
+    last_verdict: null,
+    photo_target: null,
+    stopped,
+  };
+}
+
+const setting = (page: Page, size: string, us: number) =>
+  page.getByRole('checkbox', { name: `${size} at ${us} µs` });
+
+test('every setting is ticked by default and the ticked ones are sent on Start', async ({ page }) => {
+  await mockBaseApis(page, () => choiceState({}, true));
+  const startBodies: Record<string, unknown>[] = [];
+  await page.route('**/api/tester/ladder/start', async (route) => {
+    startBodies.push(route.request().postDataJSON());
+    await fulfillJson(route, choiceState({}, false));
+  });
+  await page.goto('/tester.html');
+
+  await expect(page.locator('#ladder-choice')).toContainText('1280×800');
+  await expect(page.locator('#ladder-choice')).toContainText('640×400');
+  for (const box of await page.locator('#ladder-choice input').all()) await expect(box).toBeChecked();
+  await expect(page.locator('#ladder-choice input')).toHaveCount(10);
+
+  await setting(page, '1280×800', 50).uncheck();
+  await setting(page, '640×400', 75).uncheck();
+  await page.getByRole('button', { name: 'C. Start the exposure ladder' }).tap();
+
+  await expect.poll(() => startBodies.length).toBe(1);
+  expect(startBodies[0]).toEqual({
+    tester_id: '20260922-name',
+    arm_id: 'arm5',
+    environment: 'indoors',
+    rungs: ['full-300', 'full-200', 'full-150', 'full-100', 'full-75', 'full-30', 'half-300', 'half-150'],
+  });
+});
+
+test('settings that already ran are greyed out and the rest can be changed', async ({ page }) => {
+  await mockBaseApis(page, () =>
+    choiceState(
+      {
+        'full-300': ['done', null],
+        'full-200': ['skipped', 'too bright for the ball: 40% of it is clipped'],
+        'full-150': ['failed', '2 of the first 3 swings red'],
+        'full-100': ['skipped', NOT_SELECTED],
+      },
+      true
+    )
+  );
+  await page.goto('/tester.html');
+
+  await expect(setting(page, '1280×800', 300)).toBeDisabled();
+  await expect(setting(page, '1280×800', 200)).toBeDisabled();
+  await expect(setting(page, '1280×800', 150)).toBeDisabled();
+  await expect(setting(page, '1280×800', 100)).toBeEnabled();
+  await expect(setting(page, '640×400', 300)).toBeEnabled();
+  await expect(page.locator('#ladder-choice-hint')).toBeHidden();
+});
+
+test('the settings cannot change while the ladder walks', async ({ page }) => {
+  let stopped = false;
+  await mockBaseApis(page, () => choiceState({}, stopped));
+  await page.goto('/tester.html');
+
+  await expect(page.locator('#ladder-choice-hint')).toHaveText('The ladder is running: press Stop to change the settings.');
+  for (const box of await page.locator('#ladder-choice input').all()) await expect(box).toBeDisabled();
+  stopped = true;
+  await expect(page.locator('#ladder-choice-hint')).toBeHidden();
+  await expect(setting(page, '640×400', 150)).toBeEnabled();
+});
+
+test('the choice is remembered after a reload and sent when the ladder resumes', async ({ page }) => {
+  const target = { capture: 'camera-final-20', rung_id: 'full-300' };
+  let state = ladderState(target, true);
+  let startBody: Record<string, unknown> | undefined;
+  await mockBaseApis(page, () => state);
+  await page.route('**/api/tester/ladder/start', async (route) => {
+    startBody = route.request().postDataJSON();
+    state = ladderState(target, false);
+    await fulfillJson(route, state);
+  });
+  await page.goto('/tester.html');
+  await setting(page, '1280×800', 30).uncheck();
+  await setting(page, '640×400', 150).uncheck();
+  await page.reload();
+
+  await expect(setting(page, '1280×800', 30)).not.toBeChecked();
+  await expect(setting(page, '640×400', 150)).not.toBeChecked();
+  await expect(setting(page, '640×400', 300)).toBeChecked();
+  await page.getByRole('button', { name: 'Resume ladder' }).tap();
+
+  await expect.poll(() => startBody).toBeTruthy();
+  expect(startBody?.rungs).toEqual(['full-300', 'full-200', 'full-150', 'full-100', 'full-75', 'full-50', 'half-300', 'half-75']);
+});
+
+test('the page works when browser storage is unavailable', async ({ page }) => {
+  await page.addInitScript(() => {
+    const broken = () => {
+      throw new Error('storage disabled');
+    };
+    Object.defineProperty(window, 'localStorage', { get: broken });
+  });
+  await mockBaseApis(page, () => choiceState({}, true));
+  await page.goto('/tester.html');
+
+  await expect(setting(page, '1280×800', 300)).toBeChecked();
+  await setting(page, '1280×800', 300).uncheck();
+  await expect(setting(page, '1280×800', 300)).not.toBeChecked();
+});
+
+test('Start with nothing ticked asks for a setting and is refused', async ({ page }) => {
+  await mockBaseApis(page, () => choiceState({}, true));
+  let startRequests = 0;
+  await page.route('**/api/tester/ladder/start', async (route) => {
+    startRequests += 1;
+    await fulfillJson(route, { error: 'choose at least one setting' }, 400);
+  });
+  await page.goto('/tester.html');
+  for (const box of await page.locator('#ladder-choice input').all()) await box.uncheck();
+  await page.getByRole('button', { name: 'C. Start the exposure ladder' }).tap();
+
+  await expect(page.locator('#ladder-panel')).toHaveText('Choose at least one setting.');
+  expect(startRequests).toBe(0);
+});
+
+test('a refused start shows the server message', async ({ page }) => {
+  await mockBaseApis(page, () => choiceState({}, true));
+  await page.route('**/api/tester/ladder/start', (route) =>
+    fulfillJson(route, { error: 'choose at least one setting' }, 400)
+  );
+  await page.goto('/tester.html');
+  await page.getByRole('button', { name: 'C. Start the exposure ladder' }).tap();
+
+  await expect(page.locator('#ladder-panel')).toHaveText('choose at least one setting');
 });
 
 for (const viewport of KIOSK_VIEWPORTS) {
@@ -525,6 +682,20 @@ for (const viewport of KIOSK_VIEWPORTS) {
       })
     );
     expect(clipped).toBe(false);
+  });
+
+  test(`the setting boxes fit at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await mockBaseApis(page, () => choiceState({ 'full-300': ['done', null] }, true));
+    await page.goto('/tester.html');
+
+    const choice = page.locator('#ladder-choice');
+    await choice.scrollIntoViewIfNeeded();
+    await expect(setting(page, '1280×800', 300)).toBeDisabled();
+    const outside = await choice
+      .locator('label')
+      .evaluateAll((labels) => labels.some((label) => label.getBoundingClientRect().right > window.innerWidth));
+    expect(outside).toBe(false);
   });
 }
 
