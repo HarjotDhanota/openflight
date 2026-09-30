@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import sys
 import threading
 from datetime import datetime
@@ -5479,6 +5480,61 @@ def test_live_speed_candidate_matches_shared_replay_without_changing_canonical(m
     assert shot.experimental_ball_speed_total == expected
     assert shot.experimental_ball_speed_total["status"] == "withheld"
     assert "OPS-relative" in shot.experimental_ball_speed_total["reason"]
+
+
+def test_ops_speed_geometry_comes_from_the_rig_ops_offsets(monkeypatch):
+    """F12: with a rig, the cosine candidate uses the OPS's own position."""
+    from openflight.rig_geometry import RigGeometry
+
+    monkeypatch.setattr(
+        server_module,
+        "rig_geometry",
+        RigGeometry.from_json("config/enclosure_v3_rig_geometry.json"),
+    )
+    calibration = SimpleNamespace(tee_range_m=1.30, tee_ball_height_m=0.02135, radar_height_m=0.051)
+
+    distance_ft, above_ft, lateral_ft, source = server_module._ops_speed_correction_geometry(
+        calibration
+    )
+
+    assert source == "ops_rig_offsets"
+    assert lateral_ft == pytest.approx(0.085 * 3.28084)
+    assert above_ft == pytest.approx((0.02135 - 0.048) * 3.28084)
+    assert distance_ft == pytest.approx((math.sqrt(1.30**2 - 0.02965**2) - 0.010) * 3.28084)
+
+
+def test_ops_speed_geometry_without_a_rig_keeps_the_iwr_proxy(monkeypatch):
+    monkeypatch.setattr(server_module, "rig_geometry", None)
+    calibration = SimpleNamespace(tee_range_m=1.30, tee_ball_height_m=0.02135, radar_height_m=0.051)
+
+    distance_ft, above_ft, lateral_ft, source = server_module._ops_speed_correction_geometry(
+        calibration
+    )
+
+    assert source == "iwr_or_kld7_proxy"
+    assert distance_ft == pytest.approx(1.30 * 3.28084)
+    assert above_ft == pytest.approx((0.02135 - 0.051) * 3.28084)
+    assert lateral_ft == 0.0
+
+
+def test_live_speed_candidate_uses_the_configured_ops_geometry(monkeypatch):
+    monkeypatch.setattr(server_module, "ball_speed_correction_enabled", True)
+    monkeypatch.setattr(server_module, "ball_speed_correction_distance_ft", 4.2)
+    monkeypatch.setattr(server_module, "ball_speed_correction_ball_above_radar_ft", -0.09)
+    monkeypatch.setattr(server_module, "ball_speed_correction_lateral_ft", 0.2789)
+    monkeypatch.setattr(server_module, "ball_speed_correction_geometry_source", "ops_rig_offsets")
+    shot = Shot(
+        ball_speed_mph=108.0,
+        timestamp=datetime.now(),
+        launch_angle_vertical=19.0,
+        launch_angle_vertical_source="radar",
+    )
+
+    server_module._attach_ball_speed_contract(shot)
+
+    assert shot.ball_speed_mph == 108.0
+    assert shot.experimental_ball_speed_total["status"] == "available"
+    assert shot.experimental_ball_speed_total["inputs"]["ops_ball_lateral_ft"] == 0.2789
 
 
 def test_live_speed_candidate_withholds_estimated_fallback(monkeypatch):

@@ -272,3 +272,23 @@ class TestTheRadarPhaseCentre:
         assert record["radar_height_reference"] == "iwr_rx_row_centre"
         assert record["radar_phase_centre_offset_m"] is None
         assert "missing" in record and "iwr_board_orientation" not in record["missing"]
+
+
+class TestTheOpsPosition:
+    def test_the_v3_ops_sits_85_mm_left_of_the_teed_ball(self):
+        # F12: OPS (-85, 47, -20) and IWR (0, 44, -30) in camera right/down/forward mm.
+        forward, lateral, above = RigGeometry.from_json(V3).ops_ball_geometry_m(
+            tee_slant_range_m=1.30, ball_height_m=0.02135, radar_height_m=0.051
+        )
+        ball_forward = math.sqrt(1.30**2 - (0.02135 - 0.051) ** 2)
+        assert lateral == pytest.approx(0.085)
+        assert forward == pytest.approx(ball_forward - 0.010)
+        assert above == pytest.approx(0.02135 - (0.051 - 0.003))
+
+    def test_without_an_ops_offset_there_is_no_ops_geometry(self):
+        assert (
+            rig(ops_offset_mm=None).ops_ball_geometry_m(
+                tee_slant_range_m=1.3, ball_height_m=0.02, radar_height_m=0.05
+            )
+            is None
+        )

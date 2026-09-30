@@ -136,6 +136,28 @@ class RigGeometry:
             provenance=self.provenance,
         )
 
+    def ops_ball_geometry_m(
+        self, *, tee_slant_range_m: float, ball_height_m: float, radar_height_m: float
+    ) -> tuple[float, float, float] | None:
+        """The teed ball seen from the OPS: (forward, lateral, above) in metres.
+
+        The IWR's tee range places the ball straight downrange of the RX row;
+        the rig's OPS and IWR offsets then move the origin to the OPS itself,
+        so the OPS cosine model uses its own line of sight (audit F12).
+        Heights are above the hitting surface. None when an offset is missing.
+        """
+        if self.ops_offset_mm is None or self.iwr_offset_mm is None:
+            return None
+        ops = camera_rdf_offset_to_target_lfu(self.ops_offset_mm)
+        iwr = camera_rdf_offset_to_target_lfu(self.iwr_offset_mm)
+        ops_lateral, ops_forward, ops_up = (a - b for a, b in zip(ops, iwr))
+        ball_forward = math.sqrt(tee_slant_range_m**2 - (ball_height_m - radar_height_m) ** 2)
+        return (
+            ball_forward - ops_forward,
+            -ops_lateral,
+            ball_height_m - (radar_height_m + ops_up),
+        )
+
     def expected_inclinometer_orientation(self) -> "ExpectedOrientation":
         """What the LIS3DH should read when this enclosure is placed as designed:
         housing tilt plus the board's own mount angle. Without a housing tilt

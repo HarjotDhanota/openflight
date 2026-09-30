@@ -1208,6 +1208,38 @@ def _session_start_config() -> dict:
 ball_speed_correction_enabled = False
 ball_speed_correction_distance_ft = 5.5
 ball_speed_correction_ball_above_radar_ft = -4.0 / 12.0
+ball_speed_correction_lateral_ft = 0.0
+ball_speed_correction_geometry_source = "iwr_or_kld7_proxy"
+FEET_PER_M = 3.28084
+
+
+def _ops_speed_correction_geometry(calibration) -> tuple[float, float, float, str]:
+    """OPS-to-ball forward, above and lateral feet for the cosine candidate, and a source.
+
+    With a rig file the OPS's own offsets place it (audit F12); without one the
+    IWR's range and height stand in for the OPS's, which the candidate names
+    as a proxy and withholds.
+    """
+    geometry = (
+        rig_geometry.ops_ball_geometry_m(
+            tee_slant_range_m=calibration.tee_range_m,
+            ball_height_m=calibration.tee_ball_height_m,
+            radar_height_m=calibration.radar_height_m,
+        )
+        if rig_geometry is not None
+        else None
+    )
+    if geometry is None:
+        return (
+            calibration.tee_range_m * FEET_PER_M,
+            (calibration.tee_ball_height_m - calibration.radar_height_m) * FEET_PER_M,
+            0.0,
+            "iwr_or_kld7_proxy",
+        )
+    forward_m, lateral_m, above_m = geometry
+    return forward_m * FEET_PER_M, above_m * FEET_PER_M, lateral_m * FEET_PER_M, "ops_rig_offsets"
+
+
 calculated_spin_enabled = False
 
 
@@ -4281,7 +4313,8 @@ def _attach_ball_speed_contract(shot: Shot) -> None:
             shot.launch_angle_vertical_source,
             ball_speed_correction_distance_ft,
             ball_speed_correction_ball_above_radar_ft,
-            geometry_source="iwr_or_kld7_proxy",
+            geometry_source=ball_speed_correction_geometry_source,
+            ops_ball_lateral_ft=ball_speed_correction_lateral_ft,
         )
 
 
@@ -6268,6 +6301,7 @@ def main():
     global ball_speed_correction_enabled
     global ball_speed_correction_distance_ft
     global ball_speed_correction_ball_above_radar_ft
+    global ball_speed_correction_lateral_ft, ball_speed_correction_geometry_source
     # Cosine correction rides on whichever vertical radar supplies launch.
     # LCMF itself always receives the original OPS radial speed first.
     ball_speed_correction_enabled = args.kld7 or (args.iwr6843 and args.iwr6843_tee_m is not None)
@@ -6443,10 +6477,12 @@ def main():
         ):
             calibration = iwr6843_runtime.calibration
             if args.iwr6843_tee_m is not None:
-                ball_speed_correction_distance_ft = args.iwr6843_tee_m * 3.28084
-                ball_speed_correction_ball_above_radar_ft = (
-                    calibration.tee_ball_height_m - calibration.radar_height_m
-                ) * 3.28084
+                (
+                    ball_speed_correction_distance_ft,
+                    ball_speed_correction_ball_above_radar_ft,
+                    ball_speed_correction_lateral_ft,
+                    ball_speed_correction_geometry_source,
+                ) = _ops_speed_correction_geometry(calibration)
             print(
                 "IWR6843 enabled (LCMF-v1 launch angle, "
                 f"BCM{args.iwr6843_trigger_pin}, {iwr6843_runtime.tx_order} TX order)"
