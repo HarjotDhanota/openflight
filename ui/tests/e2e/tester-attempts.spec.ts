@@ -28,6 +28,11 @@ async function openTesterPage(page: Page) {
   const section = page.locator('#attempts');
   if (!(await section.evaluate((node) => (node as HTMLDetailsElement).open))) {
     await page.getByText('Measure capture rate (optional)').tap();
+    // the page saves the open state from its toggle event, which runs after the tap;
+    // a test that reloads straight away must wait for it
+    await expect
+      .poll(() => page.evaluate(() => localStorage.getItem('openflight-tester-capture-rate-open')))
+      .toBe('true');
   }
 }
 
