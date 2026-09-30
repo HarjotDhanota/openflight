@@ -314,6 +314,10 @@ class StaticManager:
             if on_finish:
                 on_finish(action, 0)
             return
+        if action in {"swings", "ladder"}:
+            # the kiosk command is what the swing server would be started with
+            self.last_command = list(commands[0])
+            return
         assert action == "tee_range"
         command = list(commands[0])
         self.last_command = command
@@ -457,6 +461,7 @@ def app_for(
     legacy_profile=False,
     held_radar=False,
     black_floor_dn=None,
+    use_unqualified=False,
 ):
     def camera_model(arm, *_args):
         return BallPlaneCamera.nominal(
@@ -517,6 +522,7 @@ def app_for(
         iwr_static_port="/dev/serial/by-id/iwr-if00-port0",
         require_iwr_preflight=require_iwr_preflight,
         static_radar=held,
+        use_unqualified_tee_range=use_unqualified,
     )
     app.config["TEST_STATIC_MANAGER"] = manager
     app.config["TEST_HELD_RADAR"] = held
@@ -1019,6 +1025,10 @@ def test_guided_flow_resolves_and_survives_reload(tmp_path, inputs, monkeypatch)
         "1.2",
         "--iwr6843-ball-height-m",
         "0.021335",
+        "--iwr6843-tee-range-source",
+        "qualified_static_iwr",
+        "--iwr6843-tee-range-candidate",
+        solution.selected_candidate_id,
     ]
 
 
@@ -1287,6 +1297,8 @@ def test_missing_qualification_and_disagreement_remain_raw_only(tmp_path, inputs
         "--iwr6843-tee-range-pending",
         "--iwr6843-ball-height-m",
         "0.021335",
+        "--iwr6843-tee-range-source",
+        "pending",
     ]
     other_root = tmp_path / "other"
     app, tester = app_for(other_root, inputs, monkeypatch, camera_m=1.5)
@@ -1919,12 +1931,18 @@ def test_an_unqualified_range_reaches_swings_only_when_explicitly_enabled(
         "--iwr6843-tee-range-pending",
         "--iwr6843-ball-height-m",
         "0.021335",
+        "--iwr6843-tee-range-source",
+        "pending",
     ]
     assert ts._tee_range_cli_args(solution, use_unqualified=True) == [
         "--iwr6843-tee-m",
         f"{iwr['radar_slant_range_m']:.9g}",
         "--iwr6843-ball-height-m",
         "0.021335",
+        "--iwr6843-tee-range-source",
+        "unqualified_static_iwr",
+        "--iwr6843-tee-range-candidate",
+        iwr["candidate_id"],
     ]
     assert ts.tee_range_display(state)["swings"]["state"] == "pending"
     swings = ts.tee_range_display(state, use_unqualified=True)["swings"]
@@ -2514,3 +2532,183 @@ def test_a_tilt_reading_that_never_settles_is_returned_as_it_is():
 
     assert reading == {"status": "off"}
     assert now[0] >= 3.0
+
+
+def _session_start_for(command, rig_path, tmp_path, monkeypatch):
+    """Start the swing server on the tester's hand-off; return its session_start config."""
+    from openflight import server  # noqa: PLC0415
+
+    class StopAfterIwrInit(Exception):
+        pass
+
+    def stop(**_kwargs):
+        raise StopAfterIwrInit
+
+    # everything the tester hands over sits between --iwr6843 and --inclinometer
+    handoff = command[command.index("--iwr6843") + 1 : command.index("--inclinometer")]
+    monkeypatch.setattr(server, "init_iwr6843", stop)
+    monkeypatch.setattr(server, "init_session_logger", lambda **_kwargs: None)
+    monkeypatch.setattr(server, "ball_speed_correction_enabled", None)
+    monkeypatch.setattr(server, "profile_store", None)
+    for name in ("rig_geometry", "rig_geometry_config", "setup_handoff_config"):
+        monkeypatch.setattr(server, name, getattr(server, name))
+    monkeypatch.setattr(
+        server.sys,
+        "argv",
+        [
+            "openflight-server",
+            "--iwr6843",
+            "--no-logging",
+            "--profiles-path",
+            str(tmp_path / "profiles.json"),
+            "--rig-geometry",
+            str(rig_path),
+            *handoff,
+        ],
+    )
+    with pytest.raises(StopAfterIwrInit):
+        server.main()
+    return server._session_start_config()
+
+
+def _solving_camera(monkeypatch):
+    """A camera that also solves a lens height from the ball's size, as the real one does."""
+    monkeypatch.setattr(
+        ts,
+        "estimate_reference_ball_range",
+        lambda _frames, camera, **_kwargs: (
+            lambda result: replace(
+                result,
+                selected=replace(
+                    result.selected, camera_height_m=0.1, camera_height_uncertainty_m=0.05
+                ),
+            )
+        )(camera_result(1.2, camera.image_width_px, camera.image_height_px)),
+    )
+
+
+def test_every_record_and_session_start_say_what_swings_used(tmp_path, inputs, monkeypatch):
+    """Wiring audit S3 with C3, C4, C5: an unqualified run's tee value, candidate,
+    heights and their bases are in arm.json, setup_admission.json, the run's
+    tee_range.json and session_start, and both rig hashes join setup to session."""
+    inputs["rig"].write_bytes(Path(ts.DEFAULT_RIG_GEOMETRY).read_bytes())
+    app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False, use_unqualified=True)
+    _solving_camera(monkeypatch)
+    client = app.test_client()
+    state = drive(client, tester)
+    body = {"tester_id": tester, "arm_id": "arm5", "environment": "indoors", "action": "swings"}
+
+    response = client.post("/api/tester/run", json=body)
+
+    assert response.status_code == 202, response.get_json()
+    command = app.config["TEST_STATIC_MANAGER"].last_command
+    run_dir = Path(command[command.index("--log-dir") + 1])
+    arm = ts.read_arm_state(tmp_path / "sessions", tester, "arm5")
+    admission = json.loads((run_dir / "setup_admission.json").read_text(encoding="utf-8"))
+    contract = json.loads((run_dir / "tee_range.json").read_text(encoding="utf-8"))
+    handed = arm["handed_to_swings"]
+    assert admission["handed_to_swings"] == handed
+    assert contract["handed_to_swings"] == handed
+    iwr = state["evidence"]["iwr_candidate"]
+    assert handed["epoch_id"] == state["epoch_id"]
+    assert handed["tee_range_status"] == "unqualified"
+    assert handed["tee_range_source"] == "unqualified_static_iwr"
+    assert handed["tee_m"] == pytest.approx(iwr["radar_slant_range_m"])
+    assert handed["candidate_id"] == iwr["candidate_id"]
+    assert handed["qualified"] is False
+    assert handed["camera_window"]["outcome"] == "consistent"
+    assert arm["tee_range_m"] == handed["tee_m"]
+    assert arm["tee_range_source"] == handed["tee_range_source"]
+    scene = handed["scene"]
+    assert scene["lens_height_solved_m"] is not None
+    assert scene["lens_height_used_source"] in {"rig_nominal", "range_setup"}
+    assert scene["ball_height_m"] == pytest.approx(0.021335)
+    assert scene["ball_height_basis"] == "assumed_on_surface"
+    assert (
+        handed["cli_args"]
+        == command[command.index("--iwr6843") + 1 : command.index("--inclinometer")]
+    )
+    # the contract file still loads as a tee-range solution
+    assert tee_range.load_solution(run_dir / "tee_range.json").status == "unresolved"
+
+    session = _session_start_for(command, inputs["rig"], tmp_path, monkeypatch)
+
+    assert session["tee_range_handoff"] == {
+        "tee_slant_range_m": pytest.approx(handed["tee_m"]),
+        "status": "configured",
+        "source": handed["tee_range_source"],
+        "candidate_id": handed["candidate_id"],
+    }
+    for key in (
+        "reference",
+        "lens_height_used_m",
+        "lens_height_used_source",
+        "lens_height_solved_m",
+        "lens_height_solved_uncertainty_m",
+        "rig_lens_height_m",
+        "ball_height_m",
+        "ball_height_basis",
+    ):
+        # heights cross the command line to the micrometre
+        assert session["scene"][key] == pytest.approx(scene[key], abs=1e-6), key
+    hashes = {
+        "rig_geometry_file_sha256": file_hash(inputs["rig"]),
+        "rig_geometry_params_sha256": session["rig_geometry"]["snapshot"]["sha256"],
+    }
+    assert {key: session["rig_geometry"][key] for key in hashes} == hashes
+    assert {key: handed[key] for key in hashes} == hashes
+    assert state["evidence"]["rig_geometry"] == hashes
+    assert state["evidence"]["scene"] == scene
+
+
+def test_a_pending_hand_off_is_recorded_as_pending():
+    boxed, _level = _heights()
+    solution = tee_range.TeeRangeSolution.unresolved(
+        (_accepted_iwr(), _camera_candidate("arm5", boxed)), reason="test"
+    )
+
+    args, handed = ts.tee_range_handoff(solution)
+
+    assert handed["tee_range_status"] == handed["tee_range_source"] == "pending"
+    assert handed["tee_m"] is None
+    assert handed["candidate_id"] is None
+    assert handed["qualified"] is False
+    assert handed["solved_camera_height_m"] == pytest.approx(0.40, abs=0.003)
+    assert handed["scene"]["lens_height_used_source"] == "range_setup"
+    assert handed["scene"]["lens_height_check"] == "unit_raised"
+    assert args[args.index("--iwr6843-tee-range-source") + 1] == "pending"
+    assert "--iwr6843-tee-range-candidate" not in args
+    assert handed["cli_args"] == args
+
+
+def test_a_rig_consistent_setup_still_records_the_solved_lens_height():
+    # wiring audit C4: the rig height is used, and the solve is kept as the scene's
+    _boxed, level = _heights()
+    solution = tee_range.TeeRangeSolution.unresolved(
+        (_accepted_iwr(), _camera_candidate("arm5", level)), reason="test"
+    )
+
+    args, handed = ts.tee_range_handoff(solution, use_unqualified=True)
+
+    scene = handed["scene"]
+    assert scene["lens_height_check"] == "consistent"
+    assert scene["lens_height_used_source"] == "rig_nominal"
+    assert scene["lens_height_solved_m"] == pytest.approx(0.090, abs=0.002)
+    assert scene["lens_height_solved_uncertainty_m"] > 0.0
+    assert "--solved-camera-height-m" not in args
+    assert float(args[args.index("--scene-lens-height-solved-m") + 1]) == pytest.approx(
+        0.090, abs=0.002
+    )
+
+
+def test_a_camera_steered_hand_off_says_so():
+    steered = _accepted_iwr(
+        1.2, camera_window={"outcome": "reselected", "camera_window_m": [0.72, 1.68]}
+    )
+    solution = tee_range.TeeRangeSolution.unresolved((steered,), reason="test")
+
+    args, handed = ts.tee_range_handoff(solution, use_unqualified=True)
+
+    assert handed["tee_range_source"] == "unqualified_static_iwr_camera_steered"
+    assert handed["camera_window"] == {"outcome": "reselected", "camera_window_m": [0.72, 1.68]}
+    assert args[args.index("--iwr6843-tee-range-candidate") + 1] == steered.candidate_id

@@ -562,8 +562,10 @@ def camera_validation_agreement(
     }
 
 
-def _setup_camera_height(solution: tee_range.TeeRangeSolution | None) -> Mapping | None:
-    """The 1280x800 setup's lens-height evidence.
+def _setup_camera_height(
+    solution: tee_range.TeeRangeSolution | None, arm_id: str = "arm5"
+) -> Mapping | None:
+    """One camera mode's lens-height evidence from the setup.
 
     Only arm5's search decides the lens height; 640x400 solves it more coarsely
     and is recorded as a check (wiring audit S4).
@@ -572,7 +574,7 @@ def _setup_camera_height(solution: tee_range.TeeRangeSolution | None) -> Mapping
         solved = (item.evidence or {}).get("camera_height")
         if (
             item.source_group == "camera"
-            and item.candidate_id.endswith("-arm5")
+            and item.candidate_id.endswith(f"-{arm_id}")
             and isinstance(solved, Mapping)
         ):
             return solved
@@ -608,29 +610,169 @@ def unqualified_tee_range_choice(
     return None
 
 
-def _tee_range_cli_args(
-    solution: tee_range.TeeRangeSolution | None, *, use_unqualified: bool = False
-) -> list[str]:
+def rig_geometry_hashes(rig_geometry: Path | None) -> dict:
+    """Both rig-file hashes, under names that say what each one hashes (wiring audit C3).
+
+    The file hash covers the bytes the setup evidence binds; the params hash is the
+    swing server's fingerprint of the loaded values (``RigGeometry.snapshot``).
+    """
+    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+    hashes = {"rig_geometry_file_sha256": None, "rig_geometry_params_sha256": None}
+    if rig_geometry is None:
+        return hashes
+    try:
+        hashes["rig_geometry_file_sha256"] = _file_sha256(rig_geometry)
+        hashes["rig_geometry_params_sha256"] = RigGeometry.from_json(rig_geometry).snapshot()[
+            "sha256"
+        ]
+    except (OSError, TypeError, ValueError):
+        pass
+    return hashes
+
+
+def _rig_lens_height_m(rig_geometry: Path | None) -> float | None:
+    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+    if rig_geometry is None:
+        return None
+    try:
+        height_mm = RigGeometry.from_json(rig_geometry).lens_height_above_floor_mm
+    except (OSError, TypeError, ValueError):
+        return None
+    return height_mm / 1000.0 if height_mm is not None else None
+
+
+def setup_scene(
+    solution: tee_range.TeeRangeSolution | None, rig_geometry: Path | None = None
+) -> dict:
+    """The lens and ball heights behind this setup, and where each came from.
+
+    The radar-solved lens height is kept as the scene's even when the rig file's
+    height is used (wiring audit C4). The ball height is one radius, assumed on the
+    surface, until per-shot tee height exists (C5).
+    """
+    solved = _setup_camera_height(solution) or {}
+    check = _setup_camera_height(solution, "arm6") or {}
+    override = _setup_camera_height_m(solution)
+    rig_height = _rig_lens_height_m(rig_geometry)
+    if rig_height is None:
+        rig_height = solved.get("nominal_m")
+    return {
+        "reference": "hitting_surface",
+        "lens_height_used_m": override if override is not None else rig_height,
+        "lens_height_used_source": "range_setup" if override is not None else "rig_nominal",
+        "lens_height_solved_m": solved.get("radar_solved_m"),
+        "lens_height_solved_uncertainty_m": solved.get("radar_uncertainty_m"),
+        "lens_height_check": solved.get("check", "not_checked"),
+        # 640x400's solve is a check on arm5's, never the height used (S4)
+        "lens_height_check_640x400": check.get("check"),
+        "rig_lens_height_m": rig_height,
+        "ball_height_m": BALL_DIAMETER_MM / 2000.0,
+        "ball_height_basis": "assumed_on_surface",
+    }
+
+
+HANDED_TO_SWINGS_SCHEMA = "openflight.tester_handed_to_swings.v1"
+
+
+def tee_range_handoff(
+    solution: tee_range.TeeRangeSolution | None,
+    *,
+    use_unqualified: bool = False,
+    rig_geometry: Path | None = None,
+    reference: tee_range_setup.TeeRangeEpochReference | None = None,
+) -> tuple[list[str], dict]:
+    """The swing server's tee-range arguments, and the record of what they hand over.
+
+    The record goes into arm.json, setup_admission.json and the run's tee_range.json,
+    so the tester's files say what the kiosk ran with (wiring audit S3).
+    """
+    candidate = None
+    if solution is not None and solution.status == "resolved":
+        status, source = "resolved", "qualified_static_iwr"
+        candidate = next(
+            item
+            for item in solution.candidates
+            if item.candidate_id == solution.selected_candidate_id
+        )
+    elif use_unqualified and (candidate := unqualified_tee_range_choice(solution)) is not None:
+        logger.warning(
+            "Using UNQUALIFIED tee range %.3f m from %s for this test run",
+            candidate.radar_slant_range_m,
+            candidate.candidate_id,
+        )
+        steered = (candidate.evidence.get("camera_window") or {}).get("outcome") == "reselected"
+        status = "unqualified"
+        source = "unqualified_static_iwr_camera_steered" if steered else "unqualified_static_iwr"
+    else:
+        status = source = "pending"
+    tee_m = candidate.radar_slant_range_m if candidate is not None else None
+    scene = setup_scene(solution, rig_geometry)
     height = _setup_camera_height_m(solution)
+    solved = scene["lens_height_solved_m"]
+    uncertainty = scene["lens_height_solved_uncertainty_m"]
     # The setup ball rests on the surface, so its centre is one radius up; swings
     # must use the same ball height the setup solved the lens height with. A
     # pending range still carries a lens height the setup had to override, such as
     # a unit on a box (wiring audit S6).
-    height_args = [
+    args = [
+        *(
+            ["--iwr6843-tee-m", f"{tee_m:.9g}"]
+            if tee_m is not None
+            else ["--iwr6843-tee-range-pending"]
+        ),
         "--iwr6843-ball-height-m",
-        f"{BALL_DIAMETER_MM / 2000.0:.6g}",
+        f"{scene['ball_height_m']:.6g}",
         *(["--solved-camera-height-m", f"{height:.6g}"] if height is not None else []),
+        "--iwr6843-tee-range-source",
+        source,
+        *(
+            ["--iwr6843-tee-range-candidate", candidate.candidate_id]
+            if candidate is not None
+            else []
+        ),
+        *(["--scene-lens-height-solved-m", f"{solved:.6g}"] if solved is not None else []),
+        *(
+            ["--scene-lens-height-solved-uncertainty-m", f"{uncertainty:.6g}"]
+            if solved is not None and uncertainty is not None
+            else []
+        ),
     ]
-    if solution is not None and solution.status == "resolved":
-        return ["--iwr6843-tee-m", f"{solution.selected_range_m:.9g}", *height_args]
-    if use_unqualified and (choice := unqualified_tee_range_choice(solution)) is not None:
-        logger.warning(
-            "Using UNQUALIFIED tee range %.3f m from %s for this test run",
-            choice.radar_slant_range_m,
-            choice.candidate_id,
-        )
-        return ["--iwr6843-tee-m", f"{choice.radar_slant_range_m:.9g}", *height_args]
-    return ["--iwr6843-tee-range-pending", *height_args]
+    window = candidate.evidence.get("camera_window") if candidate is not None else None
+    record = {
+        "schema": HANDED_TO_SWINGS_SCHEMA,
+        "epoch_id": reference.epoch_id if reference is not None else None,
+        "tee_range_status": status,
+        "tee_range_source": source,
+        "tee_m": tee_m,
+        "candidate_id": candidate.candidate_id if candidate is not None else None,
+        "qualified": status == "resolved",
+        "camera_window": (
+            {
+                "outcome": window.get("outcome"),
+                "camera_window_m": (
+                    list(window["camera_window_m"])
+                    if window.get("camera_window_m") is not None
+                    else None
+                ),
+            }
+            if isinstance(window, Mapping)
+            else None
+        ),
+        "solved_camera_height_m": height,
+        "solved_camera_height_source": "static_iwr_range" if height is not None else None,
+        "scene": scene,
+        **rig_geometry_hashes(rig_geometry),
+        "cli_args": args,
+    }
+    return args, record
+
+
+def _tee_range_cli_args(
+    solution: tee_range.TeeRangeSolution | None, *, use_unqualified: bool = False
+) -> list[str]:
+    return tee_range_handoff(solution, use_unqualified=use_unqualified)[0]
 
 
 # The hitting zone may clip this much (sun patches, a white ball) and still be usable.
@@ -918,6 +1060,7 @@ def write_setup_admission(
     eligibility: Mapping,
     tee_range_solution: tee_range.TeeRangeSolution | None = None,
     tee_range_reference: tee_range_setup.TeeRangeEpochReference | None = None,
+    handed_to_swings: Mapping | None = None,
 ) -> None:
     """Bind the server-lifetime operator admission to one capture run."""
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -946,6 +1089,8 @@ def write_setup_admission(
         ),
         "tee_range_status": tee_range_solution.status if tee_range_solution else None,
         "tee_range_policy_sha256": tee_range_solution.policy_sha256 if tee_range_solution else None,
+        # what the kiosk was actually started with (wiring audit S3)
+        "handed_to_swings": dict(handed_to_swings) if handed_to_swings is not None else None,
     }
     temporary = run_dir / ".setup_admission.json.tmp"
     temporary.write_text(
@@ -967,14 +1112,26 @@ def action_commands(
     iwr_static_port: str | None = None,
     operator_reset: bool | None = None,
     use_unqualified_tee_range: bool = False,
+    handed_to_swings: Mapping | None = None,
 ) -> tuple[list[list[str]], Path]:
-    """Build an allowlisted command sequence and its log path."""
+    """Build an allowlisted command sequence and its log path.
+
+    ``handed_to_swings`` (from ``tee_range_handoff``) supplies the tee-range
+    arguments, so the kiosk runs with exactly what the tester records.
+    """
     if action not in ACTION_LABELS:
         raise ValueError("unknown tester action")
     if (optical_calibration is None) != (camera_placement is None):
         raise ValueError("calibrated camera fusion requires both calibration and placement")
     root = arm_directory(sessions_root, params)
     arm = params.arm
+    tee_range_args = []
+    if action in {"ladder", "swings"}:
+        tee_range_args = (
+            list(handed_to_swings["cli_args"])
+            if handed_to_swings is not None
+            else _tee_range_cli_args(tee_range_solution, use_unqualified=use_unqualified_tee_range)
+        )
     if action == "preflight":
         commands = [
             ["git", "rev-parse", "HEAD"],
@@ -1024,7 +1181,7 @@ def action_commands(
                 "--camera-capture-manual-exposure",
                 "--debug",
                 "--iwr6843",
-                *_tee_range_cli_args(tee_range_solution, use_unqualified=use_unqualified_tee_range),
+                *tee_range_args,
                 "--inclinometer",
                 "--rig-geometry",
                 str(rig_geometry),
@@ -1058,7 +1215,7 @@ def action_commands(
                 "--camera-capture-manual-exposure",
                 "--debug",
                 "--iwr6843",
-                *_tee_range_cli_args(tee_range_solution, use_unqualified=use_unqualified_tee_range),
+                *tee_range_args,
                 "--inclinometer",
                 "--rig-geometry",
                 str(rig_geometry),
@@ -4766,7 +4923,13 @@ def create_app(
             state,
             solution,
             qualification,
-            evidence={"validation_agreement": camera_validation_agreement(*candidates[1:])},
+            evidence={
+                "validation_agreement": camera_validation_agreement(*candidates[1:]),
+                # the setup's scene and both rig hashes, which join it to the
+                # swing sessions' session_start (wiring audit C3, C4, C5)
+                "scene": setup_scene(solution, rig_geometry),
+                "rig_geometry": rig_geometry_hashes(rig_geometry),
+            },
         )
 
     def _camera_steered_iwr(state, selected, iwr_evidence) -> dict | None:
@@ -5586,6 +5749,16 @@ def create_app(
                 solution, reference = admitted_range(params.tester_id)
                 if reference is None and not require_tee_range_flow:
                     solution = pending_tee_range_solution(sessions_root, params)
+            handed = (
+                tee_range_handoff(
+                    solution,
+                    use_unqualified=use_unqualified_tee_range,
+                    rig_geometry=rig_geometry,
+                    reference=reference,
+                )[1]
+                if action == "swings"
+                else None
+            )
             commands, log_path = action_commands(
                 action,
                 params,
@@ -5599,6 +5772,7 @@ def create_app(
                 iwr_static_port,
                 operator_reset if action == "preflight" else None,
                 use_unqualified_tee_range=use_unqualified_tee_range,
+                handed_to_swings=handed,
             )
             write_arm_state(sessions_root, params)
             if action == "swings":
@@ -5608,16 +5782,14 @@ def create_app(
                     params,
                     capture_gain=gain,
                     capture_exposure_us=exposure_us,
-                    tee_range_m=solution.selected_range_m,
-                    tee_range_source=(
-                        solution.selected_candidate_id
-                        if solution.status == "resolved"
-                        else "unresolved"
-                    ),
+                    # the range the kiosk runs with, not only a qualified one (S3)
+                    tee_range_m=handed["tee_m"],
+                    tee_range_source=handed["tee_range_source"],
                     tee_range_validation_truth_m=(
                         params.tee_mm / 1000.0 if params.tee_mm is not None else None
                     ),
                     tee_range_solution=solution.to_dict(),
+                    handed_to_swings=handed,
                 )
             if action == "gain":
                 on_finish = lambda _a, rc: record_gain(params) if rc == 0 else None  # noqa: E731
@@ -5644,9 +5816,11 @@ def create_app(
                     timeout_s=session_bundle.WRITER_WAIT_S,
                 ):
                     write_setup_admission(
-                        run_dir, params.tester_id, eligibility, solution, reference
+                        run_dir, params.tester_id, eligibility, solution, reference, handed
                     )
-                    tee_range.write_solution(run_dir / "tee_range.json", solution)
+                    tee_range.write_solution(
+                        run_dir / "tee_range.json", solution, handed_to_swings=handed
+                    )
                 active_runtime_dir["path"] = run_dir
             try:
                 release_static_radar()
@@ -5980,6 +6154,12 @@ def create_app(
         enclosure.stop()
         started = claimed = False
         try:
+            _args, handed = tee_range_handoff(
+                solution,
+                use_unqualified=use_unqualified_tee_range,
+                rig_geometry=rig_geometry,
+                reference=reference,
+            )
             commands, log_path = action_commands(
                 "ladder",
                 params_for_arm,
@@ -5992,6 +6172,7 @@ def create_app(
                 solution,
                 iwr_static_port,
                 use_unqualified_tee_range=use_unqualified_tee_range,
+                handed_to_swings=handed,
             )
             run = Path(commands[0][commands[0].index("--log-dir") + 1])
             with session_bundle.snapshot_lock(
@@ -5999,11 +6180,16 @@ def create_app(
                 timeout_s=session_bundle.WRITER_WAIT_S,
             ):
                 write_setup_admission(
-                    run, tester_id, admitted_setup[tester_id], solution, reference
+                    run, tester_id, admitted_setup[tester_id], solution, reference, handed
                 )
-                tee_range.write_solution(
-                    run / "tee_range.json",
-                    solution,
+                tee_range.write_solution(run / "tee_range.json", solution, handed_to_swings=handed)
+                write_arm_state(
+                    sessions_root,
+                    params_for_arm,
+                    _snapshot_locked=True,
+                    tee_range_m=handed["tee_m"],
+                    tee_range_source=handed["tee_range_source"],
+                    handed_to_swings=handed,
                 )
 
             def ladder_finished(_action, _return_code):

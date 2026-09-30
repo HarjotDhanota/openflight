@@ -156,6 +156,9 @@ inclinometer_service = None
 inclinometer_runtime_config: dict = {"enabled": False}
 rig_geometry = None  # the enclosure's RigGeometry when --rig-geometry was given
 rig_geometry_config: dict = {"enabled": False}
+# What the range setup handed this session (tee range, lens and ball heights) and
+# where each value came from; recorded in session_start (wiring audit S3, C4, C5).
+setup_handoff_config: dict = {"tee_range": None, "scene": None}
 # a ball resting on the surface: its centre is one radius up
 BALL_RADIUS_M = BALL_DIAMETER_MM / 2000.0
 # Heights are above the hitting surface. The radar's floor-bounce model needs the
@@ -1078,11 +1081,18 @@ def init_rig_geometry(path) -> None:
 
     rig_geometry = RigGeometry.from_json(path)
     setup = rig_geometry.enclosure_setup()
+    snapshot = rig_geometry.snapshot()
     rig_geometry_config = {
         "enabled": True,
         "path": str(Path(path).expanduser()),
         "derived": setup.as_dict(),
-        "snapshot": rig_geometry.snapshot(),
+        "snapshot": snapshot,
+        # One meaning per hash name (wiring audit C3): the tester's setup evidence
+        # binds the file's bytes, the server checks the loaded parameters.
+        "rig_geometry_file_sha256": hashlib.sha256(
+            Path(path).expanduser().read_bytes()
+        ).hexdigest(),
+        "rig_geometry_params_sha256": snapshot["sha256"],
     }
     logger.info("[SERVER] Rig geometry loaded from %s: %s", path, setup.as_dict())
     if setup.missing:
@@ -1115,10 +1125,9 @@ def _apply_solved_camera_height(args, enclosure) -> None:
             )
         args.iwr6843_radar_height_m = radar_height
     args.camera_capture_mount_height_m = solved
-    derived = rig_geometry_config.get("derived") if isinstance(rig_geometry_config, dict) else None
-    if isinstance(derived, dict):
-        derived["camera_mount_height_m"] = solved
-        derived["radar_height_m"] = args.iwr6843_radar_height_m
+    # "derived" stays what the rig file says; the scene's values live apart, so a
+    # solved height is never read back as the enclosure's (wiring audit C4, C13).
+    if rig_geometry_config.get("enabled"):
         rig_geometry_config["solved_camera_height"] = {
             "camera_mount_height_m": solved,
             "radar_height_m": args.iwr6843_radar_height_m,
@@ -1131,6 +1140,57 @@ def _apply_solved_camera_height(args, enclosure) -> None:
         "(rig file: %s)",
         solved * 1000.0,
         f"{nominal * 1000.0:.1f} mm" if nominal is not None else "none",
+    )
+
+
+def init_setup_handoff(args, enclosure) -> None:
+    """Record what the range setup handed this session, and where each value came from.
+
+    Recording only: the tee range and heights named here are the ones already
+    applied. The radar-solved lens height is kept even when the rig file's height
+    is used (wiring audit C4), and a one-radius ball height is labelled as assumed
+    on the surface (C5).
+    """
+    global setup_handoff_config  # pylint: disable=global-statement
+    tee = args.iwr6843_tee_m
+    nominal = getattr(enclosure, "camera_mount_height_m", None)
+    ball_height = float(args.iwr6843_ball_height_m)
+    if args.solved_camera_height_m is not None:
+        used_source = "range_setup"
+    elif nominal is not None:
+        used_source = "rig_nominal"
+    else:
+        used_source = "command_line"
+    setup_handoff_config = {
+        "tee_range": {
+            "tee_slant_range_m": tee,
+            "status": "configured" if tee is not None else "pending",
+            "source": args.iwr6843_tee_range_source
+            or ("command_line" if tee is not None else "pending"),
+            "candidate_id": args.iwr6843_tee_range_candidate,
+        },
+        "scene": {
+            "reference": "hitting_surface",
+            "lens_height_used_m": args.camera_capture_mount_height_m,
+            "lens_height_used_source": used_source,
+            "lens_height_solved_m": args.scene_lens_height_solved_m,
+            "lens_height_solved_uncertainty_m": args.scene_lens_height_solved_uncertainty_m,
+            "rig_lens_height_m": nominal,
+            "radar_height_m": args.iwr6843_radar_height_m,
+            "ball_height_m": ball_height,
+            "ball_height_basis": (
+                "assumed_on_surface"
+                if math.isclose(ball_height, BALL_RADIUS_M, abs_tol=1e-6)
+                else "command_line"
+            ),
+        },
+    }
+    logger.info(
+        "[SERVER] Tee range %s (%s); ball height %.1f mm, %s",
+        f"{tee:.3f} m" if tee is not None else "pending",
+        setup_handoff_config["tee_range"]["source"],
+        ball_height * 1000.0,
+        setup_handoff_config["scene"]["ball_height_basis"].replace("_", " "),
     )
 
 
@@ -1172,6 +1232,8 @@ def _session_start_config() -> dict:
     config["camera_capture"] = dict(camera_capture_config)
     config["inclinometer"] = dict(inclinometer_runtime_config)
     config["rig_geometry"] = deepcopy(rig_geometry_config)
+    config["tee_range_handoff"] = deepcopy(setup_handoff_config["tee_range"])
+    config["scene"] = deepcopy(setup_handoff_config["scene"])
     from .camera.geometry_contract import EffectiveCameraGeometryInputs, unavailable_snapshot
 
     if not camera_capture_config.get("enabled"):
@@ -1194,7 +1256,8 @@ def _session_start_config() -> dict:
             "validation": "unvalidated",
             "optical_calibration_sha256": geometry_fingerprint(camera_optical_calibration),
             "placement_sha256": geometry_fingerprint(camera_placement),
-            "rig_geometry_sha256": camera_placement.get("rig_geometry_sha256"),
+            # the placement binds the loaded parameters' fingerprint (C3)
+            "rig_geometry_params_sha256": camera_placement.get("rig_geometry_sha256"),
         }
     else:
         config["camera_calibrated_fusion"] = {"enabled": False}
@@ -5537,6 +5600,20 @@ def _add_iwr_tee_range_arguments(parser):
             "range-dependent launch and club metrics"
         ),
     )
+    parser.add_argument(
+        "--iwr6843-tee-range-source",
+        default=None,
+        help=(
+            "Where the tee range came from, as the range setup handed it over "
+            "(qualified_static_iwr, unqualified_static_iwr, "
+            "unqualified_static_iwr_camera_steered or pending); recorded in session_start"
+        ),
+    )
+    parser.add_argument(
+        "--iwr6843-tee-range-candidate",
+        default=None,
+        help="The range setup's candidate ID behind --iwr6843-tee-m; recorded in session_start",
+    )
 
 
 def _apply_kld7_device_defaults(args, dev_root: Path = Path("/dev")) -> None:
@@ -5930,6 +6007,22 @@ def main():
         ),
     )
     parser.add_argument(
+        "--scene-lens-height-solved-m",
+        type=float,
+        default=None,
+        help=(
+            "Lens height above the hitting surface that this session's range setup "
+            "solved from the radar, recorded in session_start even when the rig file's "
+            "height is used. Recorded only; --solved-camera-height-m changes the geometry."
+        ),
+    )
+    parser.add_argument(
+        "--scene-lens-height-solved-uncertainty-m",
+        type=float,
+        default=None,
+        help="1-sigma uncertainty of --scene-lens-height-solved-m; recorded only",
+    )
+    parser.add_argument(
         "--iwr6843-ball-height-m",
         type=float,
         default=BALL_RADIUS_M,
@@ -6156,6 +6249,7 @@ def main():
             _apply_solved_camera_height(args, enclosure)
         except ValueError as error:
             parser.error(str(error))
+    init_setup_handoff(args, enclosure)
 
     if args.camera_capture and (
         args.camera_capture_width <= 0

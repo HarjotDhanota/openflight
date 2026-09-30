@@ -20,6 +20,9 @@ QUALIFICATION_SCHEMA = "openflight.tee_range_qualification.v3"
 QUALIFICATION_SCHEMA_VERSION = 3
 PROMOTION_POLICY_VERSION = "tee-range-promotion-v1"
 UNRESOLVED_LEGACY_REASON = "legacy_session_has_no_tee_range_contract"
+# A capture run's tee_range.json also records what its kiosk was started with;
+# that record sits beside the contract and is not validated as part of it.
+HANDED_TO_SWINGS_KEY = "handed_to_swings"
 SOURCE_GROUPS = frozenset({"camera", "iwr", "manual_truth"})
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -502,6 +505,7 @@ class TeeRangeSolution:  # pylint: disable=too-many-instance-attributes
         epoch_id: str | None = None,
     ) -> TeeRangeSolution:
         """Validate a solution and require qualification context for resolved records."""
+        payload = {key: value for key, value in payload.items() if key != HANDED_TO_SWINGS_KEY}
         schema = payload.get("schema")
         version = payload.get("schema_version")
         if schema == LEGACY_SCHEMA and version == 1:
@@ -754,15 +758,24 @@ def _validated_loaded_solution(
     return rebuilt
 
 
-def write_solution(path: str | Path, solution: TeeRangeSolution) -> None:
-    """Atomically persist a range contract beside the session evidence."""
+def write_solution(
+    path: str | Path, solution: TeeRangeSolution, *, handed_to_swings: Mapping | None = None
+) -> None:
+    """Atomically persist a range contract beside the session evidence.
+
+    ``handed_to_swings`` records what a capture run's kiosk was started with; it
+    rides beside the contract and is not part of it.
+    """
     destination = Path(path)
+    payload = solution.to_dict()
+    if handed_to_swings is not None:
+        payload[HANDED_TO_SWINGS_KEY] = dict(handed_to_swings)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary: str | None = None
     try:
         with tempfile.NamedTemporaryFile("wb", dir=destination.parent, delete=False) as handle:
             temporary = handle.name
-            handle.write(_canonical_json(solution.to_dict()) + b"\n")
+            handle.write(_canonical_json(payload) + b"\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, destination)
