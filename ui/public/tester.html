@@ -707,6 +707,7 @@
               </svg>
             </div>
             <p class="note" id="placement-distance" role="status"></p>
+            <p class="note" id="placement-tilt" role="status"></p>
           </div>
           <div class="steps">
             <button type="button" id="placement-show" hidden>Show the camera</button>
@@ -1841,6 +1842,11 @@
         drawPatch(node, el('placement-ground'), el('placement-search'), view.frame, view.ground, view.search, true);
         node.dataset.centre = view.centre.map((value) => value.toFixed(3)).join(',');
         el('placement-distance').textContent = patchDistanceText(view.model, view.centre);
+        // P8-5: the camera's tilt decides how tall the dashed search area is
+        const tilt = placementState?.camera_tilt;
+        el('placement-tilt').textContent = tilt?.status === 'calibrated'
+          ? `Camera tilt calibrated (${Number(tilt.vertical_offset_deg).toFixed(1)}° beyond the inclinometer): the dashed search area is tight.`
+          : 'Camera tilt not calibrated yet: the dashed search area is taller to cover it. The first ball the camera and radar agree on calibrates it.';
       }
 
       function placementCameraStatus(message, problem = false) {
@@ -2636,6 +2642,21 @@
             (ball.warning ? ` — ${escapeHtml(ball.warning)}` : '') +
             '</span>'
           : '';
+        const tilt = display?.camera_tilt;
+        const tiltWords = {
+          calibrated: 'calibrated from this setup',
+          checked: 'checked against this setup',
+          refused: 'not calibrated',
+          not_stored: 'solved, not stored',
+          not_solved: 'not solved',
+          not_applicable: 'not applicable (calibrated optics)',
+        };
+        const tiltLine = tilt
+          ? `<span data-state="tilt-${escapeHtml(tilt.action)}"${tilt.warning ? ' class="problem"' : ''}>camera tilt <b>${escapeHtml(tiltWords[tilt.action] || tilt.action)}</b>` +
+            (tilt.offset_deg != null ? ` · ${Number(tilt.offset_deg).toFixed(1)}°` : '') +
+            (tilt.warning ? ` — ${escapeHtml(tilt.warning)}` : '') +
+            '</span>'
+          : '';
         const radarLine = ball?.radar_candidates?.length
           ? `<span data-state="radar-candidates">radar candidates in the patch <b>${ball.radar_candidates
               .map((item) => `${metres(item.range_m)} ${escapeHtml(item.method)}`)
@@ -2645,6 +2666,7 @@
           ? `<span>setup epoch <b>${escapeHtml(state.epoch_id)}</b></span>` +
             ballLine +
             radarLine +
+            tiltLine +
             describe(escapeHtml(display?.iwr?.label || 'bias-corrected IWR slant range'), display?.iwr) +
             describe('camera arm 5', display?.camera?.arm5) +
             describe('camera arm 6 validation', display?.camera?.arm6) +

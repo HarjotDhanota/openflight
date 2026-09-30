@@ -39,6 +39,7 @@ from openflight.camera import (
     attempt_ledger,
     ball_pixels,
     camera_roll,
+    camera_tilt,
     ground_patch,
     patch_pairing,
     reference_ball_range,
@@ -850,8 +851,8 @@ def patch_pair_lens_height(save_height: Mapping | None, decision: Mapping) -> di
 
     Only a validated pair checks the rig's lens height; otherwise it stands.
     """
-    if not isinstance(save_height, Mapping):
-        return None
+    if not isinstance(save_height, Mapping) or "nominal_m" not in save_height:
+        return dict(save_height) if isinstance(save_height, Mapping) else None
     solved = dict(save_height)
     camera = decision.get("camera")
     if decision.get("status") != "validated" or not isinstance(camera, Mapping):
@@ -1124,8 +1125,12 @@ def tee_range_handoff(
     use_unqualified: bool = False,
     rig_geometry: Path | None = None,
     reference: tee_range_setup.TeeRangeEpochReference | None = None,
+    camera_tilt_calibration: Mapping | None = None,
 ) -> tuple[list[str], dict]:
     """The swing server's tee-range arguments, and the record of what they hand over.
+
+    ``camera_tilt_calibration`` is the unit's camera tilt (P8-5); a calibrated one
+    is handed to the kiosk, which records it in session_start.
 
     The record goes into arm.json, setup_admission.json and the run's tee_range.json,
     so the tester's files say what the kiosk ran with (wiring audit S3).
@@ -1205,6 +1210,15 @@ def tee_range_handoff(
         "--iwr6843-net-range-source",
         "empty_static_capture" if measured_net else "default_not_measured",
     ]
+    tilt = camera_tilt.applied_pitch(0.0, camera_tilt_calibration)
+    if tilt["status"] == "calibrated":
+        # the unit's camera tilt (P8-5), recorded by the kiosk in session_start
+        args += [
+            "--camera-vertical-offset-deg",
+            f"{tilt['offset_deg']:.6g}",
+            "--camera-vertical-offset-source",
+            "unit_calibration",
+        ]
     window = candidate.evidence.get("camera_window") if candidate is not None else None
     record = {
         "schema": HANDED_TO_SWINGS_SCHEMA,
@@ -1255,6 +1269,19 @@ def tee_range_handoff(
             if decision is not None and decision.get("schema") == patch_pairing.DECISION_SCHEMA
             else None
         ),
+        # P8-5: the unit's camera tilt. The swing side's nominal estimators infer the
+        # camera's pitch from the resting ball and the tee range each shot, which
+        # already holds it; it is handed over to be recorded beside them
+        "camera_tilt": {
+            key: tilt.get(key)
+            for key in (
+                "status",
+                "offset_deg",
+                "uncertainty_deg",
+                "calibrated_at_utc",
+                "composition",
+            )
+        },
         **rig_geometry_hashes(rig_geometry),
         "cli_args": args,
     }
@@ -2263,7 +2290,11 @@ def expected_ball_diameter_px(arm: Arm, tee_mm: float | None, rig_geometry: Path
 
 
 def expected_ball_row_px(
-    arm: Arm, tee_mm: float | None, rig_geometry: Path, tilt: Mapping | None = None
+    arm: Arm,
+    tee_mm: float | None,
+    rig_geometry: Path,
+    tilt: Mapping | None = None,
+    camera_tilt_calibration: Mapping | None = None,
 ) -> tuple[float, float] | None:
     """The row a ball resting on the floor at the taped distance must sit in, and a band.
 
@@ -2284,7 +2315,12 @@ def expected_ball_row_px(
     drop = rig.lens_height_above_floor_mm - BALL_DIAMETER_MM / 2.0
     along = math.sqrt(max(camera_mm**2 - drop**2, 1.0))
     measured = (tilt or {}).get("camera_pitch_deg")
-    pitch = rig.boresight_pitch_deg if measured is None else measured
+    pitch = (
+        rig.boresight_pitch_deg
+        if measured is None
+        # the LIS3DH's pitch composed with the unit's camera tilt (P8-5)
+        else camera_tilt.applied_pitch(measured, camera_tilt_calibration)["pitch_deg"]
+    )
     row = arm.height / 2.0 + focal * math.tan(math.radians(pitch) + math.atan(drop / along))
     # the band is in 1:1 pixels; a binned mode sees half as many
     band = (90.0 if measured is not None else 150.0) / ball_pixels.binning_factor(arm.width)
@@ -2468,6 +2504,7 @@ def distance_cues(
     tee_mm: float | None,
     rig_geometry: Path,
     tilt: Mapping | None = None,
+    camera_tilt_calibration: Mapping | None = None,
 ) -> dict:
     """How far the camera thinks the ball is, two ways, beside the tape.
 
@@ -2496,9 +2533,20 @@ def distance_cues(
     if rig.lens_height_above_floor_mm is not None:
         drop = rig.lens_height_above_floor_mm - BALL_DIAMETER_MM / 2.0
         measured = (tilt or {}).get("camera_pitch_deg")
-        pitch = rig.boresight_pitch_deg if measured is None else measured
+        applied = (
+            camera_tilt.applied_pitch(measured, camera_tilt_calibration)
+            if measured is not None
+            else None
+        )
+        pitch = rig.boresight_pitch_deg if applied is None else applied["pitch_deg"]
         cues["camera_pitch_deg"] = pitch
-        cues["camera_pitch_source"] = "rig file" if measured is None else "inclinometer"
+        cues["camera_pitch_source"] = (
+            "rig file"
+            if applied is None
+            else "inclinometer and the unit's camera tilt"
+            if applied["status"] == "calibrated"
+            else "inclinometer"
+        )
         # a camera tilted up (+) sees the floor further below its axis
         below = below_axis - math.radians(pitch)
         if below > 0:
@@ -2586,14 +2634,26 @@ def record_placement(
     return count + 1
 
 
+# The nominal model's angular uncertainty: the camera's vertical before the unit's
+# tilt is calibrated (about 3 deg, harjot-indoor-test-1), and at least this much after.
+UNCALIBRATED_ANGULAR_UNCERTAINTY_DEG = 3.0
+CALIBRATED_ANGULAR_UNCERTAINTY_DEG = 0.5
+
+
 def _reference_ball_camera(
     arm: Arm,
     rig_geometry: Path,
     tilt: Mapping,
     optical_calibration: Path | None,
     camera_placement: Path | None,
+    camera_tilt_calibration: Mapping | None = None,
 ) -> BallPlaneCamera:
-    """Build the active saved-image camera model without claiming qualification."""
+    """Build the active saved-image camera model without claiming qualification.
+
+    ``camera_tilt_calibration`` is the unit's stored camera tilt (P8-5): the nominal
+    model's pitch is the LIS3DH's composed with it. A calibrated optical model
+    carries its own principal point and placement pose, so it is not applied there.
+    """
     from openflight.rig_geometry import (  # noqa: PLC0415
         RigGeometry,
         camera_rdf_offset_to_target_lfu,
@@ -2635,7 +2695,14 @@ def _reference_ball_camera(
                 else tilt.get("roll_deg")
             ),
         )
-        return BallPlaneCamera.calibrated(model)
+        return replace(
+            BallPlaneCamera.calibrated(model),
+            vertical_offset={
+                "status": "not_applied",
+                "reason": "a calibrated optical model carries its own principal point and "
+                "placement pose",
+            },
+        )
     rig = RigGeometry.from_json(rig_geometry)
     if rig.lens_height_above_floor_mm is None:
         raise ValueError("rig geometry lacks the measured lens height")
@@ -2650,11 +2717,18 @@ def _reference_ball_camera(
     camera = np.asarray((0.0, 0.0, rig.lens_height_above_floor_mm / 1000.0))
     # the radar's ranges start at its phase centre, not the RX row (audit F11)
     offset = np.asarray(camera_rdf_offset_to_target_lfu(rig.iwr_origin_mm or (0.0, 0.0, 0.0)))
+    # P8-5: the LIS3DH's pitch composed with the unit's camera tilt, when it has one
+    applied = camera_tilt.applied_pitch(float(pitch), camera_tilt_calibration)
+    angular = (
+        max(CALIBRATED_ANGULAR_UNCERTAINTY_DEG, float(applied.get("uncertainty_deg") or 0.0))
+        if applied["status"] == "calibrated"
+        else UNCALIBRATED_ANGULAR_UNCERTAINTY_DEG
+    )
     return BallPlaneCamera.nominal(
         focal_px=ball_pixels.mode_focal_px(arm.width, rig),
         image_width_px=arm.width,
         image_height_px=arm.height,
-        pitch_deg=float(pitch),
+        pitch_deg=float(applied["pitch_deg"]),
         # The camera is level in the enclosure; the LIS3DH roll goes through the one
         # convention both paths share, which records it but does not yet apply it
         # (wiring audit C8, camera_roll).
@@ -2666,8 +2740,9 @@ def _reference_ball_camera(
         mirror_horizontal=False,
         camera_origin_lfu=camera,
         radar_origin_lfu=camera + offset,
-        angular_uncertainty_deg=1.0,
+        angular_uncertainty_deg=angular,
         focal_relative_uncertainty=0.08,
+        vertical_offset=applied,
     )
 
 
@@ -2845,7 +2920,8 @@ def camera_tilt_facts(tilt: Mapping, camera: BallPlaneCamera) -> dict:
         "vertical_offset_deg": offset.get("offset_deg") if calibrated else None,
         "applied_pitch_deg": ground_patch.projection_parameters(camera)["pitch_deg"],
         "calibrated": calibrated,
-        "status": "calibrated" if calibrated else "uncalibrated",
+        "status": offset.get("status") or "uncalibrated",
+        "composition": offset.get("composition"),
         "camera_source": camera.source,
     }
 
@@ -5209,6 +5285,16 @@ def tee_range_display(
         "experimental": evidence.get("experimental_range"),
         # P8-4: the camera's ball and the radar's candidates, and what they agreed on
         "patch_ball": _patch_ball_display(evidence.get("patch_ball")),
+        # P8-5: what this setup's pair did to the unit's camera tilt
+        "camera_tilt": (
+            {
+                "action": evidence["camera_tilt"].get("action"),
+                "offset_deg": evidence["camera_tilt"].get("offset_deg"),
+                "warning": evidence["camera_tilt"].get("warning"),
+            }
+            if isinstance(evidence.get("camera_tilt"), Mapping)
+            else None
+        ),
         "swings": swings,
         "validation": _validation_display(evidence.get("validation_agreement")),
         "placement_box": dict(placement_box) if placement_box is not None else None,
@@ -5926,8 +6012,14 @@ def create_app(
     iwr_static_port: str | None = None,
     require_iwr_preflight: bool = False,
     static_radar=None,
+    camera_tilt_path: Path | None = None,
 ) -> Flask:
-    """Build the standalone tester service."""
+    """Build the standalone tester service.
+
+    ``camera_tilt_path`` is this unit's camera-tilt calibration (P8-5), kept with
+    the unit's other local settings; without one the camera stays uncalibrated
+    and nothing is stored.
+    """
     if (optical_calibration is None) != (camera_placement is None):
         raise ValueError("calibrated camera fusion requires both calibration and placement")
     app = Flask(__name__)
@@ -5971,6 +6063,11 @@ def create_app(
         logger.warning("Tee-range qualification unavailable: %s", qualification_reason)
     tee_range_lock = threading.RLock()
     live_owner_lock = threading.RLock()
+
+    def unit_camera_tilt() -> dict | None:
+        """The unit's stored camera tilt, if it has been calibrated (P8-5)."""
+        return camera_tilt.load_calibration(camera_tilt_path)
+
     live_owner: dict[str, dict[str, str] | None] = {"guided": None}
     guided_analyzer: dict[str, GuidedRangeAnalyzer | None] = {"value": None}
     # the box step's viewing brightness; read by nothing but the page's note (P7-15b)
@@ -6402,7 +6499,12 @@ def create_app(
         """The 1280x800 camera model the patch is drawn through, the tilt, and the roll."""
         reading = enclosure.reading()
         model = _reference_ball_camera(
-            ARMS[PLACEMENT_BOX_ARM], rig_geometry, reading, optical_calibration, camera_placement
+            ARMS[PLACEMENT_BOX_ARM],
+            rig_geometry,
+            reading,
+            optical_calibration,
+            camera_placement,
+            unit_camera_tilt(),
         )
         return model, reading, _placement_roll_deg(rig_geometry, reading)
 
@@ -6866,17 +6968,33 @@ def create_app(
         decision = patch_ball_decision(
             camera.to_dict() if camera is not None else None, iwr.to_dict()
         )
+        tilt_outcome = None
         if camera is not None:
+            camera_evidence = tee_range._thaw_json(camera.evidence)  # pylint: disable=protected-access
+            height = camera_evidence.get("camera_height")
+            seen_tilt = camera_evidence.get("camera_tilt") or {}
+            if decision["status"] == "validated" and seen_tilt.get("status") == "uncalibrated":
+                # P8-5: the first validated pair calibrates the camera's tilt. It must
+                # assume the rig's lens height, so it cannot also check it.
+                tilt_outcome = _calibrate_camera_tilt(state.epoch_id, camera_evidence, decision)
+                if isinstance(height, Mapping):
+                    height = {
+                        **height,
+                        "check": "not_checked",
+                        "note": "this pair calibrated the camera's tilt, assuming the rig's "
+                        "lens height",
+                    }
+            else:
+                if decision["status"] == "validated" and seen_tilt.get("status") == "calibrated":
+                    tilt_outcome = _calibrate_camera_tilt(state.epoch_id, camera_evidence, decision)
+                # with the tilt calibrated, the pair checks the rig's lens height
+                height = patch_pair_lens_height(height, decision)
             camera = replace(
                 camera,
                 evidence={
-                    **tee_range._thaw_json(camera.evidence),  # pylint: disable=protected-access
-                    "camera_height": patch_pair_lens_height(
-                        tee_range._thaw_json(  # pylint: disable=protected-access
-                            (camera.evidence or {}).get("camera_height")
-                        ),
-                        decision,
-                    ),
+                    **camera_evidence,
+                    "camera_height": height,
+                    "camera_tilt_calibration": tilt_outcome,
                 },
             )
         candidates = [item for item in (iwr, camera, arm6) if item is not None]
@@ -6907,6 +7025,8 @@ def create_app(
             phase=phase,
             evidence={
                 "patch_ball": decision,
+                # the unit's camera tilt: calibrated or checked by this pair (P8-5)
+                "camera_tilt": tilt_outcome,
                 # the camera's candidate with the lens height the pair checked
                 **({"camera_arm5_candidate": camera.to_dict()} if camera is not None else {}),
                 # the old D11 key, kept for readers of earlier setups' records
@@ -6921,6 +7041,61 @@ def create_app(
                 "rig_geometry": rig_geometry_hashes(rig_geometry),
             },
         )
+
+    def _calibrate_camera_tilt(epoch_id: str, camera_evidence: Mapping, decision: Mapping):
+        """Solve the camera's tilt from a validated pair, and calibrate or check the unit's.
+
+        The solve uses the nominal model at trial pitches (the rig's lens height and
+        origins, the LIS3DH's roll convention) and the LIS3DH pitch the camera step
+        froze. A calibrated optical model is not calibrated this way.
+        """
+        seen = camera_evidence.get("camera_tilt") or {}
+        if seen.get("status") == "not_applied":
+            return {"action": "not_applicable", "reason": seen.get("reason")}
+        controls = (
+            (camera_evidence.get("capture_identity") or {}).get("mode", {}).get("controls", {})
+        )
+        orientation = dict(controls.get("orientation_frozen_for_association") or {})
+        ball = decision.get("camera") or {}
+        lis3dh = seen.get("lis3dh_pitch_deg", orientation.get("camera_pitch_deg"))
+        try:
+            solved = camera_tilt.solve_vertical_offset(
+                lambda pitch: _reference_ball_camera(
+                    ARMS[PLACEMENT_BOX_ARM],
+                    rig_geometry,
+                    {**orientation, "camera_pitch_deg": pitch},
+                    None,
+                    None,
+                    None,
+                ),
+                (float(ball["x_px"]), float(ball["y_px"])),
+                radar_range_m=float(decision["range_m"]),
+                radar_uncertainty_m=float(decision["uncertainty_m"]),
+                lis3dh_pitch_deg=float(lis3dh),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            return {"action": "not_solved", "reason": str(exc)}
+        facts = {
+            "epoch_id": epoch_id,
+            "radar_range_m": decision.get("range_m"),
+            "radar_source": decision.get("source"),
+            "pixel_px": solved["pixel_px"],
+            "uncertainty_parts_deg": solved["uncertainty_parts_deg"],
+        }
+        if camera_tilt_path is None:
+            return {
+                "action": "not_stored",
+                "reason": "no unit calibration file is configured",
+                "solved": solved,
+            }
+        outcome = camera_tilt.record_pair(camera_tilt_path, solved, facts=facts)
+        logger.info(
+            "[SETUP] camera tilt %s: %+.2f deg (%s)",
+            outcome["action"],
+            solved["offset_deg"],
+            outcome.get("warning") or "no warning",
+        )
+        return {**outcome, "solved": solved}
 
     def _range_resources_busy(*, live_yields: bool = False, ladder_yields: bool = False):
         """Who owns the camera or radar, or None when a new job may take them.
@@ -7059,6 +7234,7 @@ def create_app(
             tilt_snapshot,
             optical_calibration,
             camera_placement,
+            unit_camera_tilt(),
         )
         camera_input_identity = _guided_camera_input_identity(
             params.arm,
@@ -7360,7 +7536,16 @@ def create_app(
                     **candidate.evidence,
                     "save_camera_only_analysis": save_analysis,
                     # the rig's lens height until the pair checks it (P8-4, P8-5)
-                    "camera_height": _solved_camera_height(result, model, None),
+                    "camera_height": (
+                        {
+                            **solved_height,
+                            "angular_uncertainty_deg": model.angular_uncertainty_deg,
+                        }
+                        if (solved_height := _solved_camera_height(result, model, None))
+                        else None
+                    ),
+                    # the camera tilt this ball was seen through (P8-5)
+                    "camera_tilt": dict(model.vertical_offset or {}),
                     # the ball's pixel, size distance and ray, for the pairing (P8-4)
                     "patch_ball_camera": patch_pairing.camera_ball(result.selected, model),
                     # the box this mode searched, and the one the tester confirmed
@@ -7804,6 +7989,7 @@ def create_app(
                     use_unqualified=use_unqualified_tee_range,
                     rig_geometry=rig_geometry,
                     reference=reference,
+                    camera_tilt_calibration=unit_camera_tilt(),
                 )[1]
                 if action == "swings"
                 else None
@@ -7932,7 +8118,12 @@ def create_app(
                     state.get("black_floor_dn"),
                     None,
                     lambda ball: distance_cues(
-                        ball, params.arm, None, rig_geometry, enclosure.reading()
+                        ball,
+                        params.arm,
+                        None,
+                        rig_geometry,
+                        enclosure.reading(),
+                        unit_camera_tilt(),
                     ),
                     None,
                 )
@@ -7960,7 +8151,7 @@ def create_app(
             # Measure this placement from the current frames and current rig pose.
             tilt = enclosure.reading()
             camera = _reference_ball_camera(
-                arm, rig_geometry, tilt, optical_calibration, camera_placement
+                arm, rig_geometry, tilt, optical_calibration, camera_placement, unit_camera_tilt()
             )
             rig_ball_height_m = BALL_DIAMETER_MM / 2000.0
             # the camera looks only in the confirmed patch (P8-2, P8-6); without one
@@ -8265,6 +8456,7 @@ def create_app(
                 use_unqualified=use_unqualified_tee_range,
                 rig_geometry=rig_geometry,
                 reference=reference,
+                camera_tilt_calibration=unit_camera_tilt(),
             )
             commands, log_path = action_commands(
                 "ladder",
@@ -8692,6 +8884,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--camera-optical-calibration", type=Path, default=None)
     parser.add_argument("--camera-placement", type=Path, default=None)
     parser.add_argument("--iwr-static-config", type=Path, default=DEFAULT_IWR_STATIC_CONFIG)
+    parser.add_argument(
+        "--camera-tilt-calibration",
+        type=Path,
+        default=camera_tilt.default_calibration_path(),
+        help=(
+            "This unit's camera-tilt calibration (P8-5), written by the first setup whose "
+            "camera and radar agreed; kept with the unit's local settings, not the rig file"
+        ),
+    )
     parser.add_argument("--iwr-firmware", type=Path, default=DEFAULT_IWR_FIRMWARE)
     parser.add_argument("--iwr-calibration", type=Path, default=DEFAULT_IWR_CALIBRATION)
     parser.add_argument(
@@ -8764,6 +8965,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             optical_calibration=args.camera_optical_calibration,
             camera_placement=args.camera_placement,
             iwr_static_config=args.iwr_static_config,
+            camera_tilt_path=args.camera_tilt_calibration,
             iwr_firmware=args.iwr_firmware,
             iwr_calibration=args.iwr_calibration,
             iwr_static_port=args.iwr_static_port,

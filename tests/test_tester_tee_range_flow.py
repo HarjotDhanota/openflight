@@ -477,6 +477,7 @@ def app_for(
     held_radar=False,
     black_floor_dn=None,
     use_unqualified=False,
+    camera_tilt_path=None,
 ):
     def camera_model(arm, *_args):
         return BallPlaneCamera.nominal(
@@ -538,6 +539,7 @@ def app_for(
         require_iwr_preflight=require_iwr_preflight,
         static_radar=held,
         use_unqualified_tee_range=use_unqualified,
+        camera_tilt_path=camera_tilt_path,
     )
     app.config["TEST_STATIC_MANAGER"] = manager
     app.config["TEST_HELD_RADAR"] = held
@@ -4153,3 +4155,107 @@ def test_a_patch_2_m_out_works_end_to_end(tmp_path, inputs, monkeypatch):
     args, handed = ts.tee_range_handoff(tee_range.TeeRangeSolution.from_dict(state["solution"]))
     assert float(args[1]) == pytest.approx(2.0, abs=0.03)
     assert handed["placement_box"]["patch"]["centre_lfu_m"] == pytest.approx([0.2, 2.0])
+
+
+def _tilting_camera(monkeypatch):
+    """The test camera, composing the LIS3DH's pitch with the unit's tilt as the real one does."""
+    from openflight.camera import camera_tilt  # noqa: PLC0415
+
+    def model(arm, _rig, tilt, _optical=None, _placement=None, calibration=None):
+        applied = camera_tilt.applied_pitch(float(tilt.get("camera_pitch_deg") or 0.0), calibration)
+        return BallPlaneCamera.nominal(
+            focal_px=933.0 if arm.width == 1280 else 466.5,
+            image_width_px=arm.width,
+            image_height_px=arm.height,
+            pitch_deg=applied["pitch_deg"],
+            roll_correction_deg=0.0,
+            mirror_horizontal=False,
+            camera_origin_lfu=(0.0, 0.0, 0.095),
+            radar_origin_lfu=(0.0, -0.03, 0.051),
+            angular_uncertainty_deg=3.0 if applied["status"] == "uncalibrated" else 0.5,
+            focal_relative_uncertainty=0.08,
+            vertical_offset=applied,
+        )
+
+    monkeypatch.setattr(ts, "_reference_ball_camera", model)
+
+
+def test_the_first_validated_pair_calibrates_the_camera_tilt_and_later_setups_use_it(
+    tmp_path, inputs, monkeypatch
+):
+    """P8-5: the ball's row against the row the radar's distance predicts gives the
+    camera's vertical offset; it is stored per unit, outside the rig file, and every
+    later setup composes it with the LIS3DH and tightens the patch."""
+    calibration = tmp_path / "unit" / "camera-vertical-offset.json"
+    rig_before = inputs["rig"].read_bytes()
+    app, tester = app_for(
+        tmp_path, inputs, monkeypatch, qualified=False, camera_tilt_path=calibration
+    )
+    _tilting_camera(monkeypatch)
+    _solving_camera(monkeypatch)
+    client = app.test_client()
+
+    first = drive(client, tester)
+
+    outcome = first["evidence"]["camera_tilt"]
+    assert first["evidence"]["patch_ball"]["status"] == "validated"
+    assert outcome["action"] == "calibrated"
+    # the fake ball sits 100 rows below the centre at 1.2 m: about 2.6 deg up
+    assert outcome["solved"]["offset_deg"] == pytest.approx(2.6, abs=0.3)
+    stored = json.loads(calibration.read_text(encoding="utf-8"))
+    assert stored["offset_deg"] == pytest.approx(outcome["solved"]["offset_deg"])
+    assert inputs["rig"].read_bytes() == rig_before
+    # the calibrating pair cannot also check the lens height it assumed
+    height = first["evidence"]["camera_arm5_candidate"]["evidence"]["camera_height"]
+    assert height["check"] == "not_checked"
+    uncalibrated = first["evidence"]["camera_arm5_capture_setup"]["patch_search"]
+
+    assert post(client, tester, "start_over", "again").status_code == 200
+    second = drive(client, tester)
+
+    setup = second["evidence"]["camera_arm5_capture_setup"]
+    assert setup["camera_input_identity"]["camera_model"]["source"] == "nominal_uncalibrated"
+    calibrated = setup["patch_search"]
+
+    def tall(search):
+        rows = [y for _x, y in search["search_outline_px"]]
+        return max(rows) - min(rows)
+
+    assert tall(calibrated) < tall(uncalibrated)
+    assert second["evidence"]["camera_tilt"]["action"] == "checked"
+    assert second["evidence"]["camera_tilt"]["warning"] is None
+    # a calibrated tilt lets the pair check the lens height again
+    assert (
+        second["evidence"]["camera_arm5_candidate"]["evidence"]["camera_height"]["check"]
+        != "not_checked"
+    )
+    # the kiosk is started with the unit's tilt, which session_start records
+    args, handed = ts.tee_range_handoff(
+        tee_range.TeeRangeSolution.from_dict(second["solution"]),
+        camera_tilt_calibration=json.loads(calibration.read_text(encoding="utf-8")),
+    )
+    assert args[args.index("--camera-vertical-offset-deg") + 1] == f"{stored['offset_deg']:.6g}"
+    assert args[args.index("--camera-vertical-offset-source") + 1] == "unit_calibration"
+    assert handed["camera_tilt"]["status"] == "calibrated"
+
+
+def test_a_tilt_beyond_eight_degrees_is_refused_and_not_stored(tmp_path, inputs, monkeypatch):
+    calibration = tmp_path / "unit" / "camera-vertical-offset.json"
+    app, tester = app_for(
+        tmp_path, inputs, monkeypatch, qualified=False, camera_tilt_path=calibration
+    )
+    _tilting_camera(monkeypatch)
+    # a "ball" 330 rows below the centre at the radar's 1.2 m: the camera would have
+    # to be pitched up about 16 deg
+    monkeypatch.setitem(
+        globals(),
+        "ball_pixels",
+        lambda width, height: (width / 2.0, height * 0.9125, 24.0 * width / 1280.0),
+    )
+
+    state = drive(app.test_client(), tester)
+
+    outcome = state["evidence"]["camera_tilt"]
+    assert outcome["action"] == "refused"
+    assert "8" in outcome["warning"]
+    assert not calibration.exists()

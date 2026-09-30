@@ -1337,6 +1337,7 @@ test('the patch is step 1: its camera opens by itself and every check waits for 
   // drawn in perspective: the near edge (y 494) is wider than the far edge (y 457)
   await expect(patch).toHaveAttribute('data-outline', '338,494 942,494 823,457 457,457');
   await expect(page.locator('#placement-distance')).toHaveText('Patch centre 1.25 m from the radar, straight ahead.');
+  await expect(page.locator('#placement-tilt')).toContainText('Camera tilt not calibrated yet');
   expect(mocks.posts.map((item) => item.action)).toEqual(['show']);
   await expect(page.locator('#placement-summary')).toContainText('Drag the yellow patch');
   // A, B and the ball range are locked until the patch is confirmed
@@ -1621,6 +1622,25 @@ test('an agreeing pair shows both distances and where the ball sits aside', asyn
     '1.176 m magnitude, 1.575 m coherent'
   );
   await expect(page.getByRole('button', { name: 'C. Start the exposure ladder' })).toBeEnabled();
+});
+
+test('the first agreeing pair calibrates the camera tilt, and the summary says so', async ({ page }) => {
+  const mocks = await base(page, PAIR_STATE);
+  await page.route('**/api/tester/tee-range**', (route) =>
+    json(route, {
+      state: mocks.state(),
+      display: {
+        ...rangeDisplay(mocks.state()),
+        patch_ball: { status: 'validated', warning: null, range_m: 1.18, radar_candidates: [] },
+        camera_tilt: { action: 'calibrated', offset_deg: 1.87, warning: null },
+      },
+    })
+  );
+  await page.goto('/tester.html');
+
+  const tilt = page.locator('[data-state="tilt-calibrated"]');
+  await expect(tilt).toContainText('camera tilt calibrated from this setup · 1.9°');
+  await expect(tilt).not.toHaveClass('problem');
 });
 
 test('disagreeing sensors are saved with a warning that names both distances', async ({ page }) => {

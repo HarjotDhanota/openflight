@@ -194,6 +194,8 @@ class BallPlaneCamera:
     accuracy_qualified: bool
     angular_uncertainty_deg: float
     focal_relative_uncertainty: float
+    # P8-5: the unit's camera tilt this model's pitch was composed with, labelled
+    vertical_offset: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -230,8 +232,13 @@ class BallPlaneCamera:
         radar_origin_lfu: Any,
         angular_uncertainty_deg: float,
         focal_relative_uncertainty: float,
+        vertical_offset: Mapping[str, Any] | None = None,
     ) -> "BallPlaneCamera":
-        """Build a visibly uncalibrated model from declared pinhole assumptions."""
+        """Build a visibly uncalibrated model from declared pinhole assumptions.
+
+        ``pitch_deg`` is the camera's whole pitch; ``vertical_offset`` records how it
+        was composed (the LIS3DH's and the unit's camera tilt, P8-5).
+        """
         focal_px = _positive(focal_px, "focal size")
         if not isinstance(mirror_horizontal, bool):
             raise ValueError("mirror_horizontal must be a boolean")
@@ -258,6 +265,7 @@ class BallPlaneCamera:
             accuracy_qualified=False,
             angular_uncertainty_deg=angular_uncertainty_deg,
             focal_relative_uncertainty=focal_relative_uncertainty,
+            vertical_offset=dict(vertical_offset) if vertical_offset is not None else None,
         )
 
     @classmethod
