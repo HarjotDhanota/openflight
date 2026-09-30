@@ -536,6 +536,7 @@ class TestCameraOpsFallback:
         tracks, times, ball, geometry = _project_camera_ops_pair(
             path_deg=3.0,
             aoa_deg=-5.0,
+            camera_yaw_deg=0.0,
             camera_forward_offset_m=forward_offset,
         )
 
@@ -568,10 +569,33 @@ class TestCameraOpsFallback:
             is None
         )
 
+    def test_yawed_unit_reports_path_from_its_own_boresight(self):
+        # F2: the teed ball no longer sets the zero. A unit aimed 3 deg right
+        # of the scene frame reads 3 deg less path, as the IWR and the chained
+        # branch do; the target-line correction comes from the alignment stick.
+        tracks, times, ball, geometry = _project_camera_ops_pair(
+            path_deg=3.0,
+            aoa_deg=-5.0,
+            camera_yaw_deg=3.0,
+        )
+
+        result = camera_ops_delivery_from_feature_pair(
+            tracks,
+            times,
+            ball=ball,
+            geometry=geometry,
+            ops_club_speed_mph=35.0 * 2.23694,
+        )
+
+        assert result is not None
+        assert result.path_deg == pytest.approx(0.0, abs=0.25)
+        assert result.attack_angle_deg == pytest.approx(-5.0, abs=0.25)
+
     def test_mirrored_capture_preserves_fallback_path_sign(self):
         tracks, times, ball, geometry = _project_camera_ops_pair(
             path_deg=3.0,
             aoa_deg=-5.0,
+            camera_yaw_deg=0.0,
         )
         mirrored_tracks = tracks.copy()
         mirrored_tracks[:, :, 0] = geometry.image_width_px - mirrored_tracks[:, :, 0]
@@ -1028,3 +1052,101 @@ def test_rejected_iwr_club_track_is_not_used_as_camera_depth(monkeypatch):
 
     assert result.status == "camera_ops_fallback"
     assert result.range_evidence_status == "rejected_club_speed_mismatch"
+
+
+def _off_centre_ball_scene(*, path_deg: float, aoa_deg: float, ball_offset_px: float = 67.0):
+    """One club motion seen by a level camera centred above the radar (v3 layout).
+
+    The teed ball sits ``ball_offset_px`` right of the image centre because the
+    golfer placed it there, not because the unit is yawed. Returns a two-frame
+    feature pair plus the radar ranges the chained branch needs.
+
+    The pair spans 1 ms: the camera-OPS branch takes the secant image rate as
+    the rate at the second frame, which off centre costs about 0.1 deg of path
+    per millisecond of pair span. That bias is the fallback's own, not a zero.
+    """
+    camera_height_m, radar_height_m, ball_height_m = 0.095, 0.051, 0.021335
+    focal_px, width, height = 933.33, 640, 400
+    tee_range_m = 1.30
+    lateral_m = ball_offset_px * 1.3 / focal_px
+    forward_m = math.sqrt(tee_range_m**2 - lateral_m**2 - (ball_height_m - radar_height_m) ** 2)
+    geometry = CameraDeliveryGeometry(
+        camera_height_m=camera_height_m,
+        radar_height_m=radar_height_m,
+        tee_range_m=tee_range_m,
+        ball_height_m=ball_height_m,
+        image_width_px=width,
+        image_height_px=height,
+    )
+    camera = np.array([0.0, 0.0, camera_height_m])
+
+    def project(point):
+        delta = point - camera
+        return np.array(
+            [
+                width / 2 + focal_px * delta[0] / delta[1],
+                height / 2 - focal_px * delta[2] / delta[1],
+            ]
+        )
+
+    contact = np.array([lateral_m, forward_m, ball_height_m])
+    ball_px = project(contact)
+    ball = ReferenceBall(
+        x=float(ball_px[0]),
+        y=float(ball_px[1]),
+        diameter_px=focal_px * geometry.ball_diameter_m / float(np.linalg.norm(contact - camera)),
+        area_px=400,
+    )
+    path, aoa, speed_ms = math.radians(path_deg), math.radians(aoa_deg), 35.0
+    forward_speed = speed_ms / math.sqrt(1.0 + math.tan(path) ** 2 + math.tan(aoa) ** 2)
+    velocity = np.array(
+        [forward_speed * math.tan(path), forward_speed, forward_speed * math.tan(aoa)]
+    )
+    times = np.array([-0.001, 0.0])
+    tracks, ranges = [], []
+    radar = np.array([0.0, 0.0, radar_height_m])
+    for index in range(12):
+        offset = np.array([0.001 * (index - 5.5), 0.0, 0.001 * ((index % 3) - 1)])
+        points = [contact + offset + velocity * time_s for time_s in times]
+        tracks.append([project(point) for point in points])
+        ranges.append([float(np.linalg.norm(point - radar)) for point in points])
+    return (
+        np.asarray(tracks),
+        times,
+        np.median(np.asarray(ranges), axis=0),
+        ball,
+        geometry,
+    )
+
+
+@pytest.mark.parametrize(("path_deg", "offset_px"), [(3.0, 67.0), (-4.0, -67.0), (0.0, 67.0)])
+def test_both_club_path_branches_share_the_unit_boresight_zero(path_deg, offset_px):
+    """F2: with the ball 67 px off centre, the chained and camera-OPS paths agree."""
+    tracks, times, ranges, ball, geometry = _off_centre_ball_scene(
+        path_deg=path_deg, aoa_deg=-4.0, ball_offset_px=offset_px
+    )
+    assert abs(ball.x - geometry.image_width_px / 2) == pytest.approx(abs(offset_px), abs=1.0)
+
+    chained = club_delivery_module._delivery_from_feature_pair(
+        tracks,
+        times,
+        ranges,
+        ball=ball,
+        geometry=geometry,
+        ops_club_speed_mph=35.0 * 2.23694,
+    )
+    camera_ops = camera_ops_delivery_from_feature_pair(
+        tracks,
+        times,
+        ball=ball,
+        geometry=geometry,
+        ops_club_speed_mph=35.0 * 2.23694,
+    )
+
+    assert chained is not None and camera_ops is not None
+    assert chained.path_deg == pytest.approx(path_deg, abs=0.2)
+    assert camera_ops.path_deg == pytest.approx(chained.path_deg, abs=0.2)
+
+
+def test_every_camera_club_path_names_its_frame():
+    assert ChainedDelivery(status="chained_high").club_path_frame == "unit_boresight"

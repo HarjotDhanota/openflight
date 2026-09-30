@@ -242,6 +242,10 @@ def test_aim_offset_is_added():
         aim_offset_deg=2.0,
     )
     assert with_offset.path_deg == pytest.approx(without.path_deg + 2.0, abs=0.01)
+    # F2: the path names its zero; an aim offset moves it to the target line.
+    assert without.club_path_frame == "unit_boresight"
+    assert with_offset.club_path_frame == "target_line"
+    assert without.to_dict()["club_path_frame"] == "unit_boresight"
 
 
 def test_phase_reference_removes_board_electrical_phase_bias():

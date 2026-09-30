@@ -173,6 +173,9 @@ class ClubPathResult:
     path_pre_frames: int = 0
     path_post_frames: int = 0
     path_post_speed_scale: float = 1.0
+    # The path's zero: the IWR's boresight, fixed to the unit's, until an aim
+    # offset moves it to the target line (audit F2).
+    club_path_frame: str = "unit_boresight"
     # Kept in memory only. Session JSON already records the scalar track
     # diagnostics above; serializing the fitted object would couple replay
     # files to Python implementation details.
@@ -694,6 +697,7 @@ def estimate_club_path(
         path_pre_frames=window_policy.path_pre_frames,
         path_post_frames=window_policy.path_post_frames,
         path_post_speed_scale=window_policy.path_post_speed_scale,
+        club_path_frame="unit_boresight" if aim_offset_deg == 0.0 else "target_line",
         range_evidence=ClubRangeEvidence(
             track=track,
             geometry=geo,

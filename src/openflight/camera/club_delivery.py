@@ -177,6 +177,9 @@ class ChainedDelivery:
     attack_confidence_tier: str = "withheld"
     # The IWR club track's own status; a rejected track is never camera depth.
     range_evidence_status: str | None = None
+    # Every club path is measured from the unit's boresight (audit F2); the
+    # target-line correction comes later, from the alignment stick.
+    club_path_frame: str = "unit_boresight"
 
 
 @dataclass(frozen=True)
@@ -680,8 +683,9 @@ def camera_ops_delivery_from_feature_pair(
     A down-the-line camera measures lateral and vertical image motion but not
     forward velocity directly. At the known contact point, the two perspective
     flow equations plus the OPS velocity magnitude form a closed 3D solution.
-    The teed ball also supplies pitch and yaw references, so a laterally offset
-    or slightly mis-aimed enclosure does not become false club path.
+    The teed ball supplies the pitch reference. It does not set the yaw: path
+    is measured from the unit's boresight, like the chained branch and the
+    IWR, so where the golfer tees the ball never moves the zero (audit F2).
     """
     pixels = np.asarray(feature_pixels, dtype=float)
     times = np.asarray(timestamps_s, dtype=float)
@@ -717,9 +721,6 @@ def camera_ops_delivery_from_feature_pair(
     ball_x, ball_z = normalized(np.asarray([[ball.x, ball.y]], dtype=float))
     ball_x = float(ball_x[0])
     ball_z = float(ball_z[0])
-    expected_azimuth = math.atan2(-geometry.camera_lateral_offset_m, geometry.camera_ball_forward_m)
-    observed_azimuth = math.atan2(ball_x, 1.0)
-    yaw_rad = expected_azimuth - observed_azimuth
     expected_elevation = math.atan2(
         geometry.ball_height_m - geometry.camera_height_m,
         geometry.camera_ball_forward_m,
@@ -754,14 +755,11 @@ def camera_ops_delivery_from_feature_pair(
         camera_lateral = contact_depth_m * dx_dt + image_x * camera_forward
         camera_vertical = contact_depth_m * dz_dt + image_z * camera_forward
 
-        horizontal_forward = (
-            math.cos(pitch_rad) * camera_forward - math.sin(pitch_rad) * camera_vertical
-        )
+        world_forward = math.cos(pitch_rad) * camera_forward - math.sin(pitch_rad) * camera_vertical
         world_vertical = (
             math.sin(pitch_rad) * camera_forward + math.cos(pitch_rad) * camera_vertical
         )
-        world_lateral = math.cos(yaw_rad) * camera_lateral + math.sin(yaw_rad) * horizontal_forward
-        world_forward = -math.sin(yaw_rad) * camera_lateral + math.cos(yaw_rad) * horizontal_forward
+        world_lateral = camera_lateral
         path_deg, attack_angle_deg = _velocity_angles(
             np.asarray([world_lateral, world_vertical, world_forward])
         )
