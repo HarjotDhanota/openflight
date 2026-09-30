@@ -401,6 +401,40 @@ def test_review_outputs_are_readable_without_a_viewer(tmp_path):
     assert "Impact photo: t1/impact/camera_001.pgm" in markdown
 
 
+def test_a_real_swing_the_radar_missed_reads_no_radar_shot_not_not_a_shot(tmp_path):
+    """P7-10: on 30 Sept the review called swings the OPS243 missed "Not a shot"."""
+    root = _tester_tree(tmp_path)
+    run = root / "t1" / "arm5" / "paired" / "run-01"
+    for name in ("camera_010", "camera_011"):
+        (run / "arm5" / "camera" / name).mkdir()
+        _pgm(run / "arm5" / "camera" / name / "first.pgm")
+    ladder_path = root / "t1" / "ladder.json"
+    ladder = json.loads(ladder_path.read_text(encoding="utf-8"))
+    ladder["ineligible_captures"].append(
+        {
+            "capture": "camera_010",
+            "reason": "no radar shot: the OPS243 logged no shot within 30 s of this camera trigger",
+        }
+    )
+    ladder_path.write_text(json.dumps(ladder), encoding="utf-8")
+
+    review = build_session_review(root, "t1", analysis={})
+
+    attempts = {attempt["attempt_id"]: attempt for attempt in review["attempts"]}
+    timed_out = attempts["run-01:camera_010"]["rejection"]
+    never_judged = attempts["run-01:camera_011"]["rejection"]
+    blocked = attempts["run-01:camera_009"]["rejection"]
+    assert timed_out["label"] == "No radar shot"
+    assert timed_out["detail"] == "the OPS243 logged no shot within 30 s of this camera trigger"
+    assert never_judged["label"] == "No radar shot"
+    assert never_judged["reason"].startswith("no radar shot")
+    assert blocked["label"] == "Not a shot"
+    markdown = report_markdown(review)
+    assert "No radar shot: the OPS243 logged no shot within 30 s" in markdown
+    assert "Not a shot: runtime setup readiness blocked" in markdown
+    assert "Not a shot: no " not in markdown
+
+
 def test_a_corrupt_session_log_is_reported_not_hidden(tmp_path):
     root = _tester_tree(tmp_path)
     session = next((root / "t1" / "arm5" / "paired" / "run-01").glob("session_*.jsonl"))

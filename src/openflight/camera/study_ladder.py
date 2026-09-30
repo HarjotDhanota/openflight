@@ -1157,6 +1157,23 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                 paired = evaluate_paired_capture(run_dir, folder)
                 if paired["status"] == "pending":
                     continue
+                no_shot = next(
+                    (item for item in paired["blockers"] if item["id"] == "no_radar_shot"), None
+                )
+                if no_shot is not None:
+                    # a real swing, perhaps, that the OPS243 never logged (P7-10)
+                    self.state.record_ineligible_capture(
+                        folder.name,
+                        current.rung_id,
+                        {
+                            "ready": False,
+                            "config_hash": self._required_config_hash,
+                            "checks": paired["checks"],
+                            "blockers": paired["blockers"],
+                        },
+                        reason=no_shot["reason"],
+                    )
+                    continue
                 observations = trigger_setup.get("observations")
                 runtime_identity = (
                     observations.get("runtime") if isinstance(observations, dict) else None

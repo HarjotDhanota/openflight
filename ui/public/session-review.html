@@ -882,7 +882,9 @@
           .map((label) => figure(previews[label], `${label} frame`, a.overlay))
           .join('');
         const photo = a.evidence.impact_photo ? figure(a.evidence.impact_photo, 'impact photo (club face)', null) : '';
-        const rejection = a.rejection ? `<p class="error">Not a shot: ${esc(a.rejection.reason)}</p>` : '';
+        const rejection = a.rejection
+          ? `<p class="error">${esc(a.rejection.label || 'Not a shot')}: ${esc(a.rejection.detail || a.rejection.reason)}</p>`
+          : '';
         const outcome = a.evidence.camera_outcome;
         const cameraError =
           outcome && outcome.category !== 'captured'
