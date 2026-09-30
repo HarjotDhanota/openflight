@@ -1501,6 +1501,15 @@ def action_commands(
             commands[0].extend(["--iwr6843-port", iwr_static_port])
         # the same board calibration the setup's static ranges used (wiring audit C10)
         commands[0].extend(["--iwr6843-cal", str(iwr_calibration)])
+        # each clip's analysis eligibility is judged on the setup's ball (P7-8)
+        setup_ball = expected_ladder_ball(tee_range_solution, params.arm_id)
+        if setup_ball is not None:
+            commands[0].extend(
+                [
+                    "--camera-setup-ball",
+                    ",".join(f"{setup_ball[key]:.1f}" for key in ("x", "y", "diameter_px")),
+                ]
+            )
         commands[0].extend(
             [
                 "--tester-setup-required",

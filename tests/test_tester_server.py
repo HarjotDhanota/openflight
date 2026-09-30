@@ -2139,6 +2139,46 @@ class TestTheLadder:
         assert command[command.index("--inclinometer-address") + 1] == "0x18"
         assert command[command.index("--camera-capture-exposure-us") + 1] == "300"
 
+    @pytest.mark.parametrize(
+        "arm_id, expected",
+        [("arm5", "612.0,505.0,34.0"), ("arm6", "306.0,252.5,17.0")],
+    )
+    def test_a_ladder_kiosk_is_told_where_the_setup_saw_the_ball(self, tmp_path, arm_id, expected):
+        """P7-8: the kiosk judges each clip's analysis eligibility on the setup's ball."""
+        from openflight import tee_range
+
+        camera = tee_range.TeeRangeCandidate(
+            candidate_id="camera-setup-1-arm5",
+            source="camera_reference_ball_size_range",
+            source_group="camera",
+            radar_slant_range_m=1.2,
+            uncertainty_m=0.25,
+            evidence={
+                "result": {
+                    "status": "selected",
+                    "selected": {"x_px": 612.0, "y_px": 505.0, "diameter_px": 34.0},
+                }
+            },
+        )
+        solution = tee_range.TeeRangeSolution.unresolved([camera], reason="test")
+        params = ts.TesterParameters("20260922-name", arm_id, "indoors")
+        ts.write_arm_state(tmp_path, params, gain=3.0, gain_exposure_us=300)
+        for action in ("ladder", "swings"):
+            with_ball = ts.action_commands(
+                action,
+                params,
+                tmp_path,
+                RIG,
+                tester_setup=TESTER_SETUP,
+                tee_range_solution=solution,
+            )[0][0]
+            without = ts.action_commands(action, params, tmp_path, RIG, tester_setup=TESTER_SETUP)[
+                0
+            ][0]
+
+            assert with_ball[with_ball.index("--camera-setup-ball") + 1] == expected
+            assert "--camera-setup-ball" not in without
+
     def test_the_ladder_needs_both_gain_screens_first(self, tmp_path):
         client = eligible_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()
         response = client.post("/api/tester/ladder/start", json=self.body)

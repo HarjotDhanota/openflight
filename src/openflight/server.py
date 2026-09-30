@@ -1403,6 +1403,7 @@ def init_camera_capture(
     forward_offset_m: float = 0.0,
     armed_profile: dict | None = None,
     diagnostic_capture: bool = False,
+    setup_ball: dict | None = None,
 ) -> bool:
     """Initialize passive high-speed camera capture for offline alignment."""
     global camera_capture_runtime, camera_capture_config  # pylint: disable=global-statement
@@ -1432,6 +1433,7 @@ def init_camera_capture(
             ),
             armed_profile=armed_profile,
             diagnostic_capture=diagnostic_capture,
+            setup_ball=setup_ball,
         )
         camera_capture_runtime = CameraCaptureRuntime(
             output_dir=output_dir,
@@ -1483,6 +1485,7 @@ def init_camera_capture(
             "horizontal_offset_deg": horizontal_offset_deg,
             "alignment_x_pct": 50.0,
             "alignment_y_pct": 50.0,
+            "setup_ball": dict(settings.setup_ball) if settings.setup_ball else None,
         }
         logger.info("[SERVER] Camera capture initialized: %s", camera_capture_config)
         return True
@@ -5908,6 +5911,16 @@ def main():
         ),
     )
     parser.add_argument(
+        "--camera-setup-ball",
+        default=None,
+        metavar="X,Y,DIAMETER",
+        help=(
+            "Where the tester setup saw the resting ball in this camera mode, in pixels. "
+            "Manual-exposure clips are then judged analysis-eligible on that ball, not "
+            "the hitting-zone box (P7-8)"
+        ),
+    )
+    parser.add_argument(
         "--club",
         choices=[club.value for club in ClubType],
         help="Club selected at startup (default: the monitor's own default)",
@@ -6537,6 +6550,14 @@ def main():
                 "--camera-capture-exposure-us/--camera-capture-gain exceed the qualified "
                 "armed profile ceiling"
             )
+    camera_setup_ball = None
+    if args.camera_setup_ball:
+        from .camera.capture_runtime import parse_setup_ball  # noqa: PLC0415
+
+        try:
+            camera_setup_ball = parse_setup_ball(args.camera_setup_ball)
+        except ValueError as exc:
+            parser.error(f"--camera-setup-ball: {exc}")
     camera_capture_scaler_crop = None
     if args.camera_capture_scaler_crop:
         try:
@@ -6693,6 +6714,7 @@ def main():
             auto_exposure=not args.camera_capture_manual_exposure,
             armed_profile=armed_profile,
             diagnostic_capture=bool(args.study_mode),
+            setup_ball=camera_setup_ball,
         ):
             print("Camera capture unavailable - running without high-speed camera capture")
             startup_status.skip("camera", "High-speed camera unavailable; continuing")

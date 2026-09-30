@@ -272,6 +272,45 @@ def judge_light(frames: np.ndarray, black_floor: float, expected_ball: dict | No
     return {"zone": zone, "ball": ball, "cause": cause, "message": message}
 
 
+def resting_frames(frames: np.ndarray) -> np.ndarray:
+    """A clip's first frames, before the club arrives: what the ball is judged on."""
+    return frames[: max(3, min(RESTING_FRAMES, len(frames)))]
+
+
+def capture_analysis_eligibility(
+    frames: np.ndarray, black_floor: float, expected_ball: dict
+) -> dict:
+    """Whether a clip's light permits camera analysis, judged on the setup's ball (P7-8).
+
+    The same ``judge_light`` as the ladder, on the clip's resting frames. Only the
+    ball decides: its core clipped ``CLIPPED_MAX_PCT`` or less and
+    ``BALL_MIN_SIGNAL_DN`` or more above black. A clipped background or a dark
+    hitting zone does not withhold the camera (outdoors a sunny mat is always
+    about 20 % clipped, and at the setup's own sun lock the zone reads too dark).
+    No ball where the setup saw it is not eligible.
+    """
+    light = judge_light(resting_frames(np.asarray(frames)), black_floor, expected_ball)
+    ball = light["ball"]
+    if ball is None:
+        reason = "the resting ball was not found where the setup saw it"
+    elif ball["clipped_pct"] > CLIPPED_MAX_PCT:
+        reason = f"too bright for the ball: {ball['clipped_pct']:.0f}% of it is clipped"
+    elif ball["signal_dn"] < BALL_MIN_SIGNAL_DN:
+        reason = f"too dark for the ball: {ball['signal_dn']:.0f} DN above black"
+    else:
+        reason = None
+    return {
+        "rule": "setup_ball",
+        "eligible": reason is None,
+        "reason": reason,
+        "light_cause": light["cause"],
+        "ball": ball,
+        "zone": light["zone"],
+        "setup_ball": dict(expected_ball),
+        "black_floor_dn": float(black_floor),
+    }
+
+
 def _suggested_gain(light: dict, gain: float, black_floor: float) -> float | None:
     """The gain that would bring this rung's light back into range, if any."""
     ball, zone, cause = light["ball"], light["zone"], light["cause"]
@@ -404,8 +443,7 @@ def swing_verdict(  # pylint: disable=too-many-locals,too-many-arguments
         red.append(f"controls: exposure {applied_exposure:.0f} us, not {rung.exposure_us}")
     if abs(applied_gain - gain) > GAIN_TOLERANCE_FRACTION * gain:
         red.append(f"controls: gain {applied_gain:.2f}, not {gain:.2f}")
-    resting = frames[: max(3, min(RESTING_FRAMES, len(frames)))]
-    light = judge_light(resting, black_floor, expected_ball)
+    light = judge_light(resting_frames(frames), black_floor, expected_ball)
     stats = light["zone"]
     lit = light["ball"]
     if light["cause"] in RED_LIGHT_CAUSES:
