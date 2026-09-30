@@ -88,6 +88,20 @@ LADDER: tuple[Rung, ...] = tuple(
     + [Rung(f"half-{e}", "arm6", e, False) for e in (300, 150, 75)]
 )
 RUNG_FPS = {"arm5": 120.0, "arm6": 288.0}
+# A setting the tester unticked: review and analysis must not read it as a light failure.
+NOT_SELECTED = "not selected by the tester"
+
+
+def validate_selection(rung_ids: object) -> list[str]:
+    """The ticked rung ids in ladder order; refuses an empty choice or an unknown id."""
+    if not isinstance(rung_ids, (list, tuple)) or not all(isinstance(r, str) for r in rung_ids):
+        raise ValueError("the settings must be a list of setting names")
+    unknown = sorted(set(rung_ids) - {rung.rung_id for rung in LADDER})
+    if unknown:
+        raise ValueError(f"unknown ladder setting: {', '.join(unknown)}")
+    if not rung_ids:
+        raise ValueError("choose at least one setting")
+    return [rung.rung_id for rung in LADDER if rung.rung_id in rung_ids]
 
 
 def rung_gain(gain_at_300: float, exposure_us: int) -> float:
@@ -391,6 +405,8 @@ class LadderState:
             self._data.setdefault("photo_target", None)
             self._data.setdefault("pending_photo", None)
             self._data.setdefault("ineligible_captures", [])
+            # a ladder from before the tester could choose ran every setting
+            self._data.setdefault("selected_rungs", [rung.rung_id for rung in LADDER])
             if self._add_missing_rungs():
                 self._save()
         else:
@@ -401,6 +417,7 @@ class LadderState:
                 "photo_target": None,
                 "pending_photo": None,
                 "ineligible_captures": [],
+                "selected_rungs": [rung.rung_id for rung in LADDER],
             }
             if persist_initial:
                 self._save()
@@ -453,6 +470,43 @@ class LadderState:
                 if self._data["rungs"][rung.rung_id]["status"] == status:
                     return rung
         return None
+
+    @property
+    def started(self) -> bool:
+        """Whether any setting has run or been judged; unticking one does not count."""
+        return any(
+            entry["status"] != "pending"
+            and not (entry["status"] == "skipped" and entry["reason"] == NOT_SELECTED)
+            for entry in self._data["rungs"].values()
+        )
+
+    def select(self, rung_ids) -> None:
+        """Apply the tester's ticks to the settings that have not run yet.
+
+        A pending setting not ticked is skipped as not selected; one skipped that
+        way and ticked again is pending again. Any other status is never changed.
+        """
+        selected = validate_selection(rung_ids)
+        for rung in LADDER:
+            entry = self._data["rungs"][rung.rung_id]
+            if entry["status"] == "pending" and rung.rung_id not in selected:
+                entry["status"] = "skipped"
+                entry["reason"] = NOT_SELECTED
+            elif (
+                entry["status"] == "skipped"
+                and entry["reason"] == NOT_SELECTED
+                and rung.rung_id in selected
+            ):
+                entry["status"] = "pending"
+                entry["reason"] = None
+        self._data["selected_rungs"] = selected
+        following = self.current
+        if following is not None and following.arm_id == "arm5":
+            # 1280x800 has settings to run again: its last photo is not a handoff yet
+            self._data["pending_photo"] = None
+        else:
+            self._require_boundary_photo(LADDER[0])
+        self._save()
 
     def gain(self, rung_id: str) -> float | None:
         return self._data["rungs"][rung_id]["gain"]
