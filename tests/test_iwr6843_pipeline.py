@@ -12,7 +12,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from openflight.iwr6843 import Calibration, estimate_lcmf_v1, lcmf, process_dump, tracking
+from openflight.iwr6843 import (
+    Calibration,
+    antennas,
+    estimate_lcmf_v1,
+    lcmf,
+    process_dump,
+    tracking,
+)
 from openflight.iwr6843.dump import (
     HEADER,
     MAGIC,
@@ -38,12 +45,91 @@ from openflight.iwr6843.lcmf import (
     _tx2_horizontal_proxy,
     prepare_lcmf_capture,
 )
-from openflight.iwr6843.music import LAM, steer
+from openflight.iwr6843.music import LAM
 from openflight.iwr6843.shot import ShotMeasurement, geometry_from_header
 from openflight.iwr6843.tracking import LOOP_PRI_S, RANGE_SPAN_M, BallTrack
 
 TAU_S = 45e-6
 RADAR_HEIGHT_M = 0.152
+GRAVITY_MS2 = 9.81
+_FLOOR_MIRROR = np.array([1.0, 1.0, -1.0])
+
+
+def _synth_chirp_antennas(n_tx: int, tx_order: str) -> tuple[str, ...]:
+    """The physical transmitter of each chirp in a loop, as the configs fire them."""
+    if n_tx == 3:
+        if tx_order != "normal":
+            raise ValueError("three-TX captures fire TX1, TX2, TX3")
+        return ("TX1", "TX2", "TX3")
+    if tx_order == "normal":
+        return ("TX1", "TX3")
+    if tx_order == "reversed":
+        return ("TX3", "TX1")
+    raise ValueError(f"unsupported TX order: {tx_order}")
+
+
+def synth_ball_position(
+    t_s,
+    *,
+    speed_ms,
+    launch_deg,
+    tee_m,
+    layout,
+    tilt_deg,
+    ball_height_m,
+    lateral_m=0.0,
+    accel_ms2=0.0,
+    gravity_ms2=GRAVITY_MS2,
+):
+    """The ball's (forward, lateral, up) at ``t_s`` after it leaves the tee.
+
+    The frame is the antennas' (``AntennaLayout.positions_m``): origin below
+    the virtual array's phase centre, heights above the hitting surface.
+    ``tee_m`` is the slant range from the phase centre to the resting ball.
+    The ball flies along the launch direction, ``accel_ms2`` changing its
+    speed along that line, and falls under gravity.
+    """
+    centre_m = layout.phase_centre_height_m(np.radians(tilt_deg))
+    tee_x = np.sqrt(tee_m**2 - (ball_height_m - centre_m) ** 2 - lateral_m**2)
+    launch = np.radians(launch_deg)
+    along = speed_ms * t_s + 0.5 * accel_ms2 * t_s * t_s
+    return np.array(
+        [
+            tee_x + along * np.cos(launch),
+            lateral_m,
+            ball_height_m + along * np.sin(launch) - 0.5 * gravity_ms2 * t_s * t_s,
+        ]
+    )
+
+
+def synth_channel(tx_m, rx_m, ball_m, *, image_gain, res, samples, n_samples):
+    """One TX/RX channel's range samples: every direct and floor path, exactly.
+
+    A floor-bounced leg runs to the antenna mirrored in the hitting surface.
+    ``image_gain`` is one bounce's reflection coefficient, so DG and GD carry
+    it once and GG twice. Each path's carrier phase grows with its length
+    (the processed data's convention) and its range tone sits at half its
+    round trip. The tone is centred on the ADC window: LAM is the sweep's
+    centre wavelength, and a real IF tone's range-FFT phase is its carrier
+    there. An uncentred tone would add a fast-time phase that changes as the
+    ball moves between one loop's chirps.
+    """
+    legs_tx = (np.linalg.norm(ball_m - tx_m), np.linalg.norm(ball_m - tx_m * _FLOOR_MIRROR))
+    legs_rx = (np.linalg.norm(ball_m - rx_m), np.linalg.norm(ball_m - rx_m * _FLOOR_MIRROR))
+    signal = np.zeros(n_samples, dtype=complex)
+    for tx_bounces, tx_leg in enumerate(legs_tx):
+        for rx_bounces, rx_leg in enumerate(legs_rx):
+            gain = image_gain ** (tx_bounces + rx_bounces)
+            if gain == 0.0:
+                continue
+            path = tx_leg + rx_leg
+            rbin = 0.5 * path / res
+            if rbin >= n_samples - 2:
+                continue
+            carrier = np.exp(1j * 2.0 * np.pi * path / LAM)
+            centred = samples - 0.5 * (n_samples - 1)
+            signal += gain * carrier * np.exp(2j * np.pi * rbin * centred / n_samples)
+    return signal
 
 
 def synth_shot(
@@ -64,55 +150,68 @@ def synth_shot(
     accel_ms2=0.0,
     seed=0,
     tx_order="normal",
+    layout=None,
+    ball_height_m=RADAR_HEIGHT_M,
+    lateral_m=0.0,
+    gravity_ms2=GRAVITY_MS2,
 ):
-    """Raw dump bytes for one synthetic ball flight (+ optional floor image).
+    """Raw dump bytes for one synthetic ball flight, with exact per-antenna paths.
 
-    The cube is built in CHIP conventions (the reverse of physical element
-    order; TX1 block carries the +Doppler TDM phase) so the pipeline's
-    decode path is what's under test. ``accel_ms2`` makes the radial speed
-    time-varying (Doppler phase follows the true displacement; the TDM
-    phase follows the INSTANTANEOUS velocity).
+    Each chirp is built from the physical antennas that fired and received
+    it: the ball's position at that chirp's own transmit time, and the exact
+    path lengths from its TX to the ball to each RX, direct and via the floor
+    (``synth_channel``). Nothing here reuses the estimator's slot map or
+    dictionary, so the pipeline's decode (chip order, TDM correction,
+    canonical channel order) is what's under test. TX2 fires on three-TX
+    captures from its own ECAD position.
+
+    ``layout`` is where the antennas are (default: the legacy reading of
+    ``RADAR_HEIGHT_M`` as the RX-row centre of a +90 deg board, matching the
+    ``cal`` fixture). ``tee_m`` is the slant range from the phase centre;
+    ``ball_height_m`` defaults to that radar height, as the old radar-plane
+    synthesizer launched there. ``image_gain`` is one floor bounce's
+    reflection coefficient.
     """
     rng = np.random.default_rng(seed)
     res = RANGE_SPAN_M / n_samples
     if n_tx not in (2, 3):
         raise ValueError(f"unsupported TX count: {n_tx}")
+    if layout is None:
+        layout = antennas.legacy_layout(RADAR_HEIGHT_M)
+    positions = layout.positions_m(np.radians(tilt_deg))
+    chirp_tx = _synth_chirp_antennas(n_tx, tx_order)
     cpf = n_tx * n_loops
     loop_period_s = LOOP_PRI_S if n_tx == 2 else TX2_LOOP_PERIOD_S
-    tdm_tau_s = TAU_S if n_tx == 2 else TX2_VERTICAL_TDM_TAU_S
     cube = np.zeros((n_frames, cpf, 4, n_samples), dtype=complex)
     samples = np.arange(n_samples)
-    tan_la = np.tan(np.radians(launch_deg))
     for slot in range(n_frames):
         t_slot = ((slot - trigger_frame) % n_frames) * frame_period_us / 1e6
         for loop in range(n_loops):
-            t_s = t_slot + loop * loop_period_s
-            disp = speed_ms * t_s + 0.5 * accel_ms2 * t_s * t_s
-            v_inst = speed_ms + accel_ms2 * t_s
-            x_m = tee_m + disp
-            h_m = tan_la * (x_m - tee_m)  # height above radar plane
-            theta = np.arctan2(h_m, x_m) - np.radians(tilt_deg)
-            rbin = x_m / res
-            if rbin >= n_samples - 2:
-                continue
-            tone = np.exp(2j * np.pi * rbin * samples / n_samples)
-            phys = steer(theta, 8)
-            if image_gain:
-                theta_img = np.arctan2(-(h_m + 2 * RADAR_HEIGHT_M), x_m) - np.radians(tilt_deg)
-                phys = phys + image_gain * steer(theta_img, 8)
-            chip = phys[::-1].copy()  # physical -> chip order
-            doppler = np.exp(1j * 4 * np.pi * disp / LAM)
-            tdm = np.exp(1j * 4 * np.pi * v_inst * tdm_tau_s / LAM)
-            if tx_order == "normal":
-                chirp0, chirp1 = chip[:4], chip[4:] * tdm
-            elif tx_order == "reversed":
-                chirp0, chirp1 = chip[4:], chip[:4] * tdm
-            else:
-                raise ValueError(f"unsupported TX order: {tx_order}")
-            for rx in range(4):
-                chirp_base = n_tx * loop
-                cube[slot, chirp_base, rx] = amp * doppler * chirp0[rx] * tone
-                cube[slot, chirp_base + n_tx - 1, rx] = amp * doppler * chirp1[rx] * tone
+            for chirp, tx_name in enumerate(chirp_tx):
+                # the chirps in a loop fire TDM_TAU_S apart
+                t_s = t_slot + loop * loop_period_s + chirp * TAU_S
+                ball = synth_ball_position(
+                    t_s,
+                    speed_ms=speed_ms,
+                    launch_deg=launch_deg,
+                    tee_m=tee_m,
+                    layout=layout,
+                    tilt_deg=tilt_deg,
+                    ball_height_m=ball_height_m,
+                    lateral_m=lateral_m,
+                    accel_ms2=accel_ms2,
+                    gravity_ms2=gravity_ms2,
+                )
+                for rx in range(4):
+                    cube[slot, n_tx * loop + chirp, rx] = amp * synth_channel(
+                        positions[tx_name],
+                        positions[f"RX{rx + 1}"],
+                        ball,
+                        image_gain=image_gain,
+                        res=res,
+                        samples=samples,
+                        n_samples=n_samples,
+                    )
     cube += rng.standard_normal(cube.shape) * noise + 1j * rng.standard_normal(cube.shape) * noise
     return pack_dump(
         cube, n_tx=n_tx, trigger_frame=trigger_frame, version=3, frame_period_us=frame_period_us
