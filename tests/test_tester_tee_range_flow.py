@@ -1283,7 +1283,9 @@ def test_missing_qualification_and_disagreement_remain_raw_only(tmp_path, inputs
         "static_iwr_candidate_rejected"
     )
     assert ts._tee_range_cli_args(tee_range.TeeRangeSolution.from_dict(missing["solution"])) == [
-        "--iwr6843-tee-range-pending"
+        "--iwr6843-tee-range-pending",
+        "--iwr6843-ball-height-m",
+        "0.021335",
     ]
     other_root = tmp_path / "other"
     app, tester = app_for(other_root, inputs, monkeypatch, camera_m=1.5)
@@ -1912,28 +1914,41 @@ def test_an_unqualified_range_reaches_swings_only_when_explicitly_enabled(
     iwr = state["evidence"]["iwr_candidate"]
 
     assert state["phase"] == "raw_only"
-    assert ts._tee_range_cli_args(solution) == ["--iwr6843-tee-range-pending"]
+    assert ts._tee_range_cli_args(solution) == [
+        "--iwr6843-tee-range-pending",
+        "--iwr6843-ball-height-m",
+        "0.021335",
+    ]
     assert ts._tee_range_cli_args(solution, use_unqualified=True) == [
         "--iwr6843-tee-m",
         f"{iwr['radar_slant_range_m']:.9g}",
         "--iwr6843-ball-height-m",
         "0.021335",
     ]
+    assert ts.tee_range_display(state)["swings"]["state"] == "pending"
+    swings = ts.tee_range_display(state, use_unqualified=True)["swings"]
+    assert swings["state"] == "unqualified"
+    assert swings["range_m"] == pytest.approx(iwr["radar_slant_range_m"])
 
 
-def test_without_an_accepted_radar_the_unqualified_range_is_the_camera_range(
+def test_without_an_accepted_radar_swings_start_with_the_range_pending(
     tmp_path, inputs, monkeypatch
 ):
+    # wiring audit S2 (D4): the camera's own range never stands in for the radar's
     app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
+    app.config["TEST_STATIC_MANAGER"].ball_return = 0.0
     state = drive(app.test_client(), tester)
-    payload = dict(state["solution"])
-    payload["candidates"] = [
-        item for item in payload["candidates"] if item["source_group"] != "iwr"
-    ]
-    solution = tee_range.TeeRangeSolution.from_dict(payload)
-    camera = state["evidence"]["camera_arm5_candidate"]
+    solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
 
-    assert ts.unqualified_tee_range_choice(solution).candidate_id == camera["candidate_id"]
+    assert state["evidence"]["camera_arm5_candidate"]["radar_slant_range_m"] is not None
+    assert ts.unqualified_tee_range_choice(solution) is None
+    assert ts._tee_range_cli_args(solution, use_unqualified=True)[0] == (
+        "--iwr6843-tee-range-pending"
+    )
+    swings = ts.tee_range_display(state, use_unqualified=True)["swings"]
+    assert swings["state"] == "pending"
+    assert swings["range_m"] is None
+    assert "withheld" in swings["message"]
 
 
 def test_a_radar_that_stops_answering_mid_setup_is_told_to_replug_its_usb():
@@ -1982,7 +1997,10 @@ def test_the_setup_solves_the_lens_height_from_the_radar_and_hands_it_to_swings(
     else:
         assert height["source"] == "rig_nominal"
         assert "--solved-camera-height-m" not in args
-    assert "--solved-camera-height-m" not in ts._tee_range_cli_args(solution)
+    # a pending range still carries a height the setup had to override (wiring audit S6)
+    assert ("--solved-camera-height-m" in ts._tee_range_cli_args(solution)) == (
+        height["source"] == "static_iwr_range"
+    )
 
 
 def test_a_radar_height_outside_the_plausible_band_is_not_used():
@@ -2111,7 +2129,7 @@ def test_only_a_radar_solved_height_is_handed_to_swings():
 
     def solution(height):
         candidate = tee_range.TeeRangeCandidate(
-            candidate_id="camera-arm5-000001",
+            candidate_id="camera-setup-20260929-000000000001-arm5",
             source="camera_reference_ball",
             source_group="camera",
             radar_slant_range_m=1.4,
@@ -2122,6 +2140,134 @@ def test_only_a_radar_solved_height_is_handed_to_swings():
 
     assert ts._setup_camera_height_m(solution(boxed)) == pytest.approx(0.40, abs=0.003)
     assert ts._setup_camera_height_m(solution(level)) is None
+
+
+def _accepted_iwr(range_m=1.4, **evidence):
+    return tee_range.TeeRangeCandidate(
+        candidate_id="iwr-static-setup-1",
+        source="iwr_static_profile_difference",
+        source_group="iwr",
+        radar_slant_range_m=range_m,
+        uncertainty_m=0.03,
+        selectable=False,
+        evidence={
+            "method": "pre_mti_empty_vs_ball_present",
+            "difference": {"status": "accepted"},
+            **evidence,
+        },
+    )
+
+
+def _camera_candidate(arm_id, height, range_m=1.4):
+    return tee_range.TeeRangeCandidate(
+        candidate_id=f"camera-setup-1-{arm_id}",
+        source="camera_reference_ball",
+        source_group="camera",
+        radar_slant_range_m=range_m,
+        uncertainty_m=0.03,
+        selectable=False,
+        evidence={"camera_height": height},
+    )
+
+
+def _heights():
+    """The lens-height evidence of a unit on a box (0.40 m) and of one on the surface."""
+
+    def solved(lens_height_m):
+        camera, result, iwr = _setup_ball_seen_from(lens_height_m)
+        return ts._solved_camera_height(result, camera, iwr)
+
+    return solved(0.40), solved(0.090)
+
+
+def test_a_rejected_radar_with_a_camera_range_leaves_swings_pending():
+    # wiring audit S2 (D4): the camera's size-derived range (sigma ~21 %) is never
+    # handed to swings as the radar tee range
+    rejected = replace(_accepted_iwr(), evidence={"difference": {"status": "rejected_clutter"}})
+    _boxed, level = _heights()
+    solution = tee_range.TeeRangeSolution.unresolved(
+        (rejected, _camera_candidate("arm5", level), _camera_candidate("arm6", level)),
+        reason="test",
+    )
+
+    args = ts._tee_range_cli_args(solution, use_unqualified=True)
+
+    assert ts.unqualified_tee_range_choice(solution) is None
+    assert "--iwr6843-tee-range-pending" in args
+    assert "--iwr6843-tee-m" not in args
+
+
+def test_a_camera_steered_radar_range_is_still_an_unqualified_choice():
+    steered = _accepted_iwr(
+        1.2, camera_window={"outcome": "reselected", "camera_window_m": [0.72, 1.68]}
+    )
+    solution = tee_range.TeeRangeSolution.unresolved((steered,), reason="test")
+
+    assert ts.unqualified_tee_range_choice(solution).candidate_id == steered.candidate_id
+
+
+@pytest.mark.parametrize("outcome", ["not_rechecked", "camera_window_disjoint"])
+def test_a_radar_pick_the_camera_could_not_recheck_is_unusable(outcome):
+    # wiring audit S5: the radar's own pick lies outside the camera's window and
+    # nothing inside the window replaced it
+    camera, result, _iwr = _setup_ball_seen_from(0.40)
+    iwr = _accepted_iwr(camera_window={"outcome": outcome, "camera_window_m": [0.8, 1.2]})
+    solution = tee_range.TeeRangeSolution.unresolved((iwr,), reason="test")
+
+    solved = ts._solved_camera_height(result, camera, iwr.to_dict())
+
+    assert ts.unqualified_tee_range_choice(solution) is None
+    assert solved["source"] == "rig_nominal"
+    assert solved["radar_solved_m"] is None
+
+
+def test_a_qualification_interval_disjoint_from_the_camera_window_rejects(
+    tmp_path, inputs, monkeypatch
+):
+    # a person 2.8 m out is the only change inside a 2.0-4.0 m qualification window,
+    # while the camera puts the ball at 1.2 m (window 0.72-1.68 m)
+    artifact = replace(qualification(inputs), plausible_range_m=(2.0, 4.0))
+    inputs["qualification"].write_text(json.dumps(artifact.to_dict()), encoding="utf-8")
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    app.config["TEST_STATIC_MANAGER"].other_return = (70, 300.0)
+
+    state = drive(app.test_client(), tester)
+
+    iwr = state["evidence"]["iwr_candidate"]
+    assert iwr["evidence"]["camera_window"]["outcome"] == "camera_window_disjoint"
+    solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
+    assert ts.unqualified_tee_range_choice(solution) is None
+    display = ts.tee_range_display(state)
+    assert display["iwr"]["state"] == "rejected"
+    assert "camera" in display["iwr"]["reason"]
+
+
+def test_the_lens_height_comes_from_the_1280x800_search_only():
+    # wiring audit S4: arm5 found the rig height consistent; arm6's coarser solve
+    # is a check, not an override
+    boxed, level = _heights()
+    solution = tee_range.TeeRangeSolution.unresolved(
+        (_camera_candidate("arm5", level), _camera_candidate("arm6", boxed)), reason="test"
+    )
+
+    assert level["check"] == "consistent"
+    assert boxed["check"] == "unit_raised"
+    assert ts._setup_camera_height_m(solution) is None
+
+
+def test_a_pending_range_still_hands_swings_the_solved_lens_height():
+    # wiring audit S6: a unit on a box without a range for swings
+    boxed, _level = _heights()
+    solution = tee_range.TeeRangeSolution.unresolved(
+        (_accepted_iwr(), _camera_candidate("arm5", boxed)), reason="test"
+    )
+
+    args = ts._tee_range_cli_args(solution)
+
+    assert args[0] == "--iwr6843-tee-range-pending"
+    assert "--iwr6843-tee-m" not in args
+    assert float(args[args.index("--solved-camera-height-m") + 1]) == pytest.approx(0.40, abs=0.003)
+    assert args[args.index("--iwr6843-ball-height-m") + 1] == "0.021335"
 
 
 def test_setup_captures_go_through_the_held_radar_session(tmp_path, inputs, monkeypatch):

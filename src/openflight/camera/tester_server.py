@@ -417,6 +417,29 @@ def pending_tee_range_solution(
 GROSS_LENS_HEIGHT_ERROR_M = 0.060
 # The radar must stay above the surface it reflects from.
 MIN_RADAR_CLEARANCE_M = 0.010
+# Camera-window outcomes after which the radar's own pick can't be used: it lies
+# outside the camera's window and nothing inside the window replaced it (wiring
+# audit S5).
+_CAMERA_WINDOW_REJECTIONS = {
+    "not_rechecked": "the radar's pick lies outside the camera's window and was not re-checked",
+    "camera_window_disjoint": "the camera puts the ball outside the range the radar searches",
+}
+UNUSABLE_CAMERA_WINDOW_OUTCOMES = frozenset(_CAMERA_WINDOW_REJECTIONS)
+
+
+def iwr_range_usable(range_m: float | None, evidence: Mapping | None) -> bool:
+    """Whether a static IWR range may reach swings or the lens-height solve."""
+    evidence = evidence if isinstance(evidence, Mapping) else {}
+    difference = evidence.get("difference")
+    window = evidence.get("camera_window")
+    return bool(
+        range_m is not None
+        and isinstance(difference, Mapping)
+        and difference.get("status") == "accepted"
+        and not (
+            isinstance(window, Mapping) and window.get("outcome") in UNUSABLE_CAMERA_WINDOW_OUTCOMES
+        )
+    )
 
 
 def _solved_camera_height(
@@ -446,12 +469,7 @@ def _solved_camera_height(
         "check": "not_checked",
     }
     iwr = iwr_candidate if isinstance(iwr_candidate, Mapping) else {}
-    difference = (iwr.get("evidence") or {}).get("difference")
-    if not (
-        iwr.get("radar_slant_range_m") is not None
-        and isinstance(difference, Mapping)
-        and difference.get("status") == "accepted"
-    ):
+    if not iwr_range_usable(iwr.get("radar_slant_range_m"), iwr.get("evidence")):
         return solved
     try:
         height, uncertainty = solve_camera_height_from_radar(
@@ -508,48 +526,50 @@ def _solved_camera_height(
     return solved
 
 
-def _setup_camera_height_m(solution: tee_range.TeeRangeSolution | None) -> float | None:
-    """The 1280x800 setup's lens height, only when it overrides the rig file's."""
-    for item in sorted(
-        (solution.candidates if solution is not None else ()),
-        key=lambda candidate: "arm5" not in candidate.candidate_id,
-    ):
+def _setup_camera_height(solution: tee_range.TeeRangeSolution | None) -> Mapping | None:
+    """The 1280x800 setup's lens-height evidence.
+
+    Only arm5's search decides the lens height; 640x400 solves it more coarsely
+    and is recorded as a check (wiring audit S4).
+    """
+    for item in solution.candidates if solution is not None else ():
         solved = (item.evidence or {}).get("camera_height")
         if (
             item.source_group == "camera"
+            and item.candidate_id.endswith("-arm5")
             and isinstance(solved, Mapping)
-            and solved.get("source") == "static_iwr_range"
         ):
-            height = solved.get("height_m")
-            if isinstance(height, (int, float)) and 0.0 < height < 1.0:
-                return float(height)
+            return solved
+    return None
+
+
+def _setup_camera_height_m(solution: tee_range.TeeRangeSolution | None) -> float | None:
+    """The 1280x800 setup's lens height, only when it overrides the rig file's."""
+    solved = _setup_camera_height(solution)
+    if solved is None or solved.get("source") != "static_iwr_range":
+        return None
+    height = solved.get("height_m")
+    if isinstance(height, (int, float)) and 0.0 < height < 1.0:
+        return float(height)
     return None
 
 
 def unqualified_tee_range_choice(
     solution: tee_range.TeeRangeSolution | None,
 ) -> tee_range.TeeRangeCandidate | None:
-    """The range a test run may use when nothing qualified it: accepted IWR, else camera.
+    """The range a test run may use when nothing qualified it: an accepted IWR range.
 
-    Only for explicit testing (``--use-unqualified-tee-range``); a tape value is
-    validation truth and is never used.
+    Only for explicit testing (``--use-unqualified-tee-range``). A camera-steered
+    radar range counts; the camera's own size-derived range (sigma ~21 %) never
+    does, so without an accepted radar range swings start pending (wiring audit S2,
+    decision D4). A tape value is validation truth and is never used.
     """
     if solution is None:
         return None
-    ranged = [item for item in solution.candidates if item.radar_slant_range_m is not None]
-    for item in ranged:
-        difference = (item.evidence or {}).get("difference")
-        if (
-            item.source_group == "iwr"
-            and isinstance(difference, Mapping)
-            and difference.get("status") == "accepted"
-        ):
+    for item in solution.candidates:
+        if item.source_group == "iwr" and iwr_range_usable(item.radar_slant_range_m, item.evidence):
             return item
-    cameras = sorted(
-        (item for item in ranged if item.source_group == "camera"),
-        key=lambda item: "arm5" not in item.candidate_id,
-    )
-    return cameras[0] if cameras else None
+    return None
 
 
 def _tee_range_cli_args(
@@ -557,7 +577,9 @@ def _tee_range_cli_args(
 ) -> list[str]:
     height = _setup_camera_height_m(solution)
     # The setup ball rests on the surface, so its centre is one radius up; swings
-    # must use the same ball height the setup solved the lens height with.
+    # must use the same ball height the setup solved the lens height with. A
+    # pending range still carries a lens height the setup had to override, such as
+    # a unit on a box (wiring audit S6).
     height_args = [
         "--iwr6843-ball-height-m",
         f"{BALL_DIAMETER_MM / 2000.0:.6g}",
@@ -572,7 +594,7 @@ def _tee_range_cli_args(
             choice.candidate_id,
         )
         return ["--iwr6843-tee-m", f"{choice.radar_slant_range_m:.9g}", *height_args]
-    return ["--iwr6843-tee-range-pending"]
+    return ["--iwr6843-tee-range-pending", *height_args]
 
 
 # The hitting zone may clip this much (sun patches, a white ball) and still be usable.
@@ -2863,6 +2885,15 @@ def camera_radar_window(selected) -> tuple[float, float] | None:
     return value - half, value + half
 
 
+def iwr_search_interval_m(
+    qualification: tee_range.TeeRangeQualification | None,
+) -> tuple[float, float]:
+    """The bias-corrected radar range the static selector searches."""
+    if qualification is not None:
+        return qualification.plausible_range_m
+    return TEE_RANGE_MM[0] / 1000.0, TEE_RANGE_MM[1] / 1000.0
+
+
 def _guided_iwr_candidate(
     empty_record: Mapping,
     present_record: Mapping,
@@ -2877,11 +2908,7 @@ def _guided_iwr_candidate(
     bias_m = float(calibration.get("range_bias_const_m", calibration.get("range_offset_m", 0.0)))
     empty = _static_profile(empty_record)
     present = _static_profile(present_record)
-    corrected_interval = (
-        qualification.plausible_range_m
-        if qualification is not None
-        else (TEE_RANGE_MM[0] / 1000.0, TEE_RANGE_MM[1] / 1000.0)
-    )
+    corrected_interval = iwr_search_interval_m(qualification)
     apparent_interval = tuple(value + bias_m for value in corrected_interval)
     # The camera's window only chooses which cluster may be the ball; the search, and
     # with it the scale, MAD and clutter limit, stays the whole window (wiring audit S1).
@@ -3260,20 +3287,60 @@ def _candidate_display(candidate: Mapping | None, *, qualified_source: bool) -> 
     }
 
 
-def tee_range_display(state: Mapping | None) -> dict:
+def _swings_display(solution: Mapping, *, use_unqualified: bool) -> dict | None:
+    """The tee range swings will start with, once the setup has finished."""
+    if not solution:
+        return None
+    if solution.get("status") == "resolved":
+        return {
+            "state": "resolved",
+            "range_m": solution.get("selected_range_m"),
+            "message": "Swings use the qualified radar tee range.",
+        }
+    try:
+        choice = unqualified_tee_range_choice(tee_range.TeeRangeSolution.from_dict(solution))
+    except (KeyError, TypeError, ValueError):
+        choice = None
+    if choice is not None and use_unqualified:
+        return {
+            "state": "unqualified",
+            "range_m": choice.radar_slant_range_m,
+            "message": "TEST ONLY: swings use this unqualified radar range.",
+        }
+    because = (
+        "the radar range is not qualified" if choice is not None else "no radar range was accepted"
+    )
+    return {
+        "state": "pending",
+        "range_m": None,
+        "message": (
+            f"Swings start with the tee range pending: {because}, so launch and club "
+            "metrics that need it are withheld. The camera's own estimate is never "
+            "used as the tee range."
+        ),
+    }
+
+
+def tee_range_display(state: Mapping | None, *, use_unqualified: bool = False) -> dict:
     """Backend states for the range summary; rejected numbers are diagnostics only."""
     evidence = (state or {}).get("evidence") or {}
     iwr = evidence.get("iwr_candidate")
-    difference = (
-        (iwr.get("evidence") or {}).get("difference") if isinstance(iwr, Mapping) else None
-    ) or {}
+    iwr_evidence = (iwr.get("evidence") or {}) if isinstance(iwr, Mapping) else {}
+    difference = iwr_evidence.get("difference") or {}
+    window = iwr_evidence.get("camera_window") or {}
+    window_rejection = _CAMERA_WINDOW_REJECTIONS.get(window.get("outcome"))
     iwr_display = _candidate_display(
-        iwr, qualified_source=difference.get("status") in {None, "accepted"}
+        iwr,
+        qualified_source=difference.get("status") in {None, "accepted"} and not window_rejection,
     )
     if iwr is None:
         iwr_display = {**iwr_display, "state": "not_captured"}
     elif iwr_display["state"] == "rejected":
-        iwr_display["reason"] = f"{difference.get('status')}: {difference.get('reason')}"
+        iwr_display["reason"] = (
+            f"{window.get('outcome')}: {window_rejection}"
+            if window_rejection
+            else f"{difference.get('status')}: {difference.get('reason')}"
+        )
     cameras = {}
     for arm_id in ("arm5", "arm6"):
         candidate = evidence.get(f"camera_{arm_id}_candidate")
@@ -3292,6 +3359,7 @@ def tee_range_display(state: Mapping | None) -> dict:
             "range_m": solution.get("selected_range_m") if resolved else None,
             "reason": None if resolved else (solution.get("reason") or (state or {}).get("reason")),
         },
+        "swings": _swings_display(solution, use_unqualified=use_unqualified),
     }
 
 
@@ -4664,6 +4732,21 @@ def create_app(
                     "camera_window": {**facts, "outcome": "consistent"},
                 },
             }
+        search = iwr_search_interval_m(qualification)
+        if window[1] < search[0] or window[0] > search[1]:
+            # The camera puts the ball where the radar may not look, so the radar's
+            # pick is unusable rather than kept unchecked (wiring audit S5).
+            return {
+                **iwr_evidence,
+                "evidence": {
+                    **(iwr_evidence.get("evidence") or {}),
+                    "camera_window": {
+                        **facts,
+                        "outcome": "camera_window_disjoint",
+                        "search_window_m": list(search),
+                    },
+                },
+            }
         try:
             steered = _guided_iwr_candidate(
                 state.evidence["empty_capture"],
@@ -4674,6 +4757,8 @@ def create_app(
                 camera_window_m=window,
             ).to_dict()
         except (KeyError, TypeError, ValueError) as exc:
+            # The pick outside the window stays on record but is unusable for swings
+            # and the lens-height solve (UNUSABLE_CAMERA_WINDOW_OUTCOMES).
             logger.warning("Camera-steered radar re-selection failed: %s", exc)
             return {
                 **iwr_evidence,
@@ -5231,7 +5316,10 @@ def create_app(
                     return jsonify(
                         {
                             "state": state.to_dict() if state else None,
-                            "display": tee_range_display(state.to_dict() if state else None),
+                            "display": tee_range_display(
+                                state.to_dict() if state else None,
+                                use_unqualified=use_unqualified_tee_range,
+                            ),
                             "qualification_available": qualification is not None,
                             "qualification_status": {
                                 "loaded": qualification is not None,
@@ -5309,7 +5397,12 @@ def create_app(
                 ):
                     stop_guided_live(tester_id)
                 return jsonify(
-                    {"state": state.to_dict(), "display": tee_range_display(state.to_dict())}
+                    {
+                        "state": state.to_dict(),
+                        "display": tee_range_display(
+                            state.to_dict(), use_unqualified=use_unqualified_tee_range
+                        ),
+                    }
                 )
         except TeeRangeSetupAdmissionError as exc:
             failed_state = None
