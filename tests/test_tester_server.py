@@ -342,6 +342,21 @@ class TestCommands:
         assert command[command.index("--log-dir") + 1].endswith("run-01")
 
     @pytest.mark.parametrize("action", ["swings", "ladder"])
+    def test_the_kiosk_uses_the_testers_iwr_calibration(self, tmp_path, action):
+        # C10: a --iwr-calibration override used to stop at the setup
+        p = params(arm_id="arm4", tee_mm=1524)
+        screened(tmp_path, p)
+        calibration = tmp_path / "board-7-calibration.json"
+
+        chosen = ts.action_commands(
+            action, p, tmp_path, RIG, tester_setup=TESTER_SETUP, iwr_calibration=calibration
+        )[0][0]
+        default = ts.action_commands(action, p, tmp_path, RIG, tester_setup=TESTER_SETUP)[0][0]
+
+        assert chosen[chosen.index("--iwr6843-cal") + 1] == str(calibration)
+        assert default[default.index("--iwr6843-cal") + 1] == str(ts.DEFAULT_IWR_CALIBRATION)
+
+    @pytest.mark.parametrize("action", ["swings", "ladder"])
     def test_kiosk_runs_own_the_iwr_port_the_hardware_check_verified(self, tmp_path, action):
         p = params(arm_id="arm4", tee_mm=1524)
         screened(tmp_path, p)

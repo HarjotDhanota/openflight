@@ -471,12 +471,23 @@ def _solved_camera_height(
     iwr = iwr_candidate if isinstance(iwr_candidate, Mapping) else {}
     if not iwr_range_usable(iwr.get("radar_slant_range_m"), iwr.get("evidence")):
         return solved
+    # The radar's uncertainty comes from its own evidence; without one the
+    # lens-height test has no scale, so it is not run (wiring audit C10).
+    radar_uncertainty = iwr.get("uncertainty_m")
+    if (
+        isinstance(radar_uncertainty, bool)
+        or not isinstance(radar_uncertainty, (int, float))
+        or not math.isfinite(radar_uncertainty)
+        or radar_uncertainty <= 0.0
+    ):
+        solved["radar_rejected"] = "the radar range carries no uncertainty of its own"
+        return solved
     try:
         height, uncertainty = solve_camera_height_from_radar(
             camera,
             (selected.x_px, selected.y_px),
             radar_slant_range_m=float(iwr["radar_slant_range_m"]),
-            radar_uncertainty_m=float(iwr.get("uncertainty_m") or 0.05),
+            radar_uncertainty_m=float(radar_uncertainty),
             ball_center_height_m=BALL_DIAMETER_MM / 2000.0,
         )
     except ValueError:
@@ -1113,6 +1124,7 @@ def action_commands(
     operator_reset: bool | None = None,
     use_unqualified_tee_range: bool = False,
     handed_to_swings: Mapping | None = None,
+    iwr_calibration: Path = DEFAULT_IWR_CALIBRATION,
 ) -> tuple[list[list[str]], Path]:
     """Build an allowlisted command sequence and its log path.
 
@@ -1242,6 +1254,8 @@ def action_commands(
         if iwr_static_port:
             # The kiosk must own the same interface the hardware check verified.
             commands[0].extend(["--iwr6843-port", iwr_static_port])
+        # the same board calibration the setup's static ranges used (wiring audit C10)
+        commands[0].extend(["--iwr6843-cal", str(iwr_calibration)])
         commands[0].extend(
             [
                 "--tester-setup-required",
@@ -3087,6 +3101,21 @@ def iwr_search_interval_m(
     return TEE_RANGE_MM[0] / 1000.0, TEE_RANGE_MM[1] / 1000.0
 
 
+def iwr_range_bias_m(calibration: Mapping) -> float:
+    """The static range bias the IWR calibration states, or a refusal.
+
+    No fallback to ``range_offset_m`` and then to zero: a calibration without its
+    bias would move every tee range by the board's 66 mm (wiring audit C10).
+    """
+    value = calibration.get("range_bias_const_m") if isinstance(calibration, Mapping) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(
+            "the IWR range calibration has no finite range_bias_const_m; "
+            "re-run the range calibration or pass the board's own --iwr-calibration"
+        )
+    return float(value)
+
+
 def _guided_iwr_candidate(
     empty_record: Mapping,
     present_record: Mapping,
@@ -3098,7 +3127,7 @@ def _guided_iwr_candidate(
 ) -> tee_range.TeeRangeCandidate:
     calibration_sha = _file_sha256(calibration_path)
     calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
-    bias_m = float(calibration.get("range_bias_const_m", calibration.get("range_offset_m", 0.0)))
+    bias_m = iwr_range_bias_m(calibration)
     empty = _static_profile(empty_record)
     present = _static_profile(present_record)
     corrected_interval = iwr_search_interval_m(qualification)
@@ -5019,6 +5048,8 @@ def create_app(
         for required in (iwr_static_config, iwr_firmware, iwr_calibration, rig_geometry):
             if not required.is_file():
                 raise ValueError(f"required tee-range input is missing: {required}")
+        # refused before the radar runs, not after both captures (wiring audit C10)
+        iwr_range_bias_m(json.loads(iwr_calibration.read_text(encoding="utf-8")))
         capture_id = f"{kind}-{state.sequence + 1:06d}"
         phase = "empty_capturing" if kind == "empty" else "ball_capturing"
         evidence: dict = {f"{kind}_capture_id": capture_id}
@@ -5773,6 +5804,7 @@ def create_app(
                 operator_reset if action == "preflight" else None,
                 use_unqualified_tee_range=use_unqualified_tee_range,
                 handed_to_swings=handed,
+                iwr_calibration=iwr_calibration,
             )
             write_arm_state(sessions_root, params)
             if action == "swings":
@@ -6173,6 +6205,7 @@ def create_app(
                 iwr_static_port,
                 use_unqualified_tee_range=use_unqualified_tee_range,
                 handed_to_swings=handed,
+                iwr_calibration=iwr_calibration,
             )
             run = Path(commands[0][commands[0].index("--log-dir") + 1])
             with session_bundle.snapshot_lock(

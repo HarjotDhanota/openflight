@@ -2712,3 +2712,39 @@ def test_a_camera_steered_hand_off_says_so():
     assert handed["tee_range_source"] == "unqualified_static_iwr_camera_steered"
     assert handed["camera_window"] == {"outcome": "reselected", "camera_window_m": [0.72, 1.68]}
     assert args[args.index("--iwr6843-tee-range-candidate") + 1] == steered.candidate_id
+
+
+@pytest.mark.parametrize(
+    "calibration",
+    [
+        '{"range_bias_uncertainty_m": 0.01}',
+        '{"range_offset_m": 0.066, "range_bias_uncertainty_m": 0.01}',
+        '{"range_bias_const_m": null, "range_bias_uncertainty_m": 0.01}',
+    ],
+)
+def test_a_calibration_without_a_range_bias_is_refused(tmp_path, inputs, monkeypatch, calibration):
+    # C10: no fallback to range_offset_m and then to 0 m of bias
+    inputs["calibration"].write_text(calibration, encoding="utf-8")
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+
+    assert post(client, tester, "start", "request-0").status_code == 200
+    response = post(client, tester, "capture_empty", "request-1")
+
+    assert response.status_code == 400
+    assert "range_bias_const_m" in response.get_json()["error"]
+    assert phase(client, tester)["phase"] == "needs_empty"
+    with pytest.raises(ValueError, match="range_bias_const_m"):
+        ts.iwr_range_bias_m(json.loads(calibration))
+
+
+def test_a_radar_range_without_an_uncertainty_does_not_solve_the_lens_height():
+    # C10: the radar uncertainty comes from the evidence, never a 5 cm stand-in
+    camera, result, iwr = _setup_ball_seen_from(0.40)
+    iwr = {key: value for key, value in iwr.items() if key != "uncertainty_m"}
+
+    solved = ts._solved_camera_height(result, camera, iwr)
+
+    assert solved["source"] == "rig_nominal"
+    assert solved["radar_solved_m"] is None
+    assert "uncertainty" in solved["radar_rejected"]
