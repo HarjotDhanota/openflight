@@ -47,6 +47,13 @@ _ABSENT_INPUT_MARKERS = (
     "records a capture error",
     "has no recorded",
     "no OPS ball speed",
+    "no tee range",
+)
+# What a swing without a tee range cannot have, said the same way on every metric
+# it prevents (P8-7 gate 2; the setup side owns handing one over).
+NO_TEE_RANGE = (
+    "no tee range: the setup handed the swings none, and the IWR launch and the "
+    "camera's geometry both need one"
 )
 
 
@@ -228,6 +235,12 @@ def _iwr_metrics(stage: Any, tee_range: Mapping[str, Any] | None = None) -> list
         ("iwr_attack_angle_deg", "Attack angle (IWR)", "deg"),
     )
     state, reason = _stage_state(stage, "IWR6843")
+    if (
+        state is None
+        and stage.get("status") == "withheld"
+        and stage.get("reason") == "tee_range_unresolved"
+    ):
+        state, reason = "unavailable", NO_TEE_RANGE
     if state is not None:
         return [
             _metric(key, label, unit, state, source=source, reason=reason)

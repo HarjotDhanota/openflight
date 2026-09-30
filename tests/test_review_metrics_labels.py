@@ -213,3 +213,28 @@ def test_camera_metrics_from_a_reconstructed_context_say_so():
     for key in ("camera_launch_horizontal_deg", "camera_club_path_deg"):
         assert metrics[key]["status"] == "experimental"
         assert "context reconstructed" in metrics[key]["reason"]
+
+
+def test_a_missing_tee_range_is_named_on_every_metric_it_prevents():
+    """P8-7 gate 2: the tee contract stands; its absence reads plainly on each metric."""
+    report = {
+        "stages": {
+            "iwr6843": {"status": "withheld", "reason": "tee_range_unresolved"},
+            "camera": {
+                "status": "error",
+                "error": "ValueError: cannot reconstruct the camera context: the session "
+                "recorded no tee range (tee_range_handoff status 'pending', source 'pending')",
+            },
+        }
+    }
+    metrics = _metrics(report)
+    for key in (
+        "iwr_launch_vertical_deg",
+        "iwr_launch_horizontal_deg",
+        "iwr_club_path_deg",
+        "iwr_attack_angle_deg",
+        "camera_launch_horizontal_deg",
+        "camera_club_path_deg",
+    ):
+        assert metrics[key]["status"] == "unavailable", key
+        assert "no tee range" in metrics[key]["reason"], key

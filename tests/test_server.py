@@ -1866,6 +1866,49 @@ class TestShotToDict:
             note for note in shot.camera_notes if note.startswith("club: ")
         ]
 
+    def test_a_swing_without_a_tee_range_names_it_on_the_camera(self, monkeypatch, tmp_path):
+        """P8-7 gate 2: the tee contract stands; the shot says plainly what it lacked."""
+        from openflight.camera.club_delivery import ReferenceBallTracker
+        from openflight.review_metrics import NO_TEE_RANGE
+
+        np.savez(
+            tmp_path / "frames.npz",
+            frames=np.zeros((20, 6, 8), dtype=np.uint8),
+            host_timestamp_ns=np.arange(20, dtype=np.int64),
+            trigger_host_timestamp_ns=np.int64(10),
+            pre_trigger_count=np.int32(10),
+        )
+        monkeypatch.setattr(
+            server_module, "camera_capture_runtime", SimpleNamespace(camera_analysis_eligible=True)
+        )
+        monkeypatch.setattr(
+            server_module,
+            "iwr6843_runtime",
+            SimpleNamespace(
+                calibration=SimpleNamespace(
+                    tee_range_m=None, radar_height_m=0.051, tee_ball_height_m=0.021
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            server_module,
+            "camera_capture_config",
+            {"mount_height_m": 0.095, "width": 8, "height": 6},
+        )
+        monkeypatch.setattr(
+            server_module, "camera_ball_flight_reference_tracker", ReferenceBallTracker()
+        )
+        monkeypatch.setattr(server_module, "camera_reference_ball_tracker", ReferenceBallTracker())
+        shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), shot_number=4)
+        shot.camera_fusion_session_uuid = "session-a"
+
+        server_module._fuse_camera_measurements(
+            shot, SimpleNamespace(valid=True, path=tmp_path, metadata={})
+        )
+
+        assert shot.camera_fusion_context["available"] is False
+        assert NO_TEE_RANGE in shot.camera_notes
+
     def test_live_camera_fusion_labels_dark_frames_and_preserves_iwr(self, monkeypatch):
         """D15 (P8-7): ineligible lighting is a note; the camera stages still run."""
         runtime = SimpleNamespace(camera_analysis_eligible=False)

@@ -4343,6 +4343,12 @@ def _fuse_camera_measurements(
             if camera_optical_calibration is not None:
                 shot.calibrated_camera_status = "rejected"
                 shot.calibrated_camera_reason = f"{type(error).__name__}: {error}"
+            if "tee_slant_range_m" in str(error):
+                # the tee contract stands (P8-7 gate 2); the shot names what it lacked
+                from openflight.review_metrics import NO_TEE_RANGE  # noqa: PLC0415
+
+                camera_notes.append(NO_TEE_RANGE)
+                shot.camera_notes = camera_notes
             logger.warning("[SERVER] Shared camera fusion failed: %s", error, exc_info=True)
     _fuse_camera_ball_flight(shot, camera_capture, camera_archive)
     _fuse_camera_club_delivery(shot, camera_capture, camera_archive)
