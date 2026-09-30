@@ -154,6 +154,51 @@ P6-1 to P6-3 touch the same ladder code as the setting selection, so they follow
 | P6-7 | `notify_trigger` holds the frame lock while it gathers evidence and copies it, so frame delivery stalls 14-31 ms at every trigger. | Gather and copy outside the lock; hold it only to freeze the ring and queue the trigger's records. |
 | P6-8 | Chained club delivery still times frames by host arrival, which the stall distorts by up to 31 ms around impact. | Time frames by sensor timestamps where the clip has them, as ball flight and the trigger split now do. |
 
+## Phase 7: what Outdoors-test-6 and -7 exposed (added 30 Sept)
+
+Outdoors-test-6 and -7 ran in full sun on 30 Sept (10:10-10:26) on 63b69be9. Harjot made 5 real swings; 2 became complete shots, and no camera or IWR number reached any of them. Four read-only investigations traced why (data in `pi-handoff/Outdoors-test-6`, `-7` and `tester-server-7.log`). Harjot decided D10 and D11 on 30 Sept.
+
+- **D10: a fixed placement box.** Every unit shows the same address zone, straight ahead of the unit, 1.2-1.5 m out and 0.20 m wide. It is a product constant projected through the shared rig file and the tilt sensor, not a typed input. The tester moves the ball into it.
+- **D11: the setup saves as experimental.** The camera's ball in the box, plus the radar's range when the two roughly agree, is enough to save a range. No qualification file is needed. Every number built on that range is labelled experimental.
+
+**Why nothing fused:**
+- The setup could never resolve. It needs the radar and both camera modes, plus a qualification artifact that nothing produces. No IWR number has reached a shot in any session.
+- The radar's static difference rejected a real ball. It failed the fractional gate at 0.34 against 0.50, because the mat edge interferes with the ball's echo. Coherent subtraction of the saved captures shows one ground-level reflector at 1.53-1.62 m on all 10 recorded setups.
+- The 640×400 check treated "ambiguous" as dark, judged from the whole frame. It walked up to gain 12 until only the tray balls stayed visible. The 1280×800 step locked the one mid-mat ball every time.
+- The kiosk's analysis eligibility rule is too strict for a sunny mat. It requires under 8 % clipping of the whole hitting-zone box, and a sunny mat is always about 20 % clipped. The ladder's pre-check matched fence clutter 175 px from the ball. The shortest setting (30 µs) is 3× longer than sun needs.
+- Wind set off the microphone 13 times.
+  - A false trigger starts a 7 s IWR dump, and the camera only hears edges through the IWR, so one real shot was dropped.
+  - The OPS243 never re-armed after a trigger raced its reset, so the last two swings got no speed.
+
+**Workstream T: triggers**
+
+| ID | Problem | Fix |
+|---|---|---|
+| P7-1 | The OPS243 stops dumping for good when an edge races the re-arm: `reset_input_buffer` discards the dump's start marker, and nothing re-arms after a wait times out (`ops243.py:1564, 1749`, `trigger.py:595-597`, `monitor.py:574-577`). | Never flush a dump already in flight, and re-arm after every timeout or discarded dump. If BCM17 sees an edge and no dump starts within about 0.3 s, log it and re-arm. |
+| P7-2 | The camera hears an edge only through the IWR monitor, which ignores edges while it dumps (`iwr6843/monitor.py:176-193`). | Tell the camera about every BCM17 edge, busy or not, keeping the 0.1 s de-duplication. |
+| P7-3 | An OPS-accepted shot with no camera trigger evidence is dropped (`server.py:5023-5050`). | Log it as a shot, flagged with the missing evidence, and say so in the review. |
+
+**Workstream S: setup and the placement box**
+
+| ID | Problem | Fix |
+|---|---|---|
+| P7-4 | There is no placement box. The ball search takes anything in a 1.0-2.5 m × ±0.30 m area, and the kiosk "+" is a picture only. | **D10:** project the address zone into each camera mode. Pad it for pitch, roll and a raised mat. Draw it on the tester's setup view, and restrict every setup search to it: live, Save, and both modes. With no ball in the box, say "put the ball in the box". |
+| P7-5 | The 640×400 step starts from scratch and walks brighter on ambiguity (`static_exposure.py:559-628`). | Warm-start it from the 1280×800 lock, inside the box. Judge darkness on the box, not the frame. Retry "ambiguous" at the same step; never step brighter for it. |
+| P7-6 | The radar's static difference compares magnitudes, so an echo interfering with the mat edge fails the fractional gate (`range_evidence.py:44-47, 723-787`). | Subtract the empty and ball captures coherently, per virtual channel, and search the box's range window with a margin. A clear single ground-level peak is `accepted_unqualified`. A rejected result no longer writes a slant range. |
+| P7-7 | Finalising needs all three candidates and a qualification artifact (`tester_server.py:5264-5281`). | **D11:** save a range when the 1280×800 ball in the box is locked and the radar range agrees with the camera's size range within their combined uncertainty. Use the radar's value, with the camera's range as the fallback when the radar has none. 640×400 becomes advisory; its settings use the 1280×800 ball halved, as D8 already does. The kiosk starts with the unqualified range, and the setup says the range is experimental. |
+
+**Workstream L: light, the ladder, labels**
+
+| ID | Problem | Fix |
+|---|---|---|
+| P7-8 | Capture-time `analysis_eligible` fails when more than 8 % of the whole hitting-zone box is clipped (`capture_runtime.py:571-591`, `auto_exposure.py:78-81`). | Judge it on the setup's ball with the ladder's `judge_light` (core clipped 5 % or less, 20 DN or more above black). Keep the zone rule only when there is no setup ball. |
+| P7-9 | The shortest settings are too long for sun, and the pre-check can match clutter up to 6 ball diameters away (`study_ladder.py:185-190`). | Add full-20, full-10, half-30 and half-15. Tighten the ball match to about one diameter, so the too-bright skip judges the real ball. |
+| P7-10 | Clips with no OPS shot stay "pending" forever, and the review calls real swings "Not a shot" (`paired_eligibility.py:168-172`). | Time them out as "no radar shot" and say so in the review. |
+| P7-11 | The review labels any `accepted*` IWR launch "accepted", whatever the tee's source (`review_metrics.py:230`). With a guessed tee, the launch moves 4-28° per ±0.25 m. | Label it experimental whenever the tee is unqualified or the status is single-channel, and carry the tee's range and source. |
+
+**Harjot, before the next session:** put a foam windscreen on the microphone, and check the GATE LED stays quiet in wind before swinging.
+
+The three workstreams run in parallel on their own branches. S owns the tester page and runs the Playwright specs; T and L run pytest and vitest only.
 
 ## Rough effort (agent time)
 
