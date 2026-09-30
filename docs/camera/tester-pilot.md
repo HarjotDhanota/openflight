@@ -144,6 +144,16 @@ the physical setup. Then work down **Test suite**:
    retried without losing the pending capture. The photo sets its own exposure
    from the measured light, down to a few tens of microseconds in sun, so it
    works outdoors too.
+
+   Above the button, tick boxes choose which exposures run: 300 to 30 µs at
+   1280×800 and 300, 150 and 75 µs at 640×400. All are ticked unless you
+   changed them; the page remembers your choice. Unticked exposures are
+   skipped and recorded as "not selected by the tester", not as a light
+   failure. If no 640×400 box is ticked, the ladder ends after 1280×800 with no
+   restart; if no 1280×800 box is ticked, it starts at 640×400 and asks for no
+   face photos. **B** is needed only for a mode with a ticked box. Exposures
+   that have already run are greyed out. To change your choice partway, press
+   **Stop**, change the ticks, then press **C** to carry on.
 4. **D. Analyse, review & package.** Stop the ladder first. If you have a TM4,
    Full Swing KIT or Mevo Gen 2 export, choose it first. One press replays every
    shot on the Pi, builds the session review and writes one session bundle. It
@@ -475,5 +485,6 @@ every earlier frame and failure record for review.
 | Range summary: **640×400 check disagrees** | The two camera modes put the ball at different ranges | Make sure the ball did not move between the two Saves; if it did, **Start over / ball moved**. The setup is not blocked |
 | `the LIS3DH reading has no camera pitch` | The inclinometer is off or still settling (for example just after the kiosk handed it back) | Wait a few seconds for a stable reading, then press the step again |
 | Ladder verdict amber: `resting ball not found` | The camera could not distinguish a plausible resting ball in that frame | The swing still counts; keep placing the ball in the same spot |
-| `run the gain step for both modes first` | Step **B** did not finish for both modes | Run **B** again |
+| `run the gain step for both modes first` (or for one mode) | Step **B** did not finish for a mode that has a ticked exposure | Run **B** again |
+| `Choose at least one setting.` or `choose at least one setting` | Every exposure box above **C** is unticked | Tick at least one exposure, then press **C** again |
 
