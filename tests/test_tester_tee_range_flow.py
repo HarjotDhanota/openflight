@@ -297,6 +297,7 @@ class StaticManager:
         self.fail = fail
         self.legacy_profile = legacy_profile
         self.ball_return = 30.0
+        self.ball_bins: tuple[int, ...] = (30,)
         # (bin, extra power) for something else that appeared with the ball
         self.other_return: tuple[int, float] | None = None
         self.last_command = None
@@ -324,7 +325,9 @@ class StaticManager:
         output = Path(value("--output-dir"))
         output.mkdir(parents=True, exist_ok=True)
         empty = np.ones(96).tolist()
-        present = np.ones(96) + np.where(np.arange(96) == 30, self.ball_return, 0.0)
+        present = np.ones(96) + np.where(
+            np.isin(np.arange(96), self.ball_bins), self.ball_return, 0.0
+        )
         if self.other_return is not None:
             present[self.other_return[0]] += self.other_return[1]
         present = present.tolist()
@@ -2178,6 +2181,24 @@ def test_the_camera_steers_the_radar_away_from_a_person_behind_the_ball(
     assert iwr["radar_slant_range_m"] == pytest.approx(1.2, abs=0.05)
     assert iwr["evidence"]["qualification"]["camera_range_used"] is True
     assert iwr["evidence"]["qualification"]["accuracy_qualified"] is False
+
+
+def test_the_camera_rescues_a_three_bin_ball_at_one_metre(tmp_path, inputs, monkeypatch):
+    # wiring audit S1: re-selecting inside the 0.6-1.4 m camera window judged clutter
+    # over that window alone, where the ball's three bins are 3 of 21
+    app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False, camera_m=1.0)
+    radar = app.config["TEST_STATIC_MANAGER"]
+    radar.ball_bins = (24, 25, 26)
+    radar.other_return = (70, 300.0)
+
+    state = drive(app.test_client(), tester)
+
+    iwr = state["evidence"]["iwr_candidate"]
+    assert iwr["evidence"]["camera_window"]["outcome"] == "reselected"
+    assert iwr["evidence"]["difference"]["status"] == "accepted"
+    assert iwr["radar_slant_range_m"] == pytest.approx(1.0, abs=0.03)
+    # the search stays the whole qualification window; the camera only picks the cluster
+    assert iwr["evidence"]["search_window_m"] == [0.5, 4.0]
 
 
 def test_a_radar_reading_inside_the_camera_window_is_kept_as_is(tmp_path, inputs, monkeypatch):

@@ -2874,14 +2874,18 @@ def _guided_iwr_candidate(
         if qualification is not None
         else (TEE_RANGE_MM[0] / 1000.0, TEE_RANGE_MM[1] / 1000.0)
     )
-    if camera_window_m is not None:
-        corrected_interval = (
-            max(corrected_interval[0], camera_window_m[0]),
-            min(corrected_interval[1], camera_window_m[1]),
-        )
     apparent_interval = tuple(value + bias_m for value in corrected_interval)
+    # The camera's window only chooses which cluster may be the ball; the search, and
+    # with it the scale, MAD and clutter limit, stays the whole window (wiring audit S1).
     result = compare_static_range_profiles(
-        empty, present, plausible_apparent_range_m=apparent_interval
+        empty,
+        present,
+        plausible_apparent_range_m=apparent_interval,
+        candidate_window_m=(
+            tuple(value + bias_m for value in camera_window_m)
+            if camera_window_m is not None
+            else None
+        ),
     )
     bias_uncertainty_raw = calibration.get("range_bias_uncertainty_m")
     try:

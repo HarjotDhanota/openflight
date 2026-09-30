@@ -513,6 +513,8 @@ class StaticRangeDifferenceResult:
     alternate_peaks: tuple[Mapping[str, Any], ...] = ()
     # reflectors that vanished between captures but could not move the ball's reading
     ignored_losses: tuple[Mapping[str, Any], ...] = ()
+    # the apparent-range interval the ball's cluster had to peak in, when one was given
+    candidate_window_m: tuple[float, float] | None = None
 
 
 def _matching_static_profiles(
@@ -560,6 +562,7 @@ def _static_result(  # pylint: disable=too-many-arguments
     secondary_fractional_excess: float | None = None,
     alternate_peaks: tuple[Mapping[str, Any], ...] = (),
     ignored_losses: tuple[Mapping[str, Any], ...] = (),
+    candidate_window_m: tuple[float, float] | None = None,
 ) -> StaticRangeDifferenceResult:
     return StaticRangeDifferenceResult(
         status=status,
@@ -583,6 +586,7 @@ def _static_result(  # pylint: disable=too-many-arguments
         secondary_fractional_excess=secondary_fractional_excess,
         alternate_peaks=alternate_peaks,
         ignored_losses=ignored_losses,
+        candidate_window_m=candidate_window_m,
     )
 
 
@@ -600,6 +604,23 @@ def _profile_search(
     if np.count_nonzero(search) < 5:
         raise ValueError("plausible apparent range has fewer than five stored bins")
     return ranges, search
+
+
+def _candidate_bins(
+    ranges: np.ndarray,
+    search: np.ndarray,
+    candidate_window_m: tuple[float, float] | None,
+) -> tuple[np.ndarray, tuple[float, float] | None]:
+    """The searched bins a ball's cluster may peak in, and the window that chose them."""
+    if candidate_window_m is None:
+        return search, None
+    low, high = (_finite(value, "candidate window") for value in candidate_window_m)
+    if not low < high:
+        raise ValueError("candidate window must be an increasing interval")
+    allowed = search & (ranges >= low) & (ranges <= high)
+    if not np.any(allowed):
+        raise ValueError("candidate window does not overlap the search window")
+    return allowed, (low, high)
 
 
 def _v2_scale(baseline: np.ndarray, observed: np.ndarray, search: np.ndarray) -> float:
@@ -662,9 +683,11 @@ def _compare_static_range_profiles_v2(  # pylint: disable=too-many-locals
     present: StaticRangeProfileV2,
     *,
     plausible_apparent_range_m: tuple[float, float],
+    candidate_window_m: tuple[float, float] | None = None,
 ) -> StaticRangeDifferenceResult:
     _matching_static_profiles(empty, present)
     ranges, search = _profile_search(empty, plausible_apparent_range_m)
+    allowed, window = _candidate_bins(ranges, search, candidate_window_m)
     estimator = static_range_estimator_sha256()
     if min(empty.frame_count, present.frame_count) < _STATIC_V2_MIN_FRAME_COUNT:
         return _static_result(
@@ -674,6 +697,7 @@ def _compare_static_range_profiles_v2(  # pylint: disable=too-many-locals
             present,
             changed_fraction=0.0,
             estimator_sha256=estimator,
+            candidate_window_m=window,
         )
     baseline = np.asarray(empty.power, dtype=float)
     observed = np.asarray(present.power, dtype=float)
@@ -692,21 +716,6 @@ def _compare_static_range_profiles_v2(  # pylint: disable=too-many-locals
     )
     changed_fraction = float(np.mean(passing[search]))
     search_indices = np.flatnonzero(search)
-    diagnostic_index = int(search_indices[np.argmax(fractional[search])])
-    if not np.any(passing):
-        return _static_result(
-            "rejected_no_ball",
-            "no localized change cleared both fractional and absolute gates",
-            empty,
-            present,
-            changed_fraction=changed_fraction,
-            peak_score=float(absolute_score[diagnostic_index]),
-            peak_bin=float(diagnostic_index + empty.range_bin_start),
-            range_bin_uncertainty_m=empty.range_resolution_m,
-            estimator_sha256=estimator,
-            normalization_scale=scale,
-            peak_fractional_excess=float(fractional[diagnostic_index]),
-        )
     lost = (
         search
         & (observed <= expected / (1.0 + _STATIC_V2_MIN_FRACTIONAL_EXCESS))
@@ -742,6 +751,29 @@ def _compare_static_range_profiles_v2(  # pylint: disable=too-many-locals
                 "indices": group,
             }
         )
+    # A candidate window (the camera's range) only chooses which cluster may be the
+    # ball; the scale, MAD and changed fraction above stay over the whole search, which
+    # the clutter limit was set for. Narrowing the search instead made a 3-bin ball
+    # 3 of about 18 bins and rejected it as clutter (wiring audit S1).
+    peaks = [item for item in peaks if allowed[item["peak_index"]]]
+    if not peaks:
+        allowed_indices = np.flatnonzero(allowed)
+        diagnostic_index = int(allowed_indices[np.argmax(fractional[allowed])])
+        return _static_result(
+            "rejected_no_ball",
+            "no localized change cleared both fractional and absolute gates"
+            + (" inside the candidate window" if window is not None else ""),
+            empty,
+            present,
+            changed_fraction=changed_fraction,
+            peak_score=float(absolute_score[diagnostic_index]),
+            peak_bin=float(diagnostic_index + empty.range_bin_start),
+            range_bin_uncertainty_m=empty.range_resolution_m,
+            estimator_sha256=estimator,
+            normalization_scale=scale,
+            peak_fractional_excess=float(fractional[diagnostic_index]),
+            candidate_window_m=window,
+        )
     peaks.sort(key=lambda item: item["fractional_excess"], reverse=True)
     diagnostic_peaks = tuple(
         {key: value for key, value in item.items() if key not in {"peak_index", "indices"}}
@@ -761,6 +793,7 @@ def _compare_static_range_profiles_v2(  # pylint: disable=too-many-locals
         "peak_fractional_excess": best["fractional_excess"],
         "secondary_fractional_excess": second["fractional_excess"] if second else 0.0,
         "alternate_peaks": diagnostic_peaks,
+        "candidate_window_m": window,
     }
     if np.any(lost):
         lost_index, ignored = _blocking_loss(
@@ -786,6 +819,7 @@ def _compare_static_range_profiles_v2(  # pylint: disable=too-many-locals
                 estimator_sha256=estimator,
                 normalization_scale=scale,
                 peak_fractional_excess=float(fractional[lost_index]),
+                candidate_window_m=window,
             )
         common["ignored_losses"] = ignored
     if changed_fraction > _STATIC_MAX_CHANGED_FRACTION:
@@ -846,15 +880,24 @@ def compare_static_range_profiles(
     present: StaticRangeProfile | StaticRangeProfileV2,
     *,
     plausible_apparent_range_m: tuple[float, float] = (0.5, 4.0),
+    candidate_window_m: tuple[float, float] | None = None,
 ) -> StaticRangeDifferenceResult:
-    """Find one localized reflector added between matched pre-MTI profiles."""
+    """Find one localized reflector added between matched pre-MTI profiles.
+
+    ``candidate_window_m`` (apparent range, like the search window) limits where the
+    ball's cluster may peak without narrowing the statistics, which stay over
+    ``plausible_apparent_range_m``.
+    """
     if isinstance(empty, StaticRangeProfileV2) or isinstance(present, StaticRangeProfileV2):
         if not isinstance(empty, StaticRangeProfileV2) or not isinstance(
             present, StaticRangeProfileV2
         ):
             raise ValueError("static range profile schemas do not match")
         return _compare_static_range_profiles_v2(
-            empty, present, plausible_apparent_range_m=plausible_apparent_range_m
+            empty,
+            present,
+            plausible_apparent_range_m=plausible_apparent_range_m,
+            candidate_window_m=candidate_window_m,
         )
     _matching_static_profiles(empty, present)
     low, high = (_finite(value, "plausible apparent range") for value in plausible_apparent_range_m)
@@ -866,6 +909,7 @@ def compare_static_range_profiles(
     search = (ranges >= low) & (ranges <= high)
     if np.count_nonzero(search) < 5:
         raise ValueError("plausible apparent range has fewer than five stored bins")
+    allowed, window = _candidate_bins(ranges, search, candidate_window_m)
     baseline = np.asarray(empty.power, dtype=float)
     observed = np.asarray(present.power, dtype=float)
     baseline_median = float(np.median(baseline[search]))
@@ -877,9 +921,11 @@ def compare_static_range_profiles(
     noise = max(1.4826 * mad, 0.02 * baseline_median, 1e-12)
     scores = (delta - center) / noise
     search_indices = np.flatnonzero(search)
-    peak_index = int(search_indices[np.argmax(scores[search])])
+    candidate_indices = np.flatnonzero(allowed)
+    peak_index = int(candidate_indices[np.argmax(scores[allowed])])
     peak_score = float(scores[peak_index])
-    clutter_threshold = max(_STATIC_CLUTTER_SCORE, 0.1 * peak_score)
+    # the clutter threshold follows the whole search's strongest change (wiring audit S1)
+    clutter_threshold = max(_STATIC_CLUTTER_SCORE, 0.1 * float(np.max(scores[search])))
     changed_fraction = float(np.mean(scores[search] >= clutter_threshold))
     if peak_score < _STATIC_MIN_PEAK_SCORE:
         return _static_result(
@@ -891,6 +937,7 @@ def compare_static_range_profiles(
             peak_score=peak_score,
             peak_bin=float(peak_index + empty.range_bin_start),
             range_bin_uncertainty_m=empty.range_resolution_m,
+            candidate_window_m=window,
         )
     if changed_fraction > _STATIC_MAX_CHANGED_FRACTION:
         return _static_result(
@@ -902,6 +949,7 @@ def compare_static_range_profiles(
             peak_score=peak_score,
             peak_bin=float(peak_index + empty.range_bin_start),
             range_bin_uncertainty_m=empty.range_resolution_m,
+            candidate_window_m=window,
         )
     width_threshold = max(_STATIC_CLUTTER_SCORE, 0.25 * peak_score)
     left = peak_index
@@ -922,10 +970,11 @@ def compare_static_range_profiles(
             peak_width_bins=width,
             peak_bin=float(peak_index + empty.range_bin_start),
             range_bin_uncertainty_m=max(0.5, width / 2.0) * empty.range_resolution_m,
+            candidate_window_m=window,
         )
     local_maxima = [
         index
-        for index in search_indices
+        for index in candidate_indices
         if (index == search_indices[0] or scores[index] >= scores[index - 1])
         and (index == search_indices[-1] or scores[index] >= scores[index + 1])
         and not left <= index <= right
@@ -943,6 +992,7 @@ def compare_static_range_profiles(
             peak_width_bins=width,
             peak_bin=float(peak_index + empty.range_bin_start),
             range_bin_uncertainty_m=max(0.5, width / 2.0) * empty.range_resolution_m,
+            candidate_window_m=window,
         )
     weights = np.maximum(delta[left : right + 1] - center, 0.0)
     local_bins = np.arange(left, right + 1, dtype=float) + empty.range_bin_start
@@ -963,6 +1013,7 @@ def compare_static_range_profiles(
         peak_bin=peak_bin,
         range_bin_uncertainty_m=range_uncertainty_m,
         peak_width_bins=width,
+        candidate_window_m=window,
     )
 
 
