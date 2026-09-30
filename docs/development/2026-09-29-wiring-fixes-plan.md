@@ -4,7 +4,7 @@ Date: 29 September 2026. Branch: `feat/tester-capture-pilot`. It implements `202
 
 ## Status (29 Sept, evening)
 
-55 of the 59 items are done on `feat/tester-capture-pilot`: Phase 1 (pushed as e3308529) and Phases 2-5 (merged locally in e59dcfac). Each phase was built test first on its own branch, reviewed, merged, and checked with the full suite against the Windows baseline, the UI unit tests and the tester page tests.
+56 of the 59 items are done on `feat/tester-capture-pilot`: Phase 1 (pushed as e3308529), Phases 2-5 (merged locally in e59dcfac) and F11. Each phase was built test first on its own branch, reviewed, merged, and checked with the full suite against the Windows baseline, the UI unit tests and the tester page tests.
 
 **Left, each waiting on something outside the code:**
 
@@ -12,8 +12,9 @@ Date: 29 September 2026. Branch: `feat/tester-capture-pilot`. It implements `202
 |---|---|
 | F3 (range spaces and the −2 ms constant) | The Outdoors-test-5 swings, scored as D2 says. The contact-time function it needs (F7) is built. |
 | F8's horizontal reference | An alignment-stick session (D3). Until then radar horizontal and the IWR path are marked `azimuth_uncalibrated` and face angle uses camera paths only. |
-| F11's phase-centre offset | Which way the IWR board is turned in the v3 enclosure. The offset is ±8 mm; the rig file doesn't record the rotation, so it is marked unknown. |
 | C8's roll correction | A phone-level check against the LIS3DH roll (setup spec B2). The sign is derived and pinned by a test, but roll stays unapplied in both camera paths until the check. |
+
+**F11 closed (30 Sept, `agent/radar-phase-centre`, 5060e8a9).** Harjot reported the IWR board's turn on 29 Sept: USB top right and RX antennas on the left, seen from the front, which is +90° from the ECAD frame. The v3 rig file records it as `iwr_board_rotation_deg: 90.0`, with a new approved fingerprint (f2b05c97…; the 22 Sept entry is kept). The phase centre sits 7.97 mm above the RX row in the board's plane; with the 10° aim that is 7.85 mm up, 1.38 mm back and 1.86 mm target-left. The radar height the two-ray model uses on the v3 enclosure is now 58.8 mm, not 51 mm, and every range that starts at the IWR starts there (`RigGeometry.iwr_origin_mm`). Checks against a placement's measured RX row, and the tape's start, keep the RX row.
 
 **Where the build departs from this plan or the spec, and why:**
 - C2: focal length scales by the camera's binning, not by the mode's width, because 320×200 is a crop of the 640×400 mode. The approved-rig list keys on the parameter fingerprint, since the file's bytes change with line endings.

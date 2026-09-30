@@ -1781,7 +1781,8 @@ def expected_ball_diameter_px(arm: Arm, tee_mm: float | None, rig_geometry: Path
     from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
 
     offset = RigGeometry.from_json(rig_geometry).iwr_offset_mm
-    # the tape runs from the radar window, which sits this far behind the lens
+    # the tape runs from the radar window, which sits this far behind the lens;
+    # a physical face, so the RX row's depth, not the phase centre's (audit F11)
     camera_mm = tee_mm + (offset[2] if offset else 0.0)
     return mode_focal_px(arm, rig_geometry) * BALL_DIAMETER_MM / camera_mm
 
@@ -1803,6 +1804,7 @@ def expected_ball_row_px(
     if rig.lens_height_above_floor_mm is None:
         return None
     focal = ball_pixels.mode_focal_px(arm.width, rig)
+    # the tape starts at the radar window, at the RX row's depth (audit F11)
     camera_mm = tee_mm + (rig.iwr_offset_mm[2] if rig.iwr_offset_mm else 0.0)
     drop = rig.lens_height_above_floor_mm - BALL_DIAMETER_MM / 2.0
     along = math.sqrt(max(camera_mm**2 - drop**2, 1.0))
@@ -2031,6 +2033,7 @@ def distance_cues(
         else:
             cues["from_floor_mm"] = None
     if tee_mm is not None:
+        # the tape starts at the radar window, at the RX row's depth (audit F11)
         offset = rig.iwr_offset_mm[2] if rig.iwr_offset_mm else 0.0
         tape = tee_mm + offset
         cues["tape_mm"] = round(tape)
@@ -2133,7 +2136,9 @@ def _reference_ball_camera(
 
         artifact = json.loads(optical_calibration.read_text(encoding="utf-8"))
         placement = json.loads(camera_placement.read_text(encoding="utf-8"))
-        # the kiosk's own placement checks, run at setup (wiring audit C11)
+        # the kiosk's own placement checks, run at setup (wiring audit C11); a
+        # placement measures the RX row, so it is checked against the rig's RX
+        # row, not the phase centre derived from it (audit F11)
         rig = RigGeometry.from_json(rig_geometry)
         check_placement_against_rig(
             placement,
@@ -2168,7 +2173,8 @@ def _reference_ball_camera(
             f"(status {tilt.get('status') or 'unknown'}); wait for a stable reading"
         )
     camera = np.asarray((0.0, 0.0, rig.lens_height_above_floor_mm / 1000.0))
-    offset = np.asarray(camera_rdf_offset_to_target_lfu(rig.iwr_offset_mm or (0.0, 0.0, 0.0)))
+    # the radar's ranges start at its phase centre, not the RX row (audit F11)
+    offset = np.asarray(camera_rdf_offset_to_target_lfu(rig.iwr_origin_mm or (0.0, 0.0, 0.0)))
     return BallPlaneCamera.nominal(
         focal_px=ball_pixels.mode_focal_px(arm.width, rig),
         image_width_px=arm.width,

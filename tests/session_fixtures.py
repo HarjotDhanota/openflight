@@ -31,7 +31,11 @@ BALL_SPEED_MS = 45.0
 LAUNCH_DEG = 18.0
 WIDTH, HEIGHT, FRAMES, PRE_TRIGGER = 320, 200, 24, 18
 SETUP_HASH = "5e" * 32
-RIG_PARAMETERS = {"camera_mount_height_m": 0.095, "lis3dh_mount_yaw_deg": 180.0}
+RIG_PARAMETERS = {
+    "camera_mount_height_m": 0.095,
+    "iwr_board_rotation_deg": 90.0,
+    "lis3dh_mount_yaw_deg": 180.0,
+}
 
 
 def ops_capture(shot: int) -> dict:

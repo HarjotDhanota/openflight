@@ -55,7 +55,7 @@ This already removes the door knobs and clothes in the 28 Sept field frame (well
 **A2a: setup semantics (implemented, 59bcb616)**
 
 - **Setup instruction:** "Place one ball directly on the hitting surface (on the mat or grass, not on a tee) where you will hit from". This replaces "exactly as you'll hit it".
-- **Heights are above the hitting surface.** The radar's height above the surface is the lens height minus 44 mm.
+- **Heights are above the hitting surface.** The radar's height above the surface is the lens height minus 36.2 mm: the IWR's phase centre, 7.85 mm above the RX row that sits 44 mm below the lens (F11).
 - **The rig file's lens height is the default.** It is exact whenever the unit and the ball stand on the same surface, which is also what TrackMan, Garmin and Rapsodo assume.
 - **The one-ball radar solve is a gross-error check, not a measurement.**
   - It is only good to about ±25–65 mm, because the ball sits just 2–3° below level, so each degree of tilt error costs about 22 mm at 1.25 m.

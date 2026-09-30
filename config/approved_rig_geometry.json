@@ -6,6 +6,11 @@
    "rig_geometry_params_sha256": "79870a2be3475a405260fa2ff8d00b8f5fe501632da634369fd4a800382cbaa1",
    "file": "config/enclosure_v3_rig_geometry.json",
    "description": "v3 enclosure as measured by Harjot 2026-09-22; nominal focal_px pending checkerboard calibration"
+  },
+  {
+   "rig_geometry_params_sha256": "f2b05c97a21b4436e4621e8f88f17da02a1ee33b84ad05ab9ff24511ea2685ef",
+   "file": "config/enclosure_v3_rig_geometry.json",
+   "description": "v3 enclosure as measured by Harjot 2026-09-22, with the IWR board rotation (+90 deg) he reported 2026-09-29 (audit F11); nominal focal_px pending checkerboard calibration"
   }
  ]
 }
