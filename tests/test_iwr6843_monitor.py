@@ -390,3 +390,76 @@ def test_capture_monitor_force_closes_serial_when_dump_never_finishes(tmp_path, 
 
     assert radar.shutdown_events == ["close"]
     assert radar.closed
+
+
+def test_trigger_observers_can_be_added_and_removed_after_start(tmp_path):
+    """P7-1: the OPS trigger listens to BCM17 through the IWR monitor's edges."""
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+    observed = []
+    monitor = IWR6843CaptureMonitor(
+        config_path=config,
+        output_dir=tmp_path / "dumps",
+        radar=FakeRadar(_raw_dump()),
+        button_factory=FakeButton,
+    )
+    monitor.start()
+
+    monitor.add_trigger_observer(observed.append)
+    monitor.add_trigger_observer(observed.append)
+    assert monitor.notify_trigger(10.0)
+    monitor.remove_trigger_observer(observed.append)
+    monitor.remove_trigger_observer(observed.append)
+    assert monitor.capture_for_shot(10.0, timeout_s=1.0) is not None
+    assert monitor.notify_trigger(20.0)
+
+    assert observed == [10.0]
+    monitor.stop()
+
+
+def test_observers_hear_every_edge_while_the_iwr_is_dumping(tmp_path):
+    """P7-2: a false edge's 7 s IWR dump must not hide the real impact from the camera.
+
+    Outdoors-test-7: an edge at 10:19:57.933 started a dump; the swing at
+    10:20:00.468 got no camera clip because the camera heard edges only when
+    the IWR queued them.
+    """
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+
+    class BlockingRadar(FakeRadar):
+        def __init__(self, raw):
+            super().__init__(raw)
+            self.read_started = threading.Event()
+            self.release_read = threading.Event()
+            self.reads = 0
+
+        def read_dump(self):
+            self.reads += 1
+            self.read_started.set()
+            self.release_read.wait(timeout=2.0)
+            return self.raw
+
+    radar = BlockingRadar(_raw_dump())
+    observed = []
+    monitor = IWR6843CaptureMonitor(
+        config_path=config,
+        output_dir=tmp_path / "dumps",
+        radar=radar,
+        button_factory=FakeButton,
+        trigger_observers=[observed.append],
+    )
+    monitor.start()
+
+    assert monitor.notify_trigger(100.0)
+    assert radar.read_started.wait(timeout=0.5)
+    # Busy: the IWR skips these, the camera still hears the ones 0.1 s apart.
+    assert not monitor.notify_trigger(100.05)
+    assert not monitor.notify_trigger(102.5)
+    assert not monitor.notify_trigger(102.55)
+    radar.release_read.set()
+
+    assert monitor.capture_for_shot(100.0, timeout_s=1.0).trigger_timestamp == 100.0
+    assert observed == [100.0, 102.5]
+    assert radar.reads == 1
+    monitor.stop()

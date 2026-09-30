@@ -3022,6 +3022,7 @@ class TestShutdownPreservesRollingBuffer:
                 timeout,
                 cancel_event=None,
                 on_first_byte=None,
+                gate_edge_time=None,
             ):
                 self.cancel_event = cancel_event
                 waiting.set()

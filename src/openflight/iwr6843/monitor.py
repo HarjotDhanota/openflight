@@ -93,6 +93,7 @@ class IWR6843CaptureMonitor:
         self._capture_active = False
         self._sequence = 0
         self._last_edge_timestamp = 0.0
+        self._last_observed_edge_timestamp = 0.0
         self._events: queue.Queue[float | None] = queue.Queue(maxsize=1)
         self._captures: deque[IWR6843Capture] = deque()
         self._condition = threading.Condition()
@@ -168,30 +169,50 @@ class IWR6843CaptureMonitor:
         self._armed = True
         logger.info("[IWR6843] Armed on BCM%d", self.gpio_pin)
 
+    def add_trigger_observer(self, observer: Callable[[float], None]) -> None:
+        """Also tell ``observer`` about each accepted GPIO edge (added once)."""
+        with self._condition:
+            if observer not in self._trigger_observers:
+                self._trigger_observers.append(observer)
+
+    def remove_trigger_observer(self, observer: Callable[[float], None]) -> None:
+        """Stop telling ``observer`` about GPIO edges; unknown observers are ignored."""
+        with self._condition:
+            if observer in self._trigger_observers:
+                self._trigger_observers.remove(observer)
+
     def notify_trigger(self, timestamp: float | None = None) -> bool:
         """Queue a GPIO edge without doing serial work in the callback."""
         if not self._running or not self._armed:
             return False
         edge_timestamp = time.time() if timestamp is None else float(timestamp)
         with self._condition:
-            # Reject acoustic ringing and any second edge while the seven-second
-            # UART dump is in flight. The OPS side makes the same shot wait.
-            if (
-                self._capture_active
-                or not self._events.empty()
-                or edge_timestamp - self._last_edge_timestamp < 0.1
-            ):
-                logger.debug("[IWR6843] Ignoring duplicate/busy trigger edge")
+            # Reject acoustic ringing: one edge per 0.1 s reaches anyone.
+            if edge_timestamp - self._last_observed_edge_timestamp < 0.1:
+                logger.debug("[IWR6843] Ignoring duplicate trigger edge")
                 return False
-            self._last_edge_timestamp = edge_timestamp
-            self._events.put_nowait(edge_timestamp)
-            self._condition.notify_all()
-        for observer in self._trigger_observers:
+            self._last_observed_edge_timestamp = edge_timestamp
+            # The IWR skips any edge while its seven-second UART dump is in
+            # flight, but the observers (camera, OPS) still hear it (P7-2): a
+            # false edge's dump once hid a real impact from the camera.
+            queued = self._events.empty() and not self._capture_active
+            if queued:
+                self._last_edge_timestamp = edge_timestamp
+                self._events.put_nowait(edge_timestamp)
+                self._condition.notify_all()
+            else:
+                logger.info(
+                    "[IWR6843] Edge at %.3f during dump #%d: IWR skipped it, observers told",
+                    edge_timestamp,
+                    self._sequence,
+                )
+            observers = tuple(self._trigger_observers)
+        for observer in observers:
             try:
                 observer(edge_timestamp)
             except Exception:  # pylint: disable=broad-exception-caught
                 logger.warning("[IWR6843] Trigger observer failed", exc_info=True)
-        return True
+        return queued
 
     def _validate_dump(self, raw: bytes) -> dict:
         if len(raw) < HEADER.size:

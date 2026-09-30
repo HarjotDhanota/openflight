@@ -303,6 +303,9 @@ class Shot:
     spin_axis_deg: Optional[float] = None  # Spin axis tilt: 0=backspin, +right(fade), -left(draw)
     inclinometer: Optional[dict] = None  # Stable enclosure orientation used for this shot
     stage_timing: Optional[dict] = None
+    # Trigger evidence a tester shot lacked but was kept without, as
+    # [{"id", "reason"}]; None when nothing was missing (P7-3).
+    missing_trigger_evidence: Optional[list] = None
     server_callback_started_monotonic_ns: Optional[int] = field(
         default=None,
         repr=False,
@@ -455,6 +458,7 @@ class Shot:
             "experimental_camera_iwr_delta_deg": self.experimental_camera_iwr_delta_deg,
             "camera_replay": dict(self.camera_replay) if self.camera_replay else None,
             "stage_timing": deepcopy(self.stage_timing),
+            "missing_trigger_evidence": deepcopy(self.missing_trigger_evidence),
             "camera_fusion_context": (
                 dict(self.camera_fusion_context) if self.camera_fusion_context else None
             ),
