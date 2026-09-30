@@ -1884,10 +1884,18 @@ def _reference_ball_camera(
     if optical_calibration is not None and camera_placement is not None:
         from openflight.camera.calibrated_projection import (  # noqa: PLC0415
             build_calibrated_camera_model,
+            check_placement_against_rig,
         )
 
         artifact = json.loads(optical_calibration.read_text(encoding="utf-8"))
         placement = json.loads(camera_placement.read_text(encoding="utf-8"))
+        # the kiosk's own placement checks, run at setup (wiring audit C11)
+        rig = RigGeometry.from_json(rig_geometry)
+        check_placement_against_rig(
+            placement,
+            rig_params_sha256=rig.snapshot()["sha256"],
+            iwr_offset_mm=rig.iwr_offset_mm,
+        )
         saved = artifact.get("candidate", artifact).get("mode_profile", {}).get("saved_image", {})
         if (saved.get("width"), saved.get("height")) != (arm.width, arm.height):
             raise ValueError("calibrated camera mode does not match the active capture mode")

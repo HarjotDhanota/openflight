@@ -294,6 +294,43 @@ def _inclination_rotation(pitch_deg: float, roll_deg: float) -> np.ndarray:
     )
 
 
+def check_placement_against_rig(
+    placement: Mapping[str, Any],
+    *,
+    rig_params_sha256: str | None,
+    iwr_offset_mm: Any,
+) -> None:
+    """Refuse a placement written for another rig, or whose origins contradict it.
+
+    The placement must name the loaded rig's parameter fingerprint, and its
+    camera-to-radar origins must match the rig's IWR offset carried through the
+    declared mount and alignment. The swing server and the tester's setup run
+    the same checks, so a mismatch is refused at setup rather than at the kiosk
+    (wiring audit C11).
+    """
+    if not rig_params_sha256 or placement.get("rig_geometry_sha256") != rig_params_sha256:
+        raise ValueError("camera placement rig_geometry_sha256 does not match the loaded rig")
+    if iwr_offset_mm is None:
+        raise ValueError("loaded rig lacks the measured IWR-to-camera offset")
+    mount = np.asarray(placement.get("optical_to_enclosure_lfu"), dtype=float)
+    alignment = np.asarray(placement.get("enclosure_to_target_lfu"), dtype=float)
+    expected_offset = alignment @ mount @ (np.asarray(iwr_offset_mm, dtype=float) / 1000.0)
+    declared_offset = np.asarray(placement.get("radar_origin_lfu"), dtype=float) - np.asarray(
+        placement.get("camera_origin_lfu"), dtype=float
+    )
+    tolerance = float(placement.get("rig_offset_consistency_tolerance_m", -1))
+    if (
+        expected_offset.shape != (3,)
+        or declared_offset.shape != (3,)
+        or tolerance < 0
+        or not np.all(np.isfinite(expected_offset))
+        or not np.all(np.isfinite(declared_offset))
+        or not math.isfinite(tolerance)
+        or np.linalg.norm(expected_offset - declared_offset) > tolerance
+    ):
+        raise ValueError("camera placement origins contradict the loaded rig offset")
+
+
 def build_calibrated_camera_model(
     artifact: Mapping[str, Any],
     placement: Mapping[str, Any],

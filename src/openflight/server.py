@@ -1506,31 +1506,16 @@ def init_camera_calibrated_fusion(calibration_path: str | None, placement_path: 
     placement = json.loads(Path(placement_path).read_text(encoding="utf-8"))
     if not isinstance(calibration, dict) or not isinstance(placement, dict):
         raise ValueError("camera calibration and placement files must contain JSON objects")
-    loaded_rig_hash = (rig_geometry_config.get("snapshot") or {}).get("sha256")
-    if not loaded_rig_hash or placement.get("rig_geometry_sha256") != loaded_rig_hash:
-        raise ValueError("camera placement rig_geometry_sha256 does not match the loaded rig")
-    if rig_geometry is None or rig_geometry.iwr_offset_mm is None:
-        raise ValueError("loaded rig lacks the measured IWR-to-camera offset")
-    mount = np.asarray(placement.get("optical_to_enclosure_lfu"), dtype=float)
-    alignment = np.asarray(placement.get("enclosure_to_target_lfu"), dtype=float)
-    expected_offset = (
-        alignment @ mount @ (np.asarray(rig_geometry.iwr_offset_mm, dtype=float) / 1000.0)
+    from .camera.calibrated_projection import (
+        build_calibrated_camera_model,
+        check_placement_against_rig,
     )
-    declared_offset = np.asarray(placement.get("radar_origin_lfu"), dtype=float) - np.asarray(
-        placement.get("camera_origin_lfu"), dtype=float
+
+    check_placement_against_rig(
+        placement,
+        rig_params_sha256=(rig_geometry_config.get("snapshot") or {}).get("sha256"),
+        iwr_offset_mm=getattr(rig_geometry, "iwr_offset_mm", None),
     )
-    tolerance = float(placement.get("rig_offset_consistency_tolerance_m", -1))
-    if (
-        expected_offset.shape != (3,)
-        or declared_offset.shape != (3,)
-        or tolerance < 0
-        or not np.all(np.isfinite(expected_offset))
-        or not np.all(np.isfinite(declared_offset))
-        or not math.isfinite(tolerance)
-        or np.linalg.norm(expected_offset - declared_offset) > tolerance
-    ):
-        raise ValueError("camera placement origins contradict the loaded rig offset")
-    from .camera.calibrated_projection import build_calibrated_camera_model
 
     reference = placement.get("reference_pose_deg") or {}
     build_calibrated_camera_model(
