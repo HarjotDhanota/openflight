@@ -12,6 +12,8 @@ import {
 } from '../types/shot';
 import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimStatus } from '../types/socket';
 import type { PowerStatus } from '../types/power';
+import type { ReadyLight } from '../types/readyLight';
+import { kioskRestartingLight } from '../utils/readyLight';
 import { getServerOrigin } from '../utils/serverOrigin';
 import { handleShotMessage, handleShotUpdate, type ShotMessage, type ShotUpdateMessage } from './handleShotMessage';
 import { ingestSessionClub } from './sessionClubSync';
@@ -57,7 +59,10 @@ class SocketService {
 
     this.socket.on('disconnect', () => {
       console.log('Disconnected from server');
-      useSystemStore.getState().setConnected(false);
+      const systemStore = useSystemStore.getState();
+      systemStore.setConnected(false);
+      // The kiosk is restarting or gone: never leave a green light up.
+      systemStore.setReadyLight(kioskRestartingLight(systemStore.readyLight));
       useShotStore.getState().finishShotProcessing();
     });
 
@@ -90,6 +95,10 @@ class SocketService {
 
     this.socket.on('power_status', (data: PowerStatus) => {
       useSystemStore.getState().setPowerStatus(data);
+    });
+
+    this.socket.on('ready_light', (data: ReadyLight) => {
+      useSystemStore.getState().setReadyLight(data);
     });
 
     this.socket.on('sim_shot', (data: SimShotInfo) => {

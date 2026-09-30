@@ -26,6 +26,14 @@ export const pt: Messages = {
   'live.dismiss': 'Fechar',
   'live.dismissAlert': 'Fechar alerta do radar TI',
 
+  'ready.label': 'Luz de pronto',
+  'ready.swing': 'BATA',
+  'ready.wait': 'ESPERE',
+  'ready.notReady': 'NÃO PRONTO',
+  'ready.timeLeft': 'cerca de {seconds} s',
+  'ready.lastSwing': 'Último swing: {result}',
+  'ready.swingPickedUp': 'Swing detectado',
+
   'replay.open': 'Replay',
   'replay.title': 'Replay da tacada',
   'replay.preparing': 'Preparando replay',
