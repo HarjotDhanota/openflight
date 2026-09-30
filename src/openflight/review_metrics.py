@@ -567,15 +567,23 @@ def overlay(result: Mapping[str, Any]) -> dict[str, Any]:
                 "reason": diagnostics.get("selected_source"),
             }
         )
-    return {
-        "expected_region": {
+    gate = mapping(diagnostics.get("gate"))
+    if gate:
+        # the gate the ball stage used: the setup's ball, or the fixed fractions (P8-7)
+        expected = {
+            "source": gate.get("source"),
+            "region_px": list(gate.get("region_px") or []),
+            "diameter_px": list(gate.get("diameter_px") or []),
+            "setup_ball": gate.get("setup_ball"),
+        }
+    else:
+        expected = {
             "x_fraction": list(REFERENCE_BALL_X_FRACTION),
             "y_fraction": list(REFERENCE_BALL_Y_FRACTION),
             "diameter_px": list(REFERENCE_BALL_DIAMETER_PX),
             "source": "openflight.camera.ball_flight reference-ball gate",
-        },
-        "candidates": candidates,
-    }
+        }
+    return {"expected_region": expected, "candidates": candidates}
 
 
 def _comparison(  # pylint: disable=too-many-arguments,too-many-positional-arguments

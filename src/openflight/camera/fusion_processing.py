@@ -140,6 +140,7 @@ def build_context(
     session_uuid: str,
     shot_number: int,
     notes: list[str] | None = None,
+    setup_ball: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Freeze every non-archive input before either stateful tracker changes.
 
@@ -166,6 +167,8 @@ def build_context(
         "session_uuid": session_uuid,
         "shot_number": shot_number,
         "notes": [str(note) for note in notes or ()],
+        # where the setup saw the resting ball; the ball gate follows it (P8-7)
+        "setup_ball": dict(setup_ball) if setup_ball else None,
     }
     payload = _json_value(payload)
     payload["sha256"] = geometry_fingerprint(payload)
@@ -214,6 +217,7 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
             ball_tracker=ball_tracker,
             sensor_timestamps_ns=_sensor_timestamps(archive),
             trigger_frame_index=exposure_trigger_index(archive, len(frames)),
+            setup_ball=context.get("setup_ball"),
         )
     except Exception as error:  # stage isolation is part of the persisted contract
         ball = CameraBallEstimate(status="error")

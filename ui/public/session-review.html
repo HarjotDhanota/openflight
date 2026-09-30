@@ -687,12 +687,18 @@
         context.lineWidth = 2;
         context.setLineDash([6, 4]);
         context.strokeStyle = '#ffd400';
-        context.strokeRect(
-          region.x_fraction[0] * width,
-          region.y_fraction[0] * height,
-          (region.x_fraction[1] - region.x_fraction[0]) * width,
-          (region.y_fraction[1] - region.y_fraction[0]) * height
-        );
+        if (region.region_px && region.region_px.length === 4) {
+          // the gate the ball stage used: the setup's ball, in image pixels (P8-7)
+          const [x0, y0, x1, y1] = region.region_px;
+          context.strokeRect(x0 / step, y0 / step, (x1 - x0) / step, (y1 - y0) / step);
+        } else {
+          context.strokeRect(
+            region.x_fraction[0] * width,
+            region.y_fraction[0] * height,
+            (region.x_fraction[1] - region.x_fraction[0]) * width,
+            (region.y_fraction[1] - region.y_fraction[0]) * height
+          );
+        }
         context.setLineDash([]);
         context.font = `${Math.max(10, Math.round(width / 40))}px system-ui`;
         const colours = { scene: '#ff5a5a', impact: '#4fc3f7', selected: '#5ed39a' };

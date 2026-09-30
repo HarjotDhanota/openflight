@@ -99,3 +99,20 @@ def test_camera_notes_label_every_camera_metric():
         assert metric["status"] == "experimental", key
         assert note in metric["reason"], key
         assert metric["details"]["notes"] == [note]
+
+
+def test_the_overlay_shows_the_gate_the_ball_stage_used():
+    gate = {
+        "source": "setup_ball",
+        "setup_ball": {"x": 778.0, "y": 463.0, "diameter_px": 31.0},
+        "region_px": [685.0, 370.0, 871.0, 556.0],
+        "diameter_px": [18.6, 49.6],
+    }
+    ball = {
+        "status": "rejected_reference_ball_not_found",
+        "reference_ball_diagnostics": {"gate": gate},
+    }
+    reviewed = review_replay(_report({"status": "rejected_no_ball"}, ball), {})
+    region = reviewed["overlay"]["expected_region"]
+    assert region["source"] == "setup_ball"
+    assert region["region_px"] == gate["region_px"]

@@ -41,6 +41,56 @@ REFERENCE_BALL_DIAMETER_PX = ball_pixels.REFERENCE_BALL_DIAMETER_PX
 REFERENCE_FRAME_INTERVAL_S = 1.0 / 300.0
 REFERENCE_BALL_X_FRACTION = (0.1, 0.9)
 REFERENCE_BALL_Y_FRACTION = (0.4, 0.95)
+# With the setup's ball (P7-8's --camera-setup-ball), the gate is that ball: a
+# resting ball within a few diameters of where the setup saw it (a re-teed ball
+# anywhere in the placement box), at a size its distance allows (P8-7). The
+# fixed fractions above stand in only when there is no setup ball.
+SETUP_BALL_SEARCH_DIAMETERS = 3.0
+SETUP_BALL_SIZE_RATIO = (0.6, 1.6)
+
+
+def reference_ball_gate(
+    setup_ball: dict | None, image_width_px: int, image_height_px: int
+) -> dict[str, Any]:
+    """Where and at what size the resting ball is accepted, and which rule says so."""
+    if setup_ball:
+        x, y, diameter = (float(setup_ball[key]) for key in ("x", "y", "diameter_px"))
+        reach = SETUP_BALL_SEARCH_DIAMETERS * diameter
+        return {
+            "source": "setup_ball",
+            "setup_ball": {"x": x, "y": y, "diameter_px": diameter},
+            "region_px": [
+                max(0.0, x - reach),
+                max(0.0, y - reach),
+                min(float(image_width_px), x + reach),
+                min(float(image_height_px), y + reach),
+            ],
+            "diameter_px": [
+                diameter * SETUP_BALL_SIZE_RATIO[0],
+                diameter * SETUP_BALL_SIZE_RATIO[1],
+            ],
+        }
+    scale = ball_pixels.pixel_scale(image_width_px)
+    left, right = (image_width_px * f for f in REFERENCE_BALL_X_FRACTION)
+    top, bottom = (image_height_px * f for f in REFERENCE_BALL_Y_FRACTION)
+    return {
+        "source": "fixed_fractions",
+        "setup_ball": None,
+        "region_px": [left, top, right, bottom],
+        "diameter_px": list(ball_pixels.ball_diameter_bounds_px(scale)),
+    }
+
+
+def gate_admits(gate: dict[str, Any], candidate) -> bool:
+    """Whether a resting-ball candidate lies in the gate's region at its size."""
+    left, top, right, bottom = gate["region_px"]
+    smallest, largest = gate["diameter_px"]
+    return (
+        smallest <= candidate.diameter_px <= largest
+        and left <= candidate.x <= right
+        and top <= candidate.y <= bottom
+    )
+
 
 # OpenCV's extension members are not visible to Pylint.
 # pylint: disable=no-member
@@ -410,17 +460,25 @@ def _reference_candidate(candidate: ReferenceBall | None, reason: str | None) ->
 
 
 # pylint: disable-next=too-many-branches
-def _select_reference_ball(frames, trigger_frame: int, geometry, ball_tracker):
-    """Choose between scene and impact evidence while retaining both observations."""
+def _select_reference_ball(  # pylint: disable=too-many-locals
+    frames, trigger_frame: int, geometry, ball_tracker, setup_ball: dict | None = None
+):
+    """Choose between scene and impact evidence while retaining both observations.
+
+    ``setup_ball`` (x, y, diameter_px in this mode) is where the setup saw the
+    resting ball; the gate and both detectors' search follow it (P8-7).
+    """
     candidates: dict[str, ReferenceBall | None] = {"scene": None, "impact": None}
     reasons: dict[str, str | None] = {"scene": None, "impact": None}
     scale = ball_pixels.pixel_scale(geometry.image_width_px)
+    gate = reference_ball_gate(setup_ball, geometry.image_width_px, geometry.image_height_px)
+    region = tuple(int(round(value)) for value in gate["region_px"]) if setup_ball else None
     for name, detector, kwargs in (
-        ("scene", detect_reference_ball, {"pixel_scale": scale}),
+        ("scene", detect_reference_ball, {"pixel_scale": scale, "roi": region}),
         (
             "impact",
             detect_impact_reference_ball,
-            {"trigger_frame_index": trigger_frame, "pixel_scale": scale},
+            {"trigger_frame_index": trigger_frame, "pixel_scale": scale, "region": region},
         ),
     ):
         try:
@@ -431,14 +489,7 @@ def _select_reference_ball(frames, trigger_frame: int, geometry, ball_tracker):
     def plausible(candidate: ReferenceBall | None) -> bool:
         if candidate is None:
             return False
-        smallest, largest = ball_pixels.ball_diameter_bounds_px(scale)
-        left, right = (geometry.image_width_px * f for f in REFERENCE_BALL_X_FRACTION)
-        top, bottom = (geometry.image_height_px * f for f in REFERENCE_BALL_Y_FRACTION)
-        basic = (
-            smallest <= candidate.diameter_px <= largest
-            and left <= candidate.x <= right
-            and top <= candidate.y <= bottom
-        )
+        basic = gate_admits(gate, candidate)
         if not basic or geometry.calibrated_model is None:
             return basic
         try:
@@ -454,7 +505,11 @@ def _select_reference_ball(frames, trigger_frame: int, geometry, ball_tracker):
     eligible = dict(candidates)
     for name, candidate in observations.items():
         if candidate is not None and not plausible(candidate):
-            reasons[name] = "candidate failed size or hitting-zone geometry"
+            reasons[name] = (
+                "candidate is not where or the size the setup ball was"
+                if setup_ball
+                else "candidate failed size or hitting-zone geometry"
+            )
             eligible[name] = None
     scene, impact = eligible["scene"], eligible["impact"]
     agreement = None
@@ -502,6 +557,7 @@ def _select_reference_ball(frames, trigger_frame: int, geometry, ball_tracker):
         "selected_source": selected_source,
         "selected_candidate": vars(selected).copy() if selected is not None else None,
         "disagreement": agreement is False,
+        "gate": gate,
     }
     return selected, diagnostics
 
@@ -680,6 +736,7 @@ def estimate_camera_ball_flight(
     ball_tracker=None,
     sensor_timestamps_ns: np.ndarray | None = None,
     trigger_frame_index: int | None = None,
+    setup_ball: dict | None = None,
 ) -> CameraBallEstimate:
     """Estimate horizontal flight with a frozen detector-consensus sweep.
 
@@ -702,7 +759,7 @@ def estimate_camera_ball_flight(
         else int(np.argmin(np.abs(timestamps_ns.astype(np.int64) - trigger_ns)))
     )
     anchor, reference_diagnostics = _select_reference_ball(
-        frames, trigger_frame, geometry, ball_tracker
+        frames, trigger_frame, geometry, ball_tracker, setup_ball=setup_ball
     )
     if anchor is None:
         return CameraBallEstimate(
@@ -710,7 +767,9 @@ def estimate_camera_ball_flight(
             reference_ball_diagnostics=reference_diagnostics,
         )
     scale = ball_pixels.pixel_scale(geometry.image_width_px)
-    smallest, largest = ball_pixels.ball_diameter_bounds_px(scale)
+    smallest, largest = reference_ball_gate(
+        setup_ball, geometry.image_width_px, geometry.image_height_px
+    )["diameter_px"]
     if not smallest <= anchor.diameter_px <= largest:
         return CameraBallEstimate(
             "rejected_implausible_reference_ball",

@@ -376,3 +376,18 @@ def test_a_context_recorded_before_notes_names_its_ineligible_lighting(monkeypat
 
 def test_eligible_lighting_carries_no_notes():
     assert fp.process_camera_fusion(_context(), _archive())["notes"] == []
+
+
+def test_the_setup_ball_rides_in_the_context_to_the_ball_gate(monkeypatch):
+    """P8-7: the setup's ball, not fixed fractions, is the resting-ball gate."""
+    seen = {}
+    monkeypatch.setattr(
+        fp,
+        "estimate_camera_ball_flight",
+        lambda *_a, **kwargs: seen.update(kwargs) or CameraBallEstimate(status="x"),
+    )
+    ball = {"x": 4.0, "y": 3.0, "diameter_px": 2.0}
+    context = fp.build_context(**{**_context_kwargs(), "setup_ball": ball})
+    fp.process_camera_fusion(context, _archive())
+    assert context["setup_ball"] == ball
+    assert seen["setup_ball"] == ball

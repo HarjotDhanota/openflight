@@ -4269,6 +4269,7 @@ def _fuse_camera_measurements(
                 session_uuid=session_uuid,
                 shot_number=shot_number,
                 notes=camera_notes,
+                setup_ball=camera_capture_config.get("setup_ball"),
             )
             shot.camera_fusion_context = context
             result = process_camera_fusion(context, camera_archive)
