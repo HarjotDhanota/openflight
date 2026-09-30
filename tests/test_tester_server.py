@@ -2771,8 +2771,18 @@ class TestTheLadderHoldsUp:
         assert (tmp_path / "20260922-name" / "comparator" / saved).is_file()
 
 
-FULL_RUNGS = ["full-300", "full-200", "full-150", "full-100", "full-75", "full-50", "full-30"]
-HALF_RUNGS = ["half-300", "half-150", "half-75"]
+FULL_RUNGS = [
+    "full-300",
+    "full-200",
+    "full-150",
+    "full-100",
+    "full-75",
+    "full-50",
+    "full-30",
+    "full-20",
+    "full-10",
+]
+HALF_RUNGS = ["half-300", "half-150", "half-75", "half-30", "half-15"]
 
 
 class TestTheTesterChoosesTheSettings:

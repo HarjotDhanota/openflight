@@ -151,8 +151,8 @@ the physical setup. Then work down **Test suite**:
    from the measured light, down to a few tens of microseconds in sun, so it
    works outdoors too.
 
-   Above the button, tick boxes choose which exposures run: 300 to 30 µs at
-   1280×800 and 300, 150 and 75 µs at 640×400. All are ticked unless you
+   Above the button, tick boxes choose which exposures run: 300 to 10 µs at
+   1280×800 and 300, 150, 75, 30 and 15 µs at 640×400. All are ticked unless you
    changed them; the page remembers your choice. Unticked exposures are
    skipped and recorded as "not selected by the tester", not as a light
    failure. If no 640×400 box is ticked, the ladder ends after 1280×800 with no
@@ -424,7 +424,7 @@ too dark skips the shorter rungs in its mode, since they are darker still. A swi
 taken while the ladder was correcting the gain or taking a photo is set aside: it
 is kept, but it neither counts towards the five nor fails the rung. On 29 Sept
 (Outdoors-test-3) the old zone rule failed every rung on a sunlit patio beyond the
-mat, and each failure skipped the rest of its mode. The 1280×800 mode now has two sunlight rungs after 75 µs, at 50 and 30 µs, and the setup search reaches 10 µs; the OV9281 accepts exposures down to 9 µs (one row). Indoors they are skipped with the rest once 75 µs is too dark.
+mat, and each failure skipped the rest of its mode. The 1280×800 mode now has four sunlight rungs after 75 µs, at 50, 30, 20 and 10 µs, and 640×400 has two, at 30 and 15 µs (30 Sept, full sun: the setup locked the ball at 10 µs and 30 µs was marginal); the setup search reaches 10 µs, and the OV9281 accepts exposures down to 9 µs (one row). Indoors they are skipped with the rest once 75 µs is too dark. The pre-rung check looks for the ball only around where the setup saw it and takes nothing more than about one ball diameter away, so fence or foliage clutter is never judged in its place; a ball melted into a clipped, sunlit patch of mat is judged where the setup saw it, so the too-bright exposure is skipped.
 
 Keep the ball in the camera's view on the live preview: with the lens about 95 mm off
 the ground, a raised mat edge or bumper between the unit and the ball hides it.

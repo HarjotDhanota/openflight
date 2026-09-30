@@ -68,6 +68,11 @@ ZONE_TARGET_SIGNAL_DN = 40.0
 BALL_CEILING_DN = 200.0  # a zone correction never pushes the ball's median past this
 # One light rule for the pre-rung check and the per-swing verdict (wiring audit B6).
 RED_LIGHT_CAUSES = frozenset({"ball_clipped", "ball_dark", "zone_dark", "zone_clipped_no_ball"})
+# The ball is searched for this many diameters around where the setup saw it, and
+# must lie within about one diameter of that spot (P7-9).
+BALL_SEARCH_DIAMETERS = 2.0
+BALL_SEARCH_MIN_PX = 30.0
+BALL_MATCH_DIAMETERS = 1.0
 DARK_LIGHT_CAUSES = frozenset({"ball_dark", "zone_dark"})
 # No verdict without the setup's ball position (P6-1): without it the ball
 # cannot be told from a speck, a spare ball or a white cloth.
@@ -86,11 +91,13 @@ class Rung:
 
 
 # 50 and 30 us are for sunlight (outdoors 29 Sept a ball in sun clipped at 50 us x 1
-# during setup); indoors they are skipped with the rest once 75 us is too dark. The
-# sensor's shortest exposure is 9 us (one row) at 1280x800.
+# during setup); indoors they are skipped with the rest once 75 us is too dark. In
+# full sun on 30 Sept the setup locked the ball at 10 us (7 applied) and 30 us was
+# marginal, so 20 and 10 us follow, and 30 and 15 us at 640x400 (P7-9). The
+# sensor's shortest exposure is 9 us (one row); both modes took 10 us and applied 7.
 LADDER: tuple[Rung, ...] = tuple(
-    [Rung(f"full-{e}", "arm5", e, True) for e in (300, 200, 150, 100, 75, 50, 30)]
-    + [Rung(f"half-{e}", "arm6", e, False) for e in (300, 150, 75)]
+    [Rung(f"full-{e}", "arm5", e, True) for e in (300, 200, 150, 100, 75, 50, 30, 20, 10)]
+    + [Rung(f"half-{e}", "arm6", e, False) for e in (300, 150, 75, 30, 15)]
 )
 RUNG_FPS = {"arm5": 120.0, "arm6": 288.0}
 # A setting the tester unticked: review and analysis must not read it as a light failure.
@@ -162,46 +169,69 @@ def _zone_noise(frames: np.ndarray) -> float:
     return float(np.median(np.std(zone.astype(np.float32), axis=0)))
 
 
+def _ball_core(image: np.ndarray, x: float, y: float, diameter: float) -> np.ndarray:
+    yy, xx = np.indices(image.shape)
+    return image[np.hypot(xx - x, yy - y) <= 0.8 * diameter / 2.0]
+
+
 def ball_light(
     frames: np.ndarray, black_floor: float, expected_ball: dict | None = None
 ) -> dict | None:
     """The resting ball's brightness in these frames, if the ball can be found.
 
     ``expected_ball`` (x, y, diameter_px) is where the setup saw the ball in this
-    mode. Only a ball of that size near that spot counts, so a shadow or a sun
-    patch is not taken for it. Without it nothing is searched: a whole-frame
-    search took a 5 px speck for the ball (Outdoors-test-5, P6-1).
+    mode. The ball is searched for only around that spot, and only a ball of that
+    size within about one diameter of it counts (P7-9: a six-diameter match took
+    fence clutter 175 px away for the ball in sun). Without it nothing is
+    searched: a whole-frame search took a 5 px speck for the ball (P6-1).
+
+    A ball in a sunlit, clipped patch of mat melts into it and cannot be found;
+    when the setup's spot is itself clipped, that spot is judged (``found_by`` is
+    ``setup_position``), since a ball placed there clips too.
     """
     if expected_ball is None:
         return None
     stack = np.clip(np.asarray(frames), 0, 255).astype(np.uint8)
-    try:
-        found = detect_reference_ball(stack)
-    except (RuntimeError, ValueError):
-        return None
-    # The detector's strict lit-sphere mode (given a size) refuses sunlit or
-    # half-shaded balls, so the result is checked against the setup instead.
     diameter = float(expected_ball["diameter_px"])
-    reach = max(6.0 * diameter, 60.0)
-    if not (
-        0.6 * diameter <= found.diameter_px <= 1.6 * diameter
-        and abs(found.x - float(expected_ball["x"])) <= reach
-        and abs(found.y - float(expected_ball["y"])) <= max(4.0 * diameter, 40.0)
-    ):
-        return None
+    expected_x, expected_y = float(expected_ball["x"]), float(expected_ball["y"])
+    height, width = stack.shape[1:]
+    half = max(BALL_SEARCH_DIAMETERS * diameter, BALL_SEARCH_MIN_PX)
+    roi = (
+        max(0, int(expected_x - half)),
+        max(0, int(expected_y - half)),
+        min(width, int(math.ceil(expected_x + half))),
+        min(height, int(math.ceil(expected_y + half))),
+    )
     image = np.median(stack, axis=0)
-    yy, xx = np.indices(image.shape)
-    core = image[np.hypot(xx - found.x, yy - found.y) <= 0.8 * found.diameter_px / 2.0]
+    try:
+        # The detector's strict lit-sphere mode (given a size) refuses sunlit or
+        # half-shaded balls, so the result is checked against the setup instead.
+        found = detect_reference_ball(stack, roi=roi)
+    except (RuntimeError, ValueError):
+        found = None
+    if found is not None and (
+        0.6 * diameter <= found.diameter_px <= 1.6 * diameter
+        and math.hypot(found.x - expected_x, found.y - expected_y)
+        <= BALL_MATCH_DIAMETERS * diameter
+    ):
+        x, y, size, found_by = float(found.x), float(found.y), float(found.diameter_px), "detector"
+    else:
+        x, y, size, found_by = expected_x, expected_y, diameter, "setup_position"
+    core = _ball_core(image, x, y, size)
     if not core.size:
         return None
+    clipped = float(np.mean(core >= 250) * 100.0)
+    if found_by == "setup_position" and clipped <= CLIPPED_MAX_PCT:
+        return None  # no ball there, and nothing clipped where it should be
     median = float(np.median(core))
     return {
-        "x": float(found.x),
-        "y": float(found.y),
-        "diameter_px": float(found.diameter_px),
+        "x": x,
+        "y": y,
+        "diameter_px": size,
         "median_dn": median,
         "signal_dn": median - black_floor,
-        "clipped_pct": float(np.mean(core >= 250) * 100.0),
+        "clipped_pct": clipped,
+        "found_by": found_by,
     }
 
 
@@ -296,7 +326,11 @@ def pre_rung_check(
     return {
         **light["zone"],
         "noise_dn": _zone_noise(frames),
-        "judged_on": "ball" if light["ball"] is not None else "hitting_zone",
+        "judged_on": (
+            "hitting_zone"
+            if light["ball"] is None
+            else ("setup_position" if light["ball"]["found_by"] == "setup_position" else "ball")
+        ),
         "ball": light["ball"],
         "ok": not red,
         "reason": light["message"] if red else None,
@@ -383,7 +417,7 @@ def swing_verdict(  # pylint: disable=too-many-locals,too-many-arguments
         red.append(f"ball: {NO_SETUP_BALL}")
     elif lit is None:
         amber.append("resting ball not found in the pre-impact frames")
-    else:
+    elif lit["found_by"] == "detector":
         ball = {"x": lit["x"], "y": lit["y"], "diameter_px": lit["diameter_px"]}
     if ball and previous_balls:
         x = float(np.median([b["x"] for b in previous_balls]))

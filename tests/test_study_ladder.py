@@ -2,6 +2,7 @@
 
 import json
 import threading
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -53,9 +54,13 @@ def test_the_ladder_is_the_agreed_rungs():
         ("arm5", 75),
         ("arm5", 50),
         ("arm5", 30),
+        ("arm5", 20),
+        ("arm5", 10),
         ("arm6", 300),
         ("arm6", 150),
         ("arm6", 75),
+        ("arm6", 30),
+        ("arm6", 15),
     ]
     assert all(r.photos for r in sl.LADDER if r.arm_id == "arm5")
     assert not any(r.photos for r in sl.LADDER if r.arm_id == "arm6")
@@ -168,9 +173,18 @@ def test_a_dark_rung_skips_itself_and_the_shorter_ones_in_its_mode(tmp_path):
     rungs = state.to_dict()["rungs"]
     statuses = [
         rungs[r]["status"]
-        for r in ("full-200", "full-150", "full-100", "full-75", "full-50", "full-30")
+        for r in (
+            "full-200",
+            "full-150",
+            "full-100",
+            "full-75",
+            "full-50",
+            "full-30",
+            "full-20",
+            "full-10",
+        )
     ]
-    assert statuses == ["skipped"] * 6
+    assert statuses == ["skipped"] * 8
     assert state.current.rung_id == "half-300"
 
 
@@ -383,24 +397,24 @@ def test_fifth_accepted_last_full_rung_swing_waits_for_its_exact_photo(tmp_path)
     run.mkdir(parents=True)
     state = sl.LadderState(tmp_path / "ladder.json")
     capture_number = 0
-    for rung_id in ("full-300", "full-200", "full-150", "full-100", "full-75", "full-50"):
+    for rung_id in FULL_IDS[:-1]:
         state.begin(rung_id, 3.0, {"ok": True})
         for _ in range(5):
             state.record_swing(_verdict("green", f"old-{capture_number}"))
             capture_number += 1
-    state.begin("full-30", 12.0, {"ok": True})
+    state.begin("full-10", 12.0, {"ok": True})
     for index in range(4):
-        state.record_swing(_verdict("green", f"full30-{index}"))
+        state.record_swing(_verdict("green", f"full10-{index}"))
     done = []
     runner = _runner(tmp_path, FakeKiosk(), run_dir=tmp_path / "run-01", done=done)
     runner.start_rung()
-    _capture(run, exposure=30, gain=12.0, name="camera_final_30")
+    _capture(run, exposure=10, gain=12.0, name="camera_final_10")
 
     runner.poll_once()
 
     assert runner.state.to_dict()["pending_photo"] == {
-        "capture": "camera_final_30",
-        "rung_id": "full-30",
+        "capture": "camera_final_10",
+        "rung_id": "full-10",
     }
     assert done == []
 
@@ -768,7 +782,14 @@ def test_a_ladder_file_from_before_the_sun_rungs_loads_with_them_pending(tmp_pat
     assert rungs["full-50"]["status"] == "pending"
     assert rungs["full-30"]["status"] == "pending"
     assert state.current.rung_id == "full-300"
-    assert json.loads(path.read_text())["migrated_added_rungs"] == ["full-50", "full-30"]
+    assert json.loads(path.read_text())["migrated_added_rungs"] == [
+        "full-50",
+        "full-30",
+        "full-20",
+        "full-10",
+        "half-30",
+        "half-15",
+    ]
 
 
 def test_sun_rungs_added_after_the_ladder_moved_on_are_skipped_not_reopened(tmp_path):
@@ -824,6 +845,95 @@ def test_the_expected_ball_is_still_found_where_the_setup_saw_it():
 
     assert check["judged_on"] == "ball"
     assert check["ball"]["x"] == pytest.approx(640.0, abs=3.0)
+
+
+# Outdoors-test-7 (30 Sept, full sun): ten resting frames of clip 011 at 298 us x 1,
+# cropped around the fence clutter and the ball, and the setup's 7 us lock around
+# the ball. The rest of each frame is filled flat; the setup ball is the run's
+# tee_range.json camera selection.
+SUN_FIXTURE = Path(__file__).parent / "fixtures" / "exposure" / "outdoors-test-7-sun.npz"
+
+
+def _sun_frames(kind="clip", fill=128):
+    with np.load(SUN_FIXTURE) as data:
+        height, width = (int(v) for v in data["frame_shape"])
+        crop = data[f"{kind}_crop"]
+        x0, y0 = (int(v) for v in data[f"{kind}_origin_xy"])
+        x, y, diameter = (float(v) for v in data["setup_ball_xyd"])
+    crop = crop if crop.ndim == 3 else np.repeat(crop[None], 5, axis=0)
+    frames = np.full((len(crop), height, width), fill, np.uint8)
+    frames[:, y0 : y0 + crop.shape[1], x0 : x0 + crop.shape[2]] = crop
+    return frames, {"x": x, "y": y, "diameter_px": diameter}
+
+
+def test_the_sun_pre_check_judges_the_real_ball_not_the_fence_clutter():
+    # 30 Sept: the check judged a "ball" 175 px left of the real one, fence and
+    # foliage the six-diameter match let through, and never skipped 300 us
+    frames, setup = _sun_frames()
+
+    check = sl.pre_rung_check(frames[:5], 16.0, 1.0, expected_ball=setup)
+
+    assert check["ball"] is not None
+    assert abs(check["ball"]["x"] - setup["x"]) <= setup["diameter_px"]
+    assert abs(check["ball"]["y"] - setup["y"]) <= setup["diameter_px"]
+    # the real ball sits in a clipped patch of mat: this rung is too bright
+    assert check["ok"] is False
+    assert check["light_cause"] == "ball_clipped"
+    assert check["too_bright"] is True
+
+
+def test_the_sun_lock_finds_the_real_ball_where_the_setup_saw_it():
+    frames, setup = _sun_frames("lock", fill=22)
+
+    light = sl.judge_light(frames, 16.0, setup)
+
+    assert light["ball"] is not None and light["ball"]["found_by"] == "detector"
+    assert abs(light["ball"]["x"] - setup["x"]) <= setup["diameter_px"]
+    assert light["ball"]["clipped_pct"] == 0.0
+    assert light["ball"]["signal_dn"] >= sl.BALL_MIN_SIGNAL_DN
+
+
+def _clutter_frames(real_ball, *, clutter_at=(640 - 70, 520)):
+    """A well-lit ball-sized blob 3.5 diameters from where the setup saw the ball."""
+    rng = np.random.default_rng(4)
+    frames = np.clip(60 + rng.normal(0, 1.0, (5, 800, 1280)), 0, 255)
+    yy, xx = np.indices((800, 1280))
+    frames[:, np.hypot(xx - clutter_at[0], yy - clutter_at[1]) <= 10] = 180
+    if real_ball == "clipped":
+        # the ball melts into a sunlit patch of mat: nothing ball-shaped is left
+        frames[:, 490:560, 600:690] = 255
+    return frames.astype(np.uint8)
+
+
+def test_a_ball_shaped_blob_away_from_the_setup_ball_is_never_the_ball():
+    check = sl.pre_rung_check(_clutter_frames(None), 18.0, 2.0, expected_ball=SETUP_BALL)
+
+    assert check["ball"] is None
+    assert check["judged_on"] == "hitting_zone"
+
+
+def test_a_clipped_ball_merged_into_the_mat_is_judged_where_the_setup_saw_it():
+    check = sl.pre_rung_check(_clutter_frames("clipped"), 18.0, 2.0, expected_ball=SETUP_BALL)
+
+    assert check["judged_on"] == "setup_position"
+    assert check["ball"]["found_by"] == "setup_position"
+    assert check["ball"]["x"] == SETUP_BALL["x"]
+    assert check["too_bright"] is True and check["ok"] is False
+
+
+def test_a_clipped_ball_merged_into_the_mat_is_red_but_places_no_ball(tmp_path):
+    folder = _capture(tmp_path, ball=False)
+    with np.load(folder / "frames.npz") as data:
+        arrays = dict(data)
+    arrays["frames"][:, 490:560, 600:690] = 255
+    np.savez(folder / "frames.npz", **arrays)
+    rung = sl.Rung("full-150", "arm5", 150, True)
+
+    verdict = sl.swing_verdict(folder, rung, 8.0, 18.0, [], SETUP_BALL)
+
+    assert verdict["color"] == "red"
+    assert verdict["light_cause"] == "ball_clipped"
+    assert verdict["ball"] is None
 
 
 def test_a_photo_without_a_light_index_keeps_the_rungs_brightness(tmp_path):
@@ -1025,8 +1135,18 @@ def test_a_resumed_rung_whose_light_has_gone_starts_again(tmp_path):
     assert "c0" in resumed.state.seen_captures()  # kept, and never verdicted again
 
 
-FULL_IDS = ["full-300", "full-200", "full-150", "full-100", "full-75", "full-50", "full-30"]
-HALF_IDS = ["half-300", "half-150", "half-75"]
+FULL_IDS = [
+    "full-300",
+    "full-200",
+    "full-150",
+    "full-100",
+    "full-75",
+    "full-50",
+    "full-30",
+    "full-20",
+    "full-10",
+]
+HALF_IDS = ["half-300", "half-150", "half-75", "half-30", "half-15"]
 
 
 def _statuses(state):
@@ -1086,9 +1206,13 @@ def test_settings_that_ran_or_were_skipped_for_light_are_never_changed(tmp_path)
         "full-75": "skipped",
         "full-50": "skipped",
         "full-30": "skipped",
+        "full-20": "skipped",
+        "full-10": "skipped",
         "half-300": "skipped",
         "half-150": "pending",
         "half-75": "skipped",
+        "half-30": "skipped",
+        "half-15": "skipped",
     }
     assert rungs["full-200"]["reason"] == "too bright"
     assert rungs["full-75"]["reason"] == sl.NOT_SELECTED
