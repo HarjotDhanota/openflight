@@ -135,7 +135,7 @@ TRAINING_IMPLEMENT_LABELS = {
 kld7_vertical = None
 kld7_horizontal = None
 
-# TI IWR6843 L3 rolling-buffer capture + LCMF-v1 launch angle.
+# TI IWR6843 L3 rolling-buffer capture + LCMF launch angle.
 iwr6843_runtime = None
 iwr6843_runtime_config: dict = {"enabled": False}
 camera_capture_runtime = None
@@ -3238,7 +3238,7 @@ def _iwr_azimuth_status() -> str | None:
 
 
 def _process_iwr6843_angle(shot: Shot) -> float | None:
-    """Apply a correlated LCMF-v1 result without risking the OPS shot."""
+    """Apply a correlated LCMF result without risking the OPS shot."""
     if iwr6843_runtime is None or shot.mode == "mock":
         return None
 
@@ -3356,8 +3356,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                     horizontal_status,
                 )
             logger.info(
-                "[SERVER] IWR6843 LCMF-v1 launch: %.2f° "
-                "(%d snapshots/%d frames, component std %.2f°)",
+                "[SERVER] IWR6843 LCMF launch: %.2f° (%d snapshots/%d frames, component std %.2f°)",
                 measurement.angle_deg,
                 measurement.n_snapshots,
                 measurement.n_frames,
@@ -3371,7 +3370,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             )
         else:
             logger.warning(
-                "[SERVER] IWR6843 LCMF-v1 withheld angle: %s",
+                "[SERVER] IWR6843 LCMF withheld angle: %s",
                 measurement.status,
             )
             _emit_iwr6843_trigger_status(
@@ -6127,7 +6126,7 @@ def main():
     parser.add_argument(
         "--iwr6843",
         action="store_true",
-        help="Enable TI IWR6843 L3 capture and LCMF-v1 vertical launch angle",
+        help="Enable TI IWR6843 L3 capture and LCMF vertical launch angle",
     )
     parser.add_argument(
         "--rig-geometry",
@@ -6749,7 +6748,7 @@ def main():
                     ball_speed_correction_geometry_source,
                 ) = _ops_speed_correction_geometry(calibration)
             print(
-                "IWR6843 enabled (LCMF-v1 launch angle, "
+                "IWR6843 enabled (LCMF launch angle, "
                 f"BCM{args.iwr6843_trigger_pin}, {iwr6843_runtime.tx_order} TX order)"
             )
             if args.iwr6843_tee_m is None:

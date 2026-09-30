@@ -1,4 +1,4 @@
-"""Runtime boundary joining TI capture to the frozen LCMF estimator."""
+"""Runtime boundary joining TI capture to the LCMF estimator."""
 
 from __future__ import annotations
 
@@ -428,7 +428,7 @@ class IWR6843Runtime:
         club_speed_mph: float | None = None,
         tilt_deg: float | None = None,
     ) -> IWR6843ShotResult:
-        """Match one OPS shot to TI data and run LCMF-v1."""
+        """Match one OPS shot to TI data and run LCMF."""
         process_started_ns = time.monotonic_ns()
         capture = self.capture_monitor.capture_for_shot(
             impact_timestamp,

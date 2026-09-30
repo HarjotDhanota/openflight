@@ -2,7 +2,7 @@
 
 This module is intentionally production-shaped: OPS detects the shot and
 provides radial speed, then the IWR6843 runtime matches the same sound-trigger
-edge and runs LCMF-v1. The terminal script layers operator summaries on top.
+edge and runs LCMF. The terminal script layers operator summaries on top.
 """
 
 from __future__ import annotations

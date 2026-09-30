@@ -36,7 +36,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Run a production-shaped calibration session: OPS sound trigger/speed "
-            "plus matched IWR6843 L3 capture and LCMF-v1 diagnostics."
+            "plus matched IWR6843 L3 capture and LCMF diagnostics."
         )
     )
     parser.add_argument("--shots", type=int, default=20, help="Accepted OPS shots to record")
