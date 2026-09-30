@@ -94,6 +94,7 @@ from openflight.iwr6843.range_evidence import (
     compare_static_range_profiles,
     ground_elevation_window_deg,
     static_channel_profile,
+    static_patch_candidates,
     static_range_estimator_sha256 as _iwr_static_estimator_sha256,
 )
 from openflight.iwr6843.tracking import RANGE_SPAN_M
@@ -4331,6 +4332,7 @@ def _coherent_difference(
     window_m: tuple[float, float],
     iwr_dir: Path | None,
     rig_geometry: Path | None,
+    fit_exclusion_m: tuple[float, float] | None = None,
 ):
     """The coherent static difference (P7-6), or why the captures cannot give one."""
     try:
@@ -4356,10 +4358,102 @@ def _coherent_difference(
         candidate_window_m=tuple(value + bias_m for value in window_m),
         element_correction=correction,
         ground_elevation_deg=elevation,
-        # the channels are fitted on still reflectors outside anywhere a ball may be
-        fit_exclusion_m=tuple(value + bias_m for value in _HITTING_RANGE_M),
+        # the channels are fitted on still reflectors outside anywhere a ball may be:
+        # the patch's span when there is one (P8-3), else the old hitting area
+        fit_exclusion_m=tuple(
+            value + bias_m
+            for value in (fit_exclusion_m if fit_exclusion_m is not None else _HITTING_RANGE_M)
+        ),
     )
     return result, None
+
+
+# The channel fit's still reflectors are taken outside the patch's own span, this
+# much beyond its nominal near and far edges (P8-3).
+PATCH_FIT_EXCLUSION_MARGIN_M = 0.25
+
+
+def patch_radar_window(record: Mapping | None) -> dict | None:
+    """The radar's range window from the confirmed patch, and where its channels are fitted.
+
+    Both are corrected slant ranges from the radar's phase centre: the window runs
+    from the patch's near to its far edge plus the margin, padded for the camera
+    tilt's uncertainty while it is uncalibrated (ground_patch).
+    """
+    if not isinstance(record, Mapping):
+        return None
+    try:
+        window = [float(value) for value in record["windows"]["radar_window_m"]]
+        edges = record["nominal_edges_m"]
+        near, far = float(edges["near_slant_m"]), float(edges["far_slant_m"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return {
+        "window_m": window,
+        "fit_exclusion_m": [
+            max(0.05, near - PATCH_FIT_EXCLUSION_MARGIN_M),
+            far + PATCH_FIT_EXCLUSION_MARGIN_M,
+        ],
+        "nominal_edges_m": [near, far],
+        "tilt": (record.get("camera_tilt") or {}).get("status"),
+    }
+
+
+def _patch_radar_candidates(
+    empty_record: Mapping,
+    present_record: Mapping,
+    *,
+    calibration: Mapping,
+    bias_m: float,
+    bias_uncertainty_m: float,
+    patch_window: Mapping,
+    iwr_dir: Path | None,
+    rig_geometry: Path | None,
+) -> dict:
+    """Every magnitude and coherent peak inside the patch's window (P8-3)."""
+    window = tuple(float(value) for value in patch_window["window_m"])
+    exclusion = tuple(float(value) for value in patch_window["fit_exclusion_m"])
+    try:
+        empty = _static_profile(empty_record)
+        present = _static_profile(present_record)
+    except (TypeError, ValueError) as exc:
+        return {"status": "unavailable", "reason": f"no range profiles: {exc}", "candidates": []}
+    channels: dict = {}
+    try:
+        empty_channels = _static_channel_profile(empty_record, iwr_dir)
+        present_channels = _static_channel_profile(present_record, iwr_dir)
+        if empty_channels is not None and present_channels is not None and rig_geometry:
+            channels = {
+                "empty_channels": empty_channels,
+                "present_channels": present_channels,
+                "element_correction": np.exp(
+                    -1j * np.asarray(calibration["elem_phase_rad"], dtype=float)
+                )
+                / np.asarray(calibration["elem_gain"], dtype=float),
+                "ground_elevation_deg": iwr_ground_elevation_window_deg(rig_geometry, window),
+            }
+    except (KeyError, OSError, TypeError, ValueError) as exc:
+        channels = {}
+        logger.warning("Static channel profiles unavailable for the patch candidates: %s", exc)
+    try:
+        found = static_patch_candidates(
+            empty,
+            present,
+            window_m=window,
+            bias_m=bias_m,
+            bias_uncertainty_m=bias_uncertainty_m,
+            fit_exclusion_m=exclusion,
+            **channels,
+        )
+    except ValueError as exc:
+        return {"status": "unavailable", "reason": str(exc), "candidates": []}
+    return {
+        **found.to_dict(),
+        "status": "reported",
+        "requested_window_m": list(window),
+        "fit_exclusion_m": list(exclusion),
+        "coherent_available": bool(channels),
+    }
 
 
 def _guided_iwr_candidate(  # pylint: disable=too-many-locals,too-many-branches
@@ -4372,6 +4466,7 @@ def _guided_iwr_candidate(  # pylint: disable=too-many-locals,too-many-branches
     camera_window_m: tuple[float, float] | None = None,
     iwr_dir: Path | None = None,
     rig_geometry: Path | None = None,
+    patch_window: Mapping | None = None,
 ) -> tee_range.TeeRangeCandidate:
     calibration_sha = _file_sha256(calibration_path)
     calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
@@ -4380,17 +4475,30 @@ def _guided_iwr_candidate(  # pylint: disable=too-many-locals,too-many-branches
     present = _static_profile(present_record)
     corrected_interval = iwr_search_interval_m(qualification)
     apparent_interval = tuple(value + bias_m for value in corrected_interval)
-    # The coherent difference searches the camera's window once the camera has the
-    # ball, else the broad hitting area; the power profiles stay on record (P7-6).
+    # P8-3: the radar searches only the patch's range window. Before the patch
+    # (older setups) the camera's window once the camera had the ball, else the
+    # broad hitting area; the power profiles stay on record (P7-6).
+    window = (
+        tuple(float(value) for value in patch_window["window_m"])
+        if patch_window is not None
+        else camera_window_m
+        if camera_window_m is not None
+        else _HITTING_RANGE_M
+    )
     coherent, coherent_unavailable = _coherent_difference(
         empty_record,
         present_record,
         calibration=calibration,
         bias_m=bias_m,
         search_m=corrected_interval,
-        window_m=camera_window_m if camera_window_m is not None else _HITTING_RANGE_M,
+        window_m=window,
         iwr_dir=iwr_dir,
         rig_geometry=rig_geometry,
+        fit_exclusion_m=(
+            tuple(float(value) for value in patch_window["fit_exclusion_m"])
+            if patch_window is not None
+            else None
+        ),
     )
     # The camera's window only chooses which cluster may be the ball; the search, and
     # with it the scale, MAD and clutter limit, stays the whole window (wiring audit S1).
@@ -4399,8 +4507,8 @@ def _guided_iwr_candidate(  # pylint: disable=too-many-locals,too-many-branches
         present,
         plausible_apparent_range_m=apparent_interval,
         candidate_window_m=(
-            tuple(value + bias_m for value in camera_window_m)
-            if camera_window_m is not None
+            tuple(value + bias_m for value in window)
+            if patch_window is not None or camera_window_m is not None
             else None
         ),
     )
@@ -4495,11 +4603,23 @@ def _guided_iwr_candidate(  # pylint: disable=too-many-locals,too-many-branches
                 "moving_iwr_used": False,
             },
             "search_window_m": list(corrected_interval),
-            "candidate_window_m": list(
-                camera_window_m if camera_window_m is not None else _HITTING_RANGE_M
-            )
-            if coherent is not None
-            else None,
+            "candidate_window_m": list(window) if coherent is not None else None,
+            # P8-3: every candidate inside the patch's window, both methods
+            "patch_window": dict(patch_window) if patch_window is not None else None,
+            "patch_candidates": (
+                _patch_radar_candidates(
+                    empty_record,
+                    present_record,
+                    calibration=calibration,
+                    bias_m=bias_m,
+                    bias_uncertainty_m=bias_uncertainty_m if bias_uncertainty_valid else 0.0,
+                    patch_window=patch_window,
+                    iwr_dir=iwr_dir,
+                    rig_geometry=rig_geometry,
+                )
+                if patch_window is not None
+                else None
+            ),
             "bias_uncertainty": (
                 {"value_m": bias_uncertainty_m, "source": "hashed_range_calibration"}
                 if bias_uncertainty_valid
@@ -6475,6 +6595,8 @@ def create_app(
                 qualification=qualification,
                 iwr_dir=store.epoch_dir(epoch_id) / "iwr",
                 rig_geometry=rig_geometry,
+                # the radar searches only the patch's range window (P8-3)
+                patch_window=patch_radar_window(state.evidence.get("placement_box")),
             )
         except (KeyError, TypeError, ValueError) as exc:
             return store.transition(

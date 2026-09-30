@@ -3259,6 +3259,75 @@ def _coherent_records(name="outdoors-test-7-5a7821af3641"):
     return records
 
 
+def _indoor_records():
+    """harjot-indoor-test-1's two captures as the Pi writes them (P8-3 fixture)."""
+    fixture = json.loads(
+        (REPO / "tests" / "fixtures" / "ground_patch" / "indoor-c77d227da087-radar.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    return [
+        {
+            "inputs": {
+                "firmware": {"sha256": "f" * 64},
+                "radar_config": {"sha256": fixture[f"{kind}_power"]["radar_profile_sha256"]},
+                "rig_geometry": {"sha256": fixture[f"{kind}_power"]["rig_geometry_sha256"]},
+            },
+            "profile": fixture[f"{kind}_power"],
+            "channel_profile": fixture[f"{kind}_channels"],
+        }
+        for kind in ("empty", "present")
+    ]
+
+
+def _v3_patch_record(distance_m, *, pitch_deg=1.72, side_m=0.0):
+    camera = ts._reference_ball_camera(  # pylint: disable=protected-access
+        ts.ARMS["arm5"], V3_RIG, {"camera_pitch_deg": pitch_deg, "roll_deg": -2.62}, None, None
+    )
+    return ts.patch_record(
+        camera,
+        ts.ground_patch.patch_at(camera, distance_m, side_m),
+        tilt={"camera_pitch_deg": pitch_deg},
+        roll_deg=-2.62,
+        source="tester_dragged",
+    )
+
+
+def test_the_radar_reports_every_candidate_inside_the_patch_window():
+    """P8-3 on harjot-indoor-test-1: both the coherent 1.575 m and the magnitude's
+    1.20 m (near the tape's 1.25 m) are candidates; neither method's gate drops one."""
+    empty, present = _indoor_records()
+    window = ts.patch_radar_window(_v3_patch_record(1.25))
+
+    candidate = ts._guided_iwr_candidate(
+        empty,
+        present,
+        epoch_id="setup-indoor",
+        calibration_path=REFERENCE_CALIBRATION,
+        qualification=None,
+        rig_geometry=V3_RIG,
+        patch_window=window,
+    )
+
+    found = candidate.evidence["patch_candidates"]
+    assert found["status"] == "reported"
+    ranges = {
+        method: [item["range_m"] for item in found["candidates"] if item["method"] == method]
+        for method in ("magnitude", "coherent")
+    }
+    assert any(abs(value - 1.20) < 0.03 for value in ranges["magnitude"])
+    assert any(abs(value - 1.575) < 0.03 for value in ranges["coherent"])
+    # the window runs from before the patch's near edge to past its far edge, padded
+    # for the uncalibrated tilt, and the candidates lie inside it
+    assert found["window_m"][0] <= window["nominal_edges_m"][0]
+    assert found["window_m"][1] >= window["nominal_edges_m"][1]
+    assert all(
+        found["window_m"][0] <= item["range_m"] <= found["window_m"][1]
+        for item in found["candidates"]
+    )
+    assert candidate.evidence["patch_window"]["tilt"] == "uncalibrated"
+
+
 def test_the_setup_radar_subtracts_coherently_and_stays_experimental():
     empty, present = _coherent_records()
 
