@@ -1486,6 +1486,107 @@ class TestShotToDict:
         assert estimate_call["geometry"].horizontal_pixel_sign == -1.0
         assert estimate_call["ball_tracker"] is ball_flight_tracker
 
+    def _fuse_with_camera_estimate(self, monkeypatch, tmp_path, estimate, shot):
+        from openflight.camera import ball_flight
+
+        np.savez(
+            tmp_path / "frames.npz",
+            frames=np.zeros((8, 400, 640), dtype=np.uint8),
+            host_timestamp_ns=np.arange(8, dtype=np.int64),
+            trigger_host_timestamp_ns=np.int64(3),
+        )
+        monkeypatch.setattr(
+            ball_flight, "estimate_camera_ball_flight", lambda *_args, **_kwargs: estimate
+        )
+        monkeypatch.setattr(
+            server_module,
+            "iwr6843_runtime",
+            SimpleNamespace(
+                calibration=SimpleNamespace(
+                    tee_range_m=1.524, radar_height_m=0.15875, tee_ball_height_m=0.04
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            server_module,
+            "camera_capture_config",
+            {"mount_height_m": 0.20955, "width": 640, "height": 400},
+        )
+        server_module._fuse_camera_ball_flight(shot, SimpleNamespace(valid=True, path=tmp_path))
+
+    def test_accepted_iwr_horizontal_is_displayed_over_camera_only(self, monkeypatch, tmp_path):
+        """F6: accepted IWR 3.0 plus camera-only 5.0 displays 3.0 and keeps 5.0."""
+        from openflight.camera import ball_flight
+
+        shot = Shot(
+            ball_speed_mph=110.0,
+            timestamp=datetime.now(),
+            launch_angle_horizontal=3.0,
+            launch_angle_horizontal_confidence=0.8,
+            launch_angle_horizontal_source="radar",
+            iwr6843_horizontal_deg=3.0,
+            iwr6843_horizontal_confidence=0.8,
+        )
+        estimate = ball_flight.CameraBallEstimate(
+            status="accepted_camera_only",
+            confidence_tier="experimental",
+            horizontal_deg=5.0,
+            depth_source="camera_size",
+        )
+
+        self._fuse_with_camera_estimate(monkeypatch, tmp_path, estimate, shot)
+
+        assert shot.launch_angle_horizontal == pytest.approx(3.0)
+        assert shot.launch_angle_horizontal_source == "radar"
+        assert shot.launch_angle_horizontal_confidence == pytest.approx(0.8)
+        assert shot.experimental_camera_horizontal_deg == pytest.approx(5.0)
+        assert shot.experimental_camera_horizontal_status == (
+            "camera_only_experimental_iwr_preferred"
+        )
+
+    def test_camera_only_horizontal_does_not_replace_another_radar_value(
+        self, monkeypatch, tmp_path
+    ):
+        """F6: the camera overwrites the displayed horizontal only when it outranks it."""
+        from openflight.camera import ball_flight
+
+        shot = Shot(
+            ball_speed_mph=110.0,
+            timestamp=datetime.now(),
+            launch_angle_horizontal=1.0,
+            launch_angle_horizontal_confidence=0.7,
+            launch_angle_horizontal_source="radar",
+        )
+        estimate = ball_flight.CameraBallEstimate(
+            status="accepted_camera_only",
+            confidence_tier="experimental",
+            horizontal_deg=5.0,
+            depth_source="camera_size",
+        )
+
+        self._fuse_with_camera_estimate(monkeypatch, tmp_path, estimate, shot)
+
+        assert shot.launch_angle_horizontal == pytest.approx(1.0)
+        assert shot.launch_angle_horizontal_source == "radar"
+        assert shot.experimental_camera_horizontal_deg == pytest.approx(5.0)
+
+    def test_camera_only_horizontal_fills_an_empty_horizontal(self, monkeypatch, tmp_path):
+        from openflight.camera import ball_flight
+
+        shot = Shot(ball_speed_mph=110.0, timestamp=datetime.now())
+        estimate = ball_flight.CameraBallEstimate(
+            status="accepted_camera_only",
+            confidence_tier="experimental",
+            horizontal_deg=5.0,
+            depth_source="camera_size",
+        )
+
+        self._fuse_with_camera_estimate(monkeypatch, tmp_path, estimate, shot)
+
+        assert shot.launch_angle_horizontal == pytest.approx(5.0)
+        assert shot.launch_angle_horizontal_source == "camera_only_experimental"
+        assert shot.launch_angle_horizontal_confidence == pytest.approx(0.3)
+
     def test_live_fusion_without_camera_preserves_radar_horizontal(self):
         shot = Shot(
             ball_speed_mph=110.0,

@@ -843,6 +843,18 @@ def select_camera_assisted_horizontal(
         else None
     )
     if estimate.depth_source == "camera_size" and camera_deg is not None:
+        if iwr_horizontal_deg is not None and abs(iwr_horizontal_deg) <= MAX_IWR_FALLBACK_ABS_DEG:
+            # Size-only camera depth is diagnostic and its zero is the camera's,
+            # so it never replaces an accepted radar horizontal (audit F6).
+            return HorizontalFusionDecision(
+                iwr_horizontal_deg,
+                "radar",
+                iwr_confidence,
+                "camera_only_experimental_iwr_preferred",
+                iwr_horizontal_deg,
+                camera_deg,
+                delta,
+            )
         return HorizontalFusionDecision(
             camera_deg,
             "camera_only_experimental",

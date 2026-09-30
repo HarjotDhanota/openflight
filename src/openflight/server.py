@@ -3490,6 +3490,36 @@ def _fuse_camera_club_delivery(
         )
 
 
+# How far each horizontal-launch source may be trusted as the displayed value.
+# Camera ball flight is diagnostic: only a camera bearing on accepted IWR depth
+# outranks a radar horizontal, and size-only camera depth ranks below it.
+_HORIZONTAL_SOURCE_RANK = {
+    "estimated": -1,
+    "camera_only_experimental": 0,
+    "camera_legacy_fallback": 0,
+    "radar": 1,
+    "camera_assisted_experimental": 2,
+}
+
+
+def _apply_camera_horizontal_decision(
+    shot: Shot,
+    selected_deg: float | None,
+    confidence: float | None,
+    source: str | None,
+) -> None:
+    """Display a camera-fusion horizontal only when it outranks the current one (F6)."""
+    if selected_deg is None:
+        return
+    if shot.launch_angle_horizontal is not None:
+        current_rank = _HORIZONTAL_SOURCE_RANK.get(shot.launch_angle_horizontal_source, 1)
+        if _HORIZONTAL_SOURCE_RANK.get(source, 0) < current_rank:
+            return
+    shot.launch_angle_horizontal = selected_deg
+    shot.launch_angle_horizontal_confidence = confidence
+    shot.launch_angle_horizontal_source = source
+
+
 def _fuse_camera_ball_flight(
     shot: Shot,
     camera_capture,
@@ -3565,10 +3595,9 @@ def _fuse_camera_ball_flight(
             else f"{decision.status}:{estimate.status}"
         )
         shot.experimental_camera_iwr_delta_deg = decision.camera_iwr_delta_deg
-        if decision.selected_deg is not None:
-            shot.launch_angle_horizontal = decision.selected_deg
-            shot.launch_angle_horizontal_confidence = decision.confidence
-            shot.launch_angle_horizontal_source = decision.source
+        _apply_camera_horizontal_decision(
+            shot, decision.selected_deg, decision.confidence, decision.source
+        )
         logger.info(
             "[SERVER] Camera-assisted horizontal: selected=%s camera=%s IWR=%s "
             "delta=%s status=%s support=%d/27",
@@ -3851,10 +3880,9 @@ def _fuse_camera_measurements(
                 else f"{decision['status']}:{estimate['status']}"
             )
             shot.experimental_camera_iwr_delta_deg = decision["camera_iwr_delta_deg"]
-            if decision["selected_deg"] is not None:
-                shot.launch_angle_horizontal = decision["selected_deg"]
-                shot.launch_angle_horizontal_confidence = decision["confidence"]
-                shot.launch_angle_horizontal_source = decision["source"]
+            _apply_camera_horizontal_decision(
+                shot, decision["selected_deg"], decision["confidence"], decision["source"]
+            )
             shot.experimental_fused_attack_angle_deg = fused["attack_angle_deg"]
             shot.experimental_fused_club_path_deg = fused["club_path_deg"]
             shot.experimental_fused_status = fused["status"]

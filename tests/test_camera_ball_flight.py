@@ -420,7 +420,30 @@ def test_camera_size_depth_is_labeled_as_camera_only_fallback():
     assert decision.status == "camera_only_experimental"
 
 
-def test_camera_size_depth_remains_selected_when_iwr_is_available():
+def test_accepted_iwr_horizontal_beats_a_size_only_camera_horizontal():
+    """F6: size-only camera depth is diagnostic; the radar horizontal is displayed."""
+    estimate = CameraBallEstimate(
+        status="accepted_camera_only",
+        confidence_tier="experimental",
+        horizontal_deg=5.0,
+        depth_source="camera_size",
+    )
+
+    decision = select_camera_assisted_horizontal(
+        estimate,
+        iwr_horizontal_deg=3.0,
+        iwr_confidence=0.9,
+    )
+
+    assert decision.selected_deg == pytest.approx(3.0)
+    assert decision.source == "radar"
+    assert decision.confidence == pytest.approx(0.9)
+    assert decision.status == "camera_only_experimental_iwr_preferred"
+    assert decision.camera_horizontal_deg == pytest.approx(5.0)
+    assert decision.camera_iwr_delta_deg == pytest.approx(2.0)
+
+
+def test_size_only_camera_horizontal_stands_in_for_an_implausible_iwr():
     estimate = CameraBallEstimate(
         status="accepted_camera_only",
         confidence_tier="experimental",
@@ -430,14 +453,12 @@ def test_camera_size_depth_remains_selected_when_iwr_is_available():
 
     decision = select_camera_assisted_horizontal(
         estimate,
-        iwr_horizontal_deg=-8.0,
+        iwr_horizontal_deg=38.0,
         iwr_confidence=0.9,
     )
 
     assert decision.selected_deg == pytest.approx(3.0)
     assert decision.source == "camera_only_experimental"
-    assert decision.confidence == pytest.approx(0.3)
-    assert decision.status == "camera_only_experimental"
 
 
 def test_withheld_camera_falls_back_to_unchanged_iwr():
