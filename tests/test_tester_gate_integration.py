@@ -58,6 +58,8 @@ def make_runner(tmp_path, run, session_uuid, monkeypatch):
         photo_dir=tmp_path / "impact",
         on_mode_done=lambda _arm: None,
         ready_timeout_s=0.1,
+        # where the setup saw the ball, as make_capture draws it
+        expected_ball=lambda _arm: {"x": 640.0, "y": 520.0, "diameter_px": 20.0},
     )
     runner.start_rung()
     return runner, kiosk

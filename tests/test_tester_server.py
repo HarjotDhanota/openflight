@@ -62,6 +62,39 @@ def eligible_app(**kwargs):
     return ts.create_app(setup_policy=_EligibleSetup(), **kwargs)
 
 
+SETUP_BALL_PX = {"x_px": 612.0, "y_px": 505.0, "diameter_px": 34.0}
+
+
+def setup_saw_ball(root, tester="20260922-name", arms=("arm5",), status="selected"):
+    """A finished setup whose camera found the ball (radar unresolved), as the current epoch."""
+    from openflight import tee_range, tee_range_setup  # pylint: disable=import-outside-toplevel
+
+    candidates = [
+        tee_range.TeeRangeCandidate(
+            candidate_id=f"camera-setup-1-{arm}",
+            source="camera_reference_ball_size_range",
+            source_group="camera",
+            radar_slant_range_m=None,
+            uncertainty_m=None,
+            selectable=False,
+            evidence={
+                "result": {
+                    "status": status,
+                    "selected": SETUP_BALL_PX if status == "selected" else None,
+                }
+            },
+        )
+        for arm in arms
+    ]
+    solution = tee_range.TeeRangeSolution.unresolved(
+        candidates, reason="qualification_artifact_missing"
+    )
+    epoch = tee_range_setup.TeeRangeEvidenceEpoch(
+        epoch_id="setup-1", created_at_utc="2026-09-29T18:00:00Z", solution=solution
+    )
+    tee_range_setup.write_epoch(root / tester, epoch, make_current=True)
+
+
 def params(**overrides):
     payload = {
         "tester_id": "20260922-name",
@@ -2352,6 +2385,7 @@ class TestTheLadderHoldsUp:
                 gain=3.0,
                 gain_exposure_us=300,
             )
+        setup_saw_ball(tmp_path)
         monkeypatch.setattr(ts.study_ladder, "KioskClient", _LitKiosk)
         monkeypatch.setattr(ts, "KILL_GRACE_S", 0.05, raising=False)
         monkeypatch.setattr(
@@ -2699,6 +2733,7 @@ class TestTheTesterChoosesTheSettings:
                 gain_exposure_us=300,
                 **screens.get(arm, {}),
             )
+        setup_saw_ball(tmp_path)
         monkeypatch.setattr(ts.study_ladder, "KioskClient", _LitKiosk)
         monkeypatch.setattr(ts, "KILL_GRACE_S", 0.05, raising=False)
         monkeypatch.setattr(
