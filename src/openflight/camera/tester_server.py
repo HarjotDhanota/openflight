@@ -6379,14 +6379,6 @@ def create_app(
             return jsonify({"error": f"run the gain step for both modes first ({exc})"}), 409
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
-        # a stale screen would set every rung's gain from light that has gone (D5)
-        stale = [
-            f"{ARM_SIZES[arm_id]}: {fact['screen']['prompt']}"
-            for arm_id, fact in facts.items()
-            if fact["screen"]["stale"]
-        ]
-        if stale:
-            return jsonify({"error": " ".join(stale), "gain_screen_stale": True}), 409
         with ladder_lock:
             try:
                 refuse_while_analysing()
@@ -6420,6 +6412,15 @@ def create_app(
                     "saved_attempt_scopes": attempt_scopes(sessions_root, params.tester_id),
                 }
             )
+        # A stale screen would set every rung's gain from light that has gone (D5).
+        # Checked only here: pressing C on a walking ladder above just shows it.
+        stale = [
+            f"{ARM_SIZES[arm_id]}: {fact['screen']['prompt']}"
+            for arm_id, fact in facts.items()
+            if fact["screen"]["stale"]
+        ]
+        if stale:
+            return jsonify({"error": " ".join(stale), "gain_screen_stale": True}), 409
         eligibility = require_setup(params.tester_id, settle_reading(enclosure.reading), "ladder")
         if not eligibility["eligible"]:
             return blocked_setup(eligibility)
