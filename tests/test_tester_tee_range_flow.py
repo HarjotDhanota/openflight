@@ -1082,6 +1082,10 @@ def test_conditioned_static_object_must_match_broad_save_before_promotion(
     def estimate(_frames, camera, **kwargs):
         ball = camera_result(1.2, camera.image_width_px, camera.image_height_px)
         roi = kwargs.get("roi")
+        if kwargs.get("max_fits") == 1 and camera.image_width_px == 640:
+            # the 1280x800 ball it follows first is not found here (P7-5), so the
+            # radar-hinted search picks the hinge
+            return ReferenceBallRangeResult("not_found", "withheld", None, (), {})
         # a follow look (one fit) sees whatever is inside its small region
         if roi is None or (
             kwargs.get("max_fits") == 1
@@ -3397,3 +3401,64 @@ def test_a_rejected_power_difference_hands_over_no_range(tmp_path, inputs, monke
     assert iwr["radar_slant_range_m"] is None
     assert iwr["uncertainty_m"] is None
     assert display["iwr"]["diagnostic_range_m"] is None
+
+
+# P7-5: the 640x400 check starts where the 1280x800 one locked, inside the box.
+
+
+def test_the_640x400_check_starts_from_the_1280x800_lock_and_ball(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    calls = []
+
+    def estimate(_frames, camera, **kwargs):
+        calls.append((camera.image_width_px, kwargs))
+        return camera_result(1.2, camera.image_width_px, camera.image_height_px)
+
+    monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
+    client = app.test_client()
+    post(client, tester, "start", "start")
+    assert confirm_box(client, tester, "box", origin=(560, 440)).status_code == 200
+    for index, action in enumerate(
+        ("capture_empty", "capture_ball", "start_camera_arm5", "evaluate_camera_arm5")
+    ):
+        assert post(client, tester, action, f"arm5-{index}").status_code == 200
+    calls.clear()
+
+    assert post(client, tester, "start_camera_arm6", "arm6").status_code == 200
+
+    state = phase(client, tester)
+    setup = state["evidence"]["camera_arm6_capture_setup"]
+    lock = state["evidence"]["camera_arm5_static_exposure"]["lock"]
+    ball = state["evidence"]["camera_arm5_candidate"]["evidence"]["result"]["selected"]
+    box = state["evidence"]["placement_box"]["box_px"]
+    halved = [box[0] // 2, box[1] // 2, -(-box[2] // 2), -(-box[3] // 2)]
+    assert setup["warm_start"] == {"exposure_us": lock["exposure_us"], "gain": lock["gain"]}
+    assert setup["warm_start_source"] == "camera_arm5_lock"
+    assert setup["follow_seed_px"] == {
+        "x_px": ball["x_px"] / 2.0,
+        "y_px": ball["y_px"] / 2.0,
+        "diameter_px": ball["diameter_px"] / 2.0,
+    }
+    assert setup["darkness_region_px"] == halved
+    # the first look follows the 1280x800 ball, halved, inside the halved box
+    width, first = calls[0]
+    assert width == 640
+    assert first["max_fits"] == 1
+    assert first["hold_diameter_px"] == pytest.approx(ball["diameter_px"] / 2.0)
+    assert list(first["placement_box_px"]) == halved
+
+
+def test_without_a_1280x800_lock_the_640x400_check_uses_its_own_memory(tmp_path, inputs):
+    root = tmp_path / "tester"
+    ts.remember_static_exposure_lock(
+        root,
+        "arm6",
+        ts.ARMS["arm6"],
+        {"exposure_us": 75, "gain": 2.0},
+        epoch_id="old",
+        capture_id="arm6-000001",
+    )
+
+    step, source = ts.static_warm_start({}, root, "arm6", ts.ARMS["arm6"])
+
+    assert (step.exposure_us, step.gain, source) == (75, 2.0, "remembered_lock")

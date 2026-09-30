@@ -203,7 +203,7 @@ def test_lock_serializes_with_policy_identity_and_applied_controls(tmp_path):
 def test_static_exposure_policy_identity_is_pinned():
     """A lattice or gate change must be a deliberate, reviewed identity change."""
     assert se.static_exposure_policy_sha256() == (
-        "29872dd294346caeb41ede33c3c5aa0b402ea9b0b63003cac4ff963774cab1ba"
+        "f44534a1cbff43bacf11c1985ace937f19340de4eb2204f23cf362de717e2562"
     )
 
 
@@ -243,7 +243,8 @@ def test_ambiguity_does_not_prune_dimmer_settings_as_too_dark():
     search.record(_ambiguous(first_refine))
 
     assert search.stage == "refine"
-    assert search.current_step == sorted(STEPS)[sorted(STEPS).index(first_refine) + 1]
+    # it looks again where it was (P7-5); nothing was pruned as too dark
+    assert search.current_step == first_refine
 
 
 def _observation(step, association, frames=None, applied=None):
@@ -520,3 +521,108 @@ def test_an_unknown_black_floor_uses_the_sensor_black_level_not_the_background()
 
     assert "signal" not in observation.failed_gates
     assert observation.signal_above_floor_dn == pytest.approx(190.0 - se.SENSOR_BLACK_LEVEL_DN)
+
+
+# P7-5: the 640x400 check walked brighter on ambiguity, judging darkness on the
+# whole frame (Outdoors-test-7, 30 Sept).
+BOX = (40, 20, 80, 60)
+
+
+def _split_frames(box_dn, outside_dn, *, count=5, shape=(80, 120)):
+    """A frame lit differently inside the placement box than around it."""
+    image = np.full(shape, outside_dn, dtype=np.float32)
+    x0, y0, x1, y1 = BOX
+    image[y0:y1, x0:x1] = box_dn
+    return np.repeat(image.astype(np.uint8)[None], count, axis=0)
+
+
+def test_darkness_is_judged_on_the_placement_box_not_the_whole_frame():
+    step = se.StaticExposureStep(10, 1.0)
+    missing = {"status": "not_found", "selected": None}
+
+    sunlit_box = se.assess_static_exposure(
+        _split_frames(120.0, 20.0),
+        missing,
+        requested=step,
+        applied_exposure_us=10,
+        applied_gain=1.0,
+        black_floor_dn=15.0,
+        region=BOX,
+    )
+    shaded_box = se.assess_static_exposure(
+        _split_frames(20.0, 200.0),
+        missing,
+        requested=step,
+        applied_exposure_us=10,
+        applied_gain=1.0,
+        black_floor_dn=15.0,
+        region=BOX,
+    )
+
+    assert sunlit_box.frame_signal_dn == pytest.approx(105.0)
+    assert shaded_box.frame_signal_dn == pytest.approx(5.0)
+    assert sunlit_box.frame_signal_region == "placement_box"
+    # without a box, the whole frame decides, as before
+    whole = _assess(step, _split_frames(120.0, 20.0), missing)
+    assert whole.frame_signal_dn == pytest.approx(5.0)
+    assert whole.frame_signal_region == "frame"
+
+
+def test_an_ambiguous_ball_is_looked_at_again_at_the_same_setting():
+    search = se.StaticExposureSearch(STEPS)
+    search.record(_ambiguous(search.current_step))
+    first_refine = search.current_step
+
+    for _ in range(3):
+        search.record(_ambiguous(first_refine))
+        assert search.current_step == first_refine
+
+    assert search.stage == "refine"
+
+
+def test_the_30_sept_640x400_check_never_climbs_brighter_on_ambiguity():
+    """Outdoors-test-7: at 10 us x 1 the view was ambiguous and the whole frame only
+    12 DN over black, so it was read as darkness; the search climbed to gain 12 and
+    ended with the ball clipped. Started from the 1280x800 lock, it now stays."""
+    warm = se.StaticExposureStep(10, 1.0)
+    search = se.StaticExposureSearch(STEPS, warm_start=warm)
+    ambiguous = se.assess_static_exposure(
+        _split_frames(60.0, 27.0),
+        {"status": "ambiguous", "selected": None},
+        requested=warm,
+        applied_exposure_us=10,
+        applied_gain=1.0,
+        black_floor_dn=15.0,
+        region=BOX,
+    )
+    frame_only = _assess(warm, _split_frames(27.0, 27.0), {"status": "ambiguous", "selected": None})
+    assert frame_only.frame_signal_dn < 20.0  # what the old search took for darkness
+
+    for observation in [frame_only] + [ambiguous] * 10:
+        if search.current_step is None:
+            break
+        search.record(observation)
+
+    assert search.status == "ball_not_identified"
+    assert "box" in search.reason
+    assert {(item["exposure_us"], item["gain"]) for item in search.attempts} == {(10, 1.0)}
+
+
+def test_no_consistent_candidate_in_a_lit_box_is_not_a_reason_to_brighten():
+    search = se.StaticExposureSearch(STEPS)
+    search.record(_ambiguous(search.current_step))
+    step = search.current_step
+    unidentified = se.assess_static_exposure(
+        _split_frames(120.0, 60.0),
+        {"status": "no_consistent_candidate", "selected": None},
+        requested=step,
+        applied_exposure_us=step.exposure_us,
+        applied_gain=step.gain,
+        black_floor_dn=15.0,
+        region=BOX,
+    )
+
+    search.record(unidentified)
+    search.record(unidentified)
+
+    assert search.current_step == step

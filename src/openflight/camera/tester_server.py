@@ -2975,6 +2975,44 @@ def read_static_exposure_warm_start(root: Path, arm_id: str, arm: Arm) -> Static
         return None
 
 
+def static_warm_start(
+    evidence: Mapping, root: Path, arm_id: str, arm: Arm
+) -> tuple[StaticExposureStep | None, str | None]:
+    """The first setting a camera step tries, and where it came from.
+
+    The 640x400 step starts from this setup's 1280x800 lock: the same ball in the
+    same light (P7-5). Otherwise the tester's last verified lock for this mode.
+    Either must pass every gate again before it locks.
+    """
+    if arm_id != PLACEMENT_BOX_ARM:
+        lock = (evidence.get(f"camera_{PLACEMENT_BOX_ARM}_static_exposure") or {}).get("lock")
+        if isinstance(lock, Mapping):
+            try:
+                step = StaticExposureStep(int(lock["exposure_us"]), float(lock["gain"]))
+            except (KeyError, TypeError, ValueError):
+                step = None
+            if step is not None and step in exposure_steps_for_fps(arm.fps):
+                return step, f"camera_{PLACEMENT_BOX_ARM}_lock"
+    remembered = read_static_exposure_warm_start(root, arm_id, arm)
+    return remembered, "remembered_lock" if remembered is not None else None
+
+
+def static_follow_seed(evidence: Mapping, arm: Arm) -> dict | None:
+    """The 1280x800 ball in this mode's pixels, for the 640x400 step's first looks."""
+    if arm.arm_id == PLACEMENT_BOX_ARM:
+        return None
+    candidate = evidence.get(f"camera_{PLACEMENT_BOX_ARM}_candidate")
+    result = ((candidate or {}).get("evidence") or {}).get("result") or {}
+    selected = result.get("selected")
+    if result.get("status") != "selected" or not isinstance(selected, Mapping):
+        return None
+    factor = arm.width / ARMS[PLACEMENT_BOX_ARM].width
+    try:
+        return {key: float(selected[key]) * factor for key in ("x_px", "y_px", "diameter_px")}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def remember_static_exposure_lock(
     root: Path, arm_id: str, arm: Arm, lock: Mapping, *, epoch_id: str, capture_id: str
 ) -> None:
@@ -3021,8 +3059,11 @@ class StaticExposureController:
         black_floor_dn: float | None,
         on_change: Callable[[dict], None] | None = None,
         warm_start: StaticExposureStep | None = None,
+        region: Sequence[int] | None = None,
     ):
         self._factory = analyzer_factory
+        # the placement box: where a picture without the ball is judged dark (P7-5)
+        self._region = tuple(int(value) for value in region) if region is not None else None
         self._on_change = on_change
         self._last_detection: dict | None = None
         self._steps = tuple(steps)
@@ -3120,6 +3161,7 @@ class StaticExposureController:
             applied_exposure_us=exposure,
             applied_gain=gain,
             black_floor_dn=self._black_floor_dn,
+            region=self._region,
         )
         next_step = None
         with self._lock:
@@ -3240,6 +3282,7 @@ class StaticExposureController:
                 applied_exposure_us=applied[0],
                 applied_gain=applied[1],
                 black_floor_dn=self._black_floor_dn,
+                region=self._region,
             )
             analysis["save_frame_optical_check"] = check.to_dict()
             if not check.acceptable:
@@ -5887,6 +5930,13 @@ def create_app(
         if box is None:
             raise RuntimeError("confirm the placement box before the camera checks")
         follow = BallFollowMemory()
+        seed = static_follow_seed(state.evidence, params.arm)
+        if seed is not None:
+            # the 640x400 step's first looks follow the 1280x800 ball, halved (P7-5)
+            follow.set(seed)
+        warm_start, warm_start_source = static_warm_start(
+            state.evidence, store.tester_root, arm_id, params.arm
+        )
         analyzer = StaticExposureController(
             lambda: GuidedRangeAnalyzer(
                 model,
@@ -5902,7 +5952,8 @@ def create_app(
             on_change=lambda payload: atomic_write(
                 search_path, (json.dumps(payload, indent=2) + "\n").encode("utf-8")
             ),
-            warm_start=read_static_exposure_warm_start(store.tester_root, arm_id, params.arm),
+            warm_start=warm_start,
+            region=box,
         )
         first_step = analyzer.initial_step
         warm_start = analyzer.warm_start
@@ -5916,6 +5967,9 @@ def create_app(
                 if warm_start is not None
                 else None
             ),
+            "warm_start_source": warm_start_source if analyzer.warm_start is not None else None,
+            "follow_seed_px": seed,
+            "darkness_region_px": list(box),
             "black_floor_dn": black_floor,
             "exposure_search_file": search_path.name,
             "arm": params.arm.as_dict(),

@@ -345,6 +345,19 @@ measured ball predicts where its signal is just enough and where it would clip. 
 skipped; the rest are still verified lowest exposure first, so the lock is the
 lowest passing setting. On synthetic scenes this takes 3–7 settings instead of 11–15.
 
+Whether a picture without the ball is too dark is judged on the placement box,
+not the whole frame: in sun a dark fence or a bright sky elsewhere says nothing
+about the light on the ball. When the camera sees ball-like things but cannot pick
+the ball out ("ambiguous"), it looks again at the same setting; more light never
+fixes that, so the search never steps brighter for it, and after six such looks it
+stops with "keep only the ball in the box". On 30 Sept (Outdoors-test-7) the old
+search read an ambiguous 640×400 view at 10 µs × 1 as darkness from the whole
+frame, climbed to gain 12 and ended with the ball clipped.
+
+The 640×400 step starts where the 1280×800 step locked: it tries the 1280×800
+exposure and gain first, and its first looks follow the 1280×800 ball, halved,
+inside the halved box. Both must still pass every check in this mode.
+
 Heights are measured from the hitting surface, so the setup ball goes directly on
 the mat or grass, never on a tee: its centre is then one radius up. The radar's
 floor-bounce model (its vertical launch angle) needs the radar's height above the
@@ -480,7 +493,8 @@ capture, and Save opens once the radar result is in. This early search does not
 use the radar's range hint, which exists only after the radar finishes; the
 640×400 step still uses it. Each tester also remembers the last lock whose Save
 passed, per camera mode, in `static-exposure-memory.json` in the tester
-directory, and the next setup tries it first. It must pass every check again;
+directory, and the next setup tries it first (the 640×400 step tries this setup's
+1280×800 lock before its own memory). It must pass every check again;
 any failure runs the full search. A policy or camera-mode change discards it.
 
 The setup admission is also frozen with the epoch: the approved configuration,
