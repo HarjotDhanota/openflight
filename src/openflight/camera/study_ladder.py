@@ -42,8 +42,13 @@ MIN_MATCHED_FRAMES = 3
 EARLY_EXIT_SWINGS = 3
 EARLY_EXIT_REDS = 2
 PHOTO_TARGET_DN = 100.0
-PHOTO_GAIN = 2.0
-PHOTO_EXPOSURE_US = (100, 8000)
+# A photo prefers unity gain (the least noise) and raises it only as far as 2 when
+# the exposure would pass the frame period. In sun it needs tens of microseconds:
+# the old 100 us x 2 floor clipped it (wiring audit T5). The kiosk's still-photo
+# controls take any exposure under the frame period; 9 us is the sensor's one row.
+PHOTO_GAIN_RANGE = (1.0, 2.0)
+PHOTO_EXPOSURE_US_MIN = 10
+PHOTO_FRAME_MARGIN_US = 300
 BALL_MOVED_RADII = 3.0
 RESTING_FRAMES = 10  # the first pre-impact frames, before the club arrives
 # Outdoors the background beyond the ball can be 30x brighter than the ball's
@@ -94,27 +99,30 @@ def rung_gain(gain_at_300: float, exposure_us: int) -> float:
     return round(max(GAIN_FLOOR, min(GAIN_CEILING, gain_at_300 * 300.0 / exposure_us)), 3)
 
 
-def photo_exposure_us(
+def photo_controls(
     light_index: float | None,
     black_floor: float,
     fps: float,
     *,
     rung_exposure_us: int | None = None,
     rung_gain: float | None = None,
-) -> int:
-    """An exposure that puts the hitting zone near 100 DN at gain 2, under the frame period.
+) -> tuple[int, float]:
+    """Exposure and gain that put the hitting zone near 100 DN, under the frame period.
 
-    Without a light index (a screen that measured none), the photo keeps the rung's
-    own brightness: its exposure x gain at the photo gain.
+    Aimed with the zone light index; without one (a screen that measured none), the
+    photo keeps the rung's own brightness, its exposure x gain.
     """
-    frame_limit = int(1_000_000 / fps) - 300
+    frame_limit = int(1_000_000 / fps) - PHOTO_FRAME_MARGIN_US
     if light_index is None:
         if rung_exposure_us is None or rung_gain is None:
             raise ValueError("a photo needs a light index or the rung's controls")
-        wanted = rung_exposure_us * rung_gain / PHOTO_GAIN
+        wanted = float(rung_exposure_us) * float(rung_gain)  # exposure x gain
     else:
-        wanted = (PHOTO_TARGET_DN - black_floor) / max(light_index * PHOTO_GAIN, 1e-9)
-    return int(max(PHOTO_EXPOSURE_US[0], min(PHOTO_EXPOSURE_US[1], frame_limit, wanted)))
+        wanted = (PHOTO_TARGET_DN - black_floor) / max(float(light_index), 1e-9)
+    low, high = PHOTO_GAIN_RANGE
+    gain = round(max(low, min(high, wanted / frame_limit)), 3)
+    exposure = int(max(PHOTO_EXPOSURE_US_MIN, min(frame_limit, round(wanted / gain))))
+    return exposure, gain
 
 
 def _zone(image: np.ndarray, black_floor: float) -> dict:
@@ -1035,7 +1043,7 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
             if configured is None or configured.arm_id != rung.arm_id:
                 raise RuntimeError("the pending photo camera is not ready")
             light = self._light_index(rung.arm_id)
-            still = photo_exposure_us(
+            still, still_gain = photo_controls(
                 float(light) if light is not None else None,
                 self._black_floor(rung.arm_id),
                 RUNG_FPS[rung.arm_id],
@@ -1043,10 +1051,10 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                 rung_gain=self.state.gain(configured.rung_id),
             )
             try:
-                self.client.set_controls(still, PHOTO_GAIN, purpose="still_photo")
+                self.client.set_controls(still, still_gain, purpose="still_photo")
                 if self._stop.wait(SETTLE_S):
                     raise RuntimeError("the ladder is stopped")
-                image = self._frames_at(still, PHOTO_GAIN, 1)[0][0]
+                image = self._frames_at(still, still_gain, 1)[0][0]
                 if self.stopped:
                     raise RuntimeError("the ladder is stopped")
             finally:

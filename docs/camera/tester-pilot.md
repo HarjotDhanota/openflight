@@ -138,7 +138,9 @@ the physical setup. Then work down **Test suite**:
    holds the final capture for its photo. Photograph it or choose **Skip photo**
    before continuing; do not take another swing while this choice is pending.
    The kiosk then restarts in the next mode (about 20 s). A failed photo can be
-   retried without losing the pending capture.
+   retried without losing the pending capture. The photo sets its own exposure
+   from the measured light, down to a few tens of microseconds in sun, so it
+   works outdoors too.
 4. **D. Analyse, review & package.** Stop the ladder first. If you have a TM4,
    Full Swing KIT or Mevo Gen 2 export, choose it first. One press replays every
    shot on the Pi, builds the session review and writes one session bundle. It
@@ -453,6 +455,7 @@ every earlier frame and failure record for review.
 | Ladder verdict red: `light: too dark ...` (the hitting zone or the ball) | This exposure is below what your light supports | Expected on the shortest exposures; the ladder skips the rest of the mode |
 | Ladder verdict red: `light: too bright for the ball ... clipped` | The ball area is washed out | Expected on the longest exposures in sun; this exposure fails and the shorter ones are still tried |
 | Ladder verdict red: `ladder: the camera did not apply ... within 1 s` | The kiosk has not taken the new exposure yet | Wait: the ladder retries every second. If it repeats for a minute, press **Stop**, then **C** |
+| The impact photo is white or washed out | It was taken before the photo exposure followed the light (older software), or the light changed a lot since step **B** | Update, run **B** again, then retake the photo; the pending capture is kept |
 | A swing is listed as set aside, `taken at ... not this rung's ...` or `taken during a still_photo` | It was taken while the ladder was changing the camera's settings | Nothing is lost; hit the next swing once the rung shows as set |
 | `finish automatic tee range before capture (retryable_failure)` | The setup's range record no longer matches the one the ladder was admitted with | Press **Start over / ball moved** and run the setup again |
 | Range summary: **swings get tee range pending** | No radar range was accepted (or none is qualified and the tester was not started with `--use-unqualified-tee-range`). The camera's own range is never used as the tee range | Swings still record; launch and club metrics that need the range are withheld. For a test session with a range, redo the setup with everyone clear of the radar |
