@@ -184,7 +184,7 @@ def test_path_estimate_recovers_known_horizontal_without_iwr_horizontal():
         path=list(enumerate(candidates)),
         frame_indices=list(range(len(candidates))),
         timestamps_ns=timestamps,
-        trigger_ns=0,
+        contact_ns=0,
         range_evidence=evidence,
         ops_ball_speed_mph=speed_ms * 2.23694,
         iwr_vertical_deg=20.0,
@@ -209,7 +209,7 @@ def test_path_estimate_recovers_physical_sign_from_mirrored_capture():
         path=list(enumerate(candidates)),
         frame_indices=list(range(len(candidates))),
         timestamps_ns=timestamps,
-        trigger_ns=0,
+        contact_ns=0,
         range_evidence=evidence,
         ops_ball_speed_mph=speed_ms * 2.23694,
         iwr_vertical_deg=20.0,
@@ -244,7 +244,7 @@ def test_path_estimate_recovers_horizontal_from_apparent_ball_size_without_iwr_r
         path=list(enumerate(candidates)),
         frame_indices=list(range(len(candidates))),
         timestamps_ns=timestamps,
-        trigger_ns=0,
+        contact_ns=0,
         range_evidence=None,
         ops_ball_speed_mph=speed_ms * 2.23694,
         iwr_vertical_deg=20.0,
@@ -269,7 +269,7 @@ def test_path_estimate_does_not_treat_lateral_ball_position_as_target_yaw():
         path=list(enumerate(candidates)),
         frame_indices=list(range(len(candidates))),
         timestamps_ns=timestamps,
-        trigger_ns=0,
+        contact_ns=0,
         range_evidence=evidence,
         ops_ball_speed_mph=speed_ms * 2.23694,
         iwr_vertical_deg=20.0,
@@ -293,7 +293,7 @@ def test_path_estimate_accounts_for_camera_lateral_translation():
         path=list(enumerate(candidates)),
         frame_indices=list(range(len(candidates))),
         timestamps_ns=timestamps,
-        trigger_ns=0,
+        contact_ns=0,
         range_evidence=evidence,
         ops_ball_speed_mph=speed_ms * 2.23694,
         iwr_vertical_deg=20.0,
@@ -318,7 +318,7 @@ def test_path_estimate_applies_setup_level_horizontal_offset():
         path=list(enumerate(candidates)),
         frame_indices=list(range(len(candidates))),
         timestamps_ns=timestamps,
-        trigger_ns=0,
+        contact_ns=0,
         range_evidence=evidence,
         ops_ball_speed_mph=speed_ms * 2.23694,
         iwr_vertical_deg=20.0,
@@ -593,3 +593,168 @@ def test_rejected_iwr_ball_track_is_not_used_as_camera_depth(monkeypatch):
     assert estimate.depth_source == "camera_size"
     assert estimate.range_evidence_status == "rejected_track_quality"
     assert decision.source == "camera_only_experimental"
+
+
+def _timed_flight(*, trigger_after_contact_s: float = 0.0026):
+    """A flight whose radar track and camera frames share one physical clock.
+
+    The camera's sensor clock runs 1.7 s ahead of physical time and the sound
+    trigger fires ``trigger_after_contact_s`` after contact, as it does on the
+    rig (median 2.6 ms). The IWR places impact at 12 ms into its capture.
+    """
+    geometry, _anchor, model, candidates, _timestamps, _evidence, speed_ms = _synthetic_path(
+        horizontal_deg=4.0
+    )
+    tee_forward = math.sqrt(
+        geometry.tee_range_m**2 - (geometry.ball_height_m - geometry.radar_height_m) ** 2
+    )
+    tee = np.array([0.0, tee_forward, geometry.ball_height_m])
+    horizontal, vertical = math.radians(4.0), math.radians(20.0)
+    forward = speed_ms * math.cos(vertical) * math.cos(horizontal)
+    velocity = np.array([forward * math.tan(horizontal), forward, speed_ms * math.sin(vertical)])
+    since_contact = np.arange(8, dtype=float) * 0.0035 + 0.007
+    radar = np.array([0.0, 0.0, geometry.radar_height_m])
+    impact_t_s = 0.012
+
+    class Track:
+        def range_at(self, time_s, _resolution):
+            flight = max(0.0, time_s - impact_t_s)
+            return float(np.linalg.norm(tee + velocity * flight - radar))
+
+    evidence = SimpleNamespace(
+        track=Track(), geometry=SimpleNamespace(range_res_m=0.046875), impact_t_s=impact_t_s
+    )
+    clock_offset_ns = 1_700_000_000
+    sensor_ns = np.asarray(since_contact * 1e9, dtype=np.int64) + clock_offset_ns
+    contact_ns = float(clock_offset_ns)
+    trigger_ns = contact_ns + trigger_after_contact_s * 1e9
+    return geometry, model, candidates, sensor_ns, evidence, speed_ms, contact_ns, trigger_ns
+
+
+def test_flight_timed_from_contact_recovers_the_launch():
+    """F7: contact 2.6 ms before the trigger; timing from contact recovers H and V."""
+    geometry, model, candidates, sensor_ns, evidence, speed_ms, contact_ns, trigger_ns = (
+        _timed_flight()
+    )
+
+    def estimate(anchor_ns):
+        result = _path_estimate(
+            path=list(enumerate(candidates)),
+            frame_indices=list(range(len(candidates))),
+            timestamps_ns=sensor_ns,
+            contact_ns=anchor_ns,
+            range_evidence=evidence,
+            ops_ball_speed_mph=speed_ms * 2.23694,
+            iwr_vertical_deg=20.0,
+            model=model,
+            geometry=geometry,
+            thresholds=(100, 12, 5),
+        )
+        assert result is not None
+        return result[1]
+
+    from_contact = estimate(contact_ns)
+    from_trigger = estimate(trigger_ns)
+
+    assert from_contact.horizontal_deg == pytest.approx(4.0, abs=0.05)
+    assert from_contact.vertical_deg == pytest.approx(20.0, abs=0.05)
+    # The trigger-timed version reads the range 2.6 ms late in flight.
+    assert abs(from_trigger.vertical_deg - 20.0) > 0.1
+
+
+def _departing_ball_clip(depart_after_frame: int, *, n_frames: int = 40):
+    frames = np.full((n_frames, 200, 320), 40, dtype=np.uint8)
+    yy, xx = np.mgrid[:200, :320]
+    disk = (xx - 160) ** 2 + (yy - 150) ** 2 <= 7**2
+    frames[: depart_after_frame + 1, disk] = 230
+    return frames
+
+
+def _stub_the_sweep(monkeypatch, seen):
+    anchor = ReferenceBall(160.0, 150.0, 14.0, 150)
+    monkeypatch.setattr(
+        ball_flight_module,
+        "_select_reference_ball",
+        lambda *_args, **_kwargs: (anchor, {"selected_source": "test"}),
+    )
+    monkeypatch.setattr(
+        ball_flight_module, "_camera_model", lambda *_args, **_kwargs: (480.0, 0.0, None)
+    )
+    candidate = BallCandidate(160.0, 140.0, 150, 14, 14, 0.8, 0.9, 220.0)
+    monkeypatch.setattr(ball_flight_module, "_candidates", lambda *_a, **_k: [candidate])
+    monkeypatch.setattr(
+        ball_flight_module,
+        "_pixel_paths",
+        lambda nodes, *_a, **_k: [[(index, candidate) for index in range(4)]],
+    )
+    monkeypatch.setattr(ball_flight_module, "_clean_launch_path", lambda path, _frames: path)
+
+    def path_estimate(**kwargs):
+        seen.append(kwargs)
+        return 1.0, ball_flight_module._PathEstimate(
+            3.0, 20.0, 100.0, 0.0, 0.001, 0.5, 0.2, 6, 20, 25
+        )
+
+    monkeypatch.setattr(ball_flight_module, "_path_estimate", path_estimate)
+
+
+_GEOMETRY_320 = CameraBallGeometry(
+    camera_height_m=0.095,
+    radar_height_m=0.051,
+    tee_range_m=1.5,
+    ball_height_m=0.02135,
+    image_width_px=320,
+    image_height_px=200,
+)
+
+
+def test_ball_flight_times_the_radar_from_the_departure_frame_on_the_sensor_clock(monkeypatch):
+    """F7: the live estimator hands the ball's departure time, not the trigger, to the fit."""
+    seen = []
+    _stub_the_sweep(monkeypatch, seen)
+    host = np.arange(40, dtype=np.int64) * 3_500_000 + 5_000_000_000
+    sensor = np.arange(40, dtype=np.int64) * 3_500_000 + 1_000_000_000 - 700_000
+    evidence = BallRangeEvidence(
+        track=SimpleNamespace(), geometry=SimpleNamespace(range_res_m=0.046875), impact_t_s=0.012
+    )
+
+    estimate = estimate_camera_ball_flight(
+        _departing_ball_clip(19),
+        host,
+        trigger_ns=int(host[20]),
+        range_evidence=evidence,
+        geometry=_GEOMETRY_320,
+        ops_ball_speed_mph=100.0,
+        sensor_timestamps_ns=sensor,
+    )
+
+    assert seen and all(call["range_evidence"] is evidence for call in seen)
+    assert seen[0]["timestamps_ns"] == pytest.approx(sensor)
+    assert seen[0]["contact_ns"] == pytest.approx((sensor[19] + sensor[20]) / 2.0)
+    assert estimate.timing_anchor == "ball_departure"
+    assert estimate.contact_frame == 19
+    assert estimate.timestamp_source == "sensor_timestamp_ns"
+    assert estimate.depth_source == "iwr_range"
+
+
+def test_ball_flight_without_a_departure_does_not_time_the_radar_from_the_trigger(monkeypatch):
+    seen = []
+    _stub_the_sweep(monkeypatch, seen)
+    host = np.arange(40, dtype=np.int64) * 3_500_000
+    evidence = BallRangeEvidence(
+        track=SimpleNamespace(), geometry=SimpleNamespace(range_res_m=0.046875), impact_t_s=0.012
+    )
+
+    estimate = estimate_camera_ball_flight(
+        _departing_ball_clip(39),  # the ball never leaves
+        host,
+        trigger_ns=int(host[20]),
+        range_evidence=evidence,
+        geometry=_GEOMETRY_320,
+        ops_ball_speed_mph=100.0,
+    )
+
+    assert seen and all(call["range_evidence"] is None for call in seen)
+    assert estimate.timing_anchor == "no_ball_departure"
+    assert estimate.depth_source == "camera_size"
+    assert estimate.timestamp_source == "host_timestamp_ns"

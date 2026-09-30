@@ -360,38 +360,45 @@ def test_live_adapter_and_replay_share_successful_calibrated_projection(tmp_path
     model = build_calibrated_camera_model(
         artifact, placement, observed_pitch_deg=0.0, observed_roll_deg=0.0
     )
-    times = np.arange(12, dtype=float) * 0.0035
-    trigger_index = 2
-    relative = times - times[trigger_index]
+    # The ball rests for nine frames and is gone from the trigger frame on, so
+    # the camera's contact (F7) falls midway between frames 8 and 9.
+    frame_count = 20
+    times = np.arange(frame_count, dtype=float) * 0.0035
+    trigger_index = 9
+    relative = times - (times[trigger_index - 1] + times[trigger_index]) / 2.0
     velocity = np.array([3.0, 44.0, 10.0])
     tee = np.array([0.0, 1.5, 0.021])
-    points = np.asarray([tee + velocity * item for item in relative])
-    pixels = []
-    candidates = []
-    for point in points:
+    points = np.asarray([tee + velocity * max(item, 0.0) for item in relative])
+
+    def project(point):
         ray = model.optical_to_world_lfu.T @ (
             (point - model.camera_origin_lfu) / np.linalg.norm(point - model.camera_origin_lfu)
         )
-        pixel = np.array(
+        return np.array(
             [
                 artifact["camera_matrix"][0][0] * ray[0] / ray[2] + artifact["camera_matrix"][0][2],
                 artifact["camera_matrix"][1][1] * ray[1] / ray[2] + artifact["camera_matrix"][1][2],
             ]
         )
-        pixels.append(pixel)
-        candidates.append(BallCandidate(pixel[0], pixel[1], 80, 10, 10, 0.8, 0.9, 220))
-    frames = np.zeros((12, 400, 640), np.uint8)
-    frames[:, 0, 0] = np.arange(12)
+
+    pixels = [project(point) for point in points]
+    candidates = [BallCandidate(pixel[0], pixel[1], 80, 10, 10, 0.8, 0.9, 220) for pixel in pixels]
+    tee_pixel = project(tee)
+    frames = np.zeros((frame_count, 400, 640), np.uint8)
+    yy, xx = np.mgrid[:400, :640]
+    frames[:trigger_index, (xx - tee_pixel[0]) ** 2 + (yy - tee_pixel[1]) ** 2 <= 7**2] = 220
+    frames[:, 0, 0] = np.arange(frame_count)
     timestamps = np.asarray(times * 1e9, dtype=np.int64)
     radar_ranges = np.linalg.norm(points - model.radar_origin_lfu, axis=1)
     range_res = 6.0 / 128
-    slope, intercept = np.polyfit(relative, radar_ranges / range_res, 1)
-    track = BallTrack(45.1, slope, intercept, 0.1, 12, relative[0], relative[-1], False)
-    radar_geometry = Geometry(12, 8, 2, 4, 128, 0.0035, trigger_index)
+    flying = relative > 0
+    slope, intercept = np.polyfit(relative[flying], radar_ranges[flying] / range_res, 1)
+    track = BallTrack(45.1, slope, intercept, 0.1, 12, 0.0, relative[-1], False)
+    radar_geometry = Geometry(frame_count, 8, 2, 4, 128, 0.0035, trigger_index)
     evidence = BallRangeEvidence(track, radar_geometry, 0.0)
     anchor = SimpleNamespace(
-        x=float(pixels[trigger_index][0]),
-        y=float(pixels[trigger_index][1]),
+        x=float(tee_pixel[0]),
+        y=float(tee_pixel[1]),
         diameter_px=14.0,
         area_px=140,
     )
@@ -431,7 +438,7 @@ def test_live_adapter_and_replay_share_successful_calibrated_projection(tmp_path
             frame_duration_us=3500,
             capture_mode=startup,
         )
-        for index in range(12)
+        for index in range(frame_count)
     )
     capture = SimpleNamespace(
         valid=True,
@@ -485,6 +492,8 @@ def test_live_adapter_and_replay_share_successful_calibrated_projection(tmp_path
     assert shot.calibrated_camera_status == "experimental_unqualified"
     assert shot.camera_fusion_processing == replay
     assert replay["ball_estimate"]["status"] == "accepted"
+    assert replay["ball_estimate"]["timing_anchor"] == "ball_departure"
+    assert replay["ball_estimate"]["contact_frame"] == trigger_index - 1
     assert replay["ball_estimate"]["horizontal_deg"] == pytest.approx(3.9, abs=0.5)
     frozen = {"_context": shot.camera_fusion_context, "_archive": archive, "replay": replay}
     original_context = copy.deepcopy(shot.camera_fusion_context)

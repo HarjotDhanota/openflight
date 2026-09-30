@@ -3612,6 +3612,7 @@ def _fuse_camera_ball_flight(
                                 ops_ball_speed_mph=shot.ball_speed_raw_mph or shot.ball_speed_mph,
                                 iwr_vertical_deg=shot.launch_angle_vertical,
                                 ball_tracker=camera_ball_flight_reference_tracker,
+                                sensor_timestamps_ns=archive.get("sensor_timestamp_ns"),
                             )
 
         decision = select_camera_assisted_horizontal(

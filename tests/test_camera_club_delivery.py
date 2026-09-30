@@ -1193,3 +1193,26 @@ def test_horizontal_offset_turns_club_path_like_launch(monkeypatch, offset_deg, 
     assert result.club_path_deg == pytest.approx(3.0 + offset_deg)
     assert result.attack_angle_deg == pytest.approx(-5.0)
     assert result.club_path_frame == frame
+
+
+def test_camera_contact_is_midway_between_the_last_resting_and_first_departed_frames():
+    """F7: one reusable contact time, from the ball, on whichever clock is given."""
+    from openflight.camera.club_delivery import camera_contact_time, frame_clock  # noqa: PLC0415
+
+    frames = np.zeros((60, 9, 9), dtype=np.uint8)
+    yy, xx = np.mgrid[:9, :9]
+    ball = _Ball()
+    ball.x, ball.y, ball.diameter_px = 4.0, 4.0, 8.0
+    frames[:42, (xx - ball.x) ** 2 + (yy - ball.y) ** 2 <= 3**2] = 160
+    host = np.arange(60, dtype=np.int64) * 3_500_000 + 9_000_000
+    sensor = np.arange(60, dtype=np.int64) * 3_500_000 + 2_000
+
+    clock, source = frame_clock(host, sensor)
+    contact = camera_contact_time(frames, clock, ball, trigger_index=44, timestamp_source=source)
+
+    assert source == "sensor_timestamp_ns"
+    assert contact.impact_frame == 41
+    assert contact.contact_ns == pytest.approx((sensor[41] + sensor[42]) / 2.0)
+    assert contact.contact_vs_trigger_frame_ms == pytest.approx(-8.75)
+    assert frame_clock(host, None)[1] == "host_timestamp_ns"
+    assert frame_clock(host, sensor[::-1].copy())[1] == "host_timestamp_ns"

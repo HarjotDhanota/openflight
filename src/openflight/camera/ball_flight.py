@@ -16,6 +16,7 @@ from typing import Any
 import numpy as np
 
 from openflight.camera import ball_pixels
+from openflight.camera.club_delivery import camera_contact_time, frame_clock
 from openflight.camera.club_motion import (
     BALL_DIAMETER_MM,
     ReferenceBall,
@@ -121,6 +122,11 @@ class CameraBallEstimate:
     reference_ball_diagnostics: dict[str, Any] | None = None
     # The IWR ball track's own status; a rejected track is never camera depth.
     range_evidence_status: str | None = None
+    # How the IWR range was timed: from the ball's departure frame, or not at
+    # all when the camera never saw it leave (audit F7).
+    timing_anchor: str | None = None
+    contact_frame: int | None = None
+    timestamp_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -529,7 +535,7 @@ def _path_estimate(
     path: list[tuple[int, BallCandidate]],
     frame_indices: list[int],
     timestamps_ns: np.ndarray,
-    trigger_ns: int,
+    contact_ns: float,
     range_evidence,
     ops_ball_speed_mph: float,
     iwr_vertical_deg: float | None,
@@ -545,7 +551,8 @@ def _path_estimate(
     used_candidates: list[BallCandidate] = []
     for relative_frame, candidate in path:
         frame = frame_indices[relative_frame]
-        relative_time = (int(timestamps_ns[frame]) - trigger_ns) / 1e9
+        # Radar time is the IWR's impact plus time since the camera saw contact.
+        relative_time = (int(timestamps_ns[frame]) - contact_ns) / 1e9
         if range_evidence is None:
             position = _project_from_ball_size(candidate, model=model, geometry=geometry)
         else:
@@ -671,8 +678,13 @@ def estimate_camera_ball_flight(
     ops_ball_speed_mph: float,
     iwr_vertical_deg: float | None = None,
     ball_tracker=None,
+    sensor_timestamps_ns: np.ndarray | None = None,
 ) -> CameraBallEstimate:
-    """Estimate horizontal flight with a frozen detector-consensus sweep."""
+    """Estimate horizontal flight with a frozen detector-consensus sweep.
+
+    ``timestamps_ns`` are host arrival times and locate the trigger frame.
+    Sensor timestamps, when given, time everything else.
+    """
     range_evidence_status = (
         getattr(range_evidence, "status", "accepted") if range_evidence is not None else None
     )
@@ -705,6 +717,28 @@ def estimate_camera_ball_flight(
             "rejected_implausible_reference_ball",
             reference_ball_diagnostics=reference_diagnostics,
         )
+    clock_ns, timestamp_source = frame_clock(timestamps_ns, sensor_timestamps_ns)
+    # The sound trigger fires 0.5-4 ms after contact, so the IWR range is
+    # timed from the ball's own departure frame, as club delivery does (F7).
+    contact = camera_contact_time(
+        frames,
+        clock_ns,
+        anchor,
+        trigger_index=trigger_frame,
+        timestamp_source=timestamp_source,
+    )
+    timing_anchor = "ball_departure" if contact is not None else "no_ball_departure"
+    if contact is None:
+        range_evidence = None
+        if geometry.calibrated_model is not None:
+            return CameraBallEstimate(
+                "rejected_calibrated_requires_iwr_range",
+                reference_ball_diagnostics=reference_diagnostics,
+                range_evidence_status=range_evidence_status,
+                timing_anchor=timing_anchor,
+                timestamp_source=timestamp_source,
+            )
+    contact_ns = contact.contact_ns if contact is not None else float(clock_ns[trigger_frame])
     frame_indices = list(range(trigger_frame, min(len(frames), trigger_frame + 15)))
     if len(frame_indices) < 4:
         return CameraBallEstimate(
@@ -712,7 +746,7 @@ def estimate_camera_ball_flight(
             reference_ball_diagnostics=reference_diagnostics,
         )
     background = np.median(frames[: min(20, len(frames))], axis=0).astype(np.uint8)
-    intervals = np.diff(timestamps_ns.astype(np.int64)) / 1e9
+    intervals = np.diff(clock_ns) / 1e9
     frame_interval_s = float(np.median(intervals)) if len(intervals) else REFERENCE_FRAME_INTERVAL_S
     motion_scale = scale * max(frame_interval_s, 1e-6) / REFERENCE_FRAME_INTERVAL_S
 
@@ -742,8 +776,8 @@ def estimate_camera_ball_flight(
                             result := _path_estimate(
                                 path=_clean_launch_path(raw_path, frame_indices),
                                 frame_indices=frame_indices,
-                                timestamps_ns=timestamps_ns,
-                                trigger_ns=trigger_ns,
+                                timestamps_ns=clock_ns,
+                                contact_ns=contact_ns,
                                 range_evidence=depth_evidence,
                                 ops_ball_speed_mph=ops_ball_speed_mph,
                                 iwr_vertical_deg=iwr_vertical_deg,
@@ -822,6 +856,9 @@ def estimate_camera_ball_flight(
         depth_source=depth_source,
         reference_ball_diagnostics=reference_diagnostics,
         range_evidence_status=range_evidence_status,
+        timing_anchor=timing_anchor,
+        contact_frame=contact.impact_frame if contact is not None else None,
+        timestamp_source=timestamp_source,
     )
 
 

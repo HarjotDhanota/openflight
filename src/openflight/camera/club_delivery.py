@@ -1035,9 +1035,10 @@ def estimate_chained_delivery(
     saturated_zone = float(np.mean(background[ball_zone] >= 250))
     camera_quality_clean = saturated_zone <= BALL_ZONE_SATURATION_MAX
 
-    impact_idx = _detect_impact_index(frames, ball, trigger_index=trigger_index)
-    if impact_idx is None:
+    contact = camera_contact_time(frames, timestamps_ns, ball, trigger_index=trigger_index)
+    if contact is None:
         return ChainedDelivery(status="rejected_no_impact", scene_p995=scene_p995)
+    impact_idx = contact.impact_frame
     impact_vs_trigger_ms = None
     timing_plausible = trigger_index is None and camera_quality_clean
     if trigger_index is not None:
@@ -1050,7 +1051,7 @@ def estimate_chained_delivery(
             <= trigger_index + IMPACT_POST_TRIGGER_MAX
         )
 
-    contact_camera_s = (int(timestamps_ns[impact_idx]) + int(timestamps_ns[impact_idx + 1])) / 2e9
+    contact_camera_s = contact.contact_ns / 1e9
     track = range_evidence.track if range_evidence is not None else None
     radar_geo = range_evidence.geometry if range_evidence is not None else None
     impact_t_s = range_evidence.impact_t_s if range_evidence is not None else None
@@ -1291,6 +1292,69 @@ def _detect_impact_index(
     if trigger_index is not None:
         return None
     return int(indexes[-1])
+
+
+@dataclass(frozen=True)
+class CameraContact:
+    """When the camera saw the teed ball leave, found from the ball, not the trigger.
+
+    ``contact_ns`` is midway between the last frame the ball's core is
+    undisturbed and the next one, on the clock ``timestamp_source`` names.
+    Club delivery and ball flight time the IWR range from it (audit F7), and
+    F3 scores the radar's impact time against it.
+    """
+
+    impact_frame: int
+    contact_ns: float
+    timestamp_source: str
+    contact_vs_trigger_frame_ms: float | None = None
+
+
+def frame_clock(
+    host_timestamp_ns: np.ndarray, sensor_timestamp_ns: np.ndarray | None = None
+) -> tuple[np.ndarray, str]:
+    """Pick the per-frame clock: sensor timestamps when usable, else host arrival.
+
+    Host times are when each frame reached the Pi, so they carry delivery
+    jitter; sensor times are when it was exposed. Either works for intervals
+    within one clip as long as every time in a calculation comes from one clock.
+    """
+    host = np.asarray(host_timestamp_ns, dtype=np.int64)
+    if sensor_timestamp_ns is not None:
+        sensor = np.asarray(sensor_timestamp_ns)
+        if (
+            sensor.shape == host.shape
+            and sensor.dtype.kind in "iu"
+            and (len(sensor) < 2 or bool(np.all(np.diff(sensor.astype(np.int64)) > 0)))
+        ):
+            return sensor.astype(np.int64), "sensor_timestamp_ns"
+    return host, "host_timestamp_ns"
+
+
+def camera_contact_time(
+    frames: np.ndarray,
+    timestamps_ns: np.ndarray,
+    ball,
+    *,
+    trigger_index: int | None,
+    timestamp_source: str = "host_timestamp_ns",
+) -> CameraContact | None:
+    """Return the camera's contact time from the ball-departure frame, or None."""
+    timestamps = np.asarray(timestamps_ns, dtype=np.int64)
+    impact_idx = _detect_impact_index(frames, ball, trigger_index=trigger_index)
+    if impact_idx is None or impact_idx + 1 >= len(timestamps):
+        return None
+    contact_ns = (int(timestamps[impact_idx]) + int(timestamps[impact_idx + 1])) / 2.0
+    return CameraContact(
+        impact_frame=int(impact_idx),
+        contact_ns=contact_ns,
+        timestamp_source=timestamp_source,
+        contact_vs_trigger_frame_ms=(
+            round((contact_ns - int(timestamps[trigger_index])) / 1e6, 3)
+            if trigger_index is not None and 0 <= trigger_index < len(timestamps)
+            else None
+        ),
+    )
 
 
 def _club_mask(

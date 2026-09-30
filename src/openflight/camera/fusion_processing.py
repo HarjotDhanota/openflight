@@ -52,6 +52,12 @@ def _validate_archive(archive: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarra
     return frames, timestamps, trigger_ns
 
 
+def _sensor_timestamps(archive: Mapping[str, Any]) -> np.ndarray | None:
+    """The archive's sensor timestamps, which time ball flight when present (F7)."""
+    sensor = archive.get("sensor_timestamp_ns")
+    return None if sensor is None else np.asarray(sensor)
+
+
 def _range_snapshot(evidence: Any, kind: str) -> dict[str, Any] | None:
     if evidence is None:
         return None
@@ -181,6 +187,7 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
                 ops_ball_speed_mph=float(context["ops_ball_speed_mph"]),
                 iwr_vertical_deg=context["iwr_vertical_deg"],
                 ball_tracker=ball_tracker,
+                sensor_timestamps_ns=_sensor_timestamps(archive),
             )
         except Exception as error:  # stage isolation is part of the persisted contract
             ball = CameraBallEstimate(status="error")
