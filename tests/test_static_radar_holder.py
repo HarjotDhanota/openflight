@@ -230,10 +230,13 @@ def test_cancel_stops_a_capture_in_flight(tmp_path):
         "tee_range", [_capture_command(tmp_path, "empty-1", "empty")], tmp_path / "e.log", on_finish
     )
 
+    assert holder.cancel_requested is False
     assert holder.cancel() is True
     assert done.wait(2)
     assert spawner.processes[0].terminated
     assert calls[0][1] != 0
+    # the tester reads this to tell a Stop from a radar failure (wiring audit T10)
+    assert holder.cancel_requested is True
     assert holder.cancel() is False
 
 
@@ -249,6 +252,7 @@ def test_a_capture_that_overruns_its_timeout_is_stopped(tmp_path):
     assert done.wait(2)
     assert spawner.processes[0].terminated
     assert calls[0][1] != 0
+    assert holder.cancel_requested is True
 
 
 def test_release_closes_an_idle_session_for_other_hardware(tmp_path):

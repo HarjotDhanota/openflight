@@ -83,6 +83,7 @@ class HeldStaticRadar:  # pylint: disable=too-many-instance-attributes
         self._pending: tuple[str, str, Callable[[str, int], None] | None] | None = None
         self._timer: threading.Timer | None = None
         self._stderr = None
+        self._cancelled = False
 
     # -- queries ---------------------------------------------------------------
     def _alive_locked(self) -> bool:
@@ -93,6 +94,12 @@ class HeldStaticRadar:  # pylint: disable=too-many-instance-attributes
         """Whether a session process (and so the radar port) is alive."""
         with self._lock:
             return self._alive_locked()
+
+    @property
+    def cancel_requested(self) -> bool:
+        """Whether Stop or the timeout ended the current (or last) capture."""
+        with self._lock:
+            return self._cancelled
 
     def status(self) -> dict[str, object]:
         """Job-manager-shaped status: running only while a capture is in flight."""
@@ -140,6 +147,7 @@ class HeldStaticRadar:  # pylint: disable=too-many-instance-attributes
             if not self._alive_locked():
                 self._spawn_locked(base, Path(log_path))
             self._pending = (request["capture_id"], action, on_finish)
+            self._cancelled = False
             self._reusable = not request["close_after"]
             try:
                 self._send_locked(request)
@@ -163,6 +171,7 @@ class HeldStaticRadar:  # pylint: disable=too-many-instance-attributes
                 return False
             process = self._process
             self._reusable = False
+            self._cancelled = True
         self._stop(process)
         return True
 

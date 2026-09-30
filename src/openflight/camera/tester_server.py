@@ -1305,6 +1305,12 @@ class TesterJobManager:
         with self._lock:
             return {**self._state, "output": list(self._output)}
 
+    @property
+    def cancel_requested(self) -> bool:
+        """Whether Stop or the timeout ended the current (or last) job."""
+        with self._lock:
+            return self._cancel_requested
+
     def start(
         self,
         action: str,
@@ -4809,9 +4815,13 @@ def create_app(
             retry_phase="needs_empty" if kind == "empty" else "needs_ball",
         )
 
-    def _finish_static_capture(tester_id: str, epoch_id: str, kind: str, capture_id: str):
+    def _finish_static_capture(
+        tester_id: str, epoch_id: str, kind: str, capture_id: str, *, cancelled: bool = False
+    ):
         with tee_range_lock:
-            state = _finish_static_capture_locked(tester_id, epoch_id, kind, capture_id)
+            state = _finish_static_capture_locked(
+                tester_id, epoch_id, kind, capture_id, cancelled=cancelled
+            )
             if (
                 kind == "ball_present"
                 and state is not None
@@ -4821,7 +4831,9 @@ def create_app(
                 stop_guided_live(tester_id, epoch_id, "arm5")
             return state
 
-    def _finish_static_capture_locked(tester_id: str, epoch_id: str, kind: str, capture_id: str):
+    def _finish_static_capture_locked(
+        tester_id: str, epoch_id: str, kind: str, capture_id: str, *, cancelled: bool = False
+    ):
         store = range_store(tester_id)
         state = store.load()
         if state is None or state.epoch_id != epoch_id:
@@ -4834,6 +4846,15 @@ def create_app(
         if state.phase != capturing or state.evidence.get(f"{key}_capture_id") != capture_id:
             return state
         result_path = store.epoch_dir(epoch_id) / "iwr" / f"{capture_id}.json"
+        if cancelled and not result_path.is_file():
+            # Stop or the timeout ended it: nothing says the radar failed, so the
+            # hardware check stands and the step simply retries (wiring audit T10).
+            return store.transition(
+                state,
+                phase="retryable_failure",
+                reason=f"{key}_capture_stopped",
+                retry_phase="needs_empty" if key == "empty" else "needs_ball",
+            )
         if not result_path.is_file():
             iwr_preflight[tester_id] = False
             return store.transition(
@@ -4845,7 +4866,8 @@ def create_app(
         record = json.loads(result_path.read_text(encoding="utf-8"))
         evidence = {f"{key}_capture": record}
         if not record.get("usable"):
-            iwr_preflight[tester_id] = False
+            if not cancelled:
+                iwr_preflight[tester_id] = False
             return store.transition(
                 state,
                 phase="retryable_failure",
@@ -5078,7 +5100,9 @@ def create_app(
         )
 
         def finished(_action, _return_code):
-            _finish_static_capture(tester_id, state.epoch_id, kind, capture_id)
+            # read now: Stop and the timeout both end the capture through cancel
+            cancelled = bool(getattr(radar_jobs, "cancel_requested", False))
+            _finish_static_capture(tester_id, state.epoch_id, kind, capture_id, cancelled=cancelled)
 
         try:
             radar_jobs.start(

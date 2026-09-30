@@ -2126,12 +2126,14 @@ class TestTheLadder:
         monkeypatch.setattr(ts.os, "killpg", no_fake_group, raising=False)
         manager.start("gain", [["calibrate"]], tmp_path / "gain.log")
         assert constructing.wait(1)
+        assert manager.cancel_requested is False
         assert manager.cancel()
         release.set()
         deadline = time.monotonic() + 2
         while manager.status()["state"] == "running" and time.monotonic() < deadline:
             time.sleep(0.01)
         assert manager.status()["state"] == "stopped"
+        assert manager.cancel_requested is True  # a Stop, not a failure (audit T10)
         assert group_cleanup.wait(1)
 
     def test_log_directory_failure_finishes_the_job_as_an_error(self, tmp_path, monkeypatch):

@@ -2770,3 +2770,61 @@ def test_a_late_empty_capture_callback_during_the_ball_capture_changes_nothing(
     assert after["sequence"] == during["sequence"]
     manager.release()
     assert phase(client, tester)["phase"] == "camera_arm5_capturing"
+
+
+class StoppableStaticManager(StaticManager):
+    """A radar setup capture that runs until Stop (or its timeout) cancels it."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.mirror = self  # the manager the app holds, which reports the cancel
+        self.running = None
+
+    def start(self, action, commands, log_path, on_finish=None, **kwargs):
+        if action != "tee_range":
+            return super().start(action, commands, log_path, on_finish=on_finish, **kwargs)
+        self.mirror.cancel_requested = False
+        self.running = (action, on_finish)
+        self._status = {"state": "running", "action": "tee_range", "message": "capturing"}
+        return None
+
+    def cancel(self):
+        if self.running is None:
+            return False
+        action, on_finish = self.running
+        self.running = None
+        self.mirror.cancel_requested = True
+        self._status = {"state": "idle", "action": None, "message": "Ready"}
+        on_finish(action, -15)  # the capture process was stopped, so it wrote no result
+        return True
+
+
+def test_stopping_a_radar_capture_keeps_the_hardware_check(tmp_path, inputs, monkeypatch):
+    """Wiring audit T10: Stop or a timeout is not a hardware failure."""
+    app, tester = app_for(tmp_path, inputs, monkeypatch, require_iwr_preflight=True)
+    original = app.config["TEST_STATIC_MANAGER"]
+    manager = StoppableStaticManager(
+        config_hash=original.config_hash,
+        firmware_hash=original.firmware_hash,
+        rig_hash=original.rig_hash,
+        calibration_hash=original.calibration_hash,
+    )
+    for name in ("start", "status", "cancel"):
+        monkeypatch.setattr(original, name, getattr(manager, name))
+    manager.mirror = original
+    client = app.test_client()
+    body = {"tester_id": tester, "arm_id": "arm5", "environment": "indoors"}
+    assert client.post("/api/tester/run", json={**body, "action": "preflight"}).status_code == 202
+    assert post(client, tester, "start", "t10-start").status_code == 200
+    assert post(client, tester, "capture_empty", "t10-empty").status_code == 200
+
+    assert client.post("/api/tester/stop").get_json()["stopped"] is True
+
+    state = phase(client, tester)
+    assert state["phase"] == "retryable_failure"
+    assert state["reason"] == "empty_capture_stopped"
+    eligibility = client.get(
+        "/api/tester/setup-eligibility", query_string={"tester_id": tester}
+    ).get_json()
+    assert eligibility["eligible"] is True
+    assert "iwr6843_cli" not in [blocker["id"] for blocker in eligibility["blockers"]]
