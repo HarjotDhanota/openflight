@@ -74,7 +74,8 @@ def test_sound_trigger_uses_monotonic_first_marker_and_response_boundaries(monke
         last_clock_sync = None
 
         @staticmethod
-        def wait_for_hardware_trigger(*, timeout, cancel_event, on_first_byte):
+        def wait_for_hardware_trigger(*, timeout, cancel_event, on_first_byte, gate_edge_time):
+            assert callable(gate_edge_time)
             assert timeout == 30.0
             assert cancel_event is None
             clock.advance_ns(30_000_000_000)
