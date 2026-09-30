@@ -39,8 +39,8 @@ class TestTheGeometryReplacesTheFlags:
         # first_look decides whether numbers may be attributed to sensors by
         # the presence of exactly this block, so the derived values ride in it.
         # the virtual array's phase centre, 7.85 mm above the RX row (audit F11)
-        assert block["derived"]["radar_height_m"] == pytest.approx(0.0589, abs=5e-4)
-        assert block["derived"]["radar_rx_row_height_m"] == pytest.approx(0.051, abs=5e-4)
+        assert block["derived"]["radar_height_m"] == pytest.approx(0.0569, abs=5e-4)
+        assert block["derived"]["radar_rx_row_height_m"] == pytest.approx(0.049, abs=5e-4)
         assert block["derived"]["provenance"]
 
     def test_a_measured_value_beats_a_typed_flag(self):
@@ -198,7 +198,7 @@ class TestTheSwingServerNeedsTheRigFile:
 
     def test_the_radar_height_and_tilt_come_from_the_rig_file(self, monkeypatch, tmp_path):
         received = self._main(monkeypatch, tmp_path, ["--iwr6843", "--rig-geometry", V3])
-        assert received["radar_height_m"] == pytest.approx(0.05885, abs=1e-5)
+        assert received["radar_height_m"] == pytest.approx(0.05685, abs=1e-5)
         assert received["tilt_deg"] == pytest.approx(10.0)
 
     def test_the_board_rotation_comes_from_the_rig_file(self, monkeypatch, tmp_path):
@@ -219,8 +219,8 @@ class TestTheSwingServerNeedsTheRigFile:
             board_rotation_deg=received["board_rotation_deg"],
             boresight_pitch_deg=received["tilt_deg"],
         )
-        # the RX row stays the rig's 44 mm below the lens, now 195 mm up
-        assert layout.rx_row_height_m == pytest.approx(0.195 - 0.044, abs=1e-6)
+        # the RX row stays the rig's 46 mm below the lens, now 195 mm up
+        assert layout.rx_row_height_m == pytest.approx(0.195 - 0.046, abs=1e-6)
 
     def test_the_camera_has_no_default_height(self, monkeypatch, tmp_path, capsys):
         # the 0.20955 m (8.25 in) July height is gone: no rig, no height, no start
@@ -276,7 +276,7 @@ class TestTheBoardCalibrationCarriesNoInstallation:
             radar_height_m=setup.radar_height_m,
         )
         calibration = server.iwr6843_runtime.calibration
-        assert calibration.radar_height_m == pytest.approx(0.05885, abs=1e-5)
+        assert calibration.radar_height_m == pytest.approx(0.05685, abs=1e-5)
         assert math.degrees(calibration.tilt_rad) == pytest.approx(10.0)
         server.iwr6843_runtime = None
 
@@ -327,9 +327,9 @@ class TestTheBoardCalibrationCarriesNoInstallation:
         layout = runtime.calibration.antennas
         assert layout.basis == antennas.RIG_BASIS
         assert layout.board_rotation_deg == 90.0
-        assert layout.rx_row_height_m == pytest.approx(0.051)
+        assert layout.rx_row_height_m == pytest.approx(0.049)
         # the server's radar height stays the phase centre's, which others read
-        assert runtime.calibration.radar_height_m == pytest.approx(0.05885, abs=1e-5)
+        assert runtime.calibration.radar_height_m == pytest.approx(0.05685, abs=1e-5)
         effective = runtime.calibration_provenance["effective"]
         assert effective["iwr_board_rotation_deg"] == 90.0
         assert effective["antenna_layout"] == layout.as_dict()
