@@ -197,6 +197,12 @@ Outdoors-test-6 and -7 ran in full sun on 30 Sept (10:10-10:26) on 63b69be9. Har
 | P7-11 | The review labels any `accepted*` IWR launch "accepted", whatever the tee's source (`review_metrics.py:230`). With a guessed tee, the launch moves 4-28° per ±0.25 m. | Label it experimental whenever the tee is unqualified or the status is single-channel, and carry the tee's range and source. |
 | P7-12 | Each rung's starting gain comes from the zone gain screen (`rung_gain`, `study_ladder.py:119-125`). In sun it starts full-10 at gain 12 when the ball needs about 1, and the ladder takes three swings to correct. (Found while building P7-9.) | Start each rung at the setup's ball lock, keeping its exposure × gain. A mode without its own lock scales the 1280×800 lock by the gain screens' mode ratio. With no lock, keep the gain-screen rule. Record the source per rung. |
 
+**Jumping between settings (D12, Harjot, 30 Sept):** "sometimes i dont have time to do all of them. so let me switch between them freely. this is separate from the checkbox system."
+
+| ID | Fix |
+|---|---|
+| P7-13 | The ladder panel gets a button for each setting. Pressing one switches to it now, ticked or not; a mode change restarts the kiosk as usual.<br><br>**Progress:**<ul><li>Swings already taken on the setting left behind stay counted, so returning continues it.</li><li>A setting that has finished with its good swings can't be pressed.</li><li>Pressing a failed or skipped setting reopens it with its earlier swings kept and a fresh red count.</li></ul>**Light:** the pressed setting runs anyway. Its light check still runs to set the gain, but a too-bright or too-dark result is shown as a warning, not a refusal. The swings are judged as usual.<br><br>**Afterwards:** when the pressed setting finishes or fails, the ladder continues with the next unfinished ticked setting in the usual order. The tick boxes keep deciding that order. Each switch is recorded in the ladder state with its time. |
+
 **Harjot, before the next session:** put a foam windscreen on the microphone, and check the GATE LED stays quiet in wind before swinging.
 
 The three workstreams run in parallel on their own branches. S owns the tester page and runs the Playwright specs; T and L run pytest and vitest only.
