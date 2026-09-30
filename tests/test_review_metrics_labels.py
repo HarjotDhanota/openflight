@@ -152,3 +152,41 @@ def test_club_stage_notes_label_the_club_metrics_only():
         assert "contact from the trigger frame" in metrics[key]["reason"]
         assert metrics[key]["details"]["notes"] == delivery["notes"]
     assert metrics["camera_launch_horizontal_deg"]["reason"] is None
+
+
+def test_a_low_coherence_iwr_horizontal_is_shown_experimental():
+    report = {
+        "stages": {
+            "iwr6843": {
+                "status": "accepted",
+                "launch_angle_deg": 18.0,
+                "horizontal_deg": 2.5,
+                "horizontal_confidence": 0.2,
+                "horizontal_status": "hlcmf_v1_low_coherence",
+            }
+        }
+    }
+    tee = {"tee_slant_range_m": 1.5, "source": "qualified_static_iwr"}
+    metrics = {m["key"]: m for m in review_replay(report, {}, tee_range=tee)["metrics"]}
+    horizontal = metrics["iwr_launch_horizontal_deg"]
+    assert horizontal["value"] == 2.5
+    assert horizontal["status"] == "experimental"
+    assert "hlcmf_v1_low_coherence" in horizontal["reason"]
+
+
+def test_a_reject_quality_track_launch_is_shown_experimental():
+    report = {
+        "stages": {
+            "iwr6843": {
+                "status": "accepted_warning_track_quality",
+                "launch_angle_deg": 18.0,
+                "tracker_quality": "reject",
+            }
+        }
+    }
+    tee = {"tee_slant_range_m": 1.5, "source": "qualified_static_iwr"}
+    metrics = {m["key"]: m for m in review_replay(report, {}, tee_range=tee)["metrics"]}
+    vertical = metrics["iwr_launch_vertical_deg"]
+    assert vertical["value"] == 18.0
+    assert vertical["status"] == "experimental"
+    assert "track quality reject" in vertical["reason"]

@@ -78,6 +78,7 @@ const HORIZONTAL_SOURCE_LABELS: Record<string, string> = {
   camera_only_experimental: 'camera only',
   camera_legacy_fallback: 'camera legacy',
   camera_low_consensus: 'camera, low consensus',
+  radar_low_coherence: 'radar, low coherence',
 };
 
 function experimentalStatus(status: string | null | undefined): string {

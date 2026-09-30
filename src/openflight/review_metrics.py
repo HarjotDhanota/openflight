@@ -238,6 +238,7 @@ def _iwr_metrics(stage: Any, tee_range: Mapping[str, Any] | None = None) -> list
     vertical = finite(stage.get("launch_angle_deg"))
     tee = _tee_details(tee_range)
     single_channel = stage.get("single_channel") is True or "single_channel" in status
+    reject_track = stage.get("tracker_quality") == "reject"
     # what makes an accepted launch experimental rather than accepted (P7-11)
     experimental_because = [
         text
@@ -247,6 +248,8 @@ def _iwr_metrics(stage: Any, tee_range: Mapping[str, Any] | None = None) -> list
                 f"tee range {tee['tee_range_source']} is not qualified",
             ),
             (single_channel, "one receive channel only"),
+            # a launch measured on a reject-quality track (D15, P8-7)
+            (reject_track, "track quality reject"),
         )
         if applies
     ]
@@ -294,16 +297,23 @@ def _iwr_metrics(stage: Any, tee_range: Mapping[str, Any] | None = None) -> list
     ]
     horizontal = finite(stage.get("horizontal_deg"))
     horizontal_status = stage.get("horizontal_status")
+    # a low-coherence horizontal is measured and labelled (P8-7)
+    horizontal_because = [
+        *experimental_because,
+        *([str(horizontal_status)] if horizontal_status == "hlcmf_v1_low_coherence" else []),
+    ]
     metrics.append(
         _metric(
             "iwr_launch_horizontal_deg",
             "Horizontal launch (IWR)",
             "deg",
-            launch_status if accepted and horizontal is not None else "rejected",
+            ("experimental" if horizontal_because else "accepted")
+            if accepted and horizontal is not None
+            else "rejected",
             source=source,
             value=horizontal,
             confidence=stage.get("horizontal_confidence"),
-            reason=("; ".join(experimental_because) or None)
+            reason=("; ".join(horizontal_because) or None)
             if accepted and horizontal is not None
             else f"withheld: {horizontal_status or status or 'no horizontal estimate'}",
             recorded_status=horizontal_status,

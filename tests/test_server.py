@@ -5626,13 +5626,20 @@ class TestIwrAzimuthCalibration:
     """F8: without a horizontal phase reference the IWR's azimuth is uncalibrated."""
 
     @staticmethod
-    def _run(monkeypatch, *, phase_reference, horizontal_deg=2.25, club_accepted=True):
+    def _run(
+        monkeypatch,
+        *,
+        phase_reference,
+        horizontal_deg=2.25,
+        club_accepted=True,
+        horizontal_status="hlcmf_v1_accepted",
+    ):
         measurement = SimpleNamespace(
             accepted=True,
             angle_deg=18.5,
             horizontal_deg=horizontal_deg,
             horizontal_confidence=0.93,
-            horizontal_status="hlcmf_v1_accepted",
+            horizontal_status=horizontal_status,
             n_snapshots=18,
             n_frames=5,
             component_std_deg=1.4,
@@ -5676,6 +5683,19 @@ class TestIwrAzimuthCalibration:
         )
         server_module._process_iwr6843_angle(shot)
         return shot
+
+    def test_a_low_coherence_radar_horizontal_is_shown_labelled_not_fused(self, monkeypatch):
+        """D15 (P8-7): shown under its own source, never handed to the camera as IWR's."""
+        shot = self._run(
+            monkeypatch, phase_reference=-0.5, horizontal_status="hlcmf_v1_low_coherence"
+        )
+
+        assert shot.launch_angle_horizontal == pytest.approx(2.25)
+        assert shot.launch_angle_horizontal_source == "radar_low_coherence"
+        assert shot.iwr6843_horizontal_deg is None
+        # any camera horizontal outranks it
+        server_module._apply_camera_horizontal_decision(shot, 4.0, 0.3, "camera_only_experimental")
+        assert shot.launch_angle_horizontal == pytest.approx(4.0)
 
     def test_uncalibrated_radar_horizontal_and_path_are_marked(self, monkeypatch):
         shot = self._run(monkeypatch, phase_reference=None)

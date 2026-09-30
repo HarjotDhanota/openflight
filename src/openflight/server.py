@@ -3561,14 +3561,24 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             horizontal_deg = getattr(measurement, "horizontal_deg", None)
             horizontal_confidence = getattr(measurement, "horizontal_confidence", None)
             horizontal_status = getattr(measurement, "horizontal_status", None)
-            if horizontal_deg is not None:
-                shot.iwr6843_horizontal_deg = horizontal_deg
-                shot.iwr6843_horizontal_confidence = horizontal_confidence_from(
+            from .iwr6843.runtime import camera_horizontal_input  # noqa: PLC0415
+
+            fused_horizontal, fused_confidence = camera_horizontal_input(measurement)
+            if fused_horizontal is not None:
+                shot.iwr6843_horizontal_deg = fused_horizontal
+                shot.iwr6843_horizontal_confidence = fused_confidence
+                shot.launch_angle_horizontal = fused_horizontal
+                shot.launch_angle_horizontal_confidence = fused_confidence
+                shot.launch_angle_horizontal_source = "radar"
+                shot.launch_angle_horizontal_status = _iwr_azimuth_status()
+            elif horizontal_deg is not None:
+                # a low-coherence horizontal is shown under its own source and
+                # never handed to the camera as the IWR's evidence (P8-7)
+                shot.launch_angle_horizontal = horizontal_deg
+                shot.launch_angle_horizontal_confidence = horizontal_confidence_from(
                     horizontal_confidence
                 )
-                shot.launch_angle_horizontal = horizontal_deg
-                shot.launch_angle_horizontal_confidence = shot.iwr6843_horizontal_confidence
-                shot.launch_angle_horizontal_source = "radar"
+                shot.launch_angle_horizontal_source = "radar_low_coherence"
                 shot.launch_angle_horizontal_status = _iwr_azimuth_status()
                 logger.info(
                     "[SERVER] IWR6843 TX2 horizontal proxy: %.2f° (coherence %.0f%%, status=%s)",
@@ -3856,6 +3866,8 @@ def _fuse_camera_club_delivery(
 # outranks a radar horizontal, and size-only camera depth ranks below it.
 _HORIZONTAL_SOURCE_RANK = {
     "estimated": -1,
+    # a low-coherence IWR horizontal: shown, but any camera horizontal outranks it
+    "radar_low_coherence": -0.5,
     "camera_only_experimental": 0,
     "camera_legacy_fallback": 0,
     # a scattered camera sweep, shown labelled but never over the radar (P8-7)

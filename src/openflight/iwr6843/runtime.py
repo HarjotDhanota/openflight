@@ -49,6 +49,27 @@ def horizontal_confidence_from(coherence: float | None) -> float:
     return round(min(HORIZONTAL_CONFIDENCE_CEILING, max(0.0, float(coherence))), 3)
 
 
+LOW_COHERENCE_HORIZONTAL = "hlcmf_v1_low_coherence"
+
+
+def camera_horizontal_input(measurement) -> tuple[float | None, float | None]:
+    """The IWR horizontal and confidence camera fusion may use, kiosk and replay alike.
+
+    A low-coherence horizontal is measured and shown, labelled (D15, P8-7), but
+    it is never the IWR evidence the camera weighs itself against.
+    """
+    if measurement is None or not getattr(measurement, "accepted", False):
+        return None, None
+    horizontal = getattr(measurement, "horizontal_deg", None)
+    if horizontal is None or getattr(measurement, "horizontal_status", None) == (
+        LOW_COHERENCE_HORIZONTAL
+    ):
+        return None, None
+    return horizontal, horizontal_confidence_from(
+        getattr(measurement, "horizontal_confidence", None)
+    )
+
+
 def _ops_candidate_rank(candidate: RecoveryCandidate) -> tuple[float, int, float]:
     """Rank truth-free range walks before the more expensive LCMF pass."""
     return (
@@ -124,14 +145,17 @@ def ops_guided_measurement(
     if baseline is None or not hasattr(baseline, "track_speed_mph"):
         return baseline
     speed = baseline.track_speed_mph
-    if baseline.accepted and speed is None:
+    # A launch measured on a reject-quality track keeps its label and never
+    # stops the search for a better track (D15, P8-7).
+    sound = baseline.accepted and baseline.tracker_quality != "reject"
+    if sound and speed is None:
         return replace(baseline, status="accepted_track_speed_warning")
     speed_error = (
         abs(speed / ball_speed_mph - 1.0)
         if speed is not None and ball_speed_mph > 0.0
         else float("inf")
     )
-    if baseline.accepted and speed_error <= OPS_TRACK_SPEED_TOLERANCE_FRAC:
+    if sound and speed_error <= OPS_TRACK_SPEED_TOLERANCE_FRAC:
         return baseline
     try:
         candidates = _credible_ops_candidates(
@@ -145,11 +169,7 @@ def ops_guided_measurement(
         )
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning("[IWR6843] OPS-guided track search failed: %s", error)
-        return (
-            replace(baseline, status="accepted_track_speed_warning")
-            if baseline.accepted
-            else baseline
-        )
+        return replace(baseline, status="accepted_track_speed_warning") if sound else baseline
     recoveries: list[tuple[RecoveryCandidate, LCMFResult]] = []
     for candidate in candidates:
         result = estimate_lcmf_v1(
@@ -182,9 +202,7 @@ def ops_guided_measurement(
             else "accepted_ops_guided"
         )
         return replace(selected, status=status)
-    return (
-        replace(baseline, status="accepted_track_speed_warning") if baseline.accepted else baseline
-    )
+    return replace(baseline, status="accepted_track_speed_warning") if sound else baseline
 
 
 @dataclass(frozen=True)
@@ -498,4 +516,5 @@ __all__ = [
     "ops_guided_measurement",
     "process_raw_capture",
     "horizontal_confidence_from",
+    "camera_horizontal_input",
 ]
