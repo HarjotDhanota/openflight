@@ -121,7 +121,7 @@ class FakeLive:
             status = self.analyzer.status()
             snapshot = self.analyzer.snapshot() or {}
             if generation == self.context_generation and (
-                status["status"] == "lighting_required"
+                status["status"] in ts.STATIC_EXPOSURE_FAILURES
                 or (status["locked_and_passing"] and snapshot.get("save_eligible"))
             ):
                 return
@@ -493,7 +493,7 @@ def app_for(
     monkeypatch.setattr(ts, "_reference_ball_camera", camera_model)
     monkeypatch.setattr(
         ts,
-        "estimate_reference_ball_range",
+        "estimate_patch_ball",
         lambda _frames, camera, **_kwargs: camera_result(
             camera_m, camera.image_width_px, camera.image_height_px
         ),
@@ -642,39 +642,18 @@ def start_arm5(client, tester, prefix="exposure"):
         assert post(client, tester, action, f"{prefix}-{index}").status_code == 200
 
 
-def test_static_exposure_locks_the_lowest_passing_setting_before_camera_save(
-    tmp_path, inputs, monkeypatch
-):
+def test_a_few_ball_targeted_steps_lock_the_ball_before_camera_save(tmp_path, inputs, monkeypatch):
+    """P8-2: the first look starts from the light screen, a dim ball is brought up by
+    its own measured level, and the lock passes the ball-pixel gates."""
     live = FakeLive()
+    live.ball_per_signal = 0.004  # 4.8 DN above black at the light screen's 300 us x 4
     app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
 
     state = drive(app.test_client(), tester)
 
     exposure = state["evidence"]["camera_arm5_static_exposure"]
     lock = exposure["lock"]
-    arm = ts.ARMS["arm5"]
-    x, y, diameter = ball_pixels(arm.width, arm.height)
-    probe = FakeLive()
-    probe.arm = arm
-
-    def passes(step):
-        probe.controls = (step.exposure_us, step.gain)
-        return ts.assess_static_exposure(
-            probe.recent_frames()[1],
-            {
-                "status": "selected",
-                "selected": {"x_px": x, "y_px": y, "diameter_px": diameter},
-                "stable_count": 3,
-            },
-            requested=step,
-            applied_exposure_us=step.exposure_us,
-            applied_gain=step.gain,
-            black_floor_dn=FakeLive.background,  # the black level app_for records
-        ).acceptable
-
-    lowest_passing = next(
-        step for step in sorted(ts.exposure_steps_for_fps(arm.fps)) if passes(step)
-    )
+    tried = {(item["exposure_us"], item["gain"]) for item in exposure["attempts"]}
     facts = state["evidence"]["camera_arm5_candidate"]["evidence"]["qualification"]
     controls = state["evidence"]["camera_arm5_candidate"]["evidence"]["capture_identity"]["mode"][
         "controls"
@@ -682,11 +661,11 @@ def test_static_exposure_locks_the_lowest_passing_setting_before_camera_save(
     assert state["phase"] == "resolved"
     assert exposure["status"] == "locked"
     assert exposure["locked_and_passing"] is True
-    assert (lock["exposure_us"], lock["gain"]) == (
-        lowest_passing.exposure_us,
-        lowest_passing.gain,
-    )
-    assert exposure["attempts"][0]["stage"] == "bootstrap"
+    assert exposure["attempts"][0]["stage"] == "targeting"
+    assert exposure["attempts"][0]["reason"] == "ball_too_dim"
+    assert len(tried) <= 3
+    assert lock["observation"]["signal_above_floor_dn"] >= 20.0
+    assert lock["observation"]["ball_clipped_pct"] <= 5.0
     assert facts["static_exposure_lock_verified"] is True
     assert controls["applied_exposure_us"] == lock["applied_exposure_us"]
     assert controls["applied_gain"] == lock["applied_gain"]
@@ -704,7 +683,7 @@ def test_a_static_exposure_lock_never_reaches_swing_capture(tmp_path, inputs, mo
         swing_gain, swing_exposure_us = ts.resolve_gain(tmp_path / "sessions", params)
         arm_state = ts.read_arm_state(tmp_path / "sessions", tester, arm_id)
         assert (swing_exposure_us, swing_gain) == (params.arm.exposure_us, 4.0)
-        assert (lock["exposure_us"], lock["gain"]) != (swing_exposure_us, swing_gain)
+        assert lock["purpose"] == ts.STATIC_EXPOSURE_PURPOSE
         assert "static_exposure" not in json.dumps(arm_state)
     assert not list((tmp_path / "home").rglob("camera-exposure.json"))
 
@@ -735,7 +714,7 @@ def test_the_exposure_search_is_saved_to_disk_without_any_save(
     )
     if ambiguous:
         result = replace(camera_result(1.2), status="ambiguous", selected=None)
-        monkeypatch.setattr(ts, "estimate_reference_ball_range", lambda *_args, **_kwargs: result)
+        monkeypatch.setattr(ts, "estimate_patch_ball", lambda *_args, **_kwargs: result)
     client = app.test_client()
     start_arm5(client, tester)
 
@@ -759,7 +738,7 @@ def test_dark_scene_requires_light_and_blocks_camera_save(tmp_path, inputs, monk
     association = live.analyzer.snapshot()
 
     assert response.status_code == 409
-    assert "no visible setting passed the ball-pixel gates" in response.get_json()["error"]
+    assert "more light is needed on the ball" in response.get_json()["error"]
     assert association["static_exposure"]["status"] == "lighting_required"
     assert association["save_eligible"] is False
     assert phase(client, tester)["phase"] == "camera_arm5_capturing"
@@ -802,7 +781,7 @@ def test_an_ambiguous_ball_is_reported_as_unidentified_not_as_dark(tmp_path, inp
     # a lit scene: the background is light above a black level of 0
     app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live, black_floor_dn=0.0)
     ambiguous = replace(camera_result(1.2), status="ambiguous", selected=None)
-    monkeypatch.setattr(ts, "estimate_reference_ball_range", lambda *_args, **_kwargs: ambiguous)
+    monkeypatch.setattr(ts, "estimate_patch_ball", lambda *_args, **_kwargs: ambiguous)
     client = app.test_client()
     start_arm5(client, tester)
 
@@ -843,7 +822,7 @@ def test_controls_the_camera_ignores_never_lock(tmp_path, inputs, monkeypatch):
     exposure = live.analyzer.status()
 
     assert response.status_code == 409
-    assert exposure["status"] == "lighting_required"
+    assert exposure["status"] == "controls_not_applied"
     assert exposure["lock"] is None
     assert {item["reason"] for item in exposure["attempts"]} == {"controls_not_applied"}
 
@@ -896,10 +875,10 @@ def test_the_estimator_is_not_run_until_the_camera_applies_the_controls(
         calls.append(1)
         return camera_result(1.2, camera.image_width_px, camera.image_height_px)
 
-    monkeypatch.setattr(ts, "estimate_reference_ball_range", counting)
+    monkeypatch.setattr(ts, "estimate_patch_ball", counting)
     start_arm5(app.test_client(), tester)
 
-    assert live.analyzer.status()["status"] == "lighting_required"
+    assert live.analyzer.status()["status"] == "controls_not_applied"
     assert calls == []
 
 
@@ -1012,24 +991,12 @@ def test_guided_flow_resolves_and_survives_reload(tmp_path, inputs, monkeypatch)
     ranking = guidance["camera_to_iwr_ranking"]
     assert live["save_eligible"] is True
     assert live["timing"]["clock"] == "host_performance_counter_duration"
-    # 1280x800 searches during the radar ball capture, before any radar candidate exists.
-    assert guidance["search_hint"]["reason_code"] == "static_iwr_candidate_missing"
+    # P8-2: neither camera step uses the radar while it searches, in either mode
     assert live["dependency_facts"]["iwr_range_used"] is False
-    hinted = state["evidence"]["camera_arm6_guidance"]["live_readiness"]
-    hint = state["evidence"]["camera_arm6_guidance"]["search_hint"]
-    assert hinted["independent"] is False
-    assert hinted["promotion_eligible"] is False
-    assert hinted["dependency_facts"]["iwr_range_used"] is True
-    assert hint["status"] == "usable"
-    assert hint["input_identity"]["active_epoch_id"] == state["epoch_id"]
-    assert hint["input_identity"]["source_epoch_id"] == state["epoch_id"]
-    assert hint["input_identity"]["source_inputs"]["empty_capture_sha256"] == "a" * 64
-    assert hint["input_identity"]["source_inputs"]["present_capture_sha256"] == "b" * 64
-    assert hint["input_identity"]["camera_projection"]["artifacts"][
-        "rig_geometry_sha256"
-    ] == file_hash(inputs["rig"])
-    assert hint["source_uncertainty_m"] > 0.0
-    assert hint["uncertainty"]["source_standard_uncertainty_m"] == hint["source_uncertainty_m"]
+    assert "search_hint" not in guidance
+    arm6 = state["evidence"]["camera_arm6_guidance"]["live_readiness"]
+    assert arm6["independent"] is True
+    assert arm6["dependency_facts"]["iwr_range_used"] is False
     assert camera_evidence["save_camera_only_analysis"]["dependency_facts"] == {
         "iwr_range_used": False,
         "manual_range_used": False,
@@ -1037,8 +1004,12 @@ def test_guided_flow_resolves_and_survives_reload(tmp_path, inputs, monkeypatch)
     }
     assert save["independent"] is True
     assert save["promotion_eligible"] is True
-    # Save searches the whole placement box the tester confirmed, nothing narrower
-    assert save["search_region_px"] == state["evidence"]["placement_box"]["box_px"]
+    # Save searches the whole patch the tester confirmed, nothing narrower
+    assert save["search_region"] == "patch_outline"
+    assert (
+        save["search_region_px"]
+        == state["evidence"]["camera_arm5_capture_setup"]["placement_box_px"]
+    )
     assert (
         save["input_identity"]["analyzed_frame_window_sha256"]
         == identity["analyzed_frame_window_sha256"]
@@ -1078,69 +1049,38 @@ def test_guided_flow_resolves_and_survives_reload(tmp_path, inputs, monkeypatch)
     ]
 
 
-def test_conditioned_static_object_must_match_broad_save_before_promotion(
-    tmp_path, inputs, monkeypatch
-):
-    """The radar hint only exists once the radar has finished, so 640x400 is conditioned."""
+def test_the_camera_never_uses_the_radar_while_it_searches(tmp_path, inputs, monkeypatch):
+    """P8-2: the camera's search takes nothing from the radar, in either mode, even
+    once the radar's result is in; the two are paired only after both finish."""
     live = FakeLive()
-    live.other_bright_objects = [(260.0, 300.0, 12.0)]
     app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    seen = []
 
     def estimate(_frames, camera, **kwargs):
-        ball = camera_result(1.2, camera.image_width_px, camera.image_height_px)
-        roi = kwargs.get("roi")
-        if kwargs.get("max_fits") == 1 and camera.image_width_px == 640:
-            # the 1280x800 ball it follows first is not found here (P7-5), so the
-            # radar-hinted search picks the hinge
-            return ReferenceBallRangeResult("not_found", "withheld", None, (), {})
-        # a follow look (one fit) sees whatever is inside its small region
-        if roi is None or (
-            kwargs.get("max_fits") == 1
-            and not (roi[0] <= 260 <= roi[2] and roi[1] <= 300 <= roi[3])
-        ):
-            return ball
-        return replace(
-            ball,
-            selected=replace(ball.selected, x_px=260.0, y_px=300.0),
-            candidates=(replace(ball.candidates[0], x_px=260.0, y_px=300.0),),
-        )
+        seen.append((camera.image_width_px, sorted(kwargs)))
+        return camera_result(1.2, camera.image_width_px, camera.image_height_px)
 
-    monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
-    client = app.test_client()
-    actions = (
-        "start",
-        "capture_empty",
-        "capture_ball",
-        "start_camera_arm5",
-        "evaluate_camera_arm5",
-        "start_camera_arm6",
-    )
-    for index, action in enumerate(actions):
-        assert post(client, tester, action, f"hinge-{index}").status_code == 200
+    monkeypatch.setattr(ts, "estimate_patch_ball", estimate)
+    state = drive(app.test_client(), tester)
 
-    response = post(client, tester, "evaluate_camera_arm6", "hinge-save")
-
-    assert response.status_code == 200
-    state = response.get_json()["state"]
-    assert state["phase"] == "retryable_failure"
-    assert "camera_arm5_candidate" in state["evidence"]
-    assert "camera_arm6_candidate" not in state["evidence"]
-    attempt = next(
-        value for key, value in state["evidence"].items() if key.startswith("camera_arm6_attempt_")
-    )
-    assert attempt["status"] == "association_withheld"
-    assert attempt["live_guidance"]["dependency_facts"]["iwr_range_used"] is True
-    assert attempt["live_guidance"]["promotion_eligible"] is False
-    assert attempt["camera_only_analysis"]["independent"] is True
-    assert attempt["camera_only_analysis"]["promotion_eligible"] is False
-    assert attempt["camera_only_analysis"]["search_region_px"] == [
-        value // 2 if index < 2 else -(-value // 2)
-        for index, value in enumerate(state["evidence"]["placement_box"]["box_px"])
-    ]
-    assert attempt["reason"] == (
-        "broad independent camera search does not confirm the stable provisional selection"
-    )
-    assert state["evidence"]["iwr_candidate"]["radar_slant_range_m"] == pytest.approx(1.2)
+    allowed = {
+        "search",
+        "ball_center_height_m",
+        "roi",
+        "expected_diameter_range_px",
+        "max_fits",
+        "hold_diameter_px",
+    }
+    assert {width for width, _keys in seen} == {1280, 640}
+    assert all(set(keys) <= allowed for _width, keys in seen)
+    for arm_id in ("arm5", "arm6"):
+        guidance = state["evidence"][f"camera_{arm_id}_guidance"]
+        for analysis in (guidance["live_readiness"], guidance["save_camera_only_analysis"]):
+            assert analysis["dependency_facts"]["iwr_range_used"] is False
+            assert analysis["independent"] is True
+        setup = state["evidence"][f"camera_{arm_id}_capture_setup"]
+        assert setup["iwr_range_used"] is False
+        assert "iwr_camera_search_hint" not in setup
 
 
 def test_start_over_stops_only_the_guided_camera_owner(tmp_path, inputs, monkeypatch):
@@ -1202,7 +1142,7 @@ def test_latest_ambiguous_frames_are_preserved_and_withheld_after_live_readiness
     second = replace(first, x_px=700.0)
     monkeypatch.setattr(
         ts,
-        "estimate_reference_ball_range",
+        "estimate_patch_ball",
         lambda *_args, **_kwargs: ReferenceBallRangeResult(
             "ambiguous", "withheld", None, (first, second), {"plausible_candidate_count": 2}
         ),
@@ -1236,7 +1176,7 @@ def test_stop_during_save_preserves_frame_and_withholds_changed_context(
         live.stop()
         return camera_result(1.2)
 
-    monkeypatch.setattr(ts, "estimate_reference_ball_range", stop_during_analysis)
+    monkeypatch.setattr(ts, "estimate_patch_ball", stop_during_analysis)
     response = post(client, tester, "evaluate_camera_arm5", "context-race")
 
     assert response.status_code == 200
@@ -1342,22 +1282,10 @@ def test_missing_qualification_and_disagreement_remain_raw_only(tmp_path, inputs
     assert missing["evidence"]["experimental_range"]["qualification_outcome"] == (
         "qualification_artifact_missing"
     )
-    assert missing["evidence"]["camera_arm5_guidance"]["search_hint"]["reason_code"] == (
-        "static_iwr_candidate_missing"
-    )
-    fallback = missing["evidence"]["camera_arm6_guidance"]
-    assert fallback["search_hint"]["status"] == "rejected"
-    assert fallback["search_hint"]["reason_code"] == "static_iwr_candidate_rejected"
-    # after the first full-frame find, live looks follow the ball
-    assert fallback["live_readiness"]["discovery_mode"] in {
-        "broad_full_frame_unconditioned",
-        "follow_last_selection",
-    }
-    assert fallback["live_readiness"]["independent"] is True
-    assert fallback["live_readiness"]["fallback"]["used"] is True
-    assert fallback["live_readiness"]["fallback"]["reason_code"] == (
-        "static_iwr_candidate_rejected"
-    )
+    arm6 = missing["evidence"]["camera_arm6_guidance"]
+    # after the first whole-patch find, live looks follow the ball
+    assert arm6["live_readiness"]["discovery_mode"] in {"whole_patch", "follow_last_selection"}
+    assert arm6["live_readiness"]["independent"] is True
     iwr = missing["evidence"]["iwr_candidate"]
     assert ts._tee_range_cli_args(tee_range.TeeRangeSolution.from_dict(missing["solution"])) == [
         "--iwr6843-tee-m",
@@ -1790,7 +1718,7 @@ def test_camera_evaluation_retry_uses_a_new_immutable_frame_attempt(tmp_path, in
 
     monkeypatch.setattr(
         ts,
-        "estimate_reference_ball_range",
+        "estimate_patch_ball",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("transient")),
     )
     assert post(client, tester, "evaluate_camera_arm5", "bad-evaluation").status_code == 200
@@ -1801,9 +1729,7 @@ def test_camera_evaluation_retry_uses_a_new_immutable_frame_attempt(tmp_path, in
         post(client, tester, "retry", "retry-camera").get_json()["state"]["phase"]
         == "needs_camera_arm5"
     )
-    monkeypatch.setattr(
-        ts, "estimate_reference_ball_range", lambda *_args, **_kwargs: camera_result(1.2)
-    )
+    monkeypatch.setattr(ts, "estimate_patch_ball", lambda *_args, **_kwargs: camera_result(1.2))
     assert post(client, tester, "start_camera_arm5", "new-camera").status_code == 200
 
     retried = post(client, tester, "evaluate_camera_arm5", "good-evaluation")
@@ -1993,7 +1919,7 @@ def test_a_remembered_lock_from_another_policy_is_not_used(tmp_path, inputs, mon
 
     setup = phase(client, tester)["evidence"]["camera_arm5_capture_setup"]
     assert setup["warm_start"] is None
-    assert _search_evidence(tmp_path, client, tester)["attempts"][0]["stage"] == "bootstrap"
+    assert _search_evidence(tmp_path, client, tester)["attempts"][0]["stage"] != "warm_start"
 
 
 def test_a_saved_experimental_range_reaches_swings_without_the_test_flag(
@@ -2069,7 +1995,7 @@ def test_the_setup_solves_the_lens_height_from_the_radar_and_hands_it_to_swings(
     app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
     monkeypatch.setattr(
         ts,
-        "estimate_reference_ball_range",
+        "estimate_patch_ball",
         lambda _frames, camera, **_kwargs: (
             lambda result: replace(
                 result,
@@ -2355,7 +2281,7 @@ def _arm6_at(monkeypatch, arm6_m):
     """The 640x400 validation sees the ball at another range than 1280x800 (1.2 m)."""
     monkeypatch.setattr(
         ts,
-        "estimate_reference_ball_range",
+        "estimate_patch_ball",
         lambda _frames, camera, **_kwargs: camera_result(
             1.2 if camera.image_width_px == 1280 else arm6_m,
             camera.image_width_px,
@@ -2652,7 +2578,7 @@ def _solving_camera(monkeypatch):
     """A camera that also solves a lens height from the ball's size, as the real one does."""
     monkeypatch.setattr(
         ts,
-        "estimate_reference_ball_range",
+        "estimate_patch_ball",
         lambda _frames, camera, **_kwargs: (
             lambda result: replace(
                 result,
@@ -3179,7 +3105,7 @@ def test_every_setup_search_looks_only_inside_the_confirmed_box(tmp_path, inputs
         calls.append((camera.image_width_px, kwargs))
         return camera_result(1.2, camera.image_width_px, camera.image_height_px)
 
-    monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
+    monkeypatch.setattr(ts, "estimate_patch_ball", estimate)
     client = app.test_client()
     assert confirm_box(client, tester, "box", origin=(500, 380)).status_code == 200
     post(client, tester, "start", "start")
@@ -3187,17 +3113,24 @@ def test_every_setup_search_looks_only_inside_the_confirmed_box(tmp_path, inputs
 
     state = drive_after_box(client, tester)
 
-    halved = [box[0] // 2, box[1] // 2, -(-box[2] // 2), -(-box[3] // 2)]
+    record = phase(client, tester)["evidence"]["placement_box"]
+    outline = [value for point in record["search_outline_px"] for value in point]
     assert {width for width, _kwargs in calls} == {1280, 640}
     for width, kwargs in calls:
-        assert list(kwargs["placement_box_px"]) == (box if width == 1280 else halved)
-    for arm_id, expected in (("arm5", box), ("arm6", halved)):
+        # every look is inside the patch, projected through that mode's own camera
+        searched = [value for point in kwargs["search"].outline_px for value in point]
+        scale = 1.0 if width == 1280 else 0.5
+        assert searched == pytest.approx([value * scale for value in outline], abs=1.0)
+    for arm_id in ("arm5", "arm6"):
         save = state["evidence"][f"camera_{arm_id}_guidance"]["save_camera_only_analysis"]
-        assert save["search_region_px"] == expected
-        assert save["discovery_mode"] == "placement_box_unconditioned"
+        region = state["evidence"][f"camera_{arm_id}_capture_setup"]["placement_box_px"]
+        assert save["search_region"] == "patch_outline"
+        assert save["search_region_px"] == region
+        assert save["discovery_mode"] == "whole_patch"
         assert save["promotion_eligible"] is True
         candidate = state["evidence"][f"camera_{arm_id}_candidate"]["evidence"]
-        assert candidate["placement_box"]["box_px"] == expected
+        assert candidate["placement_box"]["box_px"] == region
+    assert state["evidence"]["camera_arm5_capture_setup"]["placement_box_px"] == box
 
 
 def drive_after_box(client, tester):
@@ -3220,17 +3153,22 @@ def test_no_ball_in_the_box_tells_the_tester_to_put_it_there(tmp_path, inputs, m
     monkeypatch.setattr(ts, "_BALL_SEARCH_POOL", None)
     orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
     empty = ReferenceBallRangeResult("not_found", "withheld", None, (), {})
-    monkeypatch.setattr(ts, "estimate_reference_ball_range", lambda *_a, **_k: empty)
-    analyzer = ts.GuidedRangeAnalyzer(
-        _app_camera(), orientation, lambda: orientation, placement_box=(500, 380, 656, 510)
+    monkeypatch.setattr(ts, "estimate_patch_ball", lambda *_a, **_k: empty)
+    patch = ts.ground_patch.PatchSearch(
+        outline_px=((500, 510), (656, 510), (620, 380), (536, 380)),
+        diameter_px=(10.0, 60.0),
+        centre_lateral_m=0.0,
+        half_size_m=0.305,
+        radar_window_m=(0.5, 2.0),
     )
+    analyzer = ts.GuidedRangeAnalyzer(_app_camera(), orientation, lambda: orientation, patch)
 
     association = analyzer.observe(np.zeros((3, 800, 1280), dtype=np.uint8), 1)
 
     assert association["readiness_reason"] == (
         "No ball found in the patch. The ball may be outside it: move the ball or the patch."
     )
-    assert association["placement_box_px"] == [500, 380, 656, 510]
+    assert association["placement_box_px"] == [500, 380, 657, 511]
 
 
 def test_the_live_view_serves_the_box_it_searches_in_both_modes(tmp_path, inputs, monkeypatch):
@@ -3252,10 +3190,12 @@ def test_the_live_view_serves_the_box_it_searches_in_both_modes(tmp_path, inputs
     assert arm5["frame_size_px"] == [1280, 800] and arm5["arm_id"] == "arm5"
     flat = lambda points: [value for point in points for value in point]  # noqa: E731
     assert flat(arm5["outline_px"]) == pytest.approx(flat(record["outline_px"]))
-    assert arm6["box_px"] == [box[0] // 2, box[1] // 2, -(-box[2] // 2), -(-box[3] // 2)]
+    # 640x400 projects the same ground patch through its own camera: about half
+    halved_box = [box[0] // 2, box[1] // 2, -(-box[2] // 2), -(-box[3] // 2)]
+    assert arm6["box_px"] == pytest.approx(halved_box, abs=1)
     assert arm6["frame_size_px"] == [640, 400] and arm6["arm_id"] == "arm6"
     halved = [[x / 2.0, y / 2.0] for x, y in record["outline_px"]]
-    assert flat(arm6["outline_px"]) == pytest.approx(flat(halved))
+    assert flat(arm6["outline_px"]) == pytest.approx(flat(halved), abs=1.0)
 
 
 def test_the_swings_record_says_where_the_box_was(tmp_path, inputs, monkeypatch):
@@ -3460,7 +3400,7 @@ def test_the_640x400_check_starts_from_the_1280x800_lock_and_ball(tmp_path, inpu
         calls.append((camera.image_width_px, kwargs))
         return camera_result(1.2, camera.image_width_px, camera.image_height_px)
 
-    monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
+    monkeypatch.setattr(ts, "estimate_patch_ball", estimate)
     client = app.test_client()
     assert confirm_box(client, tester, "box", origin=(560, 440)).status_code == 200
     post(client, tester, "start", "start")
@@ -3485,13 +3425,13 @@ def test_the_640x400_check_starts_from_the_1280x800_lock_and_ball(tmp_path, inpu
         "y_px": ball["y_px"] / 2.0,
         "diameter_px": ball["diameter_px"] / 2.0,
     }
-    assert setup["darkness_region_px"] == halved
-    # the first look follows the 1280x800 ball, halved, inside the halved box
+    assert setup["darkness_region_px"] == pytest.approx(halved, abs=1)
+    # the first look follows the 1280x800 ball, halved, inside the patch
     width, first = calls[0]
     assert width == 640
     assert first["max_fits"] == 1
     assert first["hold_diameter_px"] == pytest.approx(ball["diameter_px"] / 2.0)
-    assert list(first["placement_box_px"]) == halved
+    assert list(first["search"].bounds_px(640, 400)) == setup["darkness_region_px"]
 
 
 def test_without_a_1280x800_lock_the_640x400_check_uses_its_own_memory(tmp_path, inputs):

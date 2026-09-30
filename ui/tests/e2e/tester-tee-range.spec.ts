@@ -39,6 +39,7 @@ type GuidedState =
   | 'warming'
   | 'exposure_searching'
   | 'ball_not_found'
+  | 'looking_for_ball'
   | 'optical_gates_failed'
   | 'lighting_required'
   | 'ball_not_identified'
@@ -279,7 +280,7 @@ test('shows the server-owned guided camera frame without starting another live v
   await expect(page.locator('#automatic-range-summary')).toContainText('The reference camera is live');
   await expect(page.locator('#tee-range-camera-status')).toContainText('Live 1280×800 frame ready');
   await expect(page.locator('#tee-range-camera-detector')).toContainText(
-    'Camera-only search: ball selected · x 641.2 · y 502.7 · diameter 24.4 px · range 1.527 m · stable and ready to save'
+    'Camera search in the patch: ball selected · x 641.2 · y 502.7 · diameter 24.4 px · range 1.527 m · stable and ready to save'
   );
   await expect(page.locator('#tee-range-camera-frame')).toHaveAttribute('src', /view=overlay/);
   expect(statusPolls).toBeGreaterThan(1);
@@ -329,7 +330,7 @@ test('reports the live detector reason without treating it as a camera failure',
 
   const detector = page.locator('#tee-range-camera-detector');
   await expect(detector).toContainText(
-    'Camera-only broad fallback: No reference ball was found. Save remains disabled · radar hint fallback: the static IWR candidate was rejected.'
+    'Camera search in the patch: No ball found in the patch. The ball may be outside it: move the ball or the patch. Save remains disabled.'
   );
   await expect(detector).toHaveClass(/note/);
   await expect(detector).not.toHaveClass(/problem/);
@@ -371,13 +372,14 @@ test('withholds Save and a confident verdict when camera-only association is amb
   await page.goto('/tester.html');
 
   await expect(page.locator('#tee-range-camera-detector')).toContainText(
-    'Camera-only search: Multiple candidates remain plausible. Save remains disabled.'
+    'Camera search in the patch: Several ball-like things are in the patch: keep only the ball in it. Save remains disabled.'
   );
   await expect(page.locator('#tee-range-action')).toBeDisabled();
   await expect(page.locator('#automatic-range-summary')).toContainText('The reference camera is live');
 });
 
-test('labels radar-conditioned readiness as provisional until independent Save', async ({ page }) => {
+// P8-2: the camera never uses the radar while it searches, so nothing it shows is radar-guided.
+test('the camera search is labelled as the patch search, never radar-guided', async ({ page }) => {
   await base(page, {
     epoch_id: 'epoch-radar-guided',
     phase: 'camera_arm5_capturing',
@@ -417,8 +419,8 @@ test('labels radar-conditioned readiness as provisional until independent Save',
   await page.goto('/tester.html');
 
   const detector = page.locator('#tee-range-camera-detector');
-  await expect(detector).toContainText('Radar-guided provisional search: ball selected');
-  await expect(detector).toContainText('independent full-frame check pending on Save');
+  await expect(detector).toContainText('Camera search in the patch: ball selected');
+  await expect(detector).not.toContainText('Radar-guided');
   await expect(page.locator('#tee-range-action')).toBeEnabled();
 });
 
@@ -849,11 +851,20 @@ const GUIDED_CAMERA_CASES = [
     problem: false,
   },
   {
-    name: 'a missing ball',
-    display: guidedDisplay('ball_not_found', { reason: 'no reference ball at the current exposure' }),
-    text: 'No reference ball at this exposure',
+    name: 'a look without the ball',
+    display: guidedDisplay('looking_for_ball', { reason: 'looking for the ball in the patch' }),
+    text: 'Looking for the ball in the patch',
     saveEnabled: false,
     problem: false,
+  },
+  {
+    name: 'no ball in the patch',
+    display: guidedDisplay('ball_not_found', {
+      reason: 'No ball found in the patch. The ball may be outside it: move the ball or the patch.',
+    }),
+    text: 'No ball found in the patch',
+    saveEnabled: false,
+    problem: true,
   },
   {
     name: 'insufficient light',

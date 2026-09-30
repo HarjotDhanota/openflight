@@ -37,6 +37,8 @@ class ReferenceBall:
     y: float
     diameter_px: float
     area_px: int
+    # the lit-sphere fit's diffuse brightness over its misfit, where a fit found it
+    fit_quality: float | None = None
 
 
 @dataclass(frozen=True)
@@ -333,6 +335,7 @@ def reference_ball_candidates(  # pylint: disable=too-many-locals
             y=fit.y,
             diameter_px=fit.diameter_px,
             area_px=int(round(math.pi * fit.radius_px**2)),
+            fit_quality=float(fit.quality),
         )
         duplicate = next(
             (

@@ -356,6 +356,12 @@ class ReferenceBallRangeCandidate:
     rejection_reason: str | None
     camera_height_m: float | None = None
     camera_height_uncertainty_m: float | None = None
+    # P8-2: how far the lens height the ball's floor row implies is from the rig's.
+    # A diagnostic only: before the camera tilt is calibrated the row cannot say it.
+    floor_height_residual_m: float | None = None
+    lateral_from_patch_m: float | None = None
+    # the lit-sphere fit's own quality (diffuse brightness over misfit), for ranking
+    fit_quality: float | None = None
 
 
 @dataclass(frozen=True)
@@ -1194,6 +1200,201 @@ def estimate_reference_ball_range(  # pylint: disable=too-many-locals
         return ReferenceBallRangeResult(
             "no_consistent_candidate", "withheld", None, candidates, diagnostics
         )
+    selected = plausible[0]
+    return ReferenceBallRangeResult(
+        "selected", selected.confidence, selected, candidates, diagnostics
+    )
+
+
+# P8-2: the camera searches only the patch. What a ball there must satisfy is the
+# patch's outline and the sizes its distances allow; the floor row is recorded,
+# never used to refuse a ball, since the camera's vertical is uncertain by a few
+# degrees until the unit's tilt is calibrated (P8-5).
+PATCH_REJECTION = "outside the patch"
+PATCH_SEED_MARGIN_PX = 4.0
+# Inside the patch the most ball-like fit is the ball; a second fit this close to
+# it in quality leaves the view ambiguous (Outdoors-test-7: the ball 20.8, a lit
+# tuft of turf 12.4 beside it).
+PATCH_AMBIGUITY_QUALITY_RATIO = 0.75
+
+
+def _patch_candidate(  # pylint: disable=too-many-locals
+    ball: ReferenceBall,
+    camera: BallPlaneCamera,
+    ball_center_height_m: float,
+    search,
+) -> ReferenceBallRangeCandidate:
+    """Range from apparent size, and where aside of the patch centre that puts the ball."""
+    try:
+        local_focal = _local_focal_size(camera, ball.x, ball.y)
+        angular_diameter = ball.diameter_px / local_focal
+        size_range = GOLF_BALL_DIAMETER_M / (2.0 * math.sin(angular_diameter / 2.0))
+        diameter_relative_uncertainty = max(
+            0.5 / ball.diameter_px, _MIN_DIAMETER_RELATIVE_UNCERTAINTY
+        )
+        size_uncertainty = size_range * math.hypot(
+            camera.focal_relative_uncertainty, diameter_relative_uncertainty
+        )
+        ray = np.asarray(camera.ray_model.rays(np.asarray([ball.x, ball.y], dtype=float)))
+        if ray.shape != (3,) or not np.all(np.isfinite(ray)):
+            raise ValueError("camera model returned an invalid ray")
+    except ValueError as error:
+        return _withheld(ball, camera, str(error))
+    origin = np.asarray(camera.camera_origin_lfu)
+    relative = ray * size_range
+    offset = np.asarray(camera.radar_origin_lfu) - origin
+    radar_range = float(np.linalg.norm(relative - offset))
+    down = -float(ray[2])
+    camera_height = ball_center_height_m + size_range * down
+    angular = math.sin(math.radians(camera.angular_uncertainty_deg))
+    height_uncertainty = math.hypot(size_uncertainty * abs(down), size_range * angular)
+    residual = camera_height - float(origin[2])
+    lateral = float(origin[0] + relative[0]) - search.centre_lateral_m
+    reason = None
+    if not search.contains(ball.x, ball.y):
+        reason = PATCH_REJECTION
+    elif not search.diameter_px[0] <= ball.diameter_px <= search.diameter_px[1]:
+        reason = (
+            f"{ball.diameter_px:.0f} px across: not a ball at the patch's distances "
+            f"({search.diameter_px[0]:.0f}-{search.diameter_px[1]:.0f} px)"
+        )
+    confidence = (
+        "withheld"
+        if reason is not None
+        else "high"
+        if camera.accuracy_qualified
+        else "experimental"
+    )
+    return ReferenceBallRangeCandidate(
+        x_px=ball.x,
+        y_px=ball.y,
+        diameter_px=ball.diameter_px,
+        area_px=ball.area_px,
+        size_point_lfu_m=(
+            float(origin[0] + relative[0]),
+            float(origin[1] + relative[1]),
+            float(ball_center_height_m),
+        ),
+        size_radar_range_m=radar_range,
+        floor_camera_range_m=size_range,
+        size_camera_range_m=size_range,
+        floor_range_uncertainty_m=size_uncertainty,
+        size_range_uncertainty_m=size_uncertainty,
+        range_disagreement_m=None,
+        consistency_sigma=abs(residual) / _CAMERA_HEIGHT_PRIOR_SIGMA_M,
+        source=camera.source,
+        confidence=confidence,
+        score=abs(lateral) / search.half_size_m if reason is None else None,
+        rejection_reason=reason,
+        camera_height_m=camera_height,
+        camera_height_uncertainty_m=height_uncertainty,
+        floor_height_residual_m=residual,
+        lateral_from_patch_m=lateral,
+        fit_quality=getattr(ball, "fit_quality", None),
+    )
+
+
+def _patch_seed_filter(search):
+    """Seeds whose centre lies in the patch outline, give or take the coarse grid."""
+    from openflight.camera.ground_patch import points_in_polygon  # noqa: PLC0415
+
+    margin = PATCH_SEED_MARGIN_PX
+    shifts = ((0.0, 0.0), (margin, 0.0), (-margin, 0.0), (0.0, margin), (0.0, -margin))
+
+    def allowed(xs: np.ndarray, ys: np.ndarray, _diameter: float) -> np.ndarray:
+        inside = np.zeros(np.shape(xs), dtype=bool)
+        for dx, dy in shifts:
+            inside |= points_in_polygon(np.asarray(xs) + dx, np.asarray(ys) + dy, search.outline_px)
+        return inside
+
+    return allowed
+
+
+def estimate_patch_ball(  # pylint: disable=too-many-locals
+    frames: np.ndarray,
+    camera: BallPlaneCamera,
+    *,
+    search,
+    ball_center_height_m: float,
+    roi: tuple[int, int, int, int] | None = None,
+    expected_diameter_range_px: tuple[float, float] | None = None,
+    max_fits: int = REFERENCE_SEED_FITS,
+    hold_diameter_px: float | None = None,
+) -> ReferenceBallRangeResult:
+    """Find the resting ball inside the patch (``search``, a ``PatchSearch``).
+
+    There is no search outside the patch. ``roi`` and ``expected_diameter_range_px``
+    only narrow it further (a live look following the ball it found).
+    """
+    if frames.ndim != 3 or frames.shape[1:] != (
+        camera.image_height_px,
+        camera.image_width_px,
+    ):
+        raise ValueError("camera frames do not match the declared saved-image mode")
+    width, height = camera.image_width_px, camera.image_height_px
+    bounds = search.bounds_px(width, height, PATCH_SEED_MARGIN_PX)
+    region = _placement_box_roi(bounds, roi, width, height)
+    smallest, largest = search.diameter_px
+    if expected_diameter_range_px is not None:
+        smallest = max(smallest, float(expected_diameter_range_px[0]))
+        largest = min(largest, float(expected_diameter_range_px[1]))
+    diagnostics = {
+        "capture_mode": f"{width}x{height}",
+        "source": camera.source,
+        "accuracy_qualified": camera.accuracy_qualified,
+        "search_region": "patch_outline",
+        "search_outline_px": [[round(x, 1), round(y, 1)] for x, y in search.outline_px],
+        "roi_px": list(region) if region is not None else None,
+        "diameter_search_px": [float(smallest), float(largest)],
+        "floor_row": "diagnostic_only_until_the_camera_tilt_is_calibrated",
+    }
+    if region is None or not 0.0 < smallest < largest:
+        return ReferenceBallRangeResult(
+            "not_found",
+            "withheld",
+            None,
+            (),
+            {**diagnostics, "observed_candidate_count": 0, "plausible_candidate_count": 0},
+        )
+    diameters = np.geomspace(smallest, largest, _DIAMETER_HYPOTHESES)
+    observed = reference_ball_candidates(
+        frames,
+        expected_diameters_px=diameters,
+        roi=region,
+        seed_filter=_patch_seed_filter(search),
+        max_fits=max_fits,
+        hold_diameter_px=hold_diameter_px,
+    )
+    candidates = tuple(
+        _patch_candidate(ball, camera, ball_center_height_m, search) for ball in observed
+    )
+    # the most ball-like fit first; nearer the patch centre breaks a tie
+    plausible = sorted(
+        (item for item in candidates if item.rejection_reason is None and item.score is not None),
+        key=lambda item: (-(item.fit_quality or 0.0), item.score),
+    )
+    ratio = (
+        (plausible[1].fit_quality or 0.0) / plausible[0].fit_quality
+        if len(plausible) > 1 and plausible[0].fit_quality
+        else None
+    )
+    diagnostics.update(
+        {
+            "observed_candidate_count": len(candidates),
+            "plausible_candidate_count": len(plausible),
+            "ranking": "lit_sphere_fit_quality",
+            "second_to_best_quality": ratio,
+            "ambiguity_quality_ratio": PATCH_AMBIGUITY_QUALITY_RATIO,
+        }
+    )
+    if not candidates:
+        return ReferenceBallRangeResult("not_found", "withheld", None, candidates, diagnostics)
+    if not plausible:
+        return ReferenceBallRangeResult(
+            "no_consistent_candidate", "withheld", None, candidates, diagnostics
+        )
+    if len(plausible) > 1 and (ratio is None or ratio >= PATCH_AMBIGUITY_QUALITY_RATIO):
+        return ReferenceBallRangeResult("ambiguous", "withheld", None, candidates, diagnostics)
     selected = plausible[0]
     return ReferenceBallRangeResult(
         "selected", selected.confidence, selected, candidates, diagnostics

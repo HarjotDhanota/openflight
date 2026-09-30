@@ -9,7 +9,7 @@ import os
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -21,30 +21,13 @@ from openflight.camera.optical_quality import (
 
 STATIC_EXPOSURE_PURPOSE = "static_reference_ball"
 STATIC_EXPOSURE_SCHEMA = "openflight.camera.static_exposure_lock.v1"
-# 10-75 us and unity gain are for sunlight: outdoors on 29 Sept the old darkest
-# setting, 100 us x 2, still clipped 38 % of the ball, and 50 us x 1 clipped 47 %.
-# The OV9281's shortest exposure is 9 us (one row) at 1280x800.
-EXPOSURES_US = (
-    10,
-    15,
-    20,
-    30,
-    50,
-    75,
-    100,
-    150,
-    200,
-    300,
-    500,
-    800,
-    1250,
-    2000,
-    3000,
-    4000,
-    6000,
-    8000,
-)
-GAINS = (1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0)
+# P8-2: the setup's ball is locked by a few steps aimed at its own brightness,
+# not the 44-step walk over an exposure x gain lattice that came before. The
+# OV9281 takes exposures down to 9 us (one row) at 1280x800; above gain 12 it adds
+# offset rather than signal.
+MIN_EXPOSURE_US = 10
+MIN_GAIN = 1.0
+MAX_GAIN = 12.0
 _MIN_SIGNAL_ABOVE_FLOOR_DN = 20.0
 # Contrast against the surroundings and edge sharpness are recorded but not
 # gated. In DN both scale with exposure x gain exactly as the background does, so
@@ -60,61 +43,58 @@ _MAX_BALL_CLIPPED_PCT = 5.0
 # that turned the signal gate back into a contrast gate (wiring audit B5).
 SENSOR_BLACK_LEVEL_DN = 16.0
 _REQUIRED_STABLE_OBSERVATIONS = 3
-_SETTLE_LIMIT = 4
-_STABILIZE_LIMIT = 6
-_REFINE_ATTEMPT_LIMIT = 48
-_DARK_GATES = frozenset({"signal"})
-# A frame this far above black is well lit; a ball missing from it is not dark.
-_WELL_LIT_FRAME_DN = 2.0 * _MIN_SIGNAL_ABOVE_FLOOR_DN
-# Ball brightness, contrast and edge all scale with exposure x gain, so one
-# measured ball predicts the setting where each gate is just met.
+SETTLE_LIMIT = 4
+STABILIZE_LIMIT = 12
 _CLIP_LEVEL_DN = 250.0
-# While the ball is not yet visible, aim the frame at this level above black.
-_BOOTSTRAP_TARGET_FRAME_DN = 60.0
-_MAX_JUMPS = 3
-# How far a linear prediction may be off before a step is skipped on its word.
-_PREDICTION_TOLERANCE = 1.5
-_IDENTIFY_LIMIT = 6
-_UNIDENTIFIED_STATUSES = frozenset({"ambiguous", "no_consistent_candidate"})
-_DARK_DETECTOR_STATUSES = frozenset({"not_found", None})
+# A seen ball's brightest part is brought to this share of the clip level: well
+# clear of clipping, and far above the 20 DN floor for a white ball.
+TARGET_PEAK_FRACTION = 0.6
+# A seen ball too dim for the floor is brought to twice it.
+TARGET_BALL_SIGNAL_DN = 2.0 * _MIN_SIGNAL_ABOVE_FLOOR_DN
+# A patch whose own pixels are dark is brought to this level above black before
+# the ball is looked for again; a patch this far up is clipped.
+TARGET_PATCH_DN = 60.0
+CLIPPED_PATCH_DN = 224.0
+# The most one step changes exposure x gain, either way, and the most steps.
+MAX_STEP_FACTOR = 16.0
+MAX_CONTROL_CHANGES = 8
+# Looks at a lit patch with no ball in it, and at several ball-like things, before
+# the loop says so. Neither ever changes the brightness.
+NOT_FOUND_LIMIT = 4
+IDENTIFY_LIMIT = 6
 
 
 def static_exposure_policy() -> dict[str, Any]:
-    """Return every static exposure setting and gate used for qualification."""
+    """Return every static exposure setting and gate the setup's ball lock uses."""
     return {
         "name": "stationary_reference_ball_exposure",
-        # version 5 (P7-5): an unidentified ball is looked at again at the same
-        # setting, never a brighter one, and darkness is judged on the placement box
-        "version": 5,
+        # version 6 (P8-2): a few steps aimed at the ball's own brightness replace
+        # the 44-step lattice search; "not found" never means dark
+        "version": 6,
         "purpose": STATIC_EXPOSURE_PURPOSE,
-        "exposures_us": list(EXPOSURES_US),
-        "gains": list(GAINS),
-        "objective": "minimum_exposure_then_gain",
+        "objective": "ball_peak_at_target_shortest_exposure_then_gain",
         "search": {
-            "warm_start": "remembered_verified_lock_first_any_failure_runs_full_search",
-            "jump": "linear_response_predicts_lowest_exposure_then_gain_step_then_verify",
-            "bootstrap_target_frame_dn": _BOOTSTRAP_TARGET_FRAME_DN,
+            "method": "ball_targeted_brightness_steps",
+            "warm_start": "remembered_verified_lock_first_under_the_same_gates",
+            "response": "linear_signal_above_black_in_exposure_x_gain",
+            "minimum_exposure_us": MIN_EXPOSURE_US,
+            "gain_range": [MIN_GAIN, MAX_GAIN],
+            "target_peak_fraction_of_clip": TARGET_PEAK_FRACTION,
+            "target_ball_signal_dn": TARGET_BALL_SIGNAL_DN,
+            "target_patch_dn": TARGET_PATCH_DN,
+            "clipped_patch_dn": CLIPPED_PATCH_DN,
             "clip_level_dn": _CLIP_LEVEL_DN,
-            "max_jumps": _MAX_JUMPS,
-            "prediction_tolerance": _PREDICTION_TOLERANCE,
-            "near_black_frame_climb": "at_least_4x_per_bootstrap_step",
-            "bootstrap": "ascending_exposure_at_maximum_gain_until_ball_found",
-            "refine": "lexicographic_with_monotone_signal_pruning",
-            "settle_limit_observations": _SETTLE_LIMIT,
-            "stabilize_limit_observations": _STABILIZE_LIMIT,
-            "refine_attempt_limit": _REFINE_ATTEMPT_LIMIT,
-            "unidentified_ball": "retry_same_step_never_brighter",
-            "unidentified_statuses": sorted(_UNIDENTIFIED_STATUSES),
-            "identify_limit_observations": _IDENTIFY_LIMIT,
-            "darkness_evidence": "detector_not_found_or_dark_gates_or_unlit_frame",
+            "max_step_factor": MAX_STEP_FACTOR,
+            "max_control_changes": MAX_CONTROL_CHANGES,
+            "settle_limit_observations": SETTLE_LIMIT,
+            "stabilize_limit_observations": STABILIZE_LIMIT,
+            "not_found_limit_observations": NOT_FOUND_LIMIT,
+            "identify_limit_observations": IDENTIFY_LIMIT,
+            "darkness_evidence": "the_patch_pixels_only",
             "darkness_region": "placement_box_when_given_else_frame",
+            "not_found_is_never_darkness": True,
             "ambiguous_is_never_darkness": True,
-            "unidentified_requires_frame_signal_dn": _MIN_SIGNAL_ABOVE_FLOOR_DN,
-            "clipping_prunes_before_dark_gates": True,
             "pose_change": "retry_same_step_then_rig_moved",
-            "stand_out": "detector_stable_selection_then_independent_save_search",
-            "too_bright": "ball_seen_only_clipped_never_dim",
-            "well_lit_frame_dn": _WELL_LIT_FRAME_DN,
         },
         "gates": {
             "minimum_signal_above_floor_dn": _MIN_SIGNAL_ABOVE_FLOOR_DN,
@@ -215,16 +195,15 @@ class StaticExposureLock:
         return asdict(self)
 
 
-def exposure_steps_for_fps(fps: float) -> tuple[StaticExposureStep, ...]:
+# where the first look goes without a remembered lock or a light screen
+DEFAULT_START = StaticExposureStep(300, 4.0)
+
+
+def max_static_exposure_us(fps: float) -> int:
+    """The longest exposure a frame period at ``fps`` leaves room for."""
     if not math.isfinite(fps) or fps <= 0.0:
         raise ValueError("camera FPS must be positive")
-    maximum = math.floor(1_000_000 / fps) - 200
-    return tuple(
-        StaticExposureStep(exposure, gain)
-        for exposure in EXPOSURES_US
-        if exposure <= maximum
-        for gain in GAINS
-    )
+    return max(MIN_EXPOSURE_US, math.floor(1_000_000 / fps) - 200)
 
 
 def applied_controls_match(requested: StaticExposureStep, exposure_us, gain) -> bool:
@@ -355,62 +334,69 @@ def assess_static_exposure(  # pylint: disable=too-many-locals
     )
 
 
-class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
-    """Deterministic two-stage search for the lowest passing applied static controls.
+class BallBrightnessSearch:  # pylint: disable=too-many-instance-attributes
+    """A few brightness steps aimed at the ball's own pixels (P8-2).
 
-    Bootstrap raises exposure at the highest gain only to make the ball visible;
-    it never qualifies a setting. Refine then walks, lowest exposure first, the
-    steps brighter than the last bootstrap step that showed no ball, and locks the
-    first one whose applied controls and ball pixels pass every gate. Ball level
-    rises with exposure x gain, so a too-dark failure drops every queued step no
-    brighter than it and a clipped failure drops every step no darker.
+    Like the patch preview's loop (P7-15b), each step uses the linear response
+    (signal above black ~ exposure x gain) to go straight to a target:
 
-    An optional warm start (the last verified lock for this tester and camera
-    mode) is tried first under the same gates. It locks only if it passes; any
-    failure discards it and runs the full search above.
+    * a ball is seen: its brightest part is brought to ``TARGET_PEAK_FRACTION`` of
+      the clip level, so it is at least 20 DN above black and not clipped;
+    * no ball, and the patch's own pixels are dark: the patch is brought to
+      ``TARGET_PATCH_DN`` above black, then looked at again;
+    * no ball in a lit patch: looked at again at the same setting, and after
+      ``NOT_FOUND_LIMIT`` looks the ball is not in the patch. "Not found" never
+      means dark;
+    * several ball-like things: looked at again at the same setting, never
+      brighter; after ``IDENTIFY_LIMIT`` looks they cannot be told apart.
+
+    The shortest exposure is used for any exposure x gain, then gain. A
+    remembered lock (``warm_start``) is tried first under the same gates.
     """
 
     def __init__(
         self,
-        steps: Sequence[StaticExposureStep],
+        max_exposure_us: int,
+        *,
+        start: StaticExposureStep | None = None,
         warm_start: StaticExposureStep | None = None,
     ):
-        ordered = sorted(set(steps))
-        if not ordered:
-            raise ValueError("static exposure search needs at least one step")
-        top_gain = max(step.gain for step in ordered)
-        self._steps = tuple(ordered)
-        self._bootstrap = [
-            StaticExposureStep(exposure, top_gain)
-            for exposure in sorted({step.exposure_us for step in ordered})
-        ]
-        self.warm_start = warm_start if warm_start in self._steps else None
-        self._queue: list[StaticExposureStep] = (
-            [self.warm_start] if self.warm_start else list(self._bootstrap)
-        )
-        self.stage = "warm_start" if self.warm_start else "bootstrap"
+        self.max_exposure_us = max(MIN_EXPOSURE_US, int(max_exposure_us))
+        self.warm_start = warm_start if warm_start is not None and self._valid(warm_start) else None
+        first = self.warm_start or start or DEFAULT_START
+        # the start is used as given when the sensor can take it; moves use split()
+        self._step = first if self._valid(first) else self.split(first.signal)
+        self.stage = "warm_start" if self.warm_start else "targeting"
         self.status = "searching"
         self.reason: str | None = None
         self.lock: StaticExposureLock | None = None
         self.attempts: list[dict] = []
-        self._dark_signal = 0.0
+        self.prediction: dict | None = None
+        self._changes = 0
         self._settling = 0
         self._stabilizing = 0
-        self._refine_attempts = 0
-        self._unidentified = 0
         self._pose_retries = 0
-        self._ball_seen = False
-        self._lit_seen = False
-        # the ball was seen clipped, and seen too dim: only the first means too bright
-        self._clipped_seen = False
-        self._dim_seen = False
-        self._jumps = 0
-        self.prediction: dict | None = None
+        self._not_found = 0
+        self._unidentified = 0
+
+    def _valid(self, step: StaticExposureStep) -> bool:
+        return (
+            MIN_EXPOSURE_US <= step.exposure_us <= self.max_exposure_us
+            and MIN_GAIN <= step.gain <= MAX_GAIN
+        )
+
+    def split(self, product: float) -> StaticExposureStep:
+        """The shortest exposure for this exposure x gain, then the gain it needs."""
+        exposure = min(
+            max(MIN_EXPOSURE_US, math.ceil(float(product) / MAX_GAIN)), self.max_exposure_us
+        )
+        gain = min(MAX_GAIN, max(MIN_GAIN, float(product) / exposure))
+        return StaticExposureStep(int(exposure), round(gain, 2))
 
     @property
     def current_step(self) -> StaticExposureStep | None:
         """The controls to apply next, or None once the search has finished."""
-        return self._queue[0] if self.status == "searching" and self._queue else None
+        return self._step if self.status == "searching" else None
 
     def _log(self, observation: StaticExposureObservation, reason: str) -> None:
         self.attempts.append(
@@ -424,45 +410,7 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
             }
         )
 
-    def _advance(self, prune: str | None = None) -> None:
-        if self.stage == "warm_start":
-            self.stage = "bootstrap"
-            self._queue = list(self._bootstrap)
-            self._settling = 0
-            self._stabilizing = 0
-            return
-        failed = self._queue.pop(0)
-        if prune == "dark":
-            self._queue = [step for step in self._queue if step.signal > failed.signal]
-        elif prune == "bright":
-            self._queue = [step for step in self._queue if step.signal < failed.signal]
-        self._settling = 0
-        self._stabilizing = 0
-        if self.stage == "refine":
-            self._refine_attempts += 1
-        if self._queue and self._refine_attempts < _REFINE_ATTEMPT_LIMIT:
-            return
-        if self._clipped_seen and not self._dim_seen:
-            self._finish(
-                "too_bright",
-                "the ball clips even at the darkest setting; shade the ball or turn the unit "
-                "so the sun is behind or beside it",
-            )
-        elif not self._ball_seen and self._lit_seen:
-            self._finish(
-                "ball_not_identified",
-                "no ball was found although the picture is well lit; put the ball in the box",
-            )
-        else:
-            self._finish(
-                "lighting_required",
-                "no visible setting passed the ball-pixel gates"
-                if self._ball_seen
-                else "reference ball not visible at the brightest static setting",
-            )
-
     def _finish(self, status: str, reason: str) -> None:
-        self._queue = []
         self.status = status
         self.reason = reason
 
@@ -472,99 +420,59 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
             return float(observation.applied_exposure_us) * float(observation.applied_gain)
         return observation.step.signal
 
-    def _predict(self, observation: StaticExposureObservation) -> dict | None:
-        """Exposure x gain at which each gate is just met, and where the ball clips."""
+    def _move(self, observation: StaticExposureObservation, factor: float, why: str) -> None:
+        """Step by ``factor`` in exposure x gain; at the sensor's limit, say what is needed."""
+        factor = min(MAX_STEP_FACTOR, max(1.0 / MAX_STEP_FACTOR, factor))
         product = self._applied_product(observation)
-        measured = {
-            "signal": (observation.signal_above_floor_dn, _MIN_SIGNAL_ABOVE_FLOOR_DN),
-        }
-        if product <= 0 or any(value is None for value, _ in measured.values()):
-            return None
-        if (observation.ball_clipped_pct or 0.0) > 0.0 or (
-            observation.ball_peak_fraction or 0.0
-        ) >= 1.0:
-            # a clipped ball under-reads its own brightness; only prune brighter steps
-            return None
-        if any(value <= 0 for value, _ in measured.values()):
-            return None
-        needed = {
-            gate: threshold * product / value for gate, (value, threshold) in measured.items()
-        }
-        binding = max(needed, key=needed.get)
-        peak = observation.ball_peak_fraction
-        ceiling = product / peak if peak is not None and peak > 0 else math.inf
-        return {
+        wanted = self.split(product * factor)
+        self.prediction = {
             "from_step": asdict(observation.step),
             "applied_product": product,
-            "needed_product": {gate: round(value, 1) for gate, value in needed.items()},
-            "binding_gate": binding,
-            "minimum_product": needed[binding],
-            "clip_product": ceiling,
+            "factor": round(factor, 4),
+            "because": why,
+            "to_step": asdict(wanted),
         }
-
-    def _jump(self, observation: StaticExposureObservation) -> bool:
-        """Re-order the queue around the predicted lowest passing step; False if no prediction."""
-        if self._jumps >= _MAX_JUMPS:
-            return False
-        prediction = self._predict(observation)
-        if prediction is None:
-            return False
-        self._jumps += 1
-        self.prediction = prediction
-        # Drop only steps predicted to be clearly too dark or clearly clipped; the
-        # lowest-exposure-first walk then verifies what is left, so a slightly
-        # wrong prediction costs a step, never the lowest passing setting.
-        low = prediction["minimum_product"] / _PREDICTION_TOLERANCE
-        high = prediction["clip_product"] * _PREDICTION_TOLERANCE
-        window = [
-            step
-            for step in self._steps
-            if max(low, self._dark_signal) <= step.signal <= high
-            and step.signal > self._dark_signal
-        ]
-        prediction["window"] = [asdict(step) for step in window[:3]]
-        if not window:
-            # no step is predicted to pass; the verified search decides why
-            return False
-        self._log(observation, "exposure_predicted")
-        self.stage = "refine"
-        self._queue = window
-        self._settling = 0
-        self._stabilizing = 0
-        return True
-
-    def _skip_dark_bootstrap(self, observation: StaticExposureObservation) -> None:
-        """Jump the visibility search to where the frame itself is mid-range."""
-        frame = observation.frame_signal_dn
-        if frame is None or len(self._queue) <= 1:
+        brighter = factor > 1.0
+        if wanted == self._step or self._changes >= MAX_CONTROL_CHANGES:
+            if brighter:
+                self._finish(
+                    "lighting_required",
+                    "more light is needed on the ball: the brightest setting is still too dark",
+                )
+            else:
+                self._finish(
+                    "too_bright",
+                    "the ball clips even at the darkest setting; shade the ball or turn the unit "
+                    "so the sun is behind or beside it",
+                )
             return
-        product = self._applied_product(observation)
-        # a frame within a DN of black is too dark to scale from: climb 4x per step
-        target = 8.0 * product if frame <= 1.0 else _BOOTSTRAP_TARGET_FRAME_DN * product / frame
-        ahead = [step for step in self._queue if step.signal >= 0.5 * target]
-        self._queue = ahead or self._queue[-1:]
-
-    def _enter_refine(self) -> None:
-        self.stage = "refine"
-        self._queue = [step for step in self._steps if step.signal > self._dark_signal]
+        self._log(observation, why)
+        self._step = wanted
+        self._changes += 1
+        self.stage = "targeting"
         self._settling = 0
         self._stabilizing = 0
 
-    def record(self, observation: StaticExposureObservation) -> None:
+    def record(  # pylint: disable=too-many-return-statements,too-many-branches
+        self, observation: StaticExposureObservation
+    ) -> None:
         """Consume one assessment of the current step and choose what to try next."""
         step = self.current_step
         if step is None or observation.step != step:
             return
         if observation.status == "settling":
             self._settling += 1
-            if self._settling >= _SETTLE_LIMIT:
+            if self._settling >= SETTLE_LIMIT:
                 self._log(observation, "controls_not_applied")
-                self._advance()
+                self._finish(
+                    "controls_not_applied",
+                    "the camera did not apply the requested exposure and gain",
+                )
             return
         self._settling = 0
         if observation.association_status == "pose_changed":
             self._pose_retries += 1
-            if self._pose_retries >= _SETTLE_LIMIT:
+            if self._pose_retries >= SETTLE_LIMIT:
                 self._log(observation, "rig_moved")
                 self._finish(
                     "rig_moved",
@@ -572,91 +480,72 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
                 )
             return
         self._pose_retries = 0
-        unlit = (
-            observation.frame_signal_dn is not None
-            and observation.frame_signal_dn < _MIN_SIGNAL_ABOVE_FLOOR_DN
-        )
-        if (
-            observation.frame_signal_dn is not None
-            and observation.frame_signal_dn >= _WELL_LIT_FRAME_DN
-        ):
-            self._lit_seen = True
-        if (
-            not observation.ball_found
-            and observation.association_status in _UNIDENTIFIED_STATUSES
-            and (not unlit or observation.association_status == "ambiguous")
-        ):
-            # Ball-like objects are visible but the ball cannot be picked out; more
-            # light does not resolve that, so it must not be read as darkness, nor
-            # walk the search brighter: look again at the same setting (P7-5). An
-            # ambiguous view has at least two balls in it, however dark it looks.
+        if observation.ball_found:
+            self._not_found = 0
+            failed = set(observation.failed_gates)
+            if "clipped" in failed:
+                # a clipped ball's level says only "less": a quarter, unless its
+                # brightest part still reads below the clip level
+                peak = observation.ball_peak_fraction
+                factor = TARGET_PEAK_FRACTION / peak if peak and peak < 1.0 else 0.25
+                self._move(observation, min(factor, 0.5), "ball_clipped")
+                return
+            if "signal" in failed:
+                signal = max(float(observation.signal_above_floor_dn or 0.0), 1.0)
+                self._move(observation, TARGET_BALL_SIGNAL_DN / signal, "ball_too_dim")
+                return
+            if observation.status == "stabilizing":
+                self._stabilizing += 1
+                if self._stabilizing >= STABILIZE_LIMIT:
+                    self._log(observation, "ball_not_stable")
+                    self._finish(
+                        "ball_not_stable",
+                        "the ball in the patch would not hold still in the picture; keep it and "
+                        "the unit still",
+                    )
+                return
+            if observation.status != "accepted":
+                self._log(observation, observation.reason)
+                return
+            self._log(observation, "locked")
+            self.lock = StaticExposureLock(
+                exposure_us=step.exposure_us,
+                gain=step.gain,
+                applied_exposure_us=round(float(observation.applied_exposure_us)),
+                applied_gain=float(observation.applied_gain),
+                observation=observation,
+                policy_sha256=static_exposure_policy_sha256(),
+            )
+            self.status = "locked"
+            self.reason = None
+            return
+        if observation.association_status == "ambiguous":
+            # more light never tells two balls apart: look again, same setting
             self._unidentified += 1
             self._log(observation, "ball_not_identified")
-            if self._unidentified >= _IDENTIFY_LIMIT:
+            if self._unidentified >= IDENTIFY_LIMIT:
                 self._finish(
                     "ball_not_identified",
-                    "several ball-like objects are in the box and the ball could not be "
-                    "picked out; keep only the ball in the box",
+                    "several ball-like things are in the patch and the ball could not be picked "
+                    "out; keep only the ball in the patch",
                 )
-            elif self.stage == "bootstrap":
-                self._enter_refine()
             return
-        self._unidentified = 0
-        # Noise in an unlit frame makes geometry-inconsistent candidates; that is darkness.
-        dark = not observation.ball_found and (
-            observation.association_status in _DARK_DETECTOR_STATUSES or unlit
-        )
-        if self.stage == "bootstrap":
-            if not observation.ball_found:
-                self._log(observation, "ball_not_visible" if dark else observation.reason)
-                if dark:
-                    self._dark_signal = step.signal
-                self._advance()
-                if dark and self.stage == "bootstrap" and self.status == "searching":
-                    self._skip_dark_bootstrap(observation)
-                return
-            self._ball_seen = True
-            self._log(observation, "ball_visible")
-            if not self._jump(observation):
-                self._enter_refine()
+        patch = observation.frame_signal_dn
+        if patch is not None and patch >= CLIPPED_PATCH_DN:
+            self._move(observation, 0.25, "patch_clipped")
             return
-        if observation.ball_found:
-            self._ball_seen = True
-            failed = set(observation.failed_gates)
-            self._clipped_seen |= "clipped" in failed
-            self._dim_seen |= "signal" in failed or observation.status in {
-                "accepted",
-                "stabilizing",
-            }
-        if observation.status == "stabilizing":
-            self._stabilizing += 1
-            if self._stabilizing < _STABILIZE_LIMIT:
-                return
-            self._log(observation, "ball_not_stable")
-            self._advance()
+        if patch is not None and patch < _MIN_SIGNAL_ABOVE_FLOOR_DN:
+            # the patch's own pixels are dark: brighten the patch, then look again
+            self._move(observation, TARGET_PATCH_DN / max(patch, 1.0), "patch_dark")
             return
-        if observation.status != "accepted":
-            self._log(observation, observation.reason)
-            if observation.ball_found and observation.failed_gates and self._jump(observation):
-                return
-            if "clipped" in observation.failed_gates:
-                self._advance(prune="bright")
-            elif dark or _DARK_GATES & set(observation.failed_gates):
-                self._advance(prune="dark")
-            else:
-                self._advance()
-            return
-        self._log(observation, "locked")
-        self.lock = StaticExposureLock(
-            exposure_us=step.exposure_us,
-            gain=step.gain,
-            applied_exposure_us=round(float(observation.applied_exposure_us)),
-            applied_gain=float(observation.applied_gain),
-            observation=observation,
-            policy_sha256=static_exposure_policy_sha256(),
-        )
-        self.status = "locked"
-        self.reason = None
+        self._not_found += 1
+        self._log(observation, "ball_not_in_patch")
+        if self._not_found >= NOT_FOUND_LIMIT:
+            self._finish(
+                "ball_not_found",
+                "No ball found in the patch. The ball may be outside it: move the ball or the "
+                "patch.",
+            )
 
     def to_dict(self) -> dict:
         """Durable search evidence, including every attempted step."""
@@ -670,6 +559,7 @@ class StaticExposureSearch:  # pylint: disable=too-many-instance-attributes
             "warm_start": asdict(self.warm_start) if self.warm_start else None,
             "reason": self.reason,
             "prediction": self.prediction,
+            "control_changes": self._changes,
             "current_step": asdict(step) if step is not None else None,
             "lock": self.lock.to_dict() if self.lock else None,
             "attempts": list(self.attempts),

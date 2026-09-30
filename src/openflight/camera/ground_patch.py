@@ -432,6 +432,87 @@ def scale_outline(points: Sequence[Sequence[float]], factor: float) -> list[list
     return [[float(x) * factor, float(y) * factor] for x, y in points]
 
 
+@dataclass(frozen=True)
+class PatchSearch:
+    """What the camera's ball search takes from the patch, in one mode's pixels (P8-2).
+
+    A ball counts only with its fitted centre inside ``outline_px`` and a diameter
+    inside ``diameter_px``; candidates rank by how far aside of the patch centre
+    they lie, in half-sizes of the patch.
+    """
+
+    outline_px: tuple[tuple[float, float], ...]
+    diameter_px: tuple[float, float]
+    centre_lateral_m: float
+    half_size_m: float
+    radar_window_m: tuple[float, float]
+
+    def __post_init__(self) -> None:
+        outline = tuple((float(x), float(y)) for x, y in self.outline_px)
+        if len(outline) < 3 or not all(math.isfinite(x + y) for x, y in outline):
+            raise ValueError("the patch search needs a finite outline of at least 3 points")
+        low, high = (float(value) for value in self.diameter_px)
+        if not 0.0 < low < high or not math.isfinite(high):
+            raise ValueError("the patch's diameter window must be a finite positive interval")
+        if not float(self.half_size_m) > 0.0:
+            raise ValueError("the patch's half size must be positive")
+        object.__setattr__(self, "outline_px", outline)
+        object.__setattr__(self, "diameter_px", (low, high))
+        object.__setattr__(self, "centre_lateral_m", float(self.centre_lateral_m))
+        object.__setattr__(self, "half_size_m", float(self.half_size_m))
+        object.__setattr__(
+            self, "radar_window_m", tuple(float(value) for value in self.radar_window_m)
+        )
+
+    @classmethod
+    def from_projection(cls, projection: PatchProjection) -> "PatchSearch":
+        return cls(
+            outline_px=projection.search_outline_px,
+            diameter_px=projection.diameter_px,
+            centre_lateral_m=projection.patch.centre_lateral_m,
+            half_size_m=projection.patch.size_m / 2.0,
+            radar_window_m=projection.radar_window_m,
+        )
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, Any], factor: float = 1.0) -> "PatchSearch":
+        """The search a stored patch record describes, scaled to another mode."""
+        patch = GroundPatch.from_dict(record["patch"])
+        windows = record["windows"]
+        low, high = (float(value) * factor for value in windows["diameter_px"])
+        return cls(
+            outline_px=tuple(
+                tuple(point) for point in scale_outline(record["search_outline_px"], factor)
+            ),
+            diameter_px=(low, high),
+            centre_lateral_m=patch.centre_lateral_m,
+            half_size_m=patch.size_m / 2.0,
+            radar_window_m=tuple(windows["radar_window_m"]),
+        )
+
+    def bounds_px(self, width: int, height: int, margin: float = 0.0) -> tuple[int, int, int, int]:
+        """The outline's bounding box, widened by ``margin`` pixels and kept in the frame."""
+        xs = [x for x, _y in self.outline_px]
+        ys = [y for _x, y in self.outline_px]
+        x0 = max(0, int(math.floor(min(xs) - margin)))
+        y0 = max(0, int(math.floor(min(ys) - margin)))
+        x1 = min(width, int(math.ceil(max(xs) + margin)) + 1)
+        y1 = min(height, int(math.ceil(max(ys) + margin)) + 1)
+        return x0, y0, max(x1, x0 + 1), max(y1, y0 + 1)
+
+    def contains(self, x_px: float, y_px: float) -> bool:
+        return point_in_polygon(x_px, y_px, self.outline_px)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "search_outline_px": [[round(x, 1), round(y, 1)] for x, y in self.outline_px],
+            "diameter_px": [round(value, 2) for value in self.diameter_px],
+            "centre_lateral_m": self.centre_lateral_m,
+            "half_size_m": self.half_size_m,
+            "radar_window_m": list(self.radar_window_m),
+        }
+
+
 def projection_parameters(camera) -> dict[str, Any]:
     """What the page needs to draw and drag the patch itself, in true perspective.
 
