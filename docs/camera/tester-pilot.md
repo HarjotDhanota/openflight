@@ -334,8 +334,12 @@ or on a raised mat; you only move it. It does not measure distance: at the lens'
 the box still has to pass the hitting-area checks (distance, height above the
 surface, size), so a box dragged onto the net or the sky finds nothing and says
 so. With no ball in it the page says "no ball in the box: put the ball in the
-box". If the picture does not open, the step says the camera did not answer (the
-first camera check of the session); fix the cable or close whatever holds the
+box". The picture sets its own brightness while it is open, so the scene shows in
+sun or at dusk before the light has been measured; "Adjusting brightness…" shows
+under it until it settles, usually within two to four looks. That brightness is
+for viewing only: it is logged as `box_preview` and never used as a light
+measurement, a lock or a starting point for the camera checks. If the picture does
+not open, the step says the camera did not answer (the first camera check of the session); fix the cable or close whatever holds the
 camera, then press **Show the camera**. After a restart of the tester, or a new
 physical setup confirmation, the page asks for the box again, starting where you
 last confirmed it; confirming it in the same spot changes nothing.
@@ -616,7 +620,7 @@ every earlier frame and failure record for review.
 | The 640×400 step cannot lock, or says `keep only the ball in the box` | Its view is too dark, too bright or holds more than one ball-like thing in the box | The check is advisory: press **Skip the 640×400 check and save**, or keep its raw evidence; the setup still saves. Spare balls in the box also confuse the 1280×800 step, so move them out before the next setup |
 | `the LIS3DH reading has no camera pitch` | The inclinometer is off or still settling (for example just after the kiosk handed it back) | Wait a few seconds for a stable reading, then press the step again |
 | `The camera hasn't found the ball, so the ladder can't judge your swings` when pressing **C** | The setup's camera never picked out the ball in its box (a spare ball or a white cloth in the box, or the ball outside it, too far, dark or raised) in the mode the ladder starts in. A setup whose radar range is unresolved still runs once the camera found the ball | Run the setup again: drag the box over the spot you hit from, put the ball inside it on the hitting surface, keep spare balls and white things out of the box, then press **C** |
-| `no ball in the box: put the ball in the box` during a camera step | The camera looks only inside the box you confirmed, and nothing ball-like is there | Move the ball into the box. If the box is in the wrong place, press **Start over** and drag it over the ball |
+| `no ball in the box: put the ball in the box` during a camera step | The camera looks only inside the box you confirmed, and nothing ball-like is there | Move the ball into the box. If the box is in the wrong place, press **Move the box** in step 1 and drag it over the ball (the ball range then starts over) |
 | **Confirm the box** stays greyed out, or `The camera is not showing` | The live picture is not running, so there is no box to place | Press **Show the camera**; if it still fails, run **A. Check the hardware** |
 | Ladder verdict red: `ball: the setup has no ball position for this camera mode` | The setup's camera never found the ball, so a swing's pictures cannot be checked against it | Press **Stop**, run the setup again until the camera finds the ball, then press **C** |
 | Ladder verdict amber: `resting ball not found` | The camera could not distinguish a plausible resting ball in that frame | The swing still counts; keep placing the ball in the same spot |

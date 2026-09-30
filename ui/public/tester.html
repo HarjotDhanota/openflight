@@ -675,6 +675,7 @@
           </p>
           <div class="guided-camera-preview" id="placement-preview" hidden>
             <p class="note" id="placement-camera-status" role="status">Waiting for the first camera frame…</p>
+            <p class="note" id="placement-brightness" role="status" hidden>Adjusting brightness…</p>
             <div class="box-stage" id="placement-stage">
               <img id="placement-camera-frame" alt="Live 1280×800 view for placing the box" hidden />
               <div
@@ -1791,6 +1792,7 @@
         const frame = el('placement-camera-frame');
         frame.hidden = true;
         frame.removeAttribute('src');
+        el('placement-brightness').hidden = true;
         if (key !== null) {
           placementCameraStatus('Opening the camera…');
           queueMicrotask(placementTick);
@@ -1872,6 +1874,8 @@
             return;
           }
           placementCameraStatus('Live 1280×800 view: drag the box over the spot you will hit from.');
+          // the preview sets its own brightness for viewing (P7-15b); say so while it does
+          el('placement-brightness').hidden = status.preview_exposure?.state !== 'adjusting';
           if (!placementFrameLoading) loadPlacementFrame(version);
         } catch (error) {
           if (version === placementPreviewVersion) {

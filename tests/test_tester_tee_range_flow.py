@@ -92,7 +92,8 @@ class FakeLive:
         self.context_generation += 1
         self.controls = (exposure_us, gain)
         self.requested_history.append(self.controls)
-        if analyzer is not None:
+        # the guided camera steps' analyzer; the box preview's brightness loop is not one
+        if hasattr(analyzer, "observe"):
             self.pump()
 
     def change_controls(self, exposure_us, gain, owner=None):
@@ -178,7 +179,9 @@ class FakeLive:
         return None, {
             "running": self.running,
             "error": self.error,
-            "association": self.analyzer.snapshot() if self.analyzer is not None else None,
+            "association": (
+                self.analyzer.snapshot() if hasattr(self.analyzer, "snapshot") else None
+            ),
         }
 
 
@@ -3093,7 +3096,9 @@ def test_the_box_step_shows_the_live_preview_before_anything_else(tmp_path, inpu
     # the 1280x800 preview runs so the tester can see where to drag it
     assert opened.status_code == 200, opened.get_json()
     assert opened.get_json()["previewing"] is True
-    assert live.running is True and live.arm == ts.ARMS["arm5"] and live.analyzer is None
+    assert live.running is True and live.arm == ts.ARMS["arm5"]
+    # its only analyzer sets the picture's brightness for viewing (P7-15b)
+    assert isinstance(live.analyzer, ts.BoxPreviewExposure)
     owner = client.get("/api/tester/live").get_json()["owner"]
     assert owner["kind"] == "placement_box" and owner["epoch_id"] is None
     # the ball range does not start until the box is confirmed

@@ -45,6 +45,7 @@ from openflight.camera import (
     tester_ready_light,
     worker_lifetime,
 )
+from openflight.camera.auto_exposure import hitting_zone
 from openflight.camera.club_motion import detect_reference_ball
 from openflight.camera.fusion_diagnostics import register_fusion_diagnostics
 from openflight.camera.paired_eligibility import evaluate_paired_capture
@@ -2717,6 +2718,145 @@ def mode_placement_box(record: Mapping | None, arm: Arm) -> tuple[int, int, int,
     if factor == 1.0:
         return tuple(box)  # type: ignore[return-value]
     return reference_ball_range.scale_placement_box(box, factor)
+
+
+# The box step's preview sets its own brightness, for viewing only (P7-15b): it
+# runs before the light screen, and a fixed start is white in sun and black at dusk.
+BOX_PREVIEW_PURPOSE = "box_preview"
+BOX_PREVIEW_MEDIAN_DN = (90.0, 120.0)
+BOX_PREVIEW_TARGET_DN = 105.0
+BOX_PREVIEW_MAX_CLIPPED_PCT = 5.0
+BOX_PREVIEW_EXPOSURE_MIN_US = 9  # the sensor's one row
+BOX_PREVIEW_GAIN_MAX = 15.9
+BOX_PREVIEW_FRAME_MARGIN_US = 300
+BOX_PREVIEW_MAX_STEP = 16.0  # the most one step changes exposure x gain, either way
+
+
+class BoxPreviewExposure:
+    """Walks the box preview's exposure x gain into a viewing band (P7-15b).
+
+    It is the live view's analyzer while the box step shows the picture. Each look
+    measures the frame's median and clipped share (over the placed box when there
+    is one, else the whole frame) on frames the sensor took at the last request,
+    and asks for the exposure x gain that the linear response (signal ~ exposure x
+    gain above black) puts at the band's middle. Short exposures with more gain
+    are preferred. Display only: nothing it chooses is saved, and the setup, the
+    light screen and the ladder never read it; its log lines say so.
+    """
+
+    def __init__(
+        self,
+        live,
+        arm: Arm,
+        start: tuple[int, float],
+        *,
+        box_px: Sequence[int] | None = None,
+        black_dn: float = SENSOR_BLACK_LEVEL_DN,
+    ):
+        self._live = live
+        self._arm = arm
+        self._box = tuple(int(value) for value in box_px) if box_px is not None else None
+        self._black = float(black_dn)
+        self._exposure_max = max(
+            BOX_PREVIEW_EXPOSURE_MIN_US,
+            int(1_000_000 / arm.fps) - BOX_PREVIEW_FRAME_MARGIN_US,
+        )
+        self._lock = threading.Lock()
+        self._requested = (int(start[0]), float(start[1]))
+        self._state = "adjusting"
+        self._steps = 0
+        self._measured: dict | None = None
+
+    def split(self, product: float) -> tuple[int, float]:
+        """Exposure and gain for this exposure x gain: the shortest exposure, then gain."""
+        exposure = max(
+            BOX_PREVIEW_EXPOSURE_MIN_US, math.ceil(float(product) / BOX_PREVIEW_GAIN_MAX)
+        )
+        exposure = min(exposure, self._exposure_max)
+        gain = min(BOX_PREVIEW_GAIN_MAX, max(1.0, float(product) / exposure))
+        return int(exposure), round(gain, 2)
+
+    def status(self) -> dict:
+        with self._lock:
+            exposure, gain = self._requested
+            return {
+                "purpose": BOX_PREVIEW_PURPOSE,
+                "display_only": True,
+                "state": self._state,
+                "steps": self._steps,
+                "requested": {"exposure_us": exposure, "gain": gain},
+                "region": "placement_box" if self._box is not None else "frame",
+                "measured": dict(self._measured) if self._measured else None,
+            }
+
+    def _matches(self, applied) -> bool:
+        exposure, gain = applied if applied is not None else (None, None)
+        wanted_exposure, wanted_gain = self._requested
+        if exposure is not None and abs(float(exposure) - wanted_exposure) > max(
+            15.0, 0.1 * wanted_exposure
+        ):
+            return False
+        return gain is None or abs(float(gain) - wanted_gain) <= 0.1 * wanted_gain
+
+    def __call__(self, frames: np.ndarray, frame_sequence: int, applied=None) -> dict:
+        frames = np.asarray(frames)
+        applied = list(applied or [])
+        with self._lock:
+            matched = [
+                index
+                for index in range(len(frames))
+                if self._matches(applied[index] if index < len(applied) else None)
+            ]
+            if not matched:
+                return {"status": BOX_PREVIEW_PURPOSE, "preview_exposure": self._state}
+            image = np.median(frames[matched], axis=0)
+            height, width = image.shape
+            (x0, y0, x1, y1), _source = hitting_zone(height, width, self._box)
+            if self._box is None:
+                x0, y0, x1, y1 = 0, 0, width, height
+            region = image[y0:y1, x0:x1]
+            median = float(np.median(region))
+            clipped = float(np.mean(region >= 250) * 100.0)
+            self._measured = {"median_dn": round(median, 1), "clipped_pct": round(clipped, 2)}
+            low, high = BOX_PREVIEW_MEDIAN_DN
+            if low <= median <= high and clipped < BOX_PREVIEW_MAX_CLIPPED_PCT:
+                self._state = "settled"
+                return {"status": BOX_PREVIEW_PURPOSE, "preview_exposure": self._state}
+            signal = median - self._black
+            if median >= 250.0:
+                factor = 1.0 / 8.0  # clipped: the level says nothing but "less"
+            elif signal < 2.0:
+                factor = BOX_PREVIEW_MAX_STEP  # black: the level says nothing but "more"
+            else:
+                factor = (BOX_PREVIEW_TARGET_DN - self._black) / signal
+                if clipped >= BOX_PREVIEW_MAX_CLIPPED_PCT:
+                    factor = min(factor, 0.5)
+            factor = min(BOX_PREVIEW_MAX_STEP, max(1.0 / BOX_PREVIEW_MAX_STEP, factor))
+            exposure, gain = self._requested
+            wanted = self.split(exposure * gain * factor)
+            if wanted == self._requested:
+                # the sensor can go no further: the picture is as good as it gets
+                self._state = "limit"
+                return {"status": BOX_PREVIEW_PURPOSE, "preview_exposure": self._state}
+            self._requested = wanted
+            self._state = "adjusting"
+            self._steps += 1
+        logger.info(
+            "[BOX_PREVIEW] purpose=%s (display only, never a light measurement): "
+            "median %.0f DN, %.1f%% clipped at %d us x %.2f -> %d us x %.2f",
+            BOX_PREVIEW_PURPOSE,
+            median,
+            clipped,
+            exposure,
+            gain,
+            wanted[0],
+            wanted[1],
+        )
+        try:
+            self._live.change_controls(wanted[0], wanted[1], owner=self)
+        except RuntimeError as exc:
+            logger.info("[BOX_PREVIEW] the preview stopped before its controls changed: %s", exc)
+        return {"status": BOX_PREVIEW_PURPOSE, "preview_exposure": "adjusting"}
 
 
 def placement_preview_controls(
@@ -5443,6 +5583,8 @@ def create_app(
     live_owner_lock = threading.RLock()
     live_owner: dict[str, dict[str, str] | None] = {"guided": None}
     guided_analyzer: dict[str, GuidedRangeAnalyzer | None] = {"value": None}
+    # the box step's viewing brightness; read by nothing but the page's note (P7-15b)
+    box_preview_exposure: dict[str, BoxPreviewExposure | None] = {"value": None}
     iwr_preflight: dict[str, bool] = {}
 
     def live_owner_snapshot() -> dict[str, str] | None:
@@ -5934,9 +6076,20 @@ def create_app(
                 ARMS[PLACEMENT_BOX_ARM],
             ),
         )
+        arm = ARMS[PLACEMENT_BOX_ARM]
+        placed = read_last_placement_box(tester_root(sessions_root, tester_id))
+        box = (
+            placed["box_px"]
+            if placed is not None
+            and list(placed.get("frame_size_px") or []) == [arm.width, arm.height]
+            else None
+        )
+        # the picture's brightness is set for viewing only, never recorded (P7-15b)
+        brightness = BoxPreviewExposure(live, arm, (exposure_us, gain), box_px=box)
         with live_owner_lock:
-            live.start(ARMS[PLACEMENT_BOX_ARM], exposure_us, gain)
+            live.start(arm, exposure_us, gain, analyzer=brightness)
             guided_analyzer["value"] = None
+            box_preview_exposure["value"] = brightness
             live_owner["guided"] = {
                 "kind": "placement_box",
                 "tester_id": tester_id,
@@ -7414,6 +7567,12 @@ def create_app(
     def placement():
         try:
             params = TesterParameters.from_payload(request.get_json(silent=True))
+            owner = live_owner_snapshot()
+            if owner is not None and owner.get("kind") == "placement_box":
+                # its exposure is set for viewing, not measured (P7-15b)
+                raise RuntimeError(
+                    "the box preview is for placing the box; open the live view to record"
+                )
             arm, frames = live.recent_frames()
             if frames is None:
                 raise RuntimeError("start the live view first")
@@ -7541,8 +7700,10 @@ def create_app(
         status = live.snapshot()[1]
         owner = live_owner_snapshot()
         guided = owner is not None and owner.get("kind") == "guided_tee_range"
+        boxing = owner is not None and owner.get("kind") == "placement_box"
         with live_owner_lock:
             analyzer = guided_analyzer["value"]
+            brightness = box_preview_exposure["value"] if boxing else None
         box = getattr(analyzer, "placement_box", None) if guided else None
         arm = ARMS.get(str(owner.get("arm_id"))) if guided and owner else None
         return jsonify(
@@ -7550,6 +7711,8 @@ def create_app(
                 **status,
                 "owner": owner,
                 "guided_display": guided_camera_display(status) if guided else None,
+                # the box preview's viewing brightness, for the page's note (P7-15b)
+                "preview_exposure": brightness.status() if brightness is not None else None,
                 # the box this camera step searches, drawn over its view (P7-4)
                 "placement_box": (
                     {

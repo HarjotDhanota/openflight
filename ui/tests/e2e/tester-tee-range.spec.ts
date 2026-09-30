@@ -1179,6 +1179,7 @@ async function boxStep(page: Page, options: BoxOptions = {}) {
       : {}
   );
   let previewRunning = options.previewRunning ?? false;
+  let brightness = 'settled';
   let showFails = options.showFails ?? null;
   let lightStale = false;
   const posts: Record<string, unknown>[] = [];
@@ -1218,6 +1219,7 @@ async function boxStep(page: Page, options: BoxOptions = {}) {
       association: null,
       guided_display: null,
       placement_box: null,
+      preview_exposure: previewRunning ? { purpose: 'box_preview', display_only: true, state: brightness } : null,
     })
   );
   await page.route('**/api/tester/live.png?**', (route) =>
@@ -1272,8 +1274,27 @@ async function boxStep(page: Page, options: BoxOptions = {}) {
     setRange: (value: FlowState) => {
       range = value;
     },
+    setBrightness: (value: string) => {
+      brightness = value;
+    },
   };
 }
+
+// P7-15b: the box preview sets its own brightness for viewing, and says so meanwhile.
+test('the box preview says it is adjusting its brightness until it settles', async ({ page }) => {
+  const mocks = await boxStep(page);
+  mocks.setBrightness('adjusting');
+  await page.goto('/tester.html');
+
+  const note = page.locator('#placement-brightness');
+  await expect(note).toBeVisible();
+  await expect(note).toHaveText('Adjusting brightness…');
+
+  mocks.setBrightness('settled');
+
+  await expect(note).toBeHidden();
+  await expect(page.locator('#placement-box')).toBeVisible();
+});
 
 test('the box is step 1: its camera opens by itself and every check waits for it', async ({ page }) => {
   const mocks = await boxStep(page);
