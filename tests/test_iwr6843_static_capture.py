@@ -159,6 +159,13 @@ def test_success_saves_raw_before_profile_and_records_exact_hashes(tmp_path, mon
     assert result["profile"]["rig_geometry_sha256"] == result["inputs"]["rig_geometry"]["sha256"]
     saved = json.loads((inputs.output_dir / "empty-001.json").read_text(encoding="utf-8"))
     assert saved == result
+    # P7-6: the per-channel means the coherent difference reads ride with the capture
+    channels = result["channel_profile"]
+    assert channels["capture_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert channels["capture_config_sha256"] == result["profile"]["capture_config_sha256"]
+    assert (
+        len(channels["real"]) == channels["n_tx"] * channels["n_rx"] * channels["range_bin_count"]
+    )
 
 
 def test_repeated_static_captures_verify_and_stop_each_serial_lifecycle(tmp_path):

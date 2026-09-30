@@ -1145,3 +1145,277 @@ test('shows the 1280x800 exposure search while the radar records the ball', asyn
   await expect(action).toBeEnabled();
   await expect(exposure).toContainText('Ready to save.');
 });
+
+// P7-4 (D10 as changed on 30 Sept): the tester drags a fixed-size box over the
+// hitting spot on the live 1280×800 picture and confirms it before any check.
+const WIDE_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAABAAAAAKCAAAAACY1YFAAAAAD0lEQVR4nGPQQAMMg1UAAE4iGQEMndODAAAAAElFTkSuQmCC',
+  'base64'
+);
+
+async function boxStep(page: Page) {
+  let state: FlowState = {
+    epoch_id: 'epoch-box',
+    phase: 'needs_box',
+    reason: 'drag_the_box_to_where_you_will_hit',
+    evidence: {},
+    solution: null,
+  };
+  const posts: Record<string, unknown>[] = [];
+  const placement = {
+    state: 'needs_confirmation',
+    arm_id: 'arm5',
+    frame_size_px: [1280, 800],
+    box_px: [562, 361, 718, 491],
+    size_px: [156, 130],
+    default_box_px: [562, 361, 718, 491],
+    source: 'default_straight_ahead',
+  };
+  let previewRunning = true;
+  await page.route('**/api/tester/setup-eligibility?**', (route) => json(route, eligibility()));
+  await page.route('**/api/tester/status**', (route) => json(route, {}));
+  await page.route('**/api/tester/attempts?**', (route) => json(route, { scopes: [] }));
+  await page.route('**/api/tester/ladder?**', (route) => json(route, { ladder: null, stopped: true }));
+  await page.route('**/api/tester/live', (route) =>
+    json(route, {
+      running: previewRunning,
+      arm_id: 'arm5',
+      owner: previewRunning
+        ? { kind: 'placement_box', tester_id: '20260922-name', epoch_id: state.epoch_id, arm_id: 'arm5' }
+        : null,
+      stats: previewRunning ? { mean: 90, p99: 200, max: 230, clipped_pct: 0 } : null,
+      association: null,
+      guided_display: null,
+      placement_box: null,
+    })
+  );
+  await page.route('**/api/tester/live.png?**', (route) =>
+    route.fulfill({ status: 200, contentType: 'image/png', body: WIDE_PNG })
+  );
+  await page.route('**/api/tester/tee-range**', (route) => {
+    if (route.request().method() === 'GET') {
+      return json(route, {
+        state,
+        display: { ...rangeDisplay(state), placement_box: state.phase === 'needs_box' ? placement : null },
+      });
+    }
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    posts.push(body);
+    if (body.action === 'open_box_preview') {
+      previewRunning = true;
+    } else if (body.action === 'confirm_box') {
+      state = { ...state, phase: 'needs_empty', reason: 'remove_ball_and_keep_setup_still' };
+    }
+    return json(route, { state, display: rangeDisplay(state) });
+  });
+  return {
+    posts,
+    stopPreview: () => {
+      previewRunning = false;
+    },
+  };
+}
+
+test('the tester drags the box over the hitting spot and confirms it', async ({ page }) => {
+  const mocks = await boxStep(page);
+  await page.goto('/tester.html');
+
+  const box = page.locator('#tee-range-placement-box');
+  const action = page.locator('#tee-range-action');
+  await expect(action).toHaveText('Confirm the box');
+  await expect(page.locator('#automatic-range-summary')).toContainText('Drag the yellow box');
+  await expect(box).toBeVisible();
+  await expect(box).toHaveAttribute('data-box', '562,361,718,491');
+  await expect(box).toHaveAttribute('data-draggable', 'true');
+
+  // a mouse drag 50 px right and 20 px down, in screen pixels
+  await box.scrollIntoViewIfNeeded();
+  const picture = await page.locator('#tee-range-camera-frame').boundingBox();
+  const start = await box.boundingBox();
+  if (!picture || !start) throw new Error('the preview has no size');
+  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(start.x + start.width / 2 + 50, start.y + start.height / 2 + 20, { steps: 5 });
+  await page.mouse.up();
+  const x0 = Math.round(562 + (50 * 1280) / picture.width);
+  const y0 = Math.round(361 + (20 * 800) / picture.height);
+  await expect(box).toHaveAttribute('data-box', `${x0},${y0},${x0 + 156},${y0 + 130}`);
+
+  // dragged far past the corner, the box stops at the picture's edge
+  const moved = await box.boundingBox();
+  if (!moved) throw new Error('the box has no size');
+  await page.mouse.move(moved.x + 10, moved.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(moved.x + 5000, moved.y + 5000, { steps: 3 });
+  await page.mouse.up();
+  await expect(box).toHaveAttribute('data-box', '1124,670,1280,800');
+
+  await action.click();
+
+  await expect(action).toHaveText('Capture empty hitting area');
+  const confirm = mocks.posts.find((item) => item.action === 'confirm_box');
+  expect(confirm?.box_px).toEqual([1124, 670, 1280, 800]);
+  await expect(box).toBeHidden();
+});
+
+test('the box can be dragged with a finger', async ({ page }) => {
+  const mocks = await boxStep(page);
+  await page.goto('/tester.html');
+  const box = page.locator('#tee-range-placement-box');
+  await expect(box).toHaveAttribute('data-box', '562,361,718,491');
+  const picture = await page.locator('#tee-range-camera-frame').boundingBox();
+  const start = await box.boundingBox();
+  if (!picture || !start) throw new Error('the preview has no size');
+  const at = (dx: number) => ({
+    pointerId: 7,
+    pointerType: 'touch',
+    isPrimary: true,
+    clientX: start.x + start.width / 2 + dx,
+    clientY: start.y + start.height / 2,
+    bubbles: true,
+  });
+
+  await box.dispatchEvent('pointerdown', at(0));
+  await box.dispatchEvent('pointermove', at(-40));
+  await box.dispatchEvent('pointerup', at(-40));
+
+  const x0 = Math.round(562 - (40 * 1280) / picture.width);
+  await expect(box).toHaveAttribute('data-box', `${x0},361,${x0 + 156},491`);
+  await page.locator('#tee-range-action').click();
+  await expect(page.locator('#tee-range-action')).toHaveText('Capture empty hitting area');
+  expect(mocks.posts.find((item) => item.action === 'confirm_box')?.box_px).toEqual([
+    x0,
+    361,
+    x0 + 156,
+    491,
+  ]);
+});
+
+test('without a camera picture the page offers to show it before the box can be placed', async ({ page }) => {
+  const mocks = await boxStep(page);
+  mocks.stopPreview();
+  await page.goto('/tester.html');
+
+  const show = page.locator('#tee-range-box-preview');
+  await expect(show).toBeVisible();
+  await expect(page.locator('#tee-range-camera-status')).toContainText('Show the camera');
+  await show.click();
+
+  await expect(page.locator('#tee-range-placement-box')).toBeVisible();
+  await expect(show).toBeHidden();
+  expect(mocks.posts.map((item) => item.action)).toContain('open_box_preview');
+});
+
+test('each camera step draws the box it searches', async ({ page }) => {
+  await base(page, {
+    epoch_id: 'epoch-boxed',
+    phase: 'camera_arm6_capturing',
+    reason: 'camera_arm6_warming',
+    evidence: {},
+    solution: null,
+  });
+  await page.route('**/api/tester/live', (route) =>
+    json(route, {
+      running: true,
+      arm_id: 'arm6',
+      owner: { kind: 'guided_tee_range', tester_id: '20260922-name', epoch_id: 'epoch-boxed', arm_id: 'arm6' },
+      stats: { mean: 71, p99: 139, max: 178, clipped_pct: 0 },
+      association: {
+        status: 'not_found',
+        selected: null,
+        candidates: [],
+        stable_count: 0,
+        stable_span_s: 0,
+        save_eligible: false,
+        placement_box_px: [281, 180, 359, 245],
+        readiness_reason: 'no ball in the box: put the ball in the box',
+      },
+      guided_display: guidedDisplay('exposure_searching'),
+      placement_box: { box_px: [281, 180, 359, 245], frame_size_px: [640, 400], arm_id: 'arm6' },
+    })
+  );
+  await page.route('**/api/tester/live.png?**', (route) =>
+    route.fulfill({ status: 200, contentType: 'image/png', body: WIDE_PNG })
+  );
+  await page.goto('/tester.html');
+
+  const box = page.locator('#tee-range-placement-box');
+  await expect(box).toBeVisible();
+  await expect(box).toHaveAttribute('data-box', '281,180,359,245');
+  await expect(box).toHaveAttribute('data-draggable', 'false');
+  await expect(page.locator('#tee-range-camera-detector')).toContainText(
+    'No ball in the box: put the ball in the box'
+  );
+});
+
+// P7-7 (D11): without a qualified range the setup saves as experimental.
+test('a setup saved as experimental says so and lets the ladder start', async ({ page }) => {
+  const mocks = await base(page, {
+    epoch_id: 'epoch-experimental',
+    phase: 'experimental',
+    reason: 'experimental_range_saved',
+    evidence: {
+      iwr_candidate: { radar_slant_range_m: 1.581 },
+      camera_arm5_candidate: { radar_slant_range_m: 1.34 },
+    },
+    solution: { status: 'unresolved', selected_range_m: null },
+  });
+  await page.route('**/api/tester/tee-range**', (route) =>
+    json(route, {
+      state: mocks.state(),
+      display: {
+        ...rangeDisplay(mocks.state()),
+        canonical: { state: 'experimental', range_m: 1.581, reason: null },
+        swings: {
+          state: 'experimental',
+          range_m: 1.581,
+          message: 'EXPERIMENTAL: swings use the radar’s range, which agrees with the camera’s.',
+        },
+      },
+    })
+  );
+  await page.goto('/tester.html');
+
+  await expect(page.locator('#tee-range-action')).toHaveText('Setup saved — experimental range');
+  await expect(page.locator('#automatic-range-summary')).toContainText('Saved as EXPERIMENTAL');
+  await expect(page.locator('#automatic-range')).toContainText('experimental range 1.581 m — not qualified');
+  await expect(page.locator('#automatic-range')).toContainText('swings get 1.581 m — EXPERIMENTAL');
+  await expect(page.getByRole('button', { name: 'C. Start the exposure ladder' })).toBeEnabled();
+});
+
+test('the advisory 640×400 check can be skipped', async ({ page }) => {
+  const posts: string[] = [];
+  await base(page, {
+    epoch_id: 'epoch-skip',
+    phase: 'needs_camera_arm6',
+    reason: 'validate_shared_range_in_camera_arm6',
+    evidence: {},
+    solution: null,
+  });
+  await page.route('**/api/tester/tee-range**', (route) => {
+    if (route.request().method() === 'GET') {
+      const state = {
+        epoch_id: 'epoch-skip',
+        phase: posts.includes('skip_camera_arm6') ? 'experimental' : 'needs_camera_arm6',
+        reason: 'x',
+        evidence: {},
+        solution: null,
+      };
+      return json(route, { state, display: rangeDisplay(state) });
+    }
+    const action = route.request().postDataJSON().action as string;
+    posts.push(action);
+    const state = { epoch_id: 'epoch-skip', phase: 'experimental', reason: 'x', evidence: {}, solution: null };
+    return json(route, { state, display: rangeDisplay(state) });
+  });
+  await page.goto('/tester.html');
+
+  const skip = page.locator('#tee-range-skip-arm6');
+  await expect(page.locator('#automatic-range-summary')).toContainText('The check is advisory');
+  await expect(skip).toBeVisible();
+  await skip.click();
+
+  await expect(page.locator('#tee-range-action')).toHaveText('Setup saved — experimental range');
+  expect(posts).toEqual(['skip_camera_arm6']);
+  await expect(skip).toBeHidden();
+});

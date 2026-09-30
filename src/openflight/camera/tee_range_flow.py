@@ -22,7 +22,8 @@ from openflight.tee_range_setup import (
 )
 
 SCHEMA = "openflight.tester_tee_range_flow.v1"
-TERMINAL_PHASES = frozenset({"resolved", "raw_only"})
+# "experimental": saved with an unqualified range under decision D11 (P7-7)
+TERMINAL_PHASES = frozenset({"resolved", "experimental", "raw_only"})
 CAPTURE_PHASES = frozenset({"empty_capturing", "ball_capturing"})
 # The operator-facing failure summaries. Each carries the sequence of the transition
 # that set it, so the page shows only the current one; an earlier failure stays on
@@ -163,8 +164,9 @@ class FlowStore:
                 FlowState(
                     epoch_id=epoch_id,
                     sequence=1,
-                    phase="needs_empty",
-                    reason="remove_ball_and_keep_setup_still",
+                    # the tester places the box first; every check works from it (P7-4)
+                    phase="needs_box",
+                    reason="drag_the_box_to_where_you_will_hit",
                     created_at_utc=now,
                     updated_at_utc=now,
                     request_ids=(request_id,),
@@ -245,8 +247,12 @@ class FlowStore:
         *,
         evidence: Mapping[str, Any] | None = None,
         request_id: str | None = None,
+        phase: str | None = None,
     ) -> FlowState:
-        phase = "resolved" if solution.status == "resolved" else "raw_only"
+        if phase is None:
+            phase = "resolved" if solution.status == "resolved" else "raw_only"
+        if phase not in TERMINAL_PHASES or (phase == "resolved") != (solution.status == "resolved"):
+            raise ValueError("a finished setup's phase must match its solution")
         with session_bundle.snapshot_lock(self.tester_root, timeout_s=session_bundle.WRITER_WAIT_S):
             current = self.load()
             if current is None or current.epoch_id != state.epoch_id:

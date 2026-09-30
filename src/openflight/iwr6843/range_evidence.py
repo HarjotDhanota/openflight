@@ -13,6 +13,7 @@ import numpy as np
 
 from openflight.iwr6843 import tracking
 from openflight.iwr6843.dump import is_range_snapshot, parse_dump, project_tx_pair
+from openflight.iwr6843.music import GRID as MUSIC_GRID
 from openflight.iwr6843.shot import (
     TX2_LOOP_PERIOD_S,
     moving_ball_range_track,
@@ -523,6 +524,12 @@ class StaticRangeDifferenceResult:
     ignored_losses: tuple[Mapping[str, Any], ...] = ()
     # the apparent-range interval the ball's cluster had to peak in, when one was given
     candidate_window_m: tuple[float, float] | None = None
+    # which difference produced this: the power profiles, or the coherent channels
+    method: str = "power_profile_difference"
+    # the ball cluster's elevation on the vertical array, degrees from its boresight
+    peak_elevation_deg: float | None = None
+    # the per-channel fit and floor behind a coherent result
+    coherence: Mapping[str, Any] | None = None
 
 
 def _matching_static_profiles(
@@ -571,6 +578,9 @@ def _static_result(  # pylint: disable=too-many-arguments
     alternate_peaks: tuple[Mapping[str, Any], ...] = (),
     ignored_losses: tuple[Mapping[str, Any], ...] = (),
     candidate_window_m: tuple[float, float] | None = None,
+    method: str = "power_profile_difference",
+    peak_elevation_deg: float | None = None,
+    coherence: Mapping[str, Any] | None = None,
 ) -> StaticRangeDifferenceResult:
     return StaticRangeDifferenceResult(
         status=status,
@@ -585,7 +595,7 @@ def _static_result(  # pylint: disable=too-many-arguments
         empty_capture_sha256=empty.capture_sha256,
         present_capture_sha256=present.capture_sha256,
         radar_profile_sha256=empty.radar_profile_sha256,
-        radar_profile_qualified=empty.radar_profile_qualified,
+        radar_profile_qualified=bool(getattr(empty, "radar_profile_qualified", False)),
         rig_geometry_sha256=empty.rig_geometry_sha256,
         capture_config_sha256=empty.capture_config_sha256,
         estimator_sha256=estimator_sha256,
@@ -595,6 +605,9 @@ def _static_result(  # pylint: disable=too-many-arguments
         alternate_peaks=alternate_peaks,
         ignored_losses=ignored_losses,
         candidate_window_m=candidate_window_m,
+        method=method,
+        peak_elevation_deg=peak_elevation_deg,
+        coherence=coherence,
     )
 
 
@@ -1028,6 +1041,487 @@ def compare_static_range_profiles(
     )
 
 
+STATIC_CHANNEL_PROFILE_SCHEMA = "openflight.iwr6843.static_channel_profile.v1"
+# P7-6: the empty and ball captures are subtracted as complex numbers, one virtual
+# channel at a time, so a ball whose echo interferes with a mat edge is still one
+# clear added reflector (Outdoors-test-7 failed the power profiles' fractional gate
+# at 0.34 against 0.50). Each channel is first scaled by one complex factor fitted on
+# the strongest still reflectors outside the ball's window, which absorbs the phase
+# a radar restart turns between the captures.
+_COHERENT_REFERENCE_BINS = 8
+_COHERENT_MIN_REFERENCE_BINS = 3
+# the ball's peak must stand this far above the median residual of the searched span
+_COHERENT_MIN_PEAK_SCORE = 8.0
+# a cluster is the contiguous bins above this share of its peak (and above the floor)
+_COHERENT_MEMBER_FRACTION = 0.25
+_COHERENT_MEMBER_FLOOR = 4.0
+_COHERENT_AMBIGUITY_RATIO = 0.5
+# A lone ball spans 2-3 bins (the range FFT is unwindowed); a ball whose echo mixes
+# with a nearby reflector's spreads further. The 29 Sept door setup, taped at
+# 1.00 m, spans 7; Outdoors-test-5's wide change of 8 bins is not one reflector.
+_COHERENT_MAX_WIDTH_BINS = 7
+_COHERENT_BOUNDARY_GUARD_BINS = 1
+_COHERENT_MIN_FRAME_COUNT = _STATIC_V2_MIN_FRAME_COUNT
+# A still reflector that only changed strength leaves a residual parallel to its own
+# echo and much weaker than it (the 29 Sept door: correlation 0.96, the reflector
+# 6.8 times the change); a new object's residual is neither.
+_COHERENT_STATIC_CHANGE_CORRELATION = 0.9
+_COHERENT_STATIC_CHANGE_CLUTTER_RATIO = 3.0
+_COHERENT_LOSS_GUARD_BINS = _STATIC_V2_LOSS_GUARD_BINS
+# How far the ball's elevation may stray from where the rig puts a ball on the
+# surface or a raised mat (array calibration, the unit's tilt).
+COHERENT_ELEVATION_TOLERANCE_DEG = 5.0
+
+
+def static_channel_estimator_policy() -> dict[str, Any]:
+    """Every constant of the coherent static difference, for evidence and identity."""
+    return {
+        "name": "iwr_static_coherent_channel_difference",
+        "version": 1,
+        "profile_schema": STATIC_CHANNEL_PROFILE_SCHEMA,
+        "subtraction": "per_virtual_channel_complex_mean_minus_fitted_scaled_empty",
+        "channel_fit": {
+            "reference": "strongest_static_bins_outside_the_candidate_window",
+            "reference_bins": _COHERENT_REFERENCE_BINS,
+            "minimum_reference_bins": _COHERENT_MIN_REFERENCE_BINS,
+        },
+        "accepted_status": "accepted_unqualified",
+        "gates": {
+            "minimum_peak_score": _COHERENT_MIN_PEAK_SCORE,
+            "score": "residual_power_over_median_residual_of_the_search",
+            "member_fraction_of_peak": _COHERENT_MEMBER_FRACTION,
+            "member_floor_score": _COHERENT_MEMBER_FLOOR,
+            "ambiguity_ratio": _COHERENT_AMBIGUITY_RATIO,
+            "maximum_width_bins": _COHERENT_MAX_WIDTH_BINS,
+            "boundary_guard_bins": _COHERENT_BOUNDARY_GUARD_BINS,
+            "minimum_frame_count": _COHERENT_MIN_FRAME_COUNT,
+            "ground_level": "bartlett_elevation_of_the_residual_inside_the_rig_window",
+            "elevation_tolerance_deg": COHERENT_ELEVATION_TOLERANCE_DEG,
+            "static_change": {
+                "correlation_with_empty": _COHERENT_STATIC_CHANGE_CORRELATION,
+                "empty_to_residual_power": _COHERENT_STATIC_CHANGE_CLUTTER_RATIO,
+                "guard_bins": _COHERENT_LOSS_GUARD_BINS,
+            },
+        },
+    }
+
+
+def ground_elevation_window_deg(
+    *,
+    radar_height_m: float,
+    boresight_pitch_deg: float,
+    slant_range_m: tuple[float, float],
+    ball_center_height_m: tuple[float, float],
+    tolerance_deg: float = COHERENT_ELEVATION_TOLERANCE_DEG,
+) -> tuple[float, float]:
+    """Where a ball at address appears on the vertical array, degrees from its boresight.
+
+    A ball centre ``ball_center_height_m`` above the surface (on it, or on a raised
+    mat) and ``slant_range_m`` from the radar, seen from a radar ``radar_height_m``
+    up and aimed ``boresight_pitch_deg`` above level, padded by ``tolerance_deg``.
+    """
+    angles = [
+        math.degrees(math.asin(max(-1.0, min(1.0, (height - radar_height_m) / distance))))
+        - boresight_pitch_deg
+        for height in ball_center_height_m
+        for distance in slant_range_m
+        if distance > 0.0
+    ]
+    if not angles:
+        raise ValueError("the slant range window must be positive")
+    return min(angles) - tolerance_deg, max(angles) + tolerance_deg
+
+
+def static_channel_estimator_sha256() -> str:
+    payload = json.dumps(
+        static_channel_estimator_policy(), sort_keys=True, allow_nan=False, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+@dataclass(frozen=True)
+class StaticChannelProfile:  # pylint: disable=too-many-instance-attributes
+    """One static capture's mean complex range profile per virtual channel."""
+
+    capture_sha256: str
+    radar_profile_sha256: str
+    rig_geometry_sha256: str
+    capture_config_sha256: str
+    range_bin_start: int
+    range_bin_count: int
+    range_resolution_m: float
+    n_tx: int
+    n_rx: int
+    real: tuple[float, ...]
+    imag: tuple[float, ...]
+    frame_count: int
+    schema: str = STATIC_CHANNEL_PROFILE_SCHEMA
+
+    def __post_init__(self) -> None:
+        if self.schema != STATIC_CHANNEL_PROFILE_SCHEMA:
+            raise ValueError("unsupported static channel profile schema")
+        for name in (
+            "capture_sha256",
+            "radar_profile_sha256",
+            "rig_geometry_sha256",
+            "capture_config_sha256",
+        ):
+            object.__setattr__(self, name, _hash(getattr(self, name), name))
+        for name in ("range_bin_start", "range_bin_count", "n_tx", "n_rx", "frame_count"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+        if min(self.range_bin_count, self.n_tx, self.n_rx) <= 0:
+            raise ValueError("a channel profile needs bins, transmitters and receivers")
+        resolution = _finite(self.range_resolution_m, "range resolution")
+        if resolution <= 0.0:
+            raise ValueError("range resolution must be positive")
+        object.__setattr__(self, "range_resolution_m", resolution)
+        size = self.n_tx * self.n_rx * self.range_bin_count
+        for name in ("real", "imag"):
+            values = tuple(_finite(value, f"channel {name}") for value in getattr(self, name))
+            if len(values) != size:
+                raise ValueError("channel values must cover every transmitter, receiver and bin")
+            object.__setattr__(self, name, values)
+
+    @property
+    def channels(self) -> np.ndarray:
+        """(n_tx, n_rx, bins) complex means."""
+        shape = (self.n_tx, self.n_rx, self.range_bin_count)
+        return (np.asarray(self.real) + 1j * np.asarray(self.imag)).reshape(shape)
+
+    @classmethod
+    def from_channels(cls, channels: Any, **identity: Any) -> "StaticChannelProfile":
+        values = np.asarray(channels, dtype=complex)
+        if values.ndim != 3:
+            raise ValueError("channels must be (n_tx, n_rx, bins)")
+        n_tx, n_rx, count = values.shape
+        return cls(
+            n_tx=n_tx,
+            n_rx=n_rx,
+            range_bin_count=count,
+            real=tuple(float(value) for value in values.real.ravel()),
+            imag=tuple(float(value) for value in values.imag.ravel()),
+            **identity,
+        )
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def _capture_config_sha256(metadata: Mapping[str, Any], start: int, count: int) -> str:
+    """The capture configuration the power profiles hash, so both profiles share it."""
+    config = {
+        "version": metadata["version"],
+        "n_frames": metadata["n_frames"],
+        "chirps_per_frame": metadata["chirps_per_frame"],
+        "n_tx": metadata["n_tx"],
+        "n_rx": metadata["n_rx"],
+        "n_samples": metadata["n_samples"],
+        "sample_fmt": metadata["sample_fmt"],
+        "trigger_frame": metadata["trigger_frame"],
+        "frame_period_us": metadata["frame_period_us"],
+        "range_bin_start": start,
+        "range_bin_count": count,
+        "range_fft_size": 128 if is_range_snapshot(metadata) else metadata["n_samples"],
+    }
+    return hashlib.sha256(
+        json.dumps(config, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def static_channel_profile(
+    raw: bytes, *, radar_profile_sha256: str, rig_geometry_sha256: str
+) -> StaticChannelProfile:
+    """Mean complex range profile per transmitter and receiver, over frames and loops."""
+    metadata, cube = parse_dump(raw)
+    start, count = _fixed_range_window(metadata)
+    range_domain = is_range_snapshot(metadata)
+    range_cube = cube if range_domain else np.fft.fft(cube, axis=-1)
+    n_tx = int(metadata["n_tx"])
+    frames, chirps, n_rx, _bins = range_cube.shape
+    loops = chirps // n_tx
+    if loops <= 0:
+        raise ValueError("the capture has fewer chirps than transmitters")
+    means = (
+        range_cube[:, : loops * n_tx, :, :count]
+        .reshape(frames, loops, n_tx, n_rx, count)
+        .mean(axis=(0, 1))
+    )
+    range_fft_size = 128 if range_domain else metadata["n_samples"]
+    return StaticChannelProfile.from_channels(
+        means,
+        capture_sha256=hashlib.sha256(raw).hexdigest(),
+        radar_profile_sha256=radar_profile_sha256,
+        rig_geometry_sha256=rig_geometry_sha256,
+        capture_config_sha256=_capture_config_sha256(metadata, start, count),
+        range_bin_start=start,
+        range_resolution_m=tracking.RANGE_SPAN_M / range_fft_size,
+        frame_count=int(frames),
+    )
+
+
+def _matching_channel_profiles(empty: StaticChannelProfile, present: StaticChannelProfile) -> None:
+    if empty.capture_sha256 == present.capture_sha256:
+        raise ValueError("empty and ball-present evidence must be distinct captures")
+    for name in ("radar_profile_sha256", "rig_geometry_sha256", "capture_config_sha256"):
+        if getattr(empty, name) != getattr(present, name):
+            raise ValueError(f"{name.removesuffix('_sha256').replace('_', ' ')} does not match")
+    if (
+        empty.range_bin_start != present.range_bin_start
+        or empty.range_bin_count != present.range_bin_count
+        or (empty.n_tx, empty.n_rx) != (present.n_tx, present.n_rx)
+        or not math.isclose(
+            empty.range_resolution_m, present.range_resolution_m, rel_tol=0.0, abs_tol=1e-12
+        )
+    ):
+        raise ValueError("range grid or virtual channels do not match")
+
+
+def _vertical_elevation_deg(snapshot: np.ndarray, element_correction: np.ndarray) -> float:
+    """Bartlett elevation of one bin's (n_tx, n_rx) residual on the 8-element column.
+
+    The first and last transmitters' receivers form the vertical array; the
+    calibration's element corrections apply after the physical flip (calibration.py).
+    """
+    vertical = np.concatenate([snapshot[0], snapshot[-1]])[::-1]
+    steer = np.exp(1j * np.pi * np.sin(MUSIC_GRID)[None, :] * np.arange(len(vertical))[:, None])
+    power = np.abs(steer.conj().T @ (vertical * element_correction)) ** 2
+    return float(np.degrees(MUSIC_GRID[int(np.argmax(power))]))
+
+
+def _reference_bins(static: np.ndarray, search: np.ndarray, excluded: np.ndarray) -> np.ndarray:
+    guarded = np.convolve(excluded.astype(float), np.ones(3), mode="same") > 0
+    pool = np.flatnonzero(~guarded)
+    if len(pool) < _COHERENT_MIN_REFERENCE_BINS:
+        pool = np.flatnonzero(~excluded)
+    if len(pool) < _COHERENT_MIN_REFERENCE_BINS:
+        pool = np.flatnonzero(search)
+    return pool[np.argsort(static[pool])[-_COHERENT_REFERENCE_BINS:]]
+
+
+def _channel_factors(e: np.ndarray, p: np.ndarray, reference: np.ndarray) -> np.ndarray:
+    """One complex factor per channel mapping the empty capture onto the ball capture."""
+    factors = np.ones(e.shape[:2], dtype=complex)
+    for tx in range(e.shape[0]):
+        for rx in range(e.shape[1]):
+            base_vector = e[tx, rx, reference]
+            energy = float(np.vdot(base_vector, base_vector).real)
+            if energy > 0.0:
+                factors[tx, rx] = np.vdot(base_vector, p[tx, rx, reference]) / energy
+    # a channel with nothing to fit keeps unit scale
+    return np.where(np.abs(factors) > 1e-12, factors, 1.0 + 0.0j)
+
+
+def _robust_channel_factors(
+    e: np.ndarray, p: np.ndarray, reference: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Fit, drop the reference reflectors that changed between captures, fit again.
+
+    A still reflector that moved or weakened (a door, a net in the wind) would
+    otherwise pull every channel's factor off and leave residue everywhere.
+    """
+    factors = _channel_factors(e, p, reference)
+    expected = factors[..., None] * e[:, :, reference]
+    misfit = np.sum(np.abs(p[:, :, reference] - expected) ** 2, axis=(0, 1)) / np.maximum(
+        np.sum(np.abs(expected) ** 2, axis=(0, 1)), 1e-12
+    )
+    keep = max(_COHERENT_MIN_REFERENCE_BINS, len(reference) // 2 + 1)
+    steady = np.sort(reference[np.argsort(misfit)[:keep]])
+    return _channel_factors(e, p, steady), steady
+
+
+def compare_static_channel_profiles(  # pylint: disable=too-many-locals,too-many-arguments
+    empty: StaticChannelProfile,
+    present: StaticChannelProfile,
+    *,
+    plausible_apparent_range_m: tuple[float, float],
+    candidate_window_m: tuple[float, float] | None,
+    element_correction: Any,
+    ground_elevation_deg: tuple[float, float],
+    fit_exclusion_m: tuple[float, float] | None = None,
+) -> StaticRangeDifferenceResult:
+    """Find the one ground-level reflector the ball added, subtracting coherently.
+
+    The floor is the median residual over ``plausible_apparent_range_m``; the ball's
+    cluster must peak inside ``candidate_window_m`` (apparent range) at an elevation
+    inside ``ground_elevation_deg`` (degrees from the array's boresight). A clear
+    single peak is ``accepted_unqualified``: nothing here is accuracy-qualified.
+    A rejected result carries no range. The per-channel fit uses still reflectors
+    outside ``fit_exclusion_m`` (apparent; the candidate window by default), where
+    the ball cannot be.
+    """
+    _matching_channel_profiles(empty, present)
+    correction = np.asarray(element_correction, dtype=complex)
+    if correction.shape != (2 * empty.n_rx,):
+        raise ValueError("element correction must cover the vertical array")
+    low_el, high_el = (float(value) for value in ground_elevation_deg)
+    ranges, search = _profile_search(empty, plausible_apparent_range_m)  # type: ignore[arg-type]
+    allowed, window = _candidate_bins(ranges, search, candidate_window_m)
+    estimator = static_channel_estimator_sha256()
+    base = {
+        "estimator_sha256": estimator,
+        "candidate_window_m": window,
+        "method": "coherent_per_virtual_channel",
+    }
+
+    def result(status: str, reason: str, **fields: Any) -> StaticRangeDifferenceResult:
+        return _static_result(
+            status, reason, empty, present, **{"changed_fraction": 0.0, **base, **fields}
+        )
+
+    if min(empty.frame_count, present.frame_count) < _COHERENT_MIN_FRAME_COUNT:
+        return result(
+            "rejected_insufficient_frames", "a capture has too few frames to judge the scene"
+        )
+    e = empty.channels
+    p = present.channels
+    static = np.sum(np.abs(e) ** 2, axis=(0, 1))
+    excluded = allowed
+    if fit_exclusion_m is not None:
+        low, high = (_finite(value, "fit exclusion") for value in fit_exclusion_m)
+        excluded = allowed | ((ranges >= low) & (ranges <= high))
+    factors, reference = _robust_channel_factors(e, p, _reference_bins(static, search, excluded))
+    expected = factors[..., None] * e
+    residual = p - expected
+    residual_power = np.sum(np.abs(residual) ** 2, axis=(0, 1))
+    expected_power = np.sum(np.abs(expected) ** 2, axis=(0, 1))
+    floor = max(float(np.median(residual_power[search])), 1e-12)
+    score = residual_power / floor
+    flat_residual = residual.reshape(-1, residual.shape[-1])
+    flat_expected = expected.reshape(-1, expected.shape[-1])
+    correlation = np.abs(np.sum(np.conj(flat_expected) * flat_residual, axis=0)) / np.maximum(
+        np.linalg.norm(flat_residual, axis=0) * np.linalg.norm(flat_expected, axis=0), 1e-12
+    )
+    static_change = (
+        (score >= _COHERENT_MIN_PEAK_SCORE)
+        & (correlation >= _COHERENT_STATIC_CHANGE_CORRELATION)
+        & (expected_power >= _COHERENT_STATIC_CHANGE_CLUTTER_RATIO * residual_power)
+    )
+    # its weaker neighbours are that change's range sidelobes
+    for index in np.flatnonzero(static_change):
+        for side in (index - 1, index + 1):
+            if 0 <= side < len(score) and score[side] < score[index]:
+                static_change[side] = True
+    coherence = {
+        "floor_power": floor,
+        "reference_bins": [int(index + empty.range_bin_start) for index in sorted(reference)],
+        "channel_phase_deg": np.round(np.degrees(np.angle(factors)), 2).ravel().tolist(),
+        "channel_gain": np.round(np.abs(factors), 4).ravel().tolist(),
+        "ground_elevation_deg": [low_el, high_el],
+    }
+    base["coherence"] = coherence
+    base["changed_fraction"] = float(np.mean(score[search] >= _COHERENT_MIN_PEAK_SCORE))
+    search_indices = np.flatnonzero(search)
+    first, last = int(search_indices[0]), int(search_indices[-1])
+
+    clusters: list[dict[str, Any]] = []
+    used: set[int] = set()
+    peaks = np.flatnonzero(allowed & (score >= _COHERENT_MIN_PEAK_SCORE) & ~static_change)
+    for peak in sorted(peaks, key=lambda index: -score[index]):
+        if int(peak) in used:
+            continue
+        threshold = max(_COHERENT_MEMBER_FLOOR, _COHERENT_MEMBER_FRACTION * score[peak])
+        lo = hi = int(peak)
+        while lo - 1 >= first and score[lo - 1] >= threshold and not static_change[lo - 1]:
+            lo -= 1
+        while hi + 1 <= last and score[hi + 1] >= threshold and not static_change[hi + 1]:
+            hi += 1
+        used.update(range(lo, hi + 1))
+        # judged in the empty capture's channel phases, which the fit mapped the
+        # ball capture onto
+        elevation = _vertical_elevation_deg(residual[:, :, peak] / factors, correction)
+        clusters.append(
+            {
+                "peak_index": int(peak),
+                "lo": lo,
+                "hi": hi,
+                "peak_bin": float(peak + empty.range_bin_start),
+                "apparent_range_m": float(ranges[peak]),
+                "score": float(score[peak]),
+                "width_bins": hi - lo + 1,
+                "elevation_deg": elevation,
+                "ground_level": bool(low_el <= elevation <= high_el),
+                "boundary": bool(
+                    lo <= first + _COHERENT_BOUNDARY_GUARD_BINS
+                    or hi >= last - _COHERENT_BOUNDARY_GUARD_BINS
+                ),
+            }
+        )
+    alternate = tuple(
+        {key: value for key, value in item.items() if key not in {"peak_index", "lo", "hi"}}
+        for item in clusters
+    )
+    base["alternate_peaks"] = alternate
+    ground = [item for item in clusters if item["ground_level"]]
+    if not ground:
+        return result(
+            "rejected_no_ball",
+            "no ground-level reflector was added"
+            + (" inside the candidate window" if window is not None else ""),
+        )
+    best = ground[0]
+    second = ground[1] if len(ground) > 1 else None
+    fields = {
+        "peak_score": best["score"],
+        "secondary_peak_score": second["score"] if second else 0.0,
+        "peak_width_bins": best["width_bins"],
+        "peak_elevation_deg": best["elevation_deg"],
+    }
+    changes = np.flatnonzero(static_change & search)
+    near = [
+        int(index)
+        for index in changes
+        if best["lo"] - _COHERENT_LOSS_GUARD_BINS <= index <= best["hi"] + _COHERENT_LOSS_GUARD_BINS
+        and score[index] >= _COHERENT_AMBIGUITY_RATIO * best["score"]
+    ]
+    base["ignored_losses"] = tuple(
+        {
+            "bin": float(index + empty.range_bin_start),
+            "range_m": float(ranges[index]),
+            "score": float(score[index]),
+            "fractional_power_change": float(
+                np.sum(np.abs(p[:, :, index]) ** 2) / max(expected_power[index], 1e-12) - 1.0
+            ),
+        }
+        for index in changes
+        if int(index) not in near
+    )
+    if second is not None and second["score"] >= _COHERENT_AMBIGUITY_RATIO * best["score"]:
+        return result(
+            "rejected_ambiguous", "more than one comparable ground-level change", **fields
+        )
+    if best["width_bins"] > _COHERENT_MAX_WIDTH_BINS:
+        return result("rejected_clutter", "the added reflector spans too many bins", **fields)
+    if best["boundary"]:
+        return result(
+            "rejected_boundary", "the added reflector touches the search boundary", **fields
+        )
+    if near:
+        return result(
+            "rejected_scene_changed",
+            "a still reflector beside the ball changed between captures",
+            **fields,
+        )
+    group = np.arange(best["lo"], best["hi"] + 1)
+    weights = np.maximum(score[group] - 1.0, 0.0)
+    peak_bin = (
+        float(np.average(group + empty.range_bin_start, weights=weights))
+        if float(np.sum(weights)) > 0.0
+        else best["peak_bin"]
+    )
+    return result(
+        "accepted_unqualified",
+        "one clear ground-level reflector was added",
+        peak_bin=peak_bin,
+        range_bin_uncertainty_m=max(0.5, best["width_bins"] / 2.0) * empty.range_resolution_m,
+        peak_fractional_excess=float(
+            residual_power[best["peak_index"]] / max(expected_power[best["peak_index"]], 1e-12)
+        ),
+        **fields,
+    )
+
+
 def build_static_profile_candidate(
     result: StaticRangeDifferenceResult,
     *,
@@ -1094,6 +1588,12 @@ def build_static_profile_candidate(
 
 __all__ = [
     "IndependentImpactTime",
+    "StaticChannelProfile",
+    "compare_static_channel_profiles",
+    "ground_elevation_window_deg",
+    "static_channel_estimator_policy",
+    "static_channel_estimator_sha256",
+    "static_channel_profile",
     "MovingRangeTrackResult",
     "StaticRangeDifferenceResult",
     "StaticRangeProfile",

@@ -363,7 +363,7 @@ def test_camera_range_estimator_identity_is_pinned():
     """Any estimator constant change must be a deliberate, reviewed identity change."""
     assert camera_range_estimator_policy()["name"] == "camera_reference_ball_size_range"
     assert camera_range_estimator_sha256() == (
-        "4eb8609adf8afe4ae27e38e89d2a374e59f86d5b3bd1d5db2c7c17d6a80ce7c1"
+        "4da738c48b56eac1e7dc21229996d02c7112a139b9ef1ff983934512f9ad3bf8"
     )
 
 
@@ -546,7 +546,7 @@ def test_stored_candidates_are_read_under_their_old_names_too():
     # pylint: disable=import-outside-toplevel
     from openflight.camera.reference_ball_range import stored_candidate_value
 
-    assert camera_range_estimator_policy()["version"] == 3
+    assert camera_range_estimator_policy()["version"] >= 3
     old = {"floor_radar_range_m": 1.52, "floor_point_lfu_m": [0.0, 1.5, 0.021]}
     new = {"size_radar_range_m": 1.49, "size_point_lfu_m": [0.0, 1.47, 0.021]}
     assert stored_candidate_value(old, "size_radar_range_m") == 1.52

@@ -48,6 +48,8 @@ from openflight.camera.club_motion import detect_reference_ball
 from openflight.camera.fusion_diagnostics import register_fusion_diagnostics
 from openflight.camera.paired_eligibility import evaluate_paired_capture
 from openflight.camera.reference_ball_range import (
+    _BALL_ABOVE_SURFACE_M,
+    _HITTING_RANGE_M,
     IWR_CAMERA_HINT_SCHEMA,
     BallPlaneCamera,
     ReferenceBallRangeResult,
@@ -80,10 +82,14 @@ from openflight.camera.tee_range_flow import (
 from openflight.camera.track_review import register_track_review
 from openflight.camera.triggered_buffer import unpack_r8_frame
 from openflight.iwr6843.range_evidence import (
+    StaticChannelProfile,
     StaticRangeProfile,
     StaticRangeProfileV2,
     build_static_profile_candidate,
+    compare_static_channel_profiles,
     compare_static_range_profiles,
+    ground_elevation_window_deg,
+    static_channel_profile,
     static_range_estimator_sha256 as _iwr_static_estimator_sha256,
 )
 
@@ -441,6 +447,11 @@ _CAMERA_WINDOW_REJECTIONS = {
 UNUSABLE_CAMERA_WINDOW_OUTCOMES = frozenset(_CAMERA_WINDOW_REJECTIONS)
 
 
+# The power profiles' "accepted", and the coherent difference's clear single peak,
+# which nothing qualifies (P7-6).
+IWR_ACCEPTED_STATUSES = frozenset({"accepted", "accepted_unqualified"})
+
+
 def iwr_range_usable(range_m: float | None, evidence: Mapping | None) -> bool:
     """Whether a static IWR range may reach swings or the lens-height solve."""
     evidence = evidence if isinstance(evidence, Mapping) else {}
@@ -449,7 +460,7 @@ def iwr_range_usable(range_m: float | None, evidence: Mapping | None) -> bool:
     return bool(
         range_m is not None
         and isinstance(difference, Mapping)
-        and difference.get("status") == "accepted"
+        and difference.get("status") in IWR_ACCEPTED_STATUSES
         and not (
             isinstance(window, Mapping) and window.get("outcome") in UNUSABLE_CAMERA_WINDOW_OUTCOMES
         )
@@ -635,6 +646,142 @@ def unqualified_tee_range_choice(
     return None
 
 
+# Decision D11 (P7-7): the setup saves an experimental range when the 1280x800
+# camera locked the ball in the box, taking the radar's range when it agrees with
+# the camera's size range within twice their combined uncertainty, and the
+# camera's own when the radar has none. Nothing qualifies it; every number built
+# on it is labelled experimental.
+EXPERIMENTAL_SAVED_REASON = "experimental_range_saved"
+EXPERIMENTAL_WITHHELD_PREFIX = "experimental_range_withheld_"
+EXPERIMENTAL_AGREEMENT_SIGMAS = 2.0
+_EXPERIMENTAL_SOURCES = {
+    "static_iwr": "unqualified_static_iwr",
+    "static_iwr_camera_steered": "unqualified_static_iwr_camera_steered",
+    "camera_size_range": "unqualified_camera_size_range",
+}
+
+
+def _camera_ball_locked_in_box(candidate: tee_range.TeeRangeCandidate | None) -> bool:
+    """Whether the 1280x800 camera selected a ball inside the box at a verified lock."""
+    if candidate is None or candidate.radar_slant_range_m is None or not candidate.uncertainty_m:
+        return False
+    evidence = candidate.evidence or {}
+    result = evidence.get("result") or {}
+    facts = evidence.get("qualification") or {}
+    box = evidence.get("placement_box") or {}
+    return bool(
+        result.get("status") == "selected"
+        and facts.get("static_exposure_lock_verified") is True
+        and box.get("box_px") is not None
+    )
+
+
+def experimental_tee_range_decision(
+    candidates: Sequence[tee_range.TeeRangeCandidate],
+) -> dict:
+    """Which range a setup saves as experimental, or why it saves none (D11)."""
+    camera = next(
+        (
+            item
+            for item in candidates
+            if item.source_group == "camera" and item.candidate_id.endswith(f"-{PLACEMENT_BOX_ARM}")
+        ),
+        None,
+    )
+    iwr = next(
+        (
+            item
+            for item in candidates
+            if item.source_group == "iwr" and item.source == "iwr_static_profile_difference"
+        ),
+        None,
+    )
+    usable = iwr is not None and iwr_range_usable(iwr.radar_slant_range_m, iwr.evidence)
+    facts = {
+        "schema": "openflight.tester_experimental_range.v1",
+        "label": "experimental",
+        "sigmas": EXPERIMENTAL_AGREEMENT_SIGMAS,
+        "camera_candidate_id": camera.candidate_id if camera is not None else None,
+        "camera_range_m": camera.radar_slant_range_m if camera is not None else None,
+        "camera_uncertainty_m": camera.uncertainty_m if camera is not None else None,
+        "iwr_candidate_id": iwr.candidate_id if iwr is not None else None,
+        "iwr_range_m": iwr.radar_slant_range_m if usable else None,
+        "iwr_uncertainty_m": iwr.uncertainty_m if usable else None,
+        "iwr_usable": usable,
+        "agreement": None,
+    }
+    if not _camera_ball_locked_in_box(camera):
+        return {
+            **facts,
+            "status": "withheld",
+            "reason_code": "camera_ball_not_locked_in_box",
+            "reason": "the 1280x800 camera has no ball locked in the box",
+        }
+    if not usable:
+        return {
+            **facts,
+            "status": "saved",
+            "reason_code": "camera_range_without_radar",
+            "reason": "the radar found no ball, so the camera's size range is used",
+            "source": "camera_size_range",
+            "candidate_id": camera.candidate_id,
+            "range_m": camera.radar_slant_range_m,
+            "uncertainty_m": camera.uncertainty_m,
+        }
+    residual = abs(float(iwr.radar_slant_range_m) - float(camera.radar_slant_range_m))
+    combined = math.hypot(float(iwr.uncertainty_m or 0.0), float(camera.uncertainty_m or 0.0))
+    agreement = {
+        "residual_m": residual,
+        "combined_uncertainty_m": combined,
+        "normalized_sigma": residual / combined if combined > 0.0 else math.inf,
+    }
+    facts["agreement"] = agreement
+    if not residual <= EXPERIMENTAL_AGREEMENT_SIGMAS * combined:
+        return {
+            **facts,
+            "status": "withheld",
+            "reason_code": "radar_disagrees",
+            "reason": (
+                f"the radar's {iwr.radar_slant_range_m:.3f} m and the camera's "
+                f"{camera.radar_slant_range_m:.3f} m disagree "
+                f"({agreement['normalized_sigma']:.1f} sigma)"
+            ),
+        }
+    steered = (iwr.evidence.get("camera_window") or {}).get("outcome") == "reselected"
+    return {
+        **facts,
+        "status": "saved",
+        "reason_code": "radar_agrees_with_camera",
+        "reason": "the radar's range agrees with the camera's",
+        "source": "static_iwr_camera_steered" if steered else "static_iwr",
+        "candidate_id": iwr.candidate_id,
+        "range_m": iwr.radar_slant_range_m,
+        "uncertainty_m": iwr.uncertainty_m,
+    }
+
+
+def experimental_tee_range_choice(
+    solution: tee_range.TeeRangeSolution | None,
+) -> tuple[tee_range.TeeRangeCandidate | None, dict | None]:
+    """The candidate a saved experimental setup hands to swings, and its decision.
+
+    Only a setup finalized as experimental: an epoch finished before D11 keeps
+    what it said.
+    """
+    if solution is None or solution.status == "resolved":
+        return None, None
+    if solution.reason != EXPERIMENTAL_SAVED_REASON:
+        return None, None
+    decision = experimental_tee_range_decision(solution.candidates)
+    if decision["status"] != "saved":
+        return None, decision
+    candidate = next(
+        (item for item in solution.candidates if item.candidate_id == decision["candidate_id"]),
+        None,
+    )
+    return candidate, decision
+
+
 def rig_geometry_hashes(rig_geometry: Path | None) -> dict:
     """Both rig-file hashes, under names that say what each one hashes (wiring audit C3).
 
@@ -797,6 +944,21 @@ def setup_net_range(solution: tee_range.TeeRangeSolution | None) -> dict:
     }
 
 
+def setup_placement_box(solution: tee_range.TeeRangeSolution | None) -> dict | None:
+    """The box the tester confirmed for this setup, as the 1280x800 search recorded it."""
+    for item in solution.candidates if solution is not None else ():
+        box = (item.evidence or {}).get("placement_box")
+        if item.source_group == "camera" and isinstance(box, Mapping):
+            confirmed = box.get("confirmed")
+            if isinstance(confirmed, Mapping):
+                keys = ("arm_id", "frame_size_px", "box_px", "size_px", "source")
+                return {
+                    key: list(value) if isinstance(value, (list, tuple)) else value
+                    for key, value in ((key, confirmed.get(key)) for key in keys)
+                }
+    return None
+
+
 def tee_range_handoff(
     solution: tee_range.TeeRangeSolution | None,
     *,
@@ -810,12 +972,23 @@ def tee_range_handoff(
     so the tester's files say what the kiosk ran with (wiring audit S3).
     """
     candidate = None
+    experimental, decision = experimental_tee_range_choice(solution)
     if solution is not None and solution.status == "resolved":
         status, source = "resolved", "qualified_static_iwr"
         candidate = next(
             item
             for item in solution.candidates
             if item.candidate_id == solution.selected_candidate_id
+        )
+    elif experimental is not None and decision is not None:
+        # D11: the setup saved this range as experimental; the kiosk starts with it
+        candidate = experimental
+        status, source = "unqualified", _EXPERIMENTAL_SOURCES[decision["source"]]
+        logger.warning(
+            "Using EXPERIMENTAL tee range %.3f m from %s (%s)",
+            candidate.radar_slant_range_m,
+            candidate.candidate_id,
+            decision["source"],
         )
     elif use_unqualified and (candidate := unqualified_tee_range_choice(solution)) is not None:
         logger.warning(
@@ -877,6 +1050,8 @@ def tee_range_handoff(
         "tee_m": tee_m,
         "candidate_id": candidate.candidate_id if candidate is not None else None,
         "qualified": status == "resolved",
+        "experimental": status != "resolved" and candidate is not None,
+        "experimental_range": decision,
         "camera_window": (
             {
                 "outcome": window.get("outcome"),
@@ -893,6 +1068,7 @@ def tee_range_handoff(
         "solved_camera_height_source": "static_iwr_range" if height is not None else None,
         "scene": scene,
         "net_range": net,
+        "placement_box": setup_placement_box(solution),
         **rig_geometry_hashes(rig_geometry),
         "cli_args": args,
     }
@@ -1231,8 +1407,8 @@ def ladder_gain_facts(sessions_root: Path, params: TesterParameters) -> dict:
 
 SETUP_BALL_MISSING = (
     "The camera hasn't found the ball, so the ladder can't judge your swings. Run the setup "
-    "again with the ball 1.0 to 1.3 m from the lens, on the same surface as the unit (not a "
-    "raised mat), and nothing ball-like or white in view (spare balls, a cloth)."
+    "again: drag the box over the spot you hit from and put the ball inside it, on the "
+    "hitting surface, with nothing ball-like or white in the box (spare balls, a cloth)."
 )
 
 
@@ -1267,12 +1443,12 @@ def expected_ladder_ball(solution: tee_range.TeeRangeSolution | None, arm_id: st
         for mode in ARMS:
             if item.candidate_id.endswith(mode):
                 seen[mode] = ball
-    if arm_id in seen:
-        return seen[arm_id]
     if arm_id == "arm6" and "arm5" in seen:
+        # the 640x400 check is advisory (P7-7): its settings follow the 1280x800
+        # ball, halved, whatever the check itself picked
         ratio = ARMS["arm6"].width / ARMS["arm5"].width
         return {key: value * ratio for key, value in seen["arm5"].items()}
-    return None
+    return seen.get(arm_id)
 
 
 def _setup_static_lock(solution: tee_range.TeeRangeSolution | None, arm_id: str) -> dict | None:
@@ -2266,6 +2442,131 @@ def _reference_ball_camera(
     )
 
 
+PLACEMENT_BOX_FILE = "placement-box.json"
+PLACEMENT_BOX_SCHEMA = "openflight.tester_placement_box.v1"
+# The box is placed on the 1280x800 view; 640x400 is the same view 2x binned.
+PLACEMENT_BOX_ARM = "arm5"
+PUT_BALL_IN_BOX = "no ball in the box: put the ball in the box"
+
+
+def _placement_roll_deg(rig_geometry: Path, tilt: Mapping) -> float | None:
+    """The LIS3DH roll the camera models record but do not apply, for the box's padding."""
+    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+    roll = tilt.get("roll_deg")
+    if isinstance(roll, bool) or not isinstance(roll, (int, float)) or not math.isfinite(roll):
+        return None
+    try:
+        expected = RigGeometry.from_json(rig_geometry).expected_inclinometer_orientation().roll_deg
+    except (OSError, TypeError, ValueError, KeyError):
+        expected = None
+    # measured against the placement the rig expects, whether or not it is applied
+    return float(roll) - float(expected or 0.0)
+
+
+def placement_box_geometry_for(
+    camera: BallPlaneCamera, rig_geometry: Path, tilt: Mapping
+) -> reference_ball_range.PlacementBoxGeometry:
+    """The box's fixed size and default position in this camera's mode (P7-4)."""
+    return reference_ball_range.placement_box_geometry(
+        camera,
+        ball_center_height_m=BALL_DIAMETER_MM / 2000.0,
+        roll_deg=_placement_roll_deg(rig_geometry, tilt),
+    )
+
+
+def read_last_placement_box(root: Path) -> dict | None:
+    """The last box this tester confirmed, to start the next setup from."""
+    try:
+        payload = json.loads((root / PLACEMENT_BOX_FILE).read_text(encoding="utf-8"))
+        box = [int(value) for value in payload["box_px"]]
+        if payload.get("schema") != PLACEMENT_BOX_SCHEMA or len(box) != 4:
+            return None
+        return {**payload, "box_px": box}
+    except (OSError, AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def remember_placement_box(root: Path, record: Mapping) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    atomic_write(
+        root / PLACEMENT_BOX_FILE,
+        (json.dumps({**dict(record), "schema": PLACEMENT_BOX_SCHEMA}, indent=2) + "\n").encode(
+            "utf-8"
+        ),
+    )
+
+
+def proposed_placement_box(
+    geometry: reference_ball_range.PlacementBoxGeometry, last: Mapping | None
+) -> dict:
+    """Where the box starts in a new setup: the last confirmed spot, else straight ahead."""
+    source, origin = "default_straight_ahead", geometry.default_box_px[:2]
+    if last is not None and list(last.get("frame_size_px") or []) == list(geometry.image_size_px):
+        source, origin = "last_confirmed", last["box_px"][:2]
+    box = reference_ball_range.placement_box_at(origin, geometry.size_px, geometry.image_size_px)
+    return {
+        "arm_id": PLACEMENT_BOX_ARM,
+        "frame_size_px": list(geometry.image_size_px),
+        "box_px": list(box),
+        "size_px": list(geometry.size_px),
+        "default_box_px": list(geometry.default_box_px),
+        "source": source,
+    }
+
+
+def placement_box_record(
+    geometry: reference_ball_range.PlacementBoxGeometry, requested: object
+) -> dict:
+    """The confirmed box: the fixed size, where the tester dropped it, kept in the frame."""
+    if not isinstance(requested, Sequence) or isinstance(requested, (str, bytes)):
+        raise ValueError("box_px must be [x0, y0, x1, y1] in 1280x800 pixels")
+    values = [float(value) for value in requested]
+    if len(values) != 4 or not all(math.isfinite(value) for value in values):
+        raise ValueError("box_px must be four finite numbers")
+    box = reference_ball_range.placement_box_at(
+        values[:2], geometry.size_px, geometry.image_size_px
+    )
+    return {
+        "arm_id": PLACEMENT_BOX_ARM,
+        "frame_size_px": list(geometry.image_size_px),
+        "box_px": list(box),
+        "size_px": list(geometry.size_px),
+        "default_box_px": list(geometry.default_box_px),
+        "requested_box_px": values,
+        "source": "tester_dragged",
+        "confirmed_at_utc": datetime.now(timezone.utc).isoformat(),
+        "geometry": geometry.to_dict(),
+    }
+
+
+def mode_placement_box(record: Mapping | None, arm: Arm) -> tuple[int, int, int, int] | None:
+    """The confirmed box in this arm's pixels: 640x400 is the 1280x800 box halved."""
+    if not isinstance(record, Mapping) or record.get("box_px") is None:
+        return None
+    frame = record.get("frame_size_px") or [ARMS[PLACEMENT_BOX_ARM].width]
+    factor = arm.width / float(frame[0])
+    box = [int(value) for value in record["box_px"]]
+    if factor == 1.0:
+        return tuple(box)  # type: ignore[return-value]
+    return reference_ball_range.scale_placement_box(box, factor)
+
+
+def placement_preview_controls(state: Mapping) -> tuple[int, float]:
+    """Exposure and gain for the box preview, from the light screen (step B)."""
+    arm = ARMS[PLACEMENT_BOX_ARM]
+    try:
+        equivalent = float(state.get("gain_at_300_equivalent", state.get("gain", 4.0)))
+    except (TypeError, ValueError):
+        equivalent = 4.0
+    if not math.isfinite(equivalent) or equivalent <= 0.0:
+        equivalent = 4.0
+    if equivalent < 1.0:
+        # too bright at 300 us: the same light at unity gain and a shorter exposure
+        return max(10, int(round(arm.exposure_us * equivalent))), 1.0
+    return arm.exposure_us, float(min(equivalent, GAIN_CEILING))
+
+
 def _camera_range_evidence(result: ReferenceBallRangeResult) -> dict:
     return {
         "status": result.status,
@@ -2473,17 +2774,26 @@ def _guided_camera_analysis(
     *,
     analysis_role: str = "live_preview",
     follow: Mapping | None = None,
+    placement_box: Sequence[int] | None = None,
 ) -> tuple[ReferenceBallRangeResult, dict]:
     """Run broad or explicitly non-promoting IWR-conditioned camera association.
 
     ``follow`` (a previous live selection) narrows a live look to that ball's
-    neighbourhood and size; Save never follows and always searches the full frame.
+    neighbourhood and size; Save never follows and always searches the whole of
+    ``placement_box`` (the tester's box in this mode), or the full frame without one.
     """
     if analysis_role not in {"live_preview", "independent_save_confirmation"}:
         raise ValueError("unknown guided camera analysis role")
     kwargs, usable_hint, fallback = _validated_guided_search_hint(
         search_hint, camera, analysis_role
     )
+    box = [int(value) for value in placement_box] if placement_box is not None else None
+    unconditioned = "placement_box_unconditioned" if box else "broad_full_frame_unconditioned"
+    if box is not None:
+        # the tester placed it, so it conditions nothing on the live pick (P7-4)
+        kwargs["placement_box_px"] = tuple(box)
+        if fallback.get("mode"):
+            fallback = {**fallback, "mode": unconditioned}
     following = follow is not None and analysis_role == "live_preview"
     if following:
         diameter = float(follow["diameter_px"])
@@ -2517,7 +2827,7 @@ def _guided_camera_analysis(
             if following
             else "radar_guided_provisional"
             if usable_hint
-            else "broad_full_frame_unconditioned"
+            else unconditioned
         ),
         "independent": not usable_hint,
         "promotion_eligible": False,
@@ -2528,7 +2838,8 @@ def _guided_camera_analysis(
             "prior_canonical_range_used": False,
         },
         "support_interval_m": list(kwargs["plausible_radar_range_m"]),
-        "search_region_px": list(kwargs["roi"]) if "roi" in kwargs else None,
+        "search_region_px": _search_region(kwargs.get("roi"), box),
+        "placement_box_px": box,
         "search_hint": dict(search_hint) if isinstance(search_hint, Mapping) else None,
         "fallback": fallback,
         "input_identity": {
@@ -2550,6 +2861,17 @@ def _guided_camera_analysis(
         "stable_span_s": 0.0,
         "save_eligible": False,
     }
+
+
+def _search_region(roi: Sequence[int] | None, box: Sequence[int] | None) -> list[int] | None:
+    """The pixels a search seeded ball centres in: its region, inside the placement box."""
+    if roi is None:
+        return list(box) if box is not None else None
+    if box is None:
+        return list(roi)
+    left, top = max(roi[0], box[0]), max(roi[1], box[1])
+    right, bottom = min(roi[2], box[2]), min(roi[3], box[3])
+    return [left, top, right, bottom] if left < right and top < bottom else []
 
 
 # Once found, the resting ball is only looked for near where it was: a few
@@ -2609,12 +2931,17 @@ class GuidedRangeAnalyzer:
         orientation_reader: Callable[[], Mapping],
         search_hint: Mapping | None = None,
         follow: BallFollowMemory | None = None,
+        placement_box: Sequence[int] | None = None,
     ):
         self.camera = camera
         self.orientation = dict(orientation)
         self._orientation_reader = orientation_reader
         self.search_hint = dict(search_hint) if search_hint is not None else None
         self._follow = follow
+        # the tester's box in this mode's pixels; every look and Save stays inside it
+        self.placement_box = (
+            tuple(int(value) for value in placement_box) if placement_box is not None else None
+        )
         self._lock = threading.Lock()
         self._last: dict | None = None
         self._stable_anchor: dict | None = None
@@ -2646,6 +2973,18 @@ class GuidedRangeAnalyzer:
             else "camera-only search"
         )
         status = analysis.get("status")
+        if analysis.get("placement_box_px") is not None and (
+            status == "not_found"
+            or (
+                status == "no_consistent_candidate"
+                and all(
+                    item.get("rejection_reason") == reference_ball_range.PLACEMENT_BOX_REJECTION
+                    for item in analysis.get("candidates") or []
+                    if isinstance(item, Mapping)
+                )
+            )
+        ):
+            return PUT_BALL_IN_BOX
         if status == "ambiguous":
             return f"multiple candidates remain plausible in the {source}"
         if status == "not_found":
@@ -2675,10 +3014,12 @@ class GuidedRangeAnalyzer:
         problem = self._orientation_problem()
         anchor = self._follow.get() if self._follow is not None else None
         _result, analysis = _guided_camera_analysis(
-            frames, self.camera, self.search_hint, follow=anchor
+            frames, self.camera, self.search_hint, follow=anchor, placement_box=self.placement_box
         )
         if anchor is not None and analysis["status"] != "selected":
-            _result, analysis = _guided_camera_analysis(frames, self.camera, self.search_hint)
+            _result, analysis = _guided_camera_analysis(
+                frames, self.camera, self.search_hint, placement_box=self.placement_box
+            )
         if (
             self._follow is not None
             and analysis["status"] == "selected"
@@ -2755,6 +3096,7 @@ class GuidedRangeAnalyzer:
             frames,
             self.camera,
             analysis_role="independent_save_confirmation",
+            placement_box=self.placement_box,
         )
         with self._lock:
             prior = dict(self._last) if self._last is not None else None
@@ -2791,7 +3133,9 @@ class GuidedRangeAnalyzer:
                 "promotion_eligible": True,
                 "promotion_rejection_reason": None,
                 "promotion_basis": (
-                    "broad_full_frame_unconditioned_camera_matches_provisional_selection"
+                    "placement_box_unconditioned_camera_matches_provisional_selection"
+                    if self.placement_box is not None
+                    else "broad_full_frame_unconditioned_camera_matches_provisional_selection"
                 ),
                 "readiness_reason": None,
             }
@@ -2850,6 +3194,44 @@ def read_static_exposure_warm_start(root: Path, arm_id: str, arm: Arm) -> Static
         return None
 
 
+def static_warm_start(
+    evidence: Mapping, root: Path, arm_id: str, arm: Arm
+) -> tuple[StaticExposureStep | None, str | None]:
+    """The first setting a camera step tries, and where it came from.
+
+    The 640x400 step starts from this setup's 1280x800 lock: the same ball in the
+    same light (P7-5). Otherwise the tester's last verified lock for this mode.
+    Either must pass every gate again before it locks.
+    """
+    if arm_id != PLACEMENT_BOX_ARM:
+        lock = (evidence.get(f"camera_{PLACEMENT_BOX_ARM}_static_exposure") or {}).get("lock")
+        if isinstance(lock, Mapping):
+            try:
+                step = StaticExposureStep(int(lock["exposure_us"]), float(lock["gain"]))
+            except (KeyError, TypeError, ValueError):
+                step = None
+            if step is not None and step in exposure_steps_for_fps(arm.fps):
+                return step, f"camera_{PLACEMENT_BOX_ARM}_lock"
+    remembered = read_static_exposure_warm_start(root, arm_id, arm)
+    return remembered, "remembered_lock" if remembered is not None else None
+
+
+def static_follow_seed(evidence: Mapping, arm: Arm) -> dict | None:
+    """The 1280x800 ball in this mode's pixels, for the 640x400 step's first looks."""
+    if arm.arm_id == PLACEMENT_BOX_ARM:
+        return None
+    candidate = evidence.get(f"camera_{PLACEMENT_BOX_ARM}_candidate")
+    result = ((candidate or {}).get("evidence") or {}).get("result") or {}
+    selected = result.get("selected")
+    if result.get("status") != "selected" or not isinstance(selected, Mapping):
+        return None
+    factor = arm.width / ARMS[PLACEMENT_BOX_ARM].width
+    try:
+        return {key: float(selected[key]) * factor for key in ("x_px", "y_px", "diameter_px")}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def remember_static_exposure_lock(
     root: Path, arm_id: str, arm: Arm, lock: Mapping, *, epoch_id: str, capture_id: str
 ) -> None:
@@ -2896,8 +3278,11 @@ class StaticExposureController:
         black_floor_dn: float | None,
         on_change: Callable[[dict], None] | None = None,
         warm_start: StaticExposureStep | None = None,
+        region: Sequence[int] | None = None,
     ):
         self._factory = analyzer_factory
+        # the placement box: where a picture without the ball is judged dark (P7-5)
+        self._region = tuple(int(value) for value in region) if region is not None else None
         self._on_change = on_change
         self._last_detection: dict | None = None
         self._steps = tuple(steps)
@@ -2913,6 +3298,10 @@ class StaticExposureController:
     @property
     def camera(self) -> BallPlaneCamera:
         return self._inner.camera
+
+    @property
+    def placement_box(self) -> tuple[int, ...] | None:
+        return self._inner.placement_box
 
     @property
     def orientation(self) -> dict:
@@ -2991,6 +3380,7 @@ class StaticExposureController:
             applied_exposure_us=exposure,
             applied_gain=gain,
             black_floor_dn=self._black_floor_dn,
+            region=self._region,
         )
         next_step = None
         with self._lock:
@@ -3111,6 +3501,7 @@ class StaticExposureController:
                 applied_exposure_us=applied[0],
                 applied_gain=applied[1],
                 black_floor_dn=self._black_floor_dn,
+                region=self._region,
             )
             analysis["save_frame_optical_check"] = check.to_dict()
             if not check.acceptable:
@@ -3473,7 +3864,95 @@ def iwr_range_bias_m(calibration: Mapping) -> float:
     return float(value)
 
 
-def _guided_iwr_candidate(
+def iwr_ground_elevation_window_deg(
+    rig_geometry: Path, slant_range_m: tuple[float, float]
+) -> tuple[float, float]:
+    """Where a ball at address appears on the IWR's vertical array, from the rig file.
+
+    The radar's phase centre height and aim come from the shared rig file; the
+    ball's centre is anywhere from sunk into grass to on a raised mat (P7-6).
+    """
+    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+    rig = RigGeometry.from_json(rig_geometry)
+    origin = rig.iwr_origin_mm
+    if rig.lens_height_above_floor_mm is None or origin is None:
+        raise ValueError("the rig file does not place the IWR above the surface")
+    if rig.iwr_boresight_pitch_deg is None:
+        raise ValueError("the rig file does not give the IWR's aim")
+    radius = BALL_DIAMETER_MM / 2000.0
+    return ground_elevation_window_deg(
+        # image axes: +y is down, so the phase centre sits origin[1] mm below the lens
+        radar_height_m=(rig.lens_height_above_floor_mm - origin[1]) / 1000.0,
+        boresight_pitch_deg=float(rig.iwr_boresight_pitch_deg),
+        slant_range_m=slant_range_m,
+        ball_center_height_m=(radius + _BALL_ABOVE_SURFACE_M[0], radius + _BALL_ABOVE_SURFACE_M[1]),
+    )
+
+
+def _static_channel_profile(record: Mapping, iwr_dir: Path | None) -> StaticChannelProfile | None:
+    """A capture's per-channel means: recorded with it, or derived from its saved dump."""
+    payload = record.get("channel_profile")
+    if isinstance(payload, Mapping):
+        return StaticChannelProfile(**dict(payload))
+    raw = (record.get("artifacts") or {}).get("raw") or {}
+    if iwr_dir is None or not raw.get("path") or raw.get("complete") is False:
+        return None
+    path = iwr_dir / Path(str(raw["path"])).name
+    if not path.is_file():
+        return None
+    data = path.read_bytes()
+    if raw.get("sha256") and hashlib.sha256(data).hexdigest() != raw["sha256"]:
+        return None
+    return static_channel_profile(
+        data,
+        radar_profile_sha256=str(record["inputs"]["radar_config"]["sha256"]),
+        rig_geometry_sha256=str(record["inputs"]["rig_geometry"]["sha256"]),
+    )
+
+
+def _coherent_difference(
+    empty_record: Mapping,
+    present_record: Mapping,
+    *,
+    calibration: Mapping,
+    bias_m: float,
+    search_m: tuple[float, float],
+    window_m: tuple[float, float],
+    iwr_dir: Path | None,
+    rig_geometry: Path | None,
+):
+    """The coherent static difference (P7-6), or why the captures cannot give one."""
+    try:
+        empty = _static_channel_profile(empty_record, iwr_dir)
+        present = _static_channel_profile(present_record, iwr_dir)
+    except (KeyError, OSError, TypeError, ValueError) as exc:
+        return None, f"channel profiles unreadable: {exc}"
+    if empty is None or present is None:
+        return None, "the captures carry no per-channel profiles"
+    try:
+        correction = np.exp(-1j * np.asarray(calibration["elem_phase_rad"], dtype=float)) / (
+            np.asarray(calibration["elem_gain"], dtype=float)
+        )
+        if rig_geometry is None:
+            raise ValueError("no rig file")
+        elevation = iwr_ground_elevation_window_deg(rig_geometry, window_m)
+    except (KeyError, OSError, TypeError, ValueError) as exc:
+        return None, f"no ground-level elevation window: {exc}"
+    result = compare_static_channel_profiles(
+        empty,
+        present,
+        plausible_apparent_range_m=tuple(value + bias_m for value in search_m),
+        candidate_window_m=tuple(value + bias_m for value in window_m),
+        element_correction=correction,
+        ground_elevation_deg=elevation,
+        # the channels are fitted on still reflectors outside anywhere a ball may be
+        fit_exclusion_m=tuple(value + bias_m for value in _HITTING_RANGE_M),
+    )
+    return result, None
+
+
+def _guided_iwr_candidate(  # pylint: disable=too-many-locals,too-many-branches
     empty_record: Mapping,
     present_record: Mapping,
     *,
@@ -3481,6 +3960,8 @@ def _guided_iwr_candidate(
     calibration_path: Path,
     qualification: tee_range.TeeRangeQualification | None,
     camera_window_m: tuple[float, float] | None = None,
+    iwr_dir: Path | None = None,
+    rig_geometry: Path | None = None,
 ) -> tee_range.TeeRangeCandidate:
     calibration_sha = _file_sha256(calibration_path)
     calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
@@ -3489,6 +3970,18 @@ def _guided_iwr_candidate(
     present = _static_profile(present_record)
     corrected_interval = iwr_search_interval_m(qualification)
     apparent_interval = tuple(value + bias_m for value in corrected_interval)
+    # The coherent difference searches the camera's window once the camera has the
+    # ball, else the broad hitting area; the power profiles stay on record (P7-6).
+    coherent, coherent_unavailable = _coherent_difference(
+        empty_record,
+        present_record,
+        calibration=calibration,
+        bias_m=bias_m,
+        search_m=corrected_interval,
+        window_m=camera_window_m if camera_window_m is not None else _HITTING_RANGE_M,
+        iwr_dir=iwr_dir,
+        rig_geometry=rig_geometry,
+    )
     # The camera's window only chooses which cluster may be the ball; the search, and
     # with it the scale, MAD and clutter limit, stays the whole window (wiring audit S1).
     result = compare_static_range_profiles(
@@ -3507,6 +4000,10 @@ def _guided_iwr_candidate(
     except (TypeError, ValueError):
         bias_uncertainty_m = math.nan
     bias_uncertainty_valid = math.isfinite(bias_uncertainty_m) and bias_uncertainty_m > 0.0
+    power_result = result
+    if coherent is not None:
+        # nothing qualifies the coherent difference: at best accepted_unqualified
+        result = coherent
     firmware_sha = str(present_record["inputs"]["firmware"]["sha256"])
     config_sha = str(present_record["inputs"]["radar_config"]["sha256"])
     rig_sha = str(present_record["inputs"]["rig_geometry"]["sha256"])
@@ -3528,8 +4025,19 @@ def _guided_iwr_candidate(
         and qualification.accuracy_qualified
         # a camera-steered reading is no longer independent of the camera
         and camera_window_m is None
+        and coherent is None
     )
-    if result.status == "accepted" and result.apparent_range_m is not None:
+    if result.status == "accepted_unqualified" and result.apparent_range_m is not None:
+        value = result.apparent_range_m - bias_m
+        uncertainty = max(
+            math.hypot(
+                float(result.range_bin_uncertainty_m or empty.range_resolution_m),
+                bias_uncertainty_m if bias_uncertainty_valid else 0.0,
+            ),
+            0.001,
+        )
+        evidence = {"method": "pre_mti_empty_vs_ball_present"}
+    elif result.status == "accepted" and result.apparent_range_m is not None:
         qualified_result = replace(result, radar_profile_qualified=qualified)
         if qualified:
             candidate = build_static_profile_candidate(
@@ -3548,20 +4056,16 @@ def _guided_iwr_candidate(
             )
             evidence = {"method": "pre_mti_empty_vs_ball_present"}
     else:
-        value = (
-            result.apparent_range_m - bias_m
-            if result.apparent_range_m is not None and result.apparent_range_m > bias_m
-            else None
-        )
-        uncertainty = (
-            max(float(result.range_bin_uncertainty_m or empty.range_resolution_m), 0.001)
-            if value is not None
-            else None
-        )
+        # A rejected difference hands over no range: its bin stays in the
+        # difference's record as a diagnostic only (P7-6).
+        value = None
+        uncertainty = None
         evidence = {"method": "pre_mti_empty_vs_ball_present"}
     evidence.update(
         {
             "difference": asdict(result),
+            "power_difference": asdict(power_result) if coherent is not None else None,
+            "coherent_unavailable": coherent_unavailable,
             "empty_result": dict(empty_record),
             "present_result": dict(present_record),
             "qualification": {
@@ -3577,9 +4081,15 @@ def _guided_iwr_candidate(
                 "scope": qualification.scope if qualification else "tester_setup",
                 "manual_range_used": False,
                 "camera_range_used": camera_window_m is not None,
+                "experimental": result.status == "accepted_unqualified",
                 "moving_iwr_used": False,
             },
             "search_window_m": list(corrected_interval),
+            "candidate_window_m": list(
+                camera_window_m if camera_window_m is not None else _HITTING_RANGE_M
+            )
+            if coherent is not None
+            else None,
             "bias_uncertainty": (
                 {"value_m": bias_uncertainty_m, "source": "hashed_range_calibration"}
                 if bias_uncertainty_valid
@@ -3877,25 +4387,45 @@ def _swings_display(solution: Mapping, *, use_unqualified: bool) -> dict | None:
             "message": "Swings use the qualified radar tee range.",
         }
     try:
-        choice = unqualified_tee_range_choice(tee_range.TeeRangeSolution.from_dict(solution))
+        parsed = tee_range.TeeRangeSolution.from_dict(solution)
     except (KeyError, TypeError, ValueError):
-        choice = None
+        parsed = None
+    experimental, decision = experimental_tee_range_choice(parsed)
+    if experimental is not None and decision is not None:
+        basis = (
+            "the camera's range: the radar found no ball"
+            if decision["source"] == "camera_size_range"
+            else "the radar's range, which agrees with the camera's"
+        )
+        return {
+            "state": "experimental",
+            "range_m": experimental.radar_slant_range_m,
+            "message": (
+                f"EXPERIMENTAL: swings use {basis}. Nothing has qualified it, so every "
+                "number built on it is labelled experimental."
+            ),
+        }
+    choice = unqualified_tee_range_choice(parsed) if parsed is not None else None
     if choice is not None and use_unqualified:
         return {
             "state": "unqualified",
             "range_m": choice.radar_slant_range_m,
             "message": "TEST ONLY: swings use this unqualified radar range.",
         }
+    withheld = str(solution.get("reason") or "")
     because = (
-        "the radar range is not qualified" if choice is not None else "no radar range was accepted"
+        withheld.removeprefix(EXPERIMENTAL_WITHHELD_PREFIX).replace("_", " ")
+        if withheld.startswith(EXPERIMENTAL_WITHHELD_PREFIX)
+        else "the radar range is not qualified"
+        if choice is not None
+        else "no radar range was accepted"
     )
     return {
         "state": "pending",
         "range_m": None,
         "message": (
             f"Swings start with the tee range pending: {because}, so launch and club "
-            "metrics that need it are withheld. The camera's own estimate is never "
-            "used as the tee range."
+            "metrics that need it are withheld."
         ),
     }
 
@@ -3916,7 +4446,12 @@ def _validation_display(agreement: Mapping | None) -> dict | None:
     return {"state": status, "message": message}
 
 
-def tee_range_display(state: Mapping | None, *, use_unqualified: bool = False) -> dict:
+def tee_range_display(
+    state: Mapping | None,
+    *,
+    use_unqualified: bool = False,
+    placement_box: Mapping | None = None,
+) -> dict:
     """Backend states for the range summary; rejected numbers are diagnostics only."""
     evidence = (state or {}).get("evidence") or {}
     iwr = evidence.get("iwr_candidate")
@@ -3926,7 +4461,9 @@ def tee_range_display(state: Mapping | None, *, use_unqualified: bool = False) -
     window_rejection = _CAMERA_WINDOW_REJECTIONS.get(window.get("outcome"))
     iwr_display = _candidate_display(
         iwr,
-        qualified_source=difference.get("status") in {None, "accepted"} and not window_rejection,
+        qualified_source=(
+            difference.get("status") in {None, *IWR_ACCEPTED_STATUSES} and not window_rejection
+        ),
     )
     if iwr is None:
         iwr_display = {**iwr_display, "state": "not_captured"}
@@ -3945,17 +4482,31 @@ def tee_range_display(state: Mapping | None, *, use_unqualified: bool = False) -
         )
     solution = (state or {}).get("solution") or {}
     resolved = solution.get("status") == "resolved"
+    swings = _swings_display(solution, use_unqualified=use_unqualified)
+    experimental = bool(swings and swings.get("state") == "experimental")
     return {
         "schema": "openflight.tester_tee_range_display.v1",
         "iwr": {**iwr_display, "label": "bias-corrected IWR slant range"},
         "camera": cameras,
         "canonical": {
-            "state": "resolved" if resolved else "withheld",
-            "range_m": solution.get("selected_range_m") if resolved else None,
-            "reason": None if resolved else (solution.get("reason") or (state or {}).get("reason")),
+            "state": "resolved" if resolved else "experimental" if experimental else "withheld",
+            "range_m": (
+                solution.get("selected_range_m")
+                if resolved
+                else swings.get("range_m")
+                if experimental and swings
+                else None
+            ),
+            "reason": (
+                None
+                if resolved or experimental
+                else (solution.get("reason") or (state or {}).get("reason"))
+            ),
         },
-        "swings": _swings_display(solution, use_unqualified=use_unqualified),
+        "experimental": evidence.get("experimental_range"),
+        "swings": swings,
         "validation": _validation_display(evidence.get("validation_agreement")),
+        "placement_box": dict(placement_box) if placement_box is not None else None,
     }
 
 
@@ -5124,6 +5675,73 @@ def create_app(
     def range_store(tester_id: str) -> FlowStore:
         return FlowStore(tester_root(sessions_root, tester_id))
 
+    def box_geometry() -> reference_ball_range.PlacementBoxGeometry:
+        """The placement box's size and default in the 1280x800 view, from the rig and tilt."""
+        reading = enclosure.reading()
+        model = _reference_ball_camera(
+            ARMS[PLACEMENT_BOX_ARM], rig_geometry, reading, optical_calibration, camera_placement
+        )
+        return placement_box_geometry_for(model, rig_geometry, reading)
+
+    def placement_box_display(tester_id: str, state) -> dict | None:
+        """The box the page draws: to drag and confirm, or as confirmed for this setup."""
+        if state is None:
+            return None
+        confirmed = state.evidence.get("placement_box")
+        if state.phase != "needs_box":
+            if not isinstance(confirmed, Mapping):
+                return None
+            keys = ("arm_id", "frame_size_px", "box_px", "size_px", "default_box_px", "source")
+            return {**{key: confirmed.get(key) for key in keys}, "state": "confirmed"}
+        try:
+            geometry = box_geometry()
+        except (OSError, TypeError, ValueError, KeyError) as exc:
+            return {"state": "unavailable", "reason": str(exc)}
+        last = read_last_placement_box(range_store(tester_id).tester_root)
+        return {**proposed_placement_box(geometry, last), "state": "needs_confirmation"}
+
+    def start_box_preview(tester_id: str, state, *, take_over: bool = False) -> None:
+        """Show the 1280x800 view so the tester can drag the box over the hitting spot.
+
+        A live view someone else opened is only replaced when the tester asks.
+        """
+        busy = _range_resources_busy(live_yields=take_over)
+        if busy:
+            raise RuntimeError(busy)
+        exposure_us, gain = placement_preview_controls(
+            read_arm_state(sessions_root, tester_id, PLACEMENT_BOX_ARM)
+        )
+        with live_owner_lock:
+            live.start(ARMS[PLACEMENT_BOX_ARM], exposure_us, gain)
+            guided_analyzer["value"] = None
+            live_owner["guided"] = {
+                "kind": "placement_box",
+                "tester_id": tester_id,
+                "epoch_id": state.epoch_id,
+                "arm_id": PLACEMENT_BOX_ARM,
+            }
+
+    def _confirm_placement_box(tester_id: str, state, request_id: str, requested):
+        if state is None or state.phase != "needs_box":
+            raise RuntimeError(f"tee-range setup is {state.phase if state else 'not_started'}")
+        if request_id in state.request_ids:
+            return state
+        store = range_store(tester_id)
+        record = placement_box_record(box_geometry(), requested)
+        stop_guided_live(tester_id, state.epoch_id)
+        state = store.transition(
+            state,
+            phase="needs_empty",
+            reason="remove_ball_and_keep_setup_still",
+            request_id=request_id,
+            evidence={"placement_box": record},
+        )
+        try:
+            remember_placement_box(store.tester_root, record)
+        except OSError as exc:
+            logger.warning("The placement box was not remembered for the next setup: %s", exc)
+        return state
+
     def _range_state(tester_id: str, *, reconcile: bool = True):
         store = range_store(tester_id)
         state = store.load()
@@ -5294,6 +5912,8 @@ def create_app(
                 epoch_id=epoch_id,
                 calibration_path=iwr_calibration,
                 qualification=qualification,
+                iwr_dir=store.epoch_dir(epoch_id) / "iwr",
+                rig_geometry=rig_geometry,
             )
         except (KeyError, TypeError, ValueError) as exc:
             return store.transition(
@@ -5335,26 +5955,55 @@ def create_app(
             candidates = [
                 tee_range.TeeRangeCandidate.from_dict(state.evidence["iwr_candidate"]),
                 tee_range.TeeRangeCandidate.from_dict(state.evidence["camera_arm5_candidate"]),
-                tee_range.TeeRangeCandidate.from_dict(state.evidence["camera_arm6_candidate"]),
             ]
+            # the 640x400 check is advisory (P7-7): the setup saves without it
+            arm6 = (
+                tee_range.TeeRangeCandidate.from_dict(state.evidence["camera_arm6_candidate"])
+                if isinstance(state.evidence.get("camera_arm6_candidate"), Mapping)
+                else None
+            )
         except (KeyError, TypeError, ValueError) as exc:
             return store.transition(
                 state,
                 phase="retryable_failure",
                 reason=f"cross_sensor_evidence_incomplete: {exc}",
-                retry_phase="needs_camera_arm6",
+                retry_phase="needs_camera_arm5",
             )
+        if arm6 is not None:
+            candidates.append(arm6)
         solution = (
             tee_range.resolve_qualified_tee_range(state.epoch_id, candidates, qualification)
             if qualification is not None
-            else tee_range.TeeRangeSolution.unresolved(candidates, reason=qualification_reason)
+            else None
         )
+        phase = None
+        experimental = None
+        if solution is None or solution.status != "resolved":
+            # D11: without a qualified range the setup saves as experimental
+            experimental = {
+                **experimental_tee_range_decision(candidates),
+                "qualification_outcome": (
+                    solution.reason if solution is not None else qualification_reason
+                ),
+            }
+            saved = experimental["status"] == "saved"
+            solution = tee_range.TeeRangeSolution.unresolved(
+                candidates,
+                reason=(
+                    EXPERIMENTAL_SAVED_REASON
+                    if saved
+                    else f"{EXPERIMENTAL_WITHHELD_PREFIX}{experimental['reason_code']}"
+                ),
+            )
+            phase = "experimental" if saved else "raw_only"
         return store.finalize(
             state,
             solution,
             qualification,
+            phase=phase,
             evidence={
-                "validation_agreement": camera_validation_agreement(*candidates[1:]),
+                "experimental_range": experimental,
+                "validation_agreement": camera_validation_agreement(candidates[1], arm6),
                 # the setup's scene and both rig hashes, which join it to the
                 # swing sessions' session_start (wiring audit C3, C4, C5)
                 "scene": setup_scene(solution, rig_geometry),
@@ -5362,7 +6011,7 @@ def create_app(
             },
         )
 
-    def _camera_steered_iwr(state, selected, iwr_evidence) -> dict | None:
+    def _camera_steered_iwr(tester_id: str, state, selected, iwr_evidence) -> dict | None:
         """The radar candidate checked against, or re-selected inside, the camera's window."""
         window = camera_radar_window(selected)
         if window is None or not isinstance(iwr_evidence, Mapping):
@@ -5372,7 +6021,7 @@ def create_app(
         full = {"status": difference.get("status"), "range_m": value}
         facts = {"camera_window_m": list(window), "full_window": full}
         if (
-            difference.get("status") == "accepted"
+            difference.get("status") in IWR_ACCEPTED_STATUSES
             and value is not None
             and window[0] <= float(value) <= window[1]
         ):
@@ -5406,6 +6055,8 @@ def create_app(
                 calibration_path=iwr_calibration,
                 qualification=qualification,
                 camera_window_m=window,
+                iwr_dir=range_store(tester_id).epoch_dir(state.epoch_id) / "iwr",
+                rig_geometry=rig_geometry,
             ).to_dict()
         except (KeyError, TypeError, ValueError) as exc:
             # The pick outside the window stays on record but is unusable for swings
@@ -5557,10 +6208,26 @@ def create_app(
             state, model, camera_input_identity=camera_input_identity
         )
         search_path = store.epoch_dir(state.epoch_id) / f"camera-{capture_id}-exposure-search.json"
+        # every search in this step looks only inside the tester's box (P7-4)
+        box = mode_placement_box(state.evidence.get("placement_box"), params.arm)
+        if box is None:
+            raise RuntimeError("confirm the placement box before the camera checks")
         follow = BallFollowMemory()
+        seed = static_follow_seed(state.evidence, params.arm)
+        if seed is not None:
+            # the 640x400 step's first looks follow the 1280x800 ball, halved (P7-5)
+            follow.set(seed)
+        warm_start, warm_start_source = static_warm_start(
+            state.evidence, store.tester_root, arm_id, params.arm
+        )
         analyzer = StaticExposureController(
             lambda: GuidedRangeAnalyzer(
-                model, tilt_snapshot, enclosure.reading, search_hint=search_hint, follow=follow
+                model,
+                tilt_snapshot,
+                enclosure.reading,
+                search_hint=search_hint,
+                follow=follow,
+                placement_box=box,
             ),
             exposure_steps_for_fps(params.arm.fps),
             live.change_controls,
@@ -5568,7 +6235,8 @@ def create_app(
             on_change=lambda payload: atomic_write(
                 search_path, (json.dumps(payload, indent=2) + "\n").encode("utf-8")
             ),
-            warm_start=read_static_exposure_warm_start(store.tester_root, arm_id, params.arm),
+            warm_start=warm_start,
+            region=box,
         )
         first_step = analyzer.initial_step
         warm_start = analyzer.warm_start
@@ -5582,12 +6250,16 @@ def create_app(
                 if warm_start is not None
                 else None
             ),
+            "warm_start_source": warm_start_source if analyzer.warm_start is not None else None,
+            "follow_seed_px": seed,
+            "darkness_region_px": list(box),
             "black_floor_dn": black_floor,
             "exposure_search_file": search_path.name,
             "arm": params.arm.as_dict(),
             "orientation_at_start": tilt_snapshot,
             "camera_input_identity": camera_input_identity,
             "iwr_camera_search_hint": search_hint,
+            "placement_box_px": list(box),
             **setup_facts,
         }
         return params, analyzer, capture_setup
@@ -5738,13 +6410,19 @@ def create_app(
                 unsafe_reason = "guided camera context changed during Save"
                 save_analysis["promotion_eligible"] = False
                 save_analysis["promotion_rejection_reason"] = unsafe_reason
+            # Save searches the whole of the tester's box: placed by the tester, it is
+            # as independent of the live pick as the full frame was (P7-4)
+            box = analyzer.placement_box
             if unsafe_reason is None and (
                 save_analysis.get("independent") is not True
                 or save_analysis.get("promotion_eligible") is not True
                 or save_analysis.get("dependency_facts", {}).get("iwr_range_used") is not False
-                or save_analysis.get("search_region_px") is not None
+                or save_analysis.get("search_region_px") != (list(box) if box else None)
             ):
-                unsafe_reason = "Save did not produce independent full-frame camera confirmation"
+                unsafe_reason = (
+                    "Save did not produce an independent camera confirmation "
+                    "over the whole placement box"
+                )
                 save_analysis["promotion_eligible"] = False
                 save_analysis["promotion_rejection_reason"] = unsafe_reason
             if unsafe_reason:
@@ -5803,7 +6481,7 @@ def create_app(
             )
             iwr_evidence = state.evidence.get("iwr_candidate")
             steered = (
-                _camera_steered_iwr(state, result.selected, iwr_evidence)
+                _camera_steered_iwr(tester_id, state, result.selected, iwr_evidence)
                 if arm_id == "arm5"
                 else None
             )
@@ -5815,6 +6493,13 @@ def create_app(
                     **candidate.evidence,
                     "save_camera_only_analysis": save_analysis,
                     "camera_height": _solved_camera_height(result, model, iwr_evidence),
+                    # the box this mode searched, and the one the tester confirmed
+                    "placement_box": {
+                        "arm_id": arm_id,
+                        "box_px": list(box) if box else None,
+                        "frame_size_px": [ARMS[arm_id].width, ARMS[arm_id].height],
+                        "confirmed": state.evidence.get("placement_box"),
+                    },
                 },
             )
             iwr_ranking = _camera_to_iwr_ranking(
@@ -5894,8 +6579,40 @@ def create_app(
         )
         return _finalize_range_state(store, completed)
 
+    def _skip_camera_arm6(tester_id: str, request_id: str):
+        """Finish without the advisory 640x400 check (P7-7)."""
+        store = range_store(tester_id)
+        state = _range_state(tester_id)
+        skippable = state is not None and (
+            state.phase in {"needs_camera_arm6", "camera_arm6_capturing"}
+            or (state.phase == "retryable_failure" and state.retry_phase == "needs_camera_arm6")
+        )
+        if not skippable:
+            raise RuntimeError(f"tee-range setup is {state.phase if state else 'not_started'}")
+        if request_id in state.request_ids:
+            return state
+        stop_guided_live(tester_id, state.epoch_id, "arm6")
+        completed = store.transition(
+            state,
+            phase="evaluating",
+            reason="camera_arm6_skipped_advisory",
+            request_id=request_id,
+            evidence={
+                "camera_arm6_skipped": {
+                    "reason": "advisory_check_skipped",
+                    "skipped_at_phase": state.phase,
+                    "skipped_at_utc": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
+        return _finalize_range_state(store, completed)
+
     def _save_camera_diagnostic(tester_id: str, arm_id: str, request_id: str):
-        """Keep an unusable camera view as unqualified raw evidence and finish raw-only."""
+        """Keep an unusable camera view as unqualified raw evidence.
+
+        Without the 1280x800 ball the setup finishes raw-only; the 640x400 check is
+        advisory, so its raw evidence is kept and the setup still saves (P7-7).
+        """
         store = range_store(tester_id)
         state = _range_state(tester_id)
         expected = f"camera_{arm_id}_capturing"
@@ -5935,6 +6652,30 @@ def create_app(
         if not path.exists():
             atomic_write(path, payload)
         reason = f"camera_{arm_id}_{exposure['status']}_raw_evidence_only"
+        kept = {
+            f"camera_{arm_id}_static_exposure": exposure,
+            f"camera_{arm_id}_diagnostic_capture": {
+                "capture_id": capture_id,
+                "file": path.name,
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "frame_count": int(len(frames)),
+                "applied_controls": applied,
+                "qualified": False,
+                "label": (
+                    f"unqualified diagnostic raw evidence: {exposure['status'].replace('_', ' ')}"
+                ),
+            },
+        }
+        if arm_id != PLACEMENT_BOX_ARM:
+            stop_guided_live(tester_id, state.epoch_id, arm_id)
+            completed = store.transition(
+                state,
+                phase="evaluating",
+                reason=reason,
+                request_id=request_id,
+                evidence=kept,
+            )
+            return _finalize_range_state(store, completed)
         candidates = [
             tee_range.TeeRangeCandidate.from_dict(state.evidence[key])
             for key in ("iwr_candidate", "camera_arm5_candidate")
@@ -5944,21 +6685,7 @@ def create_app(
             state,
             tee_range.TeeRangeSolution.unresolved(candidates, reason=reason),
             request_id=request_id,
-            evidence={
-                f"camera_{arm_id}_static_exposure": exposure,
-                f"camera_{arm_id}_diagnostic_capture": {
-                    "capture_id": capture_id,
-                    "file": path.name,
-                    "sha256": hashlib.sha256(payload).hexdigest(),
-                    "frame_count": int(len(frames)),
-                    "applied_controls": applied,
-                    "qualified": False,
-                    "label": (
-                        "unqualified diagnostic raw evidence: "
-                        f"{exposure['status'].replace('_', ' ')}"
-                    ),
-                },
-            },
+            evidence=kept,
         )
 
     @app.route("/api/tester/tee-range", methods=["GET", "POST"])
@@ -5980,6 +6707,7 @@ def create_app(
                             "display": tee_range_display(
                                 state.to_dict() if state else None,
                                 use_unqualified=use_unqualified_tee_range,
+                                placement_box=placement_box_display(tester_id, state),
                             ),
                             "qualification_available": qualification is not None,
                             "qualification_status": {
@@ -5999,6 +6727,8 @@ def create_app(
                     "start",
                     "start_over",
                     "ball_moved",
+                    "confirm_box",
+                    "open_box_preview",
                     "capture_empty",
                     "capture_ball",
                     "start_camera_arm5",
@@ -6007,6 +6737,7 @@ def create_app(
                     "evaluate_camera_arm6",
                     "save_camera_arm5_diagnostic",
                     "save_camera_arm6_diagnostic",
+                    "skip_camera_arm6",
                     "retry",
                 }
                 if action not in actions:
@@ -6027,6 +6758,21 @@ def create_app(
                             "tester_id": tester_id,
                         },
                     )
+                    try:
+                        start_box_preview(tester_id, state)
+                    except (OSError, RuntimeError, ValueError) as exc:
+                        # the page offers the preview again; the box can still be placed
+                        logger.warning("Placement box preview did not start: %s", exc)
+                elif action == "confirm_box":
+                    bound_range_setup(tester_id, state, action)
+                    state = _confirm_placement_box(
+                        tester_id, state, request_id, payload.get("box_px")
+                    )
+                elif action == "open_box_preview":
+                    bound_range_setup(tester_id, state, action)
+                    if state is None or state.phase != "needs_box":
+                        raise RuntimeError("the box preview is only for placing the box")
+                    start_box_preview(tester_id, state, take_over=True)
                 elif action == "capture_empty":
                     bound_range_setup(tester_id, state, action)
                     state = _start_static_capture(tester_id, "empty", request_id)
@@ -6039,6 +6785,9 @@ def create_app(
                 elif action in {"evaluate_camera_arm5", "evaluate_camera_arm6"}:
                     bound_range_setup(tester_id, state, action)
                     state = _evaluate_camera_range(tester_id, action[-4:], request_id)
+                elif action == "skip_camera_arm6":
+                    bound_range_setup(tester_id, state, action)
+                    state = _skip_camera_arm6(tester_id, request_id)
                 elif action in {"save_camera_arm5_diagnostic", "save_camera_arm6_diagnostic"}:
                     bound_range_setup(tester_id, state, action)
                     state = _save_camera_diagnostic(tester_id, action.split("_")[2], request_id)
@@ -6054,14 +6803,16 @@ def create_app(
                     )
                 if not (
                     (state.phase.startswith("camera_") and state.phase.endswith("_capturing"))
-                    or state.phase == "ball_capturing"
+                    or state.phase in {"ball_capturing", "needs_box"}
                 ):
                     stop_guided_live(tester_id)
                 return jsonify(
                     {
                         "state": state.to_dict(),
                         "display": tee_range_display(
-                            state.to_dict(), use_unqualified=use_unqualified_tee_range
+                            state.to_dict(),
+                            use_unqualified=use_unqualified_tee_range,
+                            placement_box=placement_box_display(tester_id, state),
                         ),
                     }
                 )
@@ -6465,11 +7216,25 @@ def create_app(
         status = live.snapshot()[1]
         owner = live_owner_snapshot()
         guided = owner is not None and owner.get("kind") == "guided_tee_range"
+        with live_owner_lock:
+            analyzer = guided_analyzer["value"]
+        box = getattr(analyzer, "placement_box", None) if guided else None
+        arm = ARMS.get(str(owner.get("arm_id"))) if guided and owner else None
         return jsonify(
             {
                 **status,
                 "owner": owner,
                 "guided_display": guided_camera_display(status) if guided else None,
+                # the box this camera step searches, drawn over its view (P7-4)
+                "placement_box": (
+                    {
+                        "box_px": list(box),
+                        "frame_size_px": [arm.width, arm.height],
+                        "arm_id": arm.arm_id,
+                    }
+                    if box is not None and arm is not None
+                    else None
+                ),
             }
         )
 

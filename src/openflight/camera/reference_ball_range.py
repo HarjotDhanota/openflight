@@ -57,6 +57,42 @@ _HITTING_LATERAL_M = 0.30
 _SEED_LATERAL_M = 0.45
 _BALL_ABOVE_SURFACE_M = (-0.010, 0.090)
 _LENS_ABOVE_SURFACE_M = (0.0, 1.0)
+# The placement box (P7-4, decision D10 as changed on 30 Sept): the tester drags it
+# over the spot they will hit from, and every setup search looks only inside it.
+# Its size is a product constant, the same on every unit: 0.20 m wide at the
+# nominal hitting distance, and tall enough for a ball 1.2-1.5 m out from on the
+# surface to on a raised mat. Its rows are padded for the LIS3DH pitch, the roll
+# that is recorded but not applied (camera_roll), and its columns for the
+# uncalibrated principal point. At 95 mm the whole 1.2-1.5 m depth spans only
+# about 11 rows, so the box places the ball sideways; it does not measure distance.
+# The default position is that zone straight ahead of the unit.
+PLACEMENT_BOX_NOMINAL_DISTANCE_M = 1.35
+PLACEMENT_BOX_DEPTH_M = (1.2, 1.5)
+PLACEMENT_BOX_HALF_WIDTH_M = 0.10
+PLACEMENT_BOX_PITCH_PAD_DEG = 1.5
+PLACEMENT_BOX_COLUMN_PAD_DEG = 0.5
+PLACEMENT_BOX_MIN_ROLL_PAD_DEG = 1.0
+# With no roll reading, the rows are padded as if the unit were rolled this much.
+PLACEMENT_BOX_UNKNOWN_ROLL_DEG = 3.0
+PLACEMENT_BOX_REJECTION = "outside the placement box"
+
+
+def placement_box_policy() -> dict[str, Any]:
+    """The placement box's constants, bound into the camera estimator's identity."""
+    return {
+        "placed_by": "tester_drag",
+        "size": "fixed_product_constant",
+        "nominal_distance_m": PLACEMENT_BOX_NOMINAL_DISTANCE_M,
+        "depth_m": list(PLACEMENT_BOX_DEPTH_M),
+        "half_width_m": PLACEMENT_BOX_HALF_WIDTH_M,
+        "ball_above_surface_m": list(_BALL_ABOVE_SURFACE_M),
+        "pitch_pad_deg": PLACEMENT_BOX_PITCH_PAD_DEG,
+        "column_pad_deg": PLACEMENT_BOX_COLUMN_PAD_DEG,
+        "min_roll_pad_deg": PLACEMENT_BOX_MIN_ROLL_PAD_DEG,
+        "unknown_roll_pad_deg": PLACEMENT_BOX_UNKNOWN_ROLL_DEG,
+        "distance": "lens",
+        "membership": "fitted_ball_centre_inside_the_box",
+    }
 
 
 def camera_range_estimator_policy() -> dict[str, Any]:
@@ -64,11 +100,15 @@ def camera_range_estimator_policy() -> dict[str, Any]:
     return {
         # version 3: the range fields are named for the ball's size they come from
         # (wiring audit S11); they were "floor_*" though nothing uses the floor
+        # version 4: every setup search looks only inside the tester's placement box
+        # (P7-4); a box the tester placed is as independent of the live pick as the
+        # full frame was, so Save stays an independent confirmation
         "name": "camera_reference_ball_size_range",
-        "version": 3,
+        "version": 4,
         "detector": "reference_ball_candidates_v2_merged_seeds",
         "seed_fits": REFERENCE_SEED_FITS,
-        "search_region": "hitting_area_in_world_coordinates",
+        "search_region": "tester_placed_box_then_hitting_area_in_world_coordinates",
+        "placement_box": placement_box_policy(),
         "camera_height": "solved_from_apparent_size_and_ray",
         "camera_height_range_m": list(_CAMERA_HEIGHT_RANGE_M),
         "camera_height_prior_sigma_m": _CAMERA_HEIGHT_PRIOR_SIGMA_M,
@@ -862,7 +902,178 @@ def _seed_filter(camera: BallPlaneCamera, ball_center_height_m: float):
     return allowed
 
 
-def estimate_reference_ball_range(
+def project_to_pixel(camera: BallPlaneCamera, point_lfu: Any) -> tuple[float, float]:
+    """The pixel whose ray passes through a world point, by inverting the ray model.
+
+    The models only map pixels to rays; a few Gauss-Newton steps on that map find
+    the pixel for a point in front of the camera, for nominal and calibrated
+    models alike.
+    """
+    target = np.asarray(point_lfu, dtype=float) - np.asarray(camera.camera_origin_lfu)
+    norm = float(np.linalg.norm(target))
+    if target.shape != (3,) or not math.isfinite(norm) or norm <= 0.0:
+        raise ValueError("projected point must be a finite point away from the lens")
+    target /= norm
+    pixel = np.asarray([camera.image_width_px / 2.0, camera.image_height_px / 2.0])
+    step_px = 0.5
+    offsets = np.asarray(
+        [[0.0, 0.0], [step_px, 0.0], [-step_px, 0.0], [0.0, step_px], [0.0, -step_px]]
+    )
+    for _ in range(40):
+        rays = np.asarray(camera.ray_model.rays(pixel + offsets), dtype=float)
+        if rays.shape != (5, 3) or not np.all(np.isfinite(rays)):
+            raise ValueError("camera model returned invalid rays")
+        jacobian = np.column_stack(
+            ((rays[1] - rays[2]) / (2.0 * step_px), (rays[3] - rays[4]) / (2.0 * step_px))
+        )
+        update, *_ = np.linalg.lstsq(jacobian, target - rays[0], rcond=None)
+        pixel = pixel + update
+        if not np.all(np.isfinite(pixel)):
+            break
+        if float(np.hypot(*update)) < 1e-6:
+            break
+    ray = np.asarray(camera.ray_model.rays(pixel), dtype=float)
+    if not np.all(np.isfinite(pixel)) or float(np.dot(ray, target)) < 1.0 - 1e-9:
+        raise ValueError("the point does not project into this camera")
+    return float(pixel[0]), float(pixel[1])
+
+
+@dataclass(frozen=True)
+class PlacementBoxGeometry:
+    """The placement box's fixed size in one camera mode, and where it starts."""
+
+    size_px: tuple[int, int]
+    default_box_px: tuple[int, int, int, int]
+    nominal_ball_px: tuple[float, float]
+    image_size_px: tuple[int, int]
+    basis: Mapping[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "size_px": list(self.size_px),
+            "default_box_px": list(self.default_box_px),
+            "nominal_ball_px": list(self.nominal_ball_px),
+            "image_size_px": list(self.image_size_px),
+            "basis": dict(self.basis),
+        }
+
+
+def placement_box_at(origin_xy: Any, size_px: Any, image_size_px: Any) -> tuple[int, int, int, int]:
+    """The fixed-size box with its top-left corner near ``origin_xy``, kept in the frame."""
+    width, height = (int(value) for value in size_px)
+    image_width, image_height = (int(value) for value in image_size_px)
+    if not 0 < width <= image_width or not 0 < height <= image_height:
+        raise ValueError("the placement box must fit inside the frame")
+    x, y = (float(value) for value in origin_xy)
+    if not math.isfinite(x) or not math.isfinite(y):
+        raise ValueError("the placement box position must be finite")
+    x0 = min(max(int(round(x)), 0), image_width - width)
+    y0 = min(max(int(round(y)), 0), image_height - height)
+    return x0, y0, x0 + width, y0 + height
+
+
+def scale_placement_box(box_px: Any, factor: float) -> tuple[int, int, int, int]:
+    """The same box in a mode ``factor`` times the size (640x400 is 1280x800 halved)."""
+    x0, y0, x1, y1 = (float(value) for value in box_px)
+    return (
+        int(math.floor(x0 * factor)),
+        int(math.floor(y0 * factor)),
+        int(math.ceil(x1 * factor)),
+        int(math.ceil(y1 * factor)),
+    )
+
+
+def inside_placement_box(box_px: Any, x_px: float, y_px: float) -> bool:
+    """Whether a fitted ball centre lies inside the (half-open) box."""
+    x0, y0, x1, y1 = (float(value) for value in box_px)
+    return bool(x0 <= float(x_px) < x1 and y0 <= float(y_px) < y1)
+
+
+def placement_box_geometry(
+    camera: BallPlaneCamera,
+    *,
+    ball_center_height_m: float,
+    roll_deg: float | None,
+) -> PlacementBoxGeometry:
+    """Project the address zone through the camera model: the box's size and default.
+
+    Distances are along the lens ray, as the hitting area's are. The zone is
+    straight ahead of the radar axis; ``roll_deg`` is the LIS3DH roll the camera
+    model does not apply, so the rows are padded for it (at least
+    ``PLACEMENT_BOX_MIN_ROLL_PAD_DEG``, or ``PLACEMENT_BOX_UNKNOWN_ROLL_DEG`` without
+    a reading).
+    """
+    origin = np.asarray(camera.camera_origin_lfu, dtype=float)
+    lateral0 = float(camera.radar_origin_lfu[0])
+
+    def pixel(lateral_m: float, distance_m: float, height_m: float) -> tuple[float, float]:
+        sideways = lateral0 + lateral_m - origin[0]
+        forward = math.sqrt(distance_m**2 - sideways**2 - (height_m - origin[2]) ** 2)
+        return project_to_pixel(camera, (lateral0 + lateral_m, origin[1] + forward, height_m))
+
+    nominal = pixel(0.0, PLACEMENT_BOX_NOMINAL_DISTANCE_M, ball_center_height_m)
+    left = pixel(
+        -PLACEMENT_BOX_HALF_WIDTH_M, PLACEMENT_BOX_NOMINAL_DISTANCE_M, ball_center_height_m
+    )
+    right = pixel(
+        PLACEMENT_BOX_HALF_WIDTH_M, PLACEMENT_BOX_NOMINAL_DISTANCE_M, ball_center_height_m
+    )
+    heights = (
+        ball_center_height_m + _BALL_ABOVE_SURFACE_M[0],
+        ball_center_height_m + _BALL_ABOVE_SURFACE_M[1],
+    )
+    rows = [
+        pixel(0.0, distance, height)[1]
+        for distance in (*PLACEMENT_BOX_DEPTH_M, PLACEMENT_BOX_NOMINAL_DISTANCE_M)
+        for height in heights
+    ]
+    focal = camera.focal_size_px
+    column_pad = focal * math.tan(math.radians(PLACEMENT_BOX_COLUMN_PAD_DEG))
+    half_width = abs(right[0] - left[0]) / 2.0 + column_pad
+    roll_pad = (
+        PLACEMENT_BOX_UNKNOWN_ROLL_DEG
+        if roll_deg is None or not math.isfinite(float(roll_deg))
+        else max(abs(float(roll_deg)), PLACEMENT_BOX_MIN_ROLL_PAD_DEG)
+    )
+    row_pad = focal * math.tan(math.radians(PLACEMENT_BOX_PITCH_PAD_DEG))
+    row_pad += half_width * math.tan(math.radians(roll_pad))
+    width = int(math.ceil(2.0 * half_width))
+    height = int(math.ceil(max(rows) - min(rows) + 2.0 * row_pad))
+    image_size = (camera.image_width_px, camera.image_height_px)
+    width, height = min(width, image_size[0]), min(height, image_size[1])
+    default = placement_box_at(
+        (nominal[0] - width / 2.0, min(rows) - row_pad), (width, height), image_size
+    )
+    return PlacementBoxGeometry(
+        size_px=(width, height),
+        default_box_px=default,
+        nominal_ball_px=nominal,
+        image_size_px=image_size,
+        basis={
+            **placement_box_policy(),
+            "roll_pad_deg": roll_pad,
+            "roll_reading_deg": roll_deg,
+            "focal_size_px": focal,
+            "camera_source": camera.source,
+            "lens_height_m": float(origin[2]),
+        },
+    )
+
+
+def _placement_box_roi(
+    box_px: Any, roi: tuple[int, int, int, int] | None, width: int, height: int
+) -> tuple[int, int, int, int] | None:
+    """Where ball centres may be seeded: the box, inside any other search region."""
+    x0, y0, x1, y1 = (int(value) for value in box_px)
+    rx0, ry0, rx1, ry1 = roi or (0, 0, width, height)
+    left, top = max(x0, rx0, 0), max(y0, ry0, 0)
+    right, bottom = min(x1, rx1, width), min(y1, ry1, height)
+    if left >= right or top >= bottom:
+        return None
+    return left, top, right, bottom
+
+
+def estimate_reference_ball_range(  # pylint: disable=too-many-locals
     frames: np.ndarray,
     camera: BallPlaneCamera,
     *,
@@ -872,13 +1083,38 @@ def estimate_reference_ball_range(
     expected_diameter_range_px: tuple[float, float] | None = None,
     max_fits: int = REFERENCE_SEED_FITS,
     hold_diameter_px: float | None = None,
+    placement_box_px: tuple[int, int, int, int] | None = None,
 ) -> ReferenceBallRangeResult:
-    """Rank stationary sphere candidates without requiring a tape distance."""
+    """Rank stationary sphere candidates without requiring a tape distance.
+
+    ``placement_box_px`` (the tester's box, in this mode's pixels) limits the search
+    to balls whose fitted centre lies inside it; a ball found there must still pass
+    every hitting-area check.
+    """
     if frames.ndim != 3 or frames.shape[1:] != (
         camera.image_height_px,
         camera.image_width_px,
     ):
         raise ValueError("camera frames do not match the declared saved-image mode")
+    box = tuple(int(value) for value in placement_box_px) if placement_box_px else None
+    if box is not None:
+        roi = _placement_box_roi(box, roi, camera.image_width_px, camera.image_height_px)
+        if roi is None:
+            return ReferenceBallRangeResult(
+                "not_found",
+                "withheld",
+                None,
+                (),
+                {
+                    "capture_mode": f"{camera.image_width_px}x{camera.image_height_px}",
+                    "source": camera.source,
+                    "placement_box_px": list(box),
+                    "roi_px": None,
+                    "observed_candidate_count": 0,
+                    "plausible_candidate_count": 0,
+                    "reason": "the search region does not overlap the placement box",
+                },
+            )
     low, high = (float(value) for value in plausible_radar_range_m)
     if not 0.0 < low < high:
         raise ValueError("plausible radar range must be a positive increasing interval")
@@ -905,6 +1141,16 @@ def estimate_reference_ball_range(
     candidates = tuple(
         _candidate(ball, camera, ball_center_height_m, (low, high)) for ball in observed
     )
+    if box is not None:
+        # a fit may drift out of the box it was seeded in; only centres inside count
+        candidates = tuple(
+            item
+            if item.rejection_reason is not None or inside_placement_box(box, item.x_px, item.y_px)
+            else replace(
+                item, rejection_reason=PLACEMENT_BOX_REJECTION, score=None, confidence="withheld"
+            )
+            for item in candidates
+        )
     plausible = sorted(
         (item for item in candidates if item.rejection_reason is None and item.score is not None),
         key=lambda item: item.score,
@@ -922,6 +1168,7 @@ def estimate_reference_ball_range(
         "focal_relative_uncertainty": camera.focal_relative_uncertainty,
         "diameter_search_px": [float(smallest), float(largest)],
         "roi_px": list(roi) if roi is not None else None,
+        "placement_box_px": list(box) if box is not None else None,
         "observed_candidate_count": len(candidates),
         "plausible_candidate_count": len(plausible),
         "ambiguity_score_margin": margin,

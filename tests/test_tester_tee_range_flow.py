@@ -558,9 +558,39 @@ def test_guided_static_capture_uses_the_configured_iwr_port(tmp_path, inputs, mo
 
 
 def post(client, tester, action, request_id):
+    if action == "capture_empty":
+        # every setup first asks for the placement box (P7-4); tests that are not
+        # about the box confirm it where it starts
+        current = client.get("/api/tester/tee-range", query_string={"tester_id": tester})
+        if (current.get_json().get("state") or {}).get("phase") == "needs_box":
+            response = confirm_box(client, tester, f"{request_id}-box")
+            if response.status_code != 200:
+                return response  # the box step refused for the same reason capture would
     return client.post(
         "/api/tester/tee-range",
         json={"tester_id": tester, "action": action, "request_id": request_id},
+    )
+
+
+def box_display(client, tester):
+    response = client.get("/api/tester/tee-range", query_string={"tester_id": tester})
+    assert response.status_code == 200
+    return response.get_json()["display"]["placement_box"]
+
+
+def confirm_box(client, tester, request_id, origin=None, size=None):
+    """Drop the box with its top-left corner at ``origin`` (where it starts, by default)."""
+    shown = box_display(client, tester)
+    x0, y0 = origin if origin is not None else shown["box_px"][:2]
+    width, height = size if size is not None else shown["size_px"]
+    return client.post(
+        "/api/tester/tee-range",
+        json={
+            "tester_id": tester,
+            "action": "confirm_box",
+            "request_id": request_id,
+            "box_px": [x0, y0, x0 + width, y0 + height],
+        },
     )
 
 
@@ -930,8 +960,10 @@ def test_range_display_marks_unqualified_values_as_diagnostics(tmp_path, inputs,
     assert display["iwr"]["range_m"] is None
     assert display["iwr"]["diagnostic_range_m"] == pytest.approx(1.2)
     assert display["camera"]["arm5"]["state"] == "unqualified"
-    assert display["canonical"]["state"] == "withheld"
-    assert display["canonical"]["reason"] == "qualification_artifact_missing"
+    # D11 (P7-7): unqualified, the agreeing radar range is saved as experimental
+    assert display["canonical"]["state"] == "experimental"
+    assert display["canonical"]["range_m"] == pytest.approx(1.2)
+    assert display["experimental"]["qualification_outcome"] == "qualification_artifact_missing"
 
 
 def test_range_display_never_presents_a_rejected_radar_number_as_a_range(
@@ -1000,7 +1032,8 @@ def test_guided_flow_resolves_and_survives_reload(tmp_path, inputs, monkeypatch)
     }
     assert save["independent"] is True
     assert save["promotion_eligible"] is True
-    assert save["search_region_px"] is None
+    # Save searches the whole placement box the tester confirmed, nothing narrower
+    assert save["search_region_px"] == state["evidence"]["placement_box"]["box_px"]
     assert (
         save["input_identity"]["analyzed_frame_window_sha256"]
         == identity["analyzed_frame_window_sha256"]
@@ -1051,6 +1084,10 @@ def test_conditioned_static_object_must_match_broad_save_before_promotion(
     def estimate(_frames, camera, **kwargs):
         ball = camera_result(1.2, camera.image_width_px, camera.image_height_px)
         roi = kwargs.get("roi")
+        if kwargs.get("max_fits") == 1 and camera.image_width_px == 640:
+            # the 1280x800 ball it follows first is not found here (P7-5), so the
+            # radar-hinted search picks the hinge
+            return ReferenceBallRangeResult("not_found", "withheld", None, (), {})
         # a follow look (one fit) sees whatever is inside its small region
         if roi is None or (
             kwargs.get("max_fits") == 1
@@ -1091,7 +1128,10 @@ def test_conditioned_static_object_must_match_broad_save_before_promotion(
     assert attempt["live_guidance"]["promotion_eligible"] is False
     assert attempt["camera_only_analysis"]["independent"] is True
     assert attempt["camera_only_analysis"]["promotion_eligible"] is False
-    assert attempt["camera_only_analysis"]["search_region_px"] is None
+    assert attempt["camera_only_analysis"]["search_region_px"] == [
+        value // 2 if index < 2 else -(-value // 2)
+        for index, value in enumerate(state["evidence"]["placement_box"]["box_px"])
+    ]
     assert attempt["reason"] == (
         "broad independent camera search does not confirm the stable provisional selection"
     )
@@ -1110,10 +1150,13 @@ def test_start_over_stops_only_the_guided_camera_owner(tmp_path, inputs, monkeyp
     response = post(client, tester, "start_over", "restart")
 
     assert response.status_code == 200
-    assert response.get_json()["state"]["phase"] == "needs_empty"
-    assert live.running is False
-    assert live.stop_count == 1
-    assert client.get("/api/tester/live").get_json()["owner"] is None
+    assert response.get_json()["state"]["phase"] == "needs_box"
+    # the guided camera stopped; the new setup's box preview took the camera
+    assert live.stop_count >= 1
+    assert live.analyzer is None
+    owner = client.get("/api/tester/live").get_json()["owner"]
+    assert owner["kind"] == "placement_box"
+    assert owner["epoch_id"] == response.get_json()["state"]["epoch_id"]
 
 
 def test_backend_refuses_save_before_camera_only_selection_is_stable(tmp_path, inputs, monkeypatch):
@@ -1261,8 +1304,12 @@ def test_invalid_bias_uncertainty_can_never_promote_static_iwr(
     app, tester = app_for(tmp_path, inputs, monkeypatch)
     state = drive(app.test_client(), tester)
 
-    assert state["phase"] == "raw_only"
-    assert state["solution"]["reason"] == "qualified_static_iwr_candidate_missing"
+    # never promoted: the setup saves only as experimental (D11, P7-7)
+    assert state["phase"] == "experimental"
+    assert state["solution"]["status"] == "unresolved"
+    assert state["evidence"]["experimental_range"]["qualification_outcome"] == (
+        "qualified_static_iwr_candidate_missing"
+    )
     iwr = state["evidence"]["iwr_candidate"]
     assert iwr["evidence"]["qualification"]["accuracy_qualified"] is False
     assert iwr["evidence"]["bias_uncertainty"] == "unavailable"
@@ -1274,8 +1321,11 @@ def test_changed_camera_placement_cannot_match_a_qualified_artifact(tmp_path, in
     app, tester = app_for(tmp_path, inputs, monkeypatch)
     state = drive(app.test_client(), tester)
 
-    assert state["phase"] == "raw_only"
-    assert state["solution"]["reason"] == "qualified_camera_candidate_missing"
+    assert state["phase"] == "experimental"
+    assert state["solution"]["status"] == "unresolved"
+    assert state["evidence"]["experimental_range"]["qualification_outcome"] == (
+        "qualified_camera_candidate_missing"
+    )
     camera = state["evidence"]["camera_arm5_candidate"]
     assert camera["evidence"]["qualification"]["status"] == "rejected"
 
@@ -1283,8 +1333,12 @@ def test_changed_camera_placement_cannot_match_a_qualified_artifact(tmp_path, in
 def test_missing_qualification_and_disagreement_remain_raw_only(tmp_path, inputs, monkeypatch):
     app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
     missing = drive(app.test_client(), tester)
-    assert missing["phase"] == "raw_only"
-    assert missing["solution"]["reason"] == "qualification_artifact_missing"
+    # D11 (P7-7): unqualified, the agreeing ranges save as experimental
+    assert missing["phase"] == "experimental"
+    assert missing["solution"]["reason"] == "experimental_range_saved"
+    assert missing["evidence"]["experimental_range"]["qualification_outcome"] == (
+        "qualification_artifact_missing"
+    )
     assert missing["evidence"]["camera_arm5_guidance"]["search_hint"]["reason_code"] == (
         "static_iwr_candidate_missing"
     )
@@ -1301,12 +1355,16 @@ def test_missing_qualification_and_disagreement_remain_raw_only(tmp_path, inputs
     assert fallback["live_readiness"]["fallback"]["reason_code"] == (
         "static_iwr_candidate_rejected"
     )
+    iwr = missing["evidence"]["iwr_candidate"]
     assert ts._tee_range_cli_args(tee_range.TeeRangeSolution.from_dict(missing["solution"])) == [
-        "--iwr6843-tee-range-pending",
+        "--iwr6843-tee-m",
+        f"{iwr['radar_slant_range_m']:.9g}",
         "--iwr6843-ball-height-m",
         "0.021335",
         "--iwr6843-tee-range-source",
-        "pending",
+        "unqualified_static_iwr",
+        "--iwr6843-tee-range-candidate",
+        iwr["candidate_id"],
         # no net in the fake empty capture: the default is flagged (C7)
         "--iwr6843-net-range-source",
         "default_not_measured",
@@ -1315,7 +1373,10 @@ def test_missing_qualification_and_disagreement_remain_raw_only(tmp_path, inputs
     app, tester = app_for(other_root, inputs, monkeypatch, camera_m=1.5)
     disagreed = drive(app.test_client(), tester)
     assert disagreed["phase"] == "raw_only"
-    assert disagreed["solution"]["reason"] == "absolute_residual_exceeds_policy"
+    assert disagreed["solution"]["reason"] == "experimental_range_withheld_radar_disagrees"
+    assert disagreed["evidence"]["experimental_range"]["qualification_outcome"] == (
+        "absolute_residual_exceeds_policy"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1350,9 +1411,9 @@ def test_legacy_or_invalid_qualification_starts_and_stays_raw_only(
 
     assert status["qualification_available"] is False
     assert status["qualification_status"]["reason"].startswith(reason)
-    assert state["phase"] == "raw_only"
+    assert state["phase"] == "experimental"
     assert state["solution"]["status"] == "unresolved"
-    assert state["solution"]["reason"].startswith(reason)
+    assert state["evidence"]["experimental_range"]["qualification_outcome"].startswith(reason)
 
 
 def test_resolved_epoch_is_withdrawn_without_a_configured_qualification(
@@ -1381,7 +1442,7 @@ def test_legacy_v1_static_profiles_never_promote_under_v3_qualification(
     state = drive(app.test_client(), tester)
 
     iwr = state["evidence"]["iwr_candidate"]["evidence"]["qualification"]
-    assert state["phase"] == "raw_only"
+    assert state["phase"] == "experimental"
     assert state["solution"]["status"] == "unresolved"
     assert iwr["status"] == "rejected"
     assert iwr["accuracy_qualified"] is False
@@ -1861,9 +1922,10 @@ def test_the_camera_finds_its_exposure_while_the_radar_records_the_ball(
     after = phase(client, tester)
     assert after["phase"] == "camera_arm5_capturing"
     assert after["evidence"]["iwr_candidate"]
-    assert live.start_count == 1
+    # the box preview, then the one camera search begun with the ball capture
+    assert live.start_count == 2
     assert post(client, tester, "start_camera_arm5", "no-op").status_code == 200
-    assert live.start_count == 1
+    assert live.start_count == 2
     assert post(client, tester, "evaluate_camera_arm5", "save").status_code == 200
     assert phase(client, tester)["phase"] == "needs_camera_arm6"
 
@@ -1931,25 +1993,19 @@ def test_a_remembered_lock_from_another_policy_is_not_used(tmp_path, inputs, mon
     assert _search_evidence(tmp_path, client, tester)["attempts"][0]["stage"] == "bootstrap"
 
 
-def test_an_unqualified_range_reaches_swings_only_when_explicitly_enabled(
+def test_a_saved_experimental_range_reaches_swings_without_the_test_flag(
     tmp_path, inputs, monkeypatch
 ):
+    # D11 (P7-7): the kiosk starts with the unqualified range the setup saved
     app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
     state = drive(app.test_client(), tester)
     solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
     iwr = state["evidence"]["iwr_candidate"]
 
-    assert state["phase"] == "raw_only"
-    assert ts._tee_range_cli_args(solution) == [
-        "--iwr6843-tee-range-pending",
-        "--iwr6843-ball-height-m",
-        "0.021335",
-        "--iwr6843-tee-range-source",
-        "pending",
-        # no net in the fake empty capture: the default is flagged (C7)
-        "--iwr6843-net-range-source",
-        "default_not_measured",
-    ]
+    assert state["phase"] == "experimental"
+    assert ts._tee_range_cli_args(solution) == ts._tee_range_cli_args(
+        solution, use_unqualified=True
+    )
     assert ts._tee_range_cli_args(solution, use_unqualified=True) == [
         "--iwr6843-tee-m",
         f"{iwr['radar_slant_range_m']:.9g}",
@@ -1963,30 +2019,29 @@ def test_an_unqualified_range_reaches_swings_only_when_explicitly_enabled(
         "--iwr6843-net-range-source",
         "default_not_measured",
     ]
-    assert ts.tee_range_display(state)["swings"]["state"] == "pending"
-    swings = ts.tee_range_display(state, use_unqualified=True)["swings"]
-    assert swings["state"] == "unqualified"
+    swings = ts.tee_range_display(state)["swings"]
+    assert swings["state"] == "experimental"
     assert swings["range_m"] == pytest.approx(iwr["radar_slant_range_m"])
 
 
-def test_without_an_accepted_radar_swings_start_with_the_range_pending(
+def test_without_an_accepted_radar_the_experimental_range_is_the_camera_s(
     tmp_path, inputs, monkeypatch
 ):
-    # wiring audit S2 (D4): the camera's own range never stands in for the radar's
+    # D11 (P7-7) replaces D4: with no radar range the camera's size range is saved,
+    # labelled experimental; the radar-only test choice still finds nothing
     app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
     app.config["TEST_STATIC_MANAGER"].ball_return = 0.0
     state = drive(app.test_client(), tester)
     solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
+    camera = state["evidence"]["camera_arm5_candidate"]
 
-    assert state["evidence"]["camera_arm5_candidate"]["radar_slant_range_m"] is not None
+    assert camera["radar_slant_range_m"] is not None
     assert ts.unqualified_tee_range_choice(solution) is None
-    assert ts._tee_range_cli_args(solution, use_unqualified=True)[0] == (
-        "--iwr6843-tee-range-pending"
-    )
-    swings = ts.tee_range_display(state, use_unqualified=True)["swings"]
-    assert swings["state"] == "pending"
-    assert swings["range_m"] is None
-    assert "withheld" in swings["message"]
+    args = ts._tee_range_cli_args(solution)
+    assert args[:2] == ["--iwr6843-tee-m", f"{camera['radar_slant_range_m']:.9g}"]
+    swings = ts.tee_range_display(state)["swings"]
+    assert swings["state"] == "experimental"
+    assert "the radar found no ball" in swings["message"]
 
 
 def test_a_radar_that_stops_answering_mid_setup_is_told_to_replug_its_usb():
@@ -2984,3 +3039,674 @@ def test_stopping_a_radar_capture_keeps_the_hardware_check(tmp_path, inputs, mon
     ).get_json()
     assert eligibility["eligible"] is True
     assert "iwr6843_cli" not in [blocker["id"] for blocker in eligibility["blockers"]]
+
+
+# P7-4 (D10 as changed on 30 Sept): the tester drags a fixed-size placement box over
+# the spot they will hit from and confirms it before any camera or radar check.
+
+
+def _app_camera(width=1280, height=800):
+    """The camera model app_for installs."""
+    return BallPlaneCamera.nominal(
+        focal_px=933.0 if width == 1280 else 466.5,
+        image_width_px=width,
+        image_height_px=height,
+        pitch_deg=0.0,
+        roll_correction_deg=0.0,
+        mirror_horizontal=False,
+        camera_origin_lfu=(0.0, 0.0, 0.095),
+        radar_origin_lfu=(0.0, -0.03, 0.051),
+        angular_uncertainty_deg=0.1,
+        focal_relative_uncertainty=0.01,
+    )
+
+
+def _app_box_geometry():
+    from openflight.camera.reference_ball_range import placement_box_geometry
+
+    return placement_box_geometry(
+        _app_camera(), ball_center_height_m=ts.BALL_DIAMETER_MM / 2000.0, roll_deg=0.0
+    )
+
+
+def test_the_setup_starts_with_the_placement_box_on_a_live_preview(tmp_path, inputs, monkeypatch):
+    live = FakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+
+    state = post(client, tester, "start", "start").get_json()["state"]
+    shown = box_display(client, tester)
+
+    geometry = _app_box_geometry()
+    assert state["phase"] == "needs_box"
+    assert shown["state"] == "needs_confirmation"
+    assert shown["arm_id"] == "arm5"
+    assert shown["frame_size_px"] == [1280, 800]
+    assert shown["size_px"] == list(geometry.size_px)
+    # it starts straight ahead, where the rig file and the LIS3DH put the zone
+    assert shown["box_px"] == list(geometry.default_box_px)
+    assert shown["source"] == "default_straight_ahead"
+    # the 1280x800 preview runs so the tester can see where to drag it
+    assert live.running is True and live.arm == ts.ARMS["arm5"] and live.analyzer is None
+    assert client.get("/api/tester/live").get_json()["owner"]["kind"] == "placement_box"
+    # nothing is captured until the box is confirmed
+    refused = client.post(
+        "/api/tester/tee-range",
+        json={"tester_id": tester, "action": "capture_empty", "request_id": "early"},
+    )
+    assert refused.status_code == 409
+    assert app.config["TEST_STATIC_MANAGER"].start_count == 0
+
+
+def test_a_dragged_box_keeps_its_fixed_size_and_stays_inside_the_frame(
+    tmp_path, inputs, monkeypatch
+):
+    live = FakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    post(client, tester, "start", "start")
+    geometry = _app_box_geometry()
+
+    # dragged past the frame's corner, and sent at another size
+    response = confirm_box(client, tester, "box", origin=(1250, 760), size=(300, 40))
+
+    assert response.status_code == 200, response.get_json()
+    state = response.get_json()["state"]
+    record = state["evidence"]["placement_box"]
+    width, height = geometry.size_px
+    assert state["phase"] == "needs_empty"
+    assert record["arm_id"] == "arm5"
+    assert record["frame_size_px"] == [1280, 800]
+    assert record["box_px"] == [1280 - width, 800 - height, 1280, 800]
+    assert record["size_px"] == [width, height]
+    assert record["source"] == "tester_dragged"
+    assert record["default_box_px"] == list(geometry.default_box_px)
+    assert box_display(client, tester)["state"] == "confirmed"
+    # the preview is released for the radar captures
+    assert live.running is False
+
+
+def test_a_new_setup_asks_for_the_box_again_where_it_was_last_confirmed(
+    tmp_path, inputs, monkeypatch
+):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    post(client, tester, "start", "start")
+    assert confirm_box(client, tester, "box", origin=(300, 420)).status_code == 200
+
+    restarted = post(client, tester, "start_over", "again").get_json()["state"]
+    shown = box_display(client, tester)
+
+    assert restarted["phase"] == "needs_box"
+    assert shown["state"] == "needs_confirmation"
+    assert shown["box_px"][:2] == [300, 420]
+    assert shown["source"] == "last_confirmed"
+
+
+def test_every_setup_search_looks_only_inside_the_confirmed_box(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    calls = []
+
+    def estimate(_frames, camera, **kwargs):
+        calls.append((camera.image_width_px, kwargs))
+        return camera_result(1.2, camera.image_width_px, camera.image_height_px)
+
+    monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
+    client = app.test_client()
+    post(client, tester, "start", "start")
+    assert confirm_box(client, tester, "box", origin=(500, 380)).status_code == 200
+    box = phase(client, tester)["evidence"]["placement_box"]["box_px"]
+
+    state = drive_after_box(client, tester)
+
+    halved = [box[0] // 2, box[1] // 2, -(-box[2] // 2), -(-box[3] // 2)]
+    assert {width for width, _kwargs in calls} == {1280, 640}
+    for width, kwargs in calls:
+        assert list(kwargs["placement_box_px"]) == (box if width == 1280 else halved)
+    for arm_id, expected in (("arm5", box), ("arm6", halved)):
+        save = state["evidence"][f"camera_{arm_id}_guidance"]["save_camera_only_analysis"]
+        assert save["search_region_px"] == expected
+        assert save["discovery_mode"] == "placement_box_unconditioned"
+        assert save["promotion_eligible"] is True
+        candidate = state["evidence"][f"camera_{arm_id}_candidate"]["evidence"]
+        assert candidate["placement_box"]["box_px"] == expected
+
+
+def drive_after_box(client, tester):
+    for index, action in enumerate(
+        (
+            "capture_empty",
+            "capture_ball",
+            "start_camera_arm5",
+            "evaluate_camera_arm5",
+            "start_camera_arm6",
+            "evaluate_camera_arm6",
+        )
+    ):
+        response = post(client, tester, action, f"after-box-{index}")
+        assert response.status_code == 200, response.get_json()
+    return phase(client, tester)
+
+
+def test_no_ball_in_the_box_tells_the_tester_to_put_it_there(tmp_path, inputs, monkeypatch):
+    monkeypatch.setattr(ts, "_BALL_SEARCH_POOL", None)
+    orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
+    empty = ReferenceBallRangeResult("not_found", "withheld", None, (), {})
+    monkeypatch.setattr(ts, "estimate_reference_ball_range", lambda *_a, **_k: empty)
+    analyzer = ts.GuidedRangeAnalyzer(
+        _app_camera(), orientation, lambda: orientation, placement_box=(500, 380, 656, 510)
+    )
+
+    association = analyzer.observe(np.zeros((3, 800, 1280), dtype=np.uint8), 1)
+
+    assert association["readiness_reason"] == "no ball in the box: put the ball in the box"
+    assert association["placement_box_px"] == [500, 380, 656, 510]
+
+
+def test_the_live_view_serves_the_box_it_searches_in_both_modes(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    post(client, tester, "start", "start")
+    assert confirm_box(client, tester, "box", origin=(500, 380)).status_code == 200
+    box = phase(client, tester)["evidence"]["placement_box"]["box_px"]
+    for index, action in enumerate(("capture_empty", "capture_ball", "start_camera_arm5")):
+        assert post(client, tester, action, f"live-{index}").status_code == 200
+
+    arm5 = client.get("/api/tester/live").get_json()["placement_box"]
+    for index, action in enumerate(("evaluate_camera_arm5", "start_camera_arm6")):
+        assert post(client, tester, action, f"live-arm6-{index}").status_code == 200
+    arm6 = client.get("/api/tester/live").get_json()["placement_box"]
+
+    assert arm5 == {"box_px": box, "frame_size_px": [1280, 800], "arm_id": "arm5"}
+    assert arm6 == {
+        "box_px": [box[0] // 2, box[1] // 2, -(-box[2] // 2), -(-box[3] // 2)],
+        "frame_size_px": [640, 400],
+        "arm_id": "arm6",
+    }
+
+
+def test_the_swings_record_says_where_the_box_was(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    post(client, tester, "start", "start")
+    assert confirm_box(client, tester, "box", origin=(520, 370)).status_code == 200
+    state = drive_after_box(client, tester)
+    solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
+
+    _args, handed = ts.tee_range_handoff(solution)
+
+    assert handed["placement_box"]["box_px"] == state["evidence"]["placement_box"]["box_px"]
+    assert handed["placement_box"]["frame_size_px"] == [1280, 800]
+    assert handed["placement_box"]["source"] == "tester_dragged"
+
+
+# P7-6: the setup's radar difference is subtracted coherently per virtual channel.
+REPO = Path(__file__).resolve().parents[1]
+REFERENCE_CALIBRATION = REPO / "config" / "iwr6843_calibration_reference.json"
+V3_RIG = REPO / "config" / "enclosure_v3_rig_geometry.json"
+
+
+def _coherent_records(name="outdoors-test-7-5a7821af3641"):
+    """Two capture records as the Pi writes them, from a recorded setup's fixture."""
+    fixture = json.loads(
+        (REPO / "tests" / "fixtures" / "iwr6843_static_coherent" / f"{name}.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    records = []
+    for kind in ("empty", "present"):
+        channels = fixture[kind]
+        values = np.asarray(channels["real"]) + 1j * np.asarray(channels["imag"])
+        shape = (channels["n_tx"], channels["n_rx"], channels["range_bin_count"])
+        power = np.mean(np.abs(values.reshape(shape)) ** 2, axis=(0, 1))
+        records.append(
+            {
+                "inputs": {
+                    "firmware": {"sha256": "f" * 64},
+                    "radar_config": {"sha256": channels["radar_profile_sha256"]},
+                    "rig_geometry": {"sha256": channels["rig_geometry_sha256"]},
+                },
+                "profile": {
+                    "schema": STATIC_PROFILE_V2_SCHEMA,
+                    "capture_sha256": channels["capture_sha256"],
+                    "radar_profile_sha256": channels["radar_profile_sha256"],
+                    "radar_profile_qualified": False,
+                    "rig_geometry_sha256": channels["rig_geometry_sha256"],
+                    "capture_config_sha256": channels["capture_config_sha256"],
+                    "range_bin_start": channels["range_bin_start"],
+                    "range_bin_count": channels["range_bin_count"],
+                    "range_resolution_m": channels["range_resolution_m"],
+                    "power": power.tolist(),
+                    "frame_mad_fraction": [0.0] * channels["range_bin_count"],
+                    "frame_count": channels["frame_count"],
+                },
+                "channel_profile": channels,
+            }
+        )
+    return records
+
+
+def test_the_setup_radar_subtracts_coherently_and_stays_experimental():
+    empty, present = _coherent_records()
+
+    candidate = ts._guided_iwr_candidate(
+        empty,
+        present,
+        epoch_id="setup-coherent",
+        calibration_path=REFERENCE_CALIBRATION,
+        qualification=None,
+        rig_geometry=V3_RIG,
+    )
+
+    evidence = candidate.evidence
+    assert evidence["difference"]["status"] == "accepted_unqualified"
+    assert evidence["difference"]["method"] == "coherent_per_virtual_channel"
+    assert evidence["power_difference"]["method"] == "power_profile_difference"
+    assert list(evidence["candidate_window_m"]) == [1.0, 2.5]
+    assert candidate.radar_slant_range_m == pytest.approx(1.581, abs=0.01)
+    assert candidate.uncertainty_m > 0.0
+    assert evidence["qualification"]["accuracy_qualified"] is False
+    assert evidence["qualification"]["status"] == "rejected"
+    assert evidence["qualification"]["experimental"] is True
+    assert ts.iwr_range_usable(candidate.radar_slant_range_m, evidence) is True
+    display = ts.tee_range_display({"evidence": {"iwr_candidate": candidate.to_dict()}})["iwr"]
+    assert display["state"] == "unqualified"
+    assert display["diagnostic_range_m"] == pytest.approx(candidate.radar_slant_range_m)
+
+
+def test_the_camera_window_steers_the_coherent_search():
+    empty, present = _coherent_records()
+
+    inside = ts._guided_iwr_candidate(
+        empty,
+        present,
+        epoch_id="setup-coherent",
+        calibration_path=REFERENCE_CALIBRATION,
+        qualification=None,
+        camera_window_m=(1.3, 1.9),
+        rig_geometry=V3_RIG,
+    )
+    outside = ts._guided_iwr_candidate(
+        empty,
+        present,
+        epoch_id="setup-coherent",
+        calibration_path=REFERENCE_CALIBRATION,
+        qualification=None,
+        camera_window_m=(0.8, 1.2),
+        rig_geometry=V3_RIG,
+    )
+
+    assert inside.evidence["difference"]["status"] == "accepted_unqualified"
+    assert inside.radar_slant_range_m == pytest.approx(1.581, abs=0.01)
+    assert inside.evidence["qualification"]["camera_range_used"] is True
+    assert outside.evidence["difference"]["status"] == "rejected_no_ball"
+    # a rejected difference hands over no range, only its record
+    assert outside.radar_slant_range_m is None
+    assert outside.uncertainty_m is None
+
+
+def test_the_saved_dump_stands_in_for_a_record_without_channels():
+    """Setups recorded before P7-6 carry only the power profile beside their raw dump."""
+    empty, present = _coherent_records()
+    raw_root = REPO.parent / "pi-handoff" / "Outdoors-test-7" / "calibration" / "tee-range"
+    epoch = raw_root / "guided" / "epochs" / "setup-20260930-5a7821af3641" / "iwr"
+    if not epoch.is_dir():
+        pytest.skip("the recorded Pi captures are not beside this checkout")
+    for record, name in ((empty, "empty-000002"), (present, "ball_present-000004")):
+        record.pop("channel_profile")
+        saved = json.loads((epoch / f"{name}.json").read_text(encoding="utf-8"))
+        record["artifacts"] = saved["artifacts"]
+
+    candidate = ts._guided_iwr_candidate(
+        empty,
+        present,
+        epoch_id="setup-coherent",
+        calibration_path=REFERENCE_CALIBRATION,
+        qualification=None,
+        iwr_dir=epoch,
+        rig_geometry=V3_RIG,
+    )
+
+    assert candidate.evidence["difference"]["status"] == "accepted_unqualified"
+    assert candidate.radar_slant_range_m == pytest.approx(1.581, abs=0.01)
+
+
+def test_without_channels_or_an_array_calibration_the_power_profiles_decide(inputs):
+    empty, present = _coherent_records()
+
+    no_channels = ts._guided_iwr_candidate(
+        {key: value for key, value in empty.items() if key != "channel_profile"},
+        {key: value for key, value in present.items() if key != "channel_profile"},
+        epoch_id="setup-power",
+        calibration_path=REFERENCE_CALIBRATION,
+        qualification=None,
+        rig_geometry=V3_RIG,
+    )
+    no_array = ts._guided_iwr_candidate(
+        empty,
+        present,
+        epoch_id="setup-power",
+        calibration_path=inputs["calibration"],
+        qualification=None,
+        rig_geometry=V3_RIG,
+    )
+
+    for candidate in (no_channels, no_array):
+        assert candidate.evidence["difference"]["method"] == "power_profile_difference"
+        assert candidate.evidence["power_difference"] is None
+        assert candidate.evidence["coherent_unavailable"]
+
+
+def test_a_rejected_power_difference_hands_over_no_range(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    app.config["TEST_STATIC_MANAGER"].ball_return = 0.0
+    client = app.test_client()
+    for index, action in enumerate(("start", "capture_empty", "capture_ball")):
+        assert post(client, tester, action, f"no-range-{index}").status_code == 200
+
+    state = phase(client, tester)
+    display = client.get("/api/tester/tee-range", query_string={"tester_id": tester}).get_json()[
+        "display"
+    ]
+
+    iwr = state["evidence"]["iwr_candidate"]
+    assert iwr["evidence"]["difference"]["status"] == "rejected_no_ball"
+    assert iwr["radar_slant_range_m"] is None
+    assert iwr["uncertainty_m"] is None
+    assert display["iwr"]["diagnostic_range_m"] is None
+
+
+# P7-5: the 640x400 check starts where the 1280x800 one locked, inside the box.
+
+
+def test_the_640x400_check_starts_from_the_1280x800_lock_and_ball(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    calls = []
+
+    def estimate(_frames, camera, **kwargs):
+        calls.append((camera.image_width_px, kwargs))
+        return camera_result(1.2, camera.image_width_px, camera.image_height_px)
+
+    monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
+    client = app.test_client()
+    post(client, tester, "start", "start")
+    assert confirm_box(client, tester, "box", origin=(560, 440)).status_code == 200
+    for index, action in enumerate(
+        ("capture_empty", "capture_ball", "start_camera_arm5", "evaluate_camera_arm5")
+    ):
+        assert post(client, tester, action, f"arm5-{index}").status_code == 200
+    calls.clear()
+
+    assert post(client, tester, "start_camera_arm6", "arm6").status_code == 200
+
+    state = phase(client, tester)
+    setup = state["evidence"]["camera_arm6_capture_setup"]
+    lock = state["evidence"]["camera_arm5_static_exposure"]["lock"]
+    ball = state["evidence"]["camera_arm5_candidate"]["evidence"]["result"]["selected"]
+    box = state["evidence"]["placement_box"]["box_px"]
+    halved = [box[0] // 2, box[1] // 2, -(-box[2] // 2), -(-box[3] // 2)]
+    assert setup["warm_start"] == {"exposure_us": lock["exposure_us"], "gain": lock["gain"]}
+    assert setup["warm_start_source"] == "camera_arm5_lock"
+    assert setup["follow_seed_px"] == {
+        "x_px": ball["x_px"] / 2.0,
+        "y_px": ball["y_px"] / 2.0,
+        "diameter_px": ball["diameter_px"] / 2.0,
+    }
+    assert setup["darkness_region_px"] == halved
+    # the first look follows the 1280x800 ball, halved, inside the halved box
+    width, first = calls[0]
+    assert width == 640
+    assert first["max_fits"] == 1
+    assert first["hold_diameter_px"] == pytest.approx(ball["diameter_px"] / 2.0)
+    assert list(first["placement_box_px"]) == halved
+
+
+def test_without_a_1280x800_lock_the_640x400_check_uses_its_own_memory(tmp_path, inputs):
+    root = tmp_path / "tester"
+    ts.remember_static_exposure_lock(
+        root,
+        "arm6",
+        ts.ARMS["arm6"],
+        {"exposure_us": 75, "gain": 2.0},
+        epoch_id="old",
+        capture_id="arm6-000001",
+    )
+
+    step, source = ts.static_warm_start({}, root, "arm6", ts.ARMS["arm6"])
+
+    assert (step.exposure_us, step.gain, source) == (75, 2.0, "remembered_lock")
+
+
+# P7-7 (D11): the setup saves as experimental: the 1280x800 ball locked in the box,
+# plus the radar's range when the two agree within 2 sigma, is enough.
+
+
+def _locked_camera(arm_id, range_m=1.4, *, x_px=640.0, y_px=450.0, diameter_px=31.0):
+    """A camera candidate whose ball was locked inside the confirmed box."""
+    return tee_range.TeeRangeCandidate(
+        candidate_id=f"camera-setup-1-{arm_id}",
+        source="camera_reference_ball_size_range",
+        source_group="camera",
+        radar_slant_range_m=range_m,
+        uncertainty_m=0.28,
+        selectable=False,
+        evidence={
+            "result": {
+                "status": "selected",
+                "selected": {"x_px": x_px, "y_px": y_px, "diameter_px": diameter_px},
+            },
+            "qualification": {"status": "rejected", "static_exposure_lock_verified": True},
+            "placement_box": {
+                "arm_id": arm_id,
+                "box_px": [560, 380, 716, 510],
+                "confirmed": {"box_px": [560, 380, 716, 510], "source": "tester_dragged"},
+            },
+        },
+    )
+
+
+def _unqualified_app(tmp_path, inputs, monkeypatch, **kwargs):
+    return app_for(tmp_path, inputs, monkeypatch, qualified=False, **kwargs)
+
+
+def test_an_agreeing_radar_range_is_saved_as_experimental_and_handed_to_swings(
+    tmp_path, inputs, monkeypatch
+):
+    app, tester = _unqualified_app(tmp_path, inputs, monkeypatch)
+
+    state = drive(app.test_client(), tester)
+
+    decision = state["evidence"]["experimental_range"]
+    assert state["phase"] == "experimental"
+    assert state["solution"]["status"] == "unresolved"
+    assert state["solution"]["reason"] == "experimental_range_saved"
+    assert decision["status"] == "saved"
+    assert decision["label"] == "experimental"
+    assert decision["source"] == "static_iwr"
+    assert decision["range_m"] == pytest.approx(1.2)
+    assert decision["agreement"]["normalized_sigma"] <= 2.0
+    assert decision["qualification_outcome"] == "qualification_artifact_missing"
+    solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
+    args, handed = ts.tee_range_handoff(solution)
+    assert args[:2] == ["--iwr6843-tee-m", "1.2"]
+    assert args[args.index("--iwr6843-tee-range-source") + 1] == "unqualified_static_iwr"
+    assert handed["tee_range_status"] == "unqualified"
+    assert handed["experimental"] is True
+    assert handed["experimental_range"]["source"] == "static_iwr"
+    display = ts.tee_range_display(state)
+    assert display["swings"]["state"] == "experimental"
+    assert display["swings"]["range_m"] == pytest.approx(1.2)
+    assert "EXPERIMENTAL" in display["swings"]["message"]
+    assert display["canonical"]["state"] == "experimental"
+
+
+def test_a_radar_that_disagrees_with_the_camera_saves_no_range(tmp_path, inputs, monkeypatch):
+    # the camera's size range 1.5 m +- 0.02, the radar's 1.2 m +- 0.02: 10 sigma apart
+    app, tester = _unqualified_app(tmp_path, inputs, monkeypatch, camera_m=1.5)
+
+    state = drive(app.test_client(), tester)
+
+    assert state["phase"] == "raw_only"
+    assert state["solution"]["reason"] == "experimental_range_withheld_radar_disagrees"
+    assert state["evidence"]["experimental_range"]["status"] == "withheld"
+    solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
+    assert ts.tee_range_handoff(solution)[0][0] == "--iwr6843-tee-range-pending"
+    assert ts.tee_range_display(state)["swings"]["state"] == "pending"
+
+
+def test_without_a_radar_range_the_camera_range_is_saved_as_experimental(
+    tmp_path, inputs, monkeypatch
+):
+    app, tester = _unqualified_app(tmp_path, inputs, monkeypatch)
+    app.config["TEST_STATIC_MANAGER"].ball_return = 0.0
+
+    state = drive(app.test_client(), tester)
+
+    decision = state["evidence"]["experimental_range"]
+    assert state["phase"] == "experimental"
+    assert decision["source"] == "camera_size_range"
+    assert decision["iwr_usable"] is False
+    solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
+    args, handed = ts.tee_range_handoff(solution)
+    assert args[:2] == ["--iwr6843-tee-m", "1.2"]
+    assert args[args.index("--iwr6843-tee-range-source") + 1] == "unqualified_camera_size_range"
+    assert handed["candidate_id"].endswith("-arm5")
+    assert handed["experimental"] is True
+
+
+def test_the_640x400_check_can_be_skipped_and_the_setup_still_saves(tmp_path, inputs, monkeypatch):
+    app, tester = _unqualified_app(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    for index, action in enumerate(
+        ("start", "capture_empty", "capture_ball", "start_camera_arm5", "evaluate_camera_arm5")
+    ):
+        assert post(client, tester, action, f"skip-{index}").status_code == 200
+
+    response = post(client, tester, "skip_camera_arm6", "skip")
+
+    assert response.status_code == 200, response.get_json()
+    state = response.get_json()["state"]
+    assert state["phase"] == "experimental"
+    assert state["evidence"]["validation_agreement"]["status"] == "not_compared"
+    assert state["evidence"]["camera_arm6_skipped"]["reason"] == "advisory_check_skipped"
+    assert "camera_arm6_candidate" not in state["evidence"]
+
+
+def test_a_640x400_view_kept_as_raw_evidence_still_saves_the_setup(tmp_path, inputs, monkeypatch):
+    live = FakeLive()
+    app, tester = _unqualified_app(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    for index, action in enumerate(
+        ("start", "capture_empty", "capture_ball", "start_camera_arm5", "evaluate_camera_arm5")
+    ):
+        assert post(client, tester, action, f"raw-{index}").status_code == 200
+    live.ball_per_signal = 0.0  # the 640x400 view never finds the ball
+    assert post(client, tester, "start_camera_arm6", "raw-arm6").status_code == 200
+    assert phase(client, tester)["evidence"]["camera_arm6_capture_setup"]
+
+    response = post(client, tester, "save_camera_arm6_diagnostic", "raw-keep")
+
+    assert response.status_code == 200, response.get_json()
+    state = response.get_json()["state"]
+    assert state["phase"] == "experimental"
+    assert state["evidence"]["camera_arm6_diagnostic_capture"]["qualified"] is False
+
+
+def test_the_1280x800_ball_must_be_locked_in_the_box_to_save_anything():
+    locked = _locked_camera("arm5")
+    unlocked = replace(
+        locked,
+        evidence={
+            **locked.evidence,
+            "qualification": {
+                **locked.evidence["qualification"],
+                "static_exposure_lock_verified": False,
+            },
+        },
+    )
+    no_box = replace(
+        locked,
+        evidence={key: value for key, value in locked.evidence.items() if key != "placement_box"},
+    )
+
+    for camera in (unlocked, no_box):
+        decision = ts.experimental_tee_range_decision([_accepted_iwr(), camera])
+        assert decision["status"] == "withheld"
+        assert decision["reason_code"] == "camera_ball_not_locked_in_box"
+    assert ts.experimental_tee_range_decision([_accepted_iwr(), locked])["status"] == "saved"
+
+
+def test_a_legacy_raw_only_setup_is_not_turned_into_an_experimental_range():
+    """Epochs finished before P7-7 keep what they said: only a saved experimental
+    range reaches swings without --use-unqualified-tee-range."""
+    solution = tee_range.TeeRangeSolution.unresolved(
+        [_accepted_iwr(), _locked_camera("arm5")],
+        reason="qualification_artifact_missing",
+    )
+
+    assert ts.tee_range_handoff(solution)[0][0] == "--iwr6843-tee-range-pending"
+
+
+def test_the_640x400_settings_use_the_1280x800_ball_halved():
+    arm5 = _locked_camera("arm5")
+    # the 640x400 check picked something else: a spare ball, say
+    arm6 = _locked_camera("arm6", x_px=500.0, y_px=300.0, diameter_px=9.0)
+    solution = tee_range.TeeRangeSolution.unresolved(
+        [arm5, arm6], reason="experimental_range_saved"
+    )
+
+    ball = ts.expected_ladder_ball(solution, "arm6")
+    seen = arm5.evidence["result"]["selected"]
+
+    assert ball == {
+        "x": seen["x_px"] / 2.0,
+        "y": seen["y_px"] / 2.0,
+        "diameter_px": seen["diameter_px"] / 2.0,
+    }
+
+
+def test_a_coherent_radar_pick_inside_the_camera_window_is_kept_and_saved(
+    tmp_path, inputs, monkeypatch
+):
+    """End to end on the Outdoors-test-7 captures: the capture-time pick lies inside
+    the camera's window, so it is kept as it is, and it agrees with the camera."""
+    inputs["rig"].write_text(V3_RIG.read_text(encoding="utf-8"), encoding="utf-8")
+    inputs["calibration"].write_text(
+        REFERENCE_CALIBRATION.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False, camera_m=1.55)
+    manager = app.config["TEST_STATIC_MANAGER"]
+    empty, present = _coherent_records()
+    original = manager.start
+
+    def start(action, commands, log_path, on_finish=None, **kwargs):
+        if action != "tee_range":
+            return original(action, commands, log_path, on_finish=on_finish, **kwargs)
+        command = list(commands[0])
+        kind = command[command.index("--kind") + 1]
+        capture_id = command[command.index("--capture-id") + 1]
+        output = Path(command[command.index("--output-dir") + 1])
+        output.mkdir(parents=True, exist_ok=True)
+        record = {
+            **(empty if kind == "empty" else present),
+            "capture_id": capture_id,
+            "capture_kind": kind,
+            "status": "usable",
+            "usable": True,
+        }
+        (output / f"{capture_id}.json").write_text(json.dumps(record), encoding="utf-8")
+        if on_finish:
+            on_finish(action, 0)
+
+    monkeypatch.setattr(manager, "start", start)
+
+    state = drive(app.test_client(), tester)
+
+    iwr = state["evidence"]["iwr_candidate"]
+    assert iwr["evidence"]["difference"]["status"] == "accepted_unqualified"
+    assert iwr["evidence"]["camera_window"]["outcome"] == "consistent"
+    assert iwr["radar_slant_range_m"] == pytest.approx(1.581, abs=0.01)
+    assert state["phase"] == "experimental"
+    decision = state["evidence"]["experimental_range"]
+    assert decision["source"] == "static_iwr"
+    assert decision["range_m"] == pytest.approx(1.581, abs=0.01)
