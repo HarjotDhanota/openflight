@@ -3276,7 +3276,7 @@ class TestTheLadderNeedsTheSetupsBall:
         data = response.get_json()
         assert data["setup_ball_missing"] is True
         assert "camera hasn't found the ball" in data["error"]
-        for words in ("1.0 to 1.3 m", "same surface as the unit", "spare balls"):
+        for words in ("drag the box", "put the ball inside it", "spare balls"):
             assert words in data["error"]
         assert manager.status()["state"] == "idle"
         assert self._runs(tmp_path) == []

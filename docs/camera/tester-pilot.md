@@ -117,6 +117,11 @@ exposure ladder**, then **5. Review and package**. **Advanced: manual single-arm
 maintainer-directed investigation of one mode; it is not the normal pilot and
 does not replace the ladder.
 
+**3. Automatic ball range** starts with the placement box: set the unit down
+where it will stay, drag the yellow box on the live picture to where you will
+hit from, and press **Confirm the box**. The camera and radar checks that follow
+all work from it (see [Automatic ball range](#automatic-ball-range)).
+
 ## Test suite
 
 On the study page, fill in **Who and where**, review the setup checks and confirm
@@ -278,7 +283,23 @@ check, not proof of absolute accuracy.
 
 ### Automatic ball range
 
-The main workflow asks for empty/ball IWR captures, an Arm 5 reference frame and
+**First, the placement box.** Set the unit down where it will stay. The page
+shows the live 1280×800 picture with a yellow box straight ahead of the unit;
+drag it (mouse or finger) over the spot you will hit from, then press **Confirm
+the box**. Nothing is captured before that: the radar captures, both camera
+steps and the ladder's ball checks all work from this box, and every camera
+search looks only inside it (640×400 uses the same box halved). The box has a
+fixed size on every unit, about 0.20 m wide at 1.35 m, and tall enough for a
+ball on the surface or on a raised mat; you only move it. It does not measure
+distance: at the lens's 95 mm the whole 1.2–1.5 m zone is about 11 rows of the
+picture. A ball found in the box still has to pass the hitting-area checks
+(distance, height above the surface, size), so a box dragged onto the net or the
+sky finds nothing and says so. With no ball in it the page says "no ball in the
+box: put the ball in the box". A new setup (**Start over**, or after the rig or
+its tilt changed) asks for the box again, starting where you last confirmed it.
+If the picture is missing, press **Show the camera**.
+
+Then the workflow asks for empty/ball IWR captures, an Arm 5 reference frame and
 an Arm 6 validation frame. Each setup epoch is immutable; **Start over / ball
 moved** preserves it and creates a new one, while refresh resumes the saved step.
 Missing qualification or disagreement ends in raw-only mode: the ladder remains
@@ -306,9 +327,10 @@ are provisional until the camera lighting study.
 The ball search does not assume the lens height: feet sink into carpet and a
 unit may stand on something, so each candidate's implied camera height is
 solved from its apparent size and position, and only places where a resting
-ball could be (below the horizon, at a plausible height) are searched. Once
-found, each live look re-fits the ball where it was in a fraction of a second;
-Save still runs the full-frame search as the independent check. Contrast
+ball could be (below the horizon, at a plausible height) are searched, inside
+the placement box. Once found, each live look re-fits the ball where it was in a
+fraction of a second; Save still searches the whole box as the independent check
+(you placed the box, so it does not depend on what the live look picked). Contrast
 against the surroundings and edge sharpness are recorded but no longer gate the
 lock: in camera levels both grow with exposure exactly as the background does, so
 a fixed floor only pushed the search into clipping. On 29 Sept a white ball on a
@@ -493,7 +515,9 @@ every earlier frame and failure record for review.
 | Range summary: IWR `rejected — camera_window_disjoint` or `not_rechecked` | The radar picked something outside the camera's range window and nothing inside it replaced it | Redo the setup: step well away from the rig during both radar captures and keep the ball in the camera's view |
 | Range summary: **640×400 check disagrees** | The two camera modes put the ball at different ranges | Make sure the ball did not move between the two Saves; if it did, **Start over / ball moved**. The setup is not blocked |
 | `the LIS3DH reading has no camera pitch` | The inclinometer is off or still settling (for example just after the kiosk handed it back) | Wait a few seconds for a stable reading, then press the step again |
-| `The camera hasn't found the ball, so the ladder can't judge your swings` when pressing **C** | The setup's camera never picked out the ball (it saw spare balls or a white cloth, or the ball was too far, dark or raised) in the mode the ladder starts in. A setup whose radar range is unresolved still runs once the camera found the ball | Run the setup again with the ball 1.0 to 1.3 m from the lens, on the same surface as the unit (not a raised mat), and nothing ball-like or white in view, then press **C** |
+| `The camera hasn't found the ball, so the ladder can't judge your swings` when pressing **C** | The setup's camera never picked out the ball in its box (a spare ball or a white cloth in the box, or the ball outside it, too far, dark or raised) in the mode the ladder starts in. A setup whose radar range is unresolved still runs once the camera found the ball | Run the setup again: drag the box over the spot you hit from, put the ball inside it on the hitting surface, keep spare balls and white things out of the box, then press **C** |
+| `no ball in the box: put the ball in the box` during a camera step | The camera looks only inside the box you confirmed, and nothing ball-like is there | Move the ball into the box. If the box is in the wrong place, press **Start over** and drag it over the ball |
+| **Confirm the box** stays greyed out, or `The camera is not showing` | The live picture is not running, so there is no box to place | Press **Show the camera**; if it still fails, run **A. Check the hardware** |
 | Ladder verdict red: `ball: the setup has no ball position for this camera mode` | The setup's camera never found the ball, so a swing's pictures cannot be checked against it | Press **Stop**, run the setup again until the camera finds the ball, then press **C** |
 | Ladder verdict amber: `resting ball not found` | The camera could not distinguish a plausible resting ball in that frame | The swing still counts; keep placing the ball in the same spot |
 | `run the gain step for both modes first` (or for one mode) | Step **B** did not finish for a mode that has a ticked exposure | Run **B** again |

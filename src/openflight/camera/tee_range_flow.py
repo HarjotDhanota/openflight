@@ -163,8 +163,9 @@ class FlowStore:
                 FlowState(
                     epoch_id=epoch_id,
                     sequence=1,
-                    phase="needs_empty",
-                    reason="remove_ball_and_keep_setup_still",
+                    # the tester places the box first; every check works from it (P7-4)
+                    phase="needs_box",
+                    reason="drag_the_box_to_where_you_will_hit",
                     created_at_utc=now,
                     updated_at_utc=now,
                     request_ids=(request_id,),
