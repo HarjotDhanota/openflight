@@ -33,6 +33,7 @@ def rig(**overrides) -> RigGeometry:
         provenance="test",
         lens_height_above_floor_mm=95.0,
         iwr_boresight_pitch_deg=10.0,
+        iwr_board_rotation_deg=None,
         ops_boresight_pitch_deg=10.0,
         housing_tilt_deg=0.0,
         lis3dh_mount_pitch_deg=None,
@@ -102,6 +103,7 @@ class TestTheFile:
             ("iwr_offset_mm", [0.0, "44", -30.0]),
             ("lens_height_above_floor_mm", "95"),
             ("housing_tilt_deg", float("nan")),
+            ("iwr_board_rotation_deg", "90"),
         ],
     )
     def test_a_malformed_value_is_refused(self, tmp_path, field, value):
@@ -122,6 +124,21 @@ class TestTheFile:
         assert setup.radar_height_m == pytest.approx(0.051, abs=5e-4)  # lens 95, RX 44 below
         assert setup.camera_lateral_offset_m == pytest.approx(0.0, abs=5e-4)
         assert setup.iwr_tilt_deg == pytest.approx(10.0)
+
+    def test_the_v3_file_records_how_the_iwr_board_is_turned(self):
+        # F11: seen from the front, USB top right and the RX row vertical on the
+        # left is the board turned +90 deg (ECAD +X up), as Harjot reported.
+        loaded = RigGeometry.from_json(V3)
+        assert loaded.iwr_board_rotation_deg == 90.0
+        assert "2026-09-29" in loaded.provenance
+
+    def test_a_file_without_the_board_rotation_is_refused(self, tmp_path):
+        data = dataclasses.asdict(rig())
+        data.pop("iwr_board_rotation_deg")
+        path = tmp_path / "old.json"
+        path.write_text(json.dumps(data))
+        with pytest.raises(ValueError, match="iwr_board_rotation_deg"):
+            RigGeometry.from_json(path)
 
     def test_the_v3_provenance_says_what_it_is_not(self):
         text = RigGeometry.from_json(V3).provenance

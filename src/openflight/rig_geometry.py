@@ -86,6 +86,11 @@ class RigGeometry:
     provenance: str
     lens_height_above_floor_mm: float | None
     iwr_boresight_pitch_deg: float | None
+    # The IWR board's turn in the enclosure seen from the front, counter-
+    # clockwise from its ECAD frame: 0 is ECAD +Y up, +90 is ECAD +X up (USB
+    # top right, RX row vertical on the left). It places the phase centre
+    # off the RX row that iwr_offset_mm locates (audit F11).
+    iwr_board_rotation_deg: float | None
     ops_boresight_pitch_deg: float | None
     housing_tilt_deg: float | None
     # LIS3DH board angles relative to the housing it is fixed to. None means
@@ -224,6 +229,7 @@ _SIZE_FIELDS = ("image_width", "image_height")
 _NULLABLE_NUMBER_FIELDS = (
     "lens_height_above_floor_mm",
     "iwr_boresight_pitch_deg",
+    "iwr_board_rotation_deg",
     "ops_boresight_pitch_deg",
     "housing_tilt_deg",
     "lis3dh_mount_pitch_deg",

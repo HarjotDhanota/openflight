@@ -321,7 +321,7 @@ def _approve(tmp_path, *rigs):
 class TestTheApprovedRigList:
     """C2: admission checks the rig file against an approved-hash list in config/."""
 
-    def test_the_list_starts_with_the_measured_v3_file(self):
+    def test_the_list_holds_the_v3_file_and_keeps_its_first_entry(self):
         from openflight.camera.setup_eligibility import (  # noqa: PLC0415
             DEFAULT_APPROVED_RIGS,
             approved_rig_hashes,
@@ -330,7 +330,10 @@ class TestTheApprovedRigList:
 
         assert DEFAULT_APPROVED_RIGS.parent.name == "config"
         approved = approved_rig_hashes(DEFAULT_APPROVED_RIGS)
-        assert approved[0] == RigGeometry.from_json(RIG).snapshot()["sha256"]
+        # the 2026-09-22 file before F11 recorded the IWR board's rotation; kept
+        # so earlier sessions still name an approved rig
+        assert approved[0] == "79870a2be3475a405260fa2ff8d00b8f5fe501632da634369fd4a800382cbaa1"
+        assert RigGeometry.from_json(RIG).snapshot()["sha256"] in approved
         assert inspect_geometry(RIG)[1]["status"] == "pass"
 
     def test_a_new_focal_with_an_approved_hash_is_admitted_and_used(self, tmp_path):
