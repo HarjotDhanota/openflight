@@ -519,10 +519,7 @@ test('reloads a stopped handoff, resumes it, and skips the exact target', async 
   await expect(page.locator('#photo-handoff')).toBeHidden();
 });
 
-function choiceState(
-  statuses: Record<string, [string, string | null]>,
-  stopped: boolean
-): Record<string, unknown> {
+function choiceState(statuses: Record<string, [string, string | null]>, stopped: boolean): Record<string, unknown> {
   const rungs = Object.fromEntries(
     ALL_RUNGS.map((id) => {
       const [status, reason] = statuses[id] || ['pending', null];
@@ -537,8 +534,7 @@ function choiceState(
   };
 }
 
-const setting = (page: Page, size: string, us: number) =>
-  page.getByRole('checkbox', { name: `${size} at ${us} µs` });
+const setting = (page: Page, size: string, us: number) => page.getByRole('checkbox', { name: `${size} at ${us} µs` });
 
 test('every setting is ticked by default and the ticked ones are sent on Start', async ({ page }) => {
   await mockBaseApis(page, () => choiceState({}, true));
@@ -594,7 +590,9 @@ test('the settings cannot change while the ladder walks', async ({ page }) => {
   await mockBaseApis(page, () => choiceState({}, stopped));
   await page.goto('/tester.html');
 
-  await expect(page.locator('#ladder-choice-hint')).toHaveText('The ladder is running: press Stop to change the settings.');
+  await expect(page.locator('#ladder-choice-hint')).toHaveText(
+    'The ladder is running: press Stop to change the settings.'
+  );
   for (const box of await page.locator('#ladder-choice input').all()) await expect(box).toBeDisabled();
   stopped = true;
   await expect(page.locator('#ladder-choice-hint')).toBeHidden();
@@ -622,7 +620,16 @@ test('the choice is remembered after a reload and sent when the ladder resumes',
   await page.getByRole('button', { name: 'Resume ladder' }).tap();
 
   await expect.poll(() => startBody).toBeTruthy();
-  expect(startBody?.rungs).toEqual(['full-300', 'full-200', 'full-150', 'full-100', 'full-75', 'full-50', 'half-300', 'half-75']);
+  expect(startBody?.rungs).toEqual([
+    'full-300',
+    'full-200',
+    'full-150',
+    'full-100',
+    'full-75',
+    'full-50',
+    'half-300',
+    'half-75',
+  ]);
 });
 
 test('the page works when browser storage is unavailable', async ({ page }) => {
@@ -653,6 +660,19 @@ test('Start with nothing ticked asks for a setting and is refused', async ({ pag
 
   await expect(page.locator('#ladder-panel')).toHaveText('Choose at least one setting.');
   expect(startRequests).toBe(0);
+});
+
+test('with no 640×400 setting to follow, the last photo finishes the ladder', async ({ page }) => {
+  const target = { capture: 'camera-final-21', rung_id: 'full-30' };
+  const base = ladderState(target);
+  await mockBaseApis(page, () => ({ ...base, ladder: { ...base.ladder, current: null } }));
+  await page.goto('/tester.html');
+
+  await expect(
+    page.getByText(
+      'Arm 5 is complete. Do not swing. Photograph or skip the face image for full-30 (camera-final-21) to finish the ladder.'
+    )
+  ).toBeVisible();
 });
 
 test('a refused start shows the server message', async ({ page }) => {

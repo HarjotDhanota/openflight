@@ -709,6 +709,7 @@
       let liveArm = null;
       let photoTarget = null;
       let photoIsHandoff = false;
+      let photoEndsLadder = false; // no 640×400 setting follows the handoff
       let photoStopped = false;
       let photoActionPending = false;
       let photoError = null;
@@ -2277,6 +2278,7 @@
         if (oldTarget !== newTarget) photoError = null;
         photoTarget = target;
         photoIsHandoff = Boolean(l.pending_photo);
+        photoEndsLadder = !l.current;
         photoStopped = Boolean(s.stopped);
         renderPhotoHandoff();
         el('face-guide').hidden = !target;
@@ -2310,7 +2312,7 @@
         el('photo-message').textContent = photoStopped
           ? `Photo held for ${photoTarget.rung_id}. Resume the ladder to use the camera.`
           : photoIsHandoff
-            ? `Arm 5 is complete. Do not swing. Photograph or skip the face image for ${photoTarget.rung_id} (${photoTarget.capture}) to continue to Arm 6.`
+            ? `Arm 5 is complete. Do not swing. Photograph or skip the face image for ${photoTarget.rung_id} (${photoTarget.capture}) ${photoEndsLadder ? 'to finish the ladder' : 'to continue to Arm 6'}.`
             : `Impact photo available for ${photoTarget.rung_id} (${photoTarget.capture}).`;
         el('photo-pause').textContent = photoStopped ? 'Resume ladder' : 'Pause ladder';
         el('photo-pause').hidden = !photoIsHandoff;
