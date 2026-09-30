@@ -430,7 +430,14 @@ def _camera_metrics(stage: Any) -> tuple[list[dict[str, Any]], Mapping[str, Any]
         "support": ball.get("support"),
         "depth_source": ball.get("depth_source"),
     }
-    if ball_status.startswith("accepted"):
+    if ball_status == "low_consensus":
+        # measured, not refused (P8-7): the sweep's spread is the label
+        ball_state = "experimental"
+        ball_reason = (
+            f"low consensus: parameter MAD {ball.get('parameter_mad_deg')} deg, "
+            f"window MAD {ball.get('window_mad_deg')} deg"
+        )
+    elif ball_status.startswith("accepted"):
         ball_state = "accepted" if tier == "high" and ball_status == "accepted" else "experimental"
         ball_reason = None if ball_state == "accepted" else f"confidence tier {tier}"
     else:

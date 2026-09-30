@@ -898,17 +898,21 @@ def estimate_camera_ball_flight(
     tier = _confidence_tier(len(estimates), parameter_mad, window_mad)
     if depth_source == "camera_size" and tier == "high":
         tier = "experimental"
+    # D15 (P8-7): a scattered sweep is measured and labelled "low consensus",
+    # not refused; its spread stays in parameter_mad_deg and window_mad_deg.
+    if tier == "withheld":
+        tier = "low"
     representative = min(estimates, key=lambda item: abs(item.horizontal_deg - median_horizontal))
     return CameraBallEstimate(
         status=(
-            "accepted_camera_only"
-            if tier != "withheld" and depth_source == "camera_size"
+            "low_consensus"
+            if tier == "low"
+            else "accepted_camera_only"
+            if depth_source == "camera_size"
             else "accepted"
-            if tier != "withheld"
-            else "rejected_unstable_consensus"
         ),
         confidence_tier=tier,
-        horizontal_deg=median_horizontal if tier != "withheld" else None,
+        horizontal_deg=median_horizontal,
         vertical_deg=float(np.median([estimate.vertical_deg for estimate in estimates])),
         support=len(estimates),
         support_pct=100.0 * len(estimates) / PARAMETER_SWEEP_SIZE,
@@ -945,6 +949,28 @@ def select_camera_assisted_horizontal(
         if camera_deg is not None and iwr_horizontal_deg is not None
         else None
     )
+    if estimate.confidence_tier == "low" and camera_deg is not None:
+        # A low-consensus camera value is shown, labelled, but never outranks a
+        # plausible radar horizontal (P8-7).
+        if iwr_horizontal_deg is not None and abs(iwr_horizontal_deg) <= MAX_IWR_FALLBACK_ABS_DEG:
+            return HorizontalFusionDecision(
+                iwr_horizontal_deg,
+                "radar",
+                iwr_confidence,
+                "camera_low_consensus_iwr_preferred",
+                iwr_horizontal_deg,
+                camera_deg,
+                delta,
+            )
+        return HorizontalFusionDecision(
+            camera_deg,
+            "camera_low_consensus",
+            0.15,
+            "camera_low_consensus",
+            iwr_horizontal_deg,
+            camera_deg,
+            delta,
+        )
     if estimate.depth_source == "camera_size" and camera_deg is not None:
         if iwr_horizontal_deg is not None and abs(iwr_horizontal_deg) <= MAX_IWR_FALLBACK_ABS_DEG:
             # Size-only camera depth is diagnostic and its zero is the camera's,

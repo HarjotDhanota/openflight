@@ -5684,6 +5684,21 @@ class TestIwrAzimuthCalibration:
         assert shot.experimental_face_angle_deg is None
         assert shot.experimental_face_angle_status == "start_direction_azimuth_uncalibrated"
 
+    def test_a_low_consensus_camera_horizontal_ranks_below_the_radar(self, monkeypatch):
+        """P8-7: shown, labelled, and never displacing a radar horizontal."""
+        monkeypatch.setattr(
+            server_module, "iwr6843_runtime", SimpleNamespace(horizontal_phase_reference_rad=None)
+        )
+        shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
+        server_module._apply_camera_horizontal_decision(shot, 6.0, 0.15, "camera_low_consensus")
+        assert shot.launch_angle_horizontal == 6.0
+        assert shot.launch_angle_horizontal_source == "camera_low_consensus"
+
+        server_module._apply_camera_horizontal_decision(shot, 1.0, 0.6, "radar")
+        assert shot.launch_angle_horizontal == 1.0
+        server_module._apply_camera_horizontal_decision(shot, 6.0, 0.15, "camera_low_consensus")
+        assert shot.launch_angle_horizontal == 1.0
+
     def test_camera_fallback_to_the_radar_horizontal_keeps_its_mark(self, monkeypatch):
         monkeypatch.setattr(
             server_module, "iwr6843_runtime", SimpleNamespace(horizontal_phase_reference_rad=None)

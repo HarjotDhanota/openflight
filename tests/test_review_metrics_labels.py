@@ -116,3 +116,17 @@ def test_the_overlay_shows_the_gate_the_ball_stage_used():
     region = reviewed["overlay"]["expected_region"]
     assert region["source"] == "setup_ball"
     assert region["region_px"] == gate["region_px"]
+
+
+def test_a_low_consensus_ball_is_shown_as_experimental_with_its_label():
+    ball = {
+        "status": "low_consensus",
+        "confidence_tier": "low",
+        "horizontal_deg": 4.7,
+        "vertical_deg": 15.8,
+    }
+    metrics = _metrics(_report({"status": "rejected_no_impact"}, ball))
+    for key, value in (("camera_launch_horizontal_deg", 4.7), ("camera_launch_vertical_deg", 15.8)):
+        assert metrics[key]["status"] == "experimental"
+        assert metrics[key]["value"] == value
+        assert "low consensus" in metrics[key]["reason"]

@@ -271,6 +271,7 @@ describe('buildLiveMetrics', () => {
       ['camera_assisted_experimental', 'camera assisted'],
       ['camera_only_experimental', 'camera only'],
       ['camera_legacy_fallback', 'camera legacy'],
+      ['camera_low_consensus', 'camera, low consensus'],
     ])('labels %s as experimental', (source, subtext) => {
       const metrics = buildLiveMetrics(
         makeShot({ launch_angle_horizontal_source: source, launch_angle_horizontal_confidence: 0.3 }),

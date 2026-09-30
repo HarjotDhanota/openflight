@@ -3858,6 +3858,8 @@ _HORIZONTAL_SOURCE_RANK = {
     "estimated": -1,
     "camera_only_experimental": 0,
     "camera_legacy_fallback": 0,
+    # a scattered camera sweep, shown labelled but never over the radar (P8-7)
+    "camera_low_consensus": 0,
     "radar": 1,
     "camera_assisted_experimental": 2,
 }

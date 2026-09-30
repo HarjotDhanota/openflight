@@ -77,6 +77,7 @@ const HORIZONTAL_SOURCE_LABELS: Record<string, string> = {
   camera_assisted_experimental: 'camera assisted',
   camera_only_experimental: 'camera only',
   camera_legacy_fallback: 'camera legacy',
+  camera_low_consensus: 'camera, low consensus',
 };
 
 function experimentalStatus(status: string | null | undefined): string {
