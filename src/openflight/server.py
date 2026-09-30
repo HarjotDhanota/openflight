@@ -1564,19 +1564,22 @@ def init_iwr6843(
     horizontal_phase_reference_rad: float | None = None,
     save_dumps: bool = False,
     lateral_tee_offset_m: float = 0.0,
+    board_rotation_deg: float | None = None,
 ) -> bool:
-    """Initialize GPIO-triggered TI capture and the frozen LCMF-v1 estimator.
+    """Initialize GPIO-triggered TI capture and the LCMF launch estimator.
 
     ``tilt_deg`` and ``radar_height_m`` are the enclosure's, from the rig file (or
     the setup's solved height); the board calibration's July mount never stands in
-    for them (wiring audit C1).
+    for them (wiring audit C1). ``board_rotation_deg`` is the rig's
+    ``iwr_board_rotation_deg``: with it LCMF places each antenna off the phase
+    centre ``radar_height_m`` names.
     """
     global iwr6843_runtime, iwr6843_runtime_config  # pylint: disable=global-statement
     for name, value in (("tilt_deg", tilt_deg), ("radar_height_m", radar_height_m)):
         if value is None or not math.isfinite(float(value)):
             raise ValueError(f"init_iwr6843 needs the rig's {name}, got {value!r}")
     try:
-        from .iwr6843 import Calibration
+        from .iwr6843 import Calibration, antennas, lcmf
         from .iwr6843.monitor import IWR6843CaptureMonitor, tx_order_from_config
         from .iwr6843.runtime import IWR6843Runtime
 
@@ -1610,6 +1613,18 @@ def init_iwr6843(
         calibration.tilt_rad = math.radians(float(tilt_deg))
         calibration.meta["radar_height_m"] = float(radar_height_m)
         calibration.lateral_tee_offset_m = float(lateral_tee_offset_m)
+        # A rig without the board's rotation derives its radar height at the
+        # RX row (EnclosureSetup, audit F11), which is what the legacy layout
+        # reads a single height as, on a board turned +90 deg.
+        calibration.antennas = (
+            antennas.layout_from_phase_centre(
+                phase_centre_height_m=float(radar_height_m),
+                board_rotation_deg=float(board_rotation_deg),
+                boresight_pitch_deg=float(tilt_deg),
+            )
+            if board_rotation_deg is not None
+            else antennas.legacy_layout(float(radar_height_m))
+        )
 
         capture_monitor = IWR6843CaptureMonitor(
             config_path=config_path,
@@ -1650,6 +1665,8 @@ def init_iwr6843(
                     "radar_height_m": calibration.radar_height_m,
                     "ball_height_m": calibration.tee_ball_height_m,
                     "lateral_tee_offset_m": calibration.lateral_tee_offset_m,
+                    "iwr_board_rotation_deg": board_rotation_deg,
+                    "antenna_layout": calibration.antennas.as_dict(),
                 },
             },
             radar_config_provenance={
@@ -1661,7 +1678,8 @@ def init_iwr6843(
         )
         iwr6843_runtime_config = {
             "enabled": True,
-            "estimator": "lcmf_v1",
+            "estimator": lcmf.NAME,
+            "antenna_layout": calibration.antennas.as_dict(),
             "tee_range_status": "unresolved" if tee_range_m is None else "configured",
             "port": capture_monitor.port,
             "config": str(config_path),
@@ -1683,10 +1701,10 @@ def init_iwr6843(
             "output_dir": str(Path(output_dir).expanduser()),
         }
         logger.info(
-            "[SERVER] IWR6843 initialized "
-            "(port=%s, BCM%d, estimator=LCMF-v1, firmware boundary freeze)",
+            "[SERVER] IWR6843 initialized (port=%s, BCM%d, estimator=%s, firmware boundary freeze)",
             capture_monitor.port,
             trigger_pin,
+            lcmf.NAME,
         )
         return True
     except Exception as error:  # pylint: disable=broad-exception-caught
@@ -5341,7 +5359,7 @@ def start_monitor(
                 port=iwr6843_runtime.capture_monitor.port,
                 baud=getattr(iwr6843_runtime.capture_monitor.radar, "baud", 1_041_667),
                 firmware="custom-l3-dump",
-                estimator="lcmf_v1",
+                estimator=iwr6843_runtime_config.get("estimator"),
                 trigger_pin_bcm=iwr6843_runtime_config.get("trigger_pin_bcm"),
             )
         if not mock and inclinometer_service is not None:
@@ -6717,6 +6735,9 @@ def main():
                 enclosure.tee_lateral_offset_m
                 if enclosure is not None and enclosure.tee_lateral_offset_m is not None
                 else 0.0
+            ),
+            board_rotation_deg=(
+                enclosure.iwr_board_rotation_deg if enclosure is not None else None
             ),
         ):
             calibration = iwr6843_runtime.calibration

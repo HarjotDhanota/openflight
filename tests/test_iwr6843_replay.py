@@ -156,3 +156,80 @@ def test_replay_summary_and_csv_output(tmp_path):
     out = tmp_path / "replay.jsonl"
     write_records(records, out, "jsonl")
     assert len(out.read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_a_legacy_replay_reads_its_single_height_as_the_rx_row():
+    """July/August sessions record one radar height and a tilt, no rig.
+
+    LCMF-v2 takes that height as the RX-row centre of a +90 deg board, so
+    their replays differ from the numbers they recorded, by design.
+    """
+    from openflight.iwr6843 import antennas, lcmf  # noqa: PLC0415
+    from openflight.iwr6843.replay import build_replay_calibration  # noqa: PLC0415
+
+    cal = build_replay_calibration(
+        "config/iwr6843_calibration_reference.json",
+        tee_range_m=1.372,
+        tilt_deg=5.5,
+        radar_height_m=0.229,
+        ball_height_m=0.040,
+    )
+    assert cal.antennas is None
+    assert lcmf.antenna_layout(cal) == antennas.legacy_layout(0.229)
+
+
+def test_a_rig_replay_places_the_antennas_off_its_phase_centre():
+    from openflight.iwr6843 import antennas  # noqa: PLC0415
+    from openflight.iwr6843.replay import build_replay_calibration  # noqa: PLC0415
+
+    cal = build_replay_calibration(
+        "config/iwr6843_calibration_reference.json",
+        tee_range_m=1.5,
+        tilt_deg=10.0,
+        radar_height_m=0.05885,
+        ball_height_m=0.021,
+        board_rotation_deg=90.0,
+    )
+    assert cal.antennas.basis == antennas.RIG_BASIS
+    assert cal.antennas.rx_row_height_m == pytest.approx(0.051, abs=1e-5)
+
+
+def test_the_replay_record_names_the_estimator_and_the_antenna_basis(monkeypatch, tmp_path):
+    from openflight.iwr6843 import antennas, lcmf  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        "openflight.iwr6843.replay.process_dump",
+        lambda *_args, **_kwargs: SimpleNamespace(track=None),
+    )
+
+    dump = tmp_path / "shot.l3dump"
+    dump.write_bytes(b"raw")
+    cal = Calibration.identity()
+    cal.tee_range_m = 1.5
+    cal.meta["radar_height_m"] = 0.229
+
+    def fake_estimator(_raw, _calibration, **_kwargs):
+        return SimpleNamespace(
+            accepted=False,
+            status="rejected_by_ball_tracker",
+            angle_deg=None,
+            raw_angle_deg=None,
+            component_std_deg=None,
+            n_snapshots=0,
+            n_frames=0,
+            track_speed_mph=None,
+            track_rms_bins=None,
+            track_inliers=None,
+            to_dict=lambda: {"estimator": lcmf.NAME},
+        )
+
+    record = replay_capture(
+        ReplayInput("single", None, dump, 100.0),
+        cal,
+        net_range_m=4.6,
+        tx_order="normal",
+        estimator=fake_estimator,
+    )
+
+    assert record.to_dict()["estimator"] == lcmf.NAME
+    assert record.to_dict()["antenna_basis"] == antennas.LEGACY_BASIS
