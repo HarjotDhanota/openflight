@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -273,3 +274,59 @@ class TestTheBoardCalibrationCarriesNoInstallation:
                 tx_order="auto",
                 capture_timeout_s=12.0,
             )
+
+
+class TestThe320x200StripIsRefusedForMeasurement:
+    """C12: 320x200 is a movable crop whose strip offset the camera models do not apply."""
+
+    @staticmethod
+    def _capture(*offsets, status="uniform"):
+        contexts = [
+            {"startup": {"driver": {"strip_y_offset": {"value_px": value}}}} for value in offsets
+        ]
+        return SimpleNamespace(
+            valid=True,
+            metadata={"capture_mode": {"context_status": status, "contexts": contexts}},
+        )
+
+    @pytest.fixture
+    def strip_mode(self, monkeypatch):
+        monkeypatch.setattr(server, "camera_capture_config", {"width": 320, "height": 200})
+
+    def test_a_centred_strip_is_measured(self, strip_mode):
+        assert server._strip_offset_refusal(self._capture(0)) is None
+
+    @pytest.mark.parametrize("offsets", [(30,), (-70,), (None,), ()])
+    def test_a_moved_or_unrecorded_strip_is_refused(self, strip_mode, offsets):
+        reason = server._strip_offset_refusal(self._capture(*offsets))
+        assert reason is not None and "strip" in reason
+
+    def test_other_modes_have_no_strip(self, monkeypatch):
+        monkeypatch.setattr(server, "camera_capture_config", {"width": 640, "height": 400})
+        assert server._strip_offset_refusal(self._capture(30)) is None
+
+    def test_the_shot_keeps_its_radar_values_and_says_why(self, strip_mode, monkeypatch):
+        from datetime import datetime  # noqa: PLC0415
+
+        from openflight.launch_monitor import Shot  # noqa: PLC0415
+
+        monkeypatch.setattr(
+            server,
+            "_load_camera_capture_archive",
+            lambda _capture: pytest.fail("a refused mode should not be decoded"),
+        )
+        shot = Shot(ball_speed_mph=110.0, timestamp=datetime.now())
+
+        server._fuse_camera_measurements(shot, self._capture(40))
+
+        assert shot.experimental_fused_status == "rejected_strip_offset_not_modelled"
+        assert shot.ball_speed_mph == 110.0
+
+
+def test_the_tester_refuses_320x200_for_measurement():
+    from openflight.camera import tester_server as ts  # noqa: PLC0415
+
+    with pytest.raises(ValueError, match="320x200"):
+        ts._reference_ball_camera(  # pylint: disable=protected-access
+            ts.ARMS["arm1"], V3, {"camera_pitch_deg": 0.0}, None, None
+        )

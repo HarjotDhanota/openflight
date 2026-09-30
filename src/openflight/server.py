@@ -3824,6 +3824,37 @@ def _attach_experimental_face_angle(shot: Shot) -> None:
     shot.experimental_face_angle_launch_source = shot.launch_angle_horizontal_source
 
 
+# 320x200 is a vertically movable strip of the 2x-binned mode (the OV9281
+# driver's strip_y_offset). The camera models put the principal point at the
+# image centre, so a moved strip would tilt every elevation by its offset over
+# the focal length (70 px is 8.5 deg). Applying the offset needs its sign and
+# scale confirmed on the unit, and the mode is not in use, so it is refused for
+# measurement unless the capture's startup offset reads 0 (wiring audit C12).
+STRIP_CROP_MODE = (320, 200)
+
+
+def _strip_offset_refusal(camera_capture) -> str | None:
+    """Why this capture's 320x200 strip cannot be measured, or None."""
+    mode = (camera_capture_config.get("width"), camera_capture_config.get("height"))
+    if mode != STRIP_CROP_MODE:
+        return None
+    metadata = getattr(camera_capture, "metadata", None)
+    capture_mode = metadata.get("capture_mode") if isinstance(metadata, dict) else None
+    capture_mode = capture_mode if isinstance(capture_mode, dict) else {}
+    offsets = []
+    for context in capture_mode.get("contexts") or ():
+        startup = context.get("startup") if isinstance(context, dict) else None
+        driver = startup.get("driver") if isinstance(startup, dict) else None
+        strip = driver.get("strip_y_offset") if isinstance(driver, dict) else None
+        offsets.append(strip.get("value_px") if isinstance(strip, dict) else None)
+    if capture_mode.get("context_status") == "uniform" and offsets == [0]:
+        return None
+    return (
+        f"320x200 strip offset {offsets or 'unrecorded'} px is not applied to the "
+        "principal point; the mode is refused for measurement"
+    )
+
+
 def _fuse_camera_measurements(
     shot: Shot,
     camera_capture,
@@ -3854,6 +3885,11 @@ def _fuse_camera_measurements(
         logger.warning(
             "[SERVER] Camera analysis withheld for lighting quality; using radar fallback"
         )
+        return
+    strip_refusal = _strip_offset_refusal(camera_capture)
+    if strip_refusal is not None:
+        _withhold_camera_metrics(shot, "rejected_strip_offset_not_modelled", strip_refusal)
+        logger.warning("[SERVER] Camera analysis withheld: %s", strip_refusal)
         return
     if camera_archive is _CAMERA_ARCHIVE_UNSET:
         camera_archive = _load_camera_capture_archive(camera_capture)

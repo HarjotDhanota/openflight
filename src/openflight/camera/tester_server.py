@@ -1986,6 +1986,10 @@ def _reference_ball_camera(
         camera_rdf_offset_to_target_lfu,
     )
 
+    if (arm.width, arm.height) == (320, 200):
+        # a movable strip whose offset the models do not apply (wiring audit C12)
+        raise ValueError("320x200 is refused for measurement: its strip offset is not modelled")
+
     if optical_calibration is not None and camera_placement is not None:
         from openflight.camera.calibrated_projection import (  # noqa: PLC0415
             build_calibrated_camera_model,

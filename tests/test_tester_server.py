@@ -1950,11 +1950,21 @@ class BallCamera(FakeCamera):
         return request_
 
 
+class BallCamera640(FakeCamera):
+    """The same ball in the 640x400 mode: 320x200 is refused for measurement (C12)."""
+
+    def capture_request(self):
+        time.sleep(0.002)
+        request_ = FakeRequest(640, 400, 0)
+        request_.raw[:, 1::2] = _ball_frames(110, 230, n=1, width=640, height=400, diameter=24.0)[0]
+        return request_
+
+
 class TestEachPlacementKeepsOptionalTapeSeparate:
-    body = {"tester_id": "20260922-name", "arm_id": "arm1", "environment": "indoors"}
+    body = {"tester_id": "20260922-name", "arm_id": "arm4", "environment": "indoors"}
 
     def _client(self, tmp_path):
-        live = ts.LiveView(camera_factory=BallCamera)
+        live = ts.LiveView(camera_factory=BallCamera640)
         app = eligible_app(
             sessions_root=tmp_path, rig_geometry=RIG, live_view=live, tilt=_level_tilt()
         )
