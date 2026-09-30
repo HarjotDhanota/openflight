@@ -102,3 +102,21 @@ def test_an_older_clip_falls_back_to_the_trigger_request_never_the_startup(tmp_p
     (folder / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
     facts = capture_facts(folder, {}, session)
     assert facts["requested_exposure_us"] is None and facts["controls_source"] is None
+
+
+def test_the_exposure_split_and_clock_offset_are_carried_when_recorded(tmp_path):
+    """P6-5: a clip saved before the exposure split existed reports none."""
+    folder, session = _capture(tmp_path)
+    facts = capture_facts(folder, {}, session)
+    assert facts["pre_trigger_frames_by_exposure"] is None
+    assert facts["trigger_boottime_minus_monotonic_ns"] is None
+
+    metadata = json.loads((folder / "metadata.json").read_text(encoding="utf-8"))
+    metadata["pre_trigger_frames_by_exposure"] = 19
+    metadata["trigger_clocks"] = {"boottime_minus_monotonic_ns": 250}
+    (folder / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+    facts = capture_facts(folder, {}, session)
+    assert facts["pre_trigger_frames_by_exposure"] == 19
+    assert facts["trigger_boottime_minus_monotonic_ns"] == 250
+    assert facts["pre_trigger_frames"] == 18

@@ -1181,6 +1181,43 @@ class TestRollingBufferShotIdentity:
             (2, 1001.0),
         ]
 
+    def test_the_shot_line_names_its_carry_as_the_table_estimate(self, monkeypatch, caplog):
+        """P6-6: shot 1 of Outdoors-test-5 logged three carries (103, 88, 98) unlabelled."""
+        from openflight.rolling_buffer import RollingBufferMonitor, monitor as monitor_module
+
+        monkeypatch.setattr(monitor_module, "get_session_logger", lambda: MagicMock())
+        monitor = RollingBufferMonitor(port=None, trigger_type="sound")
+        monitor._diagnostic_callback = None
+        monitor._shot_callback = lambda _shot: None
+        processed = self._processed(1000.0)
+
+        class OneCaptureTrigger:
+            calls = 0
+
+            def wait_for_trigger(self, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return processed.capture
+                monitor._running = False
+                return None
+
+            @staticmethod
+            def drain_diagnostics():
+                return []
+
+            @staticmethod
+            def reset():
+                return None
+
+        monitor.trigger = OneCaptureTrigger()
+        monitor.processor = MagicMock(process_capture=MagicMock(return_value=processed))
+        monitor._running = True
+        with caplog.at_level("INFO", logger="openflight.rolling_buffer.monitor"):
+            monitor._capture_loop()
+
+        line = next(record.getMessage() for record in caplog.records if "[SHOT] #" in record.msg)
+        assert "table carry (before launch angle)=" in line
+
 
 # =============================================================================
 # Integration Tests

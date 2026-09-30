@@ -259,3 +259,49 @@ def test_selected_camera_iwr_diagnostic_retains_alternatives_but_cannot_promote(
     assert stage["promotion_allowed"] is False
     assert stage["independent_camera_support"] is False
     assert "same moving IWR range" in stage["dependency_reason"]
+
+
+def test_frames_that_were_never_loaded_are_not_called_missing_or_misaligned():
+    """P6-6: the analysis blamed the frames when the shot had no fusion context."""
+    stage = replay_moving_camera_iwr_anchor(
+        context=None,
+        archive=None,
+        shot_event={"moving_range_evidence": _evidence()},
+        iwr_ranges=_series(),
+        ops_ball_speed_mph=100.0,
+        camera_unavailable_reason="shot has no replayable camera fusion context: lighting",
+    )
+
+    frames = next(item for item in stage["prerequisites"] if item["id"] == "saved_camera_frames")
+    assert frames["status"] == "withheld"
+    assert "missing or misaligned" not in frames["reason"]
+    assert frames["reason"] == (
+        "camera frames were not replayed: shot has no replayable camera fusion context: lighting"
+    )
+
+
+def test_frames_without_a_stated_cause_say_they_were_not_loaded():
+    stage = replay_moving_camera_iwr_anchor(
+        context={},
+        archive=None,
+        shot_event={"moving_range_evidence": _evidence()},
+        iwr_ranges=_series(),
+        ops_ball_speed_mph=100.0,
+    )
+
+    frames = next(item for item in stage["prerequisites"] if item["id"] == "saved_camera_frames")
+    assert frames["reason"] == "no camera frames were loaded for this shot"
+
+
+def test_frames_that_were_loaded_but_misaligned_still_say_so():
+    archive = {**_archive(), "host_timestamp_ns": np.arange(3, dtype=np.int64)}
+    stage = replay_moving_camera_iwr_anchor(
+        context={},
+        archive=archive,
+        shot_event={"moving_range_evidence": _evidence()},
+        iwr_ranges=_series(),
+        ops_ball_speed_mph=100.0,
+    )
+
+    frames = next(item for item in stage["prerequisites"] if item["id"] == "saved_camera_frames")
+    assert frames["reason"] == "saved camera frames/timestamps/trigger are missing or misaligned"

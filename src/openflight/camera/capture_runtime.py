@@ -32,6 +32,7 @@ from openflight.camera.triggered_buffer import (
     CameraFrame,
     TriggeredCapture,
     TriggeredFrameBuffer,
+    pre_trigger_count_by_exposure,
     timing_summary,
     unpack_r8_frame,
     unpack_yuv420_y_plane,
@@ -49,6 +50,28 @@ AUTO_EXPOSURE_STARTUP_SETTLE_S = 0.3
 # RAM; a false-trigger storm on a slow card must not grow this without bound.
 MAX_PENDING_SAVES = 3
 MAX_REMEMBERED_REJECTIONS = 64
+# What ``pre_trigger_count_by_exposure`` counts (P6-5). ``pre_trigger_count``
+# still counts the frames that had arrived when the ring froze.
+EXPOSURE_SPLIT_DEFINITION = (
+    "frames whose SensorTimestamp is at or before the trigger's CLOCK_BOOTTIME time; "
+    "libcamera stamps SensorTimestamp on CLOCK_BOOTTIME at the start of the first "
+    "row's exposure"
+)
+
+
+def _boottime_ns() -> int | None:
+    """CLOCK_BOOTTIME now: libcamera's SensorTimestamp clock, or None where there is none.
+
+    It equals CLOCK_MONOTONIC (the host timestamps' clock) until the system
+    suspends, so each trigger records both rather than assuming they agree.
+    """
+    clock = getattr(time, "CLOCK_BOOTTIME", None)
+    if clock is None:
+        return None
+    try:
+        return time.clock_gettime_ns(clock)
+    except (AttributeError, OSError):
+        return None
 
 
 def vertical_crop_limits(width: int, height: int) -> dict[str, int] | None:
@@ -347,6 +370,7 @@ class CameraCaptureRuntime:
         self._trigger_epochs: queue.Queue[float] = queue.Queue()
         self._trigger_auto_exposure: queue.Queue[dict] = queue.Queue()
         self._trigger_evidence: queue.Queue[dict | None] = queue.Queue()
+        self._trigger_clocks: queue.Queue[dict] = queue.Queue()
         self._admission_evidence: list[tuple[float, dict | None]] = []
         self._camera_control_lock = threading.Lock()
         self._controls_purpose = "capture"
@@ -733,6 +757,7 @@ class CameraCaptureRuntime:
         self._trigger_epochs = queue.Queue()
         self._trigger_auto_exposure = queue.Queue()
         self._trigger_evidence = queue.Queue()
+        self._trigger_clocks = queue.Queue()
         self._admission_evidence = []
         self._auto_exposure_policy.reset()
 
@@ -791,6 +816,10 @@ class CameraCaptureRuntime:
 
     def notify_trigger(self, timestamp: float | None = None) -> bool:
         """Freeze the camera ring on a sound-trigger edge."""
+        # Timed before anything else: the evidence below is gathered under the
+        # frame lock and stalled frame delivery ~31 ms in Outdoors-test-5 (P6-5).
+        trigger_host_ns = time.monotonic_ns()
+        trigger_boottime_ns = _boottime_ns()
         trigger_epoch = time.time() if timestamp is None else float(timestamp)
         if not self._running:
             return self._reject_trigger(trigger_epoch, "camera_stopped", "capture is not running")
@@ -812,13 +841,16 @@ class CameraCaptureRuntime:
                         "blockers": [{"id": "provider", "reason": f"{type(exc).__name__}: {exc}"}],
                     }
                     logger.warning("[CAMERA] Trigger evidence provider failed", exc_info=True)
-            accepted = self._ring.trigger(time.monotonic_ns())
+            accepted = self._ring.trigger(trigger_host_ns)
             if not accepted:
                 busy = getattr(self._ring, "busy_reason", lambda: None)()
                 return self._reject_trigger(trigger_epoch, "ring_busy", busy)
             self._trigger_epochs.put(trigger_epoch)
             self._trigger_auto_exposure.put(self.auto_exposure_status())
             self._trigger_evidence.put(evidence)
+            self._trigger_clocks.put(
+                {"host_monotonic_ns": trigger_host_ns, "boottime_ns": trigger_boottime_ns}
+            )
             self._admission_evidence.append((trigger_epoch, deepcopy(evidence)))
             return True
 
@@ -1098,6 +1130,7 @@ class CameraCaptureRuntime:
             trigger_epoch = self._trigger_epochs.get()
             auto_exposure = self._trigger_auto_exposure.get()
             trigger_evidence = self._trigger_evidence.get()
+            trigger_clocks = self._trigger_clocks.get()
             self._sequence += 1
             sequence = self._sequence
             try:
@@ -1107,6 +1140,7 @@ class CameraCaptureRuntime:
                     capture,
                     auto_exposure=auto_exposure,
                     trigger_evidence=trigger_evidence,
+                    trigger_clocks=trigger_clocks,
                 )
             except Exception as exc:  # pylint: disable=broad-except
                 logger.warning("[CAMERA] Capture #%d save failed: %s", sequence, exc, exc_info=True)
@@ -1130,6 +1164,7 @@ class CameraCaptureRuntime:
         *,
         auto_exposure: dict | None = None,
         trigger_evidence: dict | None = None,
+        trigger_clocks: Mapping | None = None,
     ) -> SavedCameraCapture:
         timestamp = datetime.fromtimestamp(trigger_epoch or time.time()).strftime(
             "%Y%m%d_%H%M%S_%f"
@@ -1157,6 +1192,22 @@ class CameraCaptureRuntime:
         )
         frozen_settings = uniform_startup["settings"] if uniform_startup else None
         frozen_resolved = uniform_startup["resolved_config"] if uniform_startup else None
+        clocks = dict(trigger_clocks or {})
+        host_trigger_ns = clocks.get("host_monotonic_ns")
+        boottime_ns = clocks.get("boottime_ns")
+        by_exposure = (
+            pre_trigger_count_by_exposure(sensor_ns, boottime_ns)
+            if boottime_ns is not None
+            else None
+        )
+        exposure_split = (
+            {
+                "pre_trigger_count_by_exposure": np.int32(by_exposure),
+                "trigger_boottime_ns": np.int64(boottime_ns),
+            }
+            if by_exposure is not None
+            else {}
+        )
 
         # These clips are consumed immediately by the live estimators. ZIP
         # compression delayed shot display by roughly a second on the Pi, so
@@ -1171,6 +1222,7 @@ class CameraCaptureRuntime:
             pre_trigger_count=np.int32(capture.pre_trigger_count),
             trigger_host_timestamp_ns=np.int64(capture.trigger_host_timestamp_ns),
             trigger_epoch_timestamp=np.float64(trigger_epoch),
+            **exposure_split,
         )
 
         for label, index in (
@@ -1191,7 +1243,18 @@ class CameraCaptureRuntime:
                 "capture_path": str(shot_dir),
                 "pre_trigger_frames": capture.pre_trigger_count,
                 "post_trigger_frames": capture.post_trigger_count,
+                "pre_trigger_frames_by_exposure": by_exposure,
                 "trigger_host_timestamp_ns": capture.trigger_host_timestamp_ns,
+                "trigger_clocks": {
+                    "host_monotonic_ns": host_trigger_ns,
+                    "boottime_ns": boottime_ns,
+                    "boottime_minus_monotonic_ns": (
+                        boottime_ns - host_trigger_ns
+                        if boottime_ns is not None and host_trigger_ns is not None
+                        else None
+                    ),
+                    "exposure_split": EXPOSURE_SPLIT_DEFINITION,
+                },
                 "mean_brightness": float(images.mean()),
                 "p99_brightness": float(np.percentile(images, 99)),
                 "storage_format": "npz_uncompressed",

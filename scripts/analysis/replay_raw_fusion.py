@@ -257,6 +257,7 @@ def replay(args, *, frozen_session=None) -> dict:
     moving_iwr_series = None
     camera_context = None
     camera_archive = None
+    camera_unavailable_reason = None
     session_start = _one(events, "session_start")
     shot_event = next((event for event in events if event.get("type") == "shot_detected"), {})
     session_dir = args.session.resolve().parent
@@ -654,6 +655,8 @@ def replay(args, *, frozen_session=None) -> dict:
                 "status": "error",
                 "error": f"{type(error).__name__}: {error}",
             }
+            if camera_archive is None:
+                camera_unavailable_reason = str(error)
     else:
         report["stages"]["camera"] = {"status": "not_requested"}
     if args.camera:
@@ -664,6 +667,7 @@ def replay(args, *, frozen_session=None) -> dict:
             shot_event=shot_event,
             iwr_ranges=moving_iwr_series,
             ops_ball_speed_mph=_mapping(ops_result).get("ball_speed_mph"),
+            camera_unavailable_reason=camera_unavailable_reason,
         )
     else:
         report["stages"]["moving_camera_iwr_anchor"] = {

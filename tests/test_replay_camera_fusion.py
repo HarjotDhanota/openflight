@@ -178,3 +178,19 @@ def test_replay_entry_reads_actual_session_logger_capture_contract(tmp_path):
     result = replay_recorded_shot(logger.session_path, 1)
     assert result["capture_npz_sha256"] == capture_hash
     assert result["session_uuid"] == logger.active_session_uuid
+
+
+def test_a_shot_without_a_fusion_context_says_why_it_had_none(tmp_path):
+    """P6-6: Outdoors-test-5 recorded the cause beside the missing context."""
+    session_file, _ = _write_replay_fixture(tmp_path)
+    events = [json.loads(line) for line in session_file.read_text(encoding="utf-8").splitlines()]
+    events[-1]["camera_fusion_context"] = {
+        "schema": "openflight.camera.fusion_context",
+        "version": 1,
+        "available": False,
+        "reason": "capture-time lighting was not analysis eligible",
+    }
+    session_file.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="lighting was not analysis eligible"):
+        replay_recorded_shot(session_file, 3)

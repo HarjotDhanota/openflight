@@ -109,7 +109,11 @@ def replay_frozen_shot(
     )
     context = shot.get("camera_fusion_context")
     if not isinstance(context, dict) or context.get("available") is not True:
-        raise ValueError("shot has no replayable camera fusion context")
+        cause = context.get("reason") if isinstance(context, dict) else None
+        raise ValueError(
+            "shot has no replayable camera fusion context"
+            + (f": {cause}" if isinstance(cause, str) and cause else "")
+        )
     if context.get("session_uuid") != session_uuid or context.get("shot_number") != shot_number:
         raise ValueError("camera fusion context identity does not match the session and shot")
     capture_event = _one(

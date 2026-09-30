@@ -864,6 +864,55 @@ class TestSolvedRange:
         assert solved["solved_range_m"] == pytest.approx(1.66, abs=0.05)
         assert solved["solved_ball_diameter_px"] == pytest.approx(12.0, abs=0.5)
 
+    @staticmethod
+    def _screen_with_ball(tmp_path, x=160, y=144, radius=6.0):
+        run = tmp_path / "gain" / "20260922_120000"
+        run.mkdir(parents=True)
+        (run / "results.json").write_text("[]")
+        image = np.full((200, 320), 110, dtype=np.uint8)
+        yy, xx = np.mgrid[0:200, 0:320]
+        image[np.hypot(xx - x, yy - y) <= radius] = 230
+        with (run / "exp0300_gain6_median.pgm").open("wb") as handle:
+            handle.write(b"P5\n320 200\n255\n")
+            handle.write(image.tobytes())
+
+    def test_a_blob_nothing_tied_to_the_setup_ball_is_never_called_clean(self, tmp_path):
+        """P6-6: Outdoors-test-5 marked 0.63 m 'clean', solved on a cloth or spare balls."""
+        self._screen_with_ball(tmp_path)
+
+        solved = ts.solved_range(tmp_path, ts.ARMS["arm1"], {"gain": 6.0}, RIG)
+
+        assert solved["solved_range_m"] is not None
+        assert solved["solved_range_note"] != "clean"
+        assert "setup" in solved["solved_range_note"]
+
+    def test_the_setup_ball_it_matches_makes_it_clean(self, tmp_path):
+        self._screen_with_ball(tmp_path)
+
+        solved = ts.solved_range(
+            tmp_path,
+            ts.ARMS["arm1"],
+            {"gain": 6.0},
+            RIG,
+            setup_ball={"x": 161.0, "y": 144.0, "diameter_px": 12.5},
+        )
+
+        assert solved["solved_range_note"] == "clean"
+
+    def test_a_blob_away_from_the_setup_ball_says_it_is_another_object(self, tmp_path):
+        self._screen_with_ball(tmp_path)
+
+        solved = ts.solved_range(
+            tmp_path,
+            ts.ARMS["arm1"],
+            {"gain": 6.0},
+            RIG,
+            setup_ball={"x": 100.0, "y": 150.0, "diameter_px": 12.0},
+        )
+
+        assert solved["solved_range_note"] != "clean"
+        assert "not the setup's ball" in solved["solved_range_note"]
+
     def test_no_ball_is_a_reason_not_an_exception(self, tmp_path):
         run = tmp_path / "gain" / "20260922_120000"
         run.mkdir(parents=True)

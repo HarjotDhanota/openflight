@@ -20,6 +20,7 @@ from openflight.camera.club_delivery import (
 )
 from openflight.camera.club_motion import ReferenceBall
 from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
+from openflight.camera.triggered_buffer import exposure_trigger_index
 from openflight.clubs import ClubType
 from openflight.iwr6843.club import ClubRangeEvidence
 from openflight.iwr6843.lcmf import BallRangeEvidence
@@ -188,6 +189,7 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
                 iwr_vertical_deg=context["iwr_vertical_deg"],
                 ball_tracker=ball_tracker,
                 sensor_timestamps_ns=_sensor_timestamps(archive),
+                trigger_frame_index=exposure_trigger_index(archive, len(frames)),
             )
         except Exception as error:  # stage isolation is part of the persisted contract
             ball = CameraBallEstimate(status="error")
@@ -196,7 +198,10 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
             pre_trigger_count = _integer_scalar(archive["pre_trigger_count"], "pre-trigger count")
             if not 1 <= pre_trigger_count <= len(frames):
                 raise ValueError("camera archive pre-trigger count is outside the frame range")
-            trigger_index = pre_trigger_count - 1
+            # Impact is compared against the frame exposed at the trigger when the
+            # clip records it (P6-5); older clips keep their arrival split.
+            by_exposure = exposure_trigger_index(archive, len(frames))
+            trigger_index = pre_trigger_count - 1 if by_exposure is None else by_exposure
             reference_ball = None
             diagnostics = ball.reference_ball_diagnostics or {}
             selected_candidate = diagnostics.get("selected_candidate")

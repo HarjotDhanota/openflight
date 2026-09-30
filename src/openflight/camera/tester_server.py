@@ -1079,11 +1079,20 @@ def _read_pgm(path: Path) -> np.ndarray:
     )
 
 
-def solved_range(arm_dir: Path, arm: Arm, choice: Mapping, rig_geometry: Path) -> dict:
+def solved_range(
+    arm_dir: Path,
+    arm: Arm,
+    choice: Mapping,
+    rig_geometry: Path,
+    setup_ball: Mapping | None = None,
+) -> dict:
     """Range to the ball solved from the gain screen's own frame at the chosen gain.
 
     Recorded beside the tape so the study shows whether the camera solve can
-    replace it. Never raises: a missing ball is recorded as a reason.
+    replace it. Never raises: a missing ball is recorded as a reason. The frame's
+    brightest ball-like blob is only called clean when it is the ball the setup
+    associated (``setup_ball``: x, y, diameter_px); a cloth or a spare ball once
+    was (P6-6).
     """
     from openflight.rig_geometry import RigGeometry, solve_setup  # noqa: PLC0415
 
@@ -1114,10 +1123,22 @@ def solved_range(arm_dir: Path, arm: Arm, choice: Mapping, rig_geometry: Path) -
             "solved_ball_diameter_px": None,
             "solved_range_note": str(exc),
         }
+    notes = list(solution.warnings)
+    if setup_ball is None:
+        notes.append("unverified: no setup ball association to confirm this is the ball")
+    elif not (
+        math.hypot(ball.x - float(setup_ball["x"]), ball.y - float(setup_ball["y"]))
+        <= 0.5 * float(setup_ball["diameter_px"])
+        and 0.75 <= ball.diameter_px / float(setup_ball["diameter_px"]) <= 1.33
+    ):
+        notes.append(
+            f"not the setup's ball: solved on a blob at ({ball.x:.0f}, {ball.y:.0f}) px, "
+            f"{ball.diameter_px:.0f} px across"
+        )
     return {
         "solved_range_m": round(solution.range_to_ball_mm / 1000.0, 4),
         "solved_ball_diameter_px": round(float(ball.diameter_px), 2),
-        "solved_range_note": "; ".join(solution.warnings) or "clean",
+        "solved_range_note": "; ".join(notes) or "clean",
     }
 
 

@@ -679,10 +679,13 @@ def estimate_camera_ball_flight(
     iwr_vertical_deg: float | None = None,
     ball_tracker=None,
     sensor_timestamps_ns: np.ndarray | None = None,
+    trigger_frame_index: int | None = None,
 ) -> CameraBallEstimate:
     """Estimate horizontal flight with a frozen detector-consensus sweep.
 
-    ``timestamps_ns`` are host arrival times and locate the trigger frame.
+    ``trigger_frame_index`` is the last frame exposed at or before the trigger,
+    from the clip's exposure split (P6-5). Clips without one locate the trigger
+    frame as they always did: the host arrival time nearest ``trigger_ns``.
     Sensor timestamps, when given, time everything else.
     """
     range_evidence_status = (
@@ -693,7 +696,11 @@ def estimate_camera_ball_flight(
         return CameraBallEstimate("rejected_invalid_camera_frames")
     if geometry.calibrated_model is not None and range_evidence is None:
         return CameraBallEstimate("rejected_calibrated_requires_iwr_range")
-    trigger_frame = int(np.argmin(np.abs(timestamps_ns.astype(np.int64) - trigger_ns)))
+    trigger_frame = (
+        int(trigger_frame_index)
+        if trigger_frame_index is not None and 0 <= trigger_frame_index < len(frames)
+        else int(np.argmin(np.abs(timestamps_ns.astype(np.int64) - trigger_ns)))
+    )
     anchor, reference_diagnostics = _select_reference_ball(
         frames, trigger_frame, geometry, ball_tracker
     )
