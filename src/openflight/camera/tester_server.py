@@ -48,6 +48,8 @@ from openflight.camera.club_motion import detect_reference_ball
 from openflight.camera.fusion_diagnostics import register_fusion_diagnostics
 from openflight.camera.paired_eligibility import evaluate_paired_capture
 from openflight.camera.reference_ball_range import (
+    _BALL_ABOVE_SURFACE_M,
+    _HITTING_RANGE_M,
     IWR_CAMERA_HINT_SCHEMA,
     BallPlaneCamera,
     ReferenceBallRangeResult,
@@ -80,10 +82,14 @@ from openflight.camera.tee_range_flow import (
 from openflight.camera.track_review import register_track_review
 from openflight.camera.triggered_buffer import unpack_r8_frame
 from openflight.iwr6843.range_evidence import (
+    StaticChannelProfile,
     StaticRangeProfile,
     StaticRangeProfileV2,
     build_static_profile_candidate,
+    compare_static_channel_profiles,
     compare_static_range_profiles,
+    ground_elevation_window_deg,
+    static_channel_profile,
     static_range_estimator_sha256 as _iwr_static_estimator_sha256,
 )
 
@@ -441,6 +447,11 @@ _CAMERA_WINDOW_REJECTIONS = {
 UNUSABLE_CAMERA_WINDOW_OUTCOMES = frozenset(_CAMERA_WINDOW_REJECTIONS)
 
 
+# The power profiles' "accepted", and the coherent difference's clear single peak,
+# which nothing qualifies (P7-6).
+IWR_ACCEPTED_STATUSES = frozenset({"accepted", "accepted_unqualified"})
+
+
 def iwr_range_usable(range_m: float | None, evidence: Mapping | None) -> bool:
     """Whether a static IWR range may reach swings or the lens-height solve."""
     evidence = evidence if isinstance(evidence, Mapping) else {}
@@ -449,7 +460,7 @@ def iwr_range_usable(range_m: float | None, evidence: Mapping | None) -> bool:
     return bool(
         range_m is not None
         and isinstance(difference, Mapping)
-        and difference.get("status") == "accepted"
+        and difference.get("status") in IWR_ACCEPTED_STATUSES
         and not (
             isinstance(window, Mapping) and window.get("outcome") in UNUSABLE_CAMERA_WINDOW_OUTCOMES
         )
@@ -3591,7 +3602,93 @@ def iwr_range_bias_m(calibration: Mapping) -> float:
     return float(value)
 
 
-def _guided_iwr_candidate(
+def iwr_ground_elevation_window_deg(
+    rig_geometry: Path, slant_range_m: tuple[float, float]
+) -> tuple[float, float]:
+    """Where a ball at address appears on the IWR's vertical array, from the rig file.
+
+    The radar's phase centre height and aim come from the shared rig file; the
+    ball's centre is anywhere from sunk into grass to on a raised mat (P7-6).
+    """
+    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+    rig = RigGeometry.from_json(rig_geometry)
+    origin = rig.iwr_origin_mm
+    if rig.lens_height_above_floor_mm is None or origin is None:
+        raise ValueError("the rig file does not place the IWR above the surface")
+    if rig.iwr_boresight_pitch_deg is None:
+        raise ValueError("the rig file does not give the IWR's aim")
+    radius = BALL_DIAMETER_MM / 2000.0
+    return ground_elevation_window_deg(
+        # image axes: +y is down, so the phase centre sits origin[1] mm below the lens
+        radar_height_m=(rig.lens_height_above_floor_mm - origin[1]) / 1000.0,
+        boresight_pitch_deg=float(rig.iwr_boresight_pitch_deg),
+        slant_range_m=slant_range_m,
+        ball_center_height_m=(radius + _BALL_ABOVE_SURFACE_M[0], radius + _BALL_ABOVE_SURFACE_M[1]),
+    )
+
+
+def _static_channel_profile(record: Mapping, iwr_dir: Path | None) -> StaticChannelProfile | None:
+    """A capture's per-channel means: recorded with it, or derived from its saved dump."""
+    payload = record.get("channel_profile")
+    if isinstance(payload, Mapping):
+        return StaticChannelProfile(**dict(payload))
+    raw = (record.get("artifacts") or {}).get("raw") or {}
+    if iwr_dir is None or not raw.get("path") or raw.get("complete") is False:
+        return None
+    path = iwr_dir / Path(str(raw["path"])).name
+    if not path.is_file():
+        return None
+    data = path.read_bytes()
+    if raw.get("sha256") and hashlib.sha256(data).hexdigest() != raw["sha256"]:
+        return None
+    return static_channel_profile(
+        data,
+        radar_profile_sha256=str(record["inputs"]["radar_config"]["sha256"]),
+        rig_geometry_sha256=str(record["inputs"]["rig_geometry"]["sha256"]),
+    )
+
+
+def _coherent_difference(
+    empty_record: Mapping,
+    present_record: Mapping,
+    *,
+    calibration: Mapping,
+    bias_m: float,
+    search_m: tuple[float, float],
+    window_m: tuple[float, float],
+    iwr_dir: Path | None,
+    rig_geometry: Path | None,
+):
+    """The coherent static difference (P7-6), or why the captures cannot give one."""
+    try:
+        empty = _static_channel_profile(empty_record, iwr_dir)
+        present = _static_channel_profile(present_record, iwr_dir)
+    except (KeyError, OSError, TypeError, ValueError) as exc:
+        return None, f"channel profiles unreadable: {exc}"
+    if empty is None or present is None:
+        return None, "the captures carry no per-channel profiles"
+    try:
+        correction = np.exp(-1j * np.asarray(calibration["elem_phase_rad"], dtype=float)) / (
+            np.asarray(calibration["elem_gain"], dtype=float)
+        )
+        if rig_geometry is None:
+            raise ValueError("no rig file")
+        elevation = iwr_ground_elevation_window_deg(rig_geometry, window_m)
+    except (KeyError, OSError, TypeError, ValueError) as exc:
+        return None, f"no ground-level elevation window: {exc}"
+    result = compare_static_channel_profiles(
+        empty,
+        present,
+        plausible_apparent_range_m=tuple(value + bias_m for value in search_m),
+        candidate_window_m=tuple(value + bias_m for value in window_m),
+        element_correction=correction,
+        ground_elevation_deg=elevation,
+    )
+    return result, None
+
+
+def _guided_iwr_candidate(  # pylint: disable=too-many-locals,too-many-branches
     empty_record: Mapping,
     present_record: Mapping,
     *,
@@ -3599,6 +3696,8 @@ def _guided_iwr_candidate(
     calibration_path: Path,
     qualification: tee_range.TeeRangeQualification | None,
     camera_window_m: tuple[float, float] | None = None,
+    iwr_dir: Path | None = None,
+    rig_geometry: Path | None = None,
 ) -> tee_range.TeeRangeCandidate:
     calibration_sha = _file_sha256(calibration_path)
     calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
@@ -3607,6 +3706,18 @@ def _guided_iwr_candidate(
     present = _static_profile(present_record)
     corrected_interval = iwr_search_interval_m(qualification)
     apparent_interval = tuple(value + bias_m for value in corrected_interval)
+    # The coherent difference searches the camera's window once the camera has the
+    # ball, else the broad hitting area; the power profiles stay on record (P7-6).
+    coherent, coherent_unavailable = _coherent_difference(
+        empty_record,
+        present_record,
+        calibration=calibration,
+        bias_m=bias_m,
+        search_m=corrected_interval,
+        window_m=camera_window_m if camera_window_m is not None else _HITTING_RANGE_M,
+        iwr_dir=iwr_dir,
+        rig_geometry=rig_geometry,
+    )
     # The camera's window only chooses which cluster may be the ball; the search, and
     # with it the scale, MAD and clutter limit, stays the whole window (wiring audit S1).
     result = compare_static_range_profiles(
@@ -3625,6 +3736,10 @@ def _guided_iwr_candidate(
     except (TypeError, ValueError):
         bias_uncertainty_m = math.nan
     bias_uncertainty_valid = math.isfinite(bias_uncertainty_m) and bias_uncertainty_m > 0.0
+    power_result = result
+    if coherent is not None:
+        # nothing qualifies the coherent difference: at best accepted_unqualified
+        result = coherent
     firmware_sha = str(present_record["inputs"]["firmware"]["sha256"])
     config_sha = str(present_record["inputs"]["radar_config"]["sha256"])
     rig_sha = str(present_record["inputs"]["rig_geometry"]["sha256"])
@@ -3646,8 +3761,19 @@ def _guided_iwr_candidate(
         and qualification.accuracy_qualified
         # a camera-steered reading is no longer independent of the camera
         and camera_window_m is None
+        and coherent is None
     )
-    if result.status == "accepted" and result.apparent_range_m is not None:
+    if result.status == "accepted_unqualified" and result.apparent_range_m is not None:
+        value = result.apparent_range_m - bias_m
+        uncertainty = max(
+            math.hypot(
+                float(result.range_bin_uncertainty_m or empty.range_resolution_m),
+                bias_uncertainty_m if bias_uncertainty_valid else 0.0,
+            ),
+            0.001,
+        )
+        evidence = {"method": "pre_mti_empty_vs_ball_present"}
+    elif result.status == "accepted" and result.apparent_range_m is not None:
         qualified_result = replace(result, radar_profile_qualified=qualified)
         if qualified:
             candidate = build_static_profile_candidate(
@@ -3666,20 +3792,16 @@ def _guided_iwr_candidate(
             )
             evidence = {"method": "pre_mti_empty_vs_ball_present"}
     else:
-        value = (
-            result.apparent_range_m - bias_m
-            if result.apparent_range_m is not None and result.apparent_range_m > bias_m
-            else None
-        )
-        uncertainty = (
-            max(float(result.range_bin_uncertainty_m or empty.range_resolution_m), 0.001)
-            if value is not None
-            else None
-        )
+        # A rejected difference hands over no range: its bin stays in the
+        # difference's record as a diagnostic only (P7-6).
+        value = None
+        uncertainty = None
         evidence = {"method": "pre_mti_empty_vs_ball_present"}
     evidence.update(
         {
             "difference": asdict(result),
+            "power_difference": asdict(power_result) if coherent is not None else None,
+            "coherent_unavailable": coherent_unavailable,
             "empty_result": dict(empty_record),
             "present_result": dict(present_record),
             "qualification": {
@@ -3695,9 +3817,15 @@ def _guided_iwr_candidate(
                 "scope": qualification.scope if qualification else "tester_setup",
                 "manual_range_used": False,
                 "camera_range_used": camera_window_m is not None,
+                "experimental": result.status == "accepted_unqualified",
                 "moving_iwr_used": False,
             },
             "search_window_m": list(corrected_interval),
+            "candidate_window_m": list(
+                camera_window_m if camera_window_m is not None else _HITTING_RANGE_M
+            )
+            if coherent is not None
+            else None,
             "bias_uncertainty": (
                 {"value_m": bias_uncertainty_m, "source": "hashed_range_calibration"}
                 if bias_uncertainty_valid
@@ -4049,7 +4177,9 @@ def tee_range_display(
     window_rejection = _CAMERA_WINDOW_REJECTIONS.get(window.get("outcome"))
     iwr_display = _candidate_display(
         iwr,
-        qualified_source=difference.get("status") in {None, "accepted"} and not window_rejection,
+        qualified_source=(
+            difference.get("status") in {None, *IWR_ACCEPTED_STATUSES} and not window_rejection
+        ),
     )
     if iwr is None:
         iwr_display = {**iwr_display, "state": "not_captured"}
@@ -5485,6 +5615,8 @@ def create_app(
                 epoch_id=epoch_id,
                 calibration_path=iwr_calibration,
                 qualification=qualification,
+                iwr_dir=store.epoch_dir(epoch_id) / "iwr",
+                rig_geometry=rig_geometry,
             )
         except (KeyError, TypeError, ValueError) as exc:
             return store.transition(
@@ -5553,7 +5685,7 @@ def create_app(
             },
         )
 
-    def _camera_steered_iwr(state, selected, iwr_evidence) -> dict | None:
+    def _camera_steered_iwr(tester_id: str, state, selected, iwr_evidence) -> dict | None:
         """The radar candidate checked against, or re-selected inside, the camera's window."""
         window = camera_radar_window(selected)
         if window is None or not isinstance(iwr_evidence, Mapping):
@@ -5597,6 +5729,8 @@ def create_app(
                 calibration_path=iwr_calibration,
                 qualification=qualification,
                 camera_window_m=window,
+                iwr_dir=range_store(tester_id).epoch_dir(state.epoch_id) / "iwr",
+                rig_geometry=rig_geometry,
             ).to_dict()
         except (KeyError, TypeError, ValueError) as exc:
             # The pick outside the window stays on record but is unusable for swings
@@ -6010,7 +6144,7 @@ def create_app(
             )
             iwr_evidence = state.evidence.get("iwr_candidate")
             steered = (
-                _camera_steered_iwr(state, result.selected, iwr_evidence)
+                _camera_steered_iwr(tester_id, state, result.selected, iwr_evidence)
                 if arm_id == "arm5"
                 else None
             )

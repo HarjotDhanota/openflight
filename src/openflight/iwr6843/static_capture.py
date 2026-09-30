@@ -16,7 +16,10 @@ from typing import Any, Callable
 
 from openflight.iwr6843.driver import IWR6843DumpRecoveryError, IWR6843Radar
 from openflight.iwr6843.dump import parse_header, payload_nbytes
-from openflight.iwr6843.range_evidence import static_range_profile_v2 as static_range_profile
+from openflight.iwr6843.range_evidence import (
+    static_channel_profile,
+    static_range_profile_v2 as static_range_profile,
+)
 
 SCHEMA = "openflight.iwr6843.static_capture.v2"
 MIN_SETTLE_S = 0.25
@@ -317,6 +320,14 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
                 rig_geometry_sha256=input_manifest["rig_geometry"]["sha256"],
             )
             result["profile"] = _profile_payload(profile)
+            # the per-channel complex means the setup subtracts coherently (P7-6)
+            result["channel_profile"] = _profile_payload(
+                static_channel_profile(
+                    raw,
+                    radar_profile_sha256=input_manifest["radar_config"]["sha256"],
+                    rig_geometry_sha256=input_manifest["rig_geometry"]["sha256"],
+                )
+            )
             result["status"] = "usable"
             result["usable"] = True
         except StaticCaptureCancelled as error:

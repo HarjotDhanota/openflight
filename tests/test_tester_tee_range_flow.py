@@ -3221,3 +3221,179 @@ def test_the_swings_record_says_where_the_box_was(tmp_path, inputs, monkeypatch)
     assert handed["placement_box"]["box_px"] == state["evidence"]["placement_box"]["box_px"]
     assert handed["placement_box"]["frame_size_px"] == [1280, 800]
     assert handed["placement_box"]["source"] == "tester_dragged"
+
+
+# P7-6: the setup's radar difference is subtracted coherently per virtual channel.
+REPO = Path(__file__).resolve().parents[1]
+REFERENCE_CALIBRATION = REPO / "config" / "iwr6843_calibration_reference.json"
+V3_RIG = REPO / "config" / "enclosure_v3_rig_geometry.json"
+
+
+def _coherent_records(name="outdoors-test-7-5a7821af3641"):
+    """Two capture records as the Pi writes them, from a recorded setup's fixture."""
+    fixture = json.loads(
+        (REPO / "tests" / "fixtures" / "iwr6843_static_coherent" / f"{name}.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    records = []
+    for kind in ("empty", "present"):
+        channels = fixture[kind]
+        values = np.asarray(channels["real"]) + 1j * np.asarray(channels["imag"])
+        shape = (channels["n_tx"], channels["n_rx"], channels["range_bin_count"])
+        power = np.mean(np.abs(values.reshape(shape)) ** 2, axis=(0, 1))
+        records.append(
+            {
+                "inputs": {
+                    "firmware": {"sha256": "f" * 64},
+                    "radar_config": {"sha256": channels["radar_profile_sha256"]},
+                    "rig_geometry": {"sha256": channels["rig_geometry_sha256"]},
+                },
+                "profile": {
+                    "schema": STATIC_PROFILE_V2_SCHEMA,
+                    "capture_sha256": channels["capture_sha256"],
+                    "radar_profile_sha256": channels["radar_profile_sha256"],
+                    "radar_profile_qualified": False,
+                    "rig_geometry_sha256": channels["rig_geometry_sha256"],
+                    "capture_config_sha256": channels["capture_config_sha256"],
+                    "range_bin_start": channels["range_bin_start"],
+                    "range_bin_count": channels["range_bin_count"],
+                    "range_resolution_m": channels["range_resolution_m"],
+                    "power": power.tolist(),
+                    "frame_mad_fraction": [0.0] * channels["range_bin_count"],
+                    "frame_count": channels["frame_count"],
+                },
+                "channel_profile": channels,
+            }
+        )
+    return records
+
+
+def test_the_setup_radar_subtracts_coherently_and_stays_experimental():
+    empty, present = _coherent_records()
+
+    candidate = ts._guided_iwr_candidate(
+        empty,
+        present,
+        epoch_id="setup-coherent",
+        calibration_path=REFERENCE_CALIBRATION,
+        qualification=None,
+        rig_geometry=V3_RIG,
+    )
+
+    evidence = candidate.evidence
+    assert evidence["difference"]["status"] == "accepted_unqualified"
+    assert evidence["difference"]["method"] == "coherent_per_virtual_channel"
+    assert evidence["power_difference"]["method"] == "power_profile_difference"
+    assert list(evidence["candidate_window_m"]) == [1.0, 2.5]
+    assert candidate.radar_slant_range_m == pytest.approx(1.581, abs=0.01)
+    assert candidate.uncertainty_m > 0.0
+    assert evidence["qualification"]["accuracy_qualified"] is False
+    assert evidence["qualification"]["status"] == "rejected"
+    assert evidence["qualification"]["experimental"] is True
+    assert ts.iwr_range_usable(candidate.radar_slant_range_m, evidence) is True
+    display = ts.tee_range_display({"evidence": {"iwr_candidate": candidate.to_dict()}})["iwr"]
+    assert display["state"] == "unqualified"
+    assert display["diagnostic_range_m"] == pytest.approx(candidate.radar_slant_range_m)
+
+
+def test_the_camera_window_steers_the_coherent_search():
+    empty, present = _coherent_records()
+
+    inside = ts._guided_iwr_candidate(
+        empty,
+        present,
+        epoch_id="setup-coherent",
+        calibration_path=REFERENCE_CALIBRATION,
+        qualification=None,
+        camera_window_m=(1.3, 1.9),
+        rig_geometry=V3_RIG,
+    )
+    outside = ts._guided_iwr_candidate(
+        empty,
+        present,
+        epoch_id="setup-coherent",
+        calibration_path=REFERENCE_CALIBRATION,
+        qualification=None,
+        camera_window_m=(0.8, 1.2),
+        rig_geometry=V3_RIG,
+    )
+
+    assert inside.evidence["difference"]["status"] == "accepted_unqualified"
+    assert inside.radar_slant_range_m == pytest.approx(1.581, abs=0.01)
+    assert inside.evidence["qualification"]["camera_range_used"] is True
+    assert outside.evidence["difference"]["status"] == "rejected_no_ball"
+    # a rejected difference hands over no range, only its record
+    assert outside.radar_slant_range_m is None
+    assert outside.uncertainty_m is None
+
+
+def test_the_saved_dump_stands_in_for_a_record_without_channels():
+    """Setups recorded before P7-6 carry only the power profile beside their raw dump."""
+    empty, present = _coherent_records()
+    raw_root = REPO.parent / "pi-handoff" / "Outdoors-test-7" / "calibration" / "tee-range"
+    epoch = raw_root / "guided" / "epochs" / "setup-20260930-5a7821af3641" / "iwr"
+    if not epoch.is_dir():
+        pytest.skip("the recorded Pi captures are not beside this checkout")
+    for record, name in ((empty, "empty-000002"), (present, "ball_present-000004")):
+        record.pop("channel_profile")
+        saved = json.loads((epoch / f"{name}.json").read_text(encoding="utf-8"))
+        record["artifacts"] = saved["artifacts"]
+
+    candidate = ts._guided_iwr_candidate(
+        empty,
+        present,
+        epoch_id="setup-coherent",
+        calibration_path=REFERENCE_CALIBRATION,
+        qualification=None,
+        iwr_dir=epoch,
+        rig_geometry=V3_RIG,
+    )
+
+    assert candidate.evidence["difference"]["status"] == "accepted_unqualified"
+    assert candidate.radar_slant_range_m == pytest.approx(1.581, abs=0.01)
+
+
+def test_without_channels_or_an_array_calibration_the_power_profiles_decide(inputs):
+    empty, present = _coherent_records()
+
+    no_channels = ts._guided_iwr_candidate(
+        {key: value for key, value in empty.items() if key != "channel_profile"},
+        {key: value for key, value in present.items() if key != "channel_profile"},
+        epoch_id="setup-power",
+        calibration_path=REFERENCE_CALIBRATION,
+        qualification=None,
+        rig_geometry=V3_RIG,
+    )
+    no_array = ts._guided_iwr_candidate(
+        empty,
+        present,
+        epoch_id="setup-power",
+        calibration_path=inputs["calibration"],
+        qualification=None,
+        rig_geometry=V3_RIG,
+    )
+
+    for candidate in (no_channels, no_array):
+        assert candidate.evidence["difference"]["method"] == "power_profile_difference"
+        assert candidate.evidence["power_difference"] is None
+        assert candidate.evidence["coherent_unavailable"]
+
+
+def test_a_rejected_power_difference_hands_over_no_range(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    app.config["TEST_STATIC_MANAGER"].ball_return = 0.0
+    client = app.test_client()
+    for index, action in enumerate(("start", "capture_empty", "capture_ball")):
+        assert post(client, tester, action, f"no-range-{index}").status_code == 200
+
+    state = phase(client, tester)
+    display = client.get("/api/tester/tee-range", query_string={"tester_id": tester}).get_json()[
+        "display"
+    ]
+
+    iwr = state["evidence"]["iwr_candidate"]
+    assert iwr["evidence"]["difference"]["status"] == "rejected_no_ball"
+    assert iwr["radar_slant_range_m"] is None
+    assert iwr["uncertainty_m"] is None
+    assert display["iwr"]["diagnostic_range_m"] is None

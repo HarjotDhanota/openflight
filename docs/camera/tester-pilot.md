@@ -389,6 +389,23 @@ gates stop 0.25 m short of it. The static capture's window ends near 2.9 m
 (apparent), so a net further away is not seen; swings then assume 4.6 m, and
 `session_start`'s `net_range` says the value was assumed.
 
+The two radar captures are compared as complex numbers, one virtual channel at a
+time: each channel of the empty capture is first scaled by one complex factor
+fitted on still reflectors outside the hitting area (a radar restart turns every
+channel's phase), then subtracted from the ball capture. What is left is what
+changed. The radar's pick is the one clear change at ground level (its elevation
+on the vertical antenna column must match a ball on the surface or a raised mat,
+from the rig file); before the camera has the ball it is searched for across the
+hitting area, 1.0–2.5 m. A pick found this way is **experimental**
+(`accepted_unqualified`): nothing has qualified it. Two comparable changes, a
+change spread over more than 7 range bins (about 0.33 m), or a still reflector
+beside the ball that changed between the captures are rejected, and a rejected
+radar result hands over no range at all (the summary shows no number for it).
+The older comparison of magnitudes stays on record beside it; on 30 Sept it
+rejected a real ball whose echo cancelled the mat edge's (a fractional change of
+0.34 against its 0.50 gate). Captures recorded before this change are compared
+from their saved raw dumps.
+
 At Save the camera's own range to the ball (from its apparent size, found without
 the radar's hint) sets a window of ±2σ, at least ±40 %, around it. If the radar
 chose something outside that window, such as a person, a club or a net at another
@@ -512,6 +529,7 @@ every earlier frame and failure record for review.
 | A swing is listed as set aside, `taken at ... not this rung's ...` or `taken during a still_photo` | It was taken while the ladder was changing the camera's settings | Nothing is lost; hit the next swing once the rung shows as set |
 | `finish automatic tee range before capture (retryable_failure)` | The setup's range record no longer matches the one the ladder was admitted with | Press **Start over / ball moved** and run the setup again |
 | Range summary: **swings get tee range pending** | No radar range was accepted (or none is qualified and the tester was not started with `--use-unqualified-tee-range`). The camera's own range is never used as the tee range | Swings still record; launch and club metrics that need the range are withheld. For a test session with a range, redo the setup with everyone clear of the radar |
+| Range summary: IWR `rejected — rejected_ambiguous`, `rejected_clutter` or `rejected_scene_changed` | More than one thing changed between the two radar captures at ground level (a person, a club, a second ball), the change was spread too wide to be one ball, or something beside the ball moved | Redo the setup: stand in the same spot, at least 2 m away, for both captures, and keep clubs, spare balls and bags still and away from the box |
 | Range summary: IWR `rejected — camera_window_disjoint` or `not_rechecked` | The radar picked something outside the camera's range window and nothing inside it replaced it | Redo the setup: step well away from the rig during both radar captures and keep the ball in the camera's view |
 | Range summary: **640×400 check disagrees** | The two camera modes put the ball at different ranges | Make sure the ball did not move between the two Saves; if it did, **Start over / ball moved**. The setup is not blocked |
 | `the LIS3DH reading has no camera pitch` | The inclinometer is off or still settling (for example just after the kiosk handed it back) | Wait a few seconds for a stable reading, then press the step again |
