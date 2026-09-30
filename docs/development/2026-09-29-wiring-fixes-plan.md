@@ -215,6 +215,28 @@ Outdoors-test-6 and -7 ran in full sun on 30 Sept (10:10-10:26) on 63b69be9. Har
 |---|---|
 | P7-15 | The placement box moves from the start of step 3 into step 1, straight after the setup checklist. The tester sets the unit down, confirms the setup, then drags and confirms the box. The hardware check, the light measurement and the ball range follow.<br><br>**The hitting zone becomes the box.** Wherever the tester judges it, the confirmed box replaces the fixed box (rows 45-90 %, columns 20-80 %), halved for 640×400:<ul><li>the light screens;</li><li>the ladder's zone floor;</li><li>the capture-time zone fallback.</li></ul>The fixed box remains only when no box has been confirmed.<br><br>**Moving the box later** makes the light measurement stale and the ball range redo, as a rig change does. |
 
+## Phase 8: the whole chain, end to end (added 30 Sept, after harjot-indoor-test-1)
+
+Harjot ran the Phase 7 build (95407c34) indoors at 14:43: carpet, a ball near a door, the box dragged over it.
+- **Radar:** the coherent difference found the ball. The result was `accepted_unqualified`: one ground-level reflector at 1.641 m apparent and 1.575 m corrected, −9.5° elevation, peak score 49.
+- **Camera:** it never locked.
+  - The radar-to-camera hint still requires a qualified, `accepted` result (`tester_server.py:4488-4498`), so the camera was told "no accepted static IWR candidate".
+  - The page showed the radar's range as "diagnostic, not used" (`tester_server.py:4683-4690`).
+  - The camera's floor-and-size check rejected the visible ball. The floor meets the door about 50 px lower in the image than the level, nominal-centre model predicts, so the camera's vertical (pitch plus principal point) is off by about 3°.
+  - The search then walked to 8000 µs × 12 in a well-lit box.
+- **Why these slipped through:** each piece had unit tests, but nothing replays a real session through the whole chain.
+
+Harjot: "we need to make sure the entire fusion pipeline works completely", and "for step 3, we can see the camera and the box as we put the ball at address".
+
+| ID | Fix |
+|---|---|
+| P8-1 | An `accepted_unqualified` radar range steers the camera search's range window, labelled experimental. The page shows it as the radar's measured range (experimental), not "diagnostic, not used". |
+| P8-2 | Inside the confirmed box, the floor-row agreement no longer rejects a ball. Size plausibility for the hitting area and the radar's range decide instead. |
+| P8-3 | Each setup solves the camera's vertical offset (pitch plus principal-point row) from the ball's image row, the radar range and the rig's lens height. It records the offset with its uncertainty, applies it wherever the camera turns rows into angles or distances, labels it experimental, and bounds it (a gross error refuses). No typed input. |
+| P8-4 | A well-lit box with no ball stops the search with "no ball in the box"; it never walks brighter. |
+| P8-5 | Step 3 shows the live camera with the box while the tester places the ball, between the radar's empty and ball captures. Fix the "3. 3." heading. |
+| P8-6 | An end-to-end check replays a whole session through the production code and reports every stage per shot: setup, range, trigger evidence, clip match, lighting, camera geometry, camera fusion, IWR, and each metric. It runs on a synthetic session, where every stage must pass, and on the real sessions, where each failure must name a data cause and never a code cause. Every code break it finds on the swing and fusion side is fixed. |
+
 **Harjot, before the next session:** put a foam windscreen on the microphone, and check the GATE LED stays quiet in wind before swinging.
 
 The three workstreams run in parallel on their own branches. S owns the tester page and runs the Playwright specs; T and L run pytest and vitest only.
