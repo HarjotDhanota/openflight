@@ -4070,18 +4070,18 @@ def _attach_experimental_face_angle(shot: Shot) -> None:
     if launch is None or shot.launch_angle_horizontal_source == "estimated":
         shot.experimental_face_angle_status = "missing_measured_start_direction"
         return
-    # An uncalibrated radar start direction has its own zero; with any path it
-    # would mix two frames (audit F8).
-    if shot.launch_angle_horizontal_status == "azimuth_uncalibrated":
-        shot.experimental_face_angle_status = "start_direction_azimuth_uncalibrated"
-        return
+    # An uncalibrated radar start direction has its own zero, so with any path
+    # it mixes two frames (audit F8). D15 (P8-7): compute it and say so.
+    azimuth_uncalibrated = shot.launch_angle_horizontal_status == "azimuth_uncalibrated"
     path, path_source = displayed_club_path(shot)
     if path is None:
         shot.experimental_face_angle_status = "missing_accepted_club_path"
         return
     weight = FACE_ANGLE_FACE_WEIGHT
     shot.experimental_face_angle_deg = round((launch - (1.0 - weight) * path) / weight, 1)
-    shot.experimental_face_angle_status = "d_plane_estimate"
+    shot.experimental_face_angle_status = (
+        "d_plane_estimate_azimuth_uncalibrated" if azimuth_uncalibrated else "d_plane_estimate"
+    )
     shot.experimental_face_angle_path_source = path_source
     shot.experimental_face_angle_launch_source = shot.launch_angle_horizontal_source
 

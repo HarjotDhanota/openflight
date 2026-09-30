@@ -66,9 +66,15 @@ function markEstimated(isEstimated: boolean): true | undefined {
 }
 
 /** The D-plane face angle rides on the club-path tile it is derived from. */
-function withFaceAngle(subtext: string | undefined, faceDeg: number | null | undefined): string | undefined {
+function withFaceAngle(
+  subtext: string | undefined,
+  faceDeg: number | null | undefined,
+  faceStatus?: string | null
+): string | undefined {
   if (faceDeg == null) return subtext;
-  const face = `face ${formatOptionalAngle(faceDeg, true)}° (D-plane)`;
+  // an uncalibrated radar start direction is labelled, not hidden (P8-7)
+  const basis = faceStatus === 'd_plane_estimate_azimuth_uncalibrated' ? 'D-plane, azimuth uncalibrated' : 'D-plane';
+  const face = `face ${formatOptionalAngle(faceDeg, true)}° (${basis})`;
   return subtext ? `${subtext} · ${face}` : face;
 }
 
@@ -208,7 +214,8 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
             : clubPathIsExperimental
               ? experimentalStatus(shot.experimental_club_path_status)
               : undefined,
-        shot.experimental_face_angle_deg
+        shot.experimental_face_angle_deg,
+        shot.experimental_face_angle_status
       ),
       confidence: clubPathIsExperimental ? (shot.experimental_fused_club_path_confidence ?? 'experimental') : null,
       confidenceLabel: shot.experimental_fused_club_path_confidence ? 'experimental' : undefined,

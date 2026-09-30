@@ -5737,16 +5737,18 @@ class TestIwrAzimuthCalibration:
         assert shot.experimental_face_angle_deg == pytest.approx(3.5)
         assert shot.experimental_face_angle_path_source == "camera_fused_chained"
 
-    def test_an_uncalibrated_radar_start_direction_gives_no_face_angle(self, monkeypatch):
-        # A radar start direction and a camera path would mix two zeros.
+    def test_an_uncalibrated_radar_start_direction_gives_a_labelled_face_angle(self, monkeypatch):
+        """D15 (P8-7): computed, and labelled with the mixed zeros and the path source."""
         shot = self._run(monkeypatch, phase_reference=None)
         shot.experimental_fused_club_path_deg = -4.0
         shot.experimental_fused_status = "chained_high"
 
         server_module._attach_experimental_face_angle(shot)
 
-        assert shot.experimental_face_angle_deg is None
-        assert shot.experimental_face_angle_status == "start_direction_azimuth_uncalibrated"
+        assert shot.experimental_face_angle_deg == pytest.approx((2.25 + 0.2 * 4.0) / 0.8, abs=0.1)
+        assert shot.experimental_face_angle_status == "d_plane_estimate_azimuth_uncalibrated"
+        assert shot.experimental_face_angle_path_source == "camera_fused_chained"
+        assert shot.experimental_face_angle_launch_source == "radar"
 
     def test_a_low_consensus_camera_horizontal_ranks_below_the_radar(self, monkeypatch):
         """P8-7: shown, labelled, and never displacing a radar horizontal."""
