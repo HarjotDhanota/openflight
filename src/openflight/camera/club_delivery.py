@@ -1017,8 +1017,17 @@ def estimate_chained_delivery(
     ball_tracker: ReferenceBallTracker | None = None,
     reference_ball: ReferenceBall | None = None,
     reference_ball_selected: bool = False,
+    sensor_timestamp_ns: np.ndarray | None = None,
 ) -> ChainedDelivery:
-    """Estimate final-approach club delivery from camera, IWR, and OPS."""
+    """Estimate final-approach club delivery from camera, IWR, and OPS.
+
+    Frames are timed by ``sensor_timestamp_ns`` (exposure) when the clip has
+    usable ones, else by host arrival, which a delivery stall distorts by up to
+    31 ms around impact (P6-8). Every time in the estimate comes from that one
+    clock: the radar is reached only through the contact anchor, the IWR impact
+    time plus camera time since the camera's contact, so no conversion between
+    the camera and host clocks is needed.
+    """
     range_evidence_status = (
         getattr(range_evidence, "status", "accepted") if range_evidence is not None else None
     )
@@ -1027,9 +1036,9 @@ def estimate_chained_delivery(
         return ChainedDelivery(status="rejected_no_ops_speed")
     if frames.ndim != 3 or len(frames) < 20:
         return ChainedDelivery(status="rejected_invalid_frames")
-    timestamps_ns = np.asarray(host_timestamp_ns, dtype=np.int64)
-    if timestamps_ns.shape != (len(frames),):
+    if np.asarray(host_timestamp_ns).shape != (len(frames),):
         return ChainedDelivery(status="rejected_invalid_timing")
+    timestamps_ns, timestamp_source = frame_clock(host_timestamp_ns, sensor_timestamp_ns)
 
     background = np.median(frames[:15], axis=0).astype(np.uint8)
     scene_p995, _ball_threshold, bright_now, dark_bg = _adaptive_thresholds(background)
@@ -1058,7 +1067,13 @@ def estimate_chained_delivery(
     saturated_zone = float(np.mean(background[ball_zone] >= 250))
     camera_quality_clean = saturated_zone <= BALL_ZONE_SATURATION_MAX
 
-    contact = camera_contact_time(frames, timestamps_ns, ball, trigger_index=trigger_index)
+    contact = camera_contact_time(
+        frames,
+        timestamps_ns,
+        ball,
+        trigger_index=trigger_index,
+        timestamp_source=timestamp_source,
+    )
     if contact is None:
         return ChainedDelivery(status="rejected_no_impact", scene_p995=scene_p995)
     impact_idx = contact.impact_frame

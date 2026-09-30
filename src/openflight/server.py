@@ -3575,6 +3575,7 @@ def _fuse_camera_club_delivery(
                                     geometry=geometry_inputs.delivery_geometry(),
                                     ops_club_speed_mph=shot.club_speed_mph,
                                     ball_tracker=camera_reference_ball_tracker,
+                                    sensor_timestamp_ns=archive.get("sensor_timestamp_ns"),
                                 )
             else:
                 fused = ChainedDelivery(status="rejected_missing_camera_frames")

@@ -375,6 +375,9 @@ class CameraCaptureRuntime:
         self._camera_control_lock = threading.Lock()
         self._controls_purpose = "capture"
         self._trigger_exposure_lock = threading.Lock()
+        # Serializes whole triggers so their records queue in ring order while the
+        # frame lock above is held only to freeze the ring (P6-7).
+        self._trigger_order_lock = threading.Lock()
         self._reconfigure_lock = threading.Lock()
         profile = self.settings.enforced_profile
         self._auto_exposure_policy = AutoExposurePolicy(
@@ -538,18 +541,40 @@ class CameraCaptureRuntime:
 
     def auto_exposure_status(self) -> dict:
         """Return controller state for diagnostics and the operator UI."""
+        return self._auto_exposure_payload(self._auto_exposure_snapshot())
+
+    def _auto_exposure_snapshot(self) -> dict:
+        """The controls and controller state in force now; cheap enough for the frame lock.
+
+        Measuring the frame is left to ``_auto_exposure_payload``, which may run
+        after the lock is released: the snapshot keeps the frame it describes.
+        """
+        settings = self.settings
         with self._auto_exposure_lock:
             payload = self._auto_exposure_decision.to_dict()
             payload.update(
                 {
-                    "enabled": self.settings.auto_exposure,
+                    "enabled": settings.auto_exposure,
                     "capture_deferred": self._auto_exposure_capture_deferred,
                     "last_check_timestamp": self._auto_exposure_last_check_epoch,
                     "last_adjustment_timestamp": self._auto_exposure_last_adjustment_epoch,
                 }
             )
-        if not self.settings.auto_exposure:
-            observation = self._manual_exposure_observation()
+        return {
+            "payload": payload,
+            "settings": settings,
+            "controls_purpose": self._controls_purpose,
+            "frame": None if settings.auto_exposure else self._ring.latest_frame,
+        }
+
+    @staticmethod
+    def _auto_exposure_payload(snapshot: Mapping) -> dict:
+        """The status dict from one snapshot, measuring its frame in manual mode."""
+        payload = dict(snapshot["payload"])
+        settings = snapshot["settings"]
+        if not settings.auto_exposure:
+            frame = snapshot["frame"]
+            observation = measure_exposure(frame.image if frame is not None else np.asarray([]))
             payload.update(
                 {
                     "status": "manual",
@@ -558,13 +583,11 @@ class CameraCaptureRuntime:
                     "observation": observation.to_dict(),
                 }
             )
-        payload["exposure_us"] = self.settings.exposure_us
-        payload["gain"] = self.settings.gain
-        payload["controls_purpose"] = self._controls_purpose
-        payload["armed_profile"] = (
-            dict(self.settings.armed_profile) if self.settings.armed_profile else None
-        )
-        payload["diagnostic_capture"] = self.settings.diagnostic_capture
+        payload["exposure_us"] = settings.exposure_us
+        payload["gain"] = settings.gain
+        payload["controls_purpose"] = snapshot["controls_purpose"]
+        payload["armed_profile"] = dict(settings.armed_profile) if settings.armed_profile else None
+        payload["diagnostic_capture"] = settings.diagnostic_capture
         return payload
 
     def _manual_exposure_observation(self) -> ExposureObservation:
@@ -816,8 +839,8 @@ class CameraCaptureRuntime:
 
     def notify_trigger(self, timestamp: float | None = None) -> bool:
         """Freeze the camera ring on a sound-trigger edge."""
-        # Timed before anything else: the evidence below is gathered under the
-        # frame lock and stalled frame delivery ~31 ms in Outdoors-test-5 (P6-5).
+        # Timed before anything else (P6-5): gathering the evidence under the frame
+        # lock once stalled delivery 14-31 ms and stamped the trigger that late.
         trigger_host_ns = time.monotonic_ns()
         trigger_boottime_ns = _boottime_ns()
         trigger_epoch = time.time() if timestamp is None else float(timestamp)
@@ -829,30 +852,43 @@ class CameraCaptureRuntime:
                 "save_backlog_full",
                 f"{self._ready.qsize()} completed clips are still waiting for the disk",
             )
-        with self._trigger_exposure_lock:
-            evidence = None
-            if self._trigger_evidence_provider is not None:
-                try:
-                    evidence = deepcopy(self._trigger_evidence_provider(trigger_epoch))
-                except Exception as exc:  # pylint: disable=broad-exception-caught
-                    evidence = {
-                        "schema_version": 1,
-                        "ready": False,
-                        "blockers": [{"id": "provider", "reason": f"{type(exc).__name__}: {exc}"}],
-                    }
-                    logger.warning("[CAMERA] Trigger evidence provider failed", exc_info=True)
-            accepted = self._ring.trigger(trigger_host_ns)
+        with self._trigger_order_lock:
+            # Frame delivery needs this lock, so it covers only the freeze and a
+            # cheap snapshot of the controls in force at it (P6-7).
+            with self._trigger_exposure_lock:
+                accepted = self._ring.trigger(trigger_host_ns)
+                exposure = self._auto_exposure_snapshot() if accepted else None
             if not accepted:
                 busy = getattr(self._ring, "busy_reason", lambda: None)()
                 return self._reject_trigger(trigger_epoch, "ring_busy", busy)
+            evidence = self._gather_trigger_evidence(trigger_epoch)
+            admission = deepcopy(evidence)
+            auto_exposure = self._auto_exposure_payload(exposure)
+            # One trigger at a time reaches here, so these queue in ring order and
+            # the save loop pairs each capture with its own records.
             self._trigger_epochs.put(trigger_epoch)
-            self._trigger_auto_exposure.put(self.auto_exposure_status())
+            self._trigger_auto_exposure.put(auto_exposure)
             self._trigger_evidence.put(evidence)
             self._trigger_clocks.put(
                 {"host_monotonic_ns": trigger_host_ns, "boottime_ns": trigger_boottime_ns}
             )
-            self._admission_evidence.append((trigger_epoch, deepcopy(evidence)))
+            with self._trigger_exposure_lock:
+                self._admission_evidence.append((trigger_epoch, admission))
             return True
+
+    def _gather_trigger_evidence(self, trigger_epoch: float) -> dict | None:
+        """The setup evidence frozen for one accepted trigger, gathered outside the frame lock."""
+        if self._trigger_evidence_provider is None:
+            return None
+        try:
+            return deepcopy(self._trigger_evidence_provider(trigger_epoch))
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("[CAMERA] Trigger evidence provider failed", exc_info=True)
+            return {
+                "schema_version": 1,
+                "ready": False,
+                "blockers": [{"id": "provider", "reason": f"{type(exc).__name__}: {exc}"}],
+            }
 
     def trigger_evidence_for_shot(self, impact_timestamp: float | None) -> dict | None:
         """Consume the immutable trigger evidence nearest one OPS shot."""

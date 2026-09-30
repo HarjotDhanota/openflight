@@ -54,7 +54,7 @@ def _validate_archive(archive: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarra
 
 
 def _sensor_timestamps(archive: Mapping[str, Any]) -> np.ndarray | None:
-    """The archive's sensor timestamps, which time ball flight when present (F7)."""
+    """The archive's sensor timestamps, which time ball flight (F7) and club delivery (P6-8)."""
     sensor = archive.get("sensor_timestamp_ns")
     return None if sensor is None else np.asarray(sensor)
 
@@ -217,6 +217,7 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
                 ball_tracker=club_tracker,
                 reference_ball=reference_ball,
                 reference_ball_selected=bool(diagnostics),
+                sensor_timestamp_ns=_sensor_timestamps(archive),
             )
         except Exception as error:  # stage isolation is part of the persisted contract
             club = ChainedDelivery(status="error")
