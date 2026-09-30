@@ -301,6 +301,8 @@ class StaticManager:
         self.ball_bins: tuple[int, ...] = (30,)
         # (bin, extra power) for something else that appeared with the ball
         self.other_return: tuple[int, float] | None = None
+        # (bin, extra power) for a still reflector in both captures: a net
+        self.still_return: tuple[int, float] | None = None
         self.last_command = None
         self.start_count = 0
         self._status = {"state": "idle", "action": None, "message": "Ready"}
@@ -329,13 +331,16 @@ class StaticManager:
         capture_id = value("--capture-id")
         output = Path(value("--output-dir"))
         output.mkdir(parents=True, exist_ok=True)
-        empty = np.ones(96).tolist()
+        empty = np.ones(96)
         present = np.ones(96) + np.where(
             np.isin(np.arange(96), self.ball_bins), self.ball_return, 0.0
         )
         if self.other_return is not None:
             present[self.other_return[0]] += self.other_return[1]
-        present = present.tolist()
+        if self.still_return is not None:
+            empty[self.still_return[0]] += self.still_return[1]
+            present[self.still_return[0]] += self.still_return[1]
+        empty, present = empty.tolist(), present.tolist()
         record = {
             "capture_id": capture_id,
             "capture_kind": kind,
@@ -1029,6 +1034,9 @@ def test_guided_flow_resolves_and_survives_reload(tmp_path, inputs, monkeypatch)
         "qualified_static_iwr",
         "--iwr6843-tee-range-candidate",
         solution.selected_candidate_id,
+        # no net in the fake empty capture: the default is flagged (C7)
+        "--iwr6843-net-range-source",
+        "default_not_measured",
     ]
 
 
@@ -1299,6 +1307,9 @@ def test_missing_qualification_and_disagreement_remain_raw_only(tmp_path, inputs
         "0.021335",
         "--iwr6843-tee-range-source",
         "pending",
+        # no net in the fake empty capture: the default is flagged (C7)
+        "--iwr6843-net-range-source",
+        "default_not_measured",
     ]
     other_root = tmp_path / "other"
     app, tester = app_for(other_root, inputs, monkeypatch, camera_m=1.5)
@@ -1933,6 +1944,9 @@ def test_an_unqualified_range_reaches_swings_only_when_explicitly_enabled(
         "0.021335",
         "--iwr6843-tee-range-source",
         "pending",
+        # no net in the fake empty capture: the default is flagged (C7)
+        "--iwr6843-net-range-source",
+        "default_not_measured",
     ]
     assert ts._tee_range_cli_args(solution, use_unqualified=True) == [
         "--iwr6843-tee-m",
@@ -1943,6 +1957,9 @@ def test_an_unqualified_range_reaches_swings_only_when_explicitly_enabled(
         "unqualified_static_iwr",
         "--iwr6843-tee-range-candidate",
         iwr["candidate_id"],
+        # no net in the fake empty capture: the default is flagged (C7)
+        "--iwr6843-net-range-source",
+        "default_not_measured",
     ]
     assert ts.tee_range_display(state)["swings"]["state"] == "pending"
     swings = ts.tee_range_display(state, use_unqualified=True)["swings"]
@@ -2748,3 +2765,102 @@ def test_a_radar_range_without_an_uncertainty_does_not_solve_the_lens_height():
     assert solved["source"] == "rig_nominal"
     assert solved["radar_solved_m"] is None
     assert "uncertainty" in solved["radar_rejected"]
+
+
+class TestTheNetRange:
+    """C7 (decision D7): the empty static capture measures the net; 4.6 m is flagged."""
+
+    @staticmethod
+    def _empty(power, start=0, resolution=0.04):
+        return {
+            "capture_id": "empty-000002",
+            "profile": profile("a", list(power), "c" * 64, "d" * 64)
+            | {
+                "range_bin_start": start,
+                "range_bin_count": len(power),
+                "range_resolution_m": resolution,
+                "frame_mad_fraction": [0.0] * len(power),
+            },
+        }
+
+    def test_a_strong_return_at_2_8_m_is_the_net(self):
+        power = np.ones(96)
+        power[69:72] += (300.0, 1000.0, 300.0)  # bin 70 x 0.04 m
+        net = ts.empty_capture_net_range(self._empty(power))
+        assert net["status"] == "measured"
+        assert net["net_range_m"] == pytest.approx(2.8)
+        assert net["range_space"] == "apparent"
+
+    def test_field_clutter_is_not_a_net(self):
+        # 29 Sept indoors: a door at 1.73 m, whose tail runs past 2 m
+        fixture = json.loads(
+            (
+                Path(__file__).parent / "fixtures/iwr6843_static_range/field-20260929-door-1m.json"
+            ).read_text(encoding="utf-8")
+        )
+        net = ts.empty_capture_net_range({"profile": fixture["empty"]["profile_v2"]})
+        assert net["status"] == "not_found"
+        assert net["net_range_m"] is None
+        assert net["reason"]
+
+    def test_a_return_at_the_captures_far_edge_is_not_located(self):
+        power = np.ones(96)
+        power[95] += 1000.0
+        net = ts.empty_capture_net_range(self._empty(power))
+        assert net["status"] == "not_found"
+        assert "edge" in net["reason"]
+
+    def test_the_hand_off_passes_a_measured_net(self):
+        power = np.ones(96)
+        power[70] += 1000.0
+        iwr = _accepted_iwr(empty_result=self._empty(power))
+        solution = tee_range.TeeRangeSolution.unresolved((iwr,), reason="test")
+
+        args, handed = ts.tee_range_handoff(solution, use_unqualified=True)
+
+        assert args[args.index("--net-range-m") + 1] == "2.8"
+        assert args[args.index("--iwr6843-net-range-source") + 1] == "empty_static_capture"
+        assert handed["net_range"]["net_range_m"] == pytest.approx(2.8)
+
+    def test_without_a_net_the_default_is_flagged_not_passed(self):
+        solution = tee_range.TeeRangeSolution.unresolved((_accepted_iwr(),), reason="test")
+
+        args, handed = ts.tee_range_handoff(solution, use_unqualified=True)
+
+        assert "--net-range-m" not in args
+        assert args[args.index("--iwr6843-net-range-source") + 1] == "default_not_measured"
+        assert handed["net_range"]["status"] == "not_found"
+        assert handed["net_range"]["default_m"] == pytest.approx(4.6)
+
+    def test_a_measured_net_reaches_the_swing_server(self, tmp_path, inputs, monkeypatch):
+        inputs["rig"].write_bytes(Path(ts.DEFAULT_RIG_GEOMETRY).read_bytes())
+        app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False, use_unqualified=True)
+        manager = app.config["TEST_STATIC_MANAGER"]
+        manager.still_return = (70, 1000.0)
+        client = app.test_client()
+        state = drive(client, tester)
+        assert state["evidence"]["net_range"]["net_range_m"] == pytest.approx(2.8)
+        body = {"tester_id": tester, "arm_id": "arm5", "environment": "indoors", "action": "swings"}
+
+        assert client.post("/api/tester/run", json=body).status_code == 202
+        command = manager.last_command
+        assert command[command.index("--net-range-m") + 1] == "2.8"
+
+        session = _session_start_for(command, inputs["rig"], tmp_path, monkeypatch)
+        assert session["net_range"] == {
+            "net_range_m": pytest.approx(2.8),
+            "source": "empty_static_capture",
+            "range_space": "apparent",
+            "assumed": False,
+        }
+
+
+def test_the_swing_server_flags_an_unmeasured_net(tmp_path, monkeypatch):
+    command = ["--iwr6843", "--iwr6843-tee-range-pending", "--inclinometer"]
+    session = _session_start_for(command, Path(ts.DEFAULT_RIG_GEOMETRY), tmp_path, monkeypatch)
+    assert session["net_range"] == {
+        "net_range_m": pytest.approx(4.6),
+        "source": "default_not_measured",
+        "range_space": "apparent",
+        "assumed": True,
+    }

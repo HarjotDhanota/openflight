@@ -105,6 +105,9 @@ def _handoff_args(**overrides):
         "iwr6843_ball_height_m": server.BALL_RADIUS_M,
         "scene_lens_height_solved_m": None,
         "scene_lens_height_solved_uncertainty_m": None,
+        "iwr6843": True,
+        "iwr6843_net_m": server.DEFAULT_NET_RANGE_M,
+        "iwr6843_net_range_source": "default_not_measured",
     }
     return SimpleNamespace(**{**values, **overrides})
 
@@ -138,6 +141,13 @@ def test_the_session_records_where_its_tee_range_and_heights_came_from(monkeypat
     assert scene["lens_height_solved_m"] == pytest.approx(0.11)
     assert scene["lens_height_solved_uncertainty_m"] == pytest.approx(0.03)
     assert scene["ball_height_basis"] == "assumed_on_surface"
+    # C7: without a measured net the 4.6 m default is flagged
+    assert recorded["net_range"] == {
+        "net_range_m": pytest.approx(4.6),
+        "source": "default_not_measured",
+        "range_space": "apparent",
+        "assumed": True,
+    }
 
 
 def test_a_pending_session_without_a_source_says_pending(monkeypatch):

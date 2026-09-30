@@ -695,6 +695,102 @@ def setup_scene(
 
 HANDED_TO_SWINGS_SCHEMA = "openflight.tester_handed_to_swings.v1"
 
+# The net, or whatever stands behind the hitting area, is the strongest still
+# reflector beyond the ball's usual range. The empty static capture sees it when
+# it lies inside the capture's window, and the swing server stops its ball gates
+# 0.25 m short of it (wiring audit C7, decision D7). Ranges are apparent, as the
+# swing server's gates are.
+NET_SEARCH_WINDOW_M = (2.0, 6.0)
+# A reflector must stand this far above the window's median to count as the net;
+# the tail of nearer clutter (a door at 1.73 m on 29 Sept) reaches about 6.5 dB.
+NET_MIN_PEAK_DB = 10.0
+# The swing server's assumption when no net is measured; flagged when it is used.
+DEFAULT_NET_RANGE_M = 4.6
+
+
+def empty_capture_net_range(record: Mapping) -> dict:
+    """The net's apparent range from an empty static capture, or why none was found."""
+    facts = {
+        "source": "empty_static_capture",
+        "range_space": "apparent",
+        "window_m": list(NET_SEARCH_WINDOW_M),
+        "capture_id": record.get("capture_id") if isinstance(record, Mapping) else None,
+        "net_range_m": None,
+    }
+    try:
+        profile = _static_profile(record)
+    except (AttributeError, TypeError, ValueError) as exc:
+        return {**facts, "status": "not_found", "reason": f"no usable empty profile: {exc}"}
+    power = np.maximum(np.asarray(profile.power, dtype=float), 1e-12)
+    ranges = (profile.range_bin_start + np.arange(profile.range_bin_count)) * (
+        profile.range_resolution_m
+    )
+    inside = np.flatnonzero((ranges >= NET_SEARCH_WINDOW_M[0]) & (ranges <= NET_SEARCH_WINDOW_M[1]))
+    if inside.size < 3:
+        return {
+            **facts,
+            "status": "not_found",
+            "reason": (
+                f"the empty capture covers {ranges[0]:.2f}-{ranges[-1]:.2f} m, "
+                f"not the {NET_SEARCH_WINDOW_M[0]:g}-{NET_SEARCH_WINDOW_M[1]:g} m window"
+            ),
+        }
+    level_db = 10.0 * np.log10(power)
+    peak = int(inside[np.argmax(level_db[inside])])
+    prominence = float(level_db[peak] - np.median(level_db[inside]))
+    facts.update(
+        {
+            "searched_m": [round(float(ranges[inside[0]]), 3), round(float(ranges[inside[-1]]), 3)],
+            "strongest_m": round(float(ranges[peak]), 3),
+            "peak_to_median_db": round(prominence, 1),
+        }
+    )
+    if peak in (0, profile.range_bin_count - 1):
+        return {
+            **facts,
+            "status": "not_found",
+            "reason": (
+                f"the strongest return is at the capture's edge ({ranges[peak]:.2f} m); "
+                "the net may lie beyond it"
+            ),
+        }
+    if level_db[peak] < level_db[peak - 1] or level_db[peak] < level_db[peak + 1]:
+        return {
+            **facts,
+            "status": "not_found",
+            "reason": "the strongest return in the window is the tail of a nearer reflector",
+        }
+    if prominence < NET_MIN_PEAK_DB:
+        return {
+            **facts,
+            "status": "not_found",
+            "reason": (
+                f"no reflector stands {NET_MIN_PEAK_DB:g} dB above the window "
+                f"(strongest {prominence:.1f} dB at {ranges[peak]:.2f} m)"
+            ),
+        }
+    # sub-bin vertex of the parabola through the peak's log powers
+    before, top, after = level_db[peak - 1 : peak + 2]
+    curvature = before - 2.0 * top + after
+    offset = 0.5 * (before - after) / curvature if curvature < 0.0 else 0.0
+    net = (profile.range_bin_start + peak + offset) * profile.range_resolution_m
+    return {**facts, "status": "measured", "net_range_m": round(float(net), 3)}
+
+
+def setup_net_range(solution: tee_range.TeeRangeSolution | None) -> dict:
+    """The net range this setup's empty static capture measured, if any."""
+    for item in solution.candidates if solution is not None else ():
+        empty = (item.evidence or {}).get("empty_result")
+        if item.source_group == "iwr" and isinstance(empty, Mapping):
+            return empty_capture_net_range(empty)
+    return {
+        "source": "empty_static_capture",
+        "range_space": "apparent",
+        "net_range_m": None,
+        "status": "not_found",
+        "reason": "this setup has no empty static capture",
+    }
+
 
 def tee_range_handoff(
     solution: tee_range.TeeRangeSolution | None,
@@ -729,6 +825,10 @@ def tee_range_handoff(
         status = source = "pending"
     tee_m = candidate.radar_slant_range_m if candidate is not None else None
     scene = setup_scene(solution, rig_geometry)
+    net = setup_net_range(solution)
+    measured_net = net["status"] == "measured"
+    if not measured_net:
+        net["default_m"] = DEFAULT_NET_RANGE_M
     height = _setup_camera_height_m(solution)
     solved = scene["lens_height_solved_m"]
     uncertainty = scene["lens_height_solved_uncertainty_m"]
@@ -758,6 +858,10 @@ def tee_range_handoff(
             if solved is not None and uncertainty is not None
             else []
         ),
+        # the net the empty capture saw; the swing server's 4.6 m otherwise, flagged
+        *(["--net-range-m", f"{net['net_range_m']:.3g}"] if measured_net else []),
+        "--iwr6843-net-range-source",
+        "empty_static_capture" if measured_net else "default_not_measured",
     ]
     window = candidate.evidence.get("camera_window") if candidate is not None else None
     record = {
@@ -783,6 +887,7 @@ def tee_range_handoff(
         "solved_camera_height_m": height,
         "solved_camera_height_source": "static_iwr_range" if height is not None else None,
         "scene": scene,
+        "net_range": net,
         **rig_geometry_hashes(rig_geometry),
         "cli_args": args,
     }
@@ -4912,6 +5017,8 @@ def create_app(
                 retry_phase="needs_empty" if key == "empty" else "needs_ball",
             )
         if key == "empty":
+            # the net is measured from the scene without the ball (wiring audit C7)
+            evidence["net_range"] = empty_capture_net_range(record)
             return store.transition(
                 state,
                 phase="needs_ball",

@@ -158,7 +158,10 @@ rig_geometry = None  # the enclosure's RigGeometry when --rig-geometry was given
 rig_geometry_config: dict = {"enabled": False}
 # What the range setup handed this session (tee range, lens and ball heights) and
 # where each value came from; recorded in session_start (wiring audit S3, C4, C5).
-setup_handoff_config: dict = {"tee_range": None, "scene": None}
+setup_handoff_config: dict = {"tee_range": None, "scene": None, "net_range": None}
+# The net's apparent range when the range setup measured none; flagged when used
+# (wiring audit C7, decision D7).
+DEFAULT_NET_RANGE_M = 4.6
 # a ball resting on the surface: its centre is one radius up
 BALL_RADIUS_M = BALL_DIAMETER_MM / 2000.0
 # Heights are above the hitting surface. The radar's floor-bounce model needs the
@@ -1184,7 +1187,19 @@ def init_setup_handoff(args, enclosure) -> None:
                 else "command_line"
             ),
         },
+        "net_range": {
+            "net_range_m": args.iwr6843_net_m,
+            "source": args.iwr6843_net_range_source,
+            "range_space": "apparent",
+            "assumed": args.iwr6843_net_range_source == "default_not_measured",
+        },
     }
+    if setup_handoff_config["net_range"]["assumed"] and args.iwr6843:
+        logger.warning(
+            "[SERVER] Net range %.2f m is ASSUMED: the range setup measured none; a nearer "
+            "net can enter the ball gates",
+            args.iwr6843_net_m,
+        )
     logger.info(
         "[SERVER] Tee range %s (%s); ball height %.1f mm, %s",
         f"{tee:.3f} m" if tee is not None else "pending",
@@ -1234,6 +1249,7 @@ def _session_start_config() -> dict:
     config["rig_geometry"] = deepcopy(rig_geometry_config)
     config["tee_range_handoff"] = deepcopy(setup_handoff_config["tee_range"])
     config["scene"] = deepcopy(setup_handoff_config["scene"])
+    config["net_range"] = deepcopy(setup_handoff_config.get("net_range"))
     from .camera.geometry_contract import EffectiveCameraGeometryInputs, unavailable_snapshot
 
     if not camera_capture_config.get("enabled"):
@@ -6088,9 +6104,22 @@ def main():
     _add_iwr_tee_range_arguments(parser)
     parser.add_argument(
         "--iwr6843-net-m",
+        "--net-range-m",
+        dest="iwr6843_net_m",
         type=float,
-        default=4.6,
-        help="Antenna-center to net range in metres (default: 4.6)",
+        default=None,
+        help=(
+            "Apparent radar range to the net in metres, as the tester's empty static "
+            "capture measured it. Without it 4.6 m is assumed and flagged in session_start."
+        ),
+    )
+    parser.add_argument(
+        "--iwr6843-net-range-source",
+        default=None,
+        help=(
+            "Where --net-range-m came from (empty_static_capture), or "
+            "default_not_measured; recorded in session_start"
+        ),
     )
     parser.add_argument(
         "--iwr6843-tilt-deg",
@@ -6324,6 +6353,11 @@ def main():
         parser.error("--camera-capture cannot be used with --mock")
     if args.tester_setup_required and not args.tester_config_hash:
         parser.error("--tester-setup-required requires --tester-config-hash")
+    if args.iwr6843_net_m is None:
+        args.iwr6843_net_m = DEFAULT_NET_RANGE_M
+        args.iwr6843_net_range_source = "default_not_measured"
+    elif args.iwr6843_net_range_source is None:
+        args.iwr6843_net_range_source = "command_line"
     if args.iwr6843 and (
         (args.iwr6843_tee_m is not None and args.iwr6843_tee_m <= 0) or args.iwr6843_net_m <= 0
     ):
