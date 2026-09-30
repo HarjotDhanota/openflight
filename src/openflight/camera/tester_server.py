@@ -1054,6 +1054,27 @@ def next_run_directory(arm_dir: Path) -> Path:
     return arm_dir / "paired" / f"run-{max(numbers, default=0) + 1:02d}"
 
 
+def _discard_unstarted_run(run_dir: Path) -> None:
+    """Take back a run folder whose job never started (wiring audit T11).
+
+    It is removed only while it holds nothing but the admission records written
+    for that start; anything else means a kiosk wrote there, and it stays.
+    """
+    admission_files = {"setup_admission.json", "tee_range.json"}
+    try:
+        contents = list(run_dir.iterdir()) if run_dir.is_dir() else None
+        if contents is None or not all(
+            path.is_file() and (path.name in admission_files or path.name.endswith(".tmp"))
+            for path in contents
+        ):
+            return
+        for path in contents:
+            path.unlink()
+        run_dir.rmdir()
+    except OSError:
+        logger.warning("Could not remove the unstarted run folder %s", run_dir, exc_info=True)
+
+
 def write_setup_admission(
     run_dir: Path,
     tester_id: str,
@@ -5019,16 +5040,22 @@ def create_app(
         steered["evidence"]["camera_window"] = {**facts, "outcome": "reselected"}
         return steered
 
-    def _range_resources_busy() -> str | None:
+    def _range_resources_busy(*, live_yields: bool = False, ladder_yields: bool = False):
+        """Who owns the camera or radar, or None when a new job may take them.
+
+        A capture job stops the live view itself (``live_yields``); the ladder's own
+        mode restart is the ladder (``ladder_yields``). Starts check this before
+        writing anything, so a refusal leaves no run folder (wiring audit T11).
+        """
         for owner in (jobs, radar_jobs):
             job = owner.status()
             if job.get("state") == "running":
                 return f"the {job.get('action')} job owns the hardware"
-        if live.running:
+        if live.running and not live_yields:
             return "the live camera owns the hardware"
         if review_routes.analysis_running(sessions_root) is not None:
             return "session analysis is running"
-        if any(not runner.stopped for runner in ladder_runners.values()):
+        if not ladder_yields and any(not runner.stopped for runner in ladder_runners.values()):
             return "the ladder owns the hardware"
         return None
 
@@ -5804,23 +5831,12 @@ def create_app(
                 use_unqualified_tee_range=use_unqualified_tee_range,
                 handed_to_swings=handed,
             )
-            write_arm_state(sessions_root, params)
+            busy = _range_resources_busy(live_yields=True)
+            if busy:
+                raise RuntimeError(busy)
+            release_static_radar()  # before anything is written: it can refuse
             if action == "swings":
                 gain, exposure_us = resolve_gain(sessions_root, params)
-                write_arm_state(
-                    sessions_root,
-                    params,
-                    capture_gain=gain,
-                    capture_exposure_us=exposure_us,
-                    # the range the kiosk runs with, not only a qualified one (S3)
-                    tee_range_m=handed["tee_m"],
-                    tee_range_source=handed["tee_range_source"],
-                    tee_range_validation_truth_m=(
-                        params.tee_mm / 1000.0 if params.tee_mm is not None else None
-                    ),
-                    tee_range_solution=solution.to_dict(),
-                    handed_to_swings=handed,
-                )
             if action == "gain":
                 on_finish = lambda _a, rc: record_gain(params) if rc == 0 else None  # noqa: E731
             elif action == "swings":
@@ -5838,29 +5854,48 @@ def create_app(
             else:
                 on_finish = None
             stop_live()  # the camera does one thing at a time
-            if action == "swings":
-                active_setup_tester["tester_id"] = params.tester_id
-                run_dir = Path(commands[0][commands[0].index("--log-dir") + 1])
-                with session_bundle.snapshot_lock(
-                    tester_root(sessions_root, params.tester_id),
-                    timeout_s=session_bundle.WRITER_WAIT_S,
-                ):
-                    write_setup_admission(
-                        run_dir, params.tester_id, eligibility, solution, reference, handed
-                    )
-                    tee_range.write_solution(
-                        run_dir / "tee_range.json", solution, handed_to_swings=handed
-                    )
-                active_runtime_dir["path"] = run_dir
+            run_dir = None
             try:
-                release_static_radar()
+                if action == "swings":
+                    active_setup_tester["tester_id"] = params.tester_id
+                    run_dir = Path(commands[0][commands[0].index("--log-dir") + 1])
+                    with session_bundle.snapshot_lock(
+                        tester_root(sessions_root, params.tester_id),
+                        timeout_s=session_bundle.WRITER_WAIT_S,
+                    ):
+                        write_setup_admission(
+                            run_dir, params.tester_id, eligibility, solution, reference, handed
+                        )
+                        tee_range.write_solution(
+                            run_dir / "tee_range.json", solution, handed_to_swings=handed
+                        )
+                    active_runtime_dir["path"] = run_dir
                 jobs.start(action, commands, log_path, on_finish=on_finish)
             except Exception:
                 if action == "swings":
                     active_setup_tester["tester_id"] = None
                     active_runtime_dir["path"] = None
                     enclosure.start()
+                    if run_dir is not None:
+                        _discard_unstarted_run(run_dir)
                 raise
+            # the job is accepted: only now does the arm record change (T11)
+            write_arm_state(sessions_root, params)
+            if action == "swings":
+                write_arm_state(
+                    sessions_root,
+                    params,
+                    capture_gain=gain,
+                    capture_exposure_us=exposure_us,
+                    # the range the kiosk runs with, not only a qualified one (S3)
+                    tee_range_m=handed["tee_m"],
+                    tee_range_source=handed["tee_range_source"],
+                    tee_range_validation_truth_m=(
+                        params.tee_mm / 1000.0 if params.tee_mm is not None else None
+                    ),
+                    tee_range_solution=solution.to_dict(),
+                    handed_to_swings=handed,
+                )
             return jsonify({"job": jobs.status(), "arm": arm_progress(sessions_root, params)}), 202
         except RuntimeError as exc:
             return jsonify({"error": str(exc), "job": jobs.status()}), 409
@@ -5881,6 +5916,9 @@ def create_app(
             params = TesterParameters.from_payload(payload)
             if jobs.status()["state"] == "running":
                 raise RuntimeError("stop the running step before opening the live view")
+            busy = _range_resources_busy(live_yields=True)
+            if busy:
+                raise RuntimeError(busy)
             try:
                 exposure_us = int(payload.get("exposure_us") or params.arm.exposure_us)
                 gain = float(payload.get("gain") or 8.0)
@@ -6178,11 +6216,16 @@ def create_app(
         if tester_id not in admitted_tee_range:
             raise RuntimeError("automatic tee-range admission was not frozen")
         solution, reference = admitted_tee_range[tester_id]
+        busy = _range_resources_busy(live_yields=True, ladder_yields=True)
+        if busy:
+            raise RuntimeError(busy)
+        release_static_radar()  # before anything is written: it can refuse (T11)
         # The kiosk reads the LIS3DH itself during the ladder. Any failure before its
         # job starts hands the sensor back, or the page's reading goes stale for the
         # rest of the session (wiring audit T2).
         enclosure.stop()
         started = claimed = False
+        run = None
         try:
             _args, handed = tee_range_handoff(
                 solution,
@@ -6231,7 +6274,6 @@ def create_app(
             active_setup_tester["tester_id"] = tester_id
             active_runtime_dir["path"] = run
             claimed = True
-            release_static_radar()
             jobs.start("ladder", commands, log_path, on_finish=ladder_finished)
             started = True
         finally:
@@ -6239,6 +6281,8 @@ def create_app(
                 if claimed:
                     active_setup_tester["tester_id"] = None
                     active_runtime_dir["path"] = None
+                if run is not None:
+                    _discard_unstarted_run(run)
                 enclosure.start()
         return run
 
@@ -6297,6 +6341,9 @@ def create_app(
             return jsonify({"error": str(exc)}), 409
         if job["state"] == "running":
             return jsonify({"error": "stop the active capture before starting the ladder"}), 409
+        busy = _range_resources_busy(live_yields=True, ladder_yields=True)
+        if busy:
+            return jsonify({"error": busy}), 409
         for previous in ladder_runners.values():
             previous.stop(wait=False)
         state = ladder_state(params.tester_id)

@@ -3033,3 +3033,129 @@ def test_a_zoned_screen_without_a_recorded_black_level_uses_the_sensors():
     assert light["black_floor_dn"] == pytest.approx(16.0)
     assert light["black_floor_source"] == "sensor_default"
     assert light["light_index"] is not None
+
+
+class _CapturingRadar:
+    """A setup radar capture in flight: it owns the radar until it finishes."""
+
+    def __init__(self):
+        self.releases = 0
+
+    def status(self):
+        return {"state": "running", "action": "tee_range", "message": "capturing"}
+
+    def release(self):
+        self.releases += 1
+        raise RuntimeError("the radar setup capture owns the hardware")
+
+    def cancel(self):
+        return False
+
+
+class TestOwnershipBeforeSideEffects:
+    """Wiring audit T11: a refused start leaves no run folder, admission or arm write."""
+
+    body = {"tester_id": "20260922-name", "arm_id": "arm5", "environment": "indoors"}
+
+    def _runs(self, root):
+        return sorted(p.name for p in (root / "20260922-name").glob("arm*/paired/run-*"))
+
+    def test_a_swing_start_refused_by_a_running_job_leaves_no_run_folder(self, tmp_path):
+        class BusyManager(ts.TesterJobManager):
+            def status(self):
+                return {"state": "running", "action": "gain", "message": "busy", "output": []}
+
+            def start(self, action, commands, log_path, on_finish=None, **_kwargs):
+                raise RuntimeError("another action is already running")
+
+        p = ts.TesterParameters("20260922-name", "arm5", "indoors")
+        screened(tmp_path, p)
+        before = ts.read_arm_state(tmp_path, p.tester_id, p.arm_id)
+        client = eligible_app(
+            sessions_root=tmp_path, rig_geometry=RIG, manager=BusyManager()
+        ).test_client()
+
+        response = client.post("/api/tester/run", json={**self.body, "action": "swings"})
+
+        assert response.status_code == 409
+        assert "owns the hardware" in response.get_json()["error"]
+        assert self._runs(tmp_path) == []
+        assert ts.read_arm_state(tmp_path, p.tester_id, p.arm_id) == before
+
+    def test_a_setup_radar_capture_refuses_a_job_before_anything_is_written(self, tmp_path):
+        p = ts.TesterParameters("20260922-name", "arm5", "indoors")
+        screened(tmp_path, p)
+        before = ts.read_arm_state(tmp_path, p.tester_id, p.arm_id)
+        manager = ts.TesterJobManager(popen=_Forever)
+        radar = _CapturingRadar()
+        client = eligible_app(
+            sessions_root=tmp_path, rig_geometry=RIG, manager=manager, static_radar=radar
+        ).test_client()
+
+        response = client.post("/api/tester/run", json={**self.body, "action": "swings"})
+
+        assert response.status_code == 409
+        assert self._runs(tmp_path) == []
+        assert ts.read_arm_state(tmp_path, p.tester_id, p.arm_id) == before
+        assert manager.status()["state"] == "idle"
+
+    def test_a_ladder_start_refused_by_the_radar_leaves_no_run_folder(self, tmp_path, monkeypatch):
+        for arm in ("arm5", "arm6"):
+            screened(tmp_path, ts.TesterParameters("20260922-name", arm, "indoors"), gain=3.0)
+        monkeypatch.setattr(ts.study_ladder, "KioskClient", _LitKiosk)
+        manager = ts.TesterJobManager(popen=_Forever)
+        client = eligible_app(
+            sessions_root=tmp_path,
+            rig_geometry=RIG,
+            manager=manager,
+            static_radar=_CapturingRadar(),
+        ).test_client()
+
+        response = client.post("/api/tester/ladder/start", json=self.body)
+
+        assert response.status_code == 409
+        assert self._runs(tmp_path) == []
+        assert manager.status()["state"] == "idle"
+
+    def test_a_job_that_refuses_after_the_checks_takes_its_run_folder_back(self, tmp_path):
+        class LateRefusal(ts.TesterJobManager):
+            def start(self, action, commands, log_path, on_finish=None, **_kwargs):
+                raise RuntimeError("another action is already running")
+
+        p = ts.TesterParameters("20260922-name", "arm5", "indoors")
+        screened(tmp_path, p)
+        client = eligible_app(
+            sessions_root=tmp_path, rig_geometry=RIG, manager=LateRefusal()
+        ).test_client()
+
+        response = client.post("/api/tester/run", json={**self.body, "action": "swings"})
+
+        assert response.status_code == 409
+        assert self._runs(tmp_path) == []
+
+    def test_the_live_view_waits_for_a_setup_radar_capture(self, tmp_path):
+        client = eligible_app(
+            sessions_root=tmp_path,
+            rig_geometry=RIG,
+            manager=ts.TesterJobManager(popen=_Forever),
+            static_radar=_CapturingRadar(),
+            live_view=_NeverStartedLive(),
+        ).test_client()
+
+        response = client.post("/api/tester/live", json={**self.body, "exposure_us": 300})
+
+        assert response.status_code == 409
+        assert "owns the hardware" in response.get_json()["error"]
+
+
+class _NeverStartedLive:
+    running = False
+
+    def start(self, *_args, **_kwargs):
+        raise AssertionError("the live view must not start while the radar setup runs")
+
+    def stop(self):
+        return None
+
+    def snapshot(self):
+        return None, {"running": False}
