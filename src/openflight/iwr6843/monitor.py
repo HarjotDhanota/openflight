@@ -15,6 +15,7 @@ from typing import Callable
 from openflight.gpio_factory import ensure_lgpio_pin_factory
 from openflight.iwr6843.driver import IWR6843Radar
 from openflight.iwr6843.dump import HEADER, parse_header, payload_nbytes
+from openflight.ready_light import IWR_TYPICAL_DUMP_S
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,10 @@ class IWR6843CaptureMonitor:
         self._running = False
         self._armed = False
         self._capture_active = False
+        # For the ready light (P7-14): when the dump in flight began, and how long
+        # the last good one took (the next wait's rough time left).
+        self._capture_started_at: float | None = None
+        self._last_dump_duration_s: float | None = None
         self._sequence = 0
         self._last_edge_timestamp = 0.0
         self._last_observed_edge_timestamp = 0.0
@@ -181,6 +186,25 @@ class IWR6843CaptureMonitor:
             if observer in self._trigger_observers:
                 self._trigger_observers.remove(observer)
 
+    def ready_snapshot(self) -> dict:
+        """What the ready light needs (P7-14), read from flags without the condition lock."""
+        worker = self._worker
+        port = getattr(self.radar, "ser", None)
+        return {
+            "running": self._running,
+            "armed": self._armed,
+            "worker_alive": bool(worker is not None and worker.is_alive()),
+            "serial_open": bool(port is not None and getattr(port, "is_open", False)),
+            "dumping": self._capture_active,
+            "queued": not self._events.empty(),
+            "dump_started_at": self._capture_started_at,
+            "typical_dump_s": (
+                IWR_TYPICAL_DUMP_S
+                if self._last_dump_duration_s is None
+                else self._last_dump_duration_s
+            ),
+        }
+
     def notify_trigger(self, timestamp: float | None = None) -> bool:
         """Queue a GPIO edge without doing serial work in the callback."""
         if not self._running or not self._armed:
@@ -237,6 +261,7 @@ class IWR6843CaptureMonitor:
                 self._sequence += 1
                 sequence = self._sequence
             start = time.time()
+            self._capture_started_at = start
             dump_started_ns = time.monotonic_ns()
             raw = None
             path = None
@@ -283,7 +308,11 @@ class IWR6843CaptureMonitor:
                 ),
             )
             with self._condition:
+                # the duration first: the ready light reads these without the lock
+                if capture.valid:
+                    self._last_dump_duration_s = capture.dump_duration_s
                 self._capture_active = False
+                self._capture_started_at = None
                 self._captures.append(capture)
                 self._condition.notify_all()
             logger.info(

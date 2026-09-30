@@ -47,6 +47,7 @@ from .ops243 import (
 )
 from .power import SUPPORTED_BATTERY_PROVIDERS, PowerMonitor, PowerStatus
 from .profiles import ProfileStore
+from .ready_light import ReadyLight, SensorStates
 from .rig_geometry import BALL_DIAMETER_MM
 from .rolling_buffer.monitor import estimate_carry_with_spin, get_optimal_spin_for_ball_speed
 from .session_logger import get_session_logger, init_session_logger, log_session_error
@@ -150,6 +151,13 @@ camera_reference_ball_tracker = None
 camera_ball_flight_reference_tracker = None
 camera_optical_calibration: dict | None = None
 camera_placement: dict | None = None
+
+# The ready light (P7-14): one readiness state from what the sensors report,
+# carried to the kiosk screen on the socket and to the tester page over HTTP.
+ready_light = ReadyLight()
+READY_LIGHT_PERIOD_S = 0.2
+_ready_light_published: tuple | None = None
+_ready_light_thread: threading.Thread | None = None
 
 # Optional LIS3DH enclosure orientation used to compensate TI mount tilt.
 inclinometer_service = None
@@ -1918,6 +1926,20 @@ def _study_runtime():
     return camera_capture_runtime, None
 
 
+def _loaded_setup_config_hash() -> str:
+    """The fingerprint of the rig geometry and LIS3DH settings this kiosk loaded."""
+    from .camera.setup_eligibility import setup_config_hash
+
+    address = inclinometer_runtime_config.get("i2c_address")
+    parsed_address = int(address, 0) if isinstance(address, str) else address
+    return setup_config_hash(
+        (rig_geometry_config.get("snapshot") or {}).get("sha256") or "",
+        inclinometer_runtime_config.get("i2c_bus") or 0,
+        parsed_address or 0,
+        inclinometer_runtime_config.get("zero_offset_deg") or 0.0,
+    )
+
+
 def _tester_setup_readiness(
     *, require_camera_armed: bool = True, checked_at: float | None = None
 ) -> dict:
@@ -1936,16 +1958,7 @@ def _tester_setup_readiness(
             }
         )
 
-    from .camera.setup_eligibility import setup_config_hash
-
-    address = inclinometer_runtime_config.get("i2c_address")
-    parsed_address = int(address, 0) if isinstance(address, str) else address
-    actual_hash = setup_config_hash(
-        (rig_geometry_config.get("snapshot") or {}).get("sha256") or "",
-        inclinometer_runtime_config.get("i2c_bus") or 0,
-        parsed_address or 0,
-        inclinometer_runtime_config.get("zero_offset_deg") or 0.0,
-    )
+    actual_hash = _loaded_setup_config_hash()
     add(
         "geometry",
         bool(tester_config_hash and actual_hash == tester_config_hash),
@@ -2599,6 +2612,164 @@ def start_power_monitor(provider: str) -> None:
     logger.info("[POWER] Battery monitoring enabled with provider=%s", provider)
 
 
+# Trigger outcomes that mean the OPS243 never dumped for an edge (P7-1).
+_NO_RADAR_SHOT_REASONS = {"edge_without_dump", "dump_discarded"}
+
+
+def _ready_light_setup_problems() -> list[str]:
+    """The tester setup gate's red causes, from cheap reads only (P7-14).
+
+    The camera and radars are judged by the light itself; this adds what makes a
+    tester capture ineligible besides them: the admitted setup, the LIS3DH, the
+    session log and manual exposure.
+    """
+    from .camera.setup_eligibility import placement_guard
+
+    problems = []
+    if not tester_config_hash or _loaded_setup_config_hash() != tester_config_hash:
+        problems.append("no admitted setup: this rig or LIS3DH is not the admitted one")
+    if inclinometer_service is None or not inclinometer_runtime_config.get("enabled"):
+        problems.append("tilt sensor (LIS3DH) is not running")
+    else:
+        selection = inclinometer_service.snapshot_for_impact(time.time())
+        if selection.snapshot is None:
+            problems.append(f"tilt sensor reading is {selection.status}")
+        else:
+            expected = _expected_inclinometer_orientation()
+            placement = placement_guard(
+                selection.snapshot,
+                expected_pitch_deg=expected.get("pitch_deg") or 0.0,
+                expected_roll_deg=expected.get("roll_deg") or 0.0,
+            )
+            if not placement["ready"]:
+                problems.append(f"tilt sensor: {placement.get('reason')}")
+    active_logger = get_session_logger()
+    if active_logger is None or not active_logger.active_session_uuid:
+        problems.append("session log is not open")
+    if camera_capture_runtime is not None and camera_capture_runtime.settings.auto_exposure:
+        problems.append("camera exposure is automatic")
+    return problems
+
+
+def _ready_light_states() -> SensorStates | None:
+    """What each sensor reports now, read from flags: never a serial or frame lock.
+
+    None, and the light off, outside a tester's kiosk (the ladder or plain swings),
+    and where nothing reports readiness (the shot simulator, swing-speed mode or
+    the streaming speed trigger).
+    """
+    if not (tester_setup_required or study_mode_enabled):
+        return None
+    if monitor is not None and (
+        mock_mode or getattr(monitor, "trigger_type", None) not in ("sound", "hardware")
+    ):
+        return None
+    ops = None
+    if monitor is not None:
+        thread = getattr(monitor, "_capture_thread", None)
+        radar = getattr(monitor, "radar", None)
+        port = getattr(radar, "serial", None)
+        phase = getattr(radar, "trigger_phase", None)
+        ops = {
+            "running": bool(
+                getattr(monitor, "_running", False) and thread is not None and thread.is_alive()
+            ),
+            "serial_open": bool(port is not None and getattr(port, "is_open", False)),
+            "phase": phase[0] if phase else None,
+            "phase_since": phase[1] if phase else None,
+        }
+    iwr = None
+    if iwr6843_runtime is not None:
+        iwr = iwr6843_runtime.capture_monitor.ready_snapshot()
+    elif iwr6843_runtime_config.get("error"):
+        iwr = {"running": False}
+    camera = None
+    if camera_capture_runtime is not None:
+        camera = camera_capture_runtime.ready_snapshot()
+    elif camera_capture_config.get("error"):
+        camera = {"running": False}  # the kiosk runs on without it; a tester's swing cannot
+    return SensorStates(
+        ops=ops,
+        iwr=iwr,
+        camera=camera,
+        setup_problems=tuple(_ready_light_setup_problems()) if tester_setup_required else (),
+    )
+
+
+def _publish_ready_light() -> dict:
+    """Compute the light and send it to the kiosk screen when it changed."""
+    global _ready_light_published  # pylint: disable=global-statement
+    payload = ready_light.update(_ready_light_states())
+    swing = payload["swing"] or {}
+    left = payload["time_left_s"]
+    key = (
+        payload["state"],
+        payload["cause"],
+        payload["hold"],
+        None if left is None else math.ceil(left),
+        swing.get("id"),
+        (swing.get("result") or {}).get("kind"),
+    )
+    if key != _ready_light_published:
+        _ready_light_published = key
+        socketio.emit("ready_light", payload)
+    return payload
+
+
+def _ready_light_loop() -> None:
+    while True:
+        try:
+            _publish_ready_light()
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning("[READY] Ready light update failed", exc_info=True)
+        time.sleep(READY_LIGHT_PERIOD_S)
+
+
+def start_ready_light() -> None:
+    """Poll the sensors' flags for the ready light, five times a second."""
+    global _ready_light_thread  # pylint: disable=global-statement
+    if _ready_light_thread is not None and _ready_light_thread.is_alive():
+        return
+    _ready_light_thread = threading.Thread(
+        target=_ready_light_loop, name="ready-light", daemon=True
+    )
+    _ready_light_thread.start()
+
+
+def _ready_light_edge(timestamp: float) -> None:
+    """A BCM17 edge: the light flashes for the swing (called from the GPIO callback)."""
+    ready_light.swing_detected("edge", at=timestamp)
+
+
+def _ready_light_trigger_outcome(event: dict) -> None:
+    """A trigger the OPS path rejected: the swing gave no shot."""
+    if event.get("accepted"):
+        return  # its shot, or its failure, is reported on its own
+    reason = event.get("reason")
+    ready_light.swing_result("no_radar_shot" if reason in _NO_RADAR_SHOT_REASONS else "not_a_shot")
+
+
+@app.get("/api/ready-light")
+def ready_light_status():
+    """The ready light for the tester page; the kiosk screen gets it on the socket."""
+    return jsonify(ready_light.update(_ready_light_states()))
+
+
+@app.post("/api/ready-light/hold")
+def ready_light_hold():
+    """Hold the light red for what only the tester page knows (the ladder's phase)."""
+    if not study_mode_enabled:
+        return jsonify({"error": "study mode is off"}), 404
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "request body must be an object"}), 400
+    cause = body.get("cause")
+    if cause is not None and (not isinstance(cause, str) or not cause.strip() or len(cause) > 120):
+        return jsonify({"error": "cause must be null or a short text"}), 400
+    ready_light.set_hold(cause.strip() if cause else None)
+    return jsonify(_publish_ready_light())
+
+
 @socketio.on("connect")
 def handle_connect():
     """Handle client connection."""
@@ -2610,6 +2781,10 @@ def handle_connect():
     if monitor:
         socketio.emit("session_state", _session_state_payload(include_runtime_meta=True))
         socketio.emit("trigger_status", _get_trigger_status())
+    try:
+        socketio.emit("ready_light", ready_light.update(_ready_light_states()))
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("[READY] Ready light snapshot for a new client failed", exc_info=True)
 
 
 @socketio.on("disconnect")
@@ -2935,6 +3110,8 @@ def handle_shutdown():
 
 def on_shot_processing(state: str) -> None:
     """Forward the rolling-buffer processing lifecycle to the UI."""
+    if state == "capturing":
+        ready_light.swing_detected("ops_dump")  # the OPS243 dump began: a swing
     socketio.emit("shot_processing", {"state": state})
 
 
@@ -5065,7 +5242,9 @@ def _handle_shot_detected(shot: Shot) -> None:
                 context={"readiness": evidence},
             )
             logger.warning("[SERVER] Tester shot rejected: %s", evidence["blockers"])
+            ready_light.swing_result("not_counted")
             return
+    ready_light.swing_result("shot", ball_speed_mph=shot.ball_speed_mph)
     _assign_shot_number(shot)
     active_profile = get_profile_store().get_active()
     shot.profile_id = active_profile.id
@@ -5397,6 +5576,7 @@ def start_monitor(
 
         def on_trigger_diagnostic(data: dict):
             """Forward trigger diagnostics to connected UI clients."""
+            _ready_light_trigger_outcome(data)
             socketio.emit("trigger_diagnostic", data)
 
         monitor.start(  # pylint: disable=unexpected-keyword-arg
@@ -5408,6 +5588,8 @@ def start_monitor(
         if iwr6843_runtime is not None:
             iwr6843_runtime.capture_monitor.arm()
             _attach_gate_edge_listener()
+            # every BCM17 edge flashes the ready light, busy or not (P7-14)
+            iwr6843_runtime.capture_monitor.add_trigger_observer(_ready_light_edge)
     else:
         monitor.start(shot_callback=on_shot_detected, live_callback=on_live_reading)
 
@@ -6925,6 +7107,7 @@ def main():
         _cleanup_hardware_for_shutdown()
         raise
     startup_status.ready(monitor_component, f"{monitor_label.capitalize()} ready")
+    start_ready_light()
 
     if battery_provider:
         startup_status.start("battery", "Starting power monitor")

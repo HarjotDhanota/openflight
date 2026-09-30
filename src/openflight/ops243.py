@@ -252,6 +252,10 @@ class OPS243Radar:
         self._internal_trigger_firmware_version = None
         self._hardware_trigger_recovery_required = False
         self.last_hardware_trigger_first_byte_timestamp: Optional[float] = None
+        # Where the trigger path is, as (phase, host epoch it began), for the ready
+        # light (P7-14), which reads it without the serial lock. One tuple, so a
+        # reader never pairs one phase with another's time.
+        self.trigger_phase: Optional[tuple[str, float]] = None
         # Most recent OPS-clock -> host-epoch sync (see read_clock_sync).
         self.last_clock_sync: Optional[dict] = None
 
@@ -1598,6 +1602,13 @@ class OPS243Radar:
             logger.info(
                 "[OPS] Re-arm recovery: discarding trailing output until a fresh capture starts"
             )
+        # Armed while this wait listens, unless the last re-arm never finished (its
+        # writes timed out): then the board may not be armed, and the light waits.
+        previous_phase = getattr(self, "trigger_phase", None)
+        unconfirmed = recovery_required or (
+            previous_phase is not None and previous_phase[0] == "rearming"
+        )
+        self._set_trigger_phase("rearming" if unconfirmed else "armed")
 
         # Bytes already here can be a dump an edge started during the re-arm.
         pending_at_start = self.serial.in_waiting
@@ -1626,6 +1637,7 @@ class OPS243Radar:
                     chunk = bytes(idle_bytes[capture_start:])
                     idle_bytes.clear()
                     capture_started = True
+                    self._set_trigger_phase("dumping")
                     if recovery_required:
                         self._hardware_trigger_recovery_required = False
                         logger.info("[OPS] Re-arm recovery: fresh capture boundary found")
@@ -1709,6 +1721,8 @@ class OPS243Radar:
             outcome = "capture"
         self.last_hardware_trigger_outcome = outcome
         self.last_hardware_trigger_discarded_bytes = discarded_bytes
+        # The host now reads and judges the dump, then re-arms; nobody listens.
+        self._set_trigger_phase("stopped" if outcome == "cancelled" else "draining")
 
         if outcome == "discarded_dump":
             logger.warning(
@@ -1755,6 +1769,7 @@ class OPS243Radar:
         """
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Not connected to radar")
+        self._set_trigger_phase("rearming")
 
         # Drain the serial buffer until no new bytes arrive for 200ms.
         # A full I/Q dump is ~41KB at 57600 baud (~7s). If the previous
@@ -1827,7 +1842,12 @@ class OPS243Radar:
         # No flush here (P7-1): the first PA restarts sampling, so an edge
         # during the commands above starts a dump whose start marker a flush
         # would discard. The next wait skips the command replies itself.
+        # Armed, but nobody reads until the next wait: the light still waits.
+        self._set_trigger_phase("rearmed")
         logger.info("[OPS] Rolling buffer re-armed (S#%d)", pre_trigger_segments)
+
+    def _set_trigger_phase(self, phase: str) -> None:
+        self.trigger_phase = (phase, time.time())
 
     def _drain_rearm_serial(self, quiet_period: float = 0.2):
         """Drain any tail bytes before changing the board mode.
@@ -1974,6 +1994,7 @@ class OPS243Radar:
             raise ValueError("Internal speed trigger requires a 30 ksps sample rate")
         if self._internal_speed_trigger_config is None:
             raise RuntimeError("Internal speed trigger has not been configured")
+        self._set_trigger_phase("rearming")
 
         try:
             self._drain_rearm_serial()
@@ -1996,6 +2017,7 @@ class OPS243Radar:
 
         time.sleep((4096 / (sample_rate_ksps * 1000)) + 0.05)
         self._hardware_trigger_recovery_required = False
+        self._set_trigger_phase("rearmed")
         logger.info("[OPS] Internal speed trigger re-armed (GC)")
         return True
 

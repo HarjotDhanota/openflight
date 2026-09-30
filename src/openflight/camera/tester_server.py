@@ -42,6 +42,7 @@ from openflight.camera import (
     reference_ball_range,
     session_review_routes as review_routes,
     study_ladder,
+    tester_ready_light,
     worker_lifetime,
 )
 from openflight.camera.club_motion import detect_reference_ball
@@ -6951,6 +6952,30 @@ def create_app(
         upload.save(folder / name)
         return jsonify({"saved": name})
 
+    # The ready light (P7-14): the kiosk's light plus the ladder's phase. Its own
+    # kiosk client gives up quickly, so a kiosk that is down never stalls a poll.
+    relay_client = study_ladder.KioskClient()
+    relay_client.timeout_s = 1.0
+
+    def ready_light_tester_side(tester_id: str | None) -> tuple[str | None, str | None]:
+        # No ladder_lock: a ladder start holds it for seconds; these reads are snapshots.
+        tester_id = tester_id or active_setup_tester["tester_id"]
+        runners = dict(ladder_runners)
+        runner = runners.get(tester_id) if tester_id else None
+        if runner is None:
+            runner = next((r for r in runners.values() if not r.stopped), None)
+        return tester_ready_light.page_causes(jobs.status(), runner)
+
+    ready_relay = tester_ready_light.ReadyLightRelay(relay_client, ready_light_tester_side)
+    app.extensions["openflight_ready_light"] = ready_relay
+
+    @app.get("/api/tester/ready-light")
+    def ready_light():
+        tester_id = request.args.get("tester_id") or None
+        if tester_id is not None and not SAFE_SEGMENT.fullmatch(tester_id):
+            return jsonify({"error": "unknown tester"}), 400
+        return jsonify(ready_relay.sync(tester_id)), 200, {"Cache-Control": "no-store"}
+
     return app
 
 
@@ -7028,7 +7053,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.no_inclinometer:
         enclosure.start()
     try:
-        create_app(
+        app = create_app(
             sessions_root=sessions_root,
             rig_geometry=args.rig_geometry,
             radar_port=args.radar_port,
@@ -7043,7 +7068,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             use_unqualified_tee_range=args.use_unqualified_tee_range,
             require_tee_range_flow=True,
             require_iwr_preflight=True,
-        ).run(host=args.host, port=args.port)
+        )
+        # the kiosk's screen follows the ladder even with no page polling (P7-14)
+        app.extensions["openflight_ready_light"].start()
+        app.run(host=args.host, port=args.port)
     except Exception:  # pylint: disable=broad-exception-caught
         logger.exception("Tester server stopped unexpectedly")
         raise

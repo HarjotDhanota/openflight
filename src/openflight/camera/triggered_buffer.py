@@ -161,6 +161,15 @@ class TriggeredFrameBuffer:
                 return "prebuffer_filling"
             return None
 
+    def state_nowait(self) -> tuple[bool, bool, int]:
+        """(collecting a tail, a capture awaiting handoff, pre-trigger frames held).
+
+        Read without the lock, for a reader that must never delay a frame (the
+        ready light, P7-14). Each value is current; together they may straddle
+        one frame.
+        """
+        return self._capturing, self._ready is not None, len(self._pre)
+
     def wait_for_capture(self, timeout_s: Optional[float] = None) -> Optional[TriggeredCapture]:
         """Wait for and consume the next completed capture."""
         with self._condition:

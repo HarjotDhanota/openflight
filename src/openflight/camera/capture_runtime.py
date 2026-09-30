@@ -426,6 +426,13 @@ class CameraCaptureRuntime:
         self._auto_exposure_last_check_epoch: float | None = None
         self._auto_exposure_last_adjustment_epoch: float | None = None
         self._auto_exposure_capture_deferred = False
+        # For the ready light (P7-14), plain values it reads without a lock: the
+        # last frame's arrival, the last accepted trigger, the save in progress,
+        # and the last clip's trigger-to-saved time (its rough time left).
+        self._last_frame_ns: int | None = None
+        self._clip_started_at: float | None = None
+        self._saving_since: float | None = None
+        self._last_clip_s: float | None = None
 
     def start(self) -> None:
         """Start the camera and, optionally, the GPIO edge listener."""
@@ -826,6 +833,36 @@ class CameraCaptureRuntime:
             "auto_exposure": self.auto_exposure_status(),
         }
 
+    def ready_snapshot(self) -> dict:
+        """What the ready light needs (P7-14), read from plain values.
+
+        Never takes the frame lock or the ring's lock, so the light can poll it
+        without delaying a frame; ``status()`` takes both.
+        """
+        collecting, awaiting, buffered = self._ring.state_nowait()
+        last_frame_ns = self._last_frame_ns
+        resolved = ((self._startup_capture_mode or {}).get("resolved_config") or {}).get("raw")
+        return {
+            "running": self._running,
+            "latest_frame_age_s": (
+                max(0.0, (time.monotonic_ns() - last_frame_ns) / 1e9)
+                if last_frame_ns is not None
+                else None
+            ),
+            "requested_size": [self.settings.width, self.settings.height],
+            "resolved_size": (resolved or {}).get("size"),
+            "controls_purpose": self._controls_purpose,
+            "collecting_tail": collecting,
+            "awaiting_handoff": awaiting,
+            "saving": self._saving_since is not None,
+            "pending_saves": self._ready.qsize(),
+            "clip_started_at": self._clip_started_at,
+            "typical_clip_s": self._last_clip_s,
+            "buffered_frames": buffered,
+            "required_pre_frames": self.settings.pre_frames,
+            "fps": self.settings.fps,
+        }
+
     def _reject_trigger(self, trigger_epoch: float, reason: str, detail: str | None) -> bool:
         """Remember why a trigger edge produced no capture, and report it."""
         rejection = {
@@ -885,6 +922,7 @@ class CameraCaptureRuntime:
             if not accepted:
                 busy = getattr(self._ring, "busy_reason", lambda: None)()
                 return self._reject_trigger(trigger_epoch, "ring_busy", busy)
+            self._clip_started_at = trigger_epoch
             evidence = self._gather_trigger_evidence(trigger_epoch)
             admission = deepcopy(evidence)
             auto_exposure = self._auto_exposure_payload(exposure)
@@ -1209,6 +1247,7 @@ class CameraCaptureRuntime:
                     )
                 )
                 capture = self._ring.pop_capture()
+            self._last_frame_ns = time.monotonic_ns()
             if capture is not None:
                 self._ready.put(capture)
         except Exception as exc:  # pylint: disable=broad-except
@@ -1225,6 +1264,7 @@ class CameraCaptureRuntime:
             trigger_clocks = self._trigger_clocks.get()
             self._sequence += 1
             sequence = self._sequence
+            self._saving_since = time.time()
             try:
                 saved = self._save_capture(
                     sequence,
@@ -1234,6 +1274,7 @@ class CameraCaptureRuntime:
                     trigger_evidence=trigger_evidence,
                     trigger_clocks=trigger_clocks,
                 )
+                self._last_clip_s = max(0.0, time.time() - trigger_epoch)
             except Exception as exc:  # pylint: disable=broad-except
                 logger.warning("[CAMERA] Capture #%d save failed: %s", sequence, exc, exc_info=True)
                 saved = SavedCameraCapture(
@@ -1244,6 +1285,7 @@ class CameraCaptureRuntime:
                     metadata={},
                     error=str(exc),
                 )
+            self._saving_since = None
             with self._condition:
                 self._captures.append(saved)
                 self._condition.notify_all()

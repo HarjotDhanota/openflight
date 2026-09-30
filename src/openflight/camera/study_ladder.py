@@ -896,6 +896,27 @@ class KioskClient:
     def frames(self, count: int) -> np.ndarray:
         return self.frames_with_controls(count)["frames"]
 
+    def ready_light(self) -> dict | None:
+        """The kiosk's ready light (P7-14), or None when it does not answer."""
+        try:
+            return json.loads(self._get("/api/ready-light"))
+        except (OSError, ValueError):
+            return None
+
+    def set_ready_hold(self, cause: str | None) -> dict | None:
+        """Hold the kiosk's light red for the ladder's phase; None when it does not answer."""
+        request = urllib.request.Request(
+            self.base_url + "/api/ready-light/hold",
+            data=json.dumps({"cause": cause}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
+                return json.loads(response.read())
+        except (OSError, ValueError):
+            return None
+
 
 SETTLE_S = 0.5  # new controls take a few frames to reach the sensor
 
@@ -945,6 +966,26 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
     @property
     def stopped(self) -> bool:
         return self._stop.is_set()
+
+    def ready_hold(self) -> str | None:
+        """Why a swing now would not count toward the ladder, for the ready light
+        (P7-14); None once the current rung's controls are set and checked.
+
+        Reads the state without the runner's lock, which the light check holds.
+        """
+        data = self.state.to_dict()
+        if self.stopped:
+            finished = data["current"] is None and data.get("pending_photo") is None
+            return "ladder finished" if finished else "ladder stopped"
+        if self.mode == "between modes":
+            return "kiosk restarting between settings"
+        if data.get("pending_photo") is not None:
+            return "photo of the club face owed: do not swing"
+        if data["current"] is None:
+            return "ladder finished"
+        if self._configured_rung != data["current"]:
+            return "ladder light check running"
+        return None
 
     def _wait_ready(self) -> bool:
         deadline = time.monotonic() + self.ready_timeout_s
