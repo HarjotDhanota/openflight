@@ -3663,3 +3663,50 @@ def test_the_640x400_settings_use_the_1280x800_ball_halved():
         "y": seen["y_px"] / 2.0,
         "diameter_px": seen["diameter_px"] / 2.0,
     }
+
+
+def test_a_coherent_radar_pick_inside_the_camera_window_is_kept_and_saved(
+    tmp_path, inputs, monkeypatch
+):
+    """End to end on the Outdoors-test-7 captures: the capture-time pick lies inside
+    the camera's window, so it is kept as it is, and it agrees with the camera."""
+    inputs["rig"].write_text(V3_RIG.read_text(encoding="utf-8"), encoding="utf-8")
+    inputs["calibration"].write_text(
+        REFERENCE_CALIBRATION.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False, camera_m=1.55)
+    manager = app.config["TEST_STATIC_MANAGER"]
+    empty, present = _coherent_records()
+    original = manager.start
+
+    def start(action, commands, log_path, on_finish=None, **kwargs):
+        if action != "tee_range":
+            return original(action, commands, log_path, on_finish=on_finish, **kwargs)
+        command = list(commands[0])
+        kind = command[command.index("--kind") + 1]
+        capture_id = command[command.index("--capture-id") + 1]
+        output = Path(command[command.index("--output-dir") + 1])
+        output.mkdir(parents=True, exist_ok=True)
+        record = {
+            **(empty if kind == "empty" else present),
+            "capture_id": capture_id,
+            "capture_kind": kind,
+            "status": "usable",
+            "usable": True,
+        }
+        (output / f"{capture_id}.json").write_text(json.dumps(record), encoding="utf-8")
+        if on_finish:
+            on_finish(action, 0)
+
+    monkeypatch.setattr(manager, "start", start)
+
+    state = drive(app.test_client(), tester)
+
+    iwr = state["evidence"]["iwr_candidate"]
+    assert iwr["evidence"]["difference"]["status"] == "accepted_unqualified"
+    assert iwr["evidence"]["camera_window"]["outcome"] == "consistent"
+    assert iwr["radar_slant_range_m"] == pytest.approx(1.581, abs=0.01)
+    assert state["phase"] == "experimental"
+    decision = state["evidence"]["experimental_range"]
+    assert decision["source"] == "static_iwr"
+    assert decision["range_m"] == pytest.approx(1.581, abs=0.01)

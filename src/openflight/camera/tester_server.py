@@ -3876,6 +3876,8 @@ def _coherent_difference(
         candidate_window_m=tuple(value + bias_m for value in window_m),
         element_correction=correction,
         ground_elevation_deg=elevation,
+        # the channels are fitted on still reflectors outside anywhere a ball may be
+        fit_exclusion_m=tuple(value + bias_m for value in _HITTING_RANGE_M),
     )
     return result, None
 
@@ -5949,7 +5951,7 @@ def create_app(
         full = {"status": difference.get("status"), "range_m": value}
         facts = {"camera_window_m": list(window), "full_window": full}
         if (
-            difference.get("status") == "accepted"
+            difference.get("status") in IWR_ACCEPTED_STATUSES
             and value is not None
             and window[0] <= float(value) <= window[1]
         ):
