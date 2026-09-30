@@ -1127,11 +1127,22 @@ class TestFrameEncoding:
         assert stretched.min() == 0 and stretched.max() == 255
 
 
+def _level_tilt():
+    """A still, level LIS3DH: placements refuse to range without a pitch (S10)."""
+    tilt = ts.EnclosureTilt(RIG, service_factory=lambda: FakeTiltService(0.0))
+    tilt.start()
+    return tilt
+
+
 class TestLiveEndpoints:
     def _client(self, tmp_path, manager=None):
         live = ts.LiveView(camera_factory=FakeCamera)
         app = eligible_app(
-            sessions_root=tmp_path, rig_geometry=RIG, manager=manager, live_view=live
+            sessions_root=tmp_path,
+            rig_geometry=RIG,
+            manager=manager,
+            live_view=live,
+            tilt=_level_tilt(),
         )
         return app.test_client(), live
 
@@ -1678,6 +1689,15 @@ class TestTheCameraSaysHowFar:
         assert camera.source == "nominal_uncalibrated"
         assert camera.accuracy_qualified is False
 
+    @pytest.mark.parametrize("reading", [{"status": "off", "error": None}, {"roll_deg": 0.5}])
+    def test_a_reading_without_pitch_is_refused_not_taken_as_level(self, reading):
+        # wiring audit S10: a stopped or warming LIS3DH used to leave the rig's
+        # boresight pitch standing in for the measured one
+        with pytest.raises(ValueError, match="pitch"):
+            ts._reference_ball_camera(  # pylint: disable=protected-access
+                ts.ARMS["arm5"], RIG, reading, None, None
+            )
+
     def test_both_routes_agree_with_the_tape_on_a_level_camera(self):
         # a ball 1041 mm from the lens, on the floor, centred: where a level
         # 2.8 mm camera 95 mm up would see it
@@ -1920,7 +1940,9 @@ class TestEachPlacementKeepsOptionalTapeSeparate:
 
     def _client(self, tmp_path):
         live = ts.LiveView(camera_factory=BallCamera)
-        app = eligible_app(sessions_root=tmp_path, rig_geometry=RIG, live_view=live)
+        app = eligible_app(
+            sessions_root=tmp_path, rig_geometry=RIG, live_view=live, tilt=_level_tilt()
+        )
         return app.test_client(), live
 
     def test_a_new_tape_reference_needs_no_restart_and_does_not_guide_detection(self, tmp_path):

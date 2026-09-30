@@ -488,11 +488,12 @@ def _added(present, empty, scale, bins, fraction=1.3):
     return changed
 
 
-def _compare(empty, present, *, window=SYNTHETIC_WINDOW_M, **present_options):
+def _compare(empty, present, *, window=SYNTHETIC_WINDOW_M, candidate_window_m=None, **options):
     return compare_static_range_profiles(
         _synthetic_v2(empty, capture="d"),
-        _synthetic_v2(present, capture="f", **present_options),
+        _synthetic_v2(present, capture="f", **options),
         plausible_apparent_range_m=window,
+        **({"candidate_window_m": candidate_window_m} if candidate_window_m else {}),
     )
 
 
@@ -690,6 +691,125 @@ def test_v2_searches_only_the_supplied_placement_envelope():
 
     assert inside.status == "accepted"
     assert outside.status == "rejected_no_ball"
+
+
+QUALIFICATION_WINDOW_M = (0.5, 4.0)
+# a camera range of 1.0 m, +-2 sigma at the 20 % floor (tester_server.camera_radar_window)
+CAMERA_WINDOW_1M = (0.6, 1.4)
+
+
+def _qualification_scene(seed=7):
+    """90 bins at 5 cm, so the 0.5-4.0 m qualification window holds 71 of them."""
+    rng = np.random.default_rng(seed)
+    empty = 1e6 * np.exp(rng.normal(0.0, 0.6, 90))
+    present = empty * (1.0 + rng.normal(0.0, 0.02, 90))
+    return empty, present
+
+
+def test_a_camera_window_picks_the_cluster_but_statistics_use_the_full_window():
+    """Wiring audit S1: a 1.0 m ball's three changed bins are 3 of 16 inside a camera
+    window of 0.6-1.4 m, over the 12 % clutter limit, but 3 of 71 in the
+    qualification window the limit was set for."""
+    empty, present = _qualification_scene()
+    present = _added(present, empty, 1.0, [19, 20, 21])
+
+    full = _compare(empty, present, window=QUALIFICATION_WINDOW_M)
+    narrowed = _compare(empty, present, window=CAMERA_WINDOW_1M)
+    windowed = _compare(
+        empty, present, window=QUALIFICATION_WINDOW_M, candidate_window_m=CAMERA_WINDOW_1M
+    )
+
+    # narrowing the search itself is what rejected the real ball
+    assert narrowed.status == "rejected_clutter"
+    assert windowed.status == "accepted"
+    assert windowed.apparent_range_m == pytest.approx(1.0, abs=0.03)
+    assert windowed.peak_width_bins == 3
+    assert windowed.changed_fraction == pytest.approx(full.changed_fraction)
+    assert windowed.normalization_scale == pytest.approx(full.normalization_scale)
+    assert windowed.candidate_window_m == CAMERA_WINDOW_1M
+    assert full.candidate_window_m is None
+
+
+def test_a_camera_window_excludes_a_person_behind_the_ball():
+    empty, present = _qualification_scene()
+    present = _added(present, empty, 1.0, [19, 20, 21])
+    # a still person 2.8 m out, changing far more than the ball
+    present = _added(present, empty, 1.0, [56], fraction=12.0)
+
+    full = _compare(empty, present, window=QUALIFICATION_WINDOW_M)
+    windowed = _compare(
+        empty, present, window=QUALIFICATION_WINDOW_M, candidate_window_m=CAMERA_WINDOW_1M
+    )
+
+    assert full.status == "accepted"
+    assert full.apparent_range_m == pytest.approx(2.8, abs=0.03)
+    assert windowed.status == "accepted"
+    assert windowed.apparent_range_m == pytest.approx(1.0, abs=0.03)
+    assert all(abs(peak["apparent_range_m"] - 2.8) > 0.1 for peak in windowed.alternate_peaks)
+
+
+def test_a_camera_window_with_no_change_inside_it_finds_no_ball():
+    empty, present = _qualification_scene()
+    present = _added(present, empty, 1.0, [56], fraction=12.0)
+
+    windowed = _compare(
+        empty, present, window=QUALIFICATION_WINDOW_M, candidate_window_m=CAMERA_WINDOW_1M
+    )
+
+    assert windowed.status == "rejected_no_ball"
+    assert CAMERA_WINDOW_1M[0] <= windowed.apparent_range_m <= CAMERA_WINDOW_1M[1]
+
+
+def test_a_legacy_profile_honours_the_camera_window_too():
+    power = np.ones(100)
+    empty = _profile(power, capture="d")
+    present = power.copy()
+    present[25] += 30.0  # the ball, 1.0 m
+    present[70] += 300.0  # a person, 2.8 m
+    present = _profile(present, capture="f")
+
+    full = compare_static_range_profiles(
+        empty, present, plausible_apparent_range_m=QUALIFICATION_WINDOW_M
+    )
+    windowed = compare_static_range_profiles(
+        empty,
+        present,
+        plausible_apparent_range_m=QUALIFICATION_WINDOW_M,
+        candidate_window_m=CAMERA_WINDOW_1M,
+    )
+
+    assert full.apparent_range_m == pytest.approx(2.8)
+    assert windowed.status == "accepted"
+    assert windowed.apparent_range_m == pytest.approx(1.0)
+    assert windowed.changed_fraction == pytest.approx(full.changed_fraction)
+
+
+@pytest.mark.parametrize(
+    ("epoch_id", "status"),
+    [
+        ("field-20260929-door-1m", "accepted"),
+        ("field-20260929-outdoor-mat-edge-2m", "rejected_scene_changed"),
+    ],
+)
+def test_the_29_sept_field_setups_keep_their_outcomes_inside_a_camera_window(epoch_id, status):
+    fixture, empty, present = _field_profiles(epoch_id)
+    bias = fixture["range_bias_const_m"]
+    tape = fixture["tape_ball_center_to_rx_m"]
+
+    full = compare_static_range_profiles(
+        empty, present, plausible_apparent_range_m=(0.5 + bias, 4.0 + bias)
+    )
+    windowed = compare_static_range_profiles(
+        empty,
+        present,
+        plausible_apparent_range_m=(0.5 + bias, 4.0 + bias),
+        candidate_window_m=(0.6 * tape + bias, 1.4 * tape + bias),
+    )
+
+    assert full.status == windowed.status == status
+    assert windowed.changed_fraction == pytest.approx(full.changed_fraction)
+    if status == "accepted":
+        assert windowed.apparent_range_m == pytest.approx(full.apparent_range_m)
 
 
 def test_v2_refuses_to_compare_a_legacy_profile_with_a_v2_profile():
