@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Mapping
 
@@ -73,26 +73,29 @@ class RigGeometry:
     say so rather than guess. Heights are above the floor the unit stands on;
     pitches are positive up."""
 
+    # Every field is required, with no defaults: a file that leaves one out is
+    # refused rather than filled in (wiring audit C9). An explicit null still
+    # means "not measured" where the type allows it.
     focal_px: float
-    image_width: int = 320
-    image_height: int = 200
-    boresight_pitch_deg: float = 0.0
-    ops_offset_mm: tuple[float, float, float] | None = None
-    iwr_offset_mm: tuple[float, float, float] | None = None
-    mic_offset_mm: tuple[float, float, float] | None = None
-    provenance: str = ""
-    lens_height_above_floor_mm: float | None = None
-    iwr_boresight_pitch_deg: float | None = None
-    ops_boresight_pitch_deg: float | None = None
-    housing_tilt_deg: float | None = None
+    image_width: int
+    image_height: int
+    boresight_pitch_deg: float
+    ops_offset_mm: tuple[float, float, float] | None
+    iwr_offset_mm: tuple[float, float, float] | None
+    mic_offset_mm: tuple[float, float, float] | None
+    provenance: str
+    lens_height_above_floor_mm: float | None
+    iwr_boresight_pitch_deg: float | None
+    ops_boresight_pitch_deg: float | None
+    housing_tilt_deg: float | None
     # LIS3DH board angles relative to the housing it is fixed to. None means
     # the file does not say, and the expectation falls back to "parallel".
-    lis3dh_mount_pitch_deg: float | None = None
-    lis3dh_mount_roll_deg: float | None = None
+    lis3dh_mount_pitch_deg: float | None
+    lis3dh_mount_roll_deg: float | None
     # The board's turn about the vertical, counter-clockwise seen from above,
     # from the design's +Y arrow toward the enclosure's front. 180 means the
     # arrow points back and X and Y read reversed; None means as designed.
-    lis3dh_mount_yaw_deg: float | None = None
+    lis3dh_mount_yaw_deg: float | None
 
     @property
     def principal_point(self) -> tuple[float, float]:
@@ -210,11 +213,76 @@ class RigGeometry:
 
     @classmethod
     def from_json(cls, path: str | Path) -> "RigGeometry":
+        """Load a rig file, refusing missing, unknown or malformed fields (audit C9)."""
         data = json.loads(Path(path).read_text(encoding="utf-8"))
-        for key in ("ops_offset_mm", "iwr_offset_mm", "mic_offset_mm"):
-            if data.get(key) is not None:
-                data[key] = tuple(float(value) for value in data[key])
-        return cls(**data)
+        return cls(**validated_rig_fields(data))
+
+
+_OFFSET_FIELDS = ("ops_offset_mm", "iwr_offset_mm", "mic_offset_mm")
+_REQUIRED_NUMBER_FIELDS = ("focal_px", "boresight_pitch_deg")
+_SIZE_FIELDS = ("image_width", "image_height")
+_NULLABLE_NUMBER_FIELDS = (
+    "lens_height_above_floor_mm",
+    "iwr_boresight_pitch_deg",
+    "ops_boresight_pitch_deg",
+    "housing_tilt_deg",
+    "lis3dh_mount_pitch_deg",
+    "lis3dh_mount_roll_deg",
+    "lis3dh_mount_yaw_deg",
+)
+
+
+def _finite_number(value, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"rig geometry {name} must be a number, got {value!r}")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"rig geometry {name} must be finite, got {value!r}")
+    return number
+
+
+def validated_rig_fields(data) -> dict:
+    """Every RigGeometry field, present and well-formed, with nothing extra.
+
+    Nullable fields may be an explicit null, which says "not measured"; a
+    field that is absent is refused rather than defaulted (wiring audit C9).
+    """
+    if not isinstance(data, Mapping):
+        raise ValueError("rig geometry must be a JSON object")
+    expected = [item.name for item in fields(RigGeometry)]
+    missing = [name for name in expected if name not in data]
+    unknown = sorted(name for name in data if name not in expected)
+    if missing or unknown:
+        problems = []
+        if missing:
+            problems.append("missing " + ", ".join(missing))
+        if unknown:
+            problems.append("unknown " + ", ".join(unknown))
+        raise ValueError("rig geometry fields: " + "; ".join(problems))
+    loaded: dict = {}
+    for name in _REQUIRED_NUMBER_FIELDS:
+        loaded[name] = _finite_number(data[name], name)
+    if loaded["focal_px"] <= 0.0:
+        raise ValueError("rig geometry focal_px must be positive")
+    for name in _SIZE_FIELDS:
+        value = data[name]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"rig geometry {name} must be a positive integer, got {value!r}")
+        loaded[name] = value
+    for name in _NULLABLE_NUMBER_FIELDS:
+        loaded[name] = None if data[name] is None else _finite_number(data[name], name)
+    for name in _OFFSET_FIELDS:
+        value = data[name]
+        if value is None:
+            loaded[name] = None
+            continue
+        if not isinstance(value, (list, tuple)) or len(value) != 3:
+            raise ValueError(f"rig geometry {name} must be three numbers or null")
+        loaded[name] = tuple(_finite_number(item, name) for item in value)
+    if not isinstance(data["provenance"], str):
+        raise ValueError("rig geometry provenance must be text")
+    loaded["provenance"] = data["provenance"]
+    return loaded
 
 
 @dataclass(frozen=True)
