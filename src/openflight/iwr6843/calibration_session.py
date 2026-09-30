@@ -95,6 +95,7 @@ def clone_calibration(
         tee_range_m=calibration.tee_range_m,
         tee_ball_height_m=calibration.tee_ball_height_m,
         meta=copy.deepcopy(calibration.meta),
+        lateral_tee_offset_m=calibration.lateral_tee_offset_m,
     )
     if tee_range_m is not None:
         cloned.tee_range_m = tee_range_m

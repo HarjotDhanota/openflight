@@ -142,3 +142,42 @@ def test_time_window_excludes_a_later_mover():
         time_window_s=(0.050, 0.072),
     )
     assert late_only is None or late_only.t_first >= 0.050 - 1e-9
+
+
+def test_accepted_range_evidence_passes_only_accepted_tracks():
+    """F4: camera depth takes only tracks their radar estimator accepted."""
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from openflight.iwr6843.tracking import accepted_range_evidence  # noqa: PLC0415
+
+    accepted = SimpleNamespace(status="accepted")
+    recovered = SimpleNamespace(status="accepted_low_confidence_recovery")
+    rejected = SimpleNamespace(status="rejected_track_quality")
+    legacy = SimpleNamespace()  # recorded before evidence carried a status
+
+    assert accepted_range_evidence(accepted) is accepted
+    assert accepted_range_evidence(recovered) is recovered
+    assert accepted_range_evidence(rejected) is None
+    assert accepted_range_evidence(None) is None
+    assert accepted_range_evidence(legacy) is legacy
+
+
+def test_one_ms_to_mph_constant():
+    """F13: the track's mph uses the shared 2.23694, not a rounded 2.237."""
+    from openflight.iwr6843 import club, lcmf, tracking  # noqa: PLC0415
+
+    track = tracking.BallTrack(
+        speed_ms=40.0,
+        slope_bins=0.0,
+        intercept_bins=0.0,
+        rms_bins=0.0,
+        n_inliers=0,
+        t_first=0.0,
+        t_last=0.0,
+        low_confidence=False,
+    )
+
+    assert tracking.MPH_PER_MS == 2.23694
+    assert track.speed_mph == 40.0 * 2.23694
+    assert lcmf.MPH_PER_MS is tracking.MPH_PER_MS
+    assert club.MPH_PER_MS is tracking.MPH_PER_MS

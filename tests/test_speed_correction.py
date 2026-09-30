@@ -157,3 +157,49 @@ def test_available_candidate_retains_unvalidated_model_inputs():
     assert result["validation"] == "unvalidated"
     assert result["inputs"]["ops_radial_speed_mph"] == 108.0
     assert any("co-temporal" in assumption for assumption in result["assumptions"])
+
+
+class TestOpsOwnPosition:
+    """F12: the cosine candidate uses where the OPS sits, not the IWR."""
+
+    LATERAL_FT = 0.085 * 3.28084
+
+    def test_a_lateral_offset_foreshortens_the_line_of_sight(self):
+        import math  # noqa: PLC0415
+
+        launch, distance_ft, above_ft = 15.0, 4.2, -0.09
+        factor = radial_speed_factor(
+            launch, 100.0, distance_ft, above_ft, window_ms=0.0, ball_lateral_ft=self.LATERAL_FT
+        )
+        expected = (
+            math.cos(math.radians(launch)) * distance_ft + math.sin(math.radians(launch)) * above_ft
+        ) / math.sqrt(self.LATERAL_FT**2 + distance_ft**2 + above_ft**2)
+
+        assert factor == pytest.approx(expected)
+        assert factor < radial_speed_factor(launch, 100.0, distance_ft, above_ft, window_ms=0.0)
+
+    def test_no_lateral_offset_keeps_the_historical_model(self):
+        assert radial_speed_factor(19.0, 110.0, 5.0, -1 / 3) == radial_speed_factor(
+            19.0, 110.0, 5.0, -1 / 3, ball_lateral_ft=0.0
+        )
+
+    def test_rig_offsets_are_measured_ops_geometry(self):
+        result = evaluate_experimental_total_speed(
+            108.0,
+            19.0,
+            "radar",
+            4.2,
+            -0.09,
+            geometry_source="ops_rig_offsets",
+            ops_ball_lateral_ft=self.LATERAL_FT,
+        )
+
+        assert result["status"] == "available"
+        assert result["inputs"]["ops_ball_lateral_ft"] == pytest.approx(self.LATERAL_FT)
+        assert result["validation"] == "unvalidated"
+        assert (
+            result["value_mph"]
+            > evaluate_experimental_total_speed(
+                108.0, 19.0, "radar", 4.2, -0.09, geometry_source="ops_rig_offsets"
+            )["value_mph"]
+        )

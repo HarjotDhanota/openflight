@@ -157,3 +157,58 @@ def test_leave_one_channel_out_error_supports_batched_dictionaries():
 def test_leave_one_channel_out_error_rejects_dimension_mismatch():
     with pytest.raises(ValueError, match="channel dimension"):
         leave_one_channel_out_error(np.ones(4), np.ones((8, 2)))
+
+
+class TestLateralTeeOffset:
+    """F10: the LCMF inversion uses this setup's lateral geometry, not July's 64 mm."""
+
+    @staticmethod
+    def _cal(lateral_m=0.0):
+        import numpy as np  # noqa: PLC0415
+
+        from openflight.iwr6843.calibration import Calibration  # noqa: PLC0415
+
+        return Calibration(
+            elem_correction=np.ones(8, dtype=complex),
+            tilt_rad=0.0,
+            range_bias_m=0.0,
+            tee_range_m=1.5,
+            tee_ball_height_m=0.02135,
+            meta={"radar_height_m": 0.051},
+            lateral_tee_offset_m=lateral_m,
+        )
+
+    def test_calibration_defaults_to_no_lateral_offset(self):
+        from openflight.iwr6843 import lcmf  # noqa: PLC0415
+
+        assert self._cal().lateral_tee_offset_m == 0.0
+        assert not hasattr(lcmf, "LATERAL_TEE_OFFSET_M")
+
+    def test_inversion_and_tee_position_use_the_calibration_offset(self):
+        import math  # noqa: PLC0415
+
+        from openflight.iwr6843 import lcmf  # noqa: PLC0415
+
+        geometry = lcmf._model_geometry(
+            self._cal(0.08), ball_speed_mph=100.0, tx_order="normal", tdm_tau_s=1e-5
+        )
+
+        assert geometry["lateral_offset_m"] == 0.08
+        assert geometry["tee_x_m"] == pytest.approx(
+            math.sqrt(1.5**2 - (0.02135 - 0.051) ** 2 - 0.08**2)
+        )
+
+    def test_dropping_the_july_offset_moves_the_inversion_under_2_mm(self):
+        import numpy as np  # noqa: PLC0415
+
+        from openflight.iwr6843 import lcmf  # noqa: PLC0415
+
+        ranges = np.linspace(1.6, 4.5, 30)
+        moved = []
+        for lateral in (0.0, 0.064):
+            geometry = lcmf._model_geometry(
+                self._cal(lateral), ball_speed_mph=100.0, tx_order="normal", tdm_tau_s=1e-5
+            )
+            moved.append(lcmf._candidate_trajectory(np.radians(18.0), ranges, geometry)[0])
+
+        assert np.max(np.abs(moved[0] - moved[1])) < 0.002

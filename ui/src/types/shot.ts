@@ -31,6 +31,7 @@ export interface Shot {
   launch_angle_horizontal_confidence?: number | null;
   launch_angle_vertical_source?: string | null;
   launch_angle_horizontal_source?: string | null;
+  launch_angle_horizontal_status?: string | null;
   angle_source: 'radar' | 'camera' | 'estimated' | null;
   club_angle_deg: number | null;
   club_path_deg: number | null;
@@ -46,6 +47,8 @@ export interface Shot {
   experimental_camera_trace_deg?: number | null;
   experimental_face_angle_deg?: number | null;
   experimental_face_angle_status?: string | null;
+  experimental_face_angle_path_source?: string | null;
+  experimental_face_angle_launch_source?: string | null;
   experimental_aoa_offset_source?: string | null;
   iwr6843_horizontal_deg?: number | null;
   iwr6843_horizontal_confidence?: number | null;

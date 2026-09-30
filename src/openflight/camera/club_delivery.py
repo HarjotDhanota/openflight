@@ -16,7 +16,7 @@ but the OpenFlight server no longer uses their per-club correction offsets.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
@@ -32,6 +32,10 @@ from openflight.camera.geometry import (
 )
 from openflight.clubs import ClubType
 from openflight.clubs.physics import get_club_physics
+from openflight.iwr6843.tracking import accepted_range_evidence
+
+# OpenCV's extension members are not visible to Pylint.
+# pylint: disable=no-member
 
 # --- scene / mask constants -------------------------------------------------
 # Scene brightness gate: background 99.5th percentile. The 2026-08-07 session
@@ -127,6 +131,9 @@ class CameraDeliveryGeometry:
     roll_correction_deg: float = 0.0
     camera_forward_offset_m: float = 0.0
     calibrated_model: Any = None
+    # The camera's target-line correction. It turns club path exactly as it
+    # turns the camera's horizontal launch, so both stay in one frame (F9).
+    horizontal_offset_deg: float = 0.0
 
     @property
     def ball_forward_m(self) -> float:
@@ -171,6 +178,11 @@ class ChainedDelivery:
     path_window_mad_deg: float | None = None
     path_confidence_tier: str = "withheld"
     attack_confidence_tier: str = "withheld"
+    # The IWR club track's own status; a rejected track is never camera depth.
+    range_evidence_status: str | None = None
+    # Every club path is measured from the unit's boresight (audit F2); the
+    # target-line correction comes later, from the alignment stick.
+    club_path_frame: str = "unit_boresight"
 
 
 @dataclass(frozen=True)
@@ -353,6 +365,29 @@ def _velocity_angles(velocity: np.ndarray) -> tuple[float, float]:
     return (
         math.degrees(math.atan2(lateral, forward)),
         math.degrees(math.atan2(vertical, math.hypot(lateral, forward))),
+    )
+
+
+def _in_output_frame(delivery: ChainedDelivery, offset_deg: float) -> ChainedDelivery:
+    """Turn every reported path by the camera's target-line correction (audit F9).
+
+    The gates above judge path in the measurement frame; only the published
+    values move. A zero correction leaves the unit's boresight as the zero.
+    """
+    if offset_deg == 0.0:
+        return delivery
+
+    def turned(value: float | None) -> float | None:
+        if value is None:
+            return None
+        return round((value + offset_deg + 180.0) % 360.0 - 180.0, 2)
+
+    return replace(
+        delivery,
+        club_path_deg=turned(delivery.club_path_deg),
+        pre_path_deg=turned(delivery.pre_path_deg),
+        cross_path_deg=turned(delivery.cross_path_deg),
+        club_path_frame="target_line",
     )
 
 
@@ -598,12 +633,15 @@ def delivery_from_feature_tracks(
         and abs(pre_aoa - cross_aoa) <= CHAINED_INTERVAL_AGREEMENT_DEG
     )
     high = timing_plausible and intervals_agree
-    return ChainedDelivery(
-        status="chained_high" if high else "chained_experimental",
-        attack_angle_deg=round(attack_angle_deg, 2),
-        club_path_deg=round(path_deg, 2),
-        confidence_tier="high" if high else "experimental",
-        **diagnostics,
+    return _in_output_frame(
+        ChainedDelivery(
+            status="chained_high" if high else "chained_experimental",
+            attack_angle_deg=round(attack_angle_deg, 2),
+            club_path_deg=round(path_deg, 2),
+            confidence_tier="high" if high else "experimental",
+            **diagnostics,
+        ),
+        geometry.horizontal_offset_deg,
     )
 
 
@@ -674,8 +712,9 @@ def camera_ops_delivery_from_feature_pair(
     A down-the-line camera measures lateral and vertical image motion but not
     forward velocity directly. At the known contact point, the two perspective
     flow equations plus the OPS velocity magnitude form a closed 3D solution.
-    The teed ball also supplies pitch and yaw references, so a laterally offset
-    or slightly mis-aimed enclosure does not become false club path.
+    The teed ball supplies the pitch reference. It does not set the yaw: path
+    is measured from the unit's boresight, like the chained branch and the
+    IWR, so where the golfer tees the ball never moves the zero (audit F2).
     """
     pixels = np.asarray(feature_pixels, dtype=float)
     times = np.asarray(timestamps_s, dtype=float)
@@ -711,9 +750,6 @@ def camera_ops_delivery_from_feature_pair(
     ball_x, ball_z = normalized(np.asarray([[ball.x, ball.y]], dtype=float))
     ball_x = float(ball_x[0])
     ball_z = float(ball_z[0])
-    expected_azimuth = math.atan2(-geometry.camera_lateral_offset_m, geometry.camera_ball_forward_m)
-    observed_azimuth = math.atan2(ball_x, 1.0)
-    yaw_rad = expected_azimuth - observed_azimuth
     expected_elevation = math.atan2(
         geometry.ball_height_m - geometry.camera_height_m,
         geometry.camera_ball_forward_m,
@@ -748,14 +784,11 @@ def camera_ops_delivery_from_feature_pair(
         camera_lateral = contact_depth_m * dx_dt + image_x * camera_forward
         camera_vertical = contact_depth_m * dz_dt + image_z * camera_forward
 
-        horizontal_forward = (
-            math.cos(pitch_rad) * camera_forward - math.sin(pitch_rad) * camera_vertical
-        )
+        world_forward = math.cos(pitch_rad) * camera_forward - math.sin(pitch_rad) * camera_vertical
         world_vertical = (
             math.sin(pitch_rad) * camera_forward + math.cos(pitch_rad) * camera_vertical
         )
-        world_lateral = math.cos(yaw_rad) * camera_lateral + math.sin(yaw_rad) * horizontal_forward
-        world_forward = -math.sin(yaw_rad) * camera_lateral + math.cos(yaw_rad) * horizontal_forward
+        world_lateral = camera_lateral
         path_deg, attack_angle_deg = _velocity_angles(
             np.asarray([world_lateral, world_vertical, world_forward])
         )
@@ -963,6 +996,10 @@ def estimate_chained_delivery(
     reference_ball_selected: bool = False,
 ) -> ChainedDelivery:
     """Estimate final-approach club delivery from camera, IWR, and OPS."""
+    range_evidence_status = (
+        getattr(range_evidence, "status", "accepted") if range_evidence is not None else None
+    )
+    range_evidence = accepted_range_evidence(range_evidence)
     if ops_club_speed_mph is None:
         return ChainedDelivery(status="rejected_no_ops_speed")
     if frames.ndim != 3 or len(frames) < 20:
@@ -998,9 +1035,10 @@ def estimate_chained_delivery(
     saturated_zone = float(np.mean(background[ball_zone] >= 250))
     camera_quality_clean = saturated_zone <= BALL_ZONE_SATURATION_MAX
 
-    impact_idx = _detect_impact_index(frames, ball, trigger_index=trigger_index)
-    if impact_idx is None:
+    contact = camera_contact_time(frames, timestamps_ns, ball, trigger_index=trigger_index)
+    if contact is None:
         return ChainedDelivery(status="rejected_no_impact", scene_p995=scene_p995)
+    impact_idx = contact.impact_frame
     impact_vs_trigger_ms = None
     timing_plausible = trigger_index is None and camera_quality_clean
     if trigger_index is not None:
@@ -1013,7 +1051,7 @@ def estimate_chained_delivery(
             <= trigger_index + IMPACT_POST_TRIGGER_MAX
         )
 
-    contact_camera_s = (int(timestamps_ns[impact_idx]) + int(timestamps_ns[impact_idx + 1])) / 2e9
+    contact_camera_s = contact.contact_ns / 1e9
     track = range_evidence.track if range_evidence is not None else None
     radar_geo = range_evidence.geometry if range_evidence is not None else None
     impact_t_s = range_evidence.impact_t_s if range_evidence is not None else None
@@ -1075,6 +1113,7 @@ def estimate_chained_delivery(
         ),
         "scene_p995": round(scene_p995, 1),
         "head_thickness_px": (round(head_thickness, 2) if head_thickness is not None else None),
+        "range_evidence_status": range_evidence_status,
     }
     if not pair_estimates:
         return ChainedDelivery(
@@ -1097,19 +1136,26 @@ def estimate_chained_delivery(
         # Camera+OPS closes the geometry, but TrackMan has not validated this
         # fallback yet. Keep every recovered value visible and explicitly low
         # confidence rather than inheriting the primary estimator's tiers.
-        return ChainedDelivery(
-            **{
-                **vars(result),
-                **common,
-                "status": "camera_ops_fallback",
-                "confidence_tier": "experimental",
-                "path_confidence_tier": ("low" if result.club_path_deg is not None else "withheld"),
-                "attack_confidence_tier": (
-                    "low" if result.attack_angle_deg is not None else "withheld"
-                ),
-            }
+        return _in_output_frame(
+            ChainedDelivery(
+                **{
+                    **vars(result),
+                    **common,
+                    "status": "camera_ops_fallback",
+                    "confidence_tier": "experimental",
+                    "path_confidence_tier": (
+                        "low" if result.club_path_deg is not None else "withheld"
+                    ),
+                    "attack_confidence_tier": (
+                        "low" if result.attack_angle_deg is not None else "withheld"
+                    ),
+                }
+            ),
+            geometry.horizontal_offset_deg,
         )
-    return ChainedDelivery(**{**vars(result), **common})
+    return _in_output_frame(
+        ChainedDelivery(**{**vars(result), **common}), geometry.horizontal_offset_deg
+    )
 
 
 # Measured AoA offsets (TrackMan July baseline minus radar candidate median,
@@ -1246,6 +1292,69 @@ def _detect_impact_index(
     if trigger_index is not None:
         return None
     return int(indexes[-1])
+
+
+@dataclass(frozen=True)
+class CameraContact:
+    """When the camera saw the teed ball leave, found from the ball, not the trigger.
+
+    ``contact_ns`` is midway between the last frame the ball's core is
+    undisturbed and the next one, on the clock ``timestamp_source`` names.
+    Club delivery and ball flight time the IWR range from it (audit F7), and
+    F3 scores the radar's impact time against it.
+    """
+
+    impact_frame: int
+    contact_ns: float
+    timestamp_source: str
+    contact_vs_trigger_frame_ms: float | None = None
+
+
+def frame_clock(
+    host_timestamp_ns: np.ndarray, sensor_timestamp_ns: np.ndarray | None = None
+) -> tuple[np.ndarray, str]:
+    """Pick the per-frame clock: sensor timestamps when usable, else host arrival.
+
+    Host times are when each frame reached the Pi, so they carry delivery
+    jitter; sensor times are when it was exposed. Either works for intervals
+    within one clip as long as every time in a calculation comes from one clock.
+    """
+    host = np.asarray(host_timestamp_ns, dtype=np.int64)
+    if sensor_timestamp_ns is not None:
+        sensor = np.asarray(sensor_timestamp_ns)
+        if (
+            sensor.shape == host.shape
+            and sensor.dtype.kind in "iu"
+            and (len(sensor) < 2 or bool(np.all(np.diff(sensor.astype(np.int64)) > 0)))
+        ):
+            return sensor.astype(np.int64), "sensor_timestamp_ns"
+    return host, "host_timestamp_ns"
+
+
+def camera_contact_time(
+    frames: np.ndarray,
+    timestamps_ns: np.ndarray,
+    ball,
+    *,
+    trigger_index: int | None,
+    timestamp_source: str = "host_timestamp_ns",
+) -> CameraContact | None:
+    """Return the camera's contact time from the ball-departure frame, or None."""
+    timestamps = np.asarray(timestamps_ns, dtype=np.int64)
+    impact_idx = _detect_impact_index(frames, ball, trigger_index=trigger_index)
+    if impact_idx is None or impact_idx + 1 >= len(timestamps):
+        return None
+    contact_ns = (int(timestamps[impact_idx]) + int(timestamps[impact_idx + 1])) / 2.0
+    return CameraContact(
+        impact_frame=int(impact_idx),
+        contact_ns=contact_ns,
+        timestamp_source=timestamp_source,
+        contact_vs_trigger_frame_ms=(
+            round((contact_ns - int(timestamps[trigger_index])) / 1e6, 3)
+            if trigger_index is not None and 0 <= trigger_index < len(timestamps)
+            else None
+        ),
+    )
 
 
 def _club_mask(

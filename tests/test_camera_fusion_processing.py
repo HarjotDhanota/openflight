@@ -270,3 +270,56 @@ def test_out_of_range_pre_trigger_count_is_isolated_to_club_stage(monkeypatch):
     assert result["ball_estimate"]["status"] == "ok"
     assert result["club_delivery"]["status"] == "error"
     assert "outside" in result["errors"]["club"]
+
+
+def test_range_evidence_status_rides_in_the_frozen_context(monkeypatch):
+    """F4: a rejected track keeps its evidence for replay, with its status."""
+    track = BallTrack(45.0, -2.0, 40.0, 0.2, 8, 0.01, 0.04, False)
+    geometry = Geometry(4, 8, 2, 4, 64, 0.01, 1)
+    context = fp.build_context(
+        geometry=_geometry(),
+        lighting_eligible=True,
+        ball_tracker=ReferenceBallTracker(),
+        club_tracker=ReferenceBallTracker(),
+        ball_range_evidence=BallRangeEvidence(
+            track, geometry, 0.02, status="rejected_track_quality"
+        ),
+        club_range_evidence=ClubRangeEvidence(
+            track, geometry, 0.02, status="rejected_club_speed_mismatch"
+        ),
+        ops_ball_speed_mph=100.0,
+        ops_club_speed_mph=75.0,
+        iwr_vertical_deg=None,
+        iwr_horizontal_deg=None,
+        iwr_horizontal_confidence=None,
+        club=ClubType.IRON_7,
+        capture_npz_sha256="capture-hash",
+        session_uuid="session-a",
+        shot_number=3,
+    )
+    seen = {}
+
+    def ball_estimator(*_args, range_evidence, **_kwargs):
+        seen["ball"] = range_evidence
+        return CameraBallEstimate(status="ok")
+
+    def club_estimator(*_args, range_evidence, **_kwargs):
+        seen["club"] = range_evidence
+        return ChainedDelivery(status="ok")
+
+    monkeypatch.setattr(fp, "estimate_camera_ball_flight", ball_estimator)
+    monkeypatch.setattr(fp, "estimate_chained_delivery", club_estimator)
+    fp.process_camera_fusion(context, _archive())
+
+    assert context["ball_range_evidence"]["status"] == "rejected_track_quality"
+    assert seen["ball"].status == "rejected_track_quality"
+    assert seen["club"].status == "rejected_club_speed_mismatch"
+
+
+def test_context_recorded_before_range_status_replays_as_accepted(monkeypatch):
+    track = BallTrack(45.0, -2.0, 40.0, 0.2, 8, 0.01, 0.04, False)
+    geometry = Geometry(4, 8, 2, 4, 64, 0.01, 1)
+    snapshot = fp._range_snapshot(BallRangeEvidence(track, geometry, 0.02), "ball")
+    del snapshot["status"]
+
+    assert fp._restore_range(snapshot, "ball").status == "accepted"

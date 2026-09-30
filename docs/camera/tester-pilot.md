@@ -98,7 +98,10 @@ the tee range: without an accepted radar range, swings start with the tee range
 pending even in a test session. The range summary's **swings get** line says
 which it will be before you start. Face angle appears on the **Club path** tile
 as `face ±x.x° (D-plane)`: an estimate from start direction and path, not seen
-on the club.
+on the club. It uses only the path the tile shows, and only when it is
+accepted. The IWR's horizontal zero is not calibrated yet, so a radar
+horizontal launch or IWR club path reads *azimuth uncalibrated* and gives no
+face angle; face angle comes from camera paths until that calibration exists.
 
 What the kiosk was started with is written down with each run: `handed_to_swings`
 in the arm's `arm.json`, the run's `setup_admission.json` and its

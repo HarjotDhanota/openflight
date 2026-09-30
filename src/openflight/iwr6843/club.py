@@ -48,7 +48,7 @@ from openflight.iwr6843.shot import (
 
 logger = logging.getLogger(__name__)
 
-MPH_PER_MS = 2.23694
+MPH_PER_MS = tracking.MPH_PER_MS
 
 # The search gate is ASYMMETRIC about the tee, because the clubhead cannot be
 # beyond the ball before it strikes the ball. Admitting the post-tee region
@@ -125,11 +125,17 @@ CLUB_MAX_PHASE_DEVIATION_RAD = 0.6
 
 @dataclass(frozen=True)
 class ClubRangeEvidence:
-    """Transient club range trajectory shared with camera fusion."""
+    """Transient club range trajectory shared with camera fusion.
+
+    ``status`` is the verdict of the track's own identity gates (OPS speed
+    projection and tee contact), not of the phase-based path: camera fusion
+    uses only the range, so an azimuth rejection leaves the track accepted.
+    """
 
     track: tracking.BallTrack
     geometry: tracking.Geometry
     impact_t_s: float
+    status: str = "accepted"
 
 
 @dataclass
@@ -167,6 +173,9 @@ class ClubPathResult:
     path_pre_frames: int = 0
     path_post_frames: int = 0
     path_post_speed_scale: float = 1.0
+    # The path's zero: the IWR's boresight, fixed to the unit's, until an aim
+    # offset moves it to the target line (audit F2).
+    club_path_frame: str = "unit_boresight"
     # Kept in memory only. Session JSON already records the scalar track
     # diagnostics above; serializing the fitted object would couple replay
     # files to Python implementation details.
@@ -659,6 +668,18 @@ def estimate_club_path(
     if selection is None:
         return ClubPathResult(status="rejected_no_club_track")
     track = selection.track
+    low, high = CLUB_SPEED_PROJECTION_RANGE
+    speed_mismatch = not low <= selection.speed_ratio <= high
+    impact_mismatch = selection.impact_error_m > CLUB_MAX_IMPACT_ERROR_M
+    # A track that fails its identity gates is kept for replay but must never
+    # become camera depth (audit F4).
+    track_status = (
+        "rejected_club_speed_mismatch"
+        if speed_mismatch
+        else "rejected_impact_contact_mismatch"
+        if impact_mismatch
+        else "accepted"
+    )
 
     result = ClubPathResult(
         status="pending",
@@ -676,10 +697,12 @@ def estimate_club_path(
         path_pre_frames=window_policy.path_pre_frames,
         path_post_frames=window_policy.path_post_frames,
         path_post_speed_scale=window_policy.path_post_speed_scale,
+        club_path_frame="unit_boresight" if aim_offset_deg == 0.0 else "target_line",
         range_evidence=ClubRangeEvidence(
             track=track,
             geometry=geo,
             impact_t_s=impact_t_s,
+            status=track_status,
         ),
     )
 
@@ -713,10 +736,6 @@ def estimate_club_path(
         track.n_inliers,
         track.rms_bins,
     )
-
-    low, high = CLUB_SPEED_PROJECTION_RANGE
-    speed_mismatch = not low <= selection.speed_ratio <= high
-    impact_mismatch = selection.impact_error_m > CLUB_MAX_IMPACT_ERROR_M
 
     (
         result.candidate_attack_angle_deg,

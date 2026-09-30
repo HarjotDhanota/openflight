@@ -38,6 +38,9 @@ MPH_TO_FTS = 1.4666667
 DRAG_MPH_PER_MS = 0.027  # iron-speed drag deceleration of the ball
 EXPERIMENTAL_MODEL = "legacy_peak_radial_v1"
 MEASURED_DIRECTION_SOURCES = frozenset({"radar", "camera"})
+# OPS-relative ball geometry that was measured: by tape from the OPS, or from
+# the rig file's OPS offsets applied to the IWR's own tee range (audit F12).
+MEASURED_OPS_GEOMETRY_SOURCES = frozenset({"ops_measured", "ops_rig_offsets"})
 MAX_WINDOW_MS = 250.0
 MEASURED_PROJECTION_MODEL = "measured_los_projection_v1"
 
@@ -242,6 +245,7 @@ def evaluate_experimental_total_speed(
     *,
     window_ms: float = 70.0,
     geometry_source: str | None = None,
+    ops_ball_lateral_ft: Any = 0.0,
 ) -> dict[str, Any]:
     """Evaluate the historical peak-radial model without changing canonical speed."""
 
@@ -259,6 +263,7 @@ def evaluate_experimental_total_speed(
         ),
         "ops_ball_distance_ft": finite_number(ops_ball_distance_ft),
         "ball_above_ops_ft": finite_number(ball_above_ops_ft),
+        "ops_ball_lateral_ft": finite_number(ops_ball_lateral_ft),
         "geometry_source": geometry_source if isinstance(geometry_source, str) else None,
         "window_ms": finite_number(window_ms),
         "drag_mph_per_ms": DRAG_MPH_PER_MS,
@@ -285,6 +290,7 @@ def evaluate_experimental_total_speed(
             "launch_angle_vertical_deg",
             "ops_ball_distance_ft",
             "ball_above_ops_ft",
+            "ops_ball_lateral_ft",
             "window_ms",
         )
     )
@@ -305,7 +311,7 @@ def evaluate_experimental_total_speed(
     if launch_angle_vertical_source not in MEASURED_DIRECTION_SOURCES:
         result["reason"] = "a measured radar or camera vertical launch direction is required"
         return result
-    if geometry_source != "ops_measured":
+    if geometry_source not in MEASURED_OPS_GEOMETRY_SOURCES:
         result["reason"] = (
             "measured OPS-relative ball distance and height geometry is unavailable; "
             "IWR or K-LD7 geometry proxies are not promoted"
@@ -317,6 +323,7 @@ def evaluate_experimental_total_speed(
         float(ops_ball_distance_ft),
         float(ball_above_ops_ft),
         float(window_ms),
+        ball_lateral_ft=float(ops_ball_lateral_ft),
     )
     value_mph = float(ops_radial_speed_mph) / factor
     if not math.isfinite(value_mph):
@@ -337,11 +344,15 @@ def radial_speed_factor(
     ball_distance_ft: float,
     ball_above_radar_ft: float,
     window_ms: float = 70.0,
+    *,
+    ball_lateral_ft: float = 0.0,
 ) -> float:
     """Predicted (OPS radial reading) / (true ball speed), in (0, 1].
 
     Maximum of the radial-speed profile over the capture window:
-    radial(t) = v(t) * cos(launch - elevation_of_ball_from_radar(t)).
+    radial(t) = v(t) * cos(launch - elevation_of_ball_from_radar(t)), scaled
+    by the share of the line of sight a sideways OPS offset takes: the ball
+    flies downrange while the OPS sits ``ball_lateral_ft`` to one side.
     """
     if ball_speed_mph <= 0:
         return 1.0
@@ -354,7 +365,8 @@ def radial_speed_factor(
         t = t_ms / 1000.0
         x = ball_distance_ft + v_fts * math.cos(la) * t
         y = ball_above_radar_ft + v_fts * math.sin(la) * t
-        best = max(best, v_frac * math.cos(la - math.atan2(y, x)))
+        sideways = math.hypot(x, y) / math.hypot(ball_lateral_ft, x, y)
+        best = max(best, v_frac * math.cos(la - math.atan2(y, x)) * sideways)
         t_ms += 2.0
     return min(max(best, 0.5), 1.0)
 

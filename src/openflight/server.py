@@ -1271,6 +1271,38 @@ def _session_start_config() -> dict:
 ball_speed_correction_enabled = False
 ball_speed_correction_distance_ft = 5.5
 ball_speed_correction_ball_above_radar_ft = -4.0 / 12.0
+ball_speed_correction_lateral_ft = 0.0
+ball_speed_correction_geometry_source = "iwr_or_kld7_proxy"
+FEET_PER_M = 3.28084
+
+
+def _ops_speed_correction_geometry(calibration) -> tuple[float, float, float, str]:
+    """OPS-to-ball forward, above and lateral feet for the cosine candidate, and a source.
+
+    With a rig file the OPS's own offsets place it (audit F12); without one the
+    IWR's range and height stand in for the OPS's, which the candidate names
+    as a proxy and withholds.
+    """
+    geometry = (
+        rig_geometry.ops_ball_geometry_m(
+            tee_slant_range_m=calibration.tee_range_m,
+            ball_height_m=calibration.tee_ball_height_m,
+            radar_height_m=calibration.radar_height_m,
+        )
+        if rig_geometry is not None
+        else None
+    )
+    if geometry is None:
+        return (
+            calibration.tee_range_m * FEET_PER_M,
+            (calibration.tee_ball_height_m - calibration.radar_height_m) * FEET_PER_M,
+            0.0,
+            "iwr_or_kld7_proxy",
+        )
+    forward_m, lateral_m, above_m = geometry
+    return forward_m * FEET_PER_M, above_m * FEET_PER_M, lateral_m * FEET_PER_M, "ops_rig_offsets"
+
+
 calculated_spin_enabled = False
 
 
@@ -1528,6 +1560,7 @@ def init_iwr6843(
     azimuth_offset_deg: float = 0.0,
     horizontal_phase_reference_rad: float | None = None,
     save_dumps: bool = False,
+    lateral_tee_offset_m: float = 0.0,
 ) -> bool:
     """Initialize GPIO-triggered TI capture and the frozen LCMF-v1 estimator."""
     global iwr6843_runtime, iwr6843_runtime_config  # pylint: disable=global-statement
@@ -1567,6 +1600,7 @@ def init_iwr6843(
             calibration.tilt_rad = math.radians(tilt_deg)
         if radar_height_m is not None:
             calibration.meta["radar_height_m"] = radar_height_m
+        calibration.lateral_tee_offset_m = float(lateral_tee_offset_m)
 
         capture_monitor = IWR6843CaptureMonitor(
             config_path=config_path,
@@ -1606,6 +1640,7 @@ def init_iwr6843(
                     "tee_slant_range_m": calibration.tee_range_m,
                     "radar_height_m": calibration.radar_height_m,
                     "ball_height_m": calibration.tee_ball_height_m,
+                    "lateral_tee_offset_m": calibration.lateral_tee_offset_m,
                 },
             },
             radar_config_provenance={
@@ -1630,6 +1665,7 @@ def init_iwr6843(
             "tilt_deg": math.degrees(calibration.tilt_rad),
             "radar_height_m": calibration.radar_height_m,
             "ball_height_m": calibration.tee_ball_height_m,
+            "lateral_tee_offset_m": calibration.lateral_tee_offset_m,
             "azimuth_offset_deg": azimuth_offset_deg,
             "horizontal_phase_reference_rad": horizontal_phase_reference_rad,
             "capture_timeout_s": capture_timeout_s,
@@ -3164,6 +3200,18 @@ def _calibrated_pose_evidence(pose: dict, placement: dict) -> dict:
     return evidence
 
 
+def _iwr_azimuth_status() -> str | None:
+    """Mark IWR horizontal values while the board has no horizontal phase reference.
+
+    An electrical phase bias shifts the radar horizontal and rotates the IWR
+    club path, so neither shares the camera's zero until the reference is
+    calibrated in situ from camera tracks (audit F8, decision D3).
+    """
+    if getattr(iwr6843_runtime, "horizontal_phase_reference_rad", None) is None:
+        return "azimuth_uncalibrated"
+    return None
+
+
 def _process_iwr6843_angle(shot: Shot) -> float | None:
     """Apply a correlated LCMF-v1 result without risking the OPS shot."""
     if iwr6843_runtime is None or shot.mode == "mock":
@@ -3275,6 +3323,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 shot.launch_angle_horizontal = horizontal_deg
                 shot.launch_angle_horizontal_confidence = shot.iwr6843_horizontal_confidence
                 shot.launch_angle_horizontal_source = "radar"
+                shot.launch_angle_horizontal_status = _iwr_azimuth_status()
                 logger.info(
                     "[SERVER] IWR6843 TX2 horizontal proxy: %.2fÂ° (coherence %.0f%%, status=%s)",
                     horizontal_deg,
@@ -3321,7 +3370,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             candidate_attack = getattr(club_path, "candidate_attack_angle_deg", None)
             candidate_path_status = getattr(club_path, "candidate_path_status", None)
             shot.experimental_club_path_status = (
-                club_path.status
+                (_iwr_azimuth_status() or club_path.status)
                 if accepted_path is not None
                 else (
                     candidate_path_status
@@ -3553,6 +3602,38 @@ def _fuse_camera_club_delivery(
         )
 
 
+# How far each horizontal-launch source may be trusted as the displayed value.
+# Camera ball flight is diagnostic: only a camera bearing on accepted IWR depth
+# outranks a radar horizontal, and size-only camera depth ranks below it.
+_HORIZONTAL_SOURCE_RANK = {
+    "estimated": -1,
+    "camera_only_experimental": 0,
+    "camera_legacy_fallback": 0,
+    "radar": 1,
+    "camera_assisted_experimental": 2,
+}
+
+
+def _apply_camera_horizontal_decision(
+    shot: Shot,
+    selected_deg: float | None,
+    confidence: float | None,
+    source: str | None,
+) -> None:
+    """Display a camera-fusion horizontal only when it outranks the current one (F6)."""
+    if selected_deg is None:
+        return
+    if shot.launch_angle_horizontal is not None:
+        current_rank = _HORIZONTAL_SOURCE_RANK.get(shot.launch_angle_horizontal_source, 1)
+        if _HORIZONTAL_SOURCE_RANK.get(source, 0) < current_rank:
+            return
+    shot.launch_angle_horizontal = selected_deg
+    shot.launch_angle_horizontal_confidence = confidence
+    shot.launch_angle_horizontal_source = source
+    # A camera decision that falls back to radar hands back the IWR's value.
+    shot.launch_angle_horizontal_status = _iwr_azimuth_status() if source == "radar" else None
+
+
 def _fuse_camera_ball_flight(
     shot: Shot,
     camera_capture,
@@ -3609,6 +3690,7 @@ def _fuse_camera_ball_flight(
                                 ops_ball_speed_mph=shot.ball_speed_raw_mph or shot.ball_speed_mph,
                                 iwr_vertical_deg=shot.launch_angle_vertical,
                                 ball_tracker=camera_ball_flight_reference_tracker,
+                                sensor_timestamps_ns=archive.get("sensor_timestamp_ns"),
                             )
 
         decision = select_camera_assisted_horizontal(
@@ -3628,10 +3710,9 @@ def _fuse_camera_ball_flight(
             else f"{decision.status}:{estimate.status}"
         )
         shot.experimental_camera_iwr_delta_deg = decision.camera_iwr_delta_deg
-        if decision.selected_deg is not None:
-            shot.launch_angle_horizontal = decision.selected_deg
-            shot.launch_angle_horizontal_confidence = decision.confidence
-            shot.launch_angle_horizontal_source = decision.source
+        _apply_camera_horizontal_decision(
+            shot, decision.selected_deg, decision.confidence, decision.source
+        )
         logger.info(
             "[SERVER] Camera-assisted horizontal: selected=%s camera=%s IWR=%s "
             "delta=%s status=%s support=%d/27",
@@ -3677,31 +3758,63 @@ def _withhold_camera_metrics(shot: Shot, status: str, reason: str) -> None:
 FACE_ANGLE_FACE_WEIGHT = 0.8
 
 
+def displayed_club_path(shot: Shot) -> tuple[float | None, str | None]:
+    """Return the club path the kiosk shows, when it is accepted, and its source.
+
+    The precedence mirrors the kiosk's club-path tile (ui liveMetrics.ts): the
+    canonical field, then the camera-fused path, and the IWR path only when
+    camera fusion did not run (the kiosk hides it otherwise). Candidate,
+    out-of-bounds, noisy, rejected and withheld paths return (None, None), so
+    face angle is never built on a path the kiosk does not show as a
+    measurement (audit F1). An IWR path without a horizontal phase reference
+    carries status "azimuth_uncalibrated", not "accepted", so it is left out
+    too (audit F8).
+    """
+    if shot.club_path_deg is not None:
+        return shot.club_path_deg, "canonical"
+    fused_status = shot.experimental_fused_status or ""
+    if shot.experimental_fused_club_path_deg is not None:
+        if (
+            fused_status.startswith("rejected")
+            or fused_status == "error"
+            or shot.experimental_fused_club_path_confidence == "withheld"
+        ):
+            return None, None
+        source = (
+            "camera_fused_ops" if fused_status == "camera_ops_fallback" else "camera_fused_chained"
+        )
+        return shot.experimental_fused_club_path_deg, source
+    if shot.experimental_fused_status is not None:
+        return None, None
+    iwr_status = shot.experimental_club_path_status or ""
+    if shot.experimental_club_path_deg is not None and iwr_status.startswith("accepted"):
+        return shot.experimental_club_path_deg, "iwr"
+    return None, None
+
+
 def _attach_experimental_face_angle(shot: Shot) -> None:
     """Derive face angle from the measured start direction and club path (D-plane)."""
     shot.experimental_face_angle_deg = None
+    shot.experimental_face_angle_path_source = None
+    shot.experimental_face_angle_launch_source = None
     launch = shot.launch_angle_horizontal
     if launch is None or shot.launch_angle_horizontal_source == "estimated":
         shot.experimental_face_angle_status = "missing_measured_start_direction"
         return
-    path = next(
-        (
-            value
-            for value in (
-                shot.club_path_deg,
-                shot.experimental_fused_club_path_deg,
-                shot.experimental_club_path_deg,
-            )
-            if value is not None
-        ),
-        None,
-    )
+    # An uncalibrated radar start direction has its own zero; with any path it
+    # would mix two frames (audit F8).
+    if shot.launch_angle_horizontal_status == "azimuth_uncalibrated":
+        shot.experimental_face_angle_status = "start_direction_azimuth_uncalibrated"
+        return
+    path, path_source = displayed_club_path(shot)
     if path is None:
-        shot.experimental_face_angle_status = "missing_club_path"
+        shot.experimental_face_angle_status = "missing_accepted_club_path"
         return
     weight = FACE_ANGLE_FACE_WEIGHT
     shot.experimental_face_angle_deg = round((launch - (1.0 - weight) * path) / weight, 1)
     shot.experimental_face_angle_status = "d_plane_estimate"
+    shot.experimental_face_angle_path_source = path_source
+    shot.experimental_face_angle_launch_source = shot.launch_angle_horizontal_source
 
 
 def _fuse_camera_measurements(
@@ -3889,10 +4002,9 @@ def _fuse_camera_measurements(
                 else f"{decision['status']}:{estimate['status']}"
             )
             shot.experimental_camera_iwr_delta_deg = decision["camera_iwr_delta_deg"]
-            if decision["selected_deg"] is not None:
-                shot.launch_angle_horizontal = decision["selected_deg"]
-                shot.launch_angle_horizontal_confidence = decision["confidence"]
-                shot.launch_angle_horizontal_source = decision["source"]
+            _apply_camera_horizontal_decision(
+                shot, decision["selected_deg"], decision["confidence"], decision["source"]
+            )
             shot.experimental_fused_attack_angle_deg = fused["attack_angle_deg"]
             shot.experimental_fused_club_path_deg = fused["club_path_deg"]
             shot.experimental_fused_status = fused["status"]
@@ -4094,6 +4206,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                         shot.launch_angle_horizontal = kld7_angle_h.horizontal_deg
                         shot.launch_angle_horizontal_confidence = kld7_angle_h.confidence
                         shot.launch_angle_horizontal_source = "radar"
+                        shot.launch_angle_horizontal_status = None
                         if shot.angle_source is None:
                             shot.angle_source = "radar"
                         if shot.launch_angle_confidence is None:
@@ -4287,7 +4400,8 @@ def _attach_ball_speed_contract(shot: Shot) -> None:
             shot.launch_angle_vertical_source,
             ball_speed_correction_distance_ft,
             ball_speed_correction_ball_above_radar_ft,
-            geometry_source="iwr_or_kld7_proxy",
+            geometry_source=ball_speed_correction_geometry_source,
+            ops_ball_lateral_ft=ball_speed_correction_lateral_ft,
         )
 
 
@@ -6305,6 +6419,7 @@ def main():
     global ball_speed_correction_enabled
     global ball_speed_correction_distance_ft
     global ball_speed_correction_ball_above_radar_ft
+    global ball_speed_correction_lateral_ft, ball_speed_correction_geometry_source
     # Cosine correction rides on whichever vertical radar supplies launch.
     # LCMF itself always receives the original OPS radial speed first.
     ball_speed_correction_enabled = args.kld7 or (args.iwr6843 and args.iwr6843_tee_m is not None)
@@ -6470,13 +6585,22 @@ def main():
             azimuth_offset_deg=args.iwr6843_azimuth_offset_deg,
             horizontal_phase_reference_rad=args.iwr6843_horizontal_phase_reference_rad,
             save_dumps=args.debug,
+            # The tee sits on the camera's axis; without a rig it is assumed
+            # directly downrange of the IWR, never July's 64 mm (audit F10).
+            lateral_tee_offset_m=(
+                enclosure.tee_lateral_offset_m
+                if enclosure is not None and enclosure.tee_lateral_offset_m is not None
+                else 0.0
+            ),
         ):
             calibration = iwr6843_runtime.calibration
             if args.iwr6843_tee_m is not None:
-                ball_speed_correction_distance_ft = args.iwr6843_tee_m * 3.28084
-                ball_speed_correction_ball_above_radar_ft = (
-                    calibration.tee_ball_height_m - calibration.radar_height_m
-                ) * 3.28084
+                (
+                    ball_speed_correction_distance_ft,
+                    ball_speed_correction_ball_above_radar_ft,
+                    ball_speed_correction_lateral_ft,
+                    ball_speed_correction_geometry_source,
+                ) = _ops_speed_correction_geometry(calibration)
             print(
                 "IWR6843 enabled (LCMF-v1 launch angle, "
                 f"BCM{args.iwr6843_trigger_pin}, {iwr6843_runtime.tx_order} TX order)"

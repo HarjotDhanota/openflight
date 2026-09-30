@@ -218,6 +218,9 @@ class Shot:
     launch_angle_horizontal_confidence: Optional[float] = None
     launch_angle_vertical_source: Optional[str] = None
     launch_angle_horizontal_source: Optional[str] = None
+    # "azimuth_uncalibrated" when the displayed horizontal is an IWR value
+    # measured without a horizontal phase reference (audit F8).
+    launch_angle_horizontal_status: Optional[str] = None
     spin_rpm: Optional[float] = None
     spin_confidence: Optional[float] = None
     # Raw radar-measured spin, kept when --calculated-spin rewrites
@@ -272,6 +275,9 @@ class Shot:
     # on the club. Experimental until checked against impact-tape truth.
     experimental_face_angle_deg: Optional[float] = None
     experimental_face_angle_status: Optional[str] = None
+    # Which displayed club path and horizontal launch the face angle used.
+    experimental_face_angle_path_source: Optional[str] = None
+    experimental_face_angle_launch_source: Optional[str] = None
     experimental_aoa_offset_source: Optional[str] = None
     # Independent horizontal ball-flight evidence. The camera-assisted value
     # may become the displayed experimental result while the original IWR
@@ -416,6 +422,7 @@ class Shot:
             "launch_angle_horizontal_confidence": self.launch_angle_horizontal_confidence,
             "launch_angle_vertical_source": self.launch_angle_vertical_source,
             "launch_angle_horizontal_source": self.launch_angle_horizontal_source,
+            "launch_angle_horizontal_status": self.launch_angle_horizontal_status,
             "angle_source": self.angle_source,
             "club_angle_deg": self.club_angle_deg,
             "club_path_deg": self.club_path_deg,
@@ -435,6 +442,8 @@ class Shot:
             "experimental_camera_trace_deg": self.experimental_camera_trace_deg,
             "experimental_face_angle_deg": self.experimental_face_angle_deg,
             "experimental_face_angle_status": self.experimental_face_angle_status,
+            "experimental_face_angle_path_source": self.experimental_face_angle_path_source,
+            "experimental_face_angle_launch_source": self.experimental_face_angle_launch_source,
             "experimental_aoa_offset_source": self.experimental_aoa_offset_source,
             "iwr6843_horizontal_deg": self.iwr6843_horizontal_deg,
             "iwr6843_horizontal_confidence": self.iwr6843_horizontal_confidence,

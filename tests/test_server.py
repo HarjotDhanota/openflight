@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import sys
 import threading
 from datetime import datetime
@@ -614,6 +615,49 @@ class TestIWR6843ShotIntegration:
         assert server_module.iwr6843_runtime_config["horizontal_phase_reference_rad"] == -0.5
         server_module.iwr6843_runtime = None
 
+    def test_init_iwr6843_takes_the_tee_lateral_offset_from_the_rig(self, monkeypatch, tmp_path):
+        """F10: the LCMF inversion's lateral offset is the rig's, recorded, not July's."""
+        calibration = Calibration.identity()
+
+        class FakeCaptureMonitor:
+            def __init__(self, **kwargs):
+                self.port = "/dev/ttyUSB0"
+
+            def start(self, *, armed=True):
+                return None
+
+            def stop(self):
+                return None
+
+        monkeypatch.setattr(Calibration, "load", lambda _path: calibration)
+        monkeypatch.setattr("openflight.iwr6843.monitor.IWR6843CaptureMonitor", FakeCaptureMonitor)
+        monkeypatch.setattr(
+            "openflight.iwr6843.monitor.tx_order_from_config", lambda _path: "normal"
+        )
+        config_path = tmp_path / "snapshot.cfg"
+        calibration_path = tmp_path / "cal.json"
+        config_path.write_text("profileCfg 0\n", encoding="utf-8")
+        calibration_path.write_text("{}", encoding="utf-8")
+
+        assert server_module.init_iwr6843(
+            port="/dev/ttyUSB0",
+            config_path=str(config_path),
+            calibration_path=str(calibration_path),
+            output_dir=tmp_path,
+            trigger_pin=17,
+            tee_range_m=1.3,
+            net_range_m=4.6,
+            tx_order="auto",
+            capture_timeout_s=12.0,
+            lateral_tee_offset_m=0.0,
+        )
+
+        assert server_module.iwr6843_runtime.calibration.lateral_tee_offset_m == 0.0
+        assert server_module.iwr6843_runtime_config["lateral_tee_offset_m"] == 0.0
+        effective = server_module.iwr6843_runtime.calibration_provenance["effective"]
+        assert effective["lateral_tee_offset_m"] == 0.0
+        server_module.iwr6843_runtime = None
+
     def test_accepted_lcmf_angle_is_applied_to_existing_shot_contract(self, monkeypatch):
         emitted = []
         measurement = SimpleNamespace(
@@ -935,11 +979,12 @@ class TestIWR6843ShotIntegration:
             sequence=1,
         )
         runtime = SimpleNamespace(
+            horizontal_phase_reference_rad=-0.5,
             process_shot=lambda **kwargs: SimpleNamespace(
                 capture=capture,
                 measurement=measurement,
                 club_path=club_path,
-            )
+            ),
         )
         monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
@@ -1485,6 +1530,107 @@ class TestShotToDict:
         assert estimate_call["geometry"].roll_correction_deg == 2.8
         assert estimate_call["geometry"].horizontal_pixel_sign == -1.0
         assert estimate_call["ball_tracker"] is ball_flight_tracker
+
+    def _fuse_with_camera_estimate(self, monkeypatch, tmp_path, estimate, shot):
+        from openflight.camera import ball_flight
+
+        np.savez(
+            tmp_path / "frames.npz",
+            frames=np.zeros((8, 400, 640), dtype=np.uint8),
+            host_timestamp_ns=np.arange(8, dtype=np.int64),
+            trigger_host_timestamp_ns=np.int64(3),
+        )
+        monkeypatch.setattr(
+            ball_flight, "estimate_camera_ball_flight", lambda *_args, **_kwargs: estimate
+        )
+        monkeypatch.setattr(
+            server_module,
+            "iwr6843_runtime",
+            SimpleNamespace(
+                calibration=SimpleNamespace(
+                    tee_range_m=1.524, radar_height_m=0.15875, tee_ball_height_m=0.04
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            server_module,
+            "camera_capture_config",
+            {"mount_height_m": 0.20955, "width": 640, "height": 400},
+        )
+        server_module._fuse_camera_ball_flight(shot, SimpleNamespace(valid=True, path=tmp_path))
+
+    def test_accepted_iwr_horizontal_is_displayed_over_camera_only(self, monkeypatch, tmp_path):
+        """F6: accepted IWR 3.0 plus camera-only 5.0 displays 3.0 and keeps 5.0."""
+        from openflight.camera import ball_flight
+
+        shot = Shot(
+            ball_speed_mph=110.0,
+            timestamp=datetime.now(),
+            launch_angle_horizontal=3.0,
+            launch_angle_horizontal_confidence=0.8,
+            launch_angle_horizontal_source="radar",
+            iwr6843_horizontal_deg=3.0,
+            iwr6843_horizontal_confidence=0.8,
+        )
+        estimate = ball_flight.CameraBallEstimate(
+            status="accepted_camera_only",
+            confidence_tier="experimental",
+            horizontal_deg=5.0,
+            depth_source="camera_size",
+        )
+
+        self._fuse_with_camera_estimate(monkeypatch, tmp_path, estimate, shot)
+
+        assert shot.launch_angle_horizontal == pytest.approx(3.0)
+        assert shot.launch_angle_horizontal_source == "radar"
+        assert shot.launch_angle_horizontal_confidence == pytest.approx(0.8)
+        assert shot.experimental_camera_horizontal_deg == pytest.approx(5.0)
+        assert shot.experimental_camera_horizontal_status == (
+            "camera_only_experimental_iwr_preferred"
+        )
+
+    def test_camera_only_horizontal_does_not_replace_another_radar_value(
+        self, monkeypatch, tmp_path
+    ):
+        """F6: the camera overwrites the displayed horizontal only when it outranks it."""
+        from openflight.camera import ball_flight
+
+        shot = Shot(
+            ball_speed_mph=110.0,
+            timestamp=datetime.now(),
+            launch_angle_horizontal=1.0,
+            launch_angle_horizontal_confidence=0.7,
+            launch_angle_horizontal_source="radar",
+        )
+        estimate = ball_flight.CameraBallEstimate(
+            status="accepted_camera_only",
+            confidence_tier="experimental",
+            horizontal_deg=5.0,
+            depth_source="camera_size",
+        )
+
+        self._fuse_with_camera_estimate(monkeypatch, tmp_path, estimate, shot)
+
+        assert shot.launch_angle_horizontal == pytest.approx(1.0)
+        assert shot.launch_angle_horizontal_source == "radar"
+        assert shot.experimental_camera_horizontal_deg == pytest.approx(5.0)
+
+    def test_camera_only_horizontal_fills_an_empty_horizontal(self, monkeypatch, tmp_path):
+        from openflight.camera import ball_flight
+
+        shot = Shot(ball_speed_mph=110.0, timestamp=datetime.now())
+        estimate = ball_flight.CameraBallEstimate(
+            status="accepted_camera_only",
+            confidence_tier="experimental",
+            horizontal_deg=5.0,
+            depth_source="camera_size",
+        )
+
+        self._fuse_with_camera_estimate(monkeypatch, tmp_path, estimate, shot)
+
+        assert shot.launch_angle_horizontal == pytest.approx(5.0)
+        assert shot.launch_angle_horizontal_source == "camera_only_experimental"
+        assert shot.launch_angle_horizontal_confidence == pytest.approx(0.3)
 
     def test_live_fusion_without_camera_preserves_radar_horizontal(self):
         shot = Shot(
@@ -5337,6 +5483,61 @@ def test_live_speed_candidate_matches_shared_replay_without_changing_canonical(m
     assert "OPS-relative" in shot.experimental_ball_speed_total["reason"]
 
 
+def test_ops_speed_geometry_comes_from_the_rig_ops_offsets(monkeypatch):
+    """F12: with a rig, the cosine candidate uses the OPS's own position."""
+    from openflight.rig_geometry import RigGeometry
+
+    monkeypatch.setattr(
+        server_module,
+        "rig_geometry",
+        RigGeometry.from_json("config/enclosure_v3_rig_geometry.json"),
+    )
+    calibration = SimpleNamespace(tee_range_m=1.30, tee_ball_height_m=0.02135, radar_height_m=0.051)
+
+    distance_ft, above_ft, lateral_ft, source = server_module._ops_speed_correction_geometry(
+        calibration
+    )
+
+    assert source == "ops_rig_offsets"
+    assert lateral_ft == pytest.approx(0.085 * 3.28084)
+    assert above_ft == pytest.approx((0.02135 - 0.048) * 3.28084)
+    assert distance_ft == pytest.approx((math.sqrt(1.30**2 - 0.02965**2) - 0.010) * 3.28084)
+
+
+def test_ops_speed_geometry_without_a_rig_keeps_the_iwr_proxy(monkeypatch):
+    monkeypatch.setattr(server_module, "rig_geometry", None)
+    calibration = SimpleNamespace(tee_range_m=1.30, tee_ball_height_m=0.02135, radar_height_m=0.051)
+
+    distance_ft, above_ft, lateral_ft, source = server_module._ops_speed_correction_geometry(
+        calibration
+    )
+
+    assert source == "iwr_or_kld7_proxy"
+    assert distance_ft == pytest.approx(1.30 * 3.28084)
+    assert above_ft == pytest.approx((0.02135 - 0.051) * 3.28084)
+    assert lateral_ft == 0.0
+
+
+def test_live_speed_candidate_uses_the_configured_ops_geometry(monkeypatch):
+    monkeypatch.setattr(server_module, "ball_speed_correction_enabled", True)
+    monkeypatch.setattr(server_module, "ball_speed_correction_distance_ft", 4.2)
+    monkeypatch.setattr(server_module, "ball_speed_correction_ball_above_radar_ft", -0.09)
+    monkeypatch.setattr(server_module, "ball_speed_correction_lateral_ft", 0.2789)
+    monkeypatch.setattr(server_module, "ball_speed_correction_geometry_source", "ops_rig_offsets")
+    shot = Shot(
+        ball_speed_mph=108.0,
+        timestamp=datetime.now(),
+        launch_angle_vertical=19.0,
+        launch_angle_vertical_source="radar",
+    )
+
+    server_module._attach_ball_speed_contract(shot)
+
+    assert shot.ball_speed_mph == 108.0
+    assert shot.experimental_ball_speed_total["status"] == "available"
+    assert shot.experimental_ball_speed_total["inputs"]["ops_ball_lateral_ft"] == 0.2789
+
+
 def test_live_speed_candidate_withholds_estimated_fallback(monkeypatch):
     monkeypatch.setattr(server_module, "ball_speed_correction_enabled", True)
     shot = Shot(
@@ -5349,3 +5550,120 @@ def test_live_speed_candidate_withholds_estimated_fallback(monkeypatch):
     assert shot.ball_speed_mph == 108.0
     assert shot.experimental_ball_speed_total["status"] == "withheld"
     assert "measured" in shot.experimental_ball_speed_total["reason"]
+
+
+class TestIwrAzimuthCalibration:
+    """F8: without a horizontal phase reference the IWR's azimuth is uncalibrated."""
+
+    @staticmethod
+    def _run(monkeypatch, *, phase_reference, horizontal_deg=2.25, club_accepted=True):
+        measurement = SimpleNamespace(
+            accepted=True,
+            angle_deg=18.5,
+            horizontal_deg=horizontal_deg,
+            horizontal_confidence=0.93,
+            horizontal_status="hlcmf_v1_accepted",
+            n_snapshots=18,
+            n_frames=5,
+            component_std_deg=1.4,
+            to_dict=lambda: {},
+        )
+        club_path = SimpleNamespace(
+            accepted=club_accepted,
+            status="accepted" if club_accepted else "rejected_phase_span",
+            path_deg=1.5 if club_accepted else None,
+            confidence=0.8,
+            n_frames=5,
+            candidate_path_deg=1.5,
+            candidate_path_status="candidate_available",
+            candidate_attack_angle_deg=-4.0,
+            attack_angle_status="candidate_available",
+            to_dict=lambda: {},
+        )
+        capture = SimpleNamespace(
+            trigger_timestamp=100.01,
+            path=None,
+            raw=b"raw",
+            dump_duration_s=4.5,
+            error=None,
+            valid=True,
+            sequence=1,
+        )
+        runtime = SimpleNamespace(
+            horizontal_phase_reference_rad=phase_reference,
+            process_shot=lambda **kwargs: SimpleNamespace(
+                capture=capture, measurement=measurement, club_path=club_path
+            ),
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        shot = Shot(
+            ball_speed_mph=100.0,
+            club_speed_mph=80.0,
+            timestamp=datetime.now(),
+            impact_timestamp=100.0,
+            club=ClubType.IRON_9,
+        )
+        server_module._process_iwr6843_angle(shot)
+        return shot
+
+    def test_uncalibrated_radar_horizontal_and_path_are_marked(self, monkeypatch):
+        shot = self._run(monkeypatch, phase_reference=None)
+
+        assert shot.launch_angle_horizontal == pytest.approx(2.25)
+        assert shot.launch_angle_horizontal_source == "radar"
+        assert shot.launch_angle_horizontal_status == "azimuth_uncalibrated"
+        assert shot.experimental_club_path_deg == pytest.approx(1.5)
+        assert shot.experimental_club_path_status == "azimuth_uncalibrated"
+        assert shot.to_dict()["launch_angle_horizontal_status"] == "azimuth_uncalibrated"
+
+    def test_a_phase_reference_clears_the_marks(self, monkeypatch):
+        shot = self._run(monkeypatch, phase_reference=-0.5)
+
+        assert shot.launch_angle_horizontal_status is None
+        assert shot.experimental_club_path_status == "accepted"
+
+    def test_a_rejected_path_keeps_its_own_status(self, monkeypatch):
+        shot = self._run(monkeypatch, phase_reference=None, club_accepted=False)
+
+        assert shot.experimental_club_path_status == "rejected_phase_span"
+
+    def test_without_a_reference_face_angle_uses_camera_paths_only(self, monkeypatch):
+        shot = self._run(monkeypatch, phase_reference=None)
+        # The camera horizontal (camera bearing on accepted IWR depth) outranks
+        # the radar one and carries no azimuth mark.
+        server_module._apply_camera_horizontal_decision(
+            shot, 2.0, 0.75, "camera_assisted_experimental"
+        )
+        assert shot.launch_angle_horizontal_status is None
+
+        server_module._attach_experimental_face_angle(shot)
+        assert shot.experimental_face_angle_deg is None
+        assert shot.experimental_face_angle_status == "missing_accepted_club_path"
+
+        shot.experimental_fused_club_path_deg = -4.0
+        shot.experimental_fused_status = "chained_high"
+        server_module._attach_experimental_face_angle(shot)
+        assert shot.experimental_face_angle_deg == pytest.approx(3.5)
+        assert shot.experimental_face_angle_path_source == "camera_fused_chained"
+
+    def test_an_uncalibrated_radar_start_direction_gives_no_face_angle(self, monkeypatch):
+        # A radar start direction and a camera path would mix two zeros.
+        shot = self._run(monkeypatch, phase_reference=None)
+        shot.experimental_fused_club_path_deg = -4.0
+        shot.experimental_fused_status = "chained_high"
+
+        server_module._attach_experimental_face_angle(shot)
+
+        assert shot.experimental_face_angle_deg is None
+        assert shot.experimental_face_angle_status == "start_direction_azimuth_uncalibrated"
+
+    def test_camera_fallback_to_the_radar_horizontal_keeps_its_mark(self, monkeypatch):
+        monkeypatch.setattr(
+            server_module, "iwr6843_runtime", SimpleNamespace(horizontal_phase_reference_rad=None)
+        )
+        shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
+
+        server_module._apply_camera_horizontal_decision(shot, 2.25, 0.9, "radar")
+
+        assert shot.launch_angle_horizontal_status == "azimuth_uncalibrated"

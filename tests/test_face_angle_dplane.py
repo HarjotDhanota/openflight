@@ -36,7 +36,7 @@ def test_face_angle_is_mostly_start_direction_and_partly_path():
         (
             {"launch_angle_horizontal": 1.0, "launch_angle_horizontal_source": "radar"},
             None,
-            "missing_club_path",
+            "missing_accepted_club_path",
         ),
     ],
 )
@@ -48,3 +48,122 @@ def test_no_face_angle_without_a_measured_direction_and_path(fields, path, statu
 
     assert shot.experimental_face_angle_deg is None
     assert shot.experimental_face_angle_status == status
+
+
+def _measured_start(**fields):
+    return _shot(
+        launch_angle_horizontal=2.0,
+        launch_angle_horizontal_source="camera_assisted_experimental",
+        **fields,
+    )
+
+
+@pytest.mark.parametrize(
+    "iwr_status", ["candidate_out_of_bounds", "candidate_noisy_fit", "rejected_phase_span"]
+)
+def test_iwr_path_that_is_not_accepted_gives_no_face_angle(iwr_status):
+    # F1: the kiosk shows an IWR candidate with its status, but face angle is
+    # built only on an accepted path.
+    shot = _measured_start(
+        experimental_club_path_deg=35.2, experimental_club_path_status=iwr_status
+    )
+
+    server._attach_experimental_face_angle(shot)
+
+    assert shot.experimental_face_angle_deg is None
+    assert shot.experimental_face_angle_status == "missing_accepted_club_path"
+    assert shot.experimental_face_angle_path_source is None
+
+
+@pytest.mark.parametrize(
+    ("fused_status", "source"),
+    [
+        ("chained_high", "camera_fused_chained"),
+        ("approach_mixed", "camera_fused_chained"),
+        ("camera_ops_fallback", "camera_fused_ops"),
+    ],
+)
+def test_accepted_camera_path_gives_face_angle_with_its_source(fused_status, source):
+    shot = _measured_start(
+        experimental_fused_club_path_deg=-4.0,
+        experimental_fused_status=fused_status,
+        experimental_fused_club_path_confidence="low",
+    )
+
+    server._attach_experimental_face_angle(shot)
+
+    assert shot.experimental_face_angle_deg == pytest.approx(3.5)
+    assert shot.experimental_face_angle_path_source == source
+    assert shot.experimental_face_angle_launch_source == "camera_assisted_experimental"
+    record = shot.to_dict()
+    assert record["experimental_face_angle_path_source"] == source
+    assert record["experimental_face_angle_launch_source"] == "camera_assisted_experimental"
+
+
+def test_face_angle_uses_the_camera_path_the_kiosk_shows_over_an_iwr_path():
+    shot = _measured_start(
+        experimental_fused_club_path_deg=-4.0,
+        experimental_fused_status="chained_high",
+        experimental_club_path_deg=6.0,
+        experimental_club_path_status="accepted",
+    )
+
+    server._attach_experimental_face_angle(shot)
+
+    assert shot.experimental_face_angle_deg == pytest.approx(3.5)
+    assert shot.experimental_face_angle_path_source == "camera_fused_chained"
+
+
+def test_rejected_camera_fusion_hides_the_iwr_path_from_face_angle():
+    # The kiosk hides the IWR path once camera fusion ran, so face angle must too.
+    shot = _measured_start(
+        experimental_fused_status="rejected_no_impact",
+        experimental_club_path_deg=6.0,
+        experimental_club_path_status="accepted",
+    )
+
+    server._attach_experimental_face_angle(shot)
+
+    assert shot.experimental_face_angle_deg is None
+    assert shot.experimental_face_angle_status == "missing_accepted_club_path"
+
+
+def test_accepted_iwr_path_without_camera_fusion_is_used_and_named():
+    shot = _measured_start(
+        experimental_club_path_deg=-4.0, experimental_club_path_status="accepted"
+    )
+
+    server._attach_experimental_face_angle(shot)
+
+    assert shot.experimental_face_angle_deg == pytest.approx(3.5)
+    assert shot.experimental_face_angle_path_source == "iwr"
+
+
+def test_displayed_club_path_withholds_a_withheld_camera_path():
+    shot = _measured_start(
+        experimental_fused_club_path_deg=-4.0,
+        experimental_fused_status="approach_path_only",
+        experimental_fused_club_path_confidence="withheld",
+    )
+
+    assert server.displayed_club_path(shot) == (None, None)
+
+
+def test_a_frame_rotation_moves_face_with_launch_and_path():
+    """F9: turning launch and path by the same offset turns face angle with them.
+
+    Face-to-path, the quantity the offset must not change, stays the same.
+    """
+    faces = []
+    for offset in (0.0, 2.0):
+        shot = _measured_start(
+            experimental_fused_club_path_deg=-4.0 + offset,
+            experimental_fused_status="chained_high",
+        )
+        shot.launch_angle_horizontal = 2.0 + offset
+        server._attach_experimental_face_angle(shot)
+        faces.append((shot.experimental_face_angle_deg, shot.experimental_fused_club_path_deg))
+
+    (face_0, path_0), (face_2, path_2) = faces
+    assert face_2 == pytest.approx(face_0 + 2.0)
+    assert face_2 - path_2 == pytest.approx(face_0 - path_0)
