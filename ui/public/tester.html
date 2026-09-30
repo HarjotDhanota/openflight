@@ -493,6 +493,7 @@
           <li>
             <button type="button" id="step-light">B. Measure the light (both modes)</button>
             <span id="light-verdict"></span>
+            <p id="light-age" class="note" hidden></p>
           </li>
           <li>
             <h3>3. Automatic ball range</h3>
@@ -673,7 +674,7 @@
       const el = (id) => document.getElementById(id);
       let currentArm = 'arm1';
       let arms = [];
-      const LIVE_EXPOSURES = [87, 175, 300, 500, 1000, 3000, 10000];
+      const LIVE_EXPOSURES = [10, 30, 87, 175, 300, 500, 1000, 3000, 10000];
       const LIVE_GAINS = [1, 2, 4, 8, 12, 15.9];
       let liveOn = false;
       let liveArm = null;
@@ -978,6 +979,34 @@
         }
         const ranged = [...arms].reverse().find((item) => item.tee_range_camera_evidence);
         if (ranged) renderAutomaticRange(ranged.tee_range_camera_evidence, ranged.tee_range_solution);
+        renderLightAge(arms);
+      }
+
+      function formatAge(seconds) {
+        if (seconds < 90) return 'just now';
+        if (seconds < 90 * 60) return `${Math.round(seconds / 60)} min ago`;
+        if (seconds < 36 * 3600) return `${Math.round(seconds / 3600)} h ago`;
+        return `${Math.round(seconds / 86400)} days ago`;
+      }
+
+      // Decision D5: a light screen is stale after 30 minutes outdoors, or on another
+      // day indoors. The server says which; the page says how old and asks for B again.
+      function renderLightAge(studyArms) {
+        const sizes = { arm5: '1280×800', arm6: '640×400' };
+        const screens = studyArms.filter((a) => sizes[a.arm_id] && a.gain_screen);
+        const stale = screens.find((a) => a.gain_screen.stale);
+        const node = el('light-age');
+        if (stale) {
+          node.className = 'problem';
+          node.textContent = `${sizes[stale.arm_id]}: ${stale.gain_screen.prompt}`;
+          node.hidden = false;
+          return;
+        }
+        const ages = screens.map((a) => a.gain_screen.age_s).filter((age) => age != null);
+        node.hidden = !ages.length;
+        if (!ages.length) return;
+        node.className = 'note';
+        node.textContent = `Light measured ${formatAge(Math.max(...ages))}.`;
       }
 
       function lightVerdict(a) {

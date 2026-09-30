@@ -968,3 +968,37 @@ def test_controls_that_never_apply_leave_the_rung_unjudged(tmp_path, monkeypatch
 
     assert runner.state.to_dict()["rungs"]["full-300"]["status"] == "pending"
     assert "did not apply 300 us" in runner.last_verdict["reasons"][0]
+
+
+def test_a_resumed_rung_is_checked_again_before_it_counts_swings(tmp_path):
+    # wiring audit T14: a rung resumed after Stop reused its gain without a new check
+    kiosk = FakeKiosk()
+    runner = _runner(tmp_path, kiosk)
+    runner.state.begin("full-300", 3.0, {"ok": True})
+    runner.state.record_swing(_verdict("green", "c0"))
+
+    resumed = _runner(tmp_path, kiosk)
+    resumed.tick()
+
+    rung = resumed.state.to_dict()["rungs"]["full-300"]
+    assert rung["status"] == "active"
+    assert [check["ok"] for check in rung["resume_checks"]] == [True]
+    assert resumed.state.accepted("full-300") == 1
+
+
+def test_a_resumed_rung_whose_light_has_gone_starts_again(tmp_path):
+    kiosk = FakeKiosk()
+    runner = _runner(tmp_path, kiosk)
+    runner.state.begin("full-300", 3.0, {"ok": True})
+    runner.state.record_swing(_verdict("green", "c0"))
+    kiosk.level = 20.0  # the sun went in while the ladder was stopped
+
+    resumed = _runner(tmp_path, kiosk)
+    resumed.start_rung()
+
+    rung = resumed.state.to_dict()["rungs"]["full-300"]
+    assert rung["resume_checks"][0]["ok"] is False
+    assert [swing["capture"] for swing in rung["superseded_swings"]] == ["c0"]
+    assert rung["swings"] == []
+    assert rung["status"] != "active" or resumed.state.accepted("full-300") == 0
+    assert "c0" in resumed.state.seen_captures()  # kept, and never verdicted again

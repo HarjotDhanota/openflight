@@ -126,7 +126,9 @@ GAIN_CEILING = 12.0
 # The live view refreshes the page this often; the camera still runs at the
 # arm's frame rate, so each frame is exposed exactly as a capture would be.
 LIVE_FPS = 12.0
-LIVE_EXPOSURE_RANGE_US = (20, 20000)
+# The setup's exposure search goes down to 10 us (outdoors, a sunlit ball), so the
+# live view takes it too (wiring audit T14).
+LIVE_EXPOSURE_RANGE_US = (10, 20000)
 LIVE_BALL_EVERY_S = 1.0
 LIVE_FRAME_STALE_S = 2.5
 LIVE_THREAD_JOIN_TIMEOUT_S = 5.0
@@ -959,7 +961,11 @@ def solved_range(arm_dir: Path, arm: Arm, choice: Mapping, rig_geometry: Path) -
 
     runs = sorted((arm_dir / "gain").glob("*/results.json"))
     if not runs:
-        return {"solved_range_m": None, "solved_range_note": "no gain screen"}
+        return {
+            "solved_range_m": None,
+            "solved_ball_diameter_px": None,
+            "solved_range_note": "no gain screen",
+        }
     stem = f"exp{arm.exposure_us:04d}_gain{float(choice['gain']):g}".replace(".", "p")
     pgm = runs[-1].parent / f"{stem}_median.pgm"
     try:
@@ -973,7 +979,12 @@ def solved_range(arm_dir: Path, arm: Arm, choice: Mapping, rig_geometry: Path) -
         )
         solution = solve_setup(ball, rig)
     except (OSError, ValueError, RuntimeError) as exc:
-        return {"solved_range_m": None, "solved_range_note": str(exc)}
+        # an earlier screen's ball must not stand beside this screen's failure (T14)
+        return {
+            "solved_range_m": None,
+            "solved_ball_diameter_px": None,
+            "solved_range_note": str(exc),
+        }
     return {
         "solved_range_m": round(solution.range_to_ball_mm / 1000.0, 4),
         "solved_ball_diameter_px": round(float(ball.diameter_px), 2),
@@ -988,6 +999,63 @@ def resolve_gain(sessions_root: Path, params: TesterParameters) -> tuple[float, 
     if "gain" not in state or state.get("gain_exposure_us") != arm.exposure_us:
         raise RuntimeError("run this arm's gain step before capturing swings")
     return float(state["gain"]), arm.exposure_us
+
+
+# Decision D5 (wiring fixes spec): outdoor light changes within half an hour; an
+# indoor screen holds for the day it was measured. A stale screen is measured again.
+GAIN_SCREEN_OUTDOOR_MAX_AGE_S = 30 * 60
+ARM_SIZES = {"arm5": "1280×800", "arm6": "640×400"}
+
+
+def _screen_folder_time(arm_dir: Path) -> datetime | None:
+    """When the latest gain screen ran, from its folder name (the Pi's local time)."""
+    runs = sorted((arm_dir / "gain").glob("*/results.json"))
+    if not runs:
+        return None
+    try:
+        return datetime.strptime(runs[-1].parent.name, "%Y%m%d_%H%M%S").astimezone()
+    except ValueError:
+        return None
+
+
+def gain_screen_age(
+    state: Mapping,
+    arm_dir: Path,
+    environment: str | None,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    """How old this arm's gain screen is, where it was measured, and whether it is stale.
+
+    Screens recorded before the time was saved (wiring audit T14) are dated by
+    their folder; with neither, the age is unknown and nothing is asked.
+    """
+    screened_in = state.get("gain_environment")
+    try:
+        when = datetime.fromisoformat(str(state["gain_screened_at"]))
+    except (KeyError, TypeError, ValueError):
+        when = _screen_folder_time(arm_dir)
+    if when is not None and when.tzinfo is None:
+        when = when.astimezone()
+    now = now or datetime.now(timezone.utc)
+    age_s = (now - when).total_seconds() if when is not None else None
+    light = screened_in or environment
+    reason = None
+    if when is None:
+        pass
+    elif environment and screened_in and environment != screened_in:
+        reason = f"was measured {screened_in} and you are {environment} now"
+    elif light == "outdoors" and age_s > GAIN_SCREEN_OUTDOOR_MAX_AGE_S:
+        reason = f"is {round(age_s / 60)} min old, and outdoor light changes within half an hour"
+    elif light == "indoors" and when.astimezone().date() != now.astimezone().date():
+        reason = "was measured on another day"
+    return {
+        "screened_at": when.isoformat() if when is not None else None,
+        "environment": screened_in,
+        "age_s": age_s,
+        "stale": reason is not None,
+        "prompt": f"Measure the light again (B): this screen {reason}." if reason else None,
+    }
 
 
 def ladder_gain_facts(sessions_root: Path, params: TesterParameters) -> dict:
@@ -1007,6 +1075,7 @@ def ladder_gain_facts(sessions_root: Path, params: TesterParameters) -> dict:
         **facts,
         "gain_at_300_equivalent": float(equivalent) if equivalent is not None else gain,
         "too_bright": bool(state.get("too_bright", False)),
+        "screen": gain_screen_age(state, arm_directory(sessions_root, params), params.environment),
     }
 
 
@@ -4238,15 +4307,18 @@ def arm_progress(sessions_root: Path, params: TesterParameters) -> dict:
     }
 
 
-def study_overview(sessions_root: Path, tester_id: str) -> dict:
+def study_overview(sessions_root: Path, tester_id: str, environment: str | None = None) -> dict:
     """Every arm's state for this tester, for the page's walkthrough."""
     arms = []
     for arm_id in ARM_ORDER:
         arm = ARMS[arm_id]
         state = read_arm_state(sessions_root, tester_id, arm_id)
+        screen = None
         try:
             probe = TesterParameters(tester_id, arm_id, "indoors")
             progress = arm_progress(sessions_root, probe)
+            if state.get("gain") is not None:
+                screen = gain_screen_age(state, arm_directory(sessions_root, probe), environment)
         except ValueError:
             progress = {}
         arms.append(
@@ -4258,6 +4330,7 @@ def study_overview(sessions_root: Path, tester_id: str) -> dict:
                 "too_bright": state.get("too_bright"),
                 "mixed_light": state.get("mixed_light"),
                 "gain_at_300_equivalent": state.get("gain_at_300_equivalent"),
+                "gain_screen": screen,
                 "light_index": state.get("light_index"),
                 "light_index_source": state.get("light_index_source"),
                 "solved_range_m": state.get("solved_range_m"),
@@ -4687,6 +4760,9 @@ def create_app(
             gain=choice["gain"],
             gain_source="gain screen",
             gain_exposure_us=params.arm.exposure_us,
+            # the screen's own time and light, so its age is known later (T14, D5)
+            gain_screened_at=datetime.now(timezone.utc).isoformat(),
+            gain_environment=params.environment,
             gain_inclinometer=enclosure.reading(),
             gain_mean=choice["mean"],
             gain_clipped_pct=choice["clipped_pct"],
@@ -5734,7 +5810,9 @@ def create_app(
                     "available": True,
                     "job": jobs.status(),
                     "arm": arm_progress(sessions_root, params),
-                    "study": study_overview(sessions_root, params.tester_id),
+                    "study": study_overview(
+                        sessions_root, params.tester_id, environment=params.environment
+                    ),
                     "inclinometer": enclosure.reading(),
                     "analysis": review_routes.read_analysis(sessions_root, params.tester_id),
                     "saved_attempt_scopes": attempt_scopes(sessions_root, params.tester_id),
@@ -6301,6 +6379,14 @@ def create_app(
             return jsonify({"error": f"run the gain step for both modes first ({exc})"}), 409
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
+        # a stale screen would set every rung's gain from light that has gone (D5)
+        stale = [
+            f"{ARM_SIZES[arm_id]}: {fact['screen']['prompt']}"
+            for arm_id, fact in facts.items()
+            if fact["screen"]["stale"]
+        ]
+        if stale:
+            return jsonify({"error": " ".join(stale), "gain_screen_stale": True}), 409
         with ladder_lock:
             try:
                 refuse_while_analysing()

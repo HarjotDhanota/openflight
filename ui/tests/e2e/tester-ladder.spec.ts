@@ -274,6 +274,53 @@ test('a too-bright arm shows its light panel without a light index', async ({ pa
   await expect(page.locator('#light')).not.toContainText('light index');
 });
 
+for (const [screen, text, problem] of [
+  [{ age_s: 12 * 60, stale: false, prompt: null }, 'Light measured 12 min ago.', false],
+  [
+    {
+      age_s: 42 * 60,
+      stale: true,
+      prompt: 'Measure the light again (B): this screen is 42 min old, and outdoor light changes within half an hour.',
+    },
+    '1280×800: Measure the light again (B): this screen is 42 min old, and outdoor light changes within half an hour.',
+    true,
+  ],
+] as const) {
+  test(`the light step shows how old its screen is (${text.slice(0, 30)})`, async ({ page }) => {
+    // wiring audit T14 with decision D5
+    await mockBaseApis(page, () => ladderState(null));
+    await page.unroute('**/api/tester/status**');
+    await page.route('**/api/tester/status**', (route) =>
+      fulfillJson(route, {
+        study: {
+          arms: [
+            { arm_id: 'arm5', label: 'Full', isolates: 'blur', exposure_us: 300, gain: 1.0, gain_screen: screen },
+            {
+              arm_id: 'arm6',
+              label: 'Half',
+              isolates: 'blur',
+              exposure_us: 300,
+              gain: 1.0,
+              gain_screen: { age_s: 60, stale: false, prompt: null },
+            },
+          ],
+        },
+      })
+    );
+    await page.goto('/tester.html');
+
+    await expect(page.locator('#light-age')).toHaveText(text);
+    if (problem) await expect(page.locator('#light-age')).toHaveClass('problem');
+    else await expect(page.locator('#light-age')).toHaveClass('note');
+  });
+}
+
+test('the light step says nothing about age before any screen', async ({ page }) => {
+  await mockBaseApis(page, () => ladderState(null));
+  await page.goto('/tester.html');
+  await expect(page.locator('#light-age')).toBeHidden();
+});
+
 test('Stop cancels the remaining light-measurement sequence', async ({ page }) => {
   await mockBaseApis(page, () => ladderState(null));
   const runBodies: Record<string, unknown>[] = [];

@@ -465,8 +465,27 @@ class LadderState:
         rungs = self._data["rungs"].values()
         return {
             *{swing["capture"] for rung in rungs for swing in rung["swings"]},
+            *{swing["capture"] for rung in rungs for swing in rung.get("superseded_swings", [])},
             *{item["capture"] for item in self._data["ineligible_captures"]},
         }
+
+    def record_resume_check(self, rung_id: str, check: dict) -> None:
+        """A resumed rung passed its check again at its own gain."""
+        self._data["rungs"][rung_id].setdefault("resume_checks", []).append(check)
+        self._save()
+
+    def restart(self, rung_id: str, check: dict) -> None:
+        """A resumed rung failed its check: it starts again, and its swings stop counting.
+
+        They were taken in light that has since changed; they stay on record as
+        superseded and are never verdicted again (wiring audit T14).
+        """
+        entry = self._data["rungs"][rung_id]
+        entry.setdefault("resume_checks", []).append(check)
+        entry["superseded_swings"] = [*entry.get("superseded_swings", []), *entry["swings"]]
+        entry["swings"] = []
+        entry["status"] = "pending"
+        self._save()
 
     def record_ineligible_capture(
         self,
@@ -794,9 +813,21 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                 if rung is None or self.mode not in (None, rung.arm_id):
                     return None
                 if self._status(rung) == "active":
-                    self.client.set_controls(rung.exposure_us, self.state.gain(rung.rung_id))
+                    gain = self.state.gain(rung.rung_id)
+                    self.client.set_controls(rung.exposure_us, gain)
                     if self._stop.wait(SETTLE_S):
                         return None
+                    # Resumed after a Stop or a restart: the light may have changed
+                    # since the rung's own check, so it is checked again (T14).
+                    check = self._pre_check(
+                        rung, gain, self._black_floor(rung.arm_id), self._expected_ball(rung.arm_id)
+                    )
+                    if self.stopped:
+                        return None
+                    if not check["ok"]:
+                        self.state.restart(rung.rung_id, check)
+                        continue
+                    self.state.record_resume_check(rung.rung_id, check)
                     self._configured_rung = rung.rung_id
                     return self.state.to_dict()["rungs"][rung.rung_id]
                 gain = rung_gain(self._gain_at_300(rung.arm_id), rung.exposure_us)

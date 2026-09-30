@@ -11,7 +11,7 @@ import threading
 import time
 import zipfile
 import zlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pytest
@@ -3159,3 +3159,131 @@ class _NeverStartedLive:
 
     def snapshot(self):
         return None, {"running": False}
+
+
+# Wiring audit T14 with decision D5: a gain screen is stale after 30 minutes
+# outdoors, or on another day indoors, and the tester is asked for a new one.
+# local noon, so "earlier the same day" and "yesterday" hold in any time zone
+NOW = datetime(2026, 9, 29, 12, 0).astimezone()
+
+
+def _screened_at(tmp_path, environment, minutes_ago, screened_in=None):
+    params = ts.TesterParameters("d5", "arm5", environment)
+    ts.write_arm_state(
+        tmp_path,
+        params,
+        gain=2.0,
+        gain_exposure_us=300,
+        gain_screened_at=(NOW - timedelta(minutes=minutes_ago)).isoformat(),
+        gain_environment=screened_in or environment,
+    )
+    state = ts.read_arm_state(tmp_path, "d5", "arm5")
+    return ts.gain_screen_age(state, ts.arm_directory(tmp_path, params), environment, now=NOW)
+
+
+@pytest.mark.parametrize(
+    ("environment", "minutes_ago", "stale"),
+    [
+        ("outdoors", 29, False),
+        ("outdoors", 31, True),
+        ("indoors", 8 * 60, False),  # earlier the same day
+        ("indoors", 24 * 60, True),  # yesterday
+    ],
+)
+def test_a_gain_screen_goes_stale_by_the_light_it_was_measured_in(
+    tmp_path, environment, minutes_ago, stale
+):
+    screen = _screened_at(tmp_path, environment, minutes_ago)
+    assert screen["age_s"] == pytest.approx(minutes_ago * 60)
+    assert screen["environment"] == environment
+    assert screen["stale"] is stale
+    assert (screen["prompt"] is not None) is stale
+
+
+def test_a_screen_measured_indoors_is_stale_outdoors(tmp_path):
+    screen = _screened_at(tmp_path, "outdoors", 2, screened_in="indoors")
+    assert screen["stale"] is True
+    assert "indoors" in screen["prompt"]
+
+
+def test_a_screen_with_no_recorded_time_has_no_age(tmp_path):
+    params = ts.TesterParameters("d5", "arm5", "outdoors")
+    ts.write_arm_state(tmp_path, params, gain=2.0, gain_exposure_us=300)
+    state = ts.read_arm_state(tmp_path, "d5", "arm5")
+    screen = ts.gain_screen_age(state, ts.arm_directory(tmp_path, params), "outdoors", now=NOW)
+    assert screen["age_s"] is None and screen["stale"] is False
+
+
+def test_an_older_screen_is_dated_by_its_folder(tmp_path):
+    params = ts.TesterParameters("d5", "arm5", "outdoors")
+    ts.write_arm_state(tmp_path, params, gain=2.0, gain_exposure_us=300)
+    local = (NOW - timedelta(hours=2)).astimezone()
+    folder = ts.arm_directory(tmp_path, params) / "gain" / local.strftime("%Y%m%d_%H%M%S")
+    folder.mkdir(parents=True)
+    (folder / "results.json").write_text("[]", encoding="utf-8")
+    state = ts.read_arm_state(tmp_path, "d5", "arm5")
+    screen = ts.gain_screen_age(state, ts.arm_directory(tmp_path, params), "outdoors", now=NOW)
+    assert screen["age_s"] == pytest.approx(2 * 3600, abs=1)
+    assert screen["stale"] is True
+
+
+def test_the_ladder_facts_and_the_page_carry_the_screens_age(tmp_path):
+    params = ts.TesterParameters("d5", "arm5", "outdoors")
+    ts.write_arm_state(
+        tmp_path,
+        params,
+        gain=1.0,
+        gain_exposure_us=300,
+        gain_screened_at=datetime.now(timezone.utc).isoformat(),
+        gain_environment="outdoors",
+    )
+    facts = ts.ladder_gain_facts(tmp_path, params)
+    assert facts["screen"]["stale"] is False
+    assert facts["screen"]["environment"] == "outdoors"
+    overview = ts.study_overview(tmp_path, "d5", environment="outdoors")
+    arm5 = next(arm for arm in overview["arms"] if arm["arm_id"] == "arm5")
+    assert arm5["gain_screen"]["age_s"] < 60
+
+
+def test_a_failed_solve_clears_the_earlier_ball_diameter(tmp_path):
+    run = tmp_path / "gain" / "20260922_120000"
+    run.mkdir(parents=True)
+    (run / "results.json").write_text("[]")
+    with (run / "exp0300_gain6_median.pgm").open("wb") as handle:
+        handle.write(b"P5\n320 200\n255\n" + bytes(320 * 200))
+    solved = ts.solved_range(tmp_path, ts.ARMS["arm1"], {"gain": 6.0}, RIG)
+    assert "solved_ball_diameter_px" in solved and solved["solved_ball_diameter_px"] is None
+    missing = ts.solved_range(tmp_path / "none", ts.ARMS["arm1"], {"gain": 6.0}, RIG)
+    assert missing["solved_ball_diameter_px"] is None
+
+
+def test_the_live_view_accepts_the_setup_searchs_shortest_exposure():
+    assert ts.LIVE_EXPOSURE_RANGE_US[0] == 10
+
+
+def test_a_stale_gain_screen_is_measured_again_before_the_ladder(tmp_path, monkeypatch):
+    """D5: 40 minutes after an outdoor screen, the ladder asks for a new one."""
+    old = (datetime.now(timezone.utc) - timedelta(minutes=40)).isoformat()
+    for arm in ("arm5", "arm6"):
+        ts.write_arm_state(
+            tmp_path,
+            ts.TesterParameters("20260922-name", arm, "outdoors"),
+            gain=1.0,
+            gain_exposure_us=300,
+            gain_screened_at=old,
+            gain_environment="outdoors",
+        )
+    monkeypatch.setattr(ts.study_ladder, "KioskClient", _LitKiosk)
+    manager = ts.TesterJobManager(popen=_Forever)
+    client = eligible_app(sessions_root=tmp_path, rig_geometry=RIG, manager=manager).test_client()
+
+    response = client.post(
+        "/api/tester/ladder/start",
+        json={"tester_id": "20260922-name", "arm_id": "arm5", "environment": "outdoors"},
+    )
+
+    assert response.status_code == 409
+    body = response.get_json()
+    assert body["gain_screen_stale"] is True
+    assert "Measure the light again" in body["error"] and "40 min old" in body["error"]
+    assert manager.status()["state"] == "idle"

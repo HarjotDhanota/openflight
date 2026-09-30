@@ -128,7 +128,10 @@ the physical setup. Then work down **Test suite**:
    mode streams. Each mode then reads "light sufficient", "more light needed"
    (swings become evidence only), "too bright: shorter exposures used" or "mixed
    light" (a sunlit patch clipped the brighter gains, so the gain stays below it).
-   The last two are normal outdoors.
+   The last two are normal outdoors. Under the button the page shows how long
+   ago the light was measured. Outdoors a measurement lasts 30 minutes; indoors
+   it lasts the day. After that, or if you move between indoors and outdoors,
+   the page asks you to measure the light again, and **C** waits until you do.
 3. **C. Start the exposure ladder.** The page sets each exposure itself and shows
    which one you are on. Hit a normal shot, wait for the verdict, repeat. It moves
    on after 5 good swings, and skips exposures your light cannot support.
@@ -455,7 +458,9 @@ every earlier frame and failure record for review.
 | Ladder verdict red: `light: too dark ...` (the hitting zone or the ball) | This exposure is below what your light supports | Expected on the shortest exposures; the ladder skips the rest of the mode |
 | Ladder verdict red: `light: too bright for the ball ... clipped` | The ball area is washed out | Expected on the longest exposures in sun; this exposure fails and the shorter ones are still tried |
 | Ladder verdict red: `ladder: the camera did not apply ... within 1 s` | The kiosk has not taken the new exposure yet | Wait: the ladder retries every second. If it repeats for a minute, press **Stop**, then **C** |
-| The impact photo is white or washed out | It was taken before the photo exposure followed the light (older software), or the light changed a lot since step **B** | Update, run **B** again, then retake the photo; the pending capture is kept |
+| The impact photo is white or washed out | The light changed a lot since step **B** (the sun came out) | Run **B** again, then retake the photo; the pending capture is kept |
+| `Measure the light again (B): this screen is … min old` or `… was measured indoors and you are outdoors now` | The light measurement is too old for the light you are in: 30 minutes outdoors, another day indoors | Press **B**, wait for both modes, then **C**. A rung you were partway through is checked again when the ladder resumes |
+| After resuming the ladder, a rung's swing count is back to 0 | The light no longer passed that exposure's check, so the rung started again | Nothing to fix; keep swinging. The earlier swings are kept for review but no longer count |
 | A swing is listed as set aside, `taken at ... not this rung's ...` or `taken during a still_photo` | It was taken while the ladder was changing the camera's settings | Nothing is lost; hit the next swing once the rung shows as set |
 | `finish automatic tee range before capture (retryable_failure)` | The setup's range record no longer matches the one the ladder was admitted with | Press **Start over / ball moved** and run the setup again |
 | Range summary: **swings get tee range pending** | No radar range was accepted (or none is qualified and the tester was not started with `--use-unqualified-tee-range`). The camera's own range is never used as the tee range | Swings still record; launch and club metrics that need the range are withheld. For a test session with a range, redo the setup with everyone clear of the radar |
