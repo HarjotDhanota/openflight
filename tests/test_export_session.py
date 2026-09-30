@@ -97,6 +97,7 @@ def _capture_tree(root: Path, shots: list[dict], run: str | None = None) -> Path
                                 "exposure_us": 87,
                                 "gain": 6.0,
                             },
+                            **s.get("camera_metadata", {}),
                         }
                     )
                 )
@@ -269,6 +270,32 @@ class TestShotsCsv:
         assert row["camera_file_settings_exposure_us"] == "87"
         assert row["fused_status"] == "low_light" and row["accepted"] == "False"
         assert row["readings"] == "[1,2]", "lists are serialised, not exploded"
+
+    def test_a_ladder_clip_exports_the_controls_at_its_trigger(self, tmp_path):
+        """Wiring audit T4: the 30 us rung is not reported as the 87 us startup snapshot."""
+        at_trigger = {
+            "controls_at_trigger": {
+                "requested": {"exposure_us": 30, "gain": 4.5, "purpose": "capture"},
+                "applied": {"exposure_us": 29, "gain": 4.5, "frame_index": 1},
+            },
+            "auto_exposure": {"exposure_us": 30, "gain": 4.5, "controls_purpose": "capture"},
+        }
+        older = {"auto_exposure": {"exposure_us": 30, "gain": 4.5}}
+        src = _capture_tree(
+            tmp_path,
+            [{"n": 1, "camera_metadata": at_trigger}, {"n": 2, "camera_metadata": older}, {"n": 3}],
+        )
+        export_session.export_session(src, tmp_path / "out")
+        rows = list(csv.DictReader((tmp_path / "out" / "shots.csv").open()))
+        assert rows[0]["camera_file_requested_exposure_us"] == "30"
+        assert rows[0]["camera_file_requested_gain"] == "4.5"
+        assert rows[0]["camera_file_applied_exposure_us"] == "29"
+        assert rows[0]["camera_file_controls_source"] == "controls_at_trigger"
+        assert rows[1]["camera_file_requested_exposure_us"] == "30"
+        assert rows[1]["camera_file_applied_exposure_us"] == ""
+        assert rows[1]["camera_file_controls_source"] == "auto_exposure"
+        assert rows[2]["camera_file_requested_exposure_us"] == "", "never the startup 87 us"
+        assert rows[2]["camera_file_controls_source"] == ""
 
 
 class TestManifest:

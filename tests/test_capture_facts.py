@@ -66,3 +66,39 @@ def test_missing_records_stay_null_rather_than_guessed(tmp_path):
     assert facts["orientation"]["rotate_180"] is None
     assert facts["rig_geometry_sha256"] is None
     assert capture_facts(None, {}, {}) is None
+
+
+def _ladder_clip(folder, *, at_trigger=True):
+    """A clip taken on the 30 us rung by a kiosk that started at 300 us (wiring audit T4)."""
+    metadata = json.loads((folder / "metadata.json").read_text(encoding="utf-8"))
+    metadata["auto_exposure"] = {"exposure_us": 30, "gain": 4.5, "controls_purpose": "capture"}
+    if at_trigger:
+        metadata["controls_at_trigger"] = {
+            "requested": {"exposure_us": 30, "gain": 4.5, "purpose": "capture"},
+            "applied": {"exposure_us": 29, "gain": 4.5, "frame_index": 17},
+        }
+    (folder / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+
+def test_a_ladder_clip_reports_the_controls_at_its_trigger_not_the_startup(tmp_path):
+    folder, session = _capture(tmp_path)
+    _ladder_clip(folder)
+    facts = capture_facts(folder, {}, session)
+    assert (facts["requested_exposure_us"], facts["requested_gain"]) == (30, 4.5)
+    assert (facts["applied_exposure_us_at_trigger"], facts["applied_gain_at_trigger"]) == (29, 4.5)
+    assert facts["controls_source"] == "controls_at_trigger"
+
+
+def test_an_older_clip_falls_back_to_the_trigger_request_never_the_startup(tmp_path):
+    folder, session = _capture(tmp_path)
+    _ladder_clip(folder, at_trigger=False)
+    facts = capture_facts(folder, {}, session)
+    assert (facts["requested_exposure_us"], facts["requested_gain"]) == (30, 4.5)
+    assert facts["applied_exposure_us_at_trigger"] is None
+    assert facts["controls_source"] == "auto_exposure"
+
+    metadata = json.loads((folder / "metadata.json").read_text(encoding="utf-8"))
+    del metadata["auto_exposure"]
+    (folder / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    facts = capture_facts(folder, {}, session)
+    assert facts["requested_exposure_us"] is None and facts["controls_source"] is None

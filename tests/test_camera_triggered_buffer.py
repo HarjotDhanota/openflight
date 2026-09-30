@@ -2,6 +2,7 @@
 
 import json
 import threading
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -222,6 +223,34 @@ def test_capture_persistence_uses_fast_uncompressed_npz(tmp_path, monkeypatch):
     with np.load(saved.path / "frames.npz") as archive:
         assert archive["frames"].shape == (3, 2, 3)
     assert saved.metadata["storage_format"] == "npz_uncompressed"
+
+
+def test_a_clip_records_the_controls_requested_and_applied_at_its_trigger(tmp_path):
+    """Wiring audit T4: a 30 us ladder clip must not read as the 300 us startup snapshot."""
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(fps=120.0, exposure_us=300, gain=2.0, auto_exposure=False),
+    )
+    runtime.settings = replace(runtime.settings, exposure_us=30, gain=4.5)
+    frames = tuple(
+        CameraFrame(
+            image=np.full((2, 3), index, dtype=np.uint8),
+            sensor_timestamp_ns=index * 8_333_333,
+            host_timestamp_ns=index * 8_333_333 + 100,
+            exposure_us=300 if index == 0 else 29,
+            analogue_gain=2.0 if index == 0 else 4.5,
+        )
+        for index in range(3)
+    )
+    capture = TriggeredCapture(frames=frames, pre_trigger_count=2, trigger_host_timestamp_ns=1)
+
+    saved = runtime._save_capture(1, 123.0, capture, auto_exposure=runtime.auto_exposure_status())
+
+    written = json.loads((saved.path / "metadata.json").read_text(encoding="utf-8"))
+    assert written["controls_at_trigger"] == {
+        "requested": {"exposure_us": 30, "gain": 4.5, "purpose": "capture"},
+        "applied": {"exposure_us": 29, "gain": 4.5, "frame_index": 1},
+    }
 
 
 def test_live_image_controls_update_camera_without_restarting(tmp_path):
