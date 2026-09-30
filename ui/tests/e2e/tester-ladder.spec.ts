@@ -650,8 +650,12 @@ test('the choice is remembered after a reload and sent when the ladder resumes',
     'full-100',
     'full-75',
     'full-50',
+    'full-20',
+    'full-10',
     'half-300',
     'half-75',
+    'half-30',
+    'half-15',
   ]);
 });
 
