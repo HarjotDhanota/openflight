@@ -64,7 +64,16 @@ BALL_THRESHOLD_FLOOR = 120.0
 BALL_THRESHOLD_SCALE = 0.9
 
 BALL_PATCH_RADIUS_FRAC = 0.4
+# The ball's core counts as present while it moves by less than this, or by
+# less than half the ball's own contrast when that is smaller (dim light, P6-4).
 BALL_PRESENT_DELTA = 30.0
+BALL_PRESENT_CONTRAST_FRACTION = 0.5
+# In dim light the change must also clear the resting frames' own noise.
+BALL_PRESENT_NOISE_SIGMAS = 6.0
+# The surround the ball's contrast is measured against, in ball diameters from
+# its centre, and the smoothing that keeps pixel noise out of a dim ball's change.
+BALL_SURROUND_RADII_FRAC = (0.65, 0.9)
+BALL_DENOISE_SIGMA_FRAC = 0.07
 MIN_CLUB_COMPONENT_PX = 40
 MAX_COMPONENT_BALL_DIST_PX = 320.0
 TIP_BAND_PX = 12.0
@@ -1265,6 +1274,70 @@ def _adaptive_thresholds(background: np.ndarray) -> tuple[float, float, float, f
     return scene_p995, ball_threshold, bright_now, dark_bg
 
 
+def _ball_presence(frames: np.ndarray, ball) -> np.ndarray:
+    """Per frame, whether the teed ball's core still looks as it did at rest.
+
+    A bright ball keeps the fixed ``BALL_PRESENT_DELTA`` on the core's mean. When
+    half the ball's contrast against its surround is less than that (dusk, a
+    distant ball), the threshold scales to the clip: half that contrast, which
+    must clear ``BALL_PRESENT_NOISE_SIGMAS`` times the resting frames' noise.
+    Bright clips therefore keep the answers they had before P6-4.
+    """
+    radius = max(3, int(round(ball.diameter_px * BALL_PATCH_RADIUS_FRAC)))
+    yy, xx = np.mgrid[0 : frames.shape[1], 0 : frames.shape[2]]
+    distance_sq = (xx - ball.x) ** 2 + (yy - ball.y) ** 2
+    disk = distance_sq <= radius * radius
+    inner, outer = (fraction * ball.diameter_px for fraction in BALL_SURROUND_RADII_FRAC)
+    surround = (distance_sq >= inner * inner) & (distance_sq <= outer * outer)
+    background = np.median(frames[:15], axis=0)
+    reference = float(background[disk].mean())
+    contrast = (
+        float(np.mean(np.abs(background[disk] - np.median(background[surround]))))
+        if surround.any()
+        else math.inf
+    )
+    if BALL_PRESENT_CONTRAST_FRACTION * contrast >= BALL_PRESENT_DELTA:
+        means = np.array([float(frame[disk].mean()) for frame in frames])
+        return np.abs(means - reference) < BALL_PRESENT_DELTA
+    return _dim_ball_presence(frames, disk, surround, ball.diameter_px)
+
+
+def _dim_ball_presence(
+    frames: np.ndarray, disk: np.ndarray, surround: np.ndarray, diameter_px: float
+) -> np.ndarray:
+    """Presence of a ball whose contrast is below the fixed threshold.
+
+    A dusk ball's lit cap sits above its surround and its shaded body below, so
+    a plain mean can stay put as it leaves; the change is the core's mean
+    absolute difference from rest instead. Light smoothing first keeps pixel
+    noise, which is as large as a dim ball's contrast, from filling that change.
+    A patch whose contrast does not clear its own noise has no ball to lose, and
+    stays present in every frame.
+    """
+    from scipy import ndimage  # pylint: disable=import-outside-toplevel
+
+    sigma = max(0.5, BALL_DENOISE_SIGMA_FRAC * diameter_px)
+    margin = int(math.ceil(3 * sigma))
+    rows, cols = np.nonzero(disk | surround)
+    top, bottom = max(0, rows.min() - margin), min(frames.shape[1], rows.max() + margin + 1)
+    left, right = max(0, cols.min() - margin), min(frames.shape[2], cols.max() + margin + 1)
+    smooth = ndimage.gaussian_filter(
+        frames[:, top:bottom, left:right].astype(np.float32), sigma=(0, sigma, sigma)
+    )
+    core = disk[top:bottom, left:right]
+    ring = surround[top:bottom, left:right]
+    rest = np.median(smooth[:15], axis=0)
+    contrast = float(np.mean(np.abs(rest[core] - np.median(rest[ring]))))
+    change = np.abs(smooth[:, core] - rest[core]).mean(axis=1)
+    baseline = float(np.median(change[:15]))
+    noise = 1.4826 * float(np.median(np.abs(change[:15] - baseline)))
+    floor = BALL_PRESENT_NOISE_SIGMAS * noise
+    if BALL_PRESENT_CONTRAST_FRACTION * contrast <= floor:
+        return np.ones(len(frames), dtype=bool)
+    threshold = min(BALL_PRESENT_DELTA, BALL_PRESENT_CONTRAST_FRACTION * contrast)
+    return (change - baseline) < threshold
+
+
 def _detect_impact_index(
     frames: np.ndarray,
     ball,
@@ -1277,12 +1350,7 @@ def _detect_impact_index(
     Otherwise, a late club/ball/background brightness match can look like the
     teed ball and incorrectly move impact to the final frame.
     """
-    radius = max(3, int(round(ball.diameter_px * BALL_PATCH_RADIUS_FRAC)))
-    yy, xx = np.mgrid[0 : frames.shape[1], 0 : frames.shape[2]]
-    disk = (xx - ball.x) ** 2 + (yy - ball.y) ** 2 <= radius * radius
-    reference = float(np.median(frames[:15], axis=0)[disk].mean())
-    means = np.array([float(frame[disk].mean()) for frame in frames])
-    present = np.abs(means - reference) < BALL_PRESENT_DELTA
+    present = _ball_presence(frames, ball)
     indexes = np.nonzero(present)[0]
     if len(indexes) == 0:
         return None
