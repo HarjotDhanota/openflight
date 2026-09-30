@@ -23,6 +23,20 @@ STATUSES = (
     "processing_failed",
 )
 ACCEPTED_DELIVERY_STATUSES = frozenset({"ok", "fused", "chained_high", "approach_high"})
+# Refusals carry no value; every other delivery status is a value the kiosk shows
+# (server.displayed_club_path), so the review shows it too, labelled (P8-7, D15).
+_REFUSED_DELIVERY_PREFIXES = ("rejected", "error")
+
+
+def delivery_shown(status: str) -> bool:
+    """Whether a club delivery status carries a value the kiosk displays."""
+    return (
+        bool(status)
+        and status != "not recorded"
+        and not status.startswith(_REFUSED_DELIVERY_PREFIXES)
+    )
+
+
 # Replay stage errors that mean an input was never recorded, not that processing broke.
 _ABSENT_INPUT_MARKERS = (
     "found 0",
@@ -446,9 +460,15 @@ def _camera_metrics(stage: Any) -> tuple[list[dict[str, Any]], Mapping[str, Any]
     ):
         value = finite(delivery.get(field))
         field_tier = delivery.get(tier_field)
-        if delivery_status in ACCEPTED_DELIVERY_STATUSES and value is not None:
-            status = "accepted" if field_tier == "high" else "experimental"
-            why = None if status == "accepted" else f"confidence tier {field_tier}"
+        if delivery_shown(delivery_status) and value is not None:
+            status = (
+                "accepted"
+                if field_tier == "high" and delivery_status in ACCEPTED_DELIVERY_STATUSES
+                else "experimental"
+            )
+            why = (
+                None if status == "accepted" else f"{delivery_status}: confidence tier {field_tier}"
+            )
         else:
             status = "rejected"
             why = delivery_status
