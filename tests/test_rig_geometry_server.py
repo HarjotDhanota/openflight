@@ -38,7 +38,9 @@ class TestTheGeometryReplacesTheFlags:
         assert block["path"].endswith("enclosure_v3_rig_geometry.json")
         # first_look decides whether numbers may be attributed to sensors by
         # the presence of exactly this block, so the derived values ride in it.
-        assert block["derived"]["radar_height_m"] == pytest.approx(0.051, abs=5e-4)
+        # the virtual array's phase centre, 7.85 mm above the RX row (audit F11)
+        assert block["derived"]["radar_height_m"] == pytest.approx(0.0589, abs=5e-4)
+        assert block["derived"]["radar_rx_row_height_m"] == pytest.approx(0.051, abs=5e-4)
         assert block["derived"]["provenance"]
 
     def test_a_measured_value_beats_a_typed_flag(self):
@@ -196,7 +198,7 @@ class TestTheSwingServerNeedsTheRigFile:
 
     def test_the_radar_height_and_tilt_come_from_the_rig_file(self, monkeypatch, tmp_path):
         received = self._main(monkeypatch, tmp_path, ["--iwr6843", "--rig-geometry", V3])
-        assert received["radar_height_m"] == pytest.approx(0.051)
+        assert received["radar_height_m"] == pytest.approx(0.05885, abs=1e-5)
         assert received["tilt_deg"] == pytest.approx(10.0)
 
     def test_the_camera_has_no_default_height(self, monkeypatch, tmp_path, capsys):
@@ -253,7 +255,7 @@ class TestTheBoardCalibrationCarriesNoInstallation:
             radar_height_m=setup.radar_height_m,
         )
         calibration = server.iwr6843_runtime.calibration
-        assert calibration.radar_height_m == pytest.approx(0.051)
+        assert calibration.radar_height_m == pytest.approx(0.05885, abs=1e-5)
         assert math.degrees(calibration.tilt_rad) == pytest.approx(10.0)
         server.iwr6843_runtime = None
 

@@ -185,12 +185,14 @@ def test_v3_rig_preserves_camera_ahead_of_radar():
         Path(__file__).resolve().parents[1] / "config/enclosure_v3_rig_geometry.json"
     )
     setup = rig.enclosure_setup()
-    assert setup.camera_forward_offset_m == pytest.approx(0.03)
-    assert setup.as_dict()["camera_forward_offset_m"] == pytest.approx(0.03)
+    # the lens is 30 mm ahead of the RX row and 1.38 mm more ahead of the phase
+    # centre the radar's ranges start from, which the 10 deg aim tips back (audit F11)
+    assert setup.camera_forward_offset_m == pytest.approx(0.03138, abs=1e-5)
+    assert setup.as_dict()["camera_forward_offset_m"] == pytest.approx(0.03138, abs=1e-5)
 
 
 @pytest.mark.parametrize(
-    "use_rig,flag,expected", [(True, -0.2, 0.03), (False, -0.02, -0.02), (False, None, 0.0)]
+    "use_rig,flag,expected", [(True, -0.2, 0.03138), (False, -0.02, -0.02), (False, None, 0.0)]
 )
 def test_startup_passes_measured_offset_or_explicit_fallback(
     monkeypatch, tmp_path, use_rig, flag, expected
@@ -231,7 +233,7 @@ def test_startup_passes_measured_offset_or_explicit_fallback(
 
     server.main()
 
-    assert received["forward_offset_m"] == pytest.approx(expected)
+    assert received["forward_offset_m"] == pytest.approx(expected, abs=1e-5)
 
 
 def test_capture_records_forward_offset_in_session_config(monkeypatch, tmp_path):

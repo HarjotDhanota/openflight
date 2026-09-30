@@ -33,21 +33,51 @@ LEVM_RX_PATCHES_MM = ((24.037, 45.851), (26.455, 45.851), (28.872, 45.851), (31.
 LEVM_LCMF_TX_PATCHES_MM = ((38.767, 42.136), (48.437, 42.136))
 
 
-def levm_vertical_phase_centre_offset_mm(board_rotation_deg: float) -> float:
-    """Height of the LCMF virtual array's phase centre above the RX-row centre.
+def _levm_board_plane_offset_mm(board_rotation_deg: float) -> tuple[float, float]:
+    """The phase centre from the RX-row centre in the board's plane seen from
+    the front: (toward the viewer's right, up) mm.
 
     Each TX/RX pair's phase centre is midway between its two patches, so the
-    array's is half the vector from the RX row to the TX pair. The board is
-    seen from the front, turned ``board_rotation_deg`` counter-clockwise from
-    its ECAD frame (0: ECAD +Y up; +90: ECAD +X up, the v42 mount). The two-ray
-    model's radar height is the RX-row height plus this (audit F11).
+    array's is half the vector from the RX row to the TX pair. The antennas
+    face the front, so the ECAD frame is seen unmirrored, turned
+    ``board_rotation_deg`` counter-clockwise.
     """
     rx_x = sum(x for x, _y in LEVM_RX_PATCHES_MM) / len(LEVM_RX_PATCHES_MM)
     rx_y = sum(y for _x, y in LEVM_RX_PATCHES_MM) / len(LEVM_RX_PATCHES_MM)
     tx_x = sum(x for x, _y in LEVM_LCMF_TX_PATCHES_MM) / len(LEVM_LCMF_TX_PATCHES_MM)
     tx_y = sum(y for _x, y in LEVM_LCMF_TX_PATCHES_MM) / len(LEVM_LCMF_TX_PATCHES_MM)
+    half_x, half_y = 0.5 * (tx_x - rx_x), 0.5 * (tx_y - rx_y)
     angle = math.radians(board_rotation_deg)
-    return 0.5 * ((tx_x - rx_x) * math.sin(angle) + (tx_y - rx_y) * math.cos(angle))
+    return (
+        half_x * math.cos(angle) - half_y * math.sin(angle),
+        half_x * math.sin(angle) + half_y * math.cos(angle),
+    )
+
+
+def levm_vertical_phase_centre_offset_mm(board_rotation_deg: float) -> float:
+    """Height of the LCMF virtual array's phase centre above the RX-row centre,
+    in the board's plane.
+
+    The board is seen from the front, turned ``board_rotation_deg`` counter-
+    clockwise from its ECAD frame (0: ECAD +Y up; +90: ECAD +X up, the v42 and
+    v3 mount). The two-ray model's radar height is the RX-row height plus this,
+    once the board's aim is applied (audit F11; `levm_phase_centre_offset_mm`).
+    """
+    return _levm_board_plane_offset_mm(board_rotation_deg)[1]
+
+
+def levm_phase_centre_offset_mm(
+    board_rotation_deg: float, boresight_pitch_deg: float
+) -> tuple[float, float, float]:
+    """The LCMF phase centre from the RX-row centre in camera image axes, mm.
+
+    The viewer facing the front has target-left on their right, so the board's
+    rightward offset is camera -x. Aimed ``boresight_pitch_deg`` up, the board
+    leans back: its own "up" gains a component away from the target (audit F11).
+    """
+    right, up = _levm_board_plane_offset_mm(board_rotation_deg)
+    pitch = math.radians(boresight_pitch_deg)
+    return (-right, -up * math.cos(pitch), -up * math.sin(pitch))
 
 
 def camera_rdf_offset_to_target_lfu(offset_mm) -> tuple[float, float, float]:
@@ -107,11 +137,39 @@ class RigGeometry:
         """(cx, cy); the image centre stands in until a calibration exists."""
         return (self.image_width / 2.0, self.image_height / 2.0)
 
+    @property
+    def iwr_phase_centre_offset_mm(self) -> tuple[float, float, float] | None:
+        """The IWR's virtual-array phase centre from the RX-row centre, camera axes mm.
+
+        None when the board's rotation or its aim is not recorded; the RX row
+        then stands in for the origin and ``enclosure_setup`` says so (audit F11).
+        """
+        if self.iwr_board_rotation_deg is None or self.iwr_boresight_pitch_deg is None:
+            return None
+        return levm_phase_centre_offset_mm(
+            self.iwr_board_rotation_deg, self.iwr_boresight_pitch_deg
+        )
+
+    @property
+    def iwr_origin_mm(self) -> tuple[float, float, float] | None:
+        """Where the IWR's ranges start, from the camera in image axes (mm).
+
+        The phase centre when the rig can place it, else the RX-row centre the
+        file measures. Every range from the IWR starts here (audit F11); only a
+        check against another measurement of the RX row reads iwr_offset_mm.
+        """
+        if self.iwr_offset_mm is None:
+            return None
+        offset = self.iwr_phase_centre_offset_mm
+        if offset is None:
+            return self.iwr_offset_mm
+        return tuple(a + b for a, b in zip(self.iwr_offset_mm, offset))
+
     def enclosure_setup(self) -> "EnclosureSetup":
         """Derive the server's geometry flags from the enclosure's constants.
 
         The camera's lateral offset is camera-relative-to-radar, positive
-        target-right, so it is the negative of the stored IWR x offset.
+        target-right, so it is the negative of the IWR origin's x offset.
         Anything the rig does not carry is None and named in ``missing``.
         """
         missing: list[str] = []
@@ -123,17 +181,22 @@ class RigGeometry:
         if camera_height is None:
             missing.append("lens_height_above_floor_mm")
         radar_height = None
+        rx_row_height = None
         lateral = None
         forward = None
-        if self.iwr_offset_mm is None:
+        origin = self.iwr_origin_mm
+        if self.iwr_offset_mm is None or origin is None:
             missing.append("iwr_offset_mm")
         else:
-            lateral = -self.iwr_offset_mm[0] / 1000.0
-            forward = -self.iwr_offset_mm[2] / 1000.0
+            lateral = -origin[0] / 1000.0
+            forward = -origin[2] / 1000.0
             if camera_height is not None:
-                radar_height = camera_height - self.iwr_offset_mm[1] / 1000.0
+                radar_height = camera_height - origin[1] / 1000.0
+                rx_row_height = camera_height - self.iwr_offset_mm[1] / 1000.0
         if self.iwr_boresight_pitch_deg is None:
             missing.append("iwr_boresight_pitch_deg")
+        phase_centre = self.iwr_phase_centre_offset_mm
+        derived = phase_centre is not None and origin is not None
         return EnclosureSetup(
             camera_mount_height_m=camera_height,
             camera_lateral_offset_m=lateral,
@@ -142,6 +205,14 @@ class RigGeometry:
             iwr_tilt_deg=self.iwr_boresight_pitch_deg,
             missing=tuple(missing),
             provenance=self.provenance,
+            radar_height_reference=(
+                "iwr_virtual_array_phase_centre" if derived else "iwr_rx_row_centre"
+            ),
+            radar_phase_centre_offset_m=-phase_centre[1] / 1000.0 if derived else None,
+            radar_phase_centre_status=(
+                "derived_from_board_rotation" if derived else "unknown_iwr_board_orientation"
+            ),
+            radar_rx_row_height_m=rx_row_height,
         )
 
     def ops_ball_geometry_m(
@@ -149,20 +220,26 @@ class RigGeometry:
     ) -> tuple[float, float, float] | None:
         """The teed ball seen from the OPS: (forward, lateral, above) in metres.
 
-        The IWR's tee range places the ball straight downrange of the RX row;
-        the rig's OPS and IWR offsets then move the origin to the OPS itself,
-        so the OPS cosine model uses its own line of sight (audit F12).
+        The IWR's tee range starts at its origin (``iwr_origin_mm``, the height
+        ``radar_height_m`` names) and places the ball straight downrange of the
+        RX row; the rig's OPS and IWR offsets then move the origin to the OPS
+        itself, so the OPS cosine model uses its own line of sight (audit F12).
         Heights are above the hitting surface. None when an offset is missing.
         """
-        if self.ops_offset_mm is None or self.iwr_offset_mm is None:
+        origin_mm = self.iwr_origin_mm
+        if self.ops_offset_mm is None or self.iwr_offset_mm is None or origin_mm is None:
             return None
         ops = camera_rdf_offset_to_target_lfu(self.ops_offset_mm)
-        iwr = camera_rdf_offset_to_target_lfu(self.iwr_offset_mm)
-        ops_lateral, ops_forward, ops_up = (a - b for a, b in zip(ops, iwr))
-        ball_forward = math.sqrt(tee_slant_range_m**2 - (ball_height_m - radar_height_m) ** 2)
+        origin = camera_rdf_offset_to_target_lfu(origin_mm)
+        ops_lateral, ops_forward, ops_up = (a - b for a, b in zip(ops, origin))
+        # the phase centre sits off the RX row, the ball does not move with it (audit F11)
+        ball_lateral = camera_rdf_offset_to_target_lfu(self.iwr_offset_mm)[0] - origin[0]
+        ball_forward = math.sqrt(
+            tee_slant_range_m**2 - (ball_height_m - radar_height_m) ** 2 - ball_lateral**2
+        )
         return (
             ball_forward - ops_forward,
-            -ops_lateral,
+            ball_lateral - ops_lateral,
             ball_height_m - (radar_height_m + ops_up),
         )
 
@@ -302,14 +379,16 @@ class EnclosureSetup:
     missing: tuple[str, ...] = ()
     provenance: str = ""
     camera_forward_offset_m: float | None = None
-    # The two-ray model wants the virtual array's vertical phase centre, but
-    # the rig file gives the RX-row centre and not how the board is turned.
-    # With the RX row vertical, as LCMF needs, the phase centre sits about
-    # 8 mm above or below it, so the offset stays unknown until the board's
-    # orientation is measured (audit F11; levm_vertical_phase_centre_offset_mm).
+    # The two-ray model wants the virtual array's vertical phase centre; the
+    # rig file gives the RX-row centre and how the board is turned. With the
+    # RX row vertical, as LCMF needs, the phase centre sits about 8 mm above
+    # or below it, so a rig without the rotation stays on the RX row and says
+    # so (audit F11; RigGeometry.iwr_origin_mm). The offset is the vertical
+    # one, up positive; the RX-row height is kept for the record.
     radar_height_reference: str = "iwr_rx_row_centre"
     radar_phase_centre_offset_m: float | None = None
     radar_phase_centre_status: str = "unknown_iwr_board_orientation"
+    radar_rx_row_height_m: float | None = None
 
     @property
     def tee_lateral_offset_m(self) -> float | None:
@@ -331,6 +410,7 @@ class EnclosureSetup:
             "radar_height_reference": self.radar_height_reference,
             "radar_phase_centre_offset_m": self.radar_phase_centre_offset_m,
             "radar_phase_centre_status": self.radar_phase_centre_status,
+            "radar_rx_row_height_m": self.radar_rx_row_height_m,
             "iwr_tilt_deg": self.iwr_tilt_deg,
             "missing": list(self.missing),
             "provenance": self.provenance,
