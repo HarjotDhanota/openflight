@@ -2,6 +2,7 @@
 
 import json
 import threading
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -1611,3 +1612,463 @@ def test_the_30_sept_sun_runs_no_640x400_rung_below_the_sensors_floor(tmp_path, 
         assert rungs[rung_id]["gain_source"] == "setup_lock_scaled"
     # each was tried once at unity: nothing lower exists to correct to
     assert [gain for _exposure, gain in kiosk.calls] == [1.0] * len(HALF_IDS)
+
+
+# P7-13 (D12): "let me switch between them freely. this is separate from the
+# checkbox system." The tester presses any setting, whenever.
+
+DARK_CHECK = {
+    "ok": False,
+    "too_bright": False,
+    "too_dark": True,
+    "light_cause": "ball_dark",
+    "reason": "too dark for the ball: 5 DN above black",
+}
+BRIGHT_CHECK = {
+    "ok": False,
+    "too_bright": True,
+    "too_dark": False,
+    "light_cause": "ball_clipped",
+    "reason": "too bright for the ball: 40% of it is clipped",
+}
+
+
+def test_pressing_a_setting_switches_to_it_now_and_records_the_switch(tmp_path):
+    path = tmp_path / "ladder.json"
+    state = sl.LadderState(path)
+    state.begin("full-300", 3.0, {"ok": True})
+    state.record_swing(_verdict("green", "a0"))
+    state.record_swing(_verdict("amber", "a1"))
+
+    state.jump("full-50")
+
+    assert state.current.rung_id == "full-50"
+    saved = sl.LadderState(path).to_dict()
+    assert saved["current"] == "full-50"
+    assert saved["rungs"]["full-50"]["status"] == "pending"
+    # the setting left behind keeps its swings and waits its turn
+    assert saved["rungs"]["full-300"]["status"] == "pending"
+    assert [swing["capture"] for swing in saved["rungs"]["full-300"]["swings"]] == ["a0", "a1"]
+    (switch,) = saved["switches"]
+    assert {key: switch[key] for key in ("from", "to", "kind")} == {
+        "from": "full-300",
+        "to": "full-50",
+        "kind": "manual",
+    }
+    assert datetime.fromisoformat(switch["at"]).tzinfo is not None
+
+
+def test_returning_to_a_setting_left_behind_continues_its_count(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.begin("full-300", 3.0, {"ok": True})
+    for index in range(3):
+        state.record_swing(_verdict("green", f"a{index}"))
+    state.jump("half-150")
+    state.begin("half-150", 5.0, {"ok": True})
+    state.record_swing(_verdict("green", "h0"))
+
+    state.jump("full-300")
+    state.begin("full-300", 3.0, {"ok": True})
+
+    assert state.record_swing(_verdict("green", "a3")) == "active"
+    assert state.record_swing(_verdict("green", "a4")) == "done"
+    assert state.accepted("half-150") == 1
+    assert [s["from"] for s in state.to_dict()["switches"]] == ["full-300", "half-150"]
+    # the pressed setting is over: the ticked order takes up again from the top
+    assert state.current.rung_id == "full-200"
+
+
+def test_a_setting_with_its_good_swings_cannot_be_pressed(tmp_path):
+    path = tmp_path / "ladder.json"
+    state = sl.LadderState(path)
+    state.begin("full-300", 3.0, {"ok": True})
+    for index in range(5):
+        state.record_swing(_verdict("green", f"a{index}"))
+    saved = path.read_text(encoding="utf-8")
+
+    with pytest.raises(ValueError, match="full-300"):
+        state.jump("full-300")
+    with pytest.raises(ValueError, match="full-999"):
+        state.jump("full-999")
+
+    assert path.read_text(encoding="utf-8") == saved
+    assert state.current.rung_id == "full-200"
+
+
+def test_pressing_a_failed_setting_reopens_it_with_its_swings_and_a_fresh_red_count(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    assert _swing_through(state, "grgrr") == "failed"
+
+    state.jump("full-300")
+
+    entry = state.to_dict()["rungs"]["full-300"]
+    assert entry["status"] == "pending" and entry["reason"] is None
+    assert len(entry["swings"]) == 5  # kept, two of them good
+    state.begin("full-300", 3.0, {"ok": True})
+    # three earlier reds no longer count against it: one more red does not fail it
+    assert state.record_swing(_verdict("red", "again-0", "frames")) == "active"
+    assert state.record_swing(_verdict("green", "again-1")) == "active"
+    assert state.record_swing(_verdict("green", "again-2")) == "active"
+    assert state.record_swing(_verdict("green", "again-3")) == "done"  # 2 earlier + 3
+
+
+def test_a_reopened_setting_still_fails_on_its_new_reds(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    _swing_through(state, "grgrr")
+    state.jump("full-300")
+    state.begin("full-300", 3.0, {"ok": True})
+
+    state.record_swing(_verdict("red", "again-0", "frames"))
+
+    assert state.record_swing(_verdict("red", "again-1", "frames")) == "failed"
+
+
+def test_pressing_a_setting_skipped_for_light_reopens_it(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.begin("full-300", 3.0, dict(DARK_CHECK))
+    assert all(status == "skipped" for rung, status in _statuses(state).items() if "full" in rung)
+
+    state.jump("full-100")
+
+    entry = state.to_dict()["rungs"]["full-100"]
+    assert entry["status"] == "pending" and entry["reason"] is None
+    assert state.current.rung_id == "full-100"
+    assert state.to_dict()["rungs"]["full-150"]["status"] == "skipped"
+
+
+@pytest.mark.parametrize("check", [DARK_CHECK, BRIGHT_CHECK])
+def test_a_pressed_setting_runs_in_bad_light_with_a_warning(tmp_path, check):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.jump("full-75")
+
+    state.begin("full-75", 12.0, dict(check))
+
+    entry = state.to_dict()["rungs"]["full-75"]
+    assert entry["status"] == "active"
+    assert entry["light_warning"] == check["reason"]
+    assert entry["pre_check"]["ok"] is False
+    assert all(
+        status == "pending" for rung, status in _statuses(state).items() if rung != "full-75"
+    )
+    # its swings are judged as usual
+    state.record_swing(_verdict("red", "d0", "ball_dark"))
+    assert state.record_swing(_verdict("red", "d1", "ball_dark")) == "failed"
+    assert state.current.rung_id == "full-300"
+
+
+def test_an_ordered_setting_in_the_same_light_is_still_skipped(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.jump("full-75")
+    state.begin("full-75", 12.0, dict(DARK_CHECK))
+    for index in range(5):
+        state.record_swing(_verdict("green", f"g{index}"))
+
+    state.begin("full-300", 3.0, dict(DARK_CHECK))
+
+    assert state.to_dict()["rungs"]["full-300"]["status"] == "skipped"
+    assert "light_warning" not in state.to_dict()["rungs"]["full-300"]
+
+
+def test_a_pressed_setting_without_the_setups_ball_is_not_run(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.jump("full-100")
+
+    state.begin(
+        "full-100",
+        3.0,
+        {"ok": False, "light_cause": "no_setup_ball", "reason": sl.NO_SETUP_BALL},
+    )
+
+    assert state.to_dict()["rungs"]["full-100"]["status"] == "skipped"
+
+
+def test_after_a_pressed_setting_the_ticked_order_continues(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.select(["full-300", "full-150", "half-300"])
+    state.begin("full-300", 3.0, {"ok": True})
+    for index in range(5):
+        state.record_swing(_verdict("green", f"a{index}"))
+    assert state.current.rung_id == "full-150"
+
+    state.jump("full-50")  # not ticked
+    state.begin("full-50", 6.0, {"ok": True})
+    for index in range(5):
+        state.record_swing(_verdict("green", f"b{index}"))
+
+    assert state.current.rung_id == "full-150"
+
+
+def test_an_unticked_setting_left_behind_goes_back_to_not_selected(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.select(["full-300", "half-300"])
+    state.jump("half-75")
+    state.begin("half-75", 5.0, {"ok": True})
+    state.record_swing(_verdict("green", "h0"))
+
+    state.jump("half-300")
+
+    entry = state.to_dict()["rungs"]["half-75"]
+    assert entry["status"] == "skipped" and entry["reason"] == sl.NOT_SELECTED
+    assert state.accepted("half-75") == 1
+    state.begin("half-300", 3.0, {"ok": True})
+    for index in range(5):
+        state.record_swing(_verdict("green", f"c{index}"))
+    assert state.current.rung_id == "full-300"  # half-75 is not run again unasked
+
+
+def test_an_unticked_setting_pressed_and_left_before_it_began_is_not_run(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.select(["full-300"])
+    state.jump("half-75")
+
+    state.jump("full-300")
+
+    entry = state.to_dict()["rungs"]["half-75"]
+    assert entry["status"] == "skipped" and entry["reason"] == sl.NOT_SELECTED
+    state.begin("full-300", 3.0, {"ok": True})
+    for index in range(5):
+        state.record_swing(_verdict("green", f"c{index}"))
+    assert state.current is None
+
+
+def test_a_press_not_yet_begun_survives_new_ticks(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.jump("half-75")
+
+    state.select(["full-300"])
+
+    assert state.current.rung_id == "half-75"
+    assert state.to_dict()["rungs"]["half-75"]["status"] == "pending"
+
+
+def test_a_ladder_pressed_straight_onto_a_later_setting_has_not_moved_on(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+
+    state.jump("half-150")
+
+    assert state.moved_on is False
+    state.begin("half-150", 5.0, {"ok": True})
+    state.record_swing(_verdict("green", "h0"))
+    state.jump("full-300")
+    assert state.moved_on is True
+
+
+def test_pressing_640x400_from_1280x800_still_asks_for_the_last_photo(tmp_path):
+    state = sl.LadderState(tmp_path / "ladder.json")
+    state.begin("full-300", 3.0, {"ok": True})
+    state.record_swing(_verdict("green", "c0"))
+
+    state.jump("half-150")
+    assert state.to_dict()["pending_photo"] == {"capture": "c0", "rung_id": "full-300"}
+
+    state.jump("full-200")  # back to 1280x800: its photo is not a handoff yet
+    assert state.to_dict()["pending_photo"] is None
+
+
+def test_pressing_the_setting_already_running_changes_nothing(tmp_path):
+    path = tmp_path / "ladder.json"
+    state = sl.LadderState(path)
+    state.begin("full-300", 3.0, {"ok": True})
+    saved = path.read_text(encoding="utf-8")
+
+    state.jump("full-300")
+
+    assert path.read_text(encoding="utf-8") == saved
+
+
+def _jump_runner(tmp_path, kiosk=None, done=None):
+    run = tmp_path / "run-01" / "arm5" / "camera"
+    run.mkdir(parents=True, exist_ok=True)
+    runner = _runner(tmp_path, kiosk or FakeKiosk(), run_dir=tmp_path / "run-01", done=done)
+    runner.mode = "arm5"
+    return runner, run
+
+
+def test_a_swing_in_flight_when_a_setting_is_pressed_counts_for_the_old_setting(tmp_path):
+    done = []
+    kiosk = FakeKiosk()
+    runner, run = _jump_runner(tmp_path, kiosk, done)
+    runner.start_rung()
+    old_gain = runner.state.gain("full-300")
+
+    runner.jump("full-150")
+    # the swing taken just before the press is saved just after it
+    _capture_with_trigger_controls(run, "camera_before", 300, old_gain)
+    runner.tick()  # sets full-150 on the same kiosk: no restart within a mode
+    assert kiosk.calls[-1][0] == 150 and done == []
+    _capture_with_trigger_controls(run, "camera_after", 150, runner.state.gain("full-150"))
+    runner.tick()
+
+    state = runner.state.to_dict()
+    assert [s["capture"] for s in state["rungs"]["full-300"]["swings"]] == ["camera_before"]
+    assert [s["capture"] for s in state["rungs"]["full-150"]["swings"]] == ["camera_after"]
+    assert state["ineligible_captures"] == []
+    assert state["current"] == "full-150"
+
+
+def test_pressing_a_setting_waits_for_the_swing_being_judged(tmp_path, monkeypatch):
+    runner, run = _jump_runner(tmp_path)
+    runner.start_rung()
+    _capture_with_trigger_controls(run, "camera_judged", 300, runner.state.gain("full-300"))
+    entered, release = threading.Event(), threading.Event()
+    verdict = sl.swing_verdict
+
+    def slow_verdict(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return verdict(*args, **kwargs)
+
+    monkeypatch.setattr(sl, "swing_verdict", slow_verdict)
+    poller = threading.Thread(target=runner.poll_once)
+    poller.start()
+    assert entered.wait(2)
+    jumper = threading.Thread(target=runner.jump, args=("full-150",))
+    jumper.start()
+    jumper.join(0.2)
+    assert jumper.is_alive()  # the press waits for the verdict
+    assert runner.state.current.rung_id == "full-300"
+    release.set()
+    poller.join(3)
+    jumper.join(3)
+
+    state = runner.state.to_dict()
+    assert [s["capture"] for s in state["rungs"]["full-300"]["swings"]] == ["camera_judged"]
+    assert state["current"] == "full-150"
+
+
+def test_a_press_into_the_other_mode_hands_over_after_the_swing_in_flight(tmp_path, monkeypatch):
+    monkeypatch.setattr(sl, "SWITCH_GRACE_S", 0.0)
+    done = []
+    kiosk = FakeKiosk()
+    runner, run = _jump_runner(tmp_path, kiosk, done)
+    runner.start_rung()
+    gain = runner.state.gain("full-300")
+    (run / "camera_saving").mkdir()  # a swing still being saved
+    calls = len(kiosk.calls)
+
+    runner.jump("half-150")
+    runner.tick()
+
+    assert done == []  # the 1280x800 kiosk stays up for the swing in flight
+    assert len(kiosk.calls) == calls  # and half-150 is never set on it
+    (run / "camera_saving").rmdir()
+    _capture_with_trigger_controls(run, "camera_saving", 300, gain)
+    runner.tick()
+
+    state = runner.state.to_dict()
+    assert [s["capture"] for s in state["rungs"]["full-300"]["swings"]] == ["camera_saving"]
+    assert state["current"] == "half-150"
+    # leaving 1280x800 asks for that swing's photo first, as the ordered ladder does
+    assert state["pending_photo"] == {"capture": "camera_saving", "rung_id": "full-300"}
+    runner.tick()
+    runner.skip_photo("camera_saving", "full-300")
+    assert done == ["arm5"]
+
+
+def test_a_press_into_the_other_mode_hands_over_at_once_with_nothing_in_flight(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(sl, "SWITCH_GRACE_S", 0.0)
+    done = []
+    runner, _run = _jump_runner(tmp_path, done=done)
+    runner.start_rung()
+
+    runner.jump("half-150")
+    runner.tick()
+
+    assert done == ["arm5"]
+
+
+def test_a_swing_that_never_finishes_saving_does_not_hold_the_switch(tmp_path, monkeypatch):
+    monkeypatch.setattr(sl, "SWITCH_GRACE_S", 0.0)
+    monkeypatch.setattr(sl, "SWITCH_WAIT_S", 0.0)
+    done = []
+    runner, run = _jump_runner(tmp_path, done=done)
+    runner.start_rung()
+    (run / "camera_broken").mkdir()
+
+    runner.jump("half-150")
+    runner.tick()
+
+    assert done == ["arm5"]
+
+
+def test_a_swing_at_other_controls_is_set_aside_without_holding_the_switch(tmp_path, monkeypatch):
+    monkeypatch.setattr(sl, "SWITCH_GRACE_S", 0.0)
+    done = []
+    runner, run = _jump_runner(tmp_path, done=done)
+    runner.start_rung()
+    gain = runner.state.gain("full-300")
+    _capture_with_trigger_controls(run, "camera_photo", 300, gain, purpose="still_photo")
+
+    runner.jump("half-150")
+    runner.tick()
+
+    assert done == ["arm5"]
+    state = runner.state.to_dict()
+    assert [item["capture"] for item in state["ineligible_captures"]] == ["camera_photo"]
+    assert state["rungs"]["full-300"]["swings"] == []
+
+
+def test_pressing_back_before_the_handover_cancels_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(sl, "SWITCH_GRACE_S", 60.0)
+    done = []
+    kiosk = FakeKiosk()
+    runner, _run = _jump_runner(tmp_path, kiosk, done)
+    runner.start_rung()
+
+    runner.jump("half-150")
+    runner.tick()
+    runner.jump("full-200")
+    runner.tick()
+
+    assert done == []
+    assert kiosk.calls[-1][0] == 200
+    assert runner.state.to_dict()["rungs"]["full-200"]["status"] == "active"
+
+
+def test_the_runner_runs_a_pressed_setting_in_bad_light_and_warns(tmp_path):
+    done = []
+    kiosk = FakeKiosk(level=24.0)  # too dark at every gain: an ordered ladder skips it all
+    runner, _run = _jump_runner(tmp_path, kiosk, done)
+
+    runner.jump("full-100")
+    runner.tick()
+
+    entry = runner.state.to_dict()["rungs"]["full-100"]
+    assert entry["status"] == "active"
+    assert "too dark" in entry["light_warning"]
+    assert len(kiosk.calls) > 1  # the gain was still corrected as far as it goes
+    assert entry["gain"] == sl.GAIN_CEILING
+    assert done == []
+    assert runner.state.to_dict()["rungs"]["full-50"]["status"] == "pending"
+
+
+def test_a_pressed_setting_resumed_in_bad_light_keeps_its_swings(tmp_path):
+    kiosk = FakeKiosk()
+    runner, _run = _jump_runner(tmp_path, kiosk)
+    runner.jump("full-300")
+    runner.state.begin("full-300", 3.0, {"ok": True})
+    runner.state.record_swing(_verdict("green", "c0"))
+    kiosk.level = 20.0  # the sun went in while the ladder was stopped
+
+    resumed, _run = _jump_runner(tmp_path, kiosk)
+    resumed.start_rung()
+
+    entry = resumed.state.to_dict()["rungs"]["full-300"]
+    assert entry["status"] == "active"
+    assert [swing["capture"] for swing in entry["swings"]] == ["c0"]
+    assert entry["resume_checks"][-1]["ok"] is False
+    assert "too dark" in entry["light_warning"]
+
+
+def test_a_press_is_refused_while_the_ladder_changes_mode_or_is_stopped(tmp_path):
+    runner, _run = _jump_runner(tmp_path)
+    runner.mode = "between modes"
+    with pytest.raises(RuntimeError, match="changing camera mode"):
+        runner.jump("full-150")
+    runner.mode = "arm5"
+    runner.stop()
+    with pytest.raises(RuntimeError, match="stopped"):
+        runner.jump("full-150")
+    assert runner.state.current.rung_id == "full-300"

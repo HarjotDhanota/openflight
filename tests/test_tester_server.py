@@ -2999,6 +2999,172 @@ class TestTheTesterChoosesTheSettings:
             manager.cancel()
 
 
+class TestTheTesterPressesASetting:
+    """P7-13 (D12): a button per setting switches to it now, ticked or not."""
+
+    body = TestTheTesterChoosesTheSettings.body
+    _stop = TestTheTesterChoosesTheSettings._stop
+
+    def _client(self, tmp_path, monkeypatch, arms=("arm5", "arm6"), ball_arms=("arm5",)):
+        for arm in arms:
+            ts.write_arm_state(
+                tmp_path,
+                ts.TesterParameters("20260922-name", arm, "indoors"),
+                gain=3.0,
+                gain_exposure_us=300,
+            )
+        setup_saw_ball(tmp_path, arms=ball_arms)
+        monkeypatch.setattr(ts.study_ladder, "KioskClient", _LitKiosk)
+        monkeypatch.setattr(ts, "KILL_GRACE_S", 0.05, raising=False)
+        monkeypatch.setattr(
+            ts.os,
+            "killpg",
+            lambda _pid, _signal: (_ for _ in ()).throw(OSError("test process has no real group")),
+            raising=False,
+        )
+        runners = []
+        monkeypatch.setattr(
+            ts.study_ladder.LadderRunner, "start", lambda runner: runners.append(runner)
+        )
+        manager = ts.TesterJobManager(popen=_Forever)
+        app = eligible_app(sessions_root=tmp_path, rig_geometry=RIG, manager=manager)
+        return app.test_client(), manager, runners
+
+    def _jump(self, client, rung_id, rungs=None):
+        return client.post(
+            "/api/tester/ladder/jump",
+            json={**self.body, "rungs": rungs or FULL_RUNGS, "rung_id": rung_id},
+        )
+
+    def test_a_press_starts_the_ladder_directly_on_that_setting(self, tmp_path, monkeypatch):
+        client, manager, runners = self._client(tmp_path, monkeypatch)
+        try:
+            response = self._jump(client, "half-150")  # not ticked
+            data = response.get_json()
+            assert response.status_code == 200, data
+            assert "arm6" in data["run_dir"] and runners[0].mode == "arm6"
+            assert data["ladder"]["current"] == "half-150"
+            assert data["ladder"]["switches"][-1]["to"] == "half-150"
+            assert data["ladder"]["switches"][-1]["kind"] == "manual"
+            assert data["ladder"]["rungs"]["half-300"]["reason"] == ts.study_ladder.NOT_SELECTED
+        finally:
+            self._stop(client, manager)
+            manager.cancel()
+
+    @pytest.mark.parametrize("rung_id", ["full-1", None, 7])
+    def test_a_press_on_an_unknown_setting_is_refused(self, tmp_path, monkeypatch, rung_id):
+        client, manager, runners = self._client(tmp_path, monkeypatch)
+
+        response = self._jump(client, rung_id)
+
+        assert response.status_code == 400
+        assert manager.status()["state"] == "idle" and runners == []
+
+    def test_a_setting_with_its_good_swings_cannot_be_pressed(self, tmp_path, monkeypatch):
+        state = ts.study_ladder.LadderState(tmp_path / "20260922-name" / "ladder.json")
+        state.begin("full-300", 3.0, {"ok": True})
+        for index in range(5):
+            state.record_swing({"capture": f"c{index}", "color": "green", "reasons": []})
+        client, manager, runners = self._client(tmp_path, monkeypatch)
+
+        response = self._jump(client, "full-300")
+
+        assert response.status_code == 409
+        assert "full-300" in response.get_json()["error"]
+        assert manager.status()["state"] == "idle" and runners == []
+
+    def test_a_press_into_a_mode_whose_light_step_is_missing_is_refused(
+        self, tmp_path, monkeypatch
+    ):
+        client, manager, runners = self._client(tmp_path, monkeypatch, arms=("arm5",))
+
+        response = self._jump(client, "half-75")
+
+        assert response.status_code == 409
+        assert "gain step for both modes" in response.get_json()["error"]
+        assert runners == []
+
+    def test_a_press_into_a_mode_whose_setup_saw_no_ball_is_refused(self, tmp_path, monkeypatch):
+        # 1280x800 never found the ball
+        client, manager, runners = self._client(tmp_path, monkeypatch, ball_arms=("arm6",))
+        try:
+            refused = self._jump(client, "full-100", rungs=HALF_RUNGS)
+            assert refused.status_code == 409
+            assert refused.get_json()["setup_ball_missing"] is True
+            assert runners == []
+            started = self._jump(client, "half-150", rungs=HALF_RUNGS)
+            assert started.status_code == 200, started.get_json()
+            walking = self._jump(client, "full-100", rungs=HALF_RUNGS)
+            assert walking.status_code == 409
+            assert walking.get_json()["setup_ball_missing"] is True
+            assert runners[0].state.current.rung_id == "half-150"
+        finally:
+            self._stop(client, manager)
+            manager.cancel()
+
+    def test_a_press_within_the_running_mode_switches_without_a_restart(
+        self, tmp_path, monkeypatch
+    ):
+        client, manager, runners = self._client(tmp_path, monkeypatch)
+        try:
+            started = client.post("/api/tester/ladder/start", json=self.body).get_json()
+            runners[0].state.begin("full-300", 3.0, {"ok": True})
+            runners[0].state.record_swing({"capture": "c0", "color": "green", "reasons": []})
+
+            response = self._jump(client, "full-100")
+
+            data = response.get_json()
+            assert response.status_code == 200, data
+            assert data["run_dir"] == started["run_dir"]
+            assert len(runners) == 1 and runners[0].mode == "arm5"
+            assert manager.status()["state"] == "running"
+            assert data["ladder"]["current"] == "full-100"
+            assert data["ladder"]["rungs"]["full-300"]["status"] == "pending"
+            assert data["ladder"]["rungs"]["full-300"]["swings"][0]["capture"] == "c0"
+            saved = json.loads((tmp_path / "20260922-name" / "ladder.json").read_text("utf-8"))
+            assert saved["switches"][-1]["from"] == "full-300"
+            assert saved["switches"][-1]["to"] == "full-100"
+        finally:
+            self._stop(client, manager)
+            manager.cancel()
+
+    def test_a_press_into_the_other_mode_restarts_the_kiosk(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ts.study_ladder, "SWITCH_GRACE_S", 0.0)
+        client, manager, runners = self._client(tmp_path, monkeypatch)
+        try:
+            started = client.post("/api/tester/ladder/start", json=self.body).get_json()
+            runner = runners[0]
+            response = self._jump(client, "half-150")
+            assert response.status_code == 200, response.get_json()
+            assert response.get_json()["ladder"]["current"] == "half-150"
+
+            runner.tick()  # nothing in flight: the 1280x800 kiosk hands over
+            worker = next(t for t in threading.enumerate() if t.name == "ladder-next-mode")
+            worker.join(5)
+
+            status = client.get("/api/tester/ladder", query_string=self.body).get_json()
+            assert status["run_dir"] != started["run_dir"] and "arm6" in status["run_dir"]
+            assert runner.mode == "arm6"
+            assert status["ladder"]["rungs"]["half-150"]["status"] == "active"
+        finally:
+            self._stop(client, manager)
+            manager.cancel()
+
+    def test_a_press_while_the_ladder_changes_mode_is_refused(self, tmp_path, monkeypatch):
+        client, manager, runners = self._client(tmp_path, monkeypatch)
+        try:
+            client.post("/api/tester/ladder/start", json=self.body)
+            runners[0].mode = "between modes"
+
+            response = self._jump(client, "full-100")
+
+            assert response.status_code == 409
+            assert "changing camera mode" in response.get_json()["error"]
+        finally:
+            self._stop(client, manager)
+            manager.cancel()
+
+
 class TestAttemptLedgerRoutes:
     def _client(self, tmp_path):
         run = tmp_path / "tester" / "arm1" / "paired" / "run-01"

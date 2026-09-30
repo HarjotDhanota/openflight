@@ -7439,7 +7439,22 @@ def create_app(
         return run
 
     @app.post("/api/tester/ladder/start")
-    def ladder_start():  # pylint: disable=too-many-locals
+    def ladder_start():
+        return ladder_request(None)
+
+    @app.post("/api/tester/ladder/jump")
+    def ladder_jump():
+        """The tester pressed a setting: switch to it now, or start the ladder on it (P7-13)."""
+        payload = request.get_json(silent=True)
+        try:
+            pressed = study_ladder.find_rung(
+                payload.get("rung_id") if isinstance(payload, Mapping) else None
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return ladder_request(pressed)
+
+    def ladder_request(pressed):  # pylint: disable=too-many-locals,too-many-return-statements
         try:
             payload = request.get_json(silent=True)
             params = TesterParameters.from_payload(payload)
@@ -7449,11 +7464,12 @@ def create_app(
             )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
-        # The light step is needed only for a mode with a ticked setting.
+        # The light step is needed only for a mode with a ticked or pressed setting.
         modes = [
             arm_id
             for arm_id in ("arm5", "arm6")
             if any(r.arm_id == arm_id and r.rung_id in selected for r in study_ladder.LADDER)
+            or (pressed is not None and pressed.arm_id == arm_id)
         ]
         facts = {}
         for arm_id in ("arm5", "arm6"):
@@ -7473,10 +7489,24 @@ def create_app(
                 refuse_while_analysing()
             except RuntimeError as exc:
                 return jsonify({"error": str(exc)}), 409
-            return start_ladder(params, facts, selected, modes)
+            walking = walking_runner(params.tester_id)
+            if pressed is None or walking is None:
+                return start_ladder(params, facts, selected, modes, pressed)
+            # D8 holds for a setting pressed on a walking ladder too
+            solution = admitted_tee_range.get(params.tester_id, (None, None))[0]
+            if expected_ladder_ball(solution, pressed.arm_id) is None:
+                return jsonify({"error": SETUP_BALL_MISSING, "setup_ball_missing": True}), 409
+        # Outside the ladder lock: a swing being judged holds the runner's lock, and
+        # a verdict that ends a mode takes the ladder lock.
+        try:
+            walking.jump(pressed.rung_id)
+        except (RuntimeError, ValueError) as exc:
+            return jsonify({"error": str(exc)}), 409
+        return walking_response(params.tester_id, walking)
 
-    def start_ladder(params: TesterParameters, facts: dict, selected: list[str], modes: list[str]):
-        existing = ladder_runners.get(params.tester_id)
+    def walking_runner(tester_id: str) -> study_ladder.LadderRunner | None:
+        """This tester's ladder while it walks, even between modes; else None."""
+        existing = ladder_runners.get(tester_id)
         job = jobs.status()
         if (
             existing is not None
@@ -7486,21 +7516,37 @@ def create_app(
                 or existing.mode == "between modes"
             )
         ):
+            return existing
+        return None
+
+    def walking_response(tester_id: str, existing: study_ladder.LadderRunner):
+        run = ladder_runs.get(tester_id)
+        state_data = existing.state.to_dict()
+        return jsonify(
+            {
+                "ladder": state_data,
+                "pending_photo": state_data.get("pending_photo"),
+                "photo_target": state_data.get("pending_photo") or state_data.get("photo_target"),
+                "stopped": existing.stopped,
+                "job": jobs.status(),
+                "run_dir": str(run) if run else None,
+                "capture_scope": current_capture_scope(tester_id),
+                "saved_attempt_scopes": attempt_scopes(sessions_root, tester_id),
+            }
+        )
+
+    def start_ladder(  # pylint: disable=too-many-arguments
+        params: TesterParameters,
+        facts: dict,
+        selected: list[str],
+        modes: list[str],
+        pressed: study_ladder.Rung | None = None,
+    ):
+        existing = walking_runner(params.tester_id)
+        job = jobs.status()
+        if existing is not None:
             # already walking: pressing C again only shows where it is
-            run = ladder_runs.get(params.tester_id)
-            return jsonify(
-                {
-                    "ladder": existing.state.to_dict(),
-                    "pending_photo": existing.state.to_dict().get("pending_photo"),
-                    "photo_target": existing.state.to_dict().get("pending_photo")
-                    or existing.state.to_dict().get("photo_target"),
-                    "stopped": existing.stopped,
-                    "job": job,
-                    "run_dir": str(run) if run else None,
-                    "capture_scope": current_capture_scope(params.tester_id),
-                    "saved_attempt_scopes": attempt_scopes(sessions_root, params.tester_id),
-                }
-            )
+            return walking_response(params.tester_id, existing)
         # A stale screen would set every rung's gain from light that has gone (D5).
         # Checked only here: pressing C on a walking ladder above just shows it.
         stale = [
@@ -7527,7 +7573,7 @@ def create_app(
             previous.stop(wait=False)
         state = ladder_state(params.tester_id)
         state.select(selected)
-        rung = state.current
+        rung = pressed or state.current
         pending_photo = state.to_dict().get("pending_photo")
         solution, frozen_reference = admitted_tee_range[params.tester_id]
         # D8: without the setup's ball a swing cannot be judged, so none is taken
@@ -7551,6 +7597,14 @@ def create_app(
                             )
                         }
                     ), 409
+        if pressed is not None:
+            # the ladder starts on the setting the tester pressed (P7-13)
+            try:
+                state.jump(pressed.rung_id)
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 409
+            rung = state.current
+            pending_photo = state.to_dict().get("pending_photo")
         if rung is None and pending_photo is None:
             return jsonify({"error": "the ladder is finished; package it"}), 409
         start_rung = (

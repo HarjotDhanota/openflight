@@ -167,6 +167,18 @@ the physical setup. Then work down **Test suite**:
    face photos. **B** is needed only for a mode with a ticked box. Exposures
    that have already run are greyed out. To change your choice partway, press
    **Stop**, change the ticks, then press **C** to carry on.
+
+   Below **C**, one button per exposure switches to it straight away, ticked or
+   not, and also starts a stopped ladder on it. Swings already taken on the
+   exposure you leave keep counting when you come back to it; an exposure with
+   its 5 good swings reads "done" and can't be pressed; pressing a failed or
+   skipped one reopens it with a fresh red count. A pressed exposure runs even
+   in light its check calls too bright or too dark (the panel shows the warning),
+   and its swings are judged as usual. When it finishes or fails, the ladder goes
+   on with the ticked exposures in their usual order. Within a mode only the
+   camera's settings change; a press into the other mode restarts the kiosk as
+   usual, after any swing already taken has been judged (and, leaving 1280×800,
+   after its face photo). Each press is recorded with its time for the review.
 4. **D. Analyse, review & package.** Stop the ladder first. If you have a TM4,
    Full Swing KIT or Mevo Gen 2 export, choose it first. One press replays every
    shot on the Pi, builds the session review and writes one session bundle. It

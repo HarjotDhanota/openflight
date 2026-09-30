@@ -18,6 +18,7 @@ import threading
 import time
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -102,6 +103,19 @@ LADDER: tuple[Rung, ...] = tuple(
 RUNG_FPS = {"arm5": 120.0, "arm6": 288.0}
 # A setting the tester unticked: review and analysis must not read it as a light failure.
 NOT_SELECTED = "not selected by the tester"
+# A pressed setting in the other mode waits this long for a swing taken just before
+# the press to be saved, and up to SWITCH_WAIT_S for saved ones to be judged (past
+# the paired check's 30 s no-radar-shot timeout), before the kiosk restarts (P7-13).
+SWITCH_GRACE_S = 2.0
+SWITCH_WAIT_S = 35.0
+
+
+def find_rung(rung_id: object) -> Rung:
+    """The rung with this id; refuses an unknown one."""
+    rung = next((item for item in LADDER if item.rung_id == rung_id), None)
+    if rung is None:
+        raise ValueError(f"unknown ladder setting: {rung_id}")
+    return rung
 
 
 def validate_selection(rung_ids: object) -> list[str]:
@@ -583,40 +597,56 @@ class LadderState:
 
     @property
     def current(self) -> Rung | None:
-        """The active rung, else the next pending one, else None at the end."""
-        for status in ("active", "pending"):
-            for rung in LADDER:
-                if self._data["rungs"][rung.rung_id]["status"] == status:
-                    return rung
+        """The active rung, else a pressed one not begun yet, else the next pending one.
+
+        None at the end.
+        """
+        rungs = self._data["rungs"]
+        pressed = self._data.get("pressed")
+        for rung in LADDER:
+            if rungs[rung.rung_id]["status"] == "active":
+                return rung
+        if pressed in rungs and rungs[pressed]["status"] == "pending":
+            return find_rung(pressed)
+        for rung in LADDER:
+            if rungs[rung.rung_id]["status"] == "pending":
+                return rung
         return None
 
     @property
     def moved_on(self) -> bool:
-        """Whether the current setting comes after one the ladder ran or judged.
+        """Whether a setting other than the current one has run or been judged.
 
         Settings the tester unticked do not count: a ladder that starts at its
-        first ticked setting has not moved on.
+        first ticked setting has not moved on, nor has one pressed straight onto
+        a later setting (P7-13).
         """
         current = self.current
         if current is None:
             return False
         return any(
-            not (entry["status"] == "skipped" and entry["reason"] == NOT_SELECTED)
-            for entry in (
-                self._data["rungs"][rung.rung_id] for rung in LADDER[: LADDER.index(current)]
-            )
+            entry["swings"]
+            or entry["status"] not in ("pending", "skipped")
+            or (entry["status"] == "skipped" and entry["reason"] != NOT_SELECTED)
+            for rung_id, entry in self._data["rungs"].items()
+            if rung_id != current.rung_id
         )
 
     def select(self, rung_ids) -> None:
         """Apply the tester's ticks to the settings that have not run yet.
 
         A pending setting not ticked is skipped as not selected; one skipped that
-        way and ticked again is pending again. Any other status is never changed.
+        way and ticked again is pending again. Any other status is never changed,
+        nor is a pressed setting not begun yet (P7-13).
         """
         selected = validate_selection(rung_ids)
         for rung in LADDER:
             entry = self._data["rungs"][rung.rung_id]
-            if entry["status"] == "pending" and rung.rung_id not in selected:
+            if (
+                entry["status"] == "pending"
+                and rung.rung_id not in selected
+                and rung.rung_id != self._data.get("pressed")
+            ):
                 entry["status"] = "skipped"
                 entry["reason"] = NOT_SELECTED
             elif (
@@ -627,13 +657,70 @@ class LadderState:
                 entry["status"] = "pending"
                 entry["reason"] = None
         self._data["selected_rungs"] = selected
+        self._settle_boundary_photo()
+        self._save()
+
+    def _settle_boundary_photo(self) -> None:
         following = self.current
         if following is not None and following.arm_id == "arm5":
             # 1280x800 has settings to run again: its last photo is not a handoff yet
             self._data["pending_photo"] = None
         else:
             self._require_boundary_photo(LADDER[0])
+
+    def jump(self, rung_id: str) -> None:
+        """The tester pressed this setting: it runs now, ticked or not (P7-13, D12).
+
+        The setting left behind keeps its swings and waits for its turn (not
+        selected again when unticked), so returning to it continues it. A failed
+        or skipped setting reopens with its swings kept and a fresh red count; a
+        setting that has its good swings can't be pressed. When the pressed
+        setting finishes or fails, the ticked order continues. Each press is
+        recorded in ``switches``.
+        """
+        rung = find_rung(rung_id)
+        rungs = self._data["rungs"]
+        entry = rungs[rung_id]
+        if entry["status"] == "done":
+            raise ValueError(f"{rung_id} is done: it has its {SWINGS_PER_RUNG} good swings")
+        previous = self.current
+        if previous == rung and entry["status"] == "active":
+            return
+        if previous is not None and previous != rung:
+            left = rungs[previous.rung_id]
+            if left["status"] in ("active", "pending"):
+                if previous.rung_id in self._data["selected_rungs"]:
+                    left["status"] = "pending"
+                else:
+                    left["status"] = "skipped"
+                    left["reason"] = NOT_SELECTED
+        if entry["status"] in ("failed", "skipped"):
+            if entry["status"] == "failed" or entry["reason"] != NOT_SELECTED:
+                entry.setdefault("reopened", []).append(
+                    {
+                        "status": entry["status"],
+                        "reason": entry["reason"],
+                        "swings": len(entry["swings"]),
+                    }
+                )
+            entry["status"] = "pending"
+            entry["reason"] = None
+            entry["reds_from"] = len(entry["swings"])  # earlier reds stop counting
+        self._data["pressed"] = rung_id
+        self._data.setdefault("switches", []).append(
+            {
+                "at": datetime.now(timezone.utc).isoformat(),
+                "from": previous.rung_id if previous else None,
+                "to": rung_id,
+                "kind": "manual",
+            }
+        )
+        self._settle_boundary_photo()
         self._save()
+
+    def runs_anyway(self, rung_id: str) -> bool:
+        """Whether this is the pressed setting, which runs whatever its light (P7-13)."""
+        return self._data.get("pressed") == rung_id
 
     def gain(self, rung_id: str) -> float | None:
         return self._data["rungs"][rung_id]["gain"]
@@ -651,8 +738,13 @@ class LadderState:
         }
 
     def record_resume_check(self, rung_id: str, check: dict) -> None:
-        """A resumed rung passed its check again at its own gain."""
-        self._data["rungs"][rung_id].setdefault("resume_checks", []).append(check)
+        """A resumed rung passed its check again at its own gain, or runs anyway (P7-13)."""
+        entry = self._data["rungs"][rung_id]
+        entry.setdefault("resume_checks", []).append(check)
+        if check.get("ok"):
+            entry.pop("light_warning", None)
+        else:
+            entry["light_warning"] = check.get("reason") or "failed the pre-rung check"
         self._save()
 
     def restart(self, rung_id: str, check: dict) -> None:
@@ -707,8 +799,17 @@ class LadderState:
             # what set the rung's first gain (P7-12); a pre-check may correct it
             entry["gain_source"] = gain_basis["source"]
             entry["gain_basis"] = gain_basis
+        entry.pop("light_warning", None)
         if check.get("ok"):
             entry["status"] = "active"
+        elif self.runs_anyway(rung_id) and (
+            check.get("light_cause") in RED_LIGHT_CAUSES
+            or check.get("too_bright")
+            or check.get("too_dark")
+        ):
+            # the tester pressed it: bad light is a warning, not a skip (P7-13)
+            entry["status"] = "active"
+            entry["light_warning"] = check.get("reason") or "failed the pre-rung check"
         elif check.get("too_bright"):
             # shorter exposures in this mode are darker and may still work
             entry["status"] = "skipped"
@@ -757,8 +858,13 @@ class LadderState:
             return f"{len(reds)} red swings", dark(reds)
         return None
 
-    def record_swing(self, verdict: dict) -> str:
-        rung = self.current
+    def record_swing(self, verdict: dict, rung_id: str | None = None) -> str:
+        """Count a swing for the current rung, or for ``rung_id``, the one it was taken at.
+
+        A swing taken just before the tester pressed another setting still counts
+        for the setting it was taken at (P7-13).
+        """
+        rung = self.current if rung_id is None else find_rung(rung_id)
         if rung is None:
             return "done"
         entry = self._data["rungs"][rung.rung_id]
@@ -770,8 +876,11 @@ class LadderState:
                 "capture": verdict["capture"],
                 "rung_id": rung.rung_id,
             }
-        failure = self._failure(entry["swings"])
-        if failure is not None:
+        # a reopened setting counts only its new reds (P7-13)
+        failure = self._failure(entry["swings"][entry.get("reds_from", 0) :])
+        if entry["status"] == "done":
+            pass  # a late swing for a setting that already has its good swings
+        elif failure is not None:
             reason, dark = failure
             if dark:
                 # a shorter exposure is darker still
@@ -781,6 +890,8 @@ class LadderState:
                 entry["reason"] = reason
         elif self.accepted(rung.rung_id) >= SWINGS_PER_RUNG:
             entry["status"] = "done"
+        if entry["status"] in ("done", "failed") and self.runs_anyway(rung.rung_id):
+            self._data["pressed"] = None  # over: the ticked order takes up again
         self._require_boundary_photo(rung)
         self._save()
         return entry["status"]
@@ -937,6 +1048,11 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
         self.mode: str | None = None
         self._last_capture: str | None = None
         self._configured_rung: str | None = None
+        # rungs the tester pressed away from: a swing taken at their controls just
+        # before the press still counts for them (P7-13)
+        self._left: list[dict] = []
+        # a press into the other mode, waiting for swings in flight before the kiosk restarts
+        self._mode_switch: dict | None = None
         self._required_config_hash: str | None = None
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -1038,9 +1154,10 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                     )
                     if self.stopped:
                         return None
-                    if not check["ok"]:
+                    if not check["ok"] and not self.state.runs_anyway(rung.rung_id):
                         self.state.restart(rung.rung_id, check)
                         continue
+                    # a pressed rung keeps its swings and runs on with a warning (P7-13)
                     self.state.record_resume_check(rung.rung_id, check)
                     self._configured_rung = rung.rung_id
                     return self.state.to_dict()["rungs"][rung.rung_id]
@@ -1071,7 +1188,7 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                 if self.stopped:
                     return None
                 self.state.begin(rung.rung_id, gain, check, basis)
-                if check["ok"]:
+                if self._status(rung) == "active":  # passed, or pressed and run anyway
                     self._configured_rung = rung.rung_id
                     return self.state.to_dict()["rungs"][rung.rung_id]
                 following = self.state.current
@@ -1130,15 +1247,12 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
         if self.stopped:
             return []
         run_dir = self._run_dir()
-        current = self.state.current
-        # a swing only counts against a rung whose exposure is set
-        if (
-            current is None
-            or self._status(current) != "active"
-            or self._configured_rung != current.rung_id
-            or self.mode not in (None, current.arm_id)
-        ):
+        current = self._set_rung()
+        left = self._left_rungs()
+        # a swing only counts against a rung whose exposure is set, or was just before a press
+        if current is None and not left:
             return []
+        owner = current or left[0]  # what a capture set aside is filed under
         if run_dir is None or not run_dir.exists():
             return []
         readiness = self._setup_readiness()
@@ -1175,7 +1289,7 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                     evidence = trigger_setup if isinstance(trigger_setup, dict) else {}
                     self.state.record_ineligible_capture(
                         folder.name,
-                        current.rung_id,
+                        owner.rung_id,
                         {
                             **evidence,
                             "ready": False,
@@ -1199,7 +1313,7 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                     # a real swing, perhaps, that the OPS243 never logged (P7-10)
                     self.state.record_ineligible_capture(
                         folder.name,
-                        current.rung_id,
+                        owner.rung_id,
                         {
                             "ready": False,
                             "config_hash": self._required_config_hash,
@@ -1240,7 +1354,7 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                 if paired["status"] == "ineligible":
                     self.state.record_ineligible_capture(
                         folder.name,
-                        current.rung_id,
+                        owner.rung_id,
                         {
                             "ready": False,
                             "config_hash": self._required_config_hash,
@@ -1251,13 +1365,15 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
                         },
                     )
                     continue
-            rung = self.state.current
-            if self.stopped or rung is None or self._status(rung) != "active":
-                break
             try:
                 trigger_metadata = json.loads(metadata.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 trigger_metadata = {}
+            rung = self._swing_rung(trigger_metadata)
+            if self.stopped:
+                break
+            if rung is None:
+                continue  # it waits for the pressed setting to be set
             mismatch = trigger_controls_mismatch(
                 trigger_metadata, rung, self.state.gain(rung.rung_id)
             )
@@ -1281,17 +1397,110 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
             )
             if self.stopped:
                 break
-            status = self.state.record_swing(verdict)
+            status = self.state.record_swing(verdict, rung.rung_id)
             self.last_verdict = {**verdict, "rung_id": rung.rung_id}
             self._last_capture = folder.name
             verdicts.append(verdict)
-            if status in ("done", "failed"):
+            # a swing for a rung pressed away from moves nothing on
+            if status in ("done", "failed") and rung.rung_id == self._configured_rung:
                 following = self.state.current
                 if following is None or following.arm_id != rung.arm_id:
                     self._finish_mode(rung.arm_id)
                     break
                 self.start_rung()
         return verdicts
+
+    def _set_rung(self) -> Rung | None:
+        """The current rung when its exposure is set on this mode's kiosk, else None."""
+        current = self.state.current
+        if (
+            current is None
+            or self._status(current) != "active"
+            or self._configured_rung != current.rung_id
+            or self.mode not in (None, current.arm_id)
+        ):
+            return None
+        return current
+
+    def _left_rungs(self) -> list[Rung]:
+        """Rungs pressed away from on this mode's kiosk, newest first, still in their wait."""
+        now = time.monotonic()
+        rungs = [find_rung(item["rung_id"]) for item in reversed(self._left) if item["until"] > now]
+        return [rung for rung in rungs if self.mode in (None, rung.arm_id)]
+
+    def _swing_rung(self, trigger_metadata: dict) -> Rung | None:
+        """The rung a capture counts for: one pressed away from if it was taken at its
+        controls, else the current rung if set, else None until it is (P7-13)."""
+        left = self._left_rungs()
+        if isinstance(trigger_metadata.get("auto_exposure"), dict):
+            for rung in left:
+                gain = self.state.gain(rung.rung_id)
+                if trigger_controls_mismatch(trigger_metadata, rung, gain) is None:
+                    return rung
+        current = self._set_rung()
+        if current is None and self._mode_switch is not None and left:
+            return left[0]  # this kiosk is closing: set aside against the setting left
+        return current
+
+    def _unsaved_captures(self) -> bool:
+        """Whether a capture in this run is still being saved or waits to be judged."""
+        run_dir = self._run_dir()
+        if run_dir is None or not run_dir.exists():
+            return False
+        seen = self.state.seen_captures()
+        return any(
+            folder.is_dir() and folder.name not in seen for folder in run_dir.rglob("camera_*")
+        )
+
+    def jump(self, rung_id: str) -> None:
+        """Switch to the setting the tester pressed, now (P7-13, D12).
+
+        Waits for a swing being judged. A swing taken at the old setting's controls
+        still counts for it after the press. Within a mode only the controls change;
+        a press into the other mode restarts the kiosk once the swings in flight
+        are judged (``tick``).
+        """
+        with self._lock:
+            if self.stopped:
+                raise RuntimeError("the ladder is stopped")
+            if self.mode == "between modes":
+                raise RuntimeError(
+                    "the ladder is changing camera mode; press the setting again in a moment"
+                )
+            left = self._configured_rung
+            running = (
+                self.mode if self.mode in RUNG_FPS else (find_rung(left).arm_id if left else None)
+            )
+            self.state.jump(rung_id)
+            if left == rung_id:
+                return  # the setting already running
+            now = time.monotonic()
+            if left is not None:
+                self._left = [
+                    item for item in self._left if item["rung_id"] != left and item["until"] > now
+                ]
+                self._left.append({"rung_id": left, "until": now + SWITCH_WAIT_S})
+            self._configured_rung = None
+            target = self._pending_photo() or {"rung_id": self.state.current.rung_id}
+            wanted = find_rung(target["rung_id"]).arm_id
+            if running is None or wanted == running:
+                self._mode_switch = None  # pressed back into the running mode
+            elif self._mode_switch is None:
+                self._mode_switch = {"arm_id": running, "since": now, "until": now + SWITCH_WAIT_S}
+
+    def _hand_over_mode(self) -> None:
+        """Restart into the pressed setting's mode once no swing is in flight."""
+        switch = self._mode_switch
+        if switch is None or self.stopped:
+            return
+        self._poll_once()
+        now = time.monotonic()
+        if now < switch["since"] + SWITCH_GRACE_S:
+            return  # a swing just triggered may not be in a folder yet
+        if self._unsaved_captures() and now < switch["until"]:
+            return
+        self._mode_switch = None
+        self._finish_mode(switch["arm_id"])
 
     def photograph(self, capture: str, rung_id: str) -> Path:
         """A still of the club face, saved against the last swing; the rung is restored after."""
@@ -1391,8 +1600,15 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
     def tick(self) -> None:
         """One step: set the rung if it is not set yet (a slow kiosk is retried), else verdict."""
         try:
+            if self._mode_switch is not None:
+                with self._lock:
+                    self._hand_over_mode()
+                return
             if self._pending_photo() is not None:
-                if self._configured_rung != self._pending_photo()["rung_id"]:
+                if self._left_rungs():
+                    self.poll_once()  # swings taken just before a press, then the photo
+                target = self._pending_photo()
+                if target is not None and self._configured_rung != target["rung_id"]:
                     self.start_rung()
                 return
             rung = self.state.current
