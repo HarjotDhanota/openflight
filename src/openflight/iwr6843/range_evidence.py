@@ -41,6 +41,12 @@ _STATIC_V2_MIN_FRAME_COUNT = 12
 # range FFT is unwindowed, so leakage follows the rectangular sidelobe envelope,
 # at most 1 / (pi^2 k^2) of the lost power at k bins (k taken half a bin closer).
 # A door or net moving a metre behind the ball is then ignored (Pi, 29 Sept).
+# The profiles are powers, so a leak of amplitude l into a ball bin that already
+# holds clutter c changes that bin by |l|^2 + 2|c||l|cos(phase); the cross term
+# counts too (wiring audit S8, interim until the captures are subtracted as
+# complex). l is the change in the lost reflector's amplitude, and the phase is
+# unknown, so the cross term enters at its RMS, sqrt(2)|c||l|. The worst case
+# (cos = 1) would reject the 29 Sept door setup that read the tape to 5 cm.
 _STATIC_V2_LOSS_LEAK_LIMIT = 0.10
 # A loss this close to the ball is the ball's echo interfering with a neighbouring
 # reflector, which moves the ball's centroid itself; sidelobe leakage does not
@@ -53,7 +59,7 @@ def static_range_estimator_policy() -> dict[str, Any]:
     """Return the complete selector policy bound by qualification artifacts."""
     return {
         "name": "iwr_static_profile_selector",
-        "version": 4,
+        "version": 5,
         "profile_schema": STATIC_PROFILE_V2_SCHEMA,
         "normalization": {
             "method": "trimmed_median_per_bin_ratio",
@@ -67,7 +73,9 @@ def static_range_estimator_policy() -> dict[str, Any]:
             "cluster_ranking": "gate_passing_bins_only",
             "scene_change": "reciprocal_fractional_loss_with_minimum_absolute_score",
             "scene_change_scope": "loss_touching_ball_cluster_or_leaking_into_it",
-            "scene_change_leak_model": "rectangular_sidelobe_envelope_1_over_pi2_k2",
+            "scene_change_leak_model": (
+                "rectangular_sidelobe_amplitude_change_1_over_pi_k_plus_rms_clutter_cross_term"
+            ),
             "scene_change_leak_limit_fraction_of_ball": _STATIC_V2_LOSS_LEAK_LIMIT,
             "scene_change_guard_bins": _STATIC_V2_LOSS_GUARD_BINS,
             "minimum_frame_count": _STATIC_V2_MIN_FRAME_COUNT,
@@ -654,10 +662,13 @@ def _blocking_loss(  # pylint: disable=too-many-arguments
     if len(touching):
         return int(touching[np.argmax(loss[touching])]), ()
     excess = float(np.sum(ball_gain))
+    clutter = np.sqrt(np.maximum(expected[group], 0.0))  # |c| in each ball bin
     leaks = {}
     for index in lost_indices:
         distance = np.maximum(np.abs(group - index) - 0.5, 0.5)
-        leaks[int(index)] = float(np.sum(loss[index] / (math.pi**2 * distance**2)))
+        amplitude_lost = math.sqrt(max(expected[index], 0.0)) - math.sqrt(max(observed[index], 0.0))
+        leak = amplitude_lost / (math.pi * distance)  # |l| in each ball bin
+        leaks[int(index)] = float(np.sum(leak**2 + math.sqrt(2.0) * clutter * leak))
     if excess <= 0.0 or sum(leaks.values()) > _STATIC_V2_LOSS_LEAK_LIMIT * excess:
         return max(leaks, key=leaks.get), ()
     return None, tuple(

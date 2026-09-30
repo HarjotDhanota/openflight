@@ -618,7 +618,8 @@ def test_v2_ignores_a_reflector_that_disappeared_too_far_away_to_move_the_ball()
     assert result.status == "accepted"
     assert result.peak_bin == pytest.approx(25.0)
     assert [loss["bin"] for loss in result.ignored_losses] == [40.0]
-    assert result.ignored_losses[0]["leak_fraction_of_ball"] < 0.01
+    # with the clutter cross term (S8) the leak is a few percent, still far under 10 %
+    assert result.ignored_losses[0]["leak_fraction_of_ball"] < 0.05
 
 
 def test_v2_still_rejects_a_distant_loss_strong_enough_to_leak_into_the_ball():
@@ -848,7 +849,7 @@ def test_static_range_estimator_identity_is_pinned():
 
     assert policy["profile_schema"] == "openflight.iwr6843.static_range_profile.v2"
     assert static_range_estimator_sha256() == (
-        "c7051ff0142e38817655799841c10eb0fa2f450df644f7454e858c30e2a9d30d"
+        "425a2463d43d4459668f14206ed647c521f181157e6139eba7ded0eff53233dd"
     )
 
 
@@ -867,3 +868,20 @@ def test_v2_ranks_each_change_by_its_gate_passing_bins_only():
     assert not (result.status == "accepted" and abs(result.peak_bin - 49.0) < 1.5)
     passing_peaks = {round(peak["peak_bin"]) for peak in result.alternate_peaks}
     assert passing_peaks <= {30, 49}
+
+
+def test_v2_rejects_a_strong_loss_that_beats_against_clutter_in_the_ball_bin():
+    """Wiring audit S8: with power differencing, a leak of amplitude l into a ball
+    bin already holding clutter c changes its power by up to |l|^2 + 2|c||l|. A loss
+    8 bins away whose sidelobe power alone is under the budget still rejects once
+    the cross term with the clutter is counted."""
+    empty, present = _static_scene()
+    empty[25] *= 20.0  # a clutter-filled ball bin
+    present[25] = empty[25] * 2.3  # the ball adds 1.3x the clutter there
+    empty[33] = empty[25] * 60.0  # a strong reflector 8 bins away...
+    present[33] = empty[33] * 0.3  # ...that lost 70 % of its power
+
+    result = _compare(empty, present)
+
+    assert result.status == "rejected_scene_changed"
+    assert result.peak_bin == pytest.approx(33.0)
