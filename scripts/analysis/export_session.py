@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from openflight.camera import attempt_ledger
+from openflight.capture_facts import trigger_controls
 from openflight.rig_geometry import geometry_fingerprint
 from openflight.runtime_provenance import export_runtime_provenance
 
@@ -145,6 +146,14 @@ def _shot_row(number: int, shot: dict, camera_event: dict, metadata: dict, direc
     row["camera_file_frame_count"] = metadata.get("frame_count")
     for key, value in (metadata.get("settings") or {}).items():
         row[f"camera_file_settings_{key}"] = _flat(value)
+    # The settings above are the kiosk's startup snapshot; these are the controls
+    # the clip was actually requested and taken at (wiring audit T4).
+    controls = trigger_controls(metadata)
+    row["camera_file_requested_exposure_us"] = controls["requested_exposure_us"]
+    row["camera_file_requested_gain"] = controls["requested_gain"]
+    row["camera_file_applied_exposure_us"] = controls["applied_exposure_us"]
+    row["camera_file_applied_gain"] = controls["applied_gain"]
+    row["camera_file_controls_source"] = controls["source"]
     row["fused_status"] = fused_status(shot)
     row["accepted"] = fused_status(shot) in ACCEPTED_STATUSES
     return row

@@ -1180,6 +1180,8 @@ class CameraCaptureRuntime:
         ):
             _save_pgm(shot_dir / f"{label}.pgm", images[index])
 
+        auto_exposure = auto_exposure or self.auto_exposure_status()
+        trigger_index = max(0, capture.pre_trigger_count - 1)
         summary = timing_summary(capture.frames)
         summary.update(
             {
@@ -1198,7 +1200,22 @@ class CameraCaptureRuntime:
                 "resolved": frozen_resolved,
                 "settings": frozen_settings or {},
                 "settings_scope": "capture_startup" if frozen_settings else "unavailable",
-                "auto_exposure": auto_exposure or self.auto_exposure_status(),
+                "auto_exposure": auto_exposure,
+                # ``settings`` is the startup snapshot; ladder rungs, gain corrections
+                # and photos change the controls after it, so each clip states the
+                # request in force at its trigger and what the trigger frame got (T4).
+                "controls_at_trigger": {
+                    "requested": {
+                        "exposure_us": auto_exposure.get("exposure_us"),
+                        "gain": auto_exposure.get("gain"),
+                        "purpose": auto_exposure.get("controls_purpose") or "capture",
+                    },
+                    "applied": {
+                        "exposure_us": int(exposure_us[trigger_index]),
+                        "gain": float(gain[trigger_index]),
+                        "frame_index": trigger_index,
+                    },
+                },
                 "capture_mode": capture_mode,
                 "tester_setup": trigger_evidence,
             }

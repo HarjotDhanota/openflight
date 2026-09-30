@@ -19,6 +19,7 @@ import logging
 import subprocess
 import sys
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -55,6 +56,16 @@ def split_capture_command(command: Sequence[str]) -> tuple[tuple[str, ...], dict
     return tuple(shared), request
 
 
+@dataclass
+class _Capture:
+    """The one capture in flight; ``process`` is None until the session has it."""
+
+    capture_id: str
+    action: str
+    on_finish: Callable[[str, int], None] | None
+    process: object | None = None
+
+
 class HeldStaticRadar:  # pylint: disable=too-many-instance-attributes
     """Run setup captures through one long-lived radar session."""
 
@@ -80,9 +91,10 @@ class HeldStaticRadar:  # pylint: disable=too-many-instance-attributes
         self._process = None
         self._base: tuple[str, ...] | None = None
         self._reusable = False
-        self._pending: tuple[str, str, Callable[[str, int], None] | None] | None = None
+        self._pending: _Capture | None = None
         self._timer: threading.Timer | None = None
         self._stderr = None
+        self._cancelled = False
 
     # -- queries ---------------------------------------------------------------
     def _alive_locked(self) -> bool:
@@ -93,6 +105,12 @@ class HeldStaticRadar:  # pylint: disable=too-many-instance-attributes
         """Whether a session process (and so the radar port) is alive."""
         with self._lock:
             return self._alive_locked()
+
+    @property
+    def cancel_requested(self) -> bool:
+        """Whether Stop or the timeout ended the current (or last) capture."""
+        with self._lock:
+            return self._cancelled
 
     def status(self) -> dict[str, object]:
         """Job-manager-shaped status: running only while a capture is in flight."""
@@ -132,38 +150,80 @@ class HeldStaticRadar:  # pylint: disable=too-many-instance-attributes
             old = None
             if self._alive_locked() and (self._base != base or not self._reusable):
                 old = self._request_close_locked()
-        if old is not None:
-            self._await_exit(old)
-        with self._lock:
-            if self._pending is not None:
-                raise RuntimeError("another action is already running")
-            if not self._alive_locked():
-                self._spawn_locked(base, Path(log_path))
-            self._pending = (request["capture_id"], action, on_finish)
-            self._reusable = not request["close_after"]
-            try:
-                self._send_locked(request)
-            except (OSError, ValueError) as error:
-                self._pending = None
-                process = self._process
-                self._process = None
-                if process is not None:
-                    self._stop(process)
-                raise RuntimeError(
-                    f"the radar session did not take the capture: {error}"
-                ) from error
+            capture = _Capture(request["capture_id"], action, on_finish)
+            self._pending = capture
+            self._cancelled = False
             self._timer = threading.Timer(self._timeout_s, self._timed_out)
             self._timer.daemon = True
             self._timer.start()
+            if old is None:
+                try:
+                    self._begin_locked(capture, base, Path(log_path), request)
+                except RuntimeError:
+                    self._clear_locked(capture)
+                    raise
+                return
+        # The old session can take seconds to close (the CP2105 purge on the Pi).
+        # The tester calls start under its setup lock, so the wait happens here,
+        # off the caller's thread; the capture is already reserved (wiring audit T13).
+        threading.Thread(
+            target=self._replace_then_begin,
+            args=(old, capture, base, Path(log_path), request),
+            daemon=True,
+            name="static-radar-replace",
+        ).start()
+
+    def _replace_then_begin(self, old, capture: _Capture, base, log_path: Path, request) -> None:
+        self._await_exit(old)
+        with self._lock:
+            if self._pending is not capture:
+                return  # stopped while the old session closed; it already finished
+            try:
+                self._begin_locked(capture, base, log_path, request)
+                return
+            except RuntimeError:
+                logger.warning("Radar setup capture could not start", exc_info=True)
+                self._clear_locked(capture)
+        self._call_finish(capture, -1)
+
+    def _begin_locked(self, capture: _Capture, base, log_path: Path, request: dict) -> None:
+        """Hand the capture to the session, starting one if none is alive."""
+        if not self._alive_locked():
+            self._spawn_locked(base, log_path)
+        capture.process = self._process
+        self._reusable = not request["close_after"]
+        try:
+            self._send_locked(request)
+        except (OSError, ValueError) as error:
+            process = self._process
+            self._process = None
+            if process is not None:
+                self._stop(process)
+            raise RuntimeError(f"the radar session did not take the capture: {error}") from error
+
+    def _clear_locked(self, capture: _Capture) -> None:
+        if self._pending is capture:
+            self._pending = None
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
 
     def cancel(self) -> bool:
         """Stop a capture in flight; its result is then missing and the setup retries."""
         with self._lock:
-            if self._pending is None or self._process is None:
+            capture = self._pending
+            if capture is None:
                 return False
-            process = self._process
             self._reusable = False
-        self._stop(process)
+            self._cancelled = True
+            process = capture.process
+            if process is None:
+                # still waiting for the old session to close: it never reaches one
+                self._clear_locked(capture)
+        if process is None:
+            self._call_finish(capture, -1)
+        else:
+            self._stop(process)
         return True
 
     def release(self) -> None:
@@ -271,21 +331,20 @@ class HeldStaticRadar:  # pylint: disable=too-many-instance-attributes
 
     def _finish(self, process, capture_id, code: int) -> None:
         with self._lock:
-            pending = self._pending
-            if pending is None:
+            capture = self._pending
+            # only the session this capture was sent to can finish it
+            if capture is None or capture.process is None or capture.process is not process:
                 return
-            if capture_id is not None and capture_id != pending[0]:
+            if capture_id is not None and capture_id != capture.capture_id:
                 return
-            if capture_id is None and process is not self._process and self._process is not None:
-                return
-            self._pending = None
-            if self._timer is not None:
-                self._timer.cancel()
-                self._timer = None
-        _capture_id, action, on_finish = pending
-        if on_finish is not None:
+            self._clear_locked(capture)
+        self._call_finish(capture, code)
+
+    @staticmethod
+    def _call_finish(capture: _Capture, code: int) -> None:
+        if capture.on_finish is not None:
             try:
-                on_finish(action, code)
+                capture.on_finish(capture.action, code)
             except Exception:  # pylint: disable=broad-exception-caught
                 logger.exception("Radar setup capture completion failed")
 

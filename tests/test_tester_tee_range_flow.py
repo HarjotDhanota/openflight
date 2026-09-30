@@ -25,7 +25,7 @@ class EligibleSetup:
     def evaluate(self, tester_id, _reading):
         return self.require(tester_id, _reading, "read")
 
-    def require(self, tester_id, _reading, _action):
+    def require(self, tester_id, _reading, _action, **_kwargs):
         return {
             "eligible": True,
             "tester_id": tester_id,
@@ -210,8 +210,8 @@ class StaleFakeLive(FakeLive):
 
 
 class IneligibleSetup(EligibleSetup):
-    def require(self, tester_id, _reading, _action):
-        result = super().require(tester_id, _reading, _action)
+    def require(self, tester_id, _reading, _action, **_kwargs):
+        result = super().require(tester_id, _reading, _action, **_kwargs)
         return {**result, "eligible": False, "blockers": [{"id": "lis3dh"}]}
 
 
@@ -219,8 +219,8 @@ class MutableSetup(EligibleSetup):
     def __init__(self):
         self.eligible = True
 
-    def require(self, tester_id, _reading, _action):
-        result = super().require(tester_id, _reading, _action)
+    def require(self, tester_id, _reading, _action, **_kwargs):
+        result = super().require(tester_id, _reading, _action, **_kwargs)
         return {
             **result,
             "eligible": self.eligible,
@@ -232,8 +232,8 @@ class ReconfirmedSetup(EligibleSetup):
     def __init__(self):
         self.confirmed_at = "first-server"
 
-    def require(self, tester_id, _reading, _action):
-        result = super().require(tester_id, _reading, _action)
+    def require(self, tester_id, _reading, _action, **_kwargs):
+        result = super().require(tester_id, _reading, _action, **_kwargs)
         return {
             **result,
             "operator_confirmation": {
@@ -384,8 +384,8 @@ def camera_result(value: float, width: int = 1280, height: int = 800) -> Referen
         y_px=y,
         diameter_px=diameter,
         area_px=450,
-        floor_point_lfu_m=(0.0, value, 0.021),
-        floor_radar_range_m=value,
+        size_point_lfu_m=(0.0, value, 0.021),
+        size_radar_range_m=value,
         floor_camera_range_m=value,
         size_camera_range_m=value,
         floor_range_uncertainty_m=0.02,
@@ -1412,6 +1412,7 @@ def test_requests_are_idempotent_and_failures_retry_without_erasing_evidence(
             "misses it, restart the tester with --iwr-static-port set to its stable "
             "/dev/serial/by-id/...-if00-port0 path."
         ),
+        "sequence": failed["sequence"],
     }
     retried = post(client, tester, "retry", "retry").get_json()["state"]
     assert retried["phase"] == "needs_empty"
@@ -1772,6 +1773,7 @@ def test_interrupted_guided_camera_preserves_its_live_error(tmp_path, inputs, mo
         "stage": "live_view",
         "message": "camera cable disconnected",
         "remedy": "Check the camera connection, then retry this camera step.",
+        "sequence": state["sequence"],
     }
     assert client.get("/api/tester/live").get_json()["owner"] is None
 
@@ -2403,7 +2405,7 @@ def test_the_camera_window_is_its_range_plus_minus_two_sigma_with_a_20_percent_f
     # floor uncertainty is 0.02 m, below the 20 % floor, so the window is +-0.48 m
     assert low == pytest.approx(1.2 - 0.48)
     assert high == pytest.approx(1.2 + 0.48)
-    assert ts.camera_radar_window(replace(selected, floor_radar_range_m=None)) is None
+    assert ts.camera_radar_window(replace(selected, size_radar_range_m=None)) is None
 
 
 def test_the_camera_steers_the_radar_away_from_a_person_behind_the_ball(
@@ -2868,3 +2870,117 @@ def test_the_swing_server_flags_an_unmeasured_net(tmp_path, monkeypatch):
         "range_space": "apparent",
         "assumed": True,
     }
+
+
+def test_a_failure_message_belongs_to_the_transition_that_set_it(tmp_path, inputs, monkeypatch):
+    """Wiring audit T8: fail, retry and succeed, then a different failure; the page
+    shows a failure only when it was set in the current transition."""
+    live = FakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    manager = app.config["TEST_STATIC_MANAGER"]
+    client = app.test_client()
+    for index, action in enumerate(("start", "capture_empty")):
+        assert post(client, tester, action, f"t8-{index}").status_code == 200
+    manager.fail = True
+    assert post(client, tester, "capture_ball", "t8-ball-fails").status_code == 200
+    failed = phase(client, tester)
+    assert failed["evidence"]["capture_failure"]["sequence"] == failed["sequence"]
+
+    manager.fail = False
+    for index, action in enumerate(("retry", "capture_ball", "start_camera_arm5")):
+        assert post(client, tester, action, f"t8-again-{index}").status_code == 200
+    live.error = "camera cable disconnected"
+    live.running = False
+    state = phase(client, tester)
+
+    assert state["phase"] == "retryable_failure"
+    assert state["evidence"]["camera_capture_failure"]["sequence"] == state["sequence"]
+    # the radar failure is still on record, but it is not this transition's
+    assert state["evidence"]["capture_failure"]["sequence"] < state["sequence"]
+
+
+def test_a_late_empty_capture_callback_during_the_ball_capture_changes_nothing(
+    tmp_path, inputs, monkeypatch
+):
+    """Wiring audit T9: a capture result is finished once, by its own capture."""
+    live = FakeLive()
+    app, tester, manager = deferred_app(tmp_path, inputs, monkeypatch, live)
+    original = app.config["TEST_STATIC_MANAGER"]
+    callbacks = []
+
+    def recording_start(action, commands, log_path, on_finish=None, **kwargs):
+        callbacks.append(on_finish)
+        return manager.start(action, commands, log_path, on_finish=on_finish, **kwargs)
+
+    monkeypatch.setattr(original, "start", recording_start)
+    client = app.test_client()
+    for index, action in enumerate(("start", "capture_empty", "capture_ball")):
+        assert post(client, tester, action, f"t9-{index}").status_code == 200
+    during = phase(client, tester)
+    assert during["phase"] == "ball_capturing"
+
+    callbacks[0]("tee_range", 0)  # the empty capture's completion, delivered again
+
+    after = phase(client, tester)
+    assert after["phase"] == "ball_capturing"
+    assert after["sequence"] == during["sequence"]
+    manager.release()
+    assert phase(client, tester)["phase"] == "camera_arm5_capturing"
+
+
+class StoppableStaticManager(StaticManager):
+    """A radar setup capture that runs until Stop (or its timeout) cancels it."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.mirror = self  # the manager the app holds, which reports the cancel
+        self.running = None
+
+    def start(self, action, commands, log_path, on_finish=None, **kwargs):
+        if action != "tee_range":
+            return super().start(action, commands, log_path, on_finish=on_finish, **kwargs)
+        self.mirror.cancel_requested = False
+        self.running = (action, on_finish)
+        self._status = {"state": "running", "action": "tee_range", "message": "capturing"}
+        return None
+
+    def cancel(self):
+        if self.running is None:
+            return False
+        action, on_finish = self.running
+        self.running = None
+        self.mirror.cancel_requested = True
+        self._status = {"state": "idle", "action": None, "message": "Ready"}
+        on_finish(action, -15)  # the capture process was stopped, so it wrote no result
+        return True
+
+
+def test_stopping_a_radar_capture_keeps_the_hardware_check(tmp_path, inputs, monkeypatch):
+    """Wiring audit T10: Stop or a timeout is not a hardware failure."""
+    app, tester = app_for(tmp_path, inputs, monkeypatch, require_iwr_preflight=True)
+    original = app.config["TEST_STATIC_MANAGER"]
+    manager = StoppableStaticManager(
+        config_hash=original.config_hash,
+        firmware_hash=original.firmware_hash,
+        rig_hash=original.rig_hash,
+        calibration_hash=original.calibration_hash,
+    )
+    for name in ("start", "status", "cancel"):
+        monkeypatch.setattr(original, name, getattr(manager, name))
+    manager.mirror = original
+    client = app.test_client()
+    body = {"tester_id": tester, "arm_id": "arm5", "environment": "indoors"}
+    assert client.post("/api/tester/run", json={**body, "action": "preflight"}).status_code == 202
+    assert post(client, tester, "start", "t10-start").status_code == 200
+    assert post(client, tester, "capture_empty", "t10-empty").status_code == 200
+
+    assert client.post("/api/tester/stop").get_json()["stopped"] is True
+
+    state = phase(client, tester)
+    assert state["phase"] == "retryable_failure"
+    assert state["reason"] == "empty_capture_stopped"
+    eligibility = client.get(
+        "/api/tester/setup-eligibility", query_string={"tester_id": tester}
+    ).get_json()
+    assert eligibility["eligible"] is True
+    assert "iwr6843_cli" not in [blocker["id"] for blocker in eligibility["blockers"]]

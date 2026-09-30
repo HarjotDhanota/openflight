@@ -52,6 +52,36 @@ def _median(array: Any) -> float | None:
     return float(np.median(array)) if isinstance(array, np.ndarray) and array.size else None
 
 
+def trigger_controls(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """The controls a clip was requested and taken at, from its trigger-time record.
+
+    ``controls_at_trigger`` is written since wiring audit T4; older clips fall back
+    to the request frozen at the trigger (``auto_exposure``). The startup
+    ``settings`` are never used: a ladder rung or photo changes the controls after
+    them, so a 30 us rung would read as the kiosk's 300 us start.
+    """
+    recorded = mapping(metadata.get("controls_at_trigger"))
+    if recorded:
+        requested = mapping(recorded.get("requested"))
+        applied = mapping(recorded.get("applied"))
+        return {
+            "requested_exposure_us": requested.get("exposure_us"),
+            "requested_gain": requested.get("gain"),
+            "applied_exposure_us": applied.get("exposure_us"),
+            "applied_gain": applied.get("gain"),
+            "source": "controls_at_trigger",
+        }
+    frozen = mapping(metadata.get("auto_exposure"))
+    known = frozen.get("exposure_us") is not None or frozen.get("gain") is not None
+    return {
+        "requested_exposure_us": frozen.get("exposure_us"),
+        "requested_gain": frozen.get("gain"),
+        "applied_exposure_us": None,
+        "applied_gain": None,
+        "source": "auto_exposure" if known else None,
+    }
+
+
 def capture_facts(
     capture_dir: Path | None,
     camera_event: Mapping[str, Any],
@@ -101,6 +131,7 @@ def capture_facts(
             return None
         return str(int(sensor[index]))
 
+    controls = trigger_controls(metadata)
     count = metadata.get("frame_count")
     last_index = count - 1 if isinstance(count, int) and count > 0 else None
     return {
@@ -136,8 +167,11 @@ def capture_facts(
             "trigger": timestamp(trigger_index),
             "last": timestamp(last_index),
         },
-        "requested_exposure_us": settings.get("exposure_us"),
-        "requested_gain": settings.get("gain"),
+        "requested_exposure_us": controls["requested_exposure_us"],
+        "requested_gain": controls["requested_gain"],
+        "applied_exposure_us_at_trigger": controls["applied_exposure_us"],
+        "applied_gain_at_trigger": controls["applied_gain"],
+        "controls_source": controls["source"],
         "applied_exposure_us_median": _median(arrays.get("exposure_us")),
         "applied_gain_median": _median(arrays.get("analogue_gain")),
         "setup_config_hash": mapping(metadata.get("tester_setup")).get("config_hash"),

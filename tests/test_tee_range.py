@@ -131,7 +131,7 @@ def qualified_camera(epoch_id="epoch-a", value=1.50, uncertainty=0.05, **updates
     facts.update(updates)
     return TeeRangeCandidate(
         candidate_id="camera",
-        source="camera_reference_ball_floor_plane",
+        source="camera_reference_ball_size_range",
         source_group="camera",
         radar_slant_range_m=value,
         uncertainty_m=uncertainty,
@@ -231,7 +231,7 @@ def test_candidate_evidence_is_deeply_frozen_and_serialization_is_detached():
     external = {"qualification": dict(facts), "nested": {"values": [1, 2]}}
     camera = TeeRangeCandidate(
         candidate_id="camera-detached",
-        source="camera_reference_ball_floor_plane",
+        source="camera_reference_ball_size_range",
         source_group="camera",
         radar_slant_range_m=1.5,
         uncertainty_m=0.05,

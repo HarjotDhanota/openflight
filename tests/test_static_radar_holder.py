@@ -230,10 +230,13 @@ def test_cancel_stops_a_capture_in_flight(tmp_path):
         "tee_range", [_capture_command(tmp_path, "empty-1", "empty")], tmp_path / "e.log", on_finish
     )
 
+    assert holder.cancel_requested is False
     assert holder.cancel() is True
     assert done.wait(2)
     assert spawner.processes[0].terminated
     assert calls[0][1] != 0
+    # the tester reads this to tell a Stop from a radar failure (wiring audit T10)
+    assert holder.cancel_requested is True
     assert holder.cancel() is False
 
 
@@ -249,6 +252,7 @@ def test_a_capture_that_overruns_its_timeout_is_stopped(tmp_path):
     assert done.wait(2)
     assert spawner.processes[0].terminated
     assert calls[0][1] != 0
+    assert holder.cancel_requested is True
 
 
 def test_release_closes_an_idle_session_for_other_hardware(tmp_path):
@@ -326,3 +330,89 @@ def test_only_the_setup_capture_action_is_accepted(tmp_path):
 
     with pytest.raises(ValueError, match="tee_range"):
         holder.start("swings", [["python", "x.py"]], tmp_path / "s.log")
+
+
+class SlowCloseSpawner(Spawner):
+    """The first session takes its time to close, as the CP2105 purge does on the Pi."""
+
+    def __init__(self):
+        super().__init__()
+        self.closing = threading.Event()
+        self.let_close = threading.Event()
+
+    def __call__(self, command, **popen_kwargs):
+        process = super().__call__(command, **popen_kwargs)
+        if len(self.processes) == 1:
+            original_exit = process.exit
+
+            def slow_exit(reason, code=0):
+                if reason in ("requested", "stdin_closed"):
+                    self.closing.set()
+                    threading.Thread(
+                        target=lambda: self.let_close.wait(5) and original_exit(reason, code),
+                        daemon=True,
+                    ).start()
+                    return
+                original_exit(reason, code)
+
+            process.exit = slow_exit
+        return process
+
+
+def _replacing(tmp_path):
+    """A holder whose idle session must close before the next capture can run."""
+    spawner = SlowCloseSpawner()
+    holder = _holder(spawner)
+    calls, done, on_finish = _finished()
+    holder.start(
+        "tee_range", [_capture_command(tmp_path, "empty-1", "empty")], tmp_path / "e.log", on_finish
+    )
+    assert done.wait(2)
+    done.clear()
+    started = time.monotonic()
+    holder.start(
+        "tee_range",
+        [_capture_command(tmp_path, "empty-2", "empty", config="other.cfg")],
+        tmp_path / "e2.log",
+        on_finish,
+    )
+    return spawner, holder, calls, done, time.monotonic() - started
+
+
+def test_replacing_a_slow_closing_session_does_not_block_the_caller(tmp_path):
+    """Wiring audit T13: the tester calls start under its setup lock, so the wait
+    for the old session to close happens off the caller's thread."""
+    spawner, holder, calls, done, elapsed = _replacing(tmp_path)
+
+    assert elapsed < 0.5
+    assert spawner.closing.wait(2)
+    assert holder.status()["state"] == "running"
+    assert len(spawner.processes) == 1
+    with pytest.raises(RuntimeError, match="already running"):
+        holder.start(
+            "tee_range",
+            [_capture_command(tmp_path, "empty-3", "empty")],
+            tmp_path / "e3.log",
+            lambda *_args: None,
+        )
+
+    spawner.let_close.set()
+
+    assert done.wait(2)
+    assert calls == [("tee_range", 0), ("tee_range", 0)]
+    assert len(spawner.processes) == 2
+    assert spawner.processes[1].requests[0]["capture_id"] == "empty-2"
+
+
+def test_stop_while_the_old_session_closes_never_starts_the_capture(tmp_path):
+    spawner, holder, calls, done, _elapsed = _replacing(tmp_path)
+
+    assert holder.cancel() is True
+    assert done.wait(2)
+    assert calls[-1][1] != 0
+    assert holder.cancel_requested is True
+    assert holder.status()["state"] == "idle"
+
+    spawner.let_close.set()
+    time.sleep(0.2)
+    assert len(spawner.processes) == 1

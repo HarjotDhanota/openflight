@@ -67,10 +67,28 @@ def test_gain_keeps_the_brightness_until_the_ceiling():
     assert sl.rung_gain(0.6, 300) == pytest.approx(1.0)
 
 
-def test_photo_exposure_stays_under_the_frame_period():
-    assert sl.photo_exposure_us(0.01, 20.0, 120.0) <= 8000
-    assert sl.photo_exposure_us(10.0, 20.0, 120.0) == 100
-    assert sl.photo_exposure_us(0.05, 20.0, 120.0) == 800  # (100-20)/(0.05*2)
+def test_photo_controls_stay_under_the_frame_period():
+    exposure, gain = sl.photo_controls(0.001, 20.0, 120.0)
+    assert exposure <= int(1_000_000 / 120.0) - 300 and gain == 2.0
+    assert sl.photo_controls(0.05, 20.0, 120.0) == (1600, 1.0)  # (100-20)/0.05 at unity
+    # dim light raises the gain towards 2 before the exposure runs out
+    assert sl.photo_controls(0.008, 20.0, 120.0) == (8032, 1.245)  # 10000 us of light
+
+
+def test_a_photo_in_sun_is_shorter_than_100_us_at_unity_gain():
+    # audit T5: outdoors the photo was held at >= 100 us x 2, so it clipped
+    exposure, gain = sl.photo_controls(2.5, 16.0, 120.0)
+    assert gain == 1.0
+    assert exposure < 100
+    assert exposure == 34  # (100-16)/2.5
+    # even the brightest light is asked for no less than the sensor can apply
+    assert sl.photo_controls(50.0, 16.0, 120.0) == (sl.PHOTO_EXPOSURE_US_MIN, 1.0)
+
+
+def test_a_photo_in_sun_without_a_light_index_scales_from_a_short_rung():
+    assert sl.photo_controls(None, 16.0, 120.0, rung_exposure_us=30, rung_gain=1.5) == (45, 1.0)
+    with pytest.raises(ValueError):
+        sl.photo_controls(None, 16.0, 120.0)
 
 
 def test_a_dark_rung_is_skipped_before_any_swing():
@@ -305,7 +323,8 @@ def test_a_photo_is_saved_against_the_last_swing(tmp_path):
     runner.poll_once()
     path = runner.photograph("camera_a", "full-300")
     assert path.name == "camera_a.pgm" and path.is_file()
-    assert kiosk.calls[-2] == (820, 2.0)  # the still: (100 - 18) / (0.05 x 2), then back
+    # the still: (100 - 18) / 0.05 at unity gain, then back (audit T5)
+    assert kiosk.calls[-2] == (1640, 1.0)
     assert kiosk.calls[-1] == (300, 3.0)
     assert runner.state.to_dict()["photos"]["camera_a"] == "impact/camera_a.pgm"
 
@@ -325,7 +344,7 @@ def test_photo_after_same_mode_advance_restores_the_new_rung(tmp_path):
 
     assert path.is_file()
     assert runner.state.current.rung_id == "full-200"
-    assert kiosk.calls[-2] == (820, 2.0)
+    assert kiosk.calls[-2] == (1640, 1.0)
     assert kiosk.calls[-1] == (200, 4.5)
 
 
@@ -815,8 +834,8 @@ def test_a_photo_without_a_light_index_keeps_the_rungs_brightness(tmp_path):
     runner.photograph("c4", "full-300")
 
     photo = kiosk.calls[kiosk.purposes.index("still_photo")]
-    # full-300 ran at gain 3.0: the same brightness at the photo gain of 2
-    assert photo == (450, sl.PHOTO_GAIN)
+    # full-300 ran at gain 3.0: the same brightness at unity gain, the least noise
+    assert photo == (900, 1.0)
 
 
 def test_a_rung_failed_for_anything_but_darkness_skips_only_itself(tmp_path):
@@ -949,3 +968,37 @@ def test_controls_that_never_apply_leave_the_rung_unjudged(tmp_path, monkeypatch
 
     assert runner.state.to_dict()["rungs"]["full-300"]["status"] == "pending"
     assert "did not apply 300 us" in runner.last_verdict["reasons"][0]
+
+
+def test_a_resumed_rung_is_checked_again_before_it_counts_swings(tmp_path):
+    # wiring audit T14: a rung resumed after Stop reused its gain without a new check
+    kiosk = FakeKiosk()
+    runner = _runner(tmp_path, kiosk)
+    runner.state.begin("full-300", 3.0, {"ok": True})
+    runner.state.record_swing(_verdict("green", "c0"))
+
+    resumed = _runner(tmp_path, kiosk)
+    resumed.tick()
+
+    rung = resumed.state.to_dict()["rungs"]["full-300"]
+    assert rung["status"] == "active"
+    assert [check["ok"] for check in rung["resume_checks"]] == [True]
+    assert resumed.state.accepted("full-300") == 1
+
+
+def test_a_resumed_rung_whose_light_has_gone_starts_again(tmp_path):
+    kiosk = FakeKiosk()
+    runner = _runner(tmp_path, kiosk)
+    runner.state.begin("full-300", 3.0, {"ok": True})
+    runner.state.record_swing(_verdict("green", "c0"))
+    kiosk.level = 20.0  # the sun went in while the ladder was stopped
+
+    resumed = _runner(tmp_path, kiosk)
+    resumed.start_rung()
+
+    rung = resumed.state.to_dict()["rungs"]["full-300"]
+    assert rung["resume_checks"][0]["ok"] is False
+    assert [swing["capture"] for swing in rung["superseded_swings"]] == ["c0"]
+    assert rung["swings"] == []
+    assert rung["status"] != "active" or resumed.state.accepted("full-300") == 0
+    assert "c0" in resumed.state.seen_captures()  # kept, and never verdicted again

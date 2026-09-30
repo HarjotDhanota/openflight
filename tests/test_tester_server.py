@@ -11,7 +11,7 @@ import threading
 import time
 import zipfile
 import zlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pytest
@@ -48,7 +48,7 @@ class _EligibleSetup:
     def evaluate(self, tester_id, _reading):
         return self._result(tester_id)
 
-    def require(self, tester_id, _reading, _action):
+    def require(self, tester_id, _reading, _action, **_kwargs):
         return self._result(tester_id)
 
     def confirmation_valid(self, _tester_id):
@@ -1340,8 +1340,8 @@ def _guided_result(*, status="selected", x=160.0, y=140.0, diameter=14.0, range_
         y_px=y,
         diameter_px=diameter,
         area_px=150,
-        floor_point_lfu_m=(0.0, range_m, ts.BALL_DIAMETER_MM / 2000.0),
-        floor_radar_range_m=range_m,
+        size_point_lfu_m=(0.0, range_m, ts.BALL_DIAMETER_MM / 2000.0),
+        size_radar_range_m=range_m,
         floor_camera_range_m=range_m,
         size_camera_range_m=range_m,
         floor_range_uncertainty_m=0.02,
@@ -1439,7 +1439,7 @@ class TestGuidedRangeAnalyzer:
         assert calls[0][2]["expected_diameter_range_px"] == pytest.approx(
             hint["expected_diameter_px"]
         )
-        assert analysis["method"] == "iwr_conditioned_camera_floor_plane_v1"
+        assert analysis["method"] == "iwr_conditioned_camera_size_range_v1"
         assert analysis["discovery_mode"] == "radar_guided_provisional"
         assert analysis["independent"] is False
         assert analysis["promotion_eligible"] is False
@@ -1774,8 +1774,8 @@ class TestTheCameraSaysHowFar:
             y_px=470.0,
             diameter_px=38.0,
             area_px=1100,
-            floor_point_lfu_m=(0.0, 1.1, 0.021335),
-            floor_radar_range_m=1.101,
+            size_point_lfu_m=(0.0, 1.1, 0.021335),
+            size_radar_range_m=1.101,
             floor_camera_range_m=1.073,
             size_camera_range_m=1.08,
             floor_range_uncertainty_m=0.04,
@@ -1808,7 +1808,7 @@ class TestTheCameraSaysHowFar:
             .splitlines()[0]
         )
         assert row["tee_mm"] is None
-        assert row["automatic_range"]["selected"]["floor_radar_range_m"] == pytest.approx(1.101)
+        assert row["automatic_range"]["selected"]["size_radar_range_m"] == pytest.approx(1.101)
 
 
 class FakeTiltService:
@@ -2151,12 +2151,14 @@ class TestTheLadder:
         monkeypatch.setattr(ts.os, "killpg", no_fake_group, raising=False)
         manager.start("gain", [["calibrate"]], tmp_path / "gain.log")
         assert constructing.wait(1)
+        assert manager.cancel_requested is False
         assert manager.cancel()
         release.set()
         deadline = time.monotonic() + 2
         while manager.status()["state"] == "running" and time.monotonic() < deadline:
             time.sleep(0.01)
         assert manager.status()["state"] == "stopped"
+        assert manager.cancel_requested is True  # a Stop, not a failure (audit T10)
         assert group_cleanup.wait(1)
 
     def test_log_directory_failure_finishes_the_job_as_an_error(self, tmp_path, monkeypatch):
@@ -2925,7 +2927,7 @@ def test_the_ladder_expects_the_ball_the_setup_saw():
     selected = {"x_px": 612.0, "y_px": 505.0, "diameter_px": 34.0}
     camera = tee_range.TeeRangeCandidate(
         candidate_id="camera-setup-1-arm5",
-        source="camera_reference_ball_floor_plane",
+        source="camera_reference_ball_size_range",
         source_group="camera",
         radar_slant_range_m=1.2,
         uncertainty_m=0.25,
@@ -3056,3 +3058,266 @@ def test_a_zoned_screen_without_a_recorded_black_level_uses_the_sensors():
     assert light["black_floor_dn"] == pytest.approx(16.0)
     assert light["black_floor_source"] == "sensor_default"
     assert light["light_index"] is not None
+
+
+class _CapturingRadar:
+    """A setup radar capture in flight: it owns the radar until it finishes."""
+
+    def __init__(self):
+        self.releases = 0
+
+    def status(self):
+        return {"state": "running", "action": "tee_range", "message": "capturing"}
+
+    def release(self):
+        self.releases += 1
+        raise RuntimeError("the radar setup capture owns the hardware")
+
+    def cancel(self):
+        return False
+
+
+class TestOwnershipBeforeSideEffects:
+    """Wiring audit T11: a refused start leaves no run folder, admission or arm write."""
+
+    body = {"tester_id": "20260922-name", "arm_id": "arm5", "environment": "indoors"}
+
+    def _runs(self, root):
+        return sorted(p.name for p in (root / "20260922-name").glob("arm*/paired/run-*"))
+
+    def test_a_swing_start_refused_by_a_running_job_leaves_no_run_folder(self, tmp_path):
+        class BusyManager(ts.TesterJobManager):
+            def status(self):
+                return {"state": "running", "action": "gain", "message": "busy", "output": []}
+
+            def start(self, action, commands, log_path, on_finish=None, **_kwargs):
+                raise RuntimeError("another action is already running")
+
+        p = ts.TesterParameters("20260922-name", "arm5", "indoors")
+        screened(tmp_path, p)
+        before = ts.read_arm_state(tmp_path, p.tester_id, p.arm_id)
+        client = eligible_app(
+            sessions_root=tmp_path, rig_geometry=RIG, manager=BusyManager()
+        ).test_client()
+
+        response = client.post("/api/tester/run", json={**self.body, "action": "swings"})
+
+        assert response.status_code == 409
+        assert "owns the hardware" in response.get_json()["error"]
+        assert self._runs(tmp_path) == []
+        assert ts.read_arm_state(tmp_path, p.tester_id, p.arm_id) == before
+
+    def test_a_setup_radar_capture_refuses_a_job_before_anything_is_written(self, tmp_path):
+        p = ts.TesterParameters("20260922-name", "arm5", "indoors")
+        screened(tmp_path, p)
+        before = ts.read_arm_state(tmp_path, p.tester_id, p.arm_id)
+        manager = ts.TesterJobManager(popen=_Forever)
+        radar = _CapturingRadar()
+        client = eligible_app(
+            sessions_root=tmp_path, rig_geometry=RIG, manager=manager, static_radar=radar
+        ).test_client()
+
+        response = client.post("/api/tester/run", json={**self.body, "action": "swings"})
+
+        assert response.status_code == 409
+        assert self._runs(tmp_path) == []
+        assert ts.read_arm_state(tmp_path, p.tester_id, p.arm_id) == before
+        assert manager.status()["state"] == "idle"
+
+    def test_a_ladder_start_refused_by_the_radar_leaves_no_run_folder(self, tmp_path, monkeypatch):
+        for arm in ("arm5", "arm6"):
+            screened(tmp_path, ts.TesterParameters("20260922-name", arm, "indoors"), gain=3.0)
+        monkeypatch.setattr(ts.study_ladder, "KioskClient", _LitKiosk)
+        manager = ts.TesterJobManager(popen=_Forever)
+        client = eligible_app(
+            sessions_root=tmp_path,
+            rig_geometry=RIG,
+            manager=manager,
+            static_radar=_CapturingRadar(),
+        ).test_client()
+
+        response = client.post("/api/tester/ladder/start", json=self.body)
+
+        assert response.status_code == 409
+        assert self._runs(tmp_path) == []
+        assert manager.status()["state"] == "idle"
+
+    def test_a_job_that_refuses_after_the_checks_takes_its_run_folder_back(self, tmp_path):
+        class LateRefusal(ts.TesterJobManager):
+            def start(self, action, commands, log_path, on_finish=None, **_kwargs):
+                raise RuntimeError("another action is already running")
+
+        p = ts.TesterParameters("20260922-name", "arm5", "indoors")
+        screened(tmp_path, p)
+        client = eligible_app(
+            sessions_root=tmp_path, rig_geometry=RIG, manager=LateRefusal()
+        ).test_client()
+
+        response = client.post("/api/tester/run", json={**self.body, "action": "swings"})
+
+        assert response.status_code == 409
+        assert self._runs(tmp_path) == []
+
+    def test_the_live_view_waits_for_a_setup_radar_capture(self, tmp_path):
+        client = eligible_app(
+            sessions_root=tmp_path,
+            rig_geometry=RIG,
+            manager=ts.TesterJobManager(popen=_Forever),
+            static_radar=_CapturingRadar(),
+            live_view=_NeverStartedLive(),
+        ).test_client()
+
+        response = client.post("/api/tester/live", json={**self.body, "exposure_us": 300})
+
+        assert response.status_code == 409
+        assert "owns the hardware" in response.get_json()["error"]
+
+
+class _NeverStartedLive:
+    running = False
+
+    def start(self, *_args, **_kwargs):
+        raise AssertionError("the live view must not start while the radar setup runs")
+
+    def stop(self):
+        return None
+
+    def snapshot(self):
+        return None, {"running": False}
+
+
+# Wiring audit T14 with decision D5: a gain screen is stale after 30 minutes
+# outdoors, or on another day indoors, and the tester is asked for a new one.
+# local noon, so "earlier the same day" and "yesterday" hold in any time zone
+NOW = datetime(2026, 9, 29, 12, 0).astimezone()
+
+
+def _screened_at(tmp_path, environment, minutes_ago, screened_in=None):
+    params = ts.TesterParameters("d5", "arm5", environment)
+    ts.write_arm_state(
+        tmp_path,
+        params,
+        gain=2.0,
+        gain_exposure_us=300,
+        gain_screened_at=(NOW - timedelta(minutes=minutes_ago)).isoformat(),
+        gain_environment=screened_in or environment,
+    )
+    state = ts.read_arm_state(tmp_path, "d5", "arm5")
+    return ts.gain_screen_age(state, ts.arm_directory(tmp_path, params), environment, now=NOW)
+
+
+@pytest.mark.parametrize(
+    ("environment", "minutes_ago", "stale"),
+    [
+        ("outdoors", 29, False),
+        ("outdoors", 31, True),
+        ("indoors", 8 * 60, False),  # earlier the same day
+        ("indoors", 24 * 60, True),  # yesterday
+    ],
+)
+def test_a_gain_screen_goes_stale_by_the_light_it_was_measured_in(
+    tmp_path, environment, minutes_ago, stale
+):
+    screen = _screened_at(tmp_path, environment, minutes_ago)
+    assert screen["age_s"] == pytest.approx(minutes_ago * 60)
+    assert screen["environment"] == environment
+    assert screen["stale"] is stale
+    assert (screen["prompt"] is not None) is stale
+
+
+def test_a_screen_measured_indoors_is_stale_outdoors(tmp_path):
+    screen = _screened_at(tmp_path, "outdoors", 2, screened_in="indoors")
+    assert screen["stale"] is True
+    assert "indoors" in screen["prompt"]
+
+
+def test_a_screen_with_no_recorded_time_has_no_age(tmp_path):
+    params = ts.TesterParameters("d5", "arm5", "outdoors")
+    ts.write_arm_state(tmp_path, params, gain=2.0, gain_exposure_us=300)
+    state = ts.read_arm_state(tmp_path, "d5", "arm5")
+    screen = ts.gain_screen_age(state, ts.arm_directory(tmp_path, params), "outdoors", now=NOW)
+    assert screen["age_s"] is None and screen["stale"] is False
+
+
+def test_an_older_screen_is_dated_by_its_folder(tmp_path):
+    params = ts.TesterParameters("d5", "arm5", "outdoors")
+    ts.write_arm_state(tmp_path, params, gain=2.0, gain_exposure_us=300)
+    local = (NOW - timedelta(hours=2)).astimezone()
+    folder = ts.arm_directory(tmp_path, params) / "gain" / local.strftime("%Y%m%d_%H%M%S")
+    folder.mkdir(parents=True)
+    (folder / "results.json").write_text("[]", encoding="utf-8")
+    state = ts.read_arm_state(tmp_path, "d5", "arm5")
+    screen = ts.gain_screen_age(state, ts.arm_directory(tmp_path, params), "outdoors", now=NOW)
+    assert screen["age_s"] == pytest.approx(2 * 3600, abs=1)
+    assert screen["stale"] is True
+
+
+def test_the_ladder_facts_and_the_page_carry_the_screens_age(tmp_path):
+    params = ts.TesterParameters("d5", "arm5", "outdoors")
+    ts.write_arm_state(
+        tmp_path,
+        params,
+        gain=1.0,
+        gain_exposure_us=300,
+        gain_screened_at=datetime.now(timezone.utc).isoformat(),
+        gain_environment="outdoors",
+    )
+    facts = ts.ladder_gain_facts(tmp_path, params)
+    assert facts["screen"]["stale"] is False
+    assert facts["screen"]["environment"] == "outdoors"
+    overview = ts.study_overview(tmp_path, "d5", environment="outdoors")
+    arm5 = next(arm for arm in overview["arms"] if arm["arm_id"] == "arm5")
+    assert arm5["gain_screen"]["age_s"] < 60
+
+
+def test_a_failed_solve_clears_the_earlier_ball_diameter(tmp_path):
+    run = tmp_path / "gain" / "20260922_120000"
+    run.mkdir(parents=True)
+    (run / "results.json").write_text("[]")
+    with (run / "exp0300_gain6_median.pgm").open("wb") as handle:
+        handle.write(b"P5\n320 200\n255\n" + bytes(320 * 200))
+    solved = ts.solved_range(tmp_path, ts.ARMS["arm1"], {"gain": 6.0}, RIG)
+    assert "solved_ball_diameter_px" in solved and solved["solved_ball_diameter_px"] is None
+    missing = ts.solved_range(tmp_path / "none", ts.ARMS["arm1"], {"gain": 6.0}, RIG)
+    assert missing["solved_ball_diameter_px"] is None
+
+
+def test_the_live_view_accepts_the_setup_searchs_shortest_exposure():
+    assert ts.LIVE_EXPOSURE_RANGE_US[0] == 10
+
+
+def test_a_stale_gain_screen_is_measured_again_before_the_ladder(tmp_path, monkeypatch):
+    """D5: 40 minutes after an outdoor screen, the ladder asks for a new one."""
+    old = (datetime.now(timezone.utc) - timedelta(minutes=40)).isoformat()
+    for arm in ("arm5", "arm6"):
+        ts.write_arm_state(
+            tmp_path,
+            ts.TesterParameters("20260922-name", arm, "outdoors"),
+            gain=1.0,
+            gain_exposure_us=300,
+            gain_screened_at=old,
+            gain_environment="outdoors",
+        )
+    monkeypatch.setattr(ts.study_ladder, "KioskClient", _LitKiosk)
+    manager = ts.TesterJobManager(popen=_Forever)
+    client = eligible_app(sessions_root=tmp_path, rig_geometry=RIG, manager=manager).test_client()
+
+    response = client.post(
+        "/api/tester/ladder/start",
+        json={"tester_id": "20260922-name", "arm_id": "arm5", "environment": "outdoors"},
+    )
+
+    assert response.status_code == 409
+    body = response.get_json()
+    assert body["gain_screen_stale"] is True
+    assert "Measure the light again" in body["error"] and "40 min old" in body["error"]
+    assert manager.status()["state"] == "idle"
+
+
+def test_a_stored_pre_s11_candidate_still_matches_a_new_one():
+    """Wiring audit S11: evidence saved under floor_radar_range_m is still read."""
+    base = {"x_px": 640.0, "y_px": 500.0, "diameter_px": 30.0, "floor_range_uncertainty_m": 0.02}
+    old = {**base, "floor_radar_range_m": 1.50}
+    new = {**base, "size_radar_range_m": 1.51}
+    assert ts._same_guided_candidate(old, new) is True
+    assert ts._same_guided_candidate(old, {**new, "size_radar_range_m": 1.9}) is False

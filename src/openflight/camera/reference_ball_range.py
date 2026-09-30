@@ -62,8 +62,10 @@ _LENS_ABOVE_SURFACE_M = (0.0, 1.0)
 def camera_range_estimator_policy() -> dict[str, Any]:
     """Return the camera range policy bound by qualification artifacts."""
     return {
-        "name": "camera_reference_ball_floor_plane",
-        "version": 2,
+        # version 3: the range fields are named for the ball's size they come from
+        # (wiring audit S11); they were "floor_*" though nothing uses the floor
+        "name": "camera_reference_ball_size_range",
+        "version": 3,
         "detector": "reference_ball_candidates_v2_merged_seeds",
         "seed_fits": REFERENCE_SEED_FITS,
         "search_region": "hitting_area_in_world_coordinates",
@@ -74,6 +76,8 @@ def camera_range_estimator_policy() -> dict[str, Any]:
         "lateral_sigma_m": _LATERAL_SIGMA_M,
         "hitting_range_m": list(_HITTING_RANGE_M),
         "hitting_lateral_m": _HITTING_LATERAL_M,
+        # the area's ray tests measure along the lens ray, not the radar's slant (S7)
+        "hitting_area_ray_distance": "lens",
         "seed_lateral_m": _SEED_LATERAL_M,
         "ball_above_surface_m": list(_BALL_ABOVE_SURFACE_M),
         "lens_above_surface_m": list(_LENS_ABOVE_SURFACE_M),
@@ -272,6 +276,24 @@ class BallPlaneIntersection:
     accuracy_qualified: bool
 
 
+# Evidence stored before wiring audit S11 carries the old names; readers of stored
+# candidates accept either (``stored_candidate_value``).
+LEGACY_CANDIDATE_FIELDS = {
+    "size_radar_range_m": "floor_radar_range_m",
+    "size_point_lfu_m": "floor_point_lfu_m",
+}
+
+
+def stored_candidate_value(candidate: Mapping[str, Any], name: str) -> Any:
+    """A field of a stored candidate, under its current name or its pre-S11 one."""
+    if name in candidate:
+        return candidate[name]
+    legacy = LEGACY_CANDIDATE_FIELDS.get(name)
+    if legacy is None or legacy not in candidate:
+        raise KeyError(name)
+    return candidate[legacy]
+
+
 @dataclass(frozen=True)
 class ReferenceBallRangeCandidate:
     """One sphere observation and the two range estimates it implies."""
@@ -280,8 +302,8 @@ class ReferenceBallRangeCandidate:
     y_px: float
     diameter_px: float
     area_px: int
-    floor_point_lfu_m: tuple[float, float, float] | None
-    floor_radar_range_m: float | None
+    size_point_lfu_m: tuple[float, float, float] | None
+    size_radar_range_m: float | None
     floor_camera_range_m: float | None
     size_camera_range_m: float | None
     floor_range_uncertainty_m: float | None
@@ -614,8 +636,8 @@ def _withheld(ball: ReferenceBall, camera: BallPlaneCamera, reason: str, **range
         y_px=ball.y,
         diameter_px=ball.diameter_px,
         area_px=ball.area_px,
-        floor_point_lfu_m=None,
-        floor_radar_range_m=None,
+        size_point_lfu_m=None,
+        size_radar_range_m=None,
         floor_camera_range_m=None,
         size_camera_range_m=ranges.get("size_range"),
         floor_range_uncertainty_m=None,
@@ -663,7 +685,9 @@ def _candidate(  # pylint: disable=too-many-locals
     relative = ray * size_range
     offset = np.asarray(camera.radar_origin_lfu) - np.asarray(camera.camera_origin_lfu)
     radar_range = float(np.linalg.norm(relative - offset))
-    reason = _hitting_area_reason(ray, radar_range, size_uncertainty, camera, ball_center_height_m)
+    reason = _hitting_area_reason(
+        ray, radar_range, size_range, size_uncertainty, camera, ball_center_height_m
+    )
     if reason is None and not plausible_range[0] <= radar_range <= plausible_range[1]:
         reason = "size-derived radar range is outside the configured search interval"
     height_sigma = abs(camera_height - camera.camera_origin_lfu[2]) / _CAMERA_HEIGHT_PRIOR_SIGMA_M
@@ -682,12 +706,12 @@ def _candidate(  # pylint: disable=too-many-locals
         y_px=ball.y,
         diameter_px=ball.diameter_px,
         area_px=ball.area_px,
-        floor_point_lfu_m=(
+        size_point_lfu_m=(
             float(origin[0] + relative[0]),
             float(origin[1] + relative[1]),
             float(ball_center_height_m),
         ),
-        floor_radar_range_m=radar_range,
+        size_radar_range_m=radar_range,
         floor_camera_range_m=size_range,
         size_camera_range_m=size_range,
         floor_range_uncertainty_m=size_uncertainty,
@@ -769,25 +793,33 @@ def _hitting_area_upper_distance(
     return upper
 
 
-def _hitting_area_reason(
+def _hitting_area_reason(  # pylint: disable=too-many-arguments
     ray: np.ndarray,
     distance: float,
+    lens_distance: float,
     distance_sigma: float,
     camera: BallPlaneCamera,
     ball_center_height_m: float,
 ) -> str | None:
-    """Why a candidate at this distance cannot be the ball at address, if it cannot."""
+    """Why a candidate at this distance cannot be the ball at address, if it cannot.
+
+    The area's range limits are radar slant ranges (``distance``); the ray tests
+    are distances along the lens ray (``lens_distance``), so the window found in
+    radar range is moved onto the ray by their difference (wiring audit S7).
+    """
     offset = np.asarray(camera.radar_origin_lfu) - np.asarray(camera.camera_origin_lfu)
     near = max(_HITTING_RANGE_M[0], distance - 2.0 * distance_sigma)
     far = min(_HITTING_RANGE_M[1], distance + 2.0 * distance_sigma)
     if near > far:
         return f"outside the hitting area: about {distance:.1f} m from the radar"
+    to_lens = lens_distance - distance
+    near, far = near + to_lens, far + to_lens
     reach = float(
         _hitting_area_upper_distance(ray[None], camera, ball_center_height_m, _HITTING_LATERAL_M)[0]
     )
     if reach >= near:
         return None
-    point = ray * min(max(distance, near), far)
+    point = ray * min(max(lens_distance, near), far)
     sideways = float(point[0] - offset[0])
     if abs(sideways) - math.sin(math.radians(camera.angular_uncertainty_deg)) * near > (
         _HITTING_LATERAL_M
@@ -802,7 +834,7 @@ def _hitting_area_reason(
 
 def _score_reason(candidate: ReferenceBallRangeCandidate, camera: BallPlaneCamera) -> str:
     """Name the term that made a candidate score too badly to be the ball at address."""
-    point = candidate.floor_point_lfu_m
+    point = candidate.size_point_lfu_m
     sideways = float(point[0] - camera.radar_origin_lfu[0]) if point is not None else 0.0
     lateral_sigma = abs(sideways) / _LATERAL_SIGMA_M
     if lateral_sigma >= (candidate.consistency_sigma or 0.0):

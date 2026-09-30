@@ -42,6 +42,7 @@ from openflight.camera import (
     reference_ball_range,
     session_review_routes as review_routes,
     study_ladder,
+    worker_lifetime,
 )
 from openflight.camera.club_motion import detect_reference_ball
 from openflight.camera.fusion_diagnostics import register_fusion_diagnostics
@@ -55,6 +56,7 @@ from openflight.camera.reference_ball_range import (
     camera_range_estimator_sha256 as _camera_range_estimator_sha256,
     estimate_reference_ball_range,
     solve_camera_height_from_radar,
+    stored_candidate_value,
 )
 from openflight.camera.setup_eligibility import SetupEligibility
 from openflight.camera.static_exposure import (
@@ -124,7 +126,9 @@ GAIN_CEILING = 12.0
 # The live view refreshes the page this often; the camera still runs at the
 # arm's frame rate, so each frame is exposed exactly as a capture would be.
 LIVE_FPS = 12.0
-LIVE_EXPOSURE_RANGE_US = (20, 20000)
+# The setup's exposure search goes down to 10 us (outdoors, a sunlit ball), so the
+# live view takes it too (wiring audit T14).
+LIVE_EXPOSURE_RANGE_US = (10, 20000)
 LIVE_BALL_EVERY_S = 1.0
 LIVE_FRAME_STALE_S = 2.5
 LIVE_THREAD_JOIN_TIMEOUT_S = 5.0
@@ -1085,7 +1089,11 @@ def solved_range(arm_dir: Path, arm: Arm, choice: Mapping, rig_geometry: Path) -
 
     runs = sorted((arm_dir / "gain").glob("*/results.json"))
     if not runs:
-        return {"solved_range_m": None, "solved_range_note": "no gain screen"}
+        return {
+            "solved_range_m": None,
+            "solved_ball_diameter_px": None,
+            "solved_range_note": "no gain screen",
+        }
     stem = f"exp{arm.exposure_us:04d}_gain{float(choice['gain']):g}".replace(".", "p")
     pgm = runs[-1].parent / f"{stem}_median.pgm"
     try:
@@ -1100,7 +1108,12 @@ def solved_range(arm_dir: Path, arm: Arm, choice: Mapping, rig_geometry: Path) -
         )
         solution = solve_setup(ball, rig)
     except (OSError, ValueError, RuntimeError) as exc:
-        return {"solved_range_m": None, "solved_range_note": str(exc)}
+        # an earlier screen's ball must not stand beside this screen's failure (T14)
+        return {
+            "solved_range_m": None,
+            "solved_ball_diameter_px": None,
+            "solved_range_note": str(exc),
+        }
     return {
         "solved_range_m": round(solution.range_to_ball_mm / 1000.0, 4),
         "solved_ball_diameter_px": round(float(ball.diameter_px), 2),
@@ -1115,6 +1128,63 @@ def resolve_gain(sessions_root: Path, params: TesterParameters) -> tuple[float, 
     if "gain" not in state or state.get("gain_exposure_us") != arm.exposure_us:
         raise RuntimeError("run this arm's gain step before capturing swings")
     return float(state["gain"]), arm.exposure_us
+
+
+# Decision D5 (wiring fixes spec): outdoor light changes within half an hour; an
+# indoor screen holds for the day it was measured. A stale screen is measured again.
+GAIN_SCREEN_OUTDOOR_MAX_AGE_S = 30 * 60
+ARM_SIZES = {"arm5": "1280×800", "arm6": "640×400"}
+
+
+def _screen_folder_time(arm_dir: Path) -> datetime | None:
+    """When the latest gain screen ran, from its folder name (the Pi's local time)."""
+    runs = sorted((arm_dir / "gain").glob("*/results.json"))
+    if not runs:
+        return None
+    try:
+        return datetime.strptime(runs[-1].parent.name, "%Y%m%d_%H%M%S").astimezone()
+    except ValueError:
+        return None
+
+
+def gain_screen_age(
+    state: Mapping,
+    arm_dir: Path,
+    environment: str | None,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    """How old this arm's gain screen is, where it was measured, and whether it is stale.
+
+    Screens recorded before the time was saved (wiring audit T14) are dated by
+    their folder; with neither, the age is unknown and nothing is asked.
+    """
+    screened_in = state.get("gain_environment")
+    try:
+        when = datetime.fromisoformat(str(state["gain_screened_at"]))
+    except (KeyError, TypeError, ValueError):
+        when = _screen_folder_time(arm_dir)
+    if when is not None and when.tzinfo is None:
+        when = when.astimezone()
+    now = now or datetime.now(timezone.utc)
+    age_s = (now - when).total_seconds() if when is not None else None
+    light = screened_in or environment
+    reason = None
+    if when is None:
+        pass
+    elif environment and screened_in and environment != screened_in:
+        reason = f"was measured {screened_in} and you are {environment} now"
+    elif light == "outdoors" and age_s > GAIN_SCREEN_OUTDOOR_MAX_AGE_S:
+        reason = f"is {round(age_s / 60)} min old, and outdoor light changes within half an hour"
+    elif light == "indoors" and when.astimezone().date() != now.astimezone().date():
+        reason = "was measured on another day"
+    return {
+        "screened_at": when.isoformat() if when is not None else None,
+        "environment": screened_in,
+        "age_s": age_s,
+        "stale": reason is not None,
+        "prompt": f"Measure the light again (B): this screen {reason}." if reason else None,
+    }
 
 
 def ladder_gain_facts(sessions_root: Path, params: TesterParameters) -> dict:
@@ -1134,6 +1204,7 @@ def ladder_gain_facts(sessions_root: Path, params: TesterParameters) -> dict:
         **facts,
         "gain_at_300_equivalent": float(equivalent) if equivalent is not None else gain,
         "too_bright": bool(state.get("too_bright", False)),
+        "screen": gain_screen_age(state, arm_directory(sessions_root, params), params.environment),
     }
 
 
@@ -1179,6 +1250,27 @@ def next_run_directory(arm_dir: Path) -> Path:
         if (match := re.fullmatch(r"run-(\d+)", path.name))
     ]
     return arm_dir / "paired" / f"run-{max(numbers, default=0) + 1:02d}"
+
+
+def _discard_unstarted_run(run_dir: Path) -> None:
+    """Take back a run folder whose job never started (wiring audit T11).
+
+    It is removed only while it holds nothing but the admission records written
+    for that start; anything else means a kiosk wrote there, and it stays.
+    """
+    admission_files = {"setup_admission.json", "tee_range.json"}
+    try:
+        contents = list(run_dir.iterdir()) if run_dir.is_dir() else None
+        if contents is None or not all(
+            path.is_file() and (path.name in admission_files or path.name.endswith(".tmp"))
+            for path in contents
+        ):
+            return
+        for path in contents:
+            path.unlink()
+        run_dir.rmdir()
+    except OSError:
+        logger.warning("Could not remove the unstarted run folder %s", run_dir, exc_info=True)
 
 
 def write_setup_admission(
@@ -1434,6 +1526,12 @@ class TesterJobManager:
     def status(self) -> dict[str, object]:
         with self._lock:
             return {**self._state, "output": list(self._output)}
+
+    @property
+    def cancel_requested(self) -> bool:
+        """Whether Stop or the timeout ended the current (or last) job."""
+        with self._lock:
+            return self._cancel_requested
 
     def start(
         self,
@@ -2231,7 +2329,11 @@ def configure_ball_search_workers(workers: int) -> None:
         if workers > 0:
             # spawn, not fork: the tester has camera and web threads that a fork would copy
             _BALL_SEARCH_POOL = ProcessPoolExecutor(
-                max_workers=workers, mp_context=multiprocessing.get_context("spawn")
+                max_workers=workers,
+                mp_context=multiprocessing.get_context("spawn"),
+                # a killed server never shuts the pool down; its workers must not
+                # outlive it (29 Sept: two orphans per test run)
+                initializer=worker_lifetime.exit_with_parent,
             )
             for _ in range(workers):
                 _BALL_SEARCH_POOL.submit(int)  # import the worker's modules now, not on first use
@@ -2294,7 +2396,7 @@ def _guided_camera_analysis(
     return result, {
         **_camera_range_evidence(result),
         "method": (
-            "iwr_conditioned_camera_floor_plane_v1" if usable_hint else "camera_floor_plane_v1"
+            "iwr_conditioned_camera_size_range_v1" if usable_hint else "camera_size_range_v1"
         ),
         "analysis_role": analysis_role,
         "discovery_mode": (
@@ -2370,7 +2472,8 @@ def _same_guided_candidate(first: Mapping, second: Mapping) -> bool:
         )
         diameter_delta = abs(float(first["diameter_px"]) - float(second["diameter_px"]))
         range_delta = abs(
-            float(first["floor_radar_range_m"]) - float(second["floor_radar_range_m"])
+            float(stored_candidate_value(first, "size_radar_range_m"))
+            - float(stored_candidate_value(second, "size_radar_range_m"))
         )
         first_uncertainty = float(first.get("floor_range_uncertainty_m") or 0.0)
         second_uncertainty = float(second.get("floor_range_uncertainty_m") or 0.0)
@@ -2917,9 +3020,9 @@ def _camera_tee_candidates(
                 candidate_id=f"camera-placement-{placement:02d}-{index:02d}",
                 source=item.source,
                 source_group="camera",
-                radar_slant_range_m=item.floor_radar_range_m,
+                radar_slant_range_m=item.size_radar_range_m,
                 uncertainty_m=(
-                    max(float(uncertainty), 0.001) if item.floor_radar_range_m is not None else None
+                    max(float(uncertainty), 0.001) if item.size_radar_range_m is not None else None
                 ),
                 selectable=False,
                 evidence={
@@ -3100,7 +3203,7 @@ def _guided_camera_candidate(
     static_exposure: Mapping | None = None,
 ) -> tee_range.TeeRangeCandidate:
     selected = result.selected
-    accepted = selected is not None and selected.floor_radar_range_m is not None
+    accepted = selected is not None and selected.size_radar_range_m is not None
     rig_sha = _file_sha256(rig_geometry)
     camera_sha = _file_sha256(optical_calibration) if optical_calibration else None
     placement_sha = _file_sha256(camera_placement) if camera_placement else None
@@ -3172,12 +3275,12 @@ def _guided_camera_candidate(
     }
     uncertainty = None
     value = None
-    if selected is not None and selected.floor_radar_range_m is not None:
-        value = float(selected.floor_radar_range_m)
+    if selected is not None and selected.size_radar_range_m is not None:
+        value = float(selected.size_radar_range_m)
         uncertainty = max(float(selected.floor_range_uncertainty_m or 0.001), 0.001)
     return tee_range.TeeRangeCandidate(
         candidate_id=f"camera-{epoch_id}-{arm.arm_id}",
-        source="camera_reference_ball_floor_plane",
+        source="camera_reference_ball_size_range",
         source_group="camera",
         radar_slant_range_m=value,
         uncertainty_m=uncertainty,
@@ -3221,7 +3324,7 @@ CAMERA_WINDOW_MIN_RELATIVE_SIGMA = 0.20
 
 def camera_radar_window(selected) -> tuple[float, float] | None:
     """Radar slant-range interval (m) the camera's selected ball allows, if any."""
-    value = getattr(selected, "floor_radar_range_m", None)
+    value = getattr(selected, "size_radar_range_m", None)
     if value is None or not math.isfinite(float(value)) or float(value) <= 0.0:
         return None
     value = float(value)
@@ -3479,7 +3582,7 @@ def _camera_to_iwr_ranking(
     hypotheses = []
     rejection_reasons = []
     try:
-        camera_range = float(selected.floor_radar_range_m) if selected is not None else math.nan
+        camera_range = float(selected.size_radar_range_m) if selected is not None else math.nan
         camera_uncertainty = (
             float(selected.floor_range_uncertainty_m) if selected is not None else math.nan
         )
@@ -3529,7 +3632,7 @@ def _camera_to_iwr_ranking(
             "epoch_id": epoch_id,
             "camera_candidate_id": camera_candidate_id,
             "saved_frame_sha256": saved_frame_sha256,
-            "camera_estimator": "camera_floor_plane_v1",
+            "camera_estimator": "camera_size_range_v1",
             "radar_candidate_id": iwr_candidate.get("candidate_id"),
             "radar_source": iwr_candidate.get("source"),
             "radar_source_group": iwr_candidate.get("source_group"),
@@ -4391,15 +4494,18 @@ def arm_progress(sessions_root: Path, params: TesterParameters) -> dict:
     }
 
 
-def study_overview(sessions_root: Path, tester_id: str) -> dict:
+def study_overview(sessions_root: Path, tester_id: str, environment: str | None = None) -> dict:
     """Every arm's state for this tester, for the page's walkthrough."""
     arms = []
     for arm_id in ARM_ORDER:
         arm = ARMS[arm_id]
         state = read_arm_state(sessions_root, tester_id, arm_id)
+        screen = None
         try:
             probe = TesterParameters(tester_id, arm_id, "indoors")
             progress = arm_progress(sessions_root, probe)
+            if state.get("gain") is not None:
+                screen = gain_screen_age(state, arm_directory(sessions_root, probe), environment)
         except ValueError:
             progress = {}
         arms.append(
@@ -4411,6 +4517,7 @@ def study_overview(sessions_root: Path, tester_id: str) -> dict:
                 "too_bright": state.get("too_bright"),
                 "mixed_light": state.get("mixed_light"),
                 "gain_at_300_equivalent": state.get("gain_at_300_equivalent"),
+                "gain_screen": screen,
                 "light_index": state.get("light_index"),
                 "light_index_source": state.get("light_index_source"),
                 "solved_range_m": state.get("solved_range_m"),
@@ -4568,7 +4675,10 @@ def create_app(
         return {**result, "checks": checks, "blockers": blockers, "eligible": not blockers}
 
     def require_setup(tester_id: str, reading: Mapping, action: str) -> dict:
-        return with_iwr_preflight(setup.require(tester_id, reading, action))
+        # the policy records after the IWR check (T12); applying it again is a no-op
+        return with_iwr_preflight(
+            setup.require(tester_id, reading, action, adjust=with_iwr_preflight)
+        )
 
     @app.before_request
     def start_request_timer():
@@ -4837,6 +4947,9 @@ def create_app(
             gain=choice["gain"],
             gain_source="gain screen",
             gain_exposure_us=params.arm.exposure_us,
+            # the screen's own time and light, so its age is known later (T14, D5)
+            gain_screened_at=datetime.now(timezone.utc).isoformat(),
+            gain_environment=params.environment,
             gain_inclinometer=enclosure.reading(),
             gain_mean=choice["mean"],
             gain_clipped_pct=choice["clipped_pct"],
@@ -4989,9 +5102,13 @@ def create_app(
             retry_phase="needs_empty" if kind == "empty" else "needs_ball",
         )
 
-    def _finish_static_capture(tester_id: str, epoch_id: str, kind: str, capture_id: str):
+    def _finish_static_capture(
+        tester_id: str, epoch_id: str, kind: str, capture_id: str, *, cancelled: bool = False
+    ):
         with tee_range_lock:
-            state = _finish_static_capture_locked(tester_id, epoch_id, kind, capture_id)
+            state = _finish_static_capture_locked(
+                tester_id, epoch_id, kind, capture_id, cancelled=cancelled
+            )
             if (
                 kind == "ball_present"
                 and state is not None
@@ -5001,13 +5118,30 @@ def create_app(
                 stop_guided_live(tester_id, epoch_id, "arm5")
             return state
 
-    def _finish_static_capture_locked(tester_id: str, epoch_id: str, kind: str, capture_id: str):
+    def _finish_static_capture_locked(
+        tester_id: str, epoch_id: str, kind: str, capture_id: str, *, cancelled: bool = False
+    ):
         store = range_store(tester_id)
         state = store.load()
         if state is None or state.epoch_id != epoch_id:
             return state
         key = "empty" if kind == "empty" else "ball_present"
+        # The GET reconcile and the job's own completion can both deliver a result,
+        # and a late callback can arrive after the next capture started: only the
+        # capture this phase is waiting for is finished, once (wiring audit T9).
+        capturing = "empty_capturing" if key == "empty" else "ball_capturing"
+        if state.phase != capturing or state.evidence.get(f"{key}_capture_id") != capture_id:
+            return state
         result_path = store.epoch_dir(epoch_id) / "iwr" / f"{capture_id}.json"
+        if cancelled and not result_path.is_file():
+            # Stop or the timeout ended it: nothing says the radar failed, so the
+            # hardware check stands and the step simply retries (wiring audit T10).
+            return store.transition(
+                state,
+                phase="retryable_failure",
+                reason=f"{key}_capture_stopped",
+                retry_phase="needs_empty" if key == "empty" else "needs_ball",
+            )
         if not result_path.is_file():
             iwr_preflight[tester_id] = False
             return store.transition(
@@ -5019,7 +5153,8 @@ def create_app(
         record = json.loads(result_path.read_text(encoding="utf-8"))
         evidence = {f"{key}_capture": record}
         if not record.get("usable"):
-            iwr_preflight[tester_id] = False
+            if not cancelled:
+                iwr_preflight[tester_id] = False
             return store.transition(
                 state,
                 phase="retryable_failure",
@@ -5173,16 +5308,22 @@ def create_app(
         steered["evidence"]["camera_window"] = {**facts, "outcome": "reselected"}
         return steered
 
-    def _range_resources_busy() -> str | None:
+    def _range_resources_busy(*, live_yields: bool = False, ladder_yields: bool = False):
+        """Who owns the camera or radar, or None when a new job may take them.
+
+        A capture job stops the live view itself (``live_yields``); the ladder's own
+        mode restart is the ladder (``ladder_yields``). Starts check this before
+        writing anything, so a refusal leaves no run folder (wiring audit T11).
+        """
         for owner in (jobs, radar_jobs):
             job = owner.status()
             if job.get("state") == "running":
                 return f"the {job.get('action')} job owns the hardware"
-        if live.running:
+        if live.running and not live_yields:
             return "the live camera owns the hardware"
         if review_routes.analysis_running(sessions_root) is not None:
             return "session analysis is running"
-        if any(not runner.stopped for runner in ladder_runners.values()):
+        if not ladder_yields and any(not runner.stopped for runner in ladder_runners.values()):
             return "the ladder owns the hardware"
         return None
 
@@ -5256,7 +5397,9 @@ def create_app(
         )
 
         def finished(_action, _return_code):
-            _finish_static_capture(tester_id, state.epoch_id, kind, capture_id)
+            # read now: Stop and the timeout both end the capture through cancel
+            cancelled = bool(getattr(radar_jobs, "cancel_requested", False))
+            _finish_static_capture(tester_id, state.epoch_id, kind, capture_id, cancelled=cancelled)
 
         try:
             radar_jobs.start(
@@ -5858,7 +6001,9 @@ def create_app(
                     "available": True,
                     "job": jobs.status(),
                     "arm": arm_progress(sessions_root, params),
-                    "study": study_overview(sessions_root, params.tester_id),
+                    "study": study_overview(
+                        sessions_root, params.tester_id, environment=params.environment
+                    ),
                     "inclinometer": enclosure.reading(),
                     "analysis": review_routes.read_analysis(sessions_root, params.tester_id),
                     "saved_attempt_scopes": attempt_scopes(sessions_root, params.tester_id),
@@ -5959,23 +6104,12 @@ def create_app(
                 handed_to_swings=handed,
                 iwr_calibration=iwr_calibration,
             )
-            write_arm_state(sessions_root, params)
+            busy = _range_resources_busy(live_yields=True)
+            if busy:
+                raise RuntimeError(busy)
+            release_static_radar()  # before anything is written: it can refuse
             if action == "swings":
                 gain, exposure_us = resolve_gain(sessions_root, params)
-                write_arm_state(
-                    sessions_root,
-                    params,
-                    capture_gain=gain,
-                    capture_exposure_us=exposure_us,
-                    # the range the kiosk runs with, not only a qualified one (S3)
-                    tee_range_m=handed["tee_m"],
-                    tee_range_source=handed["tee_range_source"],
-                    tee_range_validation_truth_m=(
-                        params.tee_mm / 1000.0 if params.tee_mm is not None else None
-                    ),
-                    tee_range_solution=solution.to_dict(),
-                    handed_to_swings=handed,
-                )
             if action == "gain":
                 on_finish = lambda _a, rc: record_gain(params) if rc == 0 else None  # noqa: E731
             elif action == "swings":
@@ -5993,29 +6127,48 @@ def create_app(
             else:
                 on_finish = None
             stop_live()  # the camera does one thing at a time
-            if action == "swings":
-                active_setup_tester["tester_id"] = params.tester_id
-                run_dir = Path(commands[0][commands[0].index("--log-dir") + 1])
-                with session_bundle.snapshot_lock(
-                    tester_root(sessions_root, params.tester_id),
-                    timeout_s=session_bundle.WRITER_WAIT_S,
-                ):
-                    write_setup_admission(
-                        run_dir, params.tester_id, eligibility, solution, reference, handed
-                    )
-                    tee_range.write_solution(
-                        run_dir / "tee_range.json", solution, handed_to_swings=handed
-                    )
-                active_runtime_dir["path"] = run_dir
+            run_dir = None
             try:
-                release_static_radar()
+                if action == "swings":
+                    active_setup_tester["tester_id"] = params.tester_id
+                    run_dir = Path(commands[0][commands[0].index("--log-dir") + 1])
+                    with session_bundle.snapshot_lock(
+                        tester_root(sessions_root, params.tester_id),
+                        timeout_s=session_bundle.WRITER_WAIT_S,
+                    ):
+                        write_setup_admission(
+                            run_dir, params.tester_id, eligibility, solution, reference, handed
+                        )
+                        tee_range.write_solution(
+                            run_dir / "tee_range.json", solution, handed_to_swings=handed
+                        )
+                    active_runtime_dir["path"] = run_dir
                 jobs.start(action, commands, log_path, on_finish=on_finish)
             except Exception:
                 if action == "swings":
                     active_setup_tester["tester_id"] = None
                     active_runtime_dir["path"] = None
                     enclosure.start()
+                    if run_dir is not None:
+                        _discard_unstarted_run(run_dir)
                 raise
+            # the job is accepted: only now does the arm record change (T11)
+            write_arm_state(sessions_root, params)
+            if action == "swings":
+                write_arm_state(
+                    sessions_root,
+                    params,
+                    capture_gain=gain,
+                    capture_exposure_us=exposure_us,
+                    # the range the kiosk runs with, not only a qualified one (S3)
+                    tee_range_m=handed["tee_m"],
+                    tee_range_source=handed["tee_range_source"],
+                    tee_range_validation_truth_m=(
+                        params.tee_mm / 1000.0 if params.tee_mm is not None else None
+                    ),
+                    tee_range_solution=solution.to_dict(),
+                    handed_to_swings=handed,
+                )
             return jsonify({"job": jobs.status(), "arm": arm_progress(sessions_root, params)}), 202
         except RuntimeError as exc:
             return jsonify({"error": str(exc), "job": jobs.status()}), 409
@@ -6036,6 +6189,9 @@ def create_app(
             params = TesterParameters.from_payload(payload)
             if jobs.status()["state"] == "running":
                 raise RuntimeError("stop the running step before opening the live view")
+            busy = _range_resources_busy(live_yields=True)
+            if busy:
+                raise RuntimeError(busy)
             try:
                 exposure_us = int(payload.get("exposure_us") or params.arm.exposure_us)
                 gain = float(payload.get("gain") or 8.0)
@@ -6098,8 +6254,8 @@ def create_app(
                         "from_size_mm": round(selected.size_camera_range_m * 1000)
                         if selected.size_camera_range_m is not None
                         else None,
-                        "from_floor_mm": round(selected.floor_radar_range_m * 1000)
-                        if selected.floor_radar_range_m is not None
+                        "from_floor_mm": round(selected.size_radar_range_m * 1000)
+                        if selected.size_radar_range_m is not None
                         else None,
                     },
                 }
@@ -6333,11 +6489,16 @@ def create_app(
         if tester_id not in admitted_tee_range:
             raise RuntimeError("automatic tee-range admission was not frozen")
         solution, reference = admitted_tee_range[tester_id]
+        busy = _range_resources_busy(live_yields=True, ladder_yields=True)
+        if busy:
+            raise RuntimeError(busy)
+        release_static_radar()  # before anything is written: it can refuse (T11)
         # The kiosk reads the LIS3DH itself during the ladder. Any failure before its
         # job starts hands the sensor back, or the page's reading goes stale for the
         # rest of the session (wiring audit T2).
         enclosure.stop()
         started = claimed = False
+        run = None
         try:
             _args, handed = tee_range_handoff(
                 solution,
@@ -6387,7 +6548,6 @@ def create_app(
             active_setup_tester["tester_id"] = tester_id
             active_runtime_dir["path"] = run
             claimed = True
-            release_static_radar()
             jobs.start("ladder", commands, log_path, on_finish=ladder_finished)
             started = True
         finally:
@@ -6395,6 +6555,8 @@ def create_app(
                 if claimed:
                     active_setup_tester["tester_id"] = None
                     active_runtime_dir["path"] = None
+                if run is not None:
+                    _discard_unstarted_run(run)
                 enclosure.start()
         return run
 
@@ -6443,6 +6605,15 @@ def create_app(
                     "saved_attempt_scopes": attempt_scopes(sessions_root, params.tester_id),
                 }
             )
+        # A stale screen would set every rung's gain from light that has gone (D5).
+        # Checked only here: pressing C on a walking ladder above just shows it.
+        stale = [
+            f"{ARM_SIZES[arm_id]}: {fact['screen']['prompt']}"
+            for arm_id, fact in facts.items()
+            if fact["screen"]["stale"]
+        ]
+        if stale:
+            return jsonify({"error": " ".join(stale), "gain_screen_stale": True}), 409
         eligibility = require_setup(params.tester_id, settle_reading(enclosure.reading), "ladder")
         if not eligibility["eligible"]:
             return blocked_setup(eligibility)
@@ -6453,6 +6624,9 @@ def create_app(
             return jsonify({"error": str(exc)}), 409
         if job["state"] == "running":
             return jsonify({"error": "stop the active capture before starting the ladder"}), 409
+        busy = _range_resources_busy(live_yields=True, ladder_yields=True)
+        if busy:
+            return jsonify({"error": busy}), 409
         for previous in ladder_runners.values():
             previous.stop(wait=False)
         state = ladder_state(params.tester_id)
@@ -6738,6 +6912,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise
     finally:
         enclosure.stop()
+        configure_ball_search_workers(0)
         logger.info("Tester server stopped")
         handler.flush()
     return 0

@@ -493,6 +493,7 @@
           <li>
             <button type="button" id="step-light">B. Measure the light (both modes)</button>
             <span id="light-verdict"></span>
+            <p id="light-age" class="note" hidden></p>
           </li>
           <li>
             <h3>3. Automatic ball range</h3>
@@ -673,7 +674,7 @@
       const el = (id) => document.getElementById(id);
       let currentArm = 'arm1';
       let arms = [];
-      const LIVE_EXPOSURES = [87, 175, 300, 500, 1000, 3000, 10000];
+      const LIVE_EXPOSURES = [10, 30, 87, 175, 300, 500, 1000, 3000, 10000];
       const LIVE_GAINS = [1, 2, 4, 8, 12, 15.9];
       let liveOn = false;
       let liveArm = null;
@@ -978,6 +979,34 @@
         }
         const ranged = [...arms].reverse().find((item) => item.tee_range_camera_evidence);
         if (ranged) renderAutomaticRange(ranged.tee_range_camera_evidence, ranged.tee_range_solution);
+        renderLightAge(arms);
+      }
+
+      function formatAge(seconds) {
+        if (seconds < 90) return 'just now';
+        if (seconds < 90 * 60) return `${Math.round(seconds / 60)} min ago`;
+        if (seconds < 36 * 3600) return `${Math.round(seconds / 3600)} h ago`;
+        return `${Math.round(seconds / 86400)} days ago`;
+      }
+
+      // Decision D5: a light screen is stale after 30 minutes outdoors, or on another
+      // day indoors. The server says which; the page says how old and asks for B again.
+      function renderLightAge(studyArms) {
+        const sizes = { arm5: '1280×800', arm6: '640×400' };
+        const screens = studyArms.filter((a) => sizes[a.arm_id] && a.gain_screen);
+        const stale = screens.find((a) => a.gain_screen.stale);
+        const node = el('light-age');
+        if (stale) {
+          node.className = 'problem';
+          node.textContent = `${sizes[stale.arm_id]}: ${stale.gain_screen.prompt}`;
+          node.hidden = false;
+          return;
+        }
+        const ages = screens.map((a) => a.gain_screen.age_s).filter((age) => age != null);
+        node.hidden = !ages.length;
+        if (!ages.length) return;
+        node.className = 'note';
+        node.textContent = `Light measured ${formatAge(Math.max(...ages))}.`;
       }
 
       function lightVerdict(a) {
@@ -1176,9 +1205,11 @@
         }
         const metres = (value) => (value == null ? '?' : `${value.toFixed(3)} m`);
         const tape = Number(el('tee-mm').value) / 1000;
-        const residual = Number.isFinite(tape) && tape > 0 ? selected.floor_radar_range_m - tape : null;
+        // named floor_radar_range_m before wiring audit S11; arm records keep the old name
+        const radarRange = selected.size_radar_range_m ?? selected.floor_radar_range_m;
+        const residual = Number.isFinite(tape) && tape > 0 && radarRange != null ? radarRange - tape : null;
         el('automatic-range-values').innerHTML =
-          `<span>floor range <b>${metres(selected.floor_radar_range_m)}</b> ± ${metres(selected.floor_range_uncertainty_m)}</span>` +
+          `<span>radar range from size <b>${metres(radarRange)}</b> ± ${metres(selected.floor_range_uncertainty_m)}</span>` +
           `<span>apparent-size range <b>${metres(selected.size_camera_range_m)}</b> ± ${metres(selected.size_range_uncertainty_m)}</span>` +
           `<span>disagreement <b>${metres(selected.range_disagreement_m)}</b> · consistency <b>${selected.consistency_sigma?.toFixed(2) ?? '?'}σ</b></span>` +
           `<span>confidence <b>${selected.confidence}</b> · canonical status <b>${solution?.status ?? 'unresolved'}</b></span>` +
@@ -1440,15 +1471,23 @@
         teeRangeActionErrorKey = message ? teeRangeStateKey(teeRangeState) : null;
       }
 
+      // A failure summary is shown only by the transition that set it; an older one
+      // stays on record but never resurfaces beside a newer failure (wiring audit T8).
+      // Records written before the stamp have no sequence and are shown as before.
+      function currentFailure(state, failure) {
+        if (!failure) return null;
+        return failure.sequence == null || failure.sequence === state.sequence ? failure : null;
+      }
+
       function teeRangeFailureSummary(state) {
         if (state?.phase !== 'retryable_failure') return null;
-        const cameraFailure = state?.evidence?.camera_capture_failure;
+        const cameraFailure = currentFailure(state, state?.evidence?.camera_capture_failure);
         if (cameraFailure) {
           const arm = cameraFailure.arm_id === 'arm6' ? '640×400' : '1280×800';
           const remedy = cameraFailure.remedy ? ` Remedy: ${cameraFailure.remedy}` : '';
           return `${arm} camera failed at ${cameraFailure.stage || 'live view'}: ${cameraFailure.message || 'the live camera stopped'}.${remedy}`;
         }
-        const failure = state?.evidence?.capture_failure;
+        const failure = currentFailure(state, state?.evidence?.capture_failure);
         if (!failure) return null;
         const kind = failure.capture_kind === 'ball_present' ? 'Ball-present' : 'Empty';
         const stage = failure.stage || 'unknown stage';
@@ -1603,7 +1642,7 @@
         const numeric = (value) => value != null && Number.isFinite(Number(value));
         const coordinate = (value) => numeric(value) ? Number(value).toFixed(1) : '?';
         const diameter = numeric(ball.diameter_px) ? `${Number(ball.diameter_px).toFixed(1)} px` : 'unavailable';
-        const range = numeric(ball.floor_radar_range_m) ? ` · range ${Number(ball.floor_radar_range_m).toFixed(3)} m` : '';
+        const range = numeric(ball.size_radar_range_m) ? ` · range ${Number(ball.size_radar_range_m).toFixed(3)} m` : '';
         const readiness = association.save_eligible
           ? ' · stable and ready to save'
           : ` · stabilizing ${association.stable_count || 0}/3`;

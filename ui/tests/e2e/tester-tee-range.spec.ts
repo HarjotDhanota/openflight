@@ -22,6 +22,7 @@ function eligibility() {
 
 type FlowState = {
   epoch_id: string;
+  sequence?: number;
   phase: string;
   reason: string;
   retry_phase?: string | null;
@@ -135,7 +136,7 @@ async function base(page: Page, initial: FlowState | null = null) {
               x_px: 641.2,
               y_px: 502.7,
               diameter_px: 24.4,
-              floor_radar_range_m: 1.527,
+              size_radar_range_m: 1.527,
             },
             candidates: [],
             stable_count: 3,
@@ -248,7 +249,7 @@ test('shows the server-owned guided camera frame without starting another live v
               x_px: 641.2,
               y_px: 502.7,
               diameter_px: 24.4,
-              floor_radar_range_m: 1.527,
+              size_radar_range_m: 1.527,
             },
             candidates: [],
             stable_count: 3,
@@ -400,7 +401,7 @@ test('labels radar-conditioned readiness as provisional until independent Save',
           x_px: 641.2,
           y_px: 502.7,
           diameter_px: 24.4,
-          floor_radar_range_m: 1.527,
+          size_radar_range_m: 1.527,
         },
         stable_count: 3,
         stable_span_s: 1,
@@ -691,6 +692,83 @@ test('a newer server failure replaces an earlier rejected-action message', async
     'Empty IWR capture failed at connect (RuntimeError): no IWR6843 CLI found'
   );
 });
+
+test('an earlier failure never resurfaces beside a newer one', async ({ page }) => {
+  // audit T8: a camera failure was retried and fixed; later the radar failed
+  const oldCamera = {
+    arm_id: 'arm5',
+    stage: 'live_view',
+    message: 'camera cable disconnected',
+    remedy: 'Check the camera connection.',
+    sequence: 5,
+  };
+  const fixture = await base(page, {
+    epoch_id: 'epoch-t8',
+    sequence: 9,
+    phase: 'retryable_failure',
+    reason: 'ball_present_capture_unusable',
+    retry_phase: 'needs_ball',
+    evidence: {
+      camera_capture_failure: oldCamera,
+      capture_failure: { ...CONNECT_FAILURE, capture_kind: 'ball_present', sequence: 9 },
+    },
+    solution: null,
+  });
+  await page.goto('/tester.html');
+  const summary = page.locator('#automatic-range-summary');
+  await expect(summary).toContainText('Ball-present IWR capture failed at connect');
+  await expect(summary).not.toContainText('camera cable disconnected');
+
+  // a failure that set no message of its own shows neither old one
+  fixture.setState({
+    ...fixture.state()!,
+    sequence: 12,
+    reason: 'camera_arm6_evaluation_failed',
+    retry_phase: 'needs_camera_arm6',
+  });
+  await expect(summary).not.toContainText('IWR capture failed');
+  await expect(summary).not.toContainText('camera cable disconnected');
+});
+
+for (const key of ['size_radar_range_m', 'floor_radar_range_m']) {
+  test(`camera range evidence recorded as ${key} is shown`, async ({ page }) => {
+    // wiring audit S11: arm records written before the rename keep floor_radar_range_m.
+    // The arm record's panel shows when the guided range endpoint does not answer.
+    await base(page);
+    await page.route('**/api/tester/tee-range**', (route) => json(route, { error: 'unavailable' }, 503));
+    await page.route('**/api/tester/status**', (route) =>
+      json(route, {
+        study: {
+          arms: [
+            {
+              arm_id: 'arm5',
+              label: 'Arm 5',
+              isolates: 'reference',
+              exposure_us: 300,
+              target: 10,
+              tee_range_camera_evidence: {
+                status: 'selected',
+                confidence: 'experimental',
+                candidates: [{}],
+                selected: {
+                  [key]: 1.234,
+                  floor_range_uncertainty_m: 0.02,
+                  size_camera_range_m: 1.2,
+                  size_range_uncertainty_m: 0.02,
+                  range_disagreement_m: null,
+                  consistency_sigma: 0.4,
+                  confidence: 'experimental',
+                },
+              },
+            },
+          ],
+        },
+      })
+    );
+    await page.goto('/tester.html');
+    await expect(page.locator('#automatic-range-values')).toContainText('radar range from size 1.234 m');
+  });
+}
 
 test('legacy camera evidence polling never overwrites the guided failure', async ({ page }) => {
   await base(page, {
