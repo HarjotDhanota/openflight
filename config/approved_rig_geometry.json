@@ -1,0 +1,11 @@
+{
+ "schema": "openflight.approved_rig_geometry.v1",
+ "note": "Rig files the tester may capture with, by the canonical parameter fingerprint (RigGeometry.snapshot()['sha256'], named rig_geometry_params_sha256 in the records), so re-saving a file with other whitespace or line endings does not change it. Add a new entry when a re-measured or calibrated rig file is approved; keep the old ones so earlier sessions still name an approved rig.",
+ "approved": [
+  {
+   "rig_geometry_params_sha256": "79870a2be3475a405260fa2ff8d00b8f5fe501632da634369fd4a800382cbaa1",
+   "file": "config/enclosure_v3_rig_geometry.json",
+   "description": "v3 enclosure as measured by Harjot 2026-09-22; nominal focal_px pending checkerboard calibration"
+  }
+ ]
+}

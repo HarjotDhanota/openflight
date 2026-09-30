@@ -37,6 +37,7 @@ from flask import Flask, Response, g, jsonify, request, send_file
 from openflight import session_bundle, tee_range, tee_range_setup
 from openflight.camera import (
     attempt_ledger,
+    ball_pixels,
     reference_ball_range,
     session_review_routes as review_routes,
     study_ladder,
@@ -114,10 +115,6 @@ SWINGS_PER_ARM = 5
 # depth, so that is about a third of head speed. The budget is in millimetres,
 # so the exposure is the same in every mode.
 EXPOSURE_CEILING_US = 300
-# The 2x-decimated modes share one focal because each output pixel spans the
-# same 6 um; 1:1 doubles it.
-FOCAL_PX_2X = 466.6667
-FOCAL_PX_1X = 933.3333
 # OV9282 analogue gain runs from 1 (unity) to 0xFF/16; unity matters in sunlight
 GAIN_SCREEN = "1,2,4,6,8,10,12,14,15.9"
 # Above ~12x the black floor lifts and column stripes appear: more offset, not
@@ -227,6 +224,18 @@ ARMS: dict[str, Arm] = {
     )
 }
 ARM_ORDER = tuple(ARMS)
+
+
+def mode_focal_px(arm: Arm, rig_geometry: Path) -> float:
+    """The arm's focal length from the rig file, by its binning (wiring audit C2).
+
+    The 2x-binned modes share one focal because each output pixel spans the same
+    two sensor pixels (320x200 is a crop of 640x400); 1:1 doubles it.
+    """
+    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+    return ball_pixels.mode_focal_px(arm.width, RigGeometry.from_json(rig_geometry))
+
 
 ACTION_LABELS = {
     "preflight": "Hardware and software preflight",
@@ -976,9 +985,10 @@ def solved_range(arm_dir: Path, arm: Arm, choice: Mapping, rig_geometry: Path) -
     try:
         image = _read_pgm(pgm)
         ball = detect_reference_ball(np.stack([image] * 3))
+        loaded = RigGeometry.from_json(rig_geometry)
         rig = replace(
-            RigGeometry.from_json(rig_geometry),
-            focal_px=FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X,
+            loaded,
+            focal_px=ball_pixels.mode_focal_px(arm.width, loaded),
             image_width=arm.width,
             image_height=arm.height,
         )
@@ -1532,8 +1542,7 @@ def expected_ball_diameter_px(arm: Arm, tee_mm: float | None, rig_geometry: Path
     offset = RigGeometry.from_json(rig_geometry).iwr_offset_mm
     # the tape runs from the radar window, which sits this far behind the lens
     camera_mm = tee_mm + (offset[2] if offset else 0.0)
-    focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
-    return focal * BALL_DIAMETER_MM / camera_mm
+    return mode_focal_px(arm, rig_geometry) * BALL_DIAMETER_MM / camera_mm
 
 
 def expected_ball_row_px(
@@ -1552,20 +1561,21 @@ def expected_ball_row_px(
     rig = RigGeometry.from_json(rig_geometry)
     if rig.lens_height_above_floor_mm is None:
         return None
-    focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
+    focal = ball_pixels.mode_focal_px(arm.width, rig)
     camera_mm = tee_mm + (rig.iwr_offset_mm[2] if rig.iwr_offset_mm else 0.0)
     drop = rig.lens_height_above_floor_mm - BALL_DIAMETER_MM / 2.0
     along = math.sqrt(max(camera_mm**2 - drop**2, 1.0))
     measured = (tilt or {}).get("camera_pitch_deg")
     pitch = rig.boresight_pitch_deg if measured is None else measured
     row = arm.height / 2.0 + focal * math.tan(math.radians(pitch) + math.atan(drop / along))
-    band = (90.0 if measured is not None else 150.0) * focal / FOCAL_PX_1X
+    # the band is in 1:1 pixels; a binned mode sees half as many
+    band = (90.0 if measured is not None else 150.0) / ball_pixels.binning_factor(arm.width)
     return row, band
 
 
 def ball_readout(
     frames: np.ndarray,
-    focal_px: float,
+    focal_px: float | None,
     expected_diameter_px: float | None = None,
     expected_row: tuple[float, float] | None = None,
 ) -> dict:
@@ -1604,7 +1614,11 @@ def ball_readout(
         "x": round(ball.x, 1),
         "y": round(ball.y, 1),
         "diameter_px": round(ball.diameter_px, 1),
-        "range_m": round(focal_px * BALL_DIAMETER_MM / ball.diameter_px / 1000.0, 2),
+        "range_m": (
+            round(focal_px * BALL_DIAMETER_MM / ball.diameter_px / 1000.0, 2)
+            if focal_px is not None
+            else None
+        ),
         "ball_dn": round(float(np.median(inside)), 1),
         "around_dn": round(float(np.median(around)), 1) if around.size else None,
         "edge_dn_per_px": round(float(edge.mean()), 1) if edge.size else None,
@@ -1750,7 +1764,7 @@ def distance_cues(
     from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
 
     rig = RigGeometry.from_json(rig_geometry)
-    focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
+    focal = ball_pixels.mode_focal_px(arm.width, rig)
     cx, cy = arm.width / 2.0, arm.height / 2.0
     # with a tape, the ring's size IS the tape's: only the picture's own reading
     # of the same ball is an independent estimate, and without one there is none
@@ -1898,7 +1912,7 @@ def _reference_ball_camera(
     camera = np.asarray((0.0, 0.0, rig.lens_height_above_floor_mm / 1000.0))
     offset = np.asarray(camera_rdf_offset_to_target_lfu(rig.iwr_offset_mm or (0.0, 0.0, 0.0)))
     return BallPlaneCamera.nominal(
-        focal_px=FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X,
+        focal_px=ball_pixels.mode_focal_px(arm.width, rig),
         image_width_px=arm.width,
         image_height_px=arm.height,
         pitch_deg=float(pitch),
@@ -3676,8 +3690,15 @@ def live_controls(arm: Arm, exposure_us: int, gain: float) -> dict:
 class LiveView:
     """One arm's readout mode streamed to the page; exposure and gain change live."""
 
-    def __init__(self, camera_factory: Callable[[], object] | None = None):
+    def __init__(
+        self,
+        camera_factory: Callable[[], object] | None = None,
+        focal_px_for: Callable[[Arm], float] | None = None,
+    ):
         self._camera_factory = camera_factory
+        # the arm's focal length from the rig file; without it the live readout
+        # gives no size range rather than a nominal one (wiring audit C2)
+        self._focal_px_for = focal_px_for
         self._lock = threading.Lock()
         self._active_stop: threading.Event | None = None
         self._run_generation = 0
@@ -3855,7 +3876,10 @@ class LiveView:
             self._prune_retired_locked()
 
     def _look(self, arm: Arm, stop_event: threading.Event, generation: int) -> None:
-        focal = FOCAL_PX_1X if arm.width >= 1280 else FOCAL_PX_2X
+        try:
+            focal = self._focal_px_for(arm) if self._focal_px_for is not None else None
+        except (OSError, TypeError, ValueError):
+            focal = None
         last_context, last_sequence, last_at, context_started = None, 0, 0.0, 0.0
         while not stop_event.wait(min(0.1, LIVE_BALL_EVERY_S)):
             with self._lock:
@@ -4316,7 +4340,7 @@ def create_app(
         if radar_jobs is not jobs:
             radar_jobs.release()
 
-    live = live_view or LiveView()
+    live = live_view or LiveView(focal_px_for=lambda arm: mode_focal_px(arm, rig_geometry))
     enclosure = tilt or EnclosureTilt(rig_geometry)
     setup = setup_policy or SetupEligibility(
         rig_geometry,
