@@ -1665,6 +1665,53 @@ class TestGuidedRangeAnalyzer:
         assert analysis["promotion_eligible"] is False
         assert analysis["promotion_rejection_reason"] == reason
 
+    def test_live_looks_that_land_while_save_searches_do_not_make_the_save_frames_stale(
+        self, monkeypatch
+    ):
+        # harjot-indoor-test-2 (30 Sept): Save's whole-patch search took 3.3 s on the
+        # Pi, the live loop kept looking meanwhile, and Save was withheld as "older
+        # than the stable camera observation" though its frames were the newest
+        orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
+        analyzer = ts.GuidedRangeAnalyzer(
+            _guided_camera(), orientation, lambda: orientation, _guided_patch()
+        )
+        frames = np.full((5, 200, 320), 70, dtype=np.uint8)
+        saving = {"active": False}
+
+        def estimate(_frames, _camera, **_kwargs):
+            if saving["active"]:
+                saving["active"] = False
+                analyzer.observe(frames, 6, observed_at=2.5)
+            return _guided_result()
+
+        monkeypatch.setattr(ts, "estimate_patch_ball", estimate)
+        for observation_id, observed_at in enumerate((1.0, 1.5, 2.0), start=1):
+            analyzer.observe(frames, observation_id, observed_at=observed_at)
+        saving["active"] = True
+
+        _result, analysis, reason = analyzer.analyze_for_save(frames, 3)
+
+        assert reason is None
+        assert analysis["promotion_eligible"] is True
+        assert analysis["observation_id"] == 3
+
+    def test_save_frames_older_than_the_readiness_it_was_pressed_on_are_still_refused(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(ts, "estimate_patch_ball", lambda *_args, **_kwargs: _guided_result())
+        orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
+        analyzer = ts.GuidedRangeAnalyzer(
+            _guided_camera(), orientation, lambda: orientation, _guided_patch()
+        )
+        frames = np.full((5, 200, 320), 70, dtype=np.uint8)
+        for observation_id, observed_at in enumerate((1.0, 1.5, 2.0), start=4):
+            analyzer.observe(frames, observation_id, observed_at=observed_at)
+
+        _result, analysis, reason = analyzer.analyze_for_save(frames, 3)
+
+        assert reason == "Save frames are older than the stable camera observation"
+        assert analysis["promotion_eligible"] is False
+
 
 class TestTheTapeGivesTheBallsSize:
     def test_the_tape_runs_from_the_radar_window_behind_the_lens(self):

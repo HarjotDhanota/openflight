@@ -3651,15 +3651,18 @@ class GuidedRangeAnalyzer:
         self, frames: np.ndarray, observation_id: int
     ) -> tuple[ReferenceBallRangeResult, dict, str | None]:
         """Re-run the estimator on exact Save frames and compare with stable live readiness."""
+        # freeze the readiness Save was pressed on first: the live loop keeps looking
+        # through the seconds the whole-patch search takes on a Pi, and a look that
+        # lands meanwhile is newer than the Save frames without making them stale
+        with self._lock:
+            prior = dict(self._last) if self._last is not None else None
+            stable = dict(self._stable_anchor) if self._stable_anchor is not None else None
         result, analysis = _guided_camera_analysis(
             frames,
             self.camera,
             self.patch,
             analysis_role="independent_save_confirmation",
         )
-        with self._lock:
-            prior = dict(self._last) if self._last is not None else None
-            stable = dict(self._stable_anchor) if self._stable_anchor is not None else None
         if not prior or not prior.get("save_eligible"):
             reason = "provisional camera selection is not temporally stable"
             analysis["promotion_rejection_reason"] = reason
