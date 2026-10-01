@@ -3703,6 +3703,14 @@ class GuidedRangeAnalyzer:
         return result, analysis, None
 
 
+POSE_RETURNED_RESTART_REASON = "the rig pose returned within tolerance; the search restarted"
+# The radar's captures were taken at the frozen pose, so a rig that stays moved
+# needs the whole setup again, not just this camera step.
+RIG_MOVED_READINESS = (
+    "rig moved: put it back where it was and the search restarts by itself; "
+    "if it has to stay where it is now, start setup over"
+)
+
 STATIC_EXPOSURE_FAILURES = frozenset(
     {
         "lighting_required",
@@ -3922,6 +3930,30 @@ class StaticExposureController:
             float(np.median([gain for _exposure, gain in applied_controls])),
         )
 
+    def _resume_after_pose_returned(self) -> StaticExposureStep | None:
+        """Restart a rig_moved search once the LIS3DH reads the frozen pose again.
+
+        A gust or a bump while placing the ball ends the search as rig_moved; it used
+        to stay there until the tester pressed Stop (Outdoors-test-8, 30 Sept). Only a
+        return to the frozen pose restarts it: the radar's captures were taken there.
+        """
+        with self._lock:
+            if self._search.status != "rig_moved":
+                return None
+            last = self._search.attempts[-1] if self._search.attempts else None
+            restart = StaticExposureStep(last["exposure_us"], last["gain"]) if last else None
+            self._invalidations.append(
+                {"lock": None, "observation": None, "reason": POSE_RETURNED_RESTART_REASON}
+            )
+            self._search = BallBrightnessSearch(self._max_exposure_us, start=restart)
+            self._inner = self._factory()
+            self._last_observation = None
+            step = self._search.current_step
+        if step is not None:
+            self._change_controls(step.exposure_us, step.gain, owner=self)
+        self._persist()
+        return step
+
     def _restart_search(self, observation: StaticExposureObservation) -> StaticExposureStep:
         self._invalidations.append(
             {
@@ -3948,8 +3980,14 @@ class StaticExposureController:
         with self._lock:
             inner = self._inner
             step = self._active_step()
+            moved = self._search.status == "rig_moved"
         if step is None:
-            return self._decorate(inner.observe(frames, observation_id, observed_at=observed_at))
+            association = inner.observe(frames, observation_id, observed_at=observed_at)
+            # the inner analyzer reports pose_changed until the reading is stable and
+            # back within tolerance of the frozen pose
+            if moved and association.get("status") != "pose_changed":
+                self._resume_after_pose_returned()
+            return self._decorate(association)
         exposure, gain = self._applied(step, applied_controls)
         association = (
             inner.observe(frames, observation_id, observed_at=observed_at)
@@ -4041,11 +4079,14 @@ class StaticExposureController:
         payload["static_exposure"] = exposure
         if not exposure["locked_and_passing"]:
             payload["save_eligible"] = False
-            payload["readiness_reason"] = (
-                f"{exposure['status'].replace('_', ' ')}: {exposure['reason']}"
-                if exposure["status"] in STATIC_EXPOSURE_FAILURES
-                else "static exposure is still being searched and locked"
-            )
+            if exposure["status"] == "rig_moved":
+                payload["readiness_reason"] = RIG_MOVED_READINESS
+            elif exposure["status"] in STATIC_EXPOSURE_FAILURES:
+                payload["readiness_reason"] = (
+                    f"{exposure['status'].replace('_', ' ')}: {exposure['reason']}"
+                )
+            else:
+                payload["readiness_reason"] = "static exposure is still being searched and locked"
         return payload
 
     def snapshot(self) -> dict | None:

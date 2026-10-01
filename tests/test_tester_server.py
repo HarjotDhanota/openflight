@@ -23,6 +23,7 @@ from openflight.camera.reference_ball_range import (
     ReferenceBallRangeCandidate,
     ReferenceBallRangeResult,
 )
+from openflight.camera.static_exposure import SETTLE_LIMIT
 from tests.session_fixtures import TESTER, capture_tree
 
 RIG = ts.DEFAULT_RIG_GEOMETRY
@@ -1711,6 +1712,95 @@ class TestGuidedRangeAnalyzer:
 
         assert reason == "Save frames are older than the stable camera observation"
         assert analysis["promotion_eligible"] is False
+
+
+class TestStaticExposureRigMoved:
+    """Outdoors-test-8 (30 Sept): a roll blip ended the search as rig_moved for good."""
+
+    @staticmethod
+    def _controller(monkeypatch, pose):
+        monkeypatch.setattr(ts, "estimate_patch_ball", lambda *_args, **_kwargs: _guided_result())
+        frozen = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": -2.0}
+        changes = []
+        controller = ts.StaticExposureController(
+            lambda: ts.GuidedRangeAnalyzer(
+                _guided_camera(), frozen, lambda: dict(pose), _guided_patch()
+            ),
+            max_exposure_us=2000,
+            change_controls=lambda exposure, gain, owner=None: changes.append((exposure, gain)),
+            black_floor_dn=16.0,
+        )
+        return controller, changes
+
+    @staticmethod
+    def _look(controller, observation_id):
+        # a finished search has no step: the camera keeps the controls it last applied
+        step = controller._active_step()  # pylint: disable=protected-access
+        if step is not None:
+            controller.applied_in_test = step
+        step = controller.applied_in_test
+        frames = np.full((5, 200, 320), 70, dtype=np.uint8)
+        return controller.observe(
+            frames,
+            observation_id,
+            observed_at=float(observation_id),
+            applied_controls=[(float(step.exposure_us), float(step.gain))] * 5,
+        )
+
+    def _move_rig(self, controller, pose, start_id):
+        pose["roll_deg"] = -2.9
+        for offset in range(SETTLE_LIMIT):
+            self._look(controller, start_id + offset)
+        assert controller.status()["status"] == "rig_moved"
+        return start_id + SETTLE_LIMIT
+
+    def test_the_search_restarts_by_itself_when_the_pose_comes_back(self, monkeypatch):
+        pose = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": -2.0}
+        controller, _changes = self._controller(monkeypatch, pose)
+        step_before = controller.initial_step
+        next_id = self._move_rig(controller, pose, 1)
+
+        pose["roll_deg"] = -2.1
+        self._look(controller, next_id)
+
+        status = controller.status()
+        assert status["status"] == "searching"
+        assert controller._active_step() == step_before  # pylint: disable=protected-access
+        assert status["invalidations"][-1]["reason"] == ts.POSE_RETURNED_RESTART_REASON
+
+    def test_a_rig_that_stays_moved_is_not_restarted_and_says_why(self, monkeypatch):
+        pose = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": -2.0}
+        controller, _changes = self._controller(monkeypatch, pose)
+        next_id = self._move_rig(controller, pose, 1)
+
+        readiness = self._look(controller, next_id)
+
+        assert controller.status()["status"] == "rig_moved"
+        assert readiness["save_eligible"] is False
+        assert readiness["readiness_reason"] == ts.RIG_MOVED_READINESS
+
+    def test_an_unsettled_reading_does_not_restart_the_search(self, monkeypatch):
+        pose = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": -2.0}
+        controller, _changes = self._controller(monkeypatch, pose)
+        next_id = self._move_rig(controller, pose, 1)
+
+        pose.update(status="settling", roll_deg=-2.0)
+        self._look(controller, next_id)
+
+        assert controller.status()["status"] == "rig_moved"
+
+    def test_the_search_restarts_every_time_the_pose_comes_back(self, monkeypatch):
+        pose = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": -2.0}
+        controller, _changes = self._controller(monkeypatch, pose)
+        next_id = 1
+        for _ in range(3):
+            next_id = self._move_rig(controller, pose, next_id)
+            pose["roll_deg"] = -2.0
+            self._look(controller, next_id)
+            next_id += 1
+            assert controller.status()["status"] == "searching"
+        reasons = [item["reason"] for item in controller.status()["invalidations"]]
+        assert reasons.count(ts.POSE_RETURNED_RESTART_REASON) == 3
 
 
 class TestTheTapeGivesTheBallsSize:
