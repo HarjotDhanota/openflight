@@ -20,12 +20,7 @@ from openflight.camera.geometry import unit_world_rays
 GOLF_BALL_DIAMETER_M = 0.04267
 _DIAMETER_HYPOTHESES = 12
 _AMBIGUITY_SCORE_MARGIN = 0.75
-IWR_CAMERA_HINT_SCHEMA = "openflight.iwr_camera_search_hint.v1"
 _FULL_RADAR_RANGE_M = (0.5, 4.0)
-_MAX_HINT_RANGE_WIDTH_M = 1.5
-_MAX_HINT_ROI_HEIGHT_FRACTION = 0.85
-_HINT_UNCERTAINTY_MULTIPLIER = 3.0
-_MIN_HINT_HALF_WIDTH_M = 0.12
 # The lens height is solved from the resting ball, not assumed: feet sink into
 # carpet and a unit may stand on a box. These bound what is physically plausible.
 # Heights are measured from the surface the ball rests on (ground, mat or tee top),
@@ -57,42 +52,15 @@ _HITTING_LATERAL_M = 0.30
 _SEED_LATERAL_M = 0.45
 _BALL_ABOVE_SURFACE_M = (-0.010, 0.090)
 _LENS_ABOVE_SURFACE_M = (0.0, 1.0)
-# The placement box (P7-4, decision D10 as changed on 30 Sept): the tester drags it
-# over the spot they will hit from, and every setup search looks only inside it.
-# Its size is a product constant, the same on every unit: 0.20 m wide at the
-# nominal hitting distance, and tall enough for a ball 1.2-1.5 m out from on the
-# surface to on a raised mat. Its rows are padded for the LIS3DH pitch, the roll
-# that is recorded but not applied (camera_roll), and its columns for the
-# uncalibrated principal point. At 95 mm the whole 1.2-1.5 m depth spans only
-# about 11 rows, so the box places the ball sideways; it does not measure distance.
-# The default position is that zone straight ahead of the unit.
-PLACEMENT_BOX_NOMINAL_DISTANCE_M = 1.35
-PLACEMENT_BOX_DEPTH_M = (1.2, 1.5)
-PLACEMENT_BOX_HALF_WIDTH_M = 0.10
-PLACEMENT_BOX_PITCH_PAD_DEG = 1.5
-PLACEMENT_BOX_COLUMN_PAD_DEG = 0.5
-PLACEMENT_BOX_MIN_ROLL_PAD_DEG = 1.0
-# With no roll reading, the rows are padded as if the unit were rolled this much.
-PLACEMENT_BOX_UNKNOWN_ROLL_DEG = 3.0
+# A search region the caller names in pixels (the old whole-frame estimator's
+# ``placement_box_px``); the setup itself now searches the ground patch (P8-1, P8-2).
 PLACEMENT_BOX_REJECTION = "outside the placement box"
 
 
-def placement_box_policy() -> dict[str, Any]:
-    """The placement box's constants, bound into the camera estimator's identity."""
-    return {
-        "placed_by": "tester_drag",
-        "size": "fixed_product_constant",
-        "nominal_distance_m": PLACEMENT_BOX_NOMINAL_DISTANCE_M,
-        "depth_m": list(PLACEMENT_BOX_DEPTH_M),
-        "half_width_m": PLACEMENT_BOX_HALF_WIDTH_M,
-        "ball_above_surface_m": list(_BALL_ABOVE_SURFACE_M),
-        "pitch_pad_deg": PLACEMENT_BOX_PITCH_PAD_DEG,
-        "column_pad_deg": PLACEMENT_BOX_COLUMN_PAD_DEG,
-        "min_roll_pad_deg": PLACEMENT_BOX_MIN_ROLL_PAD_DEG,
-        "unknown_roll_pad_deg": PLACEMENT_BOX_UNKNOWN_ROLL_DEG,
-        "distance": "lens",
-        "membership": "fitted_ball_centre_inside_the_box",
-    }
+def _patch_policy() -> dict[str, Any]:
+    from openflight.camera.ground_patch import ground_patch_policy  # noqa: PLC0415
+
+    return ground_patch_policy()
 
 
 def camera_range_estimator_policy() -> dict[str, Any]:
@@ -103,12 +71,18 @@ def camera_range_estimator_policy() -> dict[str, Any]:
         # version 4: every setup search looks only inside the tester's placement box
         # (P7-4); a box the tester placed is as independent of the live pick as the
         # full frame was, so Save stays an independent confirmation
+        # version 5 (P8-2): the setup searches only the ground patch's outline, at the
+        # sizes its distances allow; the floor row is a diagnostic, never a refusal;
+        # candidates rank by the lit-sphere fit's quality
         "name": "camera_reference_ball_size_range",
-        "version": 4,
+        "version": 5,
         "detector": "reference_ball_candidates_v2_merged_seeds",
         "seed_fits": REFERENCE_SEED_FITS,
-        "search_region": "tester_placed_box_then_hitting_area_in_world_coordinates",
-        "placement_box": placement_box_policy(),
+        "search_region": "the_ground_patch_outline_only",
+        "patch": _patch_policy(),
+        "patch_ranking": "lit_sphere_fit_quality",
+        "patch_ambiguity_quality_ratio": 0.75,
+        "floor_row": "diagnostic_residual_never_a_refusal",
         "camera_height": "solved_from_apparent_size_and_ray",
         "camera_height_range_m": list(_CAMERA_HEIGHT_RANGE_M),
         "camera_height_prior_sigma_m": _CAMERA_HEIGHT_PRIOR_SIGMA_M,
@@ -381,221 +355,6 @@ class ReferenceBallRangeResult:
     selected: ReferenceBallRangeCandidate | None
     candidates: tuple[ReferenceBallRangeCandidate, ...]
     diagnostics: Mapping[str, Any]
-
-
-def _search_hint_input_identity(
-    camera: BallPlaneCamera,
-    *,
-    epoch_id: str,
-    source_epoch_id: str | None,
-    candidate_id: str | None,
-    source_input_identity: Mapping[str, Any] | None,
-    camera_input_identity: Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    return {
-        "active_epoch_id": epoch_id,
-        "source_epoch_id": source_epoch_id,
-        "source_candidate_id": candidate_id,
-        "source": "iwr_static_profile_difference",
-        "source_group": "iwr",
-        "source_inputs": dict(source_input_identity or {}),
-        "camera_projection": {
-            "source": camera.source,
-            "accuracy_qualified": camera.accuracy_qualified,
-            "image_size_px": [camera.image_width_px, camera.image_height_px],
-            "camera_origin_lfu_m": list(camera.camera_origin_lfu),
-            "radar_origin_lfu_m": list(camera.radar_origin_lfu),
-            "focal_size_px": camera.focal_size_px,
-            "angular_uncertainty_deg": camera.angular_uncertainty_deg,
-            "focal_relative_uncertainty": camera.focal_relative_uncertainty,
-            "artifacts": dict(camera_input_identity or {}),
-        },
-    }
-
-
-def _rejected_search_hint(
-    *, input_identity: Mapping[str, Any], reason_code: str, reason: str
-) -> dict[str, Any]:
-    return {
-        "schema": IWR_CAMERA_HINT_SCHEMA,
-        "status": "rejected",
-        "reason_code": reason_code,
-        "rejection_reasons": [reason],
-        "input_identity": dict(input_identity),
-        "conditioning": "not_applied",
-        "promotion_eligible": False,
-        "independent_confirmation_eligible": False,
-        "iwr_range_used": False,
-        "fallback": {
-            "mode": "broad_full_frame_unconditioned",
-            "reason_code": reason_code,
-            "reason": reason,
-        },
-    }
-
-
-def build_iwr_camera_search_hint(  # pylint: disable=too-many-locals
-    camera: BallPlaneCamera,
-    *,
-    radar_range_m: Any,
-    uncertainty_m: Any,
-    ball_center_height_m: float,
-    epoch_id: str,
-    source_epoch_id: str | None,
-    candidate_id: str | None,
-    source_input_identity: Mapping[str, Any] | None = None,
-    camera_input_identity: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Project a static-IWR range band into a non-promoting camera search hint."""
-    input_identity = _search_hint_input_identity(
-        camera,
-        epoch_id=epoch_id,
-        source_epoch_id=source_epoch_id,
-        candidate_id=candidate_id,
-        source_input_identity=source_input_identity,
-        camera_input_identity=camera_input_identity,
-    )
-    if not epoch_id:
-        return _rejected_search_hint(
-            input_identity=input_identity,
-            reason_code="active_epoch_missing",
-            reason="the active guided-flow epoch is missing",
-        )
-    if not candidate_id:
-        return _rejected_search_hint(
-            input_identity=input_identity,
-            reason_code="static_iwr_candidate_missing",
-            reason="no accepted static IWR candidate is available",
-        )
-    if source_epoch_id is None:
-        return _rejected_search_hint(
-            input_identity=input_identity,
-            reason_code="static_iwr_candidate_rejected",
-            reason="the static IWR candidate is not accepted for provisional guidance",
-        )
-    if source_epoch_id != epoch_id:
-        return _rejected_search_hint(
-            input_identity=input_identity,
-            reason_code="static_iwr_candidate_stale",
-            reason="static IWR candidate epoch does not match the active flow",
-        )
-    try:
-        radar_range = float(radar_range_m)
-        uncertainty = float(uncertainty_m)
-        ball_height = float(ball_center_height_m)
-    except (TypeError, ValueError):
-        return _rejected_search_hint(
-            input_identity=input_identity,
-            reason_code="static_iwr_numeric_input_invalid",
-            reason="static IWR range or uncertainty is not numeric",
-        )
-    if (
-        not math.isfinite(radar_range)
-        or not math.isfinite(uncertainty)
-        or uncertainty <= 0.0
-        or not _FULL_RADAR_RANGE_M[0] <= radar_range <= _FULL_RADAR_RANGE_M[1]
-        or not math.isfinite(ball_height)
-        or ball_height < 0.0
-    ):
-        return _rejected_search_hint(
-            input_identity=input_identity,
-            reason_code="static_iwr_physical_input_invalid",
-            reason="static IWR range, uncertainty, or ball height is invalid",
-        )
-    padding = max(_HINT_UNCERTAINTY_MULTIPLIER * uncertainty, _MIN_HINT_HALF_WIDTH_M)
-    support = (
-        max(_FULL_RADAR_RANGE_M[0], radar_range - padding),
-        min(_FULL_RADAR_RANGE_M[1], radar_range + padding),
-    )
-    if support[1] - support[0] >= _MAX_HINT_RANGE_WIDTH_M:
-        return _rejected_search_hint(
-            input_identity=input_identity,
-            reason_code="static_iwr_uncertainty_too_broad",
-            reason="static IWR uncertainty is too broad to reduce the camera search",
-        )
-
-    width = camera.image_width_px
-    height = camera.image_height_px
-    xs = np.linspace(0.0, width - 1.0, min(width, 65))
-    ys = np.arange(height, dtype=float)
-    grid_x, grid_y = np.meshgrid(xs, ys)
-    pixels = np.column_stack((grid_x.ravel(), grid_y.ravel()))
-    try:
-        rays = np.asarray(camera.ray_model.rays(pixels), dtype=float).reshape(height, -1, 3)
-    except (RuntimeError, TypeError, ValueError):
-        return _rejected_search_hint(
-            input_identity=input_identity,
-            reason_code="camera_projection_failed",
-            reason="camera geometry could not project the static IWR range band",
-        )
-    if not np.all(np.isfinite(rays)):
-        return _rejected_search_hint(
-            input_identity=input_identity,
-            reason_code="camera_projection_non_finite",
-            reason="camera geometry returned non-finite rays for the range band",
-        )
-    camera_origin = np.asarray(camera.camera_origin_lfu, dtype=float)
-    radar_origin = np.asarray(camera.radar_origin_lfu, dtype=float)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        distance = (ball_height - camera_origin[2]) / rays[..., 2]
-        points = camera_origin + distance[..., None] * rays
-        radar_ranges = np.linalg.norm(points - radar_origin, axis=-1)
-    valid = (
-        np.isfinite(radar_ranges)
-        & (distance > 0.0)
-        & (points[..., 1] > camera_origin[1])
-        & (radar_ranges >= support[0])
-        & (radar_ranges <= support[1])
-    )
-    rows = np.flatnonzero(np.any(valid, axis=1))
-    if not rows.size:
-        return _rejected_search_hint(
-            input_identity=input_identity,
-            reason_code="range_band_outside_camera_view",
-            reason="static IWR range band does not intersect the saved camera image",
-        )
-
-    origin_separation = float(np.linalg.norm(camera_origin - radar_origin))
-    camera_near = max(0.1, support[0] - origin_separation)
-    camera_far = support[1] + origin_separation
-    angular_large = 2.0 * math.asin(min(1.0, GOLF_BALL_DIAMETER_M / (2.0 * camera_near)))
-    angular_small = 2.0 * math.asin(min(1.0, GOLF_BALL_DIAMETER_M / (2.0 * camera_far)))
-    focal_margin = camera.focal_relative_uncertainty
-    smallest = camera.focal_size_px * max(0.5, 1.0 - focal_margin) * angular_small
-    largest = camera.focal_size_px * (1.0 + focal_margin) * angular_large
-    row_margin = int(math.ceil(largest / 2.0 + 4.0))
-    y0 = max(0, int(rows[0]) - row_margin)
-    y1 = min(height, int(rows[-1]) + row_margin + 1)
-    if (y1 - y0) / height >= _MAX_HINT_ROI_HEIGHT_FRACTION:
-        return _rejected_search_hint(
-            input_identity=input_identity,
-            reason_code="projected_roi_too_broad",
-            reason="projected IWR floor band is too broad to reduce the camera search",
-        )
-    return {
-        "schema": IWR_CAMERA_HINT_SCHEMA,
-        "status": "usable",
-        "reason_code": None,
-        "rejection_reasons": [],
-        "input_identity": input_identity,
-        "conditioning": "radar_guided_provisional_camera_search",
-        "source_range_m": radar_range,
-        "source_uncertainty_m": uncertainty,
-        "support_range_m": [support[0], support[1]],
-        "uncertainty": {
-            "source_standard_uncertainty_m": uncertainty,
-            "support_multiplier": _HINT_UNCERTAINTY_MULTIPLIER,
-            "minimum_half_width_m": _MIN_HINT_HALF_WIDTH_M,
-            "support_range_m": [support[0], support[1]],
-        },
-        "roi_px": [0, y0, width, y1],
-        "horizontal_basis": "full_saved_image_range_only_has_no_azimuth",
-        "expected_diameter_px": [smallest, largest],
-        "promotion_eligible": False,
-        "independent_confirmation_eligible": False,
-        "iwr_range_used": True,
-        "fallback": None,
-    }
 
 
 def ray_to_ball_center_plane(
@@ -952,40 +711,6 @@ def project_to_pixel(camera: BallPlaneCamera, point_lfu: Any) -> tuple[float, fl
     return float(pixel[0]), float(pixel[1])
 
 
-@dataclass(frozen=True)
-class PlacementBoxGeometry:
-    """The placement box's fixed size in one camera mode, and where it starts."""
-
-    size_px: tuple[int, int]
-    default_box_px: tuple[int, int, int, int]
-    nominal_ball_px: tuple[float, float]
-    image_size_px: tuple[int, int]
-    basis: Mapping[str, Any]
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "size_px": list(self.size_px),
-            "default_box_px": list(self.default_box_px),
-            "nominal_ball_px": list(self.nominal_ball_px),
-            "image_size_px": list(self.image_size_px),
-            "basis": dict(self.basis),
-        }
-
-
-def placement_box_at(origin_xy: Any, size_px: Any, image_size_px: Any) -> tuple[int, int, int, int]:
-    """The fixed-size box with its top-left corner near ``origin_xy``, kept in the frame."""
-    width, height = (int(value) for value in size_px)
-    image_width, image_height = (int(value) for value in image_size_px)
-    if not 0 < width <= image_width or not 0 < height <= image_height:
-        raise ValueError("the placement box must fit inside the frame")
-    x, y = (float(value) for value in origin_xy)
-    if not math.isfinite(x) or not math.isfinite(y):
-        raise ValueError("the placement box position must be finite")
-    x0 = min(max(int(round(x)), 0), image_width - width)
-    y0 = min(max(int(round(y)), 0), image_height - height)
-    return x0, y0, x0 + width, y0 + height
-
-
 def scale_placement_box(box_px: Any, factor: float) -> tuple[int, int, int, int]:
     """The same box in a mode ``factor`` times the size (640x400 is 1280x800 halved)."""
     x0, y0, x1, y1 = (float(value) for value in box_px)
@@ -1001,77 +726,6 @@ def inside_placement_box(box_px: Any, x_px: float, y_px: float) -> bool:
     """Whether a fitted ball centre lies inside the (half-open) box."""
     x0, y0, x1, y1 = (float(value) for value in box_px)
     return bool(x0 <= float(x_px) < x1 and y0 <= float(y_px) < y1)
-
-
-def placement_box_geometry(
-    camera: BallPlaneCamera,
-    *,
-    ball_center_height_m: float,
-    roll_deg: float | None,
-) -> PlacementBoxGeometry:
-    """Project the address zone through the camera model: the box's size and default.
-
-    Distances are along the lens ray, as the hitting area's are. The zone is
-    straight ahead of the radar axis; ``roll_deg`` is the LIS3DH roll the camera
-    model does not apply, so the rows are padded for it (at least
-    ``PLACEMENT_BOX_MIN_ROLL_PAD_DEG``, or ``PLACEMENT_BOX_UNKNOWN_ROLL_DEG`` without
-    a reading).
-    """
-    origin = np.asarray(camera.camera_origin_lfu, dtype=float)
-    lateral0 = float(camera.radar_origin_lfu[0])
-
-    def pixel(lateral_m: float, distance_m: float, height_m: float) -> tuple[float, float]:
-        sideways = lateral0 + lateral_m - origin[0]
-        forward = math.sqrt(distance_m**2 - sideways**2 - (height_m - origin[2]) ** 2)
-        return project_to_pixel(camera, (lateral0 + lateral_m, origin[1] + forward, height_m))
-
-    nominal = pixel(0.0, PLACEMENT_BOX_NOMINAL_DISTANCE_M, ball_center_height_m)
-    left = pixel(
-        -PLACEMENT_BOX_HALF_WIDTH_M, PLACEMENT_BOX_NOMINAL_DISTANCE_M, ball_center_height_m
-    )
-    right = pixel(
-        PLACEMENT_BOX_HALF_WIDTH_M, PLACEMENT_BOX_NOMINAL_DISTANCE_M, ball_center_height_m
-    )
-    heights = (
-        ball_center_height_m + _BALL_ABOVE_SURFACE_M[0],
-        ball_center_height_m + _BALL_ABOVE_SURFACE_M[1],
-    )
-    rows = [
-        pixel(0.0, distance, height)[1]
-        for distance in (*PLACEMENT_BOX_DEPTH_M, PLACEMENT_BOX_NOMINAL_DISTANCE_M)
-        for height in heights
-    ]
-    focal = camera.focal_size_px
-    column_pad = focal * math.tan(math.radians(PLACEMENT_BOX_COLUMN_PAD_DEG))
-    half_width = abs(right[0] - left[0]) / 2.0 + column_pad
-    roll_pad = (
-        PLACEMENT_BOX_UNKNOWN_ROLL_DEG
-        if roll_deg is None or not math.isfinite(float(roll_deg))
-        else max(abs(float(roll_deg)), PLACEMENT_BOX_MIN_ROLL_PAD_DEG)
-    )
-    row_pad = focal * math.tan(math.radians(PLACEMENT_BOX_PITCH_PAD_DEG))
-    row_pad += half_width * math.tan(math.radians(roll_pad))
-    width = int(math.ceil(2.0 * half_width))
-    height = int(math.ceil(max(rows) - min(rows) + 2.0 * row_pad))
-    image_size = (camera.image_width_px, camera.image_height_px)
-    width, height = min(width, image_size[0]), min(height, image_size[1])
-    default = placement_box_at(
-        (nominal[0] - width / 2.0, min(rows) - row_pad), (width, height), image_size
-    )
-    return PlacementBoxGeometry(
-        size_px=(width, height),
-        default_box_px=default,
-        nominal_ball_px=nominal,
-        image_size_px=image_size,
-        basis={
-            **placement_box_policy(),
-            "roll_pad_deg": roll_pad,
-            "roll_reading_deg": roll_deg,
-            "focal_size_px": focal,
-            "camera_source": camera.source,
-            "lens_height_m": float(origin[2]),
-        },
-    )
 
 
 def _placement_box_roi(

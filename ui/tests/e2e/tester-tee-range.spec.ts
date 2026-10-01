@@ -94,6 +94,25 @@ function rangeDisplay(current: FlowState | null) {
   };
 }
 
+// the patch the live status draws over step 3's preview (P8-6)
+const PREVIEW_PATCH = {
+  arm_id: 'arm5',
+  frame_size_px: [1280, 800],
+  box_px: [327, 458, 950, 498],
+  outline_px: [
+    [326.5, 497.1],
+    [949.7, 497.1],
+    [825.7, 458.2],
+    [452.0, 458.2],
+  ],
+  search_outline_px: [
+    [320, 546],
+    [956, 546],
+    [832, 377],
+    [446, 377],
+  ],
+};
+
 async function base(page: Page, initial: FlowState | null = null) {
   let state = initial;
   let postFailure: { body: object; status: number } | null = null;
@@ -103,22 +122,33 @@ async function base(page: Page, initial: FlowState | null = null) {
     capture_empty: 'needs_ball',
     capture_ball: 'needs_camera_arm5',
     start_camera_arm5: 'camera_arm5_capturing',
-    evaluate_camera_arm5: 'needs_camera_arm6',
-    start_camera_arm6: 'camera_arm6_capturing',
-    evaluate_camera_arm6: 'raw_only',
+    // P8-6: the 1280x800 Save finishes the setup; there is no 640x400 check
+    evaluate_camera_arm5: 'raw_only',
     retry: 'needs_empty',
   };
+  // P8-6: step 3's viewing preview while the ball is placed
+  const previews: string[] = [];
   await mockConfirmedPlacementBox(page);
   await page.route('**/api/tester/setup-eligibility?**', (route) => json(route, eligibility()));
   await page.route('**/api/tester/status**', (route) => json(route, {}));
   await page.route('**/api/tester/attempts?**', (route) => json(route, { scopes: [] }));
   await page.route('**/api/tester/ladder?**', (route) => json(route, { ladder: null, stopped: true }));
   await page.route('**/api/tester/live', (route) => {
-    const armId = state?.phase === 'camera_arm5_capturing'
-      ? 'arm5'
-      : state?.phase === 'camera_arm6_capturing'
-        ? 'arm6'
-        : null;
+    const previewing = Boolean(
+      state && ['needs_empty', 'needs_ball'].includes(state.phase) && previews.includes(`${state.epoch_id}|${state.phase}`)
+    );
+    if (previewing && state) {
+      return json(route, {
+        running: true,
+        arm_id: 'arm5',
+        owner: { kind: 'patch_preview', tester_id: '20260922-name', epoch_id: state.epoch_id, arm_id: 'arm5' },
+        stats: { mean: 70, p99: 140, max: 180, clipped_pct: 0 },
+        association: null,
+        guided_display: null,
+        placement_box: PREVIEW_PATCH,
+      });
+    }
+    const armId = state?.phase === 'camera_arm5_capturing' ? 'arm5' : null;
     return json(route, {
       running: Boolean(armId),
       arm_id: armId,
@@ -157,6 +187,10 @@ async function base(page: Page, initial: FlowState | null = null) {
     if (route.request().method() === 'GET') return json(route, { state, display: rangeDisplay(state) });
     if (postFailure) return json(route, postFailure.body, postFailure.status);
     const action = route.request().postDataJSON().action as string;
+    if (action === 'show_camera') {
+      if (state) previews.push(`${state.epoch_id}|${state.phase}`);
+      return json(route, { state, display: rangeDisplay(state) });
+    }
     const phase = next[action];
     state = {
       epoch_id: action === 'start_over' || !state ? `epoch-${action}` : state.epoch_id,
@@ -167,7 +201,6 @@ async function base(page: Page, initial: FlowState | null = null) {
           ? {
               iwr_candidate: { radar_slant_range_m: 1.52 },
               camera_arm5_candidate: { radar_slant_range_m: 1.5 },
-              camera_arm6_candidate: { radar_slant_range_m: 1.51 },
             }
           : {},
       solution:
@@ -176,6 +209,7 @@ async function base(page: Page, initial: FlowState | null = null) {
     return json(route, { state, display: rangeDisplay(state) });
   });
   return {
+    previews,
     state: () => state,
     setState: (value: FlowState) => {
       state = value;
@@ -203,11 +237,8 @@ test('walks the main automatic-range prompts and reconstructs after reload', asy
   await action.tap();
   await expect(action).toHaveText('Save 1280×800 observation');
   await action.tap();
-  await expect(action).toHaveText('Open 640×400 camera');
-  await action.tap();
-  await expect(action).toHaveText('Save 640×400 observation');
-  await action.tap();
 
+  // P8-6: the 1280×800 Save finishes the setup
   await expect(action).toHaveText('Evidence complete — no ball found');
   await expect(page.locator('#automatic-range')).toContainText(
     'bias-corrected IWR slant range unqualified — not qualified for promotion on this setup · diagnostic 1.520 m, not used'
@@ -427,8 +458,8 @@ test('the camera search is labelled as the patch search, never radar-guided', as
 test('guided camera errors stay beside the preview and stale tester polls are ignored', async ({ page }) => {
   await base(page, {
     epoch_id: 'epoch-camera-error',
-    phase: 'camera_arm6_capturing',
-    reason: 'camera_arm6_warming',
+    phase: 'camera_arm5_capturing',
+    reason: 'camera_arm5_warming',
     evidence: {},
     solution: null,
   });
@@ -439,13 +470,13 @@ test('guided camera errors stay beside the preview and stale tester polls are ig
     if (statusRequests === 1) {
       return json(route, {
         running: false,
-        arm_id: 'arm6',
+        arm_id: 'arm5',
         error: 'camera cable disconnected',
         owner: {
           kind: 'guided_tee_range',
           tester_id: '20260922-name',
           epoch_id: 'epoch-camera-error',
-          arm_id: 'arm6',
+          arm_id: 'arm5',
         },
       });
     }
@@ -454,13 +485,13 @@ test('guided camera errors stay beside the preview and stale tester polls are ig
     });
     return json(route, {
       running: false,
-      arm_id: 'arm6',
+      arm_id: 'arm5',
       error: 'camera cable disconnected',
       owner: {
         kind: 'guided_tee_range',
         tester_id: '20260922-name',
         epoch_id: 'epoch-camera-error',
-        arm_id: 'arm6',
+        arm_id: 'arm5',
       },
     });
   });
@@ -468,7 +499,7 @@ test('guided camera errors stay beside the preview and stale tester polls are ig
   await expect(page.locator('#tee-range-camera-preview')).toBeVisible();
   await expect(page.locator('#tee-range-camera-status')).toContainText('Camera error: camera cable disconnected');
   await expect(page.locator('#tee-range-action')).toBeDisabled();
-  await expect(page.locator('#automatic-range-summary')).toContainText('The second camera mode is live');
+  await expect(page.locator('#automatic-range-summary')).toContainText('The reference camera is live');
   await expect(page.locator('#automatic-range-summary')).not.toContainText('camera cable disconnected');
   await expect.poll(() => releaseStatus !== null).toBe(true);
 
@@ -1241,6 +1272,8 @@ async function boxStep(page: Page, options: BoxOptions = {}) {
   await page.route('**/api/tester/tee-range**', (route) => {
     if (route.request().method() === 'GET') return json(route, { state: range, display: rangeDisplay(range) });
     const action = route.request().postDataJSON().action as string;
+    // step 3's viewing preview (P8-6) changes nothing in the setup
+    if (action === 'show_camera') return json(route, { state: range, display: rangeDisplay(range) });
     rangePosts.push(action);
     // the ball range begins straight at the radar captures, in the confirmed patch
     range = {
@@ -1703,7 +1736,7 @@ test('a setup saved as experimental says so and lets the ladder start', async ({
   await expect(page.getByRole('button', { name: 'C. Start the exposure ladder' })).toBeEnabled();
 });
 
-test('the advisory 640×400 check can be skipped', async ({ page }) => {
+test('a setup that reached the old 640×400 check finishes without it', async ({ page }) => {
   const posts: string[] = [];
   await base(page, {
     epoch_id: 'epoch-skip',
@@ -1730,12 +1763,53 @@ test('the advisory 640×400 check can be skipped', async ({ page }) => {
   });
   await page.goto('/tester.html');
 
-  const skip = page.locator('#tee-range-skip-arm6');
-  await expect(page.locator('#automatic-range-summary')).toContainText('The check is advisory');
-  await expect(skip).toBeVisible();
-  await skip.click();
+  const action = page.locator('#tee-range-action');
+  await expect(page.locator('#automatic-range-summary')).toContainText('The 640×400 check is no longer part of the setup');
+  await expect(action).toHaveText('Finish this setup');
+  await expect(page.locator('#tee-range-skip-arm6')).toHaveCount(0);
+  await action.click();
 
-  await expect(page.locator('#tee-range-action')).toHaveText('Setup saved — experimental range');
+  await expect(action).toHaveText('Setup saved — experimental range');
   expect(posts).toEqual(['skip_camera_arm6']);
-  await expect(skip).toBeHidden();
+});
+
+test('step 3 shows the camera and the patch while the ball is placed', async ({ page }) => {
+  const mocks = await base(page, {
+    epoch_id: 'epoch-place',
+    phase: 'needs_ball',
+    reason: 'needs_ball',
+    evidence: {},
+    solution: null,
+  });
+  await page.goto('/tester.html');
+
+  await expect.poll(() => mocks.previews).toEqual(['epoch-place|needs_ball']);
+  const preview = page.locator('#tee-range-camera-preview');
+  await expect(preview).toBeVisible();
+  await expect(page.locator('#tee-range-camera-frame')).toBeVisible();
+  const patch = page.locator('#tee-range-placement-box');
+  await expect(patch).toBeVisible();
+  await expect(page.locator('#tee-range-patch-ground')).toHaveAttribute('points', /326\.5/);
+  await expect(page.locator('#tee-range-camera-detector')).toHaveText(
+    'Place the ball inside the patch. The camera and radar search it when you capture the ball.'
+  );
+  await expect(page.locator('#tee-range-camera-exposure')).toContainText('Viewing only');
+  await expect(page.locator('#tee-range-action')).toHaveText('Capture ball at address');
+  await expect(page.locator('#tee-range-action')).toBeEnabled();
+  // asked once for this step, not on every tick
+  await page.waitForTimeout(1000);
+  expect(mocks.previews).toEqual(['epoch-place|needs_ball']);
+});
+
+test('the step headings are numbered once', async ({ page }) => {
+  await base(page);
+  await page.goto('/tester.html');
+
+  const heading = page.getByRole('heading', { name: '3. Automatic ball range' });
+  await expect(heading).toBeVisible();
+  const marker = await page
+    .locator('.suite-steps > li')
+    .first()
+    .evaluate((node) => getComputedStyle(node).listStyleType);
+  expect(marker).toBe('none');
 });

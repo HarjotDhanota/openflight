@@ -6072,6 +6072,8 @@ def create_app(
     guided_analyzer: dict[str, GuidedRangeAnalyzer | None] = {"value": None}
     # the box step's viewing brightness; read by nothing but the page's note (P7-15b)
     box_preview_exposure: dict[str, BoxPreviewExposure | None] = {"value": None}
+    # the patch drawn over step 3's preview while the ball is placed (P8-6)
+    patch_preview_view: dict[str, dict | None] = {"value": None}
     iwr_preflight: dict[str, bool] = {}
 
     def live_owner_snapshot() -> dict[str, str] | None:
@@ -6083,6 +6085,8 @@ def create_app(
         owner = live_owner_snapshot()
         return bool(
             owner
+            # step 3's viewing preview (P8-6) never counts as the camera step
+            and owner.get("kind") == "guided_tee_range"
             and owner["tester_id"] == tester_id
             and owner["epoch_id"] == epoch_id
             and owner["arm_id"] == arm_id
@@ -6610,6 +6614,20 @@ def create_app(
                 "arm_id": PLACEMENT_BOX_ARM,
             }
 
+    def stop_patch_preview(tester_id: str) -> None:
+        """Release step 3's viewing preview (P8-6) before a capture takes the camera."""
+        with live_owner_lock:
+            owner = live_owner["guided"]
+            if (
+                owner
+                and owner.get("kind") == "patch_preview"
+                and owner.get("tester_id") == tester_id
+            ):
+                live.stop()
+                live_owner["guided"] = None
+                guided_analyzer["value"] = None
+                patch_preview_view["value"] = None
+
     def stop_box_preview(tester_id: str) -> None:
         with live_owner_lock:
             owner = live_owner["guided"]
@@ -6998,18 +7016,13 @@ def create_app(
                 },
             )
         candidates = [item for item in (iwr, camera, arm6) if item is not None]
-        solution = (
-            tee_range.resolve_qualified_tee_range(state.epoch_id, candidates, qualification)
-            if qualification is not None and camera is not None
-            else None
+        # P8-6: no qualification is required, and none resolves a range: the pair
+        # (or what one sensor found) is saved, labelled experimental (D15)
+        qualification_outcome = "not_required"
+        solution = patch_ball_solution(
+            state.epoch_id, candidates, decision, state.evidence.get("placement_box")
         )
-        phase = None
-        qualification_outcome = solution.reason if solution is not None else qualification_reason
-        if solution is None or solution.status != "resolved":
-            solution = patch_ball_solution(
-                state.epoch_id, candidates, decision, state.evidence.get("placement_box")
-            )
-            phase = "experimental" if solution.reason == PATCH_BALL_SAVED_REASON else "raw_only"
+        phase = "experimental" if solution.reason == PATCH_BALL_SAVED_REASON else "raw_only"
         logger.info(
             "[SETUP] patch ball %s: %s%s",
             decision["status"],
@@ -7034,7 +7047,10 @@ def create_app(
                     **decision,
                     "qualification_outcome": qualification_outcome,
                 },
-                "validation_agreement": camera_validation_agreement(camera, arm6),
+                # the 640x400 check is gone (P8-6); an epoch that ran it keeps it
+                "validation_agreement": (
+                    camera_validation_agreement(camera, arm6) if arm6 is not None else None
+                ),
                 # the setup's scene and both rig hashes, which join it to the
                 # swing sessions' session_start (wiring audit C3, C4, C5)
                 "scene": setup_scene(solution, rig_geometry),
@@ -7125,6 +7141,7 @@ def create_app(
         if request_id in state.request_ids:
             return state
         stop_guided_live(tester_id, state.epoch_id)
+        stop_patch_preview(tester_id)
         busy = _range_resources_busy()
         if busy:
             raise RuntimeError(busy)
@@ -7616,13 +7633,8 @@ def create_app(
                 "camera_to_iwr_ranking": iwr_ranking,
             },
         }
-        if arm_id == "arm5":
-            return store.transition(
-                state,
-                phase="needs_camera_arm6",
-                reason="validate_shared_range_in_camera_arm6",
-                evidence=evidence,
-            )
+        # P8-6: no 640x400 setup check; its settings use the 1280x800 ball halved. An
+        # epoch that reached the old check still finishes through it.
         completed = store.transition(
             state,
             phase="evaluating",
@@ -7630,6 +7642,53 @@ def create_app(
             evidence=evidence,
         )
         return _finalize_range_state(store, completed)
+
+    PATCH_PREVIEW_PHASES = frozenset({"needs_empty", "needs_ball"})
+
+    def _show_patch_camera(tester_id: str, state):
+        """Show the 1280x800 view with the patch while the tester places the ball (P8-6).
+
+        Viewing only, like the patch step's own preview (P7-15b): its brightness is
+        never a measurement, and a radar capture or camera step takes the camera over.
+        """
+        if state is None or state.phase not in PATCH_PREVIEW_PHASES:
+            raise RuntimeError(f"tee-range setup is {state.phase if state else 'not_started'}")
+        arm = ARMS[PLACEMENT_BOX_ARM]
+        record = state.evidence.get("placement_box")
+        view = mode_patch_view(record, arm) if isinstance(record, Mapping) else None
+        owner = live_owner_snapshot()
+        if (
+            owner is not None
+            and owner.get("kind") == "patch_preview"
+            and owner.get("tester_id") == tester_id
+            and owner.get("epoch_id") == state.epoch_id
+            and live.running
+        ):
+            return state
+        busy = _range_resources_busy(live_yields=True)
+        if busy:
+            raise RuntimeError(busy)
+        exposure_us, gain = placement_preview_controls(
+            read_arm_state(sessions_root, tester_id, PLACEMENT_BOX_ARM),
+            read_static_exposure_warm_start(
+                tester_root(sessions_root, tester_id), PLACEMENT_BOX_ARM, arm
+            ),
+        )
+        brightness = BoxPreviewExposure(
+            live, arm, (exposure_us, gain), box_px=view["box_px"] if view else None
+        )
+        with live_owner_lock:
+            live.start(arm, exposure_us, gain, analyzer=brightness)
+            guided_analyzer["value"] = None
+            box_preview_exposure["value"] = brightness
+            patch_preview_view["value"] = view
+            live_owner["guided"] = {
+                "kind": "patch_preview",
+                "tester_id": tester_id,
+                "epoch_id": state.epoch_id,
+                "arm_id": PLACEMENT_BOX_ARM,
+            }
+        return state
 
     def _skip_camera_arm6(tester_id: str, request_id: str):
         """Finish without the advisory 640x400 check (P7-7)."""
@@ -7766,12 +7825,11 @@ def create_app(
                     "ball_moved",
                     "capture_empty",
                     "capture_ball",
+                    "show_camera",
                     "start_camera_arm5",
-                    "start_camera_arm6",
                     "evaluate_camera_arm5",
-                    "evaluate_camera_arm6",
                     "save_camera_arm5_diagnostic",
-                    "save_camera_arm6_diagnostic",
+                    # finishes an epoch that reached the 640x400 check before P8-6
                     "skip_camera_arm6",
                     "retry",
                 }
@@ -7806,18 +7864,21 @@ def create_app(
                 elif action == "capture_ball":
                     bound_range_setup(tester_id, state, action)
                     state = _start_static_capture(tester_id, "ball_present", request_id)
-                elif action in {"start_camera_arm5", "start_camera_arm6"}:
+                elif action == "show_camera":
+                    # the live view with the patch while the tester places the ball (P8-6)
+                    state = _show_patch_camera(tester_id, state)
+                elif action == "start_camera_arm5":
                     bound_range_setup(tester_id, state, action)
-                    state = _start_camera_range(tester_id, action[-4:], request_id)
-                elif action in {"evaluate_camera_arm5", "evaluate_camera_arm6"}:
+                    state = _start_camera_range(tester_id, "arm5", request_id)
+                elif action == "evaluate_camera_arm5":
                     bound_range_setup(tester_id, state, action)
-                    state = _evaluate_camera_range(tester_id, action[-4:], request_id)
+                    state = _evaluate_camera_range(tester_id, "arm5", request_id)
                 elif action == "skip_camera_arm6":
                     bound_range_setup(tester_id, state, action)
                     state = _skip_camera_arm6(tester_id, request_id)
-                elif action in {"save_camera_arm5_diagnostic", "save_camera_arm6_diagnostic"}:
+                elif action == "save_camera_arm5_diagnostic":
                     bound_range_setup(tester_id, state, action)
-                    state = _save_camera_diagnostic(tester_id, action.split("_")[2], request_id)
+                    state = _save_camera_diagnostic(tester_id, "arm5", request_id)
                 elif action == "retry":
                     bound_range_setup(tester_id, state, action)
                     if state is None or state.phase != "retryable_failure" or not state.retry_phase:
@@ -7831,6 +7892,7 @@ def create_app(
                 if not (
                     (state.phase.startswith("camera_") and state.phase.endswith("_capturing"))
                     or state.phase == "ball_capturing"
+                    or action == "show_camera"
                 ):
                     stop_guided_live(tester_id)
                 return jsonify(
@@ -8283,13 +8345,17 @@ def create_app(
         status = live.snapshot()[1]
         owner = live_owner_snapshot()
         guided = owner is not None and owner.get("kind") == "guided_tee_range"
-        boxing = owner is not None and owner.get("kind") == "placement_box"
+        previewing = owner is not None and owner.get("kind") == "patch_preview"
+        boxing = owner is not None and owner.get("kind") in {"placement_box", "patch_preview"}
         with live_owner_lock:
             analyzer = guided_analyzer["value"]
             brightness = box_preview_exposure["value"] if boxing else None
+            preview_view = patch_preview_view["value"] if previewing else None
         box = getattr(analyzer, "placement_box", None) if guided else None
-        view = getattr(analyzer, "patch_view", None) if guided else None
-        arm = ARMS.get(str(owner.get("arm_id"))) if guided and owner else None
+        view = getattr(analyzer, "patch_view", None) if guided else preview_view
+        if previewing and isinstance(preview_view, Mapping):
+            box = preview_view.get("box_px")
+        arm = ARMS.get(str(owner.get("arm_id"))) if (guided or previewing) and owner else None
         return jsonify(
             {
                 **status,
