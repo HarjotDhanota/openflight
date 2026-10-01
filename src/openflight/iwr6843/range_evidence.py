@@ -1379,8 +1379,10 @@ def compare_static_channel_profiles(  # pylint: disable=too-many-locals,too-many
     static = np.sum(np.abs(e) ** 2, axis=(0, 1))
     excluded = allowed
     if fit_exclusion_m is not None:
+        # the caller's span alone: a patch's window padded for an uncalibrated
+        # tilt can cover the whole capture, leaving no still reflector to fit (P8-3)
         low, high = (_finite(value, "fit exclusion") for value in fit_exclusion_m)
-        excluded = allowed | ((ranges >= low) & (ranges <= high))
+        excluded = (ranges >= low) & (ranges <= high)
     factors, reference = _robust_channel_factors(e, p, _reference_bins(static, search, excluded))
     expected = factors[..., None] * e
     residual = p - expected
@@ -1607,3 +1609,301 @@ __all__ = [
     "static_range_profile",
     "static_range_profile_v2",
 ]
+
+
+# P8-3: the radar searches only the patch's slant-range window, and reports every
+# candidate both differences see there, with its scores and elevation. Neither
+# difference is always right (harjot-indoor-test-1: the coherent one took 1.575 m
+# against a tape of 1.25 m while the magnitude's 1.20 m failed its fractional
+# gate; the 29 Sept door: both read the tape's 1.00 m), so neither gate refuses a
+# peak here: the camera chooses between them (P8-4). A changed reflector beside a
+# peak is a warning on it.
+PATCH_CANDIDATES_SCHEMA = "openflight.iwr6843.static_patch_candidates.v1"
+# a magnitude peak's change must be at least this fraction of the still scene there,
+# and stand this far above the difference's own scatter, to be reported at all
+# (harjot-indoor-test-1's ball near the tape: 0.37 of the scene, 0.8 of the scatter)
+PATCH_MAGNITUDE_MIN_FRACTION = 0.25
+PATCH_MAGNITUDE_MIN_SCORE = 0.5
+PATCH_MAGNITUDE_MAX_CANDIDATES = 3
+PATCH_COHERENT_MAX_CANDIDATES = 4
+# a peak this many bins inside the capture's first or last bin has both neighbours
+PATCH_EDGE_GUARD_BINS = 1
+
+
+def static_patch_candidates_policy() -> dict[str, Any]:
+    return {
+        "schema": PATCH_CANDIDATES_SCHEMA,
+        "window": "patch_radar_slant_window_corrected_by_the_range_bias",
+        "statistics": "whole_capture_as_before_candidates_inside_the_window_only",
+        "magnitude": {
+            "peaks": "local_maxima_of_fractional_excess",
+            "minimum_fraction": PATCH_MAGNITUDE_MIN_FRACTION,
+            "minimum_score": PATCH_MAGNITUDE_MIN_SCORE,
+            "maximum_candidates": PATCH_MAGNITUDE_MAX_CANDIDATES,
+            "fractional_gate": "recorded_not_a_refusal",
+        },
+        "coherent": {
+            "peaks": "every_cluster_the_coherent_difference_forms",
+            "maximum_candidates": PATCH_COHERENT_MAX_CANDIDATES,
+        },
+        "scene_changed": "a_warning_on_the_candidates",
+    }
+
+
+@dataclass(frozen=True)
+class StaticPatchCandidates:
+    """Every radar candidate inside the patch's window, and each method's own verdict."""
+
+    window_m: tuple[float, float]
+    covers_m: tuple[float, float]
+    candidates: tuple[Mapping[str, Any], ...]
+    magnitude: StaticRangeDifferenceResult | None
+    coherent: StaticRangeDifferenceResult | None
+    warnings: tuple[str, ...]
+    bias_m: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema": PATCH_CANDIDATES_SCHEMA,
+            "policy": static_patch_candidates_policy(),
+            "window_m": list(self.window_m),
+            "covers_m": list(self.covers_m),
+            "bias_m": self.bias_m,
+            "candidates": [dict(item) for item in self.candidates],
+            "magnitude": asdict(self.magnitude) if self.magnitude is not None else None,
+            "coherent": asdict(self.coherent) if self.coherent is not None else None,
+            "warnings": list(self.warnings),
+        }
+
+
+def _power_statistics(
+    empty: StaticRangeProfile | StaticRangeProfileV2,
+    present: StaticRangeProfile | StaticRangeProfileV2,
+    search: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The change, its score over the capture's own scatter, and its fraction of the scene."""
+    baseline = np.asarray(empty.power, dtype=float)
+    observed = np.asarray(present.power, dtype=float)
+    if isinstance(empty, StaticRangeProfileV2):
+        scale = _v2_scale(baseline, observed, search)
+    else:
+        median = float(np.median(baseline[search]))
+        scale = float(np.median(observed[search])) / median if median > 0.0 else 1.0
+    expected = scale * baseline
+    delta = observed - expected
+    center = float(np.median(delta[search]))
+    mad = float(np.median(np.abs(delta[search] - center)))
+    floor = max(1.4826 * mad, 0.02 * float(np.median(expected[search])), 1e-12)
+    return delta - center, (delta - center) / floor, observed / np.maximum(expected, 1e-12) - 1.0
+
+
+def _residual_elevations(
+    empty: StaticChannelProfile,
+    present: StaticChannelProfile,
+    correction: np.ndarray,
+    excluded: np.ndarray,
+    search: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """The coherent residual per bin, and its elevation on the vertical column."""
+    e, p = empty.channels, present.channels
+    static = np.sum(np.abs(e) ** 2, axis=(0, 1))
+    factors, _reference = _robust_channel_factors(e, p, _reference_bins(static, search, excluded))
+    residual = p - factors[..., None] * e
+    elevations = np.asarray(
+        [
+            _vertical_elevation_deg(residual[:, :, index] / factors, correction)
+            for index in range(residual.shape[-1])
+        ]
+    )
+    return np.sum(np.abs(residual) ** 2, axis=(0, 1)), elevations
+
+
+def static_patch_candidates(  # pylint: disable=too-many-locals,too-many-arguments,too-many-statements
+    empty: StaticRangeProfile | StaticRangeProfileV2,
+    present: StaticRangeProfile | StaticRangeProfileV2,
+    *,
+    window_m: tuple[float, float],
+    bias_m: float,
+    bias_uncertainty_m: float = 0.0,
+    empty_channels: StaticChannelProfile | None = None,
+    present_channels: StaticChannelProfile | None = None,
+    element_correction: Any = None,
+    ground_elevation_deg: tuple[float, float] | None = None,
+    fit_exclusion_m: tuple[float, float] | None = None,
+) -> StaticPatchCandidates:
+    """Every change inside the patch's window, from both differences (P8-3).
+
+    ``window_m`` and ``fit_exclusion_m`` are corrected slant ranges (the apparent
+    range minus ``bias_m``); candidates carry corrected ranges. The magnitude and
+    coherent results are the unchanged selectors' own verdicts, kept for the record.
+    """
+    _matching_static_profiles(empty, present)
+    resolution = empty.range_resolution_m
+    ranges = (np.arange(empty.range_bin_count, dtype=float) + empty.range_bin_start) * resolution
+    guard = PATCH_EDGE_GUARD_BINS
+    covers = (
+        float(ranges[guard] - bias_m),
+        float(ranges[-1 - guard] - bias_m),
+    )
+    low, high = (float(value) for value in window_m)
+    warnings: list[str] = []
+    if high > covers[1]:
+        warnings.append(
+            f"the patch's window reaches {high:.2f} m, beyond the capture's {covers[1]:.2f} m"
+        )
+    if low < covers[0]:
+        warnings.append(
+            f"the patch's window starts at {low:.2f} m, nearer than the capture's {covers[0]:.2f} m"
+        )
+    low, high = max(low, covers[0]), min(high, covers[1])
+    if not low < high:
+        raise ValueError("the patch's window lies outside the radar capture")
+    window = (low, high)
+    search = np.zeros(len(ranges), dtype=bool)
+    search[guard : len(ranges) - guard] = True
+    inside = search & (ranges - bias_m >= low) & (ranges - bias_m <= high)
+    apparent_window = (low + bias_m, high + bias_m)
+    plausible = (float(ranges[guard]), float(ranges[-1 - guard]))
+
+    magnitude = compare_static_range_profiles(
+        empty, present, plausible_apparent_range_m=plausible, candidate_window_m=apparent_window
+    )
+    change, score, fraction = _power_statistics(empty, present, search)
+
+    have_channels = (
+        empty_channels is not None
+        and present_channels is not None
+        and element_correction is not None
+        and ground_elevation_deg is not None
+    )
+    coherent = None
+    residual_power = elevations = None
+    if have_channels:
+        correction = np.asarray(element_correction, dtype=complex)
+        # still reflectors for the channel fit lie outside the patch's own span
+        exclusion = (
+            tuple(float(value) for value in fit_exclusion_m) if fit_exclusion_m else (low, high)
+        )
+        coherent = compare_static_channel_profiles(
+            empty_channels,
+            present_channels,
+            plausible_apparent_range_m=plausible,
+            candidate_window_m=apparent_window,
+            element_correction=correction,
+            ground_elevation_deg=ground_elevation_deg,
+            fit_exclusion_m=(exclusion[0] + bias_m, exclusion[1] + bias_m),
+        )
+        excluded = (ranges - bias_m >= exclusion[0]) & (ranges - bias_m <= exclusion[1])
+        residual_power, elevations = _residual_elevations(
+            empty_channels, present_channels, correction, excluded, search
+        )
+
+    def elevation_facts(index: int) -> dict[str, Any]:
+        if elevations is None or ground_elevation_deg is None:
+            return {"elevation_deg": None, "ground_level": None}
+        value = float(elevations[index])
+        low_el, high_el = ground_elevation_deg
+        return {"elevation_deg": value, "ground_level": bool(low_el <= value <= high_el)}
+
+    def uncertainty(width_bins: int) -> float:
+        return float(math.hypot(max(0.5, width_bins / 2.0) * resolution, bias_uncertainty_m))
+
+    scene_warning = (
+        f"scene_changed: {magnitude.reason}"
+        if magnitude.status == "rejected_scene_changed"
+        else None
+    )
+    candidates: list[dict[str, Any]] = []
+    indices = np.flatnonzero(inside)
+    peaks = [
+        int(index)
+        for index in indices
+        if fraction[index] >= fraction[index - 1]
+        and fraction[index] >= fraction[index + 1]
+        and fraction[index] >= PATCH_MAGNITUDE_MIN_FRACTION
+        and score[index] >= PATCH_MAGNITUDE_MIN_SCORE
+    ]
+    peaks.sort(key=lambda index: -fraction[index])
+    for index in peaks[:PATCH_MAGNITUDE_MAX_CANDIDATES]:
+        lo = hi = index
+        while lo - 1 >= guard and fraction[lo - 1] >= 0.5 * fraction[index]:
+            lo -= 1
+        while hi + 1 < len(ranges) - guard and fraction[hi + 1] >= 0.5 * fraction[index]:
+            hi += 1
+        group = np.arange(max(lo, index - 1), min(hi, index + 1) + 1)
+        weights = np.maximum(change[group], 0.0)
+        centre = float(np.average(group, weights=weights)) if float(np.sum(weights)) > 0 else index
+        apparent = (centre + empty.range_bin_start) * resolution
+        candidates.append(
+            {
+                "method": "magnitude",
+                "candidate": f"magnitude-{len(candidates) + 1}",
+                "range_m": apparent - bias_m,
+                "apparent_range_m": apparent,
+                "peak_bin": float(index + empty.range_bin_start),
+                "score": float(score[index]),
+                "fractional_excess": float(fraction[index]),
+                "passes_fractional_gate": bool(fraction[index] >= _STATIC_V2_MIN_FRACTIONAL_EXCESS),
+                "width_bins": int(hi - lo + 1),
+                "uncertainty_m": uncertainty(hi - lo + 1),
+                **elevation_facts(index),
+                "warnings": [scene_warning] if scene_warning else [],
+            }
+        )
+    if coherent is not None:
+        coherent_warning = (
+            f"scene_changed: {coherent.reason}"
+            if coherent.status == "rejected_scene_changed"
+            else None
+        )
+        count = 0
+        for peak in coherent.alternate_peaks:
+            apparent = float(peak["apparent_range_m"])
+            if not apparent_window[0] <= apparent <= apparent_window[1]:
+                continue
+            accepted = (
+                coherent.status == "accepted_unqualified"
+                and coherent.peak_bin is not None
+                and abs(float(peak["peak_bin"]) - float(coherent.peak_bin)) <= peak["width_bins"]
+            )
+            if accepted and coherent.apparent_range_m is not None:
+                apparent = float(coherent.apparent_range_m)
+            candidates.append(
+                {
+                    "method": "coherent",
+                    "candidate": f"coherent-{count + 1}",
+                    "range_m": apparent - bias_m,
+                    "apparent_range_m": apparent,
+                    "peak_bin": float(peak["peak_bin"]),
+                    "score": float(peak["score"]),
+                    "fractional_excess": None,
+                    "width_bins": int(peak["width_bins"]),
+                    "uncertainty_m": uncertainty(int(peak["width_bins"])),
+                    "elevation_deg": float(peak["elevation_deg"]),
+                    "ground_level": bool(peak["ground_level"]),
+                    "selector_accepted": accepted,
+                    "warnings": [coherent_warning] if coherent_warning else [],
+                }
+            )
+            count += 1
+            if count >= PATCH_COHERENT_MAX_CANDIDATES:
+                break
+        if coherent_warning:
+            warnings.append(coherent_warning)
+    if scene_warning:
+        warnings.append(scene_warning)
+    if residual_power is not None:
+        for item in candidates:
+            if item["method"] == "magnitude":
+                index = int(item["peak_bin"]) - empty.range_bin_start
+                floor = max(float(np.median(residual_power[search])), 1e-12)
+                item["coherent_score"] = float(residual_power[index] / floor)
+    return StaticPatchCandidates(
+        window_m=window,
+        covers_m=covers,
+        candidates=tuple(candidates),
+        magnitude=magnitude,
+        coherent=coherent,
+        warnings=tuple(warnings),
+        bias_m=float(bias_m),
+    )

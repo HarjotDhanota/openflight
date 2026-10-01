@@ -1201,6 +1201,12 @@ def init_setup_handoff(args, enclosure) -> None:
             "range_space": "apparent",
             "assumed": args.iwr6843_net_range_source == "default_not_measured",
         },
+        # P8-5: recorded beside the estimators, which infer pitch per shot
+        "camera_tilt": {
+            "vertical_offset_deg": getattr(args, "camera_vertical_offset_deg", None),
+            "source": getattr(args, "camera_vertical_offset_source", None) or "uncalibrated",
+            "applied": "recorded_only_pitch_inferred_from_the_resting_ball_and_tee_range",
+        },
     }
     if setup_handoff_config["net_range"]["assumed"] and args.iwr6843:
         logger.warning(
@@ -1258,6 +1264,8 @@ def _session_start_config() -> dict:
     config["tee_range_handoff"] = deepcopy(setup_handoff_config["tee_range"])
     config["scene"] = deepcopy(setup_handoff_config["scene"])
     config["net_range"] = deepcopy(setup_handoff_config.get("net_range"))
+    # the unit's camera tilt the setup handed over (P8-5), recorded beside the geometry
+    config["camera_tilt"] = deepcopy(setup_handoff_config.get("camera_tilt"))
     from .camera.geometry_contract import EffectiveCameraGeometryInputs, unavailable_snapshot
 
     if not camera_capture_config.get("enabled"):
@@ -6119,6 +6127,22 @@ def _add_iwr_tee_range_arguments(parser):
         "--iwr6843-tee-range-candidate",
         default=None,
         help="The range setup's candidate ID behind --iwr6843-tee-m; recorded in session_start",
+    )
+    parser.add_argument(
+        "--camera-vertical-offset-deg",
+        type=float,
+        default=None,
+        help=(
+            "The unit's camera tilt (mount pitch plus principal-point row) the tester "
+            "calibrated from a validated camera-radar pair (P8-5); recorded in "
+            "session_start. The nominal estimators infer pitch per shot from the resting "
+            "ball and the tee range, so it is not added to them"
+        ),
+    )
+    parser.add_argument(
+        "--camera-vertical-offset-source",
+        default=None,
+        help="Where --camera-vertical-offset-deg came from (unit_calibration); recorded",
     )
 
 

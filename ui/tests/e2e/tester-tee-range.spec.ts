@@ -39,6 +39,7 @@ type GuidedState =
   | 'warming'
   | 'exposure_searching'
   | 'ball_not_found'
+  | 'looking_for_ball'
   | 'optical_gates_failed'
   | 'lighting_required'
   | 'ball_not_identified'
@@ -93,6 +94,25 @@ function rangeDisplay(current: FlowState | null) {
   };
 }
 
+// the patch the live status draws over step 3's preview (P8-6)
+const PREVIEW_PATCH = {
+  arm_id: 'arm5',
+  frame_size_px: [1280, 800],
+  box_px: [327, 458, 950, 498],
+  outline_px: [
+    [326.5, 497.1],
+    [949.7, 497.1],
+    [825.7, 458.2],
+    [452.0, 458.2],
+  ],
+  search_outline_px: [
+    [320, 546],
+    [956, 546],
+    [832, 377],
+    [446, 377],
+  ],
+};
+
 async function base(page: Page, initial: FlowState | null = null) {
   let state = initial;
   let postFailure: { body: object; status: number } | null = null;
@@ -102,22 +122,33 @@ async function base(page: Page, initial: FlowState | null = null) {
     capture_empty: 'needs_ball',
     capture_ball: 'needs_camera_arm5',
     start_camera_arm5: 'camera_arm5_capturing',
-    evaluate_camera_arm5: 'needs_camera_arm6',
-    start_camera_arm6: 'camera_arm6_capturing',
-    evaluate_camera_arm6: 'raw_only',
+    // P8-6: the 1280x800 Save finishes the setup; there is no 640x400 check
+    evaluate_camera_arm5: 'raw_only',
     retry: 'needs_empty',
   };
+  // P8-6: step 3's viewing preview while the ball is placed
+  const previews: string[] = [];
   await mockConfirmedPlacementBox(page);
   await page.route('**/api/tester/setup-eligibility?**', (route) => json(route, eligibility()));
   await page.route('**/api/tester/status**', (route) => json(route, {}));
   await page.route('**/api/tester/attempts?**', (route) => json(route, { scopes: [] }));
   await page.route('**/api/tester/ladder?**', (route) => json(route, { ladder: null, stopped: true }));
   await page.route('**/api/tester/live', (route) => {
-    const armId = state?.phase === 'camera_arm5_capturing'
-      ? 'arm5'
-      : state?.phase === 'camera_arm6_capturing'
-        ? 'arm6'
-        : null;
+    const previewing = Boolean(
+      state && ['needs_empty', 'needs_ball'].includes(state.phase) && previews.includes(`${state.epoch_id}|${state.phase}`)
+    );
+    if (previewing && state) {
+      return json(route, {
+        running: true,
+        arm_id: 'arm5',
+        owner: { kind: 'patch_preview', tester_id: '20260922-name', epoch_id: state.epoch_id, arm_id: 'arm5' },
+        stats: { mean: 70, p99: 140, max: 180, clipped_pct: 0 },
+        association: null,
+        guided_display: null,
+        placement_box: PREVIEW_PATCH,
+      });
+    }
+    const armId = state?.phase === 'camera_arm5_capturing' ? 'arm5' : null;
     return json(route, {
       running: Boolean(armId),
       arm_id: armId,
@@ -156,6 +187,10 @@ async function base(page: Page, initial: FlowState | null = null) {
     if (route.request().method() === 'GET') return json(route, { state, display: rangeDisplay(state) });
     if (postFailure) return json(route, postFailure.body, postFailure.status);
     const action = route.request().postDataJSON().action as string;
+    if (action === 'show_camera') {
+      if (state) previews.push(`${state.epoch_id}|${state.phase}`);
+      return json(route, { state, display: rangeDisplay(state) });
+    }
     const phase = next[action];
     state = {
       epoch_id: action === 'start_over' || !state ? `epoch-${action}` : state.epoch_id,
@@ -166,7 +201,6 @@ async function base(page: Page, initial: FlowState | null = null) {
           ? {
               iwr_candidate: { radar_slant_range_m: 1.52 },
               camera_arm5_candidate: { radar_slant_range_m: 1.5 },
-              camera_arm6_candidate: { radar_slant_range_m: 1.51 },
             }
           : {},
       solution:
@@ -175,6 +209,7 @@ async function base(page: Page, initial: FlowState | null = null) {
     return json(route, { state, display: rangeDisplay(state) });
   });
   return {
+    previews,
     state: () => state,
     setState: (value: FlowState) => {
       state = value;
@@ -202,12 +237,9 @@ test('walks the main automatic-range prompts and reconstructs after reload', asy
   await action.tap();
   await expect(action).toHaveText('Save 1280×800 observation');
   await action.tap();
-  await expect(action).toHaveText('Open 640×400 camera');
-  await action.tap();
-  await expect(action).toHaveText('Save 640×400 observation');
-  await action.tap();
 
-  await expect(action).toHaveText('Evidence complete — raw-only mode');
+  // P8-6: the 1280×800 Save finishes the setup
+  await expect(action).toHaveText('Evidence complete — no ball found');
   await expect(page.locator('#automatic-range')).toContainText(
     'bias-corrected IWR slant range unqualified — not qualified for promotion on this setup · diagnostic 1.520 m, not used'
   );
@@ -279,7 +311,7 @@ test('shows the server-owned guided camera frame without starting another live v
   await expect(page.locator('#automatic-range-summary')).toContainText('The reference camera is live');
   await expect(page.locator('#tee-range-camera-status')).toContainText('Live 1280×800 frame ready');
   await expect(page.locator('#tee-range-camera-detector')).toContainText(
-    'Camera-only search: ball selected · x 641.2 · y 502.7 · diameter 24.4 px · range 1.527 m · stable and ready to save'
+    'Camera search in the patch: ball selected · x 641.2 · y 502.7 · diameter 24.4 px · range 1.527 m · stable and ready to save'
   );
   await expect(page.locator('#tee-range-camera-frame')).toHaveAttribute('src', /view=overlay/);
   expect(statusPolls).toBeGreaterThan(1);
@@ -329,7 +361,7 @@ test('reports the live detector reason without treating it as a camera failure',
 
   const detector = page.locator('#tee-range-camera-detector');
   await expect(detector).toContainText(
-    'Camera-only broad fallback: No reference ball was found. Save remains disabled · radar hint fallback: the static IWR candidate was rejected.'
+    'Camera search in the patch: No ball found in the patch. The ball may be outside it: move the ball or the patch. Save remains disabled.'
   );
   await expect(detector).toHaveClass(/note/);
   await expect(detector).not.toHaveClass(/problem/);
@@ -371,13 +403,14 @@ test('withholds Save and a confident verdict when camera-only association is amb
   await page.goto('/tester.html');
 
   await expect(page.locator('#tee-range-camera-detector')).toContainText(
-    'Camera-only search: Multiple candidates remain plausible. Save remains disabled.'
+    'Camera search in the patch: Several ball-like things are in the patch: keep only the ball in it. Save remains disabled.'
   );
   await expect(page.locator('#tee-range-action')).toBeDisabled();
   await expect(page.locator('#automatic-range-summary')).toContainText('The reference camera is live');
 });
 
-test('labels radar-conditioned readiness as provisional until independent Save', async ({ page }) => {
+// P8-2: the camera never uses the radar while it searches, so nothing it shows is radar-guided.
+test('the camera search is labelled as the patch search, never radar-guided', async ({ page }) => {
   await base(page, {
     epoch_id: 'epoch-radar-guided',
     phase: 'camera_arm5_capturing',
@@ -417,16 +450,16 @@ test('labels radar-conditioned readiness as provisional until independent Save',
   await page.goto('/tester.html');
 
   const detector = page.locator('#tee-range-camera-detector');
-  await expect(detector).toContainText('Radar-guided provisional search: ball selected');
-  await expect(detector).toContainText('independent full-frame check pending on Save');
+  await expect(detector).toContainText('Camera search in the patch: ball selected');
+  await expect(detector).not.toContainText('Radar-guided');
   await expect(page.locator('#tee-range-action')).toBeEnabled();
 });
 
 test('guided camera errors stay beside the preview and stale tester polls are ignored', async ({ page }) => {
   await base(page, {
     epoch_id: 'epoch-camera-error',
-    phase: 'camera_arm6_capturing',
-    reason: 'camera_arm6_warming',
+    phase: 'camera_arm5_capturing',
+    reason: 'camera_arm5_warming',
     evidence: {},
     solution: null,
   });
@@ -437,13 +470,13 @@ test('guided camera errors stay beside the preview and stale tester polls are ig
     if (statusRequests === 1) {
       return json(route, {
         running: false,
-        arm_id: 'arm6',
+        arm_id: 'arm5',
         error: 'camera cable disconnected',
         owner: {
           kind: 'guided_tee_range',
           tester_id: '20260922-name',
           epoch_id: 'epoch-camera-error',
-          arm_id: 'arm6',
+          arm_id: 'arm5',
         },
       });
     }
@@ -452,13 +485,13 @@ test('guided camera errors stay beside the preview and stale tester polls are ig
     });
     return json(route, {
       running: false,
-      arm_id: 'arm6',
+      arm_id: 'arm5',
       error: 'camera cable disconnected',
       owner: {
         kind: 'guided_tee_range',
         tester_id: '20260922-name',
         epoch_id: 'epoch-camera-error',
-        arm_id: 'arm6',
+        arm_id: 'arm5',
       },
     });
   });
@@ -466,7 +499,7 @@ test('guided camera errors stay beside the preview and stale tester polls are ig
   await expect(page.locator('#tee-range-camera-preview')).toBeVisible();
   await expect(page.locator('#tee-range-camera-status')).toContainText('Camera error: camera cable disconnected');
   await expect(page.locator('#tee-range-action')).toBeDisabled();
-  await expect(page.locator('#automatic-range-summary')).toContainText('The second camera mode is live');
+  await expect(page.locator('#automatic-range-summary')).toContainText('The reference camera is live');
   await expect(page.locator('#automatic-range-summary')).not.toContainText('camera cable disconnected');
   await expect.poll(() => releaseStatus !== null).toBe(true);
 
@@ -849,11 +882,20 @@ const GUIDED_CAMERA_CASES = [
     problem: false,
   },
   {
-    name: 'a missing ball',
-    display: guidedDisplay('ball_not_found', { reason: 'no reference ball at the current exposure' }),
-    text: 'No reference ball at this exposure',
+    name: 'a look without the ball',
+    display: guidedDisplay('looking_for_ball', { reason: 'looking for the ball in the patch' }),
+    text: 'Looking for the ball in the patch',
     saveEnabled: false,
     problem: false,
+  },
+  {
+    name: 'no ball in the patch',
+    display: guidedDisplay('ball_not_found', {
+      reason: 'No ball found in the patch. The ball may be outside it: move the ball or the patch.',
+    }),
+    text: 'No ball found in the patch',
+    saveEnabled: false,
+    problem: true,
   },
   {
     name: 'insufficient light',
@@ -1147,9 +1189,10 @@ test('shows the 1280x800 exposure search while the radar records the ball', asyn
   await expect(exposure).toContainText('Ready to save.');
 });
 
-// P7-15: the placement box is step 1. The tester sets the unit down, confirms the
-// setup, then drags the fixed-size box over the hitting spot on the live 1280×800
-// picture and confirms it; the hardware check, the light and the ball range follow.
+// P8-1 (D14): the placement box became a 2 ft × 2 ft ground patch, drawn in true
+// perspective on the live 1280×800 picture. The tester drags it over the hitting
+// spot, near or far, sees its distance and side offset while dragging, and confirms
+// it; the hardware check, the light and the ball range follow.
 const WIDE_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAABAAAAAKCAAAAACY1YFAAAAAD0lEQVR4nGPQQAMMg1UAAE4iGQEMndODAAAAAElFTkSuQmCC',
   'base64'
@@ -1165,14 +1208,15 @@ type BoxOptions = {
 
 async function boxStep(page: Page, options: BoxOptions = {}) {
   let range: FlowState | null = null;
+  const initial = placementBoxState(TESTER);
   let box: Record<string, unknown> = placementBoxState(
     TESTER,
     options.confirmed ? 'confirmed' : 'needs_confirmation',
     options.prefill
       ? {
           box: {
-            ...placementBoxState(TESTER).box,
-            box_px: options.prefill,
+            ...initial.box,
+            patch: { centre_lfu_m: options.prefill, size_m: 0.61 },
             source: 'last_confirmed',
           },
         }
@@ -1228,8 +1272,10 @@ async function boxStep(page: Page, options: BoxOptions = {}) {
   await page.route('**/api/tester/tee-range**', (route) => {
     if (route.request().method() === 'GET') return json(route, { state: range, display: rangeDisplay(range) });
     const action = route.request().postDataJSON().action as string;
+    // step 3's viewing preview (P8-6) changes nothing in the setup
+    if (action === 'show_camera') return json(route, { state: range, display: rangeDisplay(range) });
     rangePosts.push(action);
-    // the ball range begins straight at the radar captures, in the confirmed box
+    // the ball range begins straight at the radar captures, in the confirmed patch
     range = {
       epoch_id: `epoch-${rangePosts.length}`,
       phase: 'needs_empty',
@@ -1248,13 +1294,18 @@ async function boxStep(page: Page, options: BoxOptions = {}) {
       previewRunning = true;
       return json(route, { ...box, previewing: true });
     }
-    const before = (box.box as { box_px: number[] }).box_px;
-    const after = body.box_px as number[];
-    const shift = Math.max(...after.map((value, index) => Math.abs(value - before[index])));
-    const moved = box.state === 'confirmed' && shift > 4;
+    const shown = box.box as { patch: { centre_lfu_m: number[] } };
+    const before = shown.patch.centre_lfu_m;
+    const after = body.centre_m as number[];
+    const shift = Math.hypot(after[0] - before[0], after[1] - before[1]);
+    const moved = box.state === 'confirmed' && shift > 0.02;
     const same = box.state === 'confirmed' && !moved;
     box = placementBoxState(TESTER, 'confirmed', {
-      box: { ...(box.box as object), box_px: same ? before : after, source: 'tester_dragged' },
+      box: {
+        ...(box.box as object),
+        patch: { centre_lfu_m: same ? before : after, size_m: 0.61 },
+        source: 'tester_dragged',
+      },
       change: moved ? 'moved' : same ? 'unchanged' : 'first',
     });
     previewRunning = false;
@@ -1280,8 +1331,11 @@ async function boxStep(page: Page, options: BoxOptions = {}) {
   };
 }
 
-// P7-15b: the box preview sets its own brightness for viewing, and says so meanwhile.
-test('the box preview says it is adjusting its brightness until it settles', async ({ page }) => {
+const centreOf = async (page: Page) =>
+  ((await page.locator('#placement-box').getAttribute('data-centre')) ?? '').split(',').map(Number);
+
+// P7-15b: the patch preview sets its own brightness for viewing, and says so meanwhile.
+test('the patch preview says it is adjusting its brightness until it settles', async ({ page }) => {
   const mocks = await boxStep(page);
   mocks.setBrightness('adjusting');
   await page.goto('/tester.html');
@@ -1296,12 +1350,12 @@ test('the box preview says it is adjusting its brightness until it settles', asy
   await expect(page.locator('#placement-box')).toBeVisible();
 });
 
-test('the box is step 1: its camera opens by itself and every check waits for it', async ({ page }) => {
+test('the patch is step 1: its camera opens by itself and every check waits for it', async ({ page }) => {
   const mocks = await boxStep(page);
   await page.goto('/tester.html');
 
-  await expect(page.getByRole('heading', { level: 2, name: '1. Set up the rig and place the box' })).toBeVisible();
-  // the box step sits after the setup checklist and before A, the hardware check
+  await expect(page.getByRole('heading', { level: 2, name: '1. Set up the rig and place the patch' })).toBeVisible();
+  // the patch step sits after the setup checklist and before A, the hardware check
   const order = await page.evaluate(() => {
     const at = (id: string) => document.getElementById(id) as HTMLElement;
     const follows = (a: string, b: string) =>
@@ -1310,23 +1364,28 @@ test('the box is step 1: its camera opens by itself and every check waits for it
   });
   expect(order).toEqual([true, true]);
 
-  const box = page.locator('#placement-box');
-  await expect(box).toBeVisible();
-  await expect(box).toHaveAttribute('data-draggable', 'true');
-  await expect(box).toHaveAttribute('data-box', '562,361,718,491');
+  const patch = page.locator('#placement-box');
+  await expect(patch).toBeVisible();
+  await expect(patch).toHaveAttribute('data-draggable', 'true');
+  // drawn in perspective: the near edge (y 494) is wider than the far edge (y 457)
+  await expect(patch).toHaveAttribute('data-outline', '338,494 942,494 823,457 457,457');
+  await expect(page.locator('#placement-distance')).toHaveText('Patch centre 1.25 m from the radar, straight ahead.');
+  await expect(page.locator('#placement-tilt')).toContainText('Camera tilt not calibrated yet');
   expect(mocks.posts.map((item) => item.action)).toEqual(['show']);
-  await expect(page.locator('#placement-summary')).toContainText('Drag the yellow box');
-  // A, B and the ball range are locked until the box is confirmed
+  await expect(page.locator('#placement-summary')).toContainText('Drag the yellow patch');
+  // A, B and the ball range are locked until the patch is confirmed
   await expect(page.locator('#step-check')).toBeDisabled();
   await expect(page.locator('#step-light')).toBeDisabled();
   await expect(page.locator('#tee-range-action')).toBeDisabled();
   await expect(page.locator('#suite-box-hint')).toBeVisible();
-  await expect(page.locator('#automatic-range-summary')).toContainText('Confirm the box in step 1 first');
+  await expect(page.locator('#automatic-range-summary')).toContainText('Confirm the patch in step 1 first');
 
   await page.locator('#placement-confirm').click();
 
-  await expect(page.locator('#placement-summary')).toContainText('Box confirmed');
-  await expect(box).toBeHidden();
+  await expect(page.locator('#placement-summary')).toContainText('Patch confirmed');
+  await expect(page.locator('#placement-summary')).toContainText('1.25 m from the radar');
+  expect(mocks.posts.find((item) => item.action === 'confirm')?.centre_m).toEqual([0, 1.2486]);
+  await expect(patch).toBeHidden();
   await expect(page.locator('#placement-move')).toBeVisible();
   await expect(page.locator('#suite-box-hint')).toBeHidden();
   await expect(page.locator('#step-check')).toBeEnabled();
@@ -1342,52 +1401,60 @@ test('the box is step 1: its camera opens by itself and every check waits for it
   await expect.poll(() => mocks.runs).toEqual(['preflight']);
 });
 
-test('the tester drags the box over the hitting spot and confirms it', async ({ page }) => {
+test('the tester drags the patch in perspective, near or far, and confirms it', async ({ page }) => {
   const mocks = await boxStep(page);
   await page.goto('/tester.html');
 
-  const box = page.locator('#placement-box');
-  await expect(box).toHaveAttribute('data-box', '562,361,718,491');
+  const ground = page.locator('#placement-ground');
+  const distance = page.locator('#placement-distance');
+  await expect(distance).toHaveText('Patch centre 1.25 m from the radar, straight ahead.');
 
-  // a mouse drag 50 px right and 20 px down, in screen pixels
-  await box.scrollIntoViewIfNeeded();
-  const picture = await page.locator('#placement-camera-frame').boundingBox();
-  const start = await box.boundingBox();
-  if (!picture || !start) throw new Error('the preview has no size');
-  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+  // a mouse drag right and down: the patch comes nearer and moves right
+  await ground.scrollIntoViewIfNeeded();
+  const start = await ground.boundingBox();
+  if (!start) throw new Error('the patch has no size');
+  const x = start.x + start.width / 2;
+  const y = start.y + start.height / 2;
+  await page.mouse.move(x, y);
   await page.mouse.down();
-  await page.mouse.move(start.x + start.width / 2 + 50, start.y + start.height / 2 + 20, { steps: 5 });
+  await page.mouse.move(x + 40, y + 6, { steps: 5 });
   await page.mouse.up();
-  const x0 = Math.round(562 + (50 * 1280) / picture.width);
-  const y0 = Math.round(361 + (20 * 800) / picture.height);
-  await expect(box).toHaveAttribute('data-box', `${x0},${y0},${x0 + 156},${y0 + 130}`);
+  const [lateral, forward] = await centreOf(page);
+  expect(lateral).toBeGreaterThan(0.02);
+  expect(forward).toBeLessThan(1.2);
+  await expect(distance).toContainText('right');
 
-  // dragged far past the corner, the box stops at the picture's edge
-  const moved = await box.boundingBox();
-  if (!moved) throw new Error('the box has no size');
-  await page.mouse.move(moved.x + 10, moved.y + 10);
+  // dragged up past the horizon, it stops at the farthest supported distance
+  const moved = await ground.boundingBox();
+  if (!moved) throw new Error('the patch has no size');
+  await page.mouse.move(moved.x + moved.width / 2, moved.y + moved.height / 2);
   await page.mouse.down();
-  await page.mouse.move(moved.x + 5000, moved.y + 5000, { steps: 3 });
+  await page.mouse.move(moved.x + moved.width / 2, moved.y - 400, { steps: 4 });
   await page.mouse.up();
-  await expect(box).toHaveAttribute('data-box', '1124,670,1280,800');
+  await expect(distance).toContainText('3.00 m from the radar');
+  // far away the patch is drawn small: its near edge is much narrower than at 1.25 m
+  const outline = ((await page.locator('#placement-box').getAttribute('data-outline')) ?? '')
+    .split(' ')
+    .map((point) => point.split(',').map(Number));
+  expect(outline[1][0] - outline[0][0]).toBeLessThan(260);
 
   await page.locator('#placement-confirm').click();
 
-  await expect(page.locator('#placement-summary')).toContainText('Box confirmed');
+  await expect(page.locator('#placement-summary')).toContainText('Patch confirmed');
   const confirm = mocks.posts.find((item) => item.action === 'confirm');
-  expect(confirm?.box_px).toEqual([1124, 670, 1280, 800]);
+  const sent = confirm?.centre_m as number[];
+  expect(Math.hypot(sent[0], sent[1] + 0.0014)).toBeCloseTo(3.0, 2);
   expect(typeof confirm?.request_id).toBe('string');
-  await expect(box).toBeHidden();
+  await expect(page.locator('#placement-box')).toBeHidden();
 });
 
-test('the box can be dragged with a finger', async ({ page }) => {
+test('the patch can be dragged with a finger', async ({ page }) => {
   const mocks = await boxStep(page);
   await page.goto('/tester.html');
-  const box = page.locator('#placement-box');
-  await expect(box).toHaveAttribute('data-box', '562,361,718,491');
-  const picture = await page.locator('#placement-camera-frame').boundingBox();
-  const start = await box.boundingBox();
-  if (!picture || !start) throw new Error('the preview has no size');
+  const ground = page.locator('#placement-ground');
+  await expect(ground).toBeVisible();
+  const start = await ground.boundingBox();
+  if (!start) throw new Error('the patch has no size');
   const at = (dx: number) => ({
     pointerId: 7,
     pointerType: 'touch',
@@ -1397,22 +1464,25 @@ test('the box can be dragged with a finger', async ({ page }) => {
     bubbles: true,
   });
 
-  await box.dispatchEvent('pointerdown', at(0));
-  await box.dispatchEvent('pointermove', at(-40));
-  await box.dispatchEvent('pointerup', at(-40));
+  await ground.dispatchEvent('pointerdown', at(0));
+  await ground.dispatchEvent('pointermove', at(-40));
+  await ground.dispatchEvent('pointerup', at(-40));
 
-  const x0 = Math.round(562 - (40 * 1280) / picture.width);
-  await expect(box).toHaveAttribute('data-box', `${x0},361,${x0 + 156},491`);
+  const [lateral] = await centreOf(page);
+  expect(lateral).toBeLessThan(-0.02);
+  await expect(page.locator('#placement-distance')).toContainText('left');
   await page.locator('#placement-confirm').click();
-  await expect(page.locator('#placement-summary')).toContainText('Box confirmed');
-  expect(mocks.posts.find((item) => item.action === 'confirm')?.box_px).toEqual([x0, 361, x0 + 156, 491]);
+  await expect(page.locator('#placement-summary')).toContainText('Patch confirmed');
+  const sent = mocks.posts.find((item) => item.action === 'confirm')?.centre_m as number[];
+  expect(sent[0]).toBeCloseTo(lateral, 3);
 });
 
-test('the box starts where it was last confirmed', async ({ page }) => {
-  await boxStep(page, { prefill: [300, 420, 456, 550] });
+test('the patch starts where it was last confirmed', async ({ page }) => {
+  await boxStep(page, { prefill: [0.3, 1.8] });
   await page.goto('/tester.html');
 
-  await expect(page.locator('#placement-box')).toHaveAttribute('data-box', '300,420,456,550');
+  await expect(page.locator('#placement-box')).toHaveAttribute('data-centre', '0.300,1.800');
+  await expect(page.locator('#placement-distance')).toHaveText('Patch centre 1.83 m from the radar, 0.30 m right.');
 });
 
 test('a camera that does not answer is the first camera check, said plainly', async ({ page }) => {
@@ -1431,10 +1501,10 @@ test('a camera that does not answer is the first camera check, said plainly', as
 
   await expect(page.locator('#placement-box')).toBeVisible();
   await expect(show).toBeHidden();
-  await expect(summary).toContainText('Drag the yellow box');
+  await expect(summary).toContainText('Drag the yellow patch');
 });
 
-test('moving the box later makes the light stale and starts the ball range over', async ({ page }) => {
+test('moving the patch later makes the light stale and starts the ball range over', async ({ page }) => {
   const mocks = await boxStep(page, { confirmed: true });
   mocks.setRange({
     epoch_id: 'epoch-done',
@@ -1444,43 +1514,42 @@ test('moving the box later makes the light stale and starts the ball range over'
     solution: { status: 'unresolved', selected_range_m: null },
   });
   await page.goto('/tester.html');
-  await expect(page.locator('#tee-range-action')).toHaveText('Evidence complete — raw-only mode');
-  // a confirmed box opens no camera by itself
+  await expect(page.locator('#tee-range-action')).toHaveText('Evidence complete — no ball found');
+  // a confirmed patch opens no camera by itself
   await expect(page.locator('#placement-box')).toBeHidden();
   expect(mocks.posts).toEqual([]);
 
   await page.locator('#placement-move').click();
-  const box = page.locator('#placement-box');
-  await expect(box).toBeVisible();
-  const picture = await page.locator('#placement-camera-frame').boundingBox();
-  const start = await box.boundingBox();
-  if (!picture || !start) throw new Error('the preview has no size');
+  const ground = page.locator('#placement-ground');
+  await expect(page.locator('#placement-box')).toBeVisible();
+  const start = await ground.boundingBox();
+  if (!start) throw new Error('the patch has no size');
   await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
   await page.mouse.down();
   await page.mouse.move(start.x + start.width / 2 + 60, start.y + start.height / 2, { steps: 5 });
   await page.mouse.up();
   await page.locator('#placement-confirm').click();
 
-  await expect(page.locator('#placement-summary')).toContainText('The box moved');
+  await expect(page.locator('#placement-summary')).toContainText('The patch moved');
   await expect(page.locator('#placement-summary')).toContainText('the ball range has started over');
   await expect(page.locator('#tee-range-action')).toHaveText('Capture empty hitting area');
   await expect(page.locator('#light-age')).toContainText('Measure the light again (B)');
   expect(mocks.posts.map((item) => item.action)).toEqual(['show', 'confirm']);
 });
 
-test('each camera step draws the box it searches', async ({ page }) => {
+test('the camera step draws the patch it searches', async ({ page }) => {
   await base(page, {
     epoch_id: 'epoch-boxed',
-    phase: 'camera_arm6_capturing',
-    reason: 'camera_arm6_warming',
+    phase: 'camera_arm5_capturing',
+    reason: 'camera_arm5_warming',
     evidence: {},
     solution: null,
   });
   await page.route('**/api/tester/live', (route) =>
     json(route, {
       running: true,
-      arm_id: 'arm6',
-      owner: { kind: 'guided_tee_range', tester_id: '20260922-name', epoch_id: 'epoch-boxed', arm_id: 'arm6' },
+      arm_id: 'arm5',
+      owner: { kind: 'guided_tee_range', tester_id: '20260922-name', epoch_id: 'epoch-boxed', arm_id: 'arm5' },
       stats: { mean: 71, p99: 139, max: 178, clipped_pct: 0 },
       association: {
         status: 'not_found',
@@ -1489,11 +1558,27 @@ test('each camera step draws the box it searches', async ({ page }) => {
         stable_count: 0,
         stable_span_s: 0,
         save_eligible: false,
-        placement_box_px: [281, 180, 359, 245],
-        readiness_reason: 'no ball in the box: put the ball in the box',
+        placement_box_px: [338, 372, 943, 550],
+        readiness_reason: 'No ball found in the patch. The ball may be outside it: move the ball or the patch.',
       },
       guided_display: guidedDisplay('exposure_searching'),
-      placement_box: { box_px: [281, 180, 359, 245], frame_size_px: [640, 400], arm_id: 'arm6' },
+      placement_box: {
+        box_px: [338, 372, 943, 550],
+        frame_size_px: [1280, 800],
+        arm_id: 'arm5',
+        outline_px: [
+          [338.3, 494.0],
+          [941.7, 494.0],
+          [823.2, 457.1],
+          [456.8, 457.1],
+        ],
+        search_outline_px: [
+          [338.3, 548.6],
+          [941.7, 548.6],
+          [823.2, 372.6],
+          [456.8, 372.6],
+        ],
+      },
     })
   );
   await page.route('**/api/tester/live.png?**', (route) =>
@@ -1501,13 +1586,119 @@ test('each camera step draws the box it searches', async ({ page }) => {
   );
   await page.goto('/tester.html');
 
-  const box = page.locator('#tee-range-placement-box');
-  await expect(box).toBeVisible();
-  await expect(box).toHaveAttribute('data-box', '281,180,359,245');
-  await expect(box).toHaveAttribute('data-draggable', 'false');
-  await expect(page.locator('#tee-range-camera-detector')).toContainText(
-    'No ball in the box: put the ball in the box'
+  const patch = page.locator('#tee-range-placement-box');
+  await expect(patch).toBeVisible();
+  await expect(patch).toHaveAttribute('data-outline', '338,494 942,494 823,457 457,457');
+  await expect(patch).toHaveAttribute('data-draggable', 'false');
+  await expect(page.locator('#tee-range-patch-search')).toHaveAttribute(
+    'points',
+    '338.3,548.6 941.7,548.6 823.2,372.6 456.8,372.6'
   );
+  await expect(page.locator('#tee-range-camera-detector')).toContainText('No ball found in the patch');
+});
+
+// P8-4: the camera's ball and the radar's candidates validate each other; the summary
+// shows both distances and what they agreed on, with a warning when they did not.
+const PAIR_STATE = {
+  epoch_id: 'epoch-pair',
+  phase: 'experimental',
+  reason: 'patch_ball_saved',
+  evidence: {},
+  solution: { status: 'unresolved', selected_range_m: null },
+};
+
+async function pairStep(page: Page, patchBall: Record<string, unknown>) {
+  const mocks = await base(page, PAIR_STATE);
+  await page.route('**/api/tester/tee-range**', (route) =>
+    json(route, {
+      state: mocks.state(),
+      display: {
+        ...rangeDisplay(mocks.state()),
+        canonical: { state: 'experimental', range_m: patchBall.range_m, reason: null },
+        swings: {
+          state: 'experimental',
+          range_m: patchBall.range_m,
+          message: 'EXPERIMENTAL: swings use the setup’s distance.',
+        },
+        patch_ball: patchBall,
+      },
+    })
+  );
+  await page.goto('/tester.html');
+}
+
+test('an agreeing pair shows both distances and where the ball sits aside', async ({ page }) => {
+  await pairStep(page, {
+    status: 'validated',
+    warning: null,
+    range_m: 1.176,
+    side_offset_m: 0.1,
+    source: 'static_iwr_magnitude',
+    camera_range_m: 1.25,
+    camera_uncertainty_m: 0.27,
+    radar_range_m: 1.176,
+    radar_method: 'magnitude',
+    radar_candidates: [
+      { method: 'magnitude', range_m: 1.176, score: 0.8, elevation_deg: -16 },
+      { method: 'coherent', range_m: 1.575, score: 49, elevation_deg: -9.5 },
+    ],
+    radar_warnings: [],
+  });
+
+  const ball = page.locator('[data-state="ball-validated"]');
+  await expect(ball).toContainText('ball 1.176 m — camera and radar agree');
+  await expect(ball).toContainText('camera 1.250 m');
+  await expect(ball).toContainText('radar 1.176 m (magnitude)');
+  await expect(ball).toContainText('0.10 m right');
+  await expect(ball).not.toHaveClass('problem');
+  await expect(page.locator('[data-state="radar-candidates"]')).toContainText(
+    '1.176 m magnitude, 1.575 m coherent'
+  );
+  await expect(page.getByRole('button', { name: 'C. Start the exposure ladder' })).toBeEnabled();
+});
+
+test('the first agreeing pair calibrates the camera tilt, and the summary says so', async ({ page }) => {
+  const mocks = await base(page, PAIR_STATE);
+  await page.route('**/api/tester/tee-range**', (route) =>
+    json(route, {
+      state: mocks.state(),
+      display: {
+        ...rangeDisplay(mocks.state()),
+        patch_ball: { status: 'validated', warning: null, range_m: 1.18, radar_candidates: [] },
+        camera_tilt: { action: 'calibrated', offset_deg: 1.87, warning: null },
+      },
+    })
+  );
+  await page.goto('/tester.html');
+
+  const tilt = page.locator('[data-state="tilt-calibrated"]');
+  await expect(tilt).toContainText('camera tilt calibrated from this setup · 1.9°');
+  await expect(tilt).not.toHaveClass('problem');
+});
+
+test('disagreeing sensors are saved with a warning that names both distances', async ({ page }) => {
+  const warning =
+    'The camera puts the ball at 1.50 m and the radar at 1.20 m: they disagree. Check for other objects in the patch. The camera’s distance is used.';
+  await pairStep(page, {
+    status: 'disagree',
+    warning,
+    range_m: 1.5,
+    side_offset_m: 0,
+    source: 'camera_size_range',
+    camera_range_m: 1.5,
+    camera_uncertainty_m: 0.02,
+    radar_range_m: 1.2,
+    radar_method: 'coherent',
+    radar_candidates: [{ method: 'coherent', range_m: 1.2, score: 30, elevation_deg: -11 }],
+    radar_warnings: [],
+  });
+
+  const ball = page.locator('[data-state="ball-disagree"]');
+  await expect(ball).toHaveClass('problem');
+  await expect(ball).toContainText('camera and radar disagree');
+  await expect(ball).toContainText(warning);
+  // measure, label, don't block (D15): the ladder can still start
+  await expect(page.getByRole('button', { name: 'C. Start the exposure ladder' })).toBeEnabled();
 });
 
 // P7-7 (D11): without a qualified range the setup saves as experimental.
@@ -1545,7 +1736,7 @@ test('a setup saved as experimental says so and lets the ladder start', async ({
   await expect(page.getByRole('button', { name: 'C. Start the exposure ladder' })).toBeEnabled();
 });
 
-test('the advisory 640×400 check can be skipped', async ({ page }) => {
+test('a setup that reached the old 640×400 check finishes without it', async ({ page }) => {
   const posts: string[] = [];
   await base(page, {
     epoch_id: 'epoch-skip',
@@ -1572,12 +1763,53 @@ test('the advisory 640×400 check can be skipped', async ({ page }) => {
   });
   await page.goto('/tester.html');
 
-  const skip = page.locator('#tee-range-skip-arm6');
-  await expect(page.locator('#automatic-range-summary')).toContainText('The check is advisory');
-  await expect(skip).toBeVisible();
-  await skip.click();
+  const action = page.locator('#tee-range-action');
+  await expect(page.locator('#automatic-range-summary')).toContainText('The 640×400 check is no longer part of the setup');
+  await expect(action).toHaveText('Finish this setup');
+  await expect(page.locator('#tee-range-skip-arm6')).toHaveCount(0);
+  await action.click();
 
-  await expect(page.locator('#tee-range-action')).toHaveText('Setup saved — experimental range');
+  await expect(action).toHaveText('Setup saved — experimental range');
   expect(posts).toEqual(['skip_camera_arm6']);
-  await expect(skip).toBeHidden();
+});
+
+test('step 3 shows the camera and the patch while the ball is placed', async ({ page }) => {
+  const mocks = await base(page, {
+    epoch_id: 'epoch-place',
+    phase: 'needs_ball',
+    reason: 'needs_ball',
+    evidence: {},
+    solution: null,
+  });
+  await page.goto('/tester.html');
+
+  await expect.poll(() => mocks.previews).toEqual(['epoch-place|needs_ball']);
+  const preview = page.locator('#tee-range-camera-preview');
+  await expect(preview).toBeVisible();
+  await expect(page.locator('#tee-range-camera-frame')).toBeVisible();
+  const patch = page.locator('#tee-range-placement-box');
+  await expect(patch).toBeVisible();
+  await expect(page.locator('#tee-range-patch-ground')).toHaveAttribute('points', /326\.5/);
+  await expect(page.locator('#tee-range-camera-detector')).toHaveText(
+    'Place the ball inside the patch. The camera and radar search it when you capture the ball.'
+  );
+  await expect(page.locator('#tee-range-camera-exposure')).toContainText('Viewing only');
+  await expect(page.locator('#tee-range-action')).toHaveText('Capture ball at address');
+  await expect(page.locator('#tee-range-action')).toBeEnabled();
+  // asked once for this step, not on every tick
+  await page.waitForTimeout(1000);
+  expect(mocks.previews).toEqual(['epoch-place|needs_ball']);
+});
+
+test('the step headings are numbered once', async ({ page }) => {
+  await base(page);
+  await page.goto('/tester.html');
+
+  const heading = page.getByRole('heading', { name: '3. Automatic ball range' });
+  await expect(heading).toBeVisible();
+  const marker = await page
+    .locator('.suite-steps > li')
+    .first()
+    .evaluate((node) => getComputedStyle(node).listStyleType);
+  expect(marker).toBe('none');
 });

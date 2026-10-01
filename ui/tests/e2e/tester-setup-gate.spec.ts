@@ -304,7 +304,7 @@ test('automatic range is visible while tape stays optional and advanced', async 
   await page.goto('/tester.html');
 
   await expect(page.getByRole('heading', { name: 'Automatic ball range' })).toBeVisible();
-  await expect(page.locator('#automatic-range-summary')).toContainText('raw-only');
+  await expect(page.locator('#automatic-range-summary')).toContainText('No ball found in the patch');
   await expect(page.locator('#automatic-range-values')).toContainText('canonical range withheld');
   await expect(page.locator('#tee-mm')).toBeHidden();
   await page.getByText('Advanced: manual single-arm tools').click();

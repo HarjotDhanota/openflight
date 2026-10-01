@@ -88,17 +88,21 @@ the sensor to the kiosk and takes it back afterwards. The OPS243 is expected on 
 elsewhere. The first `start-tester.sh` builds the environment and takes a few
 minutes; later starts are quick.
 
-**The setup saves as experimental.** No range qualification exists yet, so the
-automatic range is saved as **experimental** when the 1280×800 camera locked the
-ball inside the box: swings get the radar's range when it agrees with the
-camera's size range within twice their combined uncertainty, and the camera's
-own range when the radar found no ball. If the two disagree, nothing is saved
-and swings start with the tee range pending. The page, the run's records
-(`handed_to_swings` says `experimental: true` and which source it used) and the
-session review all say experimental: nothing has qualified this range, so
-nothing built on it is a measurement yet. The range summary's **swings get**
-line says which it will be before you start. `--use-unqualified-tee-range` only
-matters for a setup finished before this change. Face angle appears on the **Club path** tile
+**The setup saves as experimental.** No range qualification is required or used.
+After both have looked, the camera's ball in the patch and the radar's candidates
+in the patch check each other, and the setup always saves what they found,
+labelled **experimental**: the radar's distance when the two agree within twice
+their combined uncertainty; the camera's distance, with a warning, when the radar
+found nothing or disagrees; the radar's strongest candidate, with a warning, when
+the camera found no ball; and nothing, with "No ball found in the patch. The ball
+may be outside it: move the ball or the patch.", when neither did. The page, the
+run's records (`handed_to_swings` says `experimental: true`, which source it used,
+the pair and the warning) and the session review all say experimental: nothing has
+qualified this range, so nothing built on it is a measurement yet. The range
+summary's **swings get** line says which it will be before you start.
+`--use-unqualified-tee-range` only matters for a setup finished before this change.
+The only things that stop the setup are a sensor that is not connected and a rig
+moved in the middle of it. Face angle appears on the **Club path** tile
 as `face ±x.x° (D-plane)`: an estimate from start direction and path, not seen
 on the club. It uses only the path the tile shows, and only when it is
 accepted. The IWR's horizontal zero is not calibrated yet, so a radar
@@ -129,30 +133,31 @@ speed, **No radar shot** or **Not a shot**. Wait for SWING before each swing;
 a swing on amber or red may not count.
 
 Use the numbered test suite for a normal collection: **1. Set up the rig and
-place the box**, **2. Check hardware and light**, **3. Automatic ball range**,
+place the patch**, **2. Check hardware and light**, **3. Automatic ball range**,
 **4. Capture the exposure ladder**, then **5. Review and package**. **Advanced:
 manual single-arm tools** is for a maintainer-directed investigation of one mode;
 it is not the normal pilot and does not replace the ladder.
 
-**The placement box is step 1.** Set the unit down where it will stay and confirm
-the physical setup; the live 1280×800 picture then opens by itself under **Place
-the box**. Drag the yellow box to where you will hit from and press **Confirm the
-box**. Everything after it works from the box, and stays locked until it is
-confirmed: the hardware check (A), the light measurement (B), which is judged
-inside the box, the ball range and the ladder. The box is also the camera's first
-check: if the picture does not open, the step says the camera did not answer and
-offers **Show the camera** (see [Automatic ball range](#automatic-ball-range)).
+**The patch is step 1.** Set the unit down where it will stay and confirm the
+physical setup; the live 1280×800 picture then opens by itself under **Place the
+patch**. The patch is a 2 ft (0.61 m) square on the ground, drawn in perspective:
+drag it to where you will hit from, near or far, and press **Confirm the patch**.
+Everything after it works from the patch, and stays locked until it is confirmed:
+the hardware check (A), the light measurement (B), which is judged inside it, the
+ball range and the ladder. The patch is also the camera's first check: if the
+picture does not open, the step says the camera did not answer and offers **Show
+the camera** (see [Automatic ball range](#automatic-ball-range)).
 
 ## Test suite
 
 On the study page, fill in **Who and where**, review the setup checks and confirm
-the physical setup. Then place the box (step 1, above) and work down **Test
+the physical setup. Then place the patch (step 1, above) and work down **Test
 suite**:
 
 1. **A. Check the hardware.** Ready means the software and camera answered.
 2. **B. Measure the light.** Runs the camera's light screen at both modes, about
    a minute each. Keep the room as you will hit in; it also proves each camera
-   mode streams. The light is judged inside the box you confirmed (halved for
+   mode streams. The light is judged inside the patch you confirmed (halved for
    640×400), not over a fixed part of the picture, so a bright sky or a dark
    fence elsewhere does not decide it. Each mode then reads "light sufficient",
    "more light needed" (swings become evidence only), "too bright: shorter
@@ -160,7 +165,7 @@ suite**:
    so the gain stays below it). The last two are normal outdoors. Under the
    button the page shows how long ago the light was measured. Outdoors a
    measurement lasts 30 minutes; indoors it lasts the day. After that, if you
-   move between indoors and outdoors, or if you move the box, the page asks you
+   move between indoors and outdoors, or if you move the patch, the page asks you
    to measure the light again, and **C** waits until you do.
 3. **C. Start the exposure ladder.** The page sets each exposure itself and shows
    which one you are on. Hit a normal shot, wait for the verdict, repeat. It moves
@@ -320,56 +325,64 @@ check, not proof of absolute accuracy.
 
 ### Automatic ball range
 
-**First, the placement box (step 1).** Set the unit down where it will stay and
-confirm the physical setup. The page then opens the live 1280×800 picture under
-**Place the box**, with a yellow box straight ahead of the unit, or where you last
-confirmed it; drag it (mouse or finger) over the spot you will hit from, then
-press **Confirm the box**. Nothing is checked or captured before that: the
-hardware check, the light measurement, the radar captures, both camera steps and
-the ladder's ball checks all work from this box, and every camera search looks
-only inside it (640×400 uses the same box halved). The box has a fixed size on
-every unit, about 0.20 m wide at 1.35 m, and tall enough for a ball on the surface
-or on a raised mat; you only move it. It does not measure distance: at the lens's
-95 mm the whole 1.2–1.5 m zone is about 11 rows of the picture. A ball found in
-the box still has to pass the hitting-area checks (distance, height above the
-surface, size), so a box dragged onto the net or the sky finds nothing and says
-so. With no ball in it the page says "no ball in the box: put the ball in the
-box". The picture sets its own brightness while it is open, so the scene shows in
+**First, the patch (step 1).** Set the unit down where it will stay and confirm
+the physical setup. The page then opens the live 1280×800 picture under **Place
+the patch**, with the patch where you last confirmed it, or 1.25 m straight ahead
+of the unit the first time. The patch is a 2 ft (0.61 m) square lying on the
+hitting surface, drawn in true perspective: near the unit it is wide and deep in
+the picture, far away it is narrow and thin. Drag it (mouse or finger) over the
+spot you will hit from; while you drag, the page says how far its centre is from
+the radar and how far left or right ("Patch centre 1.25 m from the radar, straight
+ahead."). Its centre can go from 0.8 m to 3.0 m. Then press **Confirm the patch**.
+Nothing is checked or captured before that: the hardware check, the light
+measurement, the radar captures, the camera's ball search and the ladder's ball
+checks all work from the patch, and nothing looks anywhere else. The patch is
+stored on the ground (its centre and corners in metres from the unit), with its
+outline in the picture and the camera tilt it was drawn with, in
+`placement-box.json`.
+
+The dashed outline around the patch is where the camera looks for the ball. Its
+columns are exact; its rows are padded because the camera's tilt is known only to
+a few degrees until it is calibrated (see *Camera tilt* below): before then the
+dashed area is taller, afterwards it hugs the patch. With no ball in it the page
+says "No ball found in the patch. The ball may be outside it: move the ball or the
+patch." The picture sets its own brightness while it is open, so the scene shows in
 sun or at dusk before the light has been measured; "Adjusting brightness…" shows
 under it until it settles, usually within two to four looks. That brightness is
 for viewing only: it is logged as `box_preview` and never used as a light
 measurement, a lock or a starting point for the camera checks. If the picture does
 not open, the step says the camera did not answer (the first camera check of the session); fix the cable or close whatever holds the
 camera, then press **Show the camera**. After a restart of the tester, or a new
-physical setup confirmation, the page asks for the box again, starting where you
+physical setup confirmation, the page asks for the patch again, starting where you
 last confirmed it; confirming it in the same spot changes nothing.
 
-**The box is the hitting zone.** Wherever the tester judges the hitting zone it
-uses the confirmed box instead of the fixed centre-lower part of the picture
-(rows 45–90 %, columns 20–80 %): the light screens (B), the ladder's light checks
-("N% of the box clipped") and the kiosk's capture-time exposure rating when it has
-no setup ball. The fixed zone remains only when no box was confirmed, and every
-stored zone result says which was used (`zone_source`: `placement_box` or
-`fixed`).
+**The patch is the hitting zone.** Wherever the tester judges the hitting zone it
+uses the confirmed patch's search area instead of the fixed centre-lower part of
+the picture (rows 45–90 %, columns 20–80 %): the light screens (B), the ladder's
+light checks ("N% of the box clipped") and the kiosk's capture-time exposure rating
+when it has no setup ball. The fixed zone remains only when no patch was confirmed,
+and every stored zone result says which was used (`zone_source`: `placement_box`
+or `fixed`).
 
-**Moving the box later.** Press **Move the box**, drag it and confirm it. A box
-moved more than a few pixels (4 at 1280×800) makes the light measurement stale
-(B asks to be run again, and **C** waits for it) and starts the ball range over,
-the same as **Ball or rig moved: start over**; the new setup records the move, the
-previous setup and the time (`started_by`), and `placement-box.json` keeps the
-history of every confirmation with its time. Stop the ladder first: a move is
-refused while a capture holds the camera or radar. Confirming the box in the same
-spot changes nothing.
+**Moving the patch later.** Press **Move the patch**, drag it and confirm it. A
+patch moved more than 2 cm on the ground makes the light measurement stale (B asks
+to be run again, and **C** waits for it) and starts the ball range over, the same
+as **Ball or rig moved: start over**; the new setup records the move, the previous
+setup and the time (`started_by`), and `placement-box.json` keeps the history of
+every confirmation with its time. Stop the ladder first: a move is refused while a
+capture holds the camera or radar. Confirming the patch in the same spot changes
+nothing.
 
-Step 3 then begins directly with the camera and radar checks. The workflow asks for empty/ball IWR captures, an Arm 5 reference frame and
-an Arm 6 validation frame. Each setup epoch is immutable; **Start over / ball
-moved** preserves it and creates a new one, while refresh resumes the saved step.
-Without a qualification the setup finishes **experimental** when the 1280×800
-camera locked the ball in the box and the radar agreed with it (or found no
-ball); a radar that disagrees, or no ball locked in the box, ends in raw-only mode:
-the ladder remains available, as long as the camera found the ball, but range
-metrics stay withheld. A qualified Arm 5/IWR pair freezes one range for both
-modes; Arm 6 cannot change it. Advanced tape is validation only.
+Step 3 then begins directly with the radar captures, with the live picture and the
+patch over it while you clear the spot and place the ball (viewing only: nothing
+is measured from it). The workflow asks for an empty and a ball radar capture and
+one 1280×800 Save; there is no 640×400 check: the ladder's 640×400 settings use the
+1280×800 ball halved. Each setup epoch is immutable; **Start over / ball moved**
+preserves it and creates a new one, while refresh resumes the saved step. The
+setup always finishes **experimental** (see *The setup saves as experimental*
+above) or, when neither sensor found a ball in the patch, with no range: the
+ladder remains available, as long as the camera found the ball, but range metrics
+stay withheld. Advanced tape is validation only.
 
 For the two radar captures, stand in one spot outside the radar's view (behind
 the rig) for both, keep still, and keep others away. The ball is a weak radar
@@ -378,50 +391,36 @@ of the room's typical background, so a person standing somewhere different for
 the second capture changed the picture more than the ball did and the pair was
 correctly rejected.
 
-Each camera step first finds its own static exposure: it raises exposure at full
-gain until the ball is visible, then locks the lowest exposure and gain whose
-applied camera metadata match the request and whose ball pixels pass the
-brightness and clipping checks. Save stays disabled until that
-lock holds, and the lock is dropped if the light changes. If no setting passes,
-the step reports that more light is needed: add light and retry, or keep the view
-as unqualified raw evidence, which finishes the setup raw-only; with no ball
-found at 1280×800 the ladder then refuses to start. This lock is for
-the stationary ball only; it never sets swing-capture exposure. Its thresholds
-are provisional until the camera lighting study.
+The camera step first sets its brightness on the ball, in a few steps. It
+starts from the light measurement (B) or the last lock that passed, and uses the
+camera's linear response (signal above black is proportional to exposure × gain)
+to go straight to a target: when it sees a ball, the next step brings the ball's
+brightest part to about 60 % of clipping, so it is at least 20 DN above black and
+not clipped; when it sees no ball and the patch itself is dark, it brings the patch
+up and looks again; when it sees no ball in a lit patch, it looks again at the same
+setting, and after four such looks it stops with "No ball found in the patch".
+Not finding the ball is never taken to mean the picture is too dark. Each step uses
+the shortest exposure that reaches the brightness, then gain. At most eight changes
+are made; the lock is the setting whose applied camera metadata match the request
+and whose ball pixels pass the brightness and clipping checks. Save stays disabled
+until that lock holds, and the lock is dropped if the light changes. If the ball
+cannot be made bright enough, the step reports that more light is needed: add
+light and retry, or keep the view as unqualified raw evidence, which saves what the
+radar found; with no ball found at 1280×800 the ladder then refuses to start. This
+lock is for the stationary ball only; it never sets swing-capture exposure.
 
-The ball search does not assume the lens height: feet sink into carpet and a
-unit may stand on something, so each candidate's implied camera height is
-solved from its apparent size and position, and only places where a resting
-ball could be (below the horizon, at a plausible height) are searched, inside
-the placement box. Once found, each live look re-fits the ball where it was in a
-fraction of a second; Save still searches the whole box as the independent check
-(you placed the box, so it does not depend on what the live look picked). Contrast
-against the surroundings and edge sharpness are recorded but no longer gate the
-lock: in camera levels both grow with exposure exactly as the background does, so
-a fixed floor only pushed the search into clipping. On 29 Sept a white ball on a
-white door was found and fitted at 2 ms × 12 with 3 levels of contrast, and the
-old 12-level gate drove the search to 8 ms × 10 with 5 % of the ball clipped.
-Whether the ball stands out is the detector's call.
-
-The search does not walk every setting. Brightness on this sensor is
-proportional to exposure × gain, and so is the ball's signal. So the first
-frame sets how far to jump while the ball is still invisible, and the first
-measured ball predicts where its signal is just enough and where it would clip. Steps predicted to be clearly too dark or clearly clipped are
-skipped; the rest are still verified lowest exposure first, so the lock is the
-lowest passing setting. On synthetic scenes this takes 3–7 settings instead of 11–15.
-
-Whether a picture without the ball is too dark is judged on the placement box,
-not the whole frame: in sun a dark fence or a bright sky elsewhere says nothing
-about the light on the ball. When the camera sees ball-like things but cannot pick
-the ball out ("ambiguous"), it looks again at the same setting; more light never
-fixes that, so the search never steps brighter for it, and after six such looks it
-stops with "keep only the ball in the box". On 30 Sept (Outdoors-test-7) the old
-search read an ambiguous 640×400 view at 10 µs × 1 as darkness from the whole
-frame, climbed to gain 12 and ended with the ball clipped.
-
-The 640×400 step starts where the 1280×800 step locked: it tries the 1280×800
-exposure and gain first, and its first looks follow the 1280×800 ball, halved,
-inside the halved box. Both must still pass every check in this mode.
+The ball search looks only inside the patch's dashed outline, and only for balls
+of the sizes the patch's near and far edges allow (25 % either way). It does not
+reject a ball for sitting above or below the floor row it expects: that height is
+recorded (`floor_height_residual_m`) but never used to refuse, because the camera's
+tilt alone moves it by more than a ball. When several ball-like things are in the
+patch, they are ranked by how well each fits a lit sphere; if two fit about as
+well, the step says "Several ball-like things are in the patch: keep only the ball
+in it" and looks again at the same setting, never brighter. The camera never uses
+the radar while it searches. Once found, each live look re-fits the ball where it
+was in a fraction of a second; Save still searches the whole patch as the
+independent check. Contrast against the surroundings and edge sharpness are
+recorded but do not gate the lock.
 
 Heights are measured from the hitting surface, so the setup ball goes directly on
 the mat or grass, never on a tee: its centre is then one radius up. The radar's
@@ -429,9 +428,9 @@ floor-bounce model (its vertical launch angle) needs the radar's height above th
 surface it reflects from, which a tee-top reference would get wrong.
 
 The lens height normally comes from the rig file, which is right whenever the unit
-and the ball stand on the same surface. When the static radar accepted the ball,
-Save also solves the lens height from the radar's range along the ball's pixel
-ray. One ball solves it only to about ±25–65 mm, so the solve is a gross-error
+and the ball stand on the same surface. When the camera and radar agree on the
+ball, the pair also solves the lens height from the radar's range along the ball's
+pixel ray (once the camera tilt is calibrated). One ball solves it only to about ±25–65 mm, so the solve is a gross-error
 check: it replaces the rig file's height only when the two disagree by more than
 60 mm (for example a unit standing on a box). Swings are then started with
 `--solved-camera-height-m`, which moves the radar height with the lens; the kiosk
@@ -467,45 +466,53 @@ gates stop 0.25 m short of it. The static capture's window ends near 2.9 m
 (apparent), so a net further away is not seen; swings then assume 4.6 m, and
 `session_start`'s `net_range` says the value was assumed.
 
-The two radar captures are compared as complex numbers, one virtual channel at a
-time: each channel of the empty capture is first scaled by one complex factor
-fitted on still reflectors outside the hitting area (a radar restart turns every
-channel's phase), then subtracted from the ball capture. What is left is what
-changed. The radar's pick is the one clear change at ground level (its elevation
-on the vertical antenna column must match a ball on the surface or a raised mat,
-from the rig file); before the camera has the ball it is searched for across the
-hitting area, 1.0–2.5 m. A pick found this way is **experimental**
-(`accepted_unqualified`): nothing has qualified it. Two comparable changes, a
-change spread over more than 7 range bins (about 0.33 m), or a still reflector
-beside the ball that changed between the captures are rejected, and a rejected
-radar result hands over no range at all (the summary shows no number for it).
-The older comparison of magnitudes stays on record beside it; on 30 Sept it
-rejected a real ball whose echo cancelled the mat edge's (a fractional change of
-0.34 against its 0.50 gate). Captures recorded before this change are compared
-from their saved raw dumps.
+The radar searches only the patch's distances: from its near edge to its far
+edge as seen from the radar, widened for the camera's tilt uncertainty and 0.1 m
+either way. The two captures are compared two ways, and every candidate either way
+is reported with its distance, score and (for the coherent one) elevation:
 
-At Save the camera's own range to the ball (from its apparent size, found without
-the radar's hint) sets a window of ±2σ, at least ±40 %, around it. If the radar
-chose something outside that window, such as a person, a club or a net at another
-distance, the radar selection is re-run inside the window from the saved profiles.
-Both results are recorded in the setup evidence. The re-run only chooses which
-change in the radar profile may be the ball; how much of the profile changed is
-still judged over the whole search, so a ball at 1 m is not rejected as clutter
-just because the window is narrow. If the camera puts the ball where the radar does
-not search, or the re-run cannot be done, the radar's pick is kept on record but
-marked rejected: it is not handed to swings and does not set the lens height.
-Something ball-sized at the same distance as the ball, such as a shoe beside it, is
-not separated, so the prompt asks you to step at least 2 m away before each capture.
+* by magnitude: every place in the window where the ball capture's echo grew by a
+  quarter or more over the empty one, strongest three kept;
+* coherently, one virtual channel at a time: each channel of the empty capture is
+  first scaled by one complex factor fitted on still reflectors outside the patch
+  (a radar restart turns every channel's phase), then subtracted from the ball
+  capture; each clear change is a candidate, flagged when its elevation is not at
+  ground level.
 
-The 640×400 step checks the 1280×800 one, and it is advisory: **Skip the 640×400
-check and save** finishes the setup without it, and a 640×400 view that cannot
-find the ball can be kept as raw evidence while the setup still saves. Their
-ranges should agree within twice their combined uncertainty; the summary's
-**640×400 check** line says whether they do. A disagreement is flagged in red but
-does not stop the setup: check that the ball did not move between the two Saves,
-and start over if it did. Only the 1280×800 step decides the lens height;
-640×400's solve is recorded as a check, and the ladder's 640×400 settings always
-use the 1280×800 ball halved.
+Nothing is rejected for a fraction below a fixed gate, and a changed scene (a
+person or a club elsewhere) is a warning, not a rejection. A patch whose far edge
+is beyond the default capture's reach (about 2.75 m) uses the far profile,
+`config/iwr6843_static_range_18f3ms_72bin_iq16.cfg` (18 frames, out to 3.7 m
+apparent), chosen automatically.
+
+After both have finished, the camera's ball and the radar's candidates check each
+other: a candidate agrees when it is within twice their combined uncertainty of
+the camera's distance (from the ball's size). Of the agreeing ones, the closest
+wins, then the strongest; a coherent change off the ground is never taken for the
+ball, so a person standing behind the ball stays a candidate the pair does not
+pick. The summary's **ball** line says what happened (camera and radar agree,
+camera only, radar only, disagree, no ball), with both distances and how far the
+ball sits left or right of straight ahead (from the camera's ray at the radar's
+distance); its **radar candidates** line lists everything the radar saw in the
+patch. Something ball-sized at the same distance as the ball, such as a shoe beside
+it, is not separated, so the prompt asks you to step at least 2 m away before each
+capture.
+
+**Camera tilt.** The enclosure's inclinometer (LIS3DH) gives the camera's pitch,
+but the camera sits in the enclosure a degree or two differently from it, and at
+the lens's 95 mm each degree moves a ball at 1.25 m by about a quarter of a metre.
+So the first setup in which the camera and radar agree calibrates the unit: it
+solves the camera's pitch that puts the ball's pixel at the radar's distance and
+stores the difference from the LIS3DH's pitch in
+`~/.config/openflight/camera-vertical-offset.json` on the Pi (per unit, not in the
+rig file). Every later setup and swing uses the LIS3DH pitch plus that offset,
+labelled `unit_calibration_from_a_validated_pair`, and its patch outline tightens.
+A solve beyond ±8° is refused as a sign that the ball, the radar's distance or the
+lens height is wrong. Later agreeing pairs only check it: a difference of more than
+1.5° is shown as a warning on the summary's **camera tilt** line, and the stored
+offset is not replaced. To calibrate again (after a rebuild, or a camera that
+moved in the enclosure), delete that file. The calibrating pair cannot also check
+the lens height (it assumes the rig's); later pairs do.
 
 Each camera step needs a pitch reading from the enclosure's inclinometer. If the
 LIS3DH is off or still settling, the step is refused with "the LIS3DH reading has
@@ -558,24 +565,19 @@ it costs on this Pi, run
 Two things keep this search short. The 1280×800 search starts together with the
 radar ball capture, since the ball is already at address, so it is usually
 locked by the time the radar finishes; the page shows its progress during the
-capture, and Save opens once the radar result is in. This early search does not
-use the radar's range hint, which exists only after the radar finishes; the
-640×400 step still uses it. Each tester also remembers the last lock whose Save
-passed, per camera mode, in `static-exposure-memory.json` in the tester
-directory, and the next setup tries it first (the 640×400 step tries this setup's
-1280×800 lock before its own memory). It must pass every check again;
-any failure runs the full search. A policy or camera-mode change discards it.
+capture, and Save opens once the radar result is in. Each tester also remembers
+the last lock whose Save passed in `static-exposure-memory.json` in the tester
+directory, and the next setup tries it first. It must pass every check again; any
+failure runs the brightness steps. A policy or camera-mode change discards it.
 
 The setup admission is also frozen with the epoch: the approved configuration,
 operator confirmation and starting LIS3DH orientation must still match before
 each capture, evaluation, finalization and later ladder admission. A changed rig
 or orientation requires **Start over / ball moved**; a temporarily ineligible
 setup is refused by the server even when a stale browser still shows an enabled
-button. Camera qualification binds the exact rig, optical calibration, placement
-and saved-image mode profile. IWR qualification additionally requires a finite,
-positive measured range-bias uncertainty in the exact hashed calibration file.
-Missing or legacy qualification fields preserve the captures but keep them
-raw-only.
+button. A range qualification file, if one is configured, is still checked and
+its result recorded on each candidate, but it no longer decides anything: the
+setup saves as experimental either way (`qualification_outcome: not_required`).
 
 If the tester service restarts during a static IWR capture, it keeps waiting only
 while the reserved capture process is alive within the bounded restart window,
@@ -612,16 +614,19 @@ every earlier frame and failure record for review.
 | After resuming the ladder, a rung's swing count is back to 0 | The light no longer passed that exposure's check, so the rung started again | Nothing to fix; keep swinging. The earlier swings are kept for review but no longer count |
 | A swing is listed as set aside, `taken at ... not this rung's ...` or `taken during a still_photo` | It was taken while the ladder was changing the camera's settings | Nothing is lost; hit the next swing once the rung shows as set |
 | `finish automatic tee range before capture (retryable_failure)` | The setup's range record no longer matches the one the ladder was admitted with | Press **Start over / ball moved** and run the setup again |
-| Range summary: **swings get tee range pending** | The setup saved no range: the radar disagreed with the camera (`experimental range withheld radar disagrees`) or the 1280×800 camera never locked the ball in the box | Swings still record; launch and club metrics that need the range are withheld. Redo the setup with the ball inside the box, everyone at least 2 m away during the radar captures, and the ball not moved between the captures and Save |
-| Range summary: **experimental range**, swings get `EXPERIMENTAL` | The normal result until a range qualification exists: the camera locked the ball in the box and the radar agreed with it, or found no ball | Nothing to fix. Numbers built on it are labelled experimental |
-| Range summary: IWR `rejected — rejected_ambiguous`, `rejected_clutter` or `rejected_scene_changed` | More than one thing changed between the two radar captures at ground level (a person, a club, a second ball), the change was spread too wide to be one ball, or something beside the ball moved | Redo the setup: stand in the same spot, at least 2 m away, for both captures, and keep clubs, spare balls and bags still and away from the box |
-| Range summary: IWR `rejected — camera_window_disjoint` or `not_rechecked` | The radar picked something outside the camera's range window and nothing inside it replaced it | Redo the setup: step well away from the rig during both radar captures and keep the ball in the camera's view |
-| Range summary: **640×400 check disagrees** | The two camera modes put the ball at different ranges | Make sure the ball did not move between the two Saves; if it did, **Start over / ball moved**. The setup is not blocked |
-| The 640×400 step cannot lock, or says `keep only the ball in the box` | Its view is too dark, too bright or holds more than one ball-like thing in the box | The check is advisory: press **Skip the 640×400 check and save**, or keep its raw evidence; the setup still saves. Spare balls in the box also confuse the 1280×800 step, so move them out before the next setup |
+| Range summary: **swings get tee range pending**, `No ball found in the patch. The ball may be outside it: move the ball or the patch.` | Neither the camera nor the radar found a ball in the patch | Swings still record; launch and club metrics that need the range are withheld. Check the ball is inside the patch on the picture; if it is not, move the ball, or press **Move the patch** in step 1 and drag it over the ball (the ball range then starts over) |
+| Range summary: **experimental range**, ball line `camera and radar agree` | The normal result: the camera's ball and a radar candidate agree | Nothing to fix. Numbers built on it are labelled experimental |
+| Ball line `camera and radar disagree` — `The camera puts the ball at … m and the radar at … m` | The radar's strongest candidate is not where the camera's ball is: something else in the patch changed (a person, a club, a second ball), or the ball moved | The camera's distance is saved, with the warning. Redo the setup if you can: stand in the same spot, at least 2 m away, for both captures, and keep clubs, spare balls and bags out of the patch |
+| Ball line `camera only` — `The radar found no ball in the patch` | The ball's echo did not stand out in the patch's distances | The camera's distance is saved, with the warning. Keep everyone still and away during both radar captures; on a far patch (beyond about 2.5 m) the ball's echo is weak |
+| Ball line `radar only` — `The camera did not find the ball in the patch` | The camera could not pick the ball out (too dark, clipped, or several ball-like things) | The radar's strongest candidate is saved, unconfirmed. Fix the light or clear the patch and start over for a camera-checked range |
+| Summary **camera tilt** line in red: `… it disagrees by … deg` | This setup's ball puts the camera's tilt more than 1.5° from the unit's calibration: the unit stands raised or tilted differently, or the camera moved in the enclosure | If the unit is on the hitting surface and the camera was not touched, ignore one; if every setup says it, delete `~/.config/openflight/camera-vertical-offset.json` on the Pi and the next agreeing setup calibrates again |
+| Summary **camera tilt** `not calibrated` — `… beyond ±8 deg: it was not stored` | The pair's solve is implausible: the ball, the radar's distance or the lens height is wrong | Check the unit stands on the hitting surface and nothing else is in the patch, then start over |
+| `Finish this setup` on a setup from before this change | It reached the old 640×400 check, which no longer exists | Press **Finish this setup**: it saves what the 1280×800 camera and the radar found |
 | `the LIS3DH reading has no camera pitch` | The inclinometer is off or still settling (for example just after the kiosk handed it back) | Wait a few seconds for a stable reading, then press the step again |
-| `The camera hasn't found the ball, so the ladder can't judge your swings` when pressing **C** | The setup's camera never picked out the ball in its box (a spare ball or a white cloth in the box, or the ball outside it, too far, dark or raised) in the mode the ladder starts in. A setup whose radar range is unresolved still runs once the camera found the ball | Run the setup again: drag the box over the spot you hit from, put the ball inside it on the hitting surface, keep spare balls and white things out of the box, then press **C** |
-| `no ball in the box: put the ball in the box` during a camera step | The camera looks only inside the box you confirmed, and nothing ball-like is there | Move the ball into the box. If the box is in the wrong place, press **Move the box** in step 1 and drag it over the ball (the ball range then starts over) |
-| **Confirm the box** stays greyed out, or `The camera is not showing` | The live picture is not running, so there is no box to place | Press **Show the camera**; if it still fails, run **A. Check the hardware** |
+| `The camera hasn't found the ball, so the ladder can't judge your swings` when pressing **C** | The setup's camera never picked out the ball in the patch (a spare ball or a white cloth in it, or the ball outside it) | Run the setup again: drag the patch over the spot you hit from, put the ball inside it on the hitting surface, keep spare balls and white things out of it, then press **C** |
+| `No ball found in the patch. The ball may be outside it: move the ball or the patch` during the camera step | The camera looks only inside the patch's dashed outline, and nothing ball-sized for that distance is there | Move the ball into the patch. If the patch is in the wrong place, press **Move the patch** in step 1 and drag it over the ball (the ball range then starts over) |
+| `Several ball-like things are in the patch: keep only the ball in it` | Two things in the patch fit a lit ball about equally well (a spare ball, a tee, a white tuft or a logo) | Take everything but the ball out of the patch; the step looks again at the same brightness |
+| **Confirm the patch** stays greyed out, or `The camera is not showing` | The live picture is not running, so there is no patch to place | Press **Show the camera**; if it still fails, run **A. Check the hardware** |
 | Ladder verdict red: `ball: the setup has no ball position for this camera mode` | The setup's camera never found the ball, so a swing's pictures cannot be checked against it | Press **Stop**, run the setup again until the camera finds the ball, then press **C** |
 | Ladder verdict amber: `resting ball not found` | The camera could not distinguish a plausible resting ball in that frame | The swing still counts; keep placing the ball in the same spot |
 | `run the gain step for both modes first` (or for one mode) | Step **B** did not finish for a mode that has a ticked exposure | Run **B** again |

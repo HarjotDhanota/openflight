@@ -1457,40 +1457,36 @@ def _guided_camera():
     )
 
 
-def _usable_guided_hint():
-    hint = ts.build_iwr_camera_search_hint(
-        _guided_camera(),
-        radar_range_m=1.5,
-        uncertainty_m=0.03,
-        ball_center_height_m=ts.BALL_DIAMETER_MM / 2000.0,
-        epoch_id="epoch-guided",
-        source_epoch_id="epoch-guided",
-        candidate_id="iwr-static-guided",
-        source_input_identity={"empty_capture_sha256": "a" * 64},
-        camera_input_identity={"arm_id": "arm5"},
+def _guided_patch():
+    """A patch covering the middle of the 320x200 test view (P8-2)."""
+    return ts.ground_patch.PatchSearch(
+        outline_px=((40.0, 190.0), (280.0, 190.0), (240.0, 90.0), (80.0, 90.0)),
+        diameter_px=(4.0, 40.0),
+        centre_lateral_m=0.0,
+        half_size_m=0.305,
+        radar_window_m=(0.5, 3.0),
     )
-    assert hint["status"] == "usable"
-    return hint
 
 
 class TestGuidedRangeAnalyzer:
-    def test_shared_camera_only_analysis_has_no_range_prior_dependency(self, monkeypatch):
+    def test_the_patch_search_has_no_range_prior_dependency(self, monkeypatch):
         calls = []
 
         def estimate(frames, camera, **kwargs):
             calls.append((frames.copy(), camera, kwargs))
             return _guided_result()
 
-        monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
+        monkeypatch.setattr(ts, "estimate_patch_ball", estimate)
         frames = np.full((5, 200, 320), 70, dtype=np.uint8)
+        patch = _guided_patch()
 
-        result, analysis = ts._guided_camera_analysis(frames, _guided_camera())
+        result, analysis = ts._guided_camera_analysis(frames, _guided_camera(), patch)
 
         assert result.status == "selected"
         assert len(calls) == 1
         assert calls[0][2] == {
+            "search": patch,
             "ball_center_height_m": ts.BALL_DIAMETER_MM / 2000.0,
-            "plausible_radar_range_m": (0.5, 4.0),
         }
         assert analysis["dependency_facts"] == {
             "iwr_range_used": False,
@@ -1499,99 +1495,29 @@ class TestGuidedRangeAnalyzer:
         }
         assert analysis["independent"] is True
         assert analysis["promotion_eligible"] is False
-        assert analysis["fallback"]["reason_code"] == "radar_hint_missing"
+        assert analysis["discovery_mode"] == "whole_patch"
+        assert analysis["search_region"] == "patch_outline"
+        assert analysis["search_region_px"] == [40, 90, 281, 191]
         assert analysis["timing"]["clock"] == "host_performance_counter_duration"
 
-    def test_usable_radar_hint_conditions_only_the_provisional_live_search(self, monkeypatch):
-        calls = []
-
-        def estimate(frames, camera, **kwargs):
-            calls.append((frames.copy(), camera, kwargs))
-            return _guided_result()
-
-        monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
+    def test_there_is_no_search_without_a_patch(self):
         frames = np.full((5, 200, 320), 70, dtype=np.uint8)
-        hint = _usable_guided_hint()
+        orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
 
-        _result, analysis = ts._guided_camera_analysis(frames, _guided_camera(), hint)
-
-        assert len(calls) == 1
-        assert calls[0][2]["plausible_radar_range_m"] == pytest.approx(hint["support_range_m"])
-        assert calls[0][2]["roi"] == tuple(hint["roi_px"])
-        assert calls[0][2]["expected_diameter_range_px"] == pytest.approx(
-            hint["expected_diameter_px"]
-        )
-        assert analysis["method"] == "iwr_conditioned_camera_size_range_v1"
-        assert analysis["discovery_mode"] == "radar_guided_provisional"
-        assert analysis["independent"] is False
-        assert analysis["promotion_eligible"] is False
-        assert analysis["dependency_facts"]["iwr_range_used"] is True
-        assert analysis["fallback"]["used"] is False
-        assert analysis["search_region_px"][0::2] == [0, 320]
-
-    @pytest.mark.parametrize(
-        "hint,reason_code",
-        [
-            (None, "radar_hint_missing"),
-            (
-                {
-                    "schema": ts.IWR_CAMERA_HINT_SCHEMA,
-                    "status": "rejected",
-                    "reason_code": "static_iwr_candidate_rejected",
-                    "rejection_reasons": ["radar evidence was rejected"],
-                    "fallback": {
-                        "reason_code": "static_iwr_candidate_rejected",
-                        "reason": "radar evidence was rejected",
-                    },
-                },
-                "static_iwr_candidate_rejected",
-            ),
-        ],
-    )
-    def test_missing_or_rejected_radar_hint_runs_broad_full_frame_search(
-        self, monkeypatch, hint, reason_code
-    ):
-        calls = []
-
-        def estimate(_frames, _camera, **kwargs):
-            calls.append(kwargs)
-            return _guided_result()
-
-        monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
-
-        _result, analysis = ts._guided_camera_analysis(
-            np.full((5, 200, 320), 70, dtype=np.uint8), _guided_camera(), hint
-        )
-
-        assert calls == [
-            {
-                "ball_center_height_m": ts.BALL_DIAMETER_MM / 2000.0,
-                "plausible_radar_range_m": (0.5, 4.0),
-            }
-        ]
-        assert analysis["discovery_mode"] == "broad_full_frame_unconditioned"
-        assert analysis["independent"] is True
-        assert analysis["dependency_facts"]["iwr_range_used"] is False
-        assert analysis["fallback"] == {
-            "used": True,
-            "mode": "broad_full_frame_unconditioned",
-            "reason_code": reason_code,
-            "reason": (
-                "no radar search hint was provided"
-                if hint is None
-                else "radar evidence was rejected"
-            ),
-        }
+        with pytest.raises(ValueError, match="only a confirmed patch"):
+            ts._guided_camera_analysis(frames, _guided_camera(), None)
+        with pytest.raises(ValueError, match="only a confirmed patch"):
+            ts.GuidedRangeAnalyzer(_guided_camera(), orientation, lambda: orientation, None)
 
     def test_three_matching_analyses_over_one_second_enable_save_and_a_switch_resets(
         self, monkeypatch
     ):
         current = {"result": _guided_result()}
-        monkeypatch.setattr(
-            ts, "estimate_reference_ball_range", lambda *_args, **_kwargs: current["result"]
-        )
+        monkeypatch.setattr(ts, "estimate_patch_ball", lambda *_args, **_kwargs: current["result"])
         orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
-        analyzer = ts.GuidedRangeAnalyzer(_guided_camera(), orientation, lambda: orientation)
+        analyzer = ts.GuidedRangeAnalyzer(
+            _guided_camera(), orientation, lambda: orientation, _guided_patch()
+        )
         frames = np.full((5, 200, 320), 70, dtype=np.uint8)
 
         assert analyzer.observe(frames, 1, observed_at=4.0)["stable_count"] == 1
@@ -1608,11 +1534,11 @@ class TestGuidedRangeAnalyzer:
 
     def test_gradual_drift_cannot_chain_past_the_first_streak_observation(self, monkeypatch):
         current = {"result": _guided_result(x=160.0)}
-        monkeypatch.setattr(
-            ts, "estimate_reference_ball_range", lambda *_args, **_kwargs: current["result"]
-        )
+        monkeypatch.setattr(ts, "estimate_patch_ball", lambda *_args, **_kwargs: current["result"])
         orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
-        analyzer = ts.GuidedRangeAnalyzer(_guided_camera(), orientation, lambda: orientation)
+        analyzer = ts.GuidedRangeAnalyzer(
+            _guided_camera(), orientation, lambda: orientation, _guided_patch()
+        )
         frames = np.full((5, 200, 320), 70, dtype=np.uint8)
 
         assert analyzer.observe(frames, 1, observed_at=1.0)["stable_count"] == 1
@@ -1627,11 +1553,11 @@ class TestGuidedRangeAnalyzer:
         assert drifted["save_eligible"] is False
 
     def test_repeated_analysis_of_one_frozen_window_does_not_advance_readiness(self, monkeypatch):
-        monkeypatch.setattr(
-            ts, "estimate_reference_ball_range", lambda *_args, **_kwargs: _guided_result()
-        )
+        monkeypatch.setattr(ts, "estimate_patch_ball", lambda *_args, **_kwargs: _guided_result())
         orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
-        analyzer = ts.GuidedRangeAnalyzer(_guided_camera(), orientation, lambda: orientation)
+        analyzer = ts.GuidedRangeAnalyzer(
+            _guided_camera(), orientation, lambda: orientation, _guided_patch()
+        )
         frames = np.full((5, 200, 320), 70, dtype=np.uint8)
 
         first = analyzer.observe(frames, 7, observed_at=1.0)
@@ -1646,11 +1572,13 @@ class TestGuidedRangeAnalyzer:
     def test_unsafe_association_never_draws_or_enables_save(self, monkeypatch, status):
         monkeypatch.setattr(
             ts,
-            "estimate_reference_ball_range",
+            "estimate_patch_ball",
             lambda *_args, **_kwargs: _guided_result(status=status),
         )
         orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
-        analyzer = ts.GuidedRangeAnalyzer(_guided_camera(), orientation, lambda: orientation)
+        analyzer = ts.GuidedRangeAnalyzer(
+            _guided_camera(), orientation, lambda: orientation, _guided_patch()
+        )
         frames = np.full((5, 200, 320), 70, dtype=np.uint8)
 
         association = analyzer.observe(frames, 1, observed_at=1.0)
@@ -1661,11 +1589,11 @@ class TestGuidedRangeAnalyzer:
         assert association["stable_count"] == 0
 
     def test_pose_change_resets_readiness(self, monkeypatch):
-        monkeypatch.setattr(
-            ts, "estimate_reference_ball_range", lambda *_args, **_kwargs: _guided_result()
-        )
+        monkeypatch.setattr(ts, "estimate_patch_ball", lambda *_args, **_kwargs: _guided_result())
         orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
-        analyzer = ts.GuidedRangeAnalyzer(_guided_camera(), orientation, lambda: orientation)
+        analyzer = ts.GuidedRangeAnalyzer(
+            _guided_camera(), orientation, lambda: orientation, _guided_patch()
+        )
         frames = np.full((5, 200, 320), 70, dtype=np.uint8)
         for observation_id, observed_at in enumerate((1.0, 1.5, 2.0), start=1):
             assert (
@@ -1680,17 +1608,18 @@ class TestGuidedRangeAnalyzer:
         assert reset["stable_count"] == 0
         assert "pose changed" in reset["readiness_reason"]
 
-    def test_save_promotes_only_matching_broad_unconditioned_confirmation(self, monkeypatch):
+    def test_save_promotes_only_a_matching_whole_patch_confirmation(self, monkeypatch):
         calls = []
 
         def estimate(_frames, _camera, **kwargs):
             calls.append(kwargs)
             return _guided_result()
 
-        monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
+        monkeypatch.setattr(ts, "estimate_patch_ball", estimate)
         orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
+        patch = _guided_patch()
         analyzer = ts.GuidedRangeAnalyzer(
-            _guided_camera(), orientation, lambda: orientation, _usable_guided_hint()
+            _guided_camera(), orientation, lambda: orientation, patch, follow=ts.BallFollowMemory()
         )
         frames = np.full((5, 200, 320), 70, dtype=np.uint8)
         for observation_id, observed_at in enumerate((1.0, 1.5, 2.0), start=1):
@@ -1699,51 +1628,40 @@ class TestGuidedRangeAnalyzer:
         _result, analysis, reason = analyzer.analyze_for_save(frames, 3)
 
         assert reason is None
+        # the live looks followed the ball; Save searched the whole patch again
         assert "roi" in calls[-2]
-        assert calls[-1] == {
-            "ball_center_height_m": ts.BALL_DIAMETER_MM / 2000.0,
-            "plausible_radar_range_m": (0.5, 4.0),
-        }
+        assert calls[-1] == {"search": patch, "ball_center_height_m": ts.BALL_DIAMETER_MM / 2000.0}
         assert analysis["analysis_role"] == "independent_save_confirmation"
         assert analysis["independent"] is True
         assert analysis["promotion_eligible"] is True
         assert analysis["promotion_rejection_reason"] is None
         assert analysis["dependency_facts"]["iwr_range_used"] is False
-        assert analysis["search_region_px"] is None
-        assert analysis["fallback"]["used"] is False
+        assert analysis["search_region"] == "patch_outline"
 
-    def test_static_door_hinge_selected_by_hint_cannot_pass_broad_save(self, monkeypatch):
-        guided_hinge = _guided_result(x=80.0, y=105.0, range_m=1.5)
-        independent_ball = _guided_result(x=160.0, y=140.0, range_m=1.5)
+    def test_a_live_pick_the_whole_patch_save_does_not_confirm_cannot_pass(self, monkeypatch):
+        followed_hinge = _guided_result(x=80.0, y=105.0, range_m=1.5)
+        whole_patch_ball = _guided_result(x=160.0, y=140.0, range_m=1.5)
         calls = []
 
         def estimate(_frames, _camera, **kwargs):
             calls.append(kwargs)
-            return guided_hinge if "roi" in kwargs else independent_ball
+            return followed_hinge if "roi" in kwargs or len(calls) <= 3 else whole_patch_ball
 
-        monkeypatch.setattr(ts, "estimate_reference_ball_range", estimate)
+        monkeypatch.setattr(ts, "estimate_patch_ball", estimate)
         orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}
         analyzer = ts.GuidedRangeAnalyzer(
-            _guided_camera(), orientation, lambda: orientation, _usable_guided_hint()
+            _guided_camera(), orientation, lambda: orientation, _guided_patch()
         )
         frames = np.full((5, 200, 320), 70, dtype=np.uint8)
         for observation_id, observed_at in enumerate((1.0, 1.5, 2.0), start=1):
             readiness = analyzer.observe(frames, observation_id, observed_at=observed_at)
         assert readiness["save_eligible"] is True
-        assert readiness["independent"] is False
 
         _result, analysis, reason = analyzer.analyze_for_save(frames, 3)
 
-        assert calls[-1] == {
-            "ball_center_height_m": ts.BALL_DIAMETER_MM / 2000.0,
-            "plausible_radar_range_m": (0.5, 4.0),
-        }
-        assert reason == (
-            "broad independent camera search does not confirm the stable provisional selection"
-        )
+        assert reason == "the whole-patch search at Save does not confirm the stable live selection"
         assert analysis["status"] == "selected"
         assert analysis["selected"]["x_px"] == 160.0
-        assert analysis["independent"] is True
         assert analysis["promotion_eligible"] is False
         assert analysis["promotion_rejection_reason"] == reason
 
@@ -1873,17 +1791,32 @@ class TestTheCameraSaysHowFar:
             score=0.07,
             rejection_reason=None,
         )
-        monkeypatch.setattr(
-            ts,
-            "estimate_reference_ball_range",
-            lambda *_args, **_kwargs: ReferenceBallRangeResult(
+        searched = []
+
+        def estimate(*_args, **kwargs):
+            searched.append(kwargs)
+            return ReferenceBallRangeResult(
                 "selected", "experimental", candidate, (candidate,), {"capture_mode": "1280x800"}
-            ),
+            )
+
+        monkeypatch.setattr(ts, "estimate_patch_ball", estimate)
+        # the camera looks only inside a confirmed patch (P8-2)
+        camera = ts._reference_ball_camera(  # pylint: disable=protected-access
+            ts.ARMS["arm5"], RIG, {"camera_pitch_deg": 0.0, "roll_deg": 0.0}, None, None
         )
+        record = ts.patch_record(
+            camera,
+            ts.ground_patch.patch_at(camera, 1.1),
+            tilt={"camera_pitch_deg": 0.0},
+            roll_deg=0.0,
+            source="tester_dragged",
+        )
+        monkeypatch.setattr(ts, "confirmed_placement_box", lambda _root, _eligibility: record)
 
         response = client.post("/api/tester/placement", json=body)
 
         assert response.status_code == 200
+        assert len(searched) == 1 and "search" in searched[0]
         assert response.get_json()["tee_range"]["status"] == "unresolved"
         state = ts.read_arm_state(tmp_path, body["tester_id"], body["arm_id"])
         assert state["tee_range_solution"]["selected_range_m"] is None
@@ -3321,8 +3254,10 @@ def _exposure(status="searching", *, last=None, locked=False):
                 exposure=_exposure(last={"status": "rejected", "ball_found": False}),
                 association_status="not_found",
             ),
-            "ball_not_found",
+            "looking_for_ball",
         ),
+        # the loop's own end: no ball in a lit patch (P8-2)
+        (_guided_status(exposure=_exposure("ball_not_found")), "ball_not_found"),
         (
             _guided_status(
                 exposure=_exposure(
