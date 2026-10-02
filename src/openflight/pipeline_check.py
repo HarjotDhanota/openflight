@@ -43,7 +43,7 @@ GATES = {
     "setup_admission": "camera/tester_server.py: setup admission (setup_admission.json blockers)",
     "setup_box_ball": "server.py: --camera-setup-ball / --camera-hitting-zone hand-off",
     "tee_range": "server.py: tee_range_handoff (--iwr6843-tee-range-* from the setup)",
-    "camera_vertical_offset": "P8-3 (not built)",
+    "camera_vertical_offset": "server.py: config['camera_tilt'] (P8-5, the setup's solved offset)",
     "ops_shot": "rolling_buffer/processor.py: OPS shot extraction",
     "trigger_evidence": "server.py: tester trigger readiness (missing_trigger_evidence, P7-3)",
     "clip_matched": "camera/capture_runtime.py: capture_for_shot association",
@@ -295,19 +295,49 @@ def _find_vertical_offset(config: Mapping[str, Any]) -> tuple[str, Any] | None:
 
 
 def camera_vertical_offset(config: Mapping[str, Any]) -> dict:
-    """The setup's solved camera vertical offset (P8-3); absent until it is built."""
+    """The camera vertical offset the setup solved (P8-5) and handed to the kiosk.
+
+    The kiosk records it in config["camera_tilt"]; its swing estimators infer pitch
+    per shot and do not apply it yet, so a handed-over offset is labelled.
+    """
+    tilt = config.get("camera_tilt")
+    if isinstance(tilt, Mapping):
+        value = tilt.get("vertical_offset_deg")
+        if value is not None:
+            applied = str(tilt.get("applied") or "")
+            recorded_only = applied.startswith("recorded_only")
+            return stage(
+                "camera_vertical_offset",
+                LABELLED if recorded_only else PASS,
+                value=f"camera_tilt.vertical_offset_deg = {value} ({tilt.get('source')})",
+                evidence=(
+                    "recorded only: the swing estimators infer pitch per shot and do "
+                    "not apply this offset yet"
+                    if recorded_only
+                    else None
+                ),
+            )
+        return stage(
+            "camera_vertical_offset",
+            FAIL,
+            cause="DATA",
+            gate="camera_vertical_offset",
+            value="absent",
+            evidence="the unit's camera tilt is uncalibrated: no camera and radar pair "
+            "has been validated on it yet, so the camera uses the level, "
+            "nominal-centre model",
+        )
     found = _find_vertical_offset(config)
     if found is not None:
         return stage("camera_vertical_offset", PASS, value=f"{found[0]} = {found[1]}")
     return stage(
         "camera_vertical_offset",
         FAIL,
-        cause="PENDING",
+        cause="DATA",
         gate="camera_vertical_offset",
         value="absent",
-        evidence="P8-3 (the setup's solved pitch plus principal-point row) is not built; "
-        "the session records no vertical offset and the camera uses the level, "
-        "nominal-centre model",
+        evidence="the session recorded no camera tilt (it predates P8-5); the camera "
+        "uses the level, nominal-centre model",
     )
 
 

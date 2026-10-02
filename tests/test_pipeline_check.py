@@ -74,8 +74,9 @@ def test_the_experimental_tee_labels_the_iwr_launch_experimental(synthetic):
 def test_what_the_synthetic_data_cannot_support_is_named_not_hidden(synthetic):
     rows = _rows(synthetic)
     offset = rows["camera_vertical_offset"]
-    assert (offset["status"], offset["cause"]) == (check.FAIL, "PENDING")
-    assert "P8-3" in offset["evidence"]
+    # the synthetic session hands over no solved tilt (P8-5): named as data, not unbuilt
+    assert (offset["status"], offset["cause"]) == (check.FAIL, "DATA")
+    assert "not built" not in offset["evidence"]
     # the synthetic OPS I/Q carries only the ball, so there is no club speed
     club = rows["camera_club"]
     assert (club["status"], club["cause"]) == (check.FAIL, "DATA")
@@ -323,3 +324,39 @@ def test_a_face_angle_on_a_low_consensus_start_direction_is_labelled():
     row = check.face_angle_stage(live, _upstream())
     assert row["status"] == check.LABELLED
     assert "camera_low_consensus" in row["evidence"]
+
+
+class TestCameraVerticalOffset:
+    """P8-5 hands the solved tilt to the kiosk as config["camera_tilt"]; the check
+    looked only in the camera, scene and geometry blocks and called it unbuilt."""
+
+    def test_a_handed_over_offset_is_reported_and_labelled_recorded_only(self):
+        config = {
+            "camera_tilt": {
+                "vertical_offset_deg": 1.4,
+                "source": "first_validated_pair",
+                "applied": "recorded_only_pitch_inferred_from_the_resting_ball_and_tee_range",
+            }
+        }
+
+        row = check.camera_vertical_offset(config)
+
+        assert row["status"] == check.LABELLED
+        assert "1.4" in row["value"]
+        assert "recorded only" in row["evidence"]
+        assert "P8-3" not in (row["evidence"] or "")
+
+    def test_an_uncalibrated_unit_is_named_as_uncalibrated_not_unbuilt(self):
+        config = {"camera_tilt": {"vertical_offset_deg": None, "source": "uncalibrated"}}
+
+        row = check.camera_vertical_offset(config)
+
+        assert (row["status"], row["cause"]) == (check.FAIL, "DATA")
+        assert "uncalibrated" in row["evidence"]
+        assert "not built" not in row["evidence"]
+
+    def test_a_session_from_before_p8_5_says_it_recorded_no_tilt(self):
+        row = check.camera_vertical_offset({})
+
+        assert (row["status"], row["cause"]) == (check.FAIL, "DATA")
+        assert "recorded no camera tilt" in row["evidence"]

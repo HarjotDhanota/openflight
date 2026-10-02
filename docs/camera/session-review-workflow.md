@@ -170,7 +170,7 @@ Per shot it runs the kiosk's own hand-offs (`server._process_iwr6843_angle`,
 replayed IWR result and the saved clip standing in for the hardware) and the
 review path (`replay_raw_fusion.replay`, `review_metrics`). The stages are: setup
 admitted; placement box and setup ball; tee range with its source and label;
-camera vertical offset (P8-3, absent until built); OPS shot; trigger evidence;
+camera vertical offset (P8-5, the setup's solved tilt; labelled while the swing estimators only record it); OPS shot; trigger evidence;
 clip matched; lighting eligibility; effective camera geometry; camera fusion
 context; whether the review replay hands the camera the kiosk's inputs; camera
 ball; camera club; IWR capture; LCMF status; then every review metric and the
