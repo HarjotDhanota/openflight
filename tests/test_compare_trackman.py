@@ -645,3 +645,101 @@ class TestMainCLI:
         assert "COMPARISON SUMMARY" in out
         assert "7-iron" in out
         assert "driver" in out
+
+
+# ---------------------------------------------------------------------------
+# Delivery and face metrics reach the comparison (audit, 1 Oct 2026)
+# ---------------------------------------------------------------------------
+
+
+class TestDeliveryAndFaceComparison:
+    """Club path and attack loaded but never reached the CSV or summary, and face
+    angle, face to path and spin axis were not read from either side."""
+
+    def test_face_and_spin_axis_headers_resolve(self):
+        assert ct._build_column_map(["Face Angle", "Face To Path", "Spin Axis"]) == {
+            "face_angle_deg": "Face Angle",
+            "face_to_path_deg": "Face To Path",
+            "spin_axis_deg": "Spin Axis",
+        }
+
+    def test_face_and_spin_axis_load_from_trackman(self, tmp_path):
+        path = tmp_path / "face.csv"
+        _write_trackman_csv(
+            path,
+            ["Shot Number", "Club", "Club Path", "Face Angle", "Face To Path", "Spin Axis"],
+            [
+                {
+                    "Shot Number": "1",
+                    "Club": "7-iron",
+                    "Club Path": "2.0",
+                    "Face Angle": "1.5",
+                    "Face To Path": "-0.5",
+                    "Spin Axis": "-3.2",
+                }
+            ],
+        )
+        shot = ct.load_trackman(path)[0]
+        assert shot.face_angle_deg == pytest.approx(1.5)
+        assert shot.face_to_path_deg == pytest.approx(-0.5)
+        assert shot.spin_axis_deg == pytest.approx(-3.2)
+
+    def test_openflight_face_to_path_is_face_minus_path(self, tmp_path):
+        path = tmp_path / "of.jsonl"
+        _write_openflight_jsonl(
+            path,
+            [
+                {
+                    "timestamp": "2026-09-30T10:19:06",
+                    "shot_number": 2,
+                    "club": "7-iron",
+                    "ball_speed_mph": 84.2,
+                    "experimental_fused_club_path_deg": 7.77,
+                    "experimental_face_angle_deg": 6.8,
+                    "spin_axis_deg": None,
+                }
+            ],
+        )
+        shot = ct.load_openflight(path)[0]
+        assert shot.face_angle_deg == pytest.approx(6.8)
+        assert shot.face_to_path_deg == pytest.approx(6.8 - 7.77)
+        assert shot.spin_axis_deg is None
+
+    def test_delivery_and_face_deltas_reach_the_csv(self, tmp_path):
+        kw_of = dict(
+            club_path_deg=2.0,
+            attack_angle_deg=-3.0,
+            face_angle_deg=1.0,
+            face_to_path_deg=-1.0,
+            spin_axis_deg=-2.0,
+        )
+        kw_tm = dict(
+            club_path_deg=2.5,
+            attack_angle_deg=-4.0,
+            face_angle_deg=1.5,
+            face_to_path_deg=-1.0,
+            spin_axis_deg=-3.5,
+        )
+        pairs = ct.pair_shots(
+            [_of(1, "7-iron", 120, "2026-05-06T10:00:00", **kw_of)],
+            [_tm(1, "7-iron", 121, "2026-05-06T10:00:01", **kw_tm)],
+        )
+        out = tmp_path / "comparison.csv"
+        ct.write_comparison_csv(pairs, out)
+        with open(out, encoding="utf-8") as fh:
+            row = next(csv.DictReader(fh))
+        assert float(row["club_path_delta"]) == pytest.approx(-0.5)
+        assert float(row["attack_delta"]) == pytest.approx(1.0)
+        assert float(row["face_angle_delta"]) == pytest.approx(-0.5)
+        assert float(row["face_to_path_delta"]) == pytest.approx(0.0)
+        assert float(row["spin_axis_delta"]) == pytest.approx(1.5)
+
+    def test_the_summary_reports_delivery_and_face(self):
+        labels = {key for key, _label, _unit in ct._DELTA_LABELS}
+        assert {
+            "club_path_delta",
+            "attack_delta",
+            "face_angle_delta",
+            "face_to_path_delta",
+            "spin_axis_delta",
+        } <= labels

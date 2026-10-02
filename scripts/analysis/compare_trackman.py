@@ -77,6 +77,9 @@ _TM_ALIAS_CONFIG: Dict[str, List[str | HeaderAlias]] = {
     "spin_rpm": ["spin rate", "total spin", "spinrate"],
     "club_path_deg": ["club path"],
     "attack_angle_deg": ["attack angle", "angle of attack"],
+    "face_angle_deg": ["face angle"],
+    "face_to_path_deg": ["face to path", "face-to-path"],
+    "spin_axis_deg": ["spin axis"],
     "carry_yards": ["carry distance", "carry"],
     "club": ["club type", "club name", HeaderAlias("club", exact=True)],
     "shot_number": ["shot number", "shotnumber", "shot"],
@@ -196,6 +199,9 @@ class Shot:
     spin_rpm: Optional[float] = None
     club_path_deg: Optional[float] = None
     attack_angle_deg: Optional[float] = None
+    face_angle_deg: Optional[float] = None
+    face_to_path_deg: Optional[float] = None
+    spin_axis_deg: Optional[float] = None
     spin_confidence: Optional[float] = None
     spin_quality: Optional[str] = None
     spin_snr: Optional[float] = None
@@ -203,6 +209,11 @@ class Shot:
     spin_rejection_reason: Optional[str] = None
     carry_yards: Optional[float] = None
     raw: Dict[str, Any] = field(default_factory=dict)
+
+
+def _face_to_path(face: Optional[float], path: Optional[float]) -> Optional[float]:
+    """Face to path as Trackman reports it: face angle minus club path."""
+    return face - path if face is not None and path is not None else None
 
 
 def _to_float(v: Any) -> Optional[float]:
@@ -276,6 +287,12 @@ def load_openflight(path: Path) -> List[Shot]:
                     spin_rpm=_to_float(data.get("spin_rpm")),
                     club_path_deg=_to_float(data.get("experimental_fused_club_path_deg")),
                     attack_angle_deg=_to_float(data.get("experimental_fused_attack_angle_deg")),
+                    face_angle_deg=_to_float(data.get("experimental_face_angle_deg")),
+                    face_to_path_deg=_face_to_path(
+                        _to_float(data.get("experimental_face_angle_deg")),
+                        _to_float(data.get("experimental_fused_club_path_deg")),
+                    ),
+                    spin_axis_deg=_to_float(data.get("spin_axis_deg")),
                     spin_confidence=_to_float(data.get("spin_confidence")),
                     spin_quality=data.get("spin_quality"),
                     spin_snr=_to_float(data.get("spin_snr")),
@@ -376,6 +393,9 @@ def load_trackman(path: Path) -> List[Shot]:
                     spin_rpm=_to_float(_get(row, "spin_rpm")),
                     club_path_deg=_to_float(_get(row, "club_path_deg")),
                     attack_angle_deg=_to_float(_get(row, "attack_angle_deg")),
+                    face_angle_deg=_to_float(_get(row, "face_angle_deg")),
+                    face_to_path_deg=_to_float(_get(row, "face_to_path_deg")),
+                    spin_axis_deg=_to_float(_get(row, "spin_axis_deg")),
                     carry_yards=carry,
                     raw=dict(row),
                 )
@@ -527,6 +547,21 @@ _OUTPUT_FIELDS = [
     "spin_quality_of",
     "spin_snr_of",
     "spin_rejection_of",
+    "club_path_of",
+    "club_path_tm",
+    "club_path_delta",
+    "attack_of",
+    "attack_tm",
+    "attack_delta",
+    "face_angle_of",
+    "face_angle_tm",
+    "face_angle_delta",
+    "face_to_path_of",
+    "face_to_path_tm",
+    "face_to_path_delta",
+    "spin_axis_of",
+    "spin_axis_tm",
+    "spin_axis_delta",
     "carry_of",
     "carry_tm",
     "carry_delta",
@@ -548,6 +583,15 @@ def _row(pair: Pair) -> Dict[str, Any]:
         if isinstance(val, float):
             return round(val, 3)
         return val
+
+    def _paired(prefix: str, attribute: str) -> Dict[str, Any]:
+        mine = getattr(of, attribute) if of else None
+        theirs = getattr(tm, attribute) if tm else None
+        return {
+            f"{prefix}_of": f(mine),
+            f"{prefix}_tm": f(theirs),
+            f"{prefix}_delta": _delta(mine, theirs),
+        }
 
     return {
         "shot_number_of": f(of.shot_number) if of else None,
@@ -586,6 +630,11 @@ def _row(pair: Pair) -> Dict[str, Any]:
         "spin_quality_of": of.spin_quality if of else None,
         "spin_snr_of": f(of.spin_snr) if of else None,
         "spin_rejection_of": of.spin_rejection_reason if of else None,
+        **_paired("club_path", "club_path_deg"),
+        **_paired("attack", "attack_angle_deg"),
+        **_paired("face_angle", "face_angle_deg"),
+        **_paired("face_to_path", "face_to_path_deg"),
+        **_paired("spin_axis", "spin_axis_deg"),
         "carry_of": f(of.carry_yards) if of else None,
         "carry_tm": f(tm.carry_yards) if tm else None,
         "carry_delta": _delta(of.carry_yards if of else None, tm.carry_yards if tm else None),
@@ -614,6 +663,11 @@ _DELTA_LABELS = [
     ("launch_h_delta", "launch H", "deg"),
     ("spin_delta", "spin", "rpm"),
     ("carry_delta", "carry", "yds"),
+    ("club_path_delta", "club path", "deg"),
+    ("attack_delta", "attack angle", "deg"),
+    ("face_angle_delta", "face angle", "deg"),
+    ("face_to_path_delta", "face to path", "deg"),
+    ("spin_axis_delta", "spin axis", "deg"),
 ]
 
 
