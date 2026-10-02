@@ -356,19 +356,21 @@ def analyze(sessions_root: Path, tester_id: str, *, package: bool, viewer: Path 
         review = write_review(sessions_root, tester_id, analysis)
         if package:
             job.update(phase="package")
-            job.update(
-                bundle=session_bundle.build_bundle(
-                    sessions_root,
-                    tester_id,
-                    viewer=viewer if viewer is not None and viewer.is_file() else None,
-                    provenance={
-                        **analysis,
-                        "attempts": len(review["attempts"]),
-                        "review": f"{tester_id}/{ANALYSIS_DIR}/session_review.json",
-                    },
-                    progress=_throttled(job),
-                )
+            built = session_bundle.build_bundle(
+                sessions_root,
+                tester_id,
+                viewer=viewer if viewer is not None and viewer.is_file() else None,
+                provenance={
+                    **analysis,
+                    "attempts": len(review["attempts"]),
+                    "review": f"{tester_id}/{ANALYSIS_DIR}/session_review.json",
+                },
+                progress=_throttled(job),
             )
+            # job.json is a derived output: it names the bundle relative to the
+            # sessions folder, so the same session analyses identically anywhere
+            relative = Path(built["path"]).resolve().relative_to(Path(sessions_root).resolve())
+            job.update(bundle={**built, "path": relative.as_posix()})
     except KeyboardInterrupt:
         job.error("stopped by the operator before it finished")
         job.finish("stopped")

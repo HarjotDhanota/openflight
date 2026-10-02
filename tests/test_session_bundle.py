@@ -68,7 +68,7 @@ def test_one_action_replays_reviews_and_bundles_every_shot(tmp_path, viewer):
     assert (root / TESTER / "analysis" / "attempts.csv").is_file()
     assert (root / TESTER / "analysis" / "report.md").is_file()
 
-    bundle = Path(job["bundle"]["path"])
+    bundle = root / job["bundle"]["path"]
     manifest = session_bundle.validate_bundle(bundle)
     entries = {entry["path"]: entry for entry in manifest["entries"]}
     session_file = f"{TESTER}/arm5/paired/run-01/session_20260924_185002_arm5.jsonl"
@@ -94,7 +94,7 @@ def _zips(root: Path) -> list[Path]:
 def test_repeated_analysis_of_an_unchanged_session_reuses_one_bundle(tmp_path, viewer):
     root = capture_tree(tmp_path / "pi")
     first = _analyze(root, viewer)
-    first_path = Path(first["bundle"]["path"])
+    first_path = root / first["bundle"]["path"]
     first_bytes = first_path.read_bytes()
     assert first["bundle"]["reused"] is False
     for _ in range(2):
@@ -159,7 +159,7 @@ def _change_verdict(root, _viewer):
 def test_any_change_to_what_a_bundle_carries_makes_a_new_bundle(tmp_path, viewer, change):
     root = capture_tree(tmp_path / "pi")
     first = _analyze(root, viewer)
-    first_path = Path(first["bundle"]["path"])
+    first_path = root / first["bundle"]["path"]
     first_bytes = first_path.read_bytes()
     change(root, viewer)
     second = _analyze(root, viewer)
@@ -189,12 +189,12 @@ def test_service_logs_alone_do_not_make_a_new_bundle(tmp_path, viewer):
 
 def test_a_bundle_changed_on_disk_is_never_reused(tmp_path, viewer):
     root = capture_tree(tmp_path / "pi")
-    first_path = Path(_analyze(root, viewer)["bundle"]["path"])
+    first_path = root / _analyze(root, viewer)["bundle"]["path"]
     with first_path.open("ab") as handle:
         handle.write(b"\0")
     second = _analyze(root, viewer)
     assert second["bundle"]["name"] != first_path.name
-    session_bundle.validate_bundle(Path(second["bundle"]["path"]))
+    session_bundle.validate_bundle(root / second["bundle"]["path"])
 
 
 def test_duplicate_member_paths_are_refused_before_writing(tmp_path):
@@ -240,7 +240,7 @@ def test_a_changed_capture_is_replayed_again_not_reused(tmp_path, viewer):
 
 def test_bundle_reproduces_on_another_machine(tmp_path, viewer):
     root = capture_tree(tmp_path / "pi")
-    bundle = Path(_analyze(root, viewer)["bundle"]["path"])
+    bundle = root / _analyze(root, viewer)["bundle"]["path"]
     elsewhere = tmp_path / "laptop" / "downloads"
     elsewhere.mkdir(parents=True)
     copied = Path(shutil.copy2(bundle, elsewhere / bundle.name))
@@ -255,7 +255,7 @@ def test_bundle_reproduces_on_another_machine(tmp_path, viewer):
 
 def test_tampered_or_padded_bundles_are_rejected(tmp_path, viewer):
     root = capture_tree(tmp_path / "pi")
-    bundle = Path(_analyze(root, viewer)["bundle"]["path"])
+    bundle = root / _analyze(root, viewer)["bundle"]["path"]
     with pytest.raises(ValueError, match="checksum does not match"):
         tampered = tmp_path / "tampered" / bundle.name
         tampered.parent.mkdir()
