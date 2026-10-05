@@ -572,6 +572,7 @@ live/replay equivalence claim or independent calibration.
 | 2026-10-04 | D18. No shot needs a setup tee range under the bench's method | Setup becomes a readiness check; the ladder no longer requires the camera to see the resting ball; the tee range stays a diagnostic |
 | 2026-10-04 | D19. The physical checks and the paired reference session both need a field trip | Checkerboard intrinsics at home; on one day the C8 phone-level check, the F8 alignment stick, then the paired Trackman 4 real-ball session |
 | 2026-10-05 | D20. The system is for normal golf balls only | No ball-type setup question or foam handling; carry is computed as for a golf ball |
+| 2026-10-05 | The bench's readiness roadmap (`openflight-test-bench/docs/superpowers/plans/2026-10-05-readiness-roadmap.md`) replaces the 4 October plan's stages 2–7 | Fusion is ported once, as opt-in `openflight/fusion/` modules on upstream-main branches, after the bench is made deterministic |
 
 ## Soundless trigger architecture
 

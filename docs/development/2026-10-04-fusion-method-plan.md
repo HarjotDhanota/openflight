@@ -1,6 +1,7 @@
 # Fusion method plan: from the test bench to the live unit
 
-Written 4 October 2026. Owner: Harjot. Status: stage 1 done (1e closed by D20); stage 2 next.
+Written 4 October 2026. Owner: Harjot. Status: stage 1 done (1e closed by D20). Stages 2–7 superseded on 5 October by the
+readiness roadmap (`openflight-test-bench`, `docs/superpowers/plans/2026-10-05-readiness-roadmap.md`).
 
 ## Where we are
 
@@ -89,6 +90,12 @@ Each item is a bug against rule 1, 3 or 5. Write a failing test first, then fix.
 impact is still the trigger time. Both need the stage 2 port; they are removed there.
 
 ## Stages 2–6 — move the fusion method into openflight
+
+> **Superseded (5 October, Harjot's call).** The readiness roadmap ports the bench once,
+> as opt-in `openflight/fusion/` modules on branches cut from upstream main, after its
+> Phase 1 makes the bench deterministic. Stage 2's work is the roadmap's branches #11
+> (IWR tracks) and #14 (timing). The stages below are kept as the method they describe,
+> not as the plan.
 
 Port each stage from the bench's committed modules with their tests. Each stage is
 done when:
