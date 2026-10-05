@@ -79,7 +79,7 @@ Each item is a bug against rule 1, 3 or 5. Write a failing test first, then fix.
   and still feeds carry and simulators under that label.
 - **1f reviewed: allowed, no change.** The reused value is the offset between the
   OPS243's clock and the Pi's, measured at most
-  `TriggerProcessor.CLOCK_SYNC_MAX_FALLBACK_AGE_S` earlier and labelled `previous`
+  `SoundTrigger.CLOCK_SYNC_MAX_FALLBACK_AGE_S` (60 s) earlier and labelled `previous`
   with its age. It is a property of the two clocks, like the rig file, not data
   from another swing.
 
