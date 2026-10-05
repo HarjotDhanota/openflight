@@ -1,6 +1,6 @@
 # Fusion method plan: from the test bench to the live unit
 
-Written 4 October 2026. Owner: Harjot. Status: stage 1 in progress (1a–1d done, 1f reviewed; 1e next).
+Written 4 October 2026. Owner: Harjot. Status: stage 1 done (1e closed by D20); stage 2 next.
 
 ## Where we are
 
@@ -27,6 +27,7 @@ Written 4 October 2026. Owner: Harjot. Status: stage 1 in progress (1a–1d done
 | D17 | Fix the live unit's rule violations first. | Stage 1 below, before any port. |
 | D18 | Setup becomes a readiness check only. | No shot takes a value from setup. The exposure ladder can start without the camera seeing the resting ball. The tee range stays as a diagnostic. |
 | D19 | One field day: checkerboard at home first, then the phone-level and alignment-stick checks, then the paired Trackman 4 session on the same rig. | The Trackman data is recorded on a checked rig. |
+| D20 (5 Oct) | The system is for normal golf balls only; foam balls are not catered for. | No ball-type question in setup and no foam handling in the kiosk: carry is computed as for a golf ball. Stage 1e is closed. The bench keeps marking its own foam recordings, which physically were foam, so its pages show no carry for them. |
 
 ## The rules the live unit will follow
 
@@ -62,7 +63,7 @@ Each item is a bug against rule 1, 3 or 5. Write a failing test first, then fix.
 | 1b. IWR recovery prior | `iwr6843/runtime.py:274, 330, 386` fits up to 50 past shots to pick a track when a shot lacks an impact time. | Removed. No impact time means not measured. |
 | 1c. Camera-size distance | Setup falls back to the camera's ball-size range when the radar finds nothing (`camera/tester_server.py:740`, `patch_pairing.py:52`). Ball flight falls back to `camera_size` depth (`camera/ball_flight.py:276, 861`). | Removed. The distance is the IWR's, or none. |
 | 1d. Filled-in values | Missing vertical launch filled from club tables, horizontal set to 0.0 (`server.py:946–971`). Formula spin labelled high confidence (`server.py:3316`). Optimal-spin carry (`server.py:4800`). | Each is not measured, with the reason. |
-| 1e. Carry for any ball | Carry, apex and side are computed for every ball, foam included (`server.py:4781`). | Computed only for a session declared as golf balls. Ball type is recorded at setup as equipment metadata. |
+| 1e. Carry for any ball | Carry, apex and side are computed for every ball, foam included (`server.py:4781`). | Closed by D20: the system is for golf balls only, so no change. |
 | 1f. Previous clock sync | `rolling_buffer/trigger.py:541` reuses the previous OPS clock sync when a fresh one is rejected. | To review: a fixed clock property is allowed, a previous shot's value is not. Decide after reading it. |
 
 **Progress (5 October).**

@@ -571,6 +571,7 @@ live/replay equivalence claim or independent calibration.
 | 2026-10-04 | D17. Audit found the live pipeline pools data across shots (15-shot reference-ball median, 50-shot IWR recovery prior), uses the setup tee range for every shot, falls back to camera-size distance, and fills in missing launch and spin | Remove these first, test first; a missing value is reported as not measured with its reason |
 | 2026-10-04 | D18. No shot needs a setup tee range under the bench's method | Setup becomes a readiness check; the ladder no longer requires the camera to see the resting ball; the tee range stays a diagnostic |
 | 2026-10-04 | D19. The physical checks and the paired reference session both need a field trip | Checkerboard intrinsics at home; on one day the C8 phone-level check, the F8 alignment stick, then the paired Trackman 4 real-ball session |
+| 2026-10-05 | D20. The system is for normal golf balls only | No ball-type setup question or foam handling; carry is computed as for a golf ball |
 
 ## Soundless trigger architecture
 
