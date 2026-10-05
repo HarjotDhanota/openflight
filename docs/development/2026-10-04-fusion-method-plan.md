@@ -1,0 +1,190 @@
+# Fusion method plan: from the test bench to the live unit
+
+Written 4 October 2026. Owner: Harjot. Status: agreed direction; stage 1 not started.
+
+## Where we are
+
+- **Software plumbing is largely built.** The server emits OPS speeds first and fills
+  in IWR and camera results in the background. Live and replay share one camera
+  core. Replay, provenance and Trackman comparison tools exist.
+- **The physical gates are open.** Camera intrinsics and optical centre, target-line
+  alignment and timing qualification (M1) are unproven. Three wiring items are open:
+  F3 (radar range spaces and the −2 ms club-impact constant), F8 (alignment-stick
+  horizontal reference) and C8 (phone-level check before applying LIS3DH roll).
+  M3–M5 have not passed.
+- **The live unit does not use the bench's measurement method.** The bench
+  (`HarjotDhanota/openflight-test-bench`, method in its `docs/SYSTEM.md`) measures
+  each shot from its own captures only. The live pipeline breaks those rules in
+  several places and keeps methods the bench showed don't work at this geometry.
+  The full comparison is listed under stage 1 and the port stages below.
+- **Every recording so far used foam balls.** Nothing is checked against Trackman yet.
+
+## Decisions (4 October 2026)
+
+| # | Decision | Consequence |
+|---|---|---|
+| D16 | The bench stays in its own repository. Only the fusion code itself (the measurement method) moves into openflight. | Bench tools, recorded data, hand marks, grading and pages stay in the bench. The bench then grades openflight's fusion code instead of its own copy (stage 7). |
+| D17 | Fix the live unit's rule violations first. | Stage 1 below, before any port. |
+| D18 | Setup becomes a readiness check only. | No shot takes a value from setup. The exposure ladder can start without the camera seeing the resting ball. The tee range stays as a diagnostic. |
+| D19 | One field day: checkerboard at home first, then the phone-level and alignment-stick checks, then the paired Trackman 4 session on the same rig. | The Trackman data is recorded on a checked rig. |
+
+## The rules the live unit will follow
+
+From the bench's `docs/SYSTEM.md`:
+
+1. **Each shot stands on its own data.** No medians, history, anchors or values pooled
+   across shots. No setup value stands in for a shot's own measurement. A shot
+   without a measurement reports it as not measured, with the reason.
+2. **System outputs only.** Hand marks and Trackman data grade the system; they never
+   feed a shot. A model constant may be calibrated once and fixed, with its source.
+3. **Each sensor measures what it measures best.**
+   - The camera locates: the resting ball, the ball's flight and the club head.
+   - The IWR gives the ball's distance, from where its ball track leaves its club
+     track.
+   - The OPS243 gives speeds.
+   - The camera never estimates distance from ball size or image row.
+4. **Physics first.**
+   - Impact is no later than the sound trigger less the sound's travel from the ball
+     to the microphone.
+   - Ball speed is the full speed.
+   - The club moves on an arc.
+   - The face comes from the D-plane.
+5. **Every number carries an honest status and range:** measured, calculated,
+   experimental, or not measured with the reason.
+
+## Stage 1 — remove the rule violations (no port needed)
+
+Each item is a bug against rule 1, 3 or 5. Write a failing test first, then fix.
+
+| Item | Today | After |
+|---|---|---|
+| 1a. Resting-ball session anchor | `ReferenceBallTracker` (`camera/club_delivery.py:245`) keeps up to 15 past balls. From the 4th accepted shot, `resolve_stable` (`camera/ball_flight.py:541`) returns their median instead of this shot's detection. The camera model and contact time are built on it, and it persists for the server's lifetime (`server.py:4334`). | Each shot uses only its own detectors. If the scene and departure detectors disagree, the reference ball is withheld with the reason. No tracker state is carried between shots or stored in the frozen context. |
+| 1b. IWR recovery prior | `iwr6843/runtime.py:274, 330, 386` fits up to 50 past shots to pick a track when a shot lacks an impact time. | Removed. No impact time means not measured. |
+| 1c. Camera-size distance | Setup falls back to the camera's ball-size range when the radar finds nothing (`camera/tester_server.py:740`, `patch_pairing.py:52`). Ball flight falls back to `camera_size` depth (`camera/ball_flight.py:276, 861`). | Removed. The distance is the IWR's, or none. |
+| 1d. Filled-in values | Missing vertical launch filled from club tables, horizontal set to 0.0 (`server.py:946–971`). Formula spin labelled high confidence (`server.py:3316`). Optimal-spin carry (`server.py:4800`). | Each is not measured, with the reason. |
+| 1e. Carry for any ball | Carry, apex and side are computed for every ball, foam included (`server.py:4781`). | Computed only for a session declared as golf balls. Ball type is recorded at setup as equipment metadata. |
+| 1f. Previous clock sync | `rolling_buffer/trigger.py:541` reuses the previous OPS clock sync when a fresh one is rejected. | To review: a fixed clock property is allowed, a previous shot's value is not. Decide after reading it. |
+
+**What stage 1 leaves for stage 2.** The setup tee range is still used for every shot
+(distance, IWR impact back-extrapolation, the club gate, the full-speed geometry), and
+impact is still the trigger time. Both need the stage 2 port; they are removed there.
+
+## Stages 2–6 — move the fusion method into openflight
+
+Port each stage from the bench's committed modules with their tests. Each stage is
+done when:
+- openflight's pipeline, replayed on the recorded sessions (Outdoors-test-5, -7), gives
+  the bench's numbers on the same shots to stated tolerances;
+- the bench's grading tests pass against it;
+- the old path is deleted, not kept beside it.
+
+**Stage 2 — timing and the IWR's ball distance.** Ports `timing.py`,
+`radar/streaks.py`, `replay.shot_ball_distance`.
+- Frame times at mid-exposure from sensor timestamps.
+- Sound-delay impact window, from the rig's microphone position at 343 m/s.
+- The Doppler impact bracket check, from the already-logged OPS bracket centres.
+- The IWR club-then-ball track search at this shot's OPS speeds, with the address
+  spread.
+
+Removed:
+- the tee range as a shot input (`runtime.py:479`, `lcmf.py:852`, `shot.py:111`,
+  `club.py:365`, `server.py:3815, 3936, 1311`);
+- the 2.25 m ball gate;
+- the −2 ms club-impact constant (F3's constant; F3's range-space check remains).
+
+**Stage 3 — the resting ball, the flight and full ball speed.** Ports `address.py`,
+`camera/rest_ball.py`, `camera/flight.py`, `camera/geometry.py`, `radar/ops.py`, and
+step 5a (re-measuring at both ends of the distance's spread, launch doubt past 5°).
+- The ball sits at the IWR's distance with the IWR bearing gate, centred on its
+  outline arc.
+- The flight is three unknowns at the OPS speed.
+- Focal length comes from the rig file, not from ball size.
+- Full ball speed is shown and drives smash.
+- The camera's launch angle replaces the IWR LCMF vertical as the shown value. Keep or
+  drop LCMF as a diagnostic: decide in this stage.
+
+Removed: the blob sweep, the setup-ball gate (`camera/ball_flight.py:44`) and the
+focal-from-size model (`camera/geometry.py:71`).
+
+**Stage 4 — setup becomes a readiness check (D18).**
+- Setup checks sensors, aim, tilt and exposure, and shows the 2 ft patch.
+- It feeds no per-shot value.
+- The ladder no longer refuses to start without seeing the resting ball.
+- The static IWR tee range and the camera cross-check stay as diagnostics.
+- Update `docs/camera/tester-pilot.md`.
+
+**Stage 5 — club, face and strike.** Ports `camera/club.py` and `dplane.py`.
+- The head fit is a circular arc at the OPS club speed reaching the ball at impact,
+  with a free strike offset.
+- Radius and plane are swept, plus the leave-one-out and distance-end ranges.
+- The guards and doubts from the bench apply.
+- D-plane face with k = 0.9183 − 0.003896 × spin loft.
+- The strike offset is measured along the face.
+- The spin axis is the D-plane tilt.
+
+Removed:
+- the IWR club path and IWR horizontal as shot metrics;
+- the IWR club ranges in the camera club fit;
+- the frame after impact in the club fit;
+- the fixed 0.8 face weight;
+- `spin_axis = launch − path`.
+
+**Stage 6 — statuses and ranges in the shot contract.**
+- Every metric carries status, low/high and a reason: `launch_monitor.Shot`, the
+  session logger, review metrics and the UI (`ui/src`).
+- The provisional OPS emit stays.
+
+## Stage 7 — the bench grades openflight's code
+
+The bench's measurement modules are replaced by imports from openflight, so there is
+one implementation. The bench keeps:
+- recorded data, hand marks, spray marks and setups;
+- grading tests;
+- `live.run_live`, swing videos, pages and Trackman pairing.
+
+## Field day (D19)
+
+**Before:** fit the camera's intrinsics from a checkerboard at the shot capture mode
+(M1).
+
+**On the day, in order:**
+1. **Phone-level check against the LIS3DH roll (C8).** Then apply roll in both camera
+   paths.
+2. **Alignment-stick session (F8).** It gives the IWR's horizontal phase reference,
+   used for the bearing gate. It may explain test 7 shot 1's bearing, 10° off.
+3. **Paired Trackman 4 session**, about 60 real-ball shots
+   (`openflight-test-bench`'s pairing checklist).
+   - Raw clips, dumps and OPS buffers are the record, so the session replays through
+     whichever code is current.
+   - Record the ball type as golf.
+
+**From the session:**
+- the microphone board's delay;
+- the first accuracy figures for every motion metric;
+- k checked on new shots;
+- every constant tuned on the foam recordings re-checked;
+- the club-independent ball distance retried (the resting ball's echo vanishing at
+  impact).
+
+**Before scoring it:** freeze the numerical acceptance limits for the six motion
+metrics (bias, MAE, 90th percentile, gross-error rate, read rate). Hold out one
+session, as the master plan's acceptance policy requires.
+
+## After that, not yet scheduled
+
+- **Production ballistics:**
+  - apex about 21% low on irons and wedges;
+  - the off-line spin axis (A20) and its source (A05).
+- **3D club-head model** (Titleist 690CB) for a consistent head point.
+- **More club frames:** the 468 fps mode gives about ten head positions instead of two
+  or three.
+- **The IWR firmware work:**
+  - an IWR-detected impact trigger on a clock the Pi can map;
+  - a buffer centred on impact holding ≥ 30 ms of the club's approach.
+
+  These unblock soundless fusion, which is OPS-only today.
+- **Kiosk defaults.** `start-kiosk.sh` runs OPS-only unless `--camera-capture
+  --iwr6843` are passed. Decide when fusion becomes the default.
+- **Possible missed shot.** On test 7, an OPS buffer at 10:20:03 (91 mph) was never
+  reported as a shot.
+- **Per-shot processing time on the Pi**, and its full workload behaviour.

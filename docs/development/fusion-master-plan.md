@@ -1,6 +1,40 @@
 # Radar-camera fusion master plan
 
-Updated: 2026-09-25. Owner: Harjot. Status: active; M0 complete, M1 in progress.
+Updated: 2026-10-04. Owner: Harjot. Status: active; M0 complete, M1 in progress.
+
+## Checkpoint, 4 October 2026
+
+The next work is set out in
+[2026-10-04-fusion-method-plan.md](2026-10-04-fusion-method-plan.md). In short:
+
+- **Since the last checkpoint:**
+  - The wiring-fixes plan (29 Sept) closed 56 of its 59 items.
+  - Phase 8 (P8-1..6, merged in `51aa77a8`) added the 2 ft ground patch, camera and
+    radar checking each other inside it, and the camera tilt calibrated from the
+    first validated pair. Its decisions are D14 (the patch) and D15 ("measure,
+    label, don't block"), recorded in
+    [2026-09-29-wiring-fixes-plan.md](2026-09-29-wiring-fixes-plan.md).
+- **Still open:**
+  - F3 (radar range spaces and the −2 ms club-impact constant).
+  - F8 (alignment-stick horizontal reference).
+  - C8 (phone-level check before applying LIS3DH roll).
+  - M1's physical gate.
+  - M3–M5.
+- **The test bench** (`HarjotDhanota/openflight-test-bench`) locked a per-shot
+  measurement method in its `docs/SYSTEM.md`. The live pipeline breaks its rules: a
+  15-shot median reference ball, a 50-shot IWR recovery prior, a setup tee range used
+  for every shot, a camera-size distance fallback, and filled-in launch and spin
+  values. It also keeps IWR methods the bench found don't work at this geometry.
+- **Decisions D16–D19 (log below):**
+  - D16: the fusion code moves into openflight and the bench stays separate.
+  - D17: the rule violations are fixed first.
+  - D18: setup becomes a readiness check only.
+  - D19: one field day for the physical checks and the Trackman session.
+- **Every recording so far used foam balls.** No metric is validated against a
+  reference.
+
+The checkpoint below is from 25–28 September and is kept as history.
+
 
 ## Current Pi commissioning checkpoint
 
@@ -532,6 +566,11 @@ live/replay equivalence claim or independent calibration.
 | 2026-09-26 | Pi session `harjot-pilot-test-2` retained three complete static empty/ball capture pairs. The current absolute-residual selector rejected one approximately 1.012 m diagnostic and confidently accepted 0.496 m and 1.621 m in later epochs; capture-to-capture profile scale also varied from about 0.66 to 1.58. The bundle contains no independent tape truth, while the operator separately reported the final placement as about 1.01 m. Audit also found that qualification v2 does not bind the static-range or camera estimators and that static camera controls can leak into motion capture. | Preserve all three epochs as compact hash-bound regression evidence and require no known false confident acceptance before seeking a correct resolution. Add estimator and purpose-specific exposure-policy identities before changing selection. Treat within-capture variation only as a stability gate, measure cross-capture multiplicative drift on the Pi, keep radar alternates diagnostic-only, and separate static exposure locks from armed motion settings. Failed optical gates withhold promotion and metrics while an explicit advanced path may still retain diagnostic raw captures. This decision does not establish the true reflector, range accuracy, exposure limits or hardware qualification. |
 | 2026-09-28 | The current IWR profiles retain complex range-bin IQ for 3 TX × 4 RX, 12 TDM loops per frame and 72 ms, while existing OPS replay shows that translation-dechirped micro-Doppler can expose spin sidebands but suffers coverage and 1×/2× harmonic ambiguity. Array differential phase is also coupled to arrival angle, calibration, multipath and nonsimultaneous TDM motion. | Keep spin outside the static-range/exposure critical path and test it offline as a separate M4 feasibility study. Compare channel-summed micro-Doppler with per-channel spectra, RX cross-spectra and TDM-corrected TX-pair residual phase on identical truth-paired captures. Require ablations to prove incremental value, keep total spin and spin axis as separate gates, and do not fuse OPS/IWR or promote an IWR spin result until a frozen holdout establishes coverage, error and harmonic-failure behavior. |
 | 2026-09-28 | A Pi retest of pushed WIP `d07320a` showed a live guided Arm 5 frame with mean 21.3 and maximum 38, no detected ball or outline, Save disabled, and canonical range withheld. Code inspection confirmed that guided setup resolves one pre-existing gain/exposure pair and never invokes the new static exposure policy; the module is currently identity/scaffolding only. The displayed 1.153 m IWR value was explicitly rejected for provisional guidance and had no recorded tape truth. | Treat the result as confirmation that static exposure integration remains incomplete, not as a failed exposure policy or a validated radar range. Implement the disarmed bootstrap/refinement/lock path before UI polish, prove requested controls were applied, and retain the correct no-outline/no-promotion behavior until a real ball passes optical gates. |
+
+| 2026-10-04 | D16. The test bench's per-shot method (`openflight-test-bench/docs/SYSTEM.md`) is the agreed measurement method; the bench repository stays separate | Port only the fusion code into openflight in stages ([plan](2026-10-04-fusion-method-plan.md)); the bench later grades openflight's code instead of its own copy |
+| 2026-10-04 | D17. Audit found the live pipeline pools data across shots (15-shot reference-ball median, 50-shot IWR recovery prior), uses the setup tee range for every shot, falls back to camera-size distance, and fills in missing launch and spin | Remove these first, test first; a missing value is reported as not measured with its reason |
+| 2026-10-04 | D18. No shot needs a setup tee range under the bench's method | Setup becomes a readiness check; the ladder no longer requires the camera to see the resting ball; the tee range stays a diagnostic |
+| 2026-10-04 | D19. The physical checks and the paired reference session both need a field trip | Checkerboard intrinsics at home; on one day the C8 phone-level check, the F8 alignment stick, then the paired Trackman 4 real-ball session |
 
 ## Soundless trigger architecture
 

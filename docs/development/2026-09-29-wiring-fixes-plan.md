@@ -6,6 +6,16 @@ Date: 29 September 2026. Branch: `feat/tester-capture-pilot`. It implements `202
 
 56 of the 59 items are done on `feat/tester-capture-pilot`: Phase 1 (pushed as e3308529), Phases 2-5 (merged locally in e59dcfac) and F11. Each phase was built test first on its own branch, reviewed, merged, and checked with the full suite against the Windows baseline, the UI unit tests and the tester page tests.
 
+**Update, 4 October.**
+- Phase 8 (P8-1..6, D14 and D15 below) was merged in `51aa77a8` on 30 September, and
+  five tester fixes followed up to `03af477a`.
+- The three items below are still open.
+- The plan of 4 October
+  ([2026-10-04-fusion-method-plan.md](2026-10-04-fusion-method-plan.md)) schedules F8
+  and C8 for one field day before the Trackman session.
+- It removes F3's −2 ms constant along with the IWR club-impact path. F3's range-space
+  check remains.
+
 **Left, each waiting on something outside the code:**
 
 | Item | Waits for |
