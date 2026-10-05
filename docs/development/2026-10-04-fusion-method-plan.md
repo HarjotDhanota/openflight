@@ -110,6 +110,14 @@ done when:
   - fit the ball's line separately before and after the switch on every recorded
     swing, and confirm they join;
   - ask whether any firmware the unit will run records the real switch time.
+- **Result (5 October): no hidden gap in our recordings.**
+  - Across the 27 ms switch, the ball's track joins within ±0.4 ms on all 10 swings
+    that have one (test 1, 5 and 7).
+  - One straight line fits 20–55 points on each side, which a gap of more than about
+    1 ms would break.
+  - Every header reads 3000 µs per frame. The 48 ms switch rarely has ball points.
+  - Re-run this check on any new IWR firmware before trusting its crossing
+    (`openflight-test-bench` scratch check, to be made a bench test).
 
 **Stage 2 — timing and the IWR's ball distance.** Ports `timing.py`,
 `radar/streaks.py`, `replay.shot_ball_distance`.
