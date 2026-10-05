@@ -567,9 +567,8 @@ def replay(args, *, frozen_session=None) -> dict:
                     ),
                     club_window_policy=ClubWindowPolicy(**runtime_config["club_window_policy"]),
                     club_impact_correction_s=float(runtime_config["club_impact_correction_s"]),
-                    recovery_observations=[
-                        tuple(item) for item in runtime_config.get("recovery_observations", [])
-                    ],
+                    # a session before D17 also recorded earlier shots' tracks
+                    # (recovery_observations); each shot now replays on its own
                 )
                 iwr_measurement, iwr_club_path = measurement, club_path
                 report["stages"]["iwr6843"] = {

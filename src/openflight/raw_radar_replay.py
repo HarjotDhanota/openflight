@@ -505,7 +505,6 @@ def replay_iwr_capture_bytes(
     azimuth_offset_deg: float,
     club_window_policy,
     club_impact_correction_s: float,
-    recovery_observations: list[tuple[float, float, float]],
     horizontal_phase_reference_rad: float | None = None,
 ):
     """Run the complete production ball/club estimator on frozen dump bytes."""
@@ -524,5 +523,4 @@ def replay_iwr_capture_bytes(
         horizontal_phase_reference_rad=horizontal_phase_reference_rad,
         club_window_policy=club_window_policy,
         club_impact_correction_s=club_impact_correction_s,
-        recovery_observations=recovery_observations,
     )

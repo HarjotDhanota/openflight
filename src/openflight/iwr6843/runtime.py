@@ -20,9 +20,7 @@ from openflight.iwr6843.lcmf import (
 from openflight.iwr6843.monitor import IWR6843Capture, IWR6843CaptureMonitor
 from openflight.iwr6843.recovery import (
     RecoveryCandidate,
-    RecoveryPrior,
     find_recovery_candidates,
-    select_recovery_candidate,
 )
 
 logger = logging.getLogger(__name__)
@@ -232,7 +230,6 @@ def process_raw_capture(  # pylint: disable=too-many-arguments,too-many-locals
     horizontal_phase_reference_rad: float | None,
     club_window_policy: ClubWindowPolicy,
     club_impact_correction_s: float,
-    recovery_observations: list[tuple[float, float, float]],
 ) -> tuple[LCMFResult, ClubPathResult | None]:
     """Run the complete production ball and club estimator on frozen bytes."""
     prepared = prepare_lcmf_capture(raw)
@@ -269,25 +266,8 @@ def process_raw_capture(  # pylint: disable=too-many-arguments,too-many-locals
         return measurement, None
     ball_sign = getattr(measurement, "tdm_sign_used", None)
     fallback = ball_sign not in (-1, 1)
+    # this shot's own impact time or none: no earlier shots' tracks stand in (D17)
     impact_t_s = getattr(measurement, "impact_t_s", None)
-    recovered_impact = False
-    if impact_t_s is None and len(recovery_observations) >= 3:
-        ratios, impacts, spans = zip(*recovery_observations)
-        try:
-            prior = RecoveryPrior.fit(list(ratios), list(impacts), list(spans))
-            candidate = select_recovery_candidate(
-                find_recovery_candidates(
-                    raw,
-                    calibration,
-                    ball_speed_mph=ball_speed_mph,
-                    net_range_m=net_range_m,
-                ),
-                prior,
-            )
-            impact_t_s = candidate.impact_s if candidate is not None else None
-            recovered_impact = impact_t_s is not None
-        except ValueError:
-            impact_t_s = None
     if impact_t_s is not None:
         impact_t_s += club_impact_correction_s
     policy_sign = _TDM_SIGN_BY_POLICY.get(tdm_sign_policy, 1)
@@ -301,8 +281,6 @@ def process_raw_capture(  # pylint: disable=too-many-arguments,too-many-locals
         tdm_sign=policy_sign if fallback else ball_sign,
         window_policy=club_window_policy,
     )
-    if recovered_impact:
-        club_path.status = f"{club_path.status}_recovered_impact"
     if fallback:
         club_path.status = f"{club_path.status}_tdm_sign_fallback"
     return measurement, club_path
@@ -327,10 +305,6 @@ class IWR6843Runtime:
     # ball-departure timing. Applied to the club estimators only; the ball
     # pipeline keeps its own anchor.
     club_impact_correction_s: float = -0.002
-    # Accepted ball tracks establish a truth-free rolling prior. A rejected
-    # vertical solution may use that prior to recover impact timing for the
-    # independent experimental club search, never to publish vertical launch.
-    recovery_observations: list[tuple[float, float, float]] = field(default_factory=list)
     calibration_provenance: dict | None = None
     radar_config_provenance: dict | None = None
 
@@ -357,7 +331,6 @@ class IWR6843Runtime:
             "horizontal_phase_reference_rad": self.horizontal_phase_reference_rad,
             "club_window_policy": asdict(self.club_window_policy),
             "club_impact_correction_s": self.club_impact_correction_s,
-            "recovery_observations": [list(item) for item in self.recovery_observations],
             "source_revision_status": "captured_separately_in_session_runtime_provenance",
             "calibration": self.calibration_provenance,
             "radar_config": self.radar_config_provenance,
@@ -372,46 +345,6 @@ class IWR6843Runtime:
             payload, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
         return {**payload, "sha256": hashlib.sha256(encoded).hexdigest()}
-
-    def _remember_recovery_observation(
-        self, measurement: LCMFResult, ball_speed_mph: float
-    ) -> None:
-        if (
-            not getattr(measurement, "accepted", False)
-            or getattr(measurement, "impact_t_s", None) is None
-            or getattr(measurement, "track_speed_mph", None) is None
-            or getattr(measurement, "track_span_s", None) is None
-        ):
-            return
-        self.recovery_observations.append(
-            (
-                float(measurement.track_speed_mph) / ball_speed_mph,
-                float(measurement.impact_t_s),
-                float(measurement.track_span_s),
-            )
-        )
-        del self.recovery_observations[:-50]
-
-    def _recover_impact_time(
-        self, raw: bytes, calibration: Calibration, ball_speed_mph: float
-    ) -> float | None:
-        if len(self.recovery_observations) < 3:
-            return None
-        ratios, impacts, spans = zip(*self.recovery_observations)
-        try:
-            prior = RecoveryPrior.fit(list(ratios), list(impacts), list(spans))
-            candidates = find_recovery_candidates(
-                raw,
-                calibration,
-                ball_speed_mph=ball_speed_mph,
-                net_range_m=self.net_range_m,
-            )
-        except ValueError:
-            # Older/raw-ADC firmware formats cannot run the snapshot recovery.
-            # Preserve the original no-impact behavior rather than losing the shot.
-            return None
-        candidate = select_recovery_candidate(candidates, prior)
-        return candidate.impact_s if candidate is not None else None
 
     def _ops_guided_measurement(  # pylint: disable=too-many-return-statements
         self,
@@ -495,10 +428,8 @@ class IWR6843Runtime:
             horizontal_phase_reference_rad=self.horizontal_phase_reference_rad,
             club_window_policy=self.club_window_policy,
             club_impact_correction_s=self.club_impact_correction_s,
-            recovery_observations=list(self.recovery_observations),
         )
         analysis_completed_ns = time.monotonic_ns()
-        self._remember_recovery_observation(measurement, ball_speed_mph)
         return result(
             measurement=measurement,
             club_path=club_path,

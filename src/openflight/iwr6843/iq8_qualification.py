@@ -422,7 +422,6 @@ def _run_estimators(
         horizontal_phase_reference_rad=runtime["horizontal_phase_reference_rad"],
         club_window_policy=ClubWindowPolicy(**runtime["club_window_policy"]),
         club_impact_correction_s=runtime["club_impact_correction_s"],
-        recovery_observations=[tuple(row) for row in runtime["recovery_observations"]],
     )
     ball = measurement.to_dict()
     ball["accepted"] = measurement.accepted
@@ -956,7 +955,6 @@ def build_qualification_report(  # pylint: disable=too-many-arguments
     horizontal_phase_reference_rad: float | None = None,
     club_window_policy: ClubWindowPolicy | None = None,
     club_impact_correction_s: float = -0.002,
-    recovery_observations: list[tuple[float, float, float]] | None = None,
     baud: int = BAUD,
     repo_root: str | Path | None = None,
 ) -> dict[str, Any]:
@@ -997,7 +995,6 @@ def build_qualification_report(  # pylint: disable=too-many-arguments
         "horizontal_phase_reference_rad": horizontal_phase_reference_rad,
         "club_window_policy": asdict(policy),
         "club_impact_correction_s": club_impact_correction_s,
-        "recovery_observations": [list(row) for row in (recovery_observations or [])],
     }
     pairs = []
     for declared in manifest["pairs"]:
