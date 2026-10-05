@@ -37,7 +37,7 @@ from .clubs.physics import (
     get_club_physics,
     get_club_simulation_profile,
 )
-from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot, summarize_shots
+from .launch_monitor import Shot, summarize_shots
 from .ops243 import (
     UART_BAUD_COMMANDS,
     Direction,
@@ -147,8 +147,9 @@ tester_setup_required = False
 tester_config_hash: str | None = None
 camera_capture_config: dict = {"enabled": False}
 camera_replay_manager = None
-camera_reference_ball_tracker = None
-camera_ball_flight_reference_tracker = None
+# openflight.camera.fusion_processing.VERSION, kept here so the server needn't import the
+# camera stack for an unavailable context (test_per_shot_reference_ball holds them equal)
+CAMERA_FUSION_CONTEXT_VERSION = 2
 camera_optical_calibration: dict | None = None
 camera_placement: dict | None = None
 
@@ -939,8 +940,25 @@ def _select_horizontal_radar_launch(kld7_angle, horizontal_limit: float) -> tupl
     return True, details
 
 
+def _fusion_unit() -> bool:
+    """Whether this kiosk measures angles (IWR or camera), so it fills nothing in (D17).
+
+    The same sensors that make a shot's enrichment slow (_has_slow_shot_enrichment).
+    """
+    return iwr6843_runtime is not None or camera_capture_runtime is not None
+
+
 def _ensure_user_facing_launch_angles(shot: Shot) -> None:
-    """Provide a vertical estimate without inventing a horizontal measurement."""
+    """An OPS-only install's labelled launch estimates; a fusion unit fills nothing in.
+
+    An OPS-only kiosk has nothing to measure angles with, so simulators get a
+    club-table vertical and a neutral horizontal, labelled estimated. A fusion
+    unit leaves a missing angle missing (D17).
+    """
+    if _fusion_unit():
+        if shot.launch_angle_vertical is None or shot.launch_angle_horizontal is None:
+            logger.info("[SERVER] Launch angle not measured on this shot; nothing filled in")
+        return
     estimated: tuple[float, float] | None = None
 
     if shot.launch_angle_vertical is None:
@@ -962,12 +980,7 @@ def _ensure_user_facing_launch_angles(shot: Shot) -> None:
         )
 
     if shot.launch_angle_horizontal is None:
-        camera_capture_enabled = bool(camera_capture_config.get("enabled"))
-        if iwr6843_runtime is not None or camera_capture_enabled:
-            logger.info("[SERVER] Horizontal angle unavailable; no measured trajectory")
-            return
-        # Preserve the legacy neutral estimate for installations that have no
-        # horizontal-capable TI/camera pipeline at all.
+        # the legacy neutral estimate, for an install with no angle sensors at all
         shot.launch_angle_horizontal = 0.0
         if shot.launch_angle_horizontal_confidence is None:
             if estimated is None:
@@ -1425,8 +1438,6 @@ def init_camera_capture(
     """Initialize passive high-speed camera capture for offline alignment."""
     global camera_capture_runtime, camera_capture_config  # pylint: disable=global-statement
     global camera_replay_manager  # pylint: disable=global-statement
-    global camera_reference_ball_tracker  # pylint: disable=global-statement
-    global camera_ball_flight_reference_tracker  # pylint: disable=global-statement
     try:
         from .camera.capture_runtime import CameraCaptureRuntime, CameraCaptureSettings
 
@@ -1471,12 +1482,6 @@ def init_camera_capture(
         from .camera.replay import CameraReplayManager
 
         camera_replay_manager = CameraReplayManager(output_dir)
-        from openflight.camera.club_delivery import (  # noqa: PLC0415
-            ReferenceBallTracker,
-        )
-
-        camera_reference_ball_tracker = ReferenceBallTracker()
-        camera_ball_flight_reference_tracker = ReferenceBallTracker()
         camera_capture_config = {
             "enabled": True,
             "output_dir": str(Path(output_dir).expanduser()),
@@ -1518,8 +1523,6 @@ def init_camera_capture(
         )
         camera_capture_runtime = None
         camera_replay_manager = None
-        camera_reference_ball_tracker = None
-        camera_ball_flight_reference_tracker = None
         camera_capture_config = {"enabled": False, "error": str(error)}
         return False
 
@@ -3322,7 +3325,8 @@ def _apply_calculated_spin(shot: Shot) -> bool:
         return False
     shot.spin_rpm_measured = shot.spin_rpm
     shot.spin_rpm = spin_calc
-    shot.spin_confidence = SPIN_CONFIDENCE_HIGH
+    # a model's output has no measurement confidence; spin_source labels it (D17)
+    shot.spin_confidence = None
     shot.spin_source = "calculated"
     shot.spin_rejection_reason = None
     logger.info(
@@ -3832,7 +3836,6 @@ def _fuse_camera_club_delivery(
                                     range_evidence=shot.iwr6843_club_range_evidence,
                                     geometry=geometry_inputs.delivery_geometry(),
                                     ops_club_speed_mph=shot.club_speed_mph,
-                                    ball_tracker=camera_reference_ball_tracker,
                                     sensor_timestamp_ns=archive.get("sensor_timestamp_ns"),
                                 )
             else:
@@ -3963,7 +3966,6 @@ def _fuse_camera_ball_flight(
                                 geometry=geometry_inputs.ball_geometry(),
                                 ops_ball_speed_mph=shot.ball_speed_raw_mph or shot.ball_speed_mph,
                                 iwr_vertical_deg=shot.launch_angle_vertical,
-                                ball_tracker=camera_ball_flight_reference_tracker,
                                 sensor_timestamps_ns=archive.get("sensor_timestamp_ns"),
                                 trigger_frame_index=exposure_trigger_index(
                                     archive, len(archive["frames"])
@@ -4024,7 +4026,7 @@ def _withhold_camera_metrics(shot: Shot, status: str, reason: str) -> None:
     shot.experimental_fused_club_path_confidence = "withheld"
     shot.camera_fusion_context = {
         "schema": "openflight.camera.fusion_context",
-        "version": 1,
+        "version": CAMERA_FUSION_CONTEXT_VERSION,
         "available": False,
         "reason": reason,
     }
@@ -4177,14 +4179,8 @@ def _fuse_camera_measurements(
                 "[SERVER] Camera analysis runs with an optical-quality note: %s",
                 quality["reason"],
             )
-    if (
-        camera_archive is not None
-        and iwr6843_runtime is not None
-        and camera_reference_ball_tracker is not None
-        and camera_ball_flight_reference_tracker is not None
-    ):
+    if camera_archive is not None and iwr6843_runtime is not None:
         try:
-            from openflight.camera.club_delivery import ReferenceBallTracker  # noqa: PLC0415
             from openflight.camera.fusion_processing import (  # noqa: PLC0415
                 build_context,
                 process_camera_fusion,
@@ -4277,8 +4273,6 @@ def _fuse_camera_measurements(
             context = build_context(
                 geometry=geometry,
                 lighting_eligible=analysis_eligible,
-                ball_tracker=camera_ball_flight_reference_tracker,
-                club_tracker=camera_reference_ball_tracker,
                 ball_range_evidence=shot.iwr6843_ball_range_evidence,
                 club_range_evidence=shot.iwr6843_club_range_evidence,
                 ops_ball_speed_mph=shot.ball_speed_raw_mph or shot.ball_speed_mph,
@@ -4331,15 +4325,11 @@ def _fuse_camera_measurements(
             shot.experimental_fused_club_path_confidence = fused["path_confidence_tier"]
             shot.experimental_camera_trace_deg = None
             shot.experimental_aoa_offset_source = "none_chained_3d"
-            restored_ball = ReferenceBallTracker.from_snapshot(result["next_ball_tracker"])
-            restored_club = ReferenceBallTracker.from_snapshot(result["next_club_tracker"])
-            camera_ball_flight_reference_tracker._samples = restored_ball._samples
-            camera_reference_ball_tracker._samples = restored_club._samples
             return
         except Exception as error:  # pylint: disable=broad-exception-caught
             shot.camera_fusion_context = {
                 "schema": "openflight.camera.fusion_context",
-                "version": 1,
+                "version": CAMERA_FUSION_CONTEXT_VERSION,
                 "available": False,
                 "reason": f"{type(error).__name__}: {error}",
             }
@@ -4778,9 +4768,13 @@ def _finalize_shot_detected(
     # angle missing → resolve_launch returns None).
     _MIN_RELIABLE_SPIN_CONF = 0.6
     carry_source = None
+    fusion = _fusion_unit()
     if shot.carry_spin_adjusted is None and shot.mode != "mock":
-        conditions = resolve_launch(shot) if ballistics_enabled else None
-        if conditions is not None:
+        conditions = resolve_launch(shot, substitutes=not fusion) if ballistics_enabled else None
+        if conditions is None and fusion:
+            # a fusion unit builds carry only from measured inputs (D17)
+            logger.info("[SERVER] Carry not measured: launch, spin or spin axis not measured")
+        elif conditions is not None:
             trajectory = simulate(conditions)
             shot.carry_spin_adjusted = trajectory.carry_yards
             carry_source = "ballistic"

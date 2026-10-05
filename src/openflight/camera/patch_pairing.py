@@ -8,9 +8,9 @@ ball is the best-agreeing pair. Its distance is the radar's and its side offset
 the camera's, taken along the camera's ray at the radar's distance.
 
 Whatever exists is saved, labelled experimental (D15: measure, label, don't
-block): a pair is ``validated``; the camera's ball alone gives its own distance
-with a warning; the radar alone, or two sensors that disagree, give a warning
-that names both. With nothing in the patch the setup says so.
+block): a pair is ``validated``; the radar alone saves its distance with a warning.
+The camera never gives the distance (D17): its ball alone, or two sensors that
+disagree, save no distance and say why. With nothing in the patch the setup says so.
 """
 
 from __future__ import annotations
@@ -29,7 +29,6 @@ NO_BALL_MESSAGE = (
 SOURCES = {
     "static_iwr_magnitude": "patch_validated_static_iwr_magnitude",
     "static_iwr_coherent": "patch_validated_static_iwr_coherent",
-    "camera_size_range": "unqualified_camera_size_range",
     "static_iwr_magnitude_unconfirmed": "unqualified_static_iwr_magnitude",
     "static_iwr_coherent_unconfirmed": "unqualified_static_iwr_coherent",
 }
@@ -48,8 +47,8 @@ def pairing_policy() -> dict[str, Any]:
         "coherent_off_the_ground": "never_the_ball",
         "saves": {
             "validated": "radar_distance",
-            "camera_only": "camera_distance_with_a_warning",
-            "disagree": "camera_distance_with_a_warning_naming_both",
+            "camera_only": "nothing_with_a_warning",
+            "disagree": "nothing_with_a_warning_naming_both",
             "radar_only": "strongest_radar_peak_with_a_warning",
             "no_ball": "nothing",
         },
@@ -215,19 +214,19 @@ def pair_patch_ball(  # pylint: disable=too-many-return-statements
                 "pair": {**entry, "radar": _radar_facts(item)},
                 "radar_candidate": _radar_facts(item),
             }
+        # the camera's ball-size range never becomes the distance (D17)
         if not radar:
             return {
                 **base,
                 "status": "camera_only",
                 "warning": (
-                    "The radar found no ball in the patch, so the camera's distance "
-                    f"({camera['range_m']:.2f} m, about ±{camera['uncertainty_m']:.2f} m from "
-                    "the ball's size) is used."
+                    "The radar found no ball in the patch. The camera sees the ball but "
+                    "never gives its distance, so the setup saves no distance."
                 ),
-                "source": "camera_size_range",
-                "range_m": float(camera["range_m"]),
-                "uncertainty_m": float(camera["uncertainty_m"]),
-                "side_offset_m": camera.get("side_offset_m"),
+                "source": None,
+                "range_m": None,
+                "uncertainty_m": None,
+                "side_offset_m": None,
                 "radar_candidate": None,
             }
         strongest = _strongest(radar)
@@ -235,14 +234,14 @@ def pair_patch_ball(  # pylint: disable=too-many-return-statements
             **base,
             "status": "disagree",
             "warning": (
-                f"The camera puts the ball at {camera['range_m']:.2f} m and the radar at "
-                f"{float(strongest['range_m']):.2f} m: they disagree. Check for other objects "
-                "in the patch. The camera's distance is used."
+                f"The camera's ball size suggests {camera['range_m']:.2f} m and the radar "
+                f"reads {float(strongest['range_m']):.2f} m: they disagree. Check for other "
+                "objects in the patch. The setup saves no distance."
             ),
-            "source": "camera_size_range",
-            "range_m": float(camera["range_m"]),
-            "uncertainty_m": float(camera["uncertainty_m"]),
-            "side_offset_m": camera.get("side_offset_m"),
+            "source": None,
+            "range_m": None,
+            "uncertainty_m": None,
+            "side_offset_m": None,
             "radar_candidate": _radar_facts(strongest),
         }
     if radar:

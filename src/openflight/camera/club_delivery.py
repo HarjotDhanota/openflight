@@ -242,112 +242,6 @@ def _window_facts(estimate: ApproachPairEstimate) -> str:
     )
 
 
-class ReferenceBallTracker:
-    """Retain a robust session tee anchor when one frame finds a false blob."""
-
-    def __init__(self, max_samples: int = 15, min_fallback_samples: int = 3):
-        self.max_samples = max_samples
-        self.min_fallback_samples = min_fallback_samples
-        self._samples: list[ReferenceBall] = []
-
-    def _anchor(self) -> ReferenceBall | None:
-        if not self._samples:
-            return None
-        return ReferenceBall(
-            x=float(np.median([ball.x for ball in self._samples])),
-            y=float(np.median([ball.y for ball in self._samples])),
-            diameter_px=float(np.median([ball.diameter_px for ball in self._samples])),
-            area_px=int(round(np.median([ball.area_px for ball in self._samples]))),
-        )
-
-    def resolve(
-        self, candidate: ReferenceBall, *, pixel_scale: float = 1.0
-    ) -> tuple[ReferenceBall, str]:
-        """Accept a consistent observation or return the established anchor.
-
-        ``pixel_scale`` is the ball's size relative to the 640x400 mode the limits
-        were tuned in (2 at 1280x800).
-        """
-        anchor = self._anchor()
-        smallest, largest = ball_pixels.ball_diameter_bounds_px(pixel_scale)
-        plausible_size = smallest <= candidate.diameter_px <= largest
-        consistent = plausible_size
-        if anchor is not None:
-            distance_px = math.hypot(candidate.x - anchor.x, candidate.y - anchor.y)
-            size_ratio = candidate.diameter_px / anchor.diameter_px
-            consistent = (
-                plausible_size
-                and distance_px <= max(40.0 * pixel_scale, 4.0 * anchor.diameter_px)
-                and 0.65 <= size_ratio <= 1.55
-            )
-        if consistent:
-            self._samples.append(candidate)
-            self._samples = self._samples[-self.max_samples :]
-            return candidate, "detected"
-        if anchor is not None and len(self._samples) >= self.min_fallback_samples:
-            return anchor, "session_anchor"
-        return candidate, "unverified"
-
-    def resolve_stable(
-        self, candidate: ReferenceBall, *, pixel_scale: float = 1.0
-    ) -> tuple[ReferenceBall, str]:
-        """Return a rolling session anchor once enough valid observations exist."""
-        resolved, source = self.resolve(candidate, pixel_scale=pixel_scale)
-        anchor = self._anchor()
-        if anchor is not None and len(self._samples) >= self.min_fallback_samples:
-            return anchor, "session_anchor"
-        return resolved, "warming" if source == "detected" else source
-
-    def fallback(self) -> ReferenceBall | None:
-        """Return an established session anchor without adding an observation."""
-        if len(self._samples) < self.min_fallback_samples:
-            return None
-        return self._anchor()
-
-    def snapshot(self) -> dict:
-        """Return all state needed to replay the next resolution exactly."""
-        return {
-            "schema_version": 1,
-            "max_samples": self.max_samples,
-            "min_fallback_samples": self.min_fallback_samples,
-            "samples": [vars(sample).copy() for sample in self._samples],
-        }
-
-    @classmethod
-    def from_snapshot(cls, snapshot: dict) -> "ReferenceBallTracker":
-        """Restore a tracker without inventing an empty legacy state."""
-        if not isinstance(snapshot, dict) or snapshot.get("schema_version") != 1:
-            raise ValueError("unsupported reference-ball tracker snapshot")
-        limits = (snapshot.get("max_samples"), snapshot.get("min_fallback_samples"))
-        if any(
-            not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in limits
-        ):
-            raise ValueError("reference-ball tracker limits must be positive integers")
-        tracker = cls(max_samples=limits[0], min_fallback_samples=limits[1])
-        if tracker.min_fallback_samples > tracker.max_samples:
-            raise ValueError("reference-ball tracker fallback limit exceeds capacity")
-        samples = snapshot.get("samples")
-        if not isinstance(samples, list) or len(samples) > tracker.max_samples:
-            raise ValueError("invalid reference-ball tracker samples")
-        try:
-            restored = [ReferenceBall(**dict(sample)) for sample in samples]
-        except (TypeError, ValueError) as error:
-            raise ValueError("invalid reference-ball tracker sample") from error
-        for sample in restored:
-            values = (sample.x, sample.y, sample.diameter_px, sample.area_px)
-            if any(isinstance(value, bool) or not math.isfinite(float(value)) for value in values):
-                raise ValueError("reference-ball tracker samples must be finite numbers")
-            if (
-                sample.diameter_px <= 0
-                or not isinstance(sample.area_px, int)
-                or isinstance(sample.area_px, bool)
-                or sample.area_px <= 0
-            ):
-                raise ValueError("reference-ball tracker sample dimensions must be positive")
-        tracker._samples = restored
-        return tracker
-
-
 def _pixels_to_world(
     points_px: np.ndarray,
     radar_range_m: float,
@@ -1069,7 +963,6 @@ def estimate_chained_delivery(
     range_evidence,
     geometry: CameraDeliveryGeometry,
     ops_club_speed_mph: float | None,
-    ball_tracker: ReferenceBallTracker | None = None,
     reference_ball: ReferenceBall | None = None,
     reference_ball_selected: bool = False,
     sensor_timestamp_ns: np.ndarray | None = None,
@@ -1109,19 +1002,13 @@ def estimate_chained_delivery(
         return ChainedDelivery(status="rejected_no_ball", scene_p995=scene_p995, notes=tuple(notes))
     scale = ball_pixels.pixel_scale(frames.shape[2])
     if ball is None:
+        # this shot's own frames only: no earlier shot's ball stands in (D17)
         try:
             ball = detect_reference_ball(frames, pixel_scale=scale)
         except ValueError:
-            ball = ball_tracker.fallback() if ball_tracker is not None else None
-            if ball is None:
-                return ChainedDelivery(
-                    status="rejected_no_ball", scene_p995=scene_p995, notes=tuple(notes)
-                )
-        else:
-            if ball_tracker is not None:
-                ball, _ball_source = ball_tracker.resolve(ball, pixel_scale=scale)
-    elif ball_tracker is not None:
-        ball_tracker.resolve(ball, pixel_scale=scale)
+            return ChainedDelivery(
+                status="rejected_no_ball", scene_p995=scene_p995, notes=tuple(notes)
+            )
     yy, xx = np.mgrid[0 : frames.shape[1], 0 : frames.shape[2]]
     image_scale = _image_scale(frames.shape)
     ball_zone_radius = max(50.0, BALL_ZONE_RADIUS_PX * image_scale)

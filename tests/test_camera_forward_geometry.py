@@ -17,7 +17,7 @@ from openflight.rig_geometry import RigGeometry
 
 @pytest.mark.parametrize("forward_offset", [0.0, 0.03, -0.03, 0.20])
 @pytest.mark.parametrize("lateral_offset", [0.0, 0.08])
-@pytest.mark.parametrize("kind", ["club", "ball", "ball_size"])
+@pytest.mark.parametrize("kind", ["club", "ball"])
 def test_recovers_known_world_points(forward_offset, lateral_offset, kind):
     camera = np.array([lateral_offset, forward_offset, 0.095])
     radar = np.array([0.0, 0.0, 0.051])
@@ -73,17 +73,12 @@ def test_recovers_known_world_points(forward_offset, lateral_offset, kind):
                 mean_intensity=220,
             )
             model = ball_flight._camera_model(ball, geometry)
-            if kind == "ball":
-                result = ball_flight._project(
-                    candidate,
-                    float(np.linalg.norm(point - radar)),
-                    model=model,
-                    geometry=geometry,
-                )
-            else:
-                result = ball_flight._project_from_ball_size(
-                    candidate, model=model, geometry=geometry
-                )
+            result = ball_flight._project(
+                candidate,
+                float(np.linalg.norm(point - radar)),
+                model=model,
+                geometry=geometry,
+            )
         np.testing.assert_allclose(result, point, atol=1e-9)
 
 
@@ -243,8 +238,6 @@ def test_capture_records_forward_offset_in_session_config(monkeypatch, tmp_path)
         "camera_capture_runtime",
         "camera_capture_config",
         "camera_replay_manager",
-        "camera_reference_ball_tracker",
-        "camera_ball_flight_reference_tracker",
     ):
         monkeypatch.setattr(server, name, getattr(server, name))
     monkeypatch.setattr(

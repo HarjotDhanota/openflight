@@ -26,7 +26,6 @@ from openflight.camera.capture_runtime import _capture_mode_metadata
 from openflight.camera.club_delivery import (
     CameraDeliveryGeometry,
     ChainedDelivery,
-    ReferenceBallTracker,
     _pixels_to_world,
 )
 from openflight.camera.fusion_sensitivity import run_sensitivity
@@ -263,8 +262,6 @@ def test_effective_geometry_freezes_calibrated_model_for_replay():
     context = fusion_processing.build_context(
         geometry=geometry,
         lighting_eligible=True,
-        ball_tracker=ReferenceBallTracker(),
-        club_tracker=ReferenceBallTracker(),
         ball_range_evidence=None,
         club_range_evidence=None,
         ops_ball_speed_mph=100.0,
@@ -465,10 +462,6 @@ def test_live_adapter_and_replay_share_successful_calibrated_projection(tmp_path
             )
         ),
     )
-    monkeypatch.setattr(
-        server_module, "camera_ball_flight_reference_tracker", ReferenceBallTracker()
-    )
-    monkeypatch.setattr(server_module, "camera_reference_ball_tracker", ReferenceBallTracker())
     shot = Shot(
         ball_speed_mph=float(np.linalg.norm(velocity) * 2.23694),
         timestamp=datetime.now(),

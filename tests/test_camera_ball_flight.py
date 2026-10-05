@@ -18,39 +18,8 @@ from openflight.camera.ball_flight import (
     estimate_camera_ball_flight,
     select_camera_assisted_horizontal,
 )
-from openflight.camera.club_delivery import ReferenceBallTracker
 from openflight.camera.club_motion import ReferenceBall
 from openflight.iwr6843.lcmf import BallRangeEvidence, LCMFResult
-
-
-def test_ball_flight_uses_established_anchor_when_detection_is_missing(monkeypatch):
-    tracker = ReferenceBallTracker()
-    for x in (159.0, 160.0, 161.0):
-        tracker.resolve_stable(ReferenceBall(x, 100.0, 14.0, 140))
-    monkeypatch.setattr(
-        ball_flight_module,
-        "detect_reference_ball",
-        lambda _frames, **_kwargs: (_ for _ in ()).throw(ValueError("not found")),
-    )
-
-    result = estimate_camera_ball_flight(
-        np.zeros((20, 200, 320), dtype=np.uint8),
-        np.arange(20, dtype=np.int64) * 2_000_000,
-        trigger_ns=10_000_000,
-        range_evidence=None,
-        geometry=CameraBallGeometry(
-            camera_height_m=0.2032,
-            radar_height_m=0.1524,
-            tee_range_m=1.524,
-            ball_height_m=0.04,
-            image_width_px=320,
-            image_height_px=200,
-        ),
-        ops_ball_speed_mph=100.0,
-        ball_tracker=tracker,
-    )
-
-    assert result.status != "rejected_reference_ball_not_found"
 
 
 def _project_world_point(
@@ -237,28 +206,6 @@ def test_rough_path_scoring_avoids_numpy_in_beam_search(monkeypatch):
     assert _rough_path_score(path) == pytest.approx(60.0)
 
 
-def test_path_estimate_recovers_horizontal_from_apparent_ball_size_without_iwr_range():
-    geometry, _anchor, model, candidates, timestamps, _evidence, speed_ms = _synthetic_path()
-
-    result = _path_estimate(
-        path=list(enumerate(candidates)),
-        frame_indices=list(range(len(candidates))),
-        timestamps_ns=timestamps,
-        contact_ns=0,
-        range_evidence=None,
-        ops_ball_speed_mph=speed_ms * 2.23694,
-        iwr_vertical_deg=20.0,
-        model=model,
-        geometry=geometry,
-        thresholds=(100, 12, 5),
-    )
-
-    assert result is not None
-    _score, estimate = result
-    assert estimate.horizontal_deg == pytest.approx(4.0, abs=0.75)
-    assert estimate.vertical_deg == pytest.approx(20.0, abs=1.5)
-
-
 def test_path_estimate_does_not_treat_lateral_ball_position_as_target_yaw():
     geometry, _anchor, model, candidates, timestamps, evidence, speed_ms = _synthetic_path(
         horizontal_deg=0.0,
@@ -400,67 +347,6 @@ def test_experimental_camera_is_retained_when_iwr_is_unavailable():
     assert decision.status == "camera_experimental_no_iwr"
 
 
-def test_camera_size_depth_is_labeled_as_camera_only_fallback():
-    estimate = CameraBallEstimate(
-        status="accepted_camera_only",
-        confidence_tier="experimental",
-        horizontal_deg=3.0,
-        depth_source="camera_size",
-    )
-
-    decision = select_camera_assisted_horizontal(
-        estimate,
-        iwr_horizontal_deg=None,
-        iwr_confidence=None,
-    )
-
-    assert decision.selected_deg == pytest.approx(3.0)
-    assert decision.source == "camera_only_experimental"
-    assert decision.confidence == pytest.approx(0.3)
-    assert decision.status == "camera_only_experimental"
-
-
-def test_accepted_iwr_horizontal_beats_a_size_only_camera_horizontal():
-    """F6: size-only camera depth is diagnostic; the radar horizontal is displayed."""
-    estimate = CameraBallEstimate(
-        status="accepted_camera_only",
-        confidence_tier="experimental",
-        horizontal_deg=5.0,
-        depth_source="camera_size",
-    )
-
-    decision = select_camera_assisted_horizontal(
-        estimate,
-        iwr_horizontal_deg=3.0,
-        iwr_confidence=0.9,
-    )
-
-    assert decision.selected_deg == pytest.approx(3.0)
-    assert decision.source == "radar"
-    assert decision.confidence == pytest.approx(0.9)
-    assert decision.status == "camera_only_experimental_iwr_preferred"
-    assert decision.camera_horizontal_deg == pytest.approx(5.0)
-    assert decision.camera_iwr_delta_deg == pytest.approx(2.0)
-
-
-def test_size_only_camera_horizontal_stands_in_for_an_implausible_iwr():
-    estimate = CameraBallEstimate(
-        status="accepted_camera_only",
-        confidence_tier="experimental",
-        horizontal_deg=3.0,
-        depth_source="camera_size",
-    )
-
-    decision = select_camera_assisted_horizontal(
-        estimate,
-        iwr_horizontal_deg=38.0,
-        iwr_confidence=0.9,
-    )
-
-    assert decision.selected_deg == pytest.approx(3.0)
-    assert decision.source == "camera_only_experimental"
-
-
 def test_withheld_camera_falls_back_to_unchanged_iwr():
     decision = select_camera_assisted_horizontal(
         _estimate("withheld", None),
@@ -585,14 +471,10 @@ def test_rejected_iwr_ball_track_is_not_used_as_camera_depth(monkeypatch):
         ),
         ops_ball_speed_mph=100.0,
     )
-    decision = select_camera_assisted_horizontal(
-        estimate, iwr_horizontal_deg=None, iwr_confidence=None
-    )
-
-    assert seen and all(evidence is None for evidence in seen)
-    assert estimate.depth_source == "camera_size"
+    # a rejected IWR range leaves no distance: the camera's ball size never stands in
+    assert not seen
+    assert estimate.status == "rejected_no_iwr_range"
     assert estimate.range_evidence_status == "rejected_track_quality"
-    assert decision.source == "camera_only_experimental"
 
 
 def _timed_flight(*, trigger_after_contact_s: float = 0.0026):
@@ -754,9 +636,10 @@ def test_ball_flight_without_a_departure_does_not_time_the_radar_from_the_trigge
         ops_ball_speed_mph=100.0,
     )
 
-    assert seen and all(call["range_evidence"] is None for call in seen)
+    # without a departure the radar can't be timed, so there is no distance
+    assert not seen
+    assert estimate.status == "rejected_no_iwr_range"
     assert estimate.timing_anchor == "no_ball_departure"
-    assert estimate.depth_source == "camera_size"
     assert estimate.timestamp_source == "host_timestamp_ns"
 
 
@@ -773,12 +656,15 @@ def test_a_low_consensus_flight_is_measured_and_labelled_not_refused(monkeypatch
         ),
     )
     host = np.arange(40, dtype=np.int64) * 3_500_000
+    evidence = BallRangeEvidence(
+        track=SimpleNamespace(), geometry=SimpleNamespace(range_res_m=0.046875), impact_t_s=0.012
+    )
 
     estimate = estimate_camera_ball_flight(
         _departing_ball_clip(19),
         host,
         trigger_ns=int(host[20]),
-        range_evidence=None,
+        range_evidence=evidence,
         geometry=_GEOMETRY_320,
         ops_ball_speed_mph=100.0,
     )

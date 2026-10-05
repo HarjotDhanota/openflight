@@ -15,7 +15,6 @@ from openflight.camera.ball_flight import (
 )
 from openflight.camera.club_delivery import (
     ChainedDelivery,
-    ReferenceBallTracker,
     estimate_chained_delivery,
 )
 from openflight.camera.club_motion import ReferenceBall
@@ -28,7 +27,14 @@ from openflight.iwr6843.tracking import BallTrack, Geometry
 from openflight.rig_geometry import geometry_fingerprint
 
 SCHEMA = "openflight.camera.fusion_context"
-VERSION = 1
+VERSION = 2
+# version 1 froze each shot's resting-ball trackers, built from earlier shots; it still
+# replays, with that state ignored (D17)
+LEGACY_TRACKER_VERSION = 1
+LEGACY_TRACKER_NOTE = (
+    "this context was frozen with resting-ball tracker state from earlier shots; "
+    "it is ignored: each shot uses only its own frames (D17)"
+)
 LIGHTING_NOT_ELIGIBLE = "capture-time lighting was not analysis eligible"
 
 
@@ -126,8 +132,6 @@ def build_context(
     *,
     geometry: EffectiveCameraGeometryInputs,
     lighting_eligible: bool,
-    ball_tracker: ReferenceBallTracker,
-    club_tracker: ReferenceBallTracker,
     ball_range_evidence: Any,
     club_range_evidence: Any,
     ops_ball_speed_mph: float,
@@ -142,7 +146,7 @@ def build_context(
     notes: list[str] | None = None,
     setup_ball: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Freeze every non-archive input before either stateful tracker changes.
+    """Freeze every non-archive input of one shot: nothing from any other shot.
 
     ``notes`` are the capture's labels that no longer block the estimators
     (D15): the lighting and optical-quality verdicts, as the kiosk judged them.
@@ -153,8 +157,6 @@ def build_context(
         "available": True,
         "geometry": geometry.snapshot(),
         "lighting_eligible": bool(lighting_eligible),
-        "ball_tracker": ball_tracker.snapshot(),
-        "club_tracker": club_tracker.snapshot(),
         "ball_range_evidence": _range_snapshot(ball_range_evidence, "ball"),
         "club_range_evidence": _range_snapshot(club_range_evidence, "club"),
         "ops_ball_speed_mph": ops_ball_speed_mph,
@@ -179,7 +181,10 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
     """Run both stages from frozen context and a loader-verified archive hash."""
     context = dict(context)
     fingerprint = context.pop("sha256", None)
-    if context.get("schema") != SCHEMA or context.get("version") != VERSION:
+    if context.get("schema") != SCHEMA or context.get("version") not in (
+        VERSION,
+        LEGACY_TRACKER_VERSION,
+    ):
         raise ValueError("unsupported camera fusion context")
     if context.get("available") is not True:
         raise ValueError("camera fusion context is unavailable")
@@ -197,10 +202,10 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
     )
     frames, timestamps, trigger_ns = _validate_archive(archive)
     geometry.validate_archive_dimensions(frames.shape[-1], frames.shape[-2])
-    ball_tracker = ReferenceBallTracker.from_snapshot(context["ball_tracker"])
-    club_tracker = ReferenceBallTracker.from_snapshot(context["club_tracker"])
     errors = {}
     notes = [str(note) for note in context.get("notes") or ()]
+    if context["version"] == LEGACY_TRACKER_VERSION:
+        notes.append(LEGACY_TRACKER_NOTE)
     # Lighting labels the result and never blocks it (D15, P8-7). A context
     # frozen before notes existed still says its lighting was not eligible.
     if context["lighting_eligible"] is not True and not notes:
@@ -214,7 +219,6 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
             geometry=geometry.ball_geometry(),
             ops_ball_speed_mph=float(context["ops_ball_speed_mph"]),
             iwr_vertical_deg=context["iwr_vertical_deg"],
-            ball_tracker=ball_tracker,
             sensor_timestamps_ns=_sensor_timestamps(archive),
             trigger_frame_index=exposure_trigger_index(archive, len(frames)),
             setup_ball=context.get("setup_ball"),
@@ -242,7 +246,6 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
             range_evidence=_restore_range(context["club_range_evidence"], "club"),
             geometry=geometry.delivery_geometry(),
             ops_club_speed_mph=context["ops_club_speed_mph"],
-            ball_tracker=club_tracker,
             reference_ball=reference_ball,
             reference_ball_selected=bool(diagnostics),
             sensor_timestamp_ns=_sensor_timestamps(archive),
@@ -262,8 +265,6 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
             "ball_estimate": asdict(ball),
             "horizontal_decision": asdict(decision),
             "club_delivery": asdict(club),
-            "next_ball_tracker": ball_tracker.snapshot(),
-            "next_club_tracker": club_tracker.snapshot(),
             "errors": errors,
             "notes": notes,
         }

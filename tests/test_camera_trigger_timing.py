@@ -183,7 +183,6 @@ def test_the_exposure_trigger_index_is_used_only_when_recorded(archive, expected
 
 
 def _fusion_context():
-    from openflight.camera.club_delivery import ReferenceBallTracker  # noqa: PLC0415
     from openflight.camera.geometry_contract import (  # noqa: PLC0415
         EffectiveCameraGeometryInputs,
     )
@@ -206,8 +205,6 @@ def _fusion_context():
     return fp.build_context(
         geometry=geometry,
         lighting_eligible=True,
-        ball_tracker=ReferenceBallTracker(),
-        club_tracker=ReferenceBallTracker(),
         ball_range_evidence=None,
         club_range_evidence=None,
         ops_ball_speed_mph=100.0,
@@ -313,7 +310,7 @@ def test_the_live_path_times_against_the_exposure_split_when_recorded(
 def test_ball_flight_takes_the_exposure_trigger_frame_over_the_nearest_arrival(monkeypatch):
     seen = {}
 
-    def select(_frames, trigger_frame, _geometry, _tracker, **_kwargs):
+    def select(_frames, trigger_frame, _geometry, **_kwargs):
         seen["trigger_frame"] = trigger_frame
         return None, {}
 

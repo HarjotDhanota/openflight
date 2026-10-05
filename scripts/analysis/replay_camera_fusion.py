@@ -16,7 +16,6 @@ from typing import Any
 
 import numpy as np
 
-from openflight.camera.club_delivery import ReferenceBallTracker
 from openflight.camera.fusion_processing import build_context, lighting_note, process_camera_fusion
 from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
 from openflight.clubs import ClubType
@@ -203,8 +202,7 @@ def reconstruct_context(
 
     A kiosk that withheld camera fusion froze no context (Outdoors-test-5, -7).
     Everything the kiosk would have frozen is recorded elsewhere, except the
-    IWR range tracks (the replay's own IWR stage supplies them) and the
-    trackers' state from earlier shots. Each gap is named.
+    IWR range tracks (the replay's own IWR stage supplies them). Each gap is named.
     """
     config = _mapping(start.get("config"))
     camera = _mapping(config.get("camera_capture"))
@@ -212,7 +210,6 @@ def reconstruct_context(
     notes = [
         "context reconstructed from the saved clip, its metadata and the session records; "
         f"the kiosk froze none ({recorded.get('reason') or 'no reason recorded'})",
-        "the resting-ball trackers start empty: earlier shots' state was not recorded",
         "IWR range evidence is not in the session log; the replay's IWR stage supplies it",
     ]
     geometry = _reconstructed_geometry(config)
@@ -230,8 +227,6 @@ def reconstruct_context(
     context = build_context(
         geometry=geometry,
         lighting_eligible=eligible,
-        ball_tracker=ReferenceBallTracker(),
-        club_tracker=ReferenceBallTracker(),
         ball_range_evidence=None,
         club_range_evidence=None,
         ops_ball_speed_mph=shot.get("ball_speed_raw_mph") or shot.get("ball_speed_mph"),

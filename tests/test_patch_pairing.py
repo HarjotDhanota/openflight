@@ -168,23 +168,25 @@ def test_the_29_sept_door_setup_stays_right():
     assert decision["range_m"] == pytest.approx(1.00, abs=0.02)
 
 
-def test_a_camera_ball_without_a_radar_peak_saves_the_cameras_distance_with_a_warning():
+def test_a_camera_ball_without_a_radar_peak_saves_no_distance():
+    # the camera never gives the distance (D17): its ball-size range is not saved
     decision = pair_patch_ball(_camera(1.3, 0.28, lateral_m=0.12), [])
 
     assert decision["status"] == "camera_only"
-    assert decision["source"] == "camera_size_range"
-    assert decision["range_m"] == pytest.approx(1.3)
-    assert decision["side_offset_m"] == pytest.approx(0.12)
-    assert "radar" in decision["warning"]
+    assert decision["range_m"] is None
+    assert decision["source"] is None
+    assert "radar found no ball" in decision["warning"]
+    assert "no distance" in decision["warning"]
 
 
 def test_disagreeing_sensors_show_both_distances_and_warn_about_other_objects():
     decision = pair_patch_ball(_camera(1.2, 0.05), [_peak("coherent", 2.0, score=40.0)])
 
     assert decision["status"] == "disagree"
-    assert decision["range_m"] == pytest.approx(1.2)
+    assert decision["range_m"] is None
     assert "1.20 m" in decision["warning"] and "2.00 m" in decision["warning"]
     assert "other objects in the patch" in decision["warning"]
+    assert "no distance" in decision["warning"]
 
 
 def test_a_radar_peak_without_a_camera_ball_is_saved_with_a_warning():

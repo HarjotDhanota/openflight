@@ -273,25 +273,6 @@ def _camera_ray(
     )
 
 
-def _project_from_ball_size(
-    candidate: BallCandidate,
-    *,
-    model: tuple[float, float, np.ndarray],
-    geometry: CameraBallGeometry,
-) -> np.ndarray | None:
-    """Project a regulation ball using apparent diameter as camera depth."""
-    if geometry.calibrated_model is not None:
-        return None
-    measured_diameter_px = math.sqrt(4.0 * candidate.area / math.pi)
-    if measured_diameter_px <= 0.0:
-        return None
-    camera_range_m = model[0] * geometry.ball_diameter_m / measured_diameter_px
-    if not 0.25 <= camera_range_m <= 15.0:
-        return None
-    ray = _camera_ray(candidate, model=model, geometry=geometry)
-    return geometry.camera_origin + camera_range_m * ray
-
-
 def _candidates(
     frame: np.ndarray,
     background: np.ndarray,
@@ -461,9 +442,12 @@ def _reference_candidate(candidate: ReferenceBall | None, reason: str | None) ->
 
 # pylint: disable-next=too-many-branches
 def _select_reference_ball(  # pylint: disable=too-many-locals
-    frames, trigger_frame: int, geometry, ball_tracker, setup_ball: dict | None = None
+    frames, trigger_frame: int, geometry, *, setup_ball: dict | None = None
 ):
     """Choose between scene and impact evidence while retaining both observations.
+
+    Only this shot's frames decide: two detectors that disagree withhold the ball,
+    and no earlier shot's ball stands in for a missing one (D17).
 
     ``setup_ball`` (x, y, diameter_px in this mode) is where the setup saw the
     resting ball; the gate and both detectors' search follow it (P8-7).
@@ -522,32 +506,10 @@ def _select_reference_ball(  # pylint: disable=too-many-locals
         if agreement:
             selected, selected_source = impact, "detector_agreement"
         else:
-            anchor = ball_tracker.fallback() if ball_tracker is not None else None
-            if anchor is not None:
-
-                def score(candidate):
-                    return math.hypot(candidate.x - anchor.x, candidate.y - anchor.y) / max(
-                        anchor.diameter_px, 1.0
-                    ) + abs(math.log(candidate.diameter_px / anchor.diameter_px))
-
-                selected = min((scene, impact), key=score)
-                selected_source = "session_anchor_disagreement"
-            else:
-                selected_source = "detector_disagreement_no_stable_anchor"
+            selected_source = "detector_disagreement"
     elif scene is not None or impact is not None:
         selected = scene or impact
         selected_source = "scene_only" if scene is not None else "impact_only"
-    if selected is not None and ball_tracker is not None:
-        resolver = getattr(ball_tracker, "resolve_stable", ball_tracker.resolve)
-        try:
-            selected, tracker_source = resolver(selected, pixel_scale=scale)
-        except TypeError:  # a tracker that predates per-mode pixel scales
-            selected, tracker_source = resolver(selected)
-        selected_source = f"{selected_source}:{tracker_source}"
-    if selected is None and ball_tracker is not None:
-        selected = ball_tracker.fallback()
-        if selected is not None:
-            selected_source = "session_anchor_fallback"
     diagnostics = {
         "scene": _reference_candidate(observations["scene"], reasons["scene"]),
         "impact": _reference_candidate(observations["impact"], reasons["impact"]),
@@ -609,16 +571,13 @@ def _path_estimate(
         frame = frame_indices[relative_frame]
         # Radar time is the IWR's impact plus time since the camera saw contact.
         relative_time = (int(timestamps_ns[frame]) - contact_ns) / 1e9
-        if range_evidence is None:
-            position = _project_from_ball_size(candidate, model=model, geometry=geometry)
-        else:
-            radar_range = float(
-                range_evidence.track.range_at(
-                    range_evidence.impact_t_s + relative_time,
-                    range_evidence.geometry.range_res_m,
-                )
+        radar_range = float(
+            range_evidence.track.range_at(
+                range_evidence.impact_t_s + relative_time,
+                range_evidence.geometry.range_res_m,
             )
-            position = _project(candidate, radar_range, model=model, geometry=geometry)
+        )
+        position = _project(candidate, radar_range, model=model, geometry=geometry)
         if position is not None:
             times.append(relative_time)
             positions.append(position)
@@ -733,7 +692,6 @@ def estimate_camera_ball_flight(
     geometry: CameraBallGeometry,
     ops_ball_speed_mph: float,
     iwr_vertical_deg: float | None = None,
-    ball_tracker=None,
     sensor_timestamps_ns: np.ndarray | None = None,
     trigger_frame_index: int | None = None,
     setup_ball: dict | None = None,
@@ -759,7 +717,7 @@ def estimate_camera_ball_flight(
         else int(np.argmin(np.abs(timestamps_ns.astype(np.int64) - trigger_ns)))
     )
     anchor, reference_diagnostics = _select_reference_ball(
-        frames, trigger_frame, geometry, ball_tracker, setup_ball=setup_ball
+        frames, trigger_frame, geometry, setup_ball=setup_ball
     )
     if anchor is None:
         return CameraBallEstimate(
@@ -804,7 +762,16 @@ def estimate_camera_ball_flight(
                 timing_anchor=timing_anchor,
                 timestamp_source=timestamp_source,
             )
-    contact_ns = contact.contact_ns if contact is not None else float(clock_ns[trigger_frame])
+    if range_evidence is None:
+        # the ball's distance is the IWR's: no ball-size depth stands in (D17)
+        return CameraBallEstimate(
+            "rejected_no_iwr_range",
+            reference_ball_diagnostics=reference_diagnostics,
+            range_evidence_status=range_evidence_status,
+            timing_anchor=timing_anchor,
+            timestamp_source=timestamp_source,
+        )
+    contact_ns = contact.contact_ns
     frame_indices = list(range(trigger_frame, min(len(frames), trigger_frame + 15)))
     if len(frame_indices) < 4:
         return CameraBallEstimate(
@@ -816,7 +783,7 @@ def estimate_camera_ball_flight(
     frame_interval_s = float(np.median(intervals)) if len(intervals) else REFERENCE_FRAME_INTERVAL_S
     motion_scale = scale * max(frame_interval_s, 1e-6) / REFERENCE_FRAME_INTERVAL_S
 
-    def collect(depth_evidence) -> list[_PathEstimate]:
+    def collect() -> list[_PathEstimate]:
         found: list[_PathEstimate] = []
         for bright in (100, 115, 130):
             for difference in (12, 18, 24):
@@ -844,7 +811,7 @@ def estimate_camera_ball_flight(
                                 frame_indices=frame_indices,
                                 timestamps_ns=clock_ns,
                                 contact_ns=contact_ns,
-                                range_evidence=depth_evidence,
+                                range_evidence=range_evidence,
                                 ops_ball_speed_mph=ops_ball_speed_mph,
                                 iwr_vertical_deg=iwr_vertical_deg,
                                 model=model,
@@ -858,34 +825,7 @@ def estimate_camera_ball_flight(
                         found.append(max(options, key=lambda item: item[0])[1])
         return found
 
-    depth_source = "iwr_range" if range_evidence is not None else "camera_size"
-    estimates = collect(range_evidence)
-    if range_evidence is not None:
-        primary_tier = "withheld"
-        if estimates:
-            primary_horizontal = np.asarray([estimate.horizontal_deg for estimate in estimates])
-            primary_median = float(np.median(primary_horizontal))
-            primary_tier = _confidence_tier(
-                len(estimates),
-                float(np.median(np.abs(primary_horizontal - primary_median))),
-                float(np.median([estimate.window_mad_deg for estimate in estimates])),
-            )
-        if primary_tier == "withheld":
-            camera_only = collect(None)
-            if camera_only:
-                camera_horizontal = np.asarray(
-                    [estimate.horizontal_deg for estimate in camera_only]
-                )
-                camera_median = float(np.median(camera_horizontal))
-                camera_tier = _confidence_tier(
-                    len(camera_only),
-                    float(np.median(np.abs(camera_horizontal - camera_median))),
-                    float(np.median([estimate.window_mad_deg for estimate in camera_only])),
-                )
-                if camera_tier != "withheld":
-                    depth_source = "camera_size"
-                    estimates = camera_only
-
+    estimates = collect()
     if not estimates:
         return CameraBallEstimate(
             "rejected_no_stable_path",
@@ -896,21 +836,13 @@ def estimate_camera_ball_flight(
     parameter_mad = float(np.median(np.abs(horizontal - median_horizontal)))
     window_mad = float(np.median([estimate.window_mad_deg for estimate in estimates]))
     tier = _confidence_tier(len(estimates), parameter_mad, window_mad)
-    if depth_source == "camera_size" and tier == "high":
-        tier = "experimental"
     # D15 (P8-7): a scattered sweep is measured and labelled "low consensus",
     # not refused; its spread stays in parameter_mad_deg and window_mad_deg.
     if tier == "withheld":
         tier = "low"
     representative = min(estimates, key=lambda item: abs(item.horizontal_deg - median_horizontal))
     return CameraBallEstimate(
-        status=(
-            "low_consensus"
-            if tier == "low"
-            else "accepted_camera_only"
-            if depth_source == "camera_size"
-            else "accepted"
-        ),
+        status="low_consensus" if tier == "low" else "accepted",
         confidence_tier=tier,
         horizontal_deg=median_horizontal,
         vertical_deg=float(np.median([estimate.vertical_deg for estimate in estimates])),
@@ -923,7 +855,7 @@ def estimate_camera_ball_flight(
         n_points=representative.n_points,
         first_frame=representative.first_frame,
         last_frame=representative.last_frame,
-        depth_source=depth_source,
+        depth_source="iwr_range",
         reference_ball_diagnostics=reference_diagnostics,
         range_evidence_status=range_evidence_status,
         timing_anchor=timing_anchor,
@@ -967,28 +899,6 @@ def select_camera_assisted_horizontal(
             "camera_low_consensus",
             0.15,
             "camera_low_consensus",
-            iwr_horizontal_deg,
-            camera_deg,
-            delta,
-        )
-    if estimate.depth_source == "camera_size" and camera_deg is not None:
-        if iwr_horizontal_deg is not None and abs(iwr_horizontal_deg) <= MAX_IWR_FALLBACK_ABS_DEG:
-            # Size-only camera depth is diagnostic and its zero is the camera's,
-            # so it never replaces an accepted radar horizontal (audit F6).
-            return HorizontalFusionDecision(
-                iwr_horizontal_deg,
-                "radar",
-                iwr_confidence,
-                "camera_only_experimental_iwr_preferred",
-                iwr_horizontal_deg,
-                camera_deg,
-                delta,
-            )
-        return HorizontalFusionDecision(
-            camera_deg,
-            "camera_only_experimental",
-            0.30,
-            "camera_only_experimental",
             iwr_horizontal_deg,
             camera_deg,
             delta,

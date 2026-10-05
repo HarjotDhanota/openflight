@@ -5,7 +5,6 @@ from datetime import datetime
 import numpy as np
 import pytest
 
-from openflight.camera.club_delivery import ReferenceBallTracker
 from openflight.camera.fusion_processing import build_context
 from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
 from openflight.clubs import ClubType
@@ -48,8 +47,6 @@ def _write_replay_fixture(tmp_path):
     context = build_context(
         geometry=geometry,
         lighting_eligible=True,
-        ball_tracker=ReferenceBallTracker(),
-        club_tracker=ReferenceBallTracker(),
         ball_range_evidence=None,
         club_range_evidence=None,
         ops_ball_speed_mph=100.0,
@@ -148,8 +145,6 @@ def test_replay_entry_reads_actual_session_logger_capture_contract(tmp_path):
             ball_diameter_m=0.04267,
         ),
         lighting_eligible=True,
-        ball_tracker=ReferenceBallTracker(),
-        club_tracker=ReferenceBallTracker(),
         ball_range_evidence=None,
         club_range_evidence=None,
         ops_ball_speed_mph=100.0,

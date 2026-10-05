@@ -11,9 +11,7 @@ import numpy as np
 import pytest
 
 from openflight.camera import ball_flight, ball_pixels
-from openflight.camera.club_delivery import ReferenceBallTracker
 from openflight.camera.club_motion import (
-    ReferenceBall,
     detect_impact_reference_ball,
     detect_reference_ball,
 )
@@ -93,24 +91,6 @@ def test_the_impact_detector_finds_a_1280_ball_that_departs():
     assert 30.0 <= ball.diameter_px <= 42.0
 
 
-def test_the_club_delivery_tracker_accepts_a_1280_ball():
-    tracker = ReferenceBallTracker()
-    candidate = ReferenceBall(x=640.0, y=576.0, diameter_px=36.0, area_px=1018)
-
-    _resolved, source = tracker.resolve(candidate, pixel_scale=2.0)
-
-    assert source == "detected"
-
-
-def test_the_club_delivery_tracker_keeps_the_640_limit_by_default():
-    tracker = ReferenceBallTracker()
-    candidate = ReferenceBall(x=320.0, y=288.0, diameter_px=36.0, area_px=1018)
-
-    _resolved, source = tracker.resolve(candidate)
-
-    assert source == "unverified"
-
-
 def test_ball_flight_selects_a_1280_reference_ball():
     frames, (x, y) = _scene(1280, 800, 36.0, gone_after=10)
     geometry = ball_flight.CameraBallGeometry(
@@ -123,7 +103,7 @@ def test_ball_flight_selects_a_1280_reference_ball():
     )
 
     anchor, diagnostics = ball_flight._select_reference_ball(  # pylint: disable=protected-access
-        frames, 11, geometry, None
+        frames, 11, geometry
     )
 
     assert anchor is not None, diagnostics

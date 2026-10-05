@@ -1297,10 +1297,10 @@ def test_missing_qualification_and_disagreement_remain_raw_only(tmp_path, inputs
     other_root = tmp_path / "other"
     app, tester = app_for(other_root, inputs, monkeypatch, camera_m=1.5)
     disagreed = drive(app.test_client(), tester)
-    # D15: measure, label, don't block: the camera's distance is saved, with a warning
-    assert disagreed["phase"] == "experimental"
+    # D17: disagreeing sensors save no distance; the camera's size range never stands in
+    assert disagreed["phase"] == "raw_only"
+    assert disagreed["solution"]["reason"] == "patch_ball_withheld_disagree"
     assert disagreed["evidence"]["patch_ball"]["status"] == "disagree"
-    assert disagreed["evidence"]["experimental_range"]["qualification_outcome"] == ("not_required")
 
 
 @pytest.mark.parametrize(
@@ -1928,11 +1928,9 @@ def test_a_saved_experimental_range_reaches_swings_without_the_test_flag(
     assert swings["range_m"] == pytest.approx(pair["range_m"])
 
 
-def test_without_an_accepted_radar_the_experimental_range_is_the_camera_s(
-    tmp_path, inputs, monkeypatch
-):
-    # D11 (P7-7) replaces D4: with no radar range the camera's size range is saved,
-    # labelled experimental; the radar-only test choice still finds nothing
+def test_without_an_accepted_radar_no_range_reaches_swings(tmp_path, inputs, monkeypatch):
+    # D17 replaces D11 here: with no radar range the camera's size range is recorded
+    # but never saved for swings; the radar-only test choice still finds nothing
     app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
     app.config["TEST_STATIC_MANAGER"].ball_return = 0.0
     state = drive(app.test_client(), tester)
@@ -1941,11 +1939,8 @@ def test_without_an_accepted_radar_the_experimental_range_is_the_camera_s(
 
     assert camera["radar_slant_range_m"] is not None
     assert ts.unqualified_tee_range_choice(solution) is None
-    args = ts._tee_range_cli_args(solution)
-    assert args[:2] == ["--iwr6843-tee-m", f"{camera['radar_slant_range_m']:.9g}"]
-    swings = ts.tee_range_display(state)["swings"]
-    assert swings["state"] == "experimental"
-    assert "The radar found no ball" in swings["message"]
+    assert ts._tee_range_cli_args(solution)[0] == "--iwr6843-tee-range-pending"
+    assert ts.tee_range_display(state)["swings"]["state"] == "pending"
 
 
 def test_a_radar_that_stops_answering_mid_setup_is_told_to_replug_its_usb():
@@ -3480,7 +3475,7 @@ def test_an_agreeing_radar_range_is_saved_as_experimental_and_handed_to_swings(
     assert display["canonical"]["state"] == "experimental"
 
 
-def test_a_radar_that_disagrees_with_the_camera_is_saved_with_both_distances_named(
+def test_a_radar_that_disagrees_with_the_camera_saves_no_distance_and_names_both(
     tmp_path, inputs, monkeypatch
 ):
     # the camera's size range 1.5 m +- 0.02, the radar's 1.2 m +- 0.02: 10 sigma apart.
@@ -3490,39 +3485,40 @@ def test_a_radar_that_disagrees_with_the_camera_is_saved_with_both_distances_nam
     state = drive(app.test_client(), tester)
 
     decision = state["evidence"]["patch_ball"]
-    assert state["phase"] == "experimental"
+    # disagreeing sensors save no distance: the camera's size range never stands in (D17)
+    assert state["phase"] == "raw_only"
+    assert state["solution"]["reason"] == "patch_ball_withheld_disagree"
     assert decision["status"] == "disagree"
-    assert decision["range_m"] == pytest.approx(1.5)
+    assert decision["range_m"] is None
     assert "1.50 m" in decision["warning"] and "1.20 m" in decision["warning"]
     assert "other objects in the patch" in decision["warning"]
     solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
-    args, handed = ts.tee_range_handoff(solution)
-    assert args[:2] == ["--iwr6843-tee-m", "1.5"]
-    assert handed["patch_ball"]["warning"] == decision["warning"]
-    display = ts.tee_range_display(state)
-    assert display["swings"]["state"] == "experimental"
-    assert decision["warning"] in display["swings"]["message"]
+    assert ts.tee_range_handoff(solution)[0][0] == "--iwr6843-tee-range-pending"
 
 
-def test_without_a_radar_range_the_camera_range_is_saved_as_experimental(
-    tmp_path, inputs, monkeypatch
-):
+def test_without_a_radar_range_the_setup_saves_no_distance(tmp_path, inputs, monkeypatch):
+    # the camera never gives the distance (D17): its ball-size range is not handed on
     app, tester = _unqualified_app(tmp_path, inputs, monkeypatch)
     app.config["TEST_STATIC_MANAGER"].ball_return = 0.0
 
     state = drive(app.test_client(), tester)
 
     decision = state["evidence"]["patch_ball"]
-    assert state["phase"] == "experimental"
+    assert state["phase"] == "raw_only"
+    assert state["solution"]["reason"] == "patch_ball_withheld_camera_only"
     assert decision["status"] == "camera_only"
-    assert decision["source"] == "camera_size_range"
+    assert decision["range_m"] is None
     assert "radar found no ball" in decision["warning"]
     solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
-    args, handed = ts.tee_range_handoff(solution)
-    assert args[:2] == ["--iwr6843-tee-m", "1.2"]
-    assert args[args.index("--iwr6843-tee-range-source") + 1] == "unqualified_camera_size_range"
-    assert handed["candidate_id"] == f"patch-ball-{state['epoch_id']}"
-    assert handed["experimental"] is True
+    assert ts.tee_range_handoff(solution)[0][0] == "--iwr6843-tee-range-pending"
+
+
+def test_a_setup_without_a_usable_radar_range_saves_no_camera_range():
+    decision = ts.experimental_tee_range_decision([_locked_camera("arm5")])
+
+    assert decision["status"] == "withheld"
+    assert decision["reason_code"] == "no_radar_range"
+    assert "range_m" not in decision
 
 
 def test_no_ball_in_the_patch_saves_nothing_and_says_so(tmp_path, inputs, monkeypatch):

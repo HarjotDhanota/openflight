@@ -96,7 +96,7 @@ class LaunchConditions:
     launch_angle_h: float
     spin_rpm: float
     spin_axis_deg: float
-    spin_source: Literal["measured", "club_typical"]
+    spin_source: Literal["measured", "calculated", "club_typical"]
 
 
 @dataclass
@@ -130,31 +130,40 @@ class Trajectory:
         return self.carry_yards + rollout
 
 
-def resolve_launch(shot: Shot) -> Optional[LaunchConditions]:
+def resolve_launch(shot: Shot, *, substitutes: bool = True) -> Optional[LaunchConditions]:
     """
     Produce committed launch conditions from a shot.
 
     Returns None if the vertical launch angle is unavailable (no physics
-    simulation possible without it). Spin is taken from the measurement only
-    when confidence >= SPIN_CONFIDENCE_HIGH; otherwise a club-typical value
-    is substituted and `spin_source` is set to "club_typical".
+    simulation possible without it). Spin is the measurement when its
+    confidence >= SPIN_CONFIDENCE_HIGH, or a calculated spin under that label.
+
+    ``substitutes`` lets an OPS-only install, which has nothing to measure the
+    rest with, fill a club-typical spin and a straight (0) horizontal launch and
+    spin axis. A fusion unit passes False: without a measured spin, horizontal
+    launch and spin axis there is no carry (D17).
     """
     if shot.launch_angle_vertical is None:
         return None
 
-    use_measured = (
+    source: Literal["measured", "calculated", "club_typical"]
+    if (
         shot.spin_rpm is not None
         and shot.spin_confidence is not None
         and shot.spin_confidence >= SPIN_CONFIDENCE_HIGH
-    )
-    if use_measured:
-        spin_rpm = float(shot.spin_rpm)
-        source: Literal["measured", "club_typical"] = "measured"
-    else:
+    ):
+        spin_rpm, source = float(shot.spin_rpm), "measured"
+    elif shot.spin_source == "calculated" and shot.spin_rpm:
+        spin_rpm, source = float(shot.spin_rpm), "calculated"
+    elif substitutes:
         spin_rpm = CLUB_TYPICAL_SPIN_RPM.get(
             shot.club, CLUB_TYPICAL_SPIN_RPM[ClubType.UNKNOWN]
         )
         source = "club_typical"
+    else:
+        return None
+    if not substitutes and (shot.launch_angle_horizontal is None or shot.spin_axis_deg is None):
+        return None
 
     return LaunchConditions(
         ball_speed_mph=shot.ball_speed_mph,

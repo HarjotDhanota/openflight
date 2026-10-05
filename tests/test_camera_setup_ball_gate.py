@@ -30,7 +30,7 @@ def _clip(ball: dict, *, depart_after: int = 21, n_frames: int = 30) -> np.ndarr
 
 def test_the_fixed_gate_refuses_a_ball_above_its_rows():
     selected, diagnostics = ball_flight._select_reference_ball(  # pylint: disable=protected-access
-        _clip(HIGH_BALL), 21, _geometry(), None
+        _clip(HIGH_BALL), 21, _geometry()
     )
     assert selected is None
     assert diagnostics["gate"]["source"] == "fixed_fractions"
@@ -38,7 +38,7 @@ def test_the_fixed_gate_refuses_a_ball_above_its_rows():
 
 def test_the_setup_ball_gate_selects_the_ball_where_the_setup_saw_it():
     selected, diagnostics = ball_flight._select_reference_ball(  # pylint: disable=protected-access
-        _clip(HIGH_BALL), 21, _geometry(), None, setup_ball=HIGH_BALL
+        _clip(HIGH_BALL), 21, _geometry(), setup_ball=HIGH_BALL
     )
     assert selected is not None
     assert selected.x == pytest.approx(640.0, abs=2.0)
@@ -53,7 +53,7 @@ def test_the_setup_ball_gate_selects_the_ball_where_the_setup_saw_it():
 def test_the_setup_ball_gate_refuses_a_ball_of_another_size():
     small = {**HIGH_BALL, "diameter_px": 12.0}
     selected, diagnostics = ball_flight._select_reference_ball(  # pylint: disable=protected-access
-        _clip(small), 21, _geometry(), None, setup_ball=HIGH_BALL
+        _clip(small), 21, _geometry(), setup_ball=HIGH_BALL
     )
     assert selected is None
     assert "setup ball" in diagnostics["scene"]["reason"]

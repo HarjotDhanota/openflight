@@ -5,7 +5,7 @@ import pytest
 
 from openflight.camera import fusion_processing as fp
 from openflight.camera.ball_flight import CameraBallEstimate, HorizontalFusionDecision
-from openflight.camera.club_delivery import ChainedDelivery, ReferenceBallTracker
+from openflight.camera.club_delivery import ChainedDelivery
 from openflight.camera.club_motion import ReferenceBall
 from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
 from openflight.clubs import ClubType
@@ -31,12 +31,10 @@ def _geometry():
     )
 
 
-def _context_kwargs(ball_tracker=None, club_tracker=None) -> dict:
+def _context_kwargs() -> dict:
     return {
         "geometry": _geometry(),
         "lighting_eligible": True,
-        "ball_tracker": ball_tracker or ReferenceBallTracker(),
-        "club_tracker": club_tracker or ReferenceBallTracker(),
         "ball_range_evidence": None,
         "club_range_evidence": None,
         "ops_ball_speed_mph": 100.0,
@@ -51,8 +49,8 @@ def _context_kwargs(ball_tracker=None, club_tracker=None) -> dict:
     }
 
 
-def _context(ball_tracker=None, club_tracker=None):
-    return fp.build_context(**_context_kwargs(ball_tracker, club_tracker))
+def _context():
+    return fp.build_context(**_context_kwargs())
 
 
 def _archive():
@@ -76,32 +74,6 @@ def test_context_is_hashed_serializable_and_tamper_evident():
         fp.process_camera_fusion(context, {**_archive(), "_capture_npz_sha256": "other"})
 
 
-def test_both_tracker_states_evolve_and_replay_exactly(monkeypatch):
-    ball_tracker = ReferenceBallTracker(max_samples=5, min_fallback_samples=2)
-    club_tracker = ReferenceBallTracker(max_samples=7, min_fallback_samples=3)
-    ball_tracker.resolve(ReferenceBall(3.0, 4.0, 12.0, 100))
-    club_tracker.resolve(ReferenceBall(2.0, 4.0, 13.0, 110))
-    context = _context(ball_tracker, club_tracker)
-
-    def ball_estimator(*_args, ball_tracker, **_kwargs):
-        ball_tracker.resolve(ReferenceBall(3.2, 4.1, 12.1, 101))
-        return CameraBallEstimate(status="ok", horizontal_deg=2.0, confidence_tier="high")
-
-    def club_estimator(*_args, ball_tracker, **_kwargs):
-        ball_tracker.resolve(ReferenceBall(2.2, 4.1, 13.1, 111))
-        return ChainedDelivery(status="chained_high", attack_angle_deg=-4.0, club_path_deg=1.0)
-
-    monkeypatch.setattr(fp, "estimate_camera_ball_flight", ball_estimator)
-    monkeypatch.setattr(fp, "estimate_chained_delivery", club_estimator)
-    first = fp.process_camera_fusion(context, _archive())
-    replay = fp.process_camera_fusion(context, _archive())
-    assert first == replay
-    assert len(first["next_ball_tracker"]["samples"]) == 2
-    assert len(first["next_club_tracker"]["samples"]) == 2
-    assert first["next_ball_tracker"]["max_samples"] == 5
-    assert first["next_club_tracker"]["min_fallback_samples"] == 3
-
-
 def test_stage_exception_does_not_prevent_other_stage(monkeypatch):
     monkeypatch.setattr(fp, "estimate_camera_ball_flight", lambda *_a, **_k: 1 / 0)
     monkeypatch.setattr(
@@ -120,28 +92,6 @@ def test_stage_exception_does_not_prevent_other_stage(monkeypatch):
     assert result["ball_estimate"]["status"] == "error"
     assert result["club_delivery"]["status"] == "rejected_no_impact"
     assert "ZeroDivisionError" in result["errors"]["ball"]
-
-
-def test_missing_tracker_context_is_not_reconstructed_as_empty():
-    context = _context()
-    del context["ball_tracker"]
-    with pytest.raises(ValueError, match="fingerprint"):
-        fp.process_camera_fusion(context, _archive())
-
-
-@pytest.mark.parametrize("limit", [0, -1, 1.5, True])
-def test_tracker_snapshot_rejects_invalid_limits(limit):
-    snapshot = ReferenceBallTracker().snapshot()
-    snapshot["max_samples"] = limit
-    with pytest.raises(ValueError, match="positive integers"):
-        ReferenceBallTracker.from_snapshot(snapshot)
-
-
-def test_tracker_snapshot_rejects_nonfinite_sample():
-    snapshot = ReferenceBallTracker().snapshot()
-    snapshot["samples"] = [{"x": float("nan"), "y": 1.0, "diameter_px": 12.0, "area_px": 10}]
-    with pytest.raises(ValueError, match="finite"):
-        ReferenceBallTracker.from_snapshot(snapshot)
 
 
 def test_real_range_evidence_is_strict_json_and_round_trips(monkeypatch):
@@ -168,8 +118,6 @@ def test_real_range_evidence_is_strict_json_and_round_trips(monkeypatch):
     context = fp.build_context(
         geometry=_geometry(),
         lighting_eligible=True,
-        ball_tracker=ReferenceBallTracker(),
-        club_tracker=ReferenceBallTracker(),
         ball_range_evidence=evidence,
         club_range_evidence=ClubRangeEvidence(track, geometry, np.float64(0.02)),
         ops_ball_speed_mph=np.float64(100),
@@ -283,8 +231,6 @@ def test_range_evidence_status_rides_in_the_frozen_context(monkeypatch):
     context = fp.build_context(
         geometry=_geometry(),
         lighting_eligible=True,
-        ball_tracker=ReferenceBallTracker(),
-        club_tracker=ReferenceBallTracker(),
         ball_range_evidence=BallRangeEvidence(
             track, geometry, 0.02, status="rejected_track_quality"
         ),

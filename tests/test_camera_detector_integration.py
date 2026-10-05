@@ -5,7 +5,6 @@ import pytest
 
 from openflight.camera import ball_flight
 from openflight.camera.ball_flight import BallCandidate, CameraBallGeometry
-from openflight.camera.club_delivery import ReferenceBallTracker
 from openflight.camera.club_motion import ReferenceBall, detect_impact_reference_ball
 
 
@@ -37,7 +36,7 @@ def test_agreeing_scene_and_impact_candidates_are_both_preserved(monkeypatch):
     )
 
     selected, diagnostics = ball_flight._select_reference_ball(  # pylint: disable=protected-access
-        np.zeros((30, 100, 100), np.uint8), 15, _geometry(), ReferenceBallTracker()
+        np.zeros((30, 100, 100), np.uint8), 15, _geometry()
     )
 
     assert selected.x == pytest.approx(52.0)
@@ -45,48 +44,6 @@ def test_agreeing_scene_and_impact_candidates_are_both_preserved(monkeypatch):
     assert diagnostics["scene"]["candidate"]["x"] == 50.0
     assert diagnostics["impact"]["candidate"]["x"] == 52.0
     assert diagnostics["distance_px"] == pytest.approx(np.sqrt(5.0))
-
-
-def test_disagreement_uses_the_stable_session_anchor_and_records_delta(monkeypatch):
-    tracker = ReferenceBallTracker(min_fallback_samples=2)
-    tracker.resolve(_ball(50.0))
-    tracker.resolve(_ball(50.5))
-    monkeypatch.setattr(
-        ball_flight, "detect_reference_ball", lambda _frames, **_kwargs: _ball(80.0)
-    )
-    monkeypatch.setattr(
-        ball_flight,
-        "detect_impact_reference_ball",
-        lambda _frames, **_kwargs: _ball(52.0),
-    )
-
-    selected, diagnostics = ball_flight._select_reference_ball(  # pylint: disable=protected-access
-        np.zeros((30, 100, 100), np.uint8), 15, _geometry(), tracker
-    )
-
-    assert selected.x == pytest.approx(50.5)
-    assert diagnostics["disagreement"] is True
-    assert diagnostics["distance_px"] == pytest.approx(28.0)
-    assert diagnostics["selected_source"].startswith("session_anchor_disagreement")
-
-
-def test_disagreement_without_stable_evidence_is_withheld(monkeypatch):
-    monkeypatch.setattr(
-        ball_flight, "detect_reference_ball", lambda _frames, **_kwargs: _ball(25.0)
-    )
-    monkeypatch.setattr(
-        ball_flight,
-        "detect_impact_reference_ball",
-        lambda _frames, **_kwargs: _ball(75.0),
-    )
-
-    selected, diagnostics = ball_flight._select_reference_ball(  # pylint: disable=protected-access
-        np.zeros((30, 100, 100), np.uint8), 15, _geometry(), ReferenceBallTracker()
-    )
-
-    assert selected is None
-    assert diagnostics["selected_source"] == "detector_disagreement_no_stable_anchor"
-    assert diagnostics["disagreement"] is True
 
 
 def test_implausible_candidate_keeps_its_raw_observation_and_rejection_reason(monkeypatch):
@@ -100,33 +57,13 @@ def test_implausible_candidate_keeps_its_raw_observation_and_rejection_reason(mo
     )
 
     selected, diagnostics = ball_flight._select_reference_ball(  # pylint: disable=protected-access
-        np.zeros((30, 100, 100), np.uint8), 15, _geometry(), ReferenceBallTracker()
+        np.zeros((30, 100, 100), np.uint8), 15, _geometry()
     )
 
     assert selected is None
     assert diagnostics["scene"]["status"] == "rejected"
     assert diagnostics["scene"]["candidate"]["x"] == 96.0
     assert diagnostics["scene"]["reason"] == "candidate failed size or hitting-zone geometry"
-
-
-def test_detector_occlusion_falls_back_without_adding_a_false_sample(monkeypatch):
-    tracker = ReferenceBallTracker(min_fallback_samples=2)
-    tracker.resolve(_ball(48.0))
-    tracker.resolve(_ball(50.0))
-
-    def hidden(*_args, **_kwargs):
-        raise ValueError("occluded")
-
-    monkeypatch.setattr(ball_flight, "detect_reference_ball", hidden)
-    monkeypatch.setattr(ball_flight, "detect_impact_reference_ball", hidden)
-    selected, diagnostics = ball_flight._select_reference_ball(  # pylint: disable=protected-access
-        np.zeros((30, 100, 100), np.uint8), 15, _geometry(), tracker
-    )
-
-    assert selected.x == pytest.approx(49.0)
-    assert diagnostics["selected_source"] == "session_anchor_fallback"
-    assert "occluded" in diagnostics["scene"]["reason"]
-    assert len(tracker.snapshot()["samples"]) == 2
 
 
 def test_static_ball_has_no_impact_departure():
@@ -156,10 +93,10 @@ def test_estimator_persists_detector_evidence_on_path_rejection(monkeypatch):
         range_evidence=None,
         geometry=_geometry(),
         ops_ball_speed_mph=100.0,
-        ball_tracker=ReferenceBallTracker(),
     )
 
-    assert estimate.status == "rejected_no_stable_path"
+    # no IWR range, so no distance: the detectors' evidence is kept all the same
+    assert estimate.status == "rejected_no_iwr_range"
     assert estimate.reference_ball_diagnostics["agreement"] is True
     assert estimate.reference_ball_diagnostics["selected_source"].startswith("detector_agreement")
 

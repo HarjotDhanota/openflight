@@ -1507,12 +1507,6 @@ class TestShotToDict:
                 "height": 400,
             },
         )
-        ball_flight_tracker = object()
-        monkeypatch.setattr(
-            server_module,
-            "camera_ball_flight_reference_tracker",
-            ball_flight_tracker,
-        )
         shot = Shot(
             ball_speed_mph=110.0,
             timestamp=datetime.now(),
@@ -1535,7 +1529,7 @@ class TestShotToDict:
         assert estimate_call["geometry"].camera_lateral_offset_m == 0.0762
         assert estimate_call["geometry"].roll_correction_deg == 2.8
         assert estimate_call["geometry"].horizontal_pixel_sign == -1.0
-        assert estimate_call["ball_tracker"] is ball_flight_tracker
+        assert "ball_tracker" not in estimate_call
 
     def _fuse_with_camera_estimate(self, monkeypatch, tmp_path, estimate, shot):
         from openflight.camera import ball_flight
@@ -1564,79 +1558,6 @@ class TestShotToDict:
             {"mount_height_m": 0.20955, "width": 640, "height": 400},
         )
         server_module._fuse_camera_ball_flight(shot, SimpleNamespace(valid=True, path=tmp_path))
-
-    def test_accepted_iwr_horizontal_is_displayed_over_camera_only(self, monkeypatch, tmp_path):
-        """F6: accepted IWR 3.0 plus camera-only 5.0 displays 3.0 and keeps 5.0."""
-        from openflight.camera import ball_flight
-
-        shot = Shot(
-            ball_speed_mph=110.0,
-            timestamp=datetime.now(),
-            launch_angle_horizontal=3.0,
-            launch_angle_horizontal_confidence=0.8,
-            launch_angle_horizontal_source="radar",
-            iwr6843_horizontal_deg=3.0,
-            iwr6843_horizontal_confidence=0.8,
-        )
-        estimate = ball_flight.CameraBallEstimate(
-            status="accepted_camera_only",
-            confidence_tier="experimental",
-            horizontal_deg=5.0,
-            depth_source="camera_size",
-        )
-
-        self._fuse_with_camera_estimate(monkeypatch, tmp_path, estimate, shot)
-
-        assert shot.launch_angle_horizontal == pytest.approx(3.0)
-        assert shot.launch_angle_horizontal_source == "radar"
-        assert shot.launch_angle_horizontal_confidence == pytest.approx(0.8)
-        assert shot.experimental_camera_horizontal_deg == pytest.approx(5.0)
-        assert shot.experimental_camera_horizontal_status == (
-            "camera_only_experimental_iwr_preferred"
-        )
-
-    def test_camera_only_horizontal_does_not_replace_another_radar_value(
-        self, monkeypatch, tmp_path
-    ):
-        """F6: the camera overwrites the displayed horizontal only when it outranks it."""
-        from openflight.camera import ball_flight
-
-        shot = Shot(
-            ball_speed_mph=110.0,
-            timestamp=datetime.now(),
-            launch_angle_horizontal=1.0,
-            launch_angle_horizontal_confidence=0.7,
-            launch_angle_horizontal_source="radar",
-        )
-        estimate = ball_flight.CameraBallEstimate(
-            status="accepted_camera_only",
-            confidence_tier="experimental",
-            horizontal_deg=5.0,
-            depth_source="camera_size",
-        )
-
-        self._fuse_with_camera_estimate(monkeypatch, tmp_path, estimate, shot)
-
-        assert shot.launch_angle_horizontal == pytest.approx(1.0)
-        assert shot.launch_angle_horizontal_source == "radar"
-        assert shot.experimental_camera_horizontal_deg == pytest.approx(5.0)
-
-    def test_camera_only_horizontal_fills_an_empty_horizontal(self, monkeypatch, tmp_path):
-        from openflight.camera import ball_flight
-
-        shot = Shot(ball_speed_mph=110.0, timestamp=datetime.now())
-        estimate = ball_flight.CameraBallEstimate(
-            status="accepted_camera_only",
-            confidence_tier="experimental",
-            horizontal_deg=5.0,
-            depth_source="camera_size",
-        )
-
-        self._fuse_with_camera_estimate(monkeypatch, tmp_path, estimate, shot)
-
-        assert shot.launch_angle_horizontal == pytest.approx(5.0)
-        assert shot.launch_angle_horizontal_source == "camera_only_experimental"
-        assert shot.launch_angle_horizontal_confidence == pytest.approx(0.3)
 
     def test_live_fusion_without_camera_preserves_radar_horizontal(self):
         shot = Shot(
@@ -1699,7 +1620,6 @@ class TestShotToDict:
     def test_camera_fusion_uses_registered_session_after_logger_switch(self, monkeypatch, tmp_path):
         """Deferred enrichment must not bind an old shot to a newer session."""
         from openflight.camera import fusion_processing
-        from openflight.camera.club_delivery import ReferenceBallTracker
         from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
 
         np.savez(
@@ -1719,10 +1639,6 @@ class TestShotToDict:
             server_module, "iwr6843_runtime", SimpleNamespace(calibration=SimpleNamespace())
         )
         monkeypatch.setattr(server_module, "camera_capture_config", {})
-        monkeypatch.setattr(
-            server_module, "camera_ball_flight_reference_tracker", ReferenceBallTracker()
-        )
-        monkeypatch.setattr(server_module, "camera_reference_ball_tracker", ReferenceBallTracker())
         monkeypatch.setattr(
             server_module,
             "get_session_logger",
@@ -1760,8 +1676,6 @@ class TestShotToDict:
                     "attack_confidence_tier": "withheld",
                     "path_confidence_tier": "withheld",
                 },
-                "next_ball_tracker": ReferenceBallTracker().snapshot(),
-                "next_club_tracker": ReferenceBallTracker().snapshot(),
                 "errors": {},
             },
         )
@@ -1772,7 +1686,6 @@ class TestShotToDict:
         assert shot.camera_fusion_context == {"sha256": "context"}
 
     def test_live_camera_fusion_matches_shared_core_replay(self, monkeypatch, tmp_path):
-        from openflight.camera.club_delivery import ReferenceBallTracker
         from openflight.camera.fusion_processing import process_camera_fusion
 
         np.savez(
@@ -1804,10 +1717,6 @@ class TestShotToDict:
                 "forward_offset_m": 0.03,
             },
         )
-        monkeypatch.setattr(
-            server_module, "camera_ball_flight_reference_tracker", ReferenceBallTracker()
-        )
-        monkeypatch.setattr(server_module, "camera_reference_ball_tracker", ReferenceBallTracker())
         monkeypatch.setattr(server_module, "tester_setup_required", False)
         shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), shot_number=4)
         shot.camera_fusion_session_uuid = "session-a"
@@ -1824,7 +1733,6 @@ class TestShotToDict:
 
     def test_live_camera_fusion_carries_the_club_stage_notes(self, monkeypatch, tmp_path):
         """D15 (P8-7): the club stage's labels reach the shot beside its values."""
-        from openflight.camera.club_delivery import ReferenceBallTracker
 
         np.savez(
             tmp_path / "frames.npz",
@@ -1848,10 +1756,6 @@ class TestShotToDict:
             "camera_capture_config",
             {"mount_height_m": 0.095, "width": 8, "height": 6, "forward_offset_m": 0.03},
         )
-        monkeypatch.setattr(
-            server_module, "camera_ball_flight_reference_tracker", ReferenceBallTracker()
-        )
-        monkeypatch.setattr(server_module, "camera_reference_ball_tracker", ReferenceBallTracker())
         monkeypatch.setattr(server_module, "tester_setup_required", False)
         shot = Shot(
             ball_speed_mph=100.0, club_speed_mph=80.0, timestamp=datetime.now(), shot_number=4
@@ -1868,7 +1772,6 @@ class TestShotToDict:
 
     def test_a_swing_without_a_tee_range_names_it_on_the_camera(self, monkeypatch, tmp_path):
         """P8-7 gate 2: the tee contract stands; the shot says plainly what it lacked."""
-        from openflight.camera.club_delivery import ReferenceBallTracker
         from openflight.review_metrics import NO_TEE_RANGE
 
         np.savez(
@@ -1895,10 +1798,6 @@ class TestShotToDict:
             "camera_capture_config",
             {"mount_height_m": 0.095, "width": 8, "height": 6},
         )
-        monkeypatch.setattr(
-            server_module, "camera_ball_flight_reference_tracker", ReferenceBallTracker()
-        )
-        monkeypatch.setattr(server_module, "camera_reference_ball_tracker", ReferenceBallTracker())
         shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), shot_number=4)
         shot.camera_fusion_session_uuid = "session-a"
 
@@ -1941,7 +1840,6 @@ class TestShotToDict:
     def test_requested_calibrated_fusion_rejects_missing_mode_evidence_without_stopping_baseline(
         self, monkeypatch
     ):
-        from openflight.camera.club_delivery import ReferenceBallTracker
 
         monkeypatch.setattr(server_module, "camera_optical_calibration", {"candidate": {}})
         monkeypatch.setattr(server_module, "camera_placement", {})
@@ -1962,10 +1860,6 @@ class TestShotToDict:
             "camera_capture_config",
             {"mount_height_m": 0.095, "width": 8, "height": 6},
         )
-        monkeypatch.setattr(
-            server_module, "camera_ball_flight_reference_tracker", ReferenceBallTracker()
-        )
-        monkeypatch.setattr(server_module, "camera_reference_ball_tracker", ReferenceBallTracker())
         monkeypatch.setattr(
             server_module,
             "_load_camera_capture_archive",
@@ -3330,11 +3224,12 @@ class TestOnShotDetected:
     def _assert_finalized_once(cls, emitted, session_log):
         updates = cls._final_update_payloads(emitted)
         assert len(updates) == 1
-        assert updates[0]["shot"]["launch_angle_vertical_source"] == "estimated"
-        assert updates[0]["shot"]["carry_spin_adjusted"] > 0
+        # a fusion unit fills nothing in: no measured launch, so none and no carry (D17)
+        assert updates[0]["shot"]["launch_angle_vertical_source"] is None
+        assert updates[0]["shot"]["carry_spin_adjusted"] is None
         assert len(session_log.shots) == 1
-        assert session_log.shots[0]["launch_angle_vertical_source"] == "estimated"
-        assert session_log.shots[0]["carry_spin_adjusted"] > 0
+        assert session_log.shots[0]["launch_angle_vertical_source"] is None
+        assert session_log.shots[0]["carry_spin_adjusted"] is None
 
     @staticmethod
     def _assert_finalization_coordinator_empty():
@@ -4034,9 +3929,10 @@ class TestOnShotDetected:
         final_shots = [payload["shot"] for payload in self._final_update_payloads(emitted)]
         assert [row["shot_number"] for row in final_shots] == list(range(1, shot_count + 1))
         assert [row["shot_number"] for row in session_log.shots] == list(range(1, shot_count + 1))
-        assert all(row["launch_angle_vertical_source"] == "estimated" for row in final_shots)
-        assert all(row["carry_spin_adjusted"] > 0 for row in final_shots)
-        assert all(shot.launch_angle_vertical_source == "estimated" for shot in shots)
+        # a fusion unit fills nothing in: no measured launch, so none and no carry (D17)
+        assert all(row["launch_angle_vertical_source"] is None for row in final_shots)
+        assert all(row["carry_spin_adjusted"] is None for row in final_shots)
+        assert all(shot.launch_angle_vertical_source is None for shot in shots)
         assert simulator_shots == list(range(1, shot_count + 1))
         self._assert_finalization_coordinator_empty()
 
@@ -5143,6 +5039,9 @@ class TestCarryComputation:
     """Tests for the ballistic carry path in on_shot_detected."""
 
     def _patch_environment(self, monkeypatch):
+        # an OPS-only install: no IWR or camera, so its labelled estimates stand (D17)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+        monkeypatch.setattr(server_module, "camera_capture_runtime", None)
         monkeypatch.setattr(server_module, "kld7_vertical", None)
         monkeypatch.setattr(server_module, "kld7_horizontal", None)
         monkeypatch.setattr(server_module, "monitor", None)
@@ -5191,7 +5090,7 @@ class TestCarryComputation:
         """When resolve_launch returns None, the table path should compute carry."""
         self._patch_environment(monkeypatch)
 
-        monkeypatch.setattr(server_module, "resolve_launch", lambda shot: None)
+        monkeypatch.setattr(server_module, "resolve_launch", lambda shot, **_kwargs: None)
 
         def fail_simulate(*args, **kwargs):
             raise AssertionError("simulate() must not be called when resolve_launch is None")
@@ -5272,7 +5171,8 @@ class TestApplyCalculatedSpin:
         assert 4500 < shot.spin_rpm < 5100
         assert shot.spin_rpm_measured == 6800.0
         assert shot.spin_source == "calculated"
-        assert shot.spin_confidence == pytest.approx(0.7)
+        # a model's output has no measurement confidence (D17)
+        assert shot.spin_confidence is None
         assert shot.spin_rejection_reason is None
 
     def test_untouched_when_launch_angle_estimated(self):

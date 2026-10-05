@@ -41,7 +41,6 @@ from openflight.camera.capture_runtime import (
     parse_hitting_zone,
     parse_setup_ball,
 )
-from openflight.camera.club_delivery import ReferenceBallTracker
 from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
 from openflight.clubs import ClubType
 from openflight.raw_radar_replay import load_session_events, locate_recorded_capture
@@ -302,7 +301,6 @@ def kiosk_chain(  # pylint: disable=too-many-arguments,too-many-locals
     iwr_result: tuple | None,
     ops_result: Mapping[str, Any],
     club: str,
-    trackers: tuple[ReferenceBallTracker, ReferenceBallTracker],
     injection: Injection,
 ) -> dict[str, Any]:
     """Run the kiosk's IWR hand-off, camera fusion and face angle for one shot."""
@@ -353,8 +351,6 @@ def kiosk_chain(  # pylint: disable=too-many-arguments,too-many-locals
         iwr6843_runtime=runtime,
         camera_capture_runtime=None,
         camera_capture_config=camera_config,
-        camera_reference_ball_tracker=trackers[1],
-        camera_ball_flight_reference_tracker=trackers[0],
         camera_optical_calibration=None,
         camera_placement=None,
         tester_setup_required=tester_required,
@@ -416,7 +412,6 @@ def _shot_rows(  # pylint: disable=too-many-arguments,too-many-locals
     frozen: tuple,
     number: int,
     setup_rows: list[dict],
-    trackers,
     injection: Injection,
     root: Path,
     tap: _IwrTap,
@@ -452,7 +447,6 @@ def _shot_rows(  # pylint: disable=too-many-arguments,too-many-locals
             iwr_result=iwr_result,
             ops_result=ops_result,
             club=first["replay_inputs"]["club"],
-            trackers=trackers,
             injection=injection,
         )
     recorded_context = mapping(mapping(shot_event).get("camera_fusion_context"))
@@ -624,7 +618,6 @@ def check_run(  # pylint: disable=too-many-arguments
         runtime_tees=runtime_tees,
         setup_record=_setup_record(run_dir),
     )
-    trackers = (ReferenceBallTracker(), ReferenceBallTracker())
     numbers = sorted({e["shot_number"] for e in events if type(e.get("shot_number")) is int})
     shots = [
         _shot_rows(
@@ -634,7 +627,6 @@ def check_run(  # pylint: disable=too-many-arguments
             frozen=frozen,
             number=number,
             setup_rows=setup_rows,
-            trackers=trackers,
             injection=injection,
             root=root,
             tap=tap,

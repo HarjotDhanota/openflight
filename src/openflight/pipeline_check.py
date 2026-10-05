@@ -698,7 +698,8 @@ def camera_ball(  # pylint: disable=too-many-return-statements
         return _blocked("camera_ball", upstream["lighting"], gate="lighting")
     if status in ("rejected_insufficient_post_trigger_frames", "rejected_invalid_camera_frames"):
         return stage("camera_ball", FAIL, cause="DATA", gate="ball_flight", evidence=facts)
-    if status == "rejected_calibrated_requires_iwr_range":
+    # no IWR range, no distance: the camera never gives one (D17)
+    if status in ("rejected_calibrated_requires_iwr_range", "rejected_no_iwr_range"):
         return _blocked("camera_ball", upstream["lcmf"], gate="ball_flight")
     if status in ("rejected_reference_ball_not_found", "rejected_implausible_reference_ball"):
         facts = f"{status} ({_reference_facts(diagnostics)})"

@@ -123,7 +123,7 @@ def test_snapshot_exposes_bounded_reference_detector_disagreement():
                 "agreement": False,
                 "scene": {"candidate": {"x": 10.0, "y": 20.0, "diameter_px": 14.0}},
                 "impact": {"candidate": {"x": 13.0, "y": 24.0, "diameter_px": 15.0}},
-                "selected_source": "session_anchor_disagreement",
+                "selected_source": "detector_agreement",
                 "untrusted_extra": {"pixels": [1, 2, 3]},
             }
         }

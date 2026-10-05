@@ -145,8 +145,6 @@ def test_camera_runtime_gets_trigger_provider_only_when_tester_gate_required(mon
         "camera_capture_runtime",
         "camera_capture_config",
         "camera_replay_manager",
-        "camera_reference_ball_tracker",
-        "camera_ball_flight_reference_tracker",
     ):
         monkeypatch.setattr(server, name, getattr(server, name))
 

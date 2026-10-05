@@ -682,8 +682,12 @@ EXPERIMENTAL_AGREEMENT_SIGMAS = 2.0
 _EXPERIMENTAL_SOURCES = {
     "static_iwr": "unqualified_static_iwr",
     "static_iwr_camera_steered": "unqualified_static_iwr_camera_steered",
-    "camera_size_range": "unqualified_camera_size_range",
 }
+# a setup saved before D17 could keep the camera's ball-size range; it never reaches swings
+LEGACY_CAMERA_SIZE_SOURCE = "camera_size_range"
+LEGACY_CAMERA_SIZE_WITHHELD = (
+    "this setup saved the camera's ball-size range, which never gives the distance (D17)"
+)
 
 
 def _camera_ball_locked_in_box(candidate: tee_range.TeeRangeCandidate | None) -> bool:
@@ -743,15 +747,12 @@ def experimental_tee_range_decision(
             "reason": "the 1280x800 camera has no ball locked in the box",
         }
     if not usable:
+        # the camera never gives the distance (D17): no radar range, nothing saved
         return {
             **facts,
-            "status": "saved",
-            "reason_code": "camera_range_without_radar",
-            "reason": "the radar found no ball, so the camera's size range is used",
-            "source": "camera_size_range",
-            "candidate_id": camera.candidate_id,
-            "range_m": camera.radar_slant_range_m,
-            "uncertainty_m": camera.uncertainty_m,
+            "status": "withheld",
+            "reason_code": "no_radar_range",
+            "reason": "the radar found no ball, and the camera never gives the distance",
         }
     residual = abs(float(iwr.radar_slant_range_m) - float(camera.radar_slant_range_m))
     combined = math.hypot(float(iwr.uncertainty_m or 0.0), float(camera.uncertainty_m or 0.0))
@@ -806,6 +807,8 @@ def experimental_tee_range_choice(
         decision = tee_range._thaw_json(  # pylint: disable=protected-access
             (saved.evidence or {}).get("patch_ball") or {}
         )
+        if decision.get("source") == LEGACY_CAMERA_SIZE_SOURCE:
+            return None, {**decision, "withheld": LEGACY_CAMERA_SIZE_WITHHELD}
         return saved, {**decision, "candidate_id": saved.candidate_id}
     if solution.reason != EXPERIMENTAL_SAVED_REASON:
         return None, None
@@ -895,7 +898,7 @@ def patch_ball_solution(
             tee_range.TeeRangeCandidate(
                 candidate_id=f"patch-ball-{epoch_id}",
                 source=f"patch_ball_{decision['source']}",
-                source_group="camera" if decision["source"] == "camera_size_range" else "iwr",
+                source_group="iwr",
                 radar_slant_range_m=float(decision["range_m"]),
                 uncertainty_m=max(float(decision["uncertainty_m"]), 0.001),
                 selectable=False,
@@ -5165,8 +5168,6 @@ def _swings_display(solution: Mapping, *, use_unqualified: bool) -> dict | None:
             # P8-4: what the camera and the radar agreed on, or what one found alone
             basis = {
                 "validated": "the radar's distance, which the camera's ball in the patch confirms",
-                "camera_only": "the camera's distance",
-                "disagree": "the camera's distance",
                 "radar_only": "the radar's distance, unconfirmed by the camera",
             }.get(str(decision.get("status")), "the setup's distance")
             warning = f" {decision['warning']}" if decision.get("warning") else ""
@@ -5180,11 +5181,7 @@ def _swings_display(solution: Mapping, *, use_unqualified: bool) -> dict | None:
                     "so every number built on it is labelled experimental."
                 ),
             }
-        basis = (
-            "the camera's range: the radar found no ball"
-            if decision["source"] == "camera_size_range"
-            else "the radar's range, which agrees with the camera's"
-        )
+        basis = "the radar's range, which agrees with the camera's"
         return {
             "state": "experimental",
             "range_m": experimental.radar_slant_range_m,

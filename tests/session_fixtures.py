@@ -17,7 +17,6 @@ from types import SimpleNamespace
 import numpy as np
 
 from openflight import rig_geometry
-from openflight.camera.club_delivery import ReferenceBallTracker
 from openflight.camera.fusion_processing import build_context
 from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
 from openflight.clubs import ClubType
@@ -386,8 +385,6 @@ def capture_tree(root: Path, shots=(1, 2), *, tester_setup: bool = False) -> Pat
         context = build_context(
             geometry=geometry,
             lighting_eligible=True,
-            ball_tracker=ReferenceBallTracker(),
-            club_tracker=ReferenceBallTracker(),
             ball_range_evidence=None,
             club_range_evidence=None,
             ops_ball_speed_mph=100.7,

@@ -13,7 +13,6 @@ from openflight.camera.club_delivery import (
     CameraDeliveryGeometry,
     ChainedDelivery,
     FusedDelivery,
-    ReferenceBallTracker,
     TraceResult,
     _detect_impact_index,
     _preferred_path_estimate,
@@ -77,88 +76,7 @@ def test_impact_detection_accepts_camera_departure_after_early_gpio_trigger():
     assert _detect_impact_index(frames, ball, trigger_index=44) == 52
 
 
-def test_reference_ball_tracker_falls_back_to_established_tee_anchor():
-    tracker = ReferenceBallTracker()
-    for x in (323.0, 324.0, 325.0):
-        ball, source = tracker.resolve(ReferenceBall(x, 189.0, 13.5, 143))
-        assert source == "detected"
-        assert ball.x == x
-
-    ball, source = tracker.resolve(ReferenceBall(472.0, 274.0, 7.7, 47))
-
-    assert source == "session_anchor"
-    assert ball.x == pytest.approx(324.0)
-    assert ball.y == pytest.approx(189.0)
-    assert ball.diameter_px == pytest.approx(13.5)
-
-
-def test_reference_ball_tracker_returns_rolling_anchor_for_stable_geometry():
-    tracker = ReferenceBallTracker()
-
-    first, first_source = tracker.resolve_stable(ReferenceBall(320.0, 190.0, 14.0, 140))
-    second, second_source = tracker.resolve_stable(ReferenceBall(322.0, 192.0, 16.0, 160))
-    third, third_source = tracker.resolve_stable(ReferenceBall(321.0, 191.0, 15.0, 150))
-
-    assert first_source == "warming"
-    assert second_source == "warming"
-    assert first.x == 320.0
-    assert second.x == 322.0
-    assert third_source == "session_anchor"
-    assert third.x == pytest.approx(321.0)
-    assert third.y == pytest.approx(191.0)
-    assert third.diameter_px == pytest.approx(15.0)
-
-
-def test_reference_ball_tracker_fallback_requires_established_anchor():
-    tracker = ReferenceBallTracker()
-
-    assert tracker.fallback() is None
-    for x in (320.0, 321.0):
-        tracker.resolve_stable(ReferenceBall(x, 190.0, 14.0, 140))
-    assert tracker.fallback() is None
-
-    tracker.resolve_stable(ReferenceBall(322.0, 190.0, 14.0, 140))
-
-    anchor = tracker.fallback()
-    assert anchor is not None
-    assert anchor.x == pytest.approx(321.0)
-    assert anchor.y == pytest.approx(190.0)
-
-
-def test_club_delivery_uses_established_anchor_when_detection_is_missing(monkeypatch):
-    tracker = ReferenceBallTracker()
-    for x in (159.0, 160.0, 161.0):
-        tracker.resolve_stable(ReferenceBall(x, 100.0, 14.0, 140))
-    monkeypatch.setattr(
-        club_delivery_module,
-        "detect_reference_ball",
-        lambda _frames, **_kwargs: (_ for _ in ()).throw(ValueError("not found")),
-    )
-
-    result = estimate_chained_delivery(
-        np.full((60, 200, 320), 200, dtype=np.uint8),
-        np.arange(60, dtype=np.int64) * 2_000_000,
-        trigger_index=40,
-        range_evidence=None,
-        geometry=CameraDeliveryGeometry(
-            camera_height_m=0.2032,
-            radar_height_m=0.1524,
-            tee_range_m=1.524,
-            ball_height_m=0.04,
-            image_width_px=320,
-            image_height_px=200,
-        ),
-        ops_club_speed_mph=80.0,
-        ball_tracker=tracker,
-    )
-
-    assert result.status != "rejected_no_ball"
-
-
-def test_shared_anchor_is_not_replaced_by_the_club_trackers_anchor(monkeypatch):
-    tracker = ReferenceBallTracker(min_fallback_samples=2)
-    tracker.resolve(ReferenceBall(40.0, 100.0, 14.0, 140))
-    tracker.resolve(ReferenceBall(41.0, 100.0, 14.0, 140))
+def test_the_ball_stage_s_reference_ball_reaches_the_club_stage(monkeypatch):
     shared = ReferenceBall(160.0, 120.0, 14.0, 140)
     seen = {}
 
@@ -181,7 +99,6 @@ def test_shared_anchor_is_not_replaced_by_the_club_trackers_anchor(monkeypatch):
             image_height_px=200,
         ),
         ops_club_speed_mph=80.0,
-        ball_tracker=tracker,
         reference_ball=shared,
         reference_ball_selected=True,
     )

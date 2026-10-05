@@ -46,7 +46,10 @@ _DEFAULT_SPIN_RPM = 5000.0
 
 
 def _resolve_total_spin(shot: Shot) -> Tuple[float, str]:
-    """Measured spin if present and high-confidence, else the per-club model."""
+    """Measured spin if present and high-confidence, a calculated one, else the per-club model.
+
+    A calculated spin is a model's output, so its provenance is estimated.
+    """
     if (
         shot.spin_rpm is not None
         and shot.spin_rpm > 0
@@ -54,6 +57,8 @@ def _resolve_total_spin(shot: Shot) -> Tuple[float, str]:
         and shot.spin_confidence >= SPIN_CONFIDENCE_HIGH
     ):
         return float(shot.spin_rpm), "measured"
+    if shot.spin_source == "calculated" and shot.spin_rpm:
+        return float(shot.spin_rpm), "estimated"
     return SPIN_MODEL_RPM.get(shot.club, _DEFAULT_SPIN_RPM), "estimated"
 
 
