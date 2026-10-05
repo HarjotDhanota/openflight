@@ -78,6 +78,20 @@ done when:
 - the bench's grading tests pass against it;
 - the old path is deleted, not kept beside it.
 
+**Before stage 2, check the IWR frame times.**
+- **The finding.** In an outside contributor's real-ball TrackMan session
+  (Robinante, 4 Oct; IWR firmware 1.0.2 hybrid cadence, v10 dumps), the dump's frame
+  times hide a 17–33 ms gap at the first range-window switch (frame 9). Every delta
+  reads 2000 µs, but the ball's line only meets the club's line if shifted 17–33 ms.
+  That breaks the crossing the IWR distance comes from.
+- **Our recordings.** They switch windows at the same frame. Their headers show steady
+  3 ms steps, and their ball tracks mostly match the OPS243's speed, which suggests no
+  large gap. That isn't verified.
+- **The check.** Before porting the crossing:
+  - fit the ball's line separately before and after the switch on every recorded
+    swing, and confirm they join;
+  - ask whether any firmware the unit will run records the real switch time.
+
 **Stage 2 — timing and the IWR's ball distance.** Ports `timing.py`,
 `radar/streaks.py`, `replay.shot_ball_distance`.
 - Frame times at mid-exposure from sensor timestamps.
