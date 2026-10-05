@@ -1,6 +1,6 @@
 # Fusion method plan: from the test bench to the live unit
 
-Written 4 October 2026. Owner: Harjot. Status: agreed direction; stage 1 not started.
+Written 4 October 2026. Owner: Harjot. Status: stage 1 in progress (1a–1d done, 1f reviewed; 1e next).
 
 ## Where we are
 
@@ -64,6 +64,24 @@ Each item is a bug against rule 1, 3 or 5. Write a failing test first, then fix.
 | 1d. Filled-in values | Missing vertical launch filled from club tables, horizontal set to 0.0 (`server.py:946–971`). Formula spin labelled high confidence (`server.py:3316`). Optimal-spin carry (`server.py:4800`). | Each is not measured, with the reason. |
 | 1e. Carry for any ball | Carry, apex and side are computed for every ball, foam included (`server.py:4781`). | Computed only for a session declared as golf balls. Ball type is recorded at setup as equipment metadata. |
 | 1f. Previous clock sync | `rolling_buffer/trigger.py:541` reuses the previous OPS clock sync when a fresh one is rejected. | To review: a fixed clock property is allowed, a previous shot's value is not. Decide after reading it. |
+
+**Progress (5 October).**
+- **1a–1d are done**, test first, full suite green: `ee3ea360` (1b) and `cf0c96ea`
+  (1a, 1c, 1d).
+- **What changed in practice:**
+  - A fusion context recorded at version 1 still replays, its tracker state ignored
+    and noted.
+  - A setup saved before this with a camera-size range hands swings nothing.
+  - The `camera_only_experimental` label stays readable for old recordings.
+- **1d as decided:** with the IWR or camera running, nothing is filled in, and carry
+  needs a measured launch, spin and spin axis. An OPS-only install keeps its labelled
+  estimates. `--calculated-spin` stays opt-in, labelled calculated (no confidence),
+  and still feeds carry and simulators under that label.
+- **1f reviewed: allowed, no change.** The reused value is the offset between the
+  OPS243's clock and the Pi's, measured at most
+  `TriggerProcessor.CLOCK_SYNC_MAX_FALLBACK_AGE_S` earlier and labelled `previous`
+  with its age. It is a property of the two clocks, like the rig file, not data
+  from another swing.
 
 **What stage 1 leaves for stage 2.** The setup tee range is still used for every shot
 (distance, IWR impact back-extrapolation, the club gate, the full-speed geometry), and
