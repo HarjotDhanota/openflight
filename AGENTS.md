@@ -17,10 +17,10 @@ OpenFlight is a DIY golf launch monitor using the OPS243-A Doppler radar and K-L
 
 ## Scope and Reviewability
 
-For radar-camera fusion and testing-suite work, follow
-[the fusion master plan](docs/development/fusion-master-plan.md). Tie changes to
-its active milestone, update its checkpoint, and record evidence-backed changes
-of direction in its decision log before implementing them. User instructions
+For radar-camera fusion and testing-suite work, start from the bench's `docs/MASTER-PLAN.md` (`openflight-test-bench`):
+it holds the current order, workstreams, ownership and decisions. The fork's
+`docs/development/fusion-master-plan.md` and `2026-10-04-fusion-method-plan.md`
+are history up to 5 October 2026; don't update their checkpoints. User instructions
 take precedence; do not treat pending hardware validation as completed.
 
 Agents must produce small, correct, and reviewable changes.

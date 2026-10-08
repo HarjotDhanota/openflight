@@ -1,6 +1,12 @@
 # Radar-camera fusion master plan
 
-Updated: 2026-10-04. Owner: Harjot. Status: active; M0 complete, M1 in progress.
+Updated: 2026-10-04. Owner: Harjot.
+
+> **Status (8 Oct 2026): history.** The current plan is the bench's `docs/MASTER-PLAN.md` (`openflight-test-bench`). Stages 2-7 of the
+> 4 Oct fusion method plan were superseded on 5 Oct by the bench's readiness roadmap,
+> which is itself paused (MASTER-PLAN W12). Since 7 Oct, club path, face, D-plane and
+> carry are not measured, and assumed swing geometry is banned (the bench spec's
+> Revisions 2-5).
 
 ## Checkpoint, 4 October 2026
 

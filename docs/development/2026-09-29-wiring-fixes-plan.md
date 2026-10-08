@@ -12,7 +12,8 @@ Date: 29 September 2026. Branch: `feat/tester-capture-pilot`. It implements `202
 - The three items below are still open.
 - The plan of 4 October
   ([2026-10-04-fusion-method-plan.md](2026-10-04-fusion-method-plan.md)) schedules F8
-  and C8 for one field day before the Trackman session.
+  and C8 for one field day before the Trackman session. (8 Oct: now the bench's Part B
+  Tasks 6 and 4, after the new lens; see the bench's `docs/MASTER-PLAN.md`.)
 - It removes F3's −2 ms constant along with the IWR club-impact path. F3's range-space
   check remains.
 

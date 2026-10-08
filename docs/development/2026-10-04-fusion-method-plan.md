@@ -1,7 +1,12 @@
 # Fusion method plan: from the test bench to the live unit
 
 Written 4 October 2026. Owner: Harjot. Status: stage 1 done (1e closed by D20). Stages 2–7 superseded on 5 October by the
-readiness roadmap (`openflight-test-bench`, `docs/superpowers/plans/2026-10-05-readiness-roadmap.md`).
+readiness roadmap (`openflight-test-bench`, `docs/superpowers/plans/2026-10-05-readiness-roadmap.md`),
+itself paused on 8 October (MASTER-PLAN W12). Entry point: the bench's `docs/MASTER-PLAN.md`.
+Since 7 October (the bench spec's Revisions 2-5), the "rules the live unit will follow" below
+are partly superseded: club path, face, D-plane and carry are not measured; the arc and D-plane
+models are banned or on hold. Calibration is the bench's Part B (after the new lens) and the
+TrackMan session is its Part C pilot, replacing the D19 field day.
 
 ## Where we are
 
@@ -28,7 +33,7 @@ readiness roadmap (`openflight-test-bench`, `docs/superpowers/plans/2026-10-05-r
 | D17 | Fix the live unit's rule violations first. | Stage 1 below, before any port. |
 | D18 | Setup becomes a readiness check only. | No shot takes a value from setup. The exposure ladder can start without the camera seeing the resting ball. The tee range stays as a diagnostic. |
 | D19 | One field day: checkerboard at home first, then the phone-level and alignment-stick checks, then the paired Trackman 4 session on the same rig. | The Trackman data is recorded on a checked rig. |
-| D20 (5 Oct) | The system is for normal golf balls only; foam balls are not catered for. | No ball-type question in setup and no foam handling in the kiosk: carry is computed as for a golf ball. Stage 1e is closed. The bench keeps marking its own foam recordings, which physically were foam, so its pages show no carry for them. |
+| D20 (5 Oct) | The system is for normal golf balls only; foam balls are not catered for. | No ball-type question in setup and no foam handling in the kiosk: carry is computed as for a golf ball (superseded 7 Oct: carry, side and apex are not measured; golf balls only stands). Stage 1e is closed. The bench keeps marking its own foam recordings, which physically were foam, so its pages show no carry for them. |
 
 ## The rules the live unit will follow
 
@@ -124,7 +129,7 @@ done when:
     1 ms would break.
   - Every header reads 3000 µs per frame. The 48 ms switch rarely has ball points.
   - Re-run this check on any new IWR firmware before trusting its crossing
-    (`openflight-test-bench` scratch check, to be made a bench test).
+    (now bench test `69981dc`).
 
 **Stage 2 — timing and the IWR's ball distance.** Ports `timing.py`,
 `radar/streaks.py`, `replay.shot_ball_distance`.
@@ -223,9 +228,9 @@ session, as the master plan's acceptance policy requires.
 - **Production ballistics:**
   - apex about 21% low on irons and wedges;
   - the off-line spin axis (A20) and its source (A05).
-- **3D club-head model** (Titleist 690CB) for a consistent head point.
+- **3D club-head model** for a consistent head point: now bench MASTER-PLAN W9; the 690CB mesh is a generic stand-in, the owner's club is a Maltby TS4.
 - **More club frames:** the 468 fps mode gives about ten head positions instead of two
-  or three.
+  or three (a binned mode, ruled out; the full-density row window is the bench's camera plan).
 - **The IWR firmware work:**
   - an IWR-detected impact trigger on a clock the Pi can map;
   - a buffer centred on impact holding ≥ 30 ms of the club's approach.
