@@ -341,6 +341,64 @@ class SessionLogger:
         if not self.enabled:
             return False
 
+        data = self._shot_entry_data(shot, pipeline_ms)
+        with self._write_lock:
+            if not self._session_file or (
+                expected_session_uuid is not None and self._session_uuid != expected_session_uuid
+            ):
+                return False
+            self._stats["shots_detected"] += 1
+            if data["shot_number"] is None:
+                data["shot_number"] = self._stats["shots_detected"]
+            line = (
+                json.dumps({"ts": datetime.now().isoformat(), "type": "shot_detected", **data})
+                + "\n"
+            )
+            self._session_file.write(line)
+            self._session_file.flush()
+            return True
+
+    def log_shot_update(
+        self,
+        shot: Shot,
+        pipeline_ms: Optional[Dict] = None,
+        *,
+        update: Dict[str, Any],
+        expected_session_uuid: Optional[str] = None,
+    ) -> bool:
+        """Log a later, fuller version of an already-logged shot.
+
+        Written as a ``shot_updated`` entry with the same schema as
+        ``shot_detected`` and the same ``shot_number``. It replaces that shot's
+        metrics for readers that apply updates, and never counts as another
+        shot: ``shots_detected`` and the ``shot_detected`` lines are unchanged.
+        """
+        if not self.enabled:
+            return False
+        if isinstance(shot.shot_number, bool) or not isinstance(shot.shot_number, int):
+            return False
+        if shot.shot_number <= 0:
+            return False
+
+        data = self._shot_entry_data(shot, pipeline_ms)
+        line = (
+            json.dumps(
+                {"ts": datetime.now().isoformat(), "type": "shot_updated", **data, "update": update}
+            )
+            + "\n"
+        )
+        with self._write_lock:
+            if not self._session_file or (
+                expected_session_uuid is not None and self._session_uuid != expected_session_uuid
+            ):
+                return False
+            self._session_file.write(line)
+            self._session_file.flush()
+            return True
+
+    @staticmethod
+    def _shot_entry_data(shot: Shot, pipeline_ms: Optional[Dict]) -> Dict[str, Any]:
+        """The canonical raw shot schema shared by shot_detected and shot_updated."""
         data = shot.to_dict()
         if pipeline_ms is not None:
             data["pipeline_ms"] = pipeline_ms
@@ -372,21 +430,7 @@ class SessionLogger:
                     "browser_paint": "not instrumented",
                 },
             }
-        with self._write_lock:
-            if not self._session_file or (
-                expected_session_uuid is not None and self._session_uuid != expected_session_uuid
-            ):
-                return False
-            self._stats["shots_detected"] += 1
-            if data["shot_number"] is None:
-                data["shot_number"] = self._stats["shots_detected"]
-            line = (
-                json.dumps({"ts": datetime.now().isoformat(), "type": "shot_detected", **data})
-                + "\n"
-            )
-            self._session_file.write(line)
-            self._session_file.flush()
-            return True
+        return data
 
     def log_shot_pinned(
         self,
@@ -461,7 +505,7 @@ class SessionLogger:
         expected_session_uuid: str,
         lifecycle: Dict[str, Any],
     ) -> bool:
-        """Record truthful deadline continuation and late-result disposal."""
+        """Record deadline continuation and how each late enrichment result was applied."""
         if not self.enabled:
             return False
         line = (

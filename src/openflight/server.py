@@ -200,10 +200,16 @@ shutdown_cleanup_started = False
 # One active hardware job plus two waiting shots is enough for normal golf
 # cadence without allowing a stuck peripheral to consume memory indefinitely.
 _SHOT_ENRICHMENT_QUEUE_CAPACITY = 2
+# How long a shot's first, ordered result waits for optional enrichment before
+# it is published OPS-only. Not a cutoff: the enrichment keeps running, and
+# when it completes it is applied to the same shot as a late update
+# (_publish_late_enrichment). Nothing is dropped for missing this timer.
 _SHOT_ENRICHMENT_DEADLINE_S = 20.0
 # Active hardware work, the two queued jobs, and one overflow result. If more
-# shots arrive, fail the oldest optional enrichment closed so OPS finalization
-# can keep advancing without retaining an unbounded number of full Shot objects.
+# shots arrive, the oldest shot's first result is published OPS-only so ordered
+# finalization keeps advancing without retaining an unbounded number of full
+# Shot objects; its enrichment still lands later as an update. Also bounds the
+# OPS-only shots kept for their late enrichment (_shot_awaiting_late_enrichment).
 _SHOT_FINALIZATION_CAPACITY = _SHOT_ENRICHMENT_QUEUE_CAPACITY + 2
 shot_enrichment_queue: queue.Queue[tuple[Shot, str, float | None]] = queue.Queue(
     maxsize=_SHOT_ENRICHMENT_QUEUE_CAPACITY
@@ -220,6 +226,10 @@ _shot_finalization_registered: dict[int, "_RegisteredShotFinalization"] = {}
 _shot_finalization_ready: dict[int, "_PendingShotFinalization"] = {}
 _shot_finalization_running = False
 _shot_finalization_worker: threading.Thread | None = None
+# The shot the worker is publishing right now; a late update for it waits.
+_shot_finalization_current: Shot | None = None
+# Shots published OPS-only whose enrichment is still running, oldest first.
+_shot_awaiting_late_enrichment: dict[int, "_AwaitingLateEnrichment"] = {}
 
 
 @dataclass(frozen=True)
@@ -272,6 +282,34 @@ class _RegisteredShotFinalization:
     diagnostic_session_uuid: str | None
 
 
+@dataclass(frozen=True)
+class _AwaitingLateEnrichment:
+    """A shot published OPS-only whose still-running enrichment will update it."""
+
+    registered: _RegisteredShotFinalization
+    first_result_reason: str
+    first_result_monotonic: float
+
+
+@dataclass(frozen=True)
+class _LateShotUpdate:
+    """Marks a finalization as a late update to a shot already published OPS-only."""
+
+    first_result_reason: str
+    late_by_ms: float
+
+    def as_log_dict(self) -> dict[str, object]:
+        """The update record written beside the shot in the session log."""
+        return {
+            "reason": "late_enrichment",
+            "first_result_reason": self.first_result_reason,
+            "late_by_ms": self.late_by_ms,
+            # Simulators (GSPro, OpenGolfSim, ...) took the first result and have
+            # no way to amend a shot, so a late update is never re-sent to them.
+            "simulators": "not_resent",
+        }
+
+
 def _log_fusion_diagnostic(
     diagnostic_logger,
     session_uuid: str | None,
@@ -322,8 +360,9 @@ def _log_shot_enrichment_lifecycle(
     background_work: str,
     result_discarded: bool,
     enrichment: _ShotEnrichmentResult | None = None,
+    late_by_ms: float | None = None,
 ) -> None:
-    """Persist whether deadline work continued and whether its result was discarded."""
+    """Persist whether deadline work continued and how its late result was applied."""
     if diagnostic_logger is None or session_uuid is None:
         return
     log_lifecycle = getattr(diagnostic_logger, "log_shot_enrichment", None)
@@ -337,8 +376,18 @@ def _log_shot_enrichment_lifecycle(
                 "state": state,
                 "reason": reason,
                 "background_work": background_work,
-                "late_result_policy": "discard",
+                # A late result updates the same shot in the UI and the log.
+                "late_result_policy": "apply_as_update",
                 "result_discarded": result_discarded,
+                "late_by_ms": late_by_ms,
+                # Simulators get the first result only; they can't take an update.
+                "simulators": "first_result_only",
+                "enrichment_outcome": (
+                    enrichment.diagnostic_outcome if enrichment is not None else None
+                ),
+                "enrichment_reason": (
+                    enrichment.diagnostic_reason if enrichment is not None else None
+                ),
                 "timing": (
                     _enrichment_timing_payload(enrichment) if enrichment is not None else None
                 ),
@@ -371,6 +420,9 @@ def _reset_shot_sequence() -> None:
         _shot_finalization_order.clear()
         _shot_finalization_registered.clear()
         _shot_finalization_ready.clear()
+        # A new session renumbers shots from one; an old session's late result
+        # must never land on the new session's shot of the same number.
+        _shot_awaiting_late_enrichment.clear()
         _shot_finalization_running = False
         _shot_finalization_condition.notify_all()
 
@@ -442,10 +494,12 @@ def _shot_finalization_worker_loop() -> None:
     """Exclusively finalize ready, overdue, or capacity-evicted shots in order."""
     global _shot_finalization_running  # pylint: disable=global-statement
     global _shot_finalization_worker  # pylint: disable=global-statement
+    global _shot_finalization_current  # pylint: disable=global-statement
 
     current_thread = threading.current_thread()
     try:
         while True:
+            abandoned: list[_AwaitingLateEnrichment] = []
             with _shot_finalization_condition:
                 while True:
                     if not _shot_finalization_order:
@@ -467,6 +521,20 @@ def _shot_finalization_worker_loop() -> None:
                         _shot_finalization_order.popleft()
                         del _shot_finalization_registered[next_shot_number]
                         _shot_finalization_ready.pop(next_shot_number, None)
+                        if pending is None:
+                            # Published OPS-only now; the running enrichment will
+                            # update this same shot when it completes. Registered
+                            # in the same critical section, so a result arriving
+                            # now always finds the shot in one of the two maps.
+                            abandoned = _await_late_enrichment_locked(
+                                registered,
+                                (
+                                    "enrichment_deadline"
+                                    if deadline_expired
+                                    else "coordinator_capacity"
+                                ),
+                            )
+                        _shot_finalization_current = registered.shot
                         _shot_finalization_running = True
                         _shot_finalization_condition.notify_all()
                         break
@@ -480,6 +548,9 @@ def _shot_finalization_worker_loop() -> None:
                         )
                     _shot_finalization_condition.wait(timeout=wait_timeout_s)
 
+            for entry in abandoned:
+                _log_abandoned_late_enrichment(entry)
+
             if pending is None:
                 reason = "deadline" if deadline_expired else "coordinator capacity"
                 diagnostic_reason = (
@@ -487,7 +558,7 @@ def _shot_finalization_worker_loop() -> None:
                 )
                 logger.warning(
                     "[SERVER] Shot #%d optional enrichment exceeded %s; "
-                    "finalizing OPS-only while background work continues",
+                    "publishing OPS-only now, enrichment continues and will update it",
                     next_shot_number,
                     reason,
                 )
@@ -512,12 +583,7 @@ def _shot_finalization_worker_loop() -> None:
                     diagnostic_session_uuid=registered.diagnostic_session_uuid,
                 )
             elif pending.shot is not registered.shot:
-                for shot_field in fields(Shot):
-                    setattr(
-                        registered.shot,
-                        shot_field.name,
-                        getattr(pending.shot, shot_field.name),
-                    )
+                _copy_shot_fields(registered.shot, pending.shot)
                 pending = replace(pending, shot=registered.shot)
 
             try:
@@ -528,6 +594,7 @@ def _shot_finalization_worker_loop() -> None:
                     enrichment=pending.enrichment,
                     diagnostic_logger=pending.diagnostic_logger,
                     diagnostic_session_uuid=pending.diagnostic_session_uuid,
+                    late_update=None,
                 )
             except Exception as error:  # pylint: disable=broad-exception-caught
                 logger.error(
@@ -556,14 +623,64 @@ def _shot_finalization_worker_loop() -> None:
                 )
             finally:
                 with _shot_finalization_condition:
+                    _shot_finalization_current = None
                     _shot_finalization_running = False
                     _shot_finalization_condition.notify_all()
     finally:
         with _shot_finalization_condition:
+            _shot_finalization_current = None
             _shot_finalization_running = False
             if _shot_finalization_worker is current_thread:
                 _shot_finalization_worker = None
             _shot_finalization_condition.notify_all()
+
+
+def _copy_shot_fields(target: Shot, source: Shot) -> None:
+    """Make the retained shot object carry every field of its enriched copy."""
+    for shot_field in fields(Shot):
+        setattr(target, shot_field.name, getattr(source, shot_field.name))
+
+
+def _await_late_enrichment_locked(
+    registered: _RegisteredShotFinalization,
+    first_result_reason: str,
+) -> list[_AwaitingLateEnrichment]:
+    """Keep an OPS-only shot for its late result; caller holds the condition lock.
+
+    Returns the oldest entries dropped to stay within _SHOT_FINALIZATION_CAPACITY.
+    In normal running that never happens: every entry is a shot whose enrichment
+    is active or queued, and the enrichment queue holds fewer than that. It only
+    bounds memory if an enrichment worker died without reporting back.
+    """
+    _shot_awaiting_late_enrichment[registered.shot.shot_number] = _AwaitingLateEnrichment(
+        registered=registered,
+        first_result_reason=first_result_reason,
+        first_result_monotonic=time.monotonic(),
+    )
+    abandoned = []
+    while len(_shot_awaiting_late_enrichment) > _SHOT_FINALIZATION_CAPACITY:
+        oldest = next(iter(_shot_awaiting_late_enrichment))
+        abandoned.append(_shot_awaiting_late_enrichment.pop(oldest))
+    return abandoned
+
+
+def _log_abandoned_late_enrichment(entry: _AwaitingLateEnrichment) -> None:
+    """Say plainly that a shot stopped waiting for an enrichment that never reported."""
+    logger.warning(
+        "[SERVER] Shot #%d stays OPS-only: its enrichment never reported back and "
+        "%d newer OPS-only shots are waiting for theirs",
+        entry.registered.shot.shot_number,
+        _SHOT_FINALIZATION_CAPACITY,
+    )
+    _log_shot_enrichment_lifecycle(
+        entry.registered.diagnostic_logger,
+        entry.registered.diagnostic_session_uuid,
+        entry.registered.shot,
+        state="late_result_abandoned",
+        reason="awaiting_capacity",
+        background_work="unknown",
+        result_discarded=True,
+    )
 
 
 def _shot_number_for_log(shot: Shot, session_log) -> int:
@@ -4743,8 +4860,16 @@ def _finalize_shot_detected(
     enrichment: _ShotEnrichmentResult | None = None,
     diagnostic_logger=None,
     diagnostic_session_uuid: str | None = None,
+    late_update: _LateShotUpdate | None = None,
 ) -> None:
-    """Apply required fallbacks, persist once, and publish the final shot."""
+    """Apply required fallbacks, persist once, and publish the final shot.
+
+    With ``late_update`` the shot was already published OPS-only and this is
+    its late enrichment: the same path runs, but the session log records a
+    ``shot_updated`` entry (not another ``shot_detected``), the first
+    publication's timing is kept, and simulators and the debug log are not
+    sent the shot again.
+    """
     enrichment = enrichment or _ShotEnrichmentResult()
     iwr6843_ms = enrichment.iwr6843_ms
     kld7_ms = enrichment.kld7_ms
@@ -4883,7 +5008,19 @@ def _finalize_shot_detected(
                 round(enrichment.enrichment_ms, 1) if enrichment.enrichment_ms is not None else None
             ),
         }
-        if (
+        if session_log and late_update is not None:
+            # Replace, never add: a late update is its own entry type, so the
+            # shot is still counted once (shots_detected, shot_detected lines).
+            logged = hasattr(session_log, "log_shot_update") and (
+                session_log.log_shot_update(
+                    shot,
+                    pipeline_ms,
+                    update=late_update.as_log_dict(),
+                    expected_session_uuid=diagnostic_session_uuid,
+                )
+                is not False
+            )
+        elif (
             session_log
             and diagnostic_session_uuid is not None
             and hasattr(session_log, "log_shot_pinned")
@@ -4911,7 +5048,10 @@ def _finalize_shot_detected(
     try:
         shot_data = shot_to_dict(shot)
         stats = monitor.get_session_stats() if monitor else {}
-        publication_timing_updated = _record_server_publication_invocation(shot)
+        # The publication boundary is the shot's first result, never a late update.
+        publication_timing_updated = late_update is None and _record_server_publication_invocation(
+            shot
+        )
         shot_data["stage_timing"] = deepcopy(shot.stage_timing)
         socketio.emit(emit_event, {"shot": shot_data, "stats": stats})
         if publication_timing_updated:
@@ -4940,6 +5080,13 @@ def _finalize_shot_detected(
             context={"stage": f"emit_{emit_event}", "ball_speed_mph": shot.ball_speed_mph},
             exc=e,
         )
+        return
+
+    if late_update is not None:
+        # Simulators (GSPro, OpenGolfSim, E6, ...) were sent this shot's first
+        # result and have no way to amend a shot: re-sending would play it as a
+        # second shot. The debug log, likewise, counts shots. The late update
+        # reaches the UI and the session log only.
         return
 
     # Forward to simulator connectors (optional)
@@ -4976,9 +5123,10 @@ def _finish_shot_detected(
     initial_ui_ms: float | None = None,
 ) -> None:
     """Attempt optional enrichment, then always perform required finalization."""
-    # Optional hardware may return after the coordinator has timed out this
-    # shot. Mutate a shallow dataclass copy so a late result cannot change the
-    # already-finalized OPS object retained by the monitor.
+    # Optional hardware may return after the coordinator has published this
+    # shot OPS-only. Enrich a shallow dataclass copy so the retained OPS object
+    # is never changed mid-publication; the coordinator copies the result onto
+    # it, on time or as a late update (_publish_late_enrichment).
     enriched_shot = (
         replace(shot, stage_timing=clone_stage_timing(shot.stage_timing))
         if _has_slow_shot_enrichment(shot)
@@ -5035,7 +5183,11 @@ def _queue_ordered_shot_finalization(
     *,
     source_shot: Shot,
 ) -> None:
-    """Make a completed shot visible to the ordered finalization worker."""
+    """Make a completed shot visible to the ordered finalization worker.
+
+    A result for a shot already published OPS-only (deadline or capacity) is
+    applied to that same shot as a late update instead.
+    """
 
     shot_number = pending.shot.shot_number
     if shot_number is None:
@@ -5043,33 +5195,121 @@ def _queue_ordered_shot_finalization(
 
     with _shot_finalization_condition:
         registered = _shot_finalization_registered.get(shot_number)
-        if registered is None or registered.shot is not source_shot:
-            logger.info(
-                "[SERVER] Discarding late enrichment for finalized shot #%d",
-                shot_number,
+        if registered is not None and registered.shot is source_shot:
+            if shot_number in _shot_finalization_ready:
+                logger.warning("[SERVER] Shot #%d is already waiting for finalization", shot_number)
+                return
+            _shot_finalization_ready[shot_number] = replace(
+                pending,
+                diagnostic_logger=registered.diagnostic_logger,
+                diagnostic_session_uuid=registered.diagnostic_session_uuid,
             )
-            lifecycle_logger = get_session_logger()
-            _log_shot_enrichment_lifecycle(
-                lifecycle_logger,
-                getattr(source_shot, "camera_fusion_session_uuid", None),
-                source_shot,
-                state="late_result_discarded",
-                reason="shot_already_finalized",
-                background_work="complete",
-                result_discarded=True,
-                enrichment=pending.enrichment,
+            _ensure_shot_finalization_worker_locked()
+            _shot_finalization_condition.notify_all()
+            return
+
+        awaiting = _shot_awaiting_late_enrichment.get(shot_number)
+        if awaiting is not None and awaiting.registered.shot is source_shot:
+            del _shot_awaiting_late_enrichment[shot_number]
+            # The worker may still be publishing the OPS-only result this
+            # amends; never let the update reach the UI or log before it.
+            # Waiting releases the lock, so the worker is never blocked.
+            _shot_finalization_condition.wait_for(
+                lambda: _shot_finalization_current is not source_shot
             )
-            return
-        if shot_number in _shot_finalization_ready:
-            logger.warning("[SERVER] Shot #%d is already waiting for finalization", shot_number)
-            return
-        _shot_finalization_ready[shot_number] = replace(
-            pending,
+        else:
+            awaiting = None
+
+    # Outside the lock: a late update is published on the enrichment's own
+    # thread, so it never holds up the ordered first results of later shots.
+    if awaiting is not None:
+        _publish_late_enrichment(awaiting, pending)
+        return
+
+    # Neither registered nor awaiting: a duplicate result for a shot already
+    # finalized with its enrichment, or a result from a session that has since
+    # been reset (its shot numbers now belong to new shots). Nothing to update.
+    logger.warning(
+        "[SERVER] Enrichment result for shot #%d matches no shot awaiting one; not applied",
+        shot_number,
+    )
+    _log_shot_enrichment_lifecycle(
+        get_session_logger(),
+        getattr(source_shot, "camera_fusion_session_uuid", None),
+        source_shot,
+        state="late_result_unmatched",
+        reason="shot_not_awaiting_enrichment",
+        background_work="complete",
+        result_discarded=True,
+        enrichment=pending.enrichment,
+    )
+
+
+def _publish_late_enrichment(
+    awaiting: _AwaitingLateEnrichment,
+    pending: _PendingShotFinalization,
+) -> None:
+    """Apply a late enrichment to the shot already published OPS-only, as an update.
+
+    Reuses the ordinary finalization path, so the UI gets a ``shot_update``
+    for the same shot number (it replaces the shot in place) and the session
+    log a ``shot_updated`` entry. Simulators are not re-sent the shot.
+    """
+    registered = awaiting.registered
+    shot = registered.shot
+    late_by_ms = round((time.monotonic() - awaiting.first_result_monotonic) * 1000.0, 1)
+    logger.info(
+        "[SERVER] Shot #%d enrichment completed %.0f ms after its OPS-only result (%s); "
+        "updating the shot",
+        shot.shot_number,
+        late_by_ms,
+        awaiting.first_result_reason,
+    )
+    if pending.shot is not shot:
+        first_publication = clone_stage_timing(shot.stage_timing)["server"]["publication"]
+        _copy_shot_fields(shot, pending.shot)
+        timing = clone_stage_timing(shot.stage_timing)
+        timing["server"]["publication"] = first_publication
+        shot.stage_timing = timing
+
+    state = "late_result_applied"
+    try:
+        _finalize_shot_detected(
+            shot,
+            emit_event="shot_update",
+            initial_ui_ms=registered.initial_ui_ms,
+            enrichment=pending.enrichment,
             diagnostic_logger=registered.diagnostic_logger,
             diagnostic_session_uuid=registered.diagnostic_session_uuid,
+            late_update=_LateShotUpdate(
+                first_result_reason=awaiting.first_result_reason,
+                late_by_ms=late_by_ms,
+            ),
         )
-        _ensure_shot_finalization_worker_locked()
-        _shot_finalization_condition.notify_all()
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        state = "late_result_failed"
+        logger.error("[SERVER] Late shot update failed: %s", error, exc_info=True)
+        log_session_error(
+            "Late shot update failed",
+            component="server",
+            context={
+                "stage": "late_update",
+                "shot_number": shot.shot_number,
+                "ball_speed_mph": shot.ball_speed_mph,
+            },
+            exc=error,
+        )
+    _log_shot_enrichment_lifecycle(
+        registered.diagnostic_logger,
+        registered.diagnostic_session_uuid,
+        shot,
+        state=state,
+        reason=awaiting.first_result_reason,
+        background_work="complete",
+        result_discarded=False,
+        enrichment=pending.enrichment,
+        late_by_ms=late_by_ms,
+    )
 
 
 def _record_server_publication_invocation(shot: Shot) -> bool:

@@ -245,6 +245,35 @@ def test_reader_retains_partial_line_latest_revision_and_distinct_sessions(tmp_p
     assert legacy["ended"] is True
 
 
+def test_reader_shows_late_terminal_update_in_place_of_the_ops_only_one(tmp_path):
+    path = tmp_path / "session_late.jsonl"
+    ops_only = fd.build_snapshot(
+        _shot(),
+        session_uuid="one",
+        revision=2,
+        phase="terminal",
+        outcome="partial",
+        reason="enrichment_deadline",
+    )
+    late = fd.build_snapshot(
+        _shot(launch_angle_vertical=14.0, launch_angle_vertical_source="radar"),
+        session_uuid="one",
+        revision=2,
+        phase="terminal",
+        outcome="complete",
+    )
+    path.write_bytes(
+        _entry("session_start", session_uuid="one")
+        + _entry("fusion_diagnostic", **ops_only)
+        + _entry("fusion_diagnostic", **late)
+    )
+
+    shots = fd.DiagnosticReader().read(tmp_path)["sessions"][0]["shots"]
+
+    assert len(shots) == 1, "a late update replaces the shot; it never adds one"
+    assert shots[0]["outcome"] == "complete"
+
+
 def test_reader_ignores_wrong_uuid_and_detects_same_path_larger_rewrite(tmp_path):
     path = tmp_path / "session_same.jsonl"
     stale = fd.build_snapshot(

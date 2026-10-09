@@ -488,7 +488,9 @@ class DiagnosticReader:
                 return
             state.saw_diagnostic = True
             current = state.shots.get(shot_number)
-            if current is None or revision > current.get("revision", 0):
+            # ">=": a later terminal snapshot is a late enrichment update to a
+            # shot first published OPS-only; it replaces the earlier one.
+            if current is None or revision >= current.get("revision", 0):
                 state.shots[shot_number] = dict(entry)
                 if len(state.shots) > MAX_SHOTS_PER_SESSION:
                     del state.shots[min(state.shots)]

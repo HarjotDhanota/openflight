@@ -17,7 +17,7 @@ from openflight.camera.replay import ReplayNotFoundError, ReplayPreparationError
 from openflight.clubs import ClubType
 from openflight.iwr6843 import Calibration
 from openflight.kld7.types import KLD7Angle
-from openflight.launch_monitor import Shot
+from openflight.launch_monitor import Shot, summarize_shots
 from openflight.ops243 import UART_BAUD_COMMANDS
 from openflight.power import PowerState
 from openflight.server import (
@@ -3153,6 +3153,7 @@ class TestOnShotDetected:
         def __init__(self):
             self.stats = {"shots_detected": 0}
             self.shots = []
+            self.shot_updates = []
             self.rolling_buffer_captures = []
             self.iwr6843_captures = []
             self.camera_captures = []
@@ -3168,6 +3169,14 @@ class TestOnShotDetected:
             self.shots.append(shot_data)
             if len(self.shots) == 4:
                 self.all_shots_logged.set()
+
+        def log_shot_update(self, shot, pipeline_ms=None, *, update, expected_session_uuid=None):
+            del expected_session_uuid
+            shot_data = shot.to_dict()
+            shot_data["pipeline_ms"] = pipeline_ms
+            shot_data["update"] = update
+            self.shot_updates.append(shot_data)
+            return True
 
         def log_iwr6843_capture(self, **capture_data):
             self.iwr6843_captures.append(capture_data)
@@ -3926,15 +3935,157 @@ class TestOnShotDetected:
         for thread in background_threads:
             thread.join(timeout=2.0)
 
-        final_shots = [payload["shot"] for payload in self._final_update_payloads(emitted)]
-        assert [row["shot_number"] for row in final_shots] == list(range(1, shot_count + 1))
+        # Changed with fix/keep-late-enrichment: this test used to assert that
+        # every shot stayed OPS-only after the stuck hardware returned, because
+        # late results were discarded. Late results are now applied as updates
+        # to the same shot, so the shots whose enrichment was queued (1-3) gain
+        # their launch angle afterwards; the first results are unchanged.
+        final_payloads = self._final_update_payloads(emitted)
+        first_results = final_payloads[:shot_count]
+        late_updates = final_payloads[shot_count:]
+        assert [p["shot"]["shot_number"] for p in first_results] == list(range(1, shot_count + 1))
         assert [row["shot_number"] for row in session_log.shots] == list(range(1, shot_count + 1))
         # a fusion unit fills nothing in: no measured launch, so none and no carry (D17)
-        assert all(row["launch_angle_vertical_source"] is None for row in final_shots)
-        assert all(row["carry_spin_adjusted"] is None for row in final_shots)
-        assert all(shot.launch_angle_vertical_source is None for shot in shots)
+        assert all(p["shot"]["launch_angle_vertical_source"] is None for p in first_results)
+        assert all(p["shot"]["carry_spin_adjusted"] is None for p in first_results)
+        enriched_numbers = [1, 2, 3]  # active + the two queued enrichment jobs
+        assert [p["shot"]["shot_number"] for p in late_updates] == enriched_numbers
+        assert all(p["shot"]["launch_angle_vertical"] == 42.0 for p in late_updates)
+        assert [shot.launch_angle_vertical_source for shot in shots[:3]] == ["iwr6843"] * 3
+        assert all(shot.launch_angle_vertical_source is None for shot in shots[3:])
+        assert [row["shot_number"] for row in session_log.shot_updates] == enriched_numbers
+        assert session_log.stats["shots_detected"] == shot_count
         assert simulator_shots == list(range(1, shot_count + 1))
         self._assert_finalization_coordinator_empty()
+        assert not server_module._shot_awaiting_late_enrichment
+
+    def _late_iwr_session(self, monkeypatch, enrich):
+        """One fusion shot whose IWR result returns after the first-result timer."""
+        emitted, session_log = self._record_finalization(monkeypatch)
+        background_threads = []
+        simulator_shots = []
+        first_result_published = threading.Event()
+        monitor_shots = []
+
+        class Monitor:
+            @staticmethod
+            def get_session_stats():
+                return summarize_shots(monitor_shots, mode="rolling-buffer")
+
+        def record_emit(event, payload):
+            emitted.append((event, payload))
+            if event == "shot_update":
+                first_result_published.set()
+
+        def start_background_task(target, *args, **kwargs):
+            thread = threading.Thread(target=target, args=args, kwargs=kwargs, daemon=True)
+            background_threads.append(thread)
+            thread.start()
+            return thread
+
+        monkeypatch.setattr(server_module, "monitor", Monitor())
+        monkeypatch.setattr(server_module, "shot_enrichment_queue", self._enrichment_queue())
+        monkeypatch.setattr(server_module, "shot_enrichment_task", None)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
+        monkeypatch.setattr(server_module, "_SHOT_ENRICHMENT_DEADLINE_S", 0.05)
+        monkeypatch.setattr(server_module.socketio, "emit", record_emit)
+        monkeypatch.setattr(server_module.socketio, "start_background_task", start_background_task)
+        monkeypatch.setattr(server_module, "_enrich_shot_from_optional_hardware", enrich)
+        monkeypatch.setattr(
+            server_module,
+            "_forward_shot_to_simulators",
+            lambda shot: simulator_shots.append(shot.to_dict()),
+        )
+
+        shot = self._shot()
+        monitor_shots.append(shot)
+        return SimpleNamespace(
+            shot=shot,
+            emitted=emitted,
+            session_log=session_log,
+            simulator_shots=simulator_shots,
+            first_result_published=first_result_published,
+            background_threads=background_threads,
+        )
+
+    def test_late_iwr_result_updates_same_shot_once_without_resending_sims(self, monkeypatch):
+        release_dump = threading.Event()
+
+        def late_iwr(shot):
+            assert release_dump.wait(5.0)
+            shot.launch_angle_vertical = 14.0
+            shot.launch_angle_vertical_confidence = 0.9
+            shot.launch_angle_vertical_source = "radar"
+            return server_module._ShotEnrichmentResult(iwr6843_ms=21000.0)
+
+        run = self._late_iwr_session(monkeypatch, late_iwr)
+        on_shot_detected(run.shot)
+        assert run.first_result_published.wait(2.0), "the timer must publish OPS-only first"
+        release_dump.set()
+        for thread in run.background_threads:
+            thread.join(timeout=2.0)
+
+        assert [event for event, _payload in run.emitted] == ["shot", "shot_update", "shot_update"]
+        initial, first_result, late = (payload for _event, payload in run.emitted)
+        assert first_result["shot"]["launch_angle_vertical"] is None
+        assert late["shot"]["launch_angle_vertical"] == 14.0
+        assert late["shot"]["launch_angle_vertical_source"] == "radar"
+        # the UI replaces a shot in place by its timestamp; the number stays too
+        for key in ("shot_number", "timestamp"):
+            assert late["shot"][key] == first_result["shot"][key] == initial["shot"][key]
+        assert late["stats"]["shot_count"] == 1, "the update must not add a shot to the stats"
+        assert run.shot.launch_angle_vertical == 14.0, "the retained shot carries the update"
+
+        assert len(run.session_log.shots) == 1
+        assert run.session_log.stats["shots_detected"] == 1
+        assert len(run.session_log.shot_updates) == 1
+        update = run.session_log.shot_updates[0]
+        assert update["shot_number"] == 1
+        assert update["launch_angle_vertical"] == 14.0
+        assert update["pipeline_ms"]["iwr6843"] == 21000.0
+        assert update["update"]["first_result_reason"] == "enrichment_deadline"
+        assert update["update"]["simulators"] == "not_resent"
+        assert update["update"]["late_by_ms"] >= 0.0
+
+        assert len(run.simulator_shots) == 1, "simulators can't take an update"
+        assert run.simulator_shots[0]["launch_angle_vertical"] is None
+        self._assert_finalization_coordinator_empty()
+        assert not server_module._shot_awaiting_late_enrichment
+
+    def test_late_enrichment_failure_is_logged_and_ops_shot_stays(self, monkeypatch):
+        release_dump = threading.Event()
+        logged_errors = []
+
+        def failing_iwr(_shot):
+            assert release_dump.wait(5.0)
+            raise RuntimeError("IWR dump failed")
+
+        run = self._late_iwr_session(monkeypatch, failing_iwr)
+        monkeypatch.setattr(
+            server_module,
+            "log_session_error",
+            lambda message, **kwargs: logged_errors.append((message, kwargs)),
+        )
+        on_shot_detected(run.shot)
+        assert run.first_result_published.wait(2.0)
+        release_dump.set()
+        for thread in run.background_threads:
+            thread.join(timeout=2.0)
+
+        assert [message for message, _kwargs in logged_errors] == [
+            "Deferred shot enrichment failed"
+        ]
+        assert len(run.session_log.shots) == 1
+        assert run.session_log.stats["shots_detected"] == 1
+        updates = [payload["shot"] for event, payload in run.emitted if event == "shot_update"]
+        assert all(row["ball_speed_mph"] == 150.0 for row in updates), "the OPS shot stays"
+        assert all(row["shot_number"] == 1 for row in updates)
+        assert [row["update"]["first_result_reason"] for row in run.session_log.shot_updates] == [
+            "enrichment_deadline"
+        ]
+        assert run.session_log.shot_updates[0]["ball_speed_mph"] == 150.0
+        assert len(run.simulator_shots) == 1
+        assert not server_module._shot_awaiting_late_enrichment
 
     def test_kld7_uses_shot_impact_timestamp(self, monkeypatch):
         """K-LD7 selection should be anchored to the OPS243 impact timestamp."""
