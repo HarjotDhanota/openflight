@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from .. import __version__
+from ..shot_updates import SHOT_DETECTED, SHOT_UPDATED, merge_shot_update
 
 CLIENT_VERSION = __version__
 
@@ -90,23 +91,54 @@ def _filter_entries(
     line by line so a huge raw-ADC session is never held in memory at once.
     Captures the ``session_uuid`` from ``session_start`` during the same pass
     so we don't need a second read to resolve the upload id.
+
+    A late ``shot_updated`` is never uploaded as its own entry: it replaces its
+    shot's kept ``shot_detected`` line with the shot's final values, in the same
+    ``shot_detected`` format, so the upload contract is unchanged and the shot
+    is counted once. If the final line would exceed ``MAX_LINE_BYTES`` the first
+    result is kept and the update is counted in ``dropped_oversize``.
     """
     kept_lines: List[str] = []
     kept_type_counts: Dict[str, int] = {}
     dropped_oversize = 0
     embedded_uuid = ""
+    # Kept shot_detected line per shot number, so a late shot_updated can
+    # replace it with the shot's final values in the same shot_detected format.
+    shot_line_index: Dict[int, int] = {}
 
     for raw, entry in _iter_entries(lines):
         entry_type = entry.get("type")
-        if entry_type == "session_start" and not embedded_uuid:
-            session_uuid = entry.get("session_uuid")
-            if session_uuid:
-                embedded_uuid = str(session_uuid).lower()
+        if entry_type == "session_start":
+            shot_line_index = {}
+            if not embedded_uuid and entry.get("session_uuid"):
+                embedded_uuid = str(entry["session_uuid"]).lower()
+        number = entry.get("shot_number")
+        if not isinstance(number, int) or isinstance(number, bool):
+            number = None
+        if entry_type == SHOT_UPDATED and number is not None:
+            index = shot_line_index.get(number)
+            base = (
+                json.loads(kept_lines[index])
+                if index is not None
+                else {"ts": entry.get("ts"), "type": SHOT_DETECTED}
+            )
+            final = json.dumps(merge_shot_update(base, entry))
+            if len(final.encode("utf-8")) > MAX_LINE_BYTES:
+                dropped_oversize += 1
+            elif index is not None:
+                kept_lines[index] = final
+            else:
+                shot_line_index[number] = len(kept_lines)
+                kept_lines.append(final)
+                kept_type_counts[SHOT_DETECTED] = kept_type_counts.get(SHOT_DETECTED, 0) + 1
+            continue
         if entry_type not in KEEP_ENTRY_TYPES:
             continue
         if len(raw.encode("utf-8")) > MAX_LINE_BYTES:
             dropped_oversize += 1
             continue
+        if entry_type == SHOT_DETECTED and number is not None:
+            shot_line_index[number] = len(kept_lines)
         kept_lines.append(raw)
         kept_type_counts[entry_type] = kept_type_counts.get(entry_type, 0) + 1
 

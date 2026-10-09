@@ -34,6 +34,7 @@ from openflight.clubs import ClubType  # noqa: E402
 from openflight.rolling_buffer.monitor import get_optimal_spin_for_ball_speed  # noqa: E402
 from openflight.rolling_buffer.processor import RollingBufferProcessor  # noqa: E402
 from openflight.rolling_buffer.types import IQCapture  # noqa: E402
+from openflight.shot_updates import apply_shot_updates  # noqa: E402
 
 
 def _club_enum(normalized_club: str) -> ClubType:
@@ -64,17 +65,19 @@ def _club_enum(normalized_club: str) -> ClubType:
 
 
 def _load_session_entries(path: Path) -> tuple[list[dict], list[dict]]:
-    shots = []
+    shot_entries = []
     captures = []
     with path.open("r", encoding="utf-8") as handle:
         for line in handle:
             if not line.strip():
                 continue
             entry = json.loads(line)
-            if entry.get("type") == "shot_detected":
-                shots.append(entry)
+            if entry.get("type") in ("session_start", "shot_detected", "shot_updated"):
+                shot_entries.append(entry)
             elif entry.get("type") == "rolling_buffer_capture":
                 captures.append(entry)
+    # each shot once, with any late update applied
+    shots = [e for e in apply_shot_updates(shot_entries) if e.get("type") == "shot_detected"]
     return shots, captures
 
 

@@ -20,6 +20,7 @@ from openflight.camera.fusion_processing import build_context, lighting_note, pr
 from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
 from openflight.clubs import ClubType
 from openflight.raw_radar_replay import locate_recorded_capture
+from openflight.shot_updates import apply_shot_updates
 
 
 def _read_events(session_file: Path) -> list[dict[str, Any]]:
@@ -30,7 +31,8 @@ def _read_events(session_file: Path) -> list[dict[str, Any]]:
             event = json.loads(line)
             if isinstance(event, dict):
                 events.append(event)
-    return events
+    # a late shot_updated carries the camera fusion context the first result lacked
+    return apply_shot_updates(events)
 
 
 def _one(items: list[Any], description: str):

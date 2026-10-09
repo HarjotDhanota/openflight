@@ -6,6 +6,7 @@ import math
 from collections import Counter, defaultdict
 from typing import Any, Mapping, Sequence
 
+from .shot_updates import apply_shot_updates
 from .timing import SCHEMA_NAME, SCHEMA_VERSION
 
 
@@ -65,6 +66,8 @@ def build_commissioning_report(sources: Sequence[Mapping[str, Any]]) -> dict[str
         records = source.get("records")
         if not isinstance(records, list):
             raise ValueError("session source records must be a list")
+        # A late shot_updated replaces its shot's values; it is not another shot.
+        records = apply_shot_updates(records)
         starts = [
             row
             for row in records

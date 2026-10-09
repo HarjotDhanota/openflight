@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import math
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from openflight.shot_updates import read_session_jsonl
 
 
 @dataclass(frozen=True)
@@ -102,32 +103,27 @@ def load_openflight_details(path: Path) -> dict[int, dict[str, Any]]:
             "club_angle": entry.get("club_angle"),
         }
 
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            entry_type = entry.get("type")
-            shot_number = _to_int(entry.get("shot_number"))
-            if shot_number is None:
-                continue
+    for entry in read_session_jsonl(path):
+        entry_type = entry.get("type")
+        shot_number = _to_int(entry.get("shot_number"))
+        if shot_number is None:
+            continue
 
-            if entry_type == "kld7_buffer":
-                orientation = entry.get("orientation")
-                if orientation in {"vertical", "horizontal"}:
-                    pending_buffers[(shot_number, orientation)] = buffer_summary(entry)
-                continue
+        if entry_type == "kld7_buffer":
+            orientation = entry.get("orientation")
+            if orientation in {"vertical", "horizontal"}:
+                pending_buffers[(shot_number, orientation)] = buffer_summary(entry)
+            continue
 
-            if entry_type != "shot_detected":
-                continue
+        if entry_type != "shot_detected":
+            continue
 
-            shot = dict(entry)
-            for orientation in ("vertical", "horizontal"):
-                shot[f"{orientation}_buffer"] = pending_buffers.get(
-                    (shot_number, orientation)
-                )
-            shots[shot_number] = shot
+        shot = dict(entry)
+        for orientation in ("vertical", "horizontal"):
+            shot[f"{orientation}_buffer"] = pending_buffers.get(
+                (shot_number, orientation)
+            )
+        shots[shot_number] = shot
 
     return shots
 
