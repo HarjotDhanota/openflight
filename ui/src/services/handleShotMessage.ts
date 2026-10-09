@@ -16,25 +16,34 @@ export interface ShotUpdateMessage {
   stats: SessionStats;
   pending?: Record<string, boolean>;
   enrichment?: {
-    status: 'skipped';
+    // skipped: the hardware metrics will never come; pending: they are
+    // deferred and will arrive as a later update to this same shot.
+    status: 'skipped' | 'pending';
     reason: string;
     hardware: string[];
   };
 }
 
-export function handleShotMessage(data: ShotMessage) {
+function showPendingHardware(pending: ShotMessage['pending'], timestamp: string) {
   const shotStore = useShotStore.getState();
-  shotStore.addShot(data.shot);
-  if (data.pending?.iwr6843 && data.pending?.camera) {
-    shotStore.startShotProcessing('hardware_enrichment', data.shot.timestamp);
-  } else if (data.pending?.iwr6843) {
-    shotStore.startShotProcessing('iwr_dump', data.shot.timestamp);
-  } else if (data.pending?.camera) {
-    shotStore.startShotProcessing('camera_processing', data.shot.timestamp);
+  if (pending?.iwr6843 && pending?.camera) {
+    shotStore.startShotProcessing('hardware_enrichment', timestamp);
+  } else if (pending?.iwr6843) {
+    shotStore.startShotProcessing('iwr_dump', timestamp);
+  } else if (pending?.camera) {
+    shotStore.startShotProcessing('camera_processing', timestamp);
   }
+}
+
+export function handleShotMessage(data: ShotMessage) {
+  useShotStore.getState().addShot(data.shot);
+  showPendingHardware(data.pending, data.shot.timestamp);
   playSwingCapturedCue();
 }
 
 export function handleShotUpdate(data: ShotUpdateMessage) {
   useShotStore.getState().updateShot(data.shot);
+  if (data.enrichment?.status === 'pending') {
+    showPendingHardware(data.pending, data.shot.timestamp);
+  }
 }

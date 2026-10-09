@@ -5,6 +5,7 @@ import json
 import math
 import sys
 import threading
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -3144,8 +3145,10 @@ class TestOnShotDetected:
     """Tests for live shot processing in the server."""
 
     @pytest.fixture(autouse=True)
-    def _reset_ordered_pipeline(self):
+    def _reset_ordered_pipeline(self, monkeypatch):
         server_module._reset_shot_sequence()
+        # each test gets its own deferred-enrichment backlog, like its own queue
+        monkeypatch.setattr(server_module, "_deferred_shot_enrichment", deque())
         yield
         _wait_for_shot_finalization_idle()
 
@@ -3226,7 +3229,8 @@ class TestOnShotDetected:
         return [
             payload
             for event, payload in emitted
-            if event == "shot_update" and payload.get("enrichment", {}).get("status") != "skipped"
+            # "enrichment" marks a status notice (skipped/pending), not a result
+            if event == "shot_update" and "enrichment" not in payload
         ]
 
     @classmethod
@@ -3755,20 +3759,24 @@ class TestOnShotDetected:
         assert not overflow_callback.is_alive()
         assert all(not thread.is_alive() for thread in background_threads)
 
+        # Changed with fix/keep-late-enrichment: shot 4 overflowed the enrichment
+        # queue and used to be "skipped" (no IWR or camera processing ever). It
+        # is now deferred: the notice says "pending", and its recorded IWR and
+        # camera captures are processed once the queue drains.
         expected = [(index, shot.impact_timestamp) for index, shot in enumerate(shots, start=1)]
         initial_shots = [payload["shot"] for event, payload in emitted if event == "shot"]
-        skipped_updates = [
+        status_notices = [
             payload
             for event, payload in emitted
-            if event == "shot_update" and payload.get("enrichment", {}).get("status") == "skipped"
+            if event == "shot_update" and "enrichment" in payload
         ]
         final_shots = [payload["shot"] for payload in self._final_update_payloads(emitted)]
         assert [(row["shot_number"], row["impact_timestamp"]) for row in initial_shots] == expected
-        assert len(skipped_updates) == 1
-        assert skipped_updates[0]["shot"]["shot_number"] == 4
-        assert skipped_updates[0]["pending"] == {}
-        assert skipped_updates[0]["enrichment"] == {
-            "status": "skipped",
+        assert len(status_notices) == 1
+        assert status_notices[0]["shot"]["shot_number"] == 4
+        assert status_notices[0]["pending"] == {"iwr6843": True, "camera": True}
+        assert status_notices[0]["enrichment"] == {
+            "status": "pending",
             "reason": "queue_full",
             "hardware": ["iwr6843", "camera"],
         }
@@ -3779,16 +3787,105 @@ class TestOnShotDetected:
             (row["shot_number"], row["shot_timestamp"])
             for row in session_log.rolling_buffer_captures
         ] == expected
-        expected_enriched = expected[:3]
         assert [
             (row["shot_number"], row["shot_timestamp"]) for row in session_log.iwr6843_captures
-        ] == expected_enriched
+        ] == expected
         assert [
             (row["shot_number"], row["shot_timestamp"]) for row in session_log.camera_captures
-        ] == expected_enriched
-        assert [(row["shot_number"], row["impact_timestamp"]) for row in final_shots] == expected
+        ] == expected
+        # first results stay in shot order; shot 4's enrichment lands either on
+        # time or as one late update to the same shot
+        first_seen = list(dict.fromkeys(row["shot_number"] for row in final_shots))
+        assert first_seen == [1, 2, 3, 4]
+        assert [row["shot_number"] for row in final_shots].count(4) in (1, 2)
+        assert len(session_log.shot_updates) <= 1
         assert simulator_shots == expected
         self._assert_finalization_coordinator_empty()
+        assert not server_module._shot_awaiting_late_enrichment
+        assert not server_module._deferred_shot_enrichment
+
+    def test_deferred_enrichment_keeps_impact_order_behind_the_backlog(self, monkeypatch):
+        processed = []
+        worker_targets = []
+        monkeypatch.setattr(server_module, "shot_enrichment_queue", self._enrichment_queue())
+        monkeypatch.setattr(server_module, "_deferred_shot_enrichment", deque())
+        monkeypatch.setattr(server_module, "shot_enrichment_task", None)
+        monkeypatch.setattr(
+            server_module,
+            "_finish_shot_detected",
+            lambda shot, **_kwargs: processed.append(shot.impact_timestamp),
+        )
+        monkeypatch.setattr(
+            server_module.socketio,
+            "start_background_task",
+            lambda target, *_args, **_kwargs: worker_targets.append(target) or object(),
+        )
+        shots = [self._shot(second) for second in range(5)]
+
+        def defer(shot):
+            return server_module._defer_shot_enrichment(
+                shot, emit_event="shot_update", initial_ui_ms=None
+            )
+
+        assert [defer(shot) for shot in shots[:3]] == [True, True, False]
+        # the queue has room again, but an older shot is still deferred: the
+        # newer shot must wait behind it, or the older shot's recorded IWR and
+        # camera captures would be discarded as stale by the newer match
+        server_module.shot_enrichment_queue.get_nowait()
+        server_module.shot_enrichment_queue.task_done()
+        processed.append(shots[0].impact_timestamp)
+        assert defer(shots[3]) is False
+        assert defer(shots[4]) is False
+
+        worker_targets[0]()
+
+        assert processed == [shot.impact_timestamp for shot in shots]
+        assert not server_module._deferred_shot_enrichment
+        assert server_module.shot_enrichment_task is None
+
+    def test_deferred_backlog_bound_abandons_enrichment_loudly(self, monkeypatch):
+        emitted, session_log = self._record_finalization(monkeypatch)
+        logged_errors = []
+        lifecycle = []
+        session_log.active_session_uuid = "session-one"
+        session_log.log_shot_pinned = lambda _uuid, shot, pipeline_ms=None: session_log.log_shot(
+            shot, pipeline_ms
+        )
+        session_log.log_shot_enrichment = lambda _uuid, row: lifecycle.append(row) or True
+        monkeypatch.setattr(server_module, "shot_enrichment_queue", self._enrichment_queue())
+        monkeypatch.setattr(server_module, "_deferred_shot_enrichment", deque())
+        monkeypatch.setattr(server_module, "_DEFERRED_ENRICHMENT_CAPACITY", 1)
+        monkeypatch.setattr(server_module, "_SHOT_ENRICHMENT_DEADLINE_S", 0.05)
+        monkeypatch.setattr(server_module, "shot_enrichment_task", None)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
+        monkeypatch.setattr(
+            server_module.socketio, "start_background_task", lambda *_a, **_k: object()
+        )
+        monkeypatch.setattr(
+            server_module,
+            "log_session_error",
+            lambda message, **kwargs: logged_errors.append((message, kwargs)),
+        )
+
+        for second in range(4):  # 2 queued, 1 deferred, 1 over the hard bound
+            on_shot_detected(self._shot(second))
+        self._wait_for_finalization_coordinator_idle()
+
+        assert [message for message, _kwargs in logged_errors] == ["Shot enrichment abandoned"]
+        assert logged_errors[0][1]["context"]["shot_number"] == 4
+        assert logged_errors[0][1]["context"]["reason"] == "enrichment_backlog_full"
+        notices = [p for e, p in emitted if e == "shot_update" and "enrichment" in p]
+        assert [(p["shot"]["shot_number"], p["enrichment"]["status"]) for p in notices] == [
+            (3, "pending"),
+            (4, "skipped"),
+        ]
+        assert notices[1]["enrichment"]["reason"] == "enrichment_backlog_full"
+        abandoned = [row for row in lifecycle if row["state"] == "enrichment_abandoned"]
+        assert [(row["shot_number"], row["reason"]) for row in abandoned] == [
+            (4, "enrichment_backlog_full")
+        ]
+        assert [row["shot_number"] for row in session_log.shots] == [1, 2, 3, 4]
+        server_module._reset_shot_sequence()
 
     def test_capacity_eviction_never_finalizes_on_ops_callback(self, monkeypatch):
         enrichment_queue = self._enrichment_queue()
@@ -3938,8 +4035,10 @@ class TestOnShotDetected:
         # Changed with fix/keep-late-enrichment: this test used to assert that
         # every shot stayed OPS-only after the stuck hardware returned, because
         # late results were discarded. Late results are now applied as updates
-        # to the same shot, so the shots whose enrichment was queued (1-3) gain
-        # their launch angle afterwards; the first results are unchanged.
+        # to the same shot, and shots that overflowed the queue are deferred
+        # instead of skipped, so every shot whose enrichment was active, queued
+        # or deferred (1-11) gains its launch angle afterwards; the rest were
+        # abandoned loudly at the backlog bound. First results are unchanged.
         final_payloads = self._final_update_payloads(emitted)
         first_results = final_payloads[:shot_count]
         late_updates = final_payloads[shot_count:]
@@ -3948,11 +4047,14 @@ class TestOnShotDetected:
         # a fusion unit fills nothing in: no measured launch, so none and no carry (D17)
         assert all(p["shot"]["launch_angle_vertical_source"] is None for p in first_results)
         assert all(p["shot"]["carry_spin_adjusted"] is None for p in first_results)
-        enriched_numbers = [1, 2, 3]  # active + the two queued enrichment jobs
+        enriched = server_module._SHOT_AWAITING_LATE_CAPACITY  # active + queued + deferred
+        enriched_numbers = list(range(1, enriched + 1))
         assert [p["shot"]["shot_number"] for p in late_updates] == enriched_numbers
         assert all(p["shot"]["launch_angle_vertical"] == 42.0 for p in late_updates)
-        assert [shot.launch_angle_vertical_source for shot in shots[:3]] == ["iwr6843"] * 3
-        assert all(shot.launch_angle_vertical_source is None for shot in shots[3:])
+        assert [shot.launch_angle_vertical_source for shot in shots[:enriched]] == [
+            "iwr6843"
+        ] * enriched
+        assert all(shot.launch_angle_vertical_source is None for shot in shots[enriched:])
         assert [row["shot_number"] for row in session_log.shot_updates] == enriched_numbers
         assert session_log.stats["shots_detected"] == shot_count
         assert simulator_shots == list(range(1, shot_count + 1))

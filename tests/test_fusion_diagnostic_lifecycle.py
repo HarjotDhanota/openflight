@@ -322,6 +322,77 @@ def test_late_update_publish_error_is_logged_and_keeps_the_ops_only_shot(monkeyp
     assert shot.ball_speed_mph == 120.0
 
 
+def _deferred(shot):
+    """What the OPS callback queues when enrichment is deferred behind a full queue."""
+    server._queue_shot_finalization(
+        shot,
+        emit_event="shot_update",
+        initial_ui_ms=None,
+        enrichment=server._ShotEnrichmentResult(
+            diagnostic_outcome="partial", diagnostic_reason="enrichment_deferred"
+        ),
+        awaits_late_enrichment=True,
+    )
+
+
+def test_deferred_shot_publishes_ops_only_then_its_enrichment_updates_it(monkeypatch):
+    diagnostic_log = _DiagnosticLog()
+    calls = []
+    _capture_finalization(monkeypatch, diagnostic_log, calls)
+    monkeypatch.setattr(server, "_SHOT_ENRICHMENT_DEADLINE_S", 30.0)
+    shot = _shot()
+    server._register_shot_for_finalization(shot, needs_watchdog=True)
+    _deferred(shot)
+    _wait_until_awaiting(1)
+
+    server._queue_shot_finalization(
+        shot, emit_event="shot_update", initial_ui_ms=None, final_shot=_late_iwr_result(shot)
+    )
+
+    assert diagnostic_log.enrichment_rows[0]["state"] == "ops_only_finalized"
+    assert diagnostic_log.enrichment_rows[0]["reason"] == "enrichment_deferred"
+    assert diagnostic_log.enrichment_rows[0]["background_work"] == "deferred"
+    assert diagnostic_log.enrichment_rows[-1]["state"] == "late_result_applied"
+    assert diagnostic_log.enrichment_rows[-1]["reason"] == "enrichment_deferred"
+    assert [kwargs["late_update"] is not None for _shot_obj, kwargs in calls] == [False, True]
+    assert calls[0][1]["enrichment"].diagnostic_reason == "enrichment_deferred"
+    assert shot.launch_angle_vertical == 14.0
+
+
+def test_deferred_enrichment_ready_before_its_turn_is_published_on_time(monkeypatch):
+    diagnostic_log = _DiagnosticLog()
+    calls = []
+    _capture_finalization(monkeypatch, diagnostic_log, calls)
+    monkeypatch.setattr(server, "_SHOT_ENRICHMENT_DEADLINE_S", 30.0)
+    first, second = _shot(1), _shot(2)
+    server._register_shot_for_finalization(first, needs_watchdog=True)
+    server._register_shot_for_finalization(second, needs_watchdog=True)
+    _deferred(second)
+    # the deferred enrichment finished while shot 1 still holds the turn
+    server._queue_shot_finalization(
+        second, emit_event="shot_update", initial_ui_ms=None, final_shot=_late_iwr_result(second)
+    )
+    # and a stray second placeholder never overwrites the real result
+    _deferred(second)
+    server._queue_shot_finalization(first, emit_event="shot_update", initial_ui_ms=None)
+    with server._shot_finalization_condition:
+        assert server._shot_finalization_condition.wait_for(
+            lambda: (
+                not server._shot_finalization_order and server._shot_finalization_current is None
+            ),
+            timeout=2.0,
+        )
+
+    assert [(shot.shot_number, kwargs["late_update"]) for shot, kwargs in calls] == [
+        (1, None),
+        (2, None),
+    ]
+    assert calls[1][1]["enrichment"].diagnostic_reason is None
+    assert second.launch_angle_vertical == 14.0
+    assert not server._shot_awaiting_late_enrichment
+    assert diagnostic_log.enrichment_rows == []
+
+
 def test_late_result_after_capacity_eviction_is_applied(monkeypatch):
     diagnostic_log = _DiagnosticLog()
     calls = []
@@ -469,11 +540,19 @@ def test_late_result_from_a_reset_session_never_updates_the_new_shot(monkeypatch
     assert diagnostic_log.enrichment_rows[-1]["state"] == "late_result_unmatched"
 
 
+def test_awaiting_bound_covers_every_shot_whose_enrichment_can_still_run():
+    # active job + queued jobs + the deferred backlog: none of them may be
+    # dropped from the awaiting list while its enrichment can still report
+    assert server._SHOT_AWAITING_LATE_CAPACITY == (
+        1 + server._SHOT_ENRICHMENT_QUEUE_CAPACITY + server._DEFERRED_ENRICHMENT_CAPACITY
+    )
+
+
 def test_awaiting_late_results_are_bounded(monkeypatch):
     diagnostic_log = _DiagnosticLog()
     _capture_finalization(monkeypatch, diagnostic_log)
     monkeypatch.setattr(server, "_SHOT_ENRICHMENT_DEADLINE_S", 0.0)
-    capacity = server._SHOT_FINALIZATION_CAPACITY
+    capacity = server._SHOT_AWAITING_LATE_CAPACITY
     shots = [_shot(number) for number in range(1, capacity + 3)]
     for shot in shots:
         server._register_shot_for_finalization(shot, needs_watchdog=True)

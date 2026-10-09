@@ -208,12 +208,27 @@ _SHOT_ENRICHMENT_DEADLINE_S = 20.0
 # Active hardware work, the two queued jobs, and one overflow result. If more
 # shots arrive, the oldest shot's first result is published OPS-only so ordered
 # finalization keeps advancing without retaining an unbounded number of full
-# Shot objects; its enrichment still lands later as an update. Also bounds the
-# OPS-only shots kept for their late enrichment (_shot_awaiting_late_enrichment).
+# Shot objects; its enrichment still lands later as an update.
 _SHOT_FINALIZATION_CAPACITY = _SHOT_ENRICHMENT_QUEUE_CAPACITY + 2
+# Shots that arrive while the enrichment queue is full wait here instead of
+# losing their IWR and camera metrics. An entry is the Shot object and its
+# emit settings only (a few KB): the IWR dump and the camera clip it will use
+# were already recorded by those runtimes, which re-arm on their own threads
+# and keep the recordings whether or not a shot is waiting. Enrichment takes
+# about one IWR dump (~7-8 s) per shot, so the queue only fills when more than
+# three shots land inside one dump; reaching this bound as well takes twelve
+# shots in a row each arriving faster than the one before was enriched, far
+# beyond normal swing pace (a shot every 15 s or more). Past it, enrichment is
+# abandoned loudly (enrichment_abandoned), never silently.
+_DEFERRED_ENRICHMENT_CAPACITY = 8
+# Every shot whose enrichment can still report back: the active job, the
+# queued jobs and the deferred backlog. Bounds _shot_awaiting_late_enrichment.
+_SHOT_AWAITING_LATE_CAPACITY = 1 + _SHOT_ENRICHMENT_QUEUE_CAPACITY + _DEFERRED_ENRICHMENT_CAPACITY
 shot_enrichment_queue: queue.Queue[tuple[Shot, str, float | None]] = queue.Queue(
     maxsize=_SHOT_ENRICHMENT_QUEUE_CAPACITY
 )
+# Older than everything queued after it; guarded by shot_enrichment_task_lock.
+_deferred_shot_enrichment: deque[tuple[Shot, str, float | None]] = deque()
 shot_enrichment_task = None
 shot_enrichment_task_lock = threading.Lock()
 _shot_sequence_number = 0
@@ -268,6 +283,9 @@ class _PendingShotFinalization:
     enrichment: _ShotEnrichmentResult
     diagnostic_logger: Any | None = None
     diagnostic_session_uuid: str | None = None
+    # A placeholder for a shot whose enrichment was deferred: publish it
+    # OPS-only at its turn, then let the deferred enrichment update it.
+    awaits_late_enrichment: bool = False
 
 
 @dataclass(frozen=True)
@@ -521,18 +539,15 @@ def _shot_finalization_worker_loop() -> None:
                         _shot_finalization_order.popleft()
                         del _shot_finalization_registered[next_shot_number]
                         _shot_finalization_ready.pop(next_shot_number, None)
-                        if pending is None:
-                            # Published OPS-only now; the running enrichment will
-                            # update this same shot when it completes. Registered
-                            # in the same critical section, so a result arriving
-                            # now always finds the shot in one of the two maps.
+                        if pending is None or pending.awaits_late_enrichment:
+                            # Published OPS-only now; the running or deferred
+                            # enrichment will update this same shot when it
+                            # completes. Registered in the same critical
+                            # section, so a result arriving now always finds the
+                            # shot in one of the two maps.
                             abandoned = _await_late_enrichment_locked(
                                 registered,
-                                (
-                                    "enrichment_deadline"
-                                    if deadline_expired
-                                    else "coordinator_capacity"
-                                ),
+                                _ops_only_reason(pending, deadline_expired=deadline_expired),
                             )
                         _shot_finalization_current = registered.shot
                         _shot_finalization_running = True
@@ -581,6 +596,21 @@ def _shot_finalization_worker_loop() -> None:
                     ),
                     diagnostic_logger=registered.diagnostic_logger,
                     diagnostic_session_uuid=registered.diagnostic_session_uuid,
+                )
+            elif pending.awaits_late_enrichment:
+                logger.warning(
+                    "[SERVER] Shot #%d enrichment was deferred behind a full queue; "
+                    "publishing OPS-only now, the deferred enrichment will update it",
+                    next_shot_number,
+                )
+                _log_shot_enrichment_lifecycle(
+                    registered.diagnostic_logger,
+                    registered.diagnostic_session_uuid,
+                    registered.shot,
+                    state="ops_only_finalized",
+                    reason=pending.enrichment.diagnostic_reason or "enrichment_deferred",
+                    background_work="deferred",
+                    result_discarded=False,
                 )
             elif pending.shot is not registered.shot:
                 _copy_shot_fields(registered.shot, pending.shot)
@@ -635,6 +665,13 @@ def _shot_finalization_worker_loop() -> None:
             _shot_finalization_condition.notify_all()
 
 
+def _ops_only_reason(pending: _PendingShotFinalization | None, *, deadline_expired: bool) -> str:
+    """Why a shot's first result is published before its enrichment is ready."""
+    if pending is not None:
+        return pending.enrichment.diagnostic_reason or "enrichment_deferred"
+    return "enrichment_deadline" if deadline_expired else "coordinator_capacity"
+
+
 def _copy_shot_fields(target: Shot, source: Shot) -> None:
     """Make the retained shot object carry every field of its enriched copy."""
     for shot_field in fields(Shot):
@@ -647,10 +684,10 @@ def _await_late_enrichment_locked(
 ) -> list[_AwaitingLateEnrichment]:
     """Keep an OPS-only shot for its late result; caller holds the condition lock.
 
-    Returns the oldest entries dropped to stay within _SHOT_FINALIZATION_CAPACITY.
+    Returns the oldest entries dropped to stay within _SHOT_AWAITING_LATE_CAPACITY.
     In normal running that never happens: every entry is a shot whose enrichment
-    is active or queued, and the enrichment queue holds fewer than that. It only
-    bounds memory if an enrichment worker died without reporting back.
+    is active, queued or deferred, and those together hold at most that many.
+    It only bounds memory if an enrichment worker died without reporting back.
     """
     _shot_awaiting_late_enrichment[registered.shot.shot_number] = _AwaitingLateEnrichment(
         registered=registered,
@@ -658,7 +695,7 @@ def _await_late_enrichment_locked(
         first_result_monotonic=time.monotonic(),
     )
     abandoned = []
-    while len(_shot_awaiting_late_enrichment) > _SHOT_FINALIZATION_CAPACITY:
+    while len(_shot_awaiting_late_enrichment) > _SHOT_AWAITING_LATE_CAPACITY:
         oldest = next(iter(_shot_awaiting_late_enrichment))
         abandoned.append(_shot_awaiting_late_enrichment.pop(oldest))
     return abandoned
@@ -670,7 +707,7 @@ def _log_abandoned_late_enrichment(entry: _AwaitingLateEnrichment) -> None:
         "[SERVER] Shot #%d stays OPS-only: its enrichment never reported back and "
         "%d newer OPS-only shots are waiting for theirs",
         entry.registered.shot.shot_number,
-        _SHOT_FINALIZATION_CAPACITY,
+        _SHOT_AWAITING_LATE_CAPACITY,
     )
     _log_shot_enrichment_lifecycle(
         entry.registered.diagnostic_logger,
@@ -5165,14 +5202,20 @@ def _queue_shot_finalization(
     initial_ui_ms: float | None,
     enrichment: _ShotEnrichmentResult | None = None,
     final_shot: Shot | None = None,
+    awaits_late_enrichment: bool = False,
 ) -> None:
-    """Record a ready shot for the exclusive finalization worker."""
+    """Record a ready shot for the exclusive finalization worker.
+
+    ``awaits_late_enrichment`` queues a placeholder for a shot whose enrichment
+    was deferred: it is published OPS-only at its turn and updated later.
+    """
     _queue_ordered_shot_finalization(
         _PendingShotFinalization(
             shot=final_shot if final_shot is not None else shot,
             emit_event=emit_event,
             initial_ui_ms=initial_ui_ms,
             enrichment=(enrichment if enrichment is not None else _ShotEnrichmentResult()),
+            awaits_late_enrichment=awaits_late_enrichment,
         ),
         source_shot=shot,
     )
@@ -5196,7 +5239,12 @@ def _queue_ordered_shot_finalization(
     with _shot_finalization_condition:
         registered = _shot_finalization_registered.get(shot_number)
         if registered is not None and registered.shot is source_shot:
-            if shot_number in _shot_finalization_ready:
+            waiting = _shot_finalization_ready.get(shot_number)
+            # A deferred shot's enrichment can finish before its OPS-only turn
+            # comes: it then replaces the placeholder and is published on time.
+            if waiting is not None and (
+                pending.awaits_late_enrichment or not waiting.awaits_late_enrichment
+            ):
                 logger.warning("[SERVER] Shot #%d is already waiting for finalization", shot_number)
                 return
             _shot_finalization_ready[shot_number] = replace(
@@ -5398,30 +5446,35 @@ def _emit_initial_ops_shot(shot: Shot) -> bool:
         return False
 
 
-def _emit_ops_enrichment_skipped(shot: Shot, *, reason: str) -> None:
-    """Immediately clear provisional hardware progress when admission fails."""
-    skipped_hardware = []
+def _emit_ops_enrichment_status(shot: Shot, *, status: str, reason: str) -> None:
+    """Tell the UI at once whether this shot's hardware metrics are coming.
+
+    ``pending``: the enrichment is deferred and will update the shot later.
+    ``skipped``: it will never run, so the provisional progress is cleared.
+    """
+    hardware = []
     if iwr6843_runtime is not None:
-        skipped_hardware.append("iwr6843")
+        hardware.append("iwr6843")
     if camera_capture_runtime is not None:
-        skipped_hardware.append("camera")
+        hardware.append("camera")
     try:
         socketio.emit(
             "shot_update",
             {
                 "shot": shot_to_dict(shot),
                 "stats": monitor.get_session_stats() if monitor else {},
-                "pending": {},
+                "pending": ({name: True for name in hardware} if status == "pending" else {}),
                 "enrichment": {
-                    "status": "skipped",
+                    "status": status,
                     "reason": reason,
-                    "hardware": skipped_hardware,
+                    "hardware": hardware,
                 },
             },
         )
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning(
-            "[SERVER] Failed to clear skipped shot enrichment status: %s",
+            "[SERVER] Failed to emit %s shot enrichment status: %s",
+            status,
             error,
             exc_info=True,
         )
@@ -5435,18 +5488,29 @@ def _has_slow_shot_enrichment(shot: Shot) -> bool:
 
 
 def _drain_shot_enrichment_queue() -> None:
-    """Finish deferred shots in detection order, one hardware consumer at a time."""
+    """Finish deferred shots in detection order, one hardware consumer at a time.
+
+    Queued jobs come first, then the deferred backlog: nothing is queued while
+    the backlog holds a shot, so this is always impact order. That order
+    matters: matching a newer impact discards older unmatched IWR and camera
+    captures as stale.
+    """
     global shot_enrichment_task  # pylint: disable=global-statement
 
     while True:
+        from_queue = True
         try:
             shot, emit_event, initial_ui_ms = shot_enrichment_queue.get_nowait()
         except queue.Empty:
             with shot_enrichment_task_lock:
-                if shot_enrichment_queue.empty():
+                if _deferred_shot_enrichment:
+                    shot, emit_event, initial_ui_ms = _deferred_shot_enrichment.popleft()
+                    from_queue = False
+                elif shot_enrichment_queue.empty():
                     shot_enrichment_task = None
                     return
-            continue
+                else:
+                    continue
 
         try:
             _finish_shot_detected(
@@ -5463,7 +5527,8 @@ def _drain_shot_enrichment_queue() -> None:
                 exc=error,
             )
         finally:
-            shot_enrichment_queue.task_done()
+            if from_queue:
+                shot_enrichment_queue.task_done()
 
 
 def _defer_shot_enrichment(
@@ -5471,14 +5536,31 @@ def _defer_shot_enrichment(
     *,
     emit_event: str,
     initial_ui_ms: float | None,
-) -> None:
-    """Queue optional hardware work without blocking the OPS capture callback."""
+) -> bool:
+    """Queue optional hardware work without blocking the OPS capture callback.
+
+    Returns True when the job is queued, False when the queue is full and it
+    waits in the deferred backlog (its result then arrives as a late update).
+    Raises ``queue.Full`` only when the backlog is at its hard bound too.
+    """
     global shot_enrichment_task  # pylint: disable=global-statement
 
     with shot_enrichment_task_lock:
-        shot_enrichment_queue.put_nowait((shot, emit_event, initial_ui_ms))
+        job = (shot, emit_event, initial_ui_ms)
+        queued = False
+        # Behind an older deferred shot, a newer one must wait its turn too.
+        if not _deferred_shot_enrichment:
+            try:
+                shot_enrichment_queue.put_nowait(job)
+                queued = True
+            except queue.Full:
+                pass
+        if not queued:
+            if len(_deferred_shot_enrichment) >= _DEFERRED_ENRICHMENT_CAPACITY:
+                raise queue.Full("deferred shot enrichment backlog is full")
+            _deferred_shot_enrichment.append(job)
         if shot_enrichment_task is not None:
-            return
+            return queued
         try:
             # Reserve the slot while the task starts. The worker needs the same
             # lock before clearing it, which closes the fast-finish race.
@@ -5487,11 +5569,15 @@ def _defer_shot_enrichment(
             shot_enrichment_task = task
         except Exception:
             shot_enrichment_task = None
-            queued_shot, _event, _latency = shot_enrichment_queue.get_nowait()
-            shot_enrichment_queue.task_done()
+            if queued:
+                queued_shot, _event, _latency = shot_enrichment_queue.get_nowait()
+                shot_enrichment_queue.task_done()
+            else:
+                queued_shot, _event, _latency = _deferred_shot_enrichment.pop()
             if queued_shot is not shot:
                 raise RuntimeError("shot enrichment queue lost FIFO ordering") from None
             raise
+        return queued
 
 
 def on_shot_detected(shot: Shot) -> None:
@@ -5591,27 +5677,17 @@ def _handle_shot_detected(shot: Shot) -> None:
         needs_watchdog=True,
     )
     try:
-        _defer_shot_enrichment(
+        queued = _defer_shot_enrichment(
             shot,
             emit_event=final_event,
             initial_ui_ms=initial_ui_ms,
         )
     except queue.Full:
-        logger.warning(
-            "[SERVER] Shot enrichment queue is full (%d waiting); "
-            "skipping optional hardware for shot #%d",
-            _SHOT_ENRICHMENT_QUEUE_CAPACITY,
-            shot.shot_number,
-        )
-        if emitted:
-            _emit_ops_enrichment_skipped(shot, reason="queue_full")
-        _queue_shot_finalization(
+        _abandon_shot_enrichment(
             shot,
+            emitted=emitted,
             emit_event=final_event,
             initial_ui_ms=initial_ui_ms,
-            enrichment=_ShotEnrichmentResult(
-                diagnostic_outcome="partial", diagnostic_reason="queue_full"
-            ),
         )
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning(
@@ -5620,7 +5696,7 @@ def _handle_shot_detected(shot: Shot) -> None:
             exc_info=True,
         )
         if emitted:
-            _emit_ops_enrichment_skipped(shot, reason="worker_unavailable")
+            _emit_ops_enrichment_status(shot, status="skipped", reason="worker_unavailable")
         _queue_shot_finalization(
             shot,
             emit_event=final_event,
@@ -5629,6 +5705,73 @@ def _handle_shot_detected(shot: Shot) -> None:
                 diagnostic_outcome="partial", diagnostic_reason="worker_unavailable"
             ),
         )
+    else:
+        if not queued:
+            # Its IWR dump and camera clip are already recorded; they are
+            # processed when the queue drains and update this same shot.
+            logger.warning(
+                "[SERVER] Shot enrichment queue is full (%d waiting); shot #%d's IWR "
+                "and camera processing is deferred and will update it",
+                _SHOT_ENRICHMENT_QUEUE_CAPACITY,
+                shot.shot_number,
+            )
+            if emitted:
+                _emit_ops_enrichment_status(shot, status="pending", reason="queue_full")
+            _queue_shot_finalization(
+                shot,
+                emit_event=final_event,
+                initial_ui_ms=initial_ui_ms,
+                enrichment=_ShotEnrichmentResult(
+                    diagnostic_outcome="partial", diagnostic_reason="enrichment_deferred"
+                ),
+                awaits_late_enrichment=True,
+            )
+
+
+def _abandon_shot_enrichment(
+    shot: Shot,
+    *,
+    emitted: bool,
+    emit_event: str,
+    initial_ui_ms: float | None,
+) -> None:
+    """The deferred backlog is at its hard bound: say so loudly, keep the OPS shot."""
+    reason = "enrichment_backlog_full"
+    logger.error(
+        "[SERVER] Shot #%d enrichment ABANDONED: %d jobs queued and %d deferred already; "
+        "its IWR and camera metrics will not be computed",
+        shot.shot_number,
+        _SHOT_ENRICHMENT_QUEUE_CAPACITY,
+        _DEFERRED_ENRICHMENT_CAPACITY,
+    )
+    log_session_error(
+        "Shot enrichment abandoned",
+        component="server",
+        context={
+            "stage": "enrichment_admission",
+            "shot_number": shot.shot_number,
+            "reason": reason,
+            "queue_capacity": _SHOT_ENRICHMENT_QUEUE_CAPACITY,
+            "deferred_capacity": _DEFERRED_ENRICHMENT_CAPACITY,
+        },
+    )
+    _log_shot_enrichment_lifecycle(
+        get_session_logger(),
+        shot.camera_fusion_session_uuid,
+        shot,
+        state="enrichment_abandoned",
+        reason=reason,
+        background_work="never_started",
+        result_discarded=True,
+    )
+    if emitted:
+        _emit_ops_enrichment_status(shot, status="skipped", reason=reason)
+    _queue_shot_finalization(
+        shot,
+        emit_event=emit_event,
+        initial_ui_ms=initial_ui_ms,
+        enrichment=_ShotEnrichmentResult(diagnostic_outcome="partial", diagnostic_reason=reason),
+    )
 
 
 def swing_speed_to_dict(event: SwingSpeedEvent) -> dict:
