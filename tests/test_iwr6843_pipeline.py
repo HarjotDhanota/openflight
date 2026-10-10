@@ -293,7 +293,8 @@ def test_parse_header_rejects_future_dump_version():
 def test_parse_header_rejects_short_temperature_extension():
     raw = synth_shot()
     v5_header_only = bytearray(raw[: HEADER.size])
-    v5_header_only[4:6] = int(MAX_SUPPORTED_DUMP_VERSION).to_bytes(2, "little")
+    # Pinned to 7: this tests the v7 temperature extension, not the newest version.
+    v5_header_only[4:6] = (7).to_bytes(2, "little")
 
     with pytest.raises(ValueError, match="short temperature report extension"):
         parse_header(bytes(v5_header_only))
