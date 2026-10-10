@@ -27,6 +27,12 @@
  *   temperature extension (version 5 for fixed-width formats, version 7 for
  *     variable-width formats):
  *     a 24-byte temperature report immediately follows the fixed header.
+ *   evidence (version 8 = with the temperature report, 9 = without it; timed formats 4/5):
+ *     after the descriptors (and the IQ8 scale table) comes one l3_capture_evidence_t,
+ *     then n_frames l3_frame_evidence_t in dump frame order, then the payload, then one
+ *     l3_dump_trailer_t. Ticks are the R4F PMU cycle counter at tick_hz (the CPU clock),
+ *     32-bit, wrapping. Descriptor delta-us stays the PLANNED spacing; the frame records
+ *     are what was observed.
  * Chirp order is TDM-interleaved: chirp c -> tx = c % n_tx, loop = c / n_tx.
  */
 #ifndef L3_DUMP_FORMAT_H
@@ -42,6 +48,13 @@
 #define L3_DUMP_VERSION_TIMED    6
 #define L3_DUMP_VERSION_TEMPERATURE 5
 #define L3_DUMP_VERSION_CAPTURE_TEMPERATURE 7
+#define L3_DUMP_VERSION_EVIDENCE_TEMPERATURE 8
+#define L3_DUMP_VERSION_EVIDENCE 9
+#define L3_CAPTURE_EVIDENCE_MAGIC "ILE1"
+#define L3_DUMP_TRAILER_MAGIC "ILT1"
+#define L3_FRAME_FLAG_ASSOCIATED 0x01U
+#define L3_FRAME_FLAG_IQ8_SCANNED 0x02U
+#define L3_CAPTURE_FLAG_IQ8_SCAN 0x01U
 #define L3_SAMPLE_INT16_IQ  0
 #define L3_SAMPLE_RANGE_FFT_IQ16 1
 #define L3_SAMPLE_RANGE_FFT_IQ16_WINDOWED 2
@@ -81,5 +94,37 @@ typedef struct __attribute__((packed)) {
     int16_t  tmpDig0Sens;       /* Digital temperature sensor reading */
     int16_t  tmpDig1Sens;       /* Second digital temperature sensor reading */
 } l3_temperature_report_t;      /* sizeof == 24 */
+
+typedef struct __attribute__((packed)) {
+    char     magic[4];            /* "ILE1" */
+    uint16_t block_nbytes;        /* sizeof(l3_capture_evidence_t) */
+    uint16_t frame_record_nbytes; /* sizeof(l3_frame_evidence_t) */
+    uint32_t tick_hz;             /* cycle-counter rate (the R4F clock) */
+    uint32_t request_tick;        /* l3dump handler entered */
+    uint32_t request_seq;         /* frame-start count when the request was handled */
+    uint32_t freeze_tick;         /* CLI task resumed after the post frames were kept */
+    uint32_t stop_tick;           /* MMWave_stop and its settle sleep returned */
+    uint32_t header_tick;         /* just before the first header byte was written */
+    uint32_t hwa_missed_total;    /* missed armed frame starts since sensorStart */
+    uint8_t  pre_frames;          /* retained pre-request frames in this dump */
+    uint8_t  post_frames;         /* retained post-request frames in this dump */
+    uint8_t  flags;               /* L3_CAPTURE_FLAG_* */
+    uint8_t  reserved;
+} l3_capture_evidence_t;          /* sizeof == 40 */
+
+typedef struct __attribute__((packed)) {
+    uint32_t seq;                 /* frame-start count of the armed frame */
+    uint32_t start_tick;          /* frame-start ISR entry */
+    uint32_t done_tick;           /* HWA output EDMA completion for this frame */
+    uint16_t iq8_overflow;        /* IQ8: components outside int8 before narrowing */
+    uint16_t iq8_max_abs;         /* IQ8: largest magnitude before narrowing */
+    uint8_t  flags;               /* L3_FRAME_FLAG_* */
+    uint8_t  reserved[3];
+} l3_frame_evidence_t;            /* sizeof == 20 */
+
+typedef struct __attribute__((packed)) {
+    char     magic[4];            /* "ILT1" */
+    uint32_t payload_end_tick;    /* last payload byte handed to the UART */
+} l3_dump_trailer_t;              /* sizeof == 8 */
 
 #endif /* L3_DUMP_FORMAT_H */

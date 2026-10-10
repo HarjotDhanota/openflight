@@ -48,9 +48,15 @@
 #include <ti/utils/cli/cli.h>
 
 #include "dump_format.h"
+#include "l3_evidence.h"
 
 #if defined(L3_DUMP_IQ8) || defined(L3_RING_IQ8)
 #define L3_ANY_IQ8 1
+#endif
+
+/* Production (configurable, hybrid-cadence) builds stream observed evidence: dump v8/v9. */
+#if defined(CONFIGURABLE_CAPTURE) && defined(HYBRID_CADENCE_CAPTURE)
+#define L3_CAPTURE_EVIDENCE 1
 #endif
 
 /* --- task priorities (mirror the mmw demo): ctrl > CLI. -------------------- */
@@ -420,6 +426,65 @@ static uint8_t  gIq8FixedShift = 7U;
 #endif
 
 /* Config pulled from the CLI mmWave extension (kept off the stack -- large). */
+#ifdef L3_CAPTURE_EVIDENCE
+/* W4A-EVIDENCE-BEGIN */
+/* Observed evidence (W4a). The R4F's PMU cycle counter runs at the CPU clock (gCpuClock,
+ * 200 MHz) and wraps every 21.47 s; one capture's intervals are far shorter, so 32-bit
+ * modular differences are exact. The tick source comes first: every helper below and
+ * every later insertion (Tasks 4-5) calls it, and C99 needs it declared before use. */
+static void l3_cycleCounterInit(void)
+{
+    uint32_t pmcr = __MRC(15U, 0U, 9U, 12U, 0U);
+
+    pmcr &= ~0x8U;                             /* PMCR.D = 0: count every cycle */
+    pmcr |= 0x5U;                              /* PMCR.E = 1 enable, PMCR.C = 1 reset */
+    __MCR(15U, 0U, pmcr, 9U, 12U, 0U);
+    __MCR(15U, 0U, 0x80000000U, 9U, 12U, 1U);  /* PMCNTENSET.C: cycle counter on */
+}
+
+static uint32_t l3_ticks(void)
+{
+    return __MRC(15U, 0U, 9U, 13U, 0U);        /* PMCCNTR */
+}
+
+static uint32_t gFrameSeq[L3_MAX_CAPTURE_FRAMES];
+static uint32_t gFrameStartTick[L3_MAX_CAPTURE_FRAMES];
+static uint32_t gFrameDoneTick[L3_MAX_CAPTURE_FRAMES];
+static uint16_t gFrameIq8Overflow[L3_MAX_CAPTURE_FRAMES];
+static uint16_t gFrameIq8MaxAbs[L3_MAX_CAPTURE_FRAMES];
+static uint8_t  gFrameEvidenceFlags[L3_MAX_CAPTURE_FRAMES];
+static volatile uint32_t gActiveFrameSeq;
+static volatile uint32_t gActiveFrameStartTick;
+static volatile uint8_t  gActiveFrameFresh;
+static uint32_t gRequestTick;
+static uint32_t gRequestSeq;
+static uint32_t gFreezeTick;
+static uint32_t gStopTick;
+
+static void l3_resetEvidence(void)
+{
+    gActiveFrameFresh = 0U;
+    memset((void *)gFrameEvidenceFlags, 0, sizeof(gFrameEvidenceFlags));
+}
+
+/* HWA output-done callback: stamp the ring slot this frame completed. */
+static void l3_recordFrameEvidence(uint32_t slot, uint32_t doneTick)
+{
+    if (slot >= L3_MAX_CAPTURE_FRAMES) {
+        gActiveFrameFresh = 0U;
+        return;
+    }
+    gFrameSeq[slot] = gActiveFrameSeq;
+    gFrameStartTick[slot] = gActiveFrameStartTick;
+    gFrameDoneTick[slot] = doneTick;
+    gFrameIq8Overflow[slot] = 0U;
+    gFrameIq8MaxAbs[slot] = 0U;
+    gFrameEvidenceFlags[slot] = gActiveFrameFresh ? L3_FRAME_FLAG_ASSOCIATED : 0U;
+    gActiveFrameFresh = 0U;
+}
+/* W4A-EVIDENCE-END */
+#endif
+
 static MMWave_OpenCfg gOpenCfg;
 static MMWave_CtrlCfg gCtrlCfg;
 
@@ -1196,6 +1261,16 @@ static void l3_hwaOutputDoneCB(uintptr_t arg, uint8_t tcCode)
     gHwaOutputDone++;
     gRingFrame++;
 #ifdef CONFIGURABLE_CAPTURE
+#ifdef L3_CAPTURE_EVIDENCE
+    if (gActiveFrameShouldKeep) {
+        l3_recordFrameEvidence(gActiveFrameIsPost
+                                   ? gCapturePlan.preFrames + gPostFramesCaptured
+                                   : gPreFramesCaptured % gCapturePlan.preFrames,
+                               l3_ticks());
+    } else {
+        gActiveFrameFresh = 0U;   /* a stride-skipped frame consumes its start too */
+    }
+#endif
 #ifdef L3_RING_IQ8
     if (l3_captureUsesIq8() && gActiveFrameShouldKeep) {
         uint32_t completedSlot = gActiveFrameIsPost
@@ -1953,8 +2028,17 @@ static int32_t l3_stopCaptureAtBoundary(void)
         CLI_write("Error: HWA post-trigger frame freeze timed out\n");
         return -1;
     }
+#ifdef L3_CAPTURE_EVIDENCE
+    gFreezeTick = l3_ticks();
 #endif
-    return l3_finishCaptureStop();
+#endif
+    if (l3_finishCaptureStop() != 0) {
+        return -1;
+    }
+#ifdef L3_CAPTURE_EVIDENCE
+    gStopTick = l3_ticks();
+#endif
+    return 0;
 }
 
 /* sensorStop only needs a clean hardware boundary, not post-impact frames. */
@@ -2266,6 +2350,53 @@ static void l3_writeFrameDescriptor(uint32_t slot, uint8_t firstFrame)
 }
 #endif
 
+#ifdef L3_CAPTURE_EVIDENCE
+static void l3_writeCaptureEvidence(uint32_t actualPre, uint32_t actualPost,
+                                    uint32_t headerTick)
+{
+    l3_capture_evidence_t evidence;
+
+    memset((void *)&evidence, 0, sizeof(evidence));
+    memcpy(evidence.magic, L3_CAPTURE_EVIDENCE_MAGIC, 4);
+    evidence.block_nbytes = (uint16_t)sizeof(evidence);
+    evidence.frame_record_nbytes = (uint16_t)sizeof(l3_frame_evidence_t);
+    evidence.tick_hz = gCpuClock;
+    evidence.request_tick = gRequestTick;
+    evidence.request_seq = gRequestSeq;
+    evidence.freeze_tick = gFreezeTick;
+    evidence.stop_tick = gStopTick;
+    evidence.header_tick = headerTick;
+    evidence.hwa_missed_total = gHwaMissedFrameStarts;
+    evidence.pre_frames = (uint8_t)actualPre;
+    evidence.post_frames = (uint8_t)actualPost;
+    evidence.flags = 0U;
+    UART_writePolling(gDataUart, (uint8_t *)&evidence, sizeof(evidence));
+}
+
+static void l3_writeFrameEvidence(uint32_t slot)
+{
+    l3_frame_evidence_t record;
+
+    memset((void *)&record, 0, sizeof(record));
+    record.seq = gFrameSeq[slot];
+    record.start_tick = gFrameStartTick[slot];
+    record.done_tick = gFrameDoneTick[slot];
+    record.iq8_overflow = gFrameIq8Overflow[slot];
+    record.iq8_max_abs = gFrameIq8MaxAbs[slot];
+    record.flags = gFrameEvidenceFlags[slot];
+    UART_writePolling(gDataUart, (uint8_t *)&record, sizeof(record));
+}
+
+static void l3_writeDumpTrailer(void)
+{
+    l3_dump_trailer_t trailer;
+
+    memcpy(trailer.magic, L3_DUMP_TRAILER_MAGIC, 4);
+    trailer.payload_end_tick = l3_ticks();
+    UART_writePolling(gDataUart, (uint8_t *)&trailer, sizeof(trailer));
+}
+#endif
+
 #if defined(CONFIGURABLE_CAPTURE) && defined(L3_DUMP_IQ8)
 static uint16_t l3_iq8FrameScale(uint32_t slot)
 {
@@ -2367,9 +2498,12 @@ static void l3_edmaCB(uintptr_t arg, uint8_t tcCode)
 #endif
 
 /* Frame-start ISR: liveness + ring-alignment counters (the EDMA fills the
- * ring autonomously). */
+ * ring autonomously). With evidence on, an armed frame's start is stamped. */
 static void l3_frameStartISR(uintptr_t arg)
 {
+#ifdef L3_CAPTURE_EVIDENCE
+    uint32_t now = l3_ticks();
+#endif
     (void)arg;
     gNumFrame++;
 #ifdef HWA_CHAINED_SNAPSHOT_RING
@@ -2377,6 +2511,15 @@ static void l3_frameStartISR(uintptr_t arg)
         if (!gHwaArmedForFrame) {
             gHwaMissedFrameStarts++;
         }
+#ifdef L3_CAPTURE_EVIDENCE
+        else {
+            /* The armed chain processes this frame; its output-done callback
+             * stamps the completed ring slot with this sequence number. */
+            gActiveFrameSeq = gNumFrame;
+            gActiveFrameStartTick = now;
+            gActiveFrameFresh = 1U;
+        }
+#endif
         gHwaArmedForFrame = 0U;
     }
 #endif
@@ -2425,6 +2568,9 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
     l3_dump_header_t h;
     uint32_t         i;
     uint8_t          dumpCancelled = 0U;
+#ifdef L3_CAPTURE_EVIDENCE
+    uint32_t         headerTick = 0U;
+#endif
 #ifdef CONFIGURABLE_CAPTURE
     uint32_t actualPre;
     uint32_t actualPost;
@@ -2435,6 +2581,10 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
     if (!gCaptureActive) {
         return -1;
     }
+#ifdef L3_CAPTURE_EVIDENCE
+    gRequestTick = l3_ticks();
+    gRequestSeq = gNumFrame;
+#endif
 
     /* Halt chirping only after HWA and both output EDMAs completed naturally. */
     if (l3_stopCaptureAtBoundary() != 0) {
@@ -2470,6 +2620,11 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
             h.version = L3_DUMP_VERSION_TEMPERATURE;
 #endif
         }
+#ifdef L3_CAPTURE_EVIDENCE
+        h.version = (tempStatus == 0) ? L3_DUMP_VERSION_EVIDENCE_TEMPERATURE
+                                      : L3_DUMP_VERSION_EVIDENCE;
+        headerTick = l3_ticks();
+#endif
         UART_writePolling(gDataUart, (uint8_t *)&h, sizeof(h));
         if (tempStatus == 0) {
             UART_writePolling(gDataUart, (uint8_t *)&tempReport, sizeof(tempReport));
@@ -2515,6 +2670,15 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
         }
     }
 #endif
+#ifdef L3_CAPTURE_EVIDENCE
+    l3_writeCaptureEvidence(actualPre, actualPost, headerTick);
+    for (i = 0U; i < actualPre; i++) {
+        l3_writeFrameEvidence((oldestPre + i) % gCapturePlan.preFrames);
+    }
+    for (i = 0U; i < actualPost; i++) {
+        l3_writeFrameEvidence(gCapturePlan.preFrames + i);
+    }
+#endif
 #else
 #ifdef SNAPSHOT_DYNAMIC_WINDOWS
     UART_writePolling(gDataUart, gFrameBinStart, sizeof(gFrameBinStart));
@@ -2555,6 +2719,11 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
             break;
         }
     }
+#ifdef L3_CAPTURE_EVIDENCE
+    if (!dumpCancelled) {
+        l3_writeDumpTrailer();
+    }
+#endif
 #else
     for (i = 0; i < RING_FRAMES; i++) {
         UART_writePolling(gDataUart, (uint8_t *)g_ring[i], sizeof(g_ring[i]));
@@ -2595,6 +2764,9 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
     gPostCaptureStarted = 0U;
     gActiveFrameIsPost = 0U;
     gActiveFrameShouldKeep = 1U;
+#endif
+#ifdef L3_CAPTURE_EVIDENCE
+    l3_resetEvidence();
 #endif
     if (l3_restartCompletedHwaFrame() < 0) {
         CLI_write("Error: completed HWA frame restart failed\n");
@@ -3232,6 +3404,9 @@ static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])
     gPostCaptureStarted = 0U;
     gActiveFrameIsPost = 0U;
     gActiveFrameShouldKeep = 1U;
+#ifdef L3_CAPTURE_EVIDENCE
+    l3_resetEvidence();
+#endif
 #ifdef L3_RING_IQ8
     gIq8Pending = 0U;
     gIq8PendingSlot = 0U;
@@ -3297,6 +3472,9 @@ static void l3_initTask(UArg arg0, UArg arg1)
 
     (void)arg0; (void)arg1;
 
+#ifdef L3_CAPTURE_EVIDENCE
+    l3_cycleCounterInit();
+#endif
     UART_init();
     Pinmux_Set_FuncSel(SOC_XWR68XX_PINN5_PADBE, SOC_XWR68XX_PINN5_PADBE_MSS_UARTA_TX);
     Pinmux_Set_OverrideCtrl(SOC_XWR68XX_PINN5_PADBE,
@@ -3436,7 +3614,7 @@ static void l3_initTask(UArg arg0, UArg arg1)
     /* CLI with the mmWave extension. */
     cliCfg.cliPrompt             = "l3dump:/>";
 #ifdef HYBRID_CADENCE_CAPTURE
-    cliCfg.cliBanner             = "OpenFlight hybrid-cadence L3 firmware (v6)\n";
+    cliCfg.cliBanner             = "OpenFlight hybrid-cadence L3 firmware (v8 evidence)\n";
 #else
     cliCfg.cliBanner             = "OpenFlight configurable L3 snapshot firmware (v5)\n";
 #endif

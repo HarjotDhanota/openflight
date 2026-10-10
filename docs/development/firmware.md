@@ -96,8 +96,14 @@ RF chirp
 
 The saved bins remain complex I/Q so the host retains phase for vertical and
 horizontal direction of arrival. Every frame carries its absolute range-window
-start, bin count, and measured time delta. IQ8 frames also carry their scale,
-allowing the host to restore the physical sample amplitude before processing.
+start, bin count, and **planned** time delta (the frame period times the
+ball-phase stride; the firmware writes the plan, not a measurement). Dump
+versions 8 and 9 add what was observed: each retained frame's frame-start
+sequence number, frame-start and HWA-output cycle-counter ticks and, for IQ8,
+its pre-narrowing overflow count and largest magnitude; plus the request,
+freeze, RF-stop, header and last-payload-byte ticks. A missed frame shows as a
+sequence gap. IQ8 frames also carry their scale, allowing the host to restore
+the physical sample amplitude before processing.
 
 For IQ8, `iq8Scale` selects a fixed power-of-two scale before `sensorStart`.
 The HWA applies that scale, then EDMA copies the compact byte from each signed
@@ -112,14 +118,19 @@ The wire format is defined in two places that must stay synchronized:
 - Firmware: [`iwr6843/dump_format.h`](https://github.com/jewbetcha/openflight/blob/main/firmware/iwr6843/dump_format.h)
 - Host parser: [`../src/openflight/iwr6843/dump.py`](https://github.com/jewbetcha/openflight/blob/main/src/openflight/iwr6843/dump.py)
 
-The configurable version 7 transfer contains:
+The configurable version 7 transfer contains items 1-6; versions 8 (with temperature) and
+9 (without) insert item 4a and append item 7:
 
 1. A packed 20-byte little-endian `l3_dump_header_t`.
-2. A packed 24-byte `l3_temperature_report_t` captured immediately before streaming.
-3. A `(start bin, valid bins, elapsed microseconds)` descriptor per frame.
+2. A packed 24-byte `l3_temperature_report_t` captured immediately before streaming
+   (versions 7 and 8).
+3. A `(start bin, valid bins, planned elapsed microseconds)` descriptor per frame.
 4. A per-frame scale table when `sample_fmt` is IQ8.
+4a. One 40-byte `l3_capture_evidence_t` ("ILE1"), then one 20-byte `l3_frame_evidence_t`
+   per frame in dump order.
 5. Complex IQ16 or IQ8 samples ordered by frame, chirp, RX, and local range bin.
 6. Each complex sample in TI's native imaginary-then-real order.
+7. One 8-byte `l3_dump_trailer_t` ("ILT1"); absent when the dump was cancelled.
 
 The header carries:
 
