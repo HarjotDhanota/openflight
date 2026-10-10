@@ -221,3 +221,109 @@ def test_reserved_keys_in_fields_do_not_override(tmp_path):
 )
 def test_finite_accepts_only_finite_real_numbers(value, expected):
     assert _finite(value) is expected
+
+
+class _FailingFile:
+    """Delegates to the real file; chosen operations raise."""
+
+    def __init__(self, real, *, fail_text=None, fail_close=False, exc=OSError):
+        self.real, self.fail_text, self.fail_close, self.exc = real, fail_text, fail_close, exc
+
+    def write(self, text):
+        if self.fail_text is not None and self.fail_text in text:
+            raise self.exc("boom")
+        return self.real.write(text)
+
+    def flush(self):
+        self.real.flush()
+
+    def close(self):
+        self.real.close()
+        if self.fail_close:
+            raise OSError("close failed")
+
+
+@pytest.mark.parametrize("start_writer", [True, False])
+def test_close_is_false_when_the_footer_write_fails(tmp_path, start_writer):
+    rec = make_recorder(tmp_path, start_writer=start_writer)
+    rec._file = _FailingFile(rec._file, fail_text="trace_end")  # pylint: disable=protected-access
+    assert rec.close() is False
+    assert all(row["type"] != "trace_end" for row in read_lines(tmp_path / "trace.jsonl"))
+
+
+@pytest.mark.parametrize("start_writer", [True, False])
+def test_close_is_false_when_closing_the_file_fails(tmp_path, start_writer):
+    rec = make_recorder(tmp_path, start_writer=start_writer)
+    rec._file = _FailingFile(rec._file, fail_close=True)  # pylint: disable=protected-access
+    assert rec.close() is False
+
+
+def test_late_footer_after_a_stalled_close_says_incomplete_and_late(tmp_path):
+    gate = threading.Event()
+    rec = make_recorder(tmp_path)
+    rec._before_write = gate.wait  # pylint: disable=protected-access
+    rec.mark("m", "a-1")
+    assert rec.close(timeout_s=0.05) is False
+    gate.set()
+    rec._writer.join(timeout=2)  # pylint: disable=protected-access
+    end = read_lines(tmp_path / "trace.jsonl")[-1]
+    assert end["type"] == "trace_end" and end["complete"] is False and end["late"] is True
+
+
+def test_normal_footer_is_not_late(tmp_path):
+    rec = make_recorder(tmp_path)
+    rec.close()
+    end = read_lines(tmp_path / "trace.jsonl")[-1]
+    assert end["complete"] is True and end["late"] is False
+
+
+def test_unexpected_exception_is_a_write_failure_and_the_writer_survives(tmp_path):
+    rec = make_recorder(tmp_path)
+    rec._file = _FailingFile(  # pylint: disable=protected-access
+        rec._file, fail_text='"name": "bad"', exc=OverflowError
+    )
+    rec.mark("bad", "a-1")
+    rec.mark("good", "a-1")
+    assert rec.close() is True
+    rows = read_lines(tmp_path / "trace.jsonl")
+    assert [r["name"] for r in rows if r["type"] == "mark"] == ["good"]
+    end = rows[-1]
+    assert end["write_failures"] == 1 and end["written"] == 1 and end["complete"] is False
+
+
+def test_exception_in_before_write_does_not_kill_the_writer(tmp_path):
+    rec = make_recorder(tmp_path, start_writer=False)
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("seam")
+
+    rec._before_write = flaky  # pylint: disable=protected-access
+    rec.mark("m", "a-1")
+    assert rec.close() is True
+    assert rec.counts()["write_failures"] == 1
+
+
+def test_failed_header_write_is_counted_and_footer_is_incomplete(tmp_path, monkeypatch):
+    real_open = open
+
+    def failing_open(path, *args, **kwargs):
+        return _FailingFile(real_open(path, *args, **kwargs), fail_text="trace_start")
+
+    monkeypatch.setattr("builtins.open", failing_open)
+    rec = make_recorder(tmp_path)
+    monkeypatch.undo()
+    assert rec.counts()["write_failures"] == 1
+    assert rec.close() is True
+    end = read_lines(tmp_path / "trace.jsonl")[-1]
+    assert end["write_failures"] == 1 and end["complete"] is False
+
+
+def test_close_is_idempotent(tmp_path):
+    rec = make_recorder(tmp_path)
+    assert rec.close() is True
+    assert rec.close() is True
+    rows = read_lines(tmp_path / "trace.jsonl")
+    assert [r["type"] for r in rows].count("trace_end") == 1

@@ -128,8 +128,12 @@ class TraceRecorder:
         self.session_tag = uuid.uuid4().hex[:8]
         self._current_ops_attempt: Optional[str] = None
         self._last_edge_seq: Optional[int] = None
+        self._gave_up = False  # close() timed out; a later footer is late
+        self._closed_result: Optional[bool] = None
+        self._footer_confirmed = False
+        self._file_closed_cleanly = False
         self._file = open(self.path, "w", encoding="utf-8")  # pylint: disable=consider-using-with
-        self._write(
+        self._header_ok = self._write(
             {
                 "type": "trace_start",
                 "schema": SCHEMA,
@@ -221,21 +225,39 @@ class TraceRecorder:
                 self._counts["dropped"] += 1
 
     def close(self, timeout_s: float = 2.0) -> bool:
-        """Ask the writer to finish; True only if it wrote the footer and closed the file."""
+        """Ask the writer to finish; True only if the footer was written and the file closed.
+
+        Idempotent: a second call returns the first result and does nothing.
+        """
+        with self._lock:
+            if self._closed_result is not None:
+                return self._closed_result
+        result = self._close_once(timeout_s)
+        with self._lock:
+            if self._closed_result is None:
+                self._closed_result = result
+            return self._closed_result
+
+    def _close_once(self, timeout_s: float) -> bool:
         if self._writer is None:
             self._drain_available()
             self._finish()
-            return True
+            return self._footer_confirmed and self._file_closed_cleanly
         try:
             self._queue.put(_STOP, timeout=timeout_s)
         except queue.Full:
             logger.warning("[TRACE] close: queue still full; the trace stays incomplete")
+            with self._lock:
+                self._gave_up = True
             return False
         self._writer.join(timeout=timeout_s)
         if self._writer.is_alive():
-            logger.warning("[TRACE] close: writer still draining; no footer written")
-            return False
-        return True
+            logger.warning("[TRACE] close: writer still draining; no footer written yet")
+            with self._lock:
+                self._gave_up = True
+            if self._writer.is_alive():
+                return False
+        return self._footer_confirmed and self._file_closed_cleanly
 
     def _drain(self) -> None:
         while True:
@@ -255,30 +277,44 @@ class TraceRecorder:
                 self._write(record)
 
     def _finish(self) -> None:
-        footer = {
-            "type": "trace_end",
-            "complete": True,
-            **self.counts(),
-            "clock": asdict(self._clock()),
-        }
-        self._write(footer, count=False)
-        self._file.close()
-
-    def _write(self, record: dict, *, count: bool = True) -> None:
-        self._before_write()
+        counts = self.counts()
+        with self._lock:
+            late = self._gave_up
+        complete = counts["write_failures"] == 0 and self._header_ok and not late
         try:
+            footer = {
+                "type": "trace_end",
+                "complete": complete,
+                "late": late,
+                **counts,
+                "clock": asdict(self._clock()),
+            }
+            self._footer_confirmed = self._write(footer, count=False)
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning("[TRACE] footer failed", exc_info=True)
+        try:
+            self._file.close()
+            self._file_closed_cleanly = True
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning("[TRACE] closing the trace file failed", exc_info=True)
+
+    def _write(self, record: dict, *, count: bool = True) -> bool:
+        """Write one record; True only if it reached the file. Never raises."""
+        try:
+            self._before_write()
             text = json.dumps(record, allow_nan=False, default=str) + "\n"
             self._file.write(text)
             self._file.flush()
-        except (OSError, ValueError, TypeError):
+        except Exception:  # pylint: disable=broad-exception-caught
             logger.warning("[TRACE] write failed", exc_info=True)
-            if count:
+            if count or record.get("type") == "trace_start":
                 with self._lock:
                     self._counts["write_failures"] += 1
-            return
+            return False
         if count:
             with self._lock:
                 self._counts["written"] += 1
+        return True
 
 
 _RECORDER: Optional[TraceRecorder] = None
