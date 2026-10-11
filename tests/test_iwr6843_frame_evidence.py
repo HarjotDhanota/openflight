@@ -430,3 +430,47 @@ def test_the_reports_are_plain_json():
     report = frame_timing_report(_meta(n=4, pre=2))
 
     assert json.loads(json.dumps(report)) == report
+
+
+# --- final review: a request relation with no post frame is never "consistent" ----------------
+
+
+def _with_split(meta: dict, pre: int, post: int) -> dict:
+    meta["capture_evidence"].update(pre_frames=pre, post_frames=post)
+    return meta
+
+
+@pytest.mark.parametrize(
+    ("pre", "post", "kind"),
+    [
+        (6, 0, "no_post_frame"),  # every retained frame is before the request
+        (7, -1, "pre_frames_out_of_bounds"),  # more pre frames than frames retained
+        (-1, 7, "pre_frames_out_of_bounds"),
+    ],
+)
+def test_a_request_relation_without_an_observed_post_frame_is_unobserved(pre, post, kind):
+    request = frame_timing_report(_with_split(_meta(), pre, post))["request"]
+
+    assert request["status"] == "unobserved"
+    assert [f["kind"] for f in request["findings"]] == [kind]
+    assert request["first_post_seq"] is None
+    assert request["frames_request_to_first_post"] is None
+    assert request["request_to_first_post_start_us"] is None
+    assert request["freeze_to_stop_us"] == 11000.0  # the chip stamps are still observed
+
+
+def test_no_post_frame_keeps_the_contracts_request_keys():
+    request = frame_timing_report(_with_split(_meta(n=4, pre=2), 4, 0))["request"]
+
+    assert set(request) == set(_contract()["frame_timing"]["request"])
+    assert request["status"] == "unobserved"
+
+
+def test_no_post_frame_never_hides_a_stamp_order_fault():
+    meta = _with_split(_meta(), 6, 0)
+    meta["capture_evidence"]["header_tick"] = meta["capture_evidence"]["stop_tick"] - 1
+
+    request = frame_timing_report(meta)["request"]
+
+    assert request["status"] == "inconsistent"
+    assert {f["kind"] for f in request["findings"]} == {"no_post_frame", "stamp_order"}

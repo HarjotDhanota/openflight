@@ -21,7 +21,9 @@ offset or output latency; order, gap and tick checks compare each associated fra
 the previous associated one. Offsets are from frame 0's start, so they are all None when
 frame 0 is unassociated. If the first post-request frame is unassociated, the request
 relation's frame numbers are None and its status is "unobserved" (or "inconsistent" when
-a stamp is also out of order).
+a stamp is also out of order). The same holds when there is no first post-request frame at
+all: every retained frame precedes the request ("no_post_frame"), or the pre-frame count
+is outside the frames retained ("pre_frames_out_of_bounds").
 """
 
 from __future__ import annotations
@@ -43,6 +45,9 @@ UNOBSERVED = "unobserved"
 _TICK_MODULUS = 1 << 32
 _UNOBSERVED_KINDS = frozenset({"tick_backwards", "planned_step"})
 _IQ16_RAILS = (-32768.0, 32767.0)
+# Findings that leave the request relation unobserved (no first post frame to measure),
+# never inconsistent on their own.
+_NO_FIRST_POST = frozenset({"first_post_unassociated", "no_post_frame", "pre_frames_out_of_bounds"})
 _IQ8_LIMIT = 128  # int8 holds -128..127; magnitudes >= 64 are within a factor of 2
 
 
@@ -133,8 +138,24 @@ def _frame_findings(frames, offsets, period_us: int, period_ticks: float, us) ->
 def _request_relation(capture: dict, frames, trailer: dict | None, us) -> dict:
     findings: list[dict] = []
     pre = capture["pre_frames"]
-    first_post = frames[pre] if pre < len(frames) else None
-    if first_post is not None and not first_post["associated"]:
+    first_post = frames[pre] if 0 <= pre < len(frames) else None
+    if not 0 <= pre <= len(frames):
+        findings.append(
+            _finding(
+                "pre_frames_out_of_bounds",
+                None,
+                f"{pre} pre-request frames is outside the {len(frames)} frames retained",
+            )
+        )
+    elif first_post is None:
+        findings.append(
+            _finding(
+                "no_post_frame",
+                None,
+                "every retained frame precedes the request; no post-request frame was observed",
+            )
+        )
+    elif not first_post["associated"]:
         findings.append(
             _finding(
                 "first_post_unassociated",
@@ -164,7 +185,7 @@ def _request_relation(capture: dict, frames, trailer: dict | None, us) -> dict:
     for (earlier_name, earlier), (later_name, later) in zip(stamps, stamps[1:]):
         if _signed(later, earlier) < 0:
             findings.append(_finding("stamp_order", None, f"{later_name} precedes {earlier_name}"))
-    inconsistent = [f for f in findings if f["kind"] != "first_post_unassociated"]
+    inconsistent = [f for f in findings if f["kind"] not in _NO_FIRST_POST]
     return {
         "status": "inconsistent" if inconsistent else "unobserved" if findings else "consistent",
         "findings": findings,
