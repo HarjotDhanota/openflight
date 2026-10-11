@@ -321,6 +321,18 @@ describe('post-render acknowledgement', () => {
     expect(notShown().map((p) => p.reason)).toEqual(['unmounted_before_paint']);
   });
 
+  it('a view switch within the frame reports live_view_not_shown, not unmounted_before_paint (B-M7)', () => {
+    const { frame, acks, paints, notShown } = harness();
+    const a = shot('ts-1', 120);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    acks.commit(a, true);
+    setLiveViewShown(false); // the user switched views...
+    acks.dispose(); // ...so React unmounts the live panel before the frame
+    frame.flush();
+    expect(paints()).toEqual([]);
+    expect(notShown().map((p) => p.reason)).toEqual(['live_view_not_shown']);
+  });
+
   it('a disposed scheduler stays silent when another scheduler now owns the revision (2b)', () => {
     const first = harness();
     const second = harness();

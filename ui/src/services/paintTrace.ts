@@ -309,8 +309,10 @@ export function createAckScheduler(
   };
 
   const notShownAtFrame = (entry: PendingRevision): NotShownReason | null => {
-    if (disposed) return 'unmounted_before_paint';
+    // The user's view switch first: it is what unmounts the live panel (B-M7), and it is
+    // user-caused (not measurable), while an unmount on its own is the pipeline's.
     if (entry.liveViewLeft || !liveViewShown) return 'live_view_not_shown';
+    if (disposed) return 'unmounted_before_paint';
     if (!visible()) return 'document_hidden';
     return null;
   };
