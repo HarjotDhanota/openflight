@@ -511,16 +511,29 @@ def _install_pi_trace_hooks() -> None:
             _trace_processor(processor)
         capture_monitor = getattr(iwr6843_runtime, "capture_monitor", None)
         if capture_monitor is not None:
+            # Lazy like the other IWR imports. Warm the version lookup before
+            # the first edge, so it never runs inside the GPIO callback (M5).
+            from .iwr6843.monitor import warm_edge_reading_cache  # noqa: PLC0415  pylint: disable=import-outside-toplevel
+
+            warm_edge_reading_cache()
             capture_monitor.prepend_trigger_observer(_trace_gate_edge)
     except Exception:  # pylint: disable=broad-exception-caught
         logger.warning("[TRACE] installing the Pi trace hooks failed; ignored", exc_info=True)
 
 
+def _non_finite_float(value) -> bool:
+    """A float that is NaN or infinite (the one check, on pi_trace._finite)."""
+    return isinstance(value, float) and not _finite(value)
+
+
 def _json_safe_core(core: dict) -> dict:
-    """The core values as written to the trace: a non-finite float as its exact text."""
+    """The core values as written to the trace: a non-finite float as its exact text.
+
+    Shot payloads are already nulled by shot_to_dict; this only guards a direct
+    _traced_emit caller, so a raw NaN can't fail the trace's strict-JSON write.
+    """
     return {
-        key: (repr(value) if isinstance(value, float) and not math.isfinite(value) else value)
-        for key, value in core.items()
+        key: (repr(value) if _non_finite_float(value) else value) for key, value in core.items()
     }
 
 
@@ -1713,7 +1726,7 @@ def _null_non_finite(value, path: str, not_measured: list[dict]):
     never as a filled-in number and never by dropping the shot (owner rule). Strict
     JSON has no NaN/Infinity, so a raw one would also make the browser drop the packet.
     """
-    if isinstance(value, float) and not math.isfinite(value):
+    if _non_finite_float(value):
         not_measured.append({"id": path, "reason": f"non_finite_value:{value!r}"})
         return None
     if isinstance(value, dict):

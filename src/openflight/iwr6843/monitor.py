@@ -81,6 +81,12 @@ class IWR6843Capture:
         return self.raw is not None and self.error is None
 
 
+def warm_edge_reading_cache() -> None:
+    """Look the package versions up now, so the first GPIO callback does no lookup."""
+    for name in ("gpiozero", "lgpio"):
+        _package_version(name)
+
+
 def edge_trace_fields(read_edge_tick: Callable[[], dict] | None, observer_wall_s: float) -> dict:
     """The Pi trace fields of one GATE edge: bracketed tick reading plus a bracketed wall pair.
 

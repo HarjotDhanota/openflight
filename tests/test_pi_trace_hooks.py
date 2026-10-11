@@ -1178,3 +1178,32 @@ def test_a_trace_that_cannot_start_leaves_the_kiosk_running_untraced(tmp_path, c
     assert server._start_pi_trace(blocker) is None  # pylint: disable=protected-access
     assert pi_trace.get_recorder() is None
     assert "Pi trace could not start" in caplog.text
+
+
+def test_installing_the_hooks_warms_the_version_lookup_so_the_first_edge_does_none(
+    recorder, monkeypatch, tmp_path
+):
+    """M5: no metadata lookup inside the GPIO callback, not even on the first edge."""
+    from openflight import server
+    from openflight.iwr6843 import monitor as iwr_monitor
+
+    del recorder
+    iwr_monitor._package_version.cache_clear()  # pylint: disable=protected-access
+    capture_monitor = IWR6843CaptureMonitor(
+        config_path=tmp_path / "unused.cfg", output_dir=tmp_path, radar=object()
+    )
+    monkeypatch.setattr(server, "monitor", None)
+    monkeypatch.setattr(server, "iwr6843_runtime", _iwr_runtime(capture_monitor))
+    server._install_pi_trace_hooks()  # pylint: disable=protected-access
+
+    lookups = []
+    real_version = iwr_monitor.importlib.metadata.version
+
+    def counting(name):
+        lookups.append(name)
+        return real_version(name)
+
+    monkeypatch.setattr(iwr_monitor.importlib.metadata, "version", counting)
+    capture_monitor.edge_tick_reading()
+    assert lookups == []
+    iwr_monitor._package_version.cache_clear()  # pylint: disable=protected-access
