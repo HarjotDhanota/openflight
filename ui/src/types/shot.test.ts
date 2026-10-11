@@ -83,6 +83,25 @@ describe('a shot whose core metrics the server nulled', () => {
     expect(stats.avg_carry_est).toBeNull();
   });
 
+  it('an empty session has no measured stats: null, never 0 (B-M9)', () => {
+    const stats = computeStats([]);
+
+    expect(stats.shot_count).toBe(0);
+    expect(stats.avg_ball_speed).toBeNull();
+    expect(stats.max_ball_speed).toBeNull();
+    expect(stats.min_ball_speed).toBeNull();
+    expect(stats.avg_carry_est).toBeNull();
+    expect(stats.avg_club_speed).toBeNull();
+    expect(stats.avg_smash_factor).toBeNull();
+    expect(stats.std_dev).toBeNull();
+  });
+
+  it('std_dev needs two measured ball speeds; with fewer it is null, never 0 (B-M9)', () => {
+    expect(computeStats([shot(100, 200)]).std_dev).toBeNull();
+    expect(computeStats([shot(100, 200), shot(null, null)]).std_dev).toBeNull();
+    expect(computeStats([shot(100, 200), shot(120, 240)]).std_dev).toBeCloseTo(14.142135623730951, 12);
+  });
+
   it('a swing with neither club nor ball speed has no swing speed and is left out of swing stats', () => {
     const swing = (club: number | null, ball: number | null) =>
       shot(ball, null, { mode: 'swing-speed', club: 'Swing Speed', club_speed_mph: club });

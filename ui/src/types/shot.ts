@@ -80,7 +80,8 @@ export interface SessionStats {
   avg_ball_speed: number | null;
   max_ball_speed: number | null;
   min_ball_speed: number | null;
-  std_dev?: number;
+  /** Null with fewer than two measured ball speeds. */
+  std_dev?: number | null;
   avg_club_speed: number | null;
   avg_smash_factor: number | null;
   avg_carry_est: number | null;
@@ -237,28 +238,19 @@ export function computeSwingSpeedStats(shots: Shot[], filter: SwingSpeedStatsFil
 
 /**
  * Compute session stats from an array of shots.
+ *
+ * Only measured values count ({@link isMeasured}); a stat with nothing measured is
+ * null, never 0: an empty session too, and std_dev with fewer than two ball speeds.
  */
 export function computeStats(shots: Shot[]): SessionStats {
-  if (shots.length === 0) {
-    return {
-      shot_count: 0,
-      avg_ball_speed: 0,
-      max_ball_speed: 0,
-      min_ball_speed: 0,
-      avg_club_speed: null,
-      avg_smash_factor: null,
-      avg_carry_est: 0,
-    };
-  }
-
   const ballSpeeds = measuredValues(shots.map((s) => s.ball_speed_mph));
   const clubSpeeds = measuredValues(shots.map((s) => s.club_speed_mph));
   const smashFactors = measuredValues(shots.map((s) => s.smash_factor));
   const carries = measuredValues(shots.map((s) => s.estimated_carry_yards));
 
   const mean = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
-  const stdDev = (arr: number[]) => {
-    if (arr.length < 2) return 0;
+  const stdDev = (arr: number[]): number | null => {
+    if (arr.length < 2) return null;
     const m = mean(arr);
     return Math.sqrt(arr.reduce((sum, x) => sum + (x - m) ** 2, 0) / (arr.length - 1));
   };
