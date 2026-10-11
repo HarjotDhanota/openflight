@@ -64,6 +64,7 @@ GOAL_STATUSES = ("met", "met_conditional", "missed", "not_measurable")
 NO_SHOT_EXPECTED = "no_shot_expected"
 COLD_NOT_AFTER_BOOT = "cold_not_after_boot"  # group name when the cold swings are not cold
 QUALIFYING = "qualifying"
+REARMED = "rearmed"  # ops243 rearm_rolling_buffer's completed outcome
 PAINT_AMBIGUOUS = "paint_ambiguous"  # A-M6: kiosk accounts of one revision disagree
 SUMMARY_SCHEMA = "openflight.pi_trace_summary"
 SUMMARY_VERSION = 1
@@ -601,6 +602,14 @@ def _goal_revision(revisions: Sequence[dict]) -> Optional[dict]:
     return (painted or eligible or [None])[0]
 
 
+def _stage_marks(usable: Sequence[dict]) -> list[dict]:
+    """Marks that time a stage: a re-arm that did not re-arm (exception, write timeout)
+    is not a re-arm time (A-M7), so its stage stays unobserved; the outcome is kept."""
+    return [
+        m for m in usable if not (m["name"] == "ops_rearm_done" and m.get("outcome") != REARMED)
+    ]
+
+
 def _stage_times(usable: Sequence[dict], anchor: dict, revisions: Sequence[dict]) -> dict:
     times: dict[str, list[int]] = {}
     for mark in usable:
@@ -650,6 +659,7 @@ def _enrichment_events(own: Sequence[dict], anchor: dict) -> list[dict]:
 def _attempt(own: list, edges: list, samples: list, rate_hz: float, sid: Optional[str]) -> dict:
     first_byte = _first(own, "ops_first_byte")
     usable = [m for m in own if m.get("error") is None]
+    rearm_done = _first(own, "ops_rearm_done")
     anchor = _anchor(own, first_byte["monotonic_ns"], edges, rate_hz)
     revisions = _revisions(own, samples, sid)
     goal = _goal_revision(revisions)
@@ -670,7 +680,8 @@ def _attempt(own: list, edges: list, samples: list, rate_hz: float, sid: Optiona
         "first_revision": revisions[0]["revision"] if revisions else None,
         "goal_revision": goal["revision"] if goal else None,
         "core_ready_ns": core_ready["monotonic_ns"] if core_ready else None,
-        "stages_ms": _stages_ms(_stage_times(usable, anchor, revisions)),
+        "stages_ms": _stages_ms(_stage_times(_stage_marks(usable), anchor, revisions)),
+        "rearm_outcome": rearm_done.get("outcome") if rearm_done else None,
         "mark_errors": [f"{m['name']}:{m['error']}" for m in own if m.get("error") is not None],
         "enrichment_events": _enrichment_events(own, anchor),
         "cpu_temp_c": wait.get("cpu_temp_c") if wait else None,

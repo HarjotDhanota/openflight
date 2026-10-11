@@ -1469,3 +1469,30 @@ def test_a_named_sid_still_takes_only_its_own_document(new_trace, tmp_path):
     trace = pts.load_trace(rec.path)
     attempts = pts.build_attempts(trace, browser_sid="k")
     assert attempts[0]["revisions"][0]["paint"] == pts.QUALIFYING
+
+
+# --- A-M7: only a completed re-arm is a re-arm time ----------------------------------------
+
+
+@pytest.mark.parametrize("outcome", ["exception", "write_timeout"])
+def test_a_rearm_that_did_not_rearm_is_left_out_of_the_rearm_stage(new_trace, tmp_path, outcome):
+    rec = new_trace()
+    shot(rec, "t-1", T0)
+    shot(rec, "t-2", T0 + 10_000 * MS)
+    assert rec.close() is True
+
+    def edit(rows):
+        for row in rows:
+            if row.get("name") == "ops_rearm_done" and row.get("attempt_id") == "t-2":
+                row["outcome"] = outcome
+        return as_text(rows)
+
+    rewrite(rec.path, edit)
+    trace = pts.load_trace(rec.path)
+    attempts = pts.build_attempts(trace)
+    assert attempts[0]["stages_ms"]["rearm"] == pytest.approx(49.0)
+    assert "rearm" not in attempts[1]["stages_ms"]
+    assert [a["rearm_outcome"] for a in attempts] == ["rearmed", outcome]
+    stats = pts._stage_stats(attempts)["rearm"]  # pylint: disable=protected-access
+    assert stats["n"] == 1 and stats["unobserved"] == 1
+    assert stats["max"] == pytest.approx(49.0)
