@@ -8,7 +8,7 @@ import pytest
 from flask import Flask
 from flask_socketio import SocketIO
 
-from openflight import pi_trace
+from openflight import pi_trace, trace_routes
 from openflight.trace_routes import (
     MAX_CLOCK_SAMPLE_AGE_S,
     NOT_SHOWN_REASONS,
@@ -478,3 +478,9 @@ def test_not_shown_reasons_match_the_browser():
     block = re.search(r"export const NOT_SHOWN_REASONS = \[(.*?)\] as const;", source, re.S)
     assert block, "paintTrace.ts must export NOT_SHOWN_REASONS as a const list"
     assert set(re.findall(r"'([a-z_]+)'", block.group(1))) == NOT_SHOWN_REASONS
+
+
+def test_document_identity_keys_are_the_marked_identity():
+    # pi_trace_summary maps a browser time only with samples of this exact identity.
+    fields = trace_routes._identity_fields({"document_id": "d", "user_agent": "ua"})
+    assert tuple(fields) == trace_routes.DOCUMENT_IDENTITY_KEYS

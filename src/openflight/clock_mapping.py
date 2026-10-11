@@ -18,12 +18,37 @@ from typing import Optional, Sequence
 from openflight.pi_trace import _finite
 
 SEGMENT_SAMPLES = 128
+BUFFER_SEGMENTS = 32  # 4,096 samples; S#n moves the trigger split among them (AN-027-A p.2)
 QUALIFIED_BACKENDS = frozenset({"LGPIOFactory"})
 QUALIFIED_SHARED_EDGE = "qualified_shared_edge"
 QUALIFIED_CLOCK_SYNC = "qualified_clock_sync"
 UNQUALIFIED = "unqualified"
 UNOBSERVED = "unobserved"
 _QUALIFIED = (QUALIFIED_SHARED_EDGE, QUALIFIED_CLOCK_SYNC)
+
+
+def association_window_ns(sample_rate_hz: float, pre_trigger_segments: int) -> tuple[int, int]:
+    """(segment_ns, post_trigger_ns) of one rolling-buffer capture at this S# split.
+
+    The post-trigger part is (BUFFER_SEGMENTS − S#) segments. An unknown or out-of-range
+    split, or a rate that is not a positive finite number, raises: never a default.
+    """
+    if not _finite(sample_rate_hz) or sample_rate_hz <= 0:
+        raise ValueError(f"sample rate must be a positive number, not {sample_rate_hz!r}")
+    if (
+        not isinstance(pre_trigger_segments, int)
+        or isinstance(pre_trigger_segments, bool)
+        or not 0 <= pre_trigger_segments <= BUFFER_SEGMENTS
+    ):
+        raise ValueError(
+            f"pre_trigger_segments must be an int in 0..{BUFFER_SEGMENTS}, "
+            f"not {pre_trigger_segments!r}"
+        )
+    segment_ns = round(SEGMENT_SAMPLES / sample_rate_hz * 1e9)
+    post_ns = round(
+        (BUFFER_SEGMENTS - pre_trigger_segments) * SEGMENT_SAMPLES / sample_rate_hz * 1e9
+    )
+    return segment_ns, post_ns
 
 
 @dataclass(frozen=True)

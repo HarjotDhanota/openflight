@@ -47,6 +47,15 @@ NOT_SHOWN_REASONS = frozenset(
     }
 )
 MAX_TEXT_LENGTH = 512
+# One browser document as marked on every sample and report. pi_trace_summary maps a
+# browser time only with samples whose identity matches on all of these.
+DOCUMENT_IDENTITY_KEYS = (
+    "document_id",
+    "client_kind",
+    "time_origin_ms",
+    "user_agent",
+    "renderer_version",
+)
 MAX_CORE_FIELDS = 32
 
 

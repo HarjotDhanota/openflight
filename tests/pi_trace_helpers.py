@@ -32,7 +32,7 @@ def make_recorder(tmp_path, **kw):
         tmp_path / "trace.jsonl",
         clock=kw.pop("clock", FakeClock()),
         temp_reader=lambda: 51.5,
-        boot_id_reader=lambda: "boot-a",
+        boot_id_reader=kw.pop("boot_id_reader", lambda: "boot-a"),
         **kw,
     )
 

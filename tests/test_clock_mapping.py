@@ -399,3 +399,27 @@ def test_negative_age_edge_with_valid_readings_is_an_ambiguity_maker():
     good = _edge(2, fb - 100_000_000)
     result = _detail([negative, good], fb)
     assert result.reason == "edge_ambiguous" and result.unusable_seqs == (5,)
+
+
+def test_association_window_known_answers():
+    assert cm.association_window_ns(FS, 16) == (SEGMENT_NS, POST_NS)
+    assert cm.association_window_ns(FS, 8) == (SEGMENT_NS, round(24 * 128 / FS * 1e9))  # 102.4 ms
+    assert cm.association_window_ns(FS, 32) == (SEGMENT_NS, 0)
+
+
+@pytest.mark.parametrize(
+    "rate,segments",
+    [
+        (0, 16),
+        (-30_000, 16),
+        (FS, -1),
+        (FS, 33),
+        (FS, None),
+        (FS, 16.0),
+        (FS, True),
+        (math.nan, 16),
+    ],
+)
+def test_association_window_rejects_an_unknown_split_or_rate(rate, segments):
+    with pytest.raises(ValueError):
+        cm.association_window_ns(rate, segments)
