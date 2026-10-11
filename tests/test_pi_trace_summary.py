@@ -1342,3 +1342,63 @@ def test_a_header_without_its_clock_is_named_not_a_crash(new_trace, tmp_path):
     assert "trace_start_time_unknown" in summary["p1"]["missing"]
     assert summary["trace"]["start_wall_s"] is None
     pts.render_markdown(summary)
+
+
+# --- A-M1: an emit whose trace tagging failed ---------------------------------------------
+
+
+def _untagged_emit(rec, aid, t0, ms, *, update_kind="first"):
+    """What the server marks when tagging failed: no revision, so no paint can match it."""
+    fields = {"update_kind": update_kind, "event": "shot", "final": True, "tagging_failed": True}
+    at(rec, "server_emit_invoked", aid, t0, ms, **fields)
+    at(rec, "server_emit_returned", aid, t0, ms + 0.1, **fields, error=None)
+
+
+def test_an_untagged_emit_is_not_measurable_never_no_result(new_trace, tmp_path):
+    rec = new_trace()
+    edge(rec, T0)
+    ops(rec, "t-1", T0)
+    _untagged_emit(rec, "t-1", T0, 1885)
+    _t, attempts, ledger = analyse(rec, sheet(tmp_path, [T0]))
+    assert attempts[0]["untagged_emits"] == 1
+    assert ledger["rows"][0]["goal"] == "not_measurable"
+    assert ledger["rows"][0]["reasons"] == ["emit_untagged"]
+
+
+def test_an_untagged_status_notice_is_not_a_result(new_trace, tmp_path):
+    rec = new_trace()
+    edge(rec, T0)
+    ops(rec, "t-1", T0)
+    _untagged_emit(rec, "t-1", T0, 1885, update_kind="status")
+    _t, attempts, ledger = analyse(rec, sheet(tmp_path, [T0]))
+    assert attempts[0]["untagged_emits"] == 0
+    assert ledger["rows"][0]["goal"] == "missed"
+    assert ledger["rows"][0]["reasons"] == ["no_result_emitted"]
+
+
+def test_an_untagged_emit_before_a_late_revision_over_the_limit_is_not_a_miss(new_trace, tmp_path):
+    """The untagged emit may have shown the result in time: a later miss bounds nothing."""
+    rec = new_trace()
+    edge(rec, T0)
+    ops(rec, "t-1", T0)
+    _untagged_emit(rec, "t-1", T0, 1885)
+    emit(rec, "t-1", T0, 2500, 1)
+    samples(rec, T0, times_ms=(2400, 2600))
+    paint(rec, "t-1", T0, 1, 2520)
+    _t, _a, ledger = analyse(rec, sheet(tmp_path, [T0]), allowance=600.0)
+    row = ledger["rows"][0]
+    assert row["goal"] == "not_measurable"
+    assert row["reasons"][0] == "emit_untagged"
+    assert "over_goal" in row["reasons"]
+
+
+def test_an_untagged_emit_never_turns_a_met_goal_into_another_status(new_trace, tmp_path):
+    rec = new_trace()
+    edge(rec, T0)
+    ops(rec, "t-1", T0)
+    _untagged_emit(rec, "t-1", T0, 1880)
+    emit(rec, "t-1", T0, 1885, 1)
+    samples(rec, T0)
+    paint(rec, "t-1", T0, 1, 1900, received=1886)
+    _t, _a, ledger = analyse(rec, sheet(tmp_path, [T0]))
+    assert ledger["rows"][0]["goal"] == "met"

@@ -1168,6 +1168,12 @@ def test_a_raising_trace_tag_still_emits_untagged(recorder, monkeypatch):
     attempt = recorder.open_ops_attempt()
     assert server._emit_initial_ops_shot(_traced_shot(attempt)) is True  # pylint: disable=protected-access
     assert len(emitted) == 1 and "trace" not in emitted[0][1]
+    # A-M1: the summary must be able to tell an untagged emit from no emit at all.
+    invoked = [m for m in read_marks(recorder) if m["name"] == "server_emit_invoked"]
+    assert len(invoked) == 1
+    assert invoked[0]["tagging_failed"] is True
+    assert invoked[0]["update_kind"] == "first" and invoked[0]["event"] == "shot"
+    assert "revision" not in invoked[0]
 
 
 def test_a_trace_that_cannot_start_leaves_the_kiosk_running_untraced(tmp_path, caplog):

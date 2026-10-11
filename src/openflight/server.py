@@ -449,7 +449,15 @@ def _trace_tag(  # pylint: disable=too-many-arguments
     core_eligible: bool,
     core_fields=(),
 ) -> dict | None:
-    """Trace identity for one emitted revision; lifecycle (final) and eligibility kept apart."""
+    """Trace identity for one emitted revision; lifecycle (final) and eligibility kept apart.
+
+    ``final`` is True on every emit from ``_finalize_shot_detected``: the shot's first
+    finalized result (``update_kind`` "first") AND every late update after it
+    (``late_update``). It means "a finalized result", not "the last emit"; a later
+    revision may follow a final one. The initial OPS emit (also ``update_kind``
+    "first") and status notices carry False. A reader that needs the newest revision
+    compares ``revision`` numbers, never ``final``.
+    """
     if pi_trace.get_recorder() is None or shot.trace_attempt_id is None:
         return None
     return {
@@ -576,7 +584,9 @@ def _trace_emit_fields(shot: Shot, event: str, payload: dict, *, final: bool, up
         logger.warning(
             "[TRACE] tagging the %s emit failed; emitting untagged", event, exc_info=True
         )
-        return {}
+        # No revision, but the summary must still see that a result went out (A-M1):
+        # an untagged emit is not measurable, never "no result emitted".
+        return {"update_kind": update_kind, "event": event, "final": final, "tagging_failed": True}
 
 
 def _traced_emit(shot: Shot, event: str, payload: dict, *, final: bool, update_kind: str) -> None:

@@ -564,6 +564,17 @@ def _revisions(own: Sequence[dict], samples: Sequence[dict], sid: Optional[str])
     return revisions
 
 
+def _untagged_emits(own: Sequence[dict]) -> int:
+    """Shot emits marked without a revision (their tagging failed, A-M1): status excluded."""
+    return sum(
+        1
+        for mark in own
+        if mark["name"] == "server_emit_invoked"
+        and mark.get("update_kind") != "status"
+        and not _is_revision(mark.get("revision"))
+    )
+
+
 def _goal_revision(revisions: Sequence[dict]) -> Optional[dict]:
     """R-F5: the earliest eligible revision with a qualifying paint, else the earliest eligible."""
     eligible = [r for r in revisions if r["core_eligible"]]
@@ -636,6 +647,7 @@ def _attempt(own: list, edges: list, samples: list, rate_hz: float, sid: Optiona
         "shot_number": accepted_mark.get("shot_number") if accepted_mark else None,
         **{k: v for k, v in anchor.items() if k != "callback_ns"},
         "revisions": revisions,
+        "untagged_emits": _untagged_emits(own),
         "first_revision": revisions[0]["revision"] if revisions else None,
         "goal_revision": goal["revision"] if goal else None,
         "core_ready_ns": core_ready["monotonic_ns"] if core_ready else None,
@@ -847,6 +859,21 @@ def _timed_goal(goal: dict, anchor: Optional[list], limit: Optional[float], unme
 
 
 def _judge(attempt: dict, allowance_ms: Optional[float], unmeasured: bool) -> dict:
+    """The 2 s goal status of one swing's attempt (see _judge_revisions).
+
+    A-M1: a shot emit whose trace tagging failed went out without a revision, so its
+    paint can never be matched. It may have shown the result in time: a status that
+    would be ``missed`` is ``not_measurable`` with ``emit_untagged`` first. ``met``
+    stays (a later paint within the limit still bounds the first display).
+    """
+    judged = _judge_revisions(attempt, allowance_ms, unmeasured)
+    if judged["goal"] != "missed" or not attempt["untagged_emits"]:
+        return judged
+    reasons = [r for r in judged["reasons"] if r != "no_result_emitted"]
+    return {**judged, "goal": "not_measurable", "reasons": ["emit_untagged", *reasons]}
+
+
+def _judge_revisions(attempt: dict, allowance_ms: Optional[float], unmeasured: bool) -> dict:
     """The 2 s goal status of one swing's attempt, with every applicable reason (R-F8).
 
     missed: no result can have reached the screen (rejected, not accepted, nothing
