@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useLayoutEffect } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useSocket } from './hooks/useSocket';
 import { useSystemStore } from './stores/useSystemStore';
@@ -9,6 +9,7 @@ import { useProfileStore } from './stores/useProfileStore';
 import { useHeroMetricStore } from './stores/useHeroMetricStore';
 import { useCameraReplayController } from './hooks/useCameraReplayController';
 import { socketService } from './services/socketService';
+import { setLiveViewShown } from './services/paintTrace';
 import { DebugPanel } from './components/DebugPanel';
 import { DisplayMode } from './components/DisplayMode';
 import { SimShotBadges } from './components/SimShotBadges';
@@ -39,6 +40,7 @@ import type { Profile } from './types/profile';
 import { getClubName } from './data/clubs';
 import { getTrainingImplementLabel } from './data/trainingImplements';
 import { unlockAudioCue } from './utils/audioCue';
+import { isLiveResultCovered } from './utils/liveResultCover';
 import { useLaunchDaddy, LaunchDaddyOverlay, LaunchDaddyBrand } from './components/LaunchDaddy';
 
 import { useI18n } from './i18n/useI18n';
@@ -129,6 +131,13 @@ function AppContent() {
 
   const { isLaunchDaddyMode, isExploding, triggerExplosion } = useLaunchDaddy();
   const isDisplayRoute = typeof window !== 'undefined' && window.location.pathname.replace(/\/$/, '') === '/display';
+
+  // Stage 1b trace: a result received while the live view is off screen is never
+  // acknowledged as shown, even when the live view returns later.
+  useLayoutEffect(() => {
+    setLiveViewShown(!isDisplayRoute && currentView === 'live');
+    return () => setLiveViewShown(false);
+  }, [isDisplayRoute, currentView]);
   const isSwingSpeedMode = triggerStatus.mode === 'swing-speed';
   const activeImplementLabel = isSwingSpeedMode
     ? getTrainingImplementLabel(selectedTrainingImplement)
@@ -315,6 +324,17 @@ function AppContent() {
                 onSelectMetric={setHeroMetricId}
                 isNewShot={profileIsNewShot}
                 headerAction={liveHeaderActions}
+                acknowledgeable={
+                  !isLiveResultCovered({
+                    replayOpen: activeReplay !== null,
+                    shutdownOpen: showShutdown,
+                    pickerOpen,
+                    menuOpen,
+                    profileDialogOpen: profileDialog !== null,
+                    clearSessionOpen,
+                    processingPhase: shotProcessingPhase,
+                  })
+                }
               />
             </ShotProcessingArea>
             {debugMode && <SimShotBadges latestSimShots={latestSimShots} />}

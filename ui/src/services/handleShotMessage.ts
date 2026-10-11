@@ -1,6 +1,7 @@
 import type { SessionStats, Shot } from '../types/shot';
 import { useShotStore } from '../stores/useShotStore';
 import { playSwingCapturedCue } from '../utils/audioCue';
+import type { TraceTag } from './paintTrace';
 
 export interface ShotMessage {
   shot: Shot;
@@ -9,6 +10,8 @@ export interface ShotMessage {
     iwr6843?: boolean;
     camera?: boolean;
   };
+  /** Present only when the server runs the stage 1b Pi trace. */
+  trace?: TraceTag;
 }
 
 export interface ShotUpdateMessage {
@@ -22,6 +25,8 @@ export interface ShotUpdateMessage {
     reason: string;
     hardware: string[];
   };
+  /** Present only when the server runs the stage 1b Pi trace. */
+  trace?: TraceTag;
 }
 
 function showPendingHardware(pending: ShotMessage['pending'], timestamp: string) {

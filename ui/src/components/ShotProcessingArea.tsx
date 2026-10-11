@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { ShotProcessingPhase } from '../stores/useShotStore';
+import { shotProcessingCoversResult, type ShotProcessingPhase } from '../stores/useShotStore';
 import { ProgressIndicator } from './ProgressIndicator';
 import './ShotProcessingArea.css';
 
@@ -30,7 +30,7 @@ export function ShotProcessingArea({ phase, children }: ShotProcessingAreaProps)
 
   return (
     <>
-      {phase ? (
+      {shotProcessingCoversResult(phase) ? (
         <div className="shot-processing-overlay">
           <div className="shot-processing-card">
             <ProgressIndicator
