@@ -17,9 +17,21 @@ import numpy as np
 import pytest
 
 from openflight.iwr6843 import driver
-from openflight.iwr6843.driver import DumpTransferTiming, IWR6843DumpRecoveryError, IWR6843Radar
+from openflight.iwr6843.driver import (
+    DumpTransferTiming,
+    IWR6843DumpRecoveryError,
+    IWR6843Radar,
+    parse_perf_stats,
+)
 from openflight.iwr6843.dump import pack_dump
-from tests.iwr6843_firmware_fake import FakeClock, FakePort, FirmwareModel, NoLock
+from tests.iwr6843_firmware_fake import (
+    BENCH_REPLY,
+    PERF_REPLY,
+    FakeClock,
+    FakePort,
+    FirmwareModel,
+    NoLock,
+)
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "iwr6843" / "feasibility_run.py"
 SPEC = importlib.util.spec_from_file_location("iwr6843_feasibility_run", SCRIPT)
@@ -36,6 +48,20 @@ IQ16_CFG = "% profile\nframeCfg 0 2 12 0 3 1 0\ncaptureFormat iq16\nsensorStart\
 IMAGE = "ab" * 32
 MS = 1_000_000
 HISTORY_NS = 27 * MS  # PLAN's pre-request history: 9 frames x 3000 us
+# Raw CLI replies in the firmware's formats (made-up values; parser known-answer data only).
+PERF_TEXT = "perfstats\r\n" + PERF_REPLY.decode() + "Done\r\n"
+BENCH_TEXT = "l3bench\r\n" + BENCH_REPLY.decode() + "Done\r\n"
+OLD_FIRMWARE_PERF_TEXT = "perfstats\r\n'perfstats' is not a known command\r\nError -1\r\n"
+# A build without the scan, nothing re-armed yet and the init task gone: None, never 0.
+NO_SCAN_PERF_TEXT = (
+    "perf tick_hz=200000000 rearm_max=0 rearms=0 task_max=0 task_runs=0 "
+    "margin_min=4294967295 margin_frames=0\r\n"
+    "perf scan=not_in_build pack=not_in_build\r\n"
+    "heap size=32768 free=9000 free_min=8800 largest=8000\r\n"
+    "stacks init=not_created ctrl=700/3072 rearm=600/2048 cli=1500/4096 hwi=900/2048\r\nDone\r\n"
+)
+# A reply the parser refuses as impossible: a re-arm maximum beside zero re-arms.
+REFUSED_PERF_TEXT = PERF_TEXT.replace("rearms=900", "rearms=0")
 
 
 def _dump_bytes() -> bytes:
@@ -70,14 +96,18 @@ class FakeRadar:
         active=True,
         on_dump=None,
         raise_at=None,
-        perf=None,
+        perf_text=None,
+        bench_text=None,
+        on_cmd=None,
         stop_fails=False,
         log=None,
     ):
         self.clock, self.fail_at, self.perf_error, self.active = clock, fail_at, perf_error, active
         self.on_dump = on_dump or (lambda _n: None)
         self.raise_at = raise_at or {}
-        self.perf = perf
+        self.perf_text = OLD_FIRMWARE_PERF_TEXT if perf_error else (perf_text or PERF_TEXT)
+        self.bench_text = bench_text
+        self.on_cmd = on_cmd or (lambda _line: None)
         self.stop_fails = stop_fails
         self.log = log if log is not None else []
         self.requests = 0
@@ -116,20 +146,25 @@ class FakeRadar:
         active = self.active(self.requests) if callable(self.active) else self.active
         return f"frames=9 active={int(active)} rf_faults=0 hwa_missed=0\r\nDone"
 
-    def perf_stats(self):
-        if self.perf_error:
-            raise ValueError("perfstats reply lacks ['tick_hz'] (firmware without W4a evidence?)")
-        return self.perf if self.perf is not None else {"tick_hz": 200_000_000, "margin_min": 5}
+    def cmd(self, line, window=1.5):
+        """Only the raw-reply commands the run script sends itself."""
+        assert window > 0
+        self.log.append(line)
+        self.on_cmd(line)
+        if line == "perfstats":
+            return self.perf_text
+        if line == "l3bench":
+            if self.bench_text is not None:
+                return self.bench_text
+            if not self.stopped:
+                return "l3bench\r\nError: stop the sensor before l3bench\r\nError -1\r\n"
+            return BENCH_TEXT
+        raise AssertionError(f"unexpected command {line!r}")
 
     def stop_sensor(self):
         if self.stop_fails:
             raise RuntimeError("IWR6843 remained active after sensorStop: active=1")
         self.stopped = True
-
-    def bench_kernel(self):
-        if not self.stopped:
-            raise RuntimeError("l3bench refused: stop the sensor before l3bench")
-        return {"samples": 10, "cycles": 20, "sum": 30, "cycles_per_sample": 2.0}
 
 
 class ScriptedEdges(RUN.EdgeQueue):
@@ -635,7 +670,15 @@ def test_busy_clears_only_after_the_ring_is_ready_again(tmp_path, placement):
 
     _run(tmp_path, FakeRadar(clock, log=log), edges, clock, soak=0, clap=1, **placement)
 
-    assert log[log.index("arm") :] == ["arm", "dump 1", "stats", "busy False", "stats"]
+    assert log[log.index("arm") :] == [
+        "arm",
+        "dump 1",
+        "stats",
+        "busy False",
+        "stats",
+        "perfstats",
+        "l3bench",
+    ]
 
 
 def test_the_fresh_edge_age_is_recorded(tmp_path, placement):
@@ -791,32 +834,53 @@ def test_old_firmware_perfstats_is_recorded_as_missing_with_its_reason(tmp_path)
 
     assert summary["perf"] is None
     assert "firmware without W4a evidence" in summary["perf_error"]
-    assert summary["bench"]["cycles"] == 20
+    assert summary["perf_text"] == OLD_FIRMWARE_PERF_TEXT
+    assert summary["bench"]["cycles"] == 4_200_000
+    assert summary["bench_text"] == BENCH_TEXT
 
 
 def test_unmeasured_perf_values_stay_none_with_their_reasons(tmp_path):
     """Task 6's parser output is stored unchanged: None is never coerced to 0."""
     clock = Clock()
-    perf = {
-        "tick_hz": 200_000_000,
-        "rearms": 0,
-        "rearm_max": None,
-        "scan_max": None,
-        "iq8_overflow_saturated": False,
-        "stack_init": None,
-        "stack_hwi": {"used": 900, "size": 2048},
-        "unavailable": {
-            "rearm_max": "no samples",
-            "scan_max": "not_in_build",
-            "stack_init": "not_created",
-        },
-    }
     summary, run_dir, _unused_rows = _run(
-        tmp_path, FakeRadar(clock, perf=perf), None, clock, soak=1
+        tmp_path, FakeRadar(clock, perf_text=NO_SCAN_PERF_TEXT), None, clock, soak=1
     )
 
-    assert summary["perf"] == perf and summary["perf_error"] is None
-    assert json.loads((run_dir / "run.json").read_text())["perf"] == perf
+    perf = summary["perf"]
+    assert perf == parse_perf_stats(NO_SCAN_PERF_TEXT) and summary["perf_error"] is None
+    assert perf["rearm_max"] is None and perf["unavailable"]["rearm_max"] == "no samples"
+    assert perf["scan_max"] is None and perf["unavailable"]["scan_max"] == "not_in_build"
+    assert perf["stack_init"] is None and perf["unavailable"]["stack_init"] == "not_created"
+    stored = json.loads((run_dir / "run.json").read_text())
+    assert stored["perf"] == perf and stored["perf_text"] == NO_SCAN_PERF_TEXT
+
+
+def test_a_refused_perfstats_reply_is_kept_raw_with_its_reason(tmp_path):
+    """A strict refusal on real hardware must not lose the reply (Task 9 judges the parser)."""
+    clock = Clock()
+    summary, run_dir, _unused_rows = _run(
+        tmp_path, FakeRadar(clock, perf_text=REFUSED_PERF_TEXT), None, clock, soak=1
+    )
+
+    assert summary["perf"] is None
+    assert "rearm_max=41000 beside rearms=0" in summary["perf_error"]
+    stored = json.loads((run_dir / "run.json").read_text())
+    assert stored["perf_text"] == REFUSED_PERF_TEXT
+    assert (
+        "stacks init=2900/8192 ctrl=700/3072 rearm=600/2048 cli=1500/4096 hwi=900/2048"
+        in (stored["perf_text"])
+    )
+
+
+def test_a_refused_l3bench_reply_is_kept_raw_with_its_reason(tmp_path):
+    clock = Clock()
+    garbled = "l3bench\r\nbench samples=1\r\nDone\r\n"
+    summary, _run_dir, _unused_rows = _run(
+        tmp_path, FakeRadar(clock, bench_text=garbled), None, clock, soak=1
+    )
+
+    assert summary["bench"] is None and "no l3bench reply" in summary["bench_error"]
+    assert summary["bench_text"] == garbled
 
 
 def test_a_sensor_that_will_not_stop_is_recorded_and_l3bench_is_not_run(tmp_path):
@@ -826,7 +890,7 @@ def test_a_sensor_that_will_not_stop_is_recorded_and_l3bench_is_not_run(tmp_path
     )
 
     assert "remained active" in summary["stop_error"]
-    assert summary["bench"] is None
+    assert summary["bench"] is None and summary["bench_text"] is None
     assert "sensor did not stop" in summary["bench_error"]
     assert (run_dir / "run.json").exists()
 
@@ -907,6 +971,73 @@ def test_the_attempt_row_writer_is_public_for_the_gate_checker():
     }
 
 
+def test_edges_after_the_triggered_phase_are_counted_after_the_run(tmp_path, placement):
+    """A clap left in the queue, or during close-out, is counted, never left uncounted."""
+    clock = Clock()
+    edges = ScriptedEdges(clock, after_arm=[0], after_ready=[[0]])  # one left over after the last
+
+    def clap_during_close_out(line):
+        if line == "perfstats":
+            clock.now += 200 * MS
+            edges.on_edge()
+
+    summary, _run_dir, rows = _run(
+        tmp_path,
+        FakeRadar(clock, on_cmd=clap_during_close_out),
+        edges,
+        clock,
+        soak=0,
+        clap=1,
+        **placement,
+    )
+
+    assert [r["outcome"] for r in rows] == ["captured"]
+    assert summary["edges"]["after_run_discarded"] == 2
+    assert edges.next_fresh_edge(0.0, 10_000 * MS) is None
+
+
+def test_the_queue_closes_after_an_abandoned_triggered_phase(tmp_path, placement):
+    clock = Clock()
+    edges = ScriptedEdges(clock)
+
+    summary, _run_dir, rows = _run(
+        tmp_path,
+        FakeRadar(clock, on_cmd=lambda _line: edges.on_edge()),
+        edges,
+        clock,
+        soak=0,
+        clap=3,
+        **placement,
+    )
+
+    assert [r["outcome"] for r in rows] == ["no_edge"] * 3
+    assert summary["edges"]["after_run_discarded"] == 1
+
+
+class InterruptedWait(ScriptedEdges):
+    """The owner presses Ctrl-C while the script waits for a swing."""
+
+    def next_fresh_edge(self, timeout_s, max_age_ns):
+        raise KeyboardInterrupt
+
+
+def test_ctrl_c_while_waiting_for_an_edge_keeps_the_attempt_row(tmp_path, placement):
+    clock = Clock()
+
+    with pytest.raises(KeyboardInterrupt):
+        RUN.run_profile(
+            FakeRadar(clock),
+            **_kwargs(tmp_path, clock, InterruptedWait(clock), soak=1, clap=2, **placement),
+        )
+
+    run_dir = _only_run_dir(tmp_path)
+    rows = _rows(run_dir)
+    assert [r["outcome"] for r in rows] == ["captured", "no_edge"]
+    assert "run aborted while waiting" in rows[1]["error"]
+    assert "KeyboardInterrupt" in rows[1]["error"] and rows[1]["nbytes"] is None
+    assert not (run_dir / "run.json").exists() and (run_dir / "run_aborted.json").exists()
+
+
 # --- against the simulated firmware, through the real driver --------------------------------
 
 
@@ -958,6 +1089,8 @@ def test_a_run_through_the_real_driver_on_the_simulated_firmware(tmp_path, monke
     assert 0 <= rows[2]["edge_age_at_request_ns"] <= HISTORY_NS
     assert summary["perf"]["stack_hwi"] == {"used": 900, "size": 2048}
     assert summary["bench"]["samples"] == 183168
+    assert "stacks init=2900/8192" in summary["perf_text"]
+    assert "bench samples=183168" in summary["bench_text"]
     assert firmware.dumps == 3 and not firmware.active
     assert firmware.commands[-3:] == ["sensorStop", "stats", "l3bench"]
     assert summary["edges"] == {
@@ -965,6 +1098,7 @@ def test_a_run_through_the_real_driver_on_the_simulated_firmware(tmp_path, monke
         "busy_discarded": 0,
         "stale_discarded": 0,
         "ringing_discarded": 0,
+        "after_run_discarded": 0,
     }
 
 
@@ -1114,3 +1248,40 @@ def test_main_closes_the_radar_and_gpio_when_the_run_aborts(tmp_path, monkeypatc
         )
 
     assert closed == [True] and FakeButton.instances[0].closed
+
+
+@pytest.mark.parametrize(
+    ("radar_kwargs", "key"),
+    [
+        ({"perf_error": True}, "perf_error"),
+        ({"stop_fails": True}, "stop_error"),
+        ({"bench_text": "l3bench\r\nDone\r\n"}, "bench_error"),
+    ],
+)
+def test_main_fails_when_a_close_out_reading_is_missing(
+    tmp_path, monkeypatch, capsys, radar_kwargs, key
+):
+    radar = FakeRadar(Clock(), **radar_kwargs)
+    _patch_main(monkeypatch, radar)
+
+    code = RUN.main(
+        [
+            "--profile",
+            "smoke",
+            "--config",
+            str(_write_cfg(tmp_path)),
+            "--out-root",
+            str(tmp_path / "runs"),
+            "--image-sha256",
+            IMAGE,
+            "--soak",
+            "1",
+            "--soak-gap-s",
+            "0",
+        ]
+    )
+
+    assert code == 1
+    summary = json.loads((_only_run_dir(tmp_path) / "run.json").read_text())
+    assert summary["outcomes"] == {"captured": 1} and summary[key]
+    assert f'"{key}": "' in capsys.readouterr().out

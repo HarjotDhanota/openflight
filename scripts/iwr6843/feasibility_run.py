@@ -33,7 +33,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from openflight.iwr6843.driver import IWR6843DumpRecoveryError, IWR6843Radar
+from openflight.iwr6843.driver import (
+    IWR6843DumpRecoveryError,
+    IWR6843Radar,
+    parse_bench,
+    parse_perf_stats,
+)
 
 RUN_SCHEMA = "openflight.iwr6843.feasibility_run.v2"
 ATTEMPT_SCHEMA = "openflight.iwr6843.feasibility_attempt.v2"
@@ -44,6 +49,10 @@ RUN_ID = re.compile(r"\d{8}T\d{6}Z-[0-9a-f]{8}")
 PROFILE_NAME = re.compile(r"[A-Za-z0-9]+")
 IMAGE_SHA256 = re.compile(r"[0-9a-f]{64}")
 SOAK_STIMULI = ("none", "reflector")
+# Reply windows, as IWR6843Radar.perf_stats and bench_kernel use; the script sends these
+# itself so it can keep the raw reply even when the parser refuses it.
+PERF_WINDOW_S = 2.0
+BENCH_WINDOW_S = 10.0
 # The gate's frozen profiles run their config file unchanged; C16 is C with iq8Scale 16.
 FROZEN_PROFILES = ("A", "B", "C")
 CONTROL_PROFILE, CONTROL_SCALE = "C16", 16
@@ -140,12 +149,14 @@ class EdgeQueue:
         self._lock = threading.Lock()
         self._armed = False
         self._busy = False
+        self._closed = False
         self._last: int | None = None
         self._counts = {
             "pre_arm_discarded": 0,
             "busy_discarded": 0,
             "stale_discarded": 0,
             "ringing_discarded": 0,
+            "after_run_discarded": 0,
         }
 
     def now_ns(self) -> int:
@@ -160,6 +171,9 @@ class EdgeQueue:
                 self._counts["ringing_discarded"] += 1
                 return
             self._last = now
+            if self._closed:
+                self._counts["after_run_discarded"] += 1
+                return
             if not self._armed:
                 self._counts["pre_arm_discarded"] += 1
                 return
@@ -176,6 +190,14 @@ class EdgeQueue:
                 self._counts["pre_arm_discarded"] += 1
             self._armed = True
             self._busy = False
+
+    def close(self) -> None:
+        """End of the triggered phase: leftover and later edges are counted, never queued."""
+        with self._lock:
+            self._closed = True
+            while not self._queue.empty():
+                self._queue.get_nowait()
+                self._counts["after_run_discarded"] += 1
 
     def set_busy(self, busy: bool) -> None:
         """Busy: a dump is in flight or the ring is refilling; edges are counted, not queued."""
@@ -426,12 +448,18 @@ def _triggered(
                 error=f"not attempted: run abandoned after {pacing.max_no_edge} no-edge waits",
             )
             continue
-        claimed = _await_edge(
-            edges,
-            history_ns,
-            pacing,
-            lambda again, a=attempt: _ready_line(a, totals[a[0]], log.placement, again),
-        )
+        try:
+            claimed = _await_edge(
+                edges,
+                history_ns,
+                pacing,
+                lambda again, a=attempt: _ready_line(a, totals[a[0]], log.placement, again),
+            )
+        except BaseException as exc:
+            log.record(
+                attempt, "no_edge", error=f"{type(exc).__name__}: {exc} (run aborted while waiting)"
+            )
+            raise
         if claimed is None:
             misses += 1
             log.record(
@@ -515,19 +543,22 @@ def _effective_config(profile: str, config_bytes: bytes, scale: int | None) -> b
 def _close_out(radar) -> dict:
     """Counters, then stop the sensor and time the kernel; a missing value keeps its reason.
 
-    ``perf`` is Task 6's parsed dict exactly as returned: unmeasured values stay None with
-    their reasons under ``perf["unavailable"]``.
+    The raw ``perfstats`` and ``l3bench`` replies are kept whatever the parsers make of
+    them. ``perf`` is Task 6's parsed dict exactly as returned: unmeasured values stay None
+    with their reasons under ``perf["unavailable"]``.
     """
     out = {
         "stats_text": radar.stats(),
+        "perf_text": radar.cmd("perfstats", PERF_WINDOW_S),
         "perf": None,
         "perf_error": None,
         "stop_error": None,
+        "bench_text": None,
         "bench": None,
         "bench_error": None,
     }
     try:
-        out["perf"] = radar.perf_stats()
+        out["perf"] = parse_perf_stats(out["perf_text"])
     except ValueError as exc:
         out["perf_error"] = str(exc)
     try:
@@ -536,8 +567,9 @@ def _close_out(radar) -> dict:
         out["stop_error"] = str(exc)
         out["bench_error"] = f"not run: the sensor did not stop ({exc})"
         return out
+    out["bench_text"] = radar.cmd("l3bench", BENCH_WINDOW_S)
     try:
-        out["bench"] = radar.bench_kernel()
+        out["bench"] = parse_bench(out["bench_text"])
     except RuntimeError as exc:
         out["bench_error"] = str(exc)
     return out
@@ -638,6 +670,8 @@ def run_profile(  # pylint: disable=too-many-arguments,too-many-locals
         plan += [("clap", i, "clap") for i in range(clap)]
         pacing = _Pacing(sleep, edge_timeout_s, max_consecutive_no_edge, announce)
         _triggered(log, radar, plan, edges, pre_history_ns(plan_line), pacing)
+        if edges is not None:
+            edges.close()
         closing = _close_out(radar)
     except BaseException as exc:
         _write_abort(run_dir, run_id, exc, responses, log)
@@ -698,7 +732,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run one profile on the Pi; exit 0 only if every planned attempt was captured."""
+    """Run one profile on the Pi; exit 0 only if every attempt and every reading came back."""
     args = _parser().parse_args(argv)
     triggered = args.real_ball + args.claps
     edges, button = _gpio_edges(args.gpio_pin) if triggered else (None, None)
@@ -741,7 +775,8 @@ def main(argv: list[str] | None = None) -> int:
         "bench_error",
     )
     print(json.dumps({key: summary[key] for key in keys}, indent=2))
-    return 0 if set(summary["outcomes"]) <= {"captured"} else 1
+    readings_ok = not any(summary[key] for key in ("perf_error", "stop_error", "bench_error"))
+    return 0 if set(summary["outcomes"]) <= {"captured"} and readings_ok else 1
 
 
 if __name__ == "__main__":
