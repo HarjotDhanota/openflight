@@ -117,7 +117,9 @@ components outside int8 (exactly the values the low-byte copy would change) and
 the largest magnitude. A frame the scan did not cover (its pack failed to start,
 a pending frame was overrun, or the build packs on the CPU) carries no scanned
 flag, and the host reports the capture's IQ8 integrity as unobserved, never
-clean. The scan is a CPU pass over the same components the old CPU packer
+clean. A capture plan with fewer than two pre frames never sets the capture's
+scan flag (the next frame could reuse the slot mid-scan), so it also reads
+unobserved. The scan is a CPU pass over the same components the old CPU packer
 touched (15,264 per profile C frame), so its worst-case cycle count is recorded
 from `sensorStart` for `perfstats`. Whether it costs frames at 2 ms is measured
 on hardware, not assumed.

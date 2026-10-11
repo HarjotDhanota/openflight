@@ -692,8 +692,12 @@ def test_the_capture_says_whether_it_scanned():
         source, "static void l3_writeCaptureEvidence", "static void l3_writeFrameEvidence"
     )
 
-    assert "evidence.flags = l3_captureUsesIq8() ? L3_CAPTURE_FLAG_IQ8_SCAN : 0U;" in writer
-    scan_flag = writer.index("evidence.flags = l3_captureUsesIq8()")
+    assert (
+        "evidence.flags = l3_iq8ScanGuaranteed(l3_captureUsesIq8(), gCapturePlan.preFrames)\n"
+        "                         ? L3_CAPTURE_FLAG_IQ8_SCAN\n"
+        "                         : 0U;"
+    ) in writer
+    scan_flag = writer.index("evidence.flags = l3_iq8ScanGuaranteed(")
     assert writer.rindex("#ifdef L3_IQ8_SCAN", 0, scan_flag) < scan_flag
     assert "    evidence.flags = 0U;" in writer[scan_flag:]  # every other build: unobserved
     assert '#include "l3_evidence.h"' in source
@@ -867,3 +871,38 @@ def test_a_c_written_fully_scanned_iq8_dump_reports_its_overflow(tmp_path):
     assert report["overflow_components"] == 2
     assert report["frames_with_overflow"] == [1]
     assert report["max_abs"] == 300
+
+
+# Ruling on Task 4 concern 2: with a one-frame pre ring the next frame reuses the slot being
+# scanned, so an output-done during a long scan could tag the new record with the old
+# frame's counts. The capture then never claims the scan; the host reads "unobserved".
+GUARANTEE_PROBE = """#include <stdio.h>
+#include "l3_evidence.h"
+int main(void) {
+  printf("%u %u %u %u %u %u\\n",
+         (unsigned)l3_iq8ScanGuaranteed(1U, 0U), (unsigned)l3_iq8ScanGuaranteed(1U, 1U),
+         (unsigned)l3_iq8ScanGuaranteed(1U, 2U), (unsigned)l3_iq8ScanGuaranteed(1U, 21U),
+         (unsigned)l3_iq8ScanGuaranteed(0U, 21U), (unsigned)L3_IQ8_SCAN_MIN_PRE_FRAMES);
+  return 0;
+}
+"""
+
+
+def test_the_scan_is_claimed_only_when_no_slot_can_be_reused_mid_scan(tmp_path):
+    """Host-run plan check: IQ8 and at least two pre frames, or the capture flag stays off."""
+    assert _run_c(GUARANTEE_PROBE, tmp_path).split() == ["0", "0", "1", "1", "0", "2"]
+
+
+def test_the_capture_flag_follows_the_plan_check():
+    """Source contract: the writer takes the flag from the plan check and the live plan."""
+    source = FIRMWARE.read_text(encoding="utf-8")
+    writer = _function_source(
+        source, "static void l3_writeCaptureEvidence", "static void l3_writeFrameEvidence"
+    )
+
+    assert writer.count("l3_iq8ScanGuaranteed(l3_captureUsesIq8(), gCapturePlan.preFrames)") == 1
+    assert "l3_captureUsesIq8() ? L3_CAPTURE_FLAG_IQ8_SCAN" not in source
+    # The scan itself is unchanged: it still marks every frame it covers.
+    scan = _scan_source(source)
+    assert "preFrames" not in scan
+    assert "gFrameEvidenceFlags[slot] |= L3_FRAME_FLAG_IQ8_SCANNED;" in scan

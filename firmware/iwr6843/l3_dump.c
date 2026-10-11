@@ -2453,7 +2453,10 @@ static void l3_writeCaptureEvidence(uint32_t actualPre, uint32_t actualPost,
     evidence.pre_frames = (uint8_t)actualPre;
     evidence.post_frames = (uint8_t)actualPost;
 #ifdef L3_IQ8_SCAN
-    evidence.flags = l3_captureUsesIq8() ? L3_CAPTURE_FLAG_IQ8_SCAN : 0U;
+    /* A one-frame pre ring can't guarantee the scan's records: the flag stays off. */
+    evidence.flags = l3_iq8ScanGuaranteed(l3_captureUsesIq8(), gCapturePlan.preFrames)
+                         ? L3_CAPTURE_FLAG_IQ8_SCAN
+                         : 0U;
 #else
     evidence.flags = 0U;
 #endif
