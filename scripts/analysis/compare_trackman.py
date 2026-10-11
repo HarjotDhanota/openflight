@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import re
 import statistics
 import sys
@@ -44,6 +43,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from openflight.shot_updates import read_session_jsonl
 
 # ---------------------------------------------------------------------------
 # Trackman CSV column aliases
@@ -255,55 +256,47 @@ def _parse_timestamp(v: Any) -> Optional[datetime]:
 
 
 def load_openflight(path: Path) -> List[Shot]:
-    """Load `shot_detected` entries from an OpenFlight JSONL session log."""
+    """Load `shot_detected` entries, with late updates applied, from a session log."""
     shots: List[Shot] = []
-    with open(path, "r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if entry.get("type") != "shot_detected":
-                continue
-            data = entry.get("data", entry)  # tolerate flat or nested
-            shots.append(
-                Shot(
-                    source="of",
-                    shot_number=_to_int(data.get("shot_number")),
-                    # OpenFlight uses ``ts`` at the entry level. Older logs
-                    # may use ``timestamp`` instead. Try both.
-                    timestamp=_parse_timestamp(
-                        entry.get("ts") or entry.get("timestamp") or data.get("timestamp")
-                    ),
-                    club=normalize_club(data.get("club")),
-                    ball_speed_mph=_to_float(data.get("ball_speed_mph")),
-                    club_speed_mph=_to_float(data.get("club_speed_mph")),
-                    smash_factor=_to_float(data.get("smash_factor")),
-                    launch_angle_vertical=_to_float(data.get("launch_angle_vertical")),
-                    launch_angle_horizontal=_to_float(data.get("launch_angle_horizontal")),
-                    spin_rpm=_to_float(data.get("spin_rpm")),
-                    club_path_deg=_to_float(data.get("experimental_fused_club_path_deg")),
-                    attack_angle_deg=_to_float(data.get("experimental_fused_attack_angle_deg")),
-                    face_angle_deg=_to_float(data.get("experimental_face_angle_deg")),
-                    face_to_path_deg=_face_to_path(
-                        _to_float(data.get("experimental_face_angle_deg")),
-                        _to_float(data.get("experimental_fused_club_path_deg")),
-                    ),
-                    spin_axis_deg=_to_float(data.get("spin_axis_deg")),
-                    spin_confidence=_to_float(data.get("spin_confidence")),
-                    spin_quality=data.get("spin_quality"),
-                    spin_snr=_to_float(data.get("spin_snr")),
-                    spin_candidate_rpm=_to_float(data.get("spin_candidate_rpm")),
-                    spin_rejection_reason=data.get("spin_rejection_reason"),
-                    carry_yards=_to_float(
-                        data.get("carry_spin_adjusted") or data.get("estimated_carry_yards")
-                    ),
-                    raw=data,
-                )
+    for entry in read_session_jsonl(path):
+        if entry.get("type") != "shot_detected":
+            continue
+        data = entry.get("data", entry)  # tolerate flat or nested
+        shots.append(
+            Shot(
+                source="of",
+                shot_number=_to_int(data.get("shot_number")),
+                # OpenFlight uses ``ts`` at the entry level. Older logs
+                # may use ``timestamp`` instead. Try both.
+                timestamp=_parse_timestamp(
+                    entry.get("ts") or entry.get("timestamp") or data.get("timestamp")
+                ),
+                club=normalize_club(data.get("club")),
+                ball_speed_mph=_to_float(data.get("ball_speed_mph")),
+                club_speed_mph=_to_float(data.get("club_speed_mph")),
+                smash_factor=_to_float(data.get("smash_factor")),
+                launch_angle_vertical=_to_float(data.get("launch_angle_vertical")),
+                launch_angle_horizontal=_to_float(data.get("launch_angle_horizontal")),
+                spin_rpm=_to_float(data.get("spin_rpm")),
+                club_path_deg=_to_float(data.get("experimental_fused_club_path_deg")),
+                attack_angle_deg=_to_float(data.get("experimental_fused_attack_angle_deg")),
+                face_angle_deg=_to_float(data.get("experimental_face_angle_deg")),
+                face_to_path_deg=_face_to_path(
+                    _to_float(data.get("experimental_face_angle_deg")),
+                    _to_float(data.get("experimental_fused_club_path_deg")),
+                ),
+                spin_axis_deg=_to_float(data.get("spin_axis_deg")),
+                spin_confidence=_to_float(data.get("spin_confidence")),
+                spin_quality=data.get("spin_quality"),
+                spin_snr=_to_float(data.get("spin_snr")),
+                spin_candidate_rpm=_to_float(data.get("spin_candidate_rpm")),
+                spin_rejection_reason=data.get("spin_rejection_reason"),
+                carry_yards=_to_float(
+                    data.get("carry_spin_adjusted") or data.get("estimated_carry_yards")
+                ),
+                raw=data,
             )
+        )
     return shots
 
 

@@ -14,6 +14,7 @@ from typing import List, Optional
 from .clubs import ClubType
 from .clubs.physics import get_club_physics
 from .ops243 import SpeedReading
+from .pi_trace import _finite
 
 # Spin confidence threshold for "high" quality — used across modules.
 # Measured spin is trusted for physics simulation only above this level.
@@ -334,6 +335,12 @@ class Shot:
         repr=False,
         compare=False,
     )
+    # Pi trace attempt this shot belongs to (--pi-trace); transient, never serialized.
+    trace_attempt_id: Optional[str] = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     @property
     def ball_speed_ms(self) -> float:
@@ -358,9 +365,9 @@ class Shot:
         - Wedges: 1.20-1.25
 
         Returns:
-            Smash factor or None if club speed not available
+            Smash factor or None if club speed not available (a non-finite one is not)
         """
-        if self.club_speed_mph is None or self.club_speed_mph == 0:
+        if not _finite(self.club_speed_mph) or self.club_speed_mph == 0:
             return None
         return self.ball_speed_mph / self.club_speed_mph
 
@@ -368,12 +375,13 @@ class Shot:
     def estimated_carry_yards(self) -> float:
         """Estimated carry distance based on ball speed, club type, and launch angle."""
         base = estimate_carry_distance(self.ball_speed_mph, self.club)
-        if self.launch_angle_vertical is not None:
+        if self.has_launch_angle:
             return adjust_carry_for_launch_angle(
                 base,
                 self.launch_angle_vertical,
                 self.club,
-                self.launch_angle_confidence or 0.2,
+                (self.launch_angle_confidence if _finite(self.launch_angle_confidence) else None)
+                or 0.2,
             )
         return base
 
@@ -389,14 +397,18 @@ class Shot:
     def reported_carry_yards(self) -> Optional[float]:
         """The carry the kiosk shows, averages and sends to simulators, or None.
 
-        The committed carry when there is one; the ball-speed table only where
-        table_carry_allowed; otherwise not measured.
+        The committed (finite) carry when there is one; the ball-speed table only
+        where table_carry_allowed; otherwise not measured.
         """
         if self.carry_status == CARRY_NOT_MEASURED:
             return None
-        if self.carry_spin_adjusted is not None:
+        # a non-finite carry is a missing carry (owner rule), never reported
+        if _finite(self.carry_spin_adjusted):
             return self.carry_spin_adjusted
-        return self.estimated_carry_yards if self.table_carry_allowed else None
+        if not self.table_carry_allowed:
+            return None
+        table = self.estimated_carry_yards
+        return table if _finite(table) else None
 
     @property
     def estimated_carry_range(self) -> tuple:
@@ -415,13 +427,16 @@ class Shot:
 
     @property
     def has_launch_angle(self) -> bool:
-        """Check if launch angle data is available for this shot."""
-        return self.launch_angle_vertical is not None
+        """Check if launch angle data is available for this shot.
+
+        A non-finite angle is a missing one: it never drives carry or its provenance.
+        """
+        return _finite(self.launch_angle_vertical)
 
     @property
     def has_spin(self) -> bool:
-        """Check if spin data is available for this shot."""
-        return self.spin_rpm is not None
+        """Check if spin data is available for this shot (a non-finite spin is not)."""
+        return _finite(self.spin_rpm)
 
     @property
     def spin_quality(self) -> Optional[str]:
@@ -431,9 +446,9 @@ class Shot:
         Returns:
             "high", "medium", "low", or None if no spin data
         """
-        if self.spin_rpm is not None and self.spin_result_quality:
+        if self.has_spin and self.spin_result_quality:
             return self.spin_result_quality
-        if self.spin_confidence is None:
+        if not _finite(self.spin_confidence):
             return None
         if self.spin_confidence >= SPIN_CONFIDENCE_HIGH:
             return "high"
@@ -549,6 +564,15 @@ class Shot:
         }
 
 
+def _finite_values(values) -> list:
+    """Only the finite numbers among ``values`` (None, NaN and inf are missing)."""
+    return [value for value in values if _finite(value)]
+
+
+def _mean_or_none(values: list) -> Optional[float]:
+    return statistics.mean(values) if values else None
+
+
 def summarize_shots(shots: List[Shot], mode: str) -> dict:
     """Calculate the shared session summary for a list of shots."""
     summary = {
@@ -566,23 +590,25 @@ def summarize_shots(shots: List[Shot], mode: str) -> dict:
     if not shots:
         return summary
 
-    ball_speeds = [shot.ball_speed_mph for shot in shots]
-    club_speeds = [shot.club_speed_mph for shot in shots if shot.club_speed_mph]
-    smash_factors = [shot.smash_factor for shot in shots if shot.smash_factor]
-    spin_rpms = [shot.spin_rpm for shot in shots if shot.spin_rpm is not None]
-    carries = [shot.reported_carry_yards for shot in shots]
-    carries = [carry for carry in carries if carry is not None]
+    # A non-finite value is a missing value (owner rule): it never enters an average,
+    # so one NaN shot can't make every later emit's stats NaN.
+    ball_speeds = _finite_values(shot.ball_speed_mph for shot in shots)
+    club_speeds = _finite_values(shot.club_speed_mph for shot in shots if shot.club_speed_mph)
+    smash_factors = _finite_values(shot.smash_factor for shot in shots)
+    # only carries the kiosk reports: a fusion shot's missing carry is not averaged in
+    carries = _finite_values(shot.reported_carry_yards for shot in shots)
+    spin_rpms = _finite_values(shot.spin_rpm for shot in shots)
     summary.update(
         {
-            "avg_ball_speed": statistics.mean(ball_speeds),
-            "max_ball_speed": max(ball_speeds),
-            "min_ball_speed": min(ball_speeds),
-            "std_dev": statistics.stdev(ball_speeds) if len(ball_speeds) > 1 else 0,
-            "avg_club_speed": statistics.mean(club_speeds) if club_speeds else None,
-            "avg_smash_factor": statistics.mean(smash_factors) if smash_factors else None,
-            # only carries the kiosk reports: a fusion shot's missing carry is not averaged in
-            "avg_carry_est": statistics.mean(carries) if carries else None,
-            "avg_spin_rpm": statistics.mean(spin_rpms) if spin_rpms else None,
+            "avg_ball_speed": _mean_or_none(ball_speeds),
+            "max_ball_speed": max(ball_speeds) if ball_speeds else None,
+            "min_ball_speed": min(ball_speeds) if ball_speeds else None,
+            "std_dev": statistics.stdev(ball_speeds) if len(ball_speeds) > 1 else None,
+            "avg_club_speed": _mean_or_none(club_speeds),
+            "avg_smash_factor": _mean_or_none(smash_factors),
+            "avg_carry_est": _mean_or_none(carries),
+            "avg_spin_rpm": _mean_or_none(spin_rpms),
+            # a non-finite spin is not a detected spin
             "spin_detection_rate": len(spin_rpms) / len(shots),
         }
     )

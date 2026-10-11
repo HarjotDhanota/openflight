@@ -427,3 +427,53 @@ class TestBaudPlumbing:
             check=False,
         )
         assert "--ops-baud" in result.stdout
+
+
+class TestBaudNegotiationRecord:
+    """Minor 1 (Task 6): the I5 switch is a mutation, so connect records what it did."""
+
+    def _negotiate(self, answers_at, **kwargs):
+        radar, _opened, factory = _radar_with_fake_ports(answers_at=answers_at, **kwargs)
+        with patch("openflight.ops243.serial.Serial", side_effect=factory):
+            radar.negotiate_uart_baud()
+        return radar.last_baud_negotiation
+
+    def test_at_target_sends_no_switch(self):
+        assert self._negotiate(230400) == {
+            "found_baud": 230400,
+            "target_baud": 230400,
+            "switch_command": None,
+            "final_baud": 230400,
+        }
+
+    def test_a_switch_is_recorded_even_when_it_fails(self):
+        record = self._negotiate(19200)
+        assert record == {
+            "found_baud": 19200,
+            "target_baud": 230400,
+            "switch_command": "I5",
+            "final_baud": 19200,
+        }
+
+    def test_a_refused_target_sends_no_switch(self):
+        record = self._negotiate(19200, uart_baud=250000)
+        assert record["switch_command"] is None and record["final_baud"] == 19200
+
+    def test_no_reply_is_recorded_before_raising(self):
+        radar, _opened, factory = _radar_with_fake_ports(answers_at=None)
+        with patch("openflight.ops243.serial.Serial", side_effect=factory):
+            with pytest.raises(ConnectionError):
+                radar.negotiate_uart_baud()
+        assert radar.last_baud_negotiation == {
+            "found_baud": None,
+            "target_baud": 230400,
+            "switch_command": None,
+            "final_baud": None,
+        }
+
+    def test_usb_connect_records_no_negotiation(self):
+        radar, _opened, factory = _radar_with_fake_ports(answers_at=None, port="/dev/ttyACM0")
+        with patch("openflight.ops243.serial.Serial", side_effect=factory):
+            with patch.object(OPS243Radar, "_drain_serial"):
+                radar.connect()
+        assert radar.last_baud_negotiation is None

@@ -7,6 +7,11 @@ const SHOT_PROCESSING_TIMEOUT_MS = 30_000;
 export type ShotProcessingPhase =
   'capturing' | 'calculating' | 'iwr_dump' | 'camera_processing' | 'hardware_enrichment';
 
+/** Phases drawn as a dialog over the live result; the enrichment phases show an inline status. */
+export function shotProcessingCoversResult(phase: ShotProcessingPhase | null): boolean {
+  return phase === 'capturing' || phase === 'calculating';
+}
+
 interface ShotState {
   latestShot: Shot | null;
   shots: Shot[];

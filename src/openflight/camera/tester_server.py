@@ -100,6 +100,7 @@ from openflight.iwr6843.range_evidence import (
     static_range_estimator_sha256 as _iwr_static_estimator_sha256,
 )
 from openflight.iwr6843.tracking import RANGE_SPAN_M
+from openflight.shot_updates import apply_shot_updates
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TESTER_PAGE = REPO_ROOT / "ui" / "public" / "tester.html"
@@ -5832,10 +5833,15 @@ class LiveView:
 
 
 def _shot_events(session_dir: Path) -> list[dict]:
-    """Every shot-level event in the arm's session JSONL files, in order."""
+    """Every shot-level event in the arm's session JSONL files, in order.
+
+    Late ``shot_updated`` entries are folded into their shot, per file, so each
+    shot appears once with its latest values.
+    """
     events: list[dict] = []
     for path in sorted(session_dir.glob("session_*.jsonl")):
         session_uuid = None
+        file_events: list[dict] = []
         with path.open(encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 try:
@@ -5847,7 +5853,8 @@ def _shot_events(session_dir: Path) -> list[dict]:
                         session_uuid = event.get("session_uuid")
                     if session_uuid is not None:
                         event = {**event, "_session_uuid": session_uuid}
-                    events.append(event)
+                    file_events.append(event)
+        events.extend(apply_shot_updates(file_events))
     return events
 
 

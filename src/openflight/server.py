@@ -29,6 +29,7 @@ from flask import Flask, Response, jsonify, request, send_file, send_from_direct
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
+from . import core_eligibility, pi_trace
 from .ballistics import resolve_launch, simulate
 from .camera.fusion_diagnostics import build_snapshot as build_fusion_diagnostic
 from .clubs import ClubType
@@ -53,6 +54,7 @@ from .ops243 import (
     SpeedReading,
     set_show_raw_readings,
 )
+from .pi_trace import _finite
 from .power import SUPPORTED_BATTERY_PROVIDERS, PowerMonitor, PowerStatus
 from .profiles import ProfileStore
 from .ready_light import ReadyLight, SensorStates
@@ -75,6 +77,7 @@ from .spin_estimate import calculated_spin_rpm
 from .startup_status import StartupStatusReporter, configured_startup_components
 from .swing_speed import SwingSpeedEvent
 from .timing import clone_stage_timing, measured_stage, set_legacy_provenance
+from .trace_routes import register_trace_routes
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -208,14 +211,35 @@ shutdown_cleanup_started = False
 # One active hardware job plus two waiting shots is enough for normal golf
 # cadence without allowing a stuck peripheral to consume memory indefinitely.
 _SHOT_ENRICHMENT_QUEUE_CAPACITY = 2
+# How long a shot's first, ordered result waits for optional enrichment before
+# it is published OPS-only. Not a cutoff: the enrichment keeps running, and
+# when it completes it is applied to the same shot as a late update
+# (_publish_late_enrichment). Nothing is dropped for missing this timer.
 _SHOT_ENRICHMENT_DEADLINE_S = 20.0
 # Active hardware work, the two queued jobs, and one overflow result. If more
-# shots arrive, fail the oldest optional enrichment closed so OPS finalization
-# can keep advancing without retaining an unbounded number of full Shot objects.
+# shots arrive, the oldest shot's first result is published OPS-only so ordered
+# finalization keeps advancing without retaining an unbounded number of full
+# Shot objects; its enrichment still lands later as an update.
 _SHOT_FINALIZATION_CAPACITY = _SHOT_ENRICHMENT_QUEUE_CAPACITY + 2
+# Shots that arrive while the enrichment queue is full wait here instead of
+# losing their IWR and camera metrics. An entry is the Shot object and its
+# emit settings only (a few KB): the IWR dump and the camera clip it will use
+# were already recorded by those runtimes, which re-arm on their own threads
+# and keep the recordings whether or not a shot is waiting. Enrichment takes
+# about one IWR dump (~7-8 s) per shot, so the queue only fills when more than
+# three shots land inside one dump; reaching this bound as well takes twelve
+# shots in a row each arriving faster than the one before was enriched, far
+# beyond normal swing pace (a shot every 15 s or more). Past it, enrichment is
+# abandoned loudly (enrichment_abandoned), never silently.
+_DEFERRED_ENRICHMENT_CAPACITY = 8
+# Every shot whose enrichment can still report back: the active job, the
+# queued jobs and the deferred backlog. Bounds _shot_awaiting_late_enrichment.
+_SHOT_AWAITING_LATE_CAPACITY = 1 + _SHOT_ENRICHMENT_QUEUE_CAPACITY + _DEFERRED_ENRICHMENT_CAPACITY
 shot_enrichment_queue: queue.Queue[tuple[Shot, str, float | None]] = queue.Queue(
     maxsize=_SHOT_ENRICHMENT_QUEUE_CAPACITY
 )
+# Older than everything queued after it; guarded by shot_enrichment_task_lock.
+_deferred_shot_enrichment: deque[tuple[Shot, str, float | None]] = deque()
 shot_enrichment_task = None
 shot_enrichment_task_lock = threading.Lock()
 _shot_sequence_number = 0
@@ -228,6 +252,10 @@ _shot_finalization_registered: dict[int, "_RegisteredShotFinalization"] = {}
 _shot_finalization_ready: dict[int, "_PendingShotFinalization"] = {}
 _shot_finalization_running = False
 _shot_finalization_worker: threading.Thread | None = None
+# The shot the worker is publishing right now; a late update for it waits.
+_shot_finalization_current: Shot | None = None
+# Shots published OPS-only whose enrichment is still running, oldest first.
+_shot_awaiting_late_enrichment: dict[int, "_AwaitingLateEnrichment"] = {}
 
 
 @dataclass(frozen=True)
@@ -266,6 +294,9 @@ class _PendingShotFinalization:
     enrichment: _ShotEnrichmentResult
     diagnostic_logger: Any | None = None
     diagnostic_session_uuid: str | None = None
+    # A placeholder for a shot whose enrichment was deferred: publish it
+    # OPS-only at its turn, then let the deferred enrichment update it.
+    awaits_late_enrichment: bool = False
 
 
 @dataclass(frozen=True)
@@ -278,6 +309,34 @@ class _RegisteredShotFinalization:
     deadline_monotonic: float | None
     diagnostic_logger: Any | None
     diagnostic_session_uuid: str | None
+
+
+@dataclass(frozen=True)
+class _AwaitingLateEnrichment:
+    """A shot published OPS-only whose still-running enrichment will update it."""
+
+    registered: _RegisteredShotFinalization
+    first_result_reason: str
+    first_result_monotonic: float
+
+
+@dataclass(frozen=True)
+class _LateShotUpdate:
+    """Marks a finalization as a late update to a shot already published OPS-only."""
+
+    first_result_reason: str
+    late_by_ms: float
+
+    def as_log_dict(self) -> dict[str, object]:
+        """The update record written beside the shot in the session log."""
+        return {
+            "reason": "late_enrichment",
+            "first_result_reason": self.first_result_reason,
+            "late_by_ms": self.late_by_ms,
+            # Simulators (GSPro, OpenGolfSim, ...) took the first result and have
+            # no way to amend a shot, so a late update is never re-sent to them.
+            "simulators": "not_resent",
+        }
 
 
 def _log_fusion_diagnostic(
@@ -330,8 +389,9 @@ def _log_shot_enrichment_lifecycle(
     background_work: str,
     result_discarded: bool,
     enrichment: _ShotEnrichmentResult | None = None,
+    late_by_ms: float | None = None,
 ) -> None:
-    """Persist whether deadline work continued and whether its result was discarded."""
+    """Persist whether deadline work continued and how its late result was applied."""
     if diagnostic_logger is None or session_uuid is None:
         return
     log_lifecycle = getattr(diagnostic_logger, "log_shot_enrichment", None)
@@ -345,8 +405,18 @@ def _log_shot_enrichment_lifecycle(
                 "state": state,
                 "reason": reason,
                 "background_work": background_work,
-                "late_result_policy": "discard",
+                # A late result updates the same shot in the UI and the log.
+                "late_result_policy": "apply_as_update",
                 "result_discarded": result_discarded,
+                "late_by_ms": late_by_ms,
+                # Simulators get the first result only; they can't take an update.
+                "simulators": "first_result_only",
+                "enrichment_outcome": (
+                    enrichment.diagnostic_outcome if enrichment is not None else None
+                ),
+                "enrichment_reason": (
+                    enrichment.diagnostic_reason if enrichment is not None else None
+                ),
                 "timing": (
                     _enrichment_timing_payload(enrichment) if enrichment is not None else None
                 ),
@@ -368,6 +438,226 @@ def _assign_shot_number(shot: Shot) -> None:
             _shot_sequence_number = max(_shot_sequence_number, shot.shot_number)
 
 
+# --- Pi trace hooks (--pi-trace, stage 1b) -------------------------------------------
+# Every hook is a no-op when tracing is off, and every trace call is guarded: a
+# trace error is logged and ignored, so it can never skip, delay or drop an emit
+# or any metric (R-F16; owner rule: 2 s is a goal, not a cutoff).
+# Revisions per trace attempt: each shot-carrying emit (first or late update)
+# advances it; a status notice carries the latest one.
+_trace_revisions: dict[str, int] = {}
+_trace_revisions_lock = threading.Lock()
+
+
+def _trace_tag(  # pylint: disable=too-many-arguments
+    shot: Shot,
+    *,
+    revision: int | None,
+    final: bool,
+    update_kind: str,
+    core_eligible: bool,
+    core_fields=(),
+) -> dict | None:
+    """Trace identity for one emitted revision; lifecycle (final) and eligibility kept apart.
+
+    ``final`` is True on every emit from ``_finalize_shot_detected``: the shot's first
+    finalized result (``update_kind`` "first") AND every late update after it
+    (``late_update``). It means "a finalized result", not "the last emit"; a later
+    revision may follow a final one. The initial OPS emit (also ``update_kind``
+    "first") and status notices carry False. A reader that needs the newest revision
+    compares ``revision`` numbers, never ``final``.
+    """
+    if pi_trace.get_recorder() is None or shot.trace_attempt_id is None:
+        return None
+    return {
+        "attempt_id": shot.trace_attempt_id,
+        "revision": revision,
+        "final": final,
+        "update_kind": update_kind,
+        "core_eligible": core_eligible,
+        "core_fields": list(core_fields),
+    }
+
+
+def _trace_gate_edge(edge_wall_s: float) -> None:
+    """First BCM17 observer: bracketed edge age, a bracketed wall pair, then note the edge.
+
+    The edge is noted even when the reading fails: an edge happened, and an
+    age-less edge is kept as such (never given an invented age).
+    """
+    recorder = pi_trace.get_recorder()
+    if recorder is None:
+        return
+    try:
+        # Lazy like the other IWR imports; loaded already whenever this observer runs.
+        from .iwr6843.monitor import edge_trace_fields  # noqa: PLC0415  pylint: disable=import-outside-toplevel
+
+        capture_monitor = getattr(iwr6843_runtime, "capture_monitor", None)
+        edge_fields = edge_trace_fields(
+            getattr(capture_monitor, "edge_tick_reading", None), edge_wall_s
+        )
+        mono_after_ns = edge_fields["mono_after_ns"]
+        recorder.note_edge(
+            monotonic_ns=mono_after_ns if mono_after_ns is not None else time.monotonic_ns(),
+            **edge_fields,
+        )
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("[TRACE] GATE edge mark failed; ignored", exc_info=True)
+
+
+def _trace_processor(processor) -> None:
+    """Instance-only marks around analysis and spin (D27: measure spin's Pi cost).
+
+    Wraps once: an instance whose methods are already its own attributes is left as is.
+    The class is never touched, so replay_config and its hash are unchanged.
+    """
+    for name, start_mark, end_mark in (
+        ("process_capture", "ops_analysis_started", "ops_core_ready"),
+        ("detect_spin_multitaper", "ops_spin_started", "ops_spin_done"),
+    ):
+        if name not in vars(processor):
+            pi_trace.trace_method(processor, name, start_mark, end_mark)
+
+
+def _install_pi_trace_hooks() -> None:
+    """Before the OPS monitor starts: trace its processor, and observe BCM17 edges first."""
+    if pi_trace.get_recorder() is None:
+        return
+    try:
+        processor = getattr(monitor, "processor", None)
+        if processor is not None:
+            _trace_processor(processor)
+        capture_monitor = getattr(iwr6843_runtime, "capture_monitor", None)
+        if capture_monitor is not None:
+            # Lazy like the other IWR imports. Warm the version lookup before
+            # the first edge, so it never runs inside the GPIO callback (M5).
+            from .iwr6843.monitor import warm_edge_reading_cache  # noqa: PLC0415  pylint: disable=import-outside-toplevel
+
+            warm_edge_reading_cache()
+            capture_monitor.prepend_trigger_observer(_trace_gate_edge)
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("[TRACE] installing the Pi trace hooks failed; ignored", exc_info=True)
+
+
+def _non_finite_float(value) -> bool:
+    """A float that is NaN or infinite (the one check, on pi_trace._finite)."""
+    return isinstance(value, float) and not _finite(value)
+
+
+def _json_safe_core(core: dict) -> dict:
+    """The core values as written to the trace: a non-finite float as its exact text.
+
+    Shot payloads are already nulled by shot_to_dict; this only guards a direct
+    _traced_emit caller, so a raw NaN can't fail the trace's strict-JSON write.
+    """
+    return {
+        key: (repr(value) if _non_finite_float(value) else value) for key, value in core.items()
+    }
+
+
+def _trace_emit_fields(shot: Shot, event: str, payload: dict, *, final: bool, update_kind: str):
+    """Revision, eligibility and tag for one emit; None (and logged) on any trace error."""
+    try:
+        attempt_id = shot.trace_attempt_id
+        revision = None
+        if attempt_id is not None:
+            with _trace_revisions_lock:
+                revision = _trace_revisions.get(attempt_id, 0)
+                if update_kind != "status":
+                    revision += 1
+                    _trace_revisions[attempt_id] = revision
+        verdict = core_eligibility.evaluate(payload["shot"])
+        eligible = verdict["eligible"] and update_kind != "status"
+        reasons = (["status_update"] if update_kind == "status" else []) + verdict["reasons"]
+        tag = _trace_tag(
+            shot,
+            revision=revision,
+            final=final,
+            update_kind=update_kind,
+            core_eligible=eligible,
+            core_fields=verdict["core"].keys(),
+        )
+        if tag is not None:
+            payload["trace"] = tag
+        return {
+            "revision": revision,
+            "final": final,
+            "update_kind": update_kind,
+            "event": event,
+            "core_eligible": eligible,
+            "core_reasons": reasons,
+            "core": _json_safe_core(verdict["core"]),
+            "contract": verdict["contract"],
+        }
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning(
+            "[TRACE] tagging the %s emit failed; emitting untagged", event, exc_info=True
+        )
+        # No revision, but the summary must still see that a result went out (A-M1):
+        # an untagged emit is not measurable, never "no result emitted".
+        return {"update_kind": update_kind, "event": event, "final": final, "tagging_failed": True}
+
+
+def _traced_emit(shot: Shot, event: str, payload: dict, *, final: bool, update_kind: str) -> None:
+    """Emit one shot payload; when tracing, tag it and mark invoked/returned around it.
+
+    The emit itself is never inside a trace guard: whatever the trace does, the
+    payload is emitted, and an emit error still reaches the caller's handler.
+    """
+    if pi_trace.get_recorder() is None:
+        socketio.emit(event, payload)
+        return
+    trace_fields = _trace_emit_fields(shot, event, payload, final=final, update_kind=update_kind)
+    pi_trace.mark("server_emit_invoked", shot.trace_attempt_id, **trace_fields)
+    error = None
+    try:
+        socketio.emit(event, payload)
+    except BaseException as exc:
+        error = type(exc).__name__
+        raise
+    finally:
+        pi_trace.mark("server_emit_returned", shot.trace_attempt_id, **trace_fields, error=error)
+
+
+def _start_pi_trace(log_dir: Path | None) -> Path | None:
+    """Open the trace file beside the session logs (--pi-trace); None if it can't open.
+
+    A trace that cannot start is reported loudly and the kiosk runs untraced: the
+    trace must never cost a shot (owner rule).
+    """
+    directory = Path(log_dir).expanduser() if log_dir else Path.home() / "openflight_sessions"
+    path = directory / f"pi_trace_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
+    with _trace_revisions_lock:
+        _trace_revisions.clear()
+    try:
+        pi_trace.set_recorder(pi_trace.TraceRecorder(path))
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.error(
+            "[SERVER] Pi trace could not start at %s; running untraced", path, exc_info=True
+        )
+        return None
+    return path
+
+
+def _start_browser_trace():
+    """Browser clock pings and post-render reports on the kiosk socket (--pi-trace).
+
+    None when tracing is off or the routes cannot start; the kiosk runs on either way.
+    """
+    try:
+        return register_trace_routes(socketio)
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.error("[SERVER] Pi trace browser trace routes could not start", exc_info=True)
+        return None
+
+
+def _stop_pi_trace() -> None:
+    """Remove and close the recorder; say so when its footer could not be written."""
+    recorder = pi_trace.get_recorder()
+    pi_trace.set_recorder(None)
+    if recorder is not None and not recorder.close():
+        logger.warning("[SERVER] Pi trace closed incomplete: its footer is missing (T1 fails)")
+
+
 def _reset_shot_sequence() -> None:
     """Start shot identities at one for a newly started logging session."""
     global _shot_sequence_number  # pylint: disable=global-statement
@@ -379,6 +669,9 @@ def _reset_shot_sequence() -> None:
         _shot_finalization_order.clear()
         _shot_finalization_registered.clear()
         _shot_finalization_ready.clear()
+        # A new session renumbers shots from one; an old session's late result
+        # must never land on the new session's shot of the same number.
+        _shot_awaiting_late_enrichment.clear()
         _shot_finalization_running = False
         _shot_finalization_condition.notify_all()
 
@@ -450,10 +743,12 @@ def _shot_finalization_worker_loop() -> None:
     """Exclusively finalize ready, overdue, or capacity-evicted shots in order."""
     global _shot_finalization_running  # pylint: disable=global-statement
     global _shot_finalization_worker  # pylint: disable=global-statement
+    global _shot_finalization_current  # pylint: disable=global-statement
 
     current_thread = threading.current_thread()
     try:
         while True:
+            abandoned: list[_AwaitingLateEnrichment] = []
             with _shot_finalization_condition:
                 while True:
                     if not _shot_finalization_order:
@@ -475,6 +770,17 @@ def _shot_finalization_worker_loop() -> None:
                         _shot_finalization_order.popleft()
                         del _shot_finalization_registered[next_shot_number]
                         _shot_finalization_ready.pop(next_shot_number, None)
+                        if pending is None or pending.awaits_late_enrichment:
+                            # Published OPS-only now; the running or deferred
+                            # enrichment will update this same shot when it
+                            # completes. Registered in the same critical
+                            # section, so a result arriving now always finds the
+                            # shot in one of the two maps.
+                            abandoned = _await_late_enrichment_locked(
+                                registered,
+                                _ops_only_reason(pending, deadline_expired=deadline_expired),
+                            )
+                        _shot_finalization_current = registered.shot
                         _shot_finalization_running = True
                         _shot_finalization_condition.notify_all()
                         break
@@ -488,14 +794,24 @@ def _shot_finalization_worker_loop() -> None:
                         )
                     _shot_finalization_condition.wait(timeout=wait_timeout_s)
 
+            for entry in abandoned:
+                _log_abandoned_late_enrichment(entry)
+
             if pending is None:
                 reason = "deadline" if deadline_expired else "coordinator capacity"
                 diagnostic_reason = (
                     "enrichment_deadline" if deadline_expired else "coordinator_capacity"
                 )
+                # Records the first-result timer only: enrichment keeps running and
+                # its late result updates this shot (server_late_update_applied).
+                pi_trace.mark(
+                    "server_enrichment_watchdog_fired",
+                    registered.shot.trace_attempt_id,
+                    reason=diagnostic_reason,
+                )
                 logger.warning(
                     "[SERVER] Shot #%d optional enrichment exceeded %s; "
-                    "finalizing OPS-only while background work continues",
+                    "publishing OPS-only now, enrichment continues and will update it",
                     next_shot_number,
                     reason,
                 )
@@ -519,13 +835,23 @@ def _shot_finalization_worker_loop() -> None:
                     diagnostic_logger=registered.diagnostic_logger,
                     diagnostic_session_uuid=registered.diagnostic_session_uuid,
                 )
+            elif pending.awaits_late_enrichment:
+                logger.warning(
+                    "[SERVER] Shot #%d enrichment was deferred behind a full queue; "
+                    "publishing OPS-only now, the deferred enrichment will update it",
+                    next_shot_number,
+                )
+                _log_shot_enrichment_lifecycle(
+                    registered.diagnostic_logger,
+                    registered.diagnostic_session_uuid,
+                    registered.shot,
+                    state="ops_only_finalized",
+                    reason=pending.enrichment.diagnostic_reason or "enrichment_deferred",
+                    background_work="deferred",
+                    result_discarded=False,
+                )
             elif pending.shot is not registered.shot:
-                for shot_field in fields(Shot):
-                    setattr(
-                        registered.shot,
-                        shot_field.name,
-                        getattr(pending.shot, shot_field.name),
-                    )
+                _copy_shot_fields(registered.shot, pending.shot)
                 pending = replace(pending, shot=registered.shot)
 
             try:
@@ -536,6 +862,7 @@ def _shot_finalization_worker_loop() -> None:
                     enrichment=pending.enrichment,
                     diagnostic_logger=pending.diagnostic_logger,
                     diagnostic_session_uuid=pending.diagnostic_session_uuid,
+                    late_update=None,
                 )
             except Exception as error:  # pylint: disable=broad-exception-caught
                 logger.error(
@@ -564,14 +891,76 @@ def _shot_finalization_worker_loop() -> None:
                 )
             finally:
                 with _shot_finalization_condition:
+                    _shot_finalization_current = None
                     _shot_finalization_running = False
                     _shot_finalization_condition.notify_all()
     finally:
         with _shot_finalization_condition:
+            _shot_finalization_current = None
             _shot_finalization_running = False
             if _shot_finalization_worker is current_thread:
                 _shot_finalization_worker = None
             _shot_finalization_condition.notify_all()
+
+
+def _ops_only_reason(pending: _PendingShotFinalization | None, *, deadline_expired: bool) -> str:
+    """Why a shot's first result is published before its enrichment is ready."""
+    if pending is not None:
+        return pending.enrichment.diagnostic_reason or "enrichment_deferred"
+    return "enrichment_deadline" if deadline_expired else "coordinator_capacity"
+
+
+def _copy_shot_fields(target: Shot, source: Shot) -> None:
+    """Make the retained shot object carry every field of its enriched copy."""
+    for shot_field in fields(Shot):
+        setattr(target, shot_field.name, getattr(source, shot_field.name))
+
+
+def _await_late_enrichment_locked(
+    registered: _RegisteredShotFinalization,
+    first_result_reason: str,
+) -> list[_AwaitingLateEnrichment]:
+    """Keep an OPS-only shot for its late result; caller holds the condition lock.
+
+    Returns the oldest entries dropped to stay within _SHOT_AWAITING_LATE_CAPACITY.
+    In normal running that never happens: every entry is a shot whose enrichment
+    is active, queued or deferred, and those together hold at most that many.
+    It only bounds memory if an enrichment worker died without reporting back.
+    """
+    _shot_awaiting_late_enrichment[registered.shot.shot_number] = _AwaitingLateEnrichment(
+        registered=registered,
+        first_result_reason=first_result_reason,
+        first_result_monotonic=time.monotonic(),
+    )
+    abandoned = []
+    while len(_shot_awaiting_late_enrichment) > _SHOT_AWAITING_LATE_CAPACITY:
+        oldest = next(iter(_shot_awaiting_late_enrichment))
+        abandoned.append(_shot_awaiting_late_enrichment.pop(oldest))
+    return abandoned
+
+
+def _log_abandoned_late_enrichment(entry: _AwaitingLateEnrichment) -> None:
+    """Say plainly that a shot stopped waiting for an enrichment that never reported."""
+    logger.warning(
+        "[SERVER] Shot #%d stays OPS-only: its enrichment never reported back and "
+        "%d newer OPS-only shots are waiting for theirs",
+        entry.registered.shot.shot_number,
+        _SHOT_AWAITING_LATE_CAPACITY,
+    )
+    pi_trace.mark(
+        "server_late_result_abandoned",
+        entry.registered.shot.trace_attempt_id,
+        reason="awaiting_capacity",
+    )
+    _log_shot_enrichment_lifecycle(
+        entry.registered.diagnostic_logger,
+        entry.registered.diagnostic_session_uuid,
+        entry.registered.shot,
+        state="late_result_abandoned",
+        reason="awaiting_capacity",
+        background_work="unknown",
+        result_discarded=True,
+    )
 
 
 def _shot_number_for_log(shot: Shot, session_log) -> int:
@@ -621,6 +1010,7 @@ def _cleanup_hardware_for_shutdown() -> bool:
     for connector in sim_connectors:
         _run_shutdown_step(f"simulator connector stop ({connector.name})", connector.stop)
 
+    _run_shutdown_step("pi trace close", _stop_pi_trace)
     return True
 
 
@@ -956,6 +1346,16 @@ def _fusion_unit() -> bool:
     return iwr6843_runtime is not None or camera_capture_runtime is not None
 
 
+def _estimate_launch_from_finite_inputs(shot: Shot) -> tuple[float, float]:
+    """The OPS-only launch estimate; a non-finite club speed or spin is a missing one."""
+    return estimate_launch_angle(
+        shot.club,
+        shot.ball_speed_mph,
+        club_speed_mph=shot.club_speed_mph if _finite(shot.club_speed_mph) else None,
+        spin_rpm=shot.spin_rpm if _finite(shot.spin_rpm) else None,
+    )
+
+
 def _ensure_user_facing_launch_angles(shot: Shot) -> None:
     """An OPS-only install's labelled launch estimates; a fusion unit fills nothing in.
 
@@ -963,19 +1363,15 @@ def _ensure_user_facing_launch_angles(shot: Shot) -> None:
     club-table vertical and a neutral horizontal, labelled estimated. A fusion
     unit leaves a missing angle missing (D17).
     """
+    # A non-finite angle is a missing one: it gets exactly the missing-value handling.
     if _fusion_unit():
-        if shot.launch_angle_vertical is None or shot.launch_angle_horizontal is None:
+        if not _finite(shot.launch_angle_vertical) or not _finite(shot.launch_angle_horizontal):
             logger.info("[SERVER] Launch angle not measured on this shot; nothing filled in")
         return
     estimated: tuple[float, float] | None = None
 
-    if shot.launch_angle_vertical is None:
-        estimated = estimate_launch_angle(
-            shot.club,
-            shot.ball_speed_mph,
-            club_speed_mph=shot.club_speed_mph,
-            spin_rpm=shot.spin_rpm,
-        )
+    if not _finite(shot.launch_angle_vertical):
+        estimated = _estimate_launch_from_finite_inputs(shot)
         shot.launch_angle_vertical = estimated[0]
         shot.launch_angle_confidence = estimated[1]
         shot.launch_angle_vertical_confidence = estimated[1]
@@ -987,17 +1383,12 @@ def _ensure_user_facing_launch_angles(shot: Shot) -> None:
             estimated[1] * 100,
         )
 
-    if shot.launch_angle_horizontal is None:
+    if not _finite(shot.launch_angle_horizontal):
         # the legacy neutral estimate, for an install with no angle sensors at all
         shot.launch_angle_horizontal = 0.0
         if shot.launch_angle_horizontal_confidence is None:
             if estimated is None:
-                estimated = estimate_launch_angle(
-                    shot.club,
-                    shot.ball_speed_mph,
-                    club_speed_mph=shot.club_speed_mph,
-                    spin_rpm=shot.spin_rpm,
-                )
+                estimated = _estimate_launch_from_finite_inputs(shot)
             shot.launch_angle_horizontal_confidence = estimated[1]
         shot.launch_angle_horizontal_source = "estimated"
         if shot.angle_source is None:
@@ -1359,11 +1750,61 @@ def _ops_speed_correction_geometry(calibration) -> tuple[float, float, float, st
 calculated_spin_enabled = False
 
 
+def _null_non_finite(value, path: str, not_measured: list[dict]):
+    """``value`` with every non-finite float replaced by None, each one named in ``not_measured``.
+
+    A NaN or infinite metric was not measured: it goes out as null with the reason,
+    never as a filled-in number and never by dropping the shot (owner rule). Strict
+    JSON has no NaN/Infinity, so a raw one would also make the browser drop the packet.
+    """
+    if _non_finite_float(value):
+        not_measured.append({"id": path, "reason": f"non_finite_value:{value!r}"})
+        return None
+    if isinstance(value, dict):
+        return {
+            key: _null_non_finite(item, f"{path}.{key}", not_measured)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _null_non_finite(item, f"{path}[{index}]", not_measured)
+            for index, item in enumerate(value)
+        ]
+    return value
+
+
+# The source labels that describe each metric. When the metric is nulled for being
+# non-finite it reads like a missing one, so its labels become None (the fields'
+# "no source" value): a nulled value never keeps a measuring source's name.
+_SOURCE_LABELS_OF_METRIC = {
+    "launch_angle_vertical": ("launch_angle_vertical_source", "angle_source"),
+    "launch_angle_horizontal": ("launch_angle_horizontal_source",),
+    "spin_rpm": ("spin_source",),
+    # a nulled committed carry is not measured, simulated or calculated
+    "carry_spin_adjusted": ("carry_status",),
+    "experimental_face_angle_deg": (
+        "experimental_face_angle_path_source",
+        "experimental_face_angle_launch_source",
+    ),
+}
+
+
 def shot_to_dict(shot: Shot) -> dict:
-    """Return the UI shot schema with display-oriented rounding."""
-    data = shot.to_dict()
+    """Return the UI shot schema with display-oriented rounding.
+
+    Never raises on a non-finite metric: it is sent as null and listed in
+    ``metrics_not_measured`` as ``{"id", "reason"}`` (the shape the shot's other
+    evidence lists use); None when every metric is finite. Such a metric's source
+    labels go out as None too (_SOURCE_LABELS_OF_METRIC), like a missing metric's.
+    """
+    raw = shot.to_dict()
     for log_only_field in ("mode", "readings", "readings_count"):
-        data.pop(log_only_field)
+        raw.pop(log_only_field)
+    not_measured: list[dict] = []
+    data = {key: _null_non_finite(value, key, not_measured) for key, value in raw.items()}
+    for entry in not_measured:
+        for label in _SOURCE_LABELS_OF_METRIC.get(entry["id"], ()):
+            data[label] = None
     for field, digits in {
         "ball_speed_mph": 1,
         "ball_speed_raw_mph": 1,
@@ -1386,8 +1827,12 @@ def shot_to_dict(shot: Shot) -> dict:
     }.items():
         if data[field] is not None:
             data[field] = round(data[field], digits) if digits is not None else round(data[field])
+    # a fusion unit's payload has no table carry range at all (D17)
     if data["carry_range"] is not None:
-        data["carry_range"] = [round(value) for value in data["carry_range"]]
+        data["carry_range"] = [
+            round(value) if value is not None else None for value in data["carry_range"]
+        ]
+    data["metrics_not_measured"] = not_measured or None
     return data
 
 
@@ -2558,10 +3003,22 @@ def _current_club_id() -> str:
     return club.value if hasattr(club, "value") else str(club)
 
 
+def _session_stats() -> dict:
+    """The monitor's session stats with every non-finite value sent as null.
+
+    Defence in depth (A-I1): ``summarize_shots`` already skips non-finite values, but
+    any NaN that reached a strict-JSON emit would make the browser drop the packet,
+    and stats ride on every later shot.
+    """
+    if not monitor:
+        return {}
+    return _null_non_finite(monitor.get_session_stats(), "stats", [])
+
+
 def _session_state_payload(*, include_runtime_meta: bool = False) -> dict:
     """Build the session_state event the UI applies on connect and refresh."""
     payload = {
-        "stats": monitor.get_session_stats() if monitor else {},
+        "stats": _session_stats(),
         "shots": _session_shots(),
         "club": _current_club_id(),
     }
@@ -3790,6 +4247,28 @@ def _load_camera_capture_archive(camera_capture) -> dict[str, object] | None:
         return None
 
 
+def _trace_camera_frames(shot: Shot, camera_capture, camera_archive) -> None:
+    """Mark the camera's own host-monotonic trigger and last-frame times, when it has them.
+
+    Both are CLOCK_MONOTONIC readings the camera runtime took; a clip without them
+    gets no mark (no stand-in time).
+    """
+    if pi_trace.get_recorder() is None:
+        return
+    try:
+        metadata = getattr(camera_capture, "metadata", None) or {}
+        trigger_ns = metadata.get("trigger_host_timestamp_ns")
+        if trigger_ns is not None:
+            pi_trace.mark("camera_trigger", shot.trace_attempt_id, monotonic_ns=int(trigger_ns))
+        host_ns = (camera_archive or {}).get("host_timestamp_ns")
+        if host_ns is not None and len(host_ns):
+            pi_trace.mark(
+                "camera_last_frame", shot.trace_attempt_id, monotonic_ns=int(np.max(host_ns))
+            )
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("[TRACE] camera frame marks failed; ignored", exc_info=True)
+
+
 def _prefetch_camera_capture(shot: Shot) -> _CameraPrefetchResult:
     """Match one completed camera clip and load its archive once."""
     match_started = time.monotonic()
@@ -3801,6 +4280,7 @@ def _prefetch_camera_capture(shot: Shot) -> _CameraPrefetchResult:
     archive_started = match_finished
     camera_archive = _load_camera_capture_archive(camera_capture)
     archive_finished = time.monotonic()
+    _trace_camera_frames(shot, camera_capture, camera_archive)
     return _CameraPrefetchResult(
         capture=camera_capture,
         archive=camera_archive,
@@ -4421,7 +4901,7 @@ def _attach_camera_replay(shot: Shot, camera_capture) -> None:
 
 def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     """Mutate a shot with available radar/camera measurements and timings."""
-
+    pi_trace.mark("enrichment_started", shot.trace_attempt_id)
     enrichment_started = time.monotonic()
     # Snapshot orientation before IWR capture can block, and select only data
     # timestamped before impact so impact vibration cannot bias the geometry.
@@ -4431,7 +4911,9 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     if camera_capture_runtime is not None and shot.mode != "mock":
         camera_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="camera-prefetch")
         camera_future = camera_executor.submit(_prefetch_camera_capture, shot)
+    pi_trace.mark("iwr_process_started", shot.trace_attempt_id)
     iwr6843_ms = _process_iwr6843_angle(shot)
+    pi_trace.mark("iwr_process_done", shot.trace_attempt_id)
     kld7_ms = None
     camera_capture_ms = None
     camera_archive_load_ms = None
@@ -4650,6 +5132,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     camera_archive = None
     if camera_future is not None:
         camera_wait_started = time.monotonic()
+        pi_trace.mark("camera_wait_started", shot.trace_attempt_id)
         try:
             prefetched = camera_future.result()
             camera_capture = prefetched.capture
@@ -4669,6 +5152,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
             )
         finally:
             camera_wait_ms = (time.monotonic() - camera_wait_started) * 1000.0
+            pi_trace.mark("camera_ready", shot.trace_attempt_id, matched=camera_capture is not None)
             if camera_executor is not None:
                 camera_executor.shutdown(wait=True, cancel_futures=False)
 
@@ -4722,6 +5206,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     if shot.mode != "mock":
         _fuse_camera_measurements(shot, camera_capture, camera_archive)
         camera_analysis_ms = (time.monotonic() - camera_analysis_started) * 1000.0
+        pi_trace.mark("camera_analysis_done", shot.trace_attempt_id)
     _attach_experimental_face_angle(shot)
 
     return _ShotEnrichmentResult(
@@ -4765,7 +5250,7 @@ def _carry_log_text(shot: Shot, source: str | None) -> str:
     if not shot.table_carry_allowed:
         return f"carry shown={carry:.0f} yds ({source or shot.carry_status})"
     table = shot.estimated_carry_yards
-    if shot.carry_spin_adjusted is None:
+    if not _finite(shot.carry_spin_adjusted):
         return f"carry shown={table:.0f} yds (table estimate)"
     return (
         f"carry shown={carry:.0f} yds ({source or 'spin-adjusted'}), table estimate={table:.0f} yds"
@@ -4789,8 +5274,16 @@ def _finalize_shot_detected(
     enrichment: _ShotEnrichmentResult | None = None,
     diagnostic_logger=None,
     diagnostic_session_uuid: str | None = None,
+    late_update: _LateShotUpdate | None = None,
 ) -> None:
-    """Apply required fallbacks, persist once, and publish the final shot."""
+    """Apply required fallbacks, persist once, and publish the final shot.
+
+    With ``late_update`` the shot was already published OPS-only and this is
+    its late enrichment: the same path runs, but the session log records a
+    ``shot_updated`` entry (not another ``shot_detected``), the first
+    publication's timing is kept, and simulators and the debug log are not
+    sent the shot again.
+    """
     enrichment = enrichment or _ShotEnrichmentResult()
     iwr6843_ms = enrichment.iwr6843_ms
     kld7_ms = enrichment.kld7_ms
@@ -4856,7 +5349,7 @@ def _finalize_shot_detected(
                 shot.ball_speed_mph,
                 spin_for_carry,
                 shot.club,
-                club_speed_mph=shot.club_speed_mph,
+                club_speed_mph=shot.club_speed_mph if _finite(shot.club_speed_mph) else None,
             )
             shot.carry_status = CARRY_ESTIMATED
             carry_source = "table with spin"
@@ -4940,7 +5433,19 @@ def _finalize_shot_detected(
                 round(enrichment.enrichment_ms, 1) if enrichment.enrichment_ms is not None else None
             ),
         }
-        if (
+        if session_log and late_update is not None:
+            # Replace, never add: a late update is its own entry type, so the
+            # shot is still counted once (shots_detected, shot_detected lines).
+            logged = hasattr(session_log, "log_shot_update") and (
+                session_log.log_shot_update(
+                    shot,
+                    pipeline_ms,
+                    update=late_update.as_log_dict(),
+                    expected_session_uuid=diagnostic_session_uuid,
+                )
+                is not False
+            )
+        elif (
             session_log
             and diagnostic_session_uuid is not None
             and hasattr(session_log, "log_shot_pinned")
@@ -4967,10 +5472,19 @@ def _finalize_shot_detected(
     # Emit shot with launch angle data included
     try:
         shot_data = shot_to_dict(shot)
-        stats = monitor.get_session_stats() if monitor else {}
-        publication_timing_updated = _record_server_publication_invocation(shot)
+        stats = _session_stats()
+        # The publication boundary is the shot's first result, never a late update.
+        publication_timing_updated = late_update is None and _record_server_publication_invocation(
+            shot
+        )
         shot_data["stage_timing"] = deepcopy(shot.stage_timing)
-        socketio.emit(emit_event, {"shot": shot_data, "stats": stats})
+        _traced_emit(
+            shot,
+            emit_event,
+            {"shot": shot_data, "stats": stats},
+            final=True,
+            update_kind="first" if late_update is None else "late_update",
+        )
         if publication_timing_updated:
             _persist_shot_publication(
                 diagnostic_logger,
@@ -4997,6 +5511,13 @@ def _finalize_shot_detected(
             context={"stage": f"emit_{emit_event}", "ball_speed_mph": shot.ball_speed_mph},
             exc=e,
         )
+        return
+
+    if late_update is not None:
+        # Simulators (GSPro, OpenGolfSim, E6, ...) were sent this shot's first
+        # result and have no way to amend a shot: re-sending would play it as a
+        # second shot. The debug log, likewise, counts shots. The late update
+        # reaches the UI and the session log only.
         return
 
     # Forward to simulator connectors (optional)
@@ -5033,9 +5554,10 @@ def _finish_shot_detected(
     initial_ui_ms: float | None = None,
 ) -> None:
     """Attempt optional enrichment, then always perform required finalization."""
-    # Optional hardware may return after the coordinator has timed out this
-    # shot. Mutate a shallow dataclass copy so a late result cannot change the
-    # already-finalized OPS object retained by the monitor.
+    # Optional hardware may return after the coordinator has published this
+    # shot OPS-only. Enrich a shallow dataclass copy so the retained OPS object
+    # is never changed mid-publication; the coordinator copies the result onto
+    # it, on time or as a late update (_publish_late_enrichment).
     enriched_shot = (
         replace(shot, stage_timing=clone_stage_timing(shot.stage_timing))
         if _has_slow_shot_enrichment(shot)
@@ -5074,14 +5596,20 @@ def _queue_shot_finalization(
     initial_ui_ms: float | None,
     enrichment: _ShotEnrichmentResult | None = None,
     final_shot: Shot | None = None,
+    awaits_late_enrichment: bool = False,
 ) -> None:
-    """Record a ready shot for the exclusive finalization worker."""
+    """Record a ready shot for the exclusive finalization worker.
+
+    ``awaits_late_enrichment`` queues a placeholder for a shot whose enrichment
+    was deferred: it is published OPS-only at its turn and updated later.
+    """
     _queue_ordered_shot_finalization(
         _PendingShotFinalization(
             shot=final_shot if final_shot is not None else shot,
             emit_event=emit_event,
             initial_ui_ms=initial_ui_ms,
             enrichment=(enrichment if enrichment is not None else _ShotEnrichmentResult()),
+            awaits_late_enrichment=awaits_late_enrichment,
         ),
         source_shot=shot,
     )
@@ -5092,7 +5620,11 @@ def _queue_ordered_shot_finalization(
     *,
     source_shot: Shot,
 ) -> None:
-    """Make a completed shot visible to the ordered finalization worker."""
+    """Make a completed shot visible to the ordered finalization worker.
+
+    A result for a shot already published OPS-only (deadline or capacity) is
+    applied to that same shot as a late update instead.
+    """
 
     shot_number = pending.shot.shot_number
     if shot_number is None:
@@ -5100,33 +5632,138 @@ def _queue_ordered_shot_finalization(
 
     with _shot_finalization_condition:
         registered = _shot_finalization_registered.get(shot_number)
-        if registered is None or registered.shot is not source_shot:
-            logger.info(
-                "[SERVER] Discarding late enrichment for finalized shot #%d",
-                shot_number,
+        if registered is not None and registered.shot is source_shot:
+            waiting = _shot_finalization_ready.get(shot_number)
+            # A deferred shot's enrichment can finish before its OPS-only turn
+            # comes: it then replaces the placeholder and is published on time.
+            if waiting is not None and (
+                pending.awaits_late_enrichment or not waiting.awaits_late_enrichment
+            ):
+                logger.warning("[SERVER] Shot #%d is already waiting for finalization", shot_number)
+                return
+            _shot_finalization_ready[shot_number] = replace(
+                pending,
+                diagnostic_logger=registered.diagnostic_logger,
+                diagnostic_session_uuid=registered.diagnostic_session_uuid,
             )
-            lifecycle_logger = get_session_logger()
-            _log_shot_enrichment_lifecycle(
-                lifecycle_logger,
-                getattr(source_shot, "camera_fusion_session_uuid", None),
-                source_shot,
-                state="late_result_discarded",
-                reason="shot_already_finalized",
-                background_work="complete",
-                result_discarded=True,
-                enrichment=pending.enrichment,
+            _ensure_shot_finalization_worker_locked()
+            _shot_finalization_condition.notify_all()
+            return
+
+        awaiting = _shot_awaiting_late_enrichment.get(shot_number)
+        if awaiting is not None and awaiting.registered.shot is source_shot:
+            del _shot_awaiting_late_enrichment[shot_number]
+            # The worker may still be publishing the OPS-only result this
+            # amends; never let the update reach the UI or log before it.
+            # Waiting releases the lock, so the worker is never blocked.
+            _shot_finalization_condition.wait_for(
+                lambda: _shot_finalization_current is not source_shot
             )
-            return
-        if shot_number in _shot_finalization_ready:
-            logger.warning("[SERVER] Shot #%d is already waiting for finalization", shot_number)
-            return
-        _shot_finalization_ready[shot_number] = replace(
-            pending,
+        else:
+            awaiting = None
+
+    # Outside the lock: a late update is published on the enrichment's own
+    # thread, so it never holds up the ordered first results of later shots.
+    if awaiting is not None:
+        _publish_late_enrichment(awaiting, pending)
+        return
+
+    # Neither registered nor awaiting: a duplicate result for a shot already
+    # finalized with its enrichment, or a result from a session that has since
+    # been reset (its shot numbers now belong to new shots). Nothing to update.
+    logger.warning(
+        "[SERVER] Enrichment result for shot #%d matches no shot awaiting one; not applied",
+        shot_number,
+    )
+    pi_trace.mark(
+        "server_late_result_unmatched",
+        getattr(source_shot, "trace_attempt_id", None),
+        reason="shot_not_awaiting_enrichment",
+    )
+    _log_shot_enrichment_lifecycle(
+        get_session_logger(),
+        getattr(source_shot, "camera_fusion_session_uuid", None),
+        source_shot,
+        state="late_result_unmatched",
+        reason="shot_not_awaiting_enrichment",
+        background_work="complete",
+        result_discarded=True,
+        enrichment=pending.enrichment,
+    )
+
+
+def _publish_late_enrichment(
+    awaiting: _AwaitingLateEnrichment,
+    pending: _PendingShotFinalization,
+) -> None:
+    """Apply a late enrichment to the shot already published OPS-only, as an update.
+
+    Reuses the ordinary finalization path, so the UI gets a ``shot_update``
+    for the same shot number (it replaces the shot in place) and the session
+    log a ``shot_updated`` entry. Simulators are not re-sent the shot.
+    """
+    registered = awaiting.registered
+    shot = registered.shot
+    late_by_ms = round((time.monotonic() - awaiting.first_result_monotonic) * 1000.0, 1)
+    logger.info(
+        "[SERVER] Shot #%d enrichment completed %.0f ms after its OPS-only result (%s); "
+        "updating the shot",
+        shot.shot_number,
+        late_by_ms,
+        awaiting.first_result_reason,
+    )
+    if pending.shot is not shot:
+        first_publication = clone_stage_timing(shot.stage_timing)["server"]["publication"]
+        _copy_shot_fields(shot, pending.shot)
+        timing = clone_stage_timing(shot.stage_timing)
+        timing["server"]["publication"] = first_publication
+        shot.stage_timing = timing
+
+    state = "late_result_applied"
+    try:
+        _finalize_shot_detected(
+            shot,
+            emit_event="shot_update",
+            initial_ui_ms=registered.initial_ui_ms,
+            enrichment=pending.enrichment,
             diagnostic_logger=registered.diagnostic_logger,
             diagnostic_session_uuid=registered.diagnostic_session_uuid,
+            late_update=_LateShotUpdate(
+                first_result_reason=awaiting.first_result_reason,
+                late_by_ms=late_by_ms,
+            ),
         )
-        _ensure_shot_finalization_worker_locked()
-        _shot_finalization_condition.notify_all()
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        state = "late_result_failed"
+        logger.error("[SERVER] Late shot update failed: %s", error, exc_info=True)
+        log_session_error(
+            "Late shot update failed",
+            component="server",
+            context={
+                "stage": "late_update",
+                "shot_number": shot.shot_number,
+                "ball_speed_mph": shot.ball_speed_mph,
+            },
+            exc=error,
+        )
+    pi_trace.mark(
+        "server_late_update_applied",
+        shot.trace_attempt_id,
+        state=state,
+        first_result_reason=awaiting.first_result_reason,
+        late_by_ms=late_by_ms,
+    )
+    _log_shot_enrichment_lifecycle(
+        registered.diagnostic_logger,
+        registered.diagnostic_session_uuid,
+        shot,
+        state=state,
+        reason=awaiting.first_result_reason,
+        background_work="complete",
+        result_discarded=False,
+        enrichment=pending.enrichment,
+        late_by_ms=late_by_ms,
+    )
 
 
 def _record_server_publication_invocation(shot: Shot) -> bool:
@@ -5186,7 +5823,7 @@ def _persist_shot_publication(
 def _emit_initial_ops_shot(shot: Shot) -> bool:
     """Publish immediately available OPS metrics before slow enrichments."""
     try:
-        stats = monitor.get_session_stats() if monitor else {}
+        stats = _session_stats()
         pending = {}
         if iwr6843_runtime is not None:
             pending["iwr6843"] = True
@@ -5195,13 +5832,16 @@ def _emit_initial_ops_shot(shot: Shot) -> bool:
         shot_data = shot_to_dict(shot)
         _record_server_publication_invocation(shot)
         shot_data["stage_timing"] = deepcopy(shot.stage_timing)
-        socketio.emit(
+        _traced_emit(
+            shot,
             "shot",
             {
                 "shot": shot_data,
                 "stats": stats,
                 "pending": pending,
             },
+            final=False,
+            update_kind="first",
         )
         return True
     except Exception as error:  # pylint: disable=broad-exception-caught
@@ -5215,30 +5855,38 @@ def _emit_initial_ops_shot(shot: Shot) -> bool:
         return False
 
 
-def _emit_ops_enrichment_skipped(shot: Shot, *, reason: str) -> None:
-    """Immediately clear provisional hardware progress when admission fails."""
-    skipped_hardware = []
+def _emit_ops_enrichment_status(shot: Shot, *, status: str, reason: str) -> None:
+    """Tell the UI at once whether this shot's hardware metrics are coming.
+
+    ``pending``: the enrichment is deferred and will update the shot later.
+    ``skipped``: it will never run, so the provisional progress is cleared.
+    """
+    hardware = []
     if iwr6843_runtime is not None:
-        skipped_hardware.append("iwr6843")
+        hardware.append("iwr6843")
     if camera_capture_runtime is not None:
-        skipped_hardware.append("camera")
+        hardware.append("camera")
     try:
-        socketio.emit(
+        _traced_emit(
+            shot,
             "shot_update",
             {
                 "shot": shot_to_dict(shot),
-                "stats": monitor.get_session_stats() if monitor else {},
-                "pending": {},
+                "stats": _session_stats(),
+                "pending": ({name: True for name in hardware} if status == "pending" else {}),
                 "enrichment": {
-                    "status": "skipped",
+                    "status": status,
                     "reason": reason,
-                    "hardware": skipped_hardware,
+                    "hardware": hardware,
                 },
             },
+            final=False,
+            update_kind="status",
         )
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning(
-            "[SERVER] Failed to clear skipped shot enrichment status: %s",
+            "[SERVER] Failed to emit %s shot enrichment status: %s",
+            status,
             error,
             exc_info=True,
         )
@@ -5252,18 +5900,29 @@ def _has_slow_shot_enrichment(shot: Shot) -> bool:
 
 
 def _drain_shot_enrichment_queue() -> None:
-    """Finish deferred shots in detection order, one hardware consumer at a time."""
+    """Finish deferred shots in detection order, one hardware consumer at a time.
+
+    Queued jobs come first, then the deferred backlog: nothing is queued while
+    the backlog holds a shot, so this is always impact order. That order
+    matters: matching a newer impact discards older unmatched IWR and camera
+    captures as stale.
+    """
     global shot_enrichment_task  # pylint: disable=global-statement
 
     while True:
+        from_queue = True
         try:
             shot, emit_event, initial_ui_ms = shot_enrichment_queue.get_nowait()
         except queue.Empty:
             with shot_enrichment_task_lock:
-                if shot_enrichment_queue.empty():
+                if _deferred_shot_enrichment:
+                    shot, emit_event, initial_ui_ms = _deferred_shot_enrichment.popleft()
+                    from_queue = False
+                elif shot_enrichment_queue.empty():
                     shot_enrichment_task = None
                     return
-            continue
+                else:
+                    continue
 
         try:
             _finish_shot_detected(
@@ -5280,7 +5939,8 @@ def _drain_shot_enrichment_queue() -> None:
                 exc=error,
             )
         finally:
-            shot_enrichment_queue.task_done()
+            if from_queue:
+                shot_enrichment_queue.task_done()
 
 
 def _defer_shot_enrichment(
@@ -5288,14 +5948,31 @@ def _defer_shot_enrichment(
     *,
     emit_event: str,
     initial_ui_ms: float | None,
-) -> None:
-    """Queue optional hardware work without blocking the OPS capture callback."""
+) -> bool:
+    """Queue optional hardware work without blocking the OPS capture callback.
+
+    Returns True when the job is queued, False when the queue is full and it
+    waits in the deferred backlog (its result then arrives as a late update).
+    Raises ``queue.Full`` only when the backlog is at its hard bound too.
+    """
     global shot_enrichment_task  # pylint: disable=global-statement
 
     with shot_enrichment_task_lock:
-        shot_enrichment_queue.put_nowait((shot, emit_event, initial_ui_ms))
+        job = (shot, emit_event, initial_ui_ms)
+        queued = False
+        # Behind an older deferred shot, a newer one must wait its turn too.
+        if not _deferred_shot_enrichment:
+            try:
+                shot_enrichment_queue.put_nowait(job)
+                queued = True
+            except queue.Full:
+                pass
+        if not queued:
+            if len(_deferred_shot_enrichment) >= _DEFERRED_ENRICHMENT_CAPACITY:
+                raise queue.Full("deferred shot enrichment backlog is full")
+            _deferred_shot_enrichment.append(job)
         if shot_enrichment_task is not None:
-            return
+            return queued
         try:
             # Reserve the slot while the task starts. The worker needs the same
             # lock before clearing it, which closes the fast-finish race.
@@ -5304,11 +5981,15 @@ def _defer_shot_enrichment(
             shot_enrichment_task = task
         except Exception:
             shot_enrichment_task = None
-            queued_shot, _event, _latency = shot_enrichment_queue.get_nowait()
-            shot_enrichment_queue.task_done()
+            if queued:
+                queued_shot, _event, _latency = shot_enrichment_queue.get_nowait()
+                shot_enrichment_queue.task_done()
+            else:
+                queued_shot, _event, _latency = _deferred_shot_enrichment.pop()
             if queued_shot is not shot:
                 raise RuntimeError("shot enrichment queue lost FIFO ordering") from None
             raise
+        return queued
 
 
 def on_shot_detected(shot: Shot) -> None:
@@ -5321,6 +6002,17 @@ def _handle_shot_detected(shot: Shot) -> None:
     """Publish OPS metrics promptly, then enrich optional hardware data."""
     shot.server_callback_started_monotonic_ns = time.monotonic_ns()
     shot.stage_timing = clone_stage_timing(shot.stage_timing)
+    if pi_trace.get_recorder() is not None:
+        # Phase A join: the monitor calls this synchronously in its capture thread,
+        # before its next wait, so the current OPS attempt is this shot's (pinned by
+        # test_phase_a_join_invariant...; Task 12 replaces it with an explicit ID).
+        shot.trace_attempt_id = pi_trace.current_ops_attempt()
+        pi_trace.mark(
+            "server_callback_started",
+            shot.trace_attempt_id,
+            monotonic_ns=shot.server_callback_started_monotonic_ns,
+            join="serial_capture_loop",
+        )
     if tester_setup_required:
         readiness = (
             camera_capture_runtime.trigger_evidence_for_shot(shot.impact_timestamp)
@@ -5374,10 +6066,14 @@ def _handle_shot_detected(shot: Shot) -> None:
             )
             logger.warning("[SERVER] Tester shot rejected: %s", evidence["blockers"])
             ready_light.swing_result("not_counted")
+            pi_trace.mark(
+                "server_shot_rejected", shot.trace_attempt_id, reason="tester_setup_readiness"
+            )
             return
     ready_light.swing_result("shot", ball_speed_mph=shot.ball_speed_mph)
     _open_carry_status(shot)
     _assign_shot_number(shot)
+    pi_trace.mark("server_shot_accepted", shot.trace_attempt_id, shot_number=shot.shot_number)
     active_profile = get_profile_store().get_active()
     shot.profile_id = active_profile.id
     shot.profile_name = active_profile.name
@@ -5409,27 +6105,17 @@ def _handle_shot_detected(shot: Shot) -> None:
         needs_watchdog=True,
     )
     try:
-        _defer_shot_enrichment(
+        queued = _defer_shot_enrichment(
             shot,
             emit_event=final_event,
             initial_ui_ms=initial_ui_ms,
         )
     except queue.Full:
-        logger.warning(
-            "[SERVER] Shot enrichment queue is full (%d waiting); "
-            "skipping optional hardware for shot #%d",
-            _SHOT_ENRICHMENT_QUEUE_CAPACITY,
-            shot.shot_number,
-        )
-        if emitted:
-            _emit_ops_enrichment_skipped(shot, reason="queue_full")
-        _queue_shot_finalization(
+        _abandon_shot_enrichment(
             shot,
+            emitted=emitted,
             emit_event=final_event,
             initial_ui_ms=initial_ui_ms,
-            enrichment=_ShotEnrichmentResult(
-                diagnostic_outcome="partial", diagnostic_reason="queue_full"
-            ),
         )
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning(
@@ -5438,7 +6124,7 @@ def _handle_shot_detected(shot: Shot) -> None:
             exc_info=True,
         )
         if emitted:
-            _emit_ops_enrichment_skipped(shot, reason="worker_unavailable")
+            _emit_ops_enrichment_status(shot, status="skipped", reason="worker_unavailable")
         _queue_shot_finalization(
             shot,
             emit_event=final_event,
@@ -5447,6 +6133,75 @@ def _handle_shot_detected(shot: Shot) -> None:
                 diagnostic_outcome="partial", diagnostic_reason="worker_unavailable"
             ),
         )
+    else:
+        if not queued:
+            # Its IWR dump and camera clip are already recorded; they are
+            # processed when the queue drains and update this same shot.
+            logger.warning(
+                "[SERVER] Shot enrichment queue is full (%d waiting); shot #%d's IWR "
+                "and camera processing is deferred and will update it",
+                _SHOT_ENRICHMENT_QUEUE_CAPACITY,
+                shot.shot_number,
+            )
+            pi_trace.mark("server_enrichment_deferred", shot.trace_attempt_id, reason="queue_full")
+            if emitted:
+                _emit_ops_enrichment_status(shot, status="pending", reason="queue_full")
+            _queue_shot_finalization(
+                shot,
+                emit_event=final_event,
+                initial_ui_ms=initial_ui_ms,
+                enrichment=_ShotEnrichmentResult(
+                    diagnostic_outcome="partial", diagnostic_reason="enrichment_deferred"
+                ),
+                awaits_late_enrichment=True,
+            )
+
+
+def _abandon_shot_enrichment(
+    shot: Shot,
+    *,
+    emitted: bool,
+    emit_event: str,
+    initial_ui_ms: float | None,
+) -> None:
+    """The deferred backlog is at its hard bound: say so loudly, keep the OPS shot."""
+    reason = "enrichment_backlog_full"
+    pi_trace.mark("server_enrichment_abandoned", shot.trace_attempt_id, reason=reason)
+    logger.error(
+        "[SERVER] Shot #%d enrichment ABANDONED: %d jobs queued and %d deferred already; "
+        "its IWR and camera metrics will not be computed",
+        shot.shot_number,
+        _SHOT_ENRICHMENT_QUEUE_CAPACITY,
+        _DEFERRED_ENRICHMENT_CAPACITY,
+    )
+    log_session_error(
+        "Shot enrichment abandoned",
+        component="server",
+        context={
+            "stage": "enrichment_admission",
+            "shot_number": shot.shot_number,
+            "reason": reason,
+            "queue_capacity": _SHOT_ENRICHMENT_QUEUE_CAPACITY,
+            "deferred_capacity": _DEFERRED_ENRICHMENT_CAPACITY,
+        },
+    )
+    _log_shot_enrichment_lifecycle(
+        get_session_logger(),
+        shot.camera_fusion_session_uuid,
+        shot,
+        state="enrichment_abandoned",
+        reason=reason,
+        background_work="never_started",
+        result_discarded=True,
+    )
+    if emitted:
+        _emit_ops_enrichment_status(shot, status="skipped", reason=reason)
+    _queue_shot_finalization(
+        shot,
+        emit_event=emit_event,
+        initial_ui_ms=initial_ui_ms,
+        enrichment=_ShotEnrichmentResult(diagnostic_outcome="partial", diagnostic_reason=reason),
+    )
 
 
 def swing_speed_to_dict(event: SwingSpeedEvent) -> dict:
@@ -5529,7 +6284,7 @@ def on_swing_speed_detected(event: SwingSpeedEvent):
     event.profile_name = active_profile.name
     event_data = swing_speed_to_dict(event)
     shot_data = swing_speed_to_shot_dict(event)
-    stats = monitor.get_session_stats() if monitor else {}
+    stats = _session_stats()
     socketio.emit("swing_speed", {"event": event_data, "stats": stats})
     socketio.emit("shot", {"shot": shot_data, "stats": stats})
     logger.info(
@@ -5711,6 +6466,9 @@ def start_monitor(
             _ready_light_trigger_outcome(data)
             socketio.emit("trigger_diagnostic", data)
 
+        # Before the capture thread starts and before BCM17 is armed, so the
+        # first capture and the first edge are traced too.
+        _install_pi_trace_hooks()
         monitor.start(  # pylint: disable=unexpected-keyword-arg
             shot_callback=on_shot_detected,
             live_callback=on_live_reading,
@@ -6249,6 +7007,11 @@ def main():
     )
     parser.add_argument(
         "--debug", "-d", action="store_true", help="Enable verbose FFT/CFAR debug output"
+    )
+    parser.add_argument(
+        "--pi-trace",
+        action="store_true",
+        help=("Write the stage 1b host-monotonic trace (pi_trace_*.jsonl) beside the session logs"),
     )
     parser.add_argument(
         "--radar-log", action="store_true", help="Log raw radar data to console (Python logging)"
@@ -7024,6 +7787,14 @@ def main():
     else:
         init_session_logger(enabled=False)
         print("Session logging DISABLED")
+
+    if args.pi_trace:
+        trace_path = _start_pi_trace(Path(args.log_dir) if args.log_dir else None)
+        if trace_path is None:
+            print("Pi trace FAILED to start (see log); running WITHOUT a trace")
+        else:
+            print(f"Pi trace enabled: {trace_path}")
+            _start_browser_trace()
 
     if ballistics_enabled:
         print("Ballistic carry model: ENABLED (simulator + drag/Magnus)")

@@ -62,7 +62,9 @@ describe('DisplayMode', () => {
 
     expect(html).not.toContain('254');
     expect(html).not.toContain('Spin-adjusted');
-    expect(html).toMatch(/display-shot-chip__stat">--/);
+    // the one placeholder, with no unit beside it, in the card and the shot strip
+    expect(html).toMatch(/display-shot-chip__stat">—<\/span>/);
+    expect(html).toMatch(/metric-card__value">—<\/span><\/div><span class="metric-card__label">Carry/);
   });
 
   it('does not request a preview when camera capture is unavailable', () => {
@@ -89,5 +91,25 @@ describe('DisplayMode', () => {
 
     expect(html).toContain('experimental · rejected: no club track');
     expect(html).toContain('experimental · rejected: no pre impact frames');
+  });
+
+  it('shows a shot whose ball speed and carry the server nulled, without crashing', () => {
+    const nulled = { ...shot, ball_speed_mph: null, estimated_carry_yards: null, carry_spin_adjusted: null };
+    const html = renderToString(
+      <DisplayMode connected captureSettings={captureSettings} latestShot={nulled} shots={[nulled]} />
+    );
+
+    expect(html).toContain('—');
+    expect(html).not.toContain('NaN');
+  });
+
+  it('never shows a unit next to the no-value mark', () => {
+    const nulled = { ...shot, ball_speed_mph: Number.NaN, estimated_carry_yards: null, carry_spin_adjusted: null };
+    const html = renderToString(
+      <DisplayMode connected captureSettings={captureSettings} latestShot={nulled} shots={[nulled]} />
+    ).replace(/<!-- -->/g, '');
+
+    expect(html).not.toMatch(/—\s*(mph|km\/h|yds|m)\b/);
+    expect(html).not.toMatch(/—<\/span><span class="metric-card__unit"/);
   });
 });

@@ -855,3 +855,122 @@ def test_the_sim_send_log_records_a_shot_not_sent_with_its_reason(tmp_path):
         "missing": ["spin"],
         "shot_timestamp": "t",
     }
+
+
+# --- Merge of D31 with the base's rule: a non-finite value is a missing value --------
+# On a fusion unit a NaN or infinite required field is unmeasured exactly like None:
+# the shot is not sent, and the screen and the sim-send log say which field. A
+# non-finite optional field is left out, and a non-finite carry is never reported.
+
+_NON_FINITE = [float("nan"), float("inf"), float("-inf")]
+_NON_FINITE_IDS = ["nan", "inf", "-inf"]
+
+
+@pytest.mark.parametrize("bad", _NON_FINITE, ids=_NON_FINITE_IDS)
+@pytest.mark.parametrize(
+    "field, missing",
+    [
+        ("launch_angle_vertical", "vertical launch"),
+        ("launch_angle_horizontal", "horizontal launch"),
+        ("spin_rpm", "spin"),
+        ("spin_confidence", "spin"),
+        ("spin_axis_deg", "spin axis"),
+    ],
+)
+def test_a_fusion_shot_with_a_non_finite_required_field_is_not_sent(field, missing, bad):
+    from openflight.sim.types import UnmeasuredShotError
+
+    state = PlayerState()
+
+    with pytest.raises(UnmeasuredShotError) as raised:
+        resolve_shot(_fusion_sim_shot(**{field: bad}), state, substitutes=False)
+
+    assert raised.value.missing == [missing]
+    assert str(raised.value) == f"{missing} not measured"
+    assert state.shot_counter == 0
+
+
+@pytest.mark.parametrize("bad", _NON_FINITE, ids=_NON_FINITE_IDS)
+def test_a_fusion_shot_with_non_finite_optional_fields_is_sent_without_them(bad):
+    shot = _fusion_sim_shot(club_speed_mph=bad, club_path_deg=bad)
+
+    resolved = resolve_shot(shot, PlayerState(), substitutes=False)
+
+    assert resolved.club_speed_mph is None and resolved.club_path_deg is None
+    for field in ("club_speed", "club_path"):
+        assert field not in resolved.provenance
+        assert field not in resolved.as_values()
+
+
+@pytest.mark.parametrize("bad", _NON_FINITE, ids=_NON_FINITE_IDS)
+def test_a_fusion_shot_with_a_non_finite_carry_is_sent_without_carry(bad):
+    shot = _fusion_sim_shot(carry_spin_adjusted=bad, carry_status="measured")
+
+    resolved = resolve_shot(shot, PlayerState(), substitutes=False)
+
+    assert resolved.carry_yards is None
+    assert "carry" not in resolved.provenance and "carry" not in resolved.as_values()
+
+
+def test_the_server_does_not_send_a_fusion_shot_with_a_nan_spin_and_says_why(monkeypatch):
+    shot = _fusion_sim_shot(spin_rpm=float("nan"))
+
+    sent, emitted, session_log = _forward(monkeypatch, shot, fusion=True)
+
+    assert sent == []
+    dropped = {
+        "reason": "spin not measured",
+        "missing": ["spin"],
+        "shot_timestamp": shot.timestamp.isoformat(),
+        "targets": ["gspro"],
+    }
+    assert emitted == [("sim_shot_dropped", dropped)]
+    assert session_log.not_sent == [dropped]
+    assert session_log.sends == []
+
+
+def test_an_ops_only_unit_sends_a_nan_spin_shot_with_its_labelled_spin_estimate(monkeypatch):
+    sent, emitted, _session_log = _forward(
+        monkeypatch, _fusion_sim_shot(spin_rpm=float("nan")), fusion=False
+    )
+
+    assert len(sent) == 1
+    assert [event for event, _payload in emitted] == ["sim_shot"]
+    assert emitted[0][1]["provenance"]["total_spin"] == "estimated"
+
+
+@pytest.mark.parametrize("bad", _NON_FINITE, ids=_NON_FINITE_IDS)
+def test_a_non_finite_fusion_carry_is_not_reported_anywhere(bad):
+    shot = _fusion_sim_shot(carry_spin_adjusted=bad, carry_status="measured")
+
+    assert shot.reported_carry_yards is None
+    payload = server_module.shot_to_dict(shot)
+    assert payload["carry_spin_adjusted"] is None
+    assert payload["estimated_carry_yards"] is None  # no table on a fusion unit (D17)
+    assert payload["carry_status"] is None  # a nulled carry keeps no "measured" label
+    assert {"id": "carry_spin_adjusted", "reason": f"non_finite_value:{bad!r}"} in payload[
+        "metrics_not_measured"
+    ]
+    carry_log = server_module._carry_log_text(shot, None)  # pylint: disable=protected-access
+    assert carry_log == "carry not measured"
+
+
+def test_a_non_finite_ops_only_carry_falls_back_to_its_labelled_table():
+    shot = _shot(carry_spin_adjusted=float("nan"), carry_status="estimated")
+
+    assert shot.reported_carry_yards == pytest.approx(shot.estimated_carry_yards)
+    assert server_module._carry_log_text(shot, None) == (  # pylint: disable=protected-access
+        f"carry shown={shot.estimated_carry_yards:.0f} yds (table estimate)"
+    )
+
+
+def test_session_stats_average_only_finite_reported_carries():
+    from openflight.launch_monitor import summarize_shots
+
+    shots = [
+        _fusion_sim_shot(carry_spin_adjusted=240.0),
+        _fusion_sim_shot(carry_spin_adjusted=float("nan")),
+        _fusion_sim_shot(carry_spin_adjusted=None, carry_status="not_measured"),
+    ]
+
+    assert summarize_shots(shots, "rolling-buffer")["avg_carry_est"] == pytest.approx(240.0)

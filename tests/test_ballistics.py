@@ -178,3 +178,52 @@ class TestSimulate:
     def test_total_distance_includes_rollout(self):
         traj = simulate(_driver())
         assert traj.total_yards > traj.carry_yards
+
+
+@pytest.mark.parametrize("substitutes", [True, False], ids=["ops_only", "fusion"])
+@pytest.mark.parametrize("bad", [math.nan, math.inf], ids=["nan", "inf"])
+@pytest.mark.parametrize(
+    "field", ["launch_angle_vertical", "launch_angle_horizontal", "spin_axis_deg", "spin_rpm"]
+)
+def test_a_non_finite_input_resolves_launch_exactly_like_a_missing_one(field, bad, substitutes):
+    """Task 3 fix round (I1): a non-finite value is a missing value; D17 unchanged."""
+    measured = dict(
+        ball_speed_mph=120.0,
+        timestamp=datetime(2026, 10, 11),
+        club=ClubType.IRON_7,
+        launch_angle_vertical=18.0,
+        launch_angle_horizontal=1.0,
+        spin_rpm=6500.0,
+        spin_confidence=0.9,
+        spin_axis_deg=2.0,
+    )
+    with_bad = resolve_launch(Shot(**{**measured, field: bad}), substitutes=substitutes)
+    with_none = resolve_launch(Shot(**{**measured, field: None}), substitutes=substitutes)
+    assert with_bad == with_none
+    if with_bad is not None:
+        assert all(
+            math.isfinite(v)
+            for v in (
+                with_bad.launch_angle_v,
+                with_bad.launch_angle_h,
+                with_bad.spin_rpm,
+                with_bad.spin_axis_deg,
+            )
+        )
+
+
+@pytest.mark.parametrize("substitutes", [True, False], ids=["ops_only", "fusion"])
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "-inf"])
+def test_a_non_finite_ball_speed_resolves_no_launch(bad, substitutes):
+    """A-M2: a non-finite ball speed is a missing one, so there is nothing to simulate."""
+    shot = Shot(
+        ball_speed_mph=bad,
+        timestamp=datetime(2026, 10, 12),
+        club=ClubType.IRON_7,
+        launch_angle_vertical=18.0,
+        launch_angle_horizontal=1.0,
+        spin_rpm=6500.0,
+        spin_confidence=0.9,
+        spin_axis_deg=2.0,
+    )
+    assert resolve_launch(shot, substitutes=substitutes) is None

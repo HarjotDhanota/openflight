@@ -1,10 +1,13 @@
 """Tests for server module."""
 
 import argparse
+import dataclasses
 import json
 import math
 import sys
 import threading
+import typing
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,7 +20,7 @@ from openflight.camera.replay import ReplayNotFoundError, ReplayPreparationError
 from openflight.clubs import ClubType
 from openflight.iwr6843 import Calibration
 from openflight.kld7.types import KLD7Angle
-from openflight.launch_monitor import Shot
+from openflight.launch_monitor import Shot, summarize_shots
 from openflight.ops243 import UART_BAUD_COMMANDS
 from openflight.power import PowerState
 from openflight.server import (
@@ -32,6 +35,7 @@ from openflight.server import (
 )
 from openflight.speed_correction import evaluate_experimental_total_speed
 from openflight.swing_speed import SwingSpeedEvent
+from tests.pi_trace_helpers import read_marks
 
 
 def _wait_for_shot_finalization_idle(timeout_s: float = 2.0) -> None:
@@ -1084,6 +1088,72 @@ class TestIWR6843ShotIntegration:
         assert shot.launch_angle_horizontal_source is None
         assert shot.launch_angle_horizontal_confidence is None
 
+    @pytest.mark.parametrize("bad", [math.nan, math.inf], ids=["nan", "inf"])
+    @pytest.mark.parametrize("fusion", [False, True], ids=["ops_only", "fusion"])
+    def test_a_non_finite_launch_angle_is_handled_exactly_like_a_missing_one(
+        self, monkeypatch, fusion, bad
+    ):
+        """I1 / D17: OPS-only fills its labelled estimate; a fusion unit fills nothing in."""
+        monkeypatch.setattr(server_module, "iwr6843_runtime", SimpleNamespace() if fusion else None)
+        monkeypatch.setattr(server_module, "camera_capture_runtime", None)
+
+        def ensured(vertical, horizontal):
+            shot = Shot(
+                ball_speed_mph=100.0,
+                club_speed_mph=80.0,
+                timestamp=datetime(2026, 10, 11, 9, 0, 0),
+                club=ClubType.IRON_9,
+                launch_angle_vertical=vertical,
+                launch_angle_horizontal=horizontal,
+            )
+            server_module._ensure_user_facing_launch_angles(shot)
+            return shot
+
+        with_bad, with_none = ensured(bad, bad), ensured(None, None)
+        for name in (
+            "launch_angle_vertical_source",
+            "launch_angle_horizontal_source",
+            "launch_angle_confidence",
+            "launch_angle_horizontal_confidence",
+            "angle_source",
+        ):
+            assert getattr(with_bad, name) == getattr(with_none, name), name
+        if fusion:
+            assert with_none.launch_angle_vertical is None  # D17 unchanged: nothing filled
+            assert with_none.launch_angle_vertical_source is None
+        else:
+            assert with_bad.launch_angle_vertical == with_none.launch_angle_vertical
+            assert with_bad.launch_angle_horizontal == with_none.launch_angle_horizontal == 0.0
+            assert with_bad.launch_angle_vertical_source == "estimated"
+
+    @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "-inf"])
+    @pytest.mark.parametrize("field", ["club_speed_mph", "spin_rpm"])
+    def test_ops_only_launch_estimate_ignores_a_non_finite_input_like_none(
+        self, monkeypatch, field, bad
+    ):
+        """2b: estimate_launch_angle only checks > 0, so +inf used to drive the estimate."""
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+        monkeypatch.setattr(server_module, "camera_capture_runtime", None)
+
+        def ensured(value):
+            shot = Shot(
+                ball_speed_mph=100.0,
+                club_speed_mph=80.0,
+                spin_rpm=6500.0,
+                timestamp=datetime(2026, 10, 11, 9, 0, 0),
+                club=ClubType.IRON_7,
+            )
+            setattr(shot, field, value)
+            server_module._ensure_user_facing_launch_angles(shot)
+            return shot
+
+        with_bad, with_none = ensured(bad), ensured(None)
+        assert with_bad.launch_angle_vertical == with_none.launch_angle_vertical
+        assert with_bad.launch_angle_confidence == with_none.launch_angle_confidence
+        assert with_bad.launch_angle_horizontal_confidence == (
+            with_none.launch_angle_horizontal_confidence
+        )
+
     def test_missing_ti_capture_preserves_ops_shot(self, monkeypatch):
         emitted = []
         runtime = SimpleNamespace(
@@ -1377,7 +1447,10 @@ class TestShotToDict:
         raw = shot.to_dict()
         result = shot_to_dict(shot)
 
-        assert set(result) == set(raw) - {"mode", "readings", "readings_count"}
+        # metrics_not_measured: names any non-finite metric sent as null (None here)
+        assert set(result) == set(raw) - {"mode", "readings", "readings_count"} | {
+            "metrics_not_measured"
+        }
         assert result["ball_speed_mph"] == 150.5
         assert result["club_speed_mph"] == 103.2
         assert result["club"] == "driver"
@@ -2015,6 +2088,128 @@ class TestShotToDict:
         assert result["spin_phase_agreement_pct"] == 2.1
         assert result["spin_phase_confirmed"] is True
         assert result["spin_rejection_reason"] == "SNR too low (2.96, need 3.0)"
+
+    @staticmethod
+    def _float_fields():
+        hints = typing.get_type_hints(Shot)
+        return [f.name for f in dataclasses.fields(Shot) if "float" in str(hints[f.name])]
+
+    def test_float_field_list_is_not_empty(self):
+        assert "launch_angle_vertical" in self._float_fields()
+        assert len(self._float_fields()) > 30
+
+    @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "-inf"])
+    def test_no_non_finite_float_field_raises_or_leaks_into_the_payload(self, bad):
+        """Owner rule: a shot is never dropped; a non-finite metric goes out as null."""
+        for name in self._float_fields():
+            shot = Shot(ball_speed_mph=120.0, timestamp=datetime(2026, 10, 11, 9, 0, 0))
+            setattr(shot, name, bad)
+            result = shot_to_dict(shot)  # must not raise
+            json.dumps(result, allow_nan=False)  # strict JSON: the browser can parse it
+            if name not in result:  # a field the UI schema doesn't carry
+                continue
+            assert result[name] is None, name
+            assert {"id": name, "reason": f"non_finite_value:{bad!r}"} in result[
+                "metrics_not_measured"
+            ], name
+
+    def test_a_non_finite_launch_leaves_carry_on_its_no_launch_path(self):
+        """A non-finite value is a missing value (I1): carry is the no-launch carry."""
+        when = datetime(2026, 10, 11, 9, 0, 0)
+        result = shot_to_dict(
+            Shot(ball_speed_mph=120.0, timestamp=when, launch_angle_vertical=math.nan)
+        )
+        no_launch = shot_to_dict(Shot(ball_speed_mph=120.0, timestamp=when))
+        assert result["metrics_not_measured"] == [
+            {"id": "launch_angle_vertical", "reason": "non_finite_value:nan"}
+        ]
+        assert result["estimated_carry_yards"] == no_launch["estimated_carry_yards"]
+        assert result["carry_range"] == no_launch["carry_range"]
+
+    def test_a_derived_non_finite_metric_is_nulled_and_named(self):
+        """2c: smash factor and carry derive from an infinite ball speed; each is named."""
+        result = shot_to_dict(
+            Shot(
+                ball_speed_mph=math.inf,
+                club_speed_mph=100.0,
+                timestamp=datetime(2026, 10, 11, 9, 0, 0),
+            )
+        )
+        assert result["smash_factor"] is None
+        assert result["estimated_carry_yards"] is None
+        assert result["carry_range"] == [None, None]
+        assert result["metrics_not_measured"] == [
+            {"id": "ball_speed_mph", "reason": "non_finite_value:inf"},
+            {"id": "smash_factor", "reason": "non_finite_value:inf"},
+            {"id": "estimated_carry_yards", "reason": "non_finite_value:inf"},
+            {"id": "carry_range[0]", "reason": "non_finite_value:inf"},
+            {"id": "carry_range[1]", "reason": "non_finite_value:inf"},
+        ]
+        json.dumps(result, allow_nan=False)
+
+    @pytest.mark.parametrize("bad", [math.nan, math.inf], ids=["nan", "inf"])
+    def test_a_nulled_metric_keeps_no_measuring_source_label(self, bad):
+        """A value nulled for being non-finite reads like a missing one: its source is None."""
+        when = datetime(2026, 10, 11, 9, 0, 0)
+        result = shot_to_dict(
+            Shot(
+                ball_speed_mph=120.0,
+                timestamp=when,
+                launch_angle_vertical=bad,
+                launch_angle_vertical_source="radar",
+                angle_source="radar",
+                launch_angle_horizontal=bad,
+                launch_angle_horizontal_source="camera",
+                spin_rpm=bad,
+                spin_source="calculated",
+                experimental_face_angle_deg=bad,
+                experimental_face_angle_path_source="camera",
+                experimental_face_angle_launch_source="camera",
+            )
+        )
+        missing = shot_to_dict(Shot(ball_speed_mph=120.0, timestamp=when))
+        for label in (
+            "launch_angle_vertical_source",
+            "angle_source",
+            "launch_angle_horizontal_source",
+            "spin_source",
+            "experimental_face_angle_path_source",
+            "experimental_face_angle_launch_source",
+        ):
+            assert result[label] is None, label
+            assert result[label] == missing[label], label
+
+    def test_a_finite_metric_keeps_its_source_when_another_is_nulled(self):
+        result = shot_to_dict(
+            Shot(
+                ball_speed_mph=120.0,
+                timestamp=datetime(2026, 10, 11, 9, 0, 0),
+                launch_angle_vertical=14.0,
+                launch_angle_vertical_source="radar",
+                angle_source="radar",
+                launch_angle_horizontal=math.nan,
+                launch_angle_horizontal_source="radar",
+            )
+        )
+        assert result["launch_angle_vertical_source"] == result["angle_source"] == "radar"
+        assert result["launch_angle_horizontal_source"] is None
+
+    def test_nested_non_finite_values_are_nulled_and_named_by_path(self):
+        shot = Shot(
+            ball_speed_mph=120.0,
+            timestamp=datetime(2026, 10, 11, 9, 0, 0),
+            inclinometer={"pitch_deg": math.nan, "roll_deg": 1.5},
+        )
+        result = shot_to_dict(shot)
+        assert result["inclinometer"] == {"pitch_deg": None, "roll_deg": 1.5}
+        assert result["metrics_not_measured"] == [
+            {"id": "inclinometer.pitch_deg", "reason": "non_finite_value:nan"}
+        ]
+
+    def test_a_finite_shot_names_nothing_not_measured(self):
+        result = shot_to_dict(Shot(ball_speed_mph=120.0, timestamp=datetime.now()))
+        assert result["metrics_not_measured"] is None
+        json.dumps(result, allow_nan=False)
 
 
 class TestSessionStateClub:
@@ -3144,8 +3339,10 @@ class TestOnShotDetected:
     """Tests for live shot processing in the server."""
 
     @pytest.fixture(autouse=True)
-    def _reset_ordered_pipeline(self):
+    def _reset_ordered_pipeline(self, monkeypatch):
         server_module._reset_shot_sequence()
+        # each test gets its own deferred-enrichment backlog, like its own queue
+        monkeypatch.setattr(server_module, "_deferred_shot_enrichment", deque())
         yield
         _wait_for_shot_finalization_idle()
 
@@ -3153,6 +3350,7 @@ class TestOnShotDetected:
         def __init__(self):
             self.stats = {"shots_detected": 0}
             self.shots = []
+            self.shot_updates = []
             self.rolling_buffer_captures = []
             self.iwr6843_captures = []
             self.camera_captures = []
@@ -3168,6 +3366,14 @@ class TestOnShotDetected:
             self.shots.append(shot_data)
             if len(self.shots) == 4:
                 self.all_shots_logged.set()
+
+        def log_shot_update(self, shot, pipeline_ms=None, *, update, expected_session_uuid=None):
+            del expected_session_uuid
+            shot_data = shot.to_dict()
+            shot_data["pipeline_ms"] = pipeline_ms
+            shot_data["update"] = update
+            self.shot_updates.append(shot_data)
+            return True
 
         def log_iwr6843_capture(self, **capture_data):
             self.iwr6843_captures.append(capture_data)
@@ -3217,7 +3423,8 @@ class TestOnShotDetected:
         return [
             payload
             for event, payload in emitted
-            if event == "shot_update" and payload.get("enrichment", {}).get("status") != "skipped"
+            # "enrichment" marks a status notice (skipped/pending), not a result
+            if event == "shot_update" and "enrichment" not in payload
         ]
 
     @classmethod
@@ -3746,20 +3953,24 @@ class TestOnShotDetected:
         assert not overflow_callback.is_alive()
         assert all(not thread.is_alive() for thread in background_threads)
 
+        # Changed with fix/keep-late-enrichment: shot 4 overflowed the enrichment
+        # queue and used to be "skipped" (no IWR or camera processing ever). It
+        # is now deferred: the notice says "pending", and its recorded IWR and
+        # camera captures are processed once the queue drains.
         expected = [(index, shot.impact_timestamp) for index, shot in enumerate(shots, start=1)]
         initial_shots = [payload["shot"] for event, payload in emitted if event == "shot"]
-        skipped_updates = [
+        status_notices = [
             payload
             for event, payload in emitted
-            if event == "shot_update" and payload.get("enrichment", {}).get("status") == "skipped"
+            if event == "shot_update" and "enrichment" in payload
         ]
         final_shots = [payload["shot"] for payload in self._final_update_payloads(emitted)]
         assert [(row["shot_number"], row["impact_timestamp"]) for row in initial_shots] == expected
-        assert len(skipped_updates) == 1
-        assert skipped_updates[0]["shot"]["shot_number"] == 4
-        assert skipped_updates[0]["pending"] == {}
-        assert skipped_updates[0]["enrichment"] == {
-            "status": "skipped",
+        assert len(status_notices) == 1
+        assert status_notices[0]["shot"]["shot_number"] == 4
+        assert status_notices[0]["pending"] == {"iwr6843": True, "camera": True}
+        assert status_notices[0]["enrichment"] == {
+            "status": "pending",
             "reason": "queue_full",
             "hardware": ["iwr6843", "camera"],
         }
@@ -3770,16 +3981,105 @@ class TestOnShotDetected:
             (row["shot_number"], row["shot_timestamp"])
             for row in session_log.rolling_buffer_captures
         ] == expected
-        expected_enriched = expected[:3]
         assert [
             (row["shot_number"], row["shot_timestamp"]) for row in session_log.iwr6843_captures
-        ] == expected_enriched
+        ] == expected
         assert [
             (row["shot_number"], row["shot_timestamp"]) for row in session_log.camera_captures
-        ] == expected_enriched
-        assert [(row["shot_number"], row["impact_timestamp"]) for row in final_shots] == expected
+        ] == expected
+        # first results stay in shot order; shot 4's enrichment lands either on
+        # time or as one late update to the same shot
+        first_seen = list(dict.fromkeys(row["shot_number"] for row in final_shots))
+        assert first_seen == [1, 2, 3, 4]
+        assert [row["shot_number"] for row in final_shots].count(4) in (1, 2)
+        assert len(session_log.shot_updates) <= 1
         assert simulator_shots == expected
         self._assert_finalization_coordinator_empty()
+        assert not server_module._shot_awaiting_late_enrichment
+        assert not server_module._deferred_shot_enrichment
+
+    def test_deferred_enrichment_keeps_impact_order_behind_the_backlog(self, monkeypatch):
+        processed = []
+        worker_targets = []
+        monkeypatch.setattr(server_module, "shot_enrichment_queue", self._enrichment_queue())
+        monkeypatch.setattr(server_module, "_deferred_shot_enrichment", deque())
+        monkeypatch.setattr(server_module, "shot_enrichment_task", None)
+        monkeypatch.setattr(
+            server_module,
+            "_finish_shot_detected",
+            lambda shot, **_kwargs: processed.append(shot.impact_timestamp),
+        )
+        monkeypatch.setattr(
+            server_module.socketio,
+            "start_background_task",
+            lambda target, *_args, **_kwargs: worker_targets.append(target) or object(),
+        )
+        shots = [self._shot(second) for second in range(5)]
+
+        def defer(shot):
+            return server_module._defer_shot_enrichment(
+                shot, emit_event="shot_update", initial_ui_ms=None
+            )
+
+        assert [defer(shot) for shot in shots[:3]] == [True, True, False]
+        # the queue has room again, but an older shot is still deferred: the
+        # newer shot must wait behind it, or the older shot's recorded IWR and
+        # camera captures would be discarded as stale by the newer match
+        server_module.shot_enrichment_queue.get_nowait()
+        server_module.shot_enrichment_queue.task_done()
+        processed.append(shots[0].impact_timestamp)
+        assert defer(shots[3]) is False
+        assert defer(shots[4]) is False
+
+        worker_targets[0]()
+
+        assert processed == [shot.impact_timestamp for shot in shots]
+        assert not server_module._deferred_shot_enrichment
+        assert server_module.shot_enrichment_task is None
+
+    def test_deferred_backlog_bound_abandons_enrichment_loudly(self, monkeypatch):
+        emitted, session_log = self._record_finalization(monkeypatch)
+        logged_errors = []
+        lifecycle = []
+        session_log.active_session_uuid = "session-one"
+        session_log.log_shot_pinned = lambda _uuid, shot, pipeline_ms=None: session_log.log_shot(
+            shot, pipeline_ms
+        )
+        session_log.log_shot_enrichment = lambda _uuid, row: lifecycle.append(row) or True
+        monkeypatch.setattr(server_module, "shot_enrichment_queue", self._enrichment_queue())
+        monkeypatch.setattr(server_module, "_deferred_shot_enrichment", deque())
+        monkeypatch.setattr(server_module, "_DEFERRED_ENRICHMENT_CAPACITY", 1)
+        monkeypatch.setattr(server_module, "_SHOT_ENRICHMENT_DEADLINE_S", 0.05)
+        monkeypatch.setattr(server_module, "shot_enrichment_task", None)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
+        monkeypatch.setattr(
+            server_module.socketio, "start_background_task", lambda *_a, **_k: object()
+        )
+        monkeypatch.setattr(
+            server_module,
+            "log_session_error",
+            lambda message, **kwargs: logged_errors.append((message, kwargs)),
+        )
+
+        for second in range(4):  # 2 queued, 1 deferred, 1 over the hard bound
+            on_shot_detected(self._shot(second))
+        self._wait_for_finalization_coordinator_idle()
+
+        assert [message for message, _kwargs in logged_errors] == ["Shot enrichment abandoned"]
+        assert logged_errors[0][1]["context"]["shot_number"] == 4
+        assert logged_errors[0][1]["context"]["reason"] == "enrichment_backlog_full"
+        notices = [p for e, p in emitted if e == "shot_update" and "enrichment" in p]
+        assert [(p["shot"]["shot_number"], p["enrichment"]["status"]) for p in notices] == [
+            (3, "pending"),
+            (4, "skipped"),
+        ]
+        assert notices[1]["enrichment"]["reason"] == "enrichment_backlog_full"
+        abandoned = [row for row in lifecycle if row["state"] == "enrichment_abandoned"]
+        assert [(row["shot_number"], row["reason"]) for row in abandoned] == [
+            (4, "enrichment_backlog_full")
+        ]
+        assert [row["shot_number"] for row in session_log.shots] == [1, 2, 3, 4]
+        server_module._reset_shot_sequence()
 
     def test_capacity_eviction_never_finalizes_on_ops_callback(self, monkeypatch):
         enrichment_queue = self._enrichment_queue()
@@ -3926,15 +4226,331 @@ class TestOnShotDetected:
         for thread in background_threads:
             thread.join(timeout=2.0)
 
-        final_shots = [payload["shot"] for payload in self._final_update_payloads(emitted)]
-        assert [row["shot_number"] for row in final_shots] == list(range(1, shot_count + 1))
+        # Changed with fix/keep-late-enrichment: this test used to assert that
+        # every shot stayed OPS-only after the stuck hardware returned, because
+        # late results were discarded. Late results are now applied as updates
+        # to the same shot, and shots that overflowed the queue are deferred
+        # instead of skipped, so every shot whose enrichment was active, queued
+        # or deferred (1-11) gains its launch angle afterwards; the rest were
+        # abandoned loudly at the backlog bound. First results are unchanged.
+        final_payloads = self._final_update_payloads(emitted)
+        first_results = final_payloads[:shot_count]
+        late_updates = final_payloads[shot_count:]
+        assert [p["shot"]["shot_number"] for p in first_results] == list(range(1, shot_count + 1))
         assert [row["shot_number"] for row in session_log.shots] == list(range(1, shot_count + 1))
         # a fusion unit fills nothing in: no measured launch, so none and no carry (D17)
-        assert all(row["launch_angle_vertical_source"] is None for row in final_shots)
-        assert all(row["carry_spin_adjusted"] is None for row in final_shots)
-        assert all(shot.launch_angle_vertical_source is None for shot in shots)
+        assert all(p["shot"]["launch_angle_vertical_source"] is None for p in first_results)
+        assert all(p["shot"]["carry_spin_adjusted"] is None for p in first_results)
+        enriched = server_module._SHOT_AWAITING_LATE_CAPACITY  # active + queued + deferred
+        enriched_numbers = list(range(1, enriched + 1))
+        assert [p["shot"]["shot_number"] for p in late_updates] == enriched_numbers
+        assert all(p["shot"]["launch_angle_vertical"] == 42.0 for p in late_updates)
+        assert [shot.launch_angle_vertical_source for shot in shots[:enriched]] == [
+            "iwr6843"
+        ] * enriched
+        assert all(shot.launch_angle_vertical_source is None for shot in shots[enriched:])
+        assert [row["shot_number"] for row in session_log.shot_updates] == enriched_numbers
+        assert session_log.stats["shots_detected"] == shot_count
         assert simulator_shots == list(range(1, shot_count + 1))
         self._assert_finalization_coordinator_empty()
+        assert not server_module._shot_awaiting_late_enrichment
+
+    def _late_iwr_session(self, monkeypatch, enrich):
+        """One fusion shot whose IWR result returns after the first-result timer."""
+        emitted, session_log = self._record_finalization(monkeypatch)
+        background_threads = []
+        simulator_shots = []
+        first_result_published = threading.Event()
+        monitor_shots = []
+
+        class Monitor:
+            @staticmethod
+            def get_session_stats():
+                return summarize_shots(monitor_shots, mode="rolling-buffer")
+
+        def record_emit(event, payload):
+            emitted.append((event, payload))
+            if event == "shot_update":
+                first_result_published.set()
+
+        def start_background_task(target, *args, **kwargs):
+            thread = threading.Thread(target=target, args=args, kwargs=kwargs, daemon=True)
+            background_threads.append(thread)
+            thread.start()
+            return thread
+
+        monkeypatch.setattr(server_module, "monitor", Monitor())
+        monkeypatch.setattr(server_module, "shot_enrichment_queue", self._enrichment_queue())
+        monkeypatch.setattr(server_module, "shot_enrichment_task", None)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
+        monkeypatch.setattr(server_module, "_SHOT_ENRICHMENT_DEADLINE_S", 0.05)
+        monkeypatch.setattr(server_module.socketio, "emit", record_emit)
+        monkeypatch.setattr(server_module.socketio, "start_background_task", start_background_task)
+        monkeypatch.setattr(server_module, "_enrich_shot_from_optional_hardware", enrich)
+        monkeypatch.setattr(
+            server_module,
+            "_forward_shot_to_simulators",
+            lambda shot: simulator_shots.append(shot.to_dict()),
+        )
+
+        shot = self._shot()
+        monitor_shots.append(shot)
+        return SimpleNamespace(
+            shot=shot,
+            emitted=emitted,
+            session_log=session_log,
+            simulator_shots=simulator_shots,
+            first_result_published=first_result_published,
+            background_threads=background_threads,
+        )
+
+    def test_late_iwr_result_updates_same_shot_once_without_resending_sims(self, monkeypatch):
+        release_dump = threading.Event()
+
+        def late_iwr(shot):
+            assert release_dump.wait(5.0)
+            shot.launch_angle_vertical = 14.0
+            shot.launch_angle_vertical_confidence = 0.9
+            shot.launch_angle_vertical_source = "radar"
+            return server_module._ShotEnrichmentResult(iwr6843_ms=21000.0)
+
+        run = self._late_iwr_session(monkeypatch, late_iwr)
+        on_shot_detected(run.shot)
+        assert run.first_result_published.wait(2.0), "the timer must publish OPS-only first"
+        release_dump.set()
+        for thread in run.background_threads:
+            thread.join(timeout=2.0)
+
+        assert [event for event, _payload in run.emitted] == ["shot", "shot_update", "shot_update"]
+        initial, first_result, late = (payload for _event, payload in run.emitted)
+        assert first_result["shot"]["launch_angle_vertical"] is None
+        assert late["shot"]["launch_angle_vertical"] == 14.0
+        assert late["shot"]["launch_angle_vertical_source"] == "radar"
+        # the UI replaces a shot in place by its timestamp; the number stays too
+        for key in ("shot_number", "timestamp"):
+            assert late["shot"][key] == first_result["shot"][key] == initial["shot"][key]
+        assert late["stats"]["shot_count"] == 1, "the update must not add a shot to the stats"
+        assert run.shot.launch_angle_vertical == 14.0, "the retained shot carries the update"
+
+        assert len(run.session_log.shots) == 1
+        assert run.session_log.stats["shots_detected"] == 1
+        assert len(run.session_log.shot_updates) == 1
+        update = run.session_log.shot_updates[0]
+        assert update["shot_number"] == 1
+        assert update["launch_angle_vertical"] == 14.0
+        assert update["pipeline_ms"]["iwr6843"] == 21000.0
+        assert update["update"]["first_result_reason"] == "enrichment_deadline"
+        assert update["update"]["simulators"] == "not_resent"
+        assert update["update"]["late_by_ms"] >= 0.0
+
+        assert len(run.simulator_shots) == 1, "simulators can't take an update"
+        assert run.simulator_shots[0]["launch_angle_vertical"] is None
+        self._assert_finalization_coordinator_empty()
+        assert not server_module._shot_awaiting_late_enrichment
+
+    def test_a_shot_with_non_finite_metrics_is_still_emitted_and_logged(self, monkeypatch):
+        """Owner rule: nothing is dropped. NaN launch and inf spin go out as null."""
+        emitted, session_log = self._record_finalization(monkeypatch)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+        shot = self._shot()
+        shot.launch_angle_vertical = math.nan
+        shot.launch_angle_vertical_source = "radar"
+        shot.spin_rpm = math.inf
+        on_shot_detected(shot)
+        _wait_for_shot_finalization_idle()
+
+        assert [event for event, _payload in emitted] == ["shot"]
+        payload = emitted[0][1]
+        json.dumps(payload, allow_nan=False)
+        assert payload["shot"]["ball_speed_mph"] == 150.0
+        # OPS-only unit: the NaN launch and the inf spin get exactly the missing-value
+        # handling (I1, 2b): the same labelled estimate as a shot missing both.
+        reference = self._shot()
+        server_module._ensure_user_facing_launch_angles(reference)
+        assert payload["shot"]["launch_angle_vertical_source"] == "estimated"
+        assert payload["shot"]["launch_angle_vertical"] == reference.launch_angle_vertical
+        assert payload["shot"]["spin_rpm"] is None
+        assert payload["shot"]["metrics_not_measured"] == [
+            {"id": "spin_rpm", "reason": "non_finite_value:inf"}
+        ]
+        assert len(session_log.shots) == 1
+
+    @staticmethod
+    def _assert_strict_finite_or_null_stats(payload):
+        json.dumps(payload, allow_nan=False)
+        for key, value in payload["stats"].items():
+            assert value is None or not isinstance(value, float) or math.isfinite(value), key
+
+    def test_a_nan_shot_in_the_history_never_poisons_later_stats(self, monkeypatch):
+        """A-I1: one NaN shot in the session, then every later emit is strict JSON."""
+        emitted, _session_log = self._record_finalization(monkeypatch)
+        history = []
+        monkeypatch.setattr(
+            server_module,
+            "monitor",
+            SimpleNamespace(
+                get_session_stats=lambda: summarize_shots(history, mode="rolling-buffer"),
+                get_shots=lambda: list(history),
+            ),
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+        broken = self._shot(0)
+        broken.ball_speed_mph = math.nan
+        broken.club_speed_mph = math.nan
+        broken.spin_rpm = math.nan
+        history.append(broken)
+        on_shot_detected(broken)
+        _wait_for_shot_finalization_idle()
+        later = self._shot(1)
+        history.append(later)
+        on_shot_detected(later)
+        _wait_for_shot_finalization_idle()
+        server_module._emit_initial_ops_shot(later)
+
+        assert len(emitted) >= 3
+        for _event, payload in emitted:
+            self._assert_strict_finite_or_null_stats(payload)
+        assert emitted[-1][1]["stats"]["avg_ball_speed"] == later.ball_speed_mph
+        session_state = server_module._session_state_payload()
+        self._assert_strict_finite_or_null_stats(session_state)
+
+    def test_non_finite_stats_from_any_monitor_are_nulled_before_emit(self, monkeypatch):
+        """A-I1 defence in depth: stats are nulled before emitting, whatever made them."""
+        emitted, _session_log = self._record_finalization(monkeypatch)
+        monkeypatch.setattr(
+            server_module,
+            "monitor",
+            SimpleNamespace(
+                get_session_stats=lambda: {
+                    "shot_count": 1,
+                    "avg_ball_speed": math.nan,
+                    "nested": {"x": math.inf},
+                },
+                get_shots=lambda: [],
+            ),
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
+        assert server_module._emit_initial_ops_shot(self._shot()) is True
+        stats = emitted[0][1]["stats"]
+        self._assert_strict_finite_or_null_stats(emitted[0][1])
+        assert stats == {"shot_count": 1, "avg_ball_speed": None, "nested": {"x": None}}
+        assert server_module._session_state_payload()["stats"]["avg_ball_speed"] is None
+
+    @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "-inf"])
+    def test_table_carry_gets_no_club_speed_when_it_is_non_finite(self, monkeypatch, bad):
+        """A-M3: a non-finite club speed reaches the table carry as None (missing)."""
+        self._record_finalization(monkeypatch)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+        calls = []
+        real = server_module.estimate_carry_with_spin
+
+        def spy(*args, **kwargs):
+            calls.append(kwargs.get("club_speed_mph", "absent"))
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(server_module, "estimate_carry_with_spin", spy)
+        broken = self._shot()
+        broken.club_speed_mph = bad
+        on_shot_detected(broken)
+        _wait_for_shot_finalization_idle()
+        missing = self._shot()
+        missing.club_speed_mph = None
+        on_shot_detected(missing)
+        _wait_for_shot_finalization_idle()
+        measured = self._shot()
+        on_shot_detected(measured)
+        _wait_for_shot_finalization_idle()
+
+        assert calls == [None, None, 100.0]
+        assert broken.carry_spin_adjusted == missing.carry_spin_adjusted
+        assert math.isfinite(broken.carry_spin_adjusted)
+
+    def test_initial_ops_emit_of_a_non_finite_shot_still_happens(self, monkeypatch):
+        emitted, _session_log = self._record_finalization(monkeypatch)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
+        shot = self._shot()
+        shot.launch_angle_vertical = math.nan
+        assert server_module._emit_initial_ops_shot(shot) is True
+        assert [event for event, _payload in emitted] == ["shot"]
+        json.dumps(emitted[0][1], allow_nan=False)
+
+    def test_late_iwr_result_is_traced_as_a_later_revision_of_the_same_attempt(
+        self, monkeypatch, recorder
+    ):
+        """R-F5: first, first-final and late update are revisions 1-3 of one attempt."""
+        release_dump = threading.Event()
+
+        def late_iwr(shot):
+            assert release_dump.wait(5.0)
+            shot.launch_angle_vertical = 14.0
+            shot.launch_angle_vertical_source = "radar"
+            return server_module._ShotEnrichmentResult(iwr6843_ms=21000.0)
+
+        run = self._late_iwr_session(monkeypatch, late_iwr)
+        attempt = recorder.open_ops_attempt()
+        on_shot_detected(run.shot)
+        assert run.first_result_published.wait(2.0)
+        release_dump.set()
+        for thread in run.background_threads:
+            thread.join(timeout=2.0)
+
+        tags = [payload["trace"] for _event, payload in run.emitted]
+        assert [(t["attempt_id"], t["revision"], t["final"], t["update_kind"]) for t in tags] == [
+            (attempt, 1, False, "first"),
+            (attempt, 2, True, "first"),
+            (attempt, 3, True, "late_update"),
+        ]
+        assert not any(t["core_eligible"] for t in tags), "no distance before W13"
+        marks = [m for m in read_marks(recorder) if m["attempt_id"] == attempt]
+        names = [m["name"] for m in marks]
+        assert names.count("server_emit_invoked") == names.count("server_emit_returned") == 3
+        watchdog = [m for m in marks if m["name"] == "server_enrichment_watchdog_fired"]
+        assert [m["reason"] for m in watchdog] == ["enrichment_deadline"]
+        applied = [m for m in marks if m["name"] == "server_late_update_applied"]
+        assert [(m["state"], m["first_result_reason"]) for m in applied] == [
+            ("late_result_applied", "enrichment_deadline")
+        ]
+        assert names.index("server_enrichment_watchdog_fired") < names.index(
+            "server_late_update_applied"
+        )
+        late_invoked = [m for m in marks if m["name"] == "server_emit_invoked"][2]
+        assert late_invoked["core"]["launch_angle_vertical"] == 14.0
+        assert names[:3] == ["ops_wait_started", "server_callback_started", "server_shot_accepted"]
+
+    def test_late_enrichment_failure_is_logged_and_ops_shot_stays(self, monkeypatch):
+        release_dump = threading.Event()
+        logged_errors = []
+
+        def failing_iwr(_shot):
+            assert release_dump.wait(5.0)
+            raise RuntimeError("IWR dump failed")
+
+        run = self._late_iwr_session(monkeypatch, failing_iwr)
+        monkeypatch.setattr(
+            server_module,
+            "log_session_error",
+            lambda message, **kwargs: logged_errors.append((message, kwargs)),
+        )
+        on_shot_detected(run.shot)
+        assert run.first_result_published.wait(2.0)
+        release_dump.set()
+        for thread in run.background_threads:
+            thread.join(timeout=2.0)
+
+        assert [message for message, _kwargs in logged_errors] == [
+            "Deferred shot enrichment failed"
+        ]
+        assert len(run.session_log.shots) == 1
+        assert run.session_log.stats["shots_detected"] == 1
+        updates = [payload["shot"] for event, payload in run.emitted if event == "shot_update"]
+        assert all(row["ball_speed_mph"] == 150.0 for row in updates), "the OPS shot stays"
+        assert all(row["shot_number"] == 1 for row in updates)
+        assert [row["update"]["first_result_reason"] for row in run.session_log.shot_updates] == [
+            "enrichment_deadline"
+        ]
+        assert run.session_log.shot_updates[0]["ball_speed_mph"] == 150.0
+        assert len(run.simulator_shots) == 1
+        assert not server_module._shot_awaiting_late_enrichment
 
     def test_kld7_uses_shot_impact_timestamp(self, monkeypatch):
         """K-LD7 selection should be anchored to the OPS243 impact timestamp."""

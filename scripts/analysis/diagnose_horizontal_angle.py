@@ -35,7 +35,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import statistics as stats
 from collections import defaultdict
 from dataclasses import dataclass
@@ -47,6 +46,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
+
+from openflight.shot_updates import read_session_jsonl  # noqa: E402
 
 C_FACE = "#9C27B0"
 C_PATH = "#FF9800"
@@ -122,43 +123,38 @@ def load_sessions(paths: list[Path]) -> list[ShotRow]:
                 row.v_ball_angle = ba.get("vertical_deg")
                 row.v_confidence = ba.get("confidence")
 
-        with p.open() as fh:
-            for line in fh:
-                try:
-                    e = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                t = e.get("type")
-                if t == "shot_detected":
-                    sn = e.get("shot_number")
-                    row = ShotRow(
-                        session_id=sid,
-                        shot_number=sn,
-                        ts=e.get("ts", ""),
-                        ball_speed_mph=e.get("ball_speed_mph"),
-                        club_speed_mph=e.get("club_speed_mph"),
-                        angle_source=e.get("angle_source"),
-                        h_angle=e.get("launch_angle_horizontal"),
-                        v_angle=e.get("launch_angle_vertical"),
-                        confidence=e.get("launch_angle_confidence"),
-                        club_path_deg=e.get("club_path_deg"),
-                        spin_axis_deg=e.get("spin_axis_deg"),
-                    )
-                    # Apply any buffered kld7_buffer entries we already saw
-                    for orient in ("horizontal", "vertical"):
-                        fields = pending_bufs.pop((sn, orient), None)
-                        if fields is not None:
-                            apply_buf(row, orient, fields)
-                    shots_by_num[sn] = row
-                elif t == "kld7_buffer":
-                    sn = e.get("shot_number")
-                    orient = e.get("orientation")
-                    fields = buf_fields(e)
-                    row = shots_by_num.get(sn)
-                    if row is not None:
+        for e in read_session_jsonl(p):
+            t = e.get("type")
+            if t == "shot_detected":
+                sn = e.get("shot_number")
+                row = ShotRow(
+                    session_id=sid,
+                    shot_number=sn,
+                    ts=e.get("ts", ""),
+                    ball_speed_mph=e.get("ball_speed_mph"),
+                    club_speed_mph=e.get("club_speed_mph"),
+                    angle_source=e.get("angle_source"),
+                    h_angle=e.get("launch_angle_horizontal"),
+                    v_angle=e.get("launch_angle_vertical"),
+                    confidence=e.get("launch_angle_confidence"),
+                    club_path_deg=e.get("club_path_deg"),
+                    spin_axis_deg=e.get("spin_axis_deg"),
+                )
+                # Apply any buffered kld7_buffer entries we already saw
+                for orient in ("horizontal", "vertical"):
+                    fields = pending_bufs.pop((sn, orient), None)
+                    if fields is not None:
                         apply_buf(row, orient, fields)
-                    else:
-                        pending_bufs[(sn, orient)] = fields
+                shots_by_num[sn] = row
+            elif t == "kld7_buffer":
+                sn = e.get("shot_number")
+                orient = e.get("orientation")
+                fields = buf_fields(e)
+                row = shots_by_num.get(sn)
+                if row is not None:
+                    apply_buf(row, orient, fields)
+                else:
+                    pending_bufs[(sn, orient)] = fields
         rows.extend(shots_by_num.values())
     return rows
 

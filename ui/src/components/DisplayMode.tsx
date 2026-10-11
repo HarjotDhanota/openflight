@@ -3,7 +3,16 @@ import type { CameraCaptureSettings } from '../stores/useCameraStore';
 import type { Shot } from '../types/shot';
 import { computeSwingSpeedStats, getSwingSpeedMph, isSwingSpeedShot, reportedCarryYards } from '../types/shot';
 import { useUnitPreference } from '../state/useUnitPreference';
-import { formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../utils/units';
+import {
+  NO_VALUE,
+  firstMeasured,
+  formatDistance,
+  formatSpeed,
+  getDistanceUnit,
+  getSpeedUnit,
+  isMeasured,
+  unitIfMeasured,
+} from '../utils/units';
 import { getServerOrigin } from '../utils/serverOrigin';
 import { MetricCard } from './ui/MetricCard';
 import { getHtmlLang, type MessageKey } from '../i18n';
@@ -30,27 +39,26 @@ const CAMERA_PREVIEW_URL = `${getServerOrigin()}/api/camera/preview.jpg`;
 const CAMERA_PREVIEW_REFRESH_MS = 5_000;
 const RECENT_SHOT_COUNT = 5;
 
-/** A carry, or the placeholder when it is not measured (a fusion unit fills nothing in, D17). */
-function formatCarry(shot: Shot, unitSystem: 'imperial' | 'metric'): string {
-  const carry = reportedCarryYards(shot);
-  return carry === null ? '--' : formatDistance(carry, unitSystem, 0);
-}
-
-function formatOptionalNumber(value: number | null, digits = 1, prefixPositive = false): string {
-  if (value === null) {
-    return '--';
+function formatOptionalNumber(value: number | null | undefined, digits = 1, prefixPositive = false): string {
+  if (!isMeasured(value)) {
+    return NO_VALUE;
   }
 
   const prefix = prefixPositive && value > 0 ? '+' : '';
   return `${prefix}${value.toFixed(digits)}`;
 }
 
-function formatSpin(value: number | null): string {
-  if (value === null) {
-    return '--';
+function formatSpin(value: number | null | undefined): string {
+  if (!isMeasured(value)) {
+    return NO_VALUE;
   }
 
   return value.toLocaleString(getHtmlLang(), { maximumFractionDigits: 0 });
+}
+
+/** A recent-shot chip value with its unit, or the no-value mark alone. */
+function chipValue(value: number | null, format: (value: number) => string, unit: string): string {
+  return isMeasured(value) ? `${format(value)} ${unit}` : NO_VALUE;
 }
 
 function experimentalStatus(status: string | null | undefined): string {
@@ -61,110 +69,97 @@ function experimentalStatus(status: string | null | undefined): string {
 function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric', t: Translate): DisplayMetric[] {
   if (!shot) {
     return [
-      { label: t('display.ballSpeed'), value: '--', unit: getSpeedUnit(unitSystem) },
-      { label: t('metric.carry'), value: '--', unit: getDistanceUnit(unitSystem) },
-      { label: t('display.clubSpeed'), value: '--', unit: getSpeedUnit(unitSystem) },
-      { label: t('metric.smash'), value: '--' },
-      { label: t('display.launch'), value: '--', unit: 'deg' },
-      { label: t('metric.spin'), value: '--', unit: 'rpm' },
-      { label: t('display.clubPath'), value: '--', unit: 'deg' },
-      { label: t('metric.clubAoa'), value: '--', unit: 'deg' },
-      { label: t('metric.hLaunch'), value: '--', unit: 'deg' },
+      { label: t('display.ballSpeed'), value: NO_VALUE },
+      { label: t('metric.carry'), value: NO_VALUE },
+      { label: t('display.clubSpeed'), value: NO_VALUE },
+      { label: t('metric.smash'), value: NO_VALUE },
+      { label: t('display.launch'), value: NO_VALUE },
+      { label: t('metric.spin'), value: NO_VALUE },
+      { label: t('display.clubPath'), value: NO_VALUE },
+      { label: t('metric.clubAoa'), value: NO_VALUE },
+      { label: t('metric.hLaunch'), value: NO_VALUE },
     ];
   }
 
-  const carryYards = reportedCarryYards(shot);
   const fusedDeliveryAttempted = shot.experimental_fused_status != null;
+  // a fusion unit's unmeasured carry shows as no value, never the table (D17)
+  const carryYards = reportedCarryYards(shot);
+  const clubPath = firstMeasured(
+    shot.club_path_deg,
+    shot.experimental_fused_club_path_deg,
+    !fusedDeliveryAttempted ? shot.experimental_club_path_deg : null
+  );
+  const attackAngle = firstMeasured(
+    shot.club_angle_deg,
+    shot.experimental_fused_attack_angle_deg,
+    !fusedDeliveryAttempted ? shot.experimental_attack_angle_deg : null
+  );
 
   return [
     {
       label: t('display.ballSpeed'),
       value: formatSpeed(shot.ball_speed_mph, unitSystem, 1),
-      unit: getSpeedUnit(unitSystem),
+      unit: unitIfMeasured(shot.ball_speed_mph, getSpeedUnit(unitSystem)),
     },
     {
       label: t('metric.carry'),
-      value: formatCarry(shot, unitSystem),
-      unit: carryYards === null ? undefined : getDistanceUnit(unitSystem),
-      detail: carryYards !== null && shot.carry_spin_adjusted ? t('metric.spinAdjusted') : undefined,
+      value: formatDistance(carryYards, unitSystem, 0),
+      unit: unitIfMeasured(carryYards, getDistanceUnit(unitSystem)),
+      detail: carryYards !== null && isMeasured(shot.carry_spin_adjusted) ? t('metric.spinAdjusted') : undefined,
     },
     {
       label: t('display.clubSpeed'),
-      value: shot.club_speed_mph === null ? '--' : formatSpeed(shot.club_speed_mph, unitSystem, 1),
-      unit: shot.club_speed_mph === null ? undefined : getSpeedUnit(unitSystem),
+      value: formatSpeed(shot.club_speed_mph, unitSystem, 1),
+      unit: unitIfMeasured(shot.club_speed_mph, getSpeedUnit(unitSystem)),
     },
     {
       label: t('metric.smash'),
-      value: shot.smash_factor === null ? '--' : shot.smash_factor.toFixed(2),
+      value: isMeasured(shot.smash_factor) ? shot.smash_factor.toFixed(2) : NO_VALUE,
     },
     {
       label: t('display.launch'),
       value: formatOptionalNumber(shot.launch_angle_vertical),
-      unit: shot.launch_angle_vertical === null ? undefined : 'deg',
+      unit: unitIfMeasured(shot.launch_angle_vertical, 'deg'),
       detail: shot.angle_source ?? undefined,
     },
     {
       label: t('metric.spin'),
       value: formatSpin(shot.spin_rpm),
-      unit: shot.spin_rpm === null ? undefined : 'rpm',
+      unit: unitIfMeasured(shot.spin_rpm, 'rpm'),
       detail: shot.spin_quality ?? undefined,
     },
     {
       label: t('display.clubPath'),
-      value: formatOptionalNumber(
-        shot.club_path_deg ??
-          shot.experimental_fused_club_path_deg ??
-          (!fusedDeliveryAttempted ? shot.experimental_club_path_deg : null) ??
-          null,
-        1,
-        true
-      ),
-      unit:
-        shot.club_path_deg == null &&
-        shot.experimental_fused_club_path_deg == null &&
-        (fusedDeliveryAttempted || shot.experimental_club_path_deg == null)
-          ? undefined
-          : 'deg',
-      detail:
-        shot.club_path_deg != null
-          ? undefined
-          : fusedDeliveryAttempted
-            ? shot.experimental_fused_club_path_deg != null
-              ? 'camera fused (exp.)'
-              : experimentalStatus(shot.experimental_fused_status)
-            : shot.experimental_club_path_deg != null || shot.experimental_club_path_status != null
-              ? experimentalStatus(shot.experimental_club_path_status)
-              : undefined,
+      value: formatOptionalNumber(clubPath, 1, true),
+      unit: unitIfMeasured(clubPath, 'deg'),
+      detail: isMeasured(shot.club_path_deg)
+        ? undefined
+        : fusedDeliveryAttempted
+          ? shot.experimental_fused_club_path_deg != null
+            ? 'camera fused (exp.)'
+            : experimentalStatus(shot.experimental_fused_status)
+          : shot.experimental_club_path_deg != null || shot.experimental_club_path_status != null
+            ? experimentalStatus(shot.experimental_club_path_status)
+            : undefined,
     },
     {
       label: t('metric.clubAoa'),
-      value: formatOptionalNumber(
-        shot.club_angle_deg ??
-          shot.experimental_fused_attack_angle_deg ??
-          (!fusedDeliveryAttempted ? shot.experimental_attack_angle_deg : null) ??
-          null
-      ),
-      unit:
-        shot.club_angle_deg == null &&
-        shot.experimental_fused_attack_angle_deg == null &&
-        (fusedDeliveryAttempted || shot.experimental_attack_angle_deg == null)
-          ? undefined
-          : 'deg',
-      detail:
-        shot.club_angle_deg != null
-          ? undefined
-          : fusedDeliveryAttempted
-            ? shot.experimental_fused_attack_angle_deg != null
-              ? 'camera fused (exp.)'
-              : experimentalStatus(shot.experimental_fused_status)
-            : shot.experimental_attack_angle_deg != null || shot.experimental_attack_angle_status != null
-              ? experimentalStatus(shot.experimental_attack_angle_status)
-              : undefined,
+      value: formatOptionalNumber(attackAngle),
+      unit: unitIfMeasured(attackAngle, 'deg'),
+      detail: isMeasured(shot.club_angle_deg)
+        ? undefined
+        : fusedDeliveryAttempted
+          ? shot.experimental_fused_attack_angle_deg != null
+            ? 'camera fused (exp.)'
+            : experimentalStatus(shot.experimental_fused_status)
+          : shot.experimental_attack_angle_deg != null || shot.experimental_attack_angle_status != null
+            ? experimentalStatus(shot.experimental_attack_angle_status)
+            : undefined,
     },
     {
       label: t('metric.hLaunch'),
       value: formatOptionalNumber(shot.launch_angle_horizontal, 1, true),
-      unit: shot.launch_angle_horizontal === null ? undefined : 'deg',
+      unit: unitIfMeasured(shot.launch_angle_horizontal, 'deg'),
       detail:
         shot.launch_angle_horizontal_source === 'camera_assisted_experimental' ? 'camera assisted (exp.)' : undefined,
     },
@@ -280,13 +275,19 @@ export function DisplayMode({ connected, captureSettings, latestShot, shots }: D
                 {isSwingSpeedShot(shot) ? (shot.training_implement_label ?? shot.club) : shot.club}
               </span>
               <span className="display-shot-chip__stat">
-                {formatSpeed(isSwingSpeedShot(shot) ? getSwingSpeedMph(shot) : shot.ball_speed_mph, unitSystem, 0)}{' '}
-                {getSpeedUnit(unitSystem)}
+                {chipValue(
+                  isSwingSpeedShot(shot) ? getSwingSpeedMph(shot) : shot.ball_speed_mph,
+                  (value) => formatSpeed(value, unitSystem, 0),
+                  getSpeedUnit(unitSystem)
+                )}
               </span>
               {!isSwingSpeedShot(shot) && (
                 <span className="display-shot-chip__stat">
-                  {formatCarry(shot, unitSystem)}
-                  {reportedCarryYards(shot) === null ? null : ` ${getDistanceUnit(unitSystem)}`}
+                  {chipValue(
+                    reportedCarryYards(shot),
+                    (value) => formatDistance(value, unitSystem, 0),
+                    getDistanceUnit(unitSystem)
+                  )}
                 </span>
               )}
             </div>

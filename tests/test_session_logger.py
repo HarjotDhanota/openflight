@@ -47,6 +47,68 @@ def test_pinned_shot_write_rejects_session_rollover_without_incrementing_stats(t
     assert "shot_detected" not in logger.session_path.read_text(encoding="utf-8")
 
 
+class TestLogShotUpdate:
+    """A late update replaces a logged shot; it never counts as another shot."""
+
+    @staticmethod
+    def _logged_shot(logger):
+        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now(), shot_number=3)
+        assert logger.log_shot(shot, expected_session_uuid=logger.active_session_uuid)
+        return shot
+
+    def test_update_writes_shot_updated_entry_without_counting_a_shot(self, tmp_path):
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+        shot = self._logged_shot(logger)
+        shot.launch_angle_vertical = 14.0
+        shot.launch_angle_vertical_source = "radar"
+
+        assert logger.log_shot_update(
+            shot,
+            {"initial_ui": 900.0, "iwr6843": 21000.0},
+            update={"reason": "late_enrichment", "late_by_ms": 1500.0},
+            expected_session_uuid=logger.active_session_uuid,
+        )
+
+        entries = [json.loads(line) for line in logger.session_path.read_text().splitlines()]
+        assert [entry["type"] for entry in entries].count("shot_detected") == 1
+        updates = [entry for entry in entries if entry["type"] == "shot_updated"]
+        assert len(updates) == 1
+        assert updates[0]["shot_number"] == 3
+        assert updates[0]["launch_angle_vertical"] == 14.0
+        assert updates[0]["update"] == {"reason": "late_enrichment", "late_by_ms": 1500.0}
+        assert updates[0]["pipeline_ms"]["iwr6843"] == 21000.0
+        assert updates[0]["pipeline_timing"]["authoritative_contract"] == "stage_timing"
+        assert logger.stats["shots_detected"] == 1
+
+    def test_update_rejects_session_rollover(self, tmp_path):
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+        shot = self._logged_shot(logger)
+        pinned = logger.active_session_uuid
+        with logger._write_lock:
+            logger._session_uuid = "replacement-session"
+
+        assert (
+            logger.log_shot_update(shot, update={"reason": "x"}, expected_session_uuid=pinned)
+            is False
+        )
+        assert "shot_updated" not in logger.session_path.read_text(encoding="utf-8")
+
+    def test_update_requires_the_shot_number_it_replaces(self, tmp_path):
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now())
+
+        assert logger.log_shot_update(shot, update={"reason": "x"}) is False
+        assert "shot_updated" not in logger.session_path.read_text(encoding="utf-8")
+
+    def test_update_skipped_when_disabled(self, tmp_path):
+        logger = SessionLogger(log_dir=tmp_path, enabled=False)
+        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now(), shot_number=1)
+        assert logger.log_shot_update(shot, update={"reason": "x"}) is False
+
+
 class TestLogSessionError:
     """Tests for the module-level session error helper."""
 

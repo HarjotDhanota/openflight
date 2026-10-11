@@ -540,6 +540,31 @@ def test_shot_kept_without_trigger_evidence_is_reviewed_as_a_flagged_shot(tmp_pa
     )
 
 
+def test_a_late_shot_update_replaces_the_shot_and_is_counted_once(tmp_path):
+    root = _tester_tree(tmp_path)
+    session = next((root / "t1" / "arm5" / "paired" / "run-01").glob("session_*.jsonl"))
+    with session.open("a", encoding="utf-8") as handle:
+        update = {
+            "type": "shot_updated",
+            "shot_number": 2,
+            "ball_speed_mph": 72.1,
+            "launch_angle_vertical": 14.0,
+            "update": {"reason": "late_enrichment", "late_by_ms": 900.0},
+        }
+        handle.write(json.dumps(update) + "\n")
+
+    review = build_session_review(root, "t1", analysis={})
+
+    attempts = [a for a in review["attempts"] if a["attempt_id"] == "session-one:2"]
+    assert len(attempts) == 1
+    assert attempts[0]["live"]["launch_angle_vertical"] == 14.0
+    assert {a["attempt_id"] for a in review["attempts"]} == {
+        "session-one:1",
+        "session-one:2",
+        "run-01:camera_009",
+    }
+
+
 def test_a_shot_kept_with_blocked_trigger_readiness_carries_its_notes(tmp_path):
     """D15 (P8-7): the kiosk keeps the shot; the review names what readiness said."""
     root = _tester_tree(tmp_path)

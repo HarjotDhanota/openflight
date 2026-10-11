@@ -1,3 +1,4 @@
+import { firstMeasured, isMeasured } from '../utils/units';
 export type SpinQuality = 'high' | 'medium' | 'low' | 'experimental' | 'withheld';
 
 export interface CameraReplay {
@@ -20,7 +21,7 @@ export type CarryStatus = 'measured' | 'calculated' | 'estimated' | 'not_measure
 export interface Shot {
   mode?: 'rolling-buffer' | 'mock' | 'swing-speed';
   shot_number?: number | null;
-  ball_speed_mph: number;
+  ball_speed_mph: number | null;
   club_speed_mph: number | null;
   smash_factor: number | null;
   /** The ball-speed table; null on a fusion unit, which never shows it. */
@@ -85,10 +86,12 @@ export interface Shot {
 
 export interface SessionStats {
   shot_count: number;
-  avg_ball_speed: number;
-  max_ball_speed: number;
-  min_ball_speed: number;
-  std_dev?: number;
+  /** Null when no shot has a measured value (the server sends a non-finite one as null). */
+  avg_ball_speed: number | null;
+  max_ball_speed: number | null;
+  min_ball_speed: number | null;
+  /** Null with fewer than two measured ball speeds. */
+  std_dev?: number | null;
   avg_club_speed: number | null;
   avg_smash_factor: number | null;
   /** Mean of the carries the kiosk reports; null when no shot has one. */
@@ -170,8 +173,13 @@ export function isSwingSpeedShot(shot: Shot | null): boolean {
   return shot?.mode === 'swing-speed' || shot?.club === 'Swing Speed';
 }
 
-export function getSwingSpeedMph(shot: Shot): number {
+export function getSwingSpeedMph(shot: Shot): number | null {
   return shot.club_speed_mph ?? shot.ball_speed_mph;
+}
+
+/** The measured values (the one rule, {@link isMeasured}); a not-measured metric is null. */
+function measuredValues(values: Array<number | null | undefined>): number[] {
+  return values.filter(isMeasured);
 }
 
 export function filterShotsByProfile(shots: Shot[], profileId: string): Shot[] {
@@ -219,7 +227,7 @@ export function filterSwingSpeedShots(shots: Shot[], filter: SwingSpeedStatsFilt
 }
 
 export function computeSwingSpeedStats(shots: Shot[], filter: SwingSpeedStatsFilter = {}): SwingSpeedStats {
-  const swingSpeeds = filterSwingSpeedShots(shots, filter).map(getSwingSpeedMph);
+  const swingSpeeds = measuredValues(filterSwingSpeedShots(shots, filter).map(getSwingSpeedMph));
 
   if (swingSpeeds.length === 0) {
     return {
@@ -250,11 +258,10 @@ export function computeSwingSpeedStats(shots: Shot[], filter: SwingSpeedStatsFil
  */
 export function reportedCarryYards(shot: Shot): number | null {
   if (shot.carry_status === 'not_measured') return null;
-  if (shot.carry_spin_adjusted !== null && shot.carry_spin_adjusted !== undefined) {
-    return shot.carry_spin_adjusted;
-  }
+  // the one missing-value rule ({@link isMeasured}): a non-finite carry is no carry
+  if (isMeasured(shot.carry_spin_adjusted)) return shot.carry_spin_adjusted;
   const tableAllowed = shot.carry_status == null || shot.carry_status === 'estimated';
-  return tableAllowed ? (shot.estimated_carry_yards ?? null) : null;
+  return tableAllowed ? firstMeasured(shot.estimated_carry_yards) : null;
 }
 
 /** Whether the reported carry is modeled rather than built from measured inputs. */
@@ -263,43 +270,34 @@ export function isCarryEstimated(shot: Shot): boolean {
   if (shot.carry_status === 'calculated') return true;
   if (shot.carry_status === 'measured') return false;
   // OPS-only and older shots: the bare table is the estimate, as it always was
-  return shot.carry_spin_adjusted === null || shot.carry_spin_adjusted === undefined;
+  return !isMeasured(shot.carry_spin_adjusted);
 }
 
 /**
  * Compute session stats from an array of shots.
+ *
+ * Only measured values count ({@link isMeasured}); a stat with nothing measured is
+ * null, never 0: an empty session too, and std_dev with fewer than two ball speeds.
  */
 export function computeStats(shots: Shot[]): SessionStats {
-  if (shots.length === 0) {
-    return {
-      shot_count: 0,
-      avg_ball_speed: 0,
-      max_ball_speed: 0,
-      min_ball_speed: 0,
-      avg_club_speed: null,
-      avg_smash_factor: null,
-      avg_carry_est: null,
-    };
-  }
-
-  const ballSpeeds = shots.map((s) => s.ball_speed_mph);
-  const clubSpeeds = shots.map((s) => s.club_speed_mph).filter((v): v is number => v !== null);
-  const smashFactors = shots.map((s) => s.smash_factor).filter((v): v is number => v !== null);
+  const ballSpeeds = measuredValues(shots.map((s) => s.ball_speed_mph));
+  const clubSpeeds = measuredValues(shots.map((s) => s.club_speed_mph));
+  const smashFactors = measuredValues(shots.map((s) => s.smash_factor));
   // only reported carries: a fusion shot's missing carry is not averaged in
-  const carries = shots.map(reportedCarryYards).filter((v): v is number => v !== null);
+  const carries = measuredValues(shots.map(reportedCarryYards));
 
   const mean = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
-  const stdDev = (arr: number[]) => {
-    if (arr.length < 2) return 0;
+  const stdDev = (arr: number[]): number | null => {
+    if (arr.length < 2) return null;
     const m = mean(arr);
     return Math.sqrt(arr.reduce((sum, x) => sum + (x - m) ** 2, 0) / (arr.length - 1));
   };
 
   return {
     shot_count: shots.length,
-    avg_ball_speed: mean(ballSpeeds),
-    max_ball_speed: Math.max(...ballSpeeds),
-    min_ball_speed: Math.min(...ballSpeeds),
+    avg_ball_speed: ballSpeeds.length > 0 ? mean(ballSpeeds) : null,
+    max_ball_speed: ballSpeeds.length > 0 ? Math.max(...ballSpeeds) : null,
+    min_ball_speed: ballSpeeds.length > 0 ? Math.min(...ballSpeeds) : null,
     std_dev: stdDev(ballSpeeds),
     avg_club_speed: clubSpeeds.length > 0 ? mean(clubSpeeds) : null,
     avg_smash_factor: smashFactors.length > 0 ? mean(smashFactors) : null,

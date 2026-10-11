@@ -3,6 +3,7 @@
 Protocol-agnostic: records bytes received and can send scripted JSON replies or
 drop the connection. Used by both GSPro and OpenGolfSim connector tests.
 """
+
 import json
 import socket
 import sys
@@ -14,6 +15,9 @@ import pytest
 
 # Add tests directory to sys.path for importing test utilities like spin_synth
 sys.path.insert(0, str(Path(__file__).parent))
+
+# The process-wide Pi trace recorder fixture, defined once (R-F14).
+from tests.pi_trace_helpers import recorder  # noqa: E402,F401  pylint: disable=wrong-import-position,unused-import
 
 
 class MockSimServer:

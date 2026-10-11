@@ -8,7 +8,7 @@ import { useSystemStore } from '../../stores/useSystemStore';
 import { getEmptyValidationEntry, useValidationStore, type ValidationEntry } from '../../stores/useValidationStore';
 import { socketService } from '../../services/socketService';
 import type { UnitSystem } from '../../utils/units';
-import { formatDistance, formatSpeed } from '../../utils/units';
+import { NO_VALUE, formatDistance, formatSpeed, isMeasured } from '../../utils/units';
 import { buildValidationCsv, comparatorDifference, downloadCsv } from '../../utils/validationCsv';
 import { PanelHeader } from './PanelHeader';
 import { PanelAction } from './PanelAction';
@@ -27,7 +27,7 @@ interface ShotsPanelProps {
 const COMPARATOR_DEVICES = ['Stack Radar', 'PRGR', 'TrackMan', 'Full Swing', 'Other'];
 
 function optionalNumber(value: number | null | undefined, digits = 1, signed = false): string {
-  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+  if (!isMeasured(value)) return NO_VALUE;
   const prefix = signed && value >= 0 ? '+' : '';
   return `${prefix}${value.toFixed(digits)}`;
 }
@@ -39,7 +39,7 @@ function rowValues(shot: Shot, unitSystem: UnitSystem): string[] {
     // so the grid stays aligned with ball-strike rows.
     return [
       formatSpeed(getSwingSpeedMph(shot), unitSystem, 1),
-      '—',
+      NO_VALUE,
       optionalNumber(shot.swing_speed_reading_count, 0),
       optionalNumber(shot.swing_speed_trigger_mph),
       optionalNumber(shot.swing_speed_duration_ms, 0),
@@ -50,10 +50,10 @@ function rowValues(shot: Shot, unitSystem: UnitSystem): string[] {
   const carry = reportedCarryYards(shot);
   return [
     formatSpeed(shot.ball_speed_mph, unitSystem, 1),
-    shot.club_speed_mph === null ? '—' : formatSpeed(shot.club_speed_mph, unitSystem, 1),
+    formatSpeed(shot.club_speed_mph, unitSystem, 1),
     optionalNumber(shot.launch_angle_vertical),
-    shot.spin_rpm === null ? '—' : shot.spin_rpm.toLocaleString(getHtmlLang(), { maximumFractionDigits: 0 }),
-    carry === null ? '—' : formatDistance(carry, unitSystem, 0),
+    isMeasured(shot.spin_rpm) ? shot.spin_rpm.toLocaleString(getHtmlLang(), { maximumFractionDigits: 0 }) : NO_VALUE,
+    formatDistance(carry, unitSystem, 0),
   ];
 }
 
@@ -99,7 +99,7 @@ function ValidationEditor({
       </label>
       <div className="shots-panel__field shots-panel__field--diff">
         <span>{t('shots.diff')}</span>
-        <strong>{difference === null ? '—' : `${difference >= 0 ? '+' : ''}${difference.toFixed(1)}`}</strong>
+        <strong>{difference === null ? NO_VALUE : `${difference >= 0 ? '+' : ''}${difference.toFixed(1)}`}</strong>
       </div>
       <label className="shots-panel__field shots-panel__field--notes">
         <span>{t('shots.notes')}</span>

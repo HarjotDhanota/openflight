@@ -10,15 +10,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import ListedColormap
+
+from openflight.shot_updates import read_session_jsonl
 
 # Color scheme
 C_BALL = "#2196F3"
@@ -30,13 +32,8 @@ C_CARRY = "#009688"
 
 
 def load_session(path: Path) -> list[dict]:
-    shots = []
-    with open(path) as f:
-        for line in f:
-            entry = json.loads(line)
-            if entry.get("type") == "shot_detected":
-                shots.append(entry)
-    return shots
+    """Each shot once, with any late update applied."""
+    return [entry for entry in read_session_jsonl(path) if entry.get("type") == "shot_detected"]
 
 
 def plot_radar_card(shot: dict, output: Path):

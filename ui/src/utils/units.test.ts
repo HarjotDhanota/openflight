@@ -8,9 +8,21 @@ import {
   getDistanceUnit,
   getSpeedUnit,
   getUnitsLabel,
+  NO_VALUE,
+  isMeasured,
 } from './units';
 
 describe('units helpers', () => {
+  it('formats a missing or non-finite value as the no-value mark instead of throwing', () => {
+    for (const missing of [null, undefined, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(formatSpeed(missing, 'imperial', 1)).toBe(NO_VALUE);
+      expect(formatSpeed(missing, 'metric', 1)).toBe(NO_VALUE);
+      expect(formatDistance(missing, 'imperial', 0)).toBe(NO_VALUE);
+      expect(formatDistance(missing, 'metric', 0)).toBe(NO_VALUE);
+    }
+    expect(NO_VALUE).toBe('—');
+  });
+
   it('preserves imperial speed values', () => {
     expect(convertSpeedFromMph(150, 'imperial')).toBe(150);
     expect(formatSpeed(150, 'imperial', 1)).toBe('150.0');
@@ -43,5 +55,14 @@ describe('units helpers', () => {
   it('formats carry ranges in the selected unit system', () => {
     expect(formatCarryRange([200, 220], 'imperial')).toBe('200-220 yds');
     expect(formatCarryRange([200, 220], 'metric')).toBe('183-201 m');
+  });
+});
+
+describe('isMeasured (the one missing-value rule)', () => {
+  it('is true only for a finite number', () => {
+    expect([0, -1.5, 120].map(isMeasured)).toEqual([true, true, true]);
+    expect(
+      [null, undefined, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, '12', true].map(isMeasured)
+    ).toEqual([false, false, false, false, false, false, false]);
   });
 });

@@ -4,6 +4,7 @@ import { computeSwingSpeedStats, filterShotsByProfile } from '../../types/shot';
 import { useUnitPreference } from '../../state/useUnitPreference';
 import { useI18n } from '../../i18n/useI18n';
 import { useSharedFitFontSize } from '../../hooks/useFitFontSize';
+import { usePostRenderAck } from '../../hooks/usePostRenderAck';
 import { MetricCard } from '../ui/MetricCard';
 import { PanelHeader } from './PanelHeader';
 import { buildLiveMetrics, pinSelectedMetric } from './liveMetrics';
@@ -23,6 +24,11 @@ interface LivePanelProps {
   isNewShot?: boolean;
   /** Pinned header control, e.g. Change club. */
   headerAction?: ReactNode;
+  /**
+   * Nothing covers this result (no picker, replay, shutdown, menu or dialog), so its
+   * traced revision may be acknowledged after its frame (stage 1b Pi trace).
+   */
+  acknowledgeable?: boolean;
 }
 
 /**
@@ -40,11 +46,13 @@ export function LivePanel({
   onSelectMetric,
   isNewShot = false,
   headerAction,
+  acknowledgeable = false,
 }: LivePanelProps) {
   const { locale, t } = useI18n();
   const { unitSystem } = useUnitPreference();
   const profileShots = useMemo(() => filterShotsByProfile(shots, profileId), [shots, profileId]);
   const displayedShot = profileShots[profileShots.length - 1] ?? null;
+  usePostRenderAck(displayedShot, acknowledgeable);
   const isProfileNewShot = Boolean(isNewShot && shot && displayedShot && shot.timestamp === displayedShot.timestamp);
 
   const swingStats = useMemo(

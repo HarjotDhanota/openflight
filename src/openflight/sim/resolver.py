@@ -16,6 +16,7 @@ from openflight.launch_monitor import (
     SPIN_CONFIDENCE_HIGH,
     Shot,
 )
+from openflight.pi_trace import _finite
 from openflight.sim.types import (
     IncompleteShotError,
     PlayerState,
@@ -58,13 +59,13 @@ def _measured_total_spin(shot: Shot) -> Optional[Tuple[float, str]]:
     A calculated spin is a model's output, so its provenance is estimated.
     """
     if (
-        shot.spin_rpm is not None
+        _finite(shot.spin_rpm)
         and shot.spin_rpm > 0
-        and shot.spin_confidence is not None
+        and _finite(shot.spin_confidence)
         and shot.spin_confidence >= SPIN_CONFIDENCE_HIGH
     ):
         return float(shot.spin_rpm), "measured"
-    if shot.spin_source == "calculated" and shot.spin_rpm:
+    if shot.spin_source == "calculated" and _finite(shot.spin_rpm) and shot.spin_rpm:
         return float(shot.spin_rpm), "estimated"
     return None
 
@@ -74,16 +75,17 @@ def _unmeasured_required_fields(shot: Shot) -> List[str]:
 
     BallData Speed, VLA, HLA, TotalSpin and SpinAxis are required (BackSpin and
     SideSpin only without TotalSpin, and derived from it here); CarryDistance and
-    every ClubData field are optional. Ball speed is checked before this.
+    every ClubData field are optional. Ball speed is checked before this. A
+    non-finite value (NaN, inf) is an unmeasured one, exactly like None.
     """
     missing = []
-    if shot.launch_angle_vertical is None:
+    if not _finite(shot.launch_angle_vertical):
         missing.append("vertical launch")
-    if shot.launch_angle_horizontal is None:
+    if not _finite(shot.launch_angle_horizontal):
         missing.append("horizontal launch")
     if _measured_total_spin(shot) is None:
         missing.append("spin")
-    if shot.spin_axis_deg is None:
+    if not _finite(shot.spin_axis_deg):
         missing.append("spin axis")
     return missing
 
@@ -122,20 +124,27 @@ def _resolve_club_fields(
     out entirely, with no provenance (D17).
     """
     club_speed: Optional[float] = None
-    if shot.club_speed_mph is not None and shot.club_speed_mph > 0:
+    if _finite(shot.club_speed_mph) and shot.club_speed_mph > 0:
         club_speed = float(shot.club_speed_mph)
         provenance["club_speed"] = "measured"
     elif substitutes:
         provenance["club_speed"] = "estimated"
 
     club_path: Optional[float] = None
-    if shot.club_path_deg is not None:
+    if _finite(shot.club_path_deg):
         club_path = float(shot.club_path_deg)
         provenance["club_path"] = "measured"
     elif substitutes:
         club_path = 0.0
         provenance["club_path"] = "estimated"
     return club_speed, club_path
+
+
+def _reject_non_finite(resolved: ResolvedShot) -> None:
+    """Last line: whatever produced it, a non-finite value is never sent to a simulator."""
+    for name, value in resolved.as_values().items():
+        if value is not None and not _finite(value):
+            raise IncompleteShotError(f"{name} is not finite")
 
 
 def resolve_shot(
@@ -148,13 +157,16 @@ def resolve_shot(
     (so all connectors share a number for the same shot), and only for a shot
     that is sent.
 
+    One rule: a non-finite input (NaN, inf) is a missing input, treated exactly
+    like None; no NaN reaches any simulator.
+
     ``substitutes`` lets an OPS-only install, which has nothing to measure the
     rest with, fill a missing launch, spin, spin axis and club path from club
     tables or 0, labelled estimated. A fusion unit passes False (D17, D31): a
     required field it did not measure raises UnmeasuredShotError, so the shot is
     not sent, and an optional one (club speed, club path, carry) is left out.
     """
-    if shot.ball_speed_mph is None or shot.ball_speed_mph <= 0:
+    if not _finite(shot.ball_speed_mph) or shot.ball_speed_mph <= 0:
         raise IncompleteShotError("ball_speed_mph is required")
     if not substitutes:
         missing = _unmeasured_required_fields(shot)
@@ -163,14 +175,14 @@ def resolve_shot(
 
     provenance: Dict[str, str] = {"ball_speed": "measured"}
 
-    if shot.launch_angle_vertical is not None:
+    if _finite(shot.launch_angle_vertical):
         vla = float(shot.launch_angle_vertical)
         provenance["vla"] = "measured"
     else:
         vla = get_club_physics(shot.club).optimal_launch_deg
         provenance["vla"] = "estimated"
 
-    if shot.launch_angle_horizontal is not None:
+    if _finite(shot.launch_angle_horizontal):
         hla = float(shot.launch_angle_horizontal)
         provenance["hla"] = "measured"
     else:
@@ -184,7 +196,7 @@ def resolve_shot(
         total_spin, spin_prov = SPIN_MODEL_RPM.get(shot.club, _DEFAULT_SPIN_RPM), "estimated"
     provenance["total_spin"] = spin_prov
 
-    if shot.spin_axis_deg is not None:
+    if _finite(shot.spin_axis_deg):
         spin_axis = float(shot.spin_axis_deg)
         axis_prov = "measured"
     else:
@@ -205,8 +217,8 @@ def resolve_shot(
 
     club_speed, club_path = _resolve_club_fields(shot, provenance, substitutes=substitutes)
 
-    return ResolvedShot(
-        shot_number=player_state.next_shot_number(),
+    resolved = ResolvedShot(
+        shot_number=0,
         ball_speed_mph=float(shot.ball_speed_mph),
         vla=vla,
         hla=hla,
@@ -220,3 +232,7 @@ def resolve_shot(
         club_speed_mph=club_speed,
         provenance=provenance,
     )
+    # Checked before a shot number is taken, so a refused shot consumes none.
+    _reject_non_finite(resolved)
+    resolved.shot_number = player_state.next_shot_number()
+    return resolved

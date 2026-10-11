@@ -14,6 +14,7 @@ from .clubs import ClubType
 from .rolling_buffer.monitor import get_optimal_spin_for_ball_speed
 from .rolling_buffer.processor import RollingBufferProcessor
 from .rolling_buffer.types import IQCapture
+from .shot_updates import apply_shot_updates
 
 SCHEMA_VERSION = 1
 # Identity fields recorded per trigger, which legitimately differ between shots of
@@ -421,7 +422,12 @@ def replay_ops_capture(
 
 
 def load_session_events(session_path: Path) -> tuple[str, dict[str, Any], list[dict[str, Any]]]:
-    """Read and validate exact session bytes once for replay collection."""
+    """Read and validate exact session bytes once for replay collection.
+
+    Late ``shot_updated`` entries are folded into their ``shot_detected``
+    (see :mod:`openflight.shot_updates`), so each shot appears once with its
+    latest values.
+    """
     raw = session_path.read_bytes()
     if raw and not raw.endswith(b"\n"):
         raise ValueError("session JSONL is incomplete because it has no final newline")
@@ -461,7 +467,8 @@ def load_session_events(session_path: Path) -> tuple[str, dict[str, Any], list[d
             raise ValueError("camera fusion context does not match session_uuid")
         if context.get("available") is True and context_uuid is None:
             raise ValueError("available camera fusion context requires session_uuid")
-    return hashlib.sha256(raw).hexdigest(), starts[0], events
+    # The hash covers the exact bytes; the events carry each shot's latest values.
+    return hashlib.sha256(raw).hexdigest(), starts[0], apply_shot_updates(events)
 
 
 def session_shot_events(

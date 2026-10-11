@@ -236,4 +236,26 @@ describe('LivePanel', () => {
     expect(html.match(/metric-card--interactive/g)).toHaveLength(5);
     expect(tileLabels(html)[0]).toBe('Last swing');
   });
+
+  it('renders a shot whose core metrics the server nulled, without crashing', () => {
+    const nulled = makeShot({
+      ball_speed_mph: null,
+      estimated_carry_yards: null,
+      carry_spin_adjusted: null,
+      launch_angle_vertical: null,
+      launch_angle_horizontal: null,
+      club_speed_mph: null,
+      smash_factor: null,
+    });
+    const html = render(nulled);
+    const ballSpeedTile = html.match(/Ball speed[\s\S]*?metric-card__value-row">([\s\S]*?)<\/div>/)?.[1] ?? '';
+
+    expect(ballSpeedTile).toContain('—');
+    expect(ballSpeedTile).not.toContain('mph');
+    const carryTile = html.match(/Carry[\s\S]*?metric-card__value-row">([\s\S]*?)<\/div>/)?.[1] ?? '';
+    expect(carryTile).toContain('—');
+    expect(carryTile).not.toContain('yds');
+    expect(html).not.toContain('NaN');
+    expect(tileLabels(html)).toHaveLength(10);
+  });
 });

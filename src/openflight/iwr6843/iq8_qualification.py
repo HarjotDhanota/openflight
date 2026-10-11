@@ -371,8 +371,10 @@ def load_pair_manifest(path: str | Path) -> dict[str, Any]:
 
 def _capture_transport(raw: bytes, metadata: dict[str, Any], baud: int) -> dict[str, Any]:
     expected_bytes = metadata["header_nbytes"] + payload_nbytes(metadata, raw)
-    frame_metadata_bytes = metadata.get("frame_metadata_nbytes", 0)
-    sample_bytes = expected_bytes - metadata["header_nbytes"] - frame_metadata_bytes
+    frame_metadata_bytes = metadata.get("frame_metadata_nbytes") or 0
+    # An absent part (no trailer before v8) is 0 B, its real size; None reads as absent.
+    trailer_bytes = metadata.get("trailer_nbytes") or 0  # v8/v9 dump trailer; not samples
+    sample_bytes = expected_bytes - metadata["header_nbytes"] - frame_metadata_bytes - trailer_bytes
     return {
         "baud": baud,
         "uart_framing": "8N1",
@@ -380,6 +382,7 @@ def _capture_transport(raw: bytes, metadata: dict[str, Any], baud: int) -> dict[
         "header_bytes": metadata["header_nbytes"],
         "frame_metadata_bytes": frame_metadata_bytes,
         "sample_payload_bytes": sample_bytes,
+        "trailer_bytes": trailer_bytes,
         "dump_bytes": expected_bytes,
         "file_bytes": len(raw),
         "trailing_bytes": len(raw) - expected_bytes,

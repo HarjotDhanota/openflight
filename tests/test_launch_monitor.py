@@ -1,12 +1,14 @@
 """Tests for launch_monitor module."""
 
-import pytest
 from datetime import datetime
+
+import pytest
+
 from openflight.clubs import ClubType
 from openflight.launch_monitor import (
     Shot,
-    estimate_carry_distance,
     adjust_carry_for_launch_angle,
+    estimate_carry_distance,
 )
 
 
@@ -124,7 +126,8 @@ class TestShot:
         """Shot with launch angle should adjust carry distance."""
         shot_no_angle = Shot(ball_speed_mph=150.0, timestamp=datetime.now())
         shot_low_angle = Shot(
-            ball_speed_mph=150.0, timestamp=datetime.now(),
+            ball_speed_mph=150.0,
+            timestamp=datetime.now(),
             launch_angle_vertical=7.0,  # well below 11 optimal for driver
             launch_angle_confidence=1.0,
         )
@@ -140,11 +143,14 @@ class TestShot:
         """Shot with launch angle should have tighter carry range."""
         shot_no_angle = Shot(ball_speed_mph=150.0, timestamp=datetime.now())
         shot_angle = Shot(
-            ball_speed_mph=150.0, timestamp=datetime.now(),
+            ball_speed_mph=150.0,
+            timestamp=datetime.now(),
             launch_angle_vertical=11.0,
             launch_angle_confidence=0.5,
         )
-        no_angle_spread = shot_no_angle.estimated_carry_range[1] - shot_no_angle.estimated_carry_range[0]
+        no_angle_spread = (
+            shot_no_angle.estimated_carry_range[1] - shot_no_angle.estimated_carry_range[0]
+        )
         angle_spread = shot_angle.estimated_carry_range[1] - shot_angle.estimated_carry_range[0]
         assert angle_spread < no_angle_spread
 
@@ -215,7 +221,7 @@ class TestMultiObjectReporting:
 
         # Verify the method exists and handles single digits
         # Can't test actual command without hardware, but method should not raise
-        assert hasattr(radar, 'set_num_reports')
+        assert hasattr(radar, "set_num_reports")
 
     def test_direction_constants(self):
         """Verify direction enum values."""
@@ -224,3 +230,157 @@ class TestMultiObjectReporting:
         assert Direction.INBOUND.value == "inbound"
         assert Direction.OUTBOUND.value == "outbound"
         assert Direction.UNKNOWN.value == "unknown"
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_a_non_finite_launch_angle_is_no_launch_angle_for_carry(bad):
+    """Task 3 fix round (I1): a non-finite value is a missing value."""
+    from datetime import datetime as _dt
+
+    with_bad = Shot(ball_speed_mph=140.0, timestamp=_dt(2026, 1, 1), launch_angle_vertical=bad)
+    with_none = Shot(ball_speed_mph=140.0, timestamp=_dt(2026, 1, 1))
+    assert with_bad.has_launch_angle is False
+    assert with_bad.estimated_carry_yards == with_none.estimated_carry_yards
+    assert with_bad.estimated_carry_range == with_none.estimated_carry_range
+
+
+_DERIVED = (
+    "smash_factor",
+    "estimated_carry_yards",
+    "estimated_carry_range",
+    "has_launch_angle",
+    "has_spin",
+    "spin_quality",
+)
+
+
+@pytest.mark.parametrize(
+    "bad", [float("nan"), float("inf"), float("-inf")], ids=["nan", "inf", "-inf"]
+)
+@pytest.mark.parametrize(
+    "field",
+    [
+        "launch_angle_vertical",
+        "launch_angle_confidence",
+        "club_speed_mph",
+        "spin_rpm",
+        "spin_confidence",
+    ],
+)
+def test_every_derived_property_treats_a_non_finite_input_exactly_like_none(field, bad):
+    """Fix round 2 (2a and its class): a non-finite value is a missing value."""
+    from datetime import datetime as _dt
+
+    measured = dict(
+        ball_speed_mph=140.0,
+        timestamp=_dt(2026, 1, 1),
+        club_speed_mph=100.0,
+        launch_angle_vertical=12.0,
+        launch_angle_confidence=0.8,
+        spin_rpm=2600.0,
+        spin_confidence=0.9,
+    )
+    with_bad = Shot(**{**measured, field: bad})
+    with_none = Shot(**{**measured, field: None})
+    for name in _DERIVED:
+        assert getattr(with_bad, name) == getattr(with_none, name), name
+
+
+def test_a_zero_launch_confidence_keeps_its_existing_carry_default():
+    from datetime import datetime as _dt
+
+    def carry(confidence):
+        return Shot(
+            ball_speed_mph=140.0,
+            timestamp=_dt(2026, 1, 1),
+            launch_angle_vertical=12.0,
+            launch_angle_confidence=confidence,
+        ).estimated_carry_yards
+
+    assert carry(0.0) == carry(None) == carry(0.2)
+
+
+# --- summarize_shots: a non-finite value is a missing value (final review A-I1) ---
+
+
+def _summary_shot(ball=150.0, club=100.0, spin=3000.0):
+    return Shot(
+        ball_speed_mph=ball,
+        club_speed_mph=club,
+        spin_rpm=spin,
+        timestamp=datetime(2026, 10, 12, 9, 0, 0),
+        club=ClubType.DRIVER,
+    )
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("field", ["ball", "club", "spin"])
+def test_summarize_shots_skips_a_non_finite_value_in_every_averaged_field(field, bad):
+    """One NaN shot must never make the session stats NaN (strict JSON, browser keeps parsing)."""
+    import json
+    import math
+
+    from openflight.launch_monitor import summarize_shots
+
+    good_a = _summary_shot(ball=140.0, club=100.0, spin=3000.0)
+    good_b = _summary_shot(ball=160.0, club=110.0, spin=5000.0)
+    broken = _summary_shot(**{field: bad})
+    summary = summarize_shots([good_a, broken, good_b], mode="rolling-buffer")
+
+    json.dumps(summary, allow_nan=False)
+    for key, value in summary.items():
+        if isinstance(value, float):
+            assert math.isfinite(value), key
+    assert summary["shot_count"] == 3
+    if field == "ball":
+        assert summary["avg_ball_speed"] == 150.0
+        assert summary["max_ball_speed"] == 160.0
+        assert summary["min_ball_speed"] == 140.0
+        assert summary["avg_carry_est"] == pytest.approx(
+            (good_a.estimated_carry_yards + good_b.estimated_carry_yards) / 2
+        )
+    if field == "club":
+        assert summary["avg_club_speed"] == 105.0
+        assert summary["avg_smash_factor"] == pytest.approx(
+            (good_a.smash_factor + good_b.smash_factor) / 2
+        )
+    if field == "spin":
+        assert summary["avg_spin_rpm"] == 4000.0
+        # a non-finite spin is not a detected spin
+        assert summary["spin_detection_rate"] == pytest.approx(2 / 3)
+
+
+def test_summarize_shots_with_no_finite_ball_speed_reports_missing_not_zero():
+    import json
+    import math
+
+    from openflight.launch_monitor import summarize_shots
+
+    summary = summarize_shots(
+        [_summary_shot(ball=math.nan, club=math.nan, spin=math.nan)], mode="rolling-buffer"
+    )
+    json.dumps(summary, allow_nan=False)
+    assert summary["shot_count"] == 1
+    for key in (
+        "avg_ball_speed",
+        "max_ball_speed",
+        "min_ball_speed",
+        "std_dev",
+        "avg_club_speed",
+        "avg_smash_factor",
+        "avg_carry_est",
+        "avg_spin_rpm",
+    ):
+        assert summary[key] is None, key
+    assert summary["spin_detection_rate"] == 0.0
+
+
+def test_summarize_shots_std_dev_needs_two_finite_ball_speeds():
+    import math
+
+    from openflight.launch_monitor import summarize_shots
+
+    one_finite = summarize_shots([_summary_shot(ball=150.0), _summary_shot(ball=math.nan)], "x")
+    assert one_finite["std_dev"] is None
+    two_finite = summarize_shots([_summary_shot(ball=140.0), _summary_shot(ball=160.0)], "x")
+    assert two_finite["std_dev"] == pytest.approx(14.142135623730951)

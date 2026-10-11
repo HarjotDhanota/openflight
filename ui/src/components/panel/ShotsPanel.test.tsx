@@ -198,4 +198,11 @@ describe('ShotsPanel', () => {
     expect(render([makeShot()])).toContain('panel shots-panel');
     expect(css).toMatch(/\.panel\.shots-panel \{[^}]*background: var\(--color-surface\)/);
   });
+
+  it('lists a shot whose ball speed and carry the server nulled, without crashing', () => {
+    const html = render([makeShot({ ball_speed_mph: null, estimated_carry_yards: null })]);
+
+    expect(html).toContain('—');
+    expect(html).not.toContain('NaN');
+  });
 });

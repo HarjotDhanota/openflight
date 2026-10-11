@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from openflight.ops243 import Direction, OPS243Radar, SpeedReading
+from openflight.ops243 import Direction, OPS243Radar, SpeedReading, parse_firmware_version
 
 
 class TestParseReading:
@@ -671,3 +671,22 @@ class TestWaitForHardwareTrigger:
 
         assert response == b"".join(self._DUMP).decode("ascii")
         assert events == ["first-byte"]
+
+
+class TestParseFirmwareVersion:
+    """The ?V reply parser shared by baud negotiation and the output-options probe."""
+
+    @pytest.mark.parametrize(
+        "reply,expected",
+        [
+            ('{"Version":"1.3.0"}', "1.3.0"),
+            ('noise\r\n{"Version": "1.3.2"}\r\n', "1.3.2"),
+            ('{"Product":"OPS243"}\n{"Version":"1.2.5"}', "1.2.5"),
+            ("", None),
+            ("\x00\xff garbage at the wrong baud", None),
+            ('{"Version":', None),
+            ('["Version"]', None),
+        ],
+    )
+    def test_parse(self, reply, expected):
+        assert parse_firmware_version(reply) == expected

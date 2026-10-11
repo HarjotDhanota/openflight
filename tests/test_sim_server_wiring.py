@@ -3,6 +3,7 @@
 Exercises server._forward_shot_to_simulators and server._sim_on_inbound with
 fake connectors so no sockets or hardware are needed.
 """
+
 from datetime import datetime
 
 import pytest
@@ -49,8 +50,12 @@ class _FakeConnector:
 
 
 def _shot():
-    return Shot(ball_speed_mph=140.0, timestamp=datetime(2026, 6, 13, 12, 0, 0),
-                club=ClubType.DRIVER, launch_angle_vertical=12.0)
+    return Shot(
+        ball_speed_mph=140.0,
+        timestamp=datetime(2026, 6, 13, 12, 0, 0),
+        club=ClubType.DRIVER,
+        launch_angle_vertical=12.0,
+    )
 
 
 def test_forward_fans_out_to_connected_only(server):
@@ -88,8 +93,7 @@ def test_forward_noop_when_no_connector_connected(server):
 
 def test_forward_drops_shot_without_ball_speed(server):
     server.sim_connectors = [_FakeConnector("gspro")]
-    bad = Shot(ball_speed_mph=0.0, timestamp=datetime(2026, 6, 13, 12, 0, 0),
-               club=ClubType.DRIVER)
+    bad = Shot(ball_speed_mph=0.0, timestamp=datetime(2026, 6, 13, 12, 0, 0), club=ClubType.DRIVER)
     server._forward_shot_to_simulators(bad)
     dropped = [a_ for a_, k in server._emitted if a_[0] == "sim_shot_dropped"]
     assert len(dropped) == 1
@@ -111,8 +115,9 @@ def test_inbound_player_update_sets_state_and_monitor(server, monkeypatch):
 
 def test_inbound_error_emits_status(server):
     server._sim_on_inbound("opengolfsim", SimError(message="boom"))
-    errs = [a_ for a_, k in server._emitted
-            if a_[0] == "sim_status" and a_[1].get("state") == "error"]
+    errs = [
+        a_ for a_, k in server._emitted if a_[0] == "sim_status" and a_[1].get("state") == "error"
+    ]
     assert errs and errs[0][1]["message"] == "boom"
 
 
@@ -148,8 +153,9 @@ def test_status_connected_logged_always(server, caplog):
     with caplog.at_level("INFO", logger="openflight.server"):
         server._sim_on_status(
             "gspro",
-            StatusEvent(state=ConnectionState.CONNECTED, target="gspro",
-                        host="127.0.0.1", port=921),
+            StatusEvent(
+                state=ConnectionState.CONNECTED, target="gspro", host="127.0.0.1", port=921
+            ),
         )
     assert "gspro connected" in caplog.text
 
@@ -167,9 +173,7 @@ def test_emit_sim_snapshot_sends_status_for_every_connector(server):
 
     server._emit_sim_snapshot()
 
-    by_target = {
-        a_[1]["target"]: a_[1] for a_, _k in server._emitted if a_[0] == "sim_status"
-    }
+    by_target = {a_[1]["target"]: a_[1] for a_, _k in server._emitted if a_[0] == "sim_status"}
     assert set(by_target) == {"gspro", "opengolfsim"}
     assert by_target["gspro"]["state"] == "connected"
     assert by_target["opengolfsim"]["state"] == "reconnecting"
@@ -204,3 +208,83 @@ def test_forward_swallows_send_failure(server):
     assert len(failed) == 1 and failed[0][1]["target"] == "gspro"
     # a failed connector must not block delivery to the others
     assert len(other.sent) == 1
+
+
+def _strict_json(data):
+    import json  # pylint: disable=import-outside-toplevel
+
+    def reject(token):
+        raise ValueError(f"non-finite token {token}")
+
+    if isinstance(data, (bytes, str)):
+        return json.loads(data, parse_constant=reject)
+    return json.loads(json.dumps(data, allow_nan=False), parse_constant=reject)
+
+
+def test_a_non_finite_shot_reaches_no_simulator_payload_as_nan(server, monkeypatch):
+    """I1: codec bytes, log_sim_send and the sim_shot emit are all strict JSON."""
+    import math  # pylint: disable=import-outside-toplevel
+
+    from openflight.gspro.codec import GSProCodec  # pylint: disable=import-outside-toplevel
+
+    wire = []
+
+    class CodecConnector(_FakeConnector):
+        def __init__(self):
+            super().__init__("gspro")
+            self.codec = GSProCodec()
+
+        def send_shot(self, resolved):
+            super().send_shot(resolved)
+            wire.append(self.codec.build_shot(resolved))
+
+    logged = []
+
+    class SessionLog:
+        @staticmethod
+        def log_sim_send(**entry):
+            logged.append(entry)
+
+    monkeypatch.setattr(server, "get_session_logger", lambda: SessionLog())
+    connector = CodecConnector()
+    server.sim_connectors = [connector]
+    shot = Shot(
+        ball_speed_mph=140.0,
+        timestamp=datetime(2026, 6, 13, 12, 0, 0),
+        club=ClubType.DRIVER,
+        launch_angle_vertical=math.nan,
+        launch_angle_horizontal=math.nan,
+        spin_axis_deg=math.inf,
+    )
+    server._forward_shot_to_simulators(shot)
+
+    ball = _strict_json(wire[0])["BallData"]
+    assert all(math.isfinite(ball[key]) for key in ("VLA", "HLA", "CarryDistance", "SpinAxis"))
+    assert _strict_json(logged[0])["provenance"]["vla"] == "estimated"
+    sim_shot = [a_[1] for a_, k in server._emitted if a_[0] == "sim_shot"][0]
+    payload = _strict_json(sim_shot)
+    assert payload["provenance"]["vla"] == payload["provenance"]["carry"] == "estimated"
+    assert payload["provenance"]["hla"] == payload["provenance"]["spin_axis"] == "estimated"
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")], ids=["nan", "inf"])
+def test_a_non_finite_launch_confidence_still_sends_the_measured_shot(server, bad):
+    """2a: a NaN confidence must not make carry NaN and drop the whole send."""
+    connector = _FakeConnector("gspro")
+    server.sim_connectors = [connector]
+
+    def shot(confidence):
+        return Shot(
+            ball_speed_mph=140.0,
+            timestamp=datetime(2026, 6, 13, 12, 0, 0),
+            club=ClubType.DRIVER,
+            launch_angle_vertical=12.0,
+            launch_angle_confidence=confidence,
+        )
+
+    server._forward_shot_to_simulators(shot(bad))
+    server._forward_shot_to_simulators(shot(None))
+    assert not any(a_[0] == "sim_shot_dropped" for a_, k in server._emitted)
+    with_bad, with_none = connector.sent
+    assert with_bad.carry_yards == with_none.carry_yards
+    assert with_bad.vla == 12.0 and with_bad.provenance["vla"] == "measured"

@@ -1,6 +1,7 @@
 import type { SessionStats, Shot } from '../types/shot';
 import { useShotStore } from '../stores/useShotStore';
 import { playSwingCapturedCue } from '../utils/audioCue';
+import type { TraceTag } from './paintTrace';
 
 export interface ShotMessage {
   shot: Shot;
@@ -9,6 +10,8 @@ export interface ShotMessage {
     iwr6843?: boolean;
     camera?: boolean;
   };
+  /** Present only when the server runs the stage 1b Pi trace. */
+  trace?: TraceTag;
 }
 
 export interface ShotUpdateMessage {
@@ -16,25 +19,36 @@ export interface ShotUpdateMessage {
   stats: SessionStats;
   pending?: Record<string, boolean>;
   enrichment?: {
-    status: 'skipped';
+    // skipped: the hardware metrics will never come; pending: they are
+    // deferred and will arrive as a later update to this same shot.
+    status: 'skipped' | 'pending';
     reason: string;
     hardware: string[];
   };
+  /** Present only when the server runs the stage 1b Pi trace. */
+  trace?: TraceTag;
+}
+
+function showPendingHardware(pending: ShotMessage['pending'], timestamp: string) {
+  const shotStore = useShotStore.getState();
+  if (pending?.iwr6843 && pending?.camera) {
+    shotStore.startShotProcessing('hardware_enrichment', timestamp);
+  } else if (pending?.iwr6843) {
+    shotStore.startShotProcessing('iwr_dump', timestamp);
+  } else if (pending?.camera) {
+    shotStore.startShotProcessing('camera_processing', timestamp);
+  }
 }
 
 export function handleShotMessage(data: ShotMessage) {
-  const shotStore = useShotStore.getState();
-  shotStore.addShot(data.shot);
-  if (data.pending?.iwr6843 && data.pending?.camera) {
-    shotStore.startShotProcessing('hardware_enrichment', data.shot.timestamp);
-  } else if (data.pending?.iwr6843) {
-    shotStore.startShotProcessing('iwr_dump', data.shot.timestamp);
-  } else if (data.pending?.camera) {
-    shotStore.startShotProcessing('camera_processing', data.shot.timestamp);
-  }
+  useShotStore.getState().addShot(data.shot);
+  showPendingHardware(data.pending, data.shot.timestamp);
   playSwingCapturedCue();
 }
 
 export function handleShotUpdate(data: ShotUpdateMessage) {
   useShotStore.getState().updateShot(data.shot);
+  if (data.enrichment?.status === 'pending') {
+    showPendingHardware(data.pending, data.shot.timestamp);
+  }
 }

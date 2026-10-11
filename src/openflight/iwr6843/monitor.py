@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+import importlib.metadata
 import logging
 import queue
 import threading
@@ -12,14 +14,33 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from openflight import pi_trace
 from openflight.gpio_factory import ensure_lgpio_pin_factory
 from openflight.iwr6843.driver import IWR6843Radar
 from openflight.iwr6843.dump import HEADER, parse_header, payload_nbytes
+from openflight.pi_trace import _finite
 from openflight.ready_light import IWR_TYPICAL_DUMP_S
 
 logger = logging.getLogger(__name__)
 
 _GRACEFUL_DUMP_SHUTDOWN_S = 12.0
+
+
+def _age_ns(age_s) -> int | None:
+    """An edge age in whole ns, or None when it is missing or not a finite number."""
+    return round(float(age_s) * 1e9) if _finite(age_s) else None
+
+
+@functools.lru_cache(maxsize=None)
+def _package_version(name: str) -> str | None:
+    """Installed version of ``name``, or None where it is not installed.
+
+    Cached: a metadata lookup can take milliseconds and runs in the GPIO callback.
+    """
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
 
 
 def tx_order_from_config(config_path: str | Path) -> str:
@@ -58,6 +79,40 @@ class IWR6843Capture:
     def valid(self) -> bool:
         """Whether a complete dump was captured."""
         return self.raw is not None and self.error is None
+
+
+def warm_edge_reading_cache() -> None:
+    """Look the package versions up now, so the first GPIO callback does no lookup."""
+    for name in ("gpiozero", "lgpio"):
+        _package_version(name)
+
+
+def edge_trace_fields(read_edge_tick: Callable[[], dict] | None, observer_wall_s: float) -> dict:
+    """The Pi trace fields of one GATE edge: bracketed tick reading plus a bracketed wall pair.
+
+    Shared by the accepted-edge observer (``gate_edge_callback``) and the debounce
+    path (``gate_edge_debounced``). A failed reading leaves every reading field None
+    and names the error: the edge is still recorded, never given an invented age.
+    """
+    reading: dict = {}
+    reading_error = None
+    try:
+        reading = read_edge_tick() if read_edge_tick is not None else {}
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        reading_error = type(error).__name__
+    low, high = pi_trace.BracketedPair.now().wall_minus_mono_bounds_ns()
+    return {
+        "mono_before_ns": reading.get("mono_before_ns"),
+        "age_ns": reading.get("age_ns"),
+        "mono_after_ns": reading.get("mono_after_ns"),
+        "wall_minus_mono_low_ns": low,
+        "wall_minus_mono_high_ns": high,
+        "backend": reading.get("backend"),
+        "gpiozero_version": reading.get("gpiozero_version"),
+        "lgpio_version": reading.get("lgpio_version"),
+        "observer_wall_s": float(observer_wall_s),
+        "reading_error": reading_error,
+    }
 
 
 class IWR6843CaptureMonitor:
@@ -186,6 +241,37 @@ class IWR6843CaptureMonitor:
             if observer in self._trigger_observers:
                 self._trigger_observers.remove(observer)
 
+    def prepend_trigger_observer(self, observer: Callable[[float], None]) -> None:
+        """Run ``observer`` before every other observer (trace: read the edge age first)."""
+        with self._condition:
+            if observer not in self._trigger_observers:
+                self._trigger_observers.insert(0, observer)
+
+    def edge_tick_reading(self) -> dict:
+        """monotonic, gpiozero active_time, monotonic; plus the pin factory and versions.
+
+        active_time is an age in the pin factory's tick clock. Only the LGPIO factory
+        forwards the kernel event tick (clock_mapping.QUALIFIED_BACKENDS decides); the
+        bracket bounds when the age was read. Kernel IRQ latency before the tick is
+        not in this reading and is never estimated.
+        """
+        button = self._button
+        before = time.monotonic_ns()
+        try:
+            age_s = button.active_time if button is not None else None
+        except Exception:  # pylint: disable=broad-exception-caught
+            age_s = None
+        after = time.monotonic_ns()
+        factory = getattr(button, "pin_factory", None)
+        return {
+            "mono_before_ns": before,
+            "age_ns": _age_ns(age_s),
+            "mono_after_ns": after,
+            "backend": type(factory).__name__ if factory is not None else None,
+            "gpiozero_version": _package_version("gpiozero"),
+            "lgpio_version": _package_version("lgpio"),
+        }
+
     def ready_snapshot(self) -> dict:
         """What the ready light needs (P7-14), read from flags without the condition lock."""
         worker = self._worker
@@ -205,32 +291,63 @@ class IWR6843CaptureMonitor:
             ),
         }
 
+    def _trace_debounced_edge(self, edge_timestamp: float, since_last_observed_s: float) -> None:
+        """Record an edge the debounce hides from every observer (Pi trace only).
+
+        The OPS HOST_INT hears every edge in hardware, so a debounced edge can still
+        start or overlap a dump. TASK 5: treat ``gate_edge_debounced`` marks as
+        association candidates. They make an association ambiguous and never qualify
+        one. The debounce itself is unchanged.
+        """
+        if pi_trace.get_recorder() is None:
+            return
+        try:
+            fields = edge_trace_fields(self.edge_tick_reading, edge_timestamp)
+            mono_after_ns = fields["mono_after_ns"]
+            pi_trace.mark(
+                "gate_edge_debounced",
+                None,
+                monotonic_ns=mono_after_ns if mono_after_ns is not None else time.monotonic_ns(),
+                since_last_observed_s=since_last_observed_s,
+                **fields,
+            )
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning("[TRACE] debounced edge mark failed; ignored", exc_info=True)
+
     def notify_trigger(self, timestamp: float | None = None) -> bool:
         """Queue a GPIO edge without doing serial work in the callback."""
         if not self._running or not self._armed:
             return False
         edge_timestamp = time.time() if timestamp is None else float(timestamp)
+        since_last_observed_s = None
         with self._condition:
             # Reject acoustic ringing: one edge per 0.1 s reaches anyone.
             if edge_timestamp - self._last_observed_edge_timestamp < 0.1:
                 logger.debug("[IWR6843] Ignoring duplicate trigger edge")
-                return False
-            self._last_observed_edge_timestamp = edge_timestamp
-            # The IWR skips any edge while its seven-second UART dump is in
-            # flight, but the observers (camera, OPS) still hear it (P7-2): a
-            # false edge's dump once hid a real impact from the camera.
-            queued = self._events.empty() and not self._capture_active
-            if queued:
-                self._last_edge_timestamp = edge_timestamp
-                self._events.put_nowait(edge_timestamp)
-                self._condition.notify_all()
+                since_last_observed_s = edge_timestamp - self._last_observed_edge_timestamp
+                observers = ()
+                queued = False
             else:
-                logger.info(
-                    "[IWR6843] Edge at %.3f during dump #%d: IWR skipped it, observers told",
-                    edge_timestamp,
-                    self._sequence,
-                )
-            observers = tuple(self._trigger_observers)
+                self._last_observed_edge_timestamp = edge_timestamp
+                # The IWR skips any edge while its seven-second UART dump is in
+                # flight, but the observers (camera, OPS) still hear it (P7-2): a
+                # false edge's dump once hid a real impact from the camera.
+                queued = self._events.empty() and not self._capture_active
+                if queued:
+                    self._last_edge_timestamp = edge_timestamp
+                    self._events.put_nowait(edge_timestamp)
+                    self._condition.notify_all()
+                else:
+                    logger.info(
+                        "[IWR6843] Edge at %.3f during dump #%d: IWR skipped it, observers told",
+                        edge_timestamp,
+                        self._sequence,
+                    )
+                observers = tuple(self._trigger_observers)
+        if since_last_observed_s is not None:
+            # Outside the lock, like the observers; the debounce result is unchanged.
+            self._trace_debounced_edge(edge_timestamp, since_last_observed_s)
+            return False
         for observer in observers:
             try:
                 observer(edge_timestamp)

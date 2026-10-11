@@ -35,6 +35,7 @@ from openflight.camera import attempt_ledger
 from openflight.capture_facts import trigger_controls
 from openflight.rig_geometry import geometry_fingerprint
 from openflight.runtime_provenance import export_runtime_provenance
+from openflight.shot_updates import read_session_jsonl
 
 CONTRACT_VERSION = 1
 ACCEPTED_STATUSES = frozenset({"ok", "fused", "chained_high", "approach_high"})
@@ -56,16 +57,10 @@ class ExportReport:
 
 
 def read_events(source: Path) -> list[dict]:
+    """Every session file's events; each shot once, with any late update applied."""
     events: list[dict] = []
     for path in sorted(source.glob("session_*.jsonl")):
-        with path.open(encoding="utf-8", errors="replace") as handle:
-            for line in handle:
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(event, dict):
-                    events.append(event)
+        events.extend(read_events_file(path))
     return events
 
 
@@ -571,16 +566,8 @@ def _validate_rig_geometry(out: Path, enclosure: dict, rig: dict) -> list[str]:
 
 
 def read_events_file(path: Path) -> list[dict]:
-    events = []
-    with Path(path).open(encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(event, dict):
-                events.append(event)
-    return events
+    """One session file's events; each shot once, with any late update applied."""
+    return read_session_jsonl(path)
 
 
 def export_tester_root(root: Path, out: Path) -> list[ExportReport]:
