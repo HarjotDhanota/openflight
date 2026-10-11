@@ -346,16 +346,31 @@ def mark(name: str, attempt_id: Optional[str] = None, **fields: Any) -> None:
         logger.warning("[TRACE] mark %s failed; ignored", name, exc_info=True)
 
 
-def current_ops_attempt() -> Optional[str]:
-    """The current OPS attempt, or None when tracing is off."""
+def _read_guarded(what: str, read: Callable[[TraceRecorder], Any]) -> Any:
+    """A recorder read for a hook: None when tracing is off or the read fails (logged)."""
     recorder = _RECORDER
-    return recorder.current_ops_attempt if recorder is not None else None
+    if recorder is None:
+        return None
+    try:
+        return read(recorder)
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("[TRACE] reading %s failed; ignored", what, exc_info=True)
+        return None
+
+
+def current_ops_attempt() -> Optional[str]:
+    """The current OPS attempt, or None when tracing is off; never raises."""
+    return _read_guarded("current_ops_attempt", lambda rec: rec.current_ops_attempt)
 
 
 def bound_attempt() -> Optional[str]:
-    """The attempt the calling thread declared, or None when tracing is off."""
-    recorder = _RECORDER
-    return recorder.bound_attempt() if recorder is not None else None
+    """The attempt the calling thread declared, or None when tracing is off; never raises."""
+    return _read_guarded("bound_attempt", lambda rec: rec.bound_attempt())
+
+
+def last_edge_seq() -> Optional[int]:
+    """Sequence number of the latest GATE edge, or None (tracing off, none yet); never raises."""
+    return _read_guarded("last_edge_seq", lambda rec: rec.last_edge_seq)
 
 
 def trace_method(obj: Any, name: str, start_mark: str, end_mark: str) -> None:

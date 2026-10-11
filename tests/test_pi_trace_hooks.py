@@ -1059,3 +1059,94 @@ def test_edge_reading_looks_package_versions_up_once(monkeypatch):
         capture_monitor.edge_tick_reading()
     assert sorted(calls) == ["gpiozero", "lgpio"]
     iwr_monitor._package_version.cache_clear()  # pylint: disable=protected-access
+
+
+# --- No trace accessor can raise into a hooked path (coordinator audit, 11 Oct) ---------
+
+
+class _RaisingAccessorsRecorder(pi_trace.TraceRecorder):
+    """A recorder whose read accessors all fail, as a trace bug would."""
+
+    @property
+    def current_ops_attempt(self):
+        raise RuntimeError("trace bug")
+
+    @property
+    def last_edge_seq(self):
+        raise RuntimeError("trace bug")
+
+    def bound_attempt(self):
+        raise RuntimeError("trace bug")
+
+
+@pytest.fixture
+def raising_recorder(tmp_path):
+    rec = _RaisingAccessorsRecorder(tmp_path / "r.jsonl", temp_reader=lambda: None)
+    pi_trace.set_recorder(rec)
+    yield rec
+    pi_trace.set_recorder(None)
+    rec.close()
+
+
+def test_module_accessors_never_raise(raising_recorder):
+    del raising_recorder
+    assert pi_trace.current_ops_attempt() is None
+    assert pi_trace.bound_attempt() is None
+    assert pi_trace.last_edge_seq() is None
+
+
+def test_capture_rearm_and_analysis_survive_raising_accessors(raising_recorder, monkeypatch):
+    del raising_recorder
+    forwarded = []
+    timer = OpsCaptureTimer.start()
+    timer.first_marker_callback(lambda: forwarded.append(True))
+    assert forwarded == [True] and timer.first_marker_ns is not None
+    radar = _radar(monkeypatch)
+    radar.rearm_rolling_buffer(16)
+    assert b"S#16\r" in radar.serial.writes
+    radar.read_clock_sync(samples=2)
+    processor = RollingBufferProcessor()
+    pi_trace.trace_method(processor, "detect_spin_multitaper", "a", "b")
+    i_samples, q_samples = synth_capture(rpm=3000, ball_speed_mph=80.0, amplitude=400.0)
+    capture = IQCapture(
+        1.0, 1.068, [int(v) for v in i_samples], [int(v) for v in q_samples], timestamp=0.0
+    )
+    assert processor.process_capture(capture) is not None
+
+
+def test_shot_callback_survives_raising_accessors(raising_recorder, monkeypatch):
+    del raising_recorder
+    from openflight import server
+
+    assigned = []
+    monkeypatch.setattr(server, "tester_setup_required", False)
+    monkeypatch.setattr(server, "_has_slow_shot_enrichment", lambda _shot: False)
+    monkeypatch.setattr(server, "_register_shot_for_finalization", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_finish_shot_detected", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_assign_shot_number", assigned.append)
+    monkeypatch.setattr(server.ready_light, "swing_result", lambda *a, **k: None)
+    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
+    server._handle_shot_detected(shot)  # pylint: disable=protected-access
+    assert assigned == [shot] and shot.trace_attempt_id is None
+
+
+def test_a_raising_trace_tag_still_emits_untagged(recorder, monkeypatch):
+    server, emitted = _initial_emit_server(monkeypatch)
+
+    def broken(*_a, **_k):
+        raise RuntimeError("trace bug")
+
+    monkeypatch.setattr(server, "_trace_tag", broken)
+    attempt = recorder.open_ops_attempt()
+    assert server._emit_initial_ops_shot(_traced_shot(attempt)) is True  # pylint: disable=protected-access
+    assert len(emitted) == 1 and "trace" not in emitted[0][1]
+
+
+def test_a_trace_that_cannot_start_leaves_the_kiosk_running_untraced(tmp_path, caplog):
+    from openflight import server
+
+    blocker = tmp_path / "not_a_dir"
+    blocker.write_text("x", encoding="utf-8")
+    assert server._start_pi_trace(blocker) is None  # pylint: disable=protected-access
+    assert pi_trace.get_recorder() is None
+    assert "Pi trace could not start" in caplog.text

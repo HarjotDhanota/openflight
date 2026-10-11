@@ -193,13 +193,12 @@ class OpsCaptureTimer:
         """Record the first valid dump marker before forwarding UI feedback."""
         if self.first_marker_ns is None:
             self.first_marker_ns = time.monotonic_ns()
-            recorder = pi_trace.get_recorder()
-            if recorder is not None:
+            if pi_trace.get_recorder() is not None:
                 pi_trace.mark(
                     "ops_first_byte",
                     self.attempt_id,
                     monotonic_ns=self.first_marker_ns,
-                    last_edge_seq=recorder.last_edge_seq,
+                    last_edge_seq=pi_trace.last_edge_seq(),
                 )
         if callback is not None:
             callback()

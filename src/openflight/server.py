@@ -585,13 +585,23 @@ def _traced_emit(shot: Shot, event: str, payload: dict, *, final: bool, update_k
         pi_trace.mark("server_emit_returned", shot.trace_attempt_id, **trace_fields, error=error)
 
 
-def _start_pi_trace(log_dir: Path | None) -> Path:
-    """Open the trace file beside the session logs (--pi-trace)."""
+def _start_pi_trace(log_dir: Path | None) -> Path | None:
+    """Open the trace file beside the session logs (--pi-trace); None if it can't open.
+
+    A trace that cannot start is reported loudly and the kiosk runs untraced: the
+    trace must never cost a shot (owner rule).
+    """
     directory = Path(log_dir).expanduser() if log_dir else Path.home() / "openflight_sessions"
     path = directory / f"pi_trace_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
     with _trace_revisions_lock:
         _trace_revisions.clear()
-    pi_trace.set_recorder(pi_trace.TraceRecorder(path))
+    try:
+        pi_trace.set_recorder(pi_trace.TraceRecorder(path))
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.error(
+            "[SERVER] Pi trace could not start at %s; running untraced", path, exc_info=True
+        )
+        return None
     return path
 
 
@@ -7651,7 +7661,10 @@ def main():
 
     if args.pi_trace:
         trace_path = _start_pi_trace(Path(args.log_dir) if args.log_dir else None)
-        print(f"Pi trace enabled: {trace_path}")
+        if trace_path is None:
+            print("Pi trace FAILED to start (see log); running WITHOUT a trace")
+        else:
+            print(f"Pi trace enabled: {trace_path}")
 
     if ballistics_enabled:
         print("Ballistic carry model: ENABLED (simulator + drag/Magnus)")
