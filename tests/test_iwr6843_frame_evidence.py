@@ -52,8 +52,8 @@ def _meta(n=6, pre=3, *, seqs=None, ticks=None, steps=None, tick0=5_000_000, fmt
             "seq": seq % (1 << 32),
             "start_tick": tick % (1 << 32),
             "done_tick": (tick + 340_000) % (1 << 32),
-            "iq8_overflow": 0,
-            "iq8_max_abs": 0,
+            "iq8_overflow": None,  # not scanned: not measured (as parse_dump gives it)
+            "iq8_max_abs": None,
             "associated": True,
             "iq8_scanned": False,
         }
@@ -348,12 +348,14 @@ def _iq8_meta(overflows, max_abs, scanned=None):
 
 
 def test_iq8_with_an_unscanned_frame_is_unobserved():
-    meta = _iq8_meta([0, 0, 0], [10, 20, 30], scanned=[True, False, True])
+    # Frame 1 unscanned: parse_dump gives its iq8 values as None (not measured).
+    meta = _iq8_meta([0, None, 0], [10, None, 30], scanned=[True, False, True])
 
     report = sample_integrity_report(meta, np.zeros((3, 2, 4, 5), dtype=complex))
 
     assert report["status"] == "unobserved"
     assert "[1]" in report["reason"]
+    assert "max_abs" not in report and "overflow_components" not in report
 
 
 def test_iq8_without_the_capture_scan_flag_is_unobserved():

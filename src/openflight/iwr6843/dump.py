@@ -130,6 +130,10 @@ def _evidence_bytes(
     for index, record in enumerate(frame_evidence):
         if record["associated"] and (record["seq"] is None or record["start_tick"] is None):
             raise ValueError(f"associated frame record {index} needs its seq and start_tick")
+        if record["iq8_scanned"] and (
+            record["iq8_overflow"] is None or record["iq8_max_abs"] is None
+        ):
+            raise ValueError(f"scanned frame record {index} needs its iq8_overflow and max_abs")
     block = CAPTURE_EVIDENCE.pack(
         CAPTURE_EVIDENCE_MAGIC,
         CAPTURE_EVIDENCE.size,
@@ -142,8 +146,9 @@ def _evidence_bytes(
             int(record["seq"]) if record["associated"] else FRAME_NO_STAMP,
             int(record["start_tick"]) if record["associated"] else FRAME_NO_STAMP,
             int(record["done_tick"]),
-            int(record["iq8_overflow"]),
-            int(record["iq8_max_abs"]),
+            # Like the firmware: an unscanned slot carries zeroes, never a measurement.
+            int(record["iq8_overflow"]) if record["iq8_scanned"] else 0,
+            int(record["iq8_max_abs"]) if record["iq8_scanned"] else 0,
             (FRAME_FLAG_ASSOCIATED if record["associated"] else 0)
             | (FRAME_FLAG_IQ8_SCANNED if record["iq8_scanned"] else 0),
         )
@@ -180,16 +185,18 @@ def _parse_evidence(raw: bytes, meta: dict, offset: int) -> None:
 
 
 def _frame_record(seq, start_tick, done_tick, overflow, max_abs, flags) -> dict:
-    """One frame record; without a fresh armed start, seq and start_tick were not observed."""
+    """One frame record; without a fresh armed start, seq and start_tick were not observed,
+    and without the IQ8 scan, iq8_overflow and iq8_max_abs were not measured (None)."""
     associated = bool(flags & FRAME_FLAG_ASSOCIATED)
+    scanned = bool(flags & FRAME_FLAG_IQ8_SCANNED)
     return {
         "seq": seq if associated else None,
         "start_tick": start_tick if associated else None,
         "done_tick": done_tick,
-        "iq8_overflow": overflow,
-        "iq8_max_abs": max_abs,
+        "iq8_overflow": overflow if scanned else None,
+        "iq8_max_abs": max_abs if scanned else None,
         "associated": associated,
-        "iq8_scanned": bool(flags & FRAME_FLAG_IQ8_SCANNED),
+        "iq8_scanned": scanned,
     }
 
 

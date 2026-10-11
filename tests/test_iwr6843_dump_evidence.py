@@ -57,8 +57,8 @@ def _evidence(n_frames: int, pre: int, *, tick0: int = 1_000_000, period: int = 
             "seq": 100 + i,
             "start_tick": tick0 + period * i,
             "done_tick": tick0 + period * i + 340_000,
-            "iq8_overflow": 0,
-            "iq8_max_abs": 0,
+            "iq8_overflow": None,  # not scanned: not measured
+            "iq8_max_abs": None,
             "associated": True,
             "iq8_scanned": False,
         }
@@ -425,3 +425,48 @@ def test_an_independently_assembled_v8_dump_parses_field_by_field(version):
     assert meta["frame_time_offsets_us"] == (0, 3000)
     assert cube[0, 0, 0, 0] == 1 - 1j
     assert cube[1, 2, 3, 1] == 48 - 48j
+
+
+# --- final review M3: an unscanned frame's IQ8 values are not measured --------------------
+
+
+@pytest.mark.parametrize("version", [8, 9])
+def test_an_unscanned_record_has_no_iq8_overflow_or_max_abs(version):
+    """Frame 0 was not scanned (its wire bytes say 0 and 90): neither value was measured."""
+    meta, _cube_out = parse_dump(_assembled(version))
+    # pylint: disable=unsubscriptable-object
+    record = meta["frame_evidence"][0]
+
+    assert (record["iq8_overflow"], record["iq8_max_abs"]) == (None, None)
+    assert record["iq8_scanned"] is False
+    assert (
+        meta["frame_evidence"][1]["iq8_overflow"],
+        meta["frame_evidence"][1]["iq8_max_abs"],
+    ) == (
+        2,
+        300,
+    )
+
+
+def test_the_packer_writes_zero_for_an_unscanned_records_unmeasured_iq8_values():
+    """Like the firmware, which zeroes an unscanned slot; the parser reads it back as None."""
+    cube = _cube()
+    capture, frames, trailer = _evidence(4, 2)
+    records = [{**f, "iq8_overflow": None, "iq8_max_abs": None} for f in frames]
+
+    raw = _pack(cube, capture, records, trailer)
+    *_stamps, overflow, max_abs, _flags = FRAME_EVIDENCE.unpack_from(raw, _record_offset(8, 4, 1))
+    meta, _cube_out = parse_dump(raw)
+
+    assert (overflow, max_abs) == (0, 0)
+    assert meta["frame_evidence"] == tuple(records)  # pylint: disable=unsubscriptable-object
+
+
+def test_a_scanned_record_without_its_iq8_values_is_refused():
+    cube = _cube()
+    capture, frames, trailer = _evidence(4, 2)
+    records = list(frames)
+    records[1] = {**records[1], "iq8_scanned": True, "iq8_overflow": None, "iq8_max_abs": 7}
+
+    with pytest.raises(ValueError, match="scanned frame record 1"):
+        _pack(cube, capture, records, trailer)
