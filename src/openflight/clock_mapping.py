@@ -40,9 +40,17 @@ class EdgeObservation:  # pylint: disable=too-many-instance-attributes
     previous_callback_mono_ns: Optional[int] = None
     observer_wall_s: Optional[float] = None  # diagnostic only; never used for the mapping
 
+    def readings_valid(self) -> bool:
+        """Both monotonic readings are finite and ordered."""
+        return (
+            _finite(self.mono_before_ns)
+            and _finite(self.mono_after_ns)
+            and self.mono_before_ns <= self.mono_after_ns
+        )
+
     def kernel_mono_interval_ns(self) -> Optional[tuple[int, int]]:
-        """[before − age, after − age] when the age was observed and >= 0."""
-        if self.edge_age_ns is None or self.edge_age_ns < 0:
+        """[before − age, after − age] when the readings and the age are valid and age >= 0."""
+        if not self.readings_valid() or not _finite(self.edge_age_ns) or self.edge_age_ns < 0:
             return None
         return self.mono_before_ns - self.edge_age_ns, self.mono_after_ns - self.edge_age_ns
 
@@ -91,6 +99,19 @@ def associate_edge(
     """Find the one edge that can have started this dump, or say why there is none."""
     candidates = []
     for edge in edges:
+        if edge.kernel_mono_interval_ns() is None:
+            # No usable kernel time: the edge is only known to be at or before mono_after.
+            # It can never qualify, but it can still be the edge that started this dump.
+            if not _finite(edge.mono_after_ns):
+                candidates.append(edge)
+                continue
+            widen = max(0, edge.mono_after_ns - edge.mono_before_ns) if edge.readings_valid() else 0
+            if (
+                first_byte_mono_ns - edge.mono_after_ns
+                <= post_trigger_ns + max_dump_delay_ns + widen
+            ):
+                candidates.append(edge)
+            continue
         widen = edge.mono_after_ns - edge.mono_before_ns
         lag = first_byte_mono_ns - edge.association_mono_ns()
         if (
@@ -117,10 +138,14 @@ def shared_edge_mapping(  # pylint: disable=too-many-return-statements
     if edge is None:
         return _unqualified(association_reason)
     seq = edge.edge_seq
+    if association_reason != "associated":
+        return _unqualified(association_reason, seq)
     if edge.backend not in QUALIFIED_BACKENDS:
         return _unqualified("edge_backend_unconfirmed", seq)
     if edge.edge_age_ns is None:
         return _unqualified("edge_kernel_time_unobserved", seq)
+    if not edge.readings_valid() or not _finite(edge.edge_age_ns):
+        return _unqualified("edge_reading_invalid", seq)
     if edge.edge_age_ns < 0:
         return _unqualified("edge_age_negative", seq)
     if (
@@ -130,6 +155,12 @@ def shared_edge_mapping(  # pylint: disable=too-many-return-statements
         return _unqualified("edge_age_exceeds_edge_gap", seq)
     if edge.wall_minus_mono_low_ns is None or edge.wall_minus_mono_high_ns is None:
         return _unqualified("wall_offset_unobserved", seq)
+    if (
+        not _finite(edge.wall_minus_mono_low_ns)
+        or not _finite(edge.wall_minus_mono_high_ns)
+        or edge.wall_minus_mono_low_ns > edge.wall_minus_mono_high_ns
+    ):
+        return _unqualified("wall_offset_invalid", seq)
     mono_low, mono_high = edge.kernel_mono_interval_ns()
     wall_low_ns = mono_low + edge.wall_minus_mono_low_ns - segment_ns
     wall_high_ns = mono_high + edge.wall_minus_mono_high_ns + segment_ns
@@ -167,15 +198,25 @@ def clock_sync_mapping(
     )
 
 
-def first_byte_mapping(first_byte_wall_s: Optional[float], post_trigger_s: float) -> ClockMapping:
-    """Host arrival minus the post-trigger span: kept for diagnosis, never qualified."""
+def first_byte_mapping(
+    first_byte_wall_s: Optional[float],
+    post_trigger_s: float,
+    *,
+    max_dump_delay_s: float,
+    segment_s: float,
+) -> ClockMapping:
+    """Host arrival bounds on the trigger: kept for diagnosis, never qualified.
+
+    The first byte arrives at trigger + post + delay, delay in [0, max_dump_delay], and the
+    trigger sample sits within one segment of the break point.
+    """
     if first_byte_wall_s is None:
         return ClockMapping(UNOBSERVED, "first_byte", None, None, "first_byte_unobserved")
     return ClockMapping(
         UNQUALIFIED,
         "first_byte",
-        first_byte_wall_s - post_trigger_s,
-        first_byte_wall_s,
+        first_byte_wall_s - post_trigger_s - max_dump_delay_s - segment_s,
+        first_byte_wall_s - post_trigger_s + segment_s,
         "host_arrival_time_is_not_a_hardware_edge",
     )
 
@@ -194,8 +235,8 @@ def select_mapping(*candidates: ClockMapping) -> ClockMapping:
 
 def consistency(shared: ClockMapping, sync: ClockMapping) -> dict:
     """Does the sync centre lie in the edge interval widened by the sync's own half-width?"""
-    if not (shared.qualified and sync.qualified):
-        return {"evaluated": False, "reason": "needs_two_qualified"}
+    if shared.status != QUALIFIED_SHARED_EDGE or sync.status != QUALIFIED_CLOCK_SYNC:
+        return {"evaluated": False, "reason": "needs_shared_edge_and_clock_sync"}
     sync_centre = (sync.trigger_wall_s_low + sync.trigger_wall_s_high) / 2.0
     sync_half = (sync.trigger_wall_s_high - sync.trigger_wall_s_low) / 2.0
     edge_centre = (shared.trigger_wall_s_low + shared.trigger_wall_s_high) / 2.0
