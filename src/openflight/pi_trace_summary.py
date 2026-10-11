@@ -62,6 +62,7 @@ SHEET_COLUMNS = ("sheet_id", "kind", "wall_time")
 SHEET_KINDS = ("swing", "empty_swing", "clap")
 GOAL_STATUSES = ("met", "met_conditional", "missed", "not_measurable")
 NO_SHOT_EXPECTED = "no_shot_expected"
+COLD_NOT_AFTER_BOOT = "cold_not_after_boot"  # group name when the cold swings are not cold
 QUALIFYING = "qualifying"
 SUMMARY_SCHEMA = "openflight.pi_trace_summary"
 SUMMARY_VERSION = 1
@@ -81,10 +82,16 @@ _RESERVED_MARK_KEYS = frozenset({"type", "seq", "name", "attempt_id", "monotonic
 # T1 file-level criteria and the integrity reasons that fail each.
 _T1_FILE_CRITERIA = {
     "a": ("footer_missing", "footer_incomplete", "footer_late", "multiple_footers"),
-    "b": ("sequence_gap", "unparseable_lines", "multiple_headers"),
+    "b": (
+        "sequence_gap",
+        "unparseable_lines",
+        "non_finite_numbers",
+        "multiple_headers",
+        "header_clock_missing",
+    ),
     "c": ("marks_dropped", "write_failures", "marks_unaccounted", "footer_counts_invalid"),
     "d": ("boot_id_missing", "mixed_boot_ids"),
-    "f": ("gpio_backend_unrecorded",),
+    "f": ("gpio_backend_unrecorded", "edge_reading_failed"),
 }
 STAGES: tuple[tuple[str, str, str], ...] = (
     ("edge_to_callback", "anchor", "gate_edge_callback"),
@@ -152,7 +159,20 @@ def _count_reasons(end: Optional[dict]) -> list[str]:
     return reasons
 
 
-def _integrity(headers: list, marks: list, ends: list, unparseable: int) -> dict:
+def _edge_reasons(marks: Sequence[dict]) -> list[str]:
+    """T1(f): a failed tick reading is named apart from a backend that was never recorded."""
+    edges = [m for m in marks if m["name"] in EDGE_MARKS]
+    reasons = []
+    if any(m.get("reading_error") is None and not m.get("backend") for m in edges):
+        reasons.append("gpio_backend_unrecorded")
+    if any(m.get("reading_error") is not None for m in edges):
+        reasons.append("edge_reading_failed")
+    return reasons
+
+
+def _integrity(  # pylint: disable=too-many-arguments
+    headers: list, marks: list, ends: list, unparseable: int, non_finite: int
+) -> dict:
     """T1 (a)-(d), (f) from the file alone; (e) and (g) need the sheet and the paints."""
     end = ends[-1] if ends else None
     reasons = _footer_reasons(ends)
@@ -169,23 +189,38 @@ def _integrity(headers: list, marks: list, ends: list, unparseable: int) -> dict
         reasons.append("boot_id_missing")
     elif len(boot_ids) != 1:
         reasons.append("mixed_boot_ids")
-    if any(m["name"] in EDGE_MARKS and not m.get("backend") for m in marks):
-        reasons.append("gpio_backend_unrecorded")
+    if _header_wall_minus_mono(headers[0]) is None:
+        reasons.append("header_clock_missing")
+    reasons += _edge_reasons(marks)
     if unparseable:
         reasons.append("unparseable_lines")
+    if non_finite:
+        reasons.append("non_finite_numbers")
     return {
         "valid": not reasons,
         "reasons": reasons,
         "boot_ids": boot_ids,
         "unparseable_lines": unparseable,
+        "non_finite_lines": non_finite,
         "footer": end,
     }
 
 
-def load_trace(path: Path) -> dict:
-    """Read one trace file (format v2) and judge its integrity; refuse a non-trace file."""
-    rows, unparseable = [], 0
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
+def _non_finite(value: Any) -> bool:
+    """True if a parsed JSON value holds NaN or ±Infinity (the recorder never writes one)."""
+    if isinstance(value, float):
+        return not math.isfinite(value)
+    if isinstance(value, dict):
+        return any(_non_finite(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_non_finite(v) for v in value)
+    return False
+
+
+def _parse_lines(path: Path) -> tuple[list[dict], int, int]:
+    """(rows, unparseable lines, lines with a non-finite number); a non-finite header raises."""
+    rows, unparseable, non_finite = [], 0, 0
+    for number, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
             continue
         try:
@@ -193,10 +228,20 @@ def load_trace(path: Path) -> dict:
         except json.JSONDecodeError:
             unparseable += 1
             continue
-        if isinstance(row, dict):
-            rows.append(row)
-        else:
+        if not isinstance(row, dict):
             unparseable += 1
+        elif not _non_finite(row):
+            rows.append(row)
+        elif row.get("type") == "trace_start":
+            raise ValueError(f"trace header (line {number}) holds a non-finite number")
+        else:
+            non_finite += 1  # a hand-edited or damaged line: counted, never used
+    return rows, unparseable, non_finite
+
+
+def load_trace(path: Path) -> dict:
+    """Read one trace file (format v2) and judge its integrity; refuse a non-trace file."""
+    rows, unparseable, non_finite = _parse_lines(path)
     headers = [row for row in rows if row.get("type") == "trace_start"]
     if not headers:
         raise ValueError("trace has no trace_start header")
@@ -219,7 +264,7 @@ def load_trace(path: Path) -> dict:
         "header": header,
         "marks": marks,
         "end": ends[-1] if ends else None,
-        "integrity": _integrity(headers, marks, ends, unparseable),
+        "integrity": _integrity(headers, marks, ends, unparseable, non_finite),
     }
 
 
@@ -289,6 +334,7 @@ class _Edge:
     observation: EdgeObservation
     debounced: bool
     wall_s: Optional[float]  # sheet matching only; never a timing value
+    reading_failed: bool = False  # the tick reading raised (reading_error on the mark)
 
 
 def _header_wall_minus_mono(header: dict) -> Optional[int]:
@@ -323,7 +369,14 @@ def _edges(marks: Sequence[dict], wall_minus_mono_ns: Optional[int]) -> list[_Ed
             previous,
             mark.get("observer_wall_s"),
         )
-        edges.append(_Edge(observation, debounced, _edge_wall_s(observation, wall_minus_mono_ns)))
+        edges.append(
+            _Edge(
+                observation,
+                debounced,
+                _edge_wall_s(observation, wall_minus_mono_ns),
+                mark.get("reading_error") is not None,
+            )
+        )
         previous = before if _finite(before) else mark["monotonic_ns"]
     return edges
 
@@ -393,9 +446,11 @@ def _anchor(own: Sequence[dict], first_byte_ns: int, edges: Sequence[_Edge], rat
         "candidate_seqs": list(detail.candidate_seqs),
         "unusable_seqs": list(detail.unusable_seqs),
     }
-    debounced = {edge.observation.edge_seq for edge in edges if edge.debounced}
-    if detail.edge is not None and detail.edge.edge_seq in debounced:
+    chosen = next((e for e in edges if e.observation is detail.edge), None)
+    if chosen is not None and chosen.debounced:
         return _unanchored("edge_debounced", segments, association)
+    if chosen is not None and chosen.reading_failed:
+        return _unanchored("edge_reading_failed", segments, association)
     mapping = shared_edge_mapping(detail.edge, detail.reason, segment_ns=segment_ns)
     if not mapping.qualified:
         return _unanchored(mapping.reason, segments, association)
@@ -414,6 +469,11 @@ def _anchor(own: Sequence[dict], first_byte_ns: int, edges: Sequence[_Edge], rat
 def _not_shown_reason(mark: Mapping[str, Any]) -> str:
     reason = mark.get("reason")
     return f"not_shown:{reason if reason in NOT_SHOWN_REASONS else 'unrecognized'}"
+
+
+def _core_matches(rendered: Any, emitted: Any) -> bool:
+    """A non-empty rendered core equal to the emitted one; missing never matches missing."""
+    return isinstance(rendered, dict) and bool(rendered) and rendered == emitted
 
 
 def _paint(own: Sequence[dict], emit: dict, samples: Sequence[dict], sid: Optional[str]) -> dict:
@@ -438,7 +498,7 @@ def _paint(own: Sequence[dict], emit: dict, samples: Sequence[dict], sid: Option
             out["painted_ns"], out["uncertainty_ns"] = painted
         if report.get("semantics") != SEMANTICS:
             out["paint"] = f"semantics:{report.get('semantics')}"
-        elif report.get("rendered_core") != emit.get("core"):
+        elif not _core_matches(report.get("rendered_core"), emit.get("core")):
             out["paint"] = "rendered_core_mismatch"
         elif isinstance(painted, str):
             out["paint"] = f"browser_mapping:{painted}"
@@ -715,9 +775,27 @@ def _upper_ms(revision: dict, anchor_ns: Optional[list]) -> Optional[float]:
     return (revision["painted_ns"] + revision["uncertainty_ns"] - anchor_ns[0]) / MS
 
 
+# The pipeline itself kept the emitted core off screen. Not shown because the user covered
+# or hid the result or left the live view (M4), an unrecognised reason, or any unknown
+# outcome says nothing about pipeline timing: those leave the goal not measurable.
+_PIPELINE_NOT_SHOWN = frozenset(
+    {
+        "rendered_core_mismatch",
+        "not_shown:superseded",
+        "not_shown:unmounted_before_paint",
+        "not_shown:not_displayed",
+    }
+)
+
+
 def _known_not_shown(paint: str) -> bool:
-    """The kiosk showed other values, or reported the revision as not shown."""
-    return paint == "rendered_core_mismatch" or paint.startswith("not_shown:")
+    """The kiosk showed other values, or the pipeline kept this revision off screen."""
+    return paint in _PIPELINE_NOT_SHOWN
+
+
+def _unique(values) -> list:
+    """Values in first-seen order, each once."""
+    return list(dict.fromkeys(values))
 
 
 def _no_result_reason(attempt: dict) -> Optional[str]:
@@ -772,9 +850,12 @@ def _judge(attempt: dict, allowance_ms: Optional[float], unmeasured: bool) -> di
     """The 2 s goal status of one swing's attempt, with every applicable reason (R-F8).
 
     missed: no result can have reached the screen (rejected, not accepted, nothing
-    emitted), every eligible revision is known not shown, or the upper bound exceeds the
-    limit. not_measurable: no eligible revision, no anchor, no allowance, or a paint
-    outcome that is unknown. met / met_conditional: the upper bound is within the limit.
+    emitted); the pipeline kept every eligible revision off screen; or the upper bound
+    exceeds the limit and no earlier eligible revision's outcome is unknown.
+    not_measurable: no eligible revision, no anchor, no allowance, an unknown or
+    user-caused paint outcome, or an over-limit paint after an earlier eligible revision
+    whose outcome is unknown (``over_goal_on_revision_N``). met / met_conditional: the
+    upper bound is within the limit.
     """
     no_result = _no_result_reason(attempt)
     anchor = attempt["anchor_ns"]
@@ -797,12 +878,21 @@ def _judge(attempt: dict, allowance_ms: Optional[float], unmeasured: bool) -> di
     row.update(_revision_context(revisions, goal, anchor))
     if goal["paint"] == QUALIFYING:
         status, timed_reasons, extra = _timed_goal(goal, anchor, limit, unmeasured)
+        unknown_earlier = _unique(
+            r["paint"]
+            for r in eligible
+            if r["revision"] < goal["revision"] and not _known_not_shown(r["paint"])
+        )
+        if status == "missed" and unknown_earlier:
+            # I1: an earlier eligible revision may have been shown in time, unobserved.
+            # A later paint over the limit bounds nothing from below: not measurable.
+            # (A later paint within the limit still bounds the first display: met stays.)
+            reasons = [f"over_goal_on_revision_{goal['revision']}", *unknown_earlier]
+            return {**row, **extra, "goal": "not_measurable", "reasons": reasons}
         return {**row, **extra, "goal": status, "reasons": timed_reasons or reasons}
     # No eligible revision has a qualifying paint. Known "not shown" for every one is a
     # miss whatever the timing; any unknown outcome leaves the goal not measurable.
-    for revision in eligible:
-        if revision["paint"] not in reasons:
-            reasons.append(revision["paint"])
+    reasons = _unique([*reasons, *(r["paint"] for r in eligible)])
     known = all(_known_not_shown(r["paint"]) for r in eligible)
     return {**row, "goal": "missed" if known else "not_measurable", "reasons": reasons}
 
@@ -835,15 +925,21 @@ def _ledger_row(entry: dict, event: Optional[dict], allowance_ms, unmeasured: bo
     return row
 
 
+def _trace_start_s(trace: dict) -> Optional[float]:
+    """Wall time of the trace start from the header clock, or None when it is missing."""
+    real = (trace["header"].get("clock") or {}).get("realtime_ns")
+    return real / 1e9 if isinstance(real, int) and not isinstance(real, bool) else None
+
+
 def _groups(rows: Sequence[dict], trace: dict) -> dict:
-    """cold: the first 5 sheet swings; warm: swings >= 20 min after trace start; all."""
+    """cold: the first 5 sheet swings; warm: swings >= 20 min after trace start; all.
+
+    Without the header's start time no swing can be shown to be warm.
+    """
     swings = [r for r in rows if r["kind"] == "swing"]
-    start_s = trace["header"]["clock"]["realtime_ns"] / 1e9
-    return {
-        "cold": swings[:MIN_COLD],
-        "warm": [r for r in swings if r["wall_s"] - start_s >= WARM_AFTER_S],
-        "all": swings,
-    }
+    start_s = _trace_start_s(trace)
+    warm = [] if start_s is None else [r for r in swings if r["wall_s"] - start_s >= WARM_AFTER_S]
+    return {"cold": swings[:MIN_COLD], "warm": warm, "all": swings}
 
 
 def _goal_counts(rows: Sequence[dict]) -> dict:
@@ -935,20 +1031,31 @@ def _share(part: int, whole: int) -> Optional[float]:
 
 
 def _paint_uncertainty(attempts: Sequence[dict]) -> dict:
-    """T1(g): every mapped kiosk paint carries its uncertainty; share within 5 ms."""
+    """T1(g), D-1b-5: paint uncertainty <= 5 ms on >= 95% of paints.
+
+    Once there are qualifying paints (eligible revision, qualifying acknowledgement), both
+    the mapped kiosk paints and the qualifying ones must meet the share. Before W13 there
+    are none, and the mapped kiosk paints are the interim test. ``detail`` names which.
+    """
     limit_ns = PAINT_UNCERTAINTY_MAX_MS * MS
     mapped = [r for a in attempts for r in a["revisions"] if r["uncertainty_ns"] is not None]
     qualifying = [r for r in mapped if r["core_eligible"] and r["paint"] == QUALIFYING]
-    within = sum(r["uncertainty_ns"] <= limit_ns for r in mapped)
-    share = _share(within, len(mapped))
+    share = _share(sum(r["uncertainty_ns"] <= limit_ns for r in mapped), len(mapped))
+    share_qualifying = _share(
+        sum(r["uncertainty_ns"] <= limit_ns for r in qualifying), len(qualifying)
+    )
+    passed = share is not None and share >= PAINT_UNCERTAINTY_MIN_SHARE
+    if qualifying:
+        passed = passed and share_qualifying >= PAINT_UNCERTAINTY_MIN_SHARE
+        detail = "mapped_and_qualifying_paints"
+    else:
+        detail = "mapped_kiosk_paints_interim_no_qualifying_paints"
     return {
-        "pass": share is not None and share >= PAINT_UNCERTAINTY_MIN_SHARE,
-        "detail": "mapped_kiosk_paints",
+        "pass": passed,
+        "detail": detail,
         "n": len(mapped),
         "share_le_5ms": share,
-        "share_le_5ms_qualifying": _share(
-            sum(r["uncertainty_ns"] <= limit_ns for r in qualifying), len(qualifying)
-        ),
+        "share_le_5ms_qualifying": share_qualifying,
         "n_qualifying": len(qualifying),
     }
 
@@ -1008,19 +1115,19 @@ def _cold_after_boot(trace: dict, cold_rows: Sequence[dict]) -> bool:
     """Every cold swing within 600 s of boot (header uptime + time since trace start)."""
     header = trace["header"]
     uptime = header.get("uptime_s")
-    if not _finite(uptime) or uptime > COLD_MAX_UPTIME_S:
+    start_s = _trace_start_s(trace)
+    if not _finite(uptime) or uptime > COLD_MAX_UPTIME_S or start_s is None:
         return False
-    start_s = header["clock"]["realtime_ns"] / 1e9
     return all(uptime + (row["wall_s"] - start_s) <= COLD_MAX_UPTIME_S for row in cold_rows)
 
 
-def _headline(counts: dict) -> str:
+def _headline(counts: dict, unexpected_dumps: int) -> str:
     parts = [
         f"{group} {c['met']} met, {c['met_conditional']} met conditional, {c['missed']} missed, "
         f"{c['not_measurable']} not measurable of {c['swings']} swings"
         for group, c in ((g, counts[g]) for g in ("cold", "warm"))
     ]
-    return "2 s goal: " + "; ".join(parts)
+    return f"2 s goal: {'; '.join(parts)}; dumps not on the sheet: {unexpected_dumps}"
 
 
 def _p1(trace: dict, ledger: dict, t1: dict, allowance_ms: Optional[float]) -> dict:
@@ -1033,6 +1140,8 @@ def _p1(trace: dict, ledger: dict, t1: dict, allowance_ms: Optional[float]) -> d
         missing.append("t1_not_valid")
     if allowance_ms is None:
         missing.append("allowance_missing")
+    if _trace_start_s(trace) is None:
+        missing.append("trace_start_time_unknown")
     if counts.get("cold", {}).get("swings", 0) < MIN_COLD:
         missing.append(f"cold_swings_below_{MIN_COLD}")
     if counts.get("warm", {}).get("swings", 0) < MIN_WARM:
@@ -1049,7 +1158,9 @@ def _p1(trace: dict, ledger: dict, t1: dict, allowance_ms: Optional[float]) -> d
         "all": counts["all"],
         "reason_counts": ledger["reason_counts"],
         "no_shot_expected": sum(r["goal"] == NO_SHOT_EXPECTED for r in ledger["rows"]),
-        "headline": _headline(counts),
+        "headline": _headline(
+            counts, sum(e["kind"] == "attempt" for e in ledger["unexpected_events"])
+        ),
     }
 
 
@@ -1089,7 +1200,7 @@ def _stage_stats(attempts: Sequence[dict]) -> dict:
     return stats
 
 
-def _renderers(groups: Mapping[str, Sequence[dict]]) -> dict:
+def _renderers(groups: Mapping[str, Sequence[dict]], cold_key: str) -> dict:
     """Kiosk renderers per group: cold and warm are never mixed without saying so."""
     found = {
         name: sorted(
@@ -1100,9 +1211,9 @@ def _renderers(groups: Mapping[str, Sequence[dict]]) -> dict:
                 if r.get("renderer")
             }
         )
-        for name in ("cold", "warm")
+        for name in (cold_key, "warm")
     }
-    return {**found, "mixed": len(set(found["cold"]) | set(found["warm"])) > 1}
+    return {**found, "mixed": len(set(found[cold_key]) | set(found["warm"])) > 1}
 
 
 def _cpu_temps(groups: Mapping[str, Sequence[dict]]) -> dict:
@@ -1118,8 +1229,13 @@ def summarize(
 ) -> dict:
     """T1, P1 (per group, never a headline when incomplete), O4, edges, stages and the ledger."""
     by_id = {a["attempt_id"]: a for a in attempts}
+    # M6: a cold group not within 600 s of boot is never reported as plain "cold".
+    cold_ok = _cold_after_boot(trace, ledger["groups"].get("cold", []))
+    cold_key = "cold" if cold_ok else COLD_NOT_AFTER_BOOT
     groups = {
-        name: [by_id[r["attempt_id"]] for r in rows if r.get("attempt_id") in by_id]
+        (cold_key if name == "cold" else name): [
+            by_id[r["attempt_id"]] for r in rows if r.get("attempt_id") in by_id
+        ]
         for name, rows in ledger["groups"].items()
     }
     attempt_groups = {"trace": attempts, **groups}
@@ -1133,7 +1249,7 @@ def summarize(
             "boot_id": header.get("boot_id"),
             "session_tag": header.get("session_tag"),
             "uptime_s": header.get("uptime_s"),
-            "start_wall_s": header["clock"]["realtime_ns"] / 1e9,
+            "start_wall_s": _trace_start_s(trace),
         },
         "goal_ms": GOAL_MS,
         "allowance_ms": allowance_ms,
@@ -1144,7 +1260,7 @@ def summarize(
         "p1": _p1(trace, ledger, t1, allowance_ms),
         "o4": _o4(attempt_groups, allowance_ms),
         "edges": _edge_summary(trace, attempts),
-        "renderers": _renderers(groups),
+        "renderers": _renderers(groups, cold_key),
         "cpu_temp_c": _cpu_temps(attempt_groups),
         "unexpected_events": ledger["unexpected_events"],
         "stages": {name: _stage_stats(group) for name, group in attempt_groups.items()},
@@ -1238,13 +1354,13 @@ def _context_lines(summary: dict) -> list[str]:
         f"- Dumps left unanchored by an age-less or invalid edge: "
         f"{edges['dumps_blocked_by_unusable_edges'] or 'none'}.",
     ]
+    groups = [(name, found) for name, found in renderers.items() if name != "mixed"]
+    listed = "; ".join(f"{name} {found}" for name, found in groups)
     if renderers["mixed"]:
-        lines.append(
-            f"- **Renderers differ between cold and warm:** cold {renderers['cold']}; "
-            f"warm {renderers['warm']}."
-        )
+        names = " and ".join(name for name, _found in groups)
+        lines.append(f"- **Renderers differ between {names}:** {listed}.")
     else:
-        lines.append(f"- Renderers: cold {renderers['cold']}; warm {renderers['warm']}.")
+        lines.append(f"- Renderers: {listed}.")
     lines.append(f"- CPU temperature °C (min, max per group): {summary['cpu_temp_c']}.")
     events = summary["unexpected_events"]
     if events is None:
@@ -1307,6 +1423,10 @@ def render_markdown(summary: dict) -> str:
         "",
         "2 s is a goal. A swing's goal status (met, met_conditional, missed, not_measurable) "
         "describes timing only: it never withholds, drops or discards a shot or a metric.",
+        "",
+        "Not computed by this tool: O1 and O2 (they need Task 12's marks; the one-off check in "
+        "Task 14 Step 3 evaluates them), and `vcgencmd get_throttled` (the owner records it at "
+        "the start and end of each run, per the gate checklist).",
         "",
     ]
     for section in (_t1_lines, _p1_lines, _o4_lines, _context_lines, _stage_lines, _ledger_lines):

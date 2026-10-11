@@ -16,10 +16,27 @@ if str(ROOT / "src") not in sys.path:
 from openflight import pi_trace_summary as pts  # noqa: E402  pylint: disable=wrong-import-position
 
 
+def _finite_number(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
+    if not math.isfinite(value):
+        raise argparse.ArgumentTypeError(f"{text!r} is not a finite number")
+    return value
+
+
 def _allowance(text: str) -> float:
-    value = float(text)
-    if not math.isfinite(value) or value < 0:
-        raise argparse.ArgumentTypeError(f"allowance must be a finite number >= 0, not {text}")
+    value = _finite_number(text)
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"allowance must be >= 0, not {text}")
+    return value
+
+
+def _positive(text: str) -> float:
+    value = _finite_number(text)
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"must be > 0, not {text}")
     return value
 
 
@@ -41,8 +58,8 @@ def main(argv: list[str] | None = None) -> int:
         help="impact-to-edge allowance A: acoustic (+ board delay when measured)",
     )
     parser.add_argument("--board-delay-unmeasured", action="store_true")
-    parser.add_argument("--match-window-s", type=float, default=pts.MATCH_WINDOW_S)
-    parser.add_argument("--sample-rate-hz", type=float, default=30000)
+    parser.add_argument("--match-window-s", type=_positive, default=pts.MATCH_WINDOW_S)
+    parser.add_argument("--sample-rate-hz", type=_positive, default=30000)
     parser.add_argument("--browser-sid", default=None, help="designated kiosk socket id")
     args = parser.parse_args(argv)
     try:

@@ -309,6 +309,7 @@ def test_a_recorder_trace_is_valid_and_carries_its_header(new_trace):
         "reasons": [],
         "boot_ids": ["boot-a"],
         "unparseable_lines": 0,
+        "non_finite_lines": 0,
         "footer": trace["end"],
     }
     assert trace["header"]["uptime_s"] == 30.0
@@ -505,28 +506,43 @@ def test_a_result_known_not_shown_is_missed_with_every_reason(new_trace, tmp_pat
     assert ledger["rows"][0]["reasons"] == reasons
 
 
-def test_not_shown_report_is_a_known_miss(new_trace, tmp_path):
-    rec = new_trace()
-    shot(rec, "t-1", T0, paint_ms=None)
+def _not_shown(rec, revision, reason, ms=1900):
     at(
         rec,
         "browser_result_not_shown",
         "t-1",
         T0,
-        1900,
+        ms,
         sid="k",
         **KIOSK,
-        revision=1,
+        revision=revision,
         final=True,
         update_kind="first",
         event="shot",
         received_ms=1.0,
         reported_ms=2.0,
-        reason="covered",
+        reason=reason,
     )
+
+
+@pytest.mark.parametrize(
+    "reason,goal",
+    [
+        ("superseded", "missed"),
+        ("unmounted_before_paint", "missed"),
+        ("not_displayed", "missed"),
+        ("covered", "not_measurable"),  # M4: caused by the user, not by pipeline timing
+        ("document_hidden", "not_measurable"),
+        ("live_view_not_shown", "not_measurable"),
+    ],
+)
+def test_not_shown_is_a_miss_only_when_the_pipeline_caused_it(new_trace, tmp_path, reason, goal):
+    rec = new_trace()
+    shot(rec, "t-1", T0, paint_ms=None)
+    _not_shown(rec, 1, reason)
     _t, _a, ledger = analyse(rec, sheet(tmp_path, [T0]))
-    assert ledger["rows"][0]["goal"] == "missed"
-    assert ledger["rows"][0]["reasons"] == ["not_shown:covered"]
+    assert ledger["rows"][0]["goal"] == goal
+    assert ledger["rows"][0]["reasons"] == [f"not_shown:{reason}"]
 
 
 def test_rejected_browser_report_names_its_reason(new_trace, tmp_path):
@@ -854,7 +870,8 @@ def test_complete_run_reports_cold_and_warm_separately(new_trace, tmp_path):
     assert p1["warm"] == {**expected_cold, "swings": 20, "met": 20}
     assert p1["headline"] == (
         "2 s goal: cold 5 met, 0 met conditional, 0 missed, 0 not measurable of 5 swings; "
-        "warm 20 met, 0 met conditional, 0 missed, 0 not measurable of 20 swings"
+        "warm 20 met, 0 met conditional, 0 missed, 0 not measurable of 20 swings; "
+        "dumps not on the sheet: 0"
     )
     assert summary["stages"]["warm"]["spin"]["p50"] == pytest.approx(10.0)
     assert summary["stages"]["cold"]["spin"]["n"] == 5
@@ -891,7 +908,7 @@ def test_paint_uncertainty_share_is_t1g(new_trace, tmp_path):
     summary = pts.summarize(trace, attempts, ledger, allowance_ms=5.0)
     assert summary["t1"]["criteria"]["g"] == {
         "pass": True,
-        "detail": "mapped_kiosk_paints",
+        "detail": "mapped_and_qualifying_paints",
         "n": 25,
         "share_le_5ms": 0.96,
         "share_le_5ms_qualifying": 0.96,
@@ -1134,3 +1151,194 @@ def test_cli_refuses_a_file_that_is_not_a_trace(tmp_path, capsys):
     assert summarize_pi_trace.main([str(bad), "--out", str(tmp_path / "x")]) == 2
     assert "trace_start" in capsys.readouterr().err
     assert not (tmp_path / "x.json").exists()
+
+
+# --- fix round 1 ------------------------------------------------------------------------------
+
+
+def test_an_unknown_earlier_paint_makes_a_later_over_limit_paint_not_measurable(
+    new_trace, tmp_path
+):
+    rec = new_trace()
+    edge(rec, T0)
+    ops(rec, "t-1", T0)
+    samples(rec, T0, (1880, 2100, 6100))
+    emit(rec, "t-1", T0, 1882, 1, final=False)  # eligible, never reported
+    emit(rec, "t-1", T0, 5990, 2, update_kind="late_update")
+    paint(rec, "t-1", T0, 2, 6000, kind="late_update")
+    _t, _a, ledger = analyse(rec, sheet(tmp_path, [T0]))
+    row = ledger["rows"][0]
+    assert row["goal"] == "not_measurable"
+    assert row["reasons"] == ["over_goal_on_revision_2", "paint_unobserved"]
+    assert row["upper_ms"] == pytest.approx(6001.01, abs=1e-6)
+
+
+def test_a_known_pipeline_not_shown_earlier_paint_leaves_the_later_over_limit_paint_missed(
+    new_trace, tmp_path
+):
+    rec = new_trace()
+    edge(rec, T0)
+    ops(rec, "t-1", T0)
+    samples(rec, T0, (1880, 2100, 6100))
+    emit(rec, "t-1", T0, 1882, 1, final=False)
+    _not_shown(rec, 1, "superseded")
+    emit(rec, "t-1", T0, 5990, 2, update_kind="late_update")
+    paint(rec, "t-1", T0, 2, 6000, kind="late_update")
+    _t, _a, ledger = analyse(rec, sheet(tmp_path, [T0]))
+    assert ledger["rows"][0]["goal"] == "missed"
+    assert ledger["rows"][0]["reasons"] == ["over_goal"]
+
+
+def test_t1g_also_requires_the_qualifying_share_once_there_are_qualifying_paints(new_trace):
+    rec = new_trace()
+    for index in range(20):  # 20 ineligible paints within ± 1 ms
+        shot(rec, f"i-{index}", (10 + 40 * index) * 1_000 * MS, eligible=False)
+    shot(rec, "q-1", 900_000 * MS)  # eligible, ± 1 ms
+    shot(rec, "q-2", 940_000 * MS, rtt_ms=12.0)  # eligible, ± 6 ms
+    trace, attempts, ledger = analyse(rec, None)
+    g = pts.summarize(trace, attempts, ledger, allowance_ms=5.0)["t1"]["criteria"]["g"]
+    assert g["share_le_5ms"] == 21 / 22 and g["share_le_5ms_qualifying"] == 0.5
+    assert g["pass"] is False and g["detail"] == "mapped_and_qualifying_paints"
+
+
+def test_t1g_uses_the_mapped_share_as_the_interim_test_before_any_qualifying_paint(
+    new_trace, tmp_path
+):
+    trace, attempts, ledger = one_shot(new_trace, tmp_path, eligible=False)
+    g = pts.summarize(trace, attempts, ledger, allowance_ms=5.0)["t1"]["criteria"]["g"]
+    assert g["pass"] is True and g["n_qualifying"] == 0
+    assert g["detail"] == "mapped_kiosk_paints_interim_no_qualifying_paints"
+
+
+def test_a_missing_rendered_core_never_matches_a_missing_emitted_core(new_trace, tmp_path):
+    rec = new_trace()
+    edge(rec, T0)
+    ops(rec, "t-1", T0)
+    samples(rec, T0)
+    emit(rec, "t-1", T0, 1885, 1, core=None)
+    paint(rec, "t-1", T0, 1, 1900, rendered=None)
+    _t, attempts, _l = analyse(rec, sheet(tmp_path, [T0]))
+    assert attempts[0]["revisions"][0]["paint"] == "rendered_core_mismatch"
+
+
+def test_an_empty_rendered_core_never_matches(new_trace, tmp_path):
+    rec = new_trace()
+    edge(rec, T0)
+    ops(rec, "t-1", T0)
+    samples(rec, T0)
+    emit(rec, "t-1", T0, 1885, 1, core={})
+    paint(rec, "t-1", T0, 1, 1900, rendered={})
+    _t, attempts, _l = analyse(rec, sheet(tmp_path, [T0]))
+    assert attempts[0]["revisions"][0]["paint"] == "rendered_core_mismatch"
+
+
+def _cli():
+    sys.path.insert(0, str(ROOT / "scripts" / "analysis"))
+    try:
+        import summarize_pi_trace  # noqa: PLC0415  pylint: disable=import-outside-toplevel
+    finally:
+        sys.path.pop(0)
+    return summarize_pi_trace
+
+
+@pytest.mark.parametrize(
+    "flag,value",
+    [("--match-window-s", "0"), ("--match-window-s", "nan"), ("--sample-rate-hz", "nan")],
+)
+def test_cli_rejects_a_bad_window_or_rate(tmp_path, flag, value):
+    with pytest.raises(SystemExit) as stop:
+        _cli().main([str(tmp_path / "t.jsonl"), "--out", str(tmp_path / "x"), flag, value])
+    assert stop.value.code == 2
+
+
+def test_a_non_finite_number_in_a_mark_is_named_not_a_crash(new_trace, tmp_path, capsys):
+    rec = new_trace()
+    shot(rec, "t-1", T0)
+    rec.close()
+    with rec.path.open("a", encoding="utf-8") as handle:
+        handle.write('{"type": "mark", "seq": 99, "name": "x", "monotonic_ns": 5, "v": NaN}\n')
+    integrity = pts.load_trace(rec.path)["integrity"]
+    assert integrity["reasons"] == ["non_finite_numbers"] and integrity["non_finite_lines"] == 1
+    assert _cli().main([str(rec.path), "--out", str(tmp_path / "x")]) == 0
+    json.loads((tmp_path / "x.json").read_text(encoding="utf-8"))
+    capsys.readouterr()
+
+
+def test_a_non_finite_number_in_the_header_is_a_named_error(tmp_path, capsys):
+    path = tmp_path / "t.jsonl"
+    path.write_text(
+        '{"type": "trace_start", "schema": "openflight.pi_trace", "version": 2, "uptime_s": NaN}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="non-finite"):
+        pts.load_trace(path)
+    assert _cli().main([str(path), "--out", str(tmp_path / "x")]) == 2
+    assert "non-finite" in capsys.readouterr().err
+
+
+def test_a_failed_tick_reading_is_named_apart_from_an_unrecorded_backend(new_trace, tmp_path):
+    rec = new_trace()
+    shot(rec, "t-1", T0, with_edge=False)
+    rec.note_edge(
+        monotonic_ns=T0 + 210_000,
+        mono_before_ns=None,
+        age_ns=None,
+        mono_after_ns=None,
+        wall_minus_mono_low_ns=OFFSET_NS - 1_000,
+        wall_minus_mono_high_ns=OFFSET_NS,
+        backend=None,
+        gpiozero_version=None,
+        lgpio_version=None,
+        observer_wall_s=(T0 + OFFSET_NS) / 1e9,
+        reading_error="RuntimeError",
+    )
+    trace, attempts, _l = analyse(rec, sheet(tmp_path, [T0]))
+    assert trace["integrity"]["reasons"] == ["edge_reading_failed"]
+    assert attempts[0]["anchor_reason"] == "edge_reading_failed"
+
+
+def test_markdown_says_what_this_tool_does_not_compute(new_trace, tmp_path):
+    trace, attempts, ledger = one_shot(new_trace, tmp_path)
+    text = pts.render_markdown(pts.summarize(trace, attempts, ledger, allowance_ms=5.0))
+    assert "Not computed by this tool: O1 and O2" in text
+    assert "Task 14 Step 3" in text and "get_throttled" in text and "checklist" in text
+
+
+def test_a_cold_group_not_after_boot_is_never_printed_as_cold(new_trace, tmp_path):
+    rec = new_trace(uptime=3600.0)
+    shot(rec, "t-1", T0)
+    trace, attempts, ledger = analyse(rec, sheet(tmp_path, [T0]))
+    summary = pts.summarize(trace, attempts, ledger, allowance_ms=5.0)
+    assert "cold" not in summary["o4"] and "cold" not in summary["stages"]
+    assert summary["o4"]["cold_not_after_boot"]["n"] == 1
+    assert "cold_not_after_boot" in summary["stages"]
+    text = pts.render_markdown(summary)
+    assert "### cold_not_after_boot" in text and "### cold\n" not in text
+    assert "| cold |" not in text
+
+
+def test_the_headline_counts_dumps_not_on_the_sheet(new_trace, tmp_path):
+    rec = new_trace()
+    starts = _complete_run(rec)
+    shot(rec, "extra", 3_000_000 * MS)
+    trace, attempts, ledger = analyse(rec, sheet(tmp_path, starts))
+    summary = pts.summarize(trace, attempts, ledger, allowance_ms=5.0)
+    assert summary["p1"]["headline"].endswith("; dumps not on the sheet: 1")
+
+
+def test_a_header_without_its_clock_is_named_not_a_crash(new_trace, tmp_path):
+    rec = new_trace()
+    shot(rec, "t-1", T0)
+    rec.close()
+
+    def no_clock(rows):
+        del rows[0]["clock"]
+        return as_text(rows)
+
+    rewrite(rec.path, no_clock)
+    trace, attempts, ledger = analyse(rec, sheet(tmp_path, [T0]), close=False)
+    assert trace["integrity"]["reasons"] == ["header_clock_missing"]
+    summary = pts.summarize(trace, attempts, ledger, allowance_ms=5.0)
+    assert "trace_start_time_unknown" in summary["p1"]["missing"]
+    assert summary["trace"]["start_wall_s"] is None
+    pts.render_markdown(summary)
