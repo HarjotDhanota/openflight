@@ -14,6 +14,7 @@ from typing import List, Optional
 from .clubs import ClubType
 from .clubs.physics import get_club_physics
 from .ops243 import SpeedReading
+from .pi_trace import _finite
 
 # Spin confidence threshold for "high" quality — used across modules.
 # Measured spin is trusted for physics simulation only above this level.
@@ -357,7 +358,7 @@ class Shot:
     def estimated_carry_yards(self) -> float:
         """Estimated carry distance based on ball speed, club type, and launch angle."""
         base = estimate_carry_distance(self.ball_speed_mph, self.club)
-        if self.launch_angle_vertical is not None:
+        if self.has_launch_angle:
             return adjust_carry_for_launch_angle(
                 base,
                 self.launch_angle_vertical,
@@ -383,8 +384,11 @@ class Shot:
 
     @property
     def has_launch_angle(self) -> bool:
-        """Check if launch angle data is available for this shot."""
-        return self.launch_angle_vertical is not None
+        """Check if launch angle data is available for this shot.
+
+        A non-finite angle is a missing one: it never drives carry or its provenance.
+        """
+        return _finite(self.launch_angle_vertical)
 
     @property
     def has_spin(self) -> bool:

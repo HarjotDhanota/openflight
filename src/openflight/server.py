@@ -46,6 +46,7 @@ from .ops243 import (
     SpeedReading,
     set_show_raw_readings,
 )
+from .pi_trace import _finite
 from .power import SUPPORTED_BATTERY_PROVIDERS, PowerMonitor, PowerStatus
 from .profiles import ProfileStore
 from .ready_light import ReadyLight, SensorStates
@@ -1308,13 +1309,14 @@ def _ensure_user_facing_launch_angles(shot: Shot) -> None:
     club-table vertical and a neutral horizontal, labelled estimated. A fusion
     unit leaves a missing angle missing (D17).
     """
+    # A non-finite angle is a missing one: it gets exactly the missing-value handling.
     if _fusion_unit():
-        if shot.launch_angle_vertical is None or shot.launch_angle_horizontal is None:
+        if not _finite(shot.launch_angle_vertical) or not _finite(shot.launch_angle_horizontal):
             logger.info("[SERVER] Launch angle not measured on this shot; nothing filled in")
         return
     estimated: tuple[float, float] | None = None
 
-    if shot.launch_angle_vertical is None:
+    if not _finite(shot.launch_angle_vertical):
         estimated = estimate_launch_angle(
             shot.club,
             shot.ball_speed_mph,
@@ -1332,7 +1334,7 @@ def _ensure_user_facing_launch_angles(shot: Shot) -> None:
             estimated[1] * 100,
         )
 
-    if shot.launch_angle_horizontal is None:
+    if not _finite(shot.launch_angle_horizontal):
         # the legacy neutral estimate, for an install with no angle sensors at all
         shot.launch_angle_horizontal = 0.0
         if shot.launch_angle_horizontal_confidence is None:

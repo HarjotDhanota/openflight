@@ -230,3 +230,15 @@ class TestMultiObjectReporting:
         assert Direction.INBOUND.value == "inbound"
         assert Direction.OUTBOUND.value == "outbound"
         assert Direction.UNKNOWN.value == "unknown"
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_a_non_finite_launch_angle_is_no_launch_angle_for_carry(bad):
+    """Task 3 fix round (I1): a non-finite value is a missing value."""
+    from datetime import datetime as _dt
+
+    with_bad = Shot(ball_speed_mph=140.0, timestamp=_dt(2026, 1, 1), launch_angle_vertical=bad)
+    with_none = Shot(ball_speed_mph=140.0, timestamp=_dt(2026, 1, 1))
+    assert with_bad.has_launch_angle is False
+    assert with_bad.estimated_carry_yards == with_none.estimated_carry_yards
+    assert with_bad.estimated_carry_range == with_none.estimated_carry_range

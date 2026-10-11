@@ -208,3 +208,60 @@ def test_forward_swallows_send_failure(server):
     assert len(failed) == 1 and failed[0][1]["target"] == "gspro"
     # a failed connector must not block delivery to the others
     assert len(other.sent) == 1
+
+
+def _strict_json(data):
+    import json  # pylint: disable=import-outside-toplevel
+
+    def reject(token):
+        raise ValueError(f"non-finite token {token}")
+
+    if isinstance(data, (bytes, str)):
+        return json.loads(data, parse_constant=reject)
+    return json.loads(json.dumps(data, allow_nan=False), parse_constant=reject)
+
+
+def test_a_non_finite_shot_reaches_no_simulator_payload_as_nan(server, monkeypatch):
+    """I1: codec bytes, log_sim_send and the sim_shot emit are all strict JSON."""
+    import math  # pylint: disable=import-outside-toplevel
+
+    from openflight.gspro.codec import GSProCodec  # pylint: disable=import-outside-toplevel
+
+    wire = []
+
+    class CodecConnector(_FakeConnector):
+        def __init__(self):
+            super().__init__("gspro")
+            self.codec = GSProCodec()
+
+        def send_shot(self, resolved):
+            super().send_shot(resolved)
+            wire.append(self.codec.build_shot(resolved))
+
+    logged = []
+
+    class SessionLog:
+        @staticmethod
+        def log_sim_send(**entry):
+            logged.append(entry)
+
+    monkeypatch.setattr(server, "get_session_logger", lambda: SessionLog())
+    connector = CodecConnector()
+    server.sim_connectors = [connector]
+    shot = Shot(
+        ball_speed_mph=140.0,
+        timestamp=datetime(2026, 6, 13, 12, 0, 0),
+        club=ClubType.DRIVER,
+        launch_angle_vertical=math.nan,
+        launch_angle_horizontal=math.nan,
+        spin_axis_deg=math.inf,
+    )
+    server._forward_shot_to_simulators(shot)
+
+    ball = _strict_json(wire[0])["BallData"]
+    assert all(math.isfinite(ball[key]) for key in ("VLA", "HLA", "CarryDistance", "SpinAxis"))
+    assert _strict_json(logged[0])["provenance"]["vla"] == "estimated"
+    sim_shot = [a_[1] for a_, k in server._emitted if a_[0] == "sim_shot"][0]
+    payload = _strict_json(sim_shot)
+    assert payload["provenance"]["vla"] == payload["provenance"]["carry"] == "estimated"
+    assert payload["provenance"]["hla"] == payload["provenance"]["spin_axis"] == "estimated"

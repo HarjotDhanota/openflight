@@ -1088,6 +1088,44 @@ class TestIWR6843ShotIntegration:
         assert shot.launch_angle_horizontal_source is None
         assert shot.launch_angle_horizontal_confidence is None
 
+    @pytest.mark.parametrize("bad", [math.nan, math.inf], ids=["nan", "inf"])
+    @pytest.mark.parametrize("fusion", [False, True], ids=["ops_only", "fusion"])
+    def test_a_non_finite_launch_angle_is_handled_exactly_like_a_missing_one(
+        self, monkeypatch, fusion, bad
+    ):
+        """I1 / D17: OPS-only fills its labelled estimate; a fusion unit fills nothing in."""
+        monkeypatch.setattr(server_module, "iwr6843_runtime", SimpleNamespace() if fusion else None)
+        monkeypatch.setattr(server_module, "camera_capture_runtime", None)
+
+        def ensured(vertical, horizontal):
+            shot = Shot(
+                ball_speed_mph=100.0,
+                club_speed_mph=80.0,
+                timestamp=datetime(2026, 10, 11, 9, 0, 0),
+                club=ClubType.IRON_9,
+                launch_angle_vertical=vertical,
+                launch_angle_horizontal=horizontal,
+            )
+            server_module._ensure_user_facing_launch_angles(shot)
+            return shot
+
+        with_bad, with_none = ensured(bad, bad), ensured(None, None)
+        for name in (
+            "launch_angle_vertical_source",
+            "launch_angle_horizontal_source",
+            "launch_angle_confidence",
+            "launch_angle_horizontal_confidence",
+            "angle_source",
+        ):
+            assert getattr(with_bad, name) == getattr(with_none, name), name
+        if fusion:
+            assert with_none.launch_angle_vertical is None  # D17 unchanged: nothing filled
+            assert with_none.launch_angle_vertical_source is None
+        else:
+            assert with_bad.launch_angle_vertical == with_none.launch_angle_vertical
+            assert with_bad.launch_angle_horizontal == with_none.launch_angle_horizontal == 0.0
+            assert with_bad.launch_angle_vertical_source == "estimated"
+
     def test_missing_ti_capture_preserves_ops_shot(self, monkeypatch):
         emitted = []
         runtime = SimpleNamespace(
@@ -2047,16 +2085,18 @@ class TestShotToDict:
                 "metrics_not_measured"
             ], name
 
-    def test_a_derived_non_finite_metric_is_named_too(self):
-        shot = Shot(
-            ball_speed_mph=120.0,
-            timestamp=datetime(2026, 10, 11, 9, 0, 0),
-            launch_angle_vertical=math.nan,
+    def test_a_non_finite_launch_leaves_carry_on_its_no_launch_path(self):
+        """A non-finite value is a missing value (I1): carry is the no-launch carry."""
+        when = datetime(2026, 10, 11, 9, 0, 0)
+        result = shot_to_dict(
+            Shot(ball_speed_mph=120.0, timestamp=when, launch_angle_vertical=math.nan)
         )
-        result = shot_to_dict(shot)
-        ids = {entry["id"] for entry in result["metrics_not_measured"]}
-        assert {"launch_angle_vertical", "estimated_carry_yards"} <= ids
-        assert result["estimated_carry_yards"] is None
+        no_launch = shot_to_dict(Shot(ball_speed_mph=120.0, timestamp=when))
+        assert result["metrics_not_measured"] == [
+            {"id": "launch_angle_vertical", "reason": "non_finite_value:nan"}
+        ]
+        assert result["estimated_carry_yards"] == no_launch["estimated_carry_yards"]
+        assert result["carry_range"] == no_launch["carry_range"]
 
     def test_nested_non_finite_values_are_nulled_and_named_by_path(self):
         shot = Shot(
@@ -4227,10 +4267,14 @@ class TestOnShotDetected:
         payload = emitted[0][1]
         json.dumps(payload, allow_nan=False)
         assert payload["shot"]["ball_speed_mph"] == 150.0
-        assert payload["shot"]["launch_angle_vertical"] is None
+        # OPS-only unit: the NaN launch got exactly the missing-value handling, the
+        # labelled estimate (I1); the inf spin goes out as null, named.
+        assert payload["shot"]["launch_angle_vertical_source"] == "estimated"
+        assert math.isfinite(payload["shot"]["launch_angle_vertical"])
         assert payload["shot"]["spin_rpm"] is None
-        ids = {entry["id"] for entry in payload["shot"]["metrics_not_measured"]}
-        assert {"launch_angle_vertical", "spin_rpm"} <= ids
+        assert payload["shot"]["metrics_not_measured"] == [
+            {"id": "spin_rpm", "reason": "non_finite_value:inf"}
+        ]
         assert len(session_log.shots) == 1
 
     def test_initial_ops_emit_of_a_non_finite_shot_still_happens(self, monkeypatch):

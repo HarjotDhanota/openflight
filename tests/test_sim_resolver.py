@@ -125,3 +125,75 @@ def test_shot_number_uses_player_state():
     ps.next_shot_number()  # consume one
     r = resolve_shot(_shot(spin_rpm=2500.0, spin_confidence=0.9), ps)
     assert r.shot_number == 2
+
+
+# --- One rule: a non-finite value is a missing value (Task 3 fix round, I1) ------------
+
+_NON_FINITE = [math.nan, math.inf, -math.inf]
+
+
+def _same_resolution(a, b):
+    assert a.as_values() == b.as_values()
+    assert a.provenance == b.provenance
+
+
+@pytest.mark.parametrize("bad", _NON_FINITE, ids=["nan", "inf", "-inf"])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "launch_angle_vertical",
+        "launch_angle_horizontal",
+        "spin_axis_deg",
+        "club_speed_mph",
+        "club_path_deg",
+        "spin_rpm",
+        "spin_confidence",
+    ],
+)
+def test_a_non_finite_input_resolves_exactly_like_a_missing_one(field, bad):
+    measured = dict(
+        club_speed_mph=110.0,
+        launch_angle_vertical=12.0,
+        launch_angle_horizontal=1.5,
+        spin_rpm=2500.0,
+        spin_confidence=0.9,
+        spin_axis_deg=-3.0,
+        club_path_deg=0.5,
+    )
+    with_bad = resolve_shot(_shot(**{**measured, field: bad}), PlayerState())
+    with_none = resolve_shot(_shot(**{**measured, field: None}), PlayerState())
+    _same_resolution(with_bad, with_none)
+    assert all(v is None or math.isfinite(v) for v in with_bad.as_values().values())
+
+
+@pytest.mark.parametrize("bad", _NON_FINITE, ids=["nan", "inf", "-inf"])
+def test_a_non_finite_launch_never_makes_carry_measured_or_non_finite(bad):
+    r = resolve_shot(_shot(launch_angle_vertical=bad), PlayerState())
+    assert math.isfinite(r.vla) and math.isfinite(r.carry_yards)
+    assert r.provenance["vla"] == "estimated" and r.provenance["carry"] == "estimated"
+    _same_resolution(r, resolve_shot(_shot(launch_angle_vertical=None), PlayerState()))
+
+
+@pytest.mark.parametrize("bad", _NON_FINITE, ids=["nan", "inf", "-inf"])
+def test_a_non_finite_calculated_spin_uses_the_model(bad):
+    r = resolve_shot(_shot(spin_rpm=bad, spin_source="calculated"), PlayerState())
+    assert r.total_spin_rpm == SPIN_MODEL_RPM[ClubType.DRIVER]
+    assert r.provenance["total_spin"] == "estimated"
+
+
+@pytest.mark.parametrize("bad", _NON_FINITE, ids=["nan", "inf", "-inf"])
+def test_a_non_finite_ball_speed_is_not_sendable(bad):
+    with pytest.raises(IncompleteShotError):
+        resolve_shot(_shot(ball_speed_mph=bad), PlayerState())
+
+
+def test_no_resolved_value_can_leave_non_finite(monkeypatch):
+    """Last line: whatever produced it, a non-finite resolved value is never sent."""
+    from openflight.sim import resolver
+
+    class Physics:
+        optimal_launch_deg = math.nan
+
+    monkeypatch.setattr(resolver, "get_club_physics", lambda _club: Physics())
+    with pytest.raises(IncompleteShotError, match="vla"):
+        resolve_shot(_shot(), PlayerState())
