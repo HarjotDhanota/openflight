@@ -4375,6 +4375,67 @@ class TestOnShotDetected:
         ]
         assert len(session_log.shots) == 1
 
+    @staticmethod
+    def _assert_strict_finite_or_null_stats(payload):
+        json.dumps(payload, allow_nan=False)
+        for key, value in payload["stats"].items():
+            assert value is None or not isinstance(value, float) or math.isfinite(value), key
+
+    def test_a_nan_shot_in_the_history_never_poisons_later_stats(self, monkeypatch):
+        """A-I1: one NaN shot in the session, then every later emit is strict JSON."""
+        emitted, _session_log = self._record_finalization(monkeypatch)
+        history = []
+        monkeypatch.setattr(
+            server_module,
+            "monitor",
+            SimpleNamespace(
+                get_session_stats=lambda: summarize_shots(history, mode="rolling-buffer"),
+                get_shots=lambda: list(history),
+            ),
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+        broken = self._shot(0)
+        broken.ball_speed_mph = math.nan
+        broken.club_speed_mph = math.nan
+        broken.spin_rpm = math.nan
+        history.append(broken)
+        on_shot_detected(broken)
+        _wait_for_shot_finalization_idle()
+        later = self._shot(1)
+        history.append(later)
+        on_shot_detected(later)
+        _wait_for_shot_finalization_idle()
+        server_module._emit_initial_ops_shot(later)
+
+        assert len(emitted) >= 3
+        for _event, payload in emitted:
+            self._assert_strict_finite_or_null_stats(payload)
+        assert emitted[-1][1]["stats"]["avg_ball_speed"] == later.ball_speed_mph
+        session_state = server_module._session_state_payload()
+        self._assert_strict_finite_or_null_stats(session_state)
+
+    def test_non_finite_stats_from_any_monitor_are_nulled_before_emit(self, monkeypatch):
+        """A-I1 defence in depth: stats are nulled before emitting, whatever made them."""
+        emitted, _session_log = self._record_finalization(monkeypatch)
+        monkeypatch.setattr(
+            server_module,
+            "monitor",
+            SimpleNamespace(
+                get_session_stats=lambda: {
+                    "shot_count": 1,
+                    "avg_ball_speed": math.nan,
+                    "nested": {"x": math.inf},
+                },
+                get_shots=lambda: [],
+            ),
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
+        assert server_module._emit_initial_ops_shot(self._shot()) is True
+        stats = emitted[0][1]["stats"]
+        self._assert_strict_finite_or_null_stats(emitted[0][1])
+        assert stats == {"shot_count": 1, "avg_ball_speed": None, "nested": {"x": None}}
+        assert server_module._session_state_payload()["stats"]["avg_ball_speed"] is None
+
     def test_initial_ops_emit_of_a_non_finite_shot_still_happens(self, monkeypatch):
         emitted, _session_log = self._record_finalization(monkeypatch)
         monkeypatch.setattr(server_module, "iwr6843_runtime", object())

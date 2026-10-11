@@ -298,3 +298,89 @@ def test_a_zero_launch_confidence_keeps_its_existing_carry_default():
         ).estimated_carry_yards
 
     assert carry(0.0) == carry(None) == carry(0.2)
+
+
+# --- summarize_shots: a non-finite value is a missing value (final review A-I1) ---
+
+
+def _summary_shot(ball=150.0, club=100.0, spin=3000.0):
+    return Shot(
+        ball_speed_mph=ball,
+        club_speed_mph=club,
+        spin_rpm=spin,
+        timestamp=datetime(2026, 10, 12, 9, 0, 0),
+        club=ClubType.DRIVER,
+    )
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("field", ["ball", "club", "spin"])
+def test_summarize_shots_skips_a_non_finite_value_in_every_averaged_field(field, bad):
+    """One NaN shot must never make the session stats NaN (strict JSON, browser keeps parsing)."""
+    import json
+    import math
+
+    from openflight.launch_monitor import summarize_shots
+
+    good_a = _summary_shot(ball=140.0, club=100.0, spin=3000.0)
+    good_b = _summary_shot(ball=160.0, club=110.0, spin=5000.0)
+    broken = _summary_shot(**{field: bad})
+    summary = summarize_shots([good_a, broken, good_b], mode="rolling-buffer")
+
+    json.dumps(summary, allow_nan=False)
+    for key, value in summary.items():
+        if isinstance(value, float):
+            assert math.isfinite(value), key
+    assert summary["shot_count"] == 3
+    if field == "ball":
+        assert summary["avg_ball_speed"] == 150.0
+        assert summary["max_ball_speed"] == 160.0
+        assert summary["min_ball_speed"] == 140.0
+        assert summary["avg_carry_est"] == pytest.approx(
+            (good_a.estimated_carry_yards + good_b.estimated_carry_yards) / 2
+        )
+    if field == "club":
+        assert summary["avg_club_speed"] == 105.0
+        assert summary["avg_smash_factor"] == pytest.approx(
+            (good_a.smash_factor + good_b.smash_factor) / 2
+        )
+    if field == "spin":
+        assert summary["avg_spin_rpm"] == 4000.0
+        # a non-finite spin is not a detected spin
+        assert summary["spin_detection_rate"] == pytest.approx(2 / 3)
+
+
+def test_summarize_shots_with_no_finite_ball_speed_reports_missing_not_zero():
+    import json
+    import math
+
+    from openflight.launch_monitor import summarize_shots
+
+    summary = summarize_shots(
+        [_summary_shot(ball=math.nan, club=math.nan, spin=math.nan)], mode="rolling-buffer"
+    )
+    json.dumps(summary, allow_nan=False)
+    assert summary["shot_count"] == 1
+    for key in (
+        "avg_ball_speed",
+        "max_ball_speed",
+        "min_ball_speed",
+        "std_dev",
+        "avg_club_speed",
+        "avg_smash_factor",
+        "avg_carry_est",
+        "avg_spin_rpm",
+    ):
+        assert summary[key] is None, key
+    assert summary["spin_detection_rate"] == 0.0
+
+
+def test_summarize_shots_std_dev_needs_two_finite_ball_speeds():
+    import math
+
+    from openflight.launch_monitor import summarize_shots
+
+    one_finite = summarize_shots([_summary_shot(ball=150.0), _summary_shot(ball=math.nan)], "x")
+    assert one_finite["std_dev"] is None
+    two_finite = summarize_shots([_summary_shot(ball=140.0), _summary_shot(ball=160.0)], "x")
+    assert two_finite["std_dev"] == pytest.approx(14.142135623730951)

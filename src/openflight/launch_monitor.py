@@ -518,6 +518,15 @@ class Shot:
         }
 
 
+def _finite_values(values) -> list:
+    """Only the finite numbers among ``values`` (None, NaN and inf are missing)."""
+    return [value for value in values if _finite(value)]
+
+
+def _mean_or_none(values: list) -> Optional[float]:
+    return statistics.mean(values) if values else None
+
+
 def summarize_shots(shots: List[Shot], mode: str) -> dict:
     """Calculate the shared session summary for a list of shots."""
     summary = {
@@ -535,20 +544,24 @@ def summarize_shots(shots: List[Shot], mode: str) -> dict:
     if not shots:
         return summary
 
-    ball_speeds = [shot.ball_speed_mph for shot in shots]
-    club_speeds = [shot.club_speed_mph for shot in shots if shot.club_speed_mph]
-    smash_factors = [shot.smash_factor for shot in shots if shot.smash_factor]
-    spin_rpms = [shot.spin_rpm for shot in shots if shot.spin_rpm is not None]
+    # A non-finite value is a missing value (owner rule): it never enters an average,
+    # so one NaN shot can't make every later emit's stats NaN.
+    ball_speeds = _finite_values(shot.ball_speed_mph for shot in shots)
+    club_speeds = _finite_values(shot.club_speed_mph for shot in shots if shot.club_speed_mph)
+    smash_factors = _finite_values(shot.smash_factor for shot in shots)
+    carries = _finite_values(shot.estimated_carry_yards for shot in shots)
+    spin_rpms = _finite_values(shot.spin_rpm for shot in shots)
     summary.update(
         {
-            "avg_ball_speed": statistics.mean(ball_speeds),
-            "max_ball_speed": max(ball_speeds),
-            "min_ball_speed": min(ball_speeds),
-            "std_dev": statistics.stdev(ball_speeds) if len(ball_speeds) > 1 else 0,
-            "avg_club_speed": statistics.mean(club_speeds) if club_speeds else None,
-            "avg_smash_factor": statistics.mean(smash_factors) if smash_factors else None,
-            "avg_carry_est": statistics.mean([shot.estimated_carry_yards for shot in shots]),
-            "avg_spin_rpm": statistics.mean(spin_rpms) if spin_rpms else None,
+            "avg_ball_speed": _mean_or_none(ball_speeds),
+            "max_ball_speed": max(ball_speeds) if ball_speeds else None,
+            "min_ball_speed": min(ball_speeds) if ball_speeds else None,
+            "std_dev": statistics.stdev(ball_speeds) if len(ball_speeds) > 1 else None,
+            "avg_club_speed": _mean_or_none(club_speeds),
+            "avg_smash_factor": _mean_or_none(smash_factors),
+            "avg_carry_est": _mean_or_none(carries),
+            "avg_spin_rpm": _mean_or_none(spin_rpms),
+            # a non-finite spin is not a detected spin
             "spin_detection_rate": len(spin_rpms) / len(shots),
         }
     )

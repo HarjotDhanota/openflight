@@ -2981,10 +2981,22 @@ def _current_club_id() -> str:
     return club.value if hasattr(club, "value") else str(club)
 
 
+def _session_stats() -> dict:
+    """The monitor's session stats with every non-finite value sent as null.
+
+    Defence in depth (A-I1): ``summarize_shots`` already skips non-finite values, but
+    any NaN that reached a strict-JSON emit would make the browser drop the packet,
+    and stats ride on every later shot.
+    """
+    if not monitor:
+        return {}
+    return _null_non_finite(monitor.get_session_stats(), "stats", [])
+
+
 def _session_state_payload(*, include_runtime_meta: bool = False) -> dict:
     """Build the session_state event the UI applies on connect and refresh."""
     payload = {
-        "stats": monitor.get_session_stats() if monitor else {},
+        "stats": _session_stats(),
         "shots": _session_shots(),
         "club": _current_club_id(),
     }
@@ -5390,7 +5402,7 @@ def _finalize_shot_detected(
     # Emit shot with launch angle data included
     try:
         shot_data = shot_to_dict(shot)
-        stats = monitor.get_session_stats() if monitor else {}
+        stats = _session_stats()
         # The publication boundary is the shot's first result, never a late update.
         publication_timing_updated = late_update is None and _record_server_publication_invocation(
             shot
@@ -5741,7 +5753,7 @@ def _persist_shot_publication(
 def _emit_initial_ops_shot(shot: Shot) -> bool:
     """Publish immediately available OPS metrics before slow enrichments."""
     try:
-        stats = monitor.get_session_stats() if monitor else {}
+        stats = _session_stats()
         pending = {}
         if iwr6843_runtime is not None:
             pending["iwr6843"] = True
@@ -5790,7 +5802,7 @@ def _emit_ops_enrichment_status(shot: Shot, *, status: str, reason: str) -> None
             "shot_update",
             {
                 "shot": shot_to_dict(shot),
-                "stats": monitor.get_session_stats() if monitor else {},
+                "stats": _session_stats(),
                 "pending": ({name: True for name in hardware} if status == "pending" else {}),
                 "enrichment": {
                     "status": status,
@@ -6201,7 +6213,7 @@ def on_swing_speed_detected(event: SwingSpeedEvent):
     event.profile_name = active_profile.name
     event_data = swing_speed_to_dict(event)
     shot_data = swing_speed_to_shot_dict(event)
-    stats = monitor.get_session_stats() if monitor else {}
+    stats = _session_stats()
     socketio.emit("swing_speed", {"event": event_data, "stats": stats})
     socketio.emit("shot", {"shot": shot_data, "stats": stats})
     logger.info(
