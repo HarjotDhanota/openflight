@@ -59,14 +59,23 @@ describe('socketService trace wiring', () => {
       'noteShotReceived:shot_update',
       'handleShotUpdate',
     ]);
-    expect(vi.mocked(noteShotReceived).mock.calls[0].slice(0, 3)).toEqual(['ts-1', 'shot', trace]);
+    // The message's own shot object: the one the store keeps and the live panel renders.
+    expect(vi.mocked(noteShotReceived).mock.calls[0][0]).toBe(message.shot);
+    expect(vi.mocked(noteShotReceived).mock.calls[0].slice(1, 3)).toEqual(['shot', trace]);
   });
 
   it('still handles an untraced shot', () => {
-    handlers.shot({ shot: { timestamp: 'ts-2' }, stats: {} });
+    const message = { shot: { timestamp: 'ts-2' }, stats: {} };
+    handlers.shot(message);
 
     expect(order).toContain('handleShotMessage');
-    expect(vi.mocked(noteShotReceived).mock.calls[0].slice(0, 3)).toEqual(['ts-2', 'shot', undefined]);
+    expect(vi.mocked(noteShotReceived).mock.calls[0].slice(0, 3)).toEqual([message.shot, 'shot', undefined]);
+  });
+
+  it('asks for a clock ping as soon as it (re)connects', () => {
+    handlers.connect(undefined);
+
+    expect(emitted.map(([event]) => event)).toContain('trace_clock_hello');
   });
 
   it('answers a clock ping on the same socket at once', () => {

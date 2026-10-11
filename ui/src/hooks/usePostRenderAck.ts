@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo } from 'react';
+import { useLayoutEffect, useMemo } from 'react';
 import type { Shot } from '../types/shot';
 import { createAckScheduler } from '../services/paintTrace';
 import { socketService } from '../services/socketService';
@@ -13,5 +13,6 @@ export function usePostRenderAck(shot: Shot | null, acknowledgeable: boolean): v
   useLayoutEffect(() => {
     scheduler.commit(shot, acknowledgeable);
   }, [scheduler, shot, acknowledgeable]);
-  useEffect(() => () => scheduler.dispose(), [scheduler]);
+  // A layout cleanup runs in the same commit as the unmount, before any frame callback.
+  useLayoutEffect(() => () => scheduler.dispose(), [scheduler]);
 }

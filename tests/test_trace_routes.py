@@ -1,6 +1,8 @@
 """Browser clock samples and post-render acknowledgements (stage 1b Pi trace)."""
 
+import re
 import time
+from pathlib import Path
 
 import pytest
 from flask import Flask
@@ -9,6 +11,7 @@ from flask_socketio import SocketIO
 from openflight import pi_trace
 from openflight.trace_routes import (
     MAX_CLOCK_SAMPLE_AGE_S,
+    NOT_SHOWN_REASONS,
     PING_INTERVAL_S,
     SEMANTICS,
     BrowserClockPinger,
@@ -103,10 +106,22 @@ def test_recorder_seq_is_never_overwritten_by_the_ping_sequence(recorder):
         ({"ping_seq": 1, "browser_ms": float("nan"), "document_id": "d"}, "browser_ms"),
         ({"ping_seq": 1, "browser_ms": 1.0}, "document"),
         ({"ping_seq": 1, "browser_ms": 1.0, "document_id": ""}, "document"),
-        ({"ping_seq": 1, "browser_ms": 1.0, "document_id": "d", "client_kind": 7}, "document"),
+        (
+            {
+                "ping_seq": 1,
+                "browser_ms": 1.0,
+                "document_id": "d",
+                "user_agent": "UA",
+                "client_kind": 7,
+            },
+            "document",
+        ),
+        ({"ping_seq": 1, "browser_ms": 1.0, "document_id": "d"}, "user_agent"),
+        ({"ping_seq": 1, "browser_ms": 1.0, "document_id": "d", "user_agent": None}, "user_agent"),
+        ({"ping_seq": 1, "browser_ms": 1.0, "document_id": "d", "user_agent": ""}, "user_agent"),
         (
             {"ping_seq": 1, "browser_ms": 1.0, "document_id": "d", "user_agent": "x" * 600},
-            "document",
+            "user_agent",
         ),
     ],
 )
@@ -200,6 +215,7 @@ def test_painted_equal_to_received_is_accepted(recorder):
         ({"time_origin_ms": "now"}, "document"),
         ({"client_kind": ["local_kiosk"]}, "document"),
         ({"renderer_version": 126}, "document"),
+        ({"user_agent": None}, "user_agent"),
         ({"rendered_core": None}, "rendered_core"),
         ({"rendered_core": {"ball_speed_mph": {"nested": 1}}}, "rendered_core"),
         ({"rendered_core": {"ball_speed_mph": float("nan")}}, "rendered_core"),
@@ -211,6 +227,22 @@ def test_bad_reports_are_rejected_with_a_reason(recorder, change, reason):
     marks = read_marks(recorder)
     assert [m["name"] for m in marks] == ["browser_report_rejected"]
     assert marks[0]["reason"] == reason and marks[0]["sid"] == "s"
+    report = {**GOOD, **change}
+    well_formed_attempt = isinstance(report["attempt_id"], str) and report["attempt_id"] != ""
+    assert marks[0]["attempt_id"] == (report["attempt_id"] if well_formed_attempt else None)
+    assert marks[0]["revision"] == (2 if reason != "revision" else None)
+
+
+def test_a_rejected_report_names_the_attempt_and_revision_it_carried(recorder):
+    record_paint_report({**GOOD, "semantics": "presented_frame"}, "s")
+    record_not_shown_report({**NOT_SHOWN, "reason": "bored"}, "s")
+    record_paint_report({**GOOD, "attempt_id": ["t"], "revision": -1}, "s")
+    marks = read_marks(recorder)
+    assert [(m["attempt_id"], m["revision"]) for m in marks] == [
+        ("t-00001", 2),
+        ("t-00001", 1),
+        (None, None),
+    ]
 
 
 def test_rendered_core_with_null_values_is_kept(recorder):
@@ -240,6 +272,7 @@ def test_a_result_not_shown_is_marked_with_why(recorder, reason):
         ({"reported_ms": None}, "times"),
         ({"document_id": ""}, "document"),
         ({"update_kind": "status"}, "update_kind"),
+        ({"user_agent": None}, "user_agent"),
     ],
 )
 def test_bad_not_shown_reports_are_rejected(recorder, change, reason):
@@ -337,6 +370,110 @@ def test_a_failing_ping_never_stops_the_ping_loop(recorder):
 
     sock = FlakySocket()
     register_trace_routes(sock, interval_s=0.0)
-    assert set(sock.handlers) == {"trace_clock_pong", "trace_paint", "trace_not_shown"}
+    assert set(sock.handlers) == {
+        "trace_clock_hello",
+        "trace_clock_pong",
+        "trace_paint",
+        "trace_not_shown",
+    }
     sock.task()  # runs until the recorder is removed
     assert [event for event, _ in calls] == ["trace_clock_ping"] * 3
+
+
+def test_a_ping_can_go_to_one_document(recorder):
+    sent = []
+    pinger = BrowserClockPinger(lambda e, p, **kw: sent.append((e, p, kw)), clock=lambda: 5)
+    seq = pinger.ping(to="sid-new")
+    pinger.ping()
+    assert sent == [
+        ("trace_clock_ping", {"ping_seq": seq}, {"to": "sid-new"}),
+        ("trace_clock_ping", {"ping_seq": seq + 1}, {}),
+    ]
+    del recorder
+
+
+def _socket_app():
+    app = Flask(__name__)
+    return app, SocketIO(app, async_mode="threading")
+
+
+def _pings(client):
+    return [m["args"][0] for m in client.get_received() if m["name"] == "trace_clock_ping"]
+
+
+def test_a_document_that_says_hello_gets_its_own_ping_at_once(recorder):
+    """A (re)connected kiosk needs a clock sample now, not at the next broadcast."""
+    app, socketio = _socket_app()
+    register_trace_routes(socketio, interval_s=0.05)
+    other = socketio.test_client(app)
+    kiosk = socketio.test_client(app)
+    try:
+        kiosk.emit("trace_clock_hello")
+        kiosk_pings = _pings(kiosk)
+        other_seqs = {p["ping_seq"] for p in _pings(other)}
+        targeted = [p for p in kiosk_pings if p["ping_seq"] not in other_seqs]
+        assert len(targeted) == 1, (kiosk_pings, other_seqs)
+        kiosk.emit("trace_clock_pong", _pong(targeted[0]["ping_seq"]))
+    finally:
+        kiosk.disconnect()
+        other.disconnect()
+        pi_trace.set_recorder(None)
+    samples = _named(read_marks(recorder), "browser_clock_sample")
+    assert targeted[0]["ping_seq"] in [s["ping_seq"] for s in samples]
+
+
+def test_hello_is_ignored_once_tracing_stops(recorder):
+    app, socketio = _socket_app()
+    register_trace_routes(socketio, interval_s=0.05)
+    client = socketio.test_client(app)
+    pi_trace.set_recorder(None)
+    time.sleep(0.1)  # let the loop see the recorder is gone
+    client.get_received()
+    try:
+        client.emit("trace_clock_hello")
+        assert _pings(client) == []
+    finally:
+        client.disconnect()
+    del recorder
+
+
+def test_an_untraced_server_ignores_hello():
+    pi_trace.set_recorder(None)
+    app, socketio = _socket_app()
+    assert register_trace_routes(socketio) is None
+    client = socketio.test_client(app)
+    try:
+        client.emit("trace_clock_hello")
+        assert _pings(client) == []
+    finally:
+        client.disconnect()
+
+
+def test_routes_never_replace_the_servers_connect_handler(recorder):
+    """python-socketio keeps one handler per event: trace routes must not take 'connect'."""
+    events = []
+
+    class Recording:
+        def on(self, event):
+            events.append(event)
+            return lambda handler: handler
+
+        def emit(self, *_a, **_k):
+            pass
+
+        def start_background_task(self, _target):
+            pass
+
+    register_trace_routes(Recording())
+    assert "connect" not in events and "disconnect" not in events
+    del recorder
+
+
+def test_not_shown_reasons_match_the_browser():
+    """The browser's NotShownReason list and the server's accepted set are one list."""
+    source = (
+        Path(__file__).resolve().parents[1] / "ui" / "src" / "services" / "paintTrace.ts"
+    ).read_text(encoding="utf-8")
+    block = re.search(r"export const NOT_SHOWN_REASONS = \[(.*?)\] as const;", source, re.S)
+    assert block, "paintTrace.ts must export NOT_SHOWN_REASONS as a const list"
+    assert set(re.findall(r"'([a-z_]+)'", block.group(1))) == NOT_SHOWN_REASONS

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Shot } from '../types/shot';
 import {
   DOCUMENT_ID,
+  NOT_SHOWN_REASONS,
   afterNextPaint,
   answerClockPing,
   clearPendingPaints,
@@ -54,8 +55,9 @@ describe('post-render acknowledgement', () => {
 
   it('acknowledges the committed revision with its rendered core values and the document identity', () => {
     const { frame, acks, paints } = harness();
-    noteShotReceived('ts-1', 'shot', tag(1), 200);
-    acks.commit(shot('ts-1', 120, { launch_angle_vertical: 12.5, launch_angle_vertical_source: 'radar' }), true);
+    const a = shot('ts-1', 120, { launch_angle_vertical: 12.5, launch_angle_vertical_source: 'radar' });
+    noteShotReceived(a, 'shot', tag(1), 200);
+    acks.commit(a, true);
     expect(paints()).toEqual([]); // nothing before the frame
     frame.flush();
     expect(paints()).toHaveLength(1);
@@ -79,8 +81,9 @@ describe('post-render acknowledgement', () => {
 
   it('echoes a missing or null core value as null', () => {
     const { frame, acks, paints } = harness();
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
-    acks.commit(shot('ts-1', null), true);
+    const a = shot('ts-1', null);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    acks.commit(a, true);
     frame.flush();
     expect(paints()[0].rendered_core).toEqual({
       ball_speed_mph: null,
@@ -90,21 +93,24 @@ describe('post-render acknowledgement', () => {
   });
 
   it('acknowledges a revision once: later re-renders of it send nothing', () => {
-    const { frame, acks, paints } = harness();
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
-    acks.commit(shot('ts-1', 120), true);
+    const { frame, acks, sent } = harness();
+    const a = shot('ts-1', 120);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    acks.commit(a, true);
     frame.flush();
-    acks.commit(shot('ts-1', 120), true);
+    acks.commit(a, true);
     frame.flush();
-    expect(paints()).toHaveLength(1);
+    expect(sent.map(([event]) => event)).toEqual(['trace_paint']);
   });
 
   it('test_superseded_revision_is_cancelled', () => {
     const { frame, acks, paints, notShown } = harness();
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
-    acks.commit(shot('ts-1', 120), true); // A scheduled
-    noteShotReceived('ts-1', 'shot_update', tag(2, true, 'late_update'), 20);
-    acks.commit(shot('ts-1', 121), true); // B commits before A's frame
+    const a = shot('ts-1', 120);
+    const b = shot('ts-1', 121);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    acks.commit(a, true); // A scheduled
+    noteShotReceived(b, 'shot_update', tag(2, true, 'late_update'), 20);
+    acks.commit(b, true); // B commits before A's frame
     frame.flush();
     expect(paints()).toHaveLength(1);
     expect(paints()[0]).toMatchObject({ revision: 2, event: 'shot_update', rendered_core: { ball_speed_mph: 121 } });
@@ -113,9 +119,10 @@ describe('post-render acknowledgement', () => {
 
   it('a revision replaced before it was ever committed is reported superseded', () => {
     const { frame, acks, paints, notShown } = harness();
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
-    noteShotReceived('ts-1', 'shot_update', tag(2, true, 'late_update'), 20);
-    acks.commit(shot('ts-1', 121), true);
+    const b = shot('ts-1', 121);
+    noteShotReceived(shot('ts-1', 120), 'shot', tag(1), 10);
+    noteShotReceived(b, 'shot_update', tag(2, true, 'late_update'), 20);
+    acks.commit(b, true);
     frame.flush();
     expect(paints().map((p) => p.revision)).toEqual([2]);
     expect(notShown().map((p) => [p.revision, p.reason])).toEqual([[1, 'superseded']]);
@@ -123,11 +130,13 @@ describe('post-render acknowledgement', () => {
 
   it('a revision whose frame ran before the next revision committed is acknowledged, not superseded', () => {
     const { frame, acks, paints, notShown } = harness();
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
-    acks.commit(shot('ts-1', 120), true);
-    noteShotReceived('ts-1', 'shot_update', tag(2, true, 'late_update'), 20); // arrives before A's frame
+    const a = shot('ts-1', 120);
+    const b = shot('ts-1', 121);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    acks.commit(a, true);
+    noteShotReceived(b, 'shot_update', tag(2, true, 'late_update'), 20); // arrives before A's frame
     frame.flush(); // A's frame: A is what is on screen
-    acks.commit(shot('ts-1', 121), true);
+    acks.commit(b, true);
     frame.flush();
     expect(paints().map((p) => [p.revision, (p.rendered_core as Record<string, unknown>).ball_speed_mph])).toEqual([
       [1, 120],
@@ -138,20 +147,52 @@ describe('post-render acknowledgement', () => {
 
   it('an identical re-render does not cancel the scheduled acknowledgement (R-F6)', () => {
     const { frame, acks, paints } = harness();
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
-    acks.commit(shot('ts-1', 120), true);
-    acks.commit(shot('ts-1', 120), true); // a new object with the same values
-    acks.commit(shot('ts-1', 120, { club: 'driver' }), true); // a non-core change
+    const a = shot('ts-1', 120);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    acks.commit(a, true);
+    acks.commit(a, true);
+    acks.commit(a, true);
     frame.flush();
     expect(paints()).toHaveLength(1);
     expect(paints()[0]).toMatchObject({ revision: 1, rendered_core: { ball_speed_mph: 120 } });
   });
 
-  it('a changed rendered value reschedules: only the values on screen are acknowledged', () => {
+  it('a status notice moves the revision onto the object now shown, without its own ack (R-F5)', () => {
+    const { frame, acks, paints, notShown } = harness();
+    const a = shot('ts-1', 120);
+    const status = shot('ts-1', 120, { club: 'driver' }); // a new object, same revision values
+    noteShotReceived(a, 'shot', tag(1), 10);
+    acks.commit(a, true);
+    noteShotReceived(status, 'shot_update', tag(1, false, 'status'), 15);
+    acks.commit(status, true); // the store now shows the status object
+    frame.flush();
+    expect(paints().map((p) => [p.revision, p.update_kind, p.received_ms])).toEqual([[1, 'first', 10]]);
+    expect(notShown()).toEqual([]);
+  });
+
+  it('a status notice for a revision already acknowledged, or with revision 0, sends nothing', () => {
+    const { frame, acks, sent } = harness();
+    const a = shot('ts-1', 120);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    acks.commit(a, true);
+    frame.flush();
+    const status = shot('ts-1', 120);
+    noteShotReceived(status, 'shot_update', tag(1, false, 'status'), 20);
+    acks.commit(status, true);
+    const early = shot('ts-2', 99);
+    noteShotReceived(early, 'shot_update', tag(0, false, 'status'), 30);
+    acks.commit(early, true);
+    frame.flush();
+    expect(sent.map(([event]) => event)).toEqual(['trace_paint']);
+  });
+
+  it('a changed rendered value of the same object reschedules: only the values on screen are acknowledged', () => {
     const { frame, acks, paints } = harness();
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
-    acks.commit(shot('ts-1', 120), true);
-    acks.commit(shot('ts-1', 119), true);
+    const a = shot('ts-1', 120);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    acks.commit(a, true);
+    (a as { ball_speed_mph: number }).ball_speed_mph = 119;
+    acks.commit(a, true);
     frame.flush();
     expect(paints()).toHaveLength(1);
     expect(paints()[0].rendered_core).toMatchObject({ ball_speed_mph: 119 });
@@ -160,11 +201,13 @@ describe('post-render acknowledgement', () => {
   it('test_hidden_or_covered_panel_sends_nothing', () => {
     let visible = true;
     const { frame, acks, paints, notShown } = harness({ visible: () => visible });
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
-    acks.commit(shot('ts-1', 120), false); // covered by an overlay
+    const a = shot('ts-1', 120);
+    const b = shot('ts-2', 99);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    acks.commit(a, false); // covered by an overlay
     frame.flush();
-    noteShotReceived('ts-2', 'shot', tag(1), 10);
-    acks.commit(shot('ts-2', 99), true);
+    noteShotReceived(b, 'shot', tag(1), 10);
+    acks.commit(b, true);
     visible = false; // document hidden before the frame
     frame.flush();
     expect(paints()).toEqual([]);
@@ -173,9 +216,10 @@ describe('post-render acknowledgement', () => {
 
   it('a covered revision is never acknowledged, even after the overlay closes (R-F6)', () => {
     const { frame, acks, paints, notShown } = harness();
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
-    acks.commit(shot('ts-1', 120), false);
-    acks.commit(shot('ts-1', 120), true); // picker dismissed
+    const a = shot('ts-1', 120);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    acks.commit(a, false);
+    acks.commit(a, true); // picker dismissed
     frame.flush();
     expect(paints()).toEqual([]);
     expect(notShown()).toHaveLength(1);
@@ -183,9 +227,10 @@ describe('post-render acknowledgement', () => {
 
   it('a scheduled acknowledgement is cancelled when an overlay covers the result before its frame', () => {
     const { frame, acks, paints, notShown } = harness();
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
-    acks.commit(shot('ts-1', 120), true);
-    acks.commit(shot('ts-1', 120), false);
+    const a = shot('ts-1', 120);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    acks.commit(a, true);
+    acks.commit(a, false);
     frame.flush();
     expect(paints()).toEqual([]);
     expect(notShown().map((p) => p.reason)).toEqual(['covered']);
@@ -193,8 +238,9 @@ describe('post-render acknowledgement', () => {
 
   it('a hidden document at commit is reported, not acknowledged', () => {
     const { frame, acks, paints, notShown } = harness({ visible: () => false });
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
-    acks.commit(shot('ts-1', 120), true);
+    const a = shot('ts-1', 120);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    acks.commit(a, true);
     frame.flush();
     expect(paints()).toEqual([]);
     expect(notShown().map((p) => p.reason)).toEqual(['document_hidden']);
@@ -202,57 +248,96 @@ describe('post-render acknowledgement', () => {
 
   it('a result received while the live view was not shown is never acknowledged', () => {
     const { frame, acks, paints, notShown } = harness();
+    const a = shot('ts-1', 120);
     setLiveViewShown(false);
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
+    noteShotReceived(a, 'shot', tag(1), 10);
     setLiveViewShown(true);
-    acks.commit(shot('ts-1', 120), true);
+    acks.commit(a, true);
     frame.flush();
     expect(paints()).toEqual([]);
     expect(notShown().map((p) => p.reason)).toEqual(['live_view_not_shown']);
   });
 
-  it('leaving the live view before the frame withholds the revision for good', () => {
-    const first = harness();
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
-    first.acks.commit(shot('ts-1', 120), true);
-    first.acks.dispose(); // the live panel unmounts (view switch)
-    setLiveViewShown(false);
-    first.frame.flush();
-    setLiveViewShown(true);
-    const second = harness(); // the live panel mounts again later
-    second.acks.commit(shot('ts-1', 120), true);
-    second.frame.flush();
-    expect([...first.paints(), ...second.paints()]).toEqual([]);
-    expect(second.notShown().map((p) => p.reason)).toEqual(['live_view_not_shown']);
-  });
-
-  it('dispose cancels a scheduled acknowledgement (unmount, view switch)', () => {
-    const { frame, acks, paints } = harness();
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
-    acks.commit(shot('ts-1', 120), true);
-    acks.dispose();
+  it('the live view leaving before the frame withholds the revision, even without an unmount', () => {
+    const { frame, acks, paints, notShown } = harness();
+    const a = shot('ts-1', 120);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    acks.commit(a, true);
+    setLiveViewShown(false); // the view switched; React has not unmounted the panel yet
     frame.flush();
     expect(paints()).toEqual([]);
+    expect(notShown().map((p) => p.reason)).toEqual(['live_view_not_shown']);
+  });
+
+  it('a revision scheduled after the live view was left is withheld at its frame', () => {
+    const { frame, acks, paints, notShown } = harness();
+    const a = shot('ts-1', 120);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    acks.commit(a, true);
+    const b = shot('ts-1', 121);
+    noteShotReceived(b, 'shot_update', tag(2, true, 'late_update'), 20); // not in pending's flag sweep
+    setLiveViewShown(false);
+    frame.flush();
+    expect(paints()).toEqual([]);
+    expect(notShown().map((p) => [p.revision, p.reason])).toEqual([[1, 'live_view_not_shown']]);
+  });
+
+  it('unmounting before the frame reports unmounted_before_paint and never acknowledges', () => {
+    const { frame, acks, paints, notShown } = harness();
+    const a = shot('ts-1', 120);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    acks.commit(a, true);
+    acks.dispose();
+    frame.flush();
+    acks.commit(a, true); // nothing is left to acknowledge
+    frame.flush();
+    expect(paints()).toEqual([]);
+    expect(notShown().map((p) => p.reason)).toEqual(['unmounted_before_paint']);
   });
 
   it('a scheduler that commits again after dispose still acknowledges (StrictMode remount)', () => {
-    const { frame, acks, paints } = harness();
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
-    acks.commit(shot('ts-1', 120), true);
+    const { frame, acks, paints, notShown } = harness();
+    const a = shot('ts-1', 120);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    acks.commit(a, true);
     acks.dispose();
-    acks.commit(shot('ts-1', 120), true);
+    acks.commit(a, true);
     frame.flush();
     expect(paints()).toHaveLength(1);
+    expect(notShown()).toEqual([]);
   });
 
-  it('another shot replacing the result before its frame reports the first superseded', () => {
+  it('another shot on screen before the frame reports the first not displayed', () => {
     const { frame, acks, paints, notShown } = harness();
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
-    acks.commit(shot('ts-1', 120), true);
+    const a = shot('ts-1', 120);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    acks.commit(a, true);
     acks.commit(shot('ts-0', 90), true); // e.g. a profile switch shows an older, untraced shot
     frame.flush();
     expect(paints()).toEqual([]);
-    expect(notShown().map((p) => [p.revision, p.reason])).toEqual([[1, 'superseded']]);
+    expect(notShown().map((p) => [p.revision, p.reason])).toEqual([[1, 'not_displayed']]);
+  });
+
+  it('a revision the profile filter hides is reported at the next commit and never acknowledged later', () => {
+    const { frame, acks, paints, notShown } = harness();
+    const shown = shot('ts-0', 90);
+    const hidden = shot('ts-1', 120, { profile_id: 'other' });
+    noteShotReceived(hidden, 'shot', tag(1), 10);
+    acks.commit(shown, true); // the live result still shows this profile's last shot
+    frame.flush();
+    acks.commit(hidden, true); // seconds later: the user switches to the other profile
+    frame.flush();
+    expect(paints()).toEqual([]);
+    expect(notShown().map((p) => p.reason)).toEqual(['not_displayed']);
+  });
+
+  it('a different object for the same shot is not the revision received', () => {
+    const { frame, acks, paints, notShown } = harness();
+    noteShotReceived(shot('ts-1', 120), 'shot', tag(1), 10);
+    acks.commit(shot('ts-1', 120), true); // e.g. the session was reloaded from the server
+    frame.flush();
+    expect(paints()).toEqual([]);
+    expect(notShown().map((p) => p.reason)).toEqual(['not_displayed']);
   });
 
   it('an untraced shot is never acknowledged', () => {
@@ -262,36 +347,26 @@ describe('post-render acknowledgement', () => {
     expect(sent).toEqual([]);
   });
 
-  it('a status notice is never acknowledged and never displaces the shot revision (R-F5)', () => {
-    const { frame, acks, paints } = harness();
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
-    noteShotReceived('ts-1', 'shot_update', tag(1, false, 'status'), 15);
-    acks.commit(shot('ts-1', 120), true);
-    frame.flush();
-    expect(paints().map((p) => [p.revision, p.update_kind, p.received_ms])).toEqual([[1, 'first', 10]]);
-    noteShotReceived('ts-2', 'shot_update', tag(0, false, 'status'), 20);
-    acks.commit(shot('ts-2', 99), true);
-    frame.flush();
-    expect(paints()).toHaveLength(1);
-  });
-
-  it('the same revision received twice keeps its first receive time and is not superseded', () => {
+  it('the same revision received twice keeps its first receive time, on the object now shown', () => {
     const { frame, acks, paints, notShown } = harness();
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
-    noteShotReceived('ts-1', 'shot', tag(1), 30);
-    acks.commit(shot('ts-1', 120), true);
+    const again = shot('ts-1', 120);
+    noteShotReceived(shot('ts-1', 120), 'shot', tag(1), 10);
+    noteShotReceived(again, 'shot', tag(1), 30);
+    acks.commit(again, true);
     frame.flush();
     expect(paints().map((p) => p.received_ms)).toEqual([10]);
     expect(notShown()).toEqual([]);
   });
 
-  it('a malformed tag is ignored without throwing', () => {
+  it('a malformed tag or shot is ignored without throwing', () => {
     const { frame, acks, sent } = harness();
+    const a = shot('ts-1', 120);
     expect(() =>
-      noteShotReceived('ts-1', 'shot', { attempt_id: 't-1', revision: 1 } as unknown as TraceTag, 10)
+      noteShotReceived(a, 'shot', { attempt_id: 't-1', revision: 1 } as unknown as TraceTag, 10)
     ).not.toThrow();
-    expect(() => noteShotReceived('ts-1', 'shot', null as unknown as TraceTag, 10)).not.toThrow();
-    acks.commit(shot('ts-1', 120), true);
+    expect(() => noteShotReceived(a, 'shot', null as unknown as TraceTag, 10)).not.toThrow();
+    expect(() => noteShotReceived(undefined, 'shot', tag(1), 10)).not.toThrow();
+    acks.commit(a, true);
     frame.flush();
     expect(sent).toEqual([]);
   });
@@ -306,35 +381,48 @@ describe('post-render acknowledgement', () => {
       () => 1,
       () => true
     );
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
-    noteShotReceived('ts-2', 'shot', tag(1), 10);
-    expect(() => acks.commit(shot('ts-1', 120), false)).not.toThrow();
-    expect(() => acks.commit(shot('ts-2', 120), true)).not.toThrow();
+    const a = shot('ts-1', 120);
+    const b = shot('ts-2', 120);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    expect(() => acks.commit(a, false)).not.toThrow();
+    noteShotReceived(b, 'shot', tag(1), 10);
+    expect(() => acks.commit(b, true)).not.toThrow();
     expect(() => frame.flush()).not.toThrow();
   });
 
   it('a shot whose fields cannot be read never throws out of commit', () => {
     const { frame, acks, sent } = harness();
-    noteShotReceived('ts-1', 'shot', tag(1), 10);
     const hostile = {
       timestamp: 'ts-1',
       get ball_speed_mph(): number {
         throw new Error('bad getter');
       },
     } as unknown as Shot;
+    noteShotReceived(hostile, 'shot', tag(1), 10);
     expect(() => acks.commit(hostile, true)).not.toThrow();
     frame.flush();
     expect(sent.filter(([event]) => event === 'trace_paint')).toEqual([]);
   });
 
   it('keeps at most a bounded number of unacknowledged revisions', () => {
-    const { frame, acks, paints } = harness();
-    for (let i = 0; i < 100; i += 1) noteShotReceived(`ts-${i}`, 'shot', tag(1), i);
-    acks.commit(shot('ts-0', 120), true); // the oldest was forgotten
-    frame.flush();
-    acks.commit(shot('ts-99', 120), true);
+    const { frame, acks, paints, notShown } = harness();
+    const shots = Array.from({ length: 100 }, (_, i) => shot(`ts-${i}`, 120));
+    shots.forEach((s, i) => noteShotReceived(s, 'shot', tag(1), i));
+    acks.commit(shots[99], true);
     frame.flush();
     expect(paints().map((p) => p.received_ms)).toEqual([99]);
+    expect(notShown()).toHaveLength(63); // the 36 oldest were forgotten unreported
+  });
+
+  it('exports exactly the reasons a not-shown report may carry', () => {
+    expect([...NOT_SHOWN_REASONS].sort()).toEqual([
+      'covered',
+      'document_hidden',
+      'live_view_not_shown',
+      'not_displayed',
+      'superseded',
+      'unmounted_before_paint',
+    ]);
   });
 });
 

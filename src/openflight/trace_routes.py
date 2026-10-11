@@ -35,13 +35,15 @@ SEMANTICS = "post_render_task"
 PAINT_EVENTS = frozenset({"shot", "shot_update"})
 # R-F5: a status notice is never acknowledged as a result paint.
 SHOT_UPDATE_KINDS = frozenset({"first", "late_update"})
+# The browser's NOT_SHOWN_REASONS (ui/src/services/paintTrace.ts) is the same list (tested).
 NOT_SHOWN_REASONS = frozenset(
     {
         "covered",  # an overlay (club picker, replay, shutdown, menu, dialog) covers the result
         "document_hidden",  # the page was not visible
-        "live_view_not_shown",  # received while the live result was not mounted
-        "unmounted_before_paint",  # the live result left before its frame
-        "superseded",  # a later revision of the shot replaced it before its frame
+        "live_view_not_shown",  # received or scheduled while the live view was off screen
+        "unmounted_before_paint",  # the live result component unmounted before its frame
+        "superseded",  # a later revision of the same shot replaced it before its frame
+        "not_displayed",  # the live result showed another shot (e.g. the profile filter)
     }
 )
 MAX_TEXT_LENGTH = 512
@@ -61,17 +63,21 @@ def _revision(value: Any) -> bool:
 
 
 def _identity_problem(data: dict, *, require_time_origin: bool) -> Optional[str]:
-    """'document' when the document identity is missing or malformed, else None."""
+    """Why the document identity is unusable ('document' or 'user_agent'), else None.
+
+    The user agent is required: a sample or report without one could mix renderers
+    (a Chromium kiosk and a packaged shell) in one clock mapping.
+    """
     time_origin = data.get("time_origin_ms")
     if not _text(data.get("document_id")):
         return "document"
+    if not _text(data.get("user_agent")):
+        return "user_agent"
     if require_time_origin and not _finite(time_origin):
         return "document"
     if time_origin is not None and not _finite(time_origin):
         return "document"
-    if not all(
-        _optional_text(data.get(key)) for key in ("client_kind", "user_agent", "renderer_version")
-    ):
+    if not all(_optional_text(data.get(key)) for key in ("client_kind", "renderer_version")):
         return "document"
     return None
 
@@ -109,14 +115,17 @@ class BrowserClockPinger:
         self._sent: OrderedDict[int, int] = OrderedDict()
         self._lock = threading.Lock()
 
-    def ping(self) -> int:
-        """Send one ping and remember its host send time."""
+    def ping(self, to: Optional[str] = None) -> int:
+        """Send one ping (to every document, or only to socket ``to``); remember its send time."""
         with self._lock:
             seq = next(self._seq)
             self._sent[seq] = self._clock()
             while len(self._sent) > self._max_outstanding:
                 self._sent.popitem(last=False)
-        self._emit("trace_clock_ping", {"ping_seq": seq})
+        if to is None:
+            self._emit("trace_clock_ping", {"ping_seq": seq})
+        else:
+            self._emit("trace_clock_ping", {"ping_seq": seq}, to=to)
         return seq
 
     def pong(self, data: dict, sid: Optional[str]) -> None:
@@ -215,8 +224,18 @@ def _not_shown_problem(data: dict) -> Optional[str]:
     return problem
 
 
-def _reject(report: str, sid: Optional[str], reason: str) -> bool:
-    pi_trace.mark("browser_report_rejected", None, sid=sid, report=report, reason=reason)
+def _reject(report: str, data: dict, sid: Optional[str], reason: str) -> bool:
+    """Mark a rejected report, naming its attempt and revision when those are well-formed."""
+    attempt_id = data.get("attempt_id")
+    revision = data.get("revision")
+    pi_trace.mark(
+        "browser_report_rejected",
+        attempt_id if _text(attempt_id) else None,
+        sid=sid,
+        report=report,
+        reason=reason,
+        revision=revision if _revision(revision) else None,
+    )
     return False
 
 
@@ -236,7 +255,7 @@ def record_paint_report(data: dict, sid: Optional[str]) -> bool:
         return False
     problem = _paint_problem(data)
     if problem is not None:
-        return _reject("paint", sid, problem)
+        return _reject("paint", data, sid, problem)
     pi_trace.mark(
         "browser_report",
         data["attempt_id"],
@@ -256,7 +275,7 @@ def record_not_shown_report(data: dict, sid: Optional[str]) -> bool:
         return False
     problem = _not_shown_problem(data)
     if problem is not None:
-        return _reject("not_shown", sid, problem)
+        return _reject("not_shown", data, sid, problem)
     pi_trace.mark(
         "browser_result_not_shown",
         data["attempt_id"],
@@ -287,6 +306,20 @@ def register_trace_routes(
             handler(data if isinstance(data, dict) else {}, _sid())
         except Exception:  # pylint: disable=broad-exception-caught
             logger.warning("[TRACE] browser %s failed; ignored", what, exc_info=True)
+
+    def _hello() -> None:
+        # A (re)connected document gets its own ping at once, so its first clock sample
+        # never waits for the next broadcast. Never a 'connect' handler: python-socketio
+        # keeps one per event, and server.py owns it.
+        if pi_trace.get_recorder() is not None:
+            pinger.ping(to=_sid())
+
+    @socketio.on("trace_clock_hello")
+    def _on_hello(_data=None):
+        try:
+            _hello()
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning("[TRACE] browser clock hello failed; ignored", exc_info=True)
 
     @socketio.on("trace_clock_pong")
     def _on_pong(data=None):

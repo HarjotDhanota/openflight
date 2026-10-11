@@ -86,13 +86,13 @@ const tag = (revision: number, updateKind: TraceTag['update_kind'] = 'first'): T
 let container: HTMLDivElement;
 let root: Root;
 
-function render(shot: Shot | null, acknowledgeable = true) {
+function render(shot: Shot | null, acknowledgeable = true, shots: Shot[] = shot ? [shot] : [], profileId = 'james') {
   act(() => {
     root.render(
       <LivePanel
         shot={shot}
-        shots={shot ? [shot] : []}
-        profileId="james"
+        shots={shots}
+        profileId={profileId}
         profileName="James"
         clubLabel="DR"
         onSelectMetric={() => {}}
@@ -154,7 +154,7 @@ afterEach(() => {
 describe('LivePanel post-render acknowledgement', () => {
   it('acknowledges the shown revision with exactly the values on screen', async () => {
     const shot = makeShot();
-    noteShotReceived(TS, 'shot', tag(1), performance.now());
+    noteShotReceived(shot, 'shot', tag(1), performance.now());
     render(shot);
     expect(calls('trace_paint')).toEqual([]); // never inside the render commit
     await nextFrames();
@@ -176,10 +176,12 @@ describe('LivePanel post-render acknowledgement', () => {
   });
 
   it('a late update replacing the revision before its frame: only the new one is acknowledged', async () => {
-    noteShotReceived(TS, 'shot', tag(1), performance.now());
-    render(makeShot());
-    noteShotReceived(TS, 'shot_update', tag(2, 'late_update'), performance.now());
-    render(makeShot({ ball_speed_mph: 122.6 }));
+    const first = makeShot();
+    const late = makeShot({ ball_speed_mph: 122.6 });
+    noteShotReceived(first, 'shot', tag(1), performance.now());
+    render(first);
+    noteShotReceived(late, 'shot_update', tag(2, 'late_update'), performance.now());
+    render(late);
     await nextFrames();
 
     expect(calls('trace_paint').map((p) => p.revision)).toEqual([2]);
@@ -188,38 +190,69 @@ describe('LivePanel post-render acknowledgement', () => {
     expect(calls('trace_not_shown').map((p) => [p.revision, p.reason])).toEqual([[1, 'superseded']]);
   });
 
-  it('an identical re-render before the frame keeps the acknowledgement', async () => {
-    noteShotReceived(TS, 'shot', tag(1), performance.now());
-    render(makeShot());
-    render(makeShot()); // a new object with the same values (e.g. a status notice)
+  it('a re-render of the same result before the frame keeps the acknowledgement', async () => {
+    const shot = makeShot();
+    noteShotReceived(shot, 'shot', tag(1), performance.now());
+    render(shot);
+    render(shot, true, [shot]); // e.g. the parent re-rendered for another reason
     await nextFrames();
 
     expect(calls('trace_paint')).toHaveLength(1);
   });
 
-  it('a covered result (club picker open) is reported, never acknowledged', async () => {
-    noteShotReceived(TS, 'shot', tag(1), performance.now());
-    render(makeShot(), false);
+  it('a status notice re-render keeps the acknowledgement of its revision', async () => {
+    const shot = makeShot();
+    const status = makeShot(); // the server's status notice: a new object, same values
+    noteShotReceived(shot, 'shot', tag(1), performance.now());
+    render(shot);
+    noteShotReceived(status, 'shot_update', tag(1, 'status'), performance.now());
+    render(status);
     await nextFrames();
-    render(makeShot(), true); // the picker closes
+
+    expect(calls('trace_paint').map((p) => [p.revision, p.update_kind])).toEqual([[1, 'first']]);
+    expect(calls('trace_not_shown')).toEqual([]);
+  });
+
+  it('a covered result (club picker open) is reported, never acknowledged', async () => {
+    const shot = makeShot();
+    noteShotReceived(shot, 'shot', tag(1), performance.now());
+    render(shot, false);
+    await nextFrames();
+    render(shot, true); // the picker closes
     await nextFrames();
 
     expect(calls('trace_paint')).toEqual([]);
     expect(calls('trace_not_shown').map((p) => p.reason)).toEqual(['covered']);
   });
 
-  it('unmounting before the frame sends no acknowledgement', async () => {
-    noteShotReceived(TS, 'shot', tag(1), performance.now());
-    render(makeShot());
+  it('a shot the profile filter hides is reported, and not acknowledged when its profile is chosen later', async () => {
+    const shown = makeShot({ timestamp: '2026-10-11T09:59:00Z' });
+    const other = makeShot({ profile_id: 'sam', ball_speed_mph: 99.9 });
+    noteShotReceived(other, 'shot', tag(1), performance.now());
+    render(shown, true, [shown, other]); // james's panel still shows james's last shot
+    await nextFrames();
+    render(other, true, [shown, other], 'sam'); // seconds later the user switches to sam
+    await nextFrames();
+
+    expect(calls('trace_paint')).toEqual([]);
+    expect(calls('trace_not_shown').map((p) => p.reason)).toEqual(['not_displayed']);
+  });
+
+  it('unmounting before the frame reports unmounted_before_paint, never an ack', async () => {
+    const shot = makeShot();
+    noteShotReceived(shot, 'shot', tag(1), performance.now());
+    render(shot);
     act(() => root.render(<div />));
     await nextFrames();
 
     expect(calls('trace_paint')).toEqual([]);
+    expect(calls('trace_not_shown').map((p) => p.reason)).toEqual(['unmounted_before_paint']);
   });
 
-  it('a status notice is never acknowledged', async () => {
-    noteShotReceived(TS, 'shot_update', tag(1, 'status'), performance.now());
-    render(makeShot());
+  it('a status notice alone is never acknowledged', async () => {
+    const shot = makeShot();
+    noteShotReceived(shot, 'shot_update', tag(1, 'status'), performance.now());
+    render(shot);
     await nextFrames();
 
     expect(emitTrace).not.toHaveBeenCalled();
@@ -230,8 +263,9 @@ describe('LivePanel post-render acknowledgement', () => {
       throw new Error('socket gone');
     });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    noteShotReceived(TS, 'shot', tag(1), performance.now());
-    render(makeShot());
+    const shot = makeShot();
+    noteShotReceived(shot, 'shot', tag(1), performance.now());
+    render(shot);
     await nextFrames();
 
     expect(ballSpeedOnScreen()).toBe('121.4');
@@ -240,8 +274,9 @@ describe('LivePanel post-render acknowledgement', () => {
   });
 
   it('a nulled ball speed renders the no-value mark and is echoed as null', async () => {
-    noteShotReceived(TS, 'shot', tag(1), performance.now());
-    render(makeShot({ ball_speed_mph: null }));
+    const shot = makeShot({ ball_speed_mph: null });
+    noteShotReceived(shot, 'shot', tag(1), performance.now());
+    render(shot);
     await nextFrames();
 
     expect(ballSpeedOnScreen()).toBe(NO_VALUE);

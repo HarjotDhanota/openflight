@@ -22,13 +22,25 @@ export interface TraceTag {
   core_fields: string[];
 }
 
-/** Why a shot revision was not acknowledged; the server keeps the same list. */
-export type NotShownReason =
-  | 'covered'
-  | 'document_hidden'
-  | 'live_view_not_shown'
-  /** A later revision, or another shot, replaced it on screen before its frame. */
-  | 'superseded';
+/**
+ * Why a shot revision was not acknowledged. The server accepts exactly this list
+ * (trace_routes.NOT_SHOWN_REASONS; a Python test reads this one).
+ * - covered: an overlay drew over the live result;
+ * - document_hidden: the page was not visible;
+ * - live_view_not_shown: received or due while the live view was off screen;
+ * - unmounted_before_paint: the live result component unmounted before its frame;
+ * - superseded: a later revision of the same shot replaced it before its frame;
+ * - not_displayed: the live result showed another shot (e.g. the profile filter).
+ */
+export const NOT_SHOWN_REASONS = [
+  'covered',
+  'document_hidden',
+  'live_view_not_shown',
+  'unmounted_before_paint',
+  'superseded',
+  'not_displayed',
+] as const;
+export type NotShownReason = (typeof NOT_SHOWN_REASONS)[number];
 
 type Emit = (event: string, payload: unknown) => void;
 type Schedule = (callback: () => void, isCurrent: () => boolean) => void;
@@ -71,6 +83,8 @@ const DOCUMENT_IDENTITY = {
 
 interface PendingRevision {
   timestamp: string;
+  /** The exact object the store shows for this revision (identity, not timestamp). */
+  shot: Shot;
   tag: TraceTag;
   event: string;
   receivedMs: number;
@@ -89,16 +103,15 @@ function warn(what: string, error: unknown): void {
   console.warn(`[trace] ${what} failed; ignored`, error);
 }
 
-function isShotRevisionTag(tag: unknown): tag is TraceTag {
+function isTraceTag(tag: unknown): tag is TraceTag {
   if (!tag || typeof tag !== 'object') return false;
   const t = tag as Partial<TraceTag>;
   return (
     typeof t.attempt_id === 'string' &&
     t.attempt_id.length > 0 &&
     Number.isInteger(t.revision) &&
-    (t.revision as number) >= 1 &&
     typeof t.final === 'boolean' &&
-    (t.update_kind === 'first' || t.update_kind === 'late_update') &&
+    (t.update_kind === 'first' || t.update_kind === 'late_update' || t.update_kind === 'status') &&
     Array.isArray(t.core_fields) &&
     t.core_fields.every((field) => typeof field === 'string')
   );
@@ -112,23 +125,39 @@ export function setLiveViewShown(shown: boolean): void {
   }
 }
 
-/** Remember a traced shot revision's receive time, keyed by the shot it updates. */
+/**
+ * Remember a traced shot revision's receive time and the shot object the store will
+ * show for it. Call it with the message's own `shot` before the store takes it.
+ *
+ * A status notice (R-F5) is never acknowledged itself; it carries the latest revision's
+ * values in a new object, so it only moves that revision onto the object now shown.
+ */
 export function noteShotReceived(
-  shotTimestamp: string | undefined,
+  shot: Shot | undefined,
   event: 'shot' | 'shot_update',
   tag: TraceTag | undefined,
   now: number = performance.now()
 ): void {
   try {
-    if (typeof shotTimestamp !== 'string' || !isShotRevisionTag(tag)) return;
-    const previous = pending.get(shotTimestamp);
-    if (previous && previous.tag.attempt_id === tag.attempt_id && previous.tag.revision === tag.revision) {
-      return; // a repeat of the same revision: its first receive time stands
+    if (!shot || typeof shot.timestamp !== 'string' || !isTraceTag(tag)) return;
+    const timestamp = shot.timestamp;
+    const previous = pending.get(timestamp);
+    const sameRevision =
+      previous !== undefined && previous.tag.attempt_id === tag.attempt_id && previous.tag.revision === tag.revision;
+    if (tag.update_kind === 'status' || tag.revision < 1) {
+      if (sameRevision) previous.shot = shot;
+      return;
+    }
+    if (sameRevision) {
+      previous.shot = shot; // a repeat: its first receive time stands, on the object now shown
+      return;
     }
     const superseded = previous ? [...previous.superseded, previous] : [];
-    pending.delete(shotTimestamp); // re-insert last, so the oldest is evicted first
-    pending.set(shotTimestamp, {
-      timestamp: shotTimestamp,
+    if (previous) previous.superseded = [];
+    pending.delete(timestamp); // re-insert last, so the oldest is evicted first
+    pending.set(timestamp, {
+      timestamp,
+      shot,
       tag,
       event,
       receivedMs: now,
@@ -188,6 +217,7 @@ export function createAckScheduler(
   visible: () => boolean = () => typeof document === 'undefined' || document.visibilityState === 'visible'
 ) {
   let generation = 0;
+  let disposed = false;
   let scheduled: { entry: PendingRevision; key: string } | null = null;
 
   const safeEmit = (event: string, payload: Record<string, unknown>) => {
@@ -198,33 +228,27 @@ export function createAckScheduler(
     }
   };
 
-  /** Never acknowledged: say so once, and forget the revision. */
-  const withhold = (entry: PendingRevision, reason: NotShownReason) => {
-    if (entry.done) return;
+  const forget = (entry: PendingRevision) => {
     entry.done = true;
     if (pending.get(entry.timestamp) === entry) pending.delete(entry.timestamp);
+  };
+
+  /** Older revisions this one replaced were never shown: say so once each. */
+  const reportSuperseded = (entry: PendingRevision) => {
+    entry.superseded.splice(0).forEach((old) => withhold(old, 'superseded'));
+  };
+
+  /** Never acknowledged: say so once, and forget the revision. */
+  function withhold(entry: PendingRevision, reason: NotShownReason): void {
+    reportSuperseded(entry);
+    if (entry.done) return;
+    forget(entry);
     safeEmit('trace_not_shown', { ...revisionFields(entry), reported_ms: now(), reason });
-  };
-
-  const cancelScheduled = (keep?: PendingRevision) => {
-    generation += 1;
-    const previous = scheduled;
-    scheduled = null;
-    if (previous && previous.entry !== keep && pending.get(previous.entry.timestamp) === previous.entry) {
-      withhold(previous.entry, 'superseded');
-    }
-  };
-
-  const notShownReason = (entry: PendingRevision, acknowledgeable: boolean): NotShownReason | null => {
-    if (!entry.liveViewAtReceipt || entry.liveViewLeft) return 'live_view_not_shown';
-    if (!acknowledgeable) return 'covered';
-    if (!visible()) return 'document_hidden';
-    return null;
-  };
+  }
 
   const acknowledge = (entry: PendingRevision, rendered: Record<string, unknown>) => {
-    entry.done = true;
-    if (pending.get(entry.timestamp) === entry) pending.delete(entry.timestamp);
+    reportSuperseded(entry);
+    forget(entry);
     safeEmit('trace_paint', {
       ...revisionFields(entry),
       painted_ms: now(),
@@ -233,33 +257,59 @@ export function createAckScheduler(
     });
   };
 
+  const cancelScheduled = () => {
+    generation += 1;
+    scheduled = null;
+  };
+
+  const notShownAtCommit = (entry: PendingRevision, acknowledgeable: boolean): NotShownReason | null => {
+    if (!entry.liveViewAtReceipt || entry.liveViewLeft || !liveViewShown) return 'live_view_not_shown';
+    if (!acknowledgeable) return 'covered';
+    if (!visible()) return 'document_hidden';
+    return null;
+  };
+
+  const notShownAtFrame = (entry: PendingRevision): NotShownReason | null => {
+    if (disposed) return 'unmounted_before_paint';
+    if (entry.liveViewLeft || !liveViewShown) return 'live_view_not_shown';
+    if (!visible()) return 'document_hidden';
+    return null;
+  };
+
   return {
     commit(shot: Shot | null, acknowledgeable: boolean): void {
       try {
-        const entry = shot ? pending.get(shot.timestamp) : undefined;
+        disposed = false; // a StrictMode remount commits again on this same scheduler
+        const candidate = shot ? pending.get(shot.timestamp) : undefined;
+        const entry = candidate && candidate.shot === shot ? candidate : undefined;
+        // Every other traced revision is not what the live result shows now.
+        for (const other of [...pending.values()]) {
+          if (other !== entry) withhold(other, 'not_displayed');
+        }
         if (!shot || !entry) {
           cancelScheduled();
           return;
         }
-        entry.superseded.splice(0).forEach((old) => withhold(old, 'superseded'));
-        const reason = notShownReason(entry, acknowledgeable);
+        reportSuperseded(entry);
+        const reason = notShownAtCommit(entry, acknowledgeable);
         if (reason) {
-          cancelScheduled(entry);
+          cancelScheduled();
           withhold(entry, reason);
           return;
         }
         const rendered = renderedCore(shot, entry.tag.core_fields);
         const key = JSON.stringify(rendered);
         if (scheduled && scheduled.entry === entry && scheduled.key === key) return; // R-F6
-        cancelScheduled(entry);
+        cancelScheduled();
         const mine = generation;
         scheduled = { entry, key };
         schedule(
           () => {
             try {
-              if (mine !== generation) return;
+              if (mine !== generation || entry.done) return;
               scheduled = null;
-              if (!visible()) withhold(entry, 'document_hidden');
+              const late = notShownAtFrame(entry);
+              if (late) withhold(entry, late);
               else acknowledge(entry, rendered);
             } catch (error) {
               warn('post-render acknowledgement', error);
@@ -271,10 +321,12 @@ export function createAckScheduler(
         warn('scheduling a post-render acknowledgement', error);
       }
     },
+    /**
+     * Unmount. The scheduled callback still runs and reports unmounted_before_paint,
+     * unless a StrictMode remount commits again on this scheduler first.
+     */
     dispose(): void {
-      // Cancels only: a StrictMode remount commits again on this same scheduler.
-      generation += 1;
-      scheduled = null;
+      disposed = true;
     },
   };
 }

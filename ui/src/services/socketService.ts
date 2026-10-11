@@ -61,6 +61,9 @@ class SocketService {
       this.socket?.emit('get_radar_config');
       this.socket?.emit('get_camera_capture_settings');
       this.socket?.emit('get_profiles');
+      // Stage 1b trace: ask for a clock ping at once (a traced server answers this
+      // socket only; an untraced one ignores the event).
+      this.socket?.emit('trace_clock_hello');
     });
 
     this.socket.on('disconnect', () => {
@@ -83,12 +86,12 @@ class SocketService {
 
     // The trace notes the receive time first; it never throws, so the shot is always handled.
     this.socket.on('shot', (data: ShotMessage) => {
-      noteShotReceived(data?.shot?.timestamp, 'shot', data?.trace);
+      noteShotReceived(data?.shot, 'shot', data?.trace);
       handleShotMessage(data);
     });
 
     this.socket.on('shot_update', (data: ShotUpdateMessage) => {
-      noteShotReceived(data?.shot?.timestamp, 'shot_update', data?.trace);
+      noteShotReceived(data?.shot, 'shot_update', data?.trace);
       handleShotUpdate(data);
     });
 
