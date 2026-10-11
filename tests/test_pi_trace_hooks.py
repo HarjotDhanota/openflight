@@ -18,63 +18,17 @@ from openflight.rolling_buffer.processor import RollingBufferProcessor
 from openflight.rolling_buffer.trigger import SoundTrigger
 from openflight.rolling_buffer.types import IQCapture, ProcessedCapture, SpeedTimeline
 from openflight.timing import OpsCaptureTimer
-from tests.pi_trace_helpers import read_marks
+from tests.pi_trace_helpers import ClockAndQuietSerial, dump_bytes, read_marks
 from tests.spin_synth import synth_capture
-
-
-class _ClockAndQuietSerial:
-    """Answers C? with a fractional clock; otherwise silent, so re-arm drains at once."""
-
-    def __init__(self, *, write_timeout_on=None):
-        self.is_open = True
-        self._pending = b""
-        self.writes = []
-        self._write_timeout_on = write_timeout_on
-
-    def reset_input_buffer(self):
-        self._pending = b""
-
-    def arrive(self, data: bytes) -> None:
-        """Bytes the radar sends unprompted (a dump an edge started)."""
-        self._pending += data
-
-    def write(self, data):
-        if self._write_timeout_on is not None and data.startswith(self._write_timeout_on):
-            raise serial.SerialTimeoutException("write timeout")
-        self.writes.append(data)
-        if data == b"C?":
-            self._pending = b'{"Clock":"137.429"}'
-        return len(data)
-
-    def flush(self):
-        pass
-
-    @property
-    def in_waiting(self):
-        return len(self._pending)
-
-    def read(self, n):
-        chunk, self._pending = self._pending[:n], self._pending[n:]
-        return chunk
 
 
 def _radar(monkeypatch, **serial_kwargs):
     monkeypatch.setattr("openflight.ops243.time.sleep", lambda _s: None)
     radar = OPS243Radar.__new__(OPS243Radar)
-    radar.serial = _ClockAndQuietSerial(**serial_kwargs)
+    radar.serial = ClockAndQuietSerial(**serial_kwargs)
     radar.trigger_phase = None
     radar.baud = OPS243Radar.DEFAULT_BAUD
     return radar
-
-
-def _dump_bytes(i_samples, q_samples) -> bytes:
-    lines = [
-        '{"sample_time": "964.003"}',
-        '{"trigger_time": "964.105"}',
-        json.dumps({"I": [int(v) for v in i_samples]}),
-        json.dumps({"Q": [int(v) for v in q_samples]}),
-    ]
-    return ("\n".join(lines) + "\n").encode("ascii")
 
 
 def _named(marks, name):
@@ -229,7 +183,7 @@ def test_one_sound_trigger_capture_is_one_attempt_in_serial_order(recorder, monk
     i_samples, q_samples = synth_capture(rpm=3000, ball_speed_mph=80.0, amplitude=400.0)
     radar = _radar(monkeypatch)
     radar.rearm_rolling_buffer(12)  # the previous attempt's re-arm (no attempt yet)
-    radar.serial.arrive(_dump_bytes(i_samples, q_samples))
+    radar.serial.arrive(dump_bytes(i_samples, q_samples))
     capture = SoundTrigger(pre_trigger_segments=12).wait_for_trigger(
         radar, RollingBufferProcessor(), timeout=1.0
     )
@@ -1273,7 +1227,7 @@ def test_browser_trace_routes_that_fail_leave_the_kiosk_running(recorder, monkey
 def test_a_dump_already_pending_at_wait_start_is_marked_with_its_byte_count(recorder, monkeypatch):
     """Its first byte arrived before the wait: the first-byte time is late (fail-closed)."""
     radar = _radar(monkeypatch)
-    dump = _dump_bytes([2048] * 8, [2048] * 8)
+    dump = dump_bytes([2048] * 8, [2048] * 8)
     radar.serial.arrive(dump)  # an edge raced the re-arm
     attempt = recorder.open_ops_attempt()
     radar.wait_for_hardware_trigger(timeout=1.0, dump_grace=1.0)
@@ -1298,7 +1252,7 @@ def test_a_dump_whose_marker_starts_inside_the_pending_bytes_is_marked(recorder,
     """Noise then the dump's marker, all before the wait: still late, at its offset."""
     radar = _radar(monkeypatch)
     noise = b'{"Clock":"1.0"}\r\n'
-    dump = _dump_bytes([2048] * 8, [2048] * 8)
+    dump = dump_bytes([2048] * 8, [2048] * 8)
     radar.serial.arrive(noise + dump)
     recorder.open_ops_attempt()
     radar.wait_for_hardware_trigger(timeout=1.0, dump_grace=1.0)

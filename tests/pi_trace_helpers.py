@@ -1,8 +1,9 @@
-"""Shared helpers for tests that read Pi trace files (fixture, marks reader, fake clock)."""
+"""Shared helpers for tests that read Pi trace files (fixture, marks reader, fake clock, OPS serial)."""
 
 import json
 
 import pytest
+import serial
 
 from openflight import pi_trace
 from openflight.pi_trace import ClockTriple, TraceRecorder
@@ -50,3 +51,57 @@ def read_marks(rec):
     """Close the recorder and return only its mark lines."""
     rec.close()
     return [row for row in read_lines(rec.path) if row["type"] == "mark"]
+
+
+class ClockAndQuietSerial:
+    """Answers C? with a fractional clock; otherwise silent, so re-arm drains at once."""
+
+    def __init__(self, *, write_timeout_on=None):
+        self.is_open = True
+        self._pending = b""
+        self._later = b""
+        self.writes = []
+        self._write_timeout_on = write_timeout_on
+
+    def reset_input_buffer(self):
+        self._pending = b""
+
+    def arrive(self, data: bytes) -> None:
+        """Bytes the radar sends unprompted (a dump an edge started)."""
+        self._pending += data
+
+    def arrive_after_first_poll(self, data: bytes) -> None:
+        """Bytes that arrive after the next ``in_waiting`` poll (a dump after the wait began)."""
+        self._later += data
+
+    def write(self, data):
+        if self._write_timeout_on is not None and data.startswith(self._write_timeout_on):
+            raise serial.SerialTimeoutException("write timeout")
+        self.writes.append(data)
+        if data == b"C?":
+            self._pending = b'{"Clock":"137.429"}'
+        return len(data)
+
+    def flush(self):
+        pass
+
+    @property
+    def in_waiting(self):
+        waiting = len(self._pending)
+        self._pending, self._later = self._pending + self._later, b""
+        return waiting
+
+    def read(self, n):
+        chunk, self._pending = self._pending[:n], self._pending[n:]
+        return chunk
+
+
+def dump_bytes(i_samples, q_samples) -> bytes:
+    """One OPS rolling-buffer dump: sample/trigger time lines, then I and Q."""
+    lines = [
+        '{"sample_time": "964.003"}',
+        '{"trigger_time": "964.105"}',
+        json.dumps({"I": [int(v) for v in i_samples]}),
+        json.dumps({"Q": [int(v) for v in q_samples]}),
+    ]
+    return ("\n".join(lines) + "\n").encode("ascii")
