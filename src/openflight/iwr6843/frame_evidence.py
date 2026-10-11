@@ -14,9 +14,19 @@ Frame timing has three states:
   while the sequence advances; a planned delta that isn't whole frames).
 Rounding a tick step to the nearest whole period classifies it; the half-period
 boundary follows from the period itself and is not a tolerance.
+
+An unassociated frame (HWA output with no fresh armed frame start) has no observed
+sequence number or start tick. It yields only its "unassociated" finding and no start
+offset or output latency; order, gap and tick checks compare each associated frame with
+the previous associated one. Offsets are from frame 0's start, so they are all None when
+frame 0 is unassociated. If the first post-request frame is unassociated, the request
+relation's frame numbers are None and its status is "unobserved" (or "inconsistent" when
+a stamp is also out of order).
 """
 
 from __future__ import annotations
+
+from itertools import pairwise
 
 import numpy as np
 
@@ -76,8 +86,9 @@ def _frame_findings(frames, offsets, period_us: int, period_ticks: float, us) ->
             findings.append(
                 _finding("unassociated", index, "HWA output without a fresh armed frame start")
             )
-    for index in range(1, len(frames)):
-        planned_delta = offsets[index] - offsets[index - 1]
+    associated = [index for index, record in enumerate(frames) if record["associated"]]
+    for earlier, index in pairwise(associated):
+        planned_delta = offsets[index] - offsets[earlier]
         planned_step, remainder = divmod(planned_delta, period_us)
         if remainder or planned_step < 1:
             findings.append(
@@ -88,7 +99,7 @@ def _frame_findings(frames, offsets, period_us: int, period_ticks: float, us) ->
                 )
             )
             continue
-        previous, current = frames[index - 1], frames[index]
+        previous, current = frames[earlier], frames[index]
         seq_step = _signed(current["seq"], previous["seq"])
         if seq_step <= 0:
             findings.append(
@@ -123,6 +134,16 @@ def _request_relation(capture: dict, frames, trailer: dict | None, us) -> dict:
     findings: list[dict] = []
     pre = capture["pre_frames"]
     first_post = frames[pre] if pre < len(frames) else None
+    if first_post is not None and not first_post["associated"]:
+        findings.append(
+            _finding(
+                "first_post_unassociated",
+                pre,
+                "the first post-request frame has no fresh armed start; its sequence and "
+                "start tick are unobserved",
+            )
+        )
+        first_post = None
     request_to_post = (
         _signed(first_post["start_tick"], capture["request_tick"]) if first_post else None
     )
@@ -143,8 +164,9 @@ def _request_relation(capture: dict, frames, trailer: dict | None, us) -> dict:
     for (earlier_name, earlier), (later_name, later) in zip(stamps, stamps[1:]):
         if _signed(later, earlier) < 0:
             findings.append(_finding("stamp_order", None, f"{later_name} precedes {earlier_name}"))
+    inconsistent = [f for f in findings if f["kind"] != "first_post_unassociated"]
     return {
-        "status": "inconsistent" if findings else "consistent",
+        "status": "inconsistent" if inconsistent else "unobserved" if findings else "consistent",
         "findings": findings,
         "pre_frames": pre,
         "post_frames": capture["post_frames"],
@@ -189,7 +211,7 @@ def frame_timing_report(meta: dict) -> dict:
     findings, jitter = _frame_findings(frames, offsets, period_us, period_us * tick_hz / 1e6, us)
     unobserved = [f for f in findings if f["kind"] in _UNOBSERVED_KINDS]
     status = UNOBSERVED if unobserved else DISCONTINUOUS if findings else CONTINUOUS
-    first_tick = frames[0]["start_tick"]
+    origin = frames[0]["start_tick"] if frames[0]["associated"] else None
     return {
         **base,
         "status": status,
@@ -197,9 +219,14 @@ def frame_timing_report(meta: dict) -> dict:
             unobserved[0]["detail"] if unobserved else findings[0]["detail"] if findings else None
         ),
         "findings": findings,
-        "observed_start_offsets_us": [us(_signed(f["start_tick"], first_tick)) for f in frames],
+        "observed_start_offsets_us": [
+            us(_signed(f["start_tick"], origin)) if origin is not None and f["associated"] else None
+            for f in frames
+        ],
         "start_jitter_us": _span(jitter),
-        "output_latency_us": _span([us(_signed(f["done_tick"], f["start_tick"])) for f in frames]),
+        "output_latency_us": _span(
+            [us(_signed(f["done_tick"], f["start_tick"])) for f in frames if f["associated"]]
+        ),
         "hwa_missed_total": capture["hwa_missed_total"],
         "request": _request_relation(capture, frames, meta.get("dump_trailer"), us),
     }

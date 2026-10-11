@@ -35,7 +35,7 @@ def _compiler() -> str:
     return compiler
 
 
-def _build_c(source: str, tmp_path: Path) -> Path:
+def _build_c(source: str, tmp_path: Path, *, flags: tuple[str, ...] = ()) -> Path:
     program = tmp_path / "probe.c"
     program.write_text(source, encoding="utf-8")
     exe = tmp_path / "probe"
@@ -47,6 +47,7 @@ def _build_c(source: str, tmp_path: Path) -> Path:
             "-Wextra",
             "-Werror",
             "-Wno-unused-function",  # the header's helpers are file-static; a probe uses some
+            *flags,
             "-I",
             str(FIRMWARE_DIR),
             str(program),
@@ -60,8 +61,8 @@ def _build_c(source: str, tmp_path: Path) -> Path:
     return exe
 
 
-def _run_c(source: str, tmp_path: Path, *args: str) -> str:
-    exe = _build_c(source, tmp_path)
+def _run_c(source: str, tmp_path: Path, *args: str, flags: tuple[str, ...] = ()) -> str:
+    exe = _build_c(source, tmp_path, flags=flags)
     return subprocess.run([str(exe), *args], check=True, capture_output=True, text=True).stdout
 
 
@@ -145,12 +146,13 @@ int main(int argc, char **argv)
     l3_dump_trailer_t tr;
     uint8_t desc[4];
     int16_t iq[2];
-    int version, frame, k;
+    int version, frame, k, unassociated;
     FILE *f;
 
-    if (argc != 3) {
+    if (argc != 3 && argc != 4) {
         return 2;
     }
+    unassociated = (argc == 4 && strcmp(argv[3], "unassociated") == 0);
     version = atoi(argv[2]);
     f = fopen(argv[1], "wb");
     memset(&h, 0, sizeof h);
@@ -201,6 +203,11 @@ int main(int argc, char **argv)
         r.iq8_overflow = (uint16_t)(2 * frame);
         r.iq8_max_abs = (uint16_t)(90 + 210 * frame);
         r.flags = (uint8_t)(L3_FRAME_FLAG_ASSOCIATED | (frame ? L3_FRAME_FLAG_IQ8_SCANNED : 0U));
+        if (unassociated && frame == 1) {  /* as l3_recordFrameEvidence writes it */
+            r.seq = L3_FRAME_NO_STAMP;
+            r.start_tick = L3_FRAME_NO_STAMP;
+            r.flags = (uint8_t)L3_FRAME_FLAG_IQ8_SCANNED;
+        }
         put(f, &r, sizeof r);
     }
     for (k = 0; k < 48; k++) {
@@ -249,6 +256,71 @@ def test_c_struct_written_v8_and_v9_dumps_parse(tmp_path, version):
     assert frame_timing_report(meta)["status"] == "continuous"
 
 
+@pytest.mark.skipif(
+    sys.byteorder != "little", reason="the firmware and the parser are little-endian"
+)
+def test_a_c_written_unassociated_record_reads_as_unobserved(tmp_path):
+    """I1: a no-stamp record parses to None, and the request relation stays unobserved."""
+    from openflight.iwr6843.frame_evidence import frame_timing_report
+
+    out = tmp_path / "unassociated.l3dump"
+    _run_c(FIXTURE_WRITER, tmp_path, str(out), "8", "unassociated")
+
+    meta, _cube = dump.parse_dump(out.read_bytes())
+    # pylint: disable=unsubscriptable-object
+    record = meta["frame_evidence"][1]
+    report = frame_timing_report(meta)
+    request = report["request"]
+
+    assert (record["seq"], record["start_tick"], record["associated"]) == (None, None, False)
+    assert record["done_tick"] == 0x010927C0 + 340000
+    assert [(f["kind"], f["frame"]) for f in report["findings"]] == [("unassociated", 1)]
+    assert report["observed_start_offsets_us"] == [0.0, None]
+    assert request["status"] == "unobserved"
+    assert request["first_post_seq"] is None
+    assert request["frames_request_to_first_post"] is None
+    assert request["request_to_first_post_start_us"] is None
+
+
+# Drives the firmware's own l3_recordFrameEvidence (the evidence block, host-compiled with
+# EVIDENCE_PRELUDE's stand-ins). Made-up stamps for a known answer; not a hardware result.
+RECORD_HARNESS = r"""
+#include <stdio.h>
+
+static void show(uint32_t slot)
+{
+    printf("%u %u %u %u\n", (unsigned)gFrameSeq[slot], (unsigned)gFrameStartTick[slot],
+           (unsigned)gFrameDoneTick[slot], (unsigned)gFrameEvidenceFlags[slot]);
+}
+
+int main(void)
+{
+    gActiveFrameSeq = 41U;
+    gActiveFrameStartTick = 0x1234U;
+    gActiveFrameFresh = 1U;
+    l3_recordFrameEvidence(3U, 0x2000U);
+    l3_recordFrameEvidence(4U, 0x3000U);  /* no fresh armed start since slot 3 */
+    show(3U);
+    show(4U);
+    printf("%u\n", (unsigned)gActiveFrameFresh);
+    return 0;
+}
+"""
+
+
+def test_a_record_without_a_fresh_start_carries_no_stamp(tmp_path):
+    """I1, firmware: only a fresh start's seq and tick are copied; otherwise L3_FRAME_NO_STAMP."""
+    source = EVIDENCE_PRELUDE + _evidence_block(FIRMWARE.read_text(encoding="utf-8"))
+    out = _run_c(source + RECORD_HARNESS, tmp_path, flags=("-Wno-unused-variable",))
+
+    associated, unassociated, fresh = out.splitlines()
+
+    assert associated.split() == ["41", str(0x1234), str(0x2000), str(dump.FRAME_FLAG_ASSOCIATED)]
+    no_stamp = str(dump.FRAME_NO_STAMP)
+    assert unassociated.split() == [no_stamp, no_stamp, str(0x3000), "0"]
+    assert fresh == "0"
+
+
 def test_c_struct_sizes_match_the_python_parser(tmp_path):
     """sizeof each C evidence struct equals the parser's struct size."""
     out = _run_c(
@@ -283,6 +355,7 @@ def test_dump_format_constants_match_the_parser():
     assert int(define("L3_FRAME_FLAG_ASSOCIATED"), 0) == dump.FRAME_FLAG_ASSOCIATED
     assert int(define("L3_FRAME_FLAG_IQ8_SCANNED"), 0) == dump.FRAME_FLAG_IQ8_SCANNED
     assert int(define("L3_CAPTURE_FLAG_IQ8_SCAN"), 0) == dump.CAPTURE_FLAG_IQ8_SCAN
+    assert int(define("L3_FRAME_NO_STAMP"), 0) == dump.FRAME_NO_STAMP
 
 
 def test_production_builds_turn_the_evidence_on():
@@ -318,14 +391,43 @@ def test_output_done_records_the_completed_slot_before_counters_advance():
         source, "static void l3_hwaOutputDoneCB", "static int32_t l3_hwaStartRing"
     )
 
-    record = callback.index("l3_recordFrameEvidence(")
-    assert record < callback.index("gPostFramesCaptured++")
+    slot = callback.index("completedSlot = l3_activeRingSlot();")
+    record = callback.index("l3_recordFrameEvidence(completedSlot,")
+    assert slot < record < callback.index("gPostFramesCaptured++")
     assert record < callback.index("gPreFramesCaptured++")
-    assert (
-        "gCapturePlan.preFrames + gPostFramesCaptured"
-        in callback[max(0, record - 300) : record + 300]
-    )
+    assert slot < callback.index("gIq8PendingSlot = completedSlot;")
     assert "gActiveFrameFresh = 0U;" in callback
+
+
+def _ring_slot_helper(source: str) -> str:
+    return _function_source(source, "static inline uint32_t l3_activeRingSlot(void)", "#endif")
+
+
+def test_the_ring_slot_formula_is_written_once():
+    """I2: one helper owns the active frame's ring slot; arming and output-done share it."""
+    source = FIRMWARE.read_text(encoding="utf-8")
+    helper = _ring_slot_helper(source)
+    callback = _function_source(
+        source, "static void l3_hwaOutputDoneCB", "static int32_t l3_hwaStartRing"
+    )
+    arm = _function_source(
+        source, "static int32_t l3_configHwaFrameOutput", "static void l3_drainHwaRearmSemaphore"
+    )
+
+    assert source.count("gCapturePlan.preFrames + gPostFramesCaptured") == 1
+    assert "gCapturePlan.preFrames + gPostFramesCaptured" in helper
+    assert "gPreFramesCaptured % gCapturePlan.preFrames" in helper
+    assert callback.count("l3_activeRingSlot()") == 1
+    # The callback's remaining modulus is the wrap check, after the counter advanced.
+    assert callback.count("gPreFramesCaptured % gCapturePlan.preFrames") == 1
+    assert "(gPreFramesCaptured % gCapturePlan.preFrames) == 0U" in callback
+    assert "gPreFramesCaptured % gCapturePlan.preFrames" not in arm
+    assert arm.count("ringSlot = l3_activeRingSlot();") == 1
+    # The slot is taken once the frame's role is set on both branches.
+    assert arm.rindex("gActiveFrameIsPost = 0U;") < arm.index("ringSlot = l3_activeRingSlot();")
+    assert arm.index("ringSlot = l3_activeRingSlot();") < arm.index(
+        "if (ringSlot >= gCapturePlan.totalFrames)"
+    )
 
 
 def test_the_record_consumes_the_fresh_start():
@@ -335,8 +437,13 @@ def test_the_record_consumes_the_fresh_start():
         source, "static void l3_recordFrameEvidence", "/* W4A-EVIDENCE-END */"
     )
 
-    assert "gActiveFrameFresh ? L3_FRAME_FLAG_ASSOCIATED : 0U" in record
-    assert record.index("L3_FRAME_FLAG_ASSOCIATED") < record.rindex("gActiveFrameFresh = 0U;")
+    snapshot = record.index("uint8_t fresh = gActiveFrameFresh;")
+    consumed = record.index("gActiveFrameFresh = 0U;")
+    assert snapshot < consumed < record.index("return;")  # consumed on every path
+    assert "fresh ? gActiveFrameSeq : L3_FRAME_NO_STAMP" in record
+    assert "fresh ? gActiveFrameStartTick : L3_FRAME_NO_STAMP" in record
+    assert "fresh ? L3_FRAME_FLAG_ASSOCIATED : 0U" in record
+    assert record.count("gActiveFrameFresh") == 2  # one read, one consume: no re-read
 
 
 def test_dump_stamps_request_freeze_stop_and_header_in_order():
@@ -355,6 +462,18 @@ def test_dump_stamps_request_freeze_stop_and_header_in_order():
     header_write = dump_cli.index("UART_writePolling(gDataUart, (uint8_t *)&h, sizeof(h));")
     assert dump_cli.index("headerTick = l3_ticks();") < header_write
     assert "L3_DUMP_VERSION_EVIDENCE_TEMPERATURE" in dump_cli[:header_write]
+
+
+def test_the_request_seq_and_tick_are_read_together():
+    """A frame-start ISR between the two reads would skew frames_request_to_first_post."""
+    source = FIRMWARE.read_text(encoding="utf-8")
+    dump_cli = _function_source(source, "int32_t l3_cli_dump", "static int32_t l3_cli_stats")
+
+    disable = dump_cli.index("Hwi_disable();")
+    seq = dump_cli.index("gRequestSeq = gNumFrame;")
+    tick = dump_cli.index("gRequestTick = l3_ticks();")
+    restore = dump_cli.index("Hwi_restore(")
+    assert disable < seq < tick < restore < dump_cli.index("l3_stopCaptureAtBoundary")
 
 
 def test_dump_streams_evidence_after_metadata_and_before_payload_then_the_trailer():

@@ -127,7 +127,9 @@ The configurable version 7 transfer contains items 1-6; versions 8 (with tempera
 3. A `(start bin, valid bins, planned elapsed microseconds)` descriptor per frame.
 4. A per-frame scale table when `sample_fmt` is IQ8.
 4a. One 40-byte `l3_capture_evidence_t` ("ILE1"), then one 20-byte `l3_frame_evidence_t`
-   per frame in dump order.
+   per frame in dump order. A record without a fresh armed frame start (flag bit 0
+   clear) carries `L3_FRAME_NO_STAMP` (0) in `seq` and `start_tick`; the host reads them
+   as `None`, never as stamps.
 5. Complex IQ16 or IQ8 samples ordered by frame, chirp, RX, and local range bin.
 6. Each complex sample in TI's native imaginary-then-real order.
 7. One 8-byte `l3_dump_trailer_t` ("ILT1"); absent when the dump was cancelled.
@@ -201,8 +203,14 @@ Docker runs the same `build-native` recipe under `linux/amd64` and writes the
 release artifact back into the host worktree at:
 
 ```text
-firmware/releases/l3_dump_configurable_capture_20260818.bin
+firmware/releases/$(RELEASE_NAME)
 ```
+
+`RELEASE_NAME` names the file (default `l3_dump_local_build.bin`, never a release
+name); pass a dated name such as `RELEASE_NAME=l3_dump_evidence_20261009.bin` for a
+release. Both targets refuse to overwrite an existing file in `firmware/releases/`,
+including the checked-in rollback image
+`l3_dump_configurable_capture_20260818.bin`, unless `OVERWRITE_RELEASE=1` is given.
 
 Use the UTM workflow below only when Docker emulation is unavailable.
 
@@ -305,8 +313,14 @@ The target performs the application build, generates the flashable TI
 meta-image, and copies the production image into `firmware/releases/`:
 
 ```text
-firmware/releases/l3_dump_configurable_capture_20260818.bin
+firmware/releases/$(RELEASE_NAME)
 ```
+
+`RELEASE_NAME` names the file (default `l3_dump_local_build.bin`, never a release
+name); pass a dated name such as `RELEASE_NAME=l3_dump_evidence_20261009.bin` for a
+release. Both targets refuse to overwrite an existing file in `firmware/releases/`,
+including the checked-in rollback image
+`l3_dump_configurable_capture_20260818.bin`, unless `OVERWRITE_RELEASE=1` is given.
 
 Generated `.xer4f`, `.map`, and intermediate `.bin` files stay under
 `firmware/iwr6843/` and are ignored by Git. Current production images and

@@ -271,6 +271,83 @@ def test_select_tdm_loops_keeps_the_evidence():
     )
 
 
+def _stale_frame(frames, index: int) -> tuple[dict, ...]:
+    """Frame ``index`` unassociated, still carrying the previous frame's (stale) stamps."""
+    records = list(frames)
+    records[index] = {
+        **records[index],
+        "seq": records[index - 1]["seq"],
+        "start_tick": records[index - 1]["start_tick"],
+        "associated": False,
+    }
+    return tuple(records)
+
+
+def _record_offset(version: int, n_frames: int, index: int) -> int:
+    """Byte offset of frame record ``index`` in an IQ16 timed dump."""
+    header = dump.HEADER.size + (dump.TEMP_REPORT.size if version == 8 else 0)
+    return header + 4 * n_frames + CAPTURE_EVIDENCE.size + FRAME_EVIDENCE.size * index
+
+
+def test_an_unassociated_record_has_no_seq_or_start_tick():
+    """I1: without a fresh armed start, seq and start_tick are unobserved, never stale."""
+    cube = _cube()
+    capture, frames, trailer = _evidence(4, 2)
+    frames = _stale_frame(frames, 2)
+
+    meta, _cube_out = parse_dump(_pack(cube, capture, frames, trailer))
+    # parse_dump fills frame_evidence for v8/v9; pylint only sees its initial None.
+    # pylint: disable=unsubscriptable-object
+    record = meta["frame_evidence"][2]
+
+    assert (record["seq"], record["start_tick"]) == (None, None)
+    assert record["done_tick"] == frames[2]["done_tick"]
+    assert record["associated"] is False
+    assert meta["frame_evidence"][1]["seq"] == frames[1]["seq"]
+
+
+def test_the_packer_writes_the_no_stamp_value_for_an_unassociated_record():
+    """Like the firmware, the packer never writes stale stamps into an unassociated record."""
+    cube = _cube()
+    capture, frames, trailer = _evidence(4, 2)
+
+    raw = _pack(cube, capture, _stale_frame(frames, 2), trailer)
+    seq, start_tick, *_rest = FRAME_EVIDENCE.unpack_from(raw, _record_offset(8, 4, 2))
+
+    assert (seq, start_tick) == (dump.FRAME_NO_STAMP, dump.FRAME_NO_STAMP)
+
+
+def test_an_associated_record_without_a_seq_is_refused():
+    """An associated record must carry the stamps it claims to have observed."""
+    cube = _cube()
+    capture, frames, trailer = _evidence(4, 2)
+    records = list(frames)
+    records[1] = {**records[1], "seq": None}
+
+    with pytest.raises(ValueError, match="associated frame record 1"):
+        _pack(cube, capture, records, trailer)
+
+
+def test_project_tx_pair_keeps_an_unassociated_record_unstamped():
+    """A repack keeps the no-stamp record, and the evidence bytes, unchanged."""
+    cube = _cube()
+    capture, frames, trailer = _evidence(4, 2)
+    raw = _pack(cube, capture, _stale_frame(frames, 2), trailer)
+
+    projected = project_tx_pair(raw, (0, 2))
+    meta, _cube_out = parse_dump(projected)
+    # parse_dump fills frame_evidence for v8/v9; pylint only sees its initial None.
+    # pylint: disable=unsubscriptable-object
+
+    assert (meta["frame_evidence"][2]["seq"], meta["frame_evidence"][2]["start_tick"]) == (
+        None,
+        None,
+    )
+    offset = _record_offset(8, 4, 0)
+    evidence_end = _record_offset(8, 4, 4)
+    assert projected[offset:evidence_end] == raw[offset:evidence_end]
+
+
 def test_a_version_above_9_is_still_refused():
     raw, _ = _v8(_cube())
     bumped = raw[:4] + (10).to_bytes(2, "little") + raw[6:]

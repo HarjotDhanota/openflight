@@ -178,6 +178,82 @@ def test_an_unassociated_frame_is_discontinuous():
     assert ("unassociated", 2) in _kinds(report)
 
 
+def _unassociate(meta, index: int, *, stamps: str) -> dict:
+    """Frame ``index`` without a fresh armed start.
+
+    ``stamps="parsed"`` is what parse_dump returns (None); ``stamps="stale"`` keeps the
+    previous frame's plausible values, so the report must key off the flag alone.
+    """
+    frames = list(meta["frame_evidence"])
+    if stamps == "parsed":
+        seq, tick = None, None
+    else:
+        seq, tick = frames[index - 1]["seq"], frames[index - 1]["start_tick"]
+    frames[index] = {**frames[index], "seq": seq, "start_tick": tick, "associated": False}
+    meta["frame_evidence"] = tuple(frames)
+    return meta
+
+
+@pytest.mark.parametrize("stamps", ["parsed", "stale"])
+def test_an_unassociated_frame_gets_only_the_unassociated_finding(stamps):
+    """I1: no order, gap or tick finding is derived from an unassociated frame's stamps."""
+    report = frame_timing_report(_unassociate(_meta(), 2, stamps=stamps))
+
+    assert report["status"] == "discontinuous"
+    assert _kinds(report) == [("unassociated", 2)]
+
+
+@pytest.mark.parametrize("stamps", ["parsed", "stale"])
+def test_a_gap_across_an_unassociated_frame_is_still_found(stamps):
+    """Frame 3 is compared with frame 1, the last associated one, over two planned frames."""
+    meta = _unassociate(_meta(seqs=[200, 201, 202, 204, 205, 206]), 2, stamps=stamps)
+
+    report = frame_timing_report(meta)
+
+    assert _kinds(report) == [("unassociated", 2), ("gap", 3)]
+
+
+@pytest.mark.parametrize("stamps", ["parsed", "stale"])
+def test_an_unassociated_frame_has_no_observed_offset_or_latency(stamps):
+    """An unassociated frame's offset and latency are None or left out, never stale."""
+    report = frame_timing_report(_unassociate(_meta(), 2, stamps=stamps))
+
+    assert report["observed_start_offsets_us"] == [0.0, 3000.0, None, 9000.0, 12000.0, 15000.0]
+    assert report["output_latency_us"] == {"min": 1700.0, "max": 1700.0}
+
+
+def test_an_unassociated_first_frame_leaves_every_offset_unobserved():
+    """Offsets are from frame 0's start; with it unobserved, none is filled in."""
+    report = frame_timing_report(_unassociate(_meta(), 0, stamps="parsed"))
+
+    assert report["observed_start_offsets_us"] == [None] * 6
+    assert _kinds(report) == [("unassociated", 0)]
+
+
+@pytest.mark.parametrize("stamps", ["parsed", "stale"])
+def test_an_unassociated_first_post_frame_leaves_the_request_relation_unobserved(stamps):
+    """I1: no request-to-post numbers from a first post frame that was not observed."""
+    request = frame_timing_report(_unassociate(_meta(), 3, stamps=stamps))["request"]
+
+    assert request["status"] == "unobserved"
+    assert [f["kind"] for f in request["findings"]] == ["first_post_unassociated"]
+    assert request["first_post_seq"] is None
+    assert request["frames_request_to_first_post"] is None
+    assert request["request_to_first_post_start_us"] is None
+    assert request["freeze_to_stop_us"] == 11000.0  # the chip stamps are still observed
+
+
+def test_an_unassociated_first_post_frame_never_hides_a_stamp_order_fault():
+    """A stamp-order fault still makes the relation inconsistent."""
+    meta = _unassociate(_meta(), 3, stamps="parsed")
+    meta["capture_evidence"]["header_tick"] = meta["capture_evidence"]["stop_tick"] - 1
+
+    request = frame_timing_report(meta)["request"]
+
+    assert request["status"] == "inconsistent"
+    assert {f["kind"] for f in request["findings"]} == {"first_post_unassociated", "stamp_order"}
+
+
 def test_a_planned_delta_that_is_not_whole_frames_is_unobserved():
     meta = _meta()
     offsets = list(meta["frame_time_offsets_us"])

@@ -32,7 +32,10 @@
  *     then n_frames l3_frame_evidence_t in dump frame order, then the payload, then one
  *     l3_dump_trailer_t. Ticks are the R4F PMU cycle counter at tick_hz (the CPU clock),
  *     32-bit, wrapping. Descriptor delta-us stays the PLANNED spacing; the frame records
- *     are what was observed.
+ *     are what was observed. A record without L3_FRAME_FLAG_ASSOCIATED (HWA output with
+ *     no fresh armed frame start) carries L3_FRAME_NO_STAMP in seq and start_tick: they
+ *     were not observed, and the host reads them as absent. The flag decides, not the
+ *     value; done_tick is still observed.
  * Chirp order is TDM-interleaved: chirp c -> tx = c % n_tx, loop = c / n_tx.
  */
 #ifndef L3_DUMP_FORMAT_H
@@ -55,6 +58,7 @@
 #define L3_FRAME_FLAG_ASSOCIATED 0x01U
 #define L3_FRAME_FLAG_IQ8_SCANNED 0x02U
 #define L3_CAPTURE_FLAG_IQ8_SCAN 0x01U
+#define L3_FRAME_NO_STAMP 0U   /* seq/start_tick of an unassociated record; never a real seq */
 #define L3_SAMPLE_INT16_IQ  0
 #define L3_SAMPLE_RANGE_FFT_IQ16 1
 #define L3_SAMPLE_RANGE_FFT_IQ16_WINDOWED 2
@@ -113,8 +117,8 @@ typedef struct __attribute__((packed)) {
 } l3_capture_evidence_t;          /* sizeof == 40 */
 
 typedef struct __attribute__((packed)) {
-    uint32_t seq;                 /* frame-start count of the armed frame */
-    uint32_t start_tick;          /* frame-start ISR entry */
+    uint32_t seq;                 /* frame-start count of the armed frame, or L3_FRAME_NO_STAMP */
+    uint32_t start_tick;          /* frame-start ISR entry, or L3_FRAME_NO_STAMP */
     uint32_t done_tick;           /* HWA output EDMA completion for this frame */
     uint16_t iq8_overflow;        /* IQ8: components outside int8 before narrowing */
     uint16_t iq8_max_abs;         /* IQ8: largest magnitude before narrowing */

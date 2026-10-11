@@ -92,6 +92,9 @@ DUMP_TRAILER = struct.Struct("<4sI")
 DUMP_TRAILER_MAGIC = b"ILT1"
 FRAME_FLAG_ASSOCIATED = 0x01
 FRAME_FLAG_IQ8_SCANNED = 0x02
+# L3_FRAME_NO_STAMP: what the firmware writes into seq and start_tick when a record is not
+# associated with a fresh armed frame start. The flag decides; the parser reports None.
+FRAME_NO_STAMP = 0
 CAPTURE_FLAG_IQ8_SCAN = 0x01
 FRAME_TIME_SOURCE_PLANNED = "planned_descriptor"
 
@@ -124,6 +127,9 @@ def _evidence_bytes(
     """Encode the evidence block + per-frame records, and the trailer."""
     if len(frame_evidence) != n_frames:
         raise ValueError("evidence needs one record per frame")
+    for index, record in enumerate(frame_evidence):
+        if record["associated"] and (record["seq"] is None or record["start_tick"] is None):
+            raise ValueError(f"associated frame record {index} needs its seq and start_tick")
     block = CAPTURE_EVIDENCE.pack(
         CAPTURE_EVIDENCE_MAGIC,
         CAPTURE_EVIDENCE.size,
@@ -132,8 +138,9 @@ def _evidence_bytes(
     )
     records = b"".join(
         FRAME_EVIDENCE.pack(
-            int(record["seq"]),
-            int(record["start_tick"]),
+            # Like the firmware: an unassociated record never carries stale stamps.
+            int(record["seq"]) if record["associated"] else FRAME_NO_STAMP,
+            int(record["start_tick"]) if record["associated"] else FRAME_NO_STAMP,
             int(record["done_tick"]),
             int(record["iq8_overflow"]),
             int(record["iq8_max_abs"]),
@@ -168,19 +175,22 @@ def _parse_evidence(raw: bytes, meta: dict, offset: int) -> None:
     stop = start + FRAME_EVIDENCE.size * meta["n_frames"]
     meta["capture_evidence"] = capture
     meta["frame_evidence"] = tuple(
-        {
-            "seq": seq,
-            "start_tick": start_tick,
-            "done_tick": done_tick,
-            "iq8_overflow": overflow,
-            "iq8_max_abs": max_abs,
-            "associated": bool(flags & FRAME_FLAG_ASSOCIATED),
-            "iq8_scanned": bool(flags & FRAME_FLAG_IQ8_SCANNED),
-        }
-        for seq, start_tick, done_tick, overflow, max_abs, flags in FRAME_EVIDENCE.iter_unpack(
-            raw[start:stop]
-        )
+        _frame_record(*values) for values in FRAME_EVIDENCE.iter_unpack(raw[start:stop])
     )
+
+
+def _frame_record(seq, start_tick, done_tick, overflow, max_abs, flags) -> dict:
+    """One frame record; without a fresh armed start, seq and start_tick were not observed."""
+    associated = bool(flags & FRAME_FLAG_ASSOCIATED)
+    return {
+        "seq": seq if associated else None,
+        "start_tick": start_tick if associated else None,
+        "done_tick": done_tick,
+        "iq8_overflow": overflow,
+        "iq8_max_abs": max_abs,
+        "associated": associated,
+        "iq8_scanned": bool(flags & FRAME_FLAG_IQ8_SCANNED),
+    }
 
 
 def pack_dump(

@@ -425,7 +425,19 @@ static uint8_t  gIq8FixedShift = 7U;
 #endif
 #endif
 
-/* Config pulled from the CLI mmWave extension (kept off the stack -- large). */
+#ifdef CONFIGURABLE_CAPTURE
+/* Ring slot of the frame the HWA chain is processing: pre frames cycle through the pre
+ * ring and kept post frames follow it in order. This is the only copy of the formula; the
+ * frame arm (l3_configHwaFrameOutput) and its output-done callback both call it, so a
+ * frame's data, its IQ8 pack and its evidence record name the same slot. Valid until the
+ * output-done callback advances the counters. */
+static inline uint32_t l3_activeRingSlot(void)
+{
+    return gActiveFrameIsPost ? gCapturePlan.preFrames + gPostFramesCaptured
+                              : gPreFramesCaptured % gCapturePlan.preFrames;
+}
+#endif
+
 #ifdef L3_CAPTURE_EVIDENCE
 /* W4A-EVIDENCE-BEGIN */
 /* Observed evidence (W4a). The R4F's PMU cycle counter runs at the CPU clock (gCpuClock,
@@ -467,24 +479,28 @@ static void l3_resetEvidence(void)
     memset((void *)gFrameEvidenceFlags, 0, sizeof(gFrameEvidenceFlags));
 }
 
-/* HWA output-done callback: stamp the ring slot this frame completed. */
+/* HWA output-done callback: stamp the ring slot this frame completed. Without a fresh
+ * armed start the active seq and tick belong to an earlier frame, so the record carries
+ * L3_FRAME_NO_STAMP instead of those stale (plausible-looking) values. */
 static void l3_recordFrameEvidence(uint32_t slot, uint32_t doneTick)
 {
+    uint8_t fresh = gActiveFrameFresh;
+
+    gActiveFrameFresh = 0U;
     if (slot >= L3_MAX_CAPTURE_FRAMES) {
-        gActiveFrameFresh = 0U;
         return;
     }
-    gFrameSeq[slot] = gActiveFrameSeq;
-    gFrameStartTick[slot] = gActiveFrameStartTick;
+    gFrameSeq[slot] = fresh ? gActiveFrameSeq : L3_FRAME_NO_STAMP;
+    gFrameStartTick[slot] = fresh ? gActiveFrameStartTick : L3_FRAME_NO_STAMP;
     gFrameDoneTick[slot] = doneTick;
     gFrameIq8Overflow[slot] = 0U;
     gFrameIq8MaxAbs[slot] = 0U;
-    gFrameEvidenceFlags[slot] = gActiveFrameFresh ? L3_FRAME_FLAG_ASSOCIATED : 0U;
-    gActiveFrameFresh = 0U;
+    gFrameEvidenceFlags[slot] = fresh ? L3_FRAME_FLAG_ASSOCIATED : 0U;
 }
 /* W4A-EVIDENCE-END */
 #endif
 
+/* Config pulled from the CLI mmWave extension (kept off the stack -- large). */
 static MMWave_OpenCfg gOpenCfg;
 static MMWave_CtrlCfg gCtrlCfg;
 
@@ -1256,26 +1272,26 @@ static void l3_hwaChainDoneCB(void *arg)
 
 static void l3_hwaOutputDoneCB(uintptr_t arg, uint8_t tcCode)
 {
+#if defined(CONFIGURABLE_CAPTURE) && (defined(L3_CAPTURE_EVIDENCE) || defined(L3_RING_IQ8))
+    uint32_t completedSlot;
+#endif
     (void)arg;
     (void)tcCode;
     gHwaOutputDone++;
     gRingFrame++;
 #ifdef CONFIGURABLE_CAPTURE
+#if defined(L3_CAPTURE_EVIDENCE) || defined(L3_RING_IQ8)
+    completedSlot = l3_activeRingSlot();   /* before the counters below advance */
+#endif
 #ifdef L3_CAPTURE_EVIDENCE
     if (gActiveFrameShouldKeep) {
-        l3_recordFrameEvidence(gActiveFrameIsPost
-                                   ? gCapturePlan.preFrames + gPostFramesCaptured
-                                   : gPreFramesCaptured % gCapturePlan.preFrames,
-                               l3_ticks());
+        l3_recordFrameEvidence(completedSlot, l3_ticks());
     } else {
         gActiveFrameFresh = 0U;   /* a stride-skipped frame consumes its start too */
     }
 #endif
 #ifdef L3_RING_IQ8
     if (l3_captureUsesIq8() && gActiveFrameShouldKeep) {
-        uint32_t completedSlot = gActiveFrameIsPost
-                                     ? gCapturePlan.preFrames + gPostFramesCaptured
-                                     : gPreFramesCaptured % gCapturePlan.preFrames;
         if (gIq8Pending) {
             gIq8PackOverruns++;
         }
@@ -1831,7 +1847,6 @@ static int32_t l3_configHwaFrameOutput(uint32_t ringSlot)
 
 #ifdef CONFIGURABLE_CAPTURE
     if (gPostCaptureStarted) {
-        ringSlot = gCapturePlan.preFrames + gPostFramesCaptured;
         gActiveFrameIsPost = 1U;
         if (gCapturePlan.phased &&
             gPostFramesCaptured < gCapturePlan.impactFrames) {
@@ -1847,11 +1862,11 @@ static int32_t l3_configHwaFrameOutput(uint32_t ringSlot)
                 ((ballObserved % gCapturePlan.postStride) == 0U);
         }
     } else {
-        ringSlot = gPreFramesCaptured % gCapturePlan.preFrames;
         binCount = gCapturePlan.preBins;
         gActiveFrameIsPost = 0U;
         gActiveFrameShouldKeep = 1U;
     }
+    ringSlot = l3_activeRingSlot();
     if (ringSlot >= gCapturePlan.totalFrames) {
         return -1;
     }
@@ -2582,8 +2597,15 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
         return -1;
     }
 #ifdef L3_CAPTURE_EVIDENCE
-    gRequestTick = l3_ticks();
-    gRequestSeq = gNumFrame;
+    {
+        /* One snapshot: a frame-start ISR between the two reads would skew
+         * frames_request_to_first_post by one frame. */
+        uintptr_t key = Hwi_disable();
+
+        gRequestSeq = gNumFrame;
+        gRequestTick = l3_ticks();
+        Hwi_restore(key);
+    }
 #endif
 
     /* Halt chirping only after HWA and both output EDMAs completed naturally. */
