@@ -29,6 +29,7 @@ from flask import Flask, Response, jsonify, request, send_file, send_from_direct
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
+from . import core_eligibility, pi_trace
 from .ballistics import resolve_launch, simulate
 from .camera.fusion_diagnostics import build_snapshot as build_fusion_diagnostic
 from .clubs import ClubType
@@ -427,6 +428,192 @@ def _assign_shot_number(shot: Shot) -> None:
             _shot_sequence_number = max(_shot_sequence_number, shot.shot_number)
 
 
+# --- Pi trace hooks (--pi-trace, stage 1b) -------------------------------------------
+# Every hook is a no-op when tracing is off, and every trace call is guarded: a
+# trace error is logged and ignored, so it can never skip, delay or drop an emit
+# or any metric (R-F16; owner rule: 2 s is a goal, not a cutoff).
+# Revisions per trace attempt: each shot-carrying emit (first or late update)
+# advances it; a status notice carries the latest one.
+_trace_revisions: dict[str, int] = {}
+_trace_revisions_lock = threading.Lock()
+
+
+def _trace_tag(  # pylint: disable=too-many-arguments
+    shot: Shot,
+    *,
+    revision: int | None,
+    final: bool,
+    update_kind: str,
+    core_eligible: bool,
+    core_fields=(),
+) -> dict | None:
+    """Trace identity for one emitted revision; lifecycle (final) and eligibility kept apart."""
+    if pi_trace.get_recorder() is None or shot.trace_attempt_id is None:
+        return None
+    return {
+        "attempt_id": shot.trace_attempt_id,
+        "revision": revision,
+        "final": final,
+        "update_kind": update_kind,
+        "core_eligible": core_eligible,
+        "core_fields": list(core_fields),
+    }
+
+
+def _trace_gate_edge(edge_wall_s: float) -> None:
+    """First BCM17 observer: bracketed edge age, a bracketed wall pair, then note the edge.
+
+    The edge is noted even when the reading fails: an edge happened, and an
+    age-less edge is kept as such (never given an invented age).
+    """
+    recorder = pi_trace.get_recorder()
+    if recorder is None:
+        return
+    reading: dict = {}
+    reading_error = None
+    try:
+        capture_monitor = getattr(iwr6843_runtime, "capture_monitor", None)
+        if hasattr(capture_monitor, "edge_tick_reading"):
+            reading = capture_monitor.edge_tick_reading()
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        reading_error = type(error).__name__
+    try:
+        low, high = pi_trace.BracketedPair.now().wall_minus_mono_bounds_ns()
+        mono_after_ns = reading.get("mono_after_ns")
+        recorder.note_edge(
+            monotonic_ns=mono_after_ns if mono_after_ns is not None else time.monotonic_ns(),
+            mono_before_ns=reading.get("mono_before_ns"),
+            age_ns=reading.get("age_ns"),
+            mono_after_ns=mono_after_ns,
+            wall_minus_mono_low_ns=low,
+            wall_minus_mono_high_ns=high,
+            backend=reading.get("backend"),
+            gpiozero_version=reading.get("gpiozero_version"),
+            lgpio_version=reading.get("lgpio_version"),
+            observer_wall_s=float(edge_wall_s),
+            reading_error=reading_error,
+        )
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("[TRACE] GATE edge mark failed; ignored", exc_info=True)
+
+
+def _trace_processor(processor) -> None:
+    """Instance-only marks around analysis and spin (D27: measure spin's Pi cost).
+
+    Wraps once: an instance whose methods are already its own attributes is left as is.
+    The class is never touched, so replay_config and its hash are unchanged.
+    """
+    for name, start_mark, end_mark in (
+        ("process_capture", "ops_analysis_started", "ops_core_ready"),
+        ("detect_spin_multitaper", "ops_spin_started", "ops_spin_done"),
+    ):
+        if name not in vars(processor):
+            pi_trace.trace_method(processor, name, start_mark, end_mark)
+
+
+def _install_pi_trace_hooks() -> None:
+    """Before the OPS monitor starts: trace its processor, and observe BCM17 edges first."""
+    if pi_trace.get_recorder() is None:
+        return
+    try:
+        processor = getattr(monitor, "processor", None)
+        if processor is not None:
+            _trace_processor(processor)
+        capture_monitor = getattr(iwr6843_runtime, "capture_monitor", None)
+        if capture_monitor is not None:
+            capture_monitor.prepend_trigger_observer(_trace_gate_edge)
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("[TRACE] installing the Pi trace hooks failed; ignored", exc_info=True)
+
+
+def _json_safe_core(core: dict) -> dict:
+    """The core values as written to the trace: a non-finite float as its exact text."""
+    return {
+        key: (repr(value) if isinstance(value, float) and not math.isfinite(value) else value)
+        for key, value in core.items()
+    }
+
+
+def _trace_emit_fields(shot: Shot, event: str, payload: dict, *, final: bool, update_kind: str):
+    """Revision, eligibility and tag for one emit; None (and logged) on any trace error."""
+    try:
+        attempt_id = shot.trace_attempt_id
+        revision = None
+        if attempt_id is not None:
+            with _trace_revisions_lock:
+                revision = _trace_revisions.get(attempt_id, 0)
+                if update_kind != "status":
+                    revision += 1
+                    _trace_revisions[attempt_id] = revision
+        verdict = core_eligibility.evaluate(payload["shot"])
+        eligible = verdict["eligible"] and update_kind != "status"
+        reasons = (["status_update"] if update_kind == "status" else []) + verdict["reasons"]
+        tag = _trace_tag(
+            shot,
+            revision=revision,
+            final=final,
+            update_kind=update_kind,
+            core_eligible=eligible,
+            core_fields=verdict["core"].keys(),
+        )
+        if tag is not None:
+            payload["trace"] = tag
+        return {
+            "revision": revision,
+            "final": final,
+            "update_kind": update_kind,
+            "event": event,
+            "core_eligible": eligible,
+            "core_reasons": reasons,
+            "core": _json_safe_core(verdict["core"]),
+            "contract": verdict["contract"],
+        }
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning(
+            "[TRACE] tagging the %s emit failed; emitting untagged", event, exc_info=True
+        )
+        return {}
+
+
+def _traced_emit(shot: Shot, event: str, payload: dict, *, final: bool, update_kind: str) -> None:
+    """Emit one shot payload; when tracing, tag it and mark invoked/returned around it.
+
+    The emit itself is never inside a trace guard: whatever the trace does, the
+    payload is emitted, and an emit error still reaches the caller's handler.
+    """
+    if pi_trace.get_recorder() is None:
+        socketio.emit(event, payload)
+        return
+    trace_fields = _trace_emit_fields(shot, event, payload, final=final, update_kind=update_kind)
+    pi_trace.mark("server_emit_invoked", shot.trace_attempt_id, **trace_fields)
+    error = None
+    try:
+        socketio.emit(event, payload)
+    except BaseException as exc:
+        error = type(exc).__name__
+        raise
+    finally:
+        pi_trace.mark("server_emit_returned", shot.trace_attempt_id, **trace_fields, error=error)
+
+
+def _start_pi_trace(log_dir: Path | None) -> Path:
+    """Open the trace file beside the session logs (--pi-trace)."""
+    directory = Path(log_dir).expanduser() if log_dir else Path.home() / "openflight_sessions"
+    path = directory / f"pi_trace_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
+    with _trace_revisions_lock:
+        _trace_revisions.clear()
+    pi_trace.set_recorder(pi_trace.TraceRecorder(path))
+    return path
+
+
+def _stop_pi_trace() -> None:
+    """Remove and close the recorder; say so when its footer could not be written."""
+    recorder = pi_trace.get_recorder()
+    pi_trace.set_recorder(None)
+    if recorder is not None and not recorder.close():
+        logger.warning("[SERVER] Pi trace closed incomplete: its footer is missing (T1 fails)")
+
+
 def _reset_shot_sequence() -> None:
     """Start shot identities at one for a newly started logging session."""
     global _shot_sequence_number  # pylint: disable=global-statement
@@ -571,6 +758,13 @@ def _shot_finalization_worker_loop() -> None:
                 diagnostic_reason = (
                     "enrichment_deadline" if deadline_expired else "coordinator_capacity"
                 )
+                # Records the first-result timer only: enrichment keeps running and
+                # its late result updates this shot (server_late_update_applied).
+                pi_trace.mark(
+                    "server_enrichment_watchdog_fired",
+                    registered.shot.trace_attempt_id,
+                    reason=diagnostic_reason,
+                )
                 logger.warning(
                     "[SERVER] Shot #%d optional enrichment exceeded %s; "
                     "publishing OPS-only now, enrichment continues and will update it",
@@ -709,6 +903,11 @@ def _log_abandoned_late_enrichment(entry: _AwaitingLateEnrichment) -> None:
         entry.registered.shot.shot_number,
         _SHOT_AWAITING_LATE_CAPACITY,
     )
+    pi_trace.mark(
+        "server_late_result_abandoned",
+        entry.registered.shot.trace_attempt_id,
+        reason="awaiting_capacity",
+    )
     _log_shot_enrichment_lifecycle(
         entry.registered.diagnostic_logger,
         entry.registered.diagnostic_session_uuid,
@@ -767,6 +966,7 @@ def _cleanup_hardware_for_shutdown() -> bool:
     for connector in sim_connectors:
         _run_shutdown_step(f"simulator connector stop ({connector.name})", connector.stop)
 
+    _run_shutdown_step("pi trace close", _stop_pi_trace)
     return True
 
 
@@ -3912,6 +4112,28 @@ def _load_camera_capture_archive(camera_capture) -> dict[str, object] | None:
         return None
 
 
+def _trace_camera_frames(shot: Shot, camera_capture, camera_archive) -> None:
+    """Mark the camera's own host-monotonic trigger and last-frame times, when it has them.
+
+    Both are CLOCK_MONOTONIC readings the camera runtime took; a clip without them
+    gets no mark (no stand-in time).
+    """
+    if pi_trace.get_recorder() is None:
+        return
+    try:
+        metadata = getattr(camera_capture, "metadata", None) or {}
+        trigger_ns = metadata.get("trigger_host_timestamp_ns")
+        if trigger_ns is not None:
+            pi_trace.mark("camera_trigger", shot.trace_attempt_id, monotonic_ns=int(trigger_ns))
+        host_ns = (camera_archive or {}).get("host_timestamp_ns")
+        if host_ns is not None and len(host_ns):
+            pi_trace.mark(
+                "camera_last_frame", shot.trace_attempt_id, monotonic_ns=int(np.max(host_ns))
+            )
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("[TRACE] camera frame marks failed; ignored", exc_info=True)
+
+
 def _prefetch_camera_capture(shot: Shot) -> _CameraPrefetchResult:
     """Match one completed camera clip and load its archive once."""
     match_started = time.monotonic()
@@ -3923,6 +4145,7 @@ def _prefetch_camera_capture(shot: Shot) -> _CameraPrefetchResult:
     archive_started = match_finished
     camera_archive = _load_camera_capture_archive(camera_capture)
     archive_finished = time.monotonic()
+    _trace_camera_frames(shot, camera_capture, camera_archive)
     return _CameraPrefetchResult(
         capture=camera_capture,
         archive=camera_archive,
@@ -4543,7 +4766,7 @@ def _attach_camera_replay(shot: Shot, camera_capture) -> None:
 
 def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     """Mutate a shot with available radar/camera measurements and timings."""
-
+    pi_trace.mark("enrichment_started", shot.trace_attempt_id)
     enrichment_started = time.monotonic()
     # Snapshot orientation before IWR capture can block, and select only data
     # timestamped before impact so impact vibration cannot bias the geometry.
@@ -4553,7 +4776,9 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     if camera_capture_runtime is not None and shot.mode != "mock":
         camera_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="camera-prefetch")
         camera_future = camera_executor.submit(_prefetch_camera_capture, shot)
+    pi_trace.mark("iwr_process_started", shot.trace_attempt_id)
     iwr6843_ms = _process_iwr6843_angle(shot)
+    pi_trace.mark("iwr_process_done", shot.trace_attempt_id)
     kld7_ms = None
     camera_capture_ms = None
     camera_archive_load_ms = None
@@ -4772,6 +4997,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     camera_archive = None
     if camera_future is not None:
         camera_wait_started = time.monotonic()
+        pi_trace.mark("camera_wait_started", shot.trace_attempt_id)
         try:
             prefetched = camera_future.result()
             camera_capture = prefetched.capture
@@ -4791,6 +5017,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
             )
         finally:
             camera_wait_ms = (time.monotonic() - camera_wait_started) * 1000.0
+            pi_trace.mark("camera_ready", shot.trace_attempt_id, matched=camera_capture is not None)
             if camera_executor is not None:
                 camera_executor.shutdown(wait=True, cancel_futures=False)
 
@@ -4844,6 +5071,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     if shot.mode != "mock":
         _fuse_camera_measurements(shot, camera_capture, camera_archive)
         camera_analysis_ms = (time.monotonic() - camera_analysis_started) * 1000.0
+        pi_trace.mark("camera_analysis_done", shot.trace_attempt_id)
     _attach_experimental_face_angle(shot)
 
     return _ShotEnrichmentResult(
@@ -5090,7 +5318,13 @@ def _finalize_shot_detected(
             shot
         )
         shot_data["stage_timing"] = deepcopy(shot.stage_timing)
-        socketio.emit(emit_event, {"shot": shot_data, "stats": stats})
+        _traced_emit(
+            shot,
+            emit_event,
+            {"shot": shot_data, "stats": stats},
+            final=True,
+            update_kind="first" if late_update is None else "late_update",
+        )
         if publication_timing_updated:
             _persist_shot_publication(
                 diagnostic_logger,
@@ -5281,6 +5515,11 @@ def _queue_ordered_shot_finalization(
         "[SERVER] Enrichment result for shot #%d matches no shot awaiting one; not applied",
         shot_number,
     )
+    pi_trace.mark(
+        "server_late_result_unmatched",
+        getattr(source_shot, "trace_attempt_id", None),
+        reason="shot_not_awaiting_enrichment",
+    )
     _log_shot_enrichment_lifecycle(
         get_session_logger(),
         getattr(source_shot, "camera_fusion_session_uuid", None),
@@ -5347,6 +5586,13 @@ def _publish_late_enrichment(
             },
             exc=error,
         )
+    pi_trace.mark(
+        "server_late_update_applied",
+        shot.trace_attempt_id,
+        state=state,
+        first_result_reason=awaiting.first_result_reason,
+        late_by_ms=late_by_ms,
+    )
     _log_shot_enrichment_lifecycle(
         registered.diagnostic_logger,
         registered.diagnostic_session_uuid,
@@ -5426,13 +5672,16 @@ def _emit_initial_ops_shot(shot: Shot) -> bool:
         shot_data = shot_to_dict(shot)
         _record_server_publication_invocation(shot)
         shot_data["stage_timing"] = deepcopy(shot.stage_timing)
-        socketio.emit(
+        _traced_emit(
+            shot,
             "shot",
             {
                 "shot": shot_data,
                 "stats": stats,
                 "pending": pending,
             },
+            final=False,
+            update_kind="first",
         )
         return True
     except Exception as error:  # pylint: disable=broad-exception-caught
@@ -5458,7 +5707,8 @@ def _emit_ops_enrichment_status(shot: Shot, *, status: str, reason: str) -> None
     if camera_capture_runtime is not None:
         hardware.append("camera")
     try:
-        socketio.emit(
+        _traced_emit(
+            shot,
             "shot_update",
             {
                 "shot": shot_to_dict(shot),
@@ -5470,6 +5720,8 @@ def _emit_ops_enrichment_status(shot: Shot, *, status: str, reason: str) -> None
                     "hardware": hardware,
                 },
             },
+            final=False,
+            update_kind="status",
         )
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning(
@@ -5590,6 +5842,17 @@ def _handle_shot_detected(shot: Shot) -> None:
     """Publish OPS metrics promptly, then enrich optional hardware data."""
     shot.server_callback_started_monotonic_ns = time.monotonic_ns()
     shot.stage_timing = clone_stage_timing(shot.stage_timing)
+    if pi_trace.get_recorder() is not None:
+        # Phase A join: the monitor calls this synchronously in its capture thread,
+        # before its next wait, so the current OPS attempt is this shot's (pinned by
+        # test_phase_a_join_invariant...; Task 12 replaces it with an explicit ID).
+        shot.trace_attempt_id = pi_trace.current_ops_attempt()
+        pi_trace.mark(
+            "server_callback_started",
+            shot.trace_attempt_id,
+            monotonic_ns=shot.server_callback_started_monotonic_ns,
+            join="serial_capture_loop",
+        )
     if tester_setup_required:
         readiness = (
             camera_capture_runtime.trigger_evidence_for_shot(shot.impact_timestamp)
@@ -5643,9 +5906,13 @@ def _handle_shot_detected(shot: Shot) -> None:
             )
             logger.warning("[SERVER] Tester shot rejected: %s", evidence["blockers"])
             ready_light.swing_result("not_counted")
+            pi_trace.mark(
+                "server_shot_rejected", shot.trace_attempt_id, reason="tester_setup_readiness"
+            )
             return
     ready_light.swing_result("shot", ball_speed_mph=shot.ball_speed_mph)
     _assign_shot_number(shot)
+    pi_trace.mark("server_shot_accepted", shot.trace_attempt_id, shot_number=shot.shot_number)
     active_profile = get_profile_store().get_active()
     shot.profile_id = active_profile.id
     shot.profile_name = active_profile.name
@@ -5715,6 +5982,7 @@ def _handle_shot_detected(shot: Shot) -> None:
                 _SHOT_ENRICHMENT_QUEUE_CAPACITY,
                 shot.shot_number,
             )
+            pi_trace.mark("server_enrichment_deferred", shot.trace_attempt_id, reason="queue_full")
             if emitted:
                 _emit_ops_enrichment_status(shot, status="pending", reason="queue_full")
             _queue_shot_finalization(
@@ -5737,6 +6005,7 @@ def _abandon_shot_enrichment(
 ) -> None:
     """The deferred backlog is at its hard bound: say so loudly, keep the OPS shot."""
     reason = "enrichment_backlog_full"
+    pi_trace.mark("server_enrichment_abandoned", shot.trace_attempt_id, reason=reason)
     logger.error(
         "[SERVER] Shot #%d enrichment ABANDONED: %d jobs queued and %d deferred already; "
         "its IWR and camera metrics will not be computed",
@@ -6036,6 +6305,9 @@ def start_monitor(
             _ready_light_trigger_outcome(data)
             socketio.emit("trigger_diagnostic", data)
 
+        # Before the capture thread starts and before BCM17 is armed, so the
+        # first capture and the first edge are traced too.
+        _install_pi_trace_hooks()
         monitor.start(  # pylint: disable=unexpected-keyword-arg
             shot_callback=on_shot_detected,
             live_callback=on_live_reading,
@@ -6574,6 +6846,11 @@ def main():
     )
     parser.add_argument(
         "--debug", "-d", action="store_true", help="Enable verbose FFT/CFAR debug output"
+    )
+    parser.add_argument(
+        "--pi-trace",
+        action="store_true",
+        help=("Write the stage 1b host-monotonic trace (pi_trace_*.jsonl) beside the session logs"),
     )
     parser.add_argument(
         "--radar-log", action="store_true", help="Log raw radar data to console (Python logging)"
@@ -7349,6 +7626,10 @@ def main():
     else:
         init_session_logger(enabled=False)
         print("Session logging DISABLED")
+
+    if args.pi_trace:
+        trace_path = _start_pi_trace(Path(args.log_dir) if args.log_dir else None)
+        print(f"Pi trace enabled: {trace_path}")
 
     if ballistics_enabled:
         print("Ballistic carry model: ENABLED (simulator + drag/Magnus)")

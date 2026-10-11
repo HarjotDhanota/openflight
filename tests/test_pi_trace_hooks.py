@@ -1,6 +1,8 @@
 """Trace hooks in the non-shared files (no hardware)."""
 
 import json
+import math
+import queue
 from datetime import datetime
 
 import pytest
@@ -379,3 +381,579 @@ def test_edge_tick_reading_reports_an_unusable_age_as_none(bad_age):
 
     capture_monitor._button = Button()  # pylint: disable=protected-access
     assert capture_monitor.edge_tick_reading()["age_ns"] is None
+
+
+# --- server.py hooks ---------------------------------------------------------------------
+
+
+class _EdgeCaptureMonitor:
+    @staticmethod
+    def edge_tick_reading():
+        return {
+            "mono_before_ns": 1_000,
+            "age_ns": 300_000,
+            "mono_after_ns": 1_400,
+            "backend": "LGPIOFactory",
+            "gpiozero_version": "2.0.1",
+            "lgpio_version": "0.2.2.0",
+        }
+
+
+def _iwr_runtime(capture_monitor):
+    class Runtime:
+        pass
+
+    runtime = Runtime()
+    runtime.capture_monitor = capture_monitor
+    return runtime
+
+
+def test_server_edge_observer_uses_its_own_bracket_not_the_observer_argument(recorder, monkeypatch):
+    from openflight import server
+
+    monkeypatch.setattr(server, "iwr6843_runtime", _iwr_runtime(_EdgeCaptureMonitor()))
+    server._trace_gate_edge(1_790_000_000.25)  # pylint: disable=protected-access
+    edge = _named(read_marks(recorder), "gate_edge_callback")[0]
+    assert (edge["mono_before_ns"], edge["age_ns"], edge["mono_after_ns"]) == (
+        1_000,
+        300_000,
+        1_400,
+    )
+    assert edge["monotonic_ns"] == 1_400
+    assert edge["edge_seq"] == 1
+    assert edge["wall_minus_mono_low_ns"] <= edge["wall_minus_mono_high_ns"]
+    assert edge["observer_wall_s"] == 1_790_000_000.25
+    assert (edge["backend"], edge["gpiozero_version"], edge["lgpio_version"]) == (
+        "LGPIOFactory",
+        "2.0.1",
+        "0.2.2.0",
+    )
+    assert edge["reading_error"] is None
+
+
+def test_server_edge_observer_still_notes_the_edge_when_the_reading_fails(recorder, monkeypatch):
+    """An edge happened: it is noted age-less (an ambiguity-maker), never invented."""
+    from openflight import server
+
+    class Broken:
+        @staticmethod
+        def edge_tick_reading():
+            raise RuntimeError("pin gone")
+
+    monkeypatch.setattr(server, "iwr6843_runtime", _iwr_runtime(Broken()))
+    server._trace_gate_edge(1_790_000_000.25)  # pylint: disable=protected-access
+    edge = _named(read_marks(recorder), "gate_edge_callback")[0]
+    assert edge["age_ns"] is None and edge["mono_before_ns"] is None
+    assert edge["mono_after_ns"] is None
+    assert edge["reading_error"] == "RuntimeError"
+
+
+def test_server_edge_observer_never_raises_into_the_gpio_callback(recorder, monkeypatch):
+    from openflight import server
+
+    def broken(**_kwargs):
+        raise RuntimeError("trace bug")
+
+    monkeypatch.setattr(server, "iwr6843_runtime", _iwr_runtime(_EdgeCaptureMonitor()))
+    monkeypatch.setattr(recorder, "note_edge", broken)
+    server._trace_gate_edge(1_790_000_000.25)  # pylint: disable=protected-access
+
+
+def test_server_edge_observer_is_a_no_op_without_a_recorder(monkeypatch):
+    from openflight import server
+
+    class Counting:
+        calls = 0
+
+        def edge_tick_reading(self):
+            Counting.calls += 1
+            return {}
+
+    pi_trace.set_recorder(None)
+    monkeypatch.setattr(server, "iwr6843_runtime", _iwr_runtime(Counting()))
+    server._trace_gate_edge(1.0)  # pylint: disable=protected-access
+    assert Counting.calls == 0
+
+
+def test_trace_tag_carries_eligibility_and_update_kind_separately_from_final(recorder):
+    from openflight import server
+
+    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), trace_attempt_id="t-00001")
+    tag = server._trace_tag(  # pylint: disable=protected-access
+        shot,
+        revision=2,
+        final=True,
+        update_kind="late_update",
+        core_eligible=False,
+        core_fields=["ball_speed_mph"],
+    )
+    assert tag == {
+        "attempt_id": "t-00001",
+        "revision": 2,
+        "final": True,
+        "update_kind": "late_update",
+        "core_eligible": False,
+        "core_fields": ["ball_speed_mph"],
+    }
+    untraced = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
+    assert (
+        server._trace_tag(  # pylint: disable=protected-access
+            untraced, revision=1, final=False, update_kind="first", core_eligible=False
+        )
+        is None
+    )
+
+
+def test_trace_tag_is_absent_when_tracing_is_off():
+    from openflight import server
+
+    pi_trace.set_recorder(None)
+    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), trace_attempt_id="t-00001")
+    assert (
+        server._trace_tag(  # pylint: disable=protected-access
+            shot, revision=1, final=False, update_kind="first", core_eligible=False
+        )
+        is None
+    )
+
+
+def test_spin_and_analysis_are_traced_on_the_instance_and_results_unchanged(recorder):
+    from openflight import server
+
+    plain, traced = RollingBufferProcessor(), RollingBufferProcessor()
+    server._trace_processor(traced)  # pylint: disable=protected-access
+    server._trace_processor(traced)  # pylint: disable=protected-access  (wrapped once)
+    i_samples, q_samples = synth_capture(rpm=3000, ball_speed_mph=80.0, amplitude=400.0)
+    capture = IQCapture(
+        1.0, 1.068, [int(v) for v in i_samples], [int(v) for v in q_samples], timestamp=0.0
+    )
+    recorder.bind_thread("t-00001")
+    expected = plain.process_capture(capture)
+    assert expected is not None and traced.process_capture(capture) == expected
+    assert "process_capture" not in vars(RollingBufferProcessor()), "class must be untouched"
+    config = {
+        "club_type": monitor_module.ClubType.IRON_7,
+        "spin_prior_policy": "x",
+        "resolved_spin_prior_rpm": None,
+    }
+    assert traced.replay_config(**config)["sha256"] == plain.replay_config(**config)["sha256"]
+    marks = [m for m in read_marks(recorder) if m["name"].startswith("ops_")]
+    assert [m["name"] for m in marks] == [
+        "ops_analysis_started",
+        "ops_spin_started",
+        "ops_spin_done",
+        "ops_core_ready",
+    ]
+    assert {m["attempt_id"] for m in marks} == {"t-00001"}
+    assert {m["error"] for m in marks if m["name"].endswith(("_done", "_ready"))} == {None}
+
+
+def test_install_hooks_wraps_the_processor_and_puts_the_edge_observer_first(
+    recorder, monkeypatch, tmp_path
+):
+    from openflight import server
+
+    capture_monitor = IWR6843CaptureMonitor(
+        config_path=tmp_path / "unused.cfg", output_dir=tmp_path, radar=object()
+    )
+    capture_monitor.add_trigger_observer(lambda _wall: None)  # the camera's, registered earlier
+
+    class Monitor:
+        processor = RollingBufferProcessor()
+
+    monkeypatch.setattr(server, "monitor", Monitor())
+    monkeypatch.setattr(server, "iwr6843_runtime", _iwr_runtime(capture_monitor))
+    server._install_pi_trace_hooks()  # pylint: disable=protected-access
+    assert "process_capture" in vars(Monitor.processor)
+    assert "detect_spin_multitaper" in vars(Monitor.processor)
+    observers = capture_monitor._trigger_observers  # pylint: disable=protected-access
+    assert observers[0] is server._trace_gate_edge  # pylint: disable=protected-access
+
+
+def test_install_hooks_does_nothing_without_a_recorder(monkeypatch):
+    from openflight import server
+
+    pi_trace.set_recorder(None)
+
+    class Monitor:
+        processor = RollingBufferProcessor()
+
+    monkeypatch.setattr(server, "monitor", Monitor())
+    monkeypatch.setattr(server, "iwr6843_runtime", None)
+    server._install_pi_trace_hooks()  # pylint: disable=protected-access
+    assert "process_capture" not in vars(Monitor.processor)
+
+
+def _setup_rejecting_server(monkeypatch):
+    """Tester setup required, a camera readiness that exists and hard-stops the shot."""
+    from openflight import server
+
+    class Camera:
+        @staticmethod
+        def trigger_evidence_for_shot(_impact):
+            return {"schema_version": 1, "required": True, "ready": False, "blockers": []}
+
+    swing_results = []
+
+    class Light:
+        @staticmethod
+        def swing_result(result, **_kwargs):
+            swing_results.append(result)
+
+    assigned = []
+    monkeypatch.setattr(server, "tester_setup_required", True)
+    monkeypatch.setattr(server, "camera_capture_runtime", Camera())
+    monkeypatch.setattr(server, "_tester_trigger_evidence_problem", lambda _r: "blocked")
+    monkeypatch.setattr(server, "_tester_trigger_hard_stop", lambda _r: "hard")
+    monkeypatch.setattr(server, "log_session_error", lambda *a, **k: None)
+    monkeypatch.setattr(server, "ready_light", Light())
+    monkeypatch.setattr(server, "_assign_shot_number", assigned.append)
+    return server, swing_results, assigned
+
+
+def test_setup_rejection_is_marked_and_not_accepted(recorder, monkeypatch):
+    """R-F3: the rejection mark, and no sign the shot was accepted."""
+    server, swing_results, assigned = _setup_rejecting_server(monkeypatch)
+    attempt = recorder.open_ops_attempt()
+    server._handle_shot_detected(  # pylint: disable=protected-access
+        Shot(ball_speed_mph=100.0, timestamp=datetime.now())
+    )
+    marks = read_marks(recorder)
+    rejected = _named(marks, "server_shot_rejected")
+    assert [(m["attempt_id"], m["reason"]) for m in rejected] == [
+        (attempt, "tester_setup_readiness")
+    ]
+    assert _named(marks, "server_callback_started")[0]["join"] == "serial_capture_loop"
+    assert not _named(marks, "server_shot_accepted")
+    assert not _named(marks, "server_emit_invoked")
+    assert swing_results == ["not_counted"] and assigned == []
+
+
+def test_callback_joins_the_current_attempt_and_marks_acceptance(recorder, monkeypatch):
+    from openflight import server
+
+    attempt = recorder.open_ops_attempt()
+    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
+    monkeypatch.setattr(server, "tester_setup_required", False)
+    monkeypatch.setattr(server, "_has_slow_shot_enrichment", lambda _shot: False)
+    monkeypatch.setattr(server, "_register_shot_for_finalization", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_finish_shot_detected", lambda *a, **k: None)
+    monkeypatch.setattr(server.ready_light, "swing_result", lambda *a, **k: None)
+    server._handle_shot_detected(shot)  # pylint: disable=protected-access
+    assert shot.trace_attempt_id == attempt
+    marks = read_marks(recorder)
+    started = _named(marks, "server_callback_started")[0]
+    assert started["attempt_id"] == attempt
+    assert started["monotonic_ns"] == shot.server_callback_started_monotonic_ns
+    accepted = _named(marks, "server_shot_accepted")[0]
+    assert accepted["attempt_id"] == attempt and accepted["shot_number"] == shot.shot_number
+
+
+def test_untraced_callback_leaves_the_shot_without_an_attempt(monkeypatch):
+    from openflight import server
+
+    pi_trace.set_recorder(None)
+    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
+    monkeypatch.setattr(server, "tester_setup_required", False)
+    monkeypatch.setattr(server, "_has_slow_shot_enrichment", lambda _shot: False)
+    monkeypatch.setattr(server, "_register_shot_for_finalization", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_finish_shot_detected", lambda *a, **k: None)
+    monkeypatch.setattr(server.ready_light, "swing_result", lambda *a, **k: None)
+    server._handle_shot_detected(shot)  # pylint: disable=protected-access
+    assert shot.trace_attempt_id is None
+
+
+def _initial_emit_server(monkeypatch):
+    from openflight import server
+
+    emitted = []
+    monkeypatch.setattr(server, "monitor", None)
+    monkeypatch.setattr(server, "iwr6843_runtime", object())
+    monkeypatch.setattr(server, "camera_capture_runtime", None)
+    monkeypatch.setattr(
+        server.socketio, "emit", lambda event, payload: emitted.append((event, payload))
+    )
+    return server, emitted
+
+
+def _traced_shot(attempt_id):
+    return Shot(
+        ball_speed_mph=120.0,
+        timestamp=datetime.now(),
+        launch_angle_vertical=12.0,
+        launch_angle_vertical_source="radar",
+        trace_attempt_id=attempt_id,
+    )
+
+
+def test_initial_emit_is_tagged_and_bracketed_by_invoked_and_returned(recorder, monkeypatch):
+    server, emitted = _initial_emit_server(monkeypatch)
+    attempt = recorder.open_ops_attempt()
+    assert server._emit_initial_ops_shot(_traced_shot(attempt)) is True  # pylint: disable=protected-access
+    ((event, payload),) = emitted
+    assert event == "shot" and payload["pending"] == {"iwr6843": True}
+    assert payload["trace"] == {
+        "attempt_id": attempt,
+        "revision": 1,
+        "final": False,
+        "update_kind": "first",
+        "core_eligible": False,
+        "core_fields": list(payload["trace"]["core_fields"]),
+    }
+    assert "ball_speed_mph" in payload["trace"]["core_fields"]
+    marks = read_marks(recorder)
+    invoked, returned = (
+        _named(marks, "server_emit_invoked")[0],
+        _named(marks, "server_emit_returned")[0],
+    )
+    assert invoked["seq"] < returned["seq"]
+    for mark in (invoked, returned):
+        assert mark["attempt_id"] == attempt
+        assert (mark["revision"], mark["final"], mark["event"]) == (1, False, "shot")
+        assert mark["update_kind"] == "first"
+        assert mark["core_eligible"] is False
+        assert mark["core_reasons"] == [
+            "launch_horizontal_not_measured",
+            "distance_not_in_payload",
+        ]
+        assert mark["core"]["ball_speed_mph"] == payload["shot"]["ball_speed_mph"]
+        assert mark["contract"] == "pre_w13_v1"
+    assert returned["error"] is None
+
+
+def test_status_emit_is_tagged_status_and_never_eligible(recorder, monkeypatch):
+    server, emitted = _initial_emit_server(monkeypatch)
+    attempt = recorder.open_ops_attempt()
+    shot = _traced_shot(attempt)
+    server._emit_initial_ops_shot(shot)  # pylint: disable=protected-access
+    server._emit_ops_enrichment_status(  # pylint: disable=protected-access
+        shot, status="pending", reason="queue_full"
+    )
+    status_payload = emitted[1][1]
+    assert status_payload["enrichment"]["status"] == "pending"
+    tag = status_payload["trace"]
+    assert (tag["update_kind"], tag["revision"], tag["final"], tag["core_eligible"]) == (
+        "status",
+        1,
+        False,
+        False,
+    )
+    status_mark = _named(read_marks(recorder), "server_emit_invoked")[1]
+    assert status_mark["update_kind"] == "status" and status_mark["core_eligible"] is False
+    assert status_mark["core_reasons"][0] == "status_update"
+
+
+def test_untraced_emit_has_no_trace_key(monkeypatch):
+    server, emitted = _initial_emit_server(monkeypatch)
+    pi_trace.set_recorder(None)
+    server._emit_initial_ops_shot(_traced_shot("stale-00001"))  # pylint: disable=protected-access
+    assert "trace" not in emitted[0][1]
+
+
+def test_a_raising_recorder_never_drops_or_blocks_the_emit(recorder, monkeypatch):
+    """R-F16: a trace error is logged and ignored; the emit happens."""
+    server, emitted = _initial_emit_server(monkeypatch)
+    attempt = recorder.open_ops_attempt()
+
+    def broken(*_a, **_k):
+        raise RuntimeError("trace bug")
+
+    monkeypatch.setattr(recorder, "mark", broken)
+    monkeypatch.setattr(server.core_eligibility, "evaluate", broken)
+    assert server._emit_initial_ops_shot(_traced_shot(attempt)) is True  # pylint: disable=protected-access
+    assert [event for event, _payload in emitted] == ["shot"]
+    assert "trace" not in emitted[0][1]
+
+
+def test_a_failing_emit_is_marked_returned_with_its_error(recorder, monkeypatch):
+    server, _emitted = _initial_emit_server(monkeypatch)
+
+    def failing(_event, _payload):
+        raise ConnectionError("socket gone")
+
+    monkeypatch.setattr(server.socketio, "emit", failing)
+    monkeypatch.setattr(server, "log_session_error", lambda *a, **k: None)
+    attempt = recorder.open_ops_attempt()
+    assert server._emit_initial_ops_shot(_traced_shot(attempt)) is False  # pylint: disable=protected-access
+    assert _named(read_marks(recorder), "server_emit_returned")[0]["error"] == "ConnectionError"
+
+
+def test_non_finite_core_values_cannot_break_the_trace_file(recorder, monkeypatch):
+    server, emitted = _initial_emit_server(monkeypatch)
+    attempt = recorder.open_ops_attempt()
+    payload = {"shot": {"ball_speed_mph": 120.0, "launch_angle_vertical": float("nan")}}
+    server._traced_emit(  # pylint: disable=protected-access
+        _traced_shot(attempt), "shot", payload, final=False, update_kind="first"
+    )
+    assert math.isnan(emitted[0][1]["shot"]["launch_angle_vertical"]), "payload untouched"
+    marks = read_marks(recorder)
+    assert _named(marks, "server_emit_invoked")[0]["core"]["launch_angle_vertical"] == "nan"
+    assert recorder.counts()["write_failures"] == 0
+
+
+def test_unmatched_late_result_is_marked(recorder, monkeypatch):
+    from openflight import server
+
+    monkeypatch.setattr(server, "get_session_logger", lambda: None)
+    server._reset_shot_sequence()  # pylint: disable=protected-access
+    shot = _traced_shot("t-00007")
+    shot.shot_number = 99
+    pending = server._PendingShotFinalization(  # pylint: disable=protected-access
+        shot=shot,
+        emit_event="shot_update",
+        initial_ui_ms=None,
+        enrichment=server._ShotEnrichmentResult(),  # pylint: disable=protected-access
+    )
+    server._queue_ordered_shot_finalization(pending, source_shot=shot)  # pylint: disable=protected-access
+    mark = _named(read_marks(recorder), "server_late_result_unmatched")[0]
+    assert mark["attempt_id"] == "t-00007" and mark["reason"] == "shot_not_awaiting_enrichment"
+
+
+def test_enrichment_marks_iwr_and_camera_stages_on_the_shot_attempt(recorder, monkeypatch):
+    from openflight import server
+
+    class Capture:
+        valid = True
+        path = None
+        sequence = 3
+        error = None
+        trigger_timestamp = 1_790_000_000.0
+        metadata = {"trigger_host_timestamp_ns": 5_000}
+
+    class Camera:
+        @staticmethod
+        def capture_for_shot(_impact, timeout_s):
+            del timeout_s
+            return Capture()
+
+    monkeypatch.setattr(server, "camera_capture_runtime", Camera())
+    monkeypatch.setattr(server, "kld7_vertical", None)
+    monkeypatch.setattr(server, "kld7_horizontal", None)
+    monkeypatch.setattr(server, "get_session_logger", lambda: None)
+    monkeypatch.setattr(server, "_snapshot_inclinometer_for_shot", lambda _shot: None)
+    monkeypatch.setattr(server, "_process_iwr6843_angle", lambda _shot: 12.5)
+    monkeypatch.setattr(
+        server, "_load_camera_capture_archive", lambda _c: {"host_timestamp_ns": [6_000, 7_000]}
+    )
+    monkeypatch.setattr(server, "_attach_camera_replay", lambda *_a: None)
+    monkeypatch.setattr(server, "_fuse_camera_measurements", lambda *_a: None)
+    monkeypatch.setattr(server, "_attach_experimental_face_angle", lambda _shot: None)
+    shot = _traced_shot("t-00003")
+    shot.mode = "rolling-buffer"
+    server._enrich_shot_from_optional_hardware(shot)  # pylint: disable=protected-access
+    marks = [m for m in read_marks(recorder) if m["attempt_id"] == "t-00003"]
+    names = [m["name"] for m in marks]
+    for name in (
+        "enrichment_started",
+        "iwr_process_started",
+        "iwr_process_done",
+        "camera_trigger",
+        "camera_last_frame",
+        "camera_wait_started",
+        "camera_ready",
+        "camera_analysis_done",
+    ):
+        assert name in names, name
+    assert names[0] == "enrichment_started"
+    assert names.index("iwr_process_started") < names.index("iwr_process_done")
+    assert names.index("camera_wait_started") < names.index("camera_ready")
+    assert names.index("camera_ready") < names.index("camera_analysis_done")
+    assert _named(marks, "camera_trigger")[0]["monotonic_ns"] == 5_000
+    assert _named(marks, "camera_last_frame")[0]["monotonic_ns"] == 7_000
+    assert _named(marks, "camera_ready")[0]["matched"] is True
+
+
+def test_camera_marks_are_skipped_when_the_clip_carries_no_host_times(recorder, monkeypatch):
+    from openflight import server
+
+    class Camera:
+        @staticmethod
+        def capture_for_shot(_impact, timeout_s):
+            del timeout_s
+
+    monkeypatch.setattr(server, "camera_capture_runtime", Camera())
+    shot = _traced_shot("t-00004")
+    server._prefetch_camera_capture(shot)  # pylint: disable=protected-access
+    names = [m["name"] for m in read_marks(recorder)]
+    assert "camera_trigger" not in names and "camera_last_frame" not in names
+
+
+def test_start_and_stop_trace_beside_the_session_logs(tmp_path):
+    from openflight import server
+
+    path = server._start_pi_trace(tmp_path)  # pylint: disable=protected-access
+    try:
+        assert path.parent == tmp_path
+        assert path.name.startswith("pi_trace_") and path.suffix == ".jsonl"
+        assert pi_trace.get_recorder() is not None
+    finally:
+        server._stop_pi_trace()  # pylint: disable=protected-access
+    assert pi_trace.get_recorder() is None
+    lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert lines[0]["type"] == "trace_start" and lines[-1]["type"] == "trace_end"
+    assert lines[-1]["complete"] is True
+
+
+def test_shutdown_cleanup_closes_the_trace(tmp_path, monkeypatch):
+    from openflight import server
+
+    for name in ("kld7_vertical", "kld7_horizontal", "inclinometer_service", "iwr6843_runtime"):
+        monkeypatch.setattr(server, name, None)
+    monkeypatch.setattr(server, "power_monitor", None)
+    monkeypatch.setattr(server, "camera_capture_runtime", None)
+    monkeypatch.setattr(server, "sim_connectors", [])
+    monkeypatch.setattr(server, "stop_monitor", lambda: None)
+    monkeypatch.setattr(server, "shutdown_cleanup_started", False)
+    path = server._start_pi_trace(tmp_path)  # pylint: disable=protected-access
+    assert server._cleanup_hardware_for_shutdown() is True  # pylint: disable=protected-access
+    assert pi_trace.get_recorder() is None
+    assert json.loads(path.read_text(encoding="utf-8").splitlines()[-1])["type"] == "trace_end"
+
+
+def _admission_server(monkeypatch, defer):
+    """_handle_shot_detected up to enrichment admission, with the downstream stubbed."""
+    from openflight import server
+
+    statuses, queued = [], []
+    monkeypatch.setattr(server, "tester_setup_required", False)
+    monkeypatch.setattr(server, "_has_slow_shot_enrichment", lambda _shot: True)
+    monkeypatch.setattr(server, "_emit_initial_ops_shot", lambda _shot: True)
+    monkeypatch.setattr(server, "_register_shot_for_finalization", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_defer_shot_enrichment", defer)
+    monkeypatch.setattr(
+        server, "_emit_ops_enrichment_status", lambda _shot, **kw: statuses.append(kw)
+    )
+    monkeypatch.setattr(server, "_queue_shot_finalization", lambda *a, **k: queued.append(k))
+    monkeypatch.setattr(server, "_log_shot_enrichment_lifecycle", lambda *a, **k: None)
+    monkeypatch.setattr(server, "log_session_error", lambda *a, **k: None)
+    monkeypatch.setattr(server, "get_session_logger", lambda: None)
+    monkeypatch.setattr(server.ready_light, "swing_result", lambda *a, **k: None)
+    return server, statuses, queued
+
+
+def test_queue_full_deferral_is_marked_and_the_enrichment_still_kept(recorder, monkeypatch):
+    server, statuses, queued = _admission_server(monkeypatch, lambda *a, **k: False)
+    attempt = recorder.open_ops_attempt()
+    server._handle_shot_detected(  # pylint: disable=protected-access
+        Shot(ball_speed_mph=100.0, timestamp=datetime.now())
+    )
+    deferred = _named(read_marks(recorder), "server_enrichment_deferred")
+    assert [(m["attempt_id"], m["reason"]) for m in deferred] == [(attempt, "queue_full")]
+    assert statuses == [{"status": "pending", "reason": "queue_full"}]
+    assert queued[0]["awaits_late_enrichment"] is True
+
+
+def test_backlog_full_abandonment_is_marked(recorder, monkeypatch):
+    def full(*_a, **_k):
+        raise queue.Full("backlog full")
+
+    server, statuses, _queued = _admission_server(monkeypatch, full)
+    attempt = recorder.open_ops_attempt()
+    server._handle_shot_detected(  # pylint: disable=protected-access
+        Shot(ball_speed_mph=100.0, timestamp=datetime.now())
+    )
+    abandoned = _named(read_marks(recorder), "server_enrichment_abandoned")
+    assert [(m["attempt_id"], m["reason"]) for m in abandoned] == [
+        (attempt, "enrichment_backlog_full")
+    ]
+    assert statuses == [{"status": "skipped", "reason": "enrichment_backlog_full"}]
