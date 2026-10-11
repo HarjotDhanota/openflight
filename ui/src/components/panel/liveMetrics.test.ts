@@ -448,3 +448,41 @@ describe('pinSelectedMetric', () => {
     expect(pinSelectedMetric([], 'ball_speed')).toEqual([]);
   });
 });
+
+describe('missing values: one rule, never a unit next to the no-value mark', () => {
+  const tile = (metrics: LiveMetric[], id: string) => metrics.find((metric) => metric.id === id);
+
+  it.each([
+    ['null', null],
+    ['undefined', undefined],
+    ['NaN', Number.NaN],
+    ['infinite', Number.POSITIVE_INFINITY],
+  ])('shows a %s value as the no-value mark with no unit', (_label, missing) => {
+    const metrics = buildLiveMetrics(
+      makeShot({
+        ball_speed_mph: missing as number,
+        club_speed_mph: missing as number,
+        smash_factor: missing as number,
+        launch_angle_vertical: missing as number,
+        launch_angle_horizontal: missing as number,
+        spin_rpm: missing as number,
+        spin_axis_deg: missing as number,
+        estimated_carry_yards: missing as number,
+        carry_spin_adjusted: missing as number,
+        club_angle_deg: missing as number,
+        club_path_deg: missing as number,
+      }),
+      'imperial',
+      emptySwingStats
+    );
+    for (const id of ['ball_speed', 'club_speed', 'smash', 'launch_v', 'launch_h', 'spin', 'spin_axis', 'carry']) {
+      expect(tile(metrics, id)?.value, id).toBe(NO_VALUE);
+      expect(tile(metrics, id)?.unit, id).toBeUndefined();
+    }
+    for (const metric of metrics) {
+      expect(metric.value).not.toContain('NaN');
+      expect(metric.value).not.toContain('Infinity');
+      if (metric.value === NO_VALUE) expect(metric.unit, metric.id).toBeUndefined();
+    }
+  });
+});

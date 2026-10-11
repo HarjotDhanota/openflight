@@ -1,5 +1,6 @@
 import type { SpinQuality } from '../../types/shot';
 import { t } from '../../i18n';
+import { NO_VALUE } from '../../utils/units';
 import './MetricCard.css';
 
 export interface MetricCardProps {
@@ -90,7 +91,7 @@ export function MetricCard({
       {labelPosition === 'above' ? label_ : null}
       <div className="metric-card__value-row">
         <span className="metric-card__value">{value}</span>
-        {unit ? <span className="metric-card__unit">{unit}</span> : null}
+        {unit && value !== NO_VALUE ? <span className="metric-card__unit">{unit}</span> : null}
       </div>
       {labelPosition === 'below' ? label_ : null}
       {labelPosition === 'above' ? <div className="metric-card__meta">{meta}</div> : meta}

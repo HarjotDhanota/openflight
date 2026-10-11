@@ -9,6 +9,7 @@ import {
   getSpeedUnit,
   getUnitsLabel,
   NO_VALUE,
+  isMeasured,
 } from './units';
 
 describe('units helpers', () => {
@@ -54,5 +55,14 @@ describe('units helpers', () => {
   it('formats carry ranges in the selected unit system', () => {
     expect(formatCarryRange([200, 220], 'imperial')).toBe('200-220 yds');
     expect(formatCarryRange([200, 220], 'metric')).toBe('183-201 m');
+  });
+});
+
+describe('isMeasured (the one missing-value rule)', () => {
+  it('is true only for a finite number', () => {
+    expect([0, -1.5, 120].map(isMeasured)).toEqual([true, true, true]);
+    expect(
+      [null, undefined, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, '12', true].map(isMeasured)
+    ).toEqual([false, false, false, false, false, false, false]);
   });
 });

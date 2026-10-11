@@ -83,4 +83,14 @@ describe('DisplayMode', () => {
     expect(html).toContain('—');
     expect(html).not.toContain('NaN');
   });
+
+  it('never shows a unit next to the no-value mark', () => {
+    const nulled = { ...shot, ball_speed_mph: Number.NaN, estimated_carry_yards: null, carry_spin_adjusted: null };
+    const html = renderToString(
+      <DisplayMode connected captureSettings={captureSettings} latestShot={nulled} shots={[nulled]} />
+    ).replace(/<!-- -->/g, '');
+
+    expect(html).not.toMatch(/—\s*(mph|km\/h|yds|m)\b/);
+    expect(html).not.toMatch(/—<\/span><span class="metric-card__unit"/);
+  });
 });

@@ -99,3 +99,12 @@ describe('MetricCard', () => {
     expect(css).not.toMatch(/\.metric-card--selected \{[^}]*inset 0 0 0 2px var\(--color-accent\)/);
   });
 });
+
+describe('MetricCard with no value', () => {
+  it('never shows a unit next to the no-value mark', () => {
+    const html = renderToString(<MetricCard label="Ball speed" value="—" unit="mph" />);
+
+    expect(html).toContain('—');
+    expect(html).not.toContain('metric-card__unit');
+  });
+});

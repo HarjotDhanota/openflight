@@ -1,7 +1,16 @@
 import type { Shot, SpinQuality, SwingSpeedStats } from '../../types/shot';
 import { getSwingSpeedMph, isSwingSpeedShot } from '../../types/shot';
 import type { UnitSystem } from '../../utils/units';
-import { NO_VALUE, formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../../utils/units';
+import {
+  NO_VALUE,
+  firstMeasured,
+  formatDistance,
+  formatSpeed,
+  getDistanceUnit,
+  getSpeedUnit,
+  isMeasured,
+  unitIfMeasured,
+} from '../../utils/units';
 import { getHtmlLang, t } from '../../i18n';
 
 export { NO_VALUE };
@@ -31,18 +40,18 @@ export const LIVE_METRIC_COUNT = 10;
 /** Metric count for a swing-speed session: a single 5-tile row. */
 export const SWING_METRIC_COUNT = 5;
 
-function formatOptionalAngle(value: number | null, signed = false): string {
-  if (value === null) return NO_VALUE;
+function formatOptionalAngle(value: number | null | undefined, signed = false): string {
+  if (!isMeasured(value)) return NO_VALUE;
   const prefix = signed && value >= 0 ? '+' : '';
   return `${prefix}${value.toFixed(1)}`;
 }
 
-function angleUnit(value: number | null): string | undefined {
-  return value === null ? undefined : '°';
+function angleUnit(value: number | null | undefined): string | undefined {
+  return unitIfMeasured(value, '°');
 }
 
-function formatSpinRpm(rpm: number | null): string {
-  if (rpm === null) return NO_VALUE;
+function formatSpinRpm(rpm: number | null | undefined): string {
+  if (!isMeasured(rpm)) return NO_VALUE;
   return rpm.toLocaleString(getHtmlLang(), { maximumFractionDigits: 0 });
 }
 
@@ -53,8 +62,8 @@ function launchAngleQuality(confidence: number | null): SpinQuality | null {
   return 'low';
 }
 
-function shotShape(spinAxisDeg: number | null): string | undefined {
-  if (spinAxisDeg === null) return undefined;
+function shotShape(spinAxisDeg: number | null | undefined): string | undefined {
+  if (!isMeasured(spinAxisDeg)) return undefined;
   if (spinAxisDeg > 2) return t('shape.fade');
   if (spinAxisDeg < -2) return t('shape.draw');
   return t('shape.straight');
@@ -70,7 +79,7 @@ function withFaceAngle(
   faceDeg: number | null | undefined,
   faceStatus?: string | null
 ): string | undefined {
-  if (faceDeg == null) return subtext;
+  if (!isMeasured(faceDeg)) return subtext;
   // an uncalibrated radar start direction is labelled, not hidden (P8-7)
   const basis = faceStatus === 'd_plane_estimate_azimuth_uncalibrated' ? 'D-plane, azimuth uncalibrated' : 'D-plane';
   const face = `face ${formatOptionalAngle(faceDeg, true)}° (${basis})`;
@@ -93,7 +102,8 @@ function experimentalStatus(status: string | null | undefined): string {
 
 function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[] {
   const speedUnit = getSpeedUnit(unitSystem);
-  const carry = shot.carry_spin_adjusted ?? shot.estimated_carry_yards;
+  const spinAdjusted = isMeasured(shot.carry_spin_adjusted);
+  const carry = firstMeasured(shot.carry_spin_adjusted, shot.estimated_carry_yards);
   const angleConfidence = launchAngleQuality(shot.launch_angle_confidence);
   const angleEstimated = shot.angle_source === 'estimated';
   // The horizontal tile reads its own axis (audit F5). Shots recorded before
@@ -114,24 +124,24 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
   const horizontalSubtext =
     shot.launch_angle_horizontal_status === 'azimuth_uncalibrated' ? 'azimuth uncalibrated' : horizontalSourceLabel;
   const fusedDeliveryAttempted = shot.experimental_fused_status != null;
-  const attackAngle =
-    shot.club_angle_deg ??
-    shot.experimental_fused_attack_angle_deg ??
-    (!fusedDeliveryAttempted ? shot.experimental_attack_angle_deg : null) ??
-    null;
+  const attackAngle = firstMeasured(
+    shot.club_angle_deg,
+    shot.experimental_fused_attack_angle_deg,
+    !fusedDeliveryAttempted ? shot.experimental_attack_angle_deg : null
+  );
   const attackIsExperimental =
-    shot.club_angle_deg === null &&
+    !isMeasured(shot.club_angle_deg) &&
     (shot.experimental_fused_attack_angle_deg != null ||
       shot.experimental_fused_status != null ||
       shot.experimental_attack_angle_deg != null ||
       shot.experimental_attack_angle_status != null);
-  const clubPath =
-    shot.club_path_deg ??
-    shot.experimental_fused_club_path_deg ??
-    (!fusedDeliveryAttempted ? shot.experimental_club_path_deg : null) ??
-    null;
+  const clubPath = firstMeasured(
+    shot.club_path_deg,
+    shot.experimental_fused_club_path_deg,
+    !fusedDeliveryAttempted ? shot.experimental_club_path_deg : null
+  );
   const clubPathIsExperimental =
-    shot.club_path_deg === null &&
+    !isMeasured(shot.club_path_deg) &&
     (shot.experimental_fused_club_path_deg != null ||
       shot.experimental_fused_status != null ||
       shot.experimental_club_path_deg != null ||
@@ -142,34 +152,34 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       id: 'ball_speed',
       label: t('metric.ballSpeed'),
       value: formatSpeed(shot.ball_speed_mph, unitSystem, 1),
-      unit: shot.ball_speed_mph === null ? undefined : speedUnit,
+      unit: unitIfMeasured(shot.ball_speed_mph, speedUnit),
     },
     {
       id: 'carry',
       label: t('metric.carry'),
       value: formatDistance(carry, unitSystem, 0),
-      unit: carry === null ? undefined : getDistanceUnit(unitSystem),
-      subtext: shot.carry_spin_adjusted === null ? undefined : t('metric.spinAdjusted'),
-      estimated: markEstimated(carry !== null && shot.carry_spin_adjusted === null),
+      unit: unitIfMeasured(carry, getDistanceUnit(unitSystem)),
+      subtext: spinAdjusted ? t('metric.spinAdjusted') : undefined,
+      estimated: markEstimated(isMeasured(carry) && !spinAdjusted),
     },
     {
       id: 'club_speed',
       label: t('metric.clubSpeed'),
-      value: shot.club_speed_mph === null ? NO_VALUE : formatSpeed(shot.club_speed_mph, unitSystem, 1),
-      unit: shot.club_speed_mph === null ? undefined : speedUnit,
+      value: formatSpeed(shot.club_speed_mph, unitSystem, 1),
+      unit: unitIfMeasured(shot.club_speed_mph, speedUnit),
     },
     {
       id: 'smash',
       label: t('metric.smash'),
-      value: shot.smash_factor === null ? NO_VALUE : shot.smash_factor.toFixed(2),
+      value: isMeasured(shot.smash_factor) ? shot.smash_factor.toFixed(2) : NO_VALUE,
     },
     {
       id: 'launch_v',
       label: t('metric.vLaunch'),
       value: formatOptionalAngle(shot.launch_angle_vertical),
       unit: angleUnit(shot.launch_angle_vertical),
-      estimated: markEstimated(shot.launch_angle_vertical !== null && angleEstimated),
-      confidence: shot.launch_angle_vertical === null ? null : angleConfidence,
+      estimated: markEstimated(isMeasured(shot.launch_angle_vertical) && angleEstimated),
+      confidence: isMeasured(shot.launch_angle_vertical) ? angleConfidence : null,
     },
     {
       id: 'launch_h',
@@ -177,17 +187,17 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       value: formatOptionalAngle(shot.launch_angle_horizontal, true),
       unit: angleUnit(shot.launch_angle_horizontal),
       subtext: horizontalSubtext,
-      estimated: markEstimated(shot.launch_angle_horizontal !== null && horizontalEstimated),
-      confidence: shot.launch_angle_horizontal === null ? null : horizontalConfidence,
+      estimated: markEstimated(isMeasured(shot.launch_angle_horizontal) && horizontalEstimated),
+      confidence: isMeasured(shot.launch_angle_horizontal) ? horizontalConfidence : null,
       confidenceLabel: horizontalSourceLabel ? 'experimental' : undefined,
     },
     {
       id: 'spin',
       label: t('metric.spin'),
       value: formatSpinRpm(shot.spin_rpm),
-      unit: shot.spin_rpm === null ? undefined : 'rpm',
-      estimated: markEstimated(shot.spin_rpm !== null && shot.spin_source === 'calculated'),
-      confidence: shot.spin_rpm === null ? null : shot.spin_quality,
+      unit: unitIfMeasured(shot.spin_rpm, 'rpm'),
+      estimated: markEstimated(isMeasured(shot.spin_rpm) && shot.spin_source === 'calculated'),
+      confidence: isMeasured(shot.spin_rpm) ? shot.spin_quality : null,
     },
     {
       id: 'spin_axis',
@@ -202,7 +212,7 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       value: formatOptionalAngle(clubPath, true),
       unit: angleUnit(clubPath),
       subtext: withFaceAngle(
-        shot.club_path_deg !== null
+        isMeasured(shot.club_path_deg)
           ? undefined
           : fusedDeliveryAttempted
             ? shot.experimental_fused_club_path_deg != null
@@ -222,16 +232,15 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       label: t('metric.clubAoa'),
       value: formatOptionalAngle(attackAngle, true),
       unit: angleUnit(attackAngle),
-      subtext:
-        shot.club_angle_deg !== null
-          ? undefined
-          : fusedDeliveryAttempted
-            ? shot.experimental_fused_attack_angle_deg != null
-              ? 'camera fused'
-              : experimentalStatus(shot.experimental_fused_status)
-            : attackIsExperimental
-              ? experimentalStatus(shot.experimental_attack_angle_status)
-              : undefined,
+      subtext: isMeasured(shot.club_angle_deg)
+        ? undefined
+        : fusedDeliveryAttempted
+          ? shot.experimental_fused_attack_angle_deg != null
+            ? 'camera fused'
+            : experimentalStatus(shot.experimental_fused_status)
+          : attackIsExperimental
+            ? experimentalStatus(shot.experimental_attack_angle_status)
+            : undefined,
       confidence: attackIsExperimental ? (shot.experimental_fused_attack_angle_confidence ?? 'experimental') : null,
       confidenceLabel: shot.experimental_fused_attack_angle_confidence ? 'experimental' : undefined,
     },
@@ -246,7 +255,7 @@ function buildSwingSpeedMetrics(shot: Shot, stats: SwingSpeedStats, unitSystem: 
       id: 'swing_last',
       label: t('metric.lastSwing'),
       value: formatSpeed(getSwingSpeedMph(shot), unitSystem, 1),
-      unit: speedUnit,
+      unit: unitIfMeasured(getSwingSpeedMph(shot), speedUnit),
     },
     {
       id: 'swing_best',

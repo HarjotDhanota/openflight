@@ -1,3 +1,4 @@
+import { isMeasured } from '../utils/units';
 export type SpinQuality = 'high' | 'medium' | 'low' | 'experimental' | 'withheld';
 
 export interface CameraReplay {
@@ -163,9 +164,9 @@ export function getSwingSpeedMph(shot: Shot): number | null {
   return shot.club_speed_mph ?? shot.ball_speed_mph;
 }
 
-/** The finite numbers among values; a metric the server could not measure is null. */
+/** The measured values (the one rule, {@link isMeasured}); a not-measured metric is null. */
 function measuredValues(values: Array<number | null | undefined>): number[] {
-  return values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  return values.filter(isMeasured);
 }
 
 export function filterShotsByProfile(shots: Shot[], profileId: string): Shot[] {

@@ -10,7 +10,15 @@ import {
 import { useDragScroll } from '../../hooks/useDragScroll';
 import { useUnitPreference } from '../../state/useUnitPreference';
 import { useI18n } from '../../i18n/useI18n';
-import { formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../../utils/units';
+import {
+  NO_VALUE,
+  formatDistance,
+  formatSpeed,
+  getDistanceUnit,
+  getSpeedUnit,
+  isMeasured,
+  unitIfMeasured,
+} from '../../utils/units';
 import { MetricCard } from '../ui/MetricCard';
 import { PanelHeader } from './PanelHeader';
 
@@ -105,30 +113,30 @@ export function StatsPanel({ shots, activeClub, profileId, profileName, headerAc
         id: 'avg_ball',
         label: t('stats.avgBall'),
         value: formatSpeed(stats.avg_ball_speed, unitSystem, 1),
-        unit: speedUnit,
+        unit: unitIfMeasured(stats.avg_ball_speed, speedUnit),
       },
       {
         id: 'max_ball',
         label: t('stats.maxBall'),
         value: formatSpeed(stats.max_ball_speed, unitSystem, 1),
-        unit: speedUnit,
+        unit: unitIfMeasured(stats.max_ball_speed, speedUnit),
       },
       {
         id: 'avg_carry',
         label: t('stats.avgCarry'),
         value: formatDistance(stats.avg_carry_est, unitSystem, 0),
-        unit: distanceUnit,
+        unit: unitIfMeasured(stats.avg_carry_est, distanceUnit),
       },
       {
         id: 'avg_club',
         label: t('stats.avgClub'),
-        value: stats.avg_club_speed === null ? '—' : formatSpeed(stats.avg_club_speed, unitSystem, 1),
-        unit: stats.avg_club_speed === null ? undefined : speedUnit,
+        value: formatSpeed(stats.avg_club_speed, unitSystem, 1),
+        unit: unitIfMeasured(stats.avg_club_speed, speedUnit),
       },
       {
         id: 'avg_smash',
         label: t('stats.avgSmash'),
-        value: stats.avg_smash_factor === null ? '—' : stats.avg_smash_factor.toFixed(2),
+        value: isMeasured(stats.avg_smash_factor) ? stats.avg_smash_factor.toFixed(2) : NO_VALUE,
       },
     ];
   }, [isSwingSpeedSession, stats, swingStats, unitSystem, speedUnit, distanceUnit, t]);

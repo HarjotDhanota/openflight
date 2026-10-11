@@ -6,6 +6,7 @@ import type { SessionStats, Shot, TriggerStatus } from '../src/types/shot.js';
 import type { RadarConfig } from '../src/types/socket.js';
 import type { Profile } from '../src/types/profile.js';
 import { generateShot } from './shotGenerator.js';
+import { isMeasured } from '../src/utils/units.js';
 
 function mean(values: number[]): number {
   if (values.length === 0) return 0;
@@ -32,11 +33,11 @@ export function computeSessionStats(shots: Shot[]): SessionStats {
     };
   }
 
-  const ballSpeeds = shots.map((s) => s.ball_speed_mph).filter((v): v is number => v != null);
-  const carries = shots.map((s) => s.estimated_carry_yards).filter((v): v is number => v != null);
-  const clubSpeeds = shots.map((s) => s.club_speed_mph).filter((v): v is number => v != null);
-  const smashFactors = shots.map((s) => s.smash_factor).filter((v): v is number => v != null);
-  const spinRpms = shots.map((s) => s.spin_rpm).filter((v): v is number => v != null);
+  const ballSpeeds = shots.map((s) => s.ball_speed_mph).filter(isMeasured);
+  const carries = shots.map((s) => s.estimated_carry_yards).filter(isMeasured);
+  const clubSpeeds = shots.map((s) => s.club_speed_mph).filter(isMeasured);
+  const smashFactors = shots.map((s) => s.smash_factor).filter(isMeasured);
+  const spinRpms = shots.map((s) => s.spin_rpm).filter(isMeasured);
 
   return {
     shot_count: shots.length,
