@@ -37,6 +37,11 @@ _CP2105_USB_ID = ("10c4", "ea70")
 _CP2105_INTERFACE_NAMES = {0: "CP2105 Enhanced if00", 1: "CP2105 Standard if01"}
 _CP2105_STANDARD_INTERFACE = 1
 _PROBE_WINDOW_S = 1.5
+# Reply windows for the W4a firmware's perfstats and l3bench (l3bench passes over the whole
+# stopped ring). Public so a caller that sends these commands itself, to keep the raw
+# reply, waits exactly as long as perf_stats and bench_kernel do.
+PERF_REPLY_WINDOW_S = 2.0
+BENCH_REPLY_WINDOW_S = 10.0
 _BY_ID_GLOB = "/dev/serial/by-id/*"
 _RESET_ACTION = "press RESET on the IWR6843 board once with its switches in functional mode"
 
@@ -722,11 +727,11 @@ class IWR6843Radar:
 
     def perf_stats(self) -> dict[str, Any]:
         """The W4a firmware's ``perfstats`` high-water marks (ValueError on old images)."""
-        return parse_perf_stats(self.cmd("perfstats", 2.0))
+        return parse_perf_stats(self.cmd("perfstats", PERF_REPLY_WINDOW_S))
 
     def bench_kernel(self) -> dict[str, Any]:
         """Time one pass over the stopped ring (``l3bench``); the sensor must be stopped."""
-        return parse_bench(self.cmd("l3bench", 10.0))
+        return parse_bench(self.cmd("l3bench", BENCH_REPLY_WINDOW_S))
 
     def verify_post_dump_cli(self) -> None:
         """Require the restarted sensor and CLI after a completed binary dump."""

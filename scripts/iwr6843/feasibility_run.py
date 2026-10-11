@@ -34,6 +34,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from openflight.iwr6843.driver import (
+    BENCH_REPLY_WINDOW_S,
+    PERF_REPLY_WINDOW_S,
     IWR6843DumpRecoveryError,
     IWR6843Radar,
     parse_bench,
@@ -49,10 +51,6 @@ RUN_ID = re.compile(r"\d{8}T\d{6}Z-[0-9a-f]{8}")
 PROFILE_NAME = re.compile(r"[A-Za-z0-9]+")
 IMAGE_SHA256 = re.compile(r"[0-9a-f]{64}")
 SOAK_STIMULI = ("none", "reflector")
-# Reply windows, as IWR6843Radar.perf_stats and bench_kernel use; the script sends these
-# itself so it can keep the raw reply even when the parser refuses it.
-PERF_WINDOW_S = 2.0
-BENCH_WINDOW_S = 10.0
 # The gate's frozen profiles run their config file unchanged; C16 is C with iq8Scale 16.
 FROZEN_PROFILES = ("A", "B", "C")
 CONTROL_PROFILE, CONTROL_SCALE = "C16", 16
@@ -549,7 +547,7 @@ def _close_out(radar) -> dict:
     """
     out = {
         "stats_text": radar.stats(),
-        "perf_text": radar.cmd("perfstats", PERF_WINDOW_S),
+        "perf_text": radar.cmd("perfstats", PERF_REPLY_WINDOW_S),
         "perf": None,
         "perf_error": None,
         "stop_error": None,
@@ -567,7 +565,7 @@ def _close_out(radar) -> dict:
         out["stop_error"] = str(exc)
         out["bench_error"] = f"not run: the sensor did not stop ({exc})"
         return out
-    out["bench_text"] = radar.cmd("l3bench", BENCH_WINDOW_S)
+    out["bench_text"] = radar.cmd("l3bench", BENCH_REPLY_WINDOW_S)
     try:
         out["bench"] = parse_bench(out["bench_text"])
     except RuntimeError as exc:

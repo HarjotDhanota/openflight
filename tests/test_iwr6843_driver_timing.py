@@ -358,3 +358,26 @@ def test_a_scan_marker_beside_scan_fields_is_refused():
 
     with pytest.raises(ValueError, match="scan"):
         _perf(text)
+
+
+def test_perf_stats_and_bench_kernel_use_the_public_reply_windows(monkeypatch):
+    """One source for the windows the run script also sends its raw commands with."""
+    clock = FakeClock()
+    radar = _radar(monkeypatch, FirmwareModel(b"", clock), clock)
+    windows = {}
+    replies = {"perfstats": "perfstats\r\n" + PERF_REPLY.decode() + "Done\r\n"}
+    replies["l3bench"] = "l3bench\r\nbench samples=10 cycles=20 sum_hi=0 sum_lo=1\r\nDone\r\n"
+
+    def cmd(line, window_s):
+        windows[line] = window_s
+        return replies[line]
+
+    monkeypatch.setattr(radar, "cmd", cmd)
+    radar.perf_stats()
+    radar.bench_kernel()
+
+    assert (driver.PERF_REPLY_WINDOW_S, driver.BENCH_REPLY_WINDOW_S) == (2.0, 10.0)
+    assert windows == {
+        "perfstats": driver.PERF_REPLY_WINDOW_S,
+        "l3bench": driver.BENCH_REPLY_WINDOW_S,
+    }
