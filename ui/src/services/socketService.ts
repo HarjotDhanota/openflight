@@ -10,7 +10,7 @@ import {
   type TriggerDiagnosticUpdate,
   type TriggerStatus,
 } from '../types/shot';
-import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimStatus } from '../types/socket';
+import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimShotNotSent, SimStatus } from '../types/socket';
 import type { PowerStatus } from '../types/power';
 import type { ReadyLight } from '../types/readyLight';
 import { kioskRestartingLight } from '../utils/readyLight';
@@ -109,8 +109,9 @@ class SocketService {
       console.warn(`Sim send failed (${data.target}): ${data.reason}`);
     });
 
-    this.socket.on('sim_shot_dropped', (data: { reason: string }) => {
-      console.warn(`Sim shot dropped: ${data.reason}`);
+    this.socket.on('sim_shot_dropped', (data: SimShotNotSent) => {
+      console.warn(`Sim shot not sent: ${data.reason}`);
+      useSystemStore.getState().setSimShotNotSent(data);
     });
 
     this.socket.on('club_changed', (data: { club: string }) => {

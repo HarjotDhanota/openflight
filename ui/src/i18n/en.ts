@@ -212,6 +212,7 @@ export const en = {
   'display.clubPath': 'Club Path',
 
   'sim.connectors': 'Simulator connectors',
+  'sim.notSent': 'Not sent to simulator: {reason}',
 } as const;
 
 export type MessageKey = keyof typeof en;

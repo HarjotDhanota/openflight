@@ -214,4 +214,5 @@ export const fr: Messages = {
   'display.clubPath': 'Trajectoire club',
 
   'sim.connectors': 'Connecteurs simulateur',
+  'sim.notSent': 'Non envoyé au simulateur : {reason}',
 };

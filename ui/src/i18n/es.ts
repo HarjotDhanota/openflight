@@ -214,4 +214,5 @@ export const es: Messages = {
   'display.clubPath': 'Path del palo',
 
   'sim.connectors': 'Conectores de simulador',
+  'sim.notSent': 'No enviado al simulador: {reason}',
 };

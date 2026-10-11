@@ -214,4 +214,5 @@ export const pt: Messages = {
   'display.clubPath': 'Path do taco',
 
   'sim.connectors': 'Conectores de simulador',
+  'sim.notSent': 'Não enviado ao simulador: {reason}',
 };

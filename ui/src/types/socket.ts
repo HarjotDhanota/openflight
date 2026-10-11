@@ -25,6 +25,19 @@ export interface SimShotInfo {
   provenance: Record<string, 'measured' | 'estimated'>;
 }
 
+/**
+ * A shot withheld from the connected simulators (D31): a fusion unit sends only
+ * what it measured, so a shot missing a value the simulator requires is not sent.
+ */
+export interface SimShotNotSent {
+  /** Why, e.g. "spin not measured". */
+  reason: string;
+  missing: string[];
+  /** The withheld shot's `Shot.timestamp`. */
+  shot_timestamp: string;
+  targets: string[];
+}
+
 export interface SwingSpeedEvent {
   peak_speed_mph: number;
   timestamp: string;

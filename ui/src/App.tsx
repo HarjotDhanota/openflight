@@ -12,6 +12,7 @@ import { socketService } from './services/socketService';
 import { DebugPanel } from './components/DebugPanel';
 import { DisplayMode } from './components/DisplayMode';
 import { SimShotBadges } from './components/SimShotBadges';
+import { SimNotSentNotice } from './components/SimNotSentNotice';
 import { ShotProcessingArea } from './components/ShotProcessingArea';
 import { ReadyLightBar } from './components/ReadyLight';
 import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog';
@@ -47,12 +48,13 @@ import './components/panel/panel.css';
 function AppContent() {
   const { t } = useI18n();
   const { shutdown } = useSocket();
-  const { connected, mockMode, debugMode, latestSimShots, serverClub } = useSystemStore(
+  const { connected, mockMode, debugMode, latestSimShots, simShotNotSent, serverClub } = useSystemStore(
     useShallow((state) => ({
       connected: state.connected,
       mockMode: state.mockMode,
       debugMode: state.debugMode,
       latestSimShots: state.latestSimShots,
+      simShotNotSent: state.simShotNotSent,
       serverClub: state.serverClub,
     }))
   );
@@ -317,6 +319,7 @@ function AppContent() {
                 headerAction={liveHeaderActions}
               />
             </ShotProcessingArea>
+            <SimNotSentNotice notSent={simShotNotSent} latestShotTimestamp={profileLatestShot?.timestamp ?? null} />
             {debugMode && <SimShotBadges latestSimShots={latestSimShots} />}
           </>
         )}

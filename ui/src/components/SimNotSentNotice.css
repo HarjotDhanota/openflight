@@ -1,0 +1,11 @@
+/* A shot withheld from the simulators, and why (D31). */
+.sim-not-sent {
+  margin-top: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  border-radius: var(--radius);
+  background: rgba(251, 191, 36, 0.1);
+  color: var(--color-warning);
+  font-size: 0.75rem;
+  font-weight: 600;
+}

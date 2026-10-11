@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { PowerStatus } from '../types/power';
 import type { ReadyLight } from '../types/readyLight';
-import type { SimShotInfo, SimStatus } from '../types/socket';
+import type { SimShotInfo, SimShotNotSent, SimStatus } from '../types/socket';
 
 interface SystemState {
   connected: boolean;
@@ -11,6 +11,8 @@ interface SystemState {
   cloudUploadMessage: string;
   simStatuses: Record<string, SimStatus>;
   latestSimShots: Record<string, SimShotInfo>;
+  /** The latest shot withheld from the simulators, if any (D31). */
+  simShotNotSent: SimShotNotSent | null;
   serverClub: string | null;
   powerStatus: PowerStatus | null;
   readyLight: ReadyLight | null;
@@ -20,6 +22,7 @@ interface SystemState {
   setCloudUploadStatus: (state: SystemState['cloudUploadState'], message: string) => void;
   setSimStatus: (status: SimStatus) => void;
   setLatestSimShot: (shot: SimShotInfo) => void;
+  setSimShotNotSent: (notSent: SimShotNotSent | null) => void;
   setServerClub: (club: string | null) => void;
   setPowerStatus: (status: PowerStatus) => void;
   setReadyLight: (light: ReadyLight | null) => void;
@@ -33,6 +36,7 @@ export const useSystemStore = create<SystemState>((set) => ({
   cloudUploadMessage: '',
   simStatuses: {},
   latestSimShots: {},
+  simShotNotSent: null,
   serverClub: null,
   powerStatus: null,
   readyLight: null,
@@ -48,6 +52,7 @@ export const useSystemStore = create<SystemState>((set) => ({
     set((state) => ({
       latestSimShots: { ...state.latestSimShots, [shot.target]: shot },
     })),
+  setSimShotNotSent: (simShotNotSent) => set({ simShotNotSent }),
   setServerClub: (serverClub) => set({ serverClub }),
   setPowerStatus: (status) => set({ powerStatus: status }),
   setReadyLight: (readyLight) => set({ readyLight }),
