@@ -1315,6 +1315,16 @@ def _fusion_unit() -> bool:
     return iwr6843_runtime is not None or camera_capture_runtime is not None
 
 
+def _estimate_launch_from_finite_inputs(shot: Shot) -> tuple[float, float]:
+    """The OPS-only launch estimate; a non-finite club speed or spin is a missing one."""
+    return estimate_launch_angle(
+        shot.club,
+        shot.ball_speed_mph,
+        club_speed_mph=shot.club_speed_mph if _finite(shot.club_speed_mph) else None,
+        spin_rpm=shot.spin_rpm if _finite(shot.spin_rpm) else None,
+    )
+
+
 def _ensure_user_facing_launch_angles(shot: Shot) -> None:
     """An OPS-only install's labelled launch estimates; a fusion unit fills nothing in.
 
@@ -1330,12 +1340,7 @@ def _ensure_user_facing_launch_angles(shot: Shot) -> None:
     estimated: tuple[float, float] | None = None
 
     if not _finite(shot.launch_angle_vertical):
-        estimated = estimate_launch_angle(
-            shot.club,
-            shot.ball_speed_mph,
-            club_speed_mph=shot.club_speed_mph,
-            spin_rpm=shot.spin_rpm,
-        )
+        estimated = _estimate_launch_from_finite_inputs(shot)
         shot.launch_angle_vertical = estimated[0]
         shot.launch_angle_confidence = estimated[1]
         shot.launch_angle_vertical_confidence = estimated[1]
@@ -1352,12 +1357,7 @@ def _ensure_user_facing_launch_angles(shot: Shot) -> None:
         shot.launch_angle_horizontal = 0.0
         if shot.launch_angle_horizontal_confidence is None:
             if estimated is None:
-                estimated = estimate_launch_angle(
-                    shot.club,
-                    shot.ball_speed_mph,
-                    club_speed_mph=shot.club_speed_mph,
-                    spin_rpm=shot.spin_rpm,
-                )
+                estimated = _estimate_launch_from_finite_inputs(shot)
             shot.launch_angle_horizontal_confidence = estimated[1]
         shot.launch_angle_horizontal_source = "estimated"
         if shot.angle_source is None:

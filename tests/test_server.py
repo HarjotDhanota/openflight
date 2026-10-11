@@ -1126,6 +1126,34 @@ class TestIWR6843ShotIntegration:
             assert with_bad.launch_angle_horizontal == with_none.launch_angle_horizontal == 0.0
             assert with_bad.launch_angle_vertical_source == "estimated"
 
+    @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "-inf"])
+    @pytest.mark.parametrize("field", ["club_speed_mph", "spin_rpm"])
+    def test_ops_only_launch_estimate_ignores_a_non_finite_input_like_none(
+        self, monkeypatch, field, bad
+    ):
+        """2b: estimate_launch_angle only checks > 0, so +inf used to drive the estimate."""
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+        monkeypatch.setattr(server_module, "camera_capture_runtime", None)
+
+        def ensured(value):
+            shot = Shot(
+                ball_speed_mph=100.0,
+                club_speed_mph=80.0,
+                spin_rpm=6500.0,
+                timestamp=datetime(2026, 10, 11, 9, 0, 0),
+                club=ClubType.IRON_7,
+            )
+            setattr(shot, field, value)
+            server_module._ensure_user_facing_launch_angles(shot)
+            return shot
+
+        with_bad, with_none = ensured(bad), ensured(None)
+        assert with_bad.launch_angle_vertical == with_none.launch_angle_vertical
+        assert with_bad.launch_angle_confidence == with_none.launch_angle_confidence
+        assert with_bad.launch_angle_horizontal_confidence == (
+            with_none.launch_angle_horizontal_confidence
+        )
+
     def test_missing_ti_capture_preserves_ops_shot(self, monkeypatch):
         emitted = []
         runtime = SimpleNamespace(
@@ -4267,10 +4295,12 @@ class TestOnShotDetected:
         payload = emitted[0][1]
         json.dumps(payload, allow_nan=False)
         assert payload["shot"]["ball_speed_mph"] == 150.0
-        # OPS-only unit: the NaN launch got exactly the missing-value handling, the
-        # labelled estimate (I1); the inf spin goes out as null, named.
+        # OPS-only unit: the NaN launch and the inf spin get exactly the missing-value
+        # handling (I1, 2b): the same labelled estimate as a shot missing both.
+        reference = self._shot()
+        server_module._ensure_user_facing_launch_angles(reference)
         assert payload["shot"]["launch_angle_vertical_source"] == "estimated"
-        assert math.isfinite(payload["shot"]["launch_angle_vertical"])
+        assert payload["shot"]["launch_angle_vertical"] == reference.launch_angle_vertical
         assert payload["shot"]["spin_rpm"] is None
         assert payload["shot"]["metrics_not_measured"] == [
             {"id": "spin_rpm", "reason": "non_finite_value:inf"}
