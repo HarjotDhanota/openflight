@@ -496,26 +496,52 @@ describe('post-render acknowledgement', () => {
 describe('afterNextPaint', () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  function stubFrame() {
+  /**
+   * Explicit frame and task queues: the test runs each step itself, so it never depends
+   * on how Node orders real MessagePort deliveries against timers.
+   */
+  function stubFrameAndTasks() {
     const frames: Array<() => void> = [];
+    const tasks: Array<() => void> = [];
+    const closed: string[] = [];
     vi.stubGlobal('requestAnimationFrame', (cb: () => void) => frames.push(cb));
-    return () => frames.splice(0).forEach((cb) => cb());
+    vi.stubGlobal(
+      'MessageChannel',
+      class {
+        port1 = {
+          onmessage: null as null | (() => void),
+          close: () => closed.push('port1'),
+        };
+        port2 = {
+          postMessage: () => tasks.push(() => this.port1.onmessage?.()),
+          close: () => closed.push('port2'),
+        };
+      }
+    );
+    return {
+      runFrame: () => frames.splice(0).forEach((cb) => cb()),
+      runTasks: () => tasks.splice(0).forEach((task) => task()),
+      pendingTasks: () => tasks.length,
+      closed,
+    };
   }
-  const nextTask = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-  it('runs the callback in a task after the frame callback', async () => {
-    const runFrame = stubFrame();
+  it('runs the callback in a task after the frame callback', () => {
+    const { runFrame, runTasks, pendingTasks, closed } = stubFrameAndTasks();
     const calls: string[] = [];
     afterNextPaint(() => calls.push('after'));
     expect(calls).toEqual([]);
+    expect(pendingTasks()).toBe(0); // nothing is posted before the frame
     runFrame();
     expect(calls).toEqual([]); // not inside the frame callback
-    await nextTask();
+    expect(pendingTasks()).toBe(1); // the frame callback posted one task
+    runTasks();
     expect(calls).toEqual(['after']);
+    expect(closed.sort()).toEqual(['port1', 'port2']);
   });
 
-  it('checks the revision is still current at the frame and again after it', async () => {
-    const runFrame = stubFrame();
+  it('checks the revision is still current at the frame and again after it', () => {
+    const { runFrame, runTasks, pendingTasks } = stubFrameAndTasks();
     const calls: string[] = [];
     let current = false;
     afterNextPaint(
@@ -523,7 +549,7 @@ describe('afterNextPaint', () => {
       () => current
     ); // stale at the frame
     runFrame();
-    await nextTask();
+    expect(pendingTasks()).toBe(0); // no task is even posted
     current = true;
     afterNextPaint(
       () => calls.push('b'),
@@ -531,7 +557,7 @@ describe('afterNextPaint', () => {
     );
     runFrame();
     current = false; // stale by the post-frame task
-    await nextTask();
+    runTasks();
     expect(calls).toEqual([]);
   });
 
