@@ -109,7 +109,10 @@ class FakeRadar:  # pylint: disable=too-many-instance-attributes
         self.stale = options.pop("stale", b"")
         self.raise_on_write = options.pop("raise_on_write", None)
         self.read_error_after = options.pop("read_error_after", None)
-        self.error_reply_on = options.pop("error_reply_on", None)
+        self.error_reply_on = set(options.pop("error_replies", ()))
+        single = options.pop("error_reply_on", None)
+        if single is not None:
+            self.error_reply_on.add(single)
         self.interrupt_rearm_at = options.pop("interrupt_rearm_at", None)
         self.interrupt_queries_after_rearms = options.pop("interrupt_queries_after_rearms", None)
         self.last_baud_negotiation = options.pop(
@@ -132,7 +135,7 @@ class FakeRadar:  # pylint: disable=too-many-instance-attributes
         self.commands.append(text)
         if text == self.fail_on:
             raise OSError(f"write failed: {text}")
-        if text == self.error_reply_on:
+        if text in self.error_reply_on:
             return '{"error":"not supported"}'
         if text in self.state:
             return self.state[text]
@@ -306,6 +309,7 @@ def test_state_left_changed_is_not_restored(tmp_path):
 def test_unknown_initial_state_is_null_never_restored(tmp_path):
     _code, report, _radar = _run(tmp_path, state={"P?": ""})
     assert report["restoration_verified"] is None
+    assert report["restoration_reason"] == "initial_state_unknown"
 
 
 def test_a_failed_query_is_recorded_as_unknown(tmp_path):
@@ -424,7 +428,8 @@ def test_interrupting_the_final_rearm_still_writes_report_and_journal(tmp_path):
     assert any(e["error"] == "interrupted" for e in report["errors"])
     last = report["journal"][-1]
     assert last["step"] == "final_rearm" and last["error"] == repr(KeyboardInterrupt())
-    assert report["restoration_verified"] is False  # never verified, never "restored"
+    assert report["restoration_verified"] is None  # unknown, not a mismatch
+    assert report["restoration_reason"] == "final_steps_interrupted"
     lines = (tmp_path / "journal.jsonl").read_text(encoding="utf-8").splitlines()
     assert [json.loads(line) for line in lines] == report["journal"]
 
@@ -434,7 +439,8 @@ def test_interrupting_the_final_queries_still_writes_the_report(tmp_path):
     assert code == 130
     assert report["final_steps"] == "interrupted"
     assert report["final_rearm"] == "rearmed"
-    assert report["restoration_verified"] is False
+    assert report["restoration_verified"] is None
+    assert report["restoration_reason"] == "final_steps_interrupted"
 
 
 def test_completed_run_marks_its_final_steps_done(tmp_path):
@@ -493,3 +499,45 @@ def test_refuses_an_out_dir_holding_a_journal(tmp_path):
         script.main(["--pre-trigger-segments", "16", "--out", str(tmp_path)],
                     radar_factory=pytest.fail)  # fmt: skip
     assert raised.value.code == 2
+
+
+def test_an_unsupported_sz_does_not_block_ob(tmp_path):
+    """Round 2: SZ rejected (nothing applied), Sz rejected too: OB still runs."""
+    code, report, radar = _run(tmp_path, error_replies={"SZ", "Sz"})
+    assert code == 1  # the rejected apply is still an error of sz_on
+    assert report["candidates"]["sz_on"]["status"] == "failed"
+    assert report["candidates"]["ob_on"]["status"] == "completed"
+    assert "OB" in radar.commands
+    (sz_inverse,) = [e for e in report["journal"] if e["command"] == "Sz"]
+    assert sz_inverse["error"] == "device_error: not supported"
+    assert sz_inverse["note"] == "apply_rejected_nothing_applied"
+    assert not any(e.get("error") == "cleanup_failed" for e in report["errors"])
+
+
+def test_an_inverse_error_after_a_successful_apply_still_blocks(tmp_path):
+    _code, report, radar = _run(tmp_path, error_replies={"Sz"})
+    assert report["candidates"]["ob_on"]["status"] == "not_run"
+    assert "OB" not in radar.commands
+    (sz_inverse,) = [e for e in report["journal"] if e["command"] == "Sz"]
+    assert "note" not in sz_inverse
+
+
+def test_a_completed_run_has_no_restoration_reason(tmp_path):
+    _code, report, _radar = _run(tmp_path)
+    assert report["restoration_verified"] is True and report["restoration_reason"] is None
+
+
+def test_the_pre_final_snapshot_says_verification_is_pending(tmp_path, monkeypatch):
+    snapshots = []
+    real_write = script._write_report  # pylint: disable=protected-access
+
+    def keep(report, args):
+        snapshots.append(json.loads(json.dumps(report)))
+        real_write(report, args)
+
+    monkeypatch.setattr(script, "_write_report", keep)
+    _run(tmp_path)
+    first, last = snapshots[0], snapshots[-1]
+    assert first["final_steps"] == "pending" and first["restoration_verified"] is None
+    assert first["restoration_reason"] == "pending_final_steps"
+    assert last["final_steps"] == "done" and last["restoration_reason"] is None

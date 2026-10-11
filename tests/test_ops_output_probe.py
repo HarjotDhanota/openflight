@@ -568,3 +568,57 @@ def test_an_unwritable_journal_file_never_stops_journaling(tmp_path):
     journal = probe.Journal(tmp_path / "missing-dir" / "journal.jsonl")
     journal.record("apply", "SZ", "", None)
     assert len(journal.entries) == 1 and journal.sink_error is not None
+
+
+class _ScriptedIO(_FakeIO):
+    """Error replies for some commands, an I/O error for others."""
+
+    def __init__(self, error_replies=(), raises=()):
+        super().__init__()
+        self.error_replies, self.raises = set(error_replies), set(raises)
+
+    def command(self, text):
+        self.sent.append(text)
+        if text in self.raises:
+            raise OSError(f"write failed: {text}")
+        return '{"error":"not supported"}' if text in self.error_replies else "ok"
+
+
+def test_an_inverse_rejected_after_its_apply_was_rejected_is_not_a_failed_cleanup():
+    io, journal = _ScriptedIO(error_replies={"SZ", "Sz"}), probe.Journal()
+    with pytest.raises(probe.DeviceErrorReply):
+        probe.run_candidate(io, "sz_on", ["SZ"], ["Sz"], lambda: None, journal)
+    assert journal.inverse_errors("sz_on") == []
+    inverse = journal.entries[-1]
+    assert inverse["error"] == "device_error: not supported"
+    assert inverse["note"] == "apply_rejected_nothing_applied"
+
+
+def test_an_inverse_that_raises_after_a_rejected_apply_still_blocks():
+    io, journal = _ScriptedIO(error_replies={"SZ"}, raises={"Sz"}), probe.Journal()
+    with pytest.raises(probe.DeviceErrorReply):
+        probe.run_candidate(io, "sz_on", ["SZ"], ["Sz"], lambda: None, journal)
+    assert [e["command"] for e in journal.inverse_errors("sz_on")] == ["Sz"]
+
+
+def test_only_inverses_of_unapplied_commands_are_excused():
+    """OB applied, SZ rejected: Ob's error reply still blocks, Sz's does not."""
+    io, journal = _ScriptedIO(error_replies={"SZ", "Ob", "Sz"}), probe.Journal()
+    with pytest.raises(probe.DeviceErrorReply):
+        probe.run_candidate(io, "two", ["OB", "SZ"], ["Ob", "Sz"], lambda: None, journal)
+    assert [e["command"] for e in journal.inverse_errors("two")] == ["Ob"]
+
+
+def test_an_apply_that_raised_excuses_nothing():
+    """An I/O error on apply leaves its effect unknown, so the inverse error still counts."""
+    io, journal = _ScriptedIO(raises={"SZ"}, error_replies={"Sz"}), probe.Journal()
+    with pytest.raises(OSError):
+        probe.run_candidate(io, "sz_on", ["SZ"], ["Sz"], lambda: None, journal)
+    assert [e["command"] for e in journal.inverse_errors("sz_on")] == ["Sz"]
+
+
+def test_unpaired_candidates_excuse_nothing():
+    io, journal = _ScriptedIO(error_replies={"SZ", "Sz"}), probe.Journal()
+    with pytest.raises(probe.DeviceErrorReply):
+        probe.run_candidate(io, "odd", ["SZ"], ["Sz", "Sz"], lambda: None, journal)
+    assert len(journal.inverse_errors("odd")) == 2

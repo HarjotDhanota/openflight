@@ -412,6 +412,7 @@ def _finish(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     report["final_steps"] = "pending"
     report["queries_after"] = after
     report["restoration_verified"] = None
+    report["restoration_reason"] = "pending_final_steps"
     _write_report(report, args)
     interrupted = False
     try:
@@ -437,9 +438,14 @@ def _finish(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         report["final_steps"] = "interrupted"
         report["errors"].append({"candidate": None, "error": "interrupted"})
     finally:
-        report["restoration_verified"] = probe.restoration_verified(
-            report.get("queries_before", {}), after
-        )
+        if report["final_steps"] == "interrupted" and any(q not in after for q in QUERIES):
+            # Missing replies are unknown, not a mismatch.
+            report["restoration_verified"] = None
+            report["restoration_reason"] = "final_steps_interrupted"
+        else:
+            verified = probe.restoration_verified(report.get("queries_before", {}), after)
+            report["restoration_verified"] = verified
+            report["restoration_reason"] = None if verified is not None else "initial_state_unknown"
         report["journal_sink_error"] = journal.sink_error
         _write_report(report, args)
         try:

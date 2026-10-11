@@ -38,6 +38,9 @@ CANDIDATES: dict[str, tuple[list[str], list[str]]] = {
 }
 # A! persists settings; GS/GC switch modes and trip the HOST_INT firmware bug.
 FORBIDDEN_COMMANDS = ("A!", "GS", "GC")
+# An inverse rejected by the radar after its own apply was rejected: nothing was applied,
+# so the rejection is journaled but is not a failed cleanup.
+APPLY_REJECTED_NOTE = "apply_rejected_nothing_applied"
 
 # Recorded numbers the plan's arithmetic uses (Task 6 brief). Historical, not this run.
 TARGET_UART_BAUD = 230_400
@@ -424,6 +427,7 @@ class Journal:
         error: Optional[str],
         *,
         candidate: Optional[str] = None,
+        note: Optional[str] = None,
     ) -> None:
         """Append one journal entry (and its JSONL line when a path is set)."""
         entry = {
@@ -433,6 +437,8 @@ class Journal:
             "error": error,
             "candidate": candidate,
         }
+        if note is not None:
+            entry["note"] = note
         self.entries.append(entry)
         if self.path is None or self.sink_error is not None:
             return
@@ -450,11 +456,12 @@ class Journal:
         *,
         candidate: Optional[str] = None,
         check_reply: bool = False,
+        error_reply_note: Optional[str] = None,
     ) -> Any:
         """Run ``action``, journal its reply or its error, and re-raise any error.
 
-        With ``check_reply``, a ``{"error": ...}`` reply is journaled as an error and
-        raised as ``DeviceErrorReply``.
+        With ``check_reply``, a ``{"error": ...}`` reply is journaled as an error (with
+        ``error_reply_note``, when given) and raised as ``DeviceErrorReply``.
         """
         try:
             reply = action()
@@ -463,17 +470,27 @@ class Journal:
             raise
         message = device_error(reply) if check_reply else None
         if message is not None:
-            self.record(step, command, reply, f"device_error: {message}", candidate=candidate)
+            self.record(
+                step,
+                command,
+                reply,
+                f"device_error: {message}",
+                candidate=candidate,
+                note=error_reply_note,
+            )
             raise DeviceErrorReply(f"{command}: {message}")
         self.record(step, command, reply, None, candidate=candidate)
         return reply
 
     def inverse_errors(self, candidate: str) -> list[dict]:
-        """The failed cleanup steps of one candidate."""
+        """The failed cleanup steps of one candidate (an excused rejection is not one)."""
         return [
             e
             for e in self.entries
-            if e["candidate"] == candidate and e["step"] == "inverse" and e["error"] is not None
+            if e["candidate"] == candidate
+            and e["step"] == "inverse"
+            and e["error"] is not None
+            and e.get("note") != APPLY_REJECTED_NOTE
         ]
 
 
@@ -490,23 +507,33 @@ def run_candidate(  # pylint: disable=too-many-arguments,too-many-positional-arg
     A failed apply (raised, or answered with an error reply) is journaled and stops the
     candidate: the body never runs on a half-applied state. Every inverse is still
     attempted, each independently (R-F11); an error reply to an inverse is a failed
-    cleanup.
+    cleanup, except when apply ``i`` was rejected with an error reply: then apply ``i``
+    and every later one never took effect, so the error replies of inverses ``i..`` are
+    journaled with ``APPLY_REJECTED_NOTE`` and not counted. Applies and inverses pair by
+    index; an unpaired candidate excuses nothing. An inverse that raises always counts.
     """
     forbidden = [c for c in apply + inverse if c in FORBIDDEN_COMMANDS]
     if forbidden:
         raise ValueError(f"candidate {name!r} uses forbidden commands {forbidden}")
+    rejected_at: Optional[int] = None
     try:
-        for command in apply:
-            journal.attempt(
-                "apply",
-                command,
-                lambda c=command: io.command(c),
-                candidate=name,
-                check_reply=True,
-            )
+        for index, command in enumerate(apply):
+            try:
+                journal.attempt(
+                    "apply",
+                    command,
+                    lambda c=command: io.command(c),
+                    candidate=name,
+                    check_reply=True,
+                )
+            except DeviceErrorReply:
+                rejected_at = index
+                raise
         journal.attempt("body", name, body, candidate=name)
     finally:
-        for command in inverse:
+        paired = len(apply) == len(inverse)
+        for index, command in enumerate(inverse):
+            unapplied = paired and rejected_at is not None and index >= rejected_at
             try:
                 journal.attempt(
                     "inverse",
@@ -514,6 +541,7 @@ def run_candidate(  # pylint: disable=too-many-arguments,too-many-positional-arg
                     lambda c=command: io.command(c),
                     candidate=name,
                     check_reply=True,
+                    error_reply_note=APPLY_REJECTED_NOTE if unapplied else None,
                 )
             except Exception:  # pylint: disable=broad-exception-caught
                 pass  # journaled; the next inverse is still attempted
