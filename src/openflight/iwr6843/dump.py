@@ -434,8 +434,10 @@ def parse_header(raw: bytes) -> dict:
 def _parse_frame_metadata(raw: bytes, meta: dict) -> None:
     """Populate per-frame range-window metadata once its table has arrived."""
     metadata_nbytes = meta.get("frame_metadata_nbytes") or 0
-    start = meta.get("header_nbytes", HEADER.size)
-    range_stop = start + meta.get("range_metadata_nbytes", metadata_nbytes)
+    # A size stored as None reads as absent: the bare header, or the whole metadata table.
+    start = meta.get("header_nbytes") or HEADER.size
+    range_nbytes = meta.get("range_metadata_nbytes")
+    range_stop = start + (metadata_nbytes if range_nbytes is None else range_nbytes)
     stop = start + metadata_nbytes
     if len(raw) < stop:
         if meta["sample_fmt"] == SAMPLE_RANGE_FFT_IQ16_WINDOWED:

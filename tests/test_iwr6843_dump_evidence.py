@@ -470,3 +470,28 @@ def test_a_scanned_record_without_its_iq8_values_is_refused():
 
     with pytest.raises(ValueError, match="scanned frame record 1"):
         _pack(cube, capture, records, trailer)
+
+
+@pytest.mark.parametrize("key", ["header_nbytes", "range_metadata_nbytes"])
+def test_frame_metadata_sizes_stored_as_none_read_as_absent(key):
+    """A metadata dict carrying None for a size reads it as absent (the header's own size,
+    or the whole frame-metadata table), never a TypeError."""
+    cube = _cube(n_frames=2)
+    raw = pack_dump(
+        cube,
+        n_tx=3,
+        version=6,
+        frame_period_us=3000,
+        sample_fmt=SAMPLE_RANGE_FFT_IQ16_VARIABLE_TIMED,
+        range_bin_starts=[20, 21],
+        range_bin_counts=[5, 5],
+        frame_time_offsets_us=[0, 3000],
+    )
+    meta = dump.parse_header(raw)
+    assert meta["header_nbytes"] == dump.HEADER.size
+    assert meta["range_metadata_nbytes"] == meta["frame_metadata_nbytes"]
+    expected = dump.payload_nbytes(dict(meta), raw)
+    meta[key] = None
+
+    assert dump.payload_nbytes(meta, raw) == expected
+    assert meta["range_bin_starts"] == (20, 21) and meta["range_bin_counts"] == (5, 5)
