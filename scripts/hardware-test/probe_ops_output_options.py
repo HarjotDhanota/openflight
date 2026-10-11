@@ -37,6 +37,8 @@ EXPECTED_FIRMWARE = "1.3.0"
 ARM_SETTLE_S = 0.3  # > one 4,096-sample buffer at 30 ksps (136.5 ms) before S!
 TRIGGER_COMMAND = b"S!\r"  # as OPS243Radar.trigger_capture sends it
 POLL_S = 0.001
+JOURNAL_FILE = "journal.jsonl"
+MUTATING_STEPS = frozenset({"apply", "inverse", "rearm", "trigger", "body"})
 NOTES = [
     "Times are seconds after the host wrote S! (time zero), not impact.",
     "Each chunk's time is when its read returned, so completion times are upper bounds.",
@@ -49,6 +51,13 @@ NOTES = [
     "Silence is an observed gap, not proof of completion.",
     "restoration_verified null means an unknown initial state, never 'restored'. Power-cycle "
     "the OPS243 after every run (J3 pin 9), then run test_rolling_buffer_persist.py --test.",
+    "restoration_verified covers the eight query replies only (??, ?V, ?B, I?, O?, R?, P?, "
+    "A?). Whether SZ or S# state is visible in them is not established, so true does not show "
+    "that every setting the probe touched is back.",
+    "Speed records are not counted for candidates that apply OB: printable OB bytes can look "
+    "like a speed line. The raw .npz keeps every byte for a human verdict.",
+    "A speed record counts only when newline-terminated; one cut off by the limit or a read "
+    "error is never complete evidence.",
     "planning_arithmetic restates the plan's historical numbers; it is not this run.",
 ]
 
@@ -113,16 +122,20 @@ def _save_raw(  # pylint: disable=too-many-arguments
     )
 
 
-def _round(radar, journal: probe.Journal, name: str, index: int, args) -> dict:
-    """One re-arm, S! and fixed-limit capture; the raw bytes are saved before any parsing."""
+def _round(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    radar, journal: probe.Journal, name: str, index: int, args, row: dict
+) -> None:
+    """One re-arm, S! and fixed-limit capture into ``row`` (already in the candidate's rows).
+
+    The raw bytes are saved before any parsing, and saved even when interrupted.
+    """
     segments = args.pre_trigger_segments
-    rearm = journal.attempt(
+    row["rearm"] = journal.attempt(
         "rearm", f"PA S#{segments} PA", lambda: _rearm(radar, segments), candidate=name
     )
-    row: dict = {"round": index, "rearm": rearm}
-    if rearm != "rearmed":
+    if row["rearm"] != "rearmed":
         row["capture"] = "skipped_rearm_incomplete"
-        return row
+        return
     time.sleep(ARM_SETTLE_S)
     serial = radar.serial
     before = _read_waiting(serial)  # kept: an edge may have started a dump during the settle
@@ -137,32 +150,60 @@ def _round(radar, journal: probe.Journal, name: str, index: int, args) -> dict:
     journal.attempt("trigger", "S!", send, candidate=name)
     limit_ns = sent["sent_ns"] + round(args.observation_limit_s * 1e9)
     chunks: list[tuple[int, bytes]] = []
-    raw_file = f"{name}-{index}.npz"
+    row["raw_file"] = f"{name}-{index}.npz"
     try:
         read_error = _collect(serial, limit_ns, chunks)
     finally:  # an interrupt mid-capture still keeps the bytes read so far
         _save_raw(
-            args.out / raw_file,
+            args.out / row["raw_file"],
             chunks,
             before=before,
             sent_ns=sent["sent_ns"],
             written_ns=sent["written_ns"],
             limit_ns=limit_ns,
         )
-    # Cut by the limit unless a read error ended the capture first.
+    # Cut by the limit unless a read error ended the capture first; either way an
+    # unterminated tail is never a complete record (Record.terminated).
     records = probe.classify_stream(chunks, censored_at_limit=read_error is None)
     summary = probe.stream_summary(
-        chunks, records, baud=radar.baud, sent_ns=sent["sent_ns"], limit_ns=limit_ns
+        chunks,
+        records,
+        baud=radar.baud,
+        sent_ns=sent["sent_ns"],
+        limit_ns=limit_ns,
+        count_speeds=probe.counts_speed_records(probe.CANDIDATES[name][0]),
     )
     row.update(
-        raw_file=raw_file,
+        capture="captured",
         read_error=read_error,
         bytes_before_trigger=len(before),
         trigger_write_s=(sent["written_ns"] - sent["sent_ns"]) / 1e9,
         **summary,
         **probe.o4_allocation(summary["iq_complete_after_sent_s"], args.allowance_ms),
     )
-    return row
+
+
+def _run_rounds(radar, journal: probe.Journal, name: str, rows: list, args) -> None:
+    """The candidate's body: every round, each row appended before it runs."""
+    for index in range(args.rounds):
+        row: dict = {"round": index}
+        rows.append(row)
+        try:
+            _round(radar, journal, name, index, args, row)
+        except KeyboardInterrupt:
+            row["capture"] = "interrupted"
+            raise
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            row.update(capture="failed", error=repr(error))
+            raise
+        if row.get("read_error"):
+            raise OSError(f"serial read failed: {row['read_error']}")
+
+
+def _status(rows: list) -> str:
+    if rows and all(r.get("capture") == "skipped_rearm_incomplete" for r in rows):
+        return "completed_no_capture"
+    return "completed"
 
 
 def _run_candidates(radar, io: RadarIO, journal: probe.Journal, report: dict, args) -> None:
@@ -175,18 +216,17 @@ def _run_candidates(radar, io: RadarIO, journal: probe.Journal, report: dict, ar
             continue
         entry.pop("reason")
         rows = entry["rounds"]
-
-        def body(name=name, rows=rows):
-            for index in range(args.rounds):
-                row = _round(radar, journal, name, index, args)
-                rows.append(row)
-                if row.get("read_error"):
-                    raise OSError(f"serial read failed: {row['read_error']}")
-
         entry["status"] = "running"
         try:
-            probe.run_candidate(io, name, apply, inverse, body, journal)
-            entry["status"] = "completed"
+            probe.run_candidate(
+                io,
+                name,
+                apply,
+                inverse,
+                lambda name=name, rows=rows: _run_rounds(radar, journal, name, rows, args),
+                journal,
+            )
+            entry["status"] = _status(rows)
         except KeyboardInterrupt:
             entry["status"] = "interrupted"
             raise
@@ -205,9 +245,11 @@ def _run_candidates(radar, io: RadarIO, journal: probe.Journal, report: dict, ar
             report["errors"].append({"candidate": name, "error": "cleanup_failed"})
 
 
-def _query_all(io: RadarIO, report: dict, label: str) -> dict:
-    """Every query, each attempted on its own; a failed one is None (unknown)."""
-    replies: dict = {}
+def _query_all(io: RadarIO, report: dict, label: str, replies: dict) -> dict:
+    """Every query into ``replies``, each on its own; a failed one is None (unknown).
+
+    Filling the caller's dict keeps the replies already read if an interrupt stops it.
+    """
     for query in QUERIES:
         try:
             replies[query] = io.command(query)
@@ -260,9 +302,32 @@ def _parse_args(argv: Optional[list[str]]) -> argparse.Namespace:
     parser.add_argument("--expected-firmware", default=EXPECTED_FIRMWARE)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
-    if (args.out / "report.json").exists() or any(args.out.glob("*.npz")):
+    if (
+        (args.out / "report.json").exists()
+        or (args.out / JOURNAL_FILE).exists()
+        or any(args.out.glob("*.npz"))
+    ):
         parser.error(f"{args.out} already holds a probe run; choose a new --out")
     return args
+
+
+def _write_report(report: dict, args) -> None:
+    (args.out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+
+def _connect(radar, journal: probe.Journal, report: dict) -> None:
+    """Connect, journaling what UART baud negotiation did (an I5 switch is a mutation)."""
+    try:
+        radar.connect()
+    finally:
+        negotiation = getattr(radar, "last_baud_negotiation", None)
+        report["baud_negotiation"] = negotiation
+    journal.record(
+        "connect",
+        f"connect {report['port']}",
+        json.dumps(negotiation) if negotiation is not None else "not_negotiated",
+        None,
+    )
 
 
 def main(argv: Optional[list[str]] = None, *, radar_factory=OPS243Radar) -> int:
@@ -280,6 +345,7 @@ def main(argv: Optional[list[str]] = None, *, radar_factory=OPS243Radar) -> int:
         "expected_firmware": args.expected_firmware,
         "notes": NOTES,
         "planning_arithmetic": probe.transfer_arithmetic(),
+        "journal_file": JOURNAL_FILE,
         "candidates": {
             name: {
                 "apply": apply,
@@ -292,16 +358,20 @@ def main(argv: Optional[list[str]] = None, *, radar_factory=OPS243Radar) -> int:
         },
         "errors": [],
     }
-    journal = probe.Journal()
+    journal = probe.Journal(args.out / JOURNAL_FILE)
     radar = radar_factory(port=args.port)
     io = RadarIO(radar)
     connected = interrupted = False
     try:
-        radar.connect()
+        try:
+            _connect(radar, journal, report)
+        except BaseException as error:  # pylint: disable=broad-exception-caught
+            journal.record("connect", f"connect {args.port}", None, repr(error))
+            raise
         connected = True
         report["baud"] = radar.baud
         report["baud_is_target"] = radar.baud == probe.TARGET_UART_BAUD
-        report["queries_before"] = _query_all(io, report, "query_before")
+        report["queries_before"] = _query_all(io, report, "query_before", {})
         version = parse_firmware_version(report["queries_before"].get("?V") or "")
         report["firmware_version"] = version
         report["firmware_matches"] = version == args.expected_firmware
@@ -319,7 +389,7 @@ def main(argv: Optional[list[str]] = None, *, radar_factory=OPS243Radar) -> int:
     except Exception as error:  # pylint: disable=broad-exception-caught
         report["errors"].append({"candidate": None, "error": repr(error)})
     finally:
-        _finish(radar, io, journal, report, args, connected)
+        interrupted = _finish(radar, io, journal, report, args, connected) or interrupted
     print(
         f"Wrote {args.out / 'report.json'}; restoration_verified="
         f"{report['restoration_verified']}. Now power-cycle the OPS243 (J3 pin 9)."
@@ -331,35 +401,52 @@ def main(argv: Optional[list[str]] = None, *, radar_factory=OPS243Radar) -> int:
 
 def _finish(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     radar, io: RadarIO, journal: probe.Journal, report: dict, args, connected: bool
-):
-    """Final re-arm (only after a mutation), re-query, verify, write the report, disconnect."""
+) -> bool:
+    """Final re-arm (only after a mutation), re-query, verify, write the report, disconnect.
+
+    The report (with the journal) is written first, so an interrupt during these steps
+    still leaves it; then rewritten at the end. Returns True when interrupted here.
+    """
     after: dict = {}
-    if not connected:
-        report["final_rearm"] = "skipped_not_connected"
-    else:
-        if journal.entries:
-            try:
-                report["final_rearm"] = journal.attempt(
-                    "final_rearm",
-                    f"PA S#{args.pre_trigger_segments} PA",
-                    lambda: _rearm(radar, args.pre_trigger_segments),
-                )
-            except Exception as error:  # pylint: disable=broad-exception-caught
-                report["final_rearm"] = "failed"
-                report["errors"].append({"candidate": None, "error": f"final_rearm: {error!r}"})
-        else:
-            report["final_rearm"] = "skipped_no_mutation"
-        after = _query_all(io, report, "query_after")
-    report["queries_after"] = after
-    report["restoration_verified"] = probe.restoration_verified(
-        report.get("queries_before", {}), after
-    )
     report["journal"] = journal.entries
-    (args.out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    report["final_steps"] = "pending"
+    report["queries_after"] = after
+    report["restoration_verified"] = None
+    _write_report(report, args)
+    interrupted = False
     try:
-        radar.disconnect()
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass
+        if not connected:
+            report["final_rearm"] = "skipped_not_connected"
+        else:
+            if any(e["step"] in MUTATING_STEPS for e in journal.entries):
+                try:
+                    report["final_rearm"] = journal.attempt(
+                        "final_rearm",
+                        f"PA S#{args.pre_trigger_segments} PA",
+                        lambda: _rearm(radar, args.pre_trigger_segments),
+                    )
+                except Exception as error:  # pylint: disable=broad-exception-caught
+                    report["final_rearm"] = "failed"
+                    report["errors"].append({"candidate": None, "error": f"final_rearm: {error!r}"})
+            else:
+                report["final_rearm"] = "skipped_no_mutation"
+            _query_all(io, report, "query_after", after)
+        report["final_steps"] = "done"
+    except BaseException:  # pylint: disable=broad-exception-caught
+        interrupted = True
+        report["final_steps"] = "interrupted"
+        report["errors"].append({"candidate": None, "error": "interrupted"})
+    finally:
+        report["restoration_verified"] = probe.restoration_verified(
+            report.get("queries_before", {}), after
+        )
+        report["journal_sink_error"] = journal.sink_error
+        _write_report(report, args)
+        try:
+            radar.disconnect()
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+    return interrupted
 
 
 if __name__ == "__main__":

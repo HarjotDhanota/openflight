@@ -109,6 +109,14 @@ class FakeRadar:  # pylint: disable=too-many-instance-attributes
         self.stale = options.pop("stale", b"")
         self.raise_on_write = options.pop("raise_on_write", None)
         self.read_error_after = options.pop("read_error_after", None)
+        self.error_reply_on = options.pop("error_reply_on", None)
+        self.interrupt_rearm_at = options.pop("interrupt_rearm_at", None)
+        self.interrupt_queries_after_rearms = options.pop("interrupt_queries_after_rearms", None)
+        self.last_baud_negotiation = options.pop(
+            "negotiation",
+            {"found_baud": 19200, "target_baud": 230400, "switch_command": "I5",
+             "final_baud": 230400},
+        )  # fmt: skip
         assert not options, options
 
     def connect(self):
@@ -118,9 +126,14 @@ class FakeRadar:  # pylint: disable=too-many-instance-attributes
         return True
 
     def _send_command(self, text):
+        limit = self.interrupt_queries_after_rearms
+        if limit is not None and len(self.rearms) >= limit and text in script.QUERIES:
+            raise KeyboardInterrupt
         self.commands.append(text)
         if text == self.fail_on:
             raise OSError(f"write failed: {text}")
+        if text == self.error_reply_on:
+            return '{"error":"not supported"}'
         if text in self.state:
             return self.state[text]
         effect = self.effects.get(text)
@@ -130,6 +143,8 @@ class FakeRadar:  # pylint: disable=too-many-instance-attributes
 
     def rearm_rolling_buffer(self, pre_trigger_segments):
         self.rearms.append(pre_trigger_segments)
+        if self.interrupt_rearm_at is not None and len(self.rearms) == self.interrupt_rearm_at:
+            raise KeyboardInterrupt
         self._pre_trigger_split = self.rearm_split or (pre_trigger_segments, None)
         if self.stale:
             self.serial.arrive(self.stale)
@@ -253,7 +268,9 @@ def test_connect_failure_still_writes_a_report_and_sends_nothing(tmp_path):
     assert code == 1
     assert radar.commands == [] and radar.serial is None and radar.rearms == []
     assert report["restoration_verified"] is None
-    assert report["journal"] == []
+    assert [(e["step"], e["error"]) for e in report["journal"]] == [
+        ("connect", repr(ConnectionError("no port")))
+    ]
     assert report["final_rearm"] == "skipped_not_connected"
     assert {(c["status"], c["reason"]) for c in report["candidates"].values()} == {
         ("not_run", "not_reached")
@@ -268,7 +285,8 @@ def test_firmware_mismatch_changes_nothing(tmp_path):
     assert all(c["status"] == "not_run" for c in report["candidates"].values())
     assert radar.rearms == [] and radar.serial.writes == []
     assert set(radar.commands) <= set(script.QUERIES)
-    assert report["journal"] == [] and report["final_rearm"] == "skipped_no_mutation"
+    assert [e["step"] for e in report["journal"]] == ["connect"]
+    assert report["final_rearm"] == "skipped_no_mutation"
     assert report["restoration_verified"] is True
     assert any(e["error"].startswith("firmware_mismatch") for e in report["errors"])
 
@@ -303,6 +321,7 @@ def test_incomplete_rearm_skips_the_capture(tmp_path):
     assert row["capture"] == "skipped_rearm_incomplete"
     assert row["rearm"] == "not_armed:rearm_write_timed_out"
     assert b"S!\r" not in radar.serial.writes
+    assert {c["status"] for c in report["candidates"].values()} == {"completed_no_capture"}
 
 
 def test_read_error_keeps_the_partial_bytes_and_cleans_up(tmp_path):
@@ -373,5 +392,104 @@ def test_interrupt_mid_capture_keeps_the_bytes_read_so_far(tmp_path, monkeypatch
     monkeypatch.setattr(script, "_collect", collect_then_interrupt)
     code, report, _radar = _run(tmp_path)
     assert code == 130
+    (row,) = report["candidates"]["baseline"]["rounds"]
+    assert row["capture"] == "interrupted" and row["raw_file"] == "baseline-0.npz"
     assert bytes(np.load(tmp_path / "baseline-0.npz")["data"]) == DUMP
     assert report["candidates"]["baseline"]["status"] == "interrupted"
+
+
+def test_rows_say_they_captured(tmp_path):
+    _code, report, _radar = _run(tmp_path)
+    assert {r["capture"] for c in report["candidates"].values() for r in c["rounds"]} == {
+        "captured"
+    }
+
+
+def test_a_read_error_mid_number_is_not_a_speed_first_record(tmp_path):
+    """I2: '-41' cut from '-41.25' by a read error is not a complete speed record."""
+    head = _line({"sample_time": "964.003"}) + _line({"trigger_time": "964.071"})
+    code, report, _radar = _run(tmp_path, dump_chunks=[head + b"-41", b".25\r\n"],
+                                read_error_after=1)  # fmt: skip
+    assert code == 1
+    row = report["candidates"]["baseline"]["rounds"][0]
+    assert row["read_error"] is not None and row["unterminated_tail"] is True
+    assert row["speed_records"] == 0 and row["first_speed_complete_after_sent_s"] is None
+
+
+def test_interrupting_the_final_rearm_still_writes_report_and_journal(tmp_path):
+    """I3: 3 candidates x 2 rounds re-arm 6 times; the 7th is the final re-arm."""
+    code, report, _radar = _run(tmp_path, interrupt_rearm_at=7)
+    assert code == 130
+    assert report["final_steps"] == "interrupted"
+    assert any(e["error"] == "interrupted" for e in report["errors"])
+    last = report["journal"][-1]
+    assert last["step"] == "final_rearm" and last["error"] == repr(KeyboardInterrupt())
+    assert report["restoration_verified"] is False  # never verified, never "restored"
+    lines = (tmp_path / "journal.jsonl").read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line) for line in lines] == report["journal"]
+
+
+def test_interrupting_the_final_queries_still_writes_the_report(tmp_path):
+    code, report, _radar = _run(tmp_path, interrupt_queries_after_rearms=7)
+    assert code == 130
+    assert report["final_steps"] == "interrupted"
+    assert report["final_rearm"] == "rearmed"
+    assert report["restoration_verified"] is False
+
+
+def test_completed_run_marks_its_final_steps_done(tmp_path):
+    _code, report, _radar = _run(tmp_path)
+    assert report["final_steps"] == "done"
+    assert report["journal_file"] == "journal.jsonl" and report["journal_sink_error"] is None
+
+
+def test_baud_negotiation_is_journaled(tmp_path):
+    _code, report, _radar = _run(tmp_path)
+    first = report["journal"][0]
+    assert first["step"] == "connect" and first["error"] is None
+    assert json.loads(first["reply"])["switch_command"] == "I5"
+    assert report["baud_negotiation"]["final_baud"] == 230400
+
+
+def test_no_negotiation_is_journaled_as_such(tmp_path):
+    _code, report, _radar = _run(tmp_path, negotiation=None)
+    assert report["journal"][0]["reply"] == "not_negotiated"
+    assert report["baud_negotiation"] is None
+
+
+def test_restoration_note_says_what_it_covers():
+    note = next(n for n in script.NOTES if n.startswith("restoration_verified covers"))
+    assert "eight query replies" in note and "not established" in note
+
+
+def test_an_error_reply_to_an_inverse_stops_later_candidates(tmp_path):
+    code, report, radar = _run(tmp_path, error_reply_on="Sz")
+    assert code == 1
+    assert report["candidates"]["ob_on"]["status"] == "not_run"
+    assert "OB" not in radar.commands
+    (failed,) = [e for e in report["journal"] if e["command"] == "Sz"]
+    assert failed["error"] == "device_error: not supported"
+
+
+def test_an_error_reply_to_an_apply_fails_that_candidate(tmp_path):
+    _code, report, _radar = _run(tmp_path, error_reply_on="SZ")
+    assert report["candidates"]["sz_on"]["status"] == "failed"
+    assert report["candidates"]["sz_on"]["rounds"] == []
+    assert report["candidates"]["ob_on"]["status"] == "completed"
+
+
+def test_binary_output_rounds_do_not_count_speeds(tmp_path):
+    _code, report, _radar = _run(tmp_path)
+    ob_row = report["candidates"]["ob_on"]["rounds"][0]
+    assert ob_row["speed_records"] is None
+    assert ob_row["first_speed_complete_reason"] == "speeds_not_counted_binary_output"
+    assert report["candidates"]["baseline"]["rounds"][0]["speed_records"] == 0
+    assert any("OB" in n and "not counted" in n for n in script.NOTES)
+
+
+def test_refuses_an_out_dir_holding_a_journal(tmp_path):
+    (tmp_path / "journal.jsonl").write_text("", encoding="utf-8")
+    with pytest.raises(SystemExit) as raised:
+        script.main(["--pre-trigger-segments", "16", "--out", str(tmp_path)],
+                    radar_factory=pytest.fail)  # fmt: skip
+    assert raised.value.code == 2
