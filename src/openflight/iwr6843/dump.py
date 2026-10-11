@@ -433,7 +433,7 @@ def parse_header(raw: bytes) -> dict:
 
 def _parse_frame_metadata(raw: bytes, meta: dict) -> None:
     """Populate per-frame range-window metadata once its table has arrived."""
-    metadata_nbytes = meta.get("frame_metadata_nbytes", 0)
+    metadata_nbytes = meta.get("frame_metadata_nbytes") or 0
     start = meta.get("header_nbytes", HEADER.size)
     range_stop = start + meta.get("range_metadata_nbytes", metadata_nbytes)
     stop = start + metadata_nbytes
@@ -492,19 +492,21 @@ def payload_nbytes(meta: dict, raw: bytes | None = None) -> int:
         sample_count = meta["n_frames"] * meta["n_samples"]
     bytes_per_complex = 2 if meta["sample_fmt"] == SAMPLE_RANGE_FFT_IQ8_VARIABLE_TIMED else 4
     iq_nbytes = sample_count * meta["chirps_per_frame"] * meta["n_rx"] * bytes_per_complex
-    return meta.get("frame_metadata_nbytes", 0) + iq_nbytes + meta.get("trailer_nbytes", 0)
+    # An absent part is 0 B (its real size); a size stored as None reads as absent.
+    metadata_nbytes = meta.get("frame_metadata_nbytes") or 0
+    return metadata_nbytes + iq_nbytes + (meta.get("trailer_nbytes") or 0)
 
 
 def parse_dump(raw: bytes):
     """Dump bytes -> (meta dict, complex cube [n_frames, cpf, n_rx, n_samples])."""
     meta = parse_header(raw)
     nf, cpf, nrx, ns = (meta["n_frames"], meta["chirps_per_frame"], meta["n_rx"], meta["n_samples"])
-    payload_offset = meta["header_nbytes"] + meta.get("frame_metadata_nbytes", 0)
+    payload_offset = meta["header_nbytes"] + (meta.get("frame_metadata_nbytes") or 0)
     _parse_frame_metadata(raw, meta)
     expected_nbytes = meta["header_nbytes"] + payload_nbytes(meta, raw)
     if len(raw) < expected_nbytes:
         raise ValueError(f"short payload: {len(raw)} bytes < {expected_nbytes} needed")
-    if meta.get("trailer_nbytes", 0):
+    if meta.get("trailer_nbytes"):
         magic, payload_end_tick = DUMP_TRAILER.unpack_from(raw, expected_nbytes - DUMP_TRAILER.size)
         if magic != DUMP_TRAILER_MAGIC:
             raise ValueError(f"bad trailer magic {magic!r} (expected {DUMP_TRAILER_MAGIC!r})")

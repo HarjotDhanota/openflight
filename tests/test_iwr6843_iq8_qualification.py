@@ -689,3 +689,48 @@ def test_a_v8_dumps_sample_payload_bytes_exclude_the_trailer(sample_fmt, bytes_p
         == transport["dump_bytes"]
         == len(raw)
     )
+
+
+def test_a_v7_dump_has_no_trailer_bytes_through_capture_transport():
+    """A dump before version 8 has no trailer: 0 B is its real size, not a fill-in."""
+    cube = np.ones((4, 6, 4, 5), dtype=complex)
+    raw = pack_dump(
+        cube,
+        n_tx=3,
+        version=7,
+        frame_period_us=3000,
+        sample_fmt=SAMPLE_RANGE_FFT_IQ16_VARIABLE_TIMED,
+        range_bin_starts=[20] * 4,
+        range_bin_counts=[5] * 4,
+        frame_time_offsets_us=[3000 * i for i in range(4)],
+        temperature_report={key: 40 for key in TEMP_REPORT_KEYS},
+    )
+    metadata, _cube = parse_dump(raw)
+
+    transport = qualification._capture_transport(raw, metadata, 1_041_667)
+
+    assert transport["trailer_bytes"] == 0
+    assert transport["sample_payload_bytes"] == cube.size * 4
+
+
+def test_capture_transport_reads_a_size_key_stored_as_none_as_absent():
+    """A metadata dict that stores an absent part's size as None (not parse_dump's own
+    shape, which stores 0) still sizes the dump instead of raising TypeError."""
+    cube = np.ones((2, 6, 4, 5), dtype=complex)
+    raw = pack_dump(
+        cube,
+        n_tx=3,
+        version=6,
+        frame_period_us=3000,
+        sample_fmt=SAMPLE_RANGE_FFT_IQ16_VARIABLE_TIMED,
+        range_bin_starts=[20] * 2,
+        range_bin_counts=[5] * 2,
+        frame_time_offsets_us=[0, 3000],
+    )
+    metadata, _cube = parse_dump(raw)
+    metadata["trailer_nbytes"] = None
+
+    transport = qualification._capture_transport(raw, metadata, 1_041_667)
+
+    assert transport["trailer_bytes"] == 0
+    assert transport["sample_payload_bytes"] == cube.size * 4
