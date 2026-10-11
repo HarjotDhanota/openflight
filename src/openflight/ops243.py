@@ -1668,7 +1668,6 @@ class OPS243Radar:
                 chunk = self.serial.read(waiting)
                 first_byte_timestamp = None
                 if not capture_started:
-                    first_read = not idle_bytes and bytes_received == 0 and not discarded_bytes
                     idle_bytes.extend(chunk)
                     marker_offsets = [idle_bytes.find(marker) for marker in capture_markers]
                     marker_offsets = [offset for offset in marker_offsets if offset >= 0]
@@ -1683,6 +1682,9 @@ class OPS243Radar:
                         time.sleep(0.01)
                         continue
                     capture_start = min(marker_offsets)
+                    # The marker's offset in everything read this wait (idle_bytes
+                    # starts after the bytes already discarded).
+                    marker_offset = discarded_bytes + capture_start
                     discarded_bytes += capture_start
                     chunk = bytes(idle_bytes[capture_start:])
                     idle_bytes.clear()
@@ -1691,12 +1693,20 @@ class OPS243Radar:
                     if recovery_required:
                         self._hardware_trigger_recovery_required = False
                         logger.info("[OPS] Re-arm recovery: fresh capture boundary found")
-                    if first_read and pending_at_start:
+                    if marker_offset < pending_at_start:
                         # Its first byte arrived before this wait: the time below is late.
+                        # The trace says so (A-I2), and the summary leaves the attempt
+                        # unanchored rather than tie it to a later edge.
                         logger.info(
                             "[OPS] Hardware trigger: dump was already arriving when the wait "
                             "began (%d bytes); an edge raced the re-arm",
                             pending_at_start,
+                        )
+                        pi_trace.mark(
+                            "ops_dump_pending_at_wait_start",
+                            pi_trace.current_ops_attempt(),
+                            pending_bytes=pending_at_start,
+                            marker_offset=marker_offset,
                         )
                     first_byte_timestamp = time.time()
 

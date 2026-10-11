@@ -240,6 +240,8 @@ def test_one_sound_trigger_capture_is_one_attempt_in_serial_order(recorder, monk
     assert [m["name"] for m in marks if m["attempt_id"] == attempt] == [
         "ops_wait_started",
         "ops_wait_armed",
+        # this fake's dump is already in the buffer when the wait begins (A-I2)
+        "ops_dump_pending_at_wait_start",
         "ops_first_byte",
         "ops_dump_complete",
         "ops_clock_sync_started",
@@ -1263,3 +1265,51 @@ def test_browser_trace_routes_that_fail_leave_the_kiosk_running(recorder, monkey
     monkeypatch.setattr(server, "register_trace_routes", _boom)
     assert server._start_browser_trace() is None  # pylint: disable=protected-access
     assert "browser trace routes could not start" in caplog.text
+
+
+# --- A-I2: a dump already arriving when the wait began -------------------------------------
+
+
+def test_a_dump_already_pending_at_wait_start_is_marked_with_its_byte_count(recorder, monkeypatch):
+    """Its first byte arrived before the wait: the first-byte time is late (fail-closed)."""
+    radar = _radar(monkeypatch)
+    dump = _dump_bytes([2048] * 8, [2048] * 8)
+    radar.serial.arrive(dump)  # an edge raced the re-arm
+    attempt = recorder.open_ops_attempt()
+    radar.wait_for_hardware_trigger(timeout=1.0, dump_grace=1.0)
+    marks = read_marks(recorder)
+    late = _named(marks, "ops_dump_pending_at_wait_start")
+    assert len(late) == 1
+    assert late[0]["attempt_id"] == attempt
+    assert late[0]["pending_bytes"] == len(dump)
+    assert late[0]["marker_offset"] == 0
+
+
+def test_stale_noise_pending_at_wait_start_marks_no_late_dump(recorder, monkeypatch):
+    """Bytes pending at the start that hold no dump marker say nothing about the dump."""
+    radar = _radar(monkeypatch)
+    radar.serial.arrive(b'{"Clock":"1.0"}\r\n')
+    recorder.open_ops_attempt()
+    radar.wait_for_hardware_trigger(timeout=0.0)
+    assert _named(read_marks(recorder), "ops_dump_pending_at_wait_start") == []
+
+
+def test_a_dump_whose_marker_starts_inside_the_pending_bytes_is_marked(recorder, monkeypatch):
+    """Noise then the dump's marker, all before the wait: still late, at its offset."""
+    radar = _radar(monkeypatch)
+    noise = b'{"Clock":"1.0"}\r\n'
+    dump = _dump_bytes([2048] * 8, [2048] * 8)
+    radar.serial.arrive(noise + dump)
+    recorder.open_ops_attempt()
+    radar.wait_for_hardware_trigger(timeout=1.0, dump_grace=1.0)
+    late = _named(read_marks(recorder), "ops_dump_pending_at_wait_start")
+    assert len(late) == 1
+    assert late[0]["pending_bytes"] == len(noise + dump)
+    assert late[0]["marker_offset"] == len(noise)
+
+
+def test_no_pending_bytes_marks_no_late_dump(recorder, monkeypatch):
+    radar = _radar(monkeypatch)
+    recorder.open_ops_attempt()
+    radar.wait_for_hardware_trigger(timeout=0.0)
+    assert _named(read_marks(recorder), "ops_dump_pending_at_wait_start") == []

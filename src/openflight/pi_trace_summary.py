@@ -64,6 +64,8 @@ GOAL_STATUSES = ("met", "met_conditional", "missed", "not_measurable")
 NO_SHOT_EXPECTED = "no_shot_expected"
 COLD_NOT_AFTER_BOOT = "cold_not_after_boot"  # group name when the cold swings are not cold
 QUALIFYING = "qualifying"
+# ops243: the dump's start marker was already buffered when the wait began (A-I2).
+LATE_FIRST_BYTE_MARK = "ops_dump_pending_at_wait_start"
 REARMED = "rearmed"  # ops243 rearm_rolling_buffer's completed outcome
 PAINT_AMBIGUOUS = "paint_ambiguous"  # A-M6: kiosk accounts of one revision disagree
 SUMMARY_SCHEMA = "openflight.pi_trace_summary"
@@ -427,11 +429,19 @@ def _unanchored(reason: str, segments: Any = None, association: Optional[dict] =
 
 
 def _anchor(own: Sequence[dict], first_byte_ns: int, edges: Sequence[_Edge], rate_hz: float):
-    """Task 2's association and shared-edge mapping, with this attempt's own S# (R-F9)."""
+    """Task 2's association and shared-edge mapping, with this attempt's own S# (R-F9).
+
+    A-I2: when the dump was already arriving as the wait began (an edge raced the
+    re-arm), the observed first byte is late, so the window would sit after the real
+    edge and could hold a later one. Such an attempt stays unanchored
+    (``first_byte_observed_late``): fail-closed, and the window is never widened.
+    """
     armed = _first(own, "ops_wait_armed")
+    segments = armed.get("pre_trigger_segments") if armed else None
+    if _first(own, LATE_FIRST_BYTE_MARK) is not None:
+        return _unanchored("first_byte_observed_late", segments)
     if armed is None:
         return _unanchored("pre_trigger_segments_unobserved")
-    segments = armed.get("pre_trigger_segments")
     try:
         segment_ns, post_ns = association_window_ns(rate_hz, segments)
     except ValueError:

@@ -1496,3 +1496,36 @@ def test_a_rearm_that_did_not_rearm_is_left_out_of_the_rearm_stage(new_trace, tm
     stats = pts._stage_stats(attempts)["rearm"]  # pylint: disable=protected-access
     assert stats["n"] == 1 and stats["unobserved"] == 1
     assert stats["max"] == pytest.approx(49.0)
+
+
+# --- A-I2: a dump that started during the re-arm --------------------------------------------
+
+
+def _raced_rearm(new_trace, *, pending):
+    """E1 during the previous re-arm starts the dump; E2 lands later inside the window."""
+    rec = new_trace()
+    edge(rec, T0 - 5100 * MS)  # E1: before this wait began
+    if pending:
+        at(rec, "ops_dump_pending_at_wait_start", "t-1", T0, -4998.5, pending_bytes=900)
+    shot(rec, "t-1", T0)  # E2 at T0, first byte observed 86 ms after it
+    return rec
+
+
+def test_without_the_late_mark_the_later_edge_anchors_and_meets(new_trace, tmp_path):
+    """The hazard (control): nothing says the first byte was late, so E2 is chosen."""
+    _t, attempts, ledger = analyse(_raced_rearm(new_trace, pending=False), sheet(tmp_path, [T0]))
+    assert attempts[0]["anchor_ns"] is not None
+    assert ledger["rows"][0]["goal"] == "met"
+
+
+def test_a_dump_pending_at_wait_start_is_unanchored_never_met(new_trace, tmp_path):
+    """Fail-closed: the attempt is never tied to the later edge, and the window is unchanged."""
+    _t, attempts, ledger = analyse(_raced_rearm(new_trace, pending=True), sheet(tmp_path, [T0]))
+    attempt = attempts[0]
+    assert attempt["anchor_ns"] is None
+    assert attempt["anchor_reason"] == "first_byte_observed_late"
+    assert attempt["edge_seq"] is None
+    assert attempt["association"]["candidate_seqs"] == []
+    row = ledger["rows"][0]
+    assert row["goal"] == "not_measurable"
+    assert row["reasons"] == ["unanchored:first_byte_observed_late"]
