@@ -86,6 +86,23 @@ static void Memory_getStats(void *heap, Memory_Stats *stats)
     (void)heap;
     memcpy(stats, &gStubHeap, sizeof(*stats));
 }
+static long gHwiDepth;
+static unsigned long gHwiSections;
+static void (*gOnHwiRestore)(void);  /* plays a pre-empting writer, if a harness sets it */
+static uintptr_t Hwi_disable(void)
+{
+    gHwiDepth++;
+    return 7U;
+}
+static void Hwi_restore(uintptr_t key)
+{
+    (void)key;
+    gHwiDepth--;
+    gHwiSections++;
+    if (gHwiDepth == 0 && gOnHwiRestore != NULL) {
+        gOnHwiRestore();
+    }
+}
 """
 
 
@@ -789,6 +806,7 @@ int main(void)
     }
     printf("%u %u %u %llu\n", (unsigned)gPerfScanMaxCycles, (unsigned)gPerfScanFrames,
            (unsigned)gIq8OverflowComponents, (unsigned long long)gPerfScanCyclesTotal);
+    printf("hwi_depth=%ld hwi_sections=%lu\n", gHwiDepth, gHwiSections);
     l3_resetPerf();
     printf("%u %u %u %llu\n", (unsigned)gPerfScanMaxCycles, (unsigned)gPerfScanFrames,
            (unsigned)gIq8OverflowComponents, (unsigned long long)gPerfScanCyclesTotal);
@@ -818,7 +836,8 @@ def test_the_scan_records_each_frame_and_its_cost(tmp_path):
     assert lines[3] == f"{0x1111} {0x2222} {associated}"  # oversized frame: unscanned
     # worst elapsed scan ticks (across the wrap), frames scanned, components, elapsed total
     assert lines[4] == "300 2 3 400"
-    assert lines[5] == "0 0 0 0"
+    assert lines[5] == "hwi_depth=0 hwi_sections=2"  # one locked update per scan that ran
+    assert lines[6] == "0 0 0 0"
 
 
 @pytest.mark.skipif(
@@ -1132,13 +1151,13 @@ static int Hwi_getStackInfo(Hwi_StackInfo *info, int computeStackDepth)
     info->hwiStackSize = 2048UL;
     return 0;
 }
-static long gHwiDepth;
-static uintptr_t Hwi_disable(void) { gHwiDepth++; return 7U; }
-static void Hwi_restore(uintptr_t key) { (void)key; gHwiDepth--; }
 static void CLI_write(const char *format, ...)
 {
     va_list args;
 
+    if (gHwiDepth != 0) {
+        printf("[CLI_write with interrupts off]");  /* UART polling must not run locked */
+    }
     va_start(args, format);
     vprintf(format, args);
     va_end(args);
@@ -1191,6 +1210,28 @@ static void drive(void)
     gStubHeap.largestFreeSize = 11000UL;
 }
 
+/* Every ISR- or task-written perf value changes at once, as if an interrupt (frame start,
+ * EDMA completion) or the rearm task ran the moment perfstats re-enabled interrupts. A
+ * reply printed from one snapshot never shows these. */
+static void preempt(void)
+{
+    gPerfRearmMaxCycles = 111111U;
+    gPerfRearms = 111U;
+    gPerfTaskMaxCycles = 222222U;
+    gPerfTaskRuns = 222U;
+    gPerfMarginMin = 33U;
+    gPerfMarginFrames = 333U;
+    gPerfScanMaxCycles = 444444U;
+    gPerfScanFrames = 444U;
+    gPerfScanCyclesTotal = 0x400000004ULL;
+    gIq8OverflowComponents = 44U;
+#ifdef L3_IQ8_EDMA_PACK
+    gPerfPackMaxCycles = 555555U;
+    gPerfPacks = 555U;
+    gPerfPackOverlap = 55U;
+#endif
+}
+
 int main(int argc, char **argv)
 {
     const char *mode = argc > 1 ? argv[1] : "";
@@ -1206,6 +1247,9 @@ int main(int argc, char **argv)
     } else if (strcmp(mode, "no-ctrl") == 0) {
         drive();
         gCtrlTask = NULL;
+    } else if (strcmp(mode, "preempted") == 0) {
+        drive();
+        gOnHwiRestore = preempt;
     } else {
         drive();
     }
@@ -1383,3 +1427,110 @@ def test_firmware_guide_documents_the_commands_and_names_the_scan_time_honestly(
     assert "sampled" in geometry  # heap free_min is sampled, not continuous
     assert "worst-case elapsed scan time, including pre-emption" in guide
     assert "worst-case cycle count" not in guide
+
+
+# --- Task 5 fix round: no torn or mismatched perf pairs ------------------------------------
+
+
+def _locked_section(function: str) -> tuple[str, str]:
+    """(inside, outside) of a function's single Hwi_disable/Hwi_restore section."""
+    assert function.count("key = Hwi_disable();") == 1
+    start = function.index("key = Hwi_disable();")
+    end = function.index("Hwi_restore(key);", start)
+    return function[start:end], function[:start] + function[end:]
+
+
+@pytest.mark.parametrize(
+    ("name", "next_name", "updates"),
+    [
+        (
+            "static void l3_scanIq8Scratch",
+            "static void l3_startIq8PackAndScan",
+            (
+                "gPerfScanMaxCycles = cycles;",
+                "gPerfScanCyclesTotal += cycles;",
+                "gPerfScanFrames++;",
+                "gIq8OverflowComponents += overflow;",
+            ),
+        ),
+        (
+            "static void l3_perfNoteRearmDone",
+            "static void l3_perfNoteTaskDone",
+            ("gPerfRearmMaxCycles = cycles;", "gPerfRearms++;"),
+        ),
+        (
+            "static void l3_perfNoteTaskDone",
+            "static void l3_perfNoteArmedFrameStart",
+            ("gPerfTaskMaxCycles = cycles;", "gPerfTaskRuns++;"),
+        ),
+    ],
+)
+def test_task_side_perf_updates_are_one_locked_section(name, next_name, updates):
+    """The rearm task (priority 2) can be pre-empted by the CLI task (priority 3) between
+    two stores: a 64-bit total torn in half, or a maximum without its count. Each update
+    group runs with interrupts (and so task switches) off."""
+    source = FIRMWARE.read_text(encoding="utf-8")
+    inside, outside = _locked_section(_function_source(source, name, next_name))
+
+    for update in updates:
+        assert update in inside, update
+        assert update not in outside, update
+    assert "l3_ticks()" not in inside  # the timing itself stays outside the lock
+
+
+def test_perfstats_prints_one_snapshot_taken_with_interrupts_off(tmp_path):
+    """An interrupt or the rearm task landing just after the snapshot changes nothing in the
+    reply (no 'packs=1 pack_max=0'), and no CLI_write runs with interrupts off."""
+    (tmp_path / "driven").mkdir()
+    (tmp_path / "preempted").mkdir()
+    driven = _perfstats(tmp_path / "driven", "driven")
+    preempted = _perfstats(tmp_path / "preempted", "preempted")
+
+    assert preempted == driven
+    assert "interrupts off" not in "\n".join(preempted)
+
+
+def test_perfstats_snapshots_every_isr_or_task_written_value_once():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    handler = _function_source(
+        source, "static int32_t l3_cli_perfStats", "static int32_t l3_cli_bench"
+    )
+    inside, outside = _locked_section(handler)
+
+    for name in (
+        "gPerfRearmMaxCycles",
+        "gPerfRearms",
+        "gPerfTaskMaxCycles",
+        "gPerfTaskRuns",
+        "gPerfMarginMin",
+        "gPerfMarginFrames",
+        "gPerfScanMaxCycles",
+        "gPerfScanFrames",
+        "gPerfScanCyclesTotal",
+        "gIq8OverflowComponents",
+        "gPerfPackMaxCycles",
+        "gPerfPacks",
+        "gPerfPackOverlap",
+    ):
+        assert inside.count(name) == 1, name
+        assert name not in outside, name  # printed from the copy only
+    assert "CLI_write" not in inside
+    assert handler.index("Hwi_restore(key);") < handler.index("CLI_write(")
+
+
+def test_the_margin_is_documented_as_including_isr_entry_latency():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    helper = _function_source(
+        source, "static void l3_perfNoteArmedFrameStart", "static void l3_perfNotePackDone"
+    )
+    comment = source[
+        source.rindex("/*", 0, source.index("static void l3_perfNoteArmedFrameStart")) :
+    ]
+    guide = (Path(__file__).parents[1] / "docs" / "development" / "firmware.md").read_text(
+        encoding="utf-8"
+    )
+    row = next(line for line in guide.splitlines() if line.startswith("| `perfstats` |"))
+
+    assert "entry latency" in comment[: comment.index("*/")]
+    assert "gPerfMarginMin" in helper
+    assert "frame-start ISR entry latency" in row

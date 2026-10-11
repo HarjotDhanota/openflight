@@ -567,30 +567,40 @@ static void l3_perfNoteArmed(void)
     gArmTickValid = 1U;
 }
 
-/* Rearm task: from waking to a successful re-arm. */
+/* Rearm task: from waking to a successful re-arm. The maximum and its count change in one
+ * locked section, so the CLI task (higher priority) never reads one without the other. */
 static void l3_perfNoteRearmDone(uint32_t taskStart)
 {
     uint32_t cycles = l3_ticks() - taskStart;
+    uintptr_t key;
 
+    key = Hwi_disable();
     if (cycles > gPerfRearmMaxCycles) {
         gPerfRearmMaxCycles = cycles;
     }
     gPerfRearms++;
+    Hwi_restore(key);
 }
 
-/* Rearm task: one whole iteration (rearm, IQ8 pack start and scan). */
+/* Rearm task: one whole iteration (rearm, IQ8 pack start and scan); locked as above. */
 static void l3_perfNoteTaskDone(uint32_t taskStart)
 {
     uint32_t cycles = l3_ticks() - taskStart;
+    uintptr_t key;
 
+    key = Hwi_disable();
     if (cycles > gPerfTaskMaxCycles) {
         gPerfTaskMaxCycles = cycles;
     }
     gPerfTaskRuns++;
+    Hwi_restore(key);
 }
 
 /* Frame-start ISR, armed frame: how long before it the chain was armed (cadence headroom).
- * Each arm is used once; an armed frame without a fresh arm records nothing. */
+ * Each arm is used once; an armed frame without a fresh arm records nothing. `now` is read
+ * at ISR entry, after the frame actually started, so the margin includes the frame-start
+ * ISR's entry latency and can read slightly high (optimistic). Runs in the ISR, so its
+ * minimum and count are already consistent for perfstats' snapshot. */
 static void l3_perfNoteArmedFrameStart(uint32_t now)
 {
     if (gArmTickValid) {
@@ -1955,6 +1965,7 @@ static void l3_scanIq8Scratch(uint32_t slot, uint8_t scratch)
     uint16_t maxAbs = 0U;
     uint32_t overflow;
     uint32_t cycles;
+    uintptr_t key;
 
     if (slot >= gCapturePlan.totalFrames || scratch >= 2U) {
         return;
@@ -1967,13 +1978,17 @@ static void l3_scanIq8Scratch(uint32_t slot, uint8_t scratch)
     gFrameIq8Overflow[slot] = (overflow > 0xFFFFU) ? 0xFFFFU : (uint16_t)overflow;
     gFrameIq8MaxAbs[slot] = maxAbs;
     gFrameEvidenceFlags[slot] |= L3_FRAME_FLAG_IQ8_SCANNED;
-    gIq8OverflowComponents += overflow;
     cycles = l3_ticks() - start;   /* elapsed, pre-emption included; exact across a wrap */
+    /* One locked update: the CLI task (higher priority) must never read a half-written
+     * 64-bit total, or a total, maximum, count and overflow sum from different scans. */
+    key = Hwi_disable();
     if (cycles > gPerfScanMaxCycles) {
         gPerfScanMaxCycles = cycles;
     }
     gPerfScanCyclesTotal += cycles;
     gPerfScanFrames++;
+    gIq8OverflowComponents += overflow;
+    Hwi_restore(key);
 }
 #endif
 
@@ -3185,34 +3200,59 @@ static void l3_writeStackLine(void)
 static int32_t l3_cli_perfStats(int32_t argc, char *argv[])
 {
     Memory_Stats heap;
-#ifdef L3_IQ8_SCAN
     uintptr_t key;
+    uint32_t rearmMax;
+    uint32_t rearms;
+    uint32_t taskMax;
+    uint32_t taskRuns;
+    uint32_t marginMin;
+    uint32_t marginFrames;
+#ifdef L3_IQ8_SCAN
     uint32_t scanMax;
     uint32_t scanFrames;
     uint64_t scanTotal;
+    uint32_t overflow;
+    uint32_t packMax;
+    uint32_t packs;
+    uint32_t packOverlap;
 #endif
 
     (void)argc; (void)argv;
+    /* One snapshot of every value an ISR or the rearm task writes, so each maximum is
+     * printed with its own count (never "packs=1 pack_max=0") and the 64-bit scan total
+     * is whole. The writers update each group in one ISR or locked section. CLI_write
+     * (UART polling) runs only after interrupts are back on. */
+    key = Hwi_disable();
+    rearmMax = gPerfRearmMaxCycles;
+    rearms = gPerfRearms;
+    taskMax = gPerfTaskMaxCycles;
+    taskRuns = gPerfTaskRuns;
+    marginMin = gPerfMarginMin;
+    marginFrames = gPerfMarginFrames;
+#ifdef L3_IQ8_SCAN
+    scanMax = gPerfScanMaxCycles;
+    scanFrames = gPerfScanFrames;
+    scanTotal = gPerfScanCyclesTotal;
+    overflow = gIq8OverflowComponents;
+    packMax = gPerfPackMaxCycles;
+    packs = gPerfPacks;
+    packOverlap = gPerfPackOverlap;
+#endif
+    Hwi_restore(key);
     l3_sampleHeap();
     Memory_getStats(NULL, &heap);
     CLI_write("perf tick_hz=%u rearm_max=%u rearms=%u task_max=%u task_runs=%u "
               "margin_min=%u margin_frames=%u\n",
-              (unsigned)gCpuClock, (unsigned)gPerfRearmMaxCycles, (unsigned)gPerfRearms,
-              (unsigned)gPerfTaskMaxCycles, (unsigned)gPerfTaskRuns,
-              (unsigned)gPerfMarginMin, (unsigned)gPerfMarginFrames);
+              (unsigned)gCpuClock, (unsigned)rearmMax, (unsigned)rearms,
+              (unsigned)taskMax, (unsigned)taskRuns,
+              (unsigned)marginMin, (unsigned)marginFrames);
 #ifdef L3_IQ8_SCAN
-    /* One snapshot, so the 64-bit total is never torn and total/frames is one average. */
-    key = Hwi_disable();
-    scanMax = gPerfScanMaxCycles;
-    scanFrames = gPerfScanFrames;
-    scanTotal = gPerfScanCyclesTotal;
-    Hwi_restore(key);
     CLI_write("perf scan_max=%u scan_frames=%u scan_total_hi=%u scan_total_lo=%u "
               "pack_max=%u packs=%u pack_overlap=%u iq8_overflow=%u\n",
               (unsigned)scanMax, (unsigned)scanFrames,
               (unsigned)(scanTotal >> 32), (unsigned)(scanTotal & 0xFFFFFFFFU),
-              (unsigned)gPerfPackMaxCycles, (unsigned)gPerfPacks,
-              (unsigned)gPerfPackOverlap, (unsigned)gIq8OverflowComponents);
+              (unsigned)packMax, (unsigned)packs,
+              (unsigned)packOverlap, (unsigned)overflow);
 #else
     CLI_write("perf scan=not_in_build pack=not_in_build\n");
 #endif
