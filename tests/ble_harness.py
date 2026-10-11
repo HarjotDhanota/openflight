@@ -382,6 +382,7 @@ def server_loopback(monkeypatch, tmp_path):
         monkeypatch,
         command_handler=server_module.dispatch_phone_control_command,
         catch_up_provider=server_module.phone_catch_up,
+        catch_up_events_provider=server_module.phone_deletion_catch_up,
     )
     with loopback:
         monkeypatch.setattr(server_module, "ble_publisher", loopback.publisher)

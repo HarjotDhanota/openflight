@@ -213,3 +213,73 @@ def test_route_survives_catch_up_failure_with_latest_replay(session, monkeypatch
     monkeypatch.setattr(server_module, "phone_catch_up", broken)
 
     assert _stream_shot_ids("/api/shots/stream?schema=2") == [session[-1]]
+
+
+def _seeded_events(path, headers=None):
+    """``(name, data)`` of every event seeded on connect, and the response headers."""
+    response = server_module.app.test_client().get(path, headers=headers or {})
+    try:
+        assert response.status_code == 200
+        frames = response.response
+        assert next(frames).decode("utf-8") == HEARTBEAT_FRAME
+        events = []
+        for raw in frames:
+            frame = raw.decode("utf-8")
+            if frame == HEARTBEAT_FRAME:
+                break
+            name, _event_id, data = _parse(frame)
+            events.append((name, data))
+        return events, response.headers
+    finally:
+        response.close()
+
+
+def _publish_session_live(monkeypatch):
+    """Publish every session shot as the live path did when it was taken."""
+    monkeypatch.setattr(server_module, "ble_publisher", None)
+    for shot in server_module.monitor.get_shots():
+        server_module._publish_phone_shot(
+            server_module.shot_to_dict(shot), final=True, enrichment=None
+        )
+
+
+def test_route_replays_deletions_missed_while_away_before_the_shots(session, monkeypatch):
+    _publish_session_live(monkeypatch)
+    timestamp = server_module.monitor.get_shots()[1].timestamp.isoformat()
+    assert server_module.apply_delete_shot({"timestamp": timestamp})[1] == 200
+
+    events, _headers = _seeded_events("/api/shots/stream?schema=2", {"Last-Event-ID": session[-1]})
+
+    names = [name for name, _data in events]
+    assert [data["timestamp"] for name, data in events if name == "shot_deleted"] == [timestamp]
+    assert names.index("shot_deleted") < names.index("shot")
+
+
+def test_route_matches_ble_deletion_replay_for_the_same_anchor(session, monkeypatch):
+    _publish_session_live(monkeypatch)
+    timestamp = server_module.monitor.get_shots()[0].timestamp.isoformat()
+    server_module.apply_delete_shot({"timestamp": timestamp})
+
+    events, _headers = _seeded_events("/api/shots/stream?schema=2", {"Last-Event-ID": session[-1]})
+
+    assert [data for name, data in events if name == "shot_deleted"] == (
+        server_module.phone_deletion_catch_up(session[-1])
+    )
+
+
+def test_route_names_its_features_in_a_header(session):
+    """A stream has no ``hello``; the app reads the same feature list from this header."""
+    _events, headers = _seeded_events("/api/shots/stream?schema=2")
+
+    features = headers["OpenFlight-Features"].split(",")
+    assert "shot_catch_up" in features
+    assert "deletion_catch_up" in features
+
+
+def test_route_survives_deletion_replay_failure(session, monkeypatch):
+    def broken(_last_event_id=None):
+        raise RuntimeError("deletions unavailable")
+
+    monkeypatch.setattr(server_module, "phone_deletion_catch_up", broken)
+
+    assert _stream_shot_ids("/api/shots/stream?schema=2") == session
