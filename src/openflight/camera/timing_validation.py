@@ -9,6 +9,22 @@ from typing import Any
 import numpy as np
 
 ARTIFACT_VERSION = 1
+GAP_INTERVAL_FACTOR = 1.5  # a sensor interval longer than this times the median is a gap
+
+
+def cadence_summary(sensor: np.ndarray) -> dict[str, float | int]:
+    """Frame count, median and max sensor interval, and gaps over 1.5x the median.
+
+    ``sensor`` must hold at least two timestamps.
+    """
+    sensor_delta = np.diff(sensor)
+    median_interval = float(np.median(sensor_delta))
+    return {
+        "frame_count": int(sensor.size),
+        "median_sensor_interval_ns": median_interval,
+        "max_sensor_interval_ns": int(np.max(sensor_delta)),
+        "gap_count": int(np.sum(sensor_delta > median_interval * GAP_INTERVAL_FACTOR)),
+    }
 
 
 def _timestamps(value: Any, label: str) -> np.ndarray:
@@ -59,8 +75,6 @@ def _capture(capture: Mapping[str, Any]) -> dict[str, Any]:
     clock_domain = capture.get("clock_domain_id")
     if not isinstance(clock_domain, str) or not clock_domain.strip():
         raise ValueError(f"capture {capture_id!r} has no declared clock_domain_id")
-    sensor_delta = np.diff(sensor)
-    median_interval = float(np.median(sensor_delta))
     return {
         **dict(capture),
         "id": capture_id.strip(),
@@ -68,12 +82,7 @@ def _capture(capture: Mapping[str, Any]) -> dict[str, Any]:
         "clock_domain_id": clock_domain.strip(),
         "sensor_timestamp_ns": sensor,
         "host_timestamp_ns": host,
-        "cadence": {
-            "frame_count": int(sensor.size),
-            "median_sensor_interval_ns": median_interval,
-            "max_sensor_interval_ns": int(np.max(sensor_delta)),
-            "gap_count": int(np.sum(sensor_delta > median_interval * 1.5)),
-        },
+        "cadence": cadence_summary(sensor),
     }
 
 
