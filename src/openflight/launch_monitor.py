@@ -348,9 +348,9 @@ class Shot:
         - Wedges: 1.20-1.25
 
         Returns:
-            Smash factor or None if club speed not available
+            Smash factor or None if club speed not available (a non-finite one is not)
         """
-        if self.club_speed_mph is None or self.club_speed_mph == 0:
+        if not _finite(self.club_speed_mph) or self.club_speed_mph == 0:
             return None
         return self.ball_speed_mph / self.club_speed_mph
 
@@ -363,7 +363,8 @@ class Shot:
                 base,
                 self.launch_angle_vertical,
                 self.club,
-                self.launch_angle_confidence or 0.2,
+                (self.launch_angle_confidence if _finite(self.launch_angle_confidence) else None)
+                or 0.2,
             )
         return base
 
@@ -392,8 +393,8 @@ class Shot:
 
     @property
     def has_spin(self) -> bool:
-        """Check if spin data is available for this shot."""
-        return self.spin_rpm is not None
+        """Check if spin data is available for this shot (a non-finite spin is not)."""
+        return _finite(self.spin_rpm)
 
     @property
     def spin_quality(self) -> Optional[str]:
@@ -403,9 +404,9 @@ class Shot:
         Returns:
             "high", "medium", "low", or None if no spin data
         """
-        if self.spin_rpm is not None and self.spin_result_quality:
+        if self.has_spin and self.spin_result_quality:
             return self.spin_result_quality
-        if self.spin_confidence is None:
+        if not _finite(self.spin_confidence):
             return None
         if self.spin_confidence >= SPIN_CONFIDENCE_HIGH:
             return "high"

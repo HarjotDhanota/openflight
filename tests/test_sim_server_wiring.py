@@ -265,3 +265,26 @@ def test_a_non_finite_shot_reaches_no_simulator_payload_as_nan(server, monkeypat
     payload = _strict_json(sim_shot)
     assert payload["provenance"]["vla"] == payload["provenance"]["carry"] == "estimated"
     assert payload["provenance"]["hla"] == payload["provenance"]["spin_axis"] == "estimated"
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")], ids=["nan", "inf"])
+def test_a_non_finite_launch_confidence_still_sends_the_measured_shot(server, bad):
+    """2a: a NaN confidence must not make carry NaN and drop the whole send."""
+    connector = _FakeConnector("gspro")
+    server.sim_connectors = [connector]
+
+    def shot(confidence):
+        return Shot(
+            ball_speed_mph=140.0,
+            timestamp=datetime(2026, 6, 13, 12, 0, 0),
+            club=ClubType.DRIVER,
+            launch_angle_vertical=12.0,
+            launch_angle_confidence=confidence,
+        )
+
+    server._forward_shot_to_simulators(shot(bad))
+    server._forward_shot_to_simulators(shot(None))
+    assert not any(a_[0] == "sim_shot_dropped" for a_, k in server._emitted)
+    with_bad, with_none = connector.sent
+    assert with_bad.carry_yards == with_none.carry_yards
+    assert with_bad.vla == 12.0 and with_bad.provenance["vla"] == "measured"

@@ -242,3 +242,59 @@ def test_a_non_finite_launch_angle_is_no_launch_angle_for_carry(bad):
     assert with_bad.has_launch_angle is False
     assert with_bad.estimated_carry_yards == with_none.estimated_carry_yards
     assert with_bad.estimated_carry_range == with_none.estimated_carry_range
+
+
+_DERIVED = (
+    "smash_factor",
+    "estimated_carry_yards",
+    "estimated_carry_range",
+    "has_launch_angle",
+    "has_spin",
+    "spin_quality",
+)
+
+
+@pytest.mark.parametrize(
+    "bad", [float("nan"), float("inf"), float("-inf")], ids=["nan", "inf", "-inf"]
+)
+@pytest.mark.parametrize(
+    "field",
+    [
+        "launch_angle_vertical",
+        "launch_angle_confidence",
+        "club_speed_mph",
+        "spin_rpm",
+        "spin_confidence",
+    ],
+)
+def test_every_derived_property_treats_a_non_finite_input_exactly_like_none(field, bad):
+    """Fix round 2 (2a and its class): a non-finite value is a missing value."""
+    from datetime import datetime as _dt
+
+    measured = dict(
+        ball_speed_mph=140.0,
+        timestamp=_dt(2026, 1, 1),
+        club_speed_mph=100.0,
+        launch_angle_vertical=12.0,
+        launch_angle_confidence=0.8,
+        spin_rpm=2600.0,
+        spin_confidence=0.9,
+    )
+    with_bad = Shot(**{**measured, field: bad})
+    with_none = Shot(**{**measured, field: None})
+    for name in _DERIVED:
+        assert getattr(with_bad, name) == getattr(with_none, name), name
+
+
+def test_a_zero_launch_confidence_keeps_its_existing_carry_default():
+    from datetime import datetime as _dt
+
+    def carry(confidence):
+        return Shot(
+            ball_speed_mph=140.0,
+            timestamp=_dt(2026, 1, 1),
+            launch_angle_vertical=12.0,
+            launch_angle_confidence=confidence,
+        ).estimated_carry_yards
+
+    assert carry(0.0) == carry(None) == carry(0.2)
