@@ -144,9 +144,10 @@ def resolve_launch(shot: Shot, *, substitutes: bool = True) -> Optional[LaunchCo
     spin axis. A fusion unit passes False: without a measured spin, horizontal
     launch and spin axis there is no carry (D17).
 
-    A non-finite input (NaN, inf) is a missing input and is handled exactly so.
+    A non-finite input (NaN, inf) is a missing input and is handled exactly so;
+    without a finite ball speed there is nothing to simulate.
     """
-    if not _finite(shot.launch_angle_vertical):
+    if not _finite(shot.ball_speed_mph) or not _finite(shot.launch_angle_vertical):
         return None
 
     source: Literal["measured", "calculated", "club_typical"]
