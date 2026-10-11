@@ -64,6 +64,7 @@ GOAL_STATUSES = ("met", "met_conditional", "missed", "not_measurable")
 NO_SHOT_EXPECTED = "no_shot_expected"
 COLD_NOT_AFTER_BOOT = "cold_not_after_boot"  # group name when the cold swings are not cold
 QUALIFYING = "qualifying"
+PAINT_AMBIGUOUS = "paint_ambiguous"  # A-M6: kiosk accounts of one revision disagree
 SUMMARY_SCHEMA = "openflight.pi_trace_summary"
 SUMMARY_VERSION = 1
 PERCENTILE_METHOD = (
@@ -476,6 +477,19 @@ def _core_matches(rendered: Any, emitted: Any) -> bool:
     return isinstance(rendered, dict) and bool(rendered) and rendered == emitted
 
 
+def _ambiguous(kiosk_marks: Sequence[dict]) -> bool:
+    """More than one distinct kiosk account (report or not-shown) of the same revision."""
+    accounts = {
+        json.dumps(
+            {k: v for k, v in mark.items() if k not in _RESERVED_MARK_KEYS},
+            sort_keys=True,
+            default=repr,
+        )
+        for mark in kiosk_marks
+    }
+    return len(accounts) > 1
+
+
 def _paint(own: Sequence[dict], emit: dict, samples: Sequence[dict], sid: Optional[str]) -> dict:
     """One revision's acknowledgement, mapped to host time, or why there is none.
 
@@ -487,6 +501,18 @@ def _paint(own: Sequence[dict], emit: dict, samples: Sequence[dict], sid: Option
     reports = [m for m in own if m["name"] == "browser_report" and m.get("revision") == revision]
     kiosk = [r for r in reports if _designated(r, sid)]
     out = {"paint": None, "received_ns": None, "painted_ns": None, "uncertainty_ns": None}
+    not_shown = [
+        m
+        for m in own
+        if m["name"] == "browser_result_not_shown"
+        and m.get("revision") == revision
+        and _designated(m, sid)
+    ]
+    if _ambiguous([*kiosk, *not_shown]):
+        # A-M6: two kiosk documents (or one saying two things) about one revision: which
+        # was the screen is unknown, so neither wins; not measurable, never the first.
+        out["paint"] = PAINT_AMBIGUOUS
+        return out
     if kiosk:
         report = kiosk[0]
         out["renderer"] = _renderer(report)
@@ -505,13 +531,6 @@ def _paint(own: Sequence[dict], emit: dict, samples: Sequence[dict], sid: Option
         else:
             out["paint"] = QUALIFYING
         return out
-    not_shown = [
-        m
-        for m in own
-        if m["name"] == "browser_result_not_shown"
-        and m.get("revision") == revision
-        and _designated(m, sid)
-    ]
     rejected = [
         m
         for m in own

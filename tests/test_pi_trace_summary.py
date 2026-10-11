@@ -1402,3 +1402,70 @@ def test_an_untagged_emit_never_turns_a_met_goal_into_another_status(new_trace, 
     paint(rec, "t-1", T0, 1, 1900, received=1886)
     _t, _a, ledger = analyse(rec, sheet(tmp_path, [T0]))
     assert ledger["rows"][0]["goal"] == "met"
+
+
+# --- A-M6: two kiosk documents for one revision --------------------------------------------
+
+KIOSK_2 = {**KIOSK, "document_id": "doc-2"}
+
+
+def test_two_kiosk_documents_painting_one_revision_are_ambiguous(new_trace, tmp_path):
+    """The first report never wins silently: which one was the kiosk's screen is unknown."""
+    rec = new_trace()
+    shot(rec, "t-1", T0)  # doc-1 paints revision 1 at 1900 ms
+    paint(rec, "t-1", T0, 1, 3900, received=3880, identity=KIOSK_2)
+    _t, attempts, ledger = analyse(rec, sheet(tmp_path, [T0]))
+    assert attempts[0]["revisions"][0]["paint"] == "paint_ambiguous"
+    assert ledger["rows"][0]["goal"] == "not_measurable"
+    assert ledger["rows"][0]["reasons"] == ["paint_ambiguous"]
+
+
+def test_a_kiosk_paint_and_another_kiosk_documents_not_shown_are_ambiguous(new_trace, tmp_path):
+    rec = new_trace()
+    shot(rec, "t-1", T0)
+    at(
+        rec,
+        "browser_result_not_shown",
+        "t-1",
+        T0,
+        1905,
+        sid="k2",
+        **KIOSK_2,
+        revision=1,
+        final=True,
+        update_kind="first",
+        event="shot",
+        received_ms=1.0,
+        reported_ms=2.0,
+        reason="superseded",
+    )
+    _t, attempts, ledger = analyse(rec, sheet(tmp_path, [T0]))
+    assert attempts[0]["revisions"][0]["paint"] == "paint_ambiguous"
+    assert ledger["rows"][0]["goal"] == "not_measurable"
+
+
+def test_a_named_sid_still_takes_only_its_own_document(new_trace, tmp_path):
+    """--browser-sid picks one socket: another kiosk document is not a competitor."""
+    rec = new_trace()
+    shot(rec, "t-1", T0)
+    at(
+        rec,
+        "browser_report",
+        "t-1",
+        T0,
+        3905,
+        sid="other",
+        **KIOSK_2,
+        revision=1,
+        final=True,
+        update_kind="first",
+        event="shot",
+        received_ms=1.0,
+        painted_ms=2.0,
+        rendered_core=CORE,
+        semantics="post_render_task",
+    )
+    rec.close()
+    trace = pts.load_trace(rec.path)
+    attempts = pts.build_attempts(trace, browser_sid="k")
+    assert attempts[0]["revisions"][0]["paint"] == pts.QUALIFYING
