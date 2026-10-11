@@ -957,3 +957,105 @@ def test_backlog_full_abandonment_is_marked(recorder, monkeypatch):
         (attempt, "enrichment_backlog_full")
     ]
     assert statuses == [{"status": "skipped", "reason": "enrichment_backlog_full"}]
+
+
+# --- Debounced GATE edges stay visible (coordinator ruling, 11 Oct) ---------------------
+
+
+def _armed_capture_monitor(tmp_path, observer):
+    capture_monitor = IWR6843CaptureMonitor(
+        config_path=tmp_path / "unused.cfg", output_dir=tmp_path, radar=object()
+    )
+
+    class LGPIOFactory:
+        pass
+
+    class Button:
+        active_time = 0.0004
+        pin_factory = LGPIOFactory()
+
+    capture_monitor._button = Button()  # pylint: disable=protected-access
+    capture_monitor.add_trigger_observer(observer)
+    capture_monitor._running = capture_monitor._armed = True  # pylint: disable=protected-access
+    capture_monitor._capture_active = True  # pylint: disable=protected-access  (no IWR queue)
+    return capture_monitor
+
+
+def test_a_debounced_edge_is_marked_and_the_debounce_is_unchanged(recorder, tmp_path):
+    heard = []
+    capture_monitor = _armed_capture_monitor(tmp_path, heard.append)
+    capture_monitor.notify_trigger(1_790_000_000.00)
+    assert capture_monitor.notify_trigger(1_790_000_000.05) is False  # inside 0.1 s
+    assert heard == [1_790_000_000.00], "debounce still hides the edge from observers"
+    assert capture_monitor._last_observed_edge_timestamp == 1_790_000_000.00  # pylint: disable=protected-access
+    marks = read_marks(recorder)
+    debounced = _named(marks, "gate_edge_debounced")
+    assert len(debounced) == 1
+    edge = debounced[0]
+    assert edge["attempt_id"] is None
+    assert edge["observer_wall_s"] == 1_790_000_000.05
+    assert edge["since_last_observed_s"] == pytest.approx(0.05)
+    assert edge["age_ns"] == 400_000 and edge["backend"] == "LGPIOFactory"
+    assert edge["mono_before_ns"] <= edge["mono_after_ns"] == edge["monotonic_ns"]
+    assert edge["wall_minus_mono_low_ns"] <= edge["wall_minus_mono_high_ns"]
+    assert edge["reading_error"] is None
+
+
+def test_a_debounced_edge_is_marked_even_when_its_reading_fails(recorder, tmp_path):
+    capture_monitor = _armed_capture_monitor(tmp_path, lambda _wall: None)
+
+    class Broken:
+        pin_factory = None
+
+        @property
+        def active_time(self):
+            raise RuntimeError("pin gone")
+
+    capture_monitor.notify_trigger(10.0)
+    capture_monitor._button = Broken()  # pylint: disable=protected-access
+    capture_monitor.notify_trigger(10.01)
+    edge = _named(read_marks(recorder), "gate_edge_debounced")[0]
+    assert edge["age_ns"] is None
+
+
+def test_a_debounced_edge_with_a_raising_recorder_still_returns_false(
+    recorder, tmp_path, monkeypatch
+):
+    capture_monitor = _armed_capture_monitor(tmp_path, lambda _wall: None)
+
+    def broken(*_a, **_k):
+        raise RuntimeError("trace bug")
+
+    capture_monitor.notify_trigger(10.0)
+    monkeypatch.setattr(recorder, "mark", broken)
+    assert capture_monitor.notify_trigger(10.01) is False
+
+
+def test_debounced_edges_are_not_read_when_tracing_is_off(tmp_path, monkeypatch):
+    pi_trace.set_recorder(None)
+    capture_monitor = _armed_capture_monitor(tmp_path, lambda _wall: None)
+    reads = []
+    monkeypatch.setattr(capture_monitor, "edge_tick_reading", lambda: reads.append(1) or {})
+    capture_monitor.notify_trigger(10.0)
+    assert capture_monitor.notify_trigger(10.01) is False
+    assert reads == []
+
+
+def test_edge_reading_looks_package_versions_up_once(monkeypatch):
+    from openflight.iwr6843 import monitor as iwr_monitor
+
+    calls = []
+    real_version = iwr_monitor.importlib.metadata.version
+    iwr_monitor._package_version.cache_clear()  # pylint: disable=protected-access
+
+    def counting(name):
+        calls.append(name)
+        return real_version(name)
+
+    monkeypatch.setattr(iwr_monitor.importlib.metadata, "version", counting)
+    capture_monitor = IWR6843CaptureMonitor.__new__(IWR6843CaptureMonitor)
+    capture_monitor._button = None  # pylint: disable=protected-access
+    for _ in range(3):
+        capture_monitor.edge_tick_reading()
+    assert sorted(calls) == ["gpiozero", "lgpio"]
+    iwr_monitor._package_version.cache_clear()  # pylint: disable=protected-access

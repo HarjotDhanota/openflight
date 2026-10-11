@@ -469,29 +469,18 @@ def _trace_gate_edge(edge_wall_s: float) -> None:
     recorder = pi_trace.get_recorder()
     if recorder is None:
         return
-    reading: dict = {}
-    reading_error = None
     try:
+        # Lazy like the other IWR imports; loaded already whenever this observer runs.
+        from .iwr6843.monitor import edge_trace_fields  # noqa: PLC0415  pylint: disable=import-outside-toplevel
+
         capture_monitor = getattr(iwr6843_runtime, "capture_monitor", None)
-        if hasattr(capture_monitor, "edge_tick_reading"):
-            reading = capture_monitor.edge_tick_reading()
-    except Exception as error:  # pylint: disable=broad-exception-caught
-        reading_error = type(error).__name__
-    try:
-        low, high = pi_trace.BracketedPair.now().wall_minus_mono_bounds_ns()
-        mono_after_ns = reading.get("mono_after_ns")
+        edge_fields = edge_trace_fields(
+            getattr(capture_monitor, "edge_tick_reading", None), edge_wall_s
+        )
+        mono_after_ns = edge_fields["mono_after_ns"]
         recorder.note_edge(
             monotonic_ns=mono_after_ns if mono_after_ns is not None else time.monotonic_ns(),
-            mono_before_ns=reading.get("mono_before_ns"),
-            age_ns=reading.get("age_ns"),
-            mono_after_ns=mono_after_ns,
-            wall_minus_mono_low_ns=low,
-            wall_minus_mono_high_ns=high,
-            backend=reading.get("backend"),
-            gpiozero_version=reading.get("gpiozero_version"),
-            lgpio_version=reading.get("lgpio_version"),
-            observer_wall_s=float(edge_wall_s),
-            reading_error=reading_error,
+            **edge_fields,
         )
     except Exception:  # pylint: disable=broad-exception-caught
         logger.warning("[TRACE] GATE edge mark failed; ignored", exc_info=True)
