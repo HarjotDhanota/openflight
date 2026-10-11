@@ -5280,7 +5280,7 @@ def _finalize_shot_detected(
                 shot.ball_speed_mph,
                 spin_for_carry,
                 shot.club,
-                club_speed_mph=shot.club_speed_mph,
+                club_speed_mph=shot.club_speed_mph if _finite(shot.club_speed_mph) else None,
             )
             carry_source = "table with spin"
             reason = "ballistics disabled" if not ballistics_enabled else "no launch angle"

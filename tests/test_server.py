@@ -4436,6 +4436,35 @@ class TestOnShotDetected:
         assert stats == {"shot_count": 1, "avg_ball_speed": None, "nested": {"x": None}}
         assert server_module._session_state_payload()["stats"]["avg_ball_speed"] is None
 
+    @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "-inf"])
+    def test_table_carry_gets_no_club_speed_when_it_is_non_finite(self, monkeypatch, bad):
+        """A-M3: a non-finite club speed reaches the table carry as None (missing)."""
+        self._record_finalization(monkeypatch)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+        calls = []
+        real = server_module.estimate_carry_with_spin
+
+        def spy(*args, **kwargs):
+            calls.append(kwargs.get("club_speed_mph", "absent"))
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(server_module, "estimate_carry_with_spin", spy)
+        broken = self._shot()
+        broken.club_speed_mph = bad
+        on_shot_detected(broken)
+        _wait_for_shot_finalization_idle()
+        missing = self._shot()
+        missing.club_speed_mph = None
+        on_shot_detected(missing)
+        _wait_for_shot_finalization_idle()
+        measured = self._shot()
+        on_shot_detected(measured)
+        _wait_for_shot_finalization_idle()
+
+        assert calls == [None, None, 100.0]
+        assert broken.carry_spin_adjusted == missing.carry_spin_adjusted
+        assert math.isfinite(broken.carry_spin_adjusted)
+
     def test_initial_ops_emit_of_a_non_finite_shot_still_happens(self, monkeypatch):
         emitted, _session_log = self._record_finalization(monkeypatch)
         monkeypatch.setattr(server_module, "iwr6843_runtime", object())
