@@ -1232,3 +1232,28 @@ def test_rearm_records_the_split_only_after_its_trailing_pa(recorder, monkeypatc
         None,
         "rearm_write_timed_out",
     )
+
+
+def test_browser_trace_routes_start_on_the_kiosk_socket_when_tracing(recorder, monkeypatch):
+    from openflight import server
+
+    del recorder
+    registered = []
+    monkeypatch.setattr(
+        server, "register_trace_routes", lambda sock: registered.append(sock) or "pinger"
+    )
+    assert server._start_browser_trace() == "pinger"  # pylint: disable=protected-access
+    assert registered == [server.socketio]
+
+
+def test_browser_trace_routes_that_fail_leave_the_kiosk_running(recorder, monkeypatch, caplog):
+    from openflight import server
+
+    del recorder
+
+    def _boom(_sock):
+        raise RuntimeError("no socket")
+
+    monkeypatch.setattr(server, "register_trace_routes", _boom)
+    assert server._start_browser_trace() is None  # pylint: disable=protected-access
+    assert "browser trace routes could not start" in caplog.text

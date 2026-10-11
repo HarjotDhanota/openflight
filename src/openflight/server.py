@@ -69,6 +69,7 @@ from .spin_estimate import calculated_spin_rpm
 from .startup_status import StartupStatusReporter, configured_startup_components
 from .swing_speed import SwingSpeedEvent
 from .timing import clone_stage_timing, measured_stage, set_legacy_provenance
+from .trace_routes import register_trace_routes
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -617,6 +618,18 @@ def _start_pi_trace(log_dir: Path | None) -> Path | None:
         )
         return None
     return path
+
+
+def _start_browser_trace():
+    """Browser clock pings and post-render reports on the kiosk socket (--pi-trace).
+
+    None when tracing is off or the routes cannot start; the kiosk runs on either way.
+    """
+    try:
+        return register_trace_routes(socketio)
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.error("[SERVER] Pi trace browser trace routes could not start", exc_info=True)
+        return None
 
 
 def _stop_pi_trace() -> None:
@@ -7698,6 +7711,7 @@ def main():
             print("Pi trace FAILED to start (see log); running WITHOUT a trace")
         else:
             print(f"Pi trace enabled: {trace_path}")
+            _start_browser_trace()
 
     if ballistics_enabled:
         print("Ballistic carry model: ENABLED (simulator + drag/Magnus)")
