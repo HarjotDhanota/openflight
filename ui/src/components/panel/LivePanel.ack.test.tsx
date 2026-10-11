@@ -8,8 +8,9 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Shot } from '../../types/shot';
 import { formatSpeed, NO_VALUE } from '../../utils/units';
-import { clearPendingPaints, noteShotReceived, setLiveViewShown, type TraceTag } from '../../services/paintTrace';
+import { clearPendingPaints, noteShotReceived, setLiveViewShown } from '../../services/paintTrace';
 import { socketService } from '../../services/socketService';
+import { makeShot, nextFrames, stubLayoutGlobals, traceTag } from '../../test/liveTraceFixtures';
 import { LivePanel } from './LivePanel';
 
 vi.mock('../../services/socketService', () => ({ socketService: { emitTrace: vi.fn() } }));
@@ -32,56 +33,7 @@ vi.hoisted(() => {
 });
 
 const emitTrace = vi.mocked(socketService.emitTrace);
-const TS = '2026-10-11T10:00:00Z';
-const CORE_FIELDS = [
-  'ball_speed_mph',
-  'launch_angle_vertical',
-  'launch_angle_vertical_source',
-  'launch_angle_horizontal',
-  'launch_angle_horizontal_source',
-  'launch_angle_horizontal_status',
-];
-
-function makeShot(overrides: Partial<Shot> = {}): Shot {
-  return {
-    ball_speed_mph: 121.4,
-    club_speed_mph: 88,
-    smash_factor: 1.38,
-    estimated_carry_yards: 210,
-    carry_range: [205, 215],
-    club: 'driver',
-    timestamp: TS,
-    peak_magnitude: 100,
-    launch_angle_vertical: 13.4,
-    launch_angle_horizontal: -1.2,
-    launch_angle_vertical_source: 'radar',
-    launch_angle_horizontal_source: 'radar',
-    launch_angle_horizontal_status: 'measured',
-    launch_angle_confidence: 0.8,
-    angle_source: 'radar',
-    club_angle_deg: 2.1,
-    club_path_deg: -0.6,
-    spin_axis_deg: 3.4,
-    spin_rpm: 2650,
-    spin_confidence: 0.9,
-    spin_quality: 'high',
-    spin_source: 'measured',
-    spin_method: null,
-    carry_spin_adjusted: 214,
-    profile_id: 'james',
-    profile_name: 'James',
-    ...overrides,
-  } as Shot;
-}
-
-const tag = (revision: number, updateKind: TraceTag['update_kind'] = 'first'): TraceTag => ({
-  attempt_id: 't-00007',
-  revision,
-  final: revision > 1,
-  update_kind: updateKind,
-  core_eligible: false,
-  core_fields: CORE_FIELDS,
-});
+const tag = traceTag;
 
 let container: HTMLDivElement;
 let root: Root;
@@ -113,27 +65,7 @@ function ballSpeedOnScreen(): string {
 const calls = (event: string) =>
   emitTrace.mock.calls.filter(([name]) => name === event).map(([, payload]) => payload as Record<string, unknown>);
 
-/** Let the real rAF callback and the MessageChannel task after it run. */
-async function nextFrames(count = 3) {
-  for (let i = 0; i < count; i += 1) {
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    });
-  }
-}
-
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  // jsdom has no layout observers or font loading; the live grid's font fitting uses them.
-  vi.stubGlobal(
-    'ResizeObserver',
-    class {
-      observe() {}
-      disconnect() {}
-    }
-  );
-  Object.defineProperty(document, 'fonts', { configurable: true, value: { ready: Promise.resolve() } });
-});
+beforeAll(stubLayoutGlobals);
 
 afterAll(() => vi.unstubAllGlobals());
 
