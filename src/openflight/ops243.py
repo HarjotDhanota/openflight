@@ -114,6 +114,24 @@ def _parse_ops_clock(response: str) -> Optional[float]:
         return None
 
 
+def parse_firmware_version(reply: str) -> Optional[str]:
+    """The version from a ``?V`` reply (a ``{"Version": ...}`` line), or None.
+
+    Framing garbage from a wrong-baud read cannot produce such a line.
+    """
+    for line in reply.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and "Version" in data:
+            return str(data["Version"])
+    return None
+
+
 class SpeedUnit(Enum):
     """Speed units supported by OPS243-A."""
 
@@ -472,18 +490,7 @@ class OPS243Radar:
         except (serial.SerialException, OSError) as exc:
             logger.debug("[OPS] Probe write failed at %d baud: %s", self.baud, exc)
             return None
-
-        for line in response.splitlines():
-            line = line.strip()
-            if not line.startswith("{"):
-                continue
-            try:
-                data = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(data, dict) and "Version" in data:
-                return str(data["Version"])
-        return None
+        return parse_firmware_version(response)
 
     def disconnect(self):
         """Disconnect from the radar sensor."""
