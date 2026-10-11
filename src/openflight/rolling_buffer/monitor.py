@@ -404,7 +404,7 @@ class RollingBufferMonitor:
                     ball_speed_mph=event.get("ball_speed_mph"),
                     club_speed_mph=event.get("club_speed_mph"),
                     spin_rpm=event.get("spin_rpm"),
-                    carry_yards=event.get("carry_yards"),
+                    table_carry_estimate_yards=event.get("table_carry_estimate_yards"),
                     latency_ms=event.get("latency_ms"),
                     stage_timing=event.get("stage_timing"),
                 )
@@ -795,7 +795,9 @@ class RollingBufferMonitor:
                         spin_phase_snr=shot.spin_phase_snr,
                         spin_phase_agreement_pct=shot.spin_phase_agreement_pct,
                         spin_phase_confirmed=shot.spin_phase_confirmed,
-                        carry_yards=shot.estimated_carry_yards,
+                        # diagnostic only: the ball-speed table at detection, never the
+                        # shot's carry (finalization commits that; D17 on fusion units)
+                        table_carry_estimate_yards=shot.estimated_carry_yards,
                     )
                     trigger_event_recorded = True
 
@@ -812,9 +814,9 @@ class RollingBufferMonitor:
                             shot.shot_number,
                             shot.ball_speed_mph,
                             "%.1f" % shot.club_speed_mph if shot.club_speed_mph else "N/A",
-                            "table carry (before launch angle)"
+                            "diagnostic table carry (before launch angle)"
                             if shot.launch_angle_vertical is None
-                            else "table carry",
+                            else "diagnostic table carry",
                             "%.0f" % shot.estimated_carry_yards
                             if shot.estimated_carry_yards
                             else "N/A",

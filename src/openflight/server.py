@@ -37,7 +37,15 @@ from .clubs.physics import (
     get_club_physics,
     get_club_simulation_profile,
 )
-from .launch_monitor import SPIN_CONFIDENCE_RELIABLE, Shot, summarize_shots
+from .launch_monitor import (
+    CARRY_CALCULATED,
+    CARRY_ESTIMATED,
+    CARRY_MEASURED,
+    CARRY_NOT_MEASURED,
+    SPIN_CONFIDENCE_RELIABLE,
+    Shot,
+    summarize_shots,
+)
 from .ops243 import (
     UART_BAUD_COMMANDS,
     Direction,
@@ -1378,7 +1386,8 @@ def shot_to_dict(shot: Shot) -> dict:
     }.items():
         if data[field] is not None:
             data[field] = round(data[field], digits) if digits is not None else round(data[field])
-    data["carry_range"] = [round(value) for value in data["carry_range"]]
+    if data["carry_range"] is not None:
+        data["carry_range"] = [round(value) for value in data["carry_range"]]
     return data
 
 
@@ -3220,7 +3229,7 @@ def _forward_shot_to_simulators(shot: Shot) -> None:
             estimated = len(resolved.provenance) - measured
             logger.info(
                 "[sim] → %s shot #%d: ball=%.1f vla=%.1f hla=%.1f spin=%.0f axis=%.1f "
-                "carry=%.1f (%dM/%dE)",
+                "carry=%s (%dM/%dE)",
                 connector.name,
                 resolved.shot_number,
                 resolved.ball_speed_mph,
@@ -3228,7 +3237,7 @@ def _forward_shot_to_simulators(shot: Shot) -> None:
                 resolved.hla,
                 resolved.total_spin_rpm,
                 resolved.spin_axis_deg,
-                resolved.carry_yards,
+                "not sent" if resolved.carry_yards is None else f"{resolved.carry_yards:.1f}",
                 measured,
                 estimated,
             )
@@ -4723,16 +4732,30 @@ def _attach_ball_speed_contract(shot: Shot) -> None:
 def _carry_log_text(shot: Shot, source: str | None) -> str:
     """The carry the UI shows, named, beside the table estimate it replaces (P6-6).
 
-    The UI shows ``carry_spin_adjusted`` when set, else ``estimated_carry_yards``;
-    logging the latter unlabelled once made one shot read as having three carries.
+    The UI shows ``Shot.reported_carry_yards``; logging the table unlabelled once
+    made one shot read as having three carries. A fusion unit has no table carry
+    (D17), so its line names only the carry it reports, or none.
     """
+    carry = shot.reported_carry_yards
+    if carry is None:
+        return "carry not measured"
+    if not shot.table_carry_allowed:
+        return f"carry shown={carry:.0f} yds ({source or shot.carry_status})"
     table = shot.estimated_carry_yards
     if shot.carry_spin_adjusted is None:
         return f"carry shown={table:.0f} yds (table estimate)"
     return (
-        f"carry shown={shot.carry_spin_adjusted:.0f} yds ({source or 'spin-adjusted'}), "
-        f"table estimate={table:.0f} yds"
+        f"carry shown={carry:.0f} yds ({source or 'spin-adjusted'}), table estimate={table:.0f} yds"
     )
+
+
+def _open_carry_status(shot: Shot) -> None:
+    """Name the carry before the first emit: a fusion unit's is not measured until simulated.
+
+    The initial OPS emit runs before enrichment and finalization; without this the
+    UI would fall back to the ball-speed table on a fusion unit (D17).
+    """
+    shot.carry_status = CARRY_NOT_MEASURED if _fusion_unit() else CARRY_ESTIMATED
 
 
 def _finalize_shot_detected(
@@ -4776,10 +4799,17 @@ def _finalize_shot_detected(
             # a fusion unit builds carry only from measured inputs (D17):
             # nothing already on the shot stands in for the simulator
             shot.carry_spin_adjusted = None
+            shot.carry_status = CARRY_NOT_MEASURED
             logger.info("[SERVER] Carry not measured: launch, spin or spin axis not measured")
         elif conditions is not None:
             trajectory = simulate(conditions)
             shot.carry_spin_adjusted = trajectory.carry_yards
+            if not fusion:
+                shot.carry_status = CARRY_ESTIMATED
+            elif conditions.spin_source == "calculated":
+                shot.carry_status = CARRY_CALCULATED
+            else:
+                shot.carry_status = CARRY_MEASURED
             carry_source = "ballistic"
             logger.info(
                 "[SERVER] Ballistic carry: %.0f yds (spin: %.0f rpm, source: %s)",
@@ -4805,6 +4835,7 @@ def _finalize_shot_detected(
                 shot.club,
                 club_speed_mph=shot.club_speed_mph,
             )
+            shot.carry_status = CARRY_ESTIMATED
             carry_source = "table with spin"
             reason = "ballistics disabled" if not ballistics_enabled else "no launch angle"
             logger.info(
@@ -5322,6 +5353,7 @@ def _handle_shot_detected(shot: Shot) -> None:
             ready_light.swing_result("not_counted")
             return
     ready_light.swing_result("shot", ball_speed_mph=shot.ball_speed_mph)
+    _open_carry_status(shot)
     _assign_shot_number(shot)
     active_profile = get_profile_store().get_active()
     shot.profile_id = active_profile.id

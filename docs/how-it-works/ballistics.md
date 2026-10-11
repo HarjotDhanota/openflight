@@ -106,6 +106,15 @@ Shot finalization in the server is the only place that writes
 spin table otherwise. The same committed number is what the kiosk shows and
 what the simulator connectors receive.
 
+On a fusion unit (IWR6843 or camera) the spin table never stands in: the
+simulator runs only on the shot's measured launch, spin and spin axis, and
+otherwise the carry is not measured. The shot's `carry_status` says which:
+`measured`, `calculated` (simulator on a calculated spin) or `not_measured` on a
+fusion unit, `estimated` on an OPS-only unit. A fusion shot carries no
+`estimated_carry_yards` in its payload, the UI shows its missing carry as no
+value and leaves it out of the session average, and the simulator connectors
+send no carry, so the simulator flies the ball from speed, launch and spin.
+
 ## Disabling it
 
 ```bash

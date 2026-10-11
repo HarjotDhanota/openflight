@@ -38,12 +38,25 @@ def test_serialize_includes_all_required_keys():
                 "BallData", "ClubData", "ShotDataOptions"):
         assert key in obj
     for key in ("Speed", "SpinAxis", "TotalSpin", "BackSpin", "SideSpin",
-                "HLA", "VLA", "CarryDistance"):
+                "HLA", "VLA"):
         assert key in obj["BallData"]
     for key in ("Speed", "AngleOfAttack", "FaceToTarget", "Lie", "Loft",
                 "Path", "SpeedAtImpact", "VerticalFaceImpact",
                 "HorizontalFaceImpact", "ClosureRate"):
         assert key in obj["ClubData"]
+
+
+def test_carry_distance_is_optional_and_sent_only_when_known():
+    """OpenConnect V1 marks CarryDistance optional: an unknown carry is left off
+    the wire rather than sent as 0, and a known one is sent as is (D17)."""
+    def ball_data(**kw):
+        payload = ShotPayload(DeviceID="X", Units="Yards", ShotNumber=1, APIversion="1",
+                              BallData=BallData(Speed=150.0, **kw))
+        return json.loads(serialize_payload(payload))["BallData"]
+
+    assert "CarryDistance" not in ball_data()
+    assert ball_data(CarryDistance=243.8)["CarryDistance"] == 243.8
+    assert ball_data(CarryDistance=0.0)["CarryDistance"] == 0.0
 
 
 def test_build_heartbeat():

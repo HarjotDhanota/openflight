@@ -345,3 +345,291 @@ def test_an_ops_only_install_with_ballistics_disabled_keeps_the_spin_table(
     _finalize(shot)
 
     assert shot.carry_spin_adjusted == pytest.approx(_spin_table_carry(shot))
+
+
+# ---- "not measured" everywhere: payload, stats, simulators, logs -----------------------
+#
+# The kiosk used to show (and forward, and average) the ball-speed table
+# ``estimated_carry_yards`` whenever ``carry_spin_adjusted`` was None. On a fusion unit
+# that is a fill-in: an unmeasured carry is "not measured" everywhere. The shot says so
+# in ``carry_status`` so no consumer has to guess.
+
+
+def _payload(shot):
+    return server_module.shot_to_dict(shot)
+
+
+def test_a_fusion_payload_with_no_carry_says_not_measured_and_carries_no_table(
+    fusion_unit, quiet_finalize
+):
+    shot = _monitor_shot_with_reliable_spin()
+
+    _finalize(shot)
+    payload = _payload(shot)
+
+    assert payload["carry_status"] == "not_measured"
+    assert payload["carry_spin_adjusted"] is None
+    assert payload["estimated_carry_yards"] is None
+    assert payload["carry_range"] is None
+    assert shot.reported_carry_yards is None
+
+
+def test_a_fusion_payload_with_a_simulated_carry_says_measured_and_carries_no_table(
+    fusion_unit, quiet_finalize
+):
+    shot = _monitor_shot_with_reliable_spin()
+    _measure_launch(shot)
+
+    _finalize(shot)
+    payload = _payload(shot)
+
+    assert payload["carry_status"] == "measured"
+    assert payload["carry_spin_adjusted"] == pytest.approx(
+        _ballistic_carry(shot, substitutes=False), abs=0.5
+    )
+    assert payload["estimated_carry_yards"] is None
+    assert payload["carry_range"] is None
+    assert shot.reported_carry_yards == pytest.approx(shot.carry_spin_adjusted)
+
+
+def test_a_fusion_carry_from_a_calculated_spin_says_calculated(fusion_unit, quiet_finalize):
+    shot = _shot(
+        launch_angle_vertical=12.0,
+        launch_angle_vertical_source="radar",
+        launch_angle_horizontal=1.0,
+        launch_angle_horizontal_source="radar",
+        spin_axis_deg=2.0,
+        spin_rpm=2600,
+        spin_source="calculated",
+        mode="rolling-buffer",
+    )
+
+    _finalize(shot)
+
+    assert shot.carry_status == "calculated"
+    assert shot.carry_spin_adjusted is not None
+
+
+@pytest.mark.parametrize("ballistics", [True, False], ids=["ballistic", "table"])
+def test_an_ops_only_payload_says_estimated_and_keeps_its_table(
+    ops_only, quiet_finalize, monkeypatch, ballistics
+):
+    monkeypatch.setattr(server_module, "ballistics_enabled", ballistics)
+    shot = _monitor_shot_with_reliable_spin()
+
+    _finalize(shot)
+    payload = _payload(shot)
+
+    assert payload["carry_status"] == "estimated"
+    assert payload["carry_spin_adjusted"] is not None
+    assert payload["estimated_carry_yards"] == round(shot.estimated_carry_yards)
+    assert payload["carry_range"] is not None
+    assert shot.reported_carry_yards == pytest.approx(shot.carry_spin_adjusted)
+
+
+def test_an_unfinalized_shot_keeps_its_labelled_table_carry():
+    """Shots that never reached finalization (replays, mock) keep the old fallback."""
+    shot = _shot()
+
+    assert shot.carry_status is None
+    assert shot.reported_carry_yards == pytest.approx(shot.estimated_carry_yards)
+    assert _payload(shot)["estimated_carry_yards"] == round(shot.estimated_carry_yards)
+
+
+def test_a_carry_status_not_measured_wins_over_a_stray_carry():
+    shot = _shot(carry_spin_adjusted=250.0, carry_status="not_measured")
+
+    assert shot.reported_carry_yards is None
+
+
+def _await_finalization():
+    from tests.test_server import _wait_for_shot_finalization_idle
+
+    _wait_for_shot_finalization_idle()
+
+
+def test_a_fusion_unit_says_carry_not_measured_from_first_emit_to_session_log(
+    monkeypatch, quiet_finalize
+):
+    """The initial OPS emit (before enrichment) must not show a table carry either."""
+    emitted, logged, workers = [], [], []
+    monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+    monkeypatch.setattr(server_module, "camera_capture_runtime", object())
+    monkeypatch.setattr(server_module, "monitor", None)
+    monkeypatch.setattr(server_module, "sim_connectors", [])
+    monkeypatch.setattr(server_module, "ball_speed_correction_enabled", False)
+    monkeypatch.setattr(server_module, "shot_enrichment_task", None)
+    monkeypatch.setattr(
+        server_module,
+        "shot_enrichment_queue",
+        server_module.queue.Queue(maxsize=server_module._SHOT_ENRICHMENT_QUEUE_CAPACITY),  # pylint: disable=protected-access
+    )
+    monkeypatch.setattr(
+        server_module.socketio, "emit", lambda event, payload: emitted.append((event, payload))
+    )
+    monkeypatch.setattr(
+        server_module.socketio,
+        "start_background_task",
+        lambda target, *_a, **_k: workers.append(target) or object(),
+    )
+    monkeypatch.setattr(
+        server_module,
+        "_enrich_shot_from_optional_hardware",
+        lambda _shot: server_module._ShotEnrichmentResult(),  # pylint: disable=protected-access
+    )
+    monkeypatch.setattr(
+        server_module,
+        "get_session_logger",
+        lambda: SimpleNamespace(
+            log_shot=lambda shot, pipeline_ms=None, **_k: logged.append(shot.to_dict()) or True,
+            log_fusion_diagnostic=lambda *_a, **_k: None,
+        ),
+    )
+    server_module._reset_shot_sequence()  # pylint: disable=protected-access
+    shot = _monitor_shot_with_reliable_spin()
+
+    server_module.on_shot_detected(shot)
+    workers[0]()
+    _await_finalization()
+
+    shot_payloads = [p["shot"] for e, p in emitted if e in ("shot", "shot_update") and "shot" in p]
+    assert [e for e, _p in emitted if e in ("shot", "shot_update")] == ["shot", "shot_update"]
+    for payload in shot_payloads + logged:
+        assert payload["carry_status"] == "not_measured"
+        assert payload["carry_spin_adjusted"] is None
+        assert payload["estimated_carry_yards"] is None
+
+
+def test_session_stats_average_only_reported_carries():
+    from openflight.launch_monitor import summarize_shots
+
+    measured = _shot(carry_spin_adjusted=240.0, carry_status="measured")
+    not_measured = _shot(carry_status="not_measured")
+
+    assert summarize_shots([measured, not_measured], "rolling-buffer")[
+        "avg_carry_est"
+    ] == pytest.approx(240.0)
+    assert summarize_shots([not_measured], "rolling-buffer")["avg_carry_est"] is None
+
+
+def test_the_carry_log_line_names_a_fusion_carry_not_measured_without_the_table():
+    shot = _shot(carry_status="not_measured")
+
+    text = server_module._carry_log_text(shot, None)  # pylint: disable=protected-access
+
+    assert text == "carry not measured"
+
+
+# ---- simulator connectors ---------------------------------------------------------------
+
+
+def test_the_resolver_sends_no_carry_for_a_fusion_shot_without_one():
+    shot = _shot(
+        launch_angle_vertical=12.0,
+        launch_angle_horizontal=1.0,
+        spin_rpm=2700,
+        spin_confidence=0.85,
+        spin_axis_deg=2.0,
+        carry_status="not_measured",
+    )
+
+    resolved = resolve_shot(shot, PlayerState())
+
+    assert resolved.carry_yards is None
+    assert "carry" not in resolved.provenance
+    assert "carry" not in resolved.as_values()
+
+
+def test_the_resolver_sends_a_fusion_shot_its_simulated_carry():
+    shot = _shot(launch_angle_vertical=12.0, carry_spin_adjusted=243.8, carry_status="measured")
+
+    resolved = resolve_shot(shot, PlayerState())
+
+    assert resolved.carry_yards == pytest.approx(243.8)
+    assert resolved.provenance["carry"] == "measured"
+
+
+@pytest.mark.parametrize("target", ["gspro", "opengolfsim", "partee"])
+def test_every_connector_omits_a_missing_carry_instead_of_sending_zero(target):
+    import json
+
+    from openflight.sim.codec import _codec_for  # pylint: disable=protected-access
+    from openflight.sim.config import ConnectorConfig
+
+    shot = _shot(
+        launch_angle_vertical=12.0,
+        launch_angle_horizontal=1.0,
+        spin_rpm=2700,
+        spin_confidence=0.85,
+        spin_axis_deg=2.0,
+        carry_status="not_measured",
+    )
+    codec = _codec_for(ConnectorConfig(type=target, host="127.0.0.1", port=921))
+
+    wire = json.loads(codec.build_shot(resolve_shot(shot, PlayerState())))
+
+    assert "CarryDistance" not in wire["BallData"]
+    assert wire["BallData"]["Speed"] == pytest.approx(150.0)
+    assert wire["BallData"]["VLA"] == pytest.approx(12.0)
+    assert wire["BallData"]["TotalSpin"] == pytest.approx(2700)
+
+
+def test_the_server_forwards_a_fusion_shot_without_carry_to_connected_simulators(monkeypatch):
+    sent, emitted = [], []
+
+    class Connector:
+        name = "gspro"
+
+        def __init__(self):
+            from openflight.gspro.codec import GSProCodec
+
+            self.codec = GSProCodec()
+
+        @staticmethod
+        def is_connected():
+            return True
+
+        def send_shot(self, resolved):
+            sent.append(self.codec.build_shot(resolved))
+
+    monkeypatch.setattr(server_module, "sim_connectors", [Connector()])
+    monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+    monkeypatch.setattr(
+        server_module.socketio, "emit", lambda event, payload: emitted.append((event, payload))
+    )
+    shot = _shot(
+        launch_angle_vertical=12.0,
+        launch_angle_horizontal=1.0,
+        spin_rpm=2700,
+        spin_confidence=0.85,
+        spin_axis_deg=2.0,
+        carry_status="not_measured",
+    )
+
+    server_module._forward_shot_to_simulators(shot)  # pylint: disable=protected-access
+
+    assert len(sent) == 1 and b"CarryDistance" not in sent[0]
+    sim_shot = next(payload for event, payload in emitted if event == "sim_shot")
+    assert "carry" not in sim_shot["values"]
+    assert "carry" not in sim_shot["provenance"]
+
+
+# ---- the monitor's table carry at detection is a labelled diagnostic -------------------
+
+
+def test_the_session_log_names_the_trigger_table_carry_a_diagnostic(tmp_path):
+    import json
+
+    from openflight.session_logger import SessionLogger
+
+    session = SessionLogger(log_dir=tmp_path, enabled=True)
+    session.start_session(mode="rolling-buffer", trigger_type="sound")
+
+    session.log_trigger_event(
+        trigger_type="sound", accepted=True, reason="accepted", table_carry_estimate_yards=257.0
+    )
+
+    entry = json.loads(session.session_path.read_text().strip().split("\n")[-1])
+    assert entry["type"] == "trigger_event"
+    assert "carry_yards" not in entry
+    assert entry["table_carry_estimate_yards"] == 257.0

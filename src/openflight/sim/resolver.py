@@ -11,6 +11,8 @@ from typing import Dict, Tuple
 from openflight.clubs import ClubType
 from openflight.clubs.physics import get_club_physics
 from openflight.launch_monitor import (
+    CARRY_CALCULATED,
+    CARRY_MEASURED,
     SPIN_CONFIDENCE_HIGH,
     Shot,
 )
@@ -108,18 +110,23 @@ def resolve_shot(shot: Shot, player_state: PlayerState) -> ResolvedShot:
     provenance["back_spin"] = derived_prov
     provenance["side_spin"] = derived_prov
 
-    # carry_spin_adjusted holds the server's committed carry (ballistic
-    # simulator, or the spin table when the simulator cannot run). The bare
-    # launch-angle table is only for shots that never went through finalization.
-    if shot.carry_spin_adjusted is not None:
-        carry = float(shot.carry_spin_adjusted)
-    else:
-        carry = float(shot.estimated_carry_yards)
-    # Carry is always model-derived (never directly observed), so "measured" here
-    # means launch-angle-informed: the carry model was driven by a measured launch
-    # angle rather than falling back to club-type defaults. The UI badge reflects
-    # that distinction, not a claim that carry itself was measured (PR #115 review #6).
-    provenance["carry"] = "measured" if shot.has_launch_angle else "estimated"
+    # The carry the kiosk reports: the server's committed carry (ballistic
+    # simulator, or on an OPS-only unit the spin table), the bare launch-angle
+    # table only for shots that never went through finalization, and None for a
+    # fusion shot whose carry is not measured (D17). None is not sent: simulators
+    # fly the ball from speed, launch and spin themselves.
+    carry = shot.reported_carry_yards
+    if carry is not None:
+        carry = float(carry)
+        # Carry is always model-derived (never directly observed), so "measured" here
+        # means launch-angle-informed: the carry model was driven by a measured launch
+        # angle rather than falling back to club-type defaults. The UI badge reflects
+        # that distinction, not a claim that carry itself was measured (PR #115 review #6).
+        if shot.carry_status in (CARRY_MEASURED, CARRY_CALCULATED):
+            # a fusion unit's simulator; a calculated spin is a model's, not measured
+            provenance["carry"] = "measured" if shot.carry_status == CARRY_MEASURED else "estimated"
+        else:
+            provenance["carry"] = "measured" if shot.has_launch_angle else "estimated"
 
     if shot.club_speed_mph is not None and shot.club_speed_mph > 0:
         club_speed = float(shot.club_speed_mph)

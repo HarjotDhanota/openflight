@@ -701,7 +701,7 @@ class SessionLogger:
         ball_speed_mph: Optional[float] = None,
         club_speed_mph: Optional[float] = None,
         spin_rpm: Optional[float] = None,
-        carry_yards: Optional[float] = None,
+        table_carry_estimate_yards: Optional[float] = None,
         latency_ms: Optional[float] = None,
         stage_timing: Optional[Dict] = None,
     ):
@@ -737,7 +737,9 @@ class SessionLogger:
                 "ball_speed_mph": ball_speed_mph,
                 "club_speed_mph": club_speed_mph,
                 "spin_rpm": spin_rpm,
-                "carry_yards": carry_yards,
+                # a diagnostic: the ball-speed table at detection, not the shot's
+                # carry (that is the shot_detected entry's carry_spin_adjusted)
+                "table_carry_estimate_yards": table_carry_estimate_yards,
                 "latency_ms": latency_ms,
                 "stage_timing": stage_timing,
             },

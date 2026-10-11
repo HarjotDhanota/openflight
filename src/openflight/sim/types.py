@@ -109,15 +109,18 @@ class ResolvedShot:
     spin_axis_deg: float
     back_spin_rpm: float
     side_spin_rpm: float
-    carry_yards: float
+    carry_yards: Optional[float]
     club_path_deg: float
     club: ClubType
     club_speed_mph: Optional[float] = None  # None => no club-speed data
     provenance: Dict[str, str] = field(default_factory=dict)
 
     def as_values(self) -> Dict[str, Optional[float]]:
-        """Logical field -> value map (keys match ``provenance``) for the UI."""
-        return {
+        """Logical field -> value map (keys match ``provenance``) for the UI.
+
+        A carry that is not sent is left out, as it is from ``provenance``.
+        """
+        values = {
             "ball_speed": self.ball_speed_mph,
             "vla": self.vla,
             "hla": self.hla,
@@ -129,6 +132,9 @@ class ResolvedShot:
             "club_speed": self.club_speed_mph,
             "club_path": self.club_path_deg,
         }
+        if self.carry_yards is None:
+            del values["carry"]
+        return values
 
 
 # --- player state (shared across connectors) ---------------------------------

@@ -23,6 +23,17 @@ SPIN_CONFIDENCE_HIGH = 0.7
 # but the carry table substitutes the club-optimal spin for the ball speed.
 SPIN_CONFIDENCE_RELIABLE = 0.6
 
+# Shot.carry_status: what the reported carry is. Server finalization commits it,
+# and a fusion unit (IWR or camera) only ever reports a carry its simulator built
+# from the shot's own measured inputs (D17).
+CARRY_MEASURED = "measured"  # fusion: simulator on measured launch, spin and spin axis
+CARRY_CALCULATED = "calculated"  # fusion: simulator on a calculated (model) spin
+CARRY_ESTIMATED = "estimated"  # OPS-only: labelled estimate (substitutes or the spin table)
+CARRY_NOT_MEASURED = "not_measured"  # fusion: no carry; nothing is filled in
+# Statuses under which the ball-speed table may stand in for a missing carry. None
+# is a shot that never reached finalization (mock, replays, older logs).
+_TABLE_CARRY_STATUSES = (None, CARRY_ESTIMATED)
+
 
 def estimate_carry_distance(ball_speed_mph: float, club: ClubType = ClubType.DRIVER) -> float:
     """
@@ -196,6 +207,7 @@ class Shot:
         spin_phase_confirmed: Whether phase recovered a low-SNR spin
         spin_rejection_reason: Why spin was withheld, if it was rejected
         carry_spin_adjusted: Carry distance adjusted for spin (yards)
+        carry_status: What the reported carry is (CARRY_* above); None until finalized
         mode: Shot source — "streaming", "rolling-buffer", or "mock"
         readings_data: Serialized readings for session logging
         camera_replay: Public replay metadata for a matched high-speed capture
@@ -248,6 +260,7 @@ class Shot:
     spin_phase_confirmed: bool = False
     spin_rejection_reason: Optional[str] = None
     carry_spin_adjusted: Optional[float] = None
+    carry_status: Optional[str] = None
     mode: str = "rolling-buffer"
     profile_id: str = ""
     profile_name: str = ""
@@ -365,6 +378,27 @@ class Shot:
         return base
 
     @property
+    def table_carry_allowed(self) -> bool:
+        """Whether the ball-speed table may stand in for a missing carry.
+
+        Never on a fusion unit (D17); an OPS-only shot keeps its labelled estimate.
+        """
+        return self.carry_status in _TABLE_CARRY_STATUSES
+
+    @property
+    def reported_carry_yards(self) -> Optional[float]:
+        """The carry the kiosk shows, averages and sends to simulators, or None.
+
+        The committed carry when there is one; the ball-speed table only where
+        table_carry_allowed; otherwise not measured.
+        """
+        if self.carry_status == CARRY_NOT_MEASURED:
+            return None
+        if self.carry_spin_adjusted is not None:
+            return self.carry_spin_adjusted
+        return self.estimated_carry_yards if self.table_carry_allowed else None
+
+    @property
     def estimated_carry_range(self) -> tuple:
         """
         Return (min, max) carry distance estimate to show uncertainty.
@@ -417,8 +451,11 @@ class Shot:
             "experimental_ball_speed_total": self.experimental_ball_speed_total,
             "club_speed_mph": self.club_speed_mph,
             "smash_factor": self.smash_factor,
-            "estimated_carry_yards": self.estimated_carry_yards,
-            "carry_range": list(self.estimated_carry_range),
+            # the ball-speed table is not in a fusion unit's payload at all (D17)
+            "estimated_carry_yards": (
+                self.estimated_carry_yards if self.table_carry_allowed else None
+            ),
+            "carry_range": (list(self.estimated_carry_range) if self.table_carry_allowed else None),
             "club": self.club.value,
             "profile_id": self.profile_id,
             "profile_name": self.profile_name,
@@ -508,6 +545,7 @@ class Shot:
             "spin_phase_confirmed": self.spin_phase_confirmed,
             "spin_rejection_reason": self.spin_rejection_reason,
             "carry_spin_adjusted": self.carry_spin_adjusted,
+            "carry_status": self.carry_status,
         }
 
 
@@ -532,6 +570,8 @@ def summarize_shots(shots: List[Shot], mode: str) -> dict:
     club_speeds = [shot.club_speed_mph for shot in shots if shot.club_speed_mph]
     smash_factors = [shot.smash_factor for shot in shots if shot.smash_factor]
     spin_rpms = [shot.spin_rpm for shot in shots if shot.spin_rpm is not None]
+    carries = [shot.reported_carry_yards for shot in shots]
+    carries = [carry for carry in carries if carry is not None]
     summary.update(
         {
             "avg_ball_speed": statistics.mean(ball_speeds),
@@ -540,7 +580,8 @@ def summarize_shots(shots: List[Shot], mode: str) -> dict:
             "std_dev": statistics.stdev(ball_speeds) if len(ball_speeds) > 1 else 0,
             "avg_club_speed": statistics.mean(club_speeds) if club_speeds else None,
             "avg_smash_factor": statistics.mean(smash_factors) if smash_factors else None,
-            "avg_carry_est": statistics.mean([shot.estimated_carry_yards for shot in shots]),
+            # only carries the kiosk reports: a fusion shot's missing carry is not averaged in
+            "avg_carry_est": statistics.mean(carries) if carries else None,
             "avg_spin_rpm": statistics.mean(spin_rpms) if spin_rpms else None,
             "spin_detection_rate": len(spin_rpms) / len(shots),
         }

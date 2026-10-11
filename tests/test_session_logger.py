@@ -98,7 +98,7 @@ class TestLogTriggerEvent:
             ball_speed_mph=155.3,
             club_speed_mph=103.2,
             spin_rpm=2800,
-            carry_yards=265,
+            table_carry_estimate_yards=265,
             latency_ms=12.5,
         )
 
@@ -119,7 +119,7 @@ class TestLogTriggerEvent:
         assert entry["ball_speed_mph"] == 155.3
         assert entry["club_speed_mph"] == 103.2
         assert entry["spin_rpm"] == 2800
-        assert entry["carry_yards"] == 265
+        assert entry["table_carry_estimate_yards"] == 265
         assert entry["latency_ms"] == 12.5
         assert len(entry["all_outbound_speeds"]) == 3
         assert len(entry["all_inbound_speeds"]) == 2

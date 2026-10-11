@@ -69,7 +69,9 @@ class GSProCodec:
                 SideSpin=round(resolved.side_spin_rpm, 0),
                 HLA=round(resolved.hla, 1),
                 VLA=round(resolved.vla, 1),
-                CarryDistance=round(resolved.carry_yards, 1),
+                CarryDistance=(
+                    round(resolved.carry_yards, 1) if resolved.carry_yards is not None else None
+                ),
             ),
             ClubData=ClubData(
                 Speed=round(resolved.club_speed_mph, 1) if has_club_speed else 0.0,

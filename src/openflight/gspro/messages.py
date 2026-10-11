@@ -14,7 +14,9 @@ class BallData:
     SideSpin: float = 0.0
     HLA: float = 0.0
     VLA: float = 0.0
-    CarryDistance: float = 0.0
+    # Optional in OpenConnect V1: None leaves it off the wire, so the simulator
+    # flies the ball itself instead of being handed a carry of 0 (D17).
+    CarryDistance: Optional[float] = None
 
 
 @dataclass
@@ -59,7 +61,10 @@ class GSProResponse:
 
 
 def serialize_payload(payload: ShotPayload) -> bytes:
-    return json.dumps(asdict(payload), separators=(",", ":")).encode("utf-8")
+    data = asdict(payload)
+    if data["BallData"]["CarryDistance"] is None:
+        del data["BallData"]["CarryDistance"]
+    return json.dumps(data, separators=(",", ":")).encode("utf-8")
 
 
 def build_heartbeat(device_id: str, units: str, shot_number: int) -> bytes:
