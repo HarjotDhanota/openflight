@@ -131,6 +131,16 @@ def _reasons(result):
     return [item["reason"] for item in result["excluded"]]
 
 
+def _only(result):
+    """The one mode group of a result that must have exactly one."""
+    assert len(result["groups"]) == 1, [group["mode_key"] for group in result["groups"]]
+    return result["groups"][0]
+
+
+def _by_height(result):
+    return {json.loads(group["mode_key"])["height"]: group for group in result["groups"]}
+
+
 # --- The brief's known-answer tests ------------------------------------------------------------
 
 
@@ -140,7 +150,7 @@ def _reasons(result):
 )
 def test_slope_supports_a_convention_and_says_it_is_conditional(tmp_path, slope, verdict):
     result = ts.analyze_clips(_four(tmp_path, slope))
-    assert result["verdict"] == verdict and result["meets_c1_design"] is True
+    assert result["verdict"] == verdict and _only(result)["meets_c1_design"] is True
     assert any("fixed pipeline delay" in text for text in result["limitations"])
     assert any("drift" in text for text in result["limitations"])
 
@@ -153,46 +163,55 @@ def test_missing_clock_metadata_excludes_the_clip_and_blocks_all_within(tmp_path
     dirs = _four(tmp_path, 0)[:-1] + [_clip(tmp_path, "noclk", 3000, slope=0, clocks=False)]
     result = ts.analyze_clips(dirs)
     assert {"path": str(dirs[-1]), "reason": "trigger_clocks_missing"} in result["excluded"]
-    assert result["clock"]["clock_offsets_missing"] >= 1
-    assert result["clock"]["all_within_1ms"] is False
+    assert _only(result)["clock"]["clock_offsets_missing"] >= 1
+    assert _only(result)["clock"]["all_within_1ms"] is False
 
 
-def test_unequal_modes_are_excluded_and_listed(tmp_path):
+def test_unequal_modes_are_analysed_separately_and_listed(tmp_path):
     other = _clip(tmp_path, "other", 300, slope=0, size=(640, 400), period=4_166_666)
     result = ts.analyze_clips(_four(tmp_path, 0) + [other])
-    assert any(item["reason"] == "mode_differs" for item in result["excluded"])
-    assert len(result["clips"]) == 12
+    groups = _by_height(result)
+    assert set(groups) == {800, 400} and result["excluded"] == []
+    assert len(groups[800]["clips"]) == 12 and len(groups[400]["clips"]) == 1
 
 
 def test_suspend_offset_is_handled_per_hypothesis_not_subtracted_blindly(tmp_path):
     dirs = _four(tmp_path, 0, offset_ns=5_000_000_000)  # 5 s of suspend before these clips
-    result = ts.analyze_clips(dirs)
-    assert set(result["slope_by_hypothesis"]) == {"monotonic", "boottime"}
-    assert result["slope_by_hypothesis"]["monotonic"]["verdict"] == "slope_supports_frame_start"
-    assert result["clock"]["all_within_1ms"] is False
+    group = _only(ts.analyze_clips(dirs))
+    assert set(group["slope_by_hypothesis"]) == {"monotonic", "boottime"}
+    assert group["slope_by_hypothesis"]["monotonic"]["verdict"] == "slope_supports_frame_start"
+    assert group["clock"]["all_within_1ms"] is False
 
 
 def test_gap_events_and_inferred_missing_frames(tmp_path):
-    result = ts.analyze_clips([_clip(tmp_path, "gap", 300, slope=0, drop_at=10)])
-    assert result["gap_events"] == 1 and result["missing_frames_inferred"] == 4
+    group = _only(ts.analyze_clips([_clip(tmp_path, "gap", 300, slope=0, drop_at=10)]))
+    assert group["gap_events"] == 1 and group["missing_frames_inferred"] == 4
 
 
 @pytest.mark.parametrize("frames", [0, 1])
 def test_empty_or_single_frame_clip_is_excluded_not_a_crash(tmp_path, frames):
     result = ts.analyze_clips([_clip(tmp_path, f"f{frames}", 300, slope=0, frames=frames)])
     assert result["excluded"][0]["reason"] == "too_few_frames"
-    assert result["verdict"] == "unresolved_single_exposure"
+    assert result["verdict"] == "unresolved_no_usable_clips"  # fix round 1, Minor 2
+    assert result["groups"] == []
 
 
 def test_one_exposure_cannot_decide(tmp_path):
     result = ts.analyze_clips([_clip(tmp_path, f"c{k}", 300, slope=1, seed=k) for k in range(3)])
-    assert result["verdict"] == "unresolved_single_exposure" and result["meets_c1_design"] is False
+    group = _only(result)
+    assert result["verdict"] == "unresolved_design_not_met" and group["meets_c1_design"] is False
+    assert group["verdict"] == "unresolved_design_not_met"
+    raw = {fit["verdict"] for fit in group["slope_by_hypothesis"].values()}
+    assert raw == {"unresolved_single_exposure"}
 
 
 @pytest.mark.skipif(not TEST7.exists(), reason="bench test-7 clips not present on this machine")
 def test_historical_clips_have_one_exposure_and_cannot_answer():
     dirs = sorted(p for p in TEST7.iterdir() if (p / "frames.npz").exists())[:4]
-    assert ts.analyze_clips(dirs)["verdict"] == "unresolved_single_exposure"
+    result = ts.analyze_clips(dirs)
+    assert result["verdict"] == "unresolved_design_not_met"
+    raw = {fit["verdict"] for fit in _only(result)["slope_by_hypothesis"].values()}
+    assert raw == {"unresolved_single_exposure"}
 
 
 # --- R-F4: the mode key ignores exposure_us, and works in every candidate mode ----------------
@@ -207,8 +226,8 @@ def test_clips_differing_only_in_exposure_share_a_mode_although_context_ids_diff
     ]
     assert ids[0] != ids[1]
     result = ts.analyze_clips([low, high])
-    assert result["excluded"] == [] and len(result["clips"]) == 2
-    assert "exposure_us" not in json.loads(result["mode_key"])
+    assert result["excluded"] == [] and len(_only(result)["clips"]) == 2
+    assert "exposure_us" not in json.loads(_only(result)["mode_key"])
 
 
 @pytest.mark.parametrize(
@@ -221,7 +240,7 @@ def test_clips_differing_only_in_exposure_share_a_mode_although_context_ids_diff
 def test_every_candidate_mode_resolves(tmp_path, size, period, slope, verdict):
     result = ts.analyze_clips(_four(tmp_path, slope, size=size, period=period))
     assert result["verdict"] == verdict and result["excluded"] == []
-    key = json.loads(result["mode_key"])
+    key = json.loads(_only(result)["mode_key"])
     assert (key["width"], key["height"]) == size
     assert key["frame_duration_us"] == round(period / 1000)
 
@@ -229,18 +248,53 @@ def test_every_candidate_mode_resolves(tmp_path, size, period, slope, verdict):
 def test_same_frame_duration_different_size_is_a_different_mode(tmp_path):
     first = _clip(tmp_path, "a", 300, slope=0, size=(1280, 800))
     second = _clip(tmp_path, "b", 1000, slope=0, size=(1280, 720))
-    result = ts.analyze_clips([first, second])
-    assert result["excluded"][0]["path"] == str(second)
-    assert result["excluded"][0]["reason"] == "mode_differs"
-    assert json.loads(result["excluded"][0]["mode_key"])["height"] == 720
+    groups = _by_height(ts.analyze_clips([first, second]))
+    assert [clip["path"] for clip in groups[720]["clips"]] == [str(second)]
+    assert [clip["path"] for clip in groups[800]["clips"]] == [str(first)]
 
 
 def test_unequal_actual_frame_duration_across_clips_is_a_different_mode(tmp_path):
     first = _clip(tmp_path, "a", 300, slope=0, actual_duration_us=8330)
     longer = _clip(tmp_path, "b", 3000, slope=0, actual_duration_us=8400)
     result = ts.analyze_clips([first, longer])
-    assert _reasons(result) == ["mode_differs"]
-    assert json.loads(result["mode_key"])["actual_frame_duration_us"] == 8330
+    actual = sorted(json.loads(g["mode_key"])["actual_frame_duration_us"] for g in result["groups"])
+    assert actual == [8330, 8400] and result["excluded"] == []
+    assert result["verdict"] == "multiple_modes_see_groups"
+
+
+def test_a_stray_first_clip_leaves_the_main_group_resolved(tmp_path):
+    stray = _clip(tmp_path, "0-stray", 300, slope=0, size=(640, 400), period=4_166_666)
+    result = ts.analyze_clips([stray, *_four(tmp_path, 1)])
+    groups = _by_height(result)
+    assert groups[800]["verdict"] == "slope_supports_exposure_start"
+    assert groups[400]["verdict"] == "unresolved_design_not_met"
+    assert result["verdict"] == "slope_supports_exposure_start"
+    assert result["verdict_mode_key"] == groups[800]["mode_key"]
+
+
+def test_two_complete_groups_are_each_resolved_and_listed_never_picked(tmp_path):
+    first, second = tmp_path / "one", tmp_path / "two"
+    first.mkdir()
+    second.mkdir()
+    dirs = _four(first, 1) + _four(second, 0, size=(1280, 720))
+    result = ts.analyze_clips(dirs)
+    groups = _by_height(result)
+    assert groups[800]["verdict"] == "slope_supports_exposure_start"
+    assert groups[720]["verdict"] == "slope_supports_frame_start"
+    assert groups[800]["meets_c1_design"] and groups[720]["meets_c1_design"]
+    assert result["verdict"] == "multiple_modes_see_groups"
+    assert result["verdict_mode_key"] is None
+
+
+def test_input_order_does_not_change_the_output(tmp_path):
+    dirs = _four(tmp_path, 0) + [
+        _clip(tmp_path, "stray", 300, slope=0, size=(640, 400), period=4_166_666),
+        _clip(tmp_path, "noclk", 1000, slope=0, clocks=False),
+        _clip(tmp_path, "short", 300, slope=0, frames=1),
+    ]
+    forward = ts.analyze_clips(dirs)
+    assert forward == ts.analyze_clips(dirs[::-1])
+    assert forward == ts.analyze_clips(dirs[3:] + dirs[:3])
 
 
 # --- Strict metadata: each gap has its own reason, and nothing crashes ------------------------
@@ -296,7 +350,7 @@ def test_incomplete_or_inconsistent_clip_is_excluded_with_its_reason(tmp_path, e
     directory = _clip(tmp_path, "bad", 300, slope=0, edit=edit)
     result = ts.analyze_clips([directory])
     assert result["excluded"] == [{"path": str(directory), "reason": reason}]
-    assert result["clips"] == []
+    assert all(group["clips"] == [] for group in result["groups"])
 
 
 def test_metadata_without_a_startup_snapshot_keys_on_the_saved_settings(tmp_path):
@@ -305,7 +359,7 @@ def test_metadata_without_a_startup_snapshot_keys_on_the_saved_settings(tmp_path
 
     dirs = [_clip(tmp_path, f"b{e}", e, slope=0, edit=brief_format) for e in (100, 3000)]
     result = ts.analyze_clips(dirs)
-    assert result["excluded"] == [] and json.loads(result["mode_key"])["width"] == 1280
+    assert result["excluded"] == [] and json.loads(_only(result)["mode_key"])["width"] == 1280
 
 
 def test_startup_snapshot_wins_over_the_saved_settings(tmp_path):
@@ -313,7 +367,7 @@ def test_startup_snapshot_wins_over_the_saved_settings(tmp_path):
         meta["settings"] = {**meta["settings"], "width": 9999}
 
     result = ts.analyze_clips([_clip(tmp_path, "s", 300, slope=0, edit=stale_top_level)])
-    assert json.loads(result["mode_key"])["width"] == 1280
+    assert json.loads(_only(result)["mode_key"])["width"] == 1280
 
 
 @pytest.mark.parametrize("broken", ["no_npz", "no_metadata", "bad_json", "missing_array"])
@@ -332,27 +386,40 @@ def test_unreadable_clip_is_excluded_not_a_crash(tmp_path, broken):
     assert result["excluded"][0]["path"] == str(directory)
     assert result["excluded"][0]["reason"] == "unreadable"
     assert result["excluded"][0]["detail"]
-    assert [clip["path"] for clip in result["clips"]] == [str(good)]
+    assert [clip["path"] for clip in _only(result)["clips"]] == [str(good)]
 
 
 def test_the_same_clip_twice_is_one_point(tmp_path):
     clip = _clip(tmp_path, "once", 300, slope=0)
     result = ts.analyze_clips([clip, tmp_path / "." / "once"])
-    assert len(result["clips"]) == 1
-    assert result["excluded"] == [
-        {"path": str(tmp_path / "." / "once"), "reason": "duplicate_clip"}
-    ]
-    assert result["clock"]["clock_offsets_observed"] == 1
+    assert len(_only(result)["clips"]) == 1
+    assert _reasons(result) == ["duplicate_clip"]
+    assert result["excluded"][0]["path"] in {str(clip), str(tmp_path / "." / "once")}
+    assert _only(result)["clock"]["clock_offsets_observed"] == 1
 
 
 def test_no_clips_at_all_is_an_empty_result_not_a_crash():
     result = ts.analyze_clips([])
-    assert result["verdict"] == "unresolved_single_exposure"
-    assert result["clips"] == [] and result["excluded"] == [] and result["mode_key"] is None
-    assert result["clock"]["all_within_1ms"] is False
-    assert result["clock"]["clock_offsets_observed"] == 0
-    assert result["gap_events"] == 0 and result["missing_frames_inferred"] is None
-    assert result["meets_c1_design"] is False
+    assert result["verdict"] == "unresolved_no_usable_clips"
+    assert result["groups"] == [] and result["excluded"] == []
+    assert result["verdict_mode_key"] is None
+
+
+def test_a_group_with_only_clockless_clips_has_no_usable_clips(tmp_path):
+    result = ts.analyze_clips([_clip(tmp_path, "n", 300, slope=0, clocks=False)])
+    group = _only(result)
+    assert group["clips"] == [] and group["verdict"] == "unresolved_no_usable_clips"
+    assert group["clock"]["clock_offsets_missing"] == 1
+    assert group["clock"]["all_within_1ms"] is False
+    assert group["gap_events"] == 0 and group["missing_frames_inferred"] is None
+    assert result["verdict"] == "unresolved_no_usable_clips"
+
+
+def test_gap_scope_is_stated_as_usable_clips_only(tmp_path):
+    gappy_but_clockless = _clip(tmp_path, "n", 300, slope=0, clocks=False, drop_at=4)
+    result = ts.analyze_clips([gappy_but_clockless, _clip(tmp_path, "u", 300, slope=0)])
+    assert result["gap_scope"] == "usable_clips_only"
+    assert _only(result)["gap_events"] == 0
 
 
 # --- Both clock domains from raw values ---------------------------------------------------------
@@ -382,7 +449,7 @@ def test_suspend_between_runs_makes_the_hypotheses_disagree(tmp_path):
     # Fixed order: the host suspended for 2 s before the last (3000 us) run only.
     offsets = {100: 2_600, 300: 2_600, 1000: 2_600, 3000: 2_000_002_600}
     result = ts.analyze_clips(_four(tmp_path, 0, offsets=offsets))
-    slopes = result["slope_by_hypothesis"]
+    slopes = _only(result)["slope_by_hypothesis"]
     assert slopes["monotonic"]["verdict"] == "slope_supports_frame_start"
     assert slopes["boottime"]["verdict"] == "unresolved"
     assert result["verdict"] == "domain_dependent_unresolved"
@@ -390,8 +457,7 @@ def test_suspend_between_runs_makes_the_hypotheses_disagree(tmp_path):
 
 def test_clock_section_lists_every_raw_offset(tmp_path):
     dirs = _four(tmp_path, 0)
-    result = ts.analyze_clips(dirs)
-    clock = result["clock"]
+    clock = _only(ts.analyze_clips(dirs))["clock"]
     assert clock["clock_offsets_observed"] == 12 and clock["clock_offsets_missing"] == 0
     assert clock["all_within_1ms"] is True
     assert clock["max_abs_boottime_minus_monotonic_ns"] == 2_600
@@ -408,17 +474,18 @@ def test_clock_section_lists_every_raw_offset(tmp_path):
 )
 def test_all_within_1ms_boundary(tmp_path, offset, within):
     result = ts.analyze_clips([_clip(tmp_path, "c", 300, slope=0, offset_ns=offset)])
-    assert result["clock"]["all_within_1ms"] is within
+    assert _only(result)["clock"]["all_within_1ms"] is within
 
 
 def test_offsets_of_clips_in_another_mode_are_not_required(tmp_path):
     other = _clip(tmp_path, "other", 300, slope=0, size=(640, 400), period=4_166_666, clocks=False)
     result = ts.analyze_clips(_four(tmp_path, 0) + [other])
-    assert result["clock"]["clock_offsets_missing"] == 0
-    assert result["clock"]["all_within_1ms"] is True
-    assert {"path": str(other), "reason": "mode_differs"} in [
-        {"path": item["path"], "reason": item["reason"]} for item in result["excluded"]
-    ]
+    groups = _by_height(result)
+    assert groups[800]["clock"]["clock_offsets_missing"] == 0
+    assert groups[800]["clock"]["all_within_1ms"] is True
+    assert groups[400]["clock"]["clock_offsets_missing"] == 1
+    assert {"path": str(other), "reason": "trigger_clocks_missing"} in result["excluded"]
+    assert result["verdict"] == "slope_supports_frame_start"
 
 
 # --- Gaps and the justified cadence -----------------------------------------------------------
@@ -430,8 +497,34 @@ def test_gaps_are_counted_but_missing_frames_not_inferred_from_an_unstable_caden
     sensor = np.concatenate([[1_000_000_000], 1_000_000_000 + np.cumsum(steps)]).astype(np.int64)
     result = ts.analyze_clips([_clip(tmp_path, "wobbly", 300, slope=0, sensor=sensor)])
     assert result["excluded"] == []
-    assert result["gap_events"] == 1
-    assert result["missing_frames_inferred"] is None
+    assert _only(result)["gap_events"] == 1
+    assert _only(result)["missing_frames_inferred"] is None
+
+
+def _one_gap(ratio, frames=24, period=PERIOD_120):
+    steps = np.full(frames - 1, period, dtype=np.int64)
+    steps[10] = int(round(ratio * period))
+    return np.concatenate([[1_000_000_000], 1_000_000_000 + np.cumsum(steps)]).astype(np.int64)
+
+
+@pytest.mark.parametrize(
+    "ratio,missing",
+    [(1.6, None), (2.5, None), (3.0, 2), (3.015, 2), (2.985, 2), (3.03, None), (5.0, 4)],
+)
+def test_missing_frames_need_a_gap_that_is_a_whole_number_of_periods(tmp_path, ratio, missing):
+    clip = _clip(tmp_path, "g", 300, slope=0, sensor=_one_gap(ratio))
+    group = _only(ts.analyze_clips([clip]))
+    assert group["gap_events"] == 1
+    assert group["missing_frames_inferred"] == missing
+
+
+def test_one_unjustified_gap_makes_the_group_total_none(tmp_path):
+    dirs = [
+        _clip(tmp_path, "whole", 300, slope=0, sensor=_one_gap(3.0)),
+        _clip(tmp_path, "odd", 1000, slope=0, sensor=_one_gap(1.6)),
+    ]
+    group = _only(ts.analyze_clips(dirs))
+    assert group["gap_events"] == 2 and group["missing_frames_inferred"] is None
 
 
 def test_gaps_sum_over_analysed_clips(tmp_path):
@@ -440,8 +533,8 @@ def test_gaps_sum_over_analysed_clips(tmp_path):
         _clip(tmp_path, "b", 1000, slope=0, drop_at=15),
         _clip(tmp_path, "c", 3000, slope=0),
     ]
-    result = ts.analyze_clips(dirs)
-    assert result["gap_events"] == 2 and result["missing_frames_inferred"] == 8
+    group = _only(ts.analyze_clips(dirs))
+    assert group["gap_events"] == 2 and group["missing_frames_inferred"] == 8
 
 
 # --- exposure_slope directly --------------------------------------------------------------------
@@ -484,9 +577,52 @@ def test_exposure_slope_too_noisy_is_unresolved():
 
 def test_design_needs_three_exposures_spanning_a_millisecond(tmp_path):
     narrow = [_clip(tmp_path, f"n{e}", e, slope=0) for e in (100, 300, 900)]
-    assert ts.analyze_clips(narrow)["meets_c1_design"] is False
+    assert _only(ts.analyze_clips(narrow))["meets_c1_design"] is False
     two = [_clip(tmp_path, f"t{e}-{k}", e, slope=0, seed=k) for e in (100, 3000) for k in range(2)]
-    assert ts.analyze_clips(two)["meets_c1_design"] is False
+    assert _only(ts.analyze_clips(two))["meets_c1_design"] is False
+
+
+def test_two_exposures_20us_apart_do_not_meet_the_design(tmp_path):
+    dirs = [
+        _clip(tmp_path, f"c{e}-{k}", e, slope=1, jitter_ns=20_000, seed=k)
+        for e in (300, 320)
+        for k in range(2)
+    ]
+    result = ts.analyze_clips(dirs)
+    group = _only(result)
+    assert group["meets_c1_design"] is False and len(group["clips"]) == 4
+    assert group["verdict"] == "unresolved_design_not_met"
+    assert result["verdict"] == "unresolved_design_not_met"
+    assert all(fit["slope"] is not None for fit in group["slope_by_hypothesis"].values())
+
+
+def test_three_clips_at_two_exposures_do_not_meet_the_design(tmp_path):
+    dirs = [
+        _clip(tmp_path, "a", 100, slope=1, jitter_ns=20_000, seed=0),
+        _clip(tmp_path, "b", 100, slope=1, jitter_ns=20_000, seed=1),
+        _clip(tmp_path, "c", 3000, slope=1, jitter_ns=20_000, seed=2),
+    ]
+    result = ts.analyze_clips(dirs)
+    group = _only(result)
+    assert group["meets_c1_design"] is False
+    assert result["verdict"] == group["verdict"] == "unresolved_design_not_met"
+    assert group["slope_by_hypothesis"]["monotonic"]["verdict"] != "unresolved_design_not_met"
+
+
+def test_a_zero_noise_fit_has_no_interval_and_is_unresolved():
+    points = [(e * 1000.0, 6e6) for e in (100, 300, 900)]  # flat, no residual: stderr is NaN
+    fit = ts.exposure_slope(points)
+    assert fit["verdict"] == "unresolved" and fit["ci95"] is None
+
+
+def test_jitter_free_clips_never_crash_the_json(tmp_path, capsys):
+    dirs = [_clip(tmp_path, f"z{e}", e, slope=0) for e in (100, 300, 900)]
+    raw = _only(ts.analyze_clips(dirs))["slope_by_hypothesis"]
+    assert all(fit["verdict"] == "unresolved" and fit["ci95"] is None for fit in raw.values())
+    out = tmp_path / "z.json"
+    assert _cli().main([str(d) for d in dirs] + ["--out", str(out)]) == 0
+    json.loads(out.read_text(encoding="utf-8"))
+    assert "unresolved_design_not_met" in capsys.readouterr().out
 
 
 def test_limitations_state_what_this_tool_does_not_decide(tmp_path):
@@ -516,7 +652,8 @@ def test_cli_globs_a_parent_directory_and_writes_json(tmp_path, capsys):
     out = tmp_path / "report.json"
     assert _cli().main([str(parent), "--out", str(out)]) == 0
     report = json.loads(out.read_text(encoding="utf-8"))
-    assert report["verdict"] == "slope_supports_exposure_start" and len(report["clips"]) == 12
+    assert report["verdict"] == "slope_supports_exposure_start"
+    assert len(_only(report)["clips"]) == 12
     printed = capsys.readouterr().out
     assert "slope_supports_exposure_start" in printed and "boottime" in printed
     assert "distinct exposures: 4" in printed
@@ -529,6 +666,18 @@ def test_cli_takes_clip_directories_and_lists_exclusions(tmp_path, capsys):
     assert _cli().main([str(good), str(bad), "--out", str(out)]) == 0
     printed = capsys.readouterr().out
     assert "trigger_clocks_missing" in printed and "missing: 1" in printed
+
+
+def test_cli_prints_every_group(tmp_path, capsys):
+    first, second = tmp_path / "one", tmp_path / "two"
+    first.mkdir()
+    second.mkdir()
+    dirs = _four(first, 1) + _four(second, 0, size=(1280, 720))
+    assert _cli().main([str(first), str(second), "--out", str(tmp_path / "r.json")]) == 0
+    printed = capsys.readouterr().out
+    assert "verdict: multiple_modes_see_groups" in printed
+    assert "1280x800" in printed and "1280x720" in printed
+    assert len(dirs) == 24
 
 
 def test_cli_with_no_clips_is_an_error(tmp_path, capsys):

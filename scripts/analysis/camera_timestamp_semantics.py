@@ -32,31 +32,46 @@ def _clip_directories(path: Path) -> list[Path]:
 
 def _fmt_ci(fit: dict) -> str:
     if fit["ci95"] is None:
-        return "no interval"
+        return "no interval" if fit["slope"] is None else f"slope {fit['slope']:.4f}, no interval"
     low, high = fit["ci95"]
     return f"slope {fit['slope']:.4f}, 95% CI [{low:.4f}, {high:.4f}]"
 
 
-def _print_summary(result: dict) -> None:
-    print(f"verdict: {result['verdict']}")
-    for hypothesis, fit in result["slope_by_hypothesis"].items():
-        print(f"  {hypothesis}: {fit['verdict']} ({_fmt_ci(fit)})")
-    fit = result["slope_by_hypothesis"]["monotonic"]
-    print(
-        f"clips used: {len(result['clips'])}, distinct exposures: {fit['distinct_exposures']}, "
-        f"span: {fit['exposure_span_us']:.0f} us, meets C1 design: {result['meets_c1_design']}"
+def _mode_label(mode_key: str) -> str:
+    mode = json.loads(mode_key)
+    return (
+        f"{mode['width']}x{mode['height']} @ {mode['fps']} fps, frame "
+        f"{mode['frame_duration_us']} us (actual {mode['actual_frame_duration_us']} us)"
     )
-    clock = result["clock"]
+
+
+def _print_group(group: dict) -> None:
+    print(f"mode {_mode_label(group['mode_key'])}: {group['verdict']}")
+    for hypothesis, fit in group["slope_by_hypothesis"].items():
+        print(f"  {hypothesis}: {fit['verdict']} ({_fmt_ci(fit)})")
+    fit = group["slope_by_hypothesis"]["monotonic"]
     print(
-        f"clock offsets observed: {clock['clock_offsets_observed']}, "
+        f"  clips used: {len(group['clips'])}, distinct exposures: {fit['distinct_exposures']}, "
+        f"span: {fit['exposure_span_us']:.0f} us, meets C1 design: {group['meets_c1_design']}"
+    )
+    clock = group["clock"]
+    print(
+        f"  clock offsets observed: {clock['clock_offsets_observed']}, "
         f"missing: {clock['clock_offsets_missing']}, "
         f"max |BOOTTIME - MONOTONIC|: {clock['max_abs_boottime_minus_monotonic_ns']} ns, "
         f"all within 1 ms: {clock['all_within_1ms']}"
     )
     print(
-        f"gap events: {result['gap_events']}, "
-        f"missing frames inferred: {result['missing_frames_inferred']}"
+        f"  gap events: {group['gap_events']}, "
+        f"missing frames inferred: {group['missing_frames_inferred']}"
     )
+
+
+def _print_summary(result: dict) -> None:
+    print(f"verdict: {result['verdict']}")
+    print(f"gap scope: {result['gap_scope']}")
+    for group in result["groups"]:
+        _print_group(group)
     for item in result["excluded"]:
         print(f"excluded: {item['path']}: {item['reason']}")
 

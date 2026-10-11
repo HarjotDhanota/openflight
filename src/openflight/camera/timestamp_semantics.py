@@ -17,6 +17,7 @@ No half-exposure correction is chosen here (W2b owns it).
 from __future__ import annotations
 
 import json
+import math
 import zipfile
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -51,6 +52,9 @@ MODE_SETTINGS = (
 )
 REQUIRED_MODE_SETTINGS = ("width", "height", "fps")
 CLOCK_REASONS = ("trigger_clocks_missing", "trigger_clocks_malformed")
+# gap_events and missing_frames_inferred cover only a group's usable clips: the clips its
+# slope uses (complete metadata, clocks included).
+GAP_SCOPE = "usable_clips_only"
 LIMITATIONS = (
     "The slope supports a convention only under a fixed pipeline delay; an exposure-correlated "
     "pipeline delay can imitate either.",
@@ -203,6 +207,10 @@ def exposure_slope(points: Sequence[tuple[float, float]]) -> dict:
         return {**base, "slope": None, "ci95": None, "verdict": "unresolved_too_few_points"}
     fit = stats.linregress(exposures, delays)
     half = float(stats.t.ppf(0.975, len(points) - 2) * fit.stderr)
+    if not (math.isfinite(float(fit.slope)) and math.isfinite(half)):
+        # e.g. a zero-noise fit: scipy gives a NaN stderr, so there is no interval to judge.
+        slope = float(fit.slope) if math.isfinite(float(fit.slope)) else None
+        return {**base, "slope": slope, "ci95": None, "verdict": "unresolved"}
     low, high = float(fit.slope) - half, float(fit.slope) + half
     contains_one, contains_zero = low <= 1.0 <= high, low <= 0.0 <= high
     if contains_one and not contains_zero:
@@ -215,14 +223,21 @@ def exposure_slope(points: Sequence[tuple[float, float]]) -> dict:
 
 
 def _missing_frames(sensor: np.ndarray, cadence: dict) -> Optional[int]:
-    """Frames missing in the clip's gaps, or None when its measured period is not stable."""
+    """Frames missing in the clip's gaps, or None when they cannot be justified.
+
+    Justified means a stable measured period (>= 90% of intervals within +/-2% of the
+    median) and every gap within STABLE_TOLERANCE periods of a whole number of periods.
+    """
     deltas = np.diff(sensor)
     period = cadence["median_sensor_interval_ns"]
     stable = float(np.mean(np.abs(deltas - period) <= STABLE_TOLERANCE * period))
     if stable < STABLE_FRACTION:
         return None
-    gaps = deltas[deltas > GAP_INTERVAL_FACTOR * period]
-    return int(sum(int(np.floor(gap / period + 0.5)) - 1 for gap in gaps))
+    ratios = deltas[deltas > GAP_INTERVAL_FACTOR * period] / period
+    whole = np.floor(ratios + 0.5)
+    if np.any(np.abs(ratios - whole) > STABLE_TOLERANCE):
+        return None
+    return int(np.sum(whole - 1))
 
 
 def _clock_summary(required: Sequence[dict]) -> dict:
@@ -262,41 +277,9 @@ def _read(directory: Path) -> tuple[Optional[dict], Optional[dict]]:
         return None, {"path": str(directory), "reason": "unreadable", "detail": detail}
 
 
-def analyze_clips(directories: Sequence[Path]) -> dict:
-    """The C1 evidence for a set of kiosk clips, with exclusions and limitations.
-
-    The first clip with complete frame, exposure and mode metadata sets the mode; clips
-    in any other mode are excluded as ``mode_differs``. Every clip in that mode needs
-    its trigger's clock offset: a missing one excludes the clip and blocks
-    ``all_within_1ms``.
-    """
-    entries = []  # (clip, delay, exclusion before analysis), in input order
-    seen: set[Path] = set()
-    for directory in directories:
-        resolved = Path(directory).resolve()
-        if resolved in seen:  # one clip is one point, however often it is passed
-            entries.append((None, None, {"path": str(directory), "reason": "duplicate_clip"}))
-            continue
-        seen.add(resolved)
-        clip, unreadable = _read(directory)
-        entries.append((clip, None if clip is None else clip_delay(clip), unreadable))
-    candidates = [delay for _clip, delay, _bad in entries if _mode_known(delay)]
-    mode = candidates[0]["mode_key"] if candidates else None
-    excluded, usable, required = [], [], []
-    for clip, delay, rejection in entries:
-        if rejection is not None:
-            excluded.append(rejection)
-        elif _mode_known(delay) and delay["mode_key"] != mode:
-            excluded.append(
-                {"path": delay["path"], "reason": "mode_differs", "mode_key": delay["mode_key"]}
-            )
-        elif delay["excluded_reason"] is not None:
-            excluded.append({"path": delay["path"], "reason": delay["excluded_reason"]})
-            if _mode_known(delay):
-                required.append(delay)
-        else:
-            usable.append((clip, delay))
-            required.append(delay)
+def _group(mode_key: str, members: Sequence[tuple[Optional[dict], dict]]) -> dict:
+    """Slopes, clocks, gaps and the design check for one mode; members are (clip, delay)."""
+    usable = [(clip, delay) for clip, delay in members if delay["excluded_reason"] is None]
     clips = [delay for _clip, delay in usable]
     slopes = {
         hypothesis: exposure_slope(
@@ -304,25 +287,88 @@ def analyze_clips(directories: Sequence[Path]) -> dict:
         )
         for hypothesis in HYPOTHESES
     }
-    verdicts = {fit["verdict"] for fit in slopes.values()}
     missing = [
         _missing_frames(clip["sensor_timestamp_ns"].astype(np.int64), delay["cadence"])
         for clip, delay in usable
     ]
-    distinct = slopes["monotonic"]["distinct_exposures"]
+    meets_design = (
+        slopes["monotonic"]["distinct_exposures"] >= MIN_DISTINCT_EXPOSURES
+        and slopes["monotonic"]["exposure_span_us"] >= MIN_EXPOSURE_SPAN_US
+    )
+    verdicts = {fit["verdict"] for fit in slopes.values()}
+    if not clips:
+        verdict = "unresolved_no_usable_clips"
+    elif not meets_design:
+        verdict = "unresolved_design_not_met"
+    else:
+        verdict = verdicts.pop() if len(verdicts) == 1 else "domain_dependent_unresolved"
     return {
+        "mode_key": mode_key,
         "clips": clips,
-        "excluded": excluded,
-        "mode_key": mode,
-        "delay_definitions": dict(DELAY_DEFINITIONS),
         "slope_by_hypothesis": slopes,
-        "verdict": verdicts.pop() if len(verdicts) == 1 else "domain_dependent_unresolved",
-        "clock": _clock_summary(required),
+        "verdict": verdict,
+        "clock": _clock_summary([delay for _clip, delay in members]),
         "gap_events": int(sum(delay["cadence"]["gap_count"] for delay in clips)),
         "missing_frames_inferred": (
             None if not missing or any(count is None for count in missing) else sum(missing)
         ),
-        "meets_c1_design": distinct >= MIN_DISTINCT_EXPOSURES
-        and slopes["monotonic"]["exposure_span_us"] >= MIN_EXPOSURE_SPAN_US,
+        "meets_c1_design": meets_design,
+    }
+
+
+def _overall_verdict(groups: Sequence[dict]) -> tuple[str, Optional[str]]:
+    """(verdict, the mode it comes from). Never picks a group by order or majority."""
+    meeting = [group for group in groups if group["meets_c1_design"]]
+    with_clips = [group for group in groups if group["clips"]]
+    if len(meeting) == 1:
+        chosen = meeting[0]
+    elif not meeting and len(with_clips) == 1:
+        chosen = with_clips[0]  # its verdict is unresolved_design_not_met
+    elif not with_clips:
+        return "unresolved_no_usable_clips", None
+    else:
+        return "multiple_modes_see_groups", None
+    return chosen["verdict"], chosen["mode_key"]
+
+
+def analyze_clips(directories: Sequence[Path]) -> dict:
+    """The C1 evidence for a set of kiosk clips, one group per mode, with exclusions.
+
+    Clips with complete frame, exposure and mode metadata are grouped by mode key, and
+    each group is analysed on its own. A clip that lacks only its trigger clocks is
+    excluded from its group's slope, but its offset is still required, so it blocks
+    that group's ``all_within_1ms``. The top-level verdict is a group's verdict only
+    when exactly one group meets the C1 design (or, when none does, only one group has
+    usable clips); otherwise it is ``multiple_modes_see_groups``. Input order does not
+    change the output: directories are processed in sorted path order.
+    """
+    ordered = sorted(directories, key=lambda item: (str(Path(item).resolve()), str(item)))
+    excluded: list[dict] = []
+    members: dict[str, list[tuple[Optional[dict], dict]]] = {}
+    seen: set[Path] = set()
+    for directory in ordered:
+        resolved = Path(directory).resolve()
+        if resolved in seen:  # one clip is one point, however often it is passed
+            excluded.append({"path": str(directory), "reason": "duplicate_clip"})
+            continue
+        seen.add(resolved)
+        clip, unreadable = _read(directory)
+        if unreadable is not None:
+            excluded.append(unreadable)
+            continue
+        delay = clip_delay(clip)
+        if delay["excluded_reason"] is not None:
+            excluded.append({"path": delay["path"], "reason": delay["excluded_reason"]})
+        if _mode_known(delay):
+            members.setdefault(delay["mode_key"], []).append((clip, delay))
+    groups = [_group(key, members[key]) for key in sorted(members)]
+    verdict, verdict_mode_key = _overall_verdict(groups)
+    return {
+        "verdict": verdict,
+        "verdict_mode_key": verdict_mode_key,
+        "groups": groups,
+        "excluded": excluded,
+        "gap_scope": GAP_SCOPE,
+        "delay_definitions": dict(DELAY_DEFINITIONS),
         "limitations": list(LIMITATIONS),
     }
