@@ -9,14 +9,23 @@ export interface CameraReplay {
   display_mirror_horizontal: boolean;
 }
 
+/**
+ * What a shot's carry is, as the server commits it. A fusion unit (IWR or camera)
+ * reports `measured`, `calculated` (simulator on a calculated spin) or
+ * `not_measured`, and never the ball-speed table (D17). An OPS-only unit reports
+ * `estimated`. Missing or null: a shot that never reached finalization.
+ */
+export type CarryStatus = 'measured' | 'calculated' | 'estimated' | 'not_measured';
+
 export interface Shot {
   mode?: 'rolling-buffer' | 'mock' | 'swing-speed';
   shot_number?: number | null;
   ball_speed_mph: number;
   club_speed_mph: number | null;
   smash_factor: number | null;
-  estimated_carry_yards: number;
-  carry_range: [number, number];
+  /** The ball-speed table; null on a fusion unit, which never shows it. */
+  estimated_carry_yards: number | null;
+  carry_range: [number, number] | null;
   club: string;
   profile_id?: string;
   profile_name?: string;
@@ -65,6 +74,7 @@ export interface Shot {
   spin_method?: string | null;
   spin_multipath_fade_hz?: number | null;
   carry_spin_adjusted: number | null;
+  carry_status?: CarryStatus | null;
   swing_speed_duration_ms?: number;
   swing_speed_reading_count?: number;
   swing_speed_trigger_mph?: number;
@@ -81,7 +91,8 @@ export interface SessionStats {
   std_dev?: number;
   avg_club_speed: number | null;
   avg_smash_factor: number | null;
-  avg_carry_est: number;
+  /** Mean of the carries the kiosk reports; null when no shot has one. */
+  avg_carry_est: number | null;
   // Rolling buffer mode spin stats
   avg_spin_rpm?: number | null;
   spin_detection_rate?: number;
@@ -114,7 +125,8 @@ export interface TriggerDiagnostic {
   ball_speed_mph?: number | null;
   club_speed_mph?: number | null;
   spin_rpm?: number | null;
-  carry_yards?: number | null;
+  /** Diagnostic only: the ball-speed table at detection, never the shot's carry. */
+  table_carry_estimate_yards?: number | null;
   iwr6843?: IWR6843Diagnostic;
 }
 
@@ -229,6 +241,32 @@ export function computeSwingSpeedStats(shots: Shot[], filter: SwingSpeedStatsFil
 }
 
 /**
+ * The carry the kiosk shows for a shot, or null when it is not measured.
+ *
+ * The committed carry when there is one. The ball-speed table stands in only on
+ * an OPS-only unit (`estimated`) or for a shot that never reached finalization;
+ * a fusion unit's missing carry stays missing (D17). Mirrors the server's
+ * `Shot.reported_carry_yards`.
+ */
+export function reportedCarryYards(shot: Shot): number | null {
+  if (shot.carry_status === 'not_measured') return null;
+  if (shot.carry_spin_adjusted !== null && shot.carry_spin_adjusted !== undefined) {
+    return shot.carry_spin_adjusted;
+  }
+  const tableAllowed = shot.carry_status == null || shot.carry_status === 'estimated';
+  return tableAllowed ? (shot.estimated_carry_yards ?? null) : null;
+}
+
+/** Whether the reported carry is modeled rather than built from measured inputs. */
+export function isCarryEstimated(shot: Shot): boolean {
+  if (reportedCarryYards(shot) === null) return false;
+  if (shot.carry_status === 'calculated') return true;
+  if (shot.carry_status === 'measured') return false;
+  // OPS-only and older shots: the bare table is the estimate, as it always was
+  return shot.carry_spin_adjusted === null || shot.carry_spin_adjusted === undefined;
+}
+
+/**
  * Compute session stats from an array of shots.
  */
 export function computeStats(shots: Shot[]): SessionStats {
@@ -240,14 +278,15 @@ export function computeStats(shots: Shot[]): SessionStats {
       min_ball_speed: 0,
       avg_club_speed: null,
       avg_smash_factor: null,
-      avg_carry_est: 0,
+      avg_carry_est: null,
     };
   }
 
   const ballSpeeds = shots.map((s) => s.ball_speed_mph);
   const clubSpeeds = shots.map((s) => s.club_speed_mph).filter((v): v is number => v !== null);
   const smashFactors = shots.map((s) => s.smash_factor).filter((v): v is number => v !== null);
-  const carries = shots.map((s) => s.estimated_carry_yards);
+  // only reported carries: a fusion shot's missing carry is not averaged in
+  const carries = shots.map(reportedCarryYards).filter((v): v is number => v !== null);
 
   const mean = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
   const stdDev = (arr: number[]) => {
@@ -264,7 +303,7 @@ export function computeStats(shots: Shot[]): SessionStats {
     std_dev: stdDev(ballSpeeds),
     avg_club_speed: clubSpeeds.length > 0 ? mean(clubSpeeds) : null,
     avg_smash_factor: smashFactors.length > 0 ? mean(smashFactors) : null,
-    avg_carry_est: mean(carries),
+    avg_carry_est: carries.length > 0 ? mean(carries) : null,
   };
 }
 

@@ -1,5 +1,5 @@
 import type { Shot, SpinQuality, SwingSpeedStats } from '../../types/shot';
-import { getSwingSpeedMph, isSwingSpeedShot } from '../../types/shot';
+import { getSwingSpeedMph, isCarryEstimated, isSwingSpeedShot, reportedCarryYards } from '../../types/shot';
 import type { UnitSystem } from '../../utils/units';
 import { formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../../utils/units';
 import { getHtmlLang, t } from '../../i18n';
@@ -94,7 +94,9 @@ function experimentalStatus(status: string | null | undefined): string {
 
 function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[] {
   const speedUnit = getSpeedUnit(unitSystem);
-  const carry = shot.carry_spin_adjusted ?? shot.estimated_carry_yards;
+  // a fusion unit's unmeasured carry shows as no value, never the table (D17)
+  const carry = reportedCarryYards(shot);
+  const carryIsCommitted = carry !== null && shot.carry_spin_adjusted != null;
   const angleConfidence = launchAngleQuality(shot.launch_angle_confidence);
   const angleEstimated = shot.angle_source === 'estimated';
   // The horizontal tile reads its own axis (audit F5). Shots recorded before
@@ -113,9 +115,7 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
     : undefined;
   // A radar horizontal without the board's phase reference has its own zero (audit F8).
   const horizontalSubtext =
-    shot.launch_angle_horizontal_status === 'azimuth_uncalibrated'
-      ? 'azimuth uncalibrated'
-      : horizontalSourceLabel;
+    shot.launch_angle_horizontal_status === 'azimuth_uncalibrated' ? 'azimuth uncalibrated' : horizontalSourceLabel;
   const fusedDeliveryAttempted = shot.experimental_fused_status != null;
   const attackAngle =
     shot.club_angle_deg ??
@@ -150,10 +150,10 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
     {
       id: 'carry',
       label: t('metric.carry'),
-      value: formatDistance(carry, unitSystem, 0),
-      unit: getDistanceUnit(unitSystem),
-      subtext: shot.carry_spin_adjusted === null ? undefined : t('metric.spinAdjusted'),
-      estimated: markEstimated(shot.carry_spin_adjusted === null),
+      value: carry === null ? NO_VALUE : formatDistance(carry, unitSystem, 0),
+      unit: carry === null ? undefined : getDistanceUnit(unitSystem),
+      subtext: carryIsCommitted ? t('metric.spinAdjusted') : undefined,
+      estimated: markEstimated(isCarryEstimated(shot)),
     },
     {
       id: 'club_speed',

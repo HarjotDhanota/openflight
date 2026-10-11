@@ -124,6 +124,37 @@ describe('buildLiveMetrics', () => {
     expect(estimated.estimated).toBe(true);
   });
 
+  it('shows a fusion carry that is not measured as no value, never the table', () => {
+    const carry = byId(
+      buildLiveMetrics(
+        makeShot({ carry_status: 'not_measured', carry_spin_adjusted: null, estimated_carry_yards: 210 }),
+        'imperial',
+        emptySwingStats
+      ),
+      'carry'
+    );
+
+    expect(carry.value).toBe(NO_VALUE);
+    expect(carry.unit).toBeUndefined();
+    expect(carry.subtext).toBeUndefined();
+    expect(carry.estimated).toBeUndefined();
+  });
+
+  it('shows a measured fusion carry plainly and a calculated one as estimated', () => {
+    const measured = byId(
+      buildLiveMetrics(makeShot({ carry_status: 'measured' }), 'imperial', emptySwingStats),
+      'carry'
+    );
+    const calculated = byId(
+      buildLiveMetrics(makeShot({ carry_status: 'calculated' }), 'imperial', emptySwingStats),
+      'carry'
+    );
+
+    expect(measured).toMatchObject({ value: '214', unit: 'yds' });
+    expect(measured.estimated).toBeUndefined();
+    expect(calculated).toMatchObject({ value: '214', estimated: true });
+  });
+
   it('signs the directional angles and labels the shot shape', () => {
     const metrics = buildLiveMetrics(makeShot(), 'imperial', emptySwingStats);
 

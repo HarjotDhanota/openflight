@@ -83,6 +83,15 @@ describe('ShotsPanel', () => {
     }
   });
 
+  it('shows the reported carry, and no value for a fusion carry that is not measured', () => {
+    const measured = render([makeShot({ carry_status: 'measured', carry_spin_adjusted: 236 })]);
+    const notMeasured = render([makeShot({ carry_status: 'not_measured', estimated_carry_yards: 210 })]);
+
+    expect(measured).toContain('>236<');
+    expect(measured).not.toContain('>210<');
+    expect(notMeasured).not.toContain('>210<');
+  });
+
   it('numbers rows newest-first', () => {
     const html = render([makeShot({ timestamp: 'a' }), makeShot({ timestamp: 'b' }), makeShot({ timestamp: 'c' })]);
     const indexes = [...html.matchAll(/shots-panel__index">(\d+)</g)].map((m) => m[1]);

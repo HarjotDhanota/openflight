@@ -284,10 +284,10 @@ function LastTriggerCard({ diag }: { diag: TriggerDiagnostic | null }) {
                   <span className="last-trigger__shot-value">{diag.spin_rpm.toFixed(0)} rpm</span>
                 </div>
               )}
-              {diag.carry_yards && (
+              {diag.table_carry_estimate_yards && (
                 <div className="last-trigger__shot-item">
-                  <span className="last-trigger__shot-label">Carry</span>
-                  <span className="last-trigger__shot-value">{diag.carry_yards.toFixed(0)} yds</span>
+                  <span className="last-trigger__shot-label">Table carry (diagnostic)</span>
+                  <span className="last-trigger__shot-value">{diag.table_carry_estimate_yards.toFixed(0)} yds</span>
                 </div>
               )}
             </div>

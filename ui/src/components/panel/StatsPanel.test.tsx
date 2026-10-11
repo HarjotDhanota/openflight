@@ -75,6 +75,19 @@ describe('StatsPanel', () => {
     expect(html).toContain('metric-card__value">96.0<'); // max
   });
 
+  it('averages only reported carries and shows no value when none was measured', () => {
+    const mixed = render([
+      makeShot({ carry_status: 'measured', carry_spin_adjusted: 240 }),
+      makeShot({ carry_status: 'not_measured', timestamp: 'b' }),
+    ]);
+    const none = render([makeShot({ carry_status: 'not_measured' })]);
+
+    expect(mixed).toContain('metric-card__value">240<');
+    expect(mixed).not.toContain('metric-card__value">220<'); // (240 + 200) / 2
+    expect(none).not.toContain('metric-card__value">200<');
+    expect(none).toMatch(/Avg carry<[\s\S]*?metric-card__value">—</);
+  });
+
   it('keeps the tile count stable when club speed is missing', () => {
     // Six tiles either way, so the 3x2 grid never reflows.
     const html = render([makeShot({ club_speed_mph: null, smash_factor: null })]);

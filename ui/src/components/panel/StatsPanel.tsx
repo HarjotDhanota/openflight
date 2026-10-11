@@ -116,8 +116,8 @@ export function StatsPanel({ shots, activeClub, profileId, profileName, headerAc
       {
         id: 'avg_carry',
         label: t('stats.avgCarry'),
-        value: formatDistance(stats.avg_carry_est, unitSystem, 0),
-        unit: distanceUnit,
+        value: stats.avg_carry_est === null ? '—' : formatDistance(stats.avg_carry_est, unitSystem, 0),
+        unit: stats.avg_carry_est === null ? undefined : distanceUnit,
       },
       {
         id: 'avg_club',

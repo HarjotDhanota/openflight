@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { CameraCaptureSettings } from '../stores/useCameraStore';
 import type { Shot } from '../types/shot';
-import { computeSwingSpeedStats, getSwingSpeedMph, isSwingSpeedShot } from '../types/shot';
+import { computeSwingSpeedStats, getSwingSpeedMph, isSwingSpeedShot, reportedCarryYards } from '../types/shot';
 import { useUnitPreference } from '../state/useUnitPreference';
 import { formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../utils/units';
 import { getServerOrigin } from '../utils/serverOrigin';
@@ -29,6 +29,12 @@ interface DisplayMetric {
 const CAMERA_PREVIEW_URL = `${getServerOrigin()}/api/camera/preview.jpg`;
 const CAMERA_PREVIEW_REFRESH_MS = 5_000;
 const RECENT_SHOT_COUNT = 5;
+
+/** A carry, or the placeholder when it is not measured (a fusion unit fills nothing in, D17). */
+function formatCarry(shot: Shot, unitSystem: 'imperial' | 'metric'): string {
+  const carry = reportedCarryYards(shot);
+  return carry === null ? '--' : formatDistance(carry, unitSystem, 0);
+}
 
 function formatOptionalNumber(value: number | null, digits = 1, prefixPositive = false): string {
   if (value === null) {
@@ -67,7 +73,7 @@ function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric', t: T
     ];
   }
 
-  const carryYards = shot.carry_spin_adjusted ?? shot.estimated_carry_yards;
+  const carryYards = reportedCarryYards(shot);
   const fusedDeliveryAttempted = shot.experimental_fused_status != null;
 
   return [
@@ -78,9 +84,9 @@ function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric', t: T
     },
     {
       label: t('metric.carry'),
-      value: formatDistance(carryYards, unitSystem, 0),
-      unit: getDistanceUnit(unitSystem),
-      detail: shot.carry_spin_adjusted ? t('metric.spinAdjusted') : undefined,
+      value: formatCarry(shot, unitSystem),
+      unit: carryYards === null ? undefined : getDistanceUnit(unitSystem),
+      detail: carryYards !== null && shot.carry_spin_adjusted ? t('metric.spinAdjusted') : undefined,
     },
     {
       label: t('display.clubSpeed'),
@@ -279,8 +285,8 @@ export function DisplayMode({ connected, captureSettings, latestShot, shots }: D
               </span>
               {!isSwingSpeedShot(shot) && (
                 <span className="display-shot-chip__stat">
-                  {formatDistance(shot.carry_spin_adjusted ?? shot.estimated_carry_yards, unitSystem, 0)}{' '}
-                  {getDistanceUnit(unitSystem)}
+                  {formatCarry(shot, unitSystem)}
+                  {reportedCarryYards(shot) === null ? null : ` ${getDistanceUnit(unitSystem)}`}
                 </span>
               )}
             </div>

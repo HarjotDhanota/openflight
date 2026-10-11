@@ -48,6 +48,23 @@ describe('DisplayMode', () => {
     expect(html).not.toContain('display-metric');
   });
 
+  it('shows a fusion carry that is not measured as no value in the card and the shot strip', () => {
+    const fusionShot: Shot = {
+      ...shot,
+      carry_status: 'not_measured',
+      carry_spin_adjusted: null,
+      estimated_carry_yards: 254,
+    };
+
+    const html = renderToString(
+      <DisplayMode connected captureSettings={captureSettings} latestShot={fusionShot} shots={[fusionShot]} />
+    );
+
+    expect(html).not.toContain('254');
+    expect(html).not.toContain('Spin-adjusted');
+    expect(html).toMatch(/display-shot-chip__stat">--/);
+  });
+
   it('does not request a preview when camera capture is unavailable', () => {
     const html = renderToString(
       <DisplayMode connected captureSettings={{ available: false }} latestShot={shot} shots={[shot]} />

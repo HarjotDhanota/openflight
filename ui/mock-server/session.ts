@@ -3,6 +3,7 @@
  */
 
 import type { SessionStats, Shot, TriggerStatus } from '../src/types/shot.js';
+import { reportedCarryYards } from '../src/types/shot.js';
 import type { RadarConfig } from '../src/types/socket.js';
 import type { Profile } from '../src/types/profile.js';
 import { generateShot } from './shotGenerator.js';
@@ -36,6 +37,7 @@ export function computeSessionStats(shots: Shot[]): SessionStats {
   const clubSpeeds = shots.map((s) => s.club_speed_mph).filter((v): v is number => v != null);
   const smashFactors = shots.map((s) => s.smash_factor).filter((v): v is number => v != null);
   const spinRpms = shots.map((s) => s.spin_rpm).filter((v): v is number => v != null);
+  const carries = shots.map(reportedCarryYards).filter((v): v is number => v !== null);
 
   return {
     shot_count: shots.length,
@@ -45,7 +47,7 @@ export function computeSessionStats(shots: Shot[]): SessionStats {
     std_dev: stdDev(ballSpeeds),
     avg_club_speed: clubSpeeds.length ? mean(clubSpeeds) : null,
     avg_smash_factor: smashFactors.length ? mean(smashFactors) : null,
-    avg_carry_est: mean(shots.map((s) => s.estimated_carry_yards)),
+    avg_carry_est: carries.length ? mean(carries) : null,
     avg_spin_rpm: spinRpms.length ? mean(spinRpms) : null,
     spin_detection_rate: shots.length ? spinRpms.length / shots.length : 0,
     mode: 'rolling-buffer',

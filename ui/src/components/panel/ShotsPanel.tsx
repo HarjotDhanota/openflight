@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { Shot } from '../../types/shot';
-import { filterShotsByProfile, getSwingSpeedMph, isSwingSpeedShot } from '../../types/shot';
+import { filterShotsByProfile, getSwingSpeedMph, isSwingSpeedShot, reportedCarryYards } from '../../types/shot';
 import { useDragScroll } from '../../hooks/useDragScroll';
 import { useUnitPreference } from '../../state/useUnitPreference';
 import { useSystemStore } from '../../stores/useSystemStore';
@@ -46,12 +46,14 @@ function rowValues(shot: Shot, unitSystem: UnitSystem): string[] {
     ];
   }
 
+  // a fusion unit's unmeasured carry shows as no value, never the table (D17)
+  const carry = reportedCarryYards(shot);
   return [
     formatSpeed(shot.ball_speed_mph, unitSystem, 1),
     shot.club_speed_mph === null ? '—' : formatSpeed(shot.club_speed_mph, unitSystem, 1),
     optionalNumber(shot.launch_angle_vertical),
     shot.spin_rpm === null ? '—' : shot.spin_rpm.toLocaleString(getHtmlLang(), { maximumFractionDigits: 0 }),
-    formatDistance(shot.estimated_carry_yards, unitSystem, 0),
+    carry === null ? '—' : formatDistance(carry, unitSystem, 0),
   ];
 }
 
