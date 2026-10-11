@@ -541,3 +541,46 @@ def test_the_pre_final_snapshot_says_verification_is_pending(tmp_path, monkeypat
     assert first["final_steps"] == "pending" and first["restoration_verified"] is None
     assert first["restoration_reason"] == "pending_final_steps"
     assert last["final_steps"] == "done" and last["restoration_reason"] is None
+
+
+def _fail_first_report_write(monkeypatch, error):
+    """The pre-final snapshot write fails once (disk error, or a second Ctrl-C)."""
+    calls = []
+    real_write = script._write_report  # pylint: disable=protected-access
+
+    def first_fails(report, args):
+        calls.append(report.get("final_steps"))
+        if len(calls) == 1:
+            raise error
+        real_write(report, args)
+
+    monkeypatch.setattr(script, "_write_report", first_fails)
+    return calls
+
+
+@pytest.mark.parametrize(
+    "error,name",
+    [(OSError("disk full"), "OSError('disk full')"), (KeyboardInterrupt(), "KeyboardInterrupt()")],
+    ids=["io_error", "second_ctrl_c"],
+)
+def test_a_failed_first_report_write_still_rearms_requeries_and_disconnects(
+    tmp_path, monkeypatch, error, name
+):
+    """B-M8: the final re-arm, re-query, final report and disconnect all still happen."""
+    calls = _fail_first_report_write(monkeypatch, error)
+    code, report, radar = _run(tmp_path)
+    assert calls == ["pending", report["final_steps"]]  # the final write still ran
+    assert report["report_write_error"] == name
+    assert report["final_rearm"] not in (None, "failed")
+    assert len(radar.rearms) >= 1  # the final re-arm after the mutations
+    assert report["queries_after"]  # re-queried
+    assert report["restoration_verified"] is True
+    assert radar.disconnected is True
+    if isinstance(error, KeyboardInterrupt):
+        assert code == 130
+        assert any(e["error"] == "interrupted" for e in report["errors"])
+
+
+def test_a_successful_first_report_write_records_no_write_error(tmp_path):
+    _code, report, _radar = _run(tmp_path)
+    assert report["report_write_error"] is None

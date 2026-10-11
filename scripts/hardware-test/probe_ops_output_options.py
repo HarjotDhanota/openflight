@@ -405,7 +405,9 @@ def _finish(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     """Final re-arm (only after a mutation), re-query, verify, write the report, disconnect.
 
     The report (with the journal) is written first, so an interrupt during these steps
-    still leaves it; then rewritten at the end. Returns True when interrupted here.
+    still leaves it; then rewritten at the end. A failure of that first write (an I/O
+    error, or a second Ctrl-C) is recorded as ``report_write_error`` and never skips
+    the re-arm, re-query, final report or disconnect. Returns True when interrupted here.
     """
     after: dict = {}
     report["journal"] = journal.entries
@@ -413,8 +415,15 @@ def _finish(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     report["queries_after"] = after
     report["restoration_verified"] = None
     report["restoration_reason"] = "pending_final_steps"
-    _write_report(report, args)
+    report["report_write_error"] = None
     interrupted = False
+    try:
+        _write_report(report, args)
+    except BaseException as error:  # pylint: disable=broad-exception-caught
+        report["report_write_error"] = repr(error)
+        if isinstance(error, KeyboardInterrupt):
+            interrupted = True
+            report["errors"].append({"candidate": None, "error": "interrupted"})
     try:
         if not connected:
             report["final_rearm"] = "skipped_not_connected"
