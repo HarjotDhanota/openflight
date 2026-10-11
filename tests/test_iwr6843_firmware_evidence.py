@@ -1225,6 +1225,7 @@ static void preempt(void)
     gPerfScanFrames = 444U;
     gPerfScanCyclesTotal = 0x400000004ULL;
     gIq8OverflowComponents = 44U;
+    gIq8OverflowSaturated = 1U;
 #ifdef L3_IQ8_EDMA_PACK
     gPerfPackMaxCycles = 555555U;
     gPerfPacks = 555U;
@@ -1247,6 +1248,10 @@ int main(int argc, char **argv)
     } else if (strcmp(mode, "no-ctrl") == 0) {
         drive();
         gCtrlTask = NULL;
+    } else if (strcmp(mode, "saturated") == 0) {
+        drive();
+        gIq8OverflowComponents = 0xFFFFFFFFU;
+        gIq8OverflowSaturated = 1U;
     } else if (strcmp(mode, "preempted") == 0) {
         drive();
         gOnHwiRestore = preempt;
@@ -1346,6 +1351,7 @@ def test_perfstats_replies_four_parseable_lines_with_the_measured_marks(tmp_path
     assert values["packs"] == (2,)
     assert values["pack_overlap"] == (3,)
     assert values["iq8_overflow"] == (9,)
+    assert values["iq8_overflow_saturated"] == (0,)
     assert values["heap_size"] == (32768,)
     assert values["heap_free"] == (12000,)
     assert values["heap_free_min"] == (9000,)  # the sampled low point, not the current value
@@ -1451,6 +1457,8 @@ def _locked_section(function: str) -> tuple[str, str]:
                 "gPerfScanCyclesTotal += cycles;",
                 "gPerfScanFrames++;",
                 "gIq8OverflowComponents += overflow;",
+                "gIq8OverflowComponents = 0xFFFFFFFFU;",
+                "gIq8OverflowSaturated = 1U;",
             ),
         ),
         (
@@ -1508,6 +1516,7 @@ def test_perfstats_snapshots_every_isr_or_task_written_value_once():
         "gPerfScanFrames",
         "gPerfScanCyclesTotal",
         "gIq8OverflowComponents",
+        "gIq8OverflowSaturated",
         "gPerfPackMaxCycles",
         "gPerfPacks",
         "gPerfPackOverlap",
@@ -1534,3 +1543,98 @@ def test_the_margin_is_documented_as_including_isr_entry_latency():
     assert "entry latency" in comment[: comment.index("*/")]
     assert "gPerfMarginMin" in helper
     assert "frame-start ISR entry latency" in row
+
+
+# --- Task 5 fix round 2: the IQ8 overflow total saturates, and says so ---------------------
+
+# Drives l3_scanIq8Scratch near the 32-bit limit of the session's overflow total. Frame 0
+# (ping) has 3 components outside int8, frame 1 (pong) has none. Made-up values.
+SATURATION_HARNESS_MAIN = r"""
+#include <stdio.h>
+#include <string.h>
+
+static void show(void)
+{
+    printf("%u %u\n", (unsigned)gIq8OverflowComponents, (unsigned)gIq8OverflowSaturated);
+}
+
+int main(void)
+{
+    const int16_t ping[6] = {12, -200, 127, -128, 300, -32768};
+    uint32_t i;
+
+    for (i = 0U; i < 6U; i++) {
+        g_iq16FrameScratch[0][i] = ping[i];
+    }
+    gFrameBytes[0] = 6U;
+    gFrameBytes[1] = 4U;   /* the pong scratch is all zeros: no overflow */
+    gStep = 10U;
+
+    gIq8OverflowComponents = 0xFFFFFFFCU;
+    l3_scanIq8Scratch(0U, 0U);      /* + 3 lands exactly on 0xFFFFFFFF: still exact */
+    show();
+    l3_scanIq8Scratch(1U, 1U);      /* + 0: still exact */
+    show();
+    l3_scanIq8Scratch(0U, 0U);      /* + 3 would wrap to 2: saturates instead */
+    show();
+    l3_scanIq8Scratch(1U, 1U);      /* stays saturated */
+    show();
+    gIq8OverflowComponents = 0xFFFFFFFEU;
+    gIq8OverflowSaturated = 0U;
+    l3_scanIq8Scratch(0U, 0U);      /* + 3 from 0xFFFFFFFE: saturates */
+    show();
+    l3_resetPerf();                 /* a new sensorStart clears both */
+    show();
+    printf("hwi_depth=%ld\n", gHwiDepth);
+    return 0;
+}
+"""
+
+
+def test_the_overflow_total_saturates_instead_of_wrapping(tmp_path):
+    """No fill-ins: a wrapped total would read as a small, measured-looking count."""
+    source = FIRMWARE.read_text(encoding="utf-8")
+    program = (
+        SCRATCH_HARNESS_PRELUDE
+        + EVIDENCE_PRELUDE
+        + _evidence_block(source)
+        + SCRATCH_HARNESS_STANDINS
+        + _scan_source(source)
+        + SATURATION_HARNESS_MAIN
+    )
+    lines = _run_c(program, tmp_path, flags=("-Wno-unused-variable",)).splitlines()
+
+    assert lines == [
+        "4294967295 0",
+        "4294967295 0",
+        "4294967295 1",
+        "4294967295 1",
+        "4294967295 1",
+        "0 0",
+        "hwi_depth=0",
+    ]
+
+
+def test_perfstats_flags_a_saturated_overflow_total_in_the_parser_grammar(tmp_path):
+    """iq8_overflow stays numeric (Task 6's grammar); iq8_overflow_saturated=1 marks it as a
+    floor, not a count."""
+    lines = _perfstats(tmp_path, "saturated")
+    values = _fields(lines[:4])
+
+    assert values["iq8_overflow"] == (4294967295,)
+    assert values["iq8_overflow_saturated"] == (1,)
+    assert lines[1].endswith(" iq8_overflow=4294967295 iq8_overflow_saturated=1")
+
+
+def test_the_saturation_flag_resets_with_the_perf_marks_and_is_documented():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    block = _evidence_block(source)
+    guide = (Path(__file__).parents[1] / "docs" / "development" / "firmware.md").read_text(
+        encoding="utf-8"
+    )
+    row = next(line for line in guide.splitlines() if line.startswith("| `perfstats` |"))
+
+    assert "static uint8_t  gIq8OverflowSaturated;" in block
+    reset = _function_source(block, "static void l3_resetPerf", "static void l3_perfNoteArmed")
+    assert "    gIq8OverflowSaturated = 0U;" in reset
+    assert "iq8_overflow_saturated=1" in row

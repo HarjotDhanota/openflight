@@ -519,7 +519,8 @@ static void l3_recordFrameEvidence(uint32_t slot, uint32_t doneTick)
 static uint32_t gPerfScanMaxCycles;
 static uint32_t gPerfScanFrames;
 static uint64_t gPerfScanCyclesTotal;   /* 64-bit: 32 bits wraps within minutes at 2 ms */
-static uint32_t gIq8OverflowComponents;
+static uint32_t gIq8OverflowComponents;   /* saturates at 0xFFFFFFFF, never wraps */
+static uint8_t  gIq8OverflowSaturated;    /* 1: the total above is a floor, not a count */
 static uint32_t gPerfRearmMaxCycles;
 static uint32_t gPerfRearms;
 static uint32_t gPerfTaskMaxCycles;
@@ -543,6 +544,7 @@ static void l3_resetPerf(void)
     gPerfScanFrames = 0U;
     gPerfScanCyclesTotal = 0U;
     gIq8OverflowComponents = 0U;
+    gIq8OverflowSaturated = 0U;
     gPerfRearmMaxCycles = 0U;
     gPerfRearms = 0U;
     gPerfTaskMaxCycles = 0U;
@@ -1987,7 +1989,14 @@ static void l3_scanIq8Scratch(uint32_t slot, uint8_t scratch)
     }
     gPerfScanCyclesTotal += cycles;
     gPerfScanFrames++;
-    gIq8OverflowComponents += overflow;
+    /* Saturate: about 24k components a frame at 2 ms can wrap 32 bits in minutes, and a
+     * wrapped total would read as a small, measured-looking count. */
+    if (overflow > 0xFFFFFFFFU - gIq8OverflowComponents) {
+        gIq8OverflowComponents = 0xFFFFFFFFU;
+        gIq8OverflowSaturated = 1U;
+    } else {
+        gIq8OverflowComponents += overflow;
+    }
     Hwi_restore(key);
 }
 #endif
@@ -3212,6 +3221,7 @@ static int32_t l3_cli_perfStats(int32_t argc, char *argv[])
     uint32_t scanFrames;
     uint64_t scanTotal;
     uint32_t overflow;
+    uint8_t overflowSaturated;
     uint32_t packMax;
     uint32_t packs;
     uint32_t packOverlap;
@@ -3234,6 +3244,7 @@ static int32_t l3_cli_perfStats(int32_t argc, char *argv[])
     scanFrames = gPerfScanFrames;
     scanTotal = gPerfScanCyclesTotal;
     overflow = gIq8OverflowComponents;
+    overflowSaturated = gIq8OverflowSaturated;
     packMax = gPerfPackMaxCycles;
     packs = gPerfPacks;
     packOverlap = gPerfPackOverlap;
@@ -3248,11 +3259,11 @@ static int32_t l3_cli_perfStats(int32_t argc, char *argv[])
               (unsigned)marginMin, (unsigned)marginFrames);
 #ifdef L3_IQ8_SCAN
     CLI_write("perf scan_max=%u scan_frames=%u scan_total_hi=%u scan_total_lo=%u "
-              "pack_max=%u packs=%u pack_overlap=%u iq8_overflow=%u\n",
+              "pack_max=%u packs=%u pack_overlap=%u iq8_overflow=%u iq8_overflow_saturated=%u\n",
               (unsigned)scanMax, (unsigned)scanFrames,
               (unsigned)(scanTotal >> 32), (unsigned)(scanTotal & 0xFFFFFFFFU),
               (unsigned)packMax, (unsigned)packs,
-              (unsigned)packOverlap, (unsigned)overflow);
+              (unsigned)packOverlap, (unsigned)overflow, (unsigned)overflowSaturated);
 #else
     CLI_write("perf scan=not_in_build pack=not_in_build\n");
 #endif
