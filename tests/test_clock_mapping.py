@@ -10,7 +10,7 @@ FS = 30_000
 SEGMENT_NS = round(cm.SEGMENT_SAMPLES / FS * 1e9)  # 4,266,667 ns
 POST_NS = round(16 * 128 / FS * 1e9)  # S#16 on 4096 samples: 68.27 ms after the trigger
 MAX_DELAY_NS = 300_000_000  # OPS243Radar.GATE_EDGE_DUMP_TIMEOUT_S
-FB = {"max_dump_delay_s": 0.3, "segment_s": cm.SEGMENT_SAMPLES / FS}
+FB = {"max_dump_delay_s": 300_000_000 / 1e9, "segment_s": cm.SEGMENT_SAMPLES / FS}
 WALL_OFFSET_NS = 1_789_990_000_000_000_000  # wall − monotonic in these examples
 
 
@@ -342,3 +342,60 @@ def test_consistency_requires_one_edge_and_one_sync():
     assert cm.consistency(sync, other_sync)["evaluated"] is False
     assert cm.consistency(shared, shared)["evaluated"] is False
     assert cm.consistency(shared, sync)["evaluated"] is True
+
+
+# ---- fix round 2 ----
+def _detail(edges, first_byte_ns):
+    return cm.associate_edge_detail(
+        edges,
+        first_byte_ns,
+        post_trigger_ns=POST_NS,
+        segment_ns=SEGMENT_NS,
+        max_dump_delay_ns=MAX_DELAY_NS,
+    )
+
+
+def test_nan_previous_callback_is_an_invalid_reading_not_a_skipped_gap_check():
+    assert _mapping(previous_callback_mono_ns=NAN).reason == "edge_reading_invalid"
+
+
+def test_ambiguity_names_the_ageless_blocker_30s_later():
+    fb = 10_000_000_000
+    good = _edge(1, fb - 86_000_000)
+    ageless = cm.EdgeObservation(
+        9, fb + 29_000_000_000, fb + 29_001_000_000, None, 0, 1, "LGPIOFactory"
+    )
+    result = _detail([good, ageless], fb)
+    assert (result.edge, result.reason) == (None, "edge_ambiguous")
+    assert result.candidate_seqs == (1, 9)
+    assert result.unusable_seqs == (9,)
+    assert _associate([good, ageless], fb) == (None, "edge_ambiguous")
+
+
+def test_detail_for_associated_and_unobserved():
+    good = _edge(1, 10_000_000_000)
+    ok = _detail([good], 10_086_000_000)
+    assert (ok.edge, ok.reason, ok.candidate_seqs, ok.unusable_seqs) == (
+        good,
+        "associated",
+        (1,),
+        (),
+    )
+    none = _detail([good], 10_020_000_000)
+    assert (none.edge, none.reason, none.candidate_seqs) == (None, "edge_unobserved", ())
+
+
+def test_nan_mono_after_is_always_a_candidate():
+    fb = 10_000_000_000
+    broken = cm.EdgeObservation(4, fb, NAN, 0, 0, 1, "LGPIOFactory")
+    good = _edge(2, fb - 86_000_000)
+    result = _detail([broken, good], fb)
+    assert result.reason == "edge_ambiguous" and result.unusable_seqs == (4,)
+
+
+def test_negative_age_edge_with_valid_readings_is_an_ambiguity_maker():
+    fb = 10_000_000_000
+    negative = cm.EdgeObservation(5, fb - 51_000_000, fb - 50_000_000, -7, 0, 1, "LGPIOFactory")
+    good = _edge(2, fb - 100_000_000)
+    result = _detail([negative, good], fb)
+    assert result.reason == "edge_ambiguous" and result.unusable_seqs == (5,)

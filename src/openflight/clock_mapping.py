@@ -88,22 +88,35 @@ class ClockMapping:  # pylint: disable=too-many-instance-attributes
         return asdict(self)
 
 
-def associate_edge(
+@dataclass(frozen=True)
+class Association:
+    """Outcome of associating a dump with GATE edges, with the competitors named."""
+
+    edge: Optional[EdgeObservation]
+    reason: str
+    candidate_seqs: tuple = ()
+    unusable_seqs: tuple = ()  # candidates with no usable kernel time (age-less or invalid)
+
+
+def associate_edge_detail(
     edges: Sequence[EdgeObservation],
     first_byte_mono_ns: int,
     *,
     post_trigger_ns: int,
     segment_ns: int,
     max_dump_delay_ns: int,
-) -> tuple[Optional[EdgeObservation], str]:
-    """Find the one edge that can have started this dump, or say why there is none."""
+) -> Association:
+    """Find the one edge that can have started this dump, naming every competitor."""
     candidates = []
+    unusable = []
     for edge in edges:
         if edge.kernel_mono_interval_ns() is None:
             # No usable kernel time: the edge is only known to be at or before mono_after.
             # It can never qualify, but it can still be the edge that started this dump.
+            # Fail closed: there is no lower bound, so it also blocks earlier dumps.
             if not _finite(edge.mono_after_ns):
                 candidates.append(edge)
+                unusable.append(edge)
                 continue
             widen = max(0, edge.mono_after_ns - edge.mono_before_ns) if edge.readings_valid() else 0
             if (
@@ -111,6 +124,7 @@ def associate_edge(
                 <= post_trigger_ns + max_dump_delay_ns + widen
             ):
                 candidates.append(edge)
+                unusable.append(edge)
             continue
         widen = edge.mono_after_ns - edge.mono_before_ns
         lag = first_byte_mono_ns - edge.association_mono_ns()
@@ -120,11 +134,32 @@ def associate_edge(
             <= post_trigger_ns + max_dump_delay_ns + widen
         ):
             candidates.append(edge)
+    seqs = tuple(e.edge_seq for e in candidates)
+    bad = tuple(e.edge_seq for e in unusable)
     if not candidates:
-        return None, "edge_unobserved"
+        return Association(None, "edge_unobserved")
     if len(candidates) > 1:
-        return None, "edge_ambiguous"
-    return candidates[0], "associated"
+        return Association(None, "edge_ambiguous", seqs, bad)
+    return Association(candidates[0], "associated", seqs, bad)
+
+
+def associate_edge(
+    edges: Sequence[EdgeObservation],
+    first_byte_mono_ns: int,
+    *,
+    post_trigger_ns: int,
+    segment_ns: int,
+    max_dump_delay_ns: int,
+) -> tuple[Optional[EdgeObservation], str]:
+    """Find the one edge that can have started this dump, or say why there is none."""
+    result = associate_edge_detail(
+        edges,
+        first_byte_mono_ns,
+        post_trigger_ns=post_trigger_ns,
+        segment_ns=segment_ns,
+        max_dump_delay_ns=max_dump_delay_ns,
+    )
+    return result.edge, result.reason
 
 
 def _unqualified(reason: str, edge_seq: Optional[int] = None) -> ClockMapping:
@@ -148,6 +183,8 @@ def shared_edge_mapping(  # pylint: disable=too-many-return-statements
         return _unqualified("edge_reading_invalid", seq)
     if edge.edge_age_ns < 0:
         return _unqualified("edge_age_negative", seq)
+    if edge.previous_callback_mono_ns is not None and not _finite(edge.previous_callback_mono_ns):
+        return _unqualified("edge_reading_invalid", seq)
     if (
         edge.previous_callback_mono_ns is not None
         and edge.edge_age_ns >= edge.mono_before_ns - edge.previous_callback_mono_ns
