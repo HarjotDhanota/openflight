@@ -80,10 +80,11 @@ EVIDENCE_PRELUDE = """#include <stdint.h>
 #endif
 #define __MCR(cp, op1, src, crn, crm, op2) ((void)((cp) + (op1) + (src) + (crn) + (crm) + (op2)))
 typedef struct { unsigned long totalSize, totalFreeSize, largestFreeSize; } Memory_Stats;
+static Memory_Stats gStubHeap;  /* all zero unless a harness sets it */
 static void Memory_getStats(void *heap, Memory_Stats *stats)
 {
     (void)heap;
-    memset(stats, 0, sizeof(*stats));
+    memcpy(stats, &gStubHeap, sizeof(*stats));
 }
 """
 
@@ -94,8 +95,10 @@ def _evidence_block(source: str) -> str:
     return source[start:end]
 
 
-def test_the_evidence_block_compiles_in_order_as_c99(tmp_path):
-    """Every helper is declared before use (S12). Not a substitute for the TI build."""
+@pytest.mark.parametrize("pack_flags", [(), ("-DL3_IQ8_EDMA_PACK",)], ids=["cpu", "edma"])
+def test_the_evidence_block_compiles_in_order_as_c99(tmp_path, pack_flags):
+    """Every helper is declared before use (S12), with and without the EDMA pack's perf
+    state. Not a substitute for the TI build."""
     probe = tmp_path / "evidence_block.c"
     probe.write_text(
         EVIDENCE_PRELUDE + _evidence_block(FIRMWARE.read_text(encoding="utf-8")),
@@ -112,6 +115,7 @@ def test_the_evidence_block_compiles_in_order_as_c99(tmp_path):
             "-Wno-unused-function",
             "-Wno-unused-variable",
             "-Wno-unused-but-set-variable",
+            *pack_flags,
             "-I",
             str(FIRMWARE_DIR),
             str(probe),
@@ -783,11 +787,11 @@ int main(void)
     for (i = 0U; i < 4U; i++) {
         show(i);
     }
-    printf("%u %u %u\n", (unsigned)gPerfScanMaxCycles, (unsigned)gPerfScanFrames,
-           (unsigned)gIq8OverflowComponents);
+    printf("%u %u %u %llu\n", (unsigned)gPerfScanMaxCycles, (unsigned)gPerfScanFrames,
+           (unsigned)gIq8OverflowComponents, (unsigned long long)gPerfScanCyclesTotal);
     l3_resetPerf();
-    printf("%u %u %u\n", (unsigned)gPerfScanMaxCycles, (unsigned)gPerfScanFrames,
-           (unsigned)gIq8OverflowComponents);
+    printf("%u %u %u %llu\n", (unsigned)gPerfScanMaxCycles, (unsigned)gPerfScanFrames,
+           (unsigned)gIq8OverflowComponents, (unsigned long long)gPerfScanCyclesTotal);
     return 0;
 }
 """
@@ -812,8 +816,9 @@ def test_the_scan_records_each_frame_and_its_cost(tmp_path):
     assert lines[1] == f"0 4 {scanned}"
     assert lines[2] == f"{0x1111} {0x2222} {associated}"  # zero components: unscanned
     assert lines[3] == f"{0x1111} {0x2222} {associated}"  # oversized frame: unscanned
-    assert lines[4] == "300 2 3"  # max cycles across the wrap, frames scanned, components
-    assert lines[5] == "0 0 0"
+    # worst elapsed scan ticks (across the wrap), frames scanned, components, elapsed total
+    assert lines[4] == "300 2 3 400"
+    assert lines[5] == "0 0 0 0"
 
 
 @pytest.mark.skipif(
@@ -906,3 +911,475 @@ def test_the_capture_flag_follows_the_plan_check():
     scan = _scan_source(source)
     assert "preFrames" not in scan
     assert "gFrameEvidenceFlags[slot] |= L3_FRAME_FLAG_IQ8_SCANNED;" in scan
+
+
+# --- Task 5: perfstats and l3bench ---------------------------------------------------------
+
+# Made-up values with known answers. The int16 kernel's worst case (-32768 in every component)
+# overflows 32 bits after two complex samples, so the 64-bit accumulation is exercised.
+POWER_PROBE = """#include <stdio.h>
+#include "l3_evidence.h"
+int main(void) {
+  const int16_t iq16[] = {3, 4, -32768, 0, -1, 1};
+  const int8_t iq8[] = {-128, 127, 2, -2};
+  const int16_t worst16[] = {-32768, -32768, -32768, -32768, -32768, -32768, -32768, -32768};
+  const int8_t worst8[] = {-128, -128, -128, -128};
+  unsigned long long a = (unsigned long long)l3_powerSumIq16(iq16, 3);
+  unsigned long long b = (unsigned long long)l3_powerSumIq8(iq8, 2);
+  unsigned long long c = (unsigned long long)l3_powerSumIq16(iq16, 0);
+  unsigned long long d = (unsigned long long)l3_powerSumIq16(worst16, 4);
+  unsigned long long e = (unsigned long long)l3_powerSumIq8(worst8, 2);
+  unsigned long long f = (unsigned long long)l3_powerSumIq8(iq8, 0);
+  printf("%llu %llu %llu %llu %llu %llu\\n", a, b, c, d, e, f);
+  return 0;
+}
+"""
+
+
+def test_power_sums_are_exact_known_answers(tmp_path):
+    """Run under UBSan: a signed int32 overflow (I*I + Q*Q can reach 2**31) would wrap to
+    the right answer on this host by accident, so only the sanitizer can catch it."""
+    sanitize = ("-fsanitize=undefined", "-fno-sanitize-recover=undefined")
+    out = _run_c(POWER_PROBE, tmp_path, flags=sanitize).split()
+
+    assert out == [
+        str(9 + 16 + 32768**2 + 0 + 1 + 1),
+        str(16384 + 16129 + 4 + 4),
+        "0",
+        str(8 * 32768**2),  # 2**33: past 32 bits
+        str(4 * 128**2),
+        "0",
+    ]
+
+
+UNUSED_HEADER_PROBE = '#include "l3_evidence.h"\nint main(void) { return 0; }\n'
+
+
+def test_header_helpers_are_inline_so_builds_that_skip_them_do_not_warn(tmp_path):
+    """Controller ruling (Task 4 review): every helper is static inline, so a build that uses
+    none of them gets no unused-function warning (here an error)."""
+    _build_c(UNUSED_HEADER_PROBE, tmp_path, flags=("-Wunused-function",))
+    header = (FIRMWARE_DIR / "l3_evidence.h").read_text(encoding="utf-8")
+
+    for name in (
+        "l3_iq8ScanComponents",
+        "l3_iq8ScanGuaranteed",
+        "l3_powerSumIq16",
+        "l3_powerSumIq8",
+    ):
+        assert re.search(rf"static inline \w+ {name}\(", header), name
+
+
+def test_perfstats_and_l3bench_are_registered_in_production_builds():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    table = source[source.rindex("cliCfg.tableEntry[0].cmd") : source.index("CLI_open(&cliCfg);")]
+
+    assert 'cliCfg.tableEntry[11].cmd           = "perfstats";' in table
+    assert "cliCfg.tableEntry[11].cmdHandlerFxn = l3_cli_perfStats;" in table
+    assert 'cliCfg.tableEntry[12].cmd           = "l3bench";' in table
+    assert "cliCfg.tableEntry[12].cmdHandlerFxn = l3_cli_bench;" in table
+    entry = table.index("cliCfg.tableEntry[11].cmd")
+    assert table.rindex("#ifdef L3_CAPTURE_EVIDENCE", 0, entry) > table.rindex("#endif", 0, entry)
+    assert table.index("cliCfg.tableEntry[10].cmd") < entry
+
+
+def test_l3bench_refuses_a_running_capture_before_timing():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    bench = _function_source(source, "static int32_t l3_cli_bench", "#ifdef ENABLE_HWA_SMOKE")
+
+    assert bench.index("if (gCaptureActive) {") < bench.index("start = l3_ticks();")
+    assert "l3_powerSumIq8((const int8_t *)g_ring" in bench
+    assert "l3_powerSumIq16((const int16_t *)g_ring" in bench
+
+
+def test_margin_is_measured_on_armed_frame_starts_only():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    isr = _function_source(
+        source, "static void l3_frameStartISR", "static int32_t l3_startFrontEnd"
+    )
+
+    note = isr.index("l3_perfNoteArmedFrameStart(now);")
+    assert isr.index("gActiveFrameFresh = 1U;") < note < isr.index("gHwaArmedForFrame = 0U;")
+
+
+def test_the_margin_reference_is_stamped_before_the_chain_reads_as_armed():
+    """A frame start that lands just after the arm still yields its (tiny) margin.
+
+    Stamping after the arm flag (in the rearm task's bookkeeping) would let that frame
+    start find no reference and drop exactly the near-miss margin_min exists to catch.
+    """
+    source = FIRMWARE.read_text(encoding="utf-8")
+    start_ring = _function_source(
+        source, "static int32_t l3_hwaStartRing", "static int32_t l3_configHwaProcessParam"
+    )
+    rearm_done = _function_source(
+        source, "static void l3_perfNoteRearmDone", "static void l3_perfNoteTaskDone"
+    )
+
+    note = start_ring.index("    l3_perfNoteArmed();\n")
+    assert note < start_ring.index("gHwaArmedForFrame = 1U;")
+    assert start_ring.rindex("#ifdef L3_CAPTURE_EVIDENCE", 0, note) > start_ring.rindex(
+        "HWA_setDMA2ACCManualTrig", 0, note
+    )
+    assert "gLastArmTick" not in rearm_done
+    assert "gArmTickValid" not in rearm_done
+
+
+def test_the_rearm_task_times_its_rearm_and_its_whole_iteration():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    task = _rearm_task(source)
+
+    start = task.index("uint32_t taskStart = l3_ticks();")
+    assert start < task.index("l3_perfNoteRearmDone(taskStart);")
+    assert task.index("gHwaRearms++;") < task.index("l3_perfNoteRearmDone(taskStart);")
+    assert task.rindex("l3_perfNoteTaskDone(taskStart);") < task.rindex("gHwaRearmBusy = 0U;")
+    # The whole iteration includes the normal path's IQ8 pack start and scan.
+    assert task.rindex("l3_startIq8PackAndScan(") < task.rindex("l3_perfNoteTaskDone(taskStart);")
+
+
+def test_pack_time_and_overlap_are_counted():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    start = _function_source(
+        source, "static int32_t l3_startIq8EdmaPack", "static void l3_waitForIq8EdmaScratch"
+    )
+    callback = _function_source(
+        source, "static void l3_hwaOutputDoneCB", "static int32_t l3_hwaStartRing"
+    )
+    done = _function_source(
+        source, "static void l3_iq8EdmaDoneCB", "static int32_t l3_startIq8EdmaPack"
+    )
+
+    assert start.index("gIq8PackStartTick[scratch] = l3_ticks();") < start.index(
+        "EDMA_startDmaTransfer"
+    )
+    assert done.index("gIq8EdmaBusy[scratch] = 0U;") < done.index("l3_perfNotePackDone(scratch);")
+    assert "gPerfPackOverlap++;" in callback
+    overlap = callback.index("gPerfPackOverlap++;")
+    assert overlap < callback.index("l3_recordFrameEvidence(completedSlot,")
+
+
+def test_task_handles_are_kept_for_the_stack_report():
+    """R-D3: one Task_stat call in a loop over a table of tasks, not one block per task."""
+    source = FIRMWARE.read_text(encoding="utf-8")
+    stacks = _function_source(
+        source, "static void l3_writeStackLine", "static int32_t l3_cli_perfStats"
+    )
+
+    assert "gInitTask = Task_create(l3_initTask, &taskParams, NULL);" in source
+    assert "gCtrlTask = Task_create(l3_mmwaveCtrlTask, &taskParams, NULL);" in source
+    assert "gRearmTask = Task_create(l3_hwaRearmTask, &taskParams, NULL);" in source
+    assert stacks.count("Task_stat(") == 1
+    assert "Task_stat(tasks[i], &stat);" in stacks
+    assert "Task_self()" in stacks  # the CLI task: perfstats runs in it
+    assert "Hwi_getStackInfo(&hwiInfo, TRUE);" in stacks
+    assert "#include <xdc/runtime/Memory.h>" in source
+
+
+def _perf_region(source: str) -> str:
+    """The perfstats and l3bench handlers with their #ifdef L3_CAPTURE_EVIDENCE guard."""
+    stacks = source.index("static void l3_writeStackLine")
+    start = source.rindex("#ifdef L3_CAPTURE_EVIDENCE", 0, stacks)
+    return source[start : source.index("#ifdef ENABLE_HWA_SMOKE", stacks)]
+
+
+def test_every_perfstats_write_fits_the_cli_write_buffer():
+    """Each CLI_write formats into a 256-byte buffer; every call stays well under it."""
+    region = _perf_region(FIRMWARE.read_text(encoding="utf-8"))
+    formats = re.findall(r'CLI_write\("([^"]*)"', region)
+    longest_name = max(len(name) for name in ("init", "ctrl", "rearm", "cli"))
+
+    assert len(formats) >= 4
+    for fmt in formats:
+        width = len(fmt.replace("%u", "").replace("%s", "").replace("\\n", "\n"))
+        width += 10 * fmt.count("%u") + longest_name * fmt.count("%s")
+        assert width < 200, fmt
+
+
+# Drives the firmware's own perfstats and l3bench handlers (with the evidence block) on the
+# host. Everything SDK-side is a stand-in: CLI_write prints, Task_stat returns made-up stack
+# figures, the cycle counter is gNow (advanced by gStep per read). Known answers only; this
+# checks the reply's shape and arithmetic, never that TI's compiler or SYS/BIOS agree.
+PERF_HARNESS_PRELUDE = r"""
+#include <stdint.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+static uint32_t gNow;
+static uint32_t gStep;
+#define __MRC(cp, op1, crn, crm, op2) (gNow += gStep)
+"""
+
+PERF_HARNESS_STANDINS = r"""
+#define TRUE 1
+typedef int *Task_Handle;
+typedef struct { unsigned long stackSize, used; } Task_Stat;
+typedef struct { unsigned long hwiStackPeak, hwiStackSize; } Hwi_StackInfo;
+static int gTaskObjects[4];
+static Task_Handle gInitTask = &gTaskObjects[0];
+static Task_Handle gCtrlTask = &gTaskObjects[1];
+static Task_Handle gRearmTask = &gTaskObjects[2];
+static Task_Handle Task_self(void) { return &gTaskObjects[3]; }
+static void Task_stat(Task_Handle task, Task_Stat *stat)
+{
+    unsigned long index = (unsigned long)(task - gTaskObjects);
+
+    stat->used = 100UL * (index + 1UL);
+    stat->stackSize = 1024UL * (index + 1UL);
+}
+static int Hwi_getStackInfo(Hwi_StackInfo *info, int computeStackDepth)
+{
+    info->hwiStackPeak = computeStackDepth ? 900UL : 0UL;  /* the peak needs the scan */
+    info->hwiStackSize = 2048UL;
+    return 0;
+}
+static long gHwiDepth;
+static uintptr_t Hwi_disable(void) { gHwiDepth++; return 7U; }
+static void Hwi_restore(uintptr_t key) { (void)key; gHwiDepth--; }
+static void CLI_write(const char *format, ...)
+{
+    va_list args;
+
+    va_start(args, format);
+    vprintf(format, args);
+    va_end(args);
+}
+static uint32_t gCpuClock = 200000000U;
+static volatile uint8_t gCaptureActive;
+static struct { uint32_t usedBytes; } gCapturePlan;
+static uint8_t g_ring[64] __attribute__((aligned(8)));
+static uint8_t gUsesIq8;
+static uint8_t l3_captureUsesIq8(void) { return gUsesIq8; }
+static uint32_t l3_captureBytesPerComplex(void) { return gUsesIq8 ? 2U : 4U; }
+"""
+
+PERF_HARNESS_MAIN = r"""
+static void drive(void)
+{
+    uint32_t taskStart;
+
+    l3_resetPerf();
+    gStep = 0U;
+    /* Iteration 1: woke at 1000, armed at 1400, rearm bookkeeping 1450, done 1900. */
+    gNow = 1000U; taskStart = l3_ticks();
+    gNow = 1400U; l3_perfNoteArmed();
+    gNow = 1450U; l3_perfNoteRearmDone(taskStart);
+    gNow = 1900U; l3_perfNoteTaskDone(taskStart);
+    l3_perfNoteArmedFrameStart(2400U);   /* margin 1000 */
+    l3_perfNoteArmedFrameStart(2500U);   /* no new arm: no second margin */
+    /* Iteration 2 straddles the counter wrap. */
+    gNow = 0xFFFFFF00U; taskStart = l3_ticks();
+    gNow = 0xFFFFFFF0U; l3_perfNoteArmed();
+    gNow = 0x10U; l3_perfNoteRearmDone(taskStart);    /* 0x110 */
+    gNow = 0x200U; l3_perfNoteTaskDone(taskStart);    /* 0x300 */
+    l3_perfNoteArmedFrameStart(0x30U);                /* margin 0x40 */
+#ifdef L3_IQ8_EDMA_PACK
+    gIq8PackStartTick[1] = 5000U;
+    gNow = 5300U; l3_perfNotePackDone(1U);
+    gIq8PackStartTick[0] = 6000U;
+    gNow = 6100U; l3_perfNotePackDone(0U);
+    gPerfPackOverlap = 3U;
+#endif
+    gPerfScanMaxCycles = 700U;
+    gPerfScanFrames = 2U;
+    gPerfScanCyclesTotal = 0x100000005ULL;
+    gIq8OverflowComponents = 9U;
+    gStubHeap.totalSize = 32768UL;
+    gStubHeap.totalFreeSize = 9000UL;   /* the low point, sampled after a dump */
+    gStubHeap.largestFreeSize = 8000UL;
+    l3_sampleHeap();
+    gStubHeap.totalFreeSize = 12000UL;
+    gStubHeap.largestFreeSize = 11000UL;
+}
+
+int main(int argc, char **argv)
+{
+    const char *mode = argc > 1 ? argv[1] : "";
+
+    if (strcmp(mode, "fresh") == 0) {
+        gStubHeap.totalSize = 32768UL;
+        gStubHeap.totalFreeSize = 30000UL;
+        gStubHeap.largestFreeSize = 29000UL;
+        l3_resetPerf();
+    } else if (strcmp(mode, "reset") == 0) {
+        drive();
+        l3_resetPerf();   /* a new sensorStart: the heap low-water runs from boot */
+    } else if (strcmp(mode, "no-ctrl") == 0) {
+        drive();
+        gCtrlTask = NULL;
+    } else {
+        drive();
+    }
+    printf("result=%d\n", (int)l3_cli_perfStats(0, NULL));
+    printf("hwi_depth=%ld\n", gHwiDepth);
+    return 0;
+}
+"""
+
+BENCH_HARNESS_MAIN = r"""
+int main(int argc, char **argv)
+{
+    static const int16_t iq16[10] = {-32768, -32768, -32768, -32768, -32768,
+                                     -32768, -32768, -32768, 3, 4};
+    static const int8_t iq8[4] = {-128, 127, 2, -2};
+    const char *mode = argc > 1 ? argv[1] : "";
+    const uint32_t before = 0xFFFFFF80U;
+    int32_t result;
+
+    memcpy(g_ring, iq16, sizeof(iq16));
+    gCapturePlan.usedBytes = (uint32_t)sizeof(iq16);
+    if (strcmp(mode, "iq8") == 0) {
+        memset(g_ring, 0x55, sizeof(g_ring));   /* bytes past the plan must not count */
+        memcpy(g_ring, iq8, sizeof(iq8));
+        gCapturePlan.usedBytes = (uint32_t)sizeof(iq8);
+        gUsesIq8 = 1U;
+    } else if (strcmp(mode, "running") == 0) {
+        gCaptureActive = 1U;
+    } else if (strcmp(mode, "no-plan") == 0) {
+        gCapturePlan.usedBytes = 0U;
+    }
+    gStep = 250U;
+    gNow = before;   /* the end read wraps */
+    result = l3_cli_bench(0, NULL);
+    printf("result=%d reads=%u\n", (int)result, (unsigned)((gNow - before) / gStep));
+    return 0;
+}
+"""
+
+# The Task 6 parser's field grammar, restated so this reply is checked against it now.
+_PERF_TAGS = ("perf", "perf", "heap", "stacks")
+_PERF_FIELD = re.compile(r"(\w+)=(\d+)(?:/(\d+))?")
+
+
+def _perf_program(main: str) -> str:
+    source = FIRMWARE.read_text(encoding="utf-8")
+    return (
+        PERF_HARNESS_PRELUDE
+        + EVIDENCE_PRELUDE
+        + _evidence_block(source)
+        + PERF_HARNESS_STANDINS
+        + _perf_region(source)
+        + main
+    )
+
+
+_SCAN_BUILD = ("-DL3_IQ8_EDMA_PACK", "-DL3_IQ8_SCAN", "-Wno-unused-variable")
+_CPU_PACK_BUILD = ("-Wno-unused-variable",)
+
+
+def _perfstats(tmp_path: Path, mode: str, flags: tuple[str, ...] = _SCAN_BUILD) -> list[str]:
+    return _run_c(_perf_program(PERF_HARNESS_MAIN), tmp_path, mode, flags=flags).splitlines()
+
+
+def _fields(lines: list[str]) -> dict[str, tuple[int, ...]]:
+    assert [line.split()[0] for line in lines] == list(_PERF_TAGS)
+    values: dict[str, tuple[int, ...]] = {}
+    for tag, line in zip(_PERF_TAGS, lines, strict=True):
+        for word in line.split()[1:]:
+            match = _PERF_FIELD.fullmatch(word)
+            assert match is not None, word
+            key = ("" if tag == "perf" else f"{tag}_") + match.group(1)
+            assert key not in values, key
+            values[key] = tuple(int(group) for group in match.groups()[1:] if group is not None)
+    return values
+
+
+def test_perfstats_replies_four_parseable_lines_with_the_measured_marks(tmp_path):
+    lines = _perfstats(tmp_path, "driven")
+    values = _fields(lines[:4])
+
+    assert lines[4:] == ["result=0", "hwi_depth=0"]
+    assert values["tick_hz"] == (200_000_000,)
+    assert values["rearm_max"] == (450,)
+    assert values["rearms"] == (2,)
+    assert values["task_max"] == (900,)
+    assert values["task_runs"] == (2,)
+    assert values["margin_min"] == (0x40,)  # measured from the arm, across the wrap
+    assert values["margin_frames"] == (2,)
+    assert values["scan_max"] == (700,)
+    assert values["scan_frames"] == (2,)
+    assert (values["scan_total_hi"], values["scan_total_lo"]) == ((1,), (5,))
+    assert values["pack_max"] == (300,)
+    assert values["packs"] == (2,)
+    assert values["pack_overlap"] == (3,)
+    assert values["iq8_overflow"] == (9,)
+    assert values["heap_size"] == (32768,)
+    assert values["heap_free"] == (12000,)
+    assert values["heap_free_min"] == (9000,)  # the sampled low point, not the current value
+    assert values["heap_largest"] == (11000,)
+    assert values["stacks_init"] == (100, 1024)
+    assert values["stacks_ctrl"] == (200, 2048)
+    assert values["stacks_rearm"] == (300, 3072)
+    assert values["stacks_cli"] == (400, 4096)
+    assert values["stacks_hwi"] == (900, 2048)
+
+
+def test_perfstats_with_nothing_measured_shows_zero_counts_and_the_margin_sentinel(tmp_path):
+    """No fill-ins: every maximum comes with its count, and an unmeasured margin is
+    4294967295 beside margin_frames=0, never a plausible-looking 0."""
+    values = _fields(_perfstats(tmp_path, "fresh")[:4])
+
+    assert values["margin_min"] == (4294967295,)
+    for count in ("rearms", "task_runs", "margin_frames", "scan_frames", "packs"):
+        assert values[count] == (0,), count
+    assert values["heap_free_min"] == (30000,)  # perfstats samples the heap itself
+
+
+def test_a_new_sensor_start_resets_the_marks_but_not_the_heap_low_water(tmp_path):
+    values = _fields(_perfstats(tmp_path, "reset")[:4])
+
+    assert values["margin_min"] == (4294967295,)
+    assert values["rearm_max"] == values["task_max"] == values["pack_max"] == (0,)
+    assert values["rearms"] == values["task_runs"] == values["packs"] == (0,)
+    assert (values["scan_total_hi"], values["scan_total_lo"]) == ((0,), (0,))
+    assert values["heap_free_min"] == (9000,)  # since boot
+
+
+def test_a_task_without_a_handle_is_reported_missing_not_zero(tmp_path):
+    lines = _perfstats(tmp_path, "no-ctrl")
+
+    assert (
+        lines[3] == "stacks init=100/1024 ctrl=not_created rearm=300/3072 cli=400/4096 hwi=900/2048"
+    )
+
+
+def test_a_build_without_the_scan_says_so_instead_of_printing_zeros(tmp_path):
+    """Controller ruling: the CPU-pack build has no scan or EDMA pack to time."""
+    lines = _perfstats(tmp_path, "driven", flags=_CPU_PACK_BUILD)
+
+    assert len(lines) == 6
+    assert lines[1] == "perf scan=not_in_build pack=not_in_build"
+    assert lines[0].startswith("perf tick_hz=200000000 rearm_max=450 ")
+    assert lines[2].startswith("heap size=32768 ")
+    assert lines[3].startswith("stacks init=")
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        # 4 x (2 * 32768**2) + 3*3 + 4*4 = 2**33 + 25
+        ("iq16", ["bench samples=5 cycles=250 sum_hi=2 sum_lo=25", "result=0 reads=2"]),
+        ("iq8", ["bench samples=2 cycles=250 sum_hi=0 sum_lo=32521", "result=0 reads=2"]),
+        ("running", ["Error: stop the sensor before l3bench", "result=-1 reads=0"]),
+        ("no-plan", ["Error: no capture plan; send a config first", "result=-1 reads=0"]),
+    ],
+)
+def test_l3bench_times_one_pass_over_the_planned_ring(tmp_path, mode, expected):
+    """Host-run l3bench: the stored samples only, the exact 64-bit sum in two halves, the
+    elapsed ticks across a counter wrap; a running or unplanned capture is never timed."""
+    program = _perf_program(BENCH_HARNESS_MAIN)
+
+    assert _run_c(program, tmp_path, mode, flags=_SCAN_BUILD).splitlines() == expected
+
+
+def test_firmware_guide_documents_the_commands_and_names_the_scan_time_honestly():
+    guide = (Path(__file__).parents[1] / "docs" / "development" / "firmware.md").read_text(
+        encoding="utf-8"
+    )
+    geometry = guide[guide.index("## Changing Capture Geometry") :]
+    geometry = geometry[: geometry.index("\n## ", 1)]
+
+    assert "| `perfstats` |" in geometry
+    assert "| `l3bench` |" in geometry
+    assert "sampled" in geometry  # heap free_min is sampled, not continuous
+    assert "worst-case elapsed scan time, including pre-emption" in guide
+    assert "worst-case cycle count" not in guide

@@ -120,8 +120,8 @@ flag, and the host reports the capture's IQ8 integrity as unobserved, never
 clean. A capture plan with fewer than two pre frames never sets the capture's
 scan flag (the next frame could reuse the slot mid-scan), so it also reads
 unobserved. The scan is a CPU pass over the same components the old CPU packer
-touched (15,264 per profile C frame), so its worst-case cycle count is recorded
-from `sensorStart` for `perfstats`. Whether it costs frames at 2 ms is measured
+touched (15,264 per profile C frame), so its worst-case elapsed scan time, including pre-emption, is recorded
+from `sensorStart` for `perfstats` (with the scan count and total, for an average). Whether it costs frames at 2 ms is measured
 on hardware, not assumed.
 
 ## Firmware And Host Contract
@@ -481,6 +481,8 @@ The runtime config controls the capture without rebuilding firmware:
 | `captureFormat iq16\|iq8` | L3 sample representation |
 | `iq8Scale 16\|32\|64\|128\|256` | Fixed power-of-two IQ8 quantization scale used by EDMA packing |
 | `phaseCaptureCfg` | Pre/impact/ball window starts, widths, counts, and stride |
+| `perfstats` | Since `sensorStart`: worst-case elapsed rearm and whole rearm-task times, the smallest arm-to-frame-start margin, the worst-case elapsed scan time, including pre-emption, with the scan count and total, EDMA-pack maxima, pack overlaps, IQ8 pre-narrowing overflow total; the default heap (free low-water sampled at boot, after each dump and at each call, not continuous); task and Hwi stack high-water marks. Times are elapsed ticks of `tick_hz`, pre-emption included. Each maximum has its count (0 means not measured); `margin_min` is `4294967295` when `margin_frames=0`. A build without the IQ8 scan prints `perf scan=not_in_build pack=not_in_build` on line 2 |
+| `l3bench` | With the sensor stopped: elapsed ticks for one read-and-accumulate pass over every stored complex sample (a floor for on-chip reduction cost, not any packet's cost) |
 
 Before increasing loops, frames, transmitters, or bins, calculate the ring:
 
