@@ -2147,6 +2147,53 @@ class TestShotToDict:
         ]
         json.dumps(result, allow_nan=False)
 
+    @pytest.mark.parametrize("bad", [math.nan, math.inf], ids=["nan", "inf"])
+    def test_a_nulled_metric_keeps_no_measuring_source_label(self, bad):
+        """A value nulled for being non-finite reads like a missing one: its source is None."""
+        when = datetime(2026, 10, 11, 9, 0, 0)
+        result = shot_to_dict(
+            Shot(
+                ball_speed_mph=120.0,
+                timestamp=when,
+                launch_angle_vertical=bad,
+                launch_angle_vertical_source="radar",
+                angle_source="radar",
+                launch_angle_horizontal=bad,
+                launch_angle_horizontal_source="camera",
+                spin_rpm=bad,
+                spin_source="calculated",
+                experimental_face_angle_deg=bad,
+                experimental_face_angle_path_source="camera",
+                experimental_face_angle_launch_source="camera",
+            )
+        )
+        missing = shot_to_dict(Shot(ball_speed_mph=120.0, timestamp=when))
+        for label in (
+            "launch_angle_vertical_source",
+            "angle_source",
+            "launch_angle_horizontal_source",
+            "spin_source",
+            "experimental_face_angle_path_source",
+            "experimental_face_angle_launch_source",
+        ):
+            assert result[label] is None, label
+            assert result[label] == missing[label], label
+
+    def test_a_finite_metric_keeps_its_source_when_another_is_nulled(self):
+        result = shot_to_dict(
+            Shot(
+                ball_speed_mph=120.0,
+                timestamp=datetime(2026, 10, 11, 9, 0, 0),
+                launch_angle_vertical=14.0,
+                launch_angle_vertical_source="radar",
+                angle_source="radar",
+                launch_angle_horizontal=math.nan,
+                launch_angle_horizontal_source="radar",
+            )
+        )
+        assert result["launch_angle_vertical_source"] == result["angle_source"] == "radar"
+        assert result["launch_angle_horizontal_source"] is None
+
     def test_nested_non_finite_values_are_nulled_and_named_by_path(self):
         shot = Shot(
             ball_speed_mph=120.0,

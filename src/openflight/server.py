@@ -1742,18 +1742,36 @@ def _null_non_finite(value, path: str, not_measured: list[dict]):
     return value
 
 
+# The source labels that describe each metric. When the metric is nulled for being
+# non-finite it reads like a missing one, so its labels become None (the fields'
+# "no source" value): a nulled value never keeps a measuring source's name.
+_SOURCE_LABELS_OF_METRIC = {
+    "launch_angle_vertical": ("launch_angle_vertical_source", "angle_source"),
+    "launch_angle_horizontal": ("launch_angle_horizontal_source",),
+    "spin_rpm": ("spin_source",),
+    "experimental_face_angle_deg": (
+        "experimental_face_angle_path_source",
+        "experimental_face_angle_launch_source",
+    ),
+}
+
+
 def shot_to_dict(shot: Shot) -> dict:
     """Return the UI shot schema with display-oriented rounding.
 
     Never raises on a non-finite metric: it is sent as null and listed in
     ``metrics_not_measured`` as ``{"id", "reason"}`` (the shape the shot's other
-    evidence lists use); None when every metric is finite.
+    evidence lists use); None when every metric is finite. Such a metric's source
+    labels go out as None too (_SOURCE_LABELS_OF_METRIC), like a missing metric's.
     """
     raw = shot.to_dict()
     for log_only_field in ("mode", "readings", "readings_count"):
         raw.pop(log_only_field)
     not_measured: list[dict] = []
     data = {key: _null_non_finite(value, key, not_measured) for key, value in raw.items()}
+    for entry in not_measured:
+        for label in _SOURCE_LABELS_OF_METRIC.get(entry["id"], ()):
+            data[label] = None
     for field, digits in {
         "ball_speed_mph": 1,
         "ball_speed_raw_mph": 1,
