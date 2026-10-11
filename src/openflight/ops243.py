@@ -271,6 +271,9 @@ class OPS243Radar:
         self._internal_trigger_firmware_version = None
         self._hardware_trigger_recovery_required = False
         self.last_hardware_trigger_first_byte_timestamp: Optional[float] = None
+        # What the last UART baud negotiation did (None: not negotiated, e.g. USB):
+        # found_baud, target_baud, switch_command (sent, even if it failed), final_baud.
+        self.last_baud_negotiation: Optional[dict] = None
         # Where the trigger path is, as (phase, host epoch it began), for the ready
         # light (P7-14), which reads it without the serial lock. One tuple, so a
         # reader never pairs one phase with another's time.
@@ -417,6 +420,13 @@ class OPS243Radar:
         Returns the negotiated baud, also left on ``self.baud``.
         """
         order = [self.uart_baud] + [b for b in self.BAUD_PROBE_ORDER if b != self.uart_baud]
+        record = {
+            "found_baud": None,
+            "target_baud": self.uart_baud,
+            "switch_command": None,
+            "final_baud": None,
+        }
+        self.last_baud_negotiation = record
 
         found = None
         for candidate in order:
@@ -438,8 +448,10 @@ class OPS243Radar:
                 "serial console is disabled on this port."
             )
 
+        record["found_baud"] = found
         if found != self.uart_baud:
             self._raise_uart_baud(found, self.uart_baud, timeout)
+        record["final_baud"] = self.baud
 
         return self.baud
 
@@ -461,6 +473,8 @@ class OPS243Radar:
             return
 
         logger.info("[OPS] Switching UART %d -> %d baud (%s)", current, target, command)
+        if getattr(self, "last_baud_negotiation", None) is not None:
+            self.last_baud_negotiation["switch_command"] = command  # attempted, before the write
         self.serial.write(command.encode("ascii"))
         self.serial.flush()
         time.sleep(0.2)
