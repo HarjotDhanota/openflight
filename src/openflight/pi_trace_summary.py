@@ -428,7 +428,9 @@ def _unanchored(reason: str, segments: Any = None, association: Optional[dict] =
     }
 
 
-def _anchor(own: Sequence[dict], first_byte_ns: int, edges: Sequence[_Edge], rate_hz: float):
+def _anchor(  # pylint: disable=too-many-return-statements  # one named reason per exit
+    own: Sequence[dict], first_byte_ns: int, edges: Sequence[_Edge], rate_hz: float
+):
     """Task 2's association and shared-edge mapping, with this attempt's own S# (R-F9).
 
     A-I2: when the dump was already arriving as the wait began (an edge raced the
