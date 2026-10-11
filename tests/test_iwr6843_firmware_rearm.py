@@ -139,7 +139,13 @@ def test_iq8_edma_pack_compacts_int16_scratch_without_cpu_loop():
     assert "param->destinationBindex = 1" in pack
     assert "EDMA_startDmaTransfer" in pack
     assert "l3_restartCompletedHwaFrame" in rearm
-    assert "l3_startIq8EdmaPack" in rearm
+    # Both rearm sites start the EDMA pack through one helper that also runs the IQ8 scan.
+    assert rearm.count("l3_startIq8PackAndScan(pendingSlot, pendingScratch);") == 2
+    assert "if (l3_startIq8EdmaPack(slot, scratch) != 0) {" in _function_source(
+        source,
+        "static void l3_startIq8PackAndScan",
+        "static uint32_t l3_snapshotBinStartForNextFrame",
+    )
     assert rearm.count("l3_packIq8CompletedFrame") == 2
     assert rearm.count("#else\n                    l3_packIq8CompletedFrame") == 1
     assert rearm.count("#else\n                l3_packIq8CompletedFrame") == 1

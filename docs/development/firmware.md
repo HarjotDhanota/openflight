@@ -111,6 +111,17 @@ component into L3 without a CPU packing loop. Firmware `stats` report completed
 EDMA packs, waits, errors, clipped components, and missed HWA starts rather than
 silently hiding cadence failures.
 
+In evidence builds (dump v8/v9 with EDMA packing) the rearm task scans each
+completed IQ16 scratch frame right after its pack starts, counting the
+components outside int8 (exactly the values the low-byte copy would change) and
+the largest magnitude. A frame the scan did not cover (its pack failed to start,
+a pending frame was overrun, or the build packs on the CPU) carries no scanned
+flag, and the host reports the capture's IQ8 integrity as unobserved, never
+clean. The scan is a CPU pass over the same components the old CPU packer
+touched (15,264 per profile C frame), so its worst-case cycle count is recorded
+from `sensorStart` for `perfstats`. Whether it costs frames at 2 ms is measured
+on hardware, not assumed.
+
 ## Firmware And Host Contract
 
 The wire format is defined in two places that must stay synchronized:

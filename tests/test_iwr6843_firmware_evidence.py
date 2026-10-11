@@ -75,7 +75,9 @@ EVIDENCE_PRELUDE = """#include <stdint.h>
 #define L3_CAPTURE_EVIDENCE 1
 #define L3_RING_IQ8 1
 #define L3_MAX_CAPTURE_FRAMES 64U
+#ifndef __MRC  /* a harness may bring its own clock */
 #define __MRC(cp, op1, crn, crm, op2) ((uint32_t)((cp) + (op1) + (crn) + (crm) + (op2)))
+#endif
 #define __MCR(cp, op1, src, crn, crm, op2) ((void)((cp) + (op1) + (src) + (crn) + (crm) + (op2)))
 typedef struct { unsigned long totalSize, totalFreeSize, largestFreeSize; } Memory_Stats;
 static void Memory_getStats(void *heap, Memory_Stats *stats)
@@ -146,13 +148,25 @@ int main(int argc, char **argv)
     l3_dump_trailer_t tr;
     uint8_t desc[4];
     int16_t iq[2];
-    int version, frame, k, unassociated;
+    int8_t iq8[2];
+    uint16_t scale[2] = {16U, 128U};
+    int version, frame, k, option, unassociated = 0, iq8_format = 0, all_scanned = 0;
     FILE *f;
 
-    if (argc != 3 && argc != 4) {
+    if (argc < 3) {
         return 2;
     }
-    unassociated = (argc == 4 && strcmp(argv[3], "unassociated") == 0);
+    for (option = 3; option < argc; option++) {
+        if (strcmp(argv[option], "unassociated") == 0) {
+            unassociated = 1;
+        } else if (strcmp(argv[option], "iq8") == 0) {
+            iq8_format = 1;  /* fmt 5: the scale table, then the evidence, then int8 I/Q */
+        } else if (strcmp(argv[option], "all-scanned") == 0) {
+            all_scanned = 1;
+        } else {
+            return 2;
+        }
+    }
     version = atoi(argv[2]);
     f = fopen(argv[1], "wb");
     memset(&h, 0, sizeof h);
@@ -163,7 +177,8 @@ int main(int argc, char **argv)
     h.n_tx = 3;
     h.n_rx = 4;
     h.n_samples = 2;
-    h.sample_fmt = L3_SAMPLE_RANGE_FFT_IQ16_VARIABLE_TIMED;
+    h.sample_fmt = iq8_format ? L3_SAMPLE_RANGE_FFT_IQ8_VARIABLE_TIMED
+                              : L3_SAMPLE_RANGE_FFT_IQ16_VARIABLE_TIMED;
     h.frame_period_us = 3000;
     put(f, &h, sizeof h);
     if (version == L3_DUMP_VERSION_EVIDENCE_TEMPERATURE) {
@@ -178,6 +193,9 @@ int main(int argc, char **argv)
         desc[2] = (uint8_t)(frame ? (3000 & 0xFF) : 0);
         desc[3] = (uint8_t)(frame ? (3000 >> 8) : 0);
         put(f, desc, sizeof desc);
+    }
+    if (iq8_format) {
+        put(f, scale, sizeof scale);  /* n_frames uint16, before the evidence */
     }
     memset(&e, 0, sizeof e);
     memcpy(e.magic, L3_CAPTURE_EVIDENCE_MAGIC, 4);
@@ -202,7 +220,8 @@ int main(int argc, char **argv)
         r.done_tick = r.start_tick + 340000U;
         r.iq8_overflow = (uint16_t)(2 * frame);
         r.iq8_max_abs = (uint16_t)(90 + 210 * frame);
-        r.flags = (uint8_t)(L3_FRAME_FLAG_ASSOCIATED | (frame ? L3_FRAME_FLAG_IQ8_SCANNED : 0U));
+        r.flags = (uint8_t)(L3_FRAME_FLAG_ASSOCIATED |
+                            ((frame || all_scanned) ? L3_FRAME_FLAG_IQ8_SCANNED : 0U));
         if (unassociated && frame == 1) {  /* as l3_recordFrameEvidence writes it */
             r.seq = L3_FRAME_NO_STAMP;
             r.start_tick = L3_FRAME_NO_STAMP;
@@ -211,9 +230,15 @@ int main(int argc, char **argv)
         put(f, &r, sizeof r);
     }
     for (k = 0; k < 48; k++) {
-        iq[0] = (int16_t)(-(k + 1));  /* TI order: Im first */
-        iq[1] = (int16_t)(k + 1);
-        put(f, iq, sizeof iq);
+        if (iq8_format) {
+            iq8[0] = (int8_t)(-(k + 1));  /* TI order: Im first */
+            iq8[1] = (int8_t)(k + 1);
+            put(f, iq8, sizeof iq8);
+        } else {
+            iq[0] = (int16_t)(-(k + 1));  /* TI order: Im first */
+            iq[1] = (int16_t)(k + 1);
+            put(f, iq, sizeof iq);
+        }
     }
     memcpy(tr.magic, L3_DUMP_TRAILER_MAGIC, 4);
     tr.payload_end_tick = 0x55555555U;
@@ -508,3 +533,337 @@ def test_cycle_counter_starts_before_any_frame_can_start():
     init = _function_source(source, "static void l3_initTask", "int32_t main(void)")
 
     assert init.index("l3_cycleCounterInit();") < init.index("UART_init();")
+
+
+# --- Task 4: the IQ8 pre-narrowing scan -------------------------------------------------
+# Made-up values for known answers; none of this is a hardware result. The host compiler
+# checks the scan's C; it does not replace the owner's TI build (Task 9).
+
+SCAN_PROBE = """#include <stdio.h>
+#include "l3_evidence.h"
+int main(void) {
+  const int16_t v[] = {0, 127, -128, 128, -129, 32767, -32768, 5, -5};
+  static int16_t all[65536];
+  uint16_t maxAbs = 0;
+  uint32_t overflow;
+  int32_t value;
+  for (value = -32768; value <= 32767; value++) {
+    all[value + 32768] = (int16_t)value;
+  }
+  overflow = l3_iq8ScanComponents(v, 9, &maxAbs);
+  printf("%u %u\\n", (unsigned)overflow, (unsigned)maxAbs);
+  overflow = l3_iq8ScanComponents(v, 3, &maxAbs);
+  printf("%u %u\\n", (unsigned)overflow, (unsigned)maxAbs);
+  overflow = l3_iq8ScanComponents(v, 0, &maxAbs);
+  printf("%u %u\\n", (unsigned)overflow, (unsigned)maxAbs);
+  overflow = l3_iq8ScanComponents(all, 65536, &maxAbs);
+  printf("%u %u\\n", (unsigned)overflow, (unsigned)maxAbs);
+  return 0;
+}
+"""
+
+
+def test_scan_counts_only_values_outside_int8(tmp_path):
+    lines = _run_c(SCAN_PROBE, tmp_path).splitlines()
+
+    assert lines == ["4 32768", "0 128", "0 0", "65280 32768"]
+
+
+# Scans every int16 value on its own with the firmware's l3_iq8ScanComponents and writes,
+# per value, the overflow count (uint8) and then the magnitude (uint16), to argv[1].
+SCAN_EACH_VALUE_PROBE = r"""#include <stdio.h>
+#include "l3_evidence.h"
+int main(int argc, char **argv) {
+  static uint8_t overflow[65536];
+  static uint16_t maxAbs[65536];
+  int32_t value;
+  FILE *f;
+  if (argc != 2) {
+    return 2;
+  }
+  for (value = -32768; value <= 32767; value++) {
+    const int16_t one = (int16_t)value;
+    overflow[value + 32768] = (uint8_t)l3_iq8ScanComponents(&one, 1U, &maxAbs[value + 32768]);
+  }
+  f = fopen(argv[1], "wb");
+  fwrite(overflow, 1, sizeof overflow, f);
+  fwrite(maxAbs, 1, sizeof maxAbs, f);
+  return fclose(f);
+}
+"""
+
+
+@pytest.mark.skipif(
+    sys.byteorder != "little", reason="the R4F and the EDMA model here are little-endian"
+)
+def test_the_scan_rule_is_exactly_the_values_the_low_byte_copy_changes(tmp_path):
+    """R-D1: the firmware's scan, run on each int16, flags exactly what the pack changes.
+
+    The reference models l3_startIq8EdmaPack: aCount 1, source B-index 2 bytes, so the EDMA
+    copies the byte at each int16's even (low, little-endian) address into an int8.
+    """
+    import numpy as np
+
+    out = tmp_path / "scan_each_value.bin"
+    _run_c(SCAN_EACH_VALUE_PROBE, tmp_path, str(out))
+    raw = out.read_bytes()
+    flagged = np.frombuffer(raw, dtype=np.uint8, count=65536)
+    magnitude = np.frombuffer(raw, dtype="<u2", offset=65536, count=65536)
+
+    values = np.arange(-32768, 32768, dtype="<i2")
+    copied = values.view(np.int8)[0::2].astype(np.int32)
+    changed = copied != values.astype(np.int32)
+
+    np.testing.assert_array_equal(flagged.astype(bool), changed)
+    assert set(np.unique(flagged)) == {0, 1}
+    np.testing.assert_array_equal(magnitude.astype(np.int32), np.abs(values.astype(np.int32)))
+    assert int(changed.sum()) == 65280  # every value but -128..127
+
+
+def _rearm_task(source: str) -> str:
+    return _function_source(
+        source, "static void l3_hwaRearmTask", "/* Fill the 20-byte fixed dump header"
+    )
+
+
+def test_the_scan_runs_after_each_pack_starts_and_before_the_task_lets_go():
+    """Both rearm pack sites start the pack and scan through one helper (DRY)."""
+    source = FIRMWARE.read_text(encoding="utf-8")
+    task = _rearm_task(source)
+    call = "l3_startIq8PackAndScan(pendingSlot, pendingScratch);"
+
+    freeze_call = task.index(call)
+    assert freeze_call < task.index("l3_waitForAllIq8Edma();")
+    assert freeze_call < task.index("Semaphore_post(gHwaFreezeSemaphore)")
+    normal_call = task.rindex(call)
+    assert freeze_call != normal_call
+    assert task.count(call) == 2
+    # The normal path arms the next frame first, so the scan never delays the HWA.
+    assert task.index("errCode = l3_restartCompletedHwaFrame();") < normal_call
+    assert normal_call < task.rindex("gHwaRearmBusy = 0U;")
+    assert "(void)l3_startIq8EdmaPack(" not in task
+
+
+def test_a_pack_that_did_not_start_leaves_its_frame_unscanned():
+    """No fill-ins: a frame the EDMA never narrowed must not read 'scanned, clean'."""
+    source = FIRMWARE.read_text(encoding="utf-8")
+    helper = _function_source(
+        source,
+        "static void l3_startIq8PackAndScan",
+        "static uint32_t l3_snapshotBinStartForNextFrame",
+    )
+
+    failed = helper.index("if (l3_startIq8EdmaPack(slot, scratch) != 0) {")
+    assert (
+        failed < helper.index("return;", failed) < helper.index("l3_scanIq8Scratch(slot, scratch);")
+    )
+    assert helper.index("#ifdef L3_IQ8_SCAN") < helper.index("l3_scanIq8Scratch(slot, scratch);")
+
+
+def test_the_scan_marks_the_frame_and_saturates_its_count():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    scan = _function_source(
+        source, "static void l3_scanIq8Scratch", "static uint32_t l3_snapshotBinStartForNextFrame"
+    )
+
+    assert (
+        "l3_iq8ScanComponents(&g_iq16FrameScratch[scratch][0], gFrameBytes[slot], &maxAbs)" in scan
+    )
+    assert "(overflow > 0xFFFFU) ? 0xFFFFU : (uint16_t)overflow" in scan
+    assert "gFrameEvidenceFlags[slot] |= L3_FRAME_FLAG_IQ8_SCANNED;" in scan
+
+
+def test_the_scan_exists_only_where_the_low_byte_copy_narrows():
+    """The scan's rule is the EDMA low-byte copy's; the CPU shift-pack build is not scanned."""
+    source = FIRMWARE.read_text(encoding="utf-8")
+
+    assert (
+        "#if defined(L3_CAPTURE_EVIDENCE) && defined(L3_RING_IQ8) && defined(L3_IQ8_EDMA_PACK)\n"
+        "#define L3_IQ8_SCAN 1\n#endif"
+    ) in source
+    assert source.index("#define L3_CAPTURE_EVIDENCE 1") < source.index("#define L3_IQ8_SCAN 1")
+    scan = source.index("static void l3_scanIq8Scratch")
+    assert source.rindex("#ifdef L3_IQ8_SCAN", 0, scan) > source.rindex("#endif", 0, scan)
+
+
+def test_the_capture_says_whether_it_scanned():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    writer = _function_source(
+        source, "static void l3_writeCaptureEvidence", "static void l3_writeFrameEvidence"
+    )
+
+    assert "evidence.flags = l3_captureUsesIq8() ? L3_CAPTURE_FLAG_IQ8_SCAN : 0U;" in writer
+    scan_flag = writer.index("evidence.flags = l3_captureUsesIq8()")
+    assert writer.rindex("#ifdef L3_IQ8_SCAN", 0, scan_flag) < scan_flag
+    assert "    evidence.flags = 0U;" in writer[scan_flag:]  # every other build: unobserved
+    assert '#include "l3_evidence.h"' in source
+    assert source.count("l3_resetPerf();") == 1
+
+
+def test_perf_resets_with_the_evidence_at_sensor_start():
+    """High-water marks run from sensorStart; the post-dump restart keeps them."""
+    source = FIRMWARE.read_text(encoding="utf-8")
+    block = _evidence_block(source)
+    dump_cli = _function_source(source, "int32_t l3_cli_dump", "static int32_t l3_cli_stats")
+
+    assert "static void l3_resetPerf(void)" in block
+    for name in ("gPerfScanMaxCycles", "gPerfScanFrames", "gIq8OverflowComponents"):
+        assert f"static uint32_t {name};" in block
+        assert f"    {name} = 0U;" in block
+    assert "    l3_resetEvidence();\n    l3_resetPerf();\n#endif\n#ifdef L3_RING_IQ8\n" in source
+    assert "l3_resetPerf();" not in dump_cli
+
+
+def _scan_source(source: str) -> str:
+    start = source.index("static void l3_scanIq8Scratch")
+    return source[start : source.index("#endif", start)]
+
+
+# Drives the firmware's own l3_scanIq8Scratch (with the evidence block) on the host, with
+# stand-ins for the SDK and the capture plan: a 16-word scratch, frames of 4-6 components
+# and a fake cycle counter that advances gStep per read. Made-up values, known answers.
+SCRATCH_HARNESS_PRELUDE = r"""
+#include <stdint.h>
+static uint32_t gNow;
+static uint32_t gStep;
+#define __MRC(cp, op1, crn, crm, op2) (gNow += gStep)
+"""
+
+SCRATCH_HARNESS_STANDINS = r"""
+#define L3_IQ16_SCRATCH_WORDS 16U
+static int16_t g_iq16FrameScratch[2][L3_IQ16_SCRATCH_WORDS];
+static uint32_t gFrameBytes[L3_MAX_CAPTURE_FRAMES];
+static struct { uint8_t totalFrames; } gCapturePlan = {4U};
+"""
+
+SCRATCH_HARNESS_MAIN = r"""
+#include <stdio.h>
+
+static void show(uint32_t slot)
+{
+    printf("%u %u %u\n", (unsigned)gFrameIq8Overflow[slot], (unsigned)gFrameIq8MaxAbs[slot],
+           (unsigned)gFrameEvidenceFlags[slot]);
+}
+
+int main(void)
+{
+    const int16_t ping[6] = {12, -200, 127, -128, 300, -32768};
+    const int16_t pong[4] = {1, -2, 3, -4};
+    uint32_t i;
+
+    for (i = 0U; i < 6U; i++) {
+        g_iq16FrameScratch[0][i] = ping[i];
+    }
+    for (i = 0U; i < 4U; i++) {
+        g_iq16FrameScratch[1][i] = pong[i];
+    }
+    for (i = 0U; i < 4U; i++) {
+        gFrameEvidenceFlags[i] = L3_FRAME_FLAG_ASSOCIATED;
+        gFrameIq8Overflow[i] = 0x1111U;  /* stale values a skipped scan must leave alone */
+        gFrameIq8MaxAbs[i] = 0x2222U;
+    }
+    gFrameBytes[0] = 6U;
+    gFrameBytes[1] = 4U;
+    gFrameBytes[2] = 0U;                          /* the pack refuses it: no data */
+    gFrameBytes[3] = L3_IQ16_SCRATCH_WORDS + 1U;  /* more than the scratch holds */
+
+    gStep = 300U;
+    gNow = 0xFFFFFE00U;  /* start reads 0xFFFFFF2C, the end read wraps to 0x58 */
+    l3_scanIq8Scratch(0U, 0U);
+    gStep = 100U;
+    l3_scanIq8Scratch(1U, 1U);
+    l3_scanIq8Scratch(2U, 0U);
+    l3_scanIq8Scratch(3U, 0U);
+    l3_scanIq8Scratch(1U, 2U);   /* no third scratch */
+    l3_scanIq8Scratch(4U, 0U);   /* past the plan's frames */
+    for (i = 0U; i < 4U; i++) {
+        show(i);
+    }
+    printf("%u %u %u\n", (unsigned)gPerfScanMaxCycles, (unsigned)gPerfScanFrames,
+           (unsigned)gIq8OverflowComponents);
+    l3_resetPerf();
+    printf("%u %u %u\n", (unsigned)gPerfScanMaxCycles, (unsigned)gPerfScanFrames,
+           (unsigned)gIq8OverflowComponents);
+    return 0;
+}
+"""
+
+
+def test_the_scan_records_each_frame_and_its_cost(tmp_path):
+    """Host-compiled l3_scanIq8Scratch: per-slot counts, the scanned flag, totals, cycles."""
+    source = FIRMWARE.read_text(encoding="utf-8")
+    program = (
+        SCRATCH_HARNESS_PRELUDE
+        + EVIDENCE_PRELUDE
+        + _evidence_block(source)
+        + SCRATCH_HARNESS_STANDINS
+        + _scan_source(source)
+        + SCRATCH_HARNESS_MAIN
+    )
+    lines = _run_c(program, tmp_path, flags=("-Wno-unused-variable",)).splitlines()
+    associated = dump.FRAME_FLAG_ASSOCIATED
+    scanned = associated | dump.FRAME_FLAG_IQ8_SCANNED
+
+    assert lines[0] == f"3 32768 {scanned}"  # -200, 300 and -32768 wrap
+    assert lines[1] == f"0 4 {scanned}"
+    assert lines[2] == f"{0x1111} {0x2222} {associated}"  # zero components: unscanned
+    assert lines[3] == f"{0x1111} {0x2222} {associated}"  # oversized frame: unscanned
+    assert lines[4] == "300 2 3"  # max cycles across the wrap, frames scanned, components
+    assert lines[5] == "0 0 0"
+
+
+@pytest.mark.skipif(
+    sys.byteorder != "little", reason="the firmware and the parser are little-endian"
+)
+@pytest.mark.parametrize("version", [8, 9])
+def test_c_struct_written_iq8_dumps_parse_scale_table_then_evidence(tmp_path, version):
+    """Controller ruling (Task 3 review): production IQ8 v8/v9 layout, independent of dump.py.
+
+    fmt 5 puts the n_frames uint16 scale table after the descriptors and before the
+    evidence block; the payload is int8 Im/Re times the frame's scale.
+    """
+    from openflight.iwr6843.frame_evidence import sample_integrity_report
+
+    out = tmp_path / f"iq8_v{version}.l3dump"
+    _run_c(FIXTURE_WRITER, tmp_path, str(out), str(version), "iq8")
+
+    raw = out.read_bytes()
+    meta, cube = dump.parse_dump(raw)
+    # pylint: disable=unsubscriptable-object
+
+    assert meta["sample_fmt"] == dump.SAMPLE_RANGE_FFT_IQ8_VARIABLE_TIMED
+    assert meta["version"] == version
+    assert meta["iq8_scales"] == (16, 128)
+    assert meta["capture_evidence"]["header_tick"] == 0x44444444
+    assert meta["capture_evidence"]["flags"] == dump.CAPTURE_FLAG_IQ8_SCAN
+    assert meta["frame_evidence"][1]["iq8_overflow"] == 2
+    assert meta["frame_evidence"][1]["iq8_max_abs"] == 300
+    assert [record["iq8_scanned"] for record in meta["frame_evidence"]] == [False, True]
+    assert meta["dump_trailer"] == {"payload_end_tick": 0x55555555}
+    assert cube[0, 0, 0, 0] == 16 * (1 - 1j)
+    assert cube[1, 2, 3, 1] == 128 * (48 - 48j)
+    assert len(raw) == meta["header_nbytes"] + dump.payload_nbytes(meta, raw)
+    # Frame 0 was not scanned: the whole capture's integrity is unobserved, never clean.
+    report = sample_integrity_report(meta, cube)
+    assert (report["format"], report["status"]) == ("iq8", "unobserved")
+    assert report["reason"] == "frames [0] were not scanned before narrowing"
+
+
+@pytest.mark.skipif(
+    sys.byteorder != "little", reason="the firmware and the parser are little-endian"
+)
+def test_a_c_written_fully_scanned_iq8_dump_reports_its_overflow(tmp_path):
+    """Every frame scanned: the report carries the firmware's counts, frame by frame."""
+    from openflight.iwr6843.frame_evidence import sample_integrity_report
+
+    out = tmp_path / "iq8_scanned.l3dump"
+    _run_c(FIXTURE_WRITER, tmp_path, str(out), "8", "iq8", "all-scanned")
+
+    meta, cube = dump.parse_dump(out.read_bytes())
+    report = sample_integrity_report(meta, cube)
+
+    assert report["status"] == "overflowed"
+    assert report["frames_scanned"] == 2
+    assert report["overflow_components"] == 2
+    assert report["frames_with_overflow"] == [1]
+    assert report["max_abs"] == 300

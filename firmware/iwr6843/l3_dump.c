@@ -59,6 +59,13 @@
 #define L3_CAPTURE_EVIDENCE 1
 #endif
 
+/* The IQ8 pre-narrowing scan counts exactly the values the EDMA low-byte copy changes, so
+ * it exists only where that copy narrows the ring. The CPU shift-pack build
+ * (l3_packIq8CompletedFrame) quantizes differently and stays unscanned ("unobserved"). */
+#if defined(L3_CAPTURE_EVIDENCE) && defined(L3_RING_IQ8) && defined(L3_IQ8_EDMA_PACK)
+#define L3_IQ8_SCAN 1
+#endif
+
 /* --- task priorities (mirror the mmw demo): ctrl > CLI. -------------------- */
 #define L3_INIT_TASK_PRIORITY  2
 #define L3_CLI_TASK_PRIORITY   3
@@ -496,6 +503,18 @@ static void l3_recordFrameEvidence(uint32_t slot, uint32_t doneTick)
     gFrameIq8Overflow[slot] = 0U;
     gFrameIq8MaxAbs[slot] = 0U;
     gFrameEvidenceFlags[slot] = fresh ? L3_FRAME_FLAG_ASSOCIATED : 0U;
+}
+
+/* Performance high-water marks since sensorStart (reported by perfstats). */
+static uint32_t gPerfScanMaxCycles;
+static uint32_t gPerfScanFrames;
+static uint32_t gIq8OverflowComponents;
+
+static void l3_resetPerf(void)
+{
+    gPerfScanMaxCycles = 0U;
+    gPerfScanFrames = 0U;
+    gIq8OverflowComponents = 0U;
 }
 /* W4A-EVIDENCE-END */
 #endif
@@ -1799,6 +1818,55 @@ static void l3_waitForAllIq8Edma(void)
 #endif
 #endif
 
+#ifdef L3_IQ8_SCAN
+/* Before the low-byte copy narrows it, count every component of a completed IQ16
+ * scratch frame that int8 can't hold. Runs in the rearm task after the frame's pack
+ * starts: the EDMA only reads this scratch, the HWA's next frame writes the other one,
+ * and this scratch is re-targeted only after the task's next iteration waits for its
+ * pack, which can't begin until this call returns. A frame it refuses stays unscanned,
+ * so the host reads it as "unobserved", never "clean". */
+static void l3_scanIq8Scratch(uint32_t slot, uint8_t scratch)
+{
+    uint32_t start = l3_ticks();
+    uint16_t maxAbs = 0U;
+    uint32_t overflow;
+    uint32_t cycles;
+
+    if (slot >= gCapturePlan.totalFrames || scratch >= 2U) {
+        return;
+    }
+    /* The same refusals as l3_startIq8EdmaPack, plus the scratch's own bound. */
+    if (gFrameBytes[slot] == 0U || gFrameBytes[slot] > L3_IQ16_SCRATCH_WORDS) {
+        return;
+    }
+    overflow = l3_iq8ScanComponents(&g_iq16FrameScratch[scratch][0], gFrameBytes[slot], &maxAbs);
+    gFrameIq8Overflow[slot] = (overflow > 0xFFFFU) ? 0xFFFFU : (uint16_t)overflow;
+    gFrameIq8MaxAbs[slot] = maxAbs;
+    gFrameEvidenceFlags[slot] |= L3_FRAME_FLAG_IQ8_SCANNED;
+    gIq8OverflowComponents += overflow;
+    cycles = l3_ticks() - start;   /* modular: exact across one counter wrap */
+    if (cycles > gPerfScanMaxCycles) {
+        gPerfScanMaxCycles = cycles;
+    }
+    gPerfScanFrames++;
+}
+#endif
+
+#if defined(L3_RING_IQ8) && defined(L3_IQ8_EDMA_PACK)
+/* Start a completed frame's EDMA low-byte pack, then scan the same scratch. Both rearm
+ * paths (freeze and normal) call this. A pack that didn't start narrowed nothing into
+ * the ring, so its frame is not scanned and its integrity stays "unobserved". */
+static void l3_startIq8PackAndScan(uint32_t slot, uint8_t scratch)
+{
+    if (l3_startIq8EdmaPack(slot, scratch) != 0) {
+        return;
+    }
+#ifdef L3_IQ8_SCAN
+    l3_scanIq8Scratch(slot, scratch);
+#endif
+}
+#endif
+
 static uint32_t l3_snapshotBinStartForNextFrame(void)
 {
 #ifdef CONFIGURABLE_CAPTURE
@@ -2234,7 +2302,7 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
 #ifdef L3_RING_IQ8
                 if (hadPending) {
 #ifdef L3_IQ8_EDMA_PACK
-                    (void)l3_startIq8EdmaPack(pendingSlot, pendingScratch);
+                    l3_startIq8PackAndScan(pendingSlot, pendingScratch);
 #else
                     l3_packIq8CompletedFrame(pendingSlot, pendingScratch);
 #endif
@@ -2268,7 +2336,7 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
 #ifdef L3_RING_IQ8
             if (l3_captureUsesIq8() && hadPending) {
 #ifdef L3_IQ8_EDMA_PACK
-                (void)l3_startIq8EdmaPack(pendingSlot, pendingScratch);
+                l3_startIq8PackAndScan(pendingSlot, pendingScratch);
 #else
                 l3_packIq8CompletedFrame(pendingSlot, pendingScratch);
 #endif
@@ -2384,7 +2452,11 @@ static void l3_writeCaptureEvidence(uint32_t actualPre, uint32_t actualPost,
     evidence.hwa_missed_total = gHwaMissedFrameStarts;
     evidence.pre_frames = (uint8_t)actualPre;
     evidence.post_frames = (uint8_t)actualPost;
+#ifdef L3_IQ8_SCAN
+    evidence.flags = l3_captureUsesIq8() ? L3_CAPTURE_FLAG_IQ8_SCAN : 0U;
+#else
     evidence.flags = 0U;
+#endif
     UART_writePolling(gDataUart, (uint8_t *)&evidence, sizeof(evidence));
 }
 
@@ -3428,6 +3500,7 @@ static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])
     gActiveFrameShouldKeep = 1U;
 #ifdef L3_CAPTURE_EVIDENCE
     l3_resetEvidence();
+    l3_resetPerf();
 #endif
 #ifdef L3_RING_IQ8
     gIq8Pending = 0U;
