@@ -1705,11 +1705,41 @@ def _ops_speed_correction_geometry(calibration) -> tuple[float, float, float, st
 calculated_spin_enabled = False
 
 
+def _null_non_finite(value, path: str, not_measured: list[dict]):
+    """``value`` with every non-finite float replaced by None, each one named in ``not_measured``.
+
+    A NaN or infinite metric was not measured: it goes out as null with the reason,
+    never as a filled-in number and never by dropping the shot (owner rule). Strict
+    JSON has no NaN/Infinity, so a raw one would also make the browser drop the packet.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        not_measured.append({"id": path, "reason": f"non_finite_value:{value!r}"})
+        return None
+    if isinstance(value, dict):
+        return {
+            key: _null_non_finite(item, f"{path}.{key}", not_measured)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _null_non_finite(item, f"{path}[{index}]", not_measured)
+            for index, item in enumerate(value)
+        ]
+    return value
+
+
 def shot_to_dict(shot: Shot) -> dict:
-    """Return the UI shot schema with display-oriented rounding."""
-    data = shot.to_dict()
+    """Return the UI shot schema with display-oriented rounding.
+
+    Never raises on a non-finite metric: it is sent as null and listed in
+    ``metrics_not_measured`` as ``{"id", "reason"}`` (the shape the shot's other
+    evidence lists use); None when every metric is finite.
+    """
+    raw = shot.to_dict()
     for log_only_field in ("mode", "readings", "readings_count"):
-        data.pop(log_only_field)
+        raw.pop(log_only_field)
+    not_measured: list[dict] = []
+    data = {key: _null_non_finite(value, key, not_measured) for key, value in raw.items()}
     for field, digits in {
         "ball_speed_mph": 1,
         "ball_speed_raw_mph": 1,
@@ -1732,7 +1762,10 @@ def shot_to_dict(shot: Shot) -> dict:
     }.items():
         if data[field] is not None:
             data[field] = round(data[field], digits) if digits is not None else round(data[field])
-    data["carry_range"] = [round(value) for value in data["carry_range"]]
+    data["carry_range"] = [
+        round(value) if value is not None else None for value in data["carry_range"]
+    ]
+    data["metrics_not_measured"] = not_measured or None
     return data
 
 

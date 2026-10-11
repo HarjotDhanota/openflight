@@ -1,10 +1,12 @@
 """Tests for server module."""
 
 import argparse
+import dataclasses
 import json
 import math
 import sys
 import threading
+import typing
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -1379,7 +1381,10 @@ class TestShotToDict:
         raw = shot.to_dict()
         result = shot_to_dict(shot)
 
-        assert set(result) == set(raw) - {"mode", "readings", "readings_count"}
+        # metrics_not_measured: names any non-finite metric sent as null (None here)
+        assert set(result) == set(raw) - {"mode", "readings", "readings_count"} | {
+            "metrics_not_measured"
+        }
         assert result["ball_speed_mph"] == 150.5
         assert result["club_speed_mph"] == 103.2
         assert result["club"] == "driver"
@@ -2017,6 +2022,58 @@ class TestShotToDict:
         assert result["spin_phase_agreement_pct"] == 2.1
         assert result["spin_phase_confirmed"] is True
         assert result["spin_rejection_reason"] == "SNR too low (2.96, need 3.0)"
+
+    @staticmethod
+    def _float_fields():
+        hints = typing.get_type_hints(Shot)
+        return [f.name for f in dataclasses.fields(Shot) if "float" in str(hints[f.name])]
+
+    def test_float_field_list_is_not_empty(self):
+        assert "launch_angle_vertical" in self._float_fields()
+        assert len(self._float_fields()) > 30
+
+    @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "-inf"])
+    def test_no_non_finite_float_field_raises_or_leaks_into_the_payload(self, bad):
+        """Owner rule: a shot is never dropped; a non-finite metric goes out as null."""
+        for name in self._float_fields():
+            shot = Shot(ball_speed_mph=120.0, timestamp=datetime(2026, 10, 11, 9, 0, 0))
+            setattr(shot, name, bad)
+            result = shot_to_dict(shot)  # must not raise
+            json.dumps(result, allow_nan=False)  # strict JSON: the browser can parse it
+            if name not in result:  # a field the UI schema doesn't carry
+                continue
+            assert result[name] is None, name
+            assert {"id": name, "reason": f"non_finite_value:{bad!r}"} in result[
+                "metrics_not_measured"
+            ], name
+
+    def test_a_derived_non_finite_metric_is_named_too(self):
+        shot = Shot(
+            ball_speed_mph=120.0,
+            timestamp=datetime(2026, 10, 11, 9, 0, 0),
+            launch_angle_vertical=math.nan,
+        )
+        result = shot_to_dict(shot)
+        ids = {entry["id"] for entry in result["metrics_not_measured"]}
+        assert {"launch_angle_vertical", "estimated_carry_yards"} <= ids
+        assert result["estimated_carry_yards"] is None
+
+    def test_nested_non_finite_values_are_nulled_and_named_by_path(self):
+        shot = Shot(
+            ball_speed_mph=120.0,
+            timestamp=datetime(2026, 10, 11, 9, 0, 0),
+            inclinometer={"pitch_deg": math.nan, "roll_deg": 1.5},
+        )
+        result = shot_to_dict(shot)
+        assert result["inclinometer"] == {"pitch_deg": None, "roll_deg": 1.5}
+        assert result["metrics_not_measured"] == [
+            {"id": "inclinometer.pitch_deg", "reason": "non_finite_value:nan"}
+        ]
+
+    def test_a_finite_shot_names_nothing_not_measured(self):
+        result = shot_to_dict(Shot(ball_speed_mph=120.0, timestamp=datetime.now()))
+        assert result["metrics_not_measured"] is None
+        json.dumps(result, allow_nan=False)
 
 
 class TestSessionStateClub:
@@ -4154,6 +4211,36 @@ class TestOnShotDetected:
         assert run.simulator_shots[0]["launch_angle_vertical"] is None
         self._assert_finalization_coordinator_empty()
         assert not server_module._shot_awaiting_late_enrichment
+
+    def test_a_shot_with_non_finite_metrics_is_still_emitted_and_logged(self, monkeypatch):
+        """Owner rule: nothing is dropped. NaN launch and inf spin go out as null."""
+        emitted, session_log = self._record_finalization(monkeypatch)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+        shot = self._shot()
+        shot.launch_angle_vertical = math.nan
+        shot.launch_angle_vertical_source = "radar"
+        shot.spin_rpm = math.inf
+        on_shot_detected(shot)
+        _wait_for_shot_finalization_idle()
+
+        assert [event for event, _payload in emitted] == ["shot"]
+        payload = emitted[0][1]
+        json.dumps(payload, allow_nan=False)
+        assert payload["shot"]["ball_speed_mph"] == 150.0
+        assert payload["shot"]["launch_angle_vertical"] is None
+        assert payload["shot"]["spin_rpm"] is None
+        ids = {entry["id"] for entry in payload["shot"]["metrics_not_measured"]}
+        assert {"launch_angle_vertical", "spin_rpm"} <= ids
+        assert len(session_log.shots) == 1
+
+    def test_initial_ops_emit_of_a_non_finite_shot_still_happens(self, monkeypatch):
+        emitted, _session_log = self._record_finalization(monkeypatch)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
+        shot = self._shot()
+        shot.launch_angle_vertical = math.nan
+        assert server_module._emit_initial_ops_shot(shot) is True
+        assert [event for event, _payload in emitted] == ["shot"]
+        json.dumps(emitted[0][1], allow_nan=False)
 
     def test_late_iwr_result_is_traced_as_a_later_revision_of_the_same_attempt(
         self, monkeypatch, recorder
