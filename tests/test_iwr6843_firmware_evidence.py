@@ -1630,3 +1630,16 @@ def test_the_saturation_flag_resets_with_the_perf_marks_and_is_documented():
     reset = _function_source(block, "static void l3_resetPerf", "static void l3_perfNoteArmed")
     assert "    gIq8OverflowSaturated = 0U;" in reset
     assert "iq8_overflow_saturated=1" in row
+
+
+def test_the_overflow_saturation_comment_states_the_scans_real_component_counts():
+    """M9: the scan covers at most N_TX x L3_MAX_LOOPS x N_RX x 64 bins x 2 components
+    (24,576 with 3 TX), and 15,264 for profile C (3 TX x 12 loops x 4 RX x 53 bins x 2),
+    the number docs/development/firmware.md gives; the comment says both."""
+    source = FIRMWARE.read_text(encoding="utf-8")
+    start = source.index("static void l3_scanIq8Scratch")
+    function = source[start : source.index("static void l3_startIq8PackAndScan", start)]
+
+    assert 3 * 16 * 4 * 64 * 2 == 24_576 and 3 * 12 * 4 * 53 * 2 == 15_264
+    assert "24,576" in function and "15,264" in function
+    assert "about 24k" not in function

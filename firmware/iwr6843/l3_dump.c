@@ -1989,8 +1989,10 @@ static void l3_scanIq8Scratch(uint32_t slot, uint8_t scratch)
     }
     gPerfScanCyclesTotal += cycles;
     gPerfScanFrames++;
-    /* Saturate: about 24k components a frame at 2 ms can wrap 32 bits in minutes, and a
-     * wrapped total would read as a small, measured-looking count. */
+    /* Saturate: a frame scans up to N_TX x L3_MAX_LOOPS x N_RX x 64 bins x 2 components
+     * (24,576 with 3 TX; 15,264 for profile C's 12 loops and 53 bins), so at 2 ms a total
+     * of overflowing components can wrap 32 bits in minutes, and a wrapped total would
+     * read as a small, measured-looking count. */
     if (overflow > 0xFFFFFFFFU - gIq8OverflowComponents) {
         gIq8OverflowComponents = 0xFFFFFFFFU;
         gIq8OverflowSaturated = 1U;
