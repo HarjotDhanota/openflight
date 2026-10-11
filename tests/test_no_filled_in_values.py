@@ -185,3 +185,163 @@ def test_carry_and_simulators_use_a_calculated_spin_under_its_own_label():
     # simulators' provenance is measured or estimated: a model's spin is not measured
     assert resolved.provenance["total_spin"] == "estimated"
     assert resolved.total_spin_rpm == pytest.approx(shot.spin_rpm)
+
+
+# ---- carry is committed once, in finalization (upstream #276) ---------------------------
+#
+# The rolling buffer monitor used to pre-fill carry_spin_adjusted with the ball-speed
+# spin table whenever OPS spin was reliable, and finalization only ran the simulator
+# while that field was still None. On a fusion unit a measured launch never reached the
+# simulator, and a shot it could not simulate kept the table number (D17).
+
+
+def _monitor_shot_with_reliable_spin():
+    """A shot as the rolling buffer monitor builds it, with clean, reliable OPS spin."""
+    from openflight.rolling_buffer import RollingBufferMonitor
+    from openflight.rolling_buffer.types import (
+        IQCapture,
+        ProcessedCapture,
+        SpeedTimeline,
+        SpinResult,
+    )
+
+    monitor = RollingBufferMonitor(port=None, trigger_type="sound")
+    monitor.set_club(ClubType.DRIVER)
+    processed = ProcessedCapture(
+        timeline=SpeedTimeline(readings=[], sample_rate_hz=937.5),
+        ball_speed_mph=150.0,
+        ball_timestamp_ms=60.0,
+        club_speed_mph=105.0,
+        spin=SpinResult(
+            spin_rpm=2700,
+            confidence=0.8,
+            snr=12.0,
+            quality="high",
+            peak_freq_hz=45.0,
+            seam_cycles=4.0,
+        ),
+        capture=IQCapture(
+            sample_time=0.0,
+            trigger_time=0.068,
+            i_samples=[2048] * 4096,
+            q_samples=[2048] * 4096,
+            first_byte_timestamp=12345.746,
+            trigger_timestamp=12345.678,
+        ),
+    )
+    assert processed.has_spin
+    shot = monitor._create_shot(processed)  # pylint: disable=protected-access
+    assert shot is not None and shot.spin_rpm == 2700
+    return shot
+
+
+def _spin_table_carry(shot):
+    from openflight.rolling_buffer.monitor import estimate_carry_with_spin
+
+    return estimate_carry_with_spin(
+        shot.ball_speed_mph, shot.spin_rpm, shot.club, club_speed_mph=shot.club_speed_mph
+    )
+
+
+def _measure_launch(shot, *, horizontal=True, spin_axis=True):
+    shot.launch_angle_vertical = 12.0
+    shot.launch_angle_vertical_source = "radar"
+    shot.launch_angle_confidence = 0.9
+    if horizontal:
+        shot.launch_angle_horizontal = 1.0
+        shot.launch_angle_horizontal_source = "radar"
+    if spin_axis:
+        shot.spin_axis_deg = 2.0
+
+
+def _ballistic_carry(shot, *, substitutes):
+    from openflight.ballistics import simulate
+
+    conditions = resolve_launch(shot, substitutes=substitutes)
+    assert conditions is not None
+    return simulate(conditions).carry_yards
+
+
+def test_the_monitor_leaves_carry_to_finalization():
+    shot = _monitor_shot_with_reliable_spin()
+
+    assert shot.carry_spin_adjusted is None
+
+
+def test_a_fusion_unit_with_reliable_spin_and_a_measured_launch_gets_ballistic_carry(
+    fusion_unit, quiet_finalize
+):
+    shot = _monitor_shot_with_reliable_spin()
+    _measure_launch(shot)
+    expected = _ballistic_carry(shot, substitutes=False)
+    table = _spin_table_carry(shot)
+    assert expected != pytest.approx(table, abs=0.5)  # the two must be told apart
+
+    _finalize(shot)
+
+    assert shot.carry_spin_adjusted == pytest.approx(expected)
+    assert shot.carry_spin_adjusted != pytest.approx(table, abs=0.5)
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        {"launch": False},
+        {"launch": True, "horizontal": False},
+        {"launch": True, "spin_axis": False},
+    ],
+    ids=["no-launch", "no-horizontal", "no-spin-axis"],
+)
+def test_a_fusion_unit_with_reliable_spin_but_unmeasured_inputs_gives_no_carry(
+    fusion_unit, quiet_finalize, missing
+):
+    shot = _monitor_shot_with_reliable_spin()
+    if missing.pop("launch"):
+        _measure_launch(shot, **missing)
+
+    _finalize(shot)
+
+    assert shot.carry_spin_adjusted is None
+
+
+def test_a_fusion_unit_with_ballistics_disabled_gives_no_carry(
+    fusion_unit, quiet_finalize, monkeypatch
+):
+    monkeypatch.setattr(server_module, "ballistics_enabled", False)
+    shot = _monitor_shot_with_reliable_spin()
+    _measure_launch(shot)
+
+    _finalize(shot)
+
+    assert shot.carry_spin_adjusted is None
+
+
+def test_finalization_overwrites_a_carry_already_on_a_fusion_shot(fusion_unit, quiet_finalize):
+    shot = _monitor_shot_with_reliable_spin()
+    shot.carry_spin_adjusted = _spin_table_carry(shot)  # a stale pre-fill
+
+    _finalize(shot)
+
+    assert shot.carry_spin_adjusted is None
+
+
+def test_an_ops_only_install_with_reliable_spin_gets_ballistic_carry_on_its_estimated_launch(
+    ops_only, quiet_finalize
+):
+    shot = _monitor_shot_with_reliable_spin()
+
+    _finalize(shot)
+
+    assert shot.launch_angle_vertical_source == "estimated"
+    assert shot.carry_spin_adjusted == pytest.approx(_ballistic_carry(shot, substitutes=True))
+
+
+def test_an_ops_only_install_with_ballistics_disabled_keeps_the_spin_table(
+    ops_only, quiet_finalize, monkeypatch
+):
+    monkeypatch.setattr(server_module, "ballistics_enabled", False)
+    shot = _monitor_shot_with_reliable_spin()
+
+    _finalize(shot)
+
+    assert shot.carry_spin_adjusted == pytest.approx(_spin_table_carry(shot))

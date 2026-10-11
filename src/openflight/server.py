@@ -4765,15 +4765,16 @@ def _finalize_shot_detected(
     # Compute carry. Prefer the physics simulator (drag + Magnus, RK4) when
     # ballistics is enabled and a vertical launch angle is available; fall
     # back to the table estimator otherwise (either ballistics disabled or
-    # angle missing → resolve_launch returns None). This is the only place
-    # that writes carry_spin_adjusted for a live shot.
+    # angle missing → resolve_launch returns None), on an OPS-only unit only:
+    # a fusion unit that cannot simulate has no carry (D17). This is the only
+    # place that writes carry_spin_adjusted for a live shot.
     carry_source = None
     fusion = _fusion_unit()
     if shot.mode != "mock":
         conditions = resolve_launch(shot, substitutes=not fusion) if ballistics_enabled else None
         if conditions is None and fusion:
-            # a fusion unit builds carry only from measured inputs (D17): a
-            # pre-filled table carry does not stand in for the simulator
+            # a fusion unit builds carry only from measured inputs (D17):
+            # nothing already on the shot stands in for the simulator
             shot.carry_spin_adjusted = None
             logger.info("[SERVER] Carry not measured: launch, spin or spin axis not measured")
         elif conditions is not None:
