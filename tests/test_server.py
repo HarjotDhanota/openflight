@@ -2126,6 +2126,27 @@ class TestShotToDict:
         assert result["estimated_carry_yards"] == no_launch["estimated_carry_yards"]
         assert result["carry_range"] == no_launch["carry_range"]
 
+    def test_a_derived_non_finite_metric_is_nulled_and_named(self):
+        """2c: smash factor and carry derive from an infinite ball speed; each is named."""
+        result = shot_to_dict(
+            Shot(
+                ball_speed_mph=math.inf,
+                club_speed_mph=100.0,
+                timestamp=datetime(2026, 10, 11, 9, 0, 0),
+            )
+        )
+        assert result["smash_factor"] is None
+        assert result["estimated_carry_yards"] is None
+        assert result["carry_range"] == [None, None]
+        assert result["metrics_not_measured"] == [
+            {"id": "ball_speed_mph", "reason": "non_finite_value:inf"},
+            {"id": "smash_factor", "reason": "non_finite_value:inf"},
+            {"id": "estimated_carry_yards", "reason": "non_finite_value:inf"},
+            {"id": "carry_range[0]", "reason": "non_finite_value:inf"},
+            {"id": "carry_range[1]", "reason": "non_finite_value:inf"},
+        ]
+        json.dumps(result, allow_nan=False)
+
     def test_nested_non_finite_values_are_nulled_and_named_by_path(self):
         shot = Shot(
             ball_speed_mph=120.0,
