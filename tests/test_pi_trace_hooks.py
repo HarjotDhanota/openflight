@@ -1207,3 +1207,28 @@ def test_installing_the_hooks_warms_the_version_lookup_so_the_first_edge_does_no
     capture_monitor.edge_tick_reading()
     assert lookups == []
     iwr_monitor._package_version.cache_clear()  # pylint: disable=protected-access
+
+
+def test_rearm_records_the_split_only_after_its_trailing_pa(recorder, monkeypatch):
+    """2d: S# returned but the trailing PA timed out: the split is not recorded."""
+    radar = _radar(monkeypatch)
+    pa_writes = []
+    real_write = radar.serial.write
+
+    def write(data):
+        if data == b"PA":
+            pa_writes.append(data)
+            if len(pa_writes) == 2:
+                raise serial.SerialTimeoutException("trailing PA timed out")
+        return real_write(data)
+
+    radar.serial.write = write
+    assert radar.rearm_rolling_buffer(12) is None
+    assert b"S#12\r" in radar.serial.writes
+    recorder.open_ops_attempt()
+    radar.wait_for_hardware_trigger(timeout=0.0)
+    armed = _named(read_marks(recorder), "ops_wait_armed")[0]
+    assert (armed["pre_trigger_segments"], armed["pre_trigger_segments_reason"]) == (
+        None,
+        "rearm_write_timed_out",
+    )

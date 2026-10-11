@@ -1856,8 +1856,8 @@ class OPS243Radar:
             )
 
         pre_trigger_segments = max(0, min(32, pre_trigger_segments))
-        self._pre_trigger_split = (None, "split_write_incomplete")
-        try:
+
+        def write_rearm_commands():
             # Restart sampling
             self.serial.write(b"PA")
             self.serial.flush()
@@ -1872,6 +1872,10 @@ class OPS243Radar:
             self.serial.write(b"PA")
             self.serial.flush()
             time.sleep(0.15)
+
+        try:
+            # The split is recorded only after the trailing PA returns.
+            self._write_pre_trigger_split(pre_trigger_segments, write_rearm_commands)
         except serial.SerialTimeoutException:
             # Radar not servicing commands (likely mid-dump from an
             # immediate re-trigger). Don't hang the capture thread — the
@@ -1883,7 +1887,6 @@ class OPS243Radar:
             )
             self._pre_trigger_split = (None, "rearm_write_timed_out")
             return "write_timeout"
-        self._pre_trigger_split = (pre_trigger_segments, None)
 
         # No flush here (P7-1): the first PA restarts sampling, so an edge
         # during the commands above starts a dump whose start marker a flush
