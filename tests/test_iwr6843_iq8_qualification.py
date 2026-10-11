@@ -14,6 +14,7 @@ from openflight.iwr6843 import iq8_qualification as qualification, lcmf
 from openflight.iwr6843.dump import (
     SAMPLE_RANGE_FFT_IQ8_VARIABLE_TIMED,
     SAMPLE_RANGE_FFT_IQ16_VARIABLE_TIMED,
+    TEMP_REPORT_KEYS,
     pack_dump,
     parse_dump,
 )
@@ -621,3 +622,70 @@ def test_cli_refuses_to_replace_an_existing_output(tmp_path, monkeypatch):
 
     assert cli.main() == 3
     assert output.read_text(encoding="utf-8") == "preserve me\n"
+
+
+# --- final review M4: a v8 dump's trailer is not sample payload ---------------------------
+
+
+def _v8_evidence(n_frames: int) -> dict:
+    return {
+        "capture_evidence": {
+            "tick_hz": 200_000_000,
+            "request_tick": 1_000_000,
+            "request_seq": 100,
+            "freeze_tick": 3_000_000,
+            "stop_tick": 4_000_000,
+            "header_tick": 4_200_000,
+            "hwa_missed_total": 0,
+            "pre_frames": 2,
+            "post_frames": n_frames - 2,
+            "flags": 0,
+        },
+        "frame_evidence": [
+            {
+                "seq": 100 + i,
+                "start_tick": 600_000 * i,
+                "done_tick": 600_000 * i + 340_000,
+                "iq8_overflow": None,
+                "iq8_max_abs": None,
+                "associated": True,
+                "iq8_scanned": False,
+            }
+            for i in range(n_frames)
+        ],
+        "dump_trailer": {"payload_end_tick": 5_000_000},
+    }
+
+
+@pytest.mark.parametrize(
+    ("sample_fmt", "bytes_per_complex"),
+    [(SAMPLE_RANGE_FFT_IQ16_VARIABLE_TIMED, 4), (SAMPLE_RANGE_FFT_IQ8_VARIABLE_TIMED, 2)],
+)
+def test_a_v8_dumps_sample_payload_bytes_exclude_the_trailer(sample_fmt, bytes_per_complex):
+    cube = np.ones((4, 6, 4, 5), dtype=complex)
+    raw = pack_dump(
+        cube,
+        n_tx=3,
+        version=8,
+        frame_period_us=3000,
+        sample_fmt=sample_fmt,
+        range_bin_starts=[20] * 4,
+        range_bin_counts=[5] * 4,
+        frame_time_offsets_us=[3000 * i for i in range(4)],
+        temperature_report={key: 40 for key in TEMP_REPORT_KEYS},
+        **_v8_evidence(4),
+    )
+    metadata, _cube = parse_dump(raw)
+
+    transport = qualification._capture_transport(raw, metadata, 1_041_667)
+
+    assert transport["sample_payload_bytes"] == cube.size * bytes_per_complex
+    assert transport["trailer_bytes"] == 8
+    assert (
+        transport["header_bytes"]
+        + transport["frame_metadata_bytes"]
+        + transport["sample_payload_bytes"]
+        + transport["trailer_bytes"]
+        == transport["dump_bytes"]
+        == len(raw)
+    )
