@@ -46,6 +46,7 @@ from typing import Callable, List, Optional
 import serial
 import serial.tools.list_ports
 
+from . import pi_trace
 from .serial_latency import log_usb_serial_latency_timer
 
 # Configure logging for raw radar data
@@ -258,6 +259,12 @@ class OPS243Radar:
         self.trigger_phase: Optional[tuple[str, float]] = None
         # Most recent OPS-clock -> host-epoch sync (see read_clock_sync).
         self.last_clock_sync: Optional[dict] = None
+        # The S# split this process last confirmed writing, as (segments, reason);
+        # segments is None (with the reason) when no write is confirmed (R-F9).
+        self._pre_trigger_split: tuple[Optional[int], Optional[str]] = (
+            None,
+            "not_written_this_session",
+        )
 
     @staticmethod
     def find_radar_ports() -> List[str]:
@@ -654,6 +661,7 @@ class OPS243Radar:
         """
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Not connected to radar")
+        pi_trace.mark("ops_clock_sync_started", pi_trace.current_ops_attempt())
 
         reads: List[dict] = []
 
@@ -803,6 +811,12 @@ class OPS243Radar:
             )
         else:
             logger.warning("[OPS] Clock sync: no valid C? responses (%d attempts)", len(reads))
+        pi_trace.mark(
+            "ops_clock_sync_done",
+            pi_trace.current_ops_attempt(),
+            method=clock_sync_method,
+            usable=usable_for_trigger_timestamps,
+        )
         return summary
 
     def get_info(self) -> dict:
@@ -1316,8 +1330,10 @@ class OPS243Radar:
 
         # Step 5: Set trigger split - requires \r
         pre_trigger_segments = max(0, min(32, pre_trigger_segments))
+        self._pre_trigger_split = (None, "split_write_unconfirmed")
         self.serial.write(f"S#{pre_trigger_segments}\r".encode())
         self.serial.flush()
+        self._pre_trigger_split = (pre_trigger_segments, None)
         time.sleep(0.15)
         logger.debug("[OPS] S#%d: pre-trigger segments", pre_trigger_segments)
 
@@ -1609,6 +1625,16 @@ class OPS243Radar:
             previous_phase is not None and previous_phase[0] == "rearming"
         )
         self._set_trigger_phase("rearming" if unconfirmed else "armed")
+        split, split_reason = getattr(
+            self, "_pre_trigger_split", (None, "not_written_this_session")
+        )
+        pi_trace.mark(
+            "ops_wait_armed",
+            pi_trace.current_ops_attempt(),
+            pre_trigger_segments=split,
+            pre_trigger_segments_reason=split_reason,
+            arm_confirmed=not unconfirmed,
+        )
 
         # Bytes already here can be a dump an edge started during the re-arm.
         pending_at_start = self.serial.in_waiting
@@ -1767,6 +1793,20 @@ class OPS243Radar:
             pre_trigger_segments: Number of pre-trigger segments (0-32).
                 Each segment = 128 samples = ~4.27ms at 30ksps.
         """
+        attempt_id = pi_trace.current_ops_attempt()
+        pi_trace.mark(
+            "ops_rearm_started",
+            attempt_id,
+            pre_trigger_segments=max(0, min(32, pre_trigger_segments)),
+        )
+        outcome = "exception"
+        try:
+            outcome = self._rearm_rolling_buffer_body(pre_trigger_segments)
+        finally:
+            pi_trace.mark("ops_rearm_done", attempt_id, outcome=outcome)
+
+    def _rearm_rolling_buffer_body(self, pre_trigger_segments: int) -> str:
+        """The re-arm itself; returns "rearmed", or "write_timeout" when the radar is busy."""
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Not connected to radar")
         self._set_trigger_phase("rearming")
@@ -1813,6 +1853,7 @@ class OPS243Radar:
             )
 
         pre_trigger_segments = max(0, min(32, pre_trigger_segments))
+        self._pre_trigger_split = (None, "split_write_unconfirmed")
         try:
             # Restart sampling
             self.serial.write(b"PA")
@@ -1837,7 +1878,9 @@ class OPS243Radar:
                 "[OPS] Re-arm write timed out — radar busy (mid-dump?); "
                 "re-arm will be retried after the next capture cycle"
             )
-            return
+            self._pre_trigger_split = (None, "rearm_write_timed_out")
+            return "write_timeout"
+        self._pre_trigger_split = (pre_trigger_segments, None)
 
         # No flush here (P7-1): the first PA restarts sampling, so an edge
         # during the commands above starts a dump whose start marker a flush
@@ -1845,6 +1888,7 @@ class OPS243Radar:
         # Armed, but nobody reads until the next wait: the light still waits.
         self._set_trigger_phase("rearmed")
         logger.info("[OPS] Rolling buffer re-armed (S#%d)", pre_trigger_segments)
+        return "rearmed"
 
     def _set_trigger_phase(self, phase: str) -> None:
         self.trigger_phase = (phase, time.time())
@@ -1973,7 +2017,9 @@ class OPS243Radar:
         self.enable_json_output(True)
         self.enable_magnitude_report(True)
         self._send_command("W0")
+        self._pre_trigger_split = (None, "split_write_unconfirmed")
         self._send_command(f"S#{pre_trigger_segments}")
+        self._pre_trigger_split = (pre_trigger_segments, None)
 
         # Restore the requested trigger only after every other setting. ST and
         # SM require explicit carriage returns on this firmware path.

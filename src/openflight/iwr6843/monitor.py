@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import logging
 import queue
 import threading
@@ -15,11 +16,25 @@ from typing import Callable
 from openflight.gpio_factory import ensure_lgpio_pin_factory
 from openflight.iwr6843.driver import IWR6843Radar
 from openflight.iwr6843.dump import HEADER, parse_header, payload_nbytes
+from openflight.pi_trace import _finite
 from openflight.ready_light import IWR_TYPICAL_DUMP_S
 
 logger = logging.getLogger(__name__)
 
 _GRACEFUL_DUMP_SHUTDOWN_S = 12.0
+
+
+def _age_ns(age_s) -> int | None:
+    """An edge age in whole ns, or None when it is missing or not a finite number."""
+    return round(float(age_s) * 1e9) if _finite(age_s) else None
+
+
+def _package_version(name: str) -> str | None:
+    """Installed version of ``name``, or None where it is not installed."""
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
 
 
 def tx_order_from_config(config_path: str | Path) -> str:
@@ -185,6 +200,37 @@ class IWR6843CaptureMonitor:
         with self._condition:
             if observer in self._trigger_observers:
                 self._trigger_observers.remove(observer)
+
+    def prepend_trigger_observer(self, observer: Callable[[float], None]) -> None:
+        """Run ``observer`` before every other observer (trace: read the edge age first)."""
+        with self._condition:
+            if observer not in self._trigger_observers:
+                self._trigger_observers.insert(0, observer)
+
+    def edge_tick_reading(self) -> dict:
+        """monotonic, gpiozero active_time, monotonic; plus the pin factory and versions.
+
+        active_time is an age in the pin factory's tick clock. Only the LGPIO factory
+        forwards the kernel event tick (clock_mapping.QUALIFIED_BACKENDS decides); the
+        bracket bounds when the age was read. Kernel IRQ latency before the tick is
+        not in this reading and is never estimated.
+        """
+        button = self._button
+        before = time.monotonic_ns()
+        try:
+            age_s = button.active_time if button is not None else None
+        except Exception:  # pylint: disable=broad-exception-caught
+            age_s = None
+        after = time.monotonic_ns()
+        factory = getattr(button, "pin_factory", None)
+        return {
+            "mono_before_ns": before,
+            "age_ns": _age_ns(age_s),
+            "mono_after_ns": after,
+            "backend": type(factory).__name__ if factory is not None else None,
+            "gpiozero_version": _package_version("gpiozero"),
+            "lgpio_version": _package_version("lgpio"),
+        }
 
     def ready_snapshot(self) -> dict:
         """What the ready light needs (P7-14), read from flags without the condition lock."""

@@ -332,10 +332,18 @@ def get_recorder() -> Optional[TraceRecorder]:
 
 
 def mark(name: str, attempt_id: Optional[str] = None, **fields: Any) -> None:
-    """Hook entry point: a no-op when tracing is off."""
+    """Hook entry point: a no-op when tracing is off; never raises into the caller.
+
+    Hooks sit on the capture, re-arm and emit paths: a trace error is logged and
+    ignored, so it can never skip, delay or drop the work it observes (R-F16).
+    """
     recorder = _RECORDER
-    if recorder is not None:
+    if recorder is None:
+        return
+    try:
         recorder.mark(name, attempt_id, **fields)
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("[TRACE] mark %s failed; ignored", name, exc_info=True)
 
 
 def current_ops_attempt() -> Optional[str]:
