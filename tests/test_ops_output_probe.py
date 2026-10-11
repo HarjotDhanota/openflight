@@ -1,6 +1,8 @@
 """Known-answer tests for the OPS output probe (fake streams only; no hardware)."""
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -430,3 +432,11 @@ def test_run_candidate_refuses_a_forbidden_command_before_sending_anything():
     with pytest.raises(ValueError):
         probe.run_candidate(io, "bad", ["SZ", "A!"], ["Sz"], lambda: None, journal)
     assert io.sent == [] and journal.entries == []
+
+
+def test_probe_module_does_not_import_rolling_buffer():
+    code = (
+        "import sys, openflight.ops_output_probe; "
+        "sys.exit(any(m.startswith('openflight.rolling_buffer') for m in sys.modules))"
+    )
+    assert subprocess.run([sys.executable, "-c", code], check=False).returncode == 0
