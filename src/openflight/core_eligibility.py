@@ -23,10 +23,19 @@ _CORE_FIELDS = (
     "launch_angle_horizontal_status",
 )
 _UNMEASURED_STATUS_PREFIXES = ("rejected", "withheld")
+# Coordinator ruling (11 Oct): an uncalibrated core metric (e.g. the IWR's
+# "azimuth_uncalibrated") is not measured for the qualified core, until W13 and
+# the owner decide otherwise. Matched anywhere in the status, any case.
+_UNCALIBRATED_MARKER = "uncalibrated"
+
+
+def _status_says_unmeasured(status: str) -> bool:
+    lowered = status.lower()
+    return lowered.startswith(_UNMEASURED_STATUS_PREFIXES) or _UNCALIBRATED_MARKER in lowered
 
 
 def _measured(payload: dict, axis: str) -> bool:
-    """A finite angle from a measuring sensor whose status is not a rejection.
+    """A finite angle from a measuring sensor whose status is not a rejection or uncalibrated.
 
     A status that is not a string (or a missing one) passes; a non-string status
     that is present is treated as not measured, since its meaning is unknown.
@@ -37,7 +46,7 @@ def _measured(payload: dict, axis: str) -> bool:
     return (
         _finite(payload.get(f"launch_angle_{axis}"))
         and payload.get(f"launch_angle_{axis}_source") in MEASURED_LAUNCH_SOURCES
-        and not (status or "").startswith(_UNMEASURED_STATUS_PREFIXES)
+        and not _status_says_unmeasured(status or "")
     )
 
 
@@ -57,6 +66,12 @@ def evaluate(payload: dict) -> dict:
         status_key = f"{DISTANCE_KEY}_status"
         core[DISTANCE_KEY] = payload.get(DISTANCE_KEY)
         core[status_key] = payload.get(status_key)
-        if not _finite(core[DISTANCE_KEY]) or not core[status_key]:
+        distance_status = core[status_key]
+        if (
+            not _finite(core[DISTANCE_KEY])
+            or not isinstance(distance_status, str)
+            or not distance_status
+            or _status_says_unmeasured(distance_status)
+        ):
             reasons.append("distance_missing")
     return {"eligible": not reasons, "reasons": reasons, "core": core, "contract": CONTRACT}

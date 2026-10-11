@@ -59,8 +59,44 @@ def test_a_non_string_status_is_not_measured_and_does_not_raise():
 
 
 def test_a_status_that_is_not_a_rejection_keeps_the_axis_measured():
-    result = ce.evaluate({**FULL, "launch_angle_horizontal_status": "azimuth_uncalibrated"})
+    result = ce.evaluate({**FULL, "launch_angle_horizontal_status": "accepted"})
     assert result["reasons"] == ["distance_not_in_payload"]
+
+
+@pytest.mark.parametrize(
+    "change,reason",
+    [
+        (
+            {"launch_angle_horizontal_status": "azimuth_uncalibrated"},
+            "launch_horizontal_not_measured",
+        ),
+        (
+            {
+                "launch_angle_horizontal_source": "radar",
+                "launch_angle_horizontal_status": "azimuth_uncalibrated",
+            },
+            "launch_horizontal_not_measured",
+        ),
+        (
+            {"launch_angle_vertical_status": "elevation_uncalibrated"},
+            "launch_vertical_not_measured",
+        ),
+        ({"launch_angle_vertical_status": "UNCALIBRATED"}, "launch_vertical_not_measured"),
+    ],
+)
+def test_an_uncalibrated_launch_axis_is_not_measured(change, reason):
+    """Coordinator ruling: uncalibrated is not measured for the core, until W13/the owner say."""
+    result = ce.evaluate({**FULL, **change})
+    assert result["eligible"] is False
+    assert result["reasons"] == [reason, "distance_not_in_payload"]
+
+
+def test_an_uncalibrated_distance_is_not_measured(monkeypatch):
+    monkeypatch.setattr(ce, "DISTANCE_KEY", "ball_distance_m")
+    result = ce.evaluate(
+        {**FULL, "ball_distance_m": 1.52, "ball_distance_m_status": "range_uncalibrated"}
+    )
+    assert result["eligible"] is False and result["reasons"] == ["distance_missing"]
 
 
 def test_a_named_distance_field_makes_the_full_core_eligible(monkeypatch):
@@ -78,6 +114,8 @@ def test_a_named_distance_field_makes_the_full_core_eligible(monkeypatch):
         {"ball_distance_m": 1.52},
         {"ball_distance_m": math.nan, "ball_distance_m_status": "measured"},
         {"ball_distance_m": None, "ball_distance_m_status": "measured"},
+        {"ball_distance_m": 1.52, "ball_distance_m_status": "rejected_out_of_range"},
+        {"ball_distance_m": 1.52, "ball_distance_m_status": {"state": "measured"}},
     ],
 )
 def test_a_named_distance_without_a_finite_value_and_status_is_missing(monkeypatch, distance):
