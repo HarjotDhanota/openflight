@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   turned +90 deg and give different angles from the ones they recorded.
 
 ### Added
+- **IWR observed frame evidence (dump v8/v9).** The configurable firmware stamps each retained
+  frame with its frame-start sequence number and R4F cycle-counter tick, stamps the dump
+  request, freeze, RF stop, header and last byte, and (IQ8) counts values that would wrap
+  before narrowing. `frame_evidence.py` reports frame timing as continuous, discontinuous or
+  unobserved; older dumps stay unobserved. New firmware commands `perfstats` and `l3bench`,
+  `IWR6843Radar.read_dump_timed`, and `scripts/iwr6843/feasibility_run.py` (one exclusive run
+  directory per invocation; armed, fresh sound edges only) for the stage-1b gate run.
 - **Enclosure geometry file.** `--rig-geometry` derives camera mount height,
   camera lateral offset, radar height and radar tilt from a measured enclosure
   file and records them in `session_start`, so a session is born with measured

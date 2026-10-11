@@ -10,7 +10,12 @@ FIRMWARE_DIR ?= iwr6843
 REPO_ROOT := $(abspath $(CURDIR)/..)
 DOCKER_IMAGE ?= openflight-iwr-sdk:latest
 RELEASE_DIR ?= releases
-RELEASE_NAME ?= l3_dump_configurable_capture_20260818.bin
+# The default never names a release: releases/ holds the rollback image
+# (l3_dump_configurable_capture_20260818.bin). Name a release explicitly, e.g.
+# RELEASE_NAME=l3_dump_evidence_20261009.bin. An existing file is never replaced
+# unless OVERWRITE_RELEASE=1 is given as well.
+RELEASE_NAME ?= l3_dump_local_build.bin
+OVERWRITE_RELEASE ?= 0
 
 SDK_INSTALLER := $(INSTALLER_DIR)/mmwave_sdk_03_06_02_00-LTS-Linux-x86-Install.bin
 R4F_INSTALLER := $(INSTALLER_DIR)/ti_cgt_tms470_20.2.7.LTS_linux-x64_installer.bin
@@ -47,7 +52,7 @@ REQUIRED_INSTALLERS := \
 	sysconfig-1.10.0_2163-setup.run \
 	xdctools_3_61_00_16_core_linux.zip
 
-.PHONY: help check-host check-tools check-installers install-ti-deps-native install-ti-tools-native probe-installers-native fetch-installers build-native docker-image docker-build docker-shell clean
+.PHONY: help check-host check-tools check-release-target check-installers install-ti-deps-native install-ti-tools-native probe-installers-native fetch-installers build-native docker-image docker-build docker-shell clean
 
 help:
 	@echo "IWR6843 production firmware helpers"
@@ -56,6 +61,7 @@ help:
 	@echo "  check-host              Verify the native x86_64 Linux build host"
 	@echo "  check-tools             Verify the host AND the installed TI toolchain"
 	@echo "  check-installers        Verify required TI installers are present"
+	@echo "  check-release-target    Refuse to overwrite an existing release image"
 	@echo "  fetch-installers        Download the 3 unauthenticated TI installers"
 	@echo "  install-ti-deps-native  Install Debian packages required by TI tools"
 	@echo "  probe-installers-native Verify the downloaded installer executables"
@@ -143,7 +149,16 @@ check-tools:
 	fi; \
 	echo "build environment OK: $$(uname -s) $$(uname -m), TI_ROOT=$(TI_ROOT)"
 
-build-native: check-tools
+# Runs before any build writes $(RELEASE_DIR)/$(RELEASE_NAME), so the rollback
+# image (or any other existing release) can't be replaced by accident.
+check-release-target:
+	@if [ -e "$(RELEASE_DIR)/$(RELEASE_NAME)" ] && [ "$(OVERWRITE_RELEASE)" != "1" ]; then \
+		echo "ERROR: $(RELEASE_DIR)/$(RELEASE_NAME) exists; refusing to overwrite it." >&2; \
+		echo "       Pass another RELEASE_NAME, or OVERWRITE_RELEASE=1 to replace it." >&2; \
+		exit 1; \
+	fi
+
+build-native: check-release-target check-tools
 	$(BUILD_ENV) $(MAKE) -C "$(FIRMWARE_DIR)" cleanApp
 	$(BUILD_ENV) $(MAKE) -C "$(FIRMWARE_DIR)" bin L3_VARIANT_DEFS="--define=N_TX=3 --define=ENABLE_HWA_SMOKE=1 --define=SNAPSHOT_DUMP=1 --define=HWA_CHAINED_SNAPSHOT_RING=1 --define=CONFIGURABLE_CAPTURE=1 --define=HYBRID_CADENCE_CAPTURE=1 --define=L3_RING_IQ8=1 --define=L3_IQ8_EDMA_PACK=1"
 	mkdir -p "$(RELEASE_DIR)"
@@ -209,7 +224,7 @@ fetch-installers:
 docker-image: check-installers
 	docker build --platform linux/amd64 -t "$(DOCKER_IMAGE)" .
 
-docker-build:
+docker-build: check-release-target
 	@if ! docker image inspect "$(DOCKER_IMAGE)" >/dev/null 2>&1; then \
 		echo "ERROR: container image '$(DOCKER_IMAGE)' does not exist."; \
 		echo "       Build it once with: make -C firmware docker-image"; \
@@ -219,7 +234,8 @@ docker-build:
 	fi
 	docker run --rm --platform linux/amd64 \
 		-v "$(REPO_ROOT):/work" -w /work \
-		"$(DOCKER_IMAGE)" make -C firmware build-native RELEASE_NAME="$(RELEASE_NAME)"
+		"$(DOCKER_IMAGE)" make -C firmware build-native RELEASE_NAME="$(RELEASE_NAME)" \
+		OVERWRITE_RELEASE="$(OVERWRITE_RELEASE)"
 
 
 docker-shell:

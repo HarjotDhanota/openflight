@@ -1,0 +1,60 @@
+{
+  "frame_timing": {
+    "dump_version": 8,
+    "findings": [],
+    "frame_time_source": "planned_descriptor",
+    "frames": 4,
+    "hwa_missed_total": 0,
+    "observed_start_offsets_us": [
+      0.0,
+      3000.0,
+      6000.0,
+      9000.0
+    ],
+    "output_latency_us": {
+      "max": 1700.0,
+      "min": 1700.0
+    },
+    "reason": null,
+    "request": {
+      "findings": [],
+      "first_post_seq": 202,
+      "frames_request_to_first_post": 2,
+      "freeze_to_stop_us": 11000.0,
+      "header_to_payload_end_us": 30000.0,
+      "post_frames": 2,
+      "pre_frames": 2,
+      "request_seq": 200,
+      "request_to_first_post_start_us": 750.0,
+      "request_to_freeze_us": 5750.0,
+      "status": "consistent",
+      "stop_to_header_us": 2000.0
+    },
+    "schema": "openflight.iwr6843.frame_timing.v1",
+    "start_jitter_us": {
+      "max": 0.0,
+      "min": 0.0
+    },
+    "status": "continuous"
+  },
+  "sample_integrity": {
+    "format": "iq8",
+    "frames_scanned": 3,
+    "frames_with_overflow": [],
+    "frames_within_2x_of_wrap": 2,
+    "max_abs": 127,
+    "overflow_components": 0,
+    "reason": null,
+    "schema": "openflight.iwr6843.sample_integrity.v1",
+    "status": "clean"
+  },
+  "schema": "openflight.iwr6843.w4a_contract.v1",
+  "transfer_timing": {
+    "cli_ready_ns": 8200000000,
+    "clock": "host_monotonic_ns",
+    "first_byte_ns": 1030000000,
+    "header_complete_ns": 1031000000,
+    "last_byte_ns": 8130000000,
+    "request_written_ns": 1000000000
+  }
+}

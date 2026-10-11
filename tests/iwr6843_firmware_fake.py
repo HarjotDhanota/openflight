@@ -28,12 +28,32 @@ class FakeClock:
     def monotonic(self) -> float:
         return self.now
 
+    def monotonic_ns(self) -> int:
+        return int(round(self.now * 1e9))
+
     def sleep(self, seconds: float) -> None:
         self.now += max(0.0, seconds)
 
     def module(self) -> SimpleNamespace:
         """Stand-in for the ``time`` module inside the driver."""
-        return SimpleNamespace(time=self.time, monotonic=self.monotonic, sleep=self.sleep)
+        return SimpleNamespace(
+            time=self.time,
+            monotonic=self.monotonic,
+            monotonic_ns=self.monotonic_ns,
+            sleep=self.sleep,
+        )
+
+
+# A made-up perfstats reply in the firmware's format (l3_cli_perfStats), for parser tests only.
+PERF_REPLY = (
+    b"perf tick_hz=200000000 rearm_max=41000 rearms=900 task_max=90000 task_runs=900 "
+    b"margin_min=52000 margin_frames=1200\r\n"
+    b"perf scan_max=38000 scan_frames=900 scan_total_hi=1 scan_total_lo=5 "
+    b"pack_max=12000 packs=900 pack_overlap=0 iq8_overflow=0 iq8_overflow_saturated=0\r\n"
+    b"heap size=32768 free=9000 free_min=8800 largest=8000\r\n"
+    b"stacks init=2900/8192 ctrl=700/3072 rearm=600/2048 cli=1500/4096 hwi=900/2048\r\n"
+)
+BENCH_REPLY = b"bench samples=183168 cycles=4200000 sum_hi=1 sum_lo=5\r\n"
 
 
 class FirmwareModel:
@@ -88,6 +108,15 @@ class FirmwareModel:
                 self.active = True
             elif line == "stats":
                 self.pending += f"frames=9 active={int(self.active)} rf_faults=0\r\n".encode()
+            elif line == "perfstats":
+                self.pending += PERF_REPLY
+            elif line == "l3bench":
+                if self.active:
+                    self.pending += (
+                        b"Error: stop the sensor before l3bench\r\nError -1\r\nl3dump:/>"
+                    )
+                    continue
+                self.pending += BENCH_REPLY
             elif line == "help":
                 self.pending += b"sensorStart   Configure + start capture (no args)\r\n"
             self.pending += b"Done\r\nl3dump:/>"

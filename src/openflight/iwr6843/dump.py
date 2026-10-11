@@ -23,6 +23,14 @@ Fixed-width version 5 and configurable-capture version 7 append a temperature
 report. The older variable-width v5/v6 formats remain parseable without one.
 Sample format 5 keeps the version 6 timed descriptors but stores each
 frame as int8 I/Q plus a uint16 frame scale.
+Versions 8 (with the temperature report) and 9 (without it) keep the version 6/7 timed
+layout and add observed evidence: after the per-frame descriptors (and the IQ8 scale
+table) comes a 40-byte capture evidence block ("ILE1": the R4F cycle-counter rate and the
+request, freeze, RF-stop and header ticks) and one 20-byte record per frame (frame-start
+sequence number, frame-start and HWA-output ticks, IQ8 pre-narrowing overflow count and
+maximum magnitude, flags); after the payload comes an 8-byte trailer ("ILT1", the tick when
+the last payload byte was handed to the UART). Descriptor deltas stay the firmware's plan:
+``frame_time_source`` says so. Older dumps carry no evidence and report None.
 """
 
 from __future__ import annotations
@@ -36,7 +44,7 @@ from openflight.iwr6843.music import est_music_fbss, steer
 MAGIC = b"ILD1"
 HEADER = struct.Struct("<4sHHHBBHBBHH")
 TEMP_REPORT = struct.Struct("<Ihhhhhhhhhh")
-MAX_SUPPORTED_DUMP_VERSION = 7
+MAX_SUPPORTED_DUMP_VERSION = 9
 # TI mmWaveLink rlRfTempData_t temperature fields are signed, 1 LSB = 1 deg C.
 TEMP_REPORT_KEYS = (
     "device_time_ms",
@@ -58,6 +66,37 @@ SAMPLE_RANGE_FFT_IQ16_VARIABLE = 3
 SAMPLE_RANGE_FFT_IQ16_VARIABLE_TIMED = 4
 SAMPLE_RANGE_FFT_IQ8_VARIABLE_TIMED = 5
 TIMED_FRAME_DESCRIPTOR = struct.Struct("<BBH")
+DUMP_VERSION_EVIDENCE_TEMPERATURE = 8
+DUMP_VERSION_EVIDENCE = 9
+EVIDENCE_VERSIONS = (DUMP_VERSION_EVIDENCE_TEMPERATURE, DUMP_VERSION_EVIDENCE)
+# Mirrors firmware/iwr6843/dump_format.h l3_capture_evidence_t (40 B); its last byte is
+# the reserved pad ("x"): ten named fields follow the magic and the two sizes.
+CAPTURE_EVIDENCE = struct.Struct("<4sHHIIIIIIIBBBx")
+CAPTURE_EVIDENCE_MAGIC = b"ILE1"
+CAPTURE_EVIDENCE_KEYS = (
+    "tick_hz",
+    "request_tick",
+    "request_seq",
+    "freeze_tick",
+    "stop_tick",
+    "header_tick",
+    "hwa_missed_total",
+    "pre_frames",
+    "post_frames",
+    "flags",
+)
+# Mirrors l3_frame_evidence_t (20 B): seq, start tick, done tick, overflow, max abs, flags.
+FRAME_EVIDENCE = struct.Struct("<IIIHHB3x")
+# Mirrors l3_dump_trailer_t (8 B).
+DUMP_TRAILER = struct.Struct("<4sI")
+DUMP_TRAILER_MAGIC = b"ILT1"
+FRAME_FLAG_ASSOCIATED = 0x01
+FRAME_FLAG_IQ8_SCANNED = 0x02
+# L3_FRAME_NO_STAMP: what the firmware writes into seq and start_tick when a record is not
+# associated with a fresh armed frame start. The flag decides; the parser reports None.
+FRAME_NO_STAMP = 0
+CAPTURE_FLAG_IQ8_SCAN = 0x01
+FRAME_TIME_SOURCE_PLANNED = "planned_descriptor"
 
 _VARIABLE_SAMPLE_FORMATS = (
     SAMPLE_RANGE_FFT_IQ16_VARIABLE,
@@ -72,7 +111,93 @@ _TIMED_SAMPLE_FORMATS = (
 
 def _has_temperature_extension(version: int, sample_fmt: int) -> bool:
     """Identify schemas that append the temperature report after the header."""
-    return version == 7 or (version == 5 and sample_fmt not in _VARIABLE_SAMPLE_FORMATS)
+    return version in (7, DUMP_VERSION_EVIDENCE_TEMPERATURE) or (
+        version == 5 and sample_fmt not in _VARIABLE_SAMPLE_FORMATS
+    )
+
+
+def _has_evidence(version: int) -> bool:
+    """Versions 8 and 9 carry the observed evidence block and trailer."""
+    return version in EVIDENCE_VERSIONS
+
+
+def _evidence_bytes(
+    capture_evidence: dict, frame_evidence, dump_trailer: dict, n_frames: int
+) -> tuple[bytes, bytes]:
+    """Encode the evidence block + per-frame records, and the trailer."""
+    if len(frame_evidence) != n_frames:
+        raise ValueError("evidence needs one record per frame")
+    for index, record in enumerate(frame_evidence):
+        if record["associated"] and (record["seq"] is None or record["start_tick"] is None):
+            raise ValueError(f"associated frame record {index} needs its seq and start_tick")
+        if record["iq8_scanned"] and (
+            record["iq8_overflow"] is None or record["iq8_max_abs"] is None
+        ):
+            raise ValueError(f"scanned frame record {index} needs its iq8_overflow and max_abs")
+    block = CAPTURE_EVIDENCE.pack(
+        CAPTURE_EVIDENCE_MAGIC,
+        CAPTURE_EVIDENCE.size,
+        FRAME_EVIDENCE.size,
+        *(int(capture_evidence[key]) for key in CAPTURE_EVIDENCE_KEYS),
+    )
+    records = b"".join(
+        FRAME_EVIDENCE.pack(
+            # Like the firmware: an unassociated record never carries stale stamps.
+            int(record["seq"]) if record["associated"] else FRAME_NO_STAMP,
+            int(record["start_tick"]) if record["associated"] else FRAME_NO_STAMP,
+            int(record["done_tick"]),
+            # Like the firmware: an unscanned slot carries zeroes, never a measurement.
+            int(record["iq8_overflow"]) if record["iq8_scanned"] else 0,
+            int(record["iq8_max_abs"]) if record["iq8_scanned"] else 0,
+            (FRAME_FLAG_ASSOCIATED if record["associated"] else 0)
+            | (FRAME_FLAG_IQ8_SCANNED if record["iq8_scanned"] else 0),
+        )
+        for record in frame_evidence
+    )
+    trailer = DUMP_TRAILER.pack(DUMP_TRAILER_MAGIC, int(dump_trailer["payload_end_tick"]))
+    return block + records, trailer
+
+
+def _parse_evidence(raw: bytes, meta: dict, offset: int) -> None:
+    """Decode the evidence block and per-frame records at ``offset`` into ``meta``."""
+    magic, block_nbytes, record_nbytes, *values = CAPTURE_EVIDENCE.unpack_from(raw, offset)
+    if magic != CAPTURE_EVIDENCE_MAGIC:
+        raise ValueError(f"bad evidence magic {magic!r} (expected {CAPTURE_EVIDENCE_MAGIC!r})")
+    if block_nbytes != CAPTURE_EVIDENCE.size or record_nbytes != FRAME_EVIDENCE.size:
+        raise ValueError(
+            f"evidence block sizes {block_nbytes}/{record_nbytes} do not match "
+            f"{CAPTURE_EVIDENCE.size}/{FRAME_EVIDENCE.size}"
+        )
+    capture = dict(zip(CAPTURE_EVIDENCE_KEYS, values, strict=True))
+    if capture["tick_hz"] == 0:
+        raise ValueError("evidence tick rate is zero")
+    if capture["pre_frames"] + capture["post_frames"] != meta["n_frames"]:
+        raise ValueError(
+            f"evidence pre and post frames {capture['pre_frames']}+{capture['post_frames']} "
+            f"do not add up to the header's {meta['n_frames']} frames"
+        )
+    start = offset + CAPTURE_EVIDENCE.size
+    stop = start + FRAME_EVIDENCE.size * meta["n_frames"]
+    meta["capture_evidence"] = capture
+    meta["frame_evidence"] = tuple(
+        _frame_record(*values) for values in FRAME_EVIDENCE.iter_unpack(raw[start:stop])
+    )
+
+
+def _frame_record(seq, start_tick, done_tick, overflow, max_abs, flags) -> dict:
+    """One frame record; without a fresh armed start, seq and start_tick were not observed,
+    and without the IQ8 scan, iq8_overflow and iq8_max_abs were not measured (None)."""
+    associated = bool(flags & FRAME_FLAG_ASSOCIATED)
+    scanned = bool(flags & FRAME_FLAG_IQ8_SCANNED)
+    return {
+        "seq": seq if associated else None,
+        "start_tick": start_tick if associated else None,
+        "done_tick": done_tick,
+        "iq8_overflow": overflow if scanned else None,
+        "iq8_max_abs": max_abs if scanned else None,
+        "associated": associated,
+        "iq8_scanned": scanned,
+    }
 
 
 def pack_dump(
@@ -88,6 +213,9 @@ def pack_dump(
     range_bin_counts: tuple[int, ...] | list[int] | None = None,
     frame_time_offsets_us: tuple[int, ...] | list[int] | None = None,
     temperature_report: dict[str, int] | None = None,
+    capture_evidence: dict | None = None,
+    frame_evidence: tuple[dict, ...] | list[dict] | None = None,
+    dump_trailer: dict | None = None,
 ) -> bytes:
     """Complex cube [n_frames, chirps_per_frame, n_rx, n_samples] -> dump bytes.
 
@@ -168,6 +296,19 @@ def pack_dump(
                 )
         else:
             frame_prefix = bytes(range_bin_starts)
+    evidence_prefix = b""
+    trailer_suffix = b""
+    evidence_given = (capture_evidence, frame_evidence, dump_trailer) != (None, None, None)
+    if _has_evidence(version):
+        if sample_fmt not in _TIMED_SAMPLE_FORMATS:
+            raise ValueError("dump version 8 or 9 needs a timed sample format")
+        if capture_evidence is None or frame_evidence is None or dump_trailer is None:
+            raise ValueError("a version 8 or 9 dump needs its evidence block and trailer")
+        evidence_prefix, trailer_suffix = _evidence_bytes(
+            capture_evidence, frame_evidence, dump_trailer, n_frames
+        )
+    elif evidence_given:
+        raise ValueError("evidence requires dump version 8 or 9")
     pad = range_bin_start if sample_fmt == SAMPLE_RANGE_FFT_IQ16 else 0
     hdr = HEADER.pack(
         MAGIC,
@@ -204,12 +345,20 @@ def pack_dump(
             iq8[1::2] = np.clip(np.round(frame_flat.real / scale), -128, 127).astype(np.int8)
             chunks.append(iq8.tobytes())
         scale_prefix = np.asarray(scales, dtype="<u2").tobytes()
-        return hdr + temp_prefix + frame_prefix + scale_prefix + b"".join(chunks)
+        return (
+            hdr
+            + temp_prefix
+            + frame_prefix
+            + scale_prefix
+            + evidence_prefix
+            + b"".join(chunks)
+            + trailer_suffix
+        )
 
     iq = np.empty(flat.size * 2, dtype="<i2")
     iq[0::2] = np.clip(np.round(flat.imag), -32768, 32767).astype("<i2")  # Im first (TI ImRe)
     iq[1::2] = np.clip(np.round(flat.real), -32768, 32767).astype("<i2")
-    return hdr + temp_prefix + frame_prefix + iq.tobytes()
+    return hdr + temp_prefix + frame_prefix + evidence_prefix + iq.tobytes() + trailer_suffix
 
 
 def parse_header(raw: bytes) -> dict:
@@ -254,6 +403,10 @@ def parse_header(raw: bytes) -> dict:
         if fmt == SAMPLE_RANGE_FFT_IQ16_WINDOWED
         else 0
     )
+    evidence = _has_evidence(ver)
+    if evidence and fmt not in _TIMED_SAMPLE_FORMATS:
+        raise ValueError(f"dump version {ver} needs a timed sample format, got {fmt}")
+    evidence_nbytes = CAPTURE_EVIDENCE.size + FRAME_EVIDENCE.size * nf if evidence else 0
     return dict(
         version=ver,
         n_frames=nf,
@@ -266,7 +419,13 @@ def parse_header(raw: bytes) -> dict:
         sample_fmt=fmt,
         range_bin_start=_pad if fmt == SAMPLE_RANGE_FFT_IQ16 else 0,
         range_metadata_nbytes=range_metadata_nbytes,
-        frame_metadata_nbytes=range_metadata_nbytes,
+        frame_metadata_nbytes=range_metadata_nbytes + evidence_nbytes,
+        evidence_nbytes=evidence_nbytes,
+        trailer_nbytes=DUMP_TRAILER.size if evidence else 0,
+        frame_time_source=(FRAME_TIME_SOURCE_PLANNED if fmt in _TIMED_SAMPLE_FORMATS else None),
+        capture_evidence=None,
+        frame_evidence=None,
+        dump_trailer=None,
         header_nbytes=header_nbytes,
         temperature_report=temperature_report,
     )
@@ -274,9 +433,11 @@ def parse_header(raw: bytes) -> dict:
 
 def _parse_frame_metadata(raw: bytes, meta: dict) -> None:
     """Populate per-frame range-window metadata once its table has arrived."""
-    metadata_nbytes = meta.get("frame_metadata_nbytes", 0)
-    start = meta.get("header_nbytes", HEADER.size)
-    range_stop = start + meta.get("range_metadata_nbytes", metadata_nbytes)
+    metadata_nbytes = meta.get("frame_metadata_nbytes") or 0
+    # A size stored as None reads as absent: the bare header, or the whole metadata table.
+    start = meta.get("header_nbytes") or HEADER.size
+    range_nbytes = meta.get("range_metadata_nbytes")
+    range_stop = start + (metadata_nbytes if range_nbytes is None else range_nbytes)
     stop = start + metadata_nbytes
     if len(raw) < stop:
         if meta["sample_fmt"] == SAMPLE_RANGE_FFT_IQ16_WINDOWED:
@@ -317,6 +478,8 @@ def _parse_frame_metadata(raw: bytes, meta: dict) -> None:
             if scales.size < meta["n_frames"] or np.any(scales == 0):
                 raise ValueError("invalid per-frame IQ8 scale")
             meta["iq8_scales"] = tuple(int(scale) for scale in scales)
+    if meta.get("evidence_nbytes", 0):
+        _parse_evidence(raw, meta, range_stop)
 
 
 def payload_nbytes(meta: dict, raw: bytes | None = None) -> int:
@@ -331,18 +494,25 @@ def payload_nbytes(meta: dict, raw: bytes | None = None) -> int:
         sample_count = meta["n_frames"] * meta["n_samples"]
     bytes_per_complex = 2 if meta["sample_fmt"] == SAMPLE_RANGE_FFT_IQ8_VARIABLE_TIMED else 4
     iq_nbytes = sample_count * meta["chirps_per_frame"] * meta["n_rx"] * bytes_per_complex
-    return meta.get("frame_metadata_nbytes", 0) + iq_nbytes
+    # An absent part is 0 B (its real size); a size stored as None reads as absent.
+    metadata_nbytes = meta.get("frame_metadata_nbytes") or 0
+    return metadata_nbytes + iq_nbytes + (meta.get("trailer_nbytes") or 0)
 
 
 def parse_dump(raw: bytes):
     """Dump bytes -> (meta dict, complex cube [n_frames, cpf, n_rx, n_samples])."""
     meta = parse_header(raw)
     nf, cpf, nrx, ns = (meta["n_frames"], meta["chirps_per_frame"], meta["n_rx"], meta["n_samples"])
-    payload_offset = meta["header_nbytes"] + meta.get("frame_metadata_nbytes", 0)
+    payload_offset = meta["header_nbytes"] + (meta.get("frame_metadata_nbytes") or 0)
     _parse_frame_metadata(raw, meta)
     expected_nbytes = meta["header_nbytes"] + payload_nbytes(meta, raw)
     if len(raw) < expected_nbytes:
         raise ValueError(f"short payload: {len(raw)} bytes < {expected_nbytes} needed")
+    if meta.get("trailer_nbytes"):
+        magic, payload_end_tick = DUMP_TRAILER.unpack_from(raw, expected_nbytes - DUMP_TRAILER.size)
+        if magic != DUMP_TRAILER_MAGIC:
+            raise ValueError(f"bad trailer magic {magic!r} (expected {DUMP_TRAILER_MAGIC!r})")
+        meta["dump_trailer"] = {"payload_end_tick": payload_end_tick}
     if meta["sample_fmt"] == SAMPLE_RANGE_FFT_IQ8_VARIABLE_TIMED:
         cube = np.zeros((nf, cpf, nrx, ns), dtype=np.complex128)
         byte_offset = payload_offset
@@ -375,6 +545,28 @@ def parse_dump(raw: bytes):
     return meta, cube
 
 
+def _repack_kwargs(meta: dict) -> dict:
+    """Every pack_dump keyword that carries a parsed dump's metadata through a repack.
+
+    The evidence describes the original capture (all TX, all loops); a projection or loop
+    subset keeps it unchanged.
+    """
+    return {
+        "trigger_frame": meta["trigger_frame"],
+        "version": meta["version"],
+        "frame_period_us": meta.get("frame_period_us", 0),
+        "sample_fmt": meta.get("sample_fmt", SAMPLE_INT16_IQ),
+        "range_bin_start": meta.get("range_bin_start", 0),
+        "range_bin_starts": meta.get("range_bin_starts"),
+        "range_bin_counts": meta.get("range_bin_counts"),
+        "frame_time_offsets_us": meta.get("frame_time_offsets_us"),
+        "temperature_report": meta.get("temperature_report"),
+        "capture_evidence": meta.get("capture_evidence"),
+        "frame_evidence": meta.get("frame_evidence"),
+        "dump_trailer": meta.get("dump_trailer"),
+    }
+
+
 def select_tdm_loops(raw: bytes, *, start: int, count: int) -> bytes:
     """Return the same capture with a contiguous subset of complete TDM loops.
 
@@ -405,19 +597,7 @@ def select_tdm_loops(raw: bytes, *, start: int, count: int) -> bytes:
         meta["n_rx"],
         meta["n_samples"],
     )
-    return pack_dump(
-        selected,
-        n_tx=n_tx,
-        trigger_frame=meta["trigger_frame"],
-        version=meta["version"],
-        frame_period_us=meta["frame_period_us"],
-        sample_fmt=meta["sample_fmt"],
-        range_bin_start=meta.get("range_bin_start", 0),
-        range_bin_starts=meta.get("range_bin_starts"),
-        range_bin_counts=meta.get("range_bin_counts"),
-        frame_time_offsets_us=meta.get("frame_time_offsets_us"),
-        temperature_report=meta.get("temperature_report"),
-    )
+    return pack_dump(selected, n_tx=n_tx, **_repack_kwargs(meta))
 
 
 def is_range_snapshot(meta: dict) -> bool:
@@ -458,19 +638,7 @@ def project_tx_pair(raw: bytes, tx_indices: tuple[int, int] = (0, 1)) -> bytes:
         n_rx,
         n_samples,
     )
-    return pack_dump(
-        projected,
-        n_tx=len(tx_indices),
-        trigger_frame=meta["trigger_frame"],
-        version=meta["version"],
-        frame_period_us=meta.get("frame_period_us", 0),
-        sample_fmt=meta.get("sample_fmt", SAMPLE_INT16_IQ),
-        range_bin_start=meta.get("range_bin_start", 0),
-        range_bin_starts=meta.get("range_bin_starts"),
-        range_bin_counts=meta.get("range_bin_counts"),
-        frame_time_offsets_us=meta.get("frame_time_offsets_us"),
-        temperature_report=meta.get("temperature_report"),
-    )
+    return pack_dump(projected, n_tx=len(tx_indices), **_repack_kwargs(meta))
 
 
 def range_fft(cube: np.ndarray, n_fft: int | None = None) -> np.ndarray:
