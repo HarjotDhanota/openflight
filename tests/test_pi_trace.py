@@ -327,3 +327,34 @@ def test_close_is_idempotent(tmp_path):
     assert rec.close() is True
     rows = read_lines(tmp_path / "trace.jsonl")
     assert [r["type"] for r in rows].count("trace_end") == 1
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("float32", True),
+        ("float64", True),
+        ("int64", True),
+        ("float32_nan", False),
+        ("float64_inf", False),
+        ("bool_", False),
+    ],
+)
+def test_finite_accepts_numpy_real_scalars_but_not_bools(value, expected):
+    """A-M4: any numbers.Real counts (np.float32, np.int64); a bool never does."""
+    import fractions
+
+    import numpy as np
+
+    values = {
+        "float32": np.float32(1.5),
+        "float64": np.float64(2.5),
+        "int64": np.int64(7),
+        "float32_nan": np.float32("nan"),
+        "float64_inf": np.float64("inf"),
+        "bool_": np.bool_(True),
+    }
+    assert _finite(values[value]) is expected
+    assert _finite(fractions.Fraction(1, 3)) is True
+    assert _finite(complex(1, 0)) is False
+    assert _finite(10**400) is False  # never raises OverflowError

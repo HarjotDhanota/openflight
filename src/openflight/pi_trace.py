@@ -14,6 +14,7 @@ import itertools
 import json
 import logging
 import math
+import numbers
 import os
 import queue
 import threading
@@ -73,8 +74,17 @@ class BracketedPair:
 
 
 def _finite(value: Any) -> bool:
-    """True for a finite int or float (bool, None, strings, NaN and inf are not)."""
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    """True for a finite real number, numpy scalars included (np.float32, np.int64).
+
+    bool (and numpy's bool_, which is not a numbers.Real), None, strings, complex,
+    NaN and inf are not, nor is an int too large for a float (it would overflow).
+    """
+    if not isinstance(value, numbers.Real) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except OverflowError:
+        return False
 
 
 def read_cpu_temp_c(path: Path = THERMAL_ZONE) -> Optional[float]:
