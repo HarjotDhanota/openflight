@@ -3176,6 +3176,28 @@ def on_shot_processing(state: str) -> None:
     socketio.emit("shot_processing", {"state": state})
 
 
+def _report_shot_not_sent(shot: Shot, targets: List[str], error: IncompleteShotError) -> None:
+    """Tell the screen and the sim-send log why a shot was not sent to the simulators."""
+    reason = str(error)
+    missing = list(getattr(error, "missing", []))
+    shot_timestamp = shot.timestamp.isoformat()
+    logger.warning("[sim] shot not sent to simulator: %s", reason)
+    socketio.emit(
+        "sim_shot_dropped",
+        {
+            "reason": reason,
+            "missing": missing,
+            "shot_timestamp": shot_timestamp,
+            "targets": targets,
+        },
+    )
+    session_log = get_session_logger()
+    if session_log:
+        session_log.log_sim_not_sent(
+            targets=targets, reason=reason, missing=missing, shot_timestamp=shot_timestamp
+        )
+
+
 def _forward_shot_to_simulators(shot: Shot) -> None:
     """Resolve a shot once and fan it out to every connected simulator.
 
@@ -3183,13 +3205,14 @@ def _forward_shot_to_simulators(shot: Shot) -> None:
     raises into it. A shot number is only allocated when at least one connector
     is connected, so the sequence doesn't drift while sims are offline.
     """
-    if not any(c.is_connected() for c in sim_connectors):
+    targets = [c.name for c in sim_connectors if c.is_connected()]
+    if not targets:
         return
     try:
-        resolved = resolve_shot(shot, sim_player_state)
+        # a fusion unit sends only what it measured (D17, D31)
+        resolved = resolve_shot(shot, sim_player_state, substitutes=not _fusion_unit())
     except IncompleteShotError as e:
-        logger.warning("[sim] shot not sendable: %s", e)
-        socketio.emit("sim_shot_dropped", {"reason": str(e)})
+        _report_shot_not_sent(shot, targets, e)
         return
 
     values = resolved.as_values()

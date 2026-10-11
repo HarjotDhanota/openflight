@@ -633,3 +633,225 @@ def test_the_session_log_names_the_trigger_table_carry_a_diagnostic(tmp_path):
     assert entry["type"] == "trigger_event"
     assert "carry_yards" not in entry
     assert entry["table_carry_estimate_yards"] == 257.0
+
+
+# ---- D31: a fusion unit sends simulators only what it measured -------------------------
+#
+# OpenConnect V1 (GSPro, OpenGolfSim, PAR-TEE) requires BallData Speed, VLA, HLA,
+# TotalSpin and SpinAxis (BackSpin/SideSpin only without TotalSpin); CarryDistance and
+# every ClubData field are optional. On a fusion unit a required field the shot did not
+# measure means the shot is not sent, and the screen and the sim-send log say why; an
+# optional one is left off the wire. An OPS-only unit keeps its labelled estimates.
+
+
+def _fusion_sim_shot(**overrides):
+    values = {
+        "launch_angle_vertical": 12.0,
+        "launch_angle_horizontal": 1.0,
+        "spin_rpm": 2700,
+        "spin_confidence": 0.85,
+        "spin_axis_deg": 2.0,
+        "club_path_deg": -1.5,
+        "carry_spin_adjusted": 243.8,
+        "carry_status": "measured",
+    }
+    values.update(overrides)
+    return _shot(**values)
+
+
+@pytest.mark.parametrize(
+    "overrides, missing, reason",
+    [
+        ({"spin_confidence": 0.3}, ["spin"], "spin not measured"),
+        ({"spin_rpm": None, "spin_confidence": None}, ["spin"], "spin not measured"),
+        ({"launch_angle_vertical": None}, ["vertical launch"], "vertical launch not measured"),
+        (
+            {"launch_angle_horizontal": None},
+            ["horizontal launch"],
+            "horizontal launch not measured",
+        ),
+        ({"spin_axis_deg": None}, ["spin axis"], "spin axis not measured"),
+        (
+            {"launch_angle_vertical": None, "spin_confidence": 0.3, "spin_axis_deg": None},
+            ["vertical launch", "spin", "spin axis"],
+            "vertical launch, spin and spin axis not measured",
+        ),
+    ],
+)
+def test_a_fusion_shot_missing_a_required_field_is_not_sent(overrides, missing, reason):
+    from openflight.sim.types import UnmeasuredShotError
+
+    state = PlayerState()
+
+    with pytest.raises(UnmeasuredShotError) as raised:
+        resolve_shot(_fusion_sim_shot(**overrides), state, substitutes=False)
+
+    assert raised.value.missing == missing
+    assert str(raised.value) == reason
+    assert state.shot_counter == 0  # no shot number spent on a shot that was not sent
+
+
+def test_a_fusion_shot_with_a_calculated_spin_is_sent_under_its_label():
+    shot = _fusion_sim_shot(spin_rpm=2600, spin_confidence=None, spin_source="calculated")
+
+    resolved = resolve_shot(shot, PlayerState(), substitutes=False)
+
+    assert resolved.total_spin_rpm == pytest.approx(2600)
+    assert resolved.provenance["total_spin"] == "estimated"
+
+
+def test_a_fusion_shot_missing_only_optional_fields_is_sent_without_them():
+    import json
+
+    from openflight.gspro.codec import GSProCodec
+
+    shot = _fusion_sim_shot(
+        club_speed_mph=None,
+        club_path_deg=None,
+        carry_spin_adjusted=None,
+        carry_status="not_measured",
+    )
+
+    resolved = resolve_shot(shot, PlayerState(), substitutes=False)
+    wire = json.loads(GSProCodec().build_shot(resolved))
+
+    assert resolved.club_path_deg is None and resolved.club_speed_mph is None
+    for field in ("carry", "club_path", "club_speed"):
+        assert field not in resolved.provenance
+        assert field not in resolved.as_values()
+    assert "CarryDistance" not in wire["BallData"]
+    assert "Path" not in wire["ClubData"]
+    assert wire["ShotDataOptions"]["ContainsClubData"] is False
+    for key in ("Speed", "VLA", "HLA", "TotalSpin", "SpinAxis"):
+        assert key in wire["BallData"]
+
+
+def test_a_fully_measured_fusion_shot_is_sent_unchanged():
+
+    from openflight.gspro.codec import GSProCodec
+
+    shot = _fusion_sim_shot()
+
+    fusion = resolve_shot(shot, PlayerState(), substitutes=False)
+    ops = resolve_shot(shot, PlayerState())
+
+    assert fusion == ops
+    assert set(fusion.provenance.values()) == {"measured"}
+    assert GSProCodec().build_shot(fusion) == GSProCodec().build_shot(ops)
+
+
+def test_an_ops_only_shot_keeps_its_labelled_simulator_estimates():
+    resolved = resolve_shot(_shot(), PlayerState())
+
+    assert resolved.vla > 0 and resolved.hla == 0.0 and resolved.spin_axis_deg == 0.0
+    assert resolved.total_spin_rpm > 0 and resolved.club_path_deg == 0.0
+    for field in ("vla", "hla", "total_spin", "spin_axis", "club_path"):
+        assert resolved.provenance[field] == "estimated"
+
+
+class _Connector:
+    """A connected OpenConnect simulator that records what it was sent."""
+
+    name = "gspro"
+
+    def __init__(self, sent):
+        from openflight.gspro.codec import GSProCodec
+
+        self.codec = GSProCodec()
+        self._sent = sent
+
+    @staticmethod
+    def is_connected():
+        return True
+
+    def send_shot(self, resolved):
+        self._sent.append(self.codec.build_shot(resolved))
+
+
+def _forward(monkeypatch, shot, *, fusion):
+    sent, emitted = [], []
+    session_log = SimpleNamespace(not_sent=[], sends=[])
+    session_log.log_sim_not_sent = lambda **kw: session_log.not_sent.append(kw)
+    session_log.log_sim_send = lambda **kw: session_log.sends.append(kw)
+    monkeypatch.setattr(server_module, "iwr6843_runtime", SimpleNamespace() if fusion else None)
+    monkeypatch.setattr(server_module, "camera_capture_runtime", None)
+    monkeypatch.setattr(server_module, "sim_connectors", [_Connector(sent)])
+    monkeypatch.setattr(server_module, "sim_player_state", PlayerState())
+    monkeypatch.setattr(server_module, "get_session_logger", lambda: session_log)
+    monkeypatch.setattr(
+        server_module.socketio, "emit", lambda event, payload: emitted.append((event, payload))
+    )
+    server_module._forward_shot_to_simulators(shot)  # pylint: disable=protected-access
+    return sent, emitted, session_log
+
+
+def test_the_server_does_not_send_a_fusion_shot_without_measured_spin_and_says_why(monkeypatch):
+    shot = _fusion_sim_shot(spin_confidence=0.3)
+
+    sent, emitted, session_log = _forward(monkeypatch, shot, fusion=True)
+
+    assert sent == []
+    assert emitted == [
+        (
+            "sim_shot_dropped",
+            {
+                "reason": "spin not measured",
+                "missing": ["spin"],
+                "shot_timestamp": shot.timestamp.isoformat(),
+                "targets": ["gspro"],
+            },
+        )
+    ]
+    assert session_log.not_sent == [
+        {
+            "targets": ["gspro"],
+            "reason": "spin not measured",
+            "missing": ["spin"],
+            "shot_timestamp": shot.timestamp.isoformat(),
+        }
+    ]
+    assert session_log.sends == []
+
+
+def test_the_server_sends_the_same_shot_from_an_ops_only_unit_with_estimates(monkeypatch):
+    sent, emitted, session_log = _forward(
+        monkeypatch, _fusion_sim_shot(spin_confidence=0.3), fusion=False
+    )
+
+    assert len(sent) == 1
+    assert [event for event, _payload in emitted] == ["sim_shot"]
+    assert session_log.not_sent == [] and len(session_log.sends) == 1
+
+
+def test_the_server_sends_a_fully_measured_fusion_shot(monkeypatch):
+    sent, emitted, _session_log = _forward(monkeypatch, _fusion_sim_shot(), fusion=True)
+
+    assert len(sent) == 1
+    assert [event for event, _payload in emitted] == ["sim_shot"]
+
+
+def test_the_sim_send_log_records_a_shot_not_sent_with_its_reason(tmp_path):
+    import json
+
+    from openflight.session_logger import SessionLogger
+
+    session = SessionLogger(log_dir=tmp_path, enabled=True)
+    session.start_session(mode="rolling-buffer", trigger_type="sound")
+
+    session.log_sim_send(target="gspro", shot_number=3, provenance={"ball_speed": "measured"})
+    session.log_sim_not_sent(
+        targets=["gspro"], reason="spin not measured", missing=["spin"], shot_timestamp="t"
+    )
+
+    entries = [json.loads(line) for line in session.session_path.read_text().splitlines()]
+    sends = [entry for entry in entries if entry["type"] == "sim_send"]
+    assert sends[0]["sent"] is True
+    assert sends[1] == {
+        "ts": sends[1]["ts"],
+        "type": "sim_send",
+        "sent": False,
+        "targets": ["gspro"],
+        "reason": "spin not measured",
+        "missing": ["spin"],
+        "shot_timestamp": "t",
+    }

@@ -26,7 +26,8 @@ class ClubData:
     FaceToTarget: float = 0.0
     Lie: float = 0.0
     Loft: float = 0.0
-    Path: float = 0.0
+    # Optional like every ClubData field: None leaves it off the wire (D17).
+    Path: Optional[float] = None
     SpeedAtImpact: float = 0.0
     VerticalFaceImpact: float = 0.0
     HorizontalFaceImpact: float = 0.0
@@ -62,8 +63,10 @@ class GSProResponse:
 
 def serialize_payload(payload: ShotPayload) -> bytes:
     data = asdict(payload)
-    if data["BallData"]["CarryDistance"] is None:
-        del data["BallData"]["CarryDistance"]
+    # optional fields with no value are left out, never sent as 0 (D17)
+    for section, key in (("BallData", "CarryDistance"), ("ClubData", "Path")):
+        if data[section][key] is None:
+            del data[section][key]
     return json.dumps(data, separators=(",", ":")).encode("utf-8")
 
 

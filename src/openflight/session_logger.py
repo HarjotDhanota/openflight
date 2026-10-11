@@ -631,10 +631,37 @@ class SessionLogger:
         self._write_entry(
             "sim_send",
             {
+                "sent": True,
                 "target": target,
                 "shot_number": shot_number,
                 "provenance": provenance,
                 "values": values or {},
+            },
+        )
+
+    def log_sim_not_sent(
+        self,
+        targets: List[str],
+        reason: str,
+        missing: List[str],
+        shot_timestamp: str,
+    ):
+        """Log a shot withheld from the connected simulators, with the reason (D31).
+
+        A fusion unit sends only what it measured: a shot missing a field the
+        simulator protocol requires is not sent, and no shot number is spent.
+        """
+        if not self.enabled:
+            return
+
+        self._write_entry(
+            "sim_send",
+            {
+                "sent": False,
+                "targets": list(targets),
+                "reason": reason,
+                "missing": list(missing),
+                "shot_timestamp": shot_timestamp,
             },
         )
 

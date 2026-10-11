@@ -75,7 +75,11 @@ class GSProCodec:
             ),
             ClubData=ClubData(
                 Speed=round(resolved.club_speed_mph, 1) if has_club_speed else 0.0,
-                Path=round(resolved.club_path_deg, 1),
+                Path=(
+                    round(resolved.club_path_deg, 1)
+                    if resolved.club_path_deg is not None
+                    else None
+                ),
             ),
             ShotDataOptions=ShotDataOptions(
                 ContainsBallData=True,

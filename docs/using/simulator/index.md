@@ -94,8 +94,16 @@ missing (e.g. no measured spin → a per-club model value). Each field is tagged
 connector is honest about what came from hardware versus a model, and the UI
 renders identical badges for any simulator.
 
-A shot is **only dropped** when ball speed is missing — every other field has
-a model fallback.
+On an OPS-only unit a shot is **only dropped** when ball speed is missing —
+every other field has a model fallback.
+
+A fusion unit (IWR6843 or camera) sends only what it measured (or calculated,
+labelled estimated). If it did not measure a field the OpenConnect protocol
+requires — `Speed`, `VLA`, `HLA`, `TotalSpin`, `SpinAxis` — the shot is **not
+sent**: the live screen says why ("Not sent to simulator: spin not measured")
+and the session log records a `sim_send` entry with `"sent": false` and the
+reason. Optional fields it did not measure (`CarryDistance`, `ClubData.Path`,
+club speed) are left off the wire, never sent as 0.
 
 ### The codec contract
 

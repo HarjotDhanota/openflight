@@ -9,7 +9,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from openflight.clubs import ClubType
 
@@ -44,6 +44,20 @@ class ConnectionState(Enum):
 
 class IncompleteShotError(Exception):
     """Shot lacks the minimum fields required to send to a simulator (ball speed)."""
+
+
+class UnmeasuredShotError(IncompleteShotError):
+    """A fusion unit did not measure a field the simulator protocol requires (D31).
+
+    Nothing is filled in on a fusion unit (D17), so the shot is not sent.
+    ``missing`` names the unmeasured fields, in protocol order; the message is
+    the reason the screen and the sim-send log show, e.g. "spin not measured".
+    """
+
+    def __init__(self, missing: List[str]):
+        self.missing = list(missing)
+        names = missing[0] if len(missing) == 1 else f"{', '.join(missing[:-1])} and {missing[-1]}"
+        super().__init__(f"{names} not measured")
 
 
 @dataclass
@@ -99,6 +113,10 @@ class ResolvedShot:
     Field names are *logical* (protocol-neutral); each codec maps them to its
     own wire names. ``provenance`` tags each logical field "measured" or
     "estimated" so the UI can render per-field badges identically for any sim.
+
+    An optional field the shot has no value for (``carry_yards``, ``club_path_deg``,
+    ``club_speed_mph`` on a fusion unit, D17) is None with no provenance entry: it
+    is left out of ``as_values`` and each codec leaves it off the wire.
     """
 
     shot_number: int
@@ -110,7 +128,7 @@ class ResolvedShot:
     back_spin_rpm: float
     side_spin_rpm: float
     carry_yards: Optional[float]
-    club_path_deg: float
+    club_path_deg: Optional[float]
     club: ClubType
     club_speed_mph: Optional[float] = None  # None => no club-speed data
     provenance: Dict[str, str] = field(default_factory=dict)
@@ -118,7 +136,7 @@ class ResolvedShot:
     def as_values(self) -> Dict[str, Optional[float]]:
         """Logical field -> value map (keys match ``provenance``) for the UI.
 
-        A carry that is not sent is left out, as it is from ``provenance``.
+        A field that is not sent (None, with no provenance) is left out.
         """
         values = {
             "ball_speed": self.ball_speed_mph,
@@ -132,9 +150,11 @@ class ResolvedShot:
             "club_speed": self.club_speed_mph,
             "club_path": self.club_path_deg,
         }
-        if self.carry_yards is None:
-            del values["carry"]
-        return values
+        return {
+            name: value
+            for name, value in values.items()
+            if value is not None or name in self.provenance
+        }
 
 
 # --- player state (shared across connectors) ---------------------------------

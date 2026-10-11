@@ -40,8 +40,9 @@ def test_serialize_includes_all_required_keys():
     for key in ("Speed", "SpinAxis", "TotalSpin", "BackSpin", "SideSpin",
                 "HLA", "VLA"):
         assert key in obj["BallData"]
+    # every ClubData field is optional; Path is sent only when known (D17)
     for key in ("Speed", "AngleOfAttack", "FaceToTarget", "Lie", "Loft",
-                "Path", "SpeedAtImpact", "VerticalFaceImpact",
+                "SpeedAtImpact", "VerticalFaceImpact",
                 "HorizontalFaceImpact", "ClosureRate"):
         assert key in obj["ClubData"]
 
@@ -57,6 +58,17 @@ def test_carry_distance_is_optional_and_sent_only_when_known():
     assert "CarryDistance" not in ball_data()
     assert ball_data(CarryDistance=243.8)["CarryDistance"] == 243.8
     assert ball_data(CarryDistance=0.0)["CarryDistance"] == 0.0
+
+
+def test_club_path_is_optional_and_sent_only_when_known():
+    def club_data(**kw):
+        payload = ShotPayload(DeviceID="X", Units="Yards", ShotNumber=1, APIversion="1",
+                              ClubData=ClubData(Speed=110.0, **kw))
+        return json.loads(serialize_payload(payload))["ClubData"]
+
+    assert "Path" not in club_data()
+    assert club_data(Path=-1.5)["Path"] == -1.5
+    assert club_data(Path=0.0)["Path"] == 0.0
 
 
 def test_build_heartbeat():

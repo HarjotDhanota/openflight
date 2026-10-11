@@ -88,12 +88,16 @@ requirements and setup specific to GSPro.
 | GSPro field | Source |
 |---|---|
 | `BallData.Speed` | measured ball speed (required — shot dropped if missing) |
-| `BallData.VLA` / `HLA` | measured launch angles, else model fallback |
-| `BallData.TotalSpin` | measured spin if high-confidence, else per-club model |
-| `BallData.SpinAxis` | measured spin axis, else `0` |
+| `BallData.VLA` / `HLA` | measured launch angles, else model fallback (OPS-only) |
+| `BallData.TotalSpin` | measured spin if high-confidence, else per-club model (OPS-only) |
+| `BallData.SpinAxis` | measured spin axis, else `0` (OPS-only) |
 | `BallData.BackSpin` / `SideSpin` | derived from total spin + axis |
-| `BallData.CarryDistance` | OpenFlight's carry estimate |
+| `BallData.CarryDistance` | OpenFlight's carry; left out when there is none (optional) |
 | `ClubData.Speed` / `Path` | measured if available (`ContainsClubData` set accordingly) |
+
+On a fusion unit (IWR6843 or camera) there are no fallbacks: a shot whose
+launch angles, spin or spin axis were not measured is not sent, and the screen
+says why. See [how fields are resolved](index.md#the-resolver-and-provenance).
 
 ## Club selection
 
