@@ -259,8 +259,9 @@ class OPS243Radar:
         self.trigger_phase: Optional[tuple[str, float]] = None
         # Most recent OPS-clock -> host-epoch sync (see read_clock_sync).
         self.last_clock_sync: Optional[dict] = None
-        # The S# split this process last confirmed writing, as (segments, reason);
-        # segments is None (with the reason) when no write is confirmed (R-F9).
+        # The S# split this process last wrote, as (segments, reason): recorded once
+        # the write returns (the board sends no readback, so it is written, not
+        # confirmed); segments is None, with the reason, otherwise (R-F9).
         self._pre_trigger_split: tuple[Optional[int], Optional[str]] = (
             None,
             "not_written_this_session",
@@ -1330,10 +1331,12 @@ class OPS243Radar:
 
         # Step 5: Set trigger split - requires \r
         pre_trigger_segments = max(0, min(32, pre_trigger_segments))
-        self._pre_trigger_split = (None, "split_write_unconfirmed")
-        self.serial.write(f"S#{pre_trigger_segments}\r".encode())
-        self.serial.flush()
-        self._pre_trigger_split = (pre_trigger_segments, None)
+
+        def write_split():
+            self.serial.write(f"S#{pre_trigger_segments}\r".encode())
+            self.serial.flush()
+
+        self._write_pre_trigger_split(pre_trigger_segments, write_split)
         time.sleep(0.15)
         logger.debug("[OPS] S#%d: pre-trigger segments", pre_trigger_segments)
 
@@ -1633,7 +1636,7 @@ class OPS243Radar:
             pi_trace.current_ops_attempt(),
             pre_trigger_segments=split,
             pre_trigger_segments_reason=split_reason,
-            arm_confirmed=not unconfirmed,
+            arm_writes_complete=not unconfirmed,
         )
 
         # Bytes already here can be a dump an edge started during the re-arm.
@@ -1853,7 +1856,7 @@ class OPS243Radar:
             )
 
         pre_trigger_segments = max(0, min(32, pre_trigger_segments))
-        self._pre_trigger_split = (None, "split_write_unconfirmed")
+        self._pre_trigger_split = (None, "split_write_incomplete")
         try:
             # Restart sampling
             self.serial.write(b"PA")
@@ -1889,6 +1892,16 @@ class OPS243Radar:
         self._set_trigger_phase("rearmed")
         logger.info("[OPS] Rolling buffer re-armed (S#%d)", pre_trigger_segments)
         return "rearmed"
+
+    def _write_pre_trigger_split(self, segments: int, write: Callable[[], object]) -> None:
+        """Run one S# write and record the split once it returns (R-F9).
+
+        Written, not confirmed: there is no readback. If the write raises, the
+        split stays unknown (None, "split_write_incomplete") and the error propagates.
+        """
+        self._pre_trigger_split = (None, "split_write_incomplete")
+        write()
+        self._pre_trigger_split = (segments, None)
 
     def _set_trigger_phase(self, phase: str) -> None:
         self.trigger_phase = (phase, time.time())
@@ -2017,9 +2030,9 @@ class OPS243Radar:
         self.enable_json_output(True)
         self.enable_magnitude_report(True)
         self._send_command("W0")
-        self._pre_trigger_split = (None, "split_write_unconfirmed")
-        self._send_command(f"S#{pre_trigger_segments}")
-        self._pre_trigger_split = (pre_trigger_segments, None)
+        self._write_pre_trigger_split(
+            pre_trigger_segments, lambda: self._send_command(f"S#{pre_trigger_segments}")
+        )
 
         # Restore the requested trigger only after every other setting. ST and
         # SM require explicit carriage returns on this firmware path.
@@ -2291,7 +2304,7 @@ class OPS243Radar:
         time.sleep(0.02)  # Brief delay for mode switch
 
         # S#0 = no pre-trigger history, only capture new samples
-        self._send_command("S#0")
+        self._write_pre_trigger_split(0, lambda: self._send_command("S#0"))
         time.sleep(0.02)
 
         # 30ksps sample rate (GC may reset to default)

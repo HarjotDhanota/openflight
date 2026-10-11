@@ -204,7 +204,7 @@ def test_wait_marks_the_pre_trigger_split_the_last_rearm_wrote(recorder, monkeyp
     assert armed["attempt_id"] == attempt
     assert armed["pre_trigger_segments"] == 32
     assert armed["pre_trigger_segments_reason"] is None
-    assert armed["arm_confirmed"] is True
+    assert armed["arm_writes_complete"] is True
 
 
 def test_wait_before_any_split_was_written_reports_it_unknown(recorder, monkeypatch):
@@ -249,6 +249,34 @@ def test_one_sound_trigger_capture_is_one_attempt_in_serial_order(recorder, monk
     ]
     assert [m["attempt_id"] for m in marks[:2]] == [None, None]
     assert _named(marks, "ops_wait_armed")[0]["pre_trigger_segments"] == 12
+
+
+def test_switching_to_rolling_buffer_records_the_s0_split_it_wrote(recorder, monkeypatch):
+    """M3: every S# write records the split, S#0 in the speed-triggered switch too."""
+    radar = _radar(monkeypatch)
+    radar.rearm_rolling_buffer(16)
+    radar.switch_to_rolling_buffer()
+    assert b"S#0" in b"".join(radar.serial.writes)
+    recorder.open_ops_attempt()
+    radar.wait_for_hardware_trigger(timeout=0.0)
+    armed = _named(read_marks(recorder), "ops_wait_armed")[0]
+    assert (armed["pre_trigger_segments"], armed["pre_trigger_segments_reason"]) == (0, None)
+
+
+@pytest.mark.parametrize("write", ["enter", "switch"])
+def test_an_s_hash_write_that_never_returns_leaves_the_split_unknown(recorder, monkeypatch, write):
+    """M4: a split is recorded as written only once its write returns (no readback)."""
+    radar = _radar(monkeypatch, write_timeout_on=b"S#")
+    with pytest.raises(serial.SerialTimeoutException):
+        if write == "enter":
+            radar.enter_rolling_buffer_mode(pre_trigger_segments=6)
+        else:
+            radar.switch_to_rolling_buffer()
+    recorder.open_ops_attempt()
+    radar.wait_for_hardware_trigger(timeout=0.0)
+    armed = _named(read_marks(recorder), "ops_wait_armed")[0]
+    assert armed["pre_trigger_segments"] is None
+    assert armed["pre_trigger_segments_reason"] == "split_write_incomplete"
 
 
 # --- Shot (launch_monitor.py) -----------------------------------------------------------
