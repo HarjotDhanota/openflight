@@ -1,6 +1,7 @@
 """Shared helpers for tests that read Pi trace files (fixture, marks reader, fake clock, OPS serial)."""
 
 import json
+import time
 
 import pytest
 import serial
@@ -105,3 +106,24 @@ def dump_bytes(i_samples, q_samples) -> bytes:
         json.dumps({"Q": [int(v) for v in q_samples]}),
     ]
     return ("\n".join(lines) + "\n").encode("ascii")
+
+
+class _TimeWithoutSleep:
+    """The ``time`` module as one module sees it, with ``sleep`` a no-op (nothing global)."""
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+    @staticmethod
+    def sleep(_seconds):
+        return None
+
+
+def skip_ops243_sleeps(monkeypatch):
+    """Make the OPS243 driver's own sleeps instant without patching the global time.sleep.
+
+    ``monkeypatch.setattr("openflight.ops243.time.sleep", ...)`` replaces ``time.sleep``
+    for every module (``openflight.ops243.time is time``), which also turns a test's own
+    pauses into no-ops.
+    """
+    monkeypatch.setattr("openflight.ops243.time", _TimeWithoutSleep())

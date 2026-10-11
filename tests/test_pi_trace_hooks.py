@@ -18,12 +18,12 @@ from openflight.rolling_buffer.processor import RollingBufferProcessor
 from openflight.rolling_buffer.trigger import SoundTrigger
 from openflight.rolling_buffer.types import IQCapture, ProcessedCapture, SpeedTimeline
 from openflight.timing import OpsCaptureTimer
-from tests.pi_trace_helpers import ClockAndQuietSerial, dump_bytes, read_marks
+from tests.pi_trace_helpers import ClockAndQuietSerial, dump_bytes, read_marks, skip_ops243_sleeps
 from tests.spin_synth import synth_capture
 
 
 def _radar(monkeypatch, **serial_kwargs):
-    monkeypatch.setattr("openflight.ops243.time.sleep", lambda _s: None)
+    skip_ops243_sleeps(monkeypatch)
     radar = OPS243Radar.__new__(OPS243Radar)
     radar.serial = ClockAndQuietSerial(**serial_kwargs)
     radar.trigger_phase = None

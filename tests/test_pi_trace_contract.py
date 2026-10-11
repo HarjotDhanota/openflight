@@ -20,11 +20,12 @@ from openflight.ops243 import OPS243Radar
 from openflight.rolling_buffer.processor import RollingBufferProcessor
 from openflight.rolling_buffer.trigger import SoundTrigger
 from openflight.trace_routes import SEMANTICS, register_trace_routes
-from tests.pi_trace_helpers import ClockAndQuietSerial, dump_bytes
+from tests.pi_trace_helpers import ClockAndQuietSerial, dump_bytes, skip_ops243_sleeps
 from tests.spin_synth import synth_capture
 
 SEGMENTS = 12  # S#12: the dump's first byte lands ~85 ms (20 post-trigger segments) after
 EDGE_AGE_NS = 85_000_000  # the edge's kernel time, this long before its callback read
+STEP_GAP_S = 0.005  # emit -> receive -> paint, each a real 5 ms apart
 BROWSER_LAG_MS = 500.0  # browser performance.now() = host monotonic ms − this
 KIOSK = {
     "document_id": "doc-contract",
@@ -49,7 +50,7 @@ def _browser_ms() -> float:
 
 
 def _radar(monkeypatch) -> OPS243Radar:
-    monkeypatch.setattr("openflight.ops243.time.sleep", lambda _s: None)
+    skip_ops243_sleeps(monkeypatch)
     radar = OPS243Radar.__new__(OPS243Radar)
     radar.serial = ClockAndQuietSerial()
     radar.trigger_phase = None
@@ -154,11 +155,14 @@ def test_real_hooks_make_one_anchored_painted_attempt_the_summary_reads(live_rec
         )
         server._handle_shot_detected(shot)  # pylint: disable=protected-access
         assert server._emit_initial_ops_shot(shot) is True  # pylint: disable=protected-access
+        # Real gaps, well above the clock mapping's uncertainty (~0.1 ms): emit, then
+        # receive, then paint, as a browser would.
+        time.sleep(STEP_GAP_S)
         received_ms = _browser_ms()
         ((_event, payload),) = emitted
         tag = payload["trace"]
         rendered_core = {name: payload["shot"][name] for name in tag["core_fields"]}
-        time.sleep(0.002)
+        time.sleep(STEP_GAP_S)
         client.emit(
             "trace_paint",
             {
