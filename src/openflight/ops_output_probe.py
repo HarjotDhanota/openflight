@@ -18,8 +18,10 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, Sequence
+from pathlib import Path
+from typing import Any, Callable, Optional, Sequence, Union
 
 from openflight.clock_mapping import BUFFER_SEGMENTS, SEGMENT_SAMPLES, association_window_ns
 from openflight.pi_trace import _finite
@@ -45,7 +47,9 @@ RECORDED_PRE_TRIGGER_SEGMENTS = 16
 RECORDED_PROCESS_CAPTURE_S = (0.061, 0.096)  # Pi process_capture range, spin included
 SAMPLE_RATE_HZ = 30_000
 
-_PLAIN_NUMBER = re.compile(rb"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
+_NUMBER_PATTERN = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+_PLAIN_NUMBER = re.compile(_NUMBER_PATTERN.encode("ascii"))
+_NUMBER_TEXT = re.compile(_NUMBER_PATTERN, re.ASCII)
 _IQ_PREFIX = re.compile(rb'\{\s*"(I|Q)"\s*:')
 _TEXT_BYTES = frozenset(range(0x20, 0x7F)) | {0x09, 0x0A, 0x0D}
 
@@ -115,12 +119,28 @@ class Record:  # pylint: disable=too-many-instance-attributes
     n_bytes: int
     valid: Optional[bool]
     censored: bool
+    terminated: bool  # ended by a newline; an unterminated record is never complete evidence
+    form: Optional[str] = None  # speed records: number | string | plain
 
 
-def _speed_value_ok(value: Any) -> bool:
-    if isinstance(value, list):
-        return bool(value) and all(_finite(v) for v in value)
-    return _finite(value)
+def _numeric_string(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and _NUMBER_TEXT.fullmatch(value) is not None
+        and math.isfinite(float(value))
+    )
+
+
+def _speed_form(value: Any) -> Optional[str]:
+    """'number' or 'string' for a recognized speed value (one form throughout), else None."""
+    values = value if isinstance(value, list) else [value]
+    if not values:
+        return None
+    if all(_finite(v) for v in values):
+        return "number"
+    if all(_numeric_string(v) for v in values):
+        return "string"
+    return None
 
 
 def _iq_ok(samples: Any) -> bool:
@@ -140,34 +160,36 @@ def _time_ok(value: Any) -> bool:
         return False
 
 
-def _classify_text(  # pylint: disable=too-many-return-statements
-    text: bytes,
-) -> tuple[str, Optional[str], Optional[bool]]:
-    """(kind, key, valid) of one stripped text line. Anything unrecognized is unknown."""
+_Classified = tuple[str, Optional[str], Optional[bool], Optional[str]]
+
+
+def _classify_text(text: bytes) -> _Classified:  # pylint: disable=too-many-return-statements
+    """(kind, key, valid, form) of one stripped text line. Anything unrecognized is unknown."""
     try:
         value = json.loads(text)
     except ValueError:
         iq = _IQ_PREFIX.match(text)
         if iq:  # a broken I/Q line (dropped bytes, cut-off) is still the I/Q, invalid
             key = iq.group(1).decode("ascii")
-            return key, key, False
+            return key, key, False, None
         if _PLAIN_NUMBER.fullmatch(text) and math.isfinite(float(text)):
-            return "speed", None, True
-        return "unknown", None, None
+            return "speed", None, True, "plain"
+        return "unknown", None, None, None
     if isinstance(value, dict) and "speed" in value:
-        if _speed_value_ok(value["speed"]):
-            return "speed", "speed", True
-        return "unknown", "speed", None
+        form = _speed_form(value["speed"])
+        if form:
+            return "speed", "speed", True, form
+        return "unknown", "speed", None, None
     if _finite(value):  # a bare JSON number is a plain numeric line
-        return "speed", None, True
+        return "speed", None, True, "plain"
     if not isinstance(value, dict) or len(value) != 1:
-        return "unknown", None, None
+        return "unknown", None, None, None
     key = next(iter(value))
     if key in ("sample_time", "trigger_time"):
-        return key, key, _time_ok(value[key])
+        return key, key, _time_ok(value[key]), None
     if key in ("I", "Q"):
-        return key, key, _iq_ok(value[key])
-    return "unknown", key, None
+        return key, key, _iq_ok(value[key]), None
+    return "unknown", key, None, None
 
 
 def classify_stream(
@@ -178,7 +200,9 @@ def classify_stream(
     Lines are newline-framed. A line holding any non-text byte is binary (``OB`` output
     is not newline JSON) up to the first ``{`` after its last non-text byte; any text
     after that is classified on its own. Binary runs have no framing, so they are never
-    called censored. Blank lines are skipped.
+    called censored. Blank lines are skipped. A record without its newline is
+    ``terminated=False`` whatever ended the stream (limit or read error), and is never
+    counted as a complete speed record.
     """
     data, times = bytearray(), []
     for returned_ns, chunk in chunks:
@@ -205,16 +229,27 @@ def classify_stream(
                     text_from,
                     None,
                     False,
+                    terminated,
                 )
             )
         text = line[text_from:]
         if text.strip():
-            kind, key, valid = _classify_text(text.strip())
+            kind, key, valid, form = _classify_text(text.strip())
             censored = not terminated and censored_at_limit
             if censored and kind in ("I", "Q"):
                 valid = False
             records.append(
-                Record(kind, key, times[start + text_from], times[end], len(text), valid, censored)
+                Record(
+                    kind,
+                    key,
+                    times[start + text_from],
+                    times[end],
+                    len(text),
+                    valid,
+                    censored,
+                    terminated,
+                    form,
+                )
             )
         start = end + 1
     return records
@@ -237,26 +272,62 @@ def _iq_problems(records: Sequence[Record]) -> list[str]:
     return sorted(set(problems))
 
 
-def stream_summary(
+def counts_speed_records(apply: Sequence[str]) -> bool:
+    """False when binary output (OB) is applied: printable OB bytes can look like speeds."""
+    return "OB" not in apply
+
+
+def _speed_fields(records: Sequence[Record], first_iq: Optional[int], sent_ns: int) -> dict:
+    """Complete (terminated) speed records, overall and before the first I/Q record."""
+    speeds = [r for r in records if r.kind == "speed" and r.terminated]
+    if first_iq is None:
+        before, reason = None, "iq_missing"
+    else:
+        before = [r for r in records[:first_iq] if r.kind == "speed" and r.terminated]
+        reason = None if before else "no_speed_record_before_iq"
+    return {
+        "speed_records": len(speeds),
+        "speed_forms": dict(sorted(Counter(r.form for r in speeds).items())),
+        "speed_records_before_iq": None if before is None else len(before),
+        "speed_complete_after_sent_s": [_after_s(r.complete_ns, sent_ns) for r in speeds],
+        "first_speed_complete_after_sent_s": (
+            _after_s(before[0].complete_ns, sent_ns) if before else None
+        ),
+        "first_speed_complete_reason": reason,
+    }
+
+
+_NOT_COUNTED = {
+    "speed_records": None,
+    "speed_forms": None,
+    "speed_records_before_iq": None,
+    "speed_complete_after_sent_s": None,
+    "first_speed_complete_after_sent_s": None,
+    "first_speed_complete_reason": "speeds_not_counted_binary_output",
+}
+
+
+def stream_summary(  # pylint: disable=too-many-arguments
     chunks: Sequence[tuple[int, bytes]],
     records: Sequence[Record],
     *,
     baud: int,
     sent_ns: int,
     limit_ns: int,
+    count_speeds: bool = True,
 ) -> dict:
     """Order, I/Q validity and completion, speed records, unknowns, gaps, censoring, transfer.
 
     Times are seconds after ``sent_ns`` (the host time just before ``S!`` was written),
-    never impact. A speed record counts only once complete (terminated, not censored).
+    never impact. A speed record counts only once complete (newline-terminated). Without
+    any I/Q record, the "before I/Q" fields are None (``iq_missing``), never the whole
+    stream. ``count_speeds=False`` (binary output) leaves every speed field None.
     """
     total = sum(len(c) for _t, c in chunks)
     times = [t for t, _c in chunks]
     problems = _iq_problems(records)
-    first_iq = next((i for i, r in enumerate(records) if r.kind in ("I", "Q")), len(records))
-    before_iq = records[:first_iq]
-    speeds = [r for r in records if r.kind == "speed" and not r.censored]
-    speeds_before = [r for r in before_iq if r.kind == "speed" and not r.censored]
+    first_iq = next((i for i, r in enumerate(records) if r.kind in ("I", "Q")), None)
+    before_iq = None if first_iq is None else records[:first_iq]
     iq_complete = (
         _after_s(max(r.complete_ns for r in records if r.kind in ("I", "Q")), sent_ns)
         if not problems
@@ -271,20 +342,20 @@ def stream_summary(
         "iq_problems": problems,
         "iq_complete_after_sent_s": iq_complete,
         "iq_complete_reason": None if iq_complete is not None else "iq_invalid",
-        "speed_records": len(speeds),
-        "speed_records_before_iq": len(speeds_before),
-        "speed_complete_after_sent_s": [_after_s(r.complete_ns, sent_ns) for r in speeds],
-        "first_speed_complete_after_sent_s": (
-            _after_s(speeds_before[0].complete_ns, sent_ns) if speeds_before else None
-        ),
-        "first_speed_complete_reason": None if speeds_before else "no_speed_record_before_iq",
+        **(_speed_fields(records, first_iq, sent_ns) if count_speeds else _NOT_COUNTED),
+        "before_iq_reason": None if before_iq is not None else "iq_missing",
         "unknown_records": sum(r.kind == "unknown" for r in records),
-        "unknown_records_before_iq": sum(r.kind == "unknown" for r in before_iq),
+        "unknown_records_before_iq": (
+            None if before_iq is None else sum(r.kind == "unknown" for r in before_iq)
+        ),
         "binary_bytes": sum(r.n_bytes for r in records if r.kind == "binary"),
-        "binary_bytes_before_iq": sum(r.n_bytes for r in before_iq if r.kind == "binary"),
+        "binary_bytes_before_iq": (
+            None if before_iq is None else sum(r.n_bytes for r in before_iq if r.kind == "binary")
+        ),
         "gaps_s": [(b - a) / 1e9 for a, b in zip(times, times[1:]) if (b - a) / 1e9 > GAP_REPORT_S],
         "trailing_silence_s": (limit_ns - times[-1]) / 1e9 if times else None,
         "censored": any(r.censored for r in records),
+        "unterminated_tail": bool(records) and not records[-1].terminated,
         "observed_transfer_s": (times[-1] - times[0]) / 1e9 if times else None,
         "ideal_transfer_s": ideal_transfer_s(total, baud),
         "observation_limit_s": _after_s(limit_ns, sent_ns),
@@ -311,13 +382,41 @@ def o4_allocation(iq_complete_after_sent_s: Optional[float], allowance_ms: Optio
     }
 
 
+def device_error(reply: Optional[str]) -> Optional[str]:
+    """The message of a ``{"error": ...}`` line in a command reply (any key case), else None."""
+    for line in (reply or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            for key, message in value.items():
+                if key.lower() == "error" and message not in (None, ""):
+                    return str(message)
+    return None
+
+
+class DeviceErrorReply(RuntimeError):
+    """The radar answered a command with an error reply."""
+
+
 class Journal:
-    """Every attempted mutation, body run and cleanup, with its outcome."""
+    """Every attempted mutation, body run and cleanup, with its outcome.
 
-    def __init__(self):
+    With a ``path``, each entry is also appended to that JSONL file as it happens, so
+    an interrupted run still leaves its journal. A file error is kept in
+    ``sink_error`` and never stops journaling in memory.
+    """
+
+    def __init__(self, path: Union[str, Path, None] = None):
         self.entries: list[dict] = []
+        self.path = Path(path) if path is not None else None
+        self.sink_error: Optional[str] = None
 
-    def record(
+    def record(  # pylint: disable=too-many-arguments
         self,
         step: str,
         command: str,
@@ -326,31 +425,46 @@ class Journal:
         *,
         candidate: Optional[str] = None,
     ) -> None:
-        """Append one journal entry."""
-        self.entries.append(
-            {
-                "step": step,
-                "command": command,
-                "reply": reply,
-                "error": error,
-                "candidate": candidate,
-            }
-        )
+        """Append one journal entry (and its JSONL line when a path is set)."""
+        entry = {
+            "step": step,
+            "command": command,
+            "reply": reply,
+            "error": error,
+            "candidate": candidate,
+        }
+        self.entries.append(entry)
+        if self.path is None or self.sink_error is not None:
+            return
+        try:
+            with self.path.open("a", encoding="utf-8") as sink:
+                sink.write(json.dumps(entry) + "\n")
+        except (OSError, TypeError, ValueError) as sink_failure:
+            self.sink_error = repr(sink_failure)
 
-    def attempt(
+    def attempt(  # pylint: disable=too-many-arguments
         self,
         step: str,
         command: str,
         action: Callable[[], Any],
         *,
         candidate: Optional[str] = None,
+        check_reply: bool = False,
     ) -> Any:
-        """Run ``action``, journal its reply or its error, and re-raise any error."""
+        """Run ``action``, journal its reply or its error, and re-raise any error.
+
+        With ``check_reply``, a ``{"error": ...}`` reply is journaled as an error and
+        raised as ``DeviceErrorReply``.
+        """
         try:
             reply = action()
         except BaseException as error:  # pylint: disable=broad-exception-caught
             self.record(step, command, None, repr(error), candidate=candidate)
             raise
+        message = device_error(reply) if check_reply else None
+        if message is not None:
+            self.record(step, command, reply, f"device_error: {message}", candidate=candidate)
+            raise DeviceErrorReply(f"{command}: {message}")
         self.record(step, command, reply, None, candidate=candidate)
         return reply
 
@@ -373,20 +487,34 @@ def run_candidate(  # pylint: disable=too-many-arguments,too-many-positional-arg
 ) -> None:
     """Apply, run the body, then attempt every inverse even after failures (re-raises).
 
-    A failed apply is journaled and stops the candidate (the body never runs on a
-    half-applied state); every inverse is still attempted, each independently (R-F11).
+    A failed apply (raised, or answered with an error reply) is journaled and stops the
+    candidate: the body never runs on a half-applied state. Every inverse is still
+    attempted, each independently (R-F11); an error reply to an inverse is a failed
+    cleanup.
     """
     forbidden = [c for c in apply + inverse if c in FORBIDDEN_COMMANDS]
     if forbidden:
         raise ValueError(f"candidate {name!r} uses forbidden commands {forbidden}")
     try:
         for command in apply:
-            journal.attempt("apply", command, lambda c=command: io.command(c), candidate=name)
+            journal.attempt(
+                "apply",
+                command,
+                lambda c=command: io.command(c),
+                candidate=name,
+                check_reply=True,
+            )
         journal.attempt("body", name, body, candidate=name)
     finally:
         for command in inverse:
             try:
-                journal.attempt("inverse", command, lambda c=command: io.command(c), candidate=name)
+                journal.attempt(
+                    "inverse",
+                    command,
+                    lambda c=command: io.command(c),
+                    candidate=name,
+                    check_reply=True,
+                )
             except Exception:  # pylint: disable=broad-exception-caught
                 pass  # journaled; the next inverse is still attempted
 

@@ -162,7 +162,14 @@ def test_metadata_and_errors_are_unknown_not_speed():
 @pytest.mark.parametrize(
     "line",
     [
-        b'{"speed":"-41.2"}\r\n',  # a string is not a number
+        b'{"speed":"x"}\r\n',
+        b'{"speed":"nan"}\r\n',
+        b'{"speed":"inf"}\r\n',
+        b'{"speed":"-41.2 mph"}\r\n',
+        b'{"speed":""}\r\n',
+        b'{"speed":["1.5",2.5]}\r\n',  # mixed forms are not one recognized form
+        b'{"speed":["1.5","x"]}\r\n',
+        b'{"speed":"1e999"}\r\n',  # not finite
         b'{"speed":[]}\r\n',
         b'{"speed":[1.0,"x"]}\r\n',
         b'{"speed":true}\r\n',
@@ -181,11 +188,27 @@ def test_unrecognized_speed_shapes_stay_unknown(line):
 
 
 @pytest.mark.parametrize(
-    "line", [b"-41.2\r\n", b"38\r\n", b'{"speed":0}\r\n', b'{"speed":[-1,2.5]}\n']
+    "line,form",
+    [
+        (b"-41.2\r\n", "plain"),
+        (b"38\r\n", "plain"),
+        (b'{"speed":0}\r\n', "number"),
+        (b'{"speed":[-1,2.5]}\n', "number"),
+        (b'{"speed":"-41.2"}\r\n', "string"),  # ruling I1: numeric strings are speeds
+        (b'{"speed":["-41.2","38"],"magnitude":["30","20"]}\r\n', "string"),
+    ],
 )
-def test_recognized_speed_shapes(line):
+def test_recognized_speed_shapes(line, form):
     (record,) = _records(line)
-    assert record.kind == "speed" and record.valid is True
+    assert record.kind == "speed" and record.valid is True and record.form == form
+
+
+def test_speed_forms_are_counted_in_the_summary():
+    summary = _summary(
+        [(60, _line({"speed": "-41.2"}) + _line({"speed": 1.5}) + b"38\r\n" + _head() + _iq())]
+    )
+    assert summary["speed_forms"] == {"number": 1, "plain": 1, "string": 1}
+    assert summary["speed_records_before_iq"] == 3
 
 
 def test_unparseable_capture_times_are_invalid():
@@ -242,14 +265,61 @@ def test_split_records_and_censoring():
 
 def test_censored_speed_record_is_not_counted_as_complete():
     summary = _summary([(60, _line({"speed": 1.5}) + b'{"speed":2.5}')], censored=True)
-    assert summary["censored"] is True
+    assert summary["censored"] is True and summary["unterminated_tail"] is True
     assert summary["speed_records"] == 1
     assert summary["speed_complete_after_sent_s"] == [pytest.approx(0.06)]
 
 
 def test_unterminated_last_line_is_not_censored_when_the_stream_really_ended():
     (record,) = _records(b'{"speed":2.5}', censored=False)
-    assert record.kind == "speed" and record.censored is False
+    assert record.kind == "speed" and record.censored is False and record.terminated is False
+
+
+def test_a_truncated_speed_line_is_never_a_complete_speed_record():
+    """I2: '-41' cut from '-41.25' by a read error must not count as speed-first evidence."""
+    for censored in (False, True):
+        summary = _summary([(60, _head() + b"-41")], censored=censored)
+        assert summary["speed_records"] == 0
+        assert summary["speed_complete_after_sent_s"] == []
+        assert summary["unterminated_tail"] is True
+        assert summary["first_speed_complete_after_sent_s"] is None
+
+
+def test_without_any_iq_record_before_iq_is_undefined():
+    """Minor 2: 'before the I/Q' never defaults to the end of the stream."""
+    summary = _summary([(60, _line({"speed": 1.5}) + _line({"x": 1}))])
+    assert summary["speed_records"] == 1
+    assert summary["speed_records_before_iq"] is None
+    assert summary["unknown_records_before_iq"] is None
+    assert summary["binary_bytes_before_iq"] is None
+    assert summary["first_speed_complete_after_sent_s"] is None
+    assert summary["first_speed_complete_reason"] == "iq_missing"
+    assert summary["before_iq_reason"] == "iq_missing"
+
+
+def test_speeds_are_not_counted_when_the_output_is_binary():
+    """Minor 5: printable OB bytes can look like a speed line."""
+    chunks = _chunks([(60, b"38\r\n" + _head() + _iq())])
+    records = probe.classify_stream(chunks, censored_at_limit=True)
+    summary = probe.stream_summary(
+        chunks, records, baud=230_400, sent_ns=0, limit_ns=8000 * MS, count_speeds=False
+    )
+    for key in (
+        "speed_records",
+        "speed_records_before_iq",
+        "speed_complete_after_sent_s",
+        "first_speed_complete_after_sent_s",
+        "speed_forms",
+    ):
+        assert summary[key] is None, key
+    assert summary["first_speed_complete_reason"] == "speeds_not_counted_binary_output"
+    assert summary["iq_valid"] is True
+
+
+def test_speeds_are_counted_unless_binary_output_is_applied():
+    assert probe.counts_speed_records([]) is True
+    assert probe.counts_speed_records(["SZ"]) is True
+    assert probe.counts_speed_records(["OB"]) is False
 
 
 def test_binary_bytes_are_kept_and_not_parsed():
@@ -440,3 +510,61 @@ def test_probe_module_does_not_import_rolling_buffer():
         "sys.exit(any(m.startswith('openflight.rolling_buffer') for m in sys.modules))"
     )
     assert subprocess.run([sys.executable, "-c", code], check=False).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "reply,expected",
+    [
+        ('{"error":"unknown command"}', "unknown command"),
+        ('OK\r\n{"Error": "bad"}\r\n', "bad"),
+        ('{"error":""}', None),
+        ("", None),
+        ("Sz", None),
+        ('{"speed":1}', None),
+    ],
+)
+def test_device_error_reply(reply, expected):
+    assert probe.device_error(reply) == expected
+
+
+class _ErrorReplyIO(_FakeIO):
+    def __init__(self, error_on):
+        super().__init__()
+        self.error_on = error_on
+
+    def command(self, text):
+        super().command(text)
+        return '{"error":"not supported"}' if text == self.error_on else "ok"
+
+
+def test_an_inverse_answered_with_an_error_is_a_failed_cleanup():
+    io, journal = _ErrorReplyIO("Sz"), probe.Journal()
+    probe.run_candidate(io, "sz_on", ["SZ"], ["Sz"], lambda: None, journal)
+    (failed,) = journal.inverse_errors("sz_on")
+    assert failed["reply"] == '{"error":"not supported"}'
+    assert failed["error"] == "device_error: not supported"
+
+
+def test_an_apply_answered_with_an_error_stops_the_candidate():
+    io, journal = _ErrorReplyIO("SZ"), probe.Journal()
+    ran = []
+    with pytest.raises(probe.DeviceErrorReply):
+        probe.run_candidate(io, "sz_on", ["SZ"], ["Sz"], lambda: ran.append(1), journal)
+    assert ran == [] and io.sent == ["SZ", "Sz"]
+    assert journal.entries[0]["error"] == "device_error: not supported"
+
+
+def test_journal_entries_are_appended_to_a_jsonl_file_as_they_happen(tmp_path):
+    path = tmp_path / "journal.jsonl"
+    journal = probe.Journal(path)
+    journal.record("apply", "SZ", "", None, candidate="sz_on")
+    assert json.loads(path.read_text(encoding="utf-8")) == journal.entries[0]
+    journal.record("inverse", "Sz", "", None, candidate="sz_on")
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line)["command"] for line in lines] == ["SZ", "Sz"]
+
+
+def test_an_unwritable_journal_file_never_stops_journaling(tmp_path):
+    journal = probe.Journal(tmp_path / "missing-dir" / "journal.jsonl")
+    journal.record("apply", "SZ", "", None)
+    assert len(journal.entries) == 1 and journal.sink_error is not None
