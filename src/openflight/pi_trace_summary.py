@@ -776,14 +776,14 @@ def _upper_ms(revision: dict, anchor_ns: Optional[list]) -> Optional[float]:
 
 
 # The pipeline itself kept the emitted core off screen. Not shown because the user covered
-# or hid the result or left the live view (M4), an unrecognised reason, or any unknown
-# outcome says nothing about pipeline timing: those leave the goal not measurable.
+# or hid the result, left the live view, or chose a profile or view that showed another
+# shot (not_displayed) (M4), an unrecognised reason, or any unknown outcome says nothing
+# about pipeline timing: those leave the goal not measurable.
 _PIPELINE_NOT_SHOWN = frozenset(
     {
         "rendered_core_mismatch",
         "not_shown:superseded",
         "not_shown:unmounted_before_paint",
-        "not_shown:not_displayed",
     }
 )
 

@@ -530,7 +530,7 @@ def _not_shown(rec, revision, reason, ms=1900):
     [
         ("superseded", "missed"),
         ("unmounted_before_paint", "missed"),
-        ("not_displayed", "missed"),
+        ("not_displayed", "not_measurable"),  # profile filter or view choice: the user
         ("covered", "not_measurable"),  # M4: caused by the user, not by pipeline timing
         ("document_hidden", "not_measurable"),
         ("live_view_not_shown", "not_measurable"),
