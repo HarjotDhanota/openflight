@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { Shot } from './shot';
-import { filterShotsByProfile, excludeShotsByProfile } from './shot';
+import {
+  computeStats,
+  computeSwingSpeedStats,
+  excludeShotsByProfile,
+  filterShotsByProfile,
+  getSwingSpeedMph,
+} from './shot';
 
 describe('filterShotsByProfile', () => {
   const shotWith = (profileId: string | undefined): Shot => ({ profile_id: profileId, ball_speed_mph: 100 }) as Shot;
@@ -44,5 +50,49 @@ describe('excludeShotsByProfile', () => {
     const shots = [shotWith('aaa'), shotWith('bbb')];
 
     expect(excludeShotsByProfile(shots, '')).toEqual(shots);
+  });
+});
+
+describe('a shot whose core metrics the server nulled', () => {
+  const shot = (ball: number | null, carry: number | null, extra: Partial<Shot> = {}): Shot =>
+    ({
+      ball_speed_mph: ball,
+      estimated_carry_yards: carry,
+      club_speed_mph: null,
+      smash_factor: null,
+      ...extra,
+    }) as Shot;
+
+  it('session stats use only the measured values and never show NaN', () => {
+    const stats = computeStats([shot(100, 200), shot(null, null), shot(120, 240)]);
+
+    expect(stats.shot_count).toBe(3);
+    expect(stats.avg_ball_speed).toBe(110);
+    expect(stats.max_ball_speed).toBe(120);
+    expect(stats.min_ball_speed).toBe(100);
+    expect(stats.avg_carry_est).toBe(220);
+  });
+
+  it('session stats with no measured ball speed or carry say so with null', () => {
+    const stats = computeStats([shot(null, null)]);
+
+    expect(stats.shot_count).toBe(1);
+    expect(stats.avg_ball_speed).toBeNull();
+    expect(stats.max_ball_speed).toBeNull();
+    expect(stats.min_ball_speed).toBeNull();
+    expect(stats.avg_carry_est).toBeNull();
+  });
+
+  it('a swing with neither club nor ball speed has no swing speed and is left out of swing stats', () => {
+    const swing = (club: number | null, ball: number | null) =>
+      shot(ball, null, { mode: 'swing-speed', club: 'Swing Speed', club_speed_mph: club });
+
+    expect(getSwingSpeedMph(swing(null, null))).toBeNull();
+    expect(computeSwingSpeedStats([swing(90, null), swing(null, null), swing(80, null)])).toEqual({
+      count: 2,
+      last_speed_mph: 80,
+      best_speed_mph: 90,
+      avg_speed_mph: 85,
+    });
   });
 });

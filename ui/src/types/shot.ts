@@ -12,10 +12,10 @@ export interface CameraReplay {
 export interface Shot {
   mode?: 'rolling-buffer' | 'mock' | 'swing-speed';
   shot_number?: number | null;
-  ball_speed_mph: number;
+  ball_speed_mph: number | null;
   club_speed_mph: number | null;
   smash_factor: number | null;
-  estimated_carry_yards: number;
+  estimated_carry_yards: number | null;
   carry_range: [number, number];
   club: string;
   profile_id?: string;
@@ -75,13 +75,14 @@ export interface Shot {
 
 export interface SessionStats {
   shot_count: number;
-  avg_ball_speed: number;
-  max_ball_speed: number;
-  min_ball_speed: number;
+  /** Null when no shot has a measured value (the server sends a non-finite one as null). */
+  avg_ball_speed: number | null;
+  max_ball_speed: number | null;
+  min_ball_speed: number | null;
   std_dev?: number;
   avg_club_speed: number | null;
   avg_smash_factor: number | null;
-  avg_carry_est: number;
+  avg_carry_est: number | null;
   // Rolling buffer mode spin stats
   avg_spin_rpm?: number | null;
   spin_detection_rate?: number;
@@ -158,8 +159,13 @@ export function isSwingSpeedShot(shot: Shot | null): boolean {
   return shot?.mode === 'swing-speed' || shot?.club === 'Swing Speed';
 }
 
-export function getSwingSpeedMph(shot: Shot): number {
+export function getSwingSpeedMph(shot: Shot): number | null {
   return shot.club_speed_mph ?? shot.ball_speed_mph;
+}
+
+/** The finite numbers among values; a metric the server could not measure is null. */
+function measuredValues(values: Array<number | null | undefined>): number[] {
+  return values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
 }
 
 export function filterShotsByProfile(shots: Shot[], profileId: string): Shot[] {
@@ -207,7 +213,7 @@ export function filterSwingSpeedShots(shots: Shot[], filter: SwingSpeedStatsFilt
 }
 
 export function computeSwingSpeedStats(shots: Shot[], filter: SwingSpeedStatsFilter = {}): SwingSpeedStats {
-  const swingSpeeds = filterSwingSpeedShots(shots, filter).map(getSwingSpeedMph);
+  const swingSpeeds = measuredValues(filterSwingSpeedShots(shots, filter).map(getSwingSpeedMph));
 
   if (swingSpeeds.length === 0) {
     return {
@@ -244,10 +250,10 @@ export function computeStats(shots: Shot[]): SessionStats {
     };
   }
 
-  const ballSpeeds = shots.map((s) => s.ball_speed_mph);
-  const clubSpeeds = shots.map((s) => s.club_speed_mph).filter((v): v is number => v !== null);
-  const smashFactors = shots.map((s) => s.smash_factor).filter((v): v is number => v !== null);
-  const carries = shots.map((s) => s.estimated_carry_yards);
+  const ballSpeeds = measuredValues(shots.map((s) => s.ball_speed_mph));
+  const clubSpeeds = measuredValues(shots.map((s) => s.club_speed_mph));
+  const smashFactors = measuredValues(shots.map((s) => s.smash_factor));
+  const carries = measuredValues(shots.map((s) => s.estimated_carry_yards));
 
   const mean = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
   const stdDev = (arr: number[]) => {
@@ -258,13 +264,13 @@ export function computeStats(shots: Shot[]): SessionStats {
 
   return {
     shot_count: shots.length,
-    avg_ball_speed: mean(ballSpeeds),
-    max_ball_speed: Math.max(...ballSpeeds),
-    min_ball_speed: Math.min(...ballSpeeds),
+    avg_ball_speed: ballSpeeds.length > 0 ? mean(ballSpeeds) : null,
+    max_ball_speed: ballSpeeds.length > 0 ? Math.max(...ballSpeeds) : null,
+    min_ball_speed: ballSpeeds.length > 0 ? Math.min(...ballSpeeds) : null,
     std_dev: stdDev(ballSpeeds),
     avg_club_speed: clubSpeeds.length > 0 ? mean(clubSpeeds) : null,
     avg_smash_factor: smashFactors.length > 0 ? mean(smashFactors) : null,
-    avg_carry_est: mean(carries),
+    avg_carry_est: carries.length > 0 ? mean(carries) : null,
   };
 }
 

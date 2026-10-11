@@ -8,15 +8,16 @@ function csvValue(value: string | number | null | undefined): string {
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-/** OpenFlight speed for a shot in the unit the CSV records (always mph). */
-export function openflightSpeedMph(shot: Shot): number {
+/** OpenFlight speed for a shot in the unit the CSV records (always mph); null when not measured. */
+export function openflightSpeedMph(shot: Shot): number | null {
   return isSwingSpeedShot(shot) ? getSwingSpeedMph(shot) : shot.ball_speed_mph;
 }
 
 /** Signed difference against the comparator device, or null if none entered. */
 export function comparatorDifference(shot: Shot, entry: ValidationEntry): number | null {
   const comparatorSpeed = Number.parseFloat(entry.comparatorSpeed);
-  return Number.isFinite(comparatorSpeed) ? openflightSpeedMph(shot) - comparatorSpeed : null;
+  const speed = openflightSpeedMph(shot);
+  return Number.isFinite(comparatorSpeed) && speed !== null ? speed - comparatorSpeed : null;
 }
 
 export function buildValidationCsv(shots: Shot[], entries: Record<string, ValidationEntry>): string {
@@ -40,6 +41,7 @@ export function buildValidationCsv(shots: Shot[], entries: Record<string, Valida
   const rows = shots.map((shot, index) => {
     const validation = entries[shot.timestamp] ?? getEmptyValidationEntry();
     const difference = comparatorDifference(shot, validation);
+    const speed = openflightSpeedMph(shot);
 
     return [
       index + 1,
@@ -47,7 +49,7 @@ export function buildValidationCsv(shots: Shot[], entries: Record<string, Valida
       shot.profile_name ?? '',
       shot.mode ?? '',
       shot.training_implement_label ?? shot.club,
-      openflightSpeedMph(shot).toFixed(1),
+      speed === null ? '' : speed.toFixed(1),
       validation.comparatorDevice,
       validation.comparatorSpeed,
       difference === null ? '' : difference.toFixed(1),

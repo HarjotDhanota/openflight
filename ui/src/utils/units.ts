@@ -7,6 +7,13 @@ const METRIC_SPEED_UNIT = 'km/h';
 const IMPERIAL_DISTANCE_UNIT = 'yds';
 const METRIC_DISTANCE_UNIT = 'm';
 
+/** Placeholder for a metric the shot has no value for (the server sends a non-finite one as null). */
+export const NO_VALUE = '—';
+
+function isFiniteNumber(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
 export function convertSpeedFromMph(speedMph: number, unitSystem: UnitSystem): number {
   if (unitSystem === 'metric') {
     return speedMph * MPH_TO_KMH;
@@ -23,11 +30,13 @@ export function convertDistanceFromYards(distanceYards: number, unitSystem: Unit
   return distanceYards;
 }
 
-export function formatSpeed(speedMph: number, unitSystem: UnitSystem, digits = 1): string {
+export function formatSpeed(speedMph: number | null | undefined, unitSystem: UnitSystem, digits = 1): string {
+  if (!isFiniteNumber(speedMph)) return NO_VALUE;
   return convertSpeedFromMph(speedMph, unitSystem).toFixed(digits);
 }
 
-export function formatDistance(distanceYards: number, unitSystem: UnitSystem, digits = 0): string {
+export function formatDistance(distanceYards: number | null | undefined, unitSystem: UnitSystem, digits = 0): string {
+  if (!isFiniteNumber(distanceYards)) return NO_VALUE;
   return convertDistanceFromYards(distanceYards, unitSystem).toFixed(digits);
 }
 

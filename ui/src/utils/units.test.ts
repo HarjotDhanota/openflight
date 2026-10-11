@@ -8,9 +8,20 @@ import {
   getDistanceUnit,
   getSpeedUnit,
   getUnitsLabel,
+  NO_VALUE,
 } from './units';
 
 describe('units helpers', () => {
+  it('formats a missing or non-finite value as the no-value mark instead of throwing', () => {
+    for (const missing of [null, undefined, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(formatSpeed(missing, 'imperial', 1)).toBe(NO_VALUE);
+      expect(formatSpeed(missing, 'metric', 1)).toBe(NO_VALUE);
+      expect(formatDistance(missing, 'imperial', 0)).toBe(NO_VALUE);
+      expect(formatDistance(missing, 'metric', 0)).toBe(NO_VALUE);
+    }
+    expect(NO_VALUE).toBe('—');
+  });
+
   it('preserves imperial speed values', () => {
     expect(convertSpeedFromMph(150, 'imperial')).toBe(150);
     expect(formatSpeed(150, 'imperial', 1)).toBe('150.0');

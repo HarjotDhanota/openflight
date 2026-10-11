@@ -1,11 +1,10 @@
 import type { Shot, SpinQuality, SwingSpeedStats } from '../../types/shot';
 import { getSwingSpeedMph, isSwingSpeedShot } from '../../types/shot';
 import type { UnitSystem } from '../../utils/units';
-import { formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../../utils/units';
+import { NO_VALUE, formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../../utils/units';
 import { getHtmlLang, t } from '../../i18n';
 
-/** Placeholder for a metric the current shot has no value for. */
-export const NO_VALUE = '—';
+export { NO_VALUE };
 
 export interface LiveMetric {
   /** Stable key. Persisted as the promoted-hero choice, so do not rename. */
@@ -113,9 +112,7 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
     : undefined;
   // A radar horizontal without the board's phase reference has its own zero (audit F8).
   const horizontalSubtext =
-    shot.launch_angle_horizontal_status === 'azimuth_uncalibrated'
-      ? 'azimuth uncalibrated'
-      : horizontalSourceLabel;
+    shot.launch_angle_horizontal_status === 'azimuth_uncalibrated' ? 'azimuth uncalibrated' : horizontalSourceLabel;
   const fusedDeliveryAttempted = shot.experimental_fused_status != null;
   const attackAngle =
     shot.club_angle_deg ??
@@ -145,15 +142,15 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       id: 'ball_speed',
       label: t('metric.ballSpeed'),
       value: formatSpeed(shot.ball_speed_mph, unitSystem, 1),
-      unit: speedUnit,
+      unit: shot.ball_speed_mph === null ? undefined : speedUnit,
     },
     {
       id: 'carry',
       label: t('metric.carry'),
       value: formatDistance(carry, unitSystem, 0),
-      unit: getDistanceUnit(unitSystem),
+      unit: carry === null ? undefined : getDistanceUnit(unitSystem),
       subtext: shot.carry_spin_adjusted === null ? undefined : t('metric.spinAdjusted'),
-      estimated: markEstimated(shot.carry_spin_adjusted === null),
+      estimated: markEstimated(carry !== null && shot.carry_spin_adjusted === null),
     },
     {
       id: 'club_speed',

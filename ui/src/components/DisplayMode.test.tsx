@@ -73,4 +73,14 @@ describe('DisplayMode', () => {
     expect(html).toContain('experimental · rejected: no club track');
     expect(html).toContain('experimental · rejected: no pre impact frames');
   });
+
+  it('shows a shot whose ball speed and carry the server nulled, without crashing', () => {
+    const nulled = { ...shot, ball_speed_mph: null, estimated_carry_yards: null, carry_spin_adjusted: null };
+    const html = renderToString(
+      <DisplayMode connected captureSettings={captureSettings} latestShot={nulled} shots={[nulled]} />
+    );
+
+    expect(html).toContain('—');
+    expect(html).not.toContain('NaN');
+  });
 });
