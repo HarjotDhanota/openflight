@@ -204,14 +204,42 @@ def _release_guard(*variables: str) -> subprocess.CompletedProcess:
     )
 
 
-def test_the_default_release_name_is_not_a_release():
-    """A bare build names a scratch file, never a dated release or the rollback image."""
+def _default_release_name() -> str:
     source = FIRMWARE_MAKEFILE.read_text(encoding="utf-8")
-    default = re.search(r"^RELEASE_NAME \?= (\S+)$", source, re.MULTILINE).group(1)
+    return re.search(r"^RELEASE_NAME \?= (\S+)$", source, re.MULTILINE).group(1)
+
+
+def _git(*args: str) -> subprocess.CompletedProcess:
+    """A git query in this checkout; skips where the tree is not a git checkout."""
+    git = shutil.which("git")
+    repo = FIRMWARE_MAKEFILE.parents[1]
+    if git is None or not (repo / ".git").exists():
+        pytest.skip("needs a git checkout")
+    return subprocess.run(
+        [git, *args], cwd=repo, capture_output=True, text=True, check=False, timeout=30
+    )
+
+
+def test_the_default_release_name_is_not_a_release():
+    """A bare build names a scratch file, never a dated release or the rollback image.
+
+    The scratch file may exist after a local build; it is never a tracked release.
+    """
+    default = _default_release_name()
 
     assert default != ROLLBACK_IMAGE
     assert not re.fullmatch(r"l3_dump_\w+_\d{8}\.bin", default)  # never a dated release name
-    assert not (FIRMWARE_MAKEFILE.parent / "releases" / default).exists()
+    assert _git("ls-files", "--error-unmatch", f"firmware/releases/{default}").returncode != 0
+
+
+def test_a_bare_builds_image_is_ignored_and_the_rollback_image_is_not():
+    """A bare local build leaves no untracked file; the tracked rollback image is never ignored."""
+    default = _default_release_name()
+
+    assert _git("check-ignore", "-q", "--no-index", f"firmware/releases/{default}").returncode == 0
+    rollback = f"firmware/releases/{ROLLBACK_IMAGE}"
+    assert _git("check-ignore", "-q", "--no-index", rollback).returncode == 1
+    assert _git("ls-files", "--error-unmatch", rollback).returncode == 0
 
 
 def test_the_rollback_image_is_never_overwritten_by_name():

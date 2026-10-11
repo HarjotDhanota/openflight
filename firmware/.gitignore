@@ -10,3 +10,6 @@ ti_installers/
 # The validated production image is intentionally versioned.
 !releases/
 !releases/*.bin
+# ...except a bare `make`'s scratch copy (RELEASE_NAME's default), which is a local build,
+# never a release. Exact name only: dated releases and the rollback image stay tracked.
+/releases/l3_dump_local_build.bin
