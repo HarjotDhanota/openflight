@@ -12,10 +12,12 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from openflight.iwr6843 import dump
+from openflight.iwr6843.driver import parse_perf_stats
 
 FIRMWARE_DIR = Path(__file__).parents[1] / "firmware" / "iwr6843"
 FIRMWARE = FIRMWARE_DIR / "l3_dump.c"
@@ -1294,10 +1296,6 @@ int main(int argc, char **argv)
 }
 """
 
-# The Task 6 parser's field grammar, restated so this reply is checked against it now.
-_PERF_TAGS = ("perf", "perf", "heap", "stacks")
-_PERF_FIELD = re.compile(r"(\w+)=(\d+)(?:/(\d+))?")
-
 
 def _perf_program(main: str) -> str:
     source = FIRMWARE.read_text(encoding="utf-8")
@@ -1319,17 +1317,10 @@ def _perfstats(tmp_path: Path, mode: str, flags: tuple[str, ...] = _SCAN_BUILD) 
     return _run_c(_perf_program(PERF_HARNESS_MAIN), tmp_path, mode, flags=flags).splitlines()
 
 
-def _fields(lines: list[str]) -> dict[str, tuple[int, ...]]:
-    assert [line.split()[0] for line in lines] == list(_PERF_TAGS)
-    values: dict[str, tuple[int, ...]] = {}
-    for tag, line in zip(_PERF_TAGS, lines, strict=True):
-        for word in line.split()[1:]:
-            match = _PERF_FIELD.fullmatch(word)
-            assert match is not None, word
-            key = ("" if tag == "perf" else f"{tag}_") + match.group(1)
-            assert key not in values, key
-            values[key] = tuple(int(group) for group in match.groups()[1:] if group is not None)
-    return values
+def _fields(lines: list[str]) -> dict[str, Any]:
+    """The firmware's own four reply lines through the host driver's one grammar."""
+    assert [line.split()[0] for line in lines] == ["perf", "perf", "heap", "stacks"]
+    return parse_perf_stats("\n".join(lines))
 
 
 def test_perfstats_replies_four_parseable_lines_with_the_measured_marks(tmp_path):
@@ -1337,30 +1328,30 @@ def test_perfstats_replies_four_parseable_lines_with_the_measured_marks(tmp_path
     values = _fields(lines[:4])
 
     assert lines[4:] == ["result=0", "hwi_depth=0"]
-    assert values["tick_hz"] == (200_000_000,)
-    assert values["rearm_max"] == (450,)
-    assert values["rearms"] == (2,)
-    assert values["task_max"] == (900,)
-    assert values["task_runs"] == (2,)
-    assert values["margin_min"] == (0x40,)  # measured from the arm, across the wrap
-    assert values["margin_frames"] == (2,)
-    assert values["scan_max"] == (700,)
-    assert values["scan_frames"] == (2,)
-    assert (values["scan_total_hi"], values["scan_total_lo"]) == ((1,), (5,))
-    assert values["pack_max"] == (300,)
-    assert values["packs"] == (2,)
-    assert values["pack_overlap"] == (3,)
-    assert values["iq8_overflow"] == (9,)
-    assert values["iq8_overflow_saturated"] == (0,)
-    assert values["heap_size"] == (32768,)
-    assert values["heap_free"] == (12000,)
-    assert values["heap_free_min"] == (9000,)  # the sampled low point, not the current value
-    assert values["heap_largest"] == (11000,)
-    assert values["stacks_init"] == (100, 1024)
-    assert values["stacks_ctrl"] == (200, 2048)
-    assert values["stacks_rearm"] == (300, 3072)
-    assert values["stacks_cli"] == (400, 4096)
-    assert values["stacks_hwi"] == (900, 2048)
+    assert values["tick_hz"] == 200_000_000
+    assert values["rearm_max"] == 450
+    assert values["rearms"] == 2
+    assert values["task_max"] == 900
+    assert values["task_runs"] == 2
+    assert values["margin_min"] == 0x40  # measured from the arm, across the wrap
+    assert values["margin_frames"] == 2
+    assert values["scan_max"] == 700
+    assert values["scan_frames"] == 2
+    assert values["scan_total"] == (1 << 32) + 5
+    assert values["pack_max"] == 300
+    assert values["packs"] == 2
+    assert values["pack_overlap"] == 3
+    assert values["iq8_overflow"] == 9
+    assert values["iq8_overflow_saturated"] is False
+    assert values["heap_size"] == 32768
+    assert values["heap_free"] == 12000
+    assert values["heap_free_min"] == 9000  # the sampled low point, not the current value
+    assert values["heap_largest"] == 11000
+    assert values["stack_init"] == {"used": 100, "size": 1024}
+    assert values["stack_ctrl"] == {"used": 200, "size": 2048}
+    assert values["stack_rearm"] == {"used": 300, "size": 3072}
+    assert values["stack_cli"] == {"used": 400, "size": 4096}
+    assert values["stack_hwi"] == {"used": 900, "size": 2048}
 
 
 def test_perfstats_with_nothing_measured_shows_zero_counts_and_the_margin_sentinel(tmp_path):
@@ -1368,20 +1359,21 @@ def test_perfstats_with_nothing_measured_shows_zero_counts_and_the_margin_sentin
     4294967295 beside margin_frames=0, never a plausible-looking 0."""
     values = _fields(_perfstats(tmp_path, "fresh")[:4])
 
-    assert values["margin_min"] == (4294967295,)
+    assert values["margin_min"] is None  # the 4294967295 sentinel beside margin_frames=0
+    assert values["unavailable"]["margin_min"] == "no samples"
     for count in ("rearms", "task_runs", "margin_frames", "scan_frames", "packs"):
-        assert values[count] == (0,), count
-    assert values["heap_free_min"] == (30000,)  # perfstats samples the heap itself
+        assert values[count] == 0, count
+    assert values["heap_free_min"] == 30000  # perfstats samples the heap itself
 
 
 def test_a_new_sensor_start_resets_the_marks_but_not_the_heap_low_water(tmp_path):
     values = _fields(_perfstats(tmp_path, "reset")[:4])
 
-    assert values["margin_min"] == (4294967295,)
-    assert values["rearm_max"] == values["task_max"] == values["pack_max"] == (0,)
-    assert values["rearms"] == values["task_runs"] == values["packs"] == (0,)
-    assert (values["scan_total_hi"], values["scan_total_lo"]) == ((0,), (0,))
-    assert values["heap_free_min"] == (9000,)  # since boot
+    assert values["margin_min"] is None
+    assert values["rearm_max"] is values["task_max"] is values["pack_max"] is None
+    assert values["scan_total"] is None
+    assert values["rearms"] == values["task_runs"] == values["packs"] == 0
+    assert values["heap_free_min"] == 9000  # since boot
 
 
 def test_a_task_without_a_handle_is_reported_missing_not_zero(tmp_path):
@@ -1621,8 +1613,8 @@ def test_perfstats_flags_a_saturated_overflow_total_in_the_parser_grammar(tmp_pa
     lines = _perfstats(tmp_path, "saturated")
     values = _fields(lines[:4])
 
-    assert values["iq8_overflow"] == (4294967295,)
-    assert values["iq8_overflow_saturated"] == (1,)
+    assert values["iq8_overflow"] == 4294967295
+    assert values["iq8_overflow_saturated"] is True
     assert lines[1].endswith(" iq8_overflow=4294967295 iq8_overflow_saturated=1")
 
 

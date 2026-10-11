@@ -251,6 +251,8 @@ def _iq8_integrity(meta: dict) -> dict:
             if unscanned
             else "the capture's IQ8 scan flag is off",
         }
+    # The firmware caps each frame's count at 65535: a frame reading 65535 means "at least
+    # 65535", so overflow_components is then a floor, not an exact count.
     overflow = [f["iq8_overflow"] for f in frames]
     max_abs = [f["iq8_max_abs"] for f in frames]
     total = sum(overflow)
