@@ -1,6 +1,6 @@
-import { useLayoutEffect, useMemo } from 'react';
+import { useLayoutEffect, useMemo, useSyncExternalStore } from 'react';
 import type { Shot } from '../types/shot';
-import { createAckScheduler } from '../services/paintTrace';
+import { createAckScheduler, pendingRevisionsVersion, subscribePendingRevisions } from '../services/paintTrace';
 import { socketService } from '../services/socketService';
 
 /**
@@ -10,9 +10,16 @@ import { socketService } from '../services/socketService';
  */
 export function usePostRenderAck(shot: Shot | null, acknowledgeable: boolean): void {
   const scheduler = useMemo(() => createAckScheduler((event, payload) => socketService.emitTrace(event, payload)), []);
+  // Every noted revision re-runs the commit, so one for a shot not shown here (e.g. a
+  // hidden profile's late update) is swept as not displayed at once, not acked later.
+  const pendingVersion = useSyncExternalStore(
+    subscribePendingRevisions,
+    pendingRevisionsVersion,
+    pendingRevisionsVersion // server snapshot: renderToString must keep working
+  );
   useLayoutEffect(() => {
     scheduler.commit(shot, acknowledgeable);
-  }, [scheduler, shot, acknowledgeable]);
+  }, [scheduler, shot, acknowledgeable, pendingVersion]);
   // A layout cleanup runs in the same commit as the unmount, before any frame callback.
   useLayoutEffect(() => () => scheduler.dispose(), [scheduler]);
 }

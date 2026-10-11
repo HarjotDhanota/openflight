@@ -10,7 +10,9 @@ import {
   createAckScheduler,
   noteShotReceived,
   rendererVersionFrom,
+  pendingRevisionsVersion,
   setLiveViewShown,
+  subscribePendingRevisions,
   type TraceTag,
 } from './paintTrace';
 
@@ -170,6 +172,30 @@ describe('post-render acknowledgement', () => {
     expect(notShown()).toEqual([]);
   });
 
+  it('a status notice whose core values differ from its revision is not bound to it (2c)', () => {
+    const { frame, acks, paints, notShown } = harness();
+    const a = shot('ts-1', 120);
+    const status = shot('ts-1', 125); // claims revision 1 but carries other core values
+    noteShotReceived(a, 'shot', tag(1), 10);
+    noteShotReceived(status, 'shot_update', tag(1, false, 'status'), 15);
+    acks.commit(status, true); // the store now shows the status object
+    frame.flush();
+    expect(paints()).toEqual([]);
+    expect(notShown().map((p) => [p.revision, p.reason])).toEqual([[1, 'not_displayed']]);
+  });
+
+  it('a repeat of a revision with other core values is not bound to it either', () => {
+    const { frame, acks, paints, notShown } = harness();
+    const a = shot('ts-1', 120);
+    const repeat = shot('ts-1', 121);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    noteShotReceived(repeat, 'shot', tag(1), 15);
+    acks.commit(repeat, true);
+    frame.flush();
+    expect(paints()).toEqual([]);
+    expect(notShown().map((p) => p.reason)).toEqual(['not_displayed']);
+  });
+
   it('a status notice for a revision already acknowledged, or with revision 0, sends nothing', () => {
     const { frame, acks, sent } = harness();
     const a = shot('ts-1', 120);
@@ -293,6 +319,35 @@ describe('post-render acknowledgement', () => {
     frame.flush();
     expect(paints()).toEqual([]);
     expect(notShown().map((p) => p.reason)).toEqual(['unmounted_before_paint']);
+  });
+
+  it('a disposed scheduler stays silent when another scheduler now owns the revision (2b)', () => {
+    const first = harness();
+    const second = harness();
+    const a = shot('ts-1', 120);
+    noteShotReceived(a, 'shot', tag(1), 10);
+    first.acks.commit(a, true);
+    first.acks.dispose(); // key remount: the old panel unmounts...
+    second.acks.commit(a, true); // ...and the new one shows the same revision
+    first.frame.flush();
+    second.frame.flush();
+    expect(first.sent).toEqual([]);
+    expect(second.paints().map((p) => p.revision)).toEqual([1]);
+    expect(second.notShown()).toEqual([]);
+  });
+
+  it('notifies subscribers when a revision is noted, so the live panel re-sweeps', () => {
+    let calls = 0;
+    const unsubscribe = subscribePendingRevisions(() => {
+      calls += 1;
+    });
+    const before = pendingRevisionsVersion();
+    noteShotReceived(shot('ts-1', 120), 'shot', tag(1), 10);
+    noteShotReceived(shot('ts-1', 120), 'shot', tag(9, false, 'status'), 11); // nothing to rebind
+    unsubscribe();
+    noteShotReceived(shot('ts-2', 120), 'shot', tag(1), 12);
+    expect(calls).toBe(1);
+    expect(pendingRevisionsVersion()).toBe(before + 2);
   });
 
   it('a scheduler that commits again after dispose still acknowledges (StrictMode remount)', () => {

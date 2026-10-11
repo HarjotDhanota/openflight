@@ -94,10 +94,40 @@ interface PendingRevision {
   /** Earlier revisions of this shot it replaced; reported once, unless acknowledged. */
   superseded: PendingRevision[];
   done: boolean;
+  /** The scheduler that last scheduled its acknowledgement (a key remount hands it over). */
+  owner: number | null;
 }
 
 const pending = new Map<string, PendingRevision>();
 let liveViewShown = false;
+let pendingVersion = 0;
+const pendingListeners = new Set<() => void>();
+let nextSchedulerId = 1;
+
+/**
+ * Bumped whenever a revision is noted or rebound. The live panel subscribes, so a
+ * revision for a shot it does not show (a hidden profile's late update) still triggers
+ * a commit, and so a sweep, at once.
+ */
+export function pendingRevisionsVersion(): number {
+  return pendingVersion;
+}
+
+export function subscribePendingRevisions(listener: () => void): () => void {
+  pendingListeners.add(listener);
+  return () => pendingListeners.delete(listener);
+}
+
+function pendingChanged(): void {
+  pendingVersion += 1;
+  for (const listener of pendingListeners) {
+    try {
+      listener();
+    } catch (error) {
+      warn('notifying a pending-revision listener', error);
+    }
+  }
+}
 
 function warn(what: string, error: unknown): void {
   console.warn(`[trace] ${what} failed; ignored`, error);
@@ -144,12 +174,14 @@ export function noteShotReceived(
     const previous = pending.get(timestamp);
     const sameRevision =
       previous !== undefined && previous.tag.attempt_id === tag.attempt_id && previous.tag.revision === tag.revision;
-    if (tag.update_kind === 'status' || tag.revision < 1) {
-      if (sameRevision) previous.shot = shot;
-      return;
-    }
-    if (sameRevision) {
-      previous.shot = shot; // a repeat: its first receive time stands, on the object now shown
+    if (tag.update_kind === 'status' || tag.revision < 1 || sameRevision) {
+      // A status notice, or a repeat, moves the revision onto the object now shown only
+      // when it carries the same core values; otherwise the revision stays on its own
+      // object and is swept as not displayed (never trust the label alone).
+      if (sameRevision && sameCore(previous.shot, shot, tag.core_fields)) {
+        previous.shot = shot;
+        pendingChanged();
+      }
       return;
     }
     const superseded = previous ? [...previous.superseded, previous] : [];
@@ -165,10 +197,12 @@ export function noteShotReceived(
       liveViewLeft: false,
       superseded,
       done: false,
+      owner: null,
     });
     while (pending.size > MAX_PENDING) {
       pending.delete(pending.keys().next().value as string);
     }
+    pendingChanged();
   } catch (error) {
     warn('noting a received shot', error);
   }
@@ -194,6 +228,10 @@ function renderedCore(shot: Shot, fields: string[]): Record<string, unknown> {
   return Object.fromEntries(fields.map((key) => [key, record[key] ?? null]));
 }
 
+function sameCore(a: Shot, b: Shot, fields: string[]): boolean {
+  return JSON.stringify(renderedCore(a, fields)) === JSON.stringify(renderedCore(b, fields));
+}
+
 function revisionFields(entry: PendingRevision) {
   return {
     attempt_id: entry.tag.attempt_id,
@@ -216,6 +254,7 @@ export function createAckScheduler(
   now: () => number = () => performance.now(),
   visible: () => boolean = () => typeof document === 'undefined' || document.visibilityState === 'visible'
 ) {
+  const id = nextSchedulerId++;
   let generation = 0;
   let disposed = false;
   let scheduled: { entry: PendingRevision; key: string } | null = null;
@@ -303,10 +342,13 @@ export function createAckScheduler(
         cancelScheduled();
         const mine = generation;
         scheduled = { entry, key };
+        entry.owner = id;
         schedule(
           () => {
             try {
               if (mine !== generation || entry.done) return;
+              // A key remount handed this revision to a newer panel: that one reports it.
+              if (disposed && entry.owner !== id) return;
               scheduled = null;
               const late = notShownAtFrame(entry);
               if (late) withhold(entry, late);

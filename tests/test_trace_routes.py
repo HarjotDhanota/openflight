@@ -404,7 +404,8 @@ def _pings(client):
 def test_a_document_that_says_hello_gets_its_own_ping_at_once(recorder):
     """A (re)connected kiosk needs a clock sample now, not at the next broadcast."""
     app, socketio = _socket_app()
-    register_trace_routes(socketio, interval_s=0.05)
+    # One broadcast at start, then none for the test: only the targeted ping can differ.
+    register_trace_routes(socketio, interval_s=3600.0)
     other = socketio.test_client(app)
     kiosk = socketio.test_client(app)
     try:

@@ -3,7 +3,7 @@
  * Integration: the live result component itself acknowledges the revision it renders
  * (stage 1b trace), through the real rAF + MessageChannel path, with the values on screen.
  */
-import { act } from 'react';
+import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Shot } from '../../types/shot';
@@ -281,5 +281,89 @@ describe('LivePanel post-render acknowledgement', () => {
 
     expect(ballSpeedOnScreen()).toBe(NO_VALUE);
     expect((calls('trace_paint')[0].rendered_core as Record<string, unknown>).ball_speed_mph).toBeNull();
+  });
+
+  it('a late update for a shot the profile filter hides is reported at once, never acked when that profile is chosen', async () => {
+    const james = makeShot({ timestamp: '2026-10-11T09:59:00Z' });
+    const sam1 = makeShot({ profile_id: 'sam', ball_speed_mph: 99.9 });
+    render(james, true, [james, sam1]); // an established panel showing james's shot
+    await nextFrames();
+    const sam2 = makeShot({ profile_id: 'sam', ball_speed_mph: 101.1 });
+    noteShotReceived(sam2, 'shot_update', tag(2, 'late_update'), performance.now());
+    render(james, true, [james, sam2]); // the store replaced sam's shot; james is still shown
+    await nextFrames();
+    expect(calls('trace_not_shown').map((p) => [p.revision, p.reason])).toEqual([[2, 'not_displayed']]);
+    render(sam2, true, [james, sam2], 'sam'); // later, a remote client switches the active profile
+    await nextFrames();
+
+    expect(calls('trace_paint')).toEqual([]);
+    expect(calls('trace_not_shown')).toHaveLength(1);
+  });
+
+  it('a key remount that keeps the same shown revision inside one frame still acknowledges it', async () => {
+    const panel = (key: string, shot: Shot, shots: Shot[]) =>
+      act(() => {
+        root.render(
+          <LivePanel
+            key={key}
+            shot={shot}
+            shots={shots}
+            profileId="james"
+            profileName="James"
+            clubLabel="DR"
+            onSelectMetric={() => {}}
+            acknowledgeable
+          />
+        );
+      });
+    const james = makeShot();
+    noteShotReceived(james, 'shot', tag(1), performance.now());
+    panel('1', james, [james]);
+    const sam = makeShot({ timestamp: '2026-10-11T10:00:01Z', profile_id: 'sam' });
+    noteShotReceived(sam, 'shot', { ...tag(1), attempt_id: 't-00008' }, performance.now());
+    panel('2', james, [james, sam]); // another profile's shot: addShot bumps shotVersion, the panel remounts
+    await nextFrames();
+
+    expect(calls('trace_paint').map((p) => [p.attempt_id, p.revision])).toEqual([['t-00007', 1]]);
+    expect(calls('trace_not_shown').map((p) => [p.attempt_id, p.reason])).toEqual([['t-00008', 'not_displayed']]);
+  });
+
+  it('under StrictMode a mount, a late update and a key remount are each acknowledged once', async () => {
+    const panel = (key: string, shot: Shot, shots: Shot[]) =>
+      act(() => {
+        root.render(
+          <StrictMode>
+            <LivePanel
+              key={key}
+              shot={shot}
+              shots={shots}
+              profileId="james"
+              profileName="James"
+              clubLabel="DR"
+              onSelectMetric={() => {}}
+              acknowledgeable
+            />
+          </StrictMode>
+        );
+      });
+    const a = makeShot({ timestamp: 'a' });
+    noteShotReceived(a, 'shot', tag(1), performance.now());
+    panel('1', a, [a]);
+    await nextFrames();
+    const a2 = makeShot({ timestamp: 'a', ball_speed_mph: 130 });
+    noteShotReceived(a2, 'shot_update', tag(2, 'late_update'), performance.now());
+    panel('1', a2, [a2]);
+    await nextFrames();
+    const b = makeShot({ timestamp: 'b' });
+    noteShotReceived(b, 'shot', { ...tag(1), attempt_id: 't-00009' }, performance.now());
+    panel('2', b, [a2, b]);
+    await nextFrames();
+
+    expect(calls('trace_paint').map((p) => [p.attempt_id, p.revision])).toEqual([
+      ['t-00007', 1],
+      ['t-00007', 2],
+      ['t-00009', 1],
+    ]);
+    expect(calls('trace_not_shown')).toEqual([]);
   });
 });
