@@ -118,8 +118,12 @@
 - **#266 (Ferguson 2022 quadratic Cd/Cl) is live** after the merge: it auto-merged,
   because the fork never changed `ballistics.py`. It replaces the Hill-form constants the
   fork fitted to its own 24-shot TrackMan capture. Both are fitted physics (class (c),
-  on hold); the owner decides whether to keep it. See the merge report for its effect
-  on fork and bench results.
+  on hold); the owner decides whether to keep it. Effect: every fork test passes with
+  it, and the bench golden output is byte-identical (the bench's recorded swings are
+  foam-ball shots, whose carry is "not measured"). Simulated carry moves on real
+  shots: driver 165 mph / 11 deg / 2600 rpm +1.5 yd, 7-iron 120 / 16.5 / 7000 -0.5 yd,
+  PW 100 / 24 / 9300 +7.7 yd, 60 mph wedge +5.6 yd; apex moves more (7-iron +7.3).
+  Reverting means restoring the four Hill constants and `_cd`/`_cl` in `ballistics.py`.
 - **BLE carry:** phones get `estimated_carry_yards` only, never the committed carry. On a
   fusion unit that is `null`; on an OPS-only unit it is the table estimate, which can
   differ from the kiosk's labelled simulator estimate. Upstream's protocol; not changed.
