@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "scope": "Offline reconstructions and selected observed values; not TrackMan sensor measurement algorithms",
+  "fixtures": [
+    {"formula": "smash_factor", "status": "recovered_managed_il", "evidence": "smash-factor.il, LaunchData::get_SmashFactor", "args": [150, 100], "expected": 1.5},
+    {"formula": "spin_loft_deg", "status": "recovered_managed_il", "evidence": "spin-loft.il, LaunchData::get_SpinLoft; analytic simple-angle check", "args": [[1, 0, 0], 30, 0], "expected": 30},
+    {"formula": "spin_loft_deg", "status": "recovered_managed_il", "evidence": "spin-loft.il, analytic simple-angle check", "args": [[1, 0, 0], 0, 30], "expected": 30},
+    {"formula": "curve", "status": "recovered_managed_il", "evidence": "curve.il, CalculateCurve; analytic straight-direction check", "args": [100, 10, 0], "expected": 10},
+    {"formula": "curve", "status": "recovered_managed_il", "evidence": "curve.il, analytic no-lateral check", "args": [100, 0, 10], "expected": -17.364817766693033},
+    {"formula": "polynomial", "status": "recovered_managed_il", "evidence": "spin-polynomial.il, PolynomialFit::Evaluate; analytic sample", "args": [[1000, -100, 2], 3], "expected": 718},
+    {"formula": "spin_vector_metrics", "status": "native_probe_matching", "evidence": "gyro-spin-evidence.txt, selected direct observations; spin vector units preserved", "args": [[0, 0, 3000], 0, 0], "expected": [3000, 0, 0]},
+    {"formula": "spin_vector_metrics", "status": "native_probe_matching", "evidence": "gyro-spin-evidence.txt, selected direct observations", "args": [[0, 3000, 0], 0, 0], "expected": [3000, -90, 0]},
+    {"formula": "spin_vector_metrics", "status": "native_probe_matching", "evidence": "gyro-spin-evidence.txt, selected direct observations; transverse-zero axis undefined physically", "args": [[3000, 0, 0], 0, 0], "expected": [3000, 0, 90]},
+    {"formula": "spin_vector_metrics", "status": "native_probe_matching", "evidence": "gyro-spin-evidence.txt, selected direct observations", "args": [[1000, 2000, 3000], 30, 40], "expected": [3741.6573867739412, -13.088052777502288, 62.985971935012032]},
+    {"formula": "spin_vector_metrics", "status": "native_probe_matching", "evidence": "gyro-spin-evidence.txt, selected direct observations", "args": [[1000, 2000, 3000], -20, -35], "expected": [3741.6573867739412, -27.398355091078127, -24.157268219525161]},
+    {"formula": "spin_vector_metrics", "status": "native_probe_matching", "evidence": "gyro-spin-evidence.txt, zero-vector probes; API convention", "args": [[0, 0, 0], 0, 0], "expected": [0, 0, 0]}
+  ]
+}
