@@ -1,0 +1,17 @@
+category,mcmaster_part,description,installed_qty,order_qty,used_at,release_note
+Screw,90128A176,"M2 x 4 mm standard socket-head screw",4,"1 minimum package",Camera,"Direct-threaded into 1.60 mm printed pilots; no insert"
+Screw,91290A100,"M2.5 x 5 mm standard socket-head screw",4,"1 minimum package",LIS3DH,
+Screw,91290A101,"M2.5 x 6 mm standard socket-head screw",4,"1 minimum package",BME280,"Direct-threaded into 2.00 mm printed pilots; no insert"
+Screw,91292A019,"M2.5 x 20 mm standard socket-head screw",4,"1 minimum package",X1209 and Raspberry Pi through-stack,
+Screw,91292A036,"M2.5 x 25 mm standard socket-head screw",4,"1 minimum package",X12-A1 reversible cradle/brace,"X12-A1 remains M2.5"
+Screw,91502A102,"M3 x 6 mm standard socket-head screw",12,"1 minimum package","Sound detector; OPS; radar-brace anchors; display",
+Screw,91502A107,"M3 x 16 mm standard socket-head screw",4,"1 minimum package",IWR6843 direct mounts,
+Screw,91290A573,"M3 x 55 mm standard socket-head screw",4,"4 plus 1 spare",Housing front-to-back,"Partially threaded; confirm unthreaded grip stops before insert"
+Screw,93395A204,"M3 x 10 mm 90-degree hex-drive flat-head screw",1,"1 minimum package",X12-A1 battery door,
+Screw,93070A071,"M3 x 14 mm low-profile socket-head screw",2,"1 minimum package",Kickstand pivots,
+Insert,94459A768,"M2.5 x 0.45 heat-set insert; 4.0 mm installed length",8,"1 package of 25","LIS3DH; X12-A1 brace","Validate both boss styles with printed coupon"
+Insert,94459A140,"M3 x 0.5 heat-set insert; 5.7 mm installed length",21,"1 package of 50","Main enclosure; display; radars; sound detector; door","Validate with printed boss coupon"
+Insert,94459A769,"M3 x 0.5 heat-set insert; 3.4 mm installed length",2,"1 package of 50",Kickstand pivots,"Short insert is intentional"
+Washer,95630A310,"M2.5 nylon washer; 2.7 mm ID x 5.0 mm OD x 0.3-0.5 mm",4,"1 package of 50",Below BME280,
+Plunger,6052N13,"Press-fit spring-loaded ball plunger; 5 mm body; 4 mm ball; 1.4 mm travel",2,2,Kickstand,"Self-contained spring and ball"
+Tool,92160A315,"Heat-set installation tip for M2.5 and M3 inserts",0,1,Assembly tool,Optional if already owned

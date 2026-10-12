@@ -8,3 +8,9 @@ __pycache__/
 
 # Browser automation logs
 .playwright-mcp/
+
+# Field data and build outputs: kept on disk, not tracked here.
+# Session data is published in openflight-test-bench.
+pi-handoff/
+exports/
+.tmp/
