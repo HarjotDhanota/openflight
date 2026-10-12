@@ -8,7 +8,7 @@ The IARC v3 case holds the OPS243-A, the sound sensor, the angle radar, the
 monitor, and the Raspberry Pi in one printed assembly.
 
 STL, STEP, and 3MF files live in
-[`cad/IARC_case/`](https://github.com/jewbetcha/openflight/tree/main/cad/IARC_case)
+[`cad/IARC_case/`](https://github.com/open-flight/openflight/tree/main/cad/IARC_case)
 in the repository.
 
 **Fasteners:** 10 × M5 bolts, 12 × M2.5 bolts.

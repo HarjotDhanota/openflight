@@ -247,3 +247,45 @@ def test_gate_edges_from_before_the_wait_do_not_end_it():
 
     assert time.monotonic() - started >= 0.55
     assert trigger.drain_diagnostics() == []
+
+
+def test_sound_path_never_flushes_a_dump_already_arriving():
+    """D30 (e) / P7-1: upstream's flush must never return on the sound path.
+
+    A dump the GATE edge started before the sound trigger began listening is
+    already in the serial buffer. Any reset_input_buffer before it is read
+    (upstream's ``discard_pending_input=True`` default) drops its start
+    marker: the dump is lost (154 s of OPS data in the field).
+    """
+    i_samples, q_samples = synth_capture(rpm=3000, ball_speed_mph=80.0, amplitude=400.0)
+    ops = FakeOps(_dump(i_samples, q_samples))
+    ops.BYTES_PER_MS = 400.0
+    radar = _radar(ops)
+    radar.read_clock_sync = lambda **_kwargs: {"clock_sync_method": "no_valid_reads"}
+    flushes_before_read = []
+    dump_read = []
+    real_reset = ops.reset_input_buffer
+    real_wait = radar.wait_for_hardware_trigger
+
+    def spy_reset():
+        if not dump_read:
+            flushes_before_read.append(ops.in_waiting)
+        real_reset()
+
+    def spy_wait(*args, **kwargs):
+        response = real_wait(*args, **kwargs)
+        dump_read.append(response)
+        return response
+
+    ops.reset_input_buffer = spy_reset
+    radar.wait_for_hardware_trigger = spy_wait
+    ops.edge()
+    time.sleep(0.05)
+    assert ops.in_waiting > 0
+
+    trigger = SoundTrigger(pre_trigger_segments=16)
+    capture = trigger.wait_for_trigger(radar, RollingBufferProcessor(), timeout=5.0)
+
+    assert flushes_before_read == []
+    assert capture is not None
+    assert [diag["reason"] for diag in trigger.drain_diagnostics()] == ["accepted"]

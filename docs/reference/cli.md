@@ -134,6 +134,7 @@ Outbound connectors and battery status.
 | --- | --- | --- |
 | `--battery` | — | Show battery and external-power status using the selected provider |
 | `--sim` | flag | Enable simulator connectors from config/sim.json (GSPro / OpenGolfSim / PAR-TEE). Off by default. |
+| `--ble` | flag | Advertise shots over Bluetooth LE for the OpenFlight iOS app ([iOS BLE](../ios-ble.md)) |
 
 ## High-speed camera capture
 
@@ -142,6 +143,7 @@ Optional rolling-buffer capture and replay. See [camera setup](../camera/README.
 | Flag | Type / default | Description |
 | --- | --- | --- |
 | `--camera-capture` | flag | Enable high-speed rolling-buffer capture and replay |
+| `--camera-shot-analysis` | flag | Refused with an error (D30): it takes ball distance from pixel size and OPS speed, against the fixed sensor roles. The estimator stays in the code, unwired |
 | `--camera-capture-width` | int; default `640` | Capture width |
 | `--camera-capture-height` | int; default `400` | Capture height |
 | `--camera-capture-fps` | float; default `300` | Capture frame rate |

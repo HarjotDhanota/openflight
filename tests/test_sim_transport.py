@@ -245,7 +245,13 @@ def test_start_transitions_to_connected_then_stopped(mock_sim):
 
 
 def test_reconnect_after_server_drop(mock_sim):
-    client = _client(mock_sim.host, mock_sim.port, backoff_seconds=(0.1, 0.2, 0.4))
+    statuses = []
+    client = _client(
+        mock_sim.host,
+        mock_sim.port,
+        backoff_seconds=(0.1, 0.2, 0.4),
+        on_status=statuses.append,
+    )
     client.start()
     try:
         assert _wait_for_state(client, ConnectionState.CONNECTED)
@@ -257,8 +263,13 @@ def test_reconnect_after_server_drop(mock_sim):
         while time.time() < recv_deadline and not mock_sim.received:
             time.sleep(0.02)
         assert mock_sim.received
+        statuses.clear()
         mock_sim.disconnect_client()
         assert _wait_for_state(client, ConnectionState.RECONNECT_BACKOFF, 2.0)
+        reconnect = next(
+            status for status in statuses if status.state == ConnectionState.RECONNECT_BACKOFF
+        )
+        assert reconnect.message == "peer closed connection (EOF)"
         assert _wait_for_state(client, ConnectionState.CONNECTED, 3.0)
     finally:
         client.stop()
@@ -371,3 +382,20 @@ def test_recv_buffer_resets_on_oversized_unclosed_frame():
 
     assert len(events) == 1
     assert isinstance(events[0], PlayerUpdate)
+
+
+def test_recv_loop_reports_socket_error():
+    client = _client("127.0.0.1", 1)
+
+    class _ResetSock:
+        def settimeout(self, _timeout):
+            pass
+
+        def recv(self, _size):
+            raise ConnectionResetError(104, "Connection reset by peer")
+
+    client._sock = _ResetSock()
+
+    reason = client._recv_loop()
+
+    assert reason == ("receive failed: ConnectionResetError: [Errno 104] Connection reset by peer")

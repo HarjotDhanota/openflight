@@ -45,11 +45,17 @@ Doppler radar, with an optional TI IWR6843 angle radar.
 | Raspberry Pi 5 | Runs everything | $130 |
 | 7" Touchscreen | Shows shot data | $46 |
 | SparkFun SEN-14262 | Impact sound trigger for shot capture | $18 |
-| Power supply + accessories | | $27 |
-| **Subtotal, no angle radar** | | **~$400** |
-| TI IWR6843LEVM + cable | Launch angle, experimental club path | $156 |
-| **Total with angle radar** | | **~$556** |
-| K-LD7 (×2) + FTDI adapters | Launch angle + club path (**deprecated**) | $140 |
+| Power supply + accessories | 27 W supply with a captive, non-detachable cable, active cooler, microSD, cables | $39 |
+| Printed enclosure | ~750 g PETG, plus heat-set inserts and screws | $52 |
+| **Base build, in its case** | Ball speed, club speed, smash factor, spin, carry | **~$534** |
+| TI IWR6843LEVM | Launch angle, launch direction, experimental club path | $150 |
+| **With the angle radar** | | **~$684** |
+
+Optional on top: battery power from a Geekworm UPS HAT (**+$90**, and it
+replaces the 27 W supply — see [Powering OpenFlight](docs/get-started/power.md)),
+a tilt sensor ($15), and a global-shutter camera ($30). Everything together is
+roughly **$819**. Full staged breakdown in the
+[parts list](docs/get-started/parts.md#cost-summary).
 
 Without an angle radar you still get ball speed, club speed, smash factor,
 experimental spin, and estimated carry. The angle radar adds measured launch
@@ -67,7 +73,7 @@ See the **[Parts List](docs/get-started/parts.md)** for everything you need with
 
 ### 2. Wire it up
 
-Follow the **[Sound Trigger Wiring Guide](docs/build/sound-trigger.md)** to connect the SEN-14262 to the OPS243-A. The (deprecated) K-LD7 modules connect via USB — no wiring needed.
+Follow the **[Sound Trigger Wiring Guide](docs/build/sound-trigger.md)** to connect the SEN-14262 to the OPS243-A. The (deprecated) K-LD7 modules connect via USB — no wiring needed. The OPS243 also has an opt-in internal speed-trigger path, which requires OPS243-A firmware v1.3.2 or newer in the 1.3 release train; see the **[Internal Hardware Trigger Guide](docs/hardware-trigger.md)**.
 
 **Adding the IWR6843 angle radar?** The Pi cannot power both radars over USB, so
 the OPS243 moves to the Pi's GPIO UART header while the TI board takes the USB
@@ -86,7 +92,7 @@ instead; see the operator guide's Option B.
 Flash Raspberry Pi OS (64-bit), plug in the radars, then run the interactive setup:
 
 ```bash
-git clone https://github.com/jewbetcha/openflight.git
+git clone https://github.com/open-flight/openflight.git
 cd openflight
 ./scripts/setup/setup.sh
 ```
@@ -322,8 +328,10 @@ uv run pytest tests/ -v
 Build it locally with `make docs` (serves at `localhost:8000`).
 
 - **[Parts List](docs/get-started/parts.md)** — What to buy
+- **[Powering OpenFlight](docs/get-started/power.md)** — Pick a power route, and wire the DC input without reversing the rail
 - **[Sound Trigger Wiring](docs/build/sound-trigger.md)** — How to wire the sound trigger
 - **[Raspberry Pi Setup](docs/setup/raspberry-pi.md)** — Full setup guide
+- **[Electron Kiosk Shell](docs/electron-kiosk-shell.md)** — Why the kiosk runs in Electron and how self-updating could work later
 - **[Battery Monitoring](docs/using/battery.md)** — Provider architecture, UI states, and shared Pi support
 - **[Geekworm X1202/X1206 Operator Guide](docs/build/battery.md)** — Batteries, Pi setup, native telemetry, and warnings
 - **[IWR6843 Operator Guide](docs/iwr6843/index.md)** — Wire, flash, mount, aim, and calibrate the angle radar

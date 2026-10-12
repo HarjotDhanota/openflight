@@ -31,6 +31,13 @@ from flask_socketio import SocketIO
 
 from . import core_eligibility, pi_trace
 from .ballistics import resolve_launch, simulate
+from .ble.protocol import (
+    build_power_status_event,
+    build_profiles_event,
+    build_session_cleared_event,
+    build_shot_deleted_event,
+    build_shot_processing_event,
+)
 from .camera.fusion_diagnostics import build_snapshot as build_fusion_diagnostic
 from .clubs import ClubType
 from .clubs.physics import (
@@ -205,6 +212,15 @@ sim_connectors: List = []
 # *seconds* (see initial_shot_counter): epoch millis overflow GSPro's 32-bit
 # ShotNumber field and every shot comes back 501 "Bad format".
 sim_player_state = SimPlayerState(shot_counter=initial_shot_counter())
+
+# Optional Bluetooth Low Energy publisher for the iOS app.
+ble_publisher = None
+
+# One Pi-owned selection is shared by the browser UI and every phone/tablet.
+# Monitors start on driver, and successful changes update this value atomically
+# before being fanned out over all enabled transports.
+active_club = ClubType.DRIVER
+club_selection_lock = threading.Lock()
 
 shutdown_lock = threading.Lock()
 shutdown_cleanup_started = False
@@ -489,7 +505,9 @@ def _trace_gate_edge(edge_wall_s: float) -> None:
         return
     try:
         # Lazy like the other IWR imports; loaded already whenever this observer runs.
-        from .iwr6843.monitor import edge_trace_fields  # noqa: PLC0415  pylint: disable=import-outside-toplevel
+        from .iwr6843.monitor import (
+            edge_trace_fields,  # noqa: PLC0415  pylint: disable=import-outside-toplevel
+        )
 
         capture_monitor = getattr(iwr6843_runtime, "capture_monitor", None)
         edge_fields = edge_trace_fields(
@@ -530,7 +548,9 @@ def _install_pi_trace_hooks() -> None:
         if capture_monitor is not None:
             # Lazy like the other IWR imports. Warm the version lookup before
             # the first edge, so it never runs inside the GPIO callback (M5).
-            from .iwr6843.monitor import warm_edge_reading_cache  # noqa: PLC0415  pylint: disable=import-outside-toplevel
+            from .iwr6843.monitor import (
+                warm_edge_reading_cache,  # noqa: PLC0415  pylint: disable=import-outside-toplevel
+            )
 
             warm_edge_reading_cache()
             capture_monitor.prepend_trigger_observer(_trace_gate_edge)
@@ -749,6 +769,7 @@ def _shot_finalization_worker_loop() -> None:
     try:
         while True:
             abandoned: list[_AwaitingLateEnrichment] = []
+            awaits_late_result = False
             with _shot_finalization_condition:
                 while True:
                     if not _shot_finalization_order:
@@ -779,6 +800,9 @@ def _shot_finalization_worker_loop() -> None:
                             abandoned = _await_late_enrichment_locked(
                                 registered,
                                 _ops_only_reason(pending, deadline_expired=deadline_expired),
+                            )
+                            awaits_late_result = (
+                                registered.shot.shot_number in _shot_awaiting_late_enrichment
                             )
                         _shot_finalization_current = registered.shot
                         _shot_finalization_running = True
@@ -863,6 +887,7 @@ def _shot_finalization_worker_loop() -> None:
                     diagnostic_logger=pending.diagnostic_logger,
                     diagnostic_session_uuid=pending.diagnostic_session_uuid,
                     late_update=None,
+                    awaits_late_result=awaits_late_result,
                 )
             except Exception as error:  # pylint: disable=broad-exception-caught
                 logger.error(
@@ -961,6 +986,17 @@ def _log_abandoned_late_enrichment(entry: _AwaitingLateEnrichment) -> None:
         background_work="unknown",
         result_discarded=True,
     )
+    # Phones hold this shot as provisional; no late result will finish it now.
+    try:
+        shot_data = shot_to_dict(entry.registered.shot)
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] Could not build the abandoned shot for phones", exc_info=True)
+        return
+    _publish_phone_shot(
+        shot_data,
+        final=True,
+        enrichment={"status": "skipped", "reason": "late_result_abandoned"},
+    )
 
 
 def _shot_number_for_log(shot: Shot, session_log) -> int:
@@ -1004,6 +1040,8 @@ def _cleanup_hardware_for_shutdown() -> bool:
         _run_shutdown_step("battery monitor stop", power_monitor.stop)
     if camera_capture_runtime:
         _run_shutdown_step("camera capture stop", camera_capture_runtime.stop)
+    if ble_publisher:
+        _run_shutdown_step("BLE publisher stop", ble_publisher.stop)
 
     _run_shutdown_step("launch monitor stop", stop_monitor)
 
@@ -1846,6 +1884,82 @@ def index():
 def display():
     """Serve the React app for TV display mode."""
     return send_from_directory(_react_app_dir(), "index.html")
+
+
+def apply_club_selection(payload):
+    """Set the club used to tag and process future shots."""
+    global active_club  # pylint: disable=global-statement
+    if not isinstance(payload, dict):
+        return {"error": "Club selection must be a JSON object"}, 400
+    club_name = payload.get("club")
+    try:
+        club = ClubType(club_name)
+    except (TypeError, ValueError):
+        valid = ", ".join(item.value for item in ClubType if item is not ClubType.UNKNOWN)
+        return {"error": f"Unknown club; choose one of: {valid}"}, 400
+    if club is ClubType.UNKNOWN:
+        return {"error": "Unknown is not a selectable club"}, 400
+
+    with club_selection_lock:
+        # Without a monitor (startup, or tests) the selection is still recorded
+        # and broadcast, as the Socket.IO handler always did; the monitor picks
+        # up later changes once it exists.
+        if monitor is not None:
+            try:
+                monitor.set_club(club)
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.exception("[SERVER] Failed to set club to %s", club.value)
+                return {"error": "OpenFlight could not change the club"}, 500
+        active_club = club
+        response = {"status": "applied", "club": club.value}
+        _broadcast_club_selection(club)
+    logger.info("[SERVER] Club changed to %s", club.value)
+    return response, 200
+
+
+def current_club_selection(_payload=None):
+    """Return the Pi-owned club without changing monitor state."""
+    with club_selection_lock:
+        club_value = active_club.value
+    return {"status": "current", "club": club_value}, 200
+
+
+def _broadcast_club_selection(club: ClubType) -> None:
+    """Fan one authoritative club update out over every active transport."""
+    club_data = {"club": club.value}
+    try:
+        socketio.emit("club_changed", club_data)
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] Failed to broadcast club over WebSocket", exc_info=True)
+    if ble_publisher is not None:
+        try:
+            ble_publisher.publish_club(club.value)
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning("[SERVER] Failed to broadcast club over BLE", exc_info=True)
+
+
+def dispatch_phone_control_command(command_type, payload):
+    """Route a BLE phone command through the Socket.IO operations.
+
+    Each command calls the same function its Socket.IO counterpart does, so the
+    kiosk and every other client see identical broadcasts.
+
+    BLE has no authentication, so it is read-and-select only: profile add,
+    rename and remove, ``clear_session`` and ``delete_shot`` stay on
+    Socket.IO. Phones still hear about those changes through the
+    ``profiles``, ``session_cleared`` and ``shot_deleted`` events.
+    """
+    handlers = {
+        "set_club": apply_club_selection,
+        "get_club": current_club_selection,
+        "get_profiles": request_profiles,
+        "set_active_profile": apply_active_profile,
+        "get_power_status": current_power_status,
+    }
+    handler = handlers.get(command_type)
+    if handler is None:
+        return {"error": f"Unsupported phone command: {command_type}"}, 400
+    return handler(payload)
 
 
 @app.route("/<path:path>")
@@ -3107,8 +3221,20 @@ def _emit_sim_snapshot() -> None:
 
 
 def _on_power_status(status: PowerStatus) -> None:
-    """Publish one battery reading to connected UI clients."""
-    socketio.emit("power_status", status.to_dict())
+    """Publish one battery reading to connected UI clients and phones."""
+    payload = status.to_dict()
+    socketio.emit("power_status", payload)
+    _publish_phone_event(build_power_status_event(payload))
+
+
+def current_power_status(_payload=None):
+    """Return the latest battery reading, as ``power_status`` carries it."""
+    if power_monitor is None:
+        return {"error": "Battery monitoring is not enabled"}, 409
+    status = power_monitor.status
+    if status is None:
+        return {"error": "No battery reading yet"}, 409
+    return status.to_dict(), 200
 
 
 def _log_power_status(status: PowerStatus) -> None:
@@ -3296,6 +3422,7 @@ def handle_connect():
     _emit_profiles()
     if power_monitor and power_monitor.status:
         socketio.emit("power_status", power_monitor.status.to_dict())
+    socketio.emit("club_changed", {"club": active_club.value})
     if monitor:
         socketio.emit("session_state", _session_state_payload(include_runtime_meta=True))
         socketio.emit("trigger_status", _get_trigger_status())
@@ -3320,14 +3447,7 @@ def handle_get_trigger_status():
 @socketio.on("set_club")
 def handle_set_club(data):
     """Handle club selection change."""
-    club_name = data.get("club", "driver")
-    try:
-        club = ClubType(club_name)
-        if monitor:
-            monitor.set_club(club)
-        socketio.emit("club_changed", {"club": club.value})
-    except ValueError:
-        pass
+    apply_club_selection(data)
 
 
 def _payload_dict(data) -> dict:
@@ -3341,20 +3461,41 @@ def _emit_profiles() -> None:
     Sent after every mutation, including rejected ones, so a stale client
     self-heals on the next round trip instead of needing an error event.
     """
-    socketio.emit("profiles", get_profile_store().snapshot())
+    snapshot = get_profile_store().snapshot()
+    socketio.emit("profiles", snapshot)
+    _publish_phone_event(build_profiles_event(snapshot))
+
+
+def request_profiles(_payload=None):
+    """Broadcast the roster, as Socket.IO ``get_profiles`` does."""
+    _emit_profiles()
+    return {"status": "sent"}, 200
+
+
+def apply_active_profile(payload=None):
+    """Change which profile shots are attributed to, then broadcast the roster.
+
+    The roster goes out even when the id is unknown, so every client converges
+    on the unchanged selection.
+    """
+    store = get_profile_store()
+    applied = store.set_active(_payload_dict(payload).get("profile_id"))
+    _emit_profiles()
+    if not applied:
+        return {"error": "Unknown profile"}, 404
+    return {"status": "applied", "active_profile_id": store.get_active().id}, 200
 
 
 @socketio.on("get_profiles")
 def handle_get_profiles():
     """Send the roster to a client that asked for it."""
-    _emit_profiles()
+    request_profiles()
 
 
 @socketio.on("set_active_profile")
 def handle_set_active_profile(data=None):
     """Change which profile shots are attributed to."""
-    get_profile_store().set_active(_payload_dict(data).get("profile_id"))
-    _emit_profiles()
+    apply_active_profile(data)
 
 
 @socketio.on("add_profile")
@@ -3446,16 +3587,23 @@ def _clear_profile_rows(profile_id: str) -> None:
         monitor.clear_session()
 
 
-@socketio.on("clear_session")
-def handle_clear_session(data=None):
-    """Clear recorded rows for one profile only."""
-    raw_id = _payload_dict(data).get("profile_id")
+def apply_clear_session(payload=None):
+    """Clear recorded rows for one profile (default: the active one)."""
+    raw_id = _payload_dict(payload).get("profile_id")
     profile_id = str(raw_id).strip() if raw_id else get_profile_store().get_active().id
     _clear_profile_rows(profile_id)
     socketio.emit(
         "session_cleared",
         {"profile_id": profile_id, "shots": _session_shots()},
     )
+    _publish_phone_event(build_session_cleared_event(profile_id))
+    return {"status": "cleared", "profile_id": profile_id}, 200
+
+
+@socketio.on("clear_session")
+def handle_clear_session(data=None):
+    """Clear recorded rows for one profile only."""
+    apply_clear_session(data)
 
 
 @socketio.on("upload_cloud")
@@ -3471,17 +3619,24 @@ def handle_get_session():
         socketio.emit("session_state", _session_state_payload())
 
 
-@socketio.on("delete_shot")
-def handle_delete_shot(data):
-    """Delete one recorded shot or swing-speed rep from the current session."""
-    timestamp = data.get("timestamp") if isinstance(data, dict) else None
+def apply_delete_shot(payload):
+    """Delete one recorded shot or swing-speed rep, keyed by its timestamp."""
+    timestamp = payload.get("timestamp") if isinstance(payload, dict) else None
     deleted = _delete_session_row(timestamp)
 
     if not deleted:
         socketio.emit("delete_shot_error", {"error": "Shot not found"})
-        return
+        return {"error": "Shot not found"}, 404
 
     socketio.emit("session_state", _session_state_payload())
+    _publish_phone_event(build_shot_deleted_event(timestamp))
+    return {"status": "deleted", "timestamp": timestamp}, 200
+
+
+@socketio.on("delete_shot")
+def handle_delete_shot(data):
+    """Delete one recorded shot or swing-speed rep from the current session."""
+    apply_delete_shot(data)
 
 
 @socketio.on("simulate_shot")
@@ -3631,6 +3786,10 @@ def on_shot_processing(state: str) -> None:
     if state == "capturing":
         ready_light.swing_detected("ops_dump")  # the OPS243 dump began: a swing
     socketio.emit("shot_processing", {"state": state})
+    try:
+        _publish_phone_event(build_shot_processing_event(state))
+    except ValueError:
+        logger.warning("[SERVER] Ignoring invalid shot processing state %r", state)
 
 
 def _report_shot_not_sent(shot: Shot, targets: List[str], error: IncompleteShotError) -> None:
@@ -3730,8 +3889,9 @@ def _sim_on_status(target: str, event) -> None:
         logger.info("[sim] %s connected (%s:%s)", target, event.host, event.port)
     elif state == "reconnecting":
         logger.info(
-            "[sim] %s reconnecting — attempt %s, retry in %.0fs",
+            "[sim] %s reconnecting — %s; attempt %s, retry in %.0fs",
             target,
+            event.message or "disconnect reason unavailable",
             event.attempt,
             event.next_retry_in_s,
         )
@@ -3766,6 +3926,7 @@ def _sim_on_status(target: str, event) -> None:
 
 def _sim_on_inbound(target: str, event) -> None:
     """Apply an inbound simulator event (player/club update, error, ack)."""
+    global active_club  # pylint: disable=global-statement
     if isinstance(event, PlayerUpdate):
         sim_player_state.apply(event)
         club_value = sim_player_state.club.value
@@ -3779,12 +3940,17 @@ def _sim_on_inbound(target: str, event) -> None:
             sl.log_sim_player(target=target, handed=sim_player_state.handed, club=club_value)
         # The monitor owns current-club state for shot tagging and carry/spin
         # model selection; keep it in sync with the sim's canonical club.
-        if monitor is not None:
-            try:
-                monitor.set_club(sim_player_state.club)
-            except Exception:  # pylint: disable=broad-except
-                logger.exception("[sim] monitor.set_club failed")
-        socketio.emit("club_changed", {"club": club_value})
+        with club_selection_lock:
+            monitor_updated = True
+            if monitor is not None:
+                try:
+                    monitor.set_club(sim_player_state.club)
+                except Exception:  # pylint: disable=broad-except
+                    logger.exception("[sim] monitor.set_club failed")
+                    monitor_updated = False
+            if monitor_updated:
+                active_club = sim_player_state.club
+                _broadcast_club_selection(active_club)
     elif isinstance(event, SimError):
         logger.warning("[sim] ← %s error: %s", target, event.message)
         socketio.emit("sim_status", {"target": target, "state": "error", "message": event.message})
@@ -4506,7 +4672,7 @@ def _fuse_camera_ball_flight(
         )
         logger.info(
             "[SERVER] Camera-assisted horizontal: selected=%s camera=%s IWR=%s "
-            "delta=%s status=%s support=%d/27",
+            "delta=%s status=%s support=%d",
             decision.selected_deg,
             decision.camera_horizontal_deg,
             decision.iwr_horizontal_deg,
@@ -5275,6 +5441,7 @@ def _finalize_shot_detected(
     diagnostic_logger=None,
     diagnostic_session_uuid: str | None = None,
     late_update: _LateShotUpdate | None = None,
+    awaits_late_result: bool = False,
 ) -> None:
     """Apply required fallbacks, persist once, and publish the final shot.
 
@@ -5283,6 +5450,9 @@ def _finalize_shot_detected(
     ``shot_updated`` entry (not another ``shot_detected``), the first
     publication's timing is kept, and simulators and the debug log are not
     sent the shot again.
+
+    ``awaits_late_result`` marks an OPS-only first result whose IWR or camera
+    enrichment is still running: phones get it as provisional, not final (D30).
     """
     enrichment = enrichment or _ShotEnrichmentResult()
     iwr6843_ms = enrichment.iwr6843_ms
@@ -5470,6 +5640,7 @@ def _finalize_shot_detected(
         )
 
     # Emit shot with launch angle data included
+    shot_data = None
     try:
         shot_data = shot_to_dict(shot)
         stats = _session_stats()
@@ -5511,7 +5682,19 @@ def _finalize_shot_detected(
             context={"stage": f"emit_{emit_event}", "ball_speed_mph": shot.ball_speed_mph},
             exc=e,
         )
-        return
+
+    # Phones get the shot under the event_id of any provisional shot published
+    # for it. While a late IWR or camera result can still update it, it stays
+    # provisional (D30): the late result is the same shot's final version.
+    # Phone transports are independent of WebSocket delivery; a stalled client
+    # cannot affect recording or the UI.
+    if shot_data is not None:
+        phone_final, phone_enrichment = _phone_shot_state(
+            emit_event,
+            enrichment,
+            awaits_late_result=awaits_late_result and late_update is None,
+        )
+        _publish_phone_shot(shot_data, final=phone_final, enrichment=phone_enrichment)
 
     if late_update is not None:
         # Simulators (GSPro, OpenGolfSim, E6, ...) were sent this shot's first
@@ -5820,6 +6003,62 @@ def _persist_shot_publication(
         logger.warning("[SERVER] Shot publication evidence logging failed: %s", error)
 
 
+def _phone_shot_state(
+    emit_event: str,
+    enrichment: _ShotEnrichmentResult,
+    *,
+    awaits_late_result: bool,
+) -> tuple[bool, dict | None]:
+    """Map the fork's enrichment result onto a phone shot's ``final``/``enrichment`` (D30).
+
+    A shot whose late IWR or camera result can still arrive is not terminal:
+    it goes out provisional (``final`` false, ``pending``) and the late result
+    follows as the same shot's final version (same ``event_id``). Otherwise only
+    shots that were published provisionally (``emit_event`` is ``shot_update``)
+    carry an ``enrichment`` object; the rest never waited. A partial result is
+    ``skipped`` with the fork's ``diagnostic_reason``.
+    """
+    if awaits_late_result:
+        return False, {"status": "pending"}
+    if emit_event != "shot_update":
+        return True, None
+    if enrichment.diagnostic_outcome == "complete":
+        return True, {"status": "complete"}
+    return True, {
+        "status": "skipped",
+        "reason": enrichment.diagnostic_reason or enrichment.diagnostic_outcome,
+    }
+
+
+def _publish_phone_shot(
+    shot_data: dict,
+    *,
+    final: bool,
+    enrichment: dict | None,
+) -> None:
+    """Hand one shot to the phone transports; never raises."""
+    transports = []
+    if ble_publisher is not None:
+        transports.append(("BLE", ble_publisher))
+    for name, transport in transports:
+        try:
+            transport.publish_shot(shot_data, final=final, enrichment=enrichment)
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning("[SERVER] Failed to queue shot over %s", name, exc_info=True)
+
+
+def _publish_phone_event(event: dict) -> None:
+    """Hand one event to the phone transports; never raises."""
+    transports = []
+    if ble_publisher is not None:
+        transports.append(("BLE", ble_publisher))
+    for name, transport in transports:
+        try:
+            transport.publish_event(event)
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning("[SERVER] Failed to queue event over %s", name, exc_info=True)
+
+
 def _emit_initial_ops_shot(shot: Shot) -> bool:
     """Publish immediately available OPS metrics before slow enrichments."""
     try:
@@ -5843,6 +6082,9 @@ def _emit_initial_ops_shot(shot: Shot) -> bool:
             final=False,
             update_kind="first",
         )
+        # Phones get the same provisional shot. The final one follows
+        # from _finalize_shot_detected with the same event_id.
+        _publish_phone_shot(shot_data, final=False, enrichment={"status": "pending"})
         return True
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.error("[SERVER] Failed to emit initial OPS shot: %s", error, exc_info=True)
@@ -6509,6 +6751,17 @@ def _detach_gate_edge_listener() -> None:
         iwr_monitor.remove_trigger_observer(listener)
 
 
+def _cloud_raw_uploads_enabled() -> bool:
+    """True when this Pi has opted in to raw cloud uploads. Never raises."""
+    try:
+        from .cloud.config import load_config
+
+        config = load_config()
+        return bool(config and config.is_active() and config.upload_raw)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False
+
+
 def _fire_cloud_push(session_logger):
     """Best-effort, non-blocking cloud push on session end.
 
@@ -7024,6 +7277,15 @@ def main():
         action="store_true",
         help="Enable high-speed camera rolling-buffer capture and replay",
     )
+    parser.add_argument(
+        "--camera-shot-analysis",
+        action="store_true",
+        help=(
+            "Refused (D30): upstream's experimental impact-aware camera analysis takes "
+            "ball distance from the ball's pixel size and OPS speed, against the fixed "
+            "sensor roles (the camera locates, the IWR gives distance)"
+        ),
+    )
     parser.add_argument("--camera-capture-width", type=int, default=640)
     parser.add_argument("--camera-capture-height", type=int, default=400)
     parser.add_argument("--camera-capture-fps", type=float, default=300.0)
@@ -7182,6 +7444,11 @@ def main():
         "Off by default.",
     )
     _add_ballistics_arguments(parser)
+    parser.add_argument(
+        "--ble",
+        action="store_true",
+        help="Advertise completed shots over Bluetooth LE for the OpenFlight iOS app",
+    )
     parser.add_argument(
         "--trigger",
         choices=["hardware", "sound", "speed"],
@@ -7438,7 +7705,10 @@ def main():
     parser.add_argument(
         "--iwr6843-output-dir",
         default=None,
-        help=("Raw TI dump directory when --debug is enabled (default: <session-log-dir>/iwr6843)"),
+        help=(
+            "Raw TI dump directory, used when --debug or cloud raw uploads "
+            "(openflight-cloud raw on) are enabled (default: <session-log-dir>/iwr6843)"
+        ),
     )
     parser.add_argument(
         "--iwr6843-azimuth-offset-deg",
@@ -7555,6 +7825,15 @@ def main():
     _apply_kld7_device_defaults(args)
     if args.iwr6843_tee_range_pending:
         args.iwr6843_tee_m = None
+
+    if args.camera_shot_analysis:
+        # The flag turns the camera on, so every unit it runs on is a fusion unit.
+        parser.error(
+            "--camera-shot-analysis is refused on fusion units (--iwr6843 or camera "
+            "capture, which this flag turns on): it takes ball distance from the ball's "
+            "pixel size and OPS speed, which breaks the fixed sensor roles (the camera "
+            "locates, the IWR gives distance)"
+        )
 
     if args.trigger_threshold is not None and (
         not math.isfinite(args.trigger_threshold) or args.trigger_threshold < 0
@@ -7911,7 +8190,8 @@ def main():
             ball_height_m=args.iwr6843_ball_height_m,
             azimuth_offset_deg=args.iwr6843_azimuth_offset_deg,
             horizontal_phase_reference_rad=args.iwr6843_horizontal_phase_reference_rad,
-            save_dumps=args.debug,
+            # Raw cloud uploads need the dumps on disk to send them.
+            save_dumps=args.debug or _cloud_raw_uploads_enabled(),
             # The tee sits on the camera's axis; without a rig it is assumed
             # directly downrange of the IWR, never July's 64 mm (audit F10).
             lateral_tee_offset_m=(
@@ -8052,6 +8332,16 @@ def main():
         start_power_monitor(battery_provider)
         print(f"Battery monitoring: ENABLED ({battery_provider})")
         startup_status.ready("battery", "Power monitor ready")
+
+    global ble_publisher  # pylint: disable=global-statement
+    if args.ble:
+        from .ble import BleShotPublisher  # pylint: disable=import-outside-toplevel
+
+        ble_publisher = BleShotPublisher(
+            command_handler=dispatch_phone_control_command,
+        )
+        ble_publisher.start()
+        print("Bluetooth LE enabled (advertising as OpenFlight)")
 
     # Simulator connectors (off unless --sim). Started after the monitor exists
     # so inbound club updates can call monitor.set_club().

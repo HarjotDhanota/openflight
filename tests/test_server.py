@@ -1913,7 +1913,6 @@ class TestShotToDict:
     def test_requested_calibrated_fusion_rejects_missing_mode_evidence_without_stopping_baseline(
         self, monkeypatch
     ):
-
         monkeypatch.setattr(server_module, "camera_optical_calibration", {"candidate": {}})
         monkeypatch.setattr(server_module, "camera_placement", {})
         monkeypatch.setattr(
@@ -3715,7 +3714,8 @@ class TestOnShotDetected:
             server_module,
             "_enrich_shot_from_optional_hardware",
             lambda shot: (
-                enrichment_calls.append(shot.timestamp) or server_module._ShotEnrichmentResult()
+                enrichment_calls.append(shot.timestamp)
+                or server_module._ShotEnrichmentResult(camera_analysis_ms=123.45)
             ),
         )
 
@@ -3726,6 +3726,7 @@ class TestOnShotDetected:
 
         assert enrichment_calls == [shot.timestamp]
         self._assert_finalized_once(emitted, session_log)
+        assert session_log.shots[0]["pipeline_ms"]["camera_analysis"] == 123.5
 
     def test_camera_only_enrichment_uses_provisional_then_final_events(self, monkeypatch):
         emitted = []
@@ -4347,6 +4348,46 @@ class TestOnShotDetected:
         assert run.simulator_shots[0]["launch_angle_vertical"] is None
         self._assert_finalization_coordinator_empty()
         assert not server_module._shot_awaiting_late_enrichment
+
+    def test_phones_get_a_late_result_as_an_update_to_the_same_shot(self, monkeypatch):
+        """D30 (b): an OPS-only first result is provisional on phones, never terminal.
+
+        The late IWR result then finishes the same shot (same event_id).
+        """
+        from openflight.ble.protocol import stable_shot_event_id
+
+        phone_shots = []
+
+        class Phone:
+            def publish_shot(self, shot_data, *, final, enrichment=None):
+                phone_shots.append((dict(shot_data), final, enrichment))
+
+        release_dump = threading.Event()
+
+        def late_iwr(shot):
+            assert release_dump.wait(5.0)
+            shot.launch_angle_vertical = 14.0
+            shot.launch_angle_vertical_confidence = 0.9
+            shot.launch_angle_vertical_source = "radar"
+            return server_module._ShotEnrichmentResult(iwr6843_ms=21000.0)
+
+        run = self._late_iwr_session(monkeypatch, late_iwr)
+        monkeypatch.setattr(server_module, "ble_publisher", Phone())
+        on_shot_detected(run.shot)
+        assert run.first_result_published.wait(2.0), "the timer must publish OPS-only first"
+        release_dump.set()
+        for thread in run.background_threads:
+            thread.join(timeout=2.0)
+
+        assert [(final, enrichment) for _data, final, enrichment in phone_shots] == [
+            (False, {"status": "pending"}),  # the initial OPS shot
+            (False, {"status": "pending"}),  # OPS-only first result: the IWR is still working
+            (True, {"status": "complete"}),  # the late IWR result finishes the same shot
+        ]
+        assert len({stable_shot_event_id(data) for data, _final, _enr in phone_shots}) == 1
+        assert phone_shots[1][0]["launch_angle_vertical"] is None
+        assert phone_shots[2][0]["launch_angle_vertical"] == 14.0
+        self._assert_finalization_coordinator_empty()
 
     def test_a_shot_with_non_finite_metrics_is_still_emitted_and_logged(self, monkeypatch):
         """Owner rule: nothing is dropped. NaN launch and inf spin go out as null."""
@@ -5248,6 +5289,37 @@ class TestOnShotDetected:
         assert shot.angle_source == "estimated"
         assert shot.launch_angle_vertical == pytest.approx(20.5)
         assert shot.launch_angle_horizontal == pytest.approx(0.0)
+
+    def test_ble_publish_survives_websocket_failure(self, monkeypatch):
+        """A broken web client must not suppress the independent BLE transport."""
+        published = []
+        publisher = SimpleNamespace(
+            publish_shot=lambda shot_data, **_kwargs: published.append(shot_data)
+        )
+
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "sim_connectors", [])
+        monkeypatch.setattr(server_module, "ble_publisher", publisher)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("socket closed")),
+        )
+
+        shot = Shot(
+            ball_speed_mph=100.0,
+            timestamp=datetime.now(),
+            club=ClubType.IRON_7,
+            mode="mock",
+        )
+
+        on_shot_detected(shot)
+        _wait_for_shot_finalization_idle()
+
+        assert len(published) == 1
+        assert published[0]["ball_speed_mph"] == 100.0
 
     def test_implausible_club_aoa_is_rejected(self, monkeypatch):
         """A +31° club AoA is physically impossible and should be discarded."""
@@ -6181,6 +6253,50 @@ def test_live_speed_candidate_withholds_estimated_fallback(monkeypatch):
     assert "measured" in shot.experimental_ball_speed_total["reason"]
 
 
+class TestCameraShotAnalysisRefused:
+    """D30 (c): upstream's --camera-shot-analysis never runs live on a fusion unit.
+
+    It takes ball distance from pixel size and OPS speed, which breaks the fixed
+    sensor roles (the camera locates, the IWR gives distance). The flag turns the
+    camera on, so every unit it could run on is a fusion unit.
+    """
+
+    @pytest.mark.parametrize(
+        "extra",
+        [[], ["--iwr6843"], ["--camera-capture"], ["--iwr6843", "--camera-capture"]],
+        ids=["flag_alone", "iwr", "camera", "iwr_and_camera"],
+    )
+    def test_cli_refuses_camera_shot_analysis_and_says_why(self, monkeypatch, capsys, extra):
+        monkeypatch.setattr(sys, "argv", ["openflight-server", "--camera-shot-analysis", *extra])
+        monkeypatch.setattr(
+            server_module,
+            "init_camera_capture",
+            lambda *a, **k: pytest.fail("camera must not start"),
+        )
+        monkeypatch.setattr(
+            server_module, "start_monitor", lambda **k: pytest.fail("monitor must not start")
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            server_module.main()
+
+        assert exc_info.value.code == 2
+        error = capsys.readouterr().err
+        assert "--camera-shot-analysis is refused on fusion units" in error
+        assert "pixel size" in error
+        assert "the IWR gives distance" in error
+
+    def test_the_estimator_stays_in_the_code_unwired(self):
+        import inspect
+
+        from openflight.camera import ball_flight
+
+        assert callable(ball_flight.estimate_horizontal_launch)
+        source = inspect.getsource(server_module)
+        assert "estimate_horizontal_launch" not in source
+        assert "shot_analysis_enabled" not in source
+
+
 class TestIwrAzimuthCalibration:
     """F8: without a horizontal phase reference the IWR's azimuth is uncalibrated."""
 
@@ -6492,3 +6608,189 @@ class TestBallisticCarryPrecedence:
         resolved = server_module.resolve_shot(forwarded[0], server_module.SimPlayerState())
         assert resolved.carry_yards == pytest.approx(shot.carry_spin_adjusted)
         assert resolved.carry_yards > 135.0
+
+
+class TestHardwareTriggerPlumbing:
+    """Server-side forwarding and validation for the opt-in trigger mode."""
+
+    def test_server_cli_accepts_trigger_speed_alias(self, monkeypatch):
+        """The Pi's --trigger-speed spelling reaches hardware trigger setup."""
+        captured = {}
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "openflight-server",
+                "--mock",
+                "--no-logging",
+                "--trigger",
+                "hardware",
+                "--trigger-speed",
+                "10",
+            ],
+        )
+        monkeypatch.setattr(
+            server_module,
+            "start_monitor",
+            lambda **kwargs: captured.update(kwargs),
+        )
+        monkeypatch.setattr(server_module, "load_sim_config", lambda: [])
+        monkeypatch.setattr(server_module, "build_connectors", lambda *args, **kwargs: [])
+        monkeypatch.setattr(server_module, "init_session_logger", lambda **kwargs: None)
+        monkeypatch.setattr(server_module, "_cleanup_hardware_for_shutdown", lambda: None)
+        monkeypatch.setattr(server_module.socketio, "run", lambda *args, **kwargs: None)
+
+        server_module.main()
+
+        assert captured["trigger_type"] == "hardware"
+        assert captured["trigger_kwargs"]["trigger_threshold_mph"] == 10.0
+
+    def test_server_cli_forwards_hardware_flags_and_preserves_sound_alias(self, monkeypatch):
+        """Argparse selects the new kwargs only for hardware mode."""
+        captured = {}
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "openflight-server",
+                "--mock",
+                "--no-logging",
+                "--trigger",
+                "hardware",
+                "--trigger-threshold",
+                "31",
+                "--trigger-magnitude",
+                "52",
+                "--pre-trigger-segments",
+                "20",
+            ],
+        )
+        monkeypatch.setattr(
+            server_module,
+            "start_monitor",
+            lambda **kwargs: captured.update(kwargs),
+        )
+        monkeypatch.setattr(server_module, "load_sim_config", lambda: [])
+        monkeypatch.setattr(server_module, "build_connectors", lambda *args, **kwargs: [])
+        monkeypatch.setattr(server_module, "init_session_logger", lambda **kwargs: None)
+        monkeypatch.setattr(server_module, "_cleanup_hardware_for_shutdown", lambda: None)
+        monkeypatch.setattr(server_module.socketio, "run", lambda *args, **kwargs: None)
+
+        server_module.main()
+
+        assert captured["trigger_type"] == "hardware"
+        assert captured["sample_rate_ksps"] == 30
+        assert captured["trigger_kwargs"] == {
+            "trigger_threshold_mph": 31.0,
+            "trigger_magnitude": 52,
+            "pre_trigger_segments": 20,
+        }
+
+        captured.clear()
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "openflight-server",
+                "--mock",
+                "--no-logging",
+                "--trigger",
+                "sound",
+                "--sound-pre-trigger",
+                "18",
+            ],
+        )
+        server_module.main()
+
+        assert captured["trigger_type"] == "sound"
+        assert captured["trigger_kwargs"] == {"pre_trigger_segments": 18}
+
+    @pytest.mark.parametrize("trigger", ["speed"])
+    def test_server_cli_does_not_reuse_sound_pre_trigger_for_other_triggers(
+        self, monkeypatch, trigger
+    ):
+        """Non-sound strategies keep their constructor pre-trigger defaults."""
+        captured = {}
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "openflight-server",
+                "--mock",
+                "--no-logging",
+                "--trigger",
+                trigger,
+                "--sound-pre-trigger",
+                "16",
+            ],
+        )
+        monkeypatch.setattr(
+            server_module,
+            "start_monitor",
+            lambda **kwargs: captured.update(kwargs),
+        )
+        monkeypatch.setattr(server_module, "load_sim_config", lambda: [])
+        monkeypatch.setattr(server_module, "build_connectors", lambda *args, **kwargs: [])
+        monkeypatch.setattr(server_module, "init_session_logger", lambda **kwargs: None)
+        monkeypatch.setattr(server_module, "_cleanup_hardware_for_shutdown", lambda: None)
+        monkeypatch.setattr(server_module.socketio, "run", lambda *args, **kwargs: None)
+
+        server_module.main()
+
+        assert captured["trigger_type"] == trigger
+        assert captured["trigger_kwargs"] == {}
+
+    def test_start_monitor_forwards_hardware_trigger_kwargs(self, monkeypatch):
+        """The server passes threshold, magnitude, split, and sample rate through."""
+        captured = {}
+
+        class FakeMonitor:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def connect(self):
+                captured["connected"] = True
+
+            def start(self, **kwargs):
+                captured["started"] = kwargs
+
+            def stop(self):
+                captured["stopped"] = True
+
+            def disconnect(self):
+                captured["disconnected"] = True
+
+        monkeypatch.setattr("openflight.rolling_buffer.RollingBufferMonitor", FakeMonitor)
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+
+        server_module.start_monitor(
+            port="/dev/ops",
+            trigger_type="hardware",
+            sample_rate_ksps=30,
+            trigger_kwargs={
+                "trigger_threshold_mph": 25.0,
+                "trigger_magnitude": 40,
+                "pre_trigger_segments": 6,
+            },
+        )
+
+        assert captured["port"] == "/dev/ops"
+        assert captured["trigger_type"] == "hardware"
+        assert captured["sample_rate_ksps"] == 30
+        assert captured["trigger_threshold_mph"] == 25.0
+        assert captured["trigger_magnitude"] == 40
+        assert captured["pre_trigger_segments"] == 6
+        assert captured["connected"] is True
+
+        server_module.stop_monitor()
+
+    def test_start_monitor_rejects_non_30_ksps_hardware_mode(self, monkeypatch):
+        """Hardware mode must not start with an untested sample rate."""
+        monkeypatch.setattr(server_module, "monitor", None)
+
+        with pytest.raises(ValueError, match="30 ksps"):
+            server_module.start_monitor(
+                trigger_type="hardware",
+                sample_rate_ksps=25,
+            )

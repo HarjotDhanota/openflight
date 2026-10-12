@@ -94,6 +94,9 @@ def set_show_raw_readings(enabled: bool):
 
 _CLOCK_RE = re.compile(r'"?Clock"?\s*:\s*"?(-?\d+(?:\.\d+)?)"?')
 _OPS243_FIRMWARE_RE = re.compile(r"(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)")
+# Only rolling-buffer dumps carry a Q array, so one arriving before a capture
+# marker is the tail of a dump that lost its head.
+_ORPHANED_DUMP_MARKER = b'{"Q"'
 
 
 def _parse_ops_clock(response: str) -> Optional[float]:
@@ -326,9 +329,9 @@ class OPS243Radar:
             if not ports:
                 raise ConnectionError(
                     "No OPS243 radar found on USB. If it is wired to the Pi GPIO "
-                    "UART (J3 pins 6/7), pass the port explicitly — e.g. "
-                    "--radar-port /dev/ttyAMA0 — since a raw UART has no USB "
-                    "descriptors to auto-detect."
+                    "UART (J3 pins 6/7), pass the serial port explicitly via "
+                    "your command's port option (e.g. /dev/ttyAMA0) — a raw "
+                    "UART has no USB descriptors to auto-detect."
                 )
             self.port = ports[0]
 
@@ -1609,6 +1612,12 @@ class OPS243Radar:
                 this wait with no dump within GATE_EDGE_DUMP_TIMEOUT_S ends the
                 wait, so the caller can re-arm a board that is not armed.
 
+        Serial input is never cleared here, on either trigger path (P7-1): a
+        dump can already be arriving, and output before its capture marker is
+        skipped. A dump that lost its start (a ``Q`` array, or at least
+        DISCARDED_DUMP_MIN_BYTES, before any marker) ends the wait once the
+        line is quiet, with outcome "discarded_dump", so the caller re-arms.
+
         Returns:
             Raw response string containing JSON lines, or empty string on timeout.
             ``last_hardware_trigger_outcome`` says why: "capture", "timeout",
@@ -1638,6 +1647,7 @@ class OPS243Radar:
         self.last_hardware_trigger_missed_edge_timestamp = None
         recovery_required = bool(getattr(self, "_hardware_trigger_recovery_required", False))
         capture_started = False
+        saw_orphan_marker = False
         if recovery_required:
             logger.info(
                 "[OPS] Re-arm recovery: discarding trailing output until a fresh capture starts"
@@ -1672,6 +1682,8 @@ class OPS243Radar:
                     marker_offsets = [idle_bytes.find(marker) for marker in capture_markers]
                     marker_offsets = [offset for offset in marker_offsets if offset >= 0]
                     if not marker_offsets:
+                        if _ORPHANED_DUMP_MARKER in idle_bytes:
+                            saw_orphan_marker = True
                         # Preserve enough trailing bytes to recognize a marker split
                         # across reads, while discarding unsolicited CLI/clock noise.
                         max_marker = max(len(marker) for marker in capture_markers)
@@ -1756,8 +1768,13 @@ class OPS243Radar:
                     now = time.time()
                     # The body of a dump whose start was lost: the board is
                     # idle now, so end the wait and let the caller re-arm.
+                    # This is the one lost-dump detector for both trigger
+                    # paths: a Q array before any capture marker (only dumps
+                    # carry one), or enough unmarked bytes to be a dump body.
+                    # Waiting for a quiet line lets the tail finish so the
+                    # re-arm drain sees silence.
                     if (
-                        discarded_bytes >= self.DISCARDED_DUMP_MIN_BYTES
+                        (saw_orphan_marker or discarded_bytes >= self.DISCARDED_DUMP_MIN_BYTES)
                         and last_discard_time is not None
                         and now - last_discard_time > self.DISCARDED_DUMP_QUIET_S
                     ):
@@ -1945,7 +1962,7 @@ class OPS243Radar:
 
         Internal triggering returns a complete I/Q dump without an ``S!``
         command. A short UART tail can still be present when the Q array is
-        complete, so GC waits for a bounded quiet gap.
+        complete, so PA waits for a bounded quiet gap.
         """
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Not connected to radar")
@@ -2027,8 +2044,11 @@ class OPS243Radar:
             trigger_magnitude,
             sample_rate_ksps,
         )
+        # No reset_input_buffer from here on: the restore ends by writing the
+        # live threshold, and a dump can start immediately. Command replies
+        # left in the buffer carry no capture marker and are skipped by
+        # wait_for_hardware_trigger.
         self._restore_internal_speed_trigger_settings()
-        self.serial.reset_input_buffer()
 
         # A 4,096-sample buffer takes about 136.5 ms at 30 ksps.
         time.sleep(0.3)
@@ -2078,8 +2098,16 @@ class OPS243Radar:
     def rearm_internal_speed_trigger(self, sample_rate_ksps: int = 30) -> bool:
         """Re-arm an internal hardware trigger after a completed dump.
 
-        A write timeout is recoverable: the received capture remains valid and
-        the next wait discards stale output until a fresh capture marker.
+        After a dump, firmware 1.3.2 drops to idle power mode with every
+        detector setting intact, and ``PA`` resumes sampling.  ``GC`` is not
+        used here: it resets the detector settings, and motion during the
+        rebuild fired an unguarded trigger whose dump the rebuild's command
+        replies then consumed, leaving the board idle for good.
+
+        Input is never cleared after ``PA``; a dump can start immediately and
+        ``wait_for_hardware_trigger`` skips any output before its marker.  A
+        serial write timeout is recoverable: the capture is valid and the next
+        cycle retries.
         """
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Not connected to radar")
@@ -2090,15 +2118,11 @@ class OPS243Radar:
         self._set_trigger_phase("rearming")
 
         try:
+            # The board is idle until PA, so clearing the dump tail here is safe.
             self._drain_rearm_serial()
             self.serial.reset_input_buffer()
-            self._send_internal_trigger_threshold(self.INTERNAL_TRIGGER_GUARD_THRESHOLD)
-            self.serial.write(b"GC")
+            self.serial.write(b"PA")
             self.serial.flush()
-            time.sleep(0.15)
-            self._send_internal_trigger_threshold(self.INTERNAL_TRIGGER_GUARD_THRESHOLD)
-            self._restore_internal_speed_trigger_settings()
-            self.serial.reset_input_buffer()
         except serial.SerialTimeoutException as error:
             self._hardware_trigger_recovery_required = True
             logger.warning(
@@ -2111,7 +2135,7 @@ class OPS243Radar:
         time.sleep((4096 / (sample_rate_ksps * 1000)) + 0.05)
         self._hardware_trigger_recovery_required = False
         self._set_trigger_phase("rearmed")
-        logger.info("[OPS] Internal speed trigger re-armed (GC)")
+        logger.info("[OPS] Internal speed trigger re-armed (PA)")
         return True
 
     def configure_for_rolling_buffer(

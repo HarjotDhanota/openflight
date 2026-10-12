@@ -298,6 +298,37 @@ def test_server_publishes_high_speed_camera_status_without_blocking_ops(
     assert states["ops"] == "ready"
 
 
+def test_camera_shot_analysis_is_refused_before_any_hardware_starts(tmp_path, monkeypatch):
+    """D30 (c): upstream's opt-in analysis is refused on fusion units, and it turns
+    the camera on, so it never starts the camera or the monitor."""
+    from openflight import server
+
+    status_path = tmp_path / "status.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "openflight-server",
+            "--no-logging",
+            "--camera-shot-analysis",
+            "--startup-status-file",
+            str(status_path),
+        ],
+    )
+    monkeypatch.setattr(server, "init_session_logger", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        server, "init_camera_capture", lambda **_kwargs: pytest.fail("camera must not start")
+    )
+    monkeypatch.setattr(
+        server, "start_monitor", lambda **_kwargs: pytest.fail("monitor must not start")
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        server.main()
+
+    assert exc_info.value.code == 2
+
+
 def test_server_publishes_ops_failure_and_cleans_up(tmp_path, monkeypatch):
     from openflight import server
 

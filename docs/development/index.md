@@ -26,7 +26,7 @@ is not part of the production path.
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](https://github.com/jewbetcha/openflight/blob/main/CONTRIBUTING.md)
+See [`CONTRIBUTING.md`](https://github.com/open-flight/openflight/blob/main/CONTRIBUTING.md)
 in the repository for development setup, code quality standards, and the pull
 request process.
 

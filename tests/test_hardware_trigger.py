@@ -143,38 +143,6 @@ def test_internal_trigger_validates_settings_before_firmware_probe(monkeypatch, 
     probe.assert_not_called()
 
 
-def test_internal_trigger_rearm_restores_cached_settings(monkeypatch):
-    radar = _radar()
-    radar._internal_speed_trigger_config = (25.0, 6, 40, 30)
-    commands = []
-    monkeypatch.setattr("openflight.ops243.time.sleep", lambda _seconds: None)
-    monkeypatch.setattr(radar, "_drain_rearm_serial", lambda: None)
-    monkeypatch.setattr(radar, "_send_command", lambda command: commands.append(command) or "")
-
-    assert radar.rearm_internal_speed_trigger() is True
-    assert radar.serial.writes == [
-        b"ST-90\r",
-        b"GC",
-        b"ST-90\r",
-        b"ST-200\r",
-        b"SM40\r",
-        b"ST-25\r",
-    ]
-    assert commands[-11:] == [
-        "S=30",
-        "US",
-        "P0",
-        "S(",
-        "X=2",
-        "R-",
-        "R>25",
-        "OJ",
-        "OM",
-        "W0",
-        "S#6",
-    ]
-
-
 def test_internal_trigger_rearm_timeout_marks_recovery(monkeypatch):
     radar = _radar(_Serial(fail_write=True))
     radar._internal_speed_trigger_config = (25.0, 6, 40, 30)

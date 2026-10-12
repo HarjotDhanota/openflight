@@ -819,6 +819,29 @@ class HardwareTriggeredCapture(TriggerStrategy):
         )
         capture_timer.response_completed()
         if not response:
+            if cancel_event is not None and cancel_event.is_set():
+                logger.info("[TRIGGER] OPS hardware trigger wait cancelled")
+                return None
+            if getattr(radar, "last_hardware_trigger_outcome", None) == "discarded_dump":
+                # A dump lost its start and the board went idle: only a PA
+                # re-arm brings it back (the same lost-dump detector as the
+                # sound path, so the same diagnostic reason).
+                discarded = getattr(radar, "last_hardware_trigger_discarded_bytes", 0)
+                logger.warning(
+                    "[TRIGGER] OPS dump arrived without its start (%d bytes) - re-arming the radar",
+                    discarded,
+                )
+                started_at = time.time()
+                rearmed = self._rearm(radar)
+                self._append_diagnostic(
+                    accepted=False,
+                    reason="dump_discarded",
+                    response_bytes=discarded,
+                    trigger_latency_ms=(time.time() - started_at) * 1000.0,
+                    ops_timing=capture_timer.ops_section(time.monotonic_ns()),
+                )
+                self._decorate_latest_diagnostic(radar, rearmed=rearmed)
+                return None
             logger.info("[TRIGGER] OPS hardware trigger timeout - no dump received")
             return None
 
@@ -840,11 +863,7 @@ class HardwareTriggeredCapture(TriggerStrategy):
             parse_error = error
             logger.warning("[TRIGGER] Hardware capture parse failed: %s", error, exc_info=True)
         finally:
-            try:
-                rearmed = radar.rearm_internal_speed_trigger(self.sample_rate_ksps)
-            except Exception as error:  # pylint: disable=broad-exception-caught
-                rearmed = False
-                logger.warning("[TRIGGER] Internal trigger re-arm failed: %s", error, exc_info=True)
+            rearmed = self._rearm(radar)
 
         trigger_latency_ms = (time.time() - started_at) * 1000.0
         if not rearmed:
@@ -896,6 +915,14 @@ class HardwareTriggeredCapture(TriggerStrategy):
         )
         return capture
 
+    def _rearm(self, radar: "OPS243Radar") -> bool:
+        """Re-arm the board after a dump; failures are logged, never raised."""
+        try:
+            return radar.rearm_internal_speed_trigger(self.sample_rate_ksps)
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            logger.warning("[TRIGGER] Internal trigger re-arm failed: %s", error, exc_info=True)
+            return False
+
     def reset(self):
         """Reset trigger state; the radar owns the armed state."""
         pass
@@ -917,7 +944,7 @@ def create_trigger(trigger_type: str = "sound", **kwargs) -> TriggerStrategy:
                    Requires GATE voltage to reach 3.3V threshold.
         - "speed": Fast speed detection triggers rolling buffer capture.
                    Recommended fallback by OmniPreSense. ~5-6ms response time.
-        - "hardware": OPS243 native speed trigger with rolling-buffer capture.
+        - "hardware": OPS243 internal speed trigger with rolling-buffer capture.
     """
     triggers = {
         "hardware": HardwareTriggeredCapture,

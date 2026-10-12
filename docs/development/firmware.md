@@ -128,8 +128,8 @@ on hardware, not assumed.
 
 The wire format is defined in two places that must stay synchronized:
 
-- Firmware: [`iwr6843/dump_format.h`](https://github.com/jewbetcha/openflight/blob/main/firmware/iwr6843/dump_format.h)
-- Host parser: [`../src/openflight/iwr6843/dump.py`](https://github.com/jewbetcha/openflight/blob/main/src/openflight/iwr6843/dump.py)
+- Firmware: [`iwr6843/dump_format.h`](https://github.com/open-flight/openflight/blob/main/firmware/iwr6843/dump_format.h)
+- Host parser: [`../src/openflight/iwr6843/dump.py`](https://github.com/open-flight/openflight/blob/main/src/openflight/iwr6843/dump.py)
 
 The configurable version 7 transfer contains items 1-6; versions 8 (with temperature) and
 9 (without) insert item 4a and append item 7:
@@ -257,7 +257,7 @@ Clone the repository inside the VM or copy your existing worktree with `rsync`:
 ```bash
 sudo apt-get update
 sudo apt-get install -y git rsync openssh-server
-git clone https://github.com/jewbetcha/openflight.git
+git clone https://github.com/open-flight/openflight.git
 cd openflight
 ```
 

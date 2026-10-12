@@ -1,28 +1,76 @@
 # OPS243 Internal Hardware Trigger
 
-`--trigger hardware` lets an OPS243-A start its own rolling-buffer capture from
-its native speed and magnitude detector. It is opt-in. The default remains the
-SEN-14262 sound trigger, and the existing host-mediated `speed` strategy remains
-available.
+OpenFlight’s `hardware` trigger mode lets the OPS243-A decide when a rolling-buffer capture starts. It is opt-in; the kiosk default remains the existing SEN-14262 sound trigger.
 
-## Compatibility and scope
+## OPS243 firmware prerequisite
 
-This mode requires OPS243-A firmware **1.3.2 or newer in the 1.3 release
-train**. Firmware 1.3.1 advertises the commands but has a vendor data-sequence
-bug, so OpenFlight rejects it. Other release trains, malformed replies and an
-unresponsive version query are also rejected before the radar is armed.
+Hardware-trigger mode requires **OPS243-A firmware v1.3.2 or newer in the 1.3
+release train**. Firmware v1.3.1 has a vendor data-sequence bug and is rejected.
+The driver queries `?V` before sending the internal trigger setup commands and
+fails fast if the reported version is from an older or different release train,
+malformed, or unavailable. Update the physical OPS243 using the manufacturer’s
+firmware procedure before running `--trigger hardware`; this application does
+not flash the radar.
+
+## OPS-only scope
 
 This is currently an **OPS-only** capture mode. The native OPS trigger has no
 qualified low-latency GPIO fanout edge, and the first UART dump byte arrives too
 late to trigger the short IWR6843 history reliably. OpenFlight therefore rejects
 `--trigger hardware` when `--iwr6843` or `--camera-capture` is enabled. Use
 `--trigger sound` for synchronized OPS/IWR/camera collection until a shared
-soundless edge or an independent IWR trigger is physically qualified.
+soundless edge or an independent IWR trigger is physically qualified. This
+software support does not establish a synchronized soundless fusion trigger.
 
-## Command
+## Methodology
+
+The host configures the radar once and then waits for the radar’s completed rolling-buffer dump. The host does not poll speed reports or send `S!` for each shot:
+
+1. Put the radar in idle mode with `PI`.
+2. Set a temporary outbound `ST-90` guard before entering rolling-buffer mode.
+   `GC` can restore the detector units to m/s before `US` is sent; 90 is below
+   the 30 ksps ceiling of 93.2 m/s and is still above ordinary startup motion
+   if the board retained mph units.
+3. Enter rolling-buffer mode with `GC`, then resend the guard because `GC`
+   resets detector settings.
+4. Restore the detector settings that `GC` resets: 30 ksps and MPH units first,
+   then raise the temporary guard to `ST-200` while the remaining settings are
+   written: 128 samples, `X=2`, outbound filtering, JSON plus magnitude output,
+   and the configured `S#n` split.
+5. Restore the magnitude gate `SMn`, then restore the requested `ST-n` last and allow the 4,096-sample history to fill.
+6. Wait for the board-triggered dump, parse the I/Q payload, and reject it if it has no outbound ball-speed reading at or above 35 mph.
+7. Re-arm with `PA`. After a dump the board drops to idle power mode with every
+   detector setting intact, so `PA` alone resumes sampling. Re-arming with `GC`
+   would reset those settings, and motion during the rebuild can fire an
+   unguarded trigger whose dump is lost, leaving the board idle with nothing to
+   re-arm it. Serial input is never cleared once the board is live: a dump can
+   start immediately, and output before its capture marker is skipped. A serial
+   write timeout keeps the capture and reports a retryable re-arm failure
+   instead of discarding the shot.
+8. If the tail of a dump arrives without its start (its head was discarded by
+   an unrelated command), treat the board as idle and re-arm it with `PA`. One
+   lost-dump detector serves both trigger paths: a `Q` array before any capture
+   marker, or at least 1,024 unmarked bytes, ends the wait once the line is
+   quiet for 0.5 s. The session log records these as `dump_discarded` trigger
+   rejections, the same reason the sound path uses.
+
+The implementation is intentionally limited to the OPS243 trigger path; the
+experimental analysis and UI work remain outside this focused change.
+
+## Defaults and command
+
+| Setting | Hardware-mode default |
+|---|---:|
+| Trigger threshold | 25 mph |
+| Trigger magnitude | 25 (`SM25`) |
+| Pre-trigger split | 6 segments (`S#6`) |
+| Sample rate | 30 ksps (required) |
+| Minimum accepted outbound ball speed | 35 mph |
+
+Run the mode directly with:
 
 ```bash
-scripts/start-kiosk.sh \
+openflight-server \
   --trigger hardware \
   --trigger-threshold 25 \
   --trigger-magnitude 25 \
@@ -30,32 +78,49 @@ scripts/start-kiosk.sh \
   --sample-rate 30
 ```
 
-The kiosk wrapper forwards these options unchanged. Hardware mode requires 30
-ksps, accepts `S#0` through `S#32`, and accepts `SM1` through `SM2000`. The
-outbound speed threshold is sent to the OPS as a negative `ST` value because
-outbound motion has negative radar velocity.
+Hardware mode requires 30 ksps, accepts `S#0` through `S#32`, and accepts
+`SM1` through `SM2000`. The outbound speed threshold is sent to the OPS as a
+negative `ST` value because outbound motion has negative radar velocity.
 
-## Arming and recovery
+The kiosk script forwards the same settings:
 
-OpenFlight verifies the firmware, idles the sensor, protects the mode transition
-with a temporary outbound threshold, enters `GC`, and restores every detector
-setting that `GC` clears. The requested `SM` and `ST` values are sent last so a
-retained threshold cannot start a dump while configuration is incomplete.
+```bash
+scripts/start-kiosk.sh --trigger hardware
+```
 
-Every completed dump is parsed and then re-armed with the same guarded `GC`
-sequence. Captures without an outbound reading of at least 35 mph are retained
-in trigger diagnostics but rejected as shots. A serial write timeout does not
-discard a valid capture; the next wait ignores trailing output until it finds a
-fresh `sample_time` or `trigger_time` marker.
+Use `--trigger-threshold`, `--trigger-magnitude`, and `--pre-trigger-segments` to override the hardware path. `S#6` applies only to this new mode. The established sound path continues to use `--sound-pre-trigger` and keeps its existing default and behavior:
 
-Session provenance records the trigger mode, OPS model and firmware, threshold,
-magnitude, `S#` split, sample rate, and the unavailable auxiliary fanout status.
-No setting is written to OPS flash by this path.
+```bash
+scripts/start-kiosk.sh --trigger sound --sound-pre-trigger 16
+```
 
-## Hardware validation still required
+The internal trigger does not depend on the SEN-14262 sound edge. Existing sound-trigger wiring can remain installed, but selecting `hardware` is the software choice that activates the OPS243 internal trigger.
 
-Automated tests verify command ordering, validation, marker parsing, re-arm and
-CLI plumbing without physical hardware. Before relying on this mode, validate
-firmware reporting, false-trigger rate, missed shots, repeated captures and raw
-I/Q completeness on the target Raspberry Pi and OPS243-A. This software support
-does not establish a synchronized soundless fusion trigger.
+## Diagnostics and provenance
+
+Captures without an outbound reading of at least 35 mph are retained in trigger
+diagnostics but rejected as shots. Session provenance records the trigger mode,
+OPS model and firmware, threshold, magnitude, `S#` split, sample rate, and the
+unavailable auxiliary fanout status. No setting is written to OPS flash by this
+path.
+
+## Raspberry Pi retest checklist
+
+Before treating a change to this mode as ready for merge, run the hardware path
+on the target Pi and record the observations in the PR body:
+
+```bash
+scripts/start-kiosk.sh --trigger hardware
+```
+
+- Representative ball strikes: how many triggered, parsed, and re-armed.
+- Practice swings without a ball, and ambient motion with no swing, for false
+  triggers.
+- Rapid repeated motion past the radar for 15–20 seconds. The board must keep
+  re-arming; a blue LED that stays lit means it is idle and was never re-armed.
+
+Also run the unchanged sound path with the same representative shots:
+
+```bash
+scripts/start-kiosk.sh --trigger sound
+```

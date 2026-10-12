@@ -231,8 +231,9 @@ class RollingBufferMonitor:
         """
         Connect to radar and configure based on trigger type.
 
-        Sound uses the persisted rolling-buffer configuration. Speed handles
-        its own mode transition when a qualifying speed is detected.
+        Sound uses the persisted rolling-buffer configuration. The opt-in
+        hardware trigger configures the OPS243 internal speed trigger. Speed
+        handles its own mode transition when a qualifying speed is detected.
 
         Returns:
             True if successful

@@ -2,7 +2,7 @@
 
 This guide covers installation, Raspberry Pi configuration, verification, and
 OpenFlight battery monitoring for the Geekworm X1202 and X1206 UPS boards.
-See the [battery monitoring overview](https://github.com/jewbetcha/openflight/blob/main/README.md) for the shared provider
+See the [battery monitoring overview](https://github.com/open-flight/openflight/blob/main/README.md) for the shared provider
 architecture, UI behavior, and session logging contract.
 Both boards use the same telemetry interface:
 
