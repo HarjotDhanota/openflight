@@ -181,11 +181,94 @@ def test_saved_phone_tilt_is_used_on_restart_unless_cli_overrides(monkeypatch, t
     )
     monkeypatch.setattr(server, "PHONE_ORIENTATION_CALIBRATION_PATH", path)
 
-    assert server._resolve_iwr_mount_tilt(10.4, explicit_tilt_deg=None) == (
-        pytest.approx(11.75),
-        "ios_companion",
-    )
+    tilt_deg, source, record = server._resolve_iwr_mount_tilt(10.4, explicit_tilt_deg=None)
+    assert (tilt_deg, source) == (pytest.approx(11.75), "ios_companion")
+    assert record["configured_iwr_tilt_deg"] == pytest.approx(11.75)
     assert server._resolve_iwr_mount_tilt(10.4, explicit_tilt_deg=8.0) == (
         pytest.approx(8.0),
         "command_line",
+        None,
     )
+
+
+def _restart_iwr6843(monkeypatch, tmp_path, *, tilt_deg=None):
+    """Run init_iwr6843 against a fake capture monitor, as a server restart would."""
+
+    class FakeCaptureMonitor:
+        def __init__(self, **_kwargs):
+            self.port = "/dev/ttyUSB0"
+
+        def start(self, *, armed=True):
+            return None
+
+        def stop(self):
+            return None
+
+    calibration = Calibration.identity()
+    calibration.tilt_rad = math.radians(10.4)
+    monkeypatch.setattr(Calibration, "load", lambda _path: calibration)
+    monkeypatch.setattr("openflight.iwr6843.monitor.IWR6843CaptureMonitor", FakeCaptureMonitor)
+    monkeypatch.setattr("openflight.iwr6843.monitor.tx_order_from_config", lambda _path: "normal")
+    assert server.init_iwr6843(
+        port="/dev/ttyUSB0",
+        config_path="snapshot.cfg",
+        calibration_path="cal.json",
+        output_dir=tmp_path,
+        trigger_pin=17,
+        tee_range_m=1.575,
+        net_range_m=4.6,
+        tx_order="auto",
+        capture_timeout_s=12.0,
+        tilt_deg=tilt_deg,
+    )
+
+
+def test_get_reports_saved_phone_calibration_after_restart(monkeypatch, tmp_path):
+    path = tmp_path / "orientation.json"
+    monkeypatch.setattr(server, "iwr6843_runtime", _runtime())
+    monkeypatch.setattr(server, "iwr6843_runtime_config", {"enabled": True})
+    monkeypatch.setattr(server, "inclinometer_service", None)
+    monkeypatch.setattr(server, "PHONE_ORIENTATION_CALIBRATION_PATH", path)
+    monkeypatch.setattr(server, "get_session_logger", lambda: None)
+    client = server.app.test_client()
+    assert (
+        client.post(
+            "/api/calibration/iwr6843/orientation", json=_payload(tilt_deg=12.25)
+        ).status_code
+        == 200
+    )
+
+    _restart_iwr6843(monkeypatch, tmp_path)
+    body = client.get("/api/calibration/iwr6843/orientation").get_json()
+
+    assert body["configured_iwr_tilt_deg"] == pytest.approx(12.25)
+    assert body["calibration"]["configured_iwr_tilt_deg"] == pytest.approx(12.25)
+    assert body["calibration"]["measurement"]["device_model"] == "iPhone"
+    assert server.iwr6843_runtime_config["tilt_source"] == "ios_companion"
+    assert (
+        server.iwr6843_runtime.calibration.meta["phone_orientation_calibration"]
+        == body["calibration"]
+    )
+
+
+def test_get_omits_saved_phone_calibration_when_cli_tilt_overrides(monkeypatch, tmp_path):
+    path = tmp_path / "orientation.json"
+    monkeypatch.setattr(server, "iwr6843_runtime", _runtime())
+    monkeypatch.setattr(server, "iwr6843_runtime_config", {"enabled": True})
+    monkeypatch.setattr(server, "inclinometer_service", None)
+    monkeypatch.setattr(server, "PHONE_ORIENTATION_CALIBRATION_PATH", path)
+    monkeypatch.setattr(server, "get_session_logger", lambda: None)
+    client = server.app.test_client()
+    assert (
+        client.post(
+            "/api/calibration/iwr6843/orientation", json=_payload(tilt_deg=12.25)
+        ).status_code
+        == 200
+    )
+
+    _restart_iwr6843(monkeypatch, tmp_path, tilt_deg=8.0)
+    body = client.get("/api/calibration/iwr6843/orientation").get_json()
+
+    assert body["configured_iwr_tilt_deg"] == pytest.approx(8.0)
+    assert body["calibration"] is None
+    assert server.iwr6843_runtime_config["tilt_source"] == "command_line"

@@ -1303,18 +1303,21 @@ def _resolve_iwr_mount_tilt(
     calibration_tilt_deg: float,
     *,
     explicit_tilt_deg: float | None,
-) -> tuple[float, str]:
-    """Resolve TI tilt with explicit CLI values taking highest precedence."""
+) -> tuple[float, str, dict | None]:
+    """Resolve TI tilt with explicit CLI values taking highest precedence.
+
+    Also returns the saved phone calibration record when it supplied the tilt.
+    """
     if explicit_tilt_deg is not None:
-        return float(explicit_tilt_deg), "command_line"
+        return float(explicit_tilt_deg), "command_line", None
     try:
         saved = load_phone_orientation_calibration(PHONE_ORIENTATION_CALIBRATION_PATH)
     except (OSError, json.JSONDecodeError, PhoneOrientationValidationError) as error:
         logger.warning("[SERVER] Ignoring invalid saved phone calibration: %s", error)
-        return float(calibration_tilt_deg), "calibration_file"
+        return float(calibration_tilt_deg), "calibration_file", None
     if saved is not None:
-        return float(saved["configured_iwr_tilt_deg"]), "ios_companion"
-    return float(calibration_tilt_deg), "calibration_file"
+        return float(saved["configured_iwr_tilt_deg"]), "ios_companion", saved
+    return float(calibration_tilt_deg), "calibration_file", None
 
 
 def init_iwr6843(
@@ -1353,11 +1356,13 @@ def init_iwr6843(
         calibration = Calibration.load(calibration_path)
         calibration.tee_range_m = tee_range_m
         calibration.tee_ball_height_m = ball_height_m
-        resolved_tilt_deg, tilt_source = _resolve_iwr_mount_tilt(
+        resolved_tilt_deg, tilt_source, phone_calibration = _resolve_iwr_mount_tilt(
             math.degrees(calibration.tilt_rad),
             explicit_tilt_deg=tilt_deg,
         )
         calibration.tilt_rad = math.radians(resolved_tilt_deg)
+        if phone_calibration is not None:
+            calibration.meta["phone_orientation_calibration"] = phone_calibration
         if radar_height_m is not None:
             calibration.meta["radar_height_m"] = radar_height_m
 
@@ -1411,6 +1416,8 @@ def init_iwr6843(
             "raw_dump_saved": save_dumps,
             "output_dir": str(Path(output_dir).expanduser()),
         }
+        if phone_calibration is not None:
+            iwr6843_runtime_config["phone_orientation_calibration"] = phone_calibration
         logger.info(
             "[SERVER] IWR6843 initialized "
             "(port=%s, BCM%d, estimator=LCMF-v1, firmware boundary freeze)",
