@@ -54,6 +54,13 @@ def test_server_arguments_pass_through_unchanged():
     assert _dry_run(*arguments) == ["openflight-server", "--web-port", "8080", *arguments]
 
 
+def test_hardware_trigger_speed_alias_passes_through_to_server():
+    """The thin wrapper forwards the documented threshold alias unchanged."""
+    arguments = ["--trigger", "hardware", "--trigger-speed", "10"]
+
+    assert _dry_run(*arguments) == ["openflight-server", "--web-port", "8080", *arguments]
+
+
 def test_camera_shot_analysis_is_a_standalone_kiosk_camera_mode():
     assert _dry_run("--camera-shot-analysis") == [
         "openflight-server",
