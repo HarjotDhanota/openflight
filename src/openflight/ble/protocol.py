@@ -68,6 +68,7 @@ FEATURES = (
     "shot_deleted",
     "club",
     "shot_catch_up",
+    "deletion_catch_up",
 )
 
 EVENT_TYPES = (

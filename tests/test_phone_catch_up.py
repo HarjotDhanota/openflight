@@ -6,6 +6,7 @@ import pytest
 
 from openflight.phone_catch_up import (
     CATCH_UP_LIMIT,
+    MAX_REMEMBERED_DELETIONS,
     PhoneShotCache,
     normalize_last_event_id,
     select_catch_up,
@@ -53,6 +54,11 @@ class TestSelectCatchUp:
 
     def test_payloads_travel_with_their_ids(self):
         assert select_catch_up(_entries(2), "id-1") == [("id-1", b"payload-1")]
+
+    def test_limit_covers_a_long_gap(self):
+        """A tester missed 55 shots; the old limit of 20 lost the oldest 35."""
+        assert CATCH_UP_LIMIT >= 100
+        assert len(select_catch_up(_entries(55), "id-0")) == 55
 
     def test_rejects_non_positive_limit(self):
         with pytest.raises(ValueError):
@@ -111,3 +117,68 @@ class TestPhoneShotCache:
             thread.join()
 
         assert len(cache) == 50
+
+
+class TestDeletionsSince:
+    """Deletions a reconnecting phone missed, in the order the Pi made them."""
+
+    def test_deletions_after_the_anchor_was_sent(self):
+        cache = PhoneShotCache()
+        cache.remember("a", b"1")
+        cache.remember_deletion("ts-old")
+        cache.remember("b", b"2")
+        cache.remember_deletion("ts-1")
+        cache.remember_deletion("ts-2")
+
+        assert cache.deletions_since("b") == ["ts-1", "ts-2"]
+
+    def test_no_deletions_after_the_anchor(self):
+        cache = PhoneShotCache()
+        cache.remember_deletion("ts-old")
+        cache.remember("a", b"1")
+
+        assert cache.deletions_since("a") == []
+
+    @pytest.mark.parametrize("anchor", [None, "unknown"])
+    def test_no_or_unknown_anchor_returns_every_remembered_deletion(self, anchor):
+        """The phone's anchor may itself have been deleted: replay all, they are idempotent."""
+        cache = PhoneShotCache()
+        cache.remember_deletion("ts-1")
+        cache.remember("a", b"1")
+        cache.remember_deletion("ts-2")
+
+        assert cache.deletions_since(anchor) == ["ts-1", "ts-2"]
+
+    def test_anchor_position_is_its_first_send(self):
+        """A phone may hold only the provisional: deletions after it still count."""
+        cache = PhoneShotCache()
+        cache.remember("a", b"provisional")
+        cache.remember_deletion("ts-1")
+        cache.remember("a", b"final")
+
+        assert cache.deletions_since("a") == ["ts-1"]
+
+    def test_a_repeated_deletion_is_reported_once_at_its_latest_position(self):
+        cache = PhoneShotCache()
+        cache.remember_deletion("ts-1")
+        cache.remember("a", b"1")
+        cache.remember_deletion("ts-1")
+
+        assert cache.deletions_since(None) == ["ts-1"]
+        assert cache.deletions_since("a") == ["ts-1"]
+
+    def test_keeps_only_the_most_recent_deletions(self):
+        cache = PhoneShotCache()
+        for index in range(MAX_REMEMBERED_DELETIONS + 3):
+            cache.remember_deletion(f"ts-{index}")
+
+        deletions = cache.deletions_since(None)
+        assert len(deletions) == MAX_REMEMBERED_DELETIONS
+        assert deletions[0] == "ts-3"
+
+    @pytest.mark.parametrize("timestamp", [None, "", 7])
+    def test_ignores_invalid_timestamps(self, timestamp):
+        cache = PhoneShotCache()
+        cache.remember_deletion(timestamp)
+
+        assert cache.deletions_since(None) == []

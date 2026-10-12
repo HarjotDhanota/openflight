@@ -80,9 +80,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes are broadcast on the stream too. A reconnecting phone names the
   newest shot it has (`last_event_id` in BLE `hello`, or `Last-Event-ID` on the
   stream) and is sent that shot again plus every later current-session shot,
-  oldest first, up to 20; replays are the exact bytes sent live, and cleared or
-  deleted shots are never replayed. `hello` advertises the `shot_catch_up`
-  feature. See [phone app connection](ios-ble.md#catch-up-after-a-reconnect).
+  oldest first, up to 100; replays are the exact bytes sent live, and cleared
+  or deleted shots are never replayed. Shots deleted on the kiosk while the
+  phone was away are sent first, as `shot_deleted` events, and a shot taken
+  during a BLE catch-up no longer pushes a missed shot out of the delivery
+  queue. `hello` advertises the `shot_catch_up` and `deletion_catch_up`
+  features, and the stream names the same list in an `OpenFlight-Features`
+  header, so phone apps can tell an older Pi apart. See
+  [phone app connection](ios-ble.md#catch-up-after-a-reconnect).
 - **Bluetooth LE connection for phone apps.** `--ble` (with the optional `ble`
   extra, `bless==0.3.0` on Linux) advertises one GATT service with a shot and a
   control characteristic, speaking schema version 2; without BlueZ or the

@@ -206,7 +206,7 @@ timeouts.
    ```
    The result names the schema, the features and the characteristics:
    ```json
-   {"ok":true,"request_id":"<uuid>","result":{"characteristics":{"control":"7BA96E63-12C2-4CE0-BB84-3513C7FD1474","shot":"ED365FE6-3ABF-4FC3-8E44-D9525A22DABD"},"features":["provisional_shots","shot_processing","profiles","power_status","shot_deleted","club","shot_catch_up"],"schema_version":2},"schema_version":2}
+   {"ok":true,"request_id":"<uuid>","result":{"characteristics":{"control":"7BA96E63-12C2-4CE0-BB84-3513C7FD1474","shot":"ED365FE6-3ABF-4FC3-8E44-D9525A22DABD"},"features":["provisional_shots","shot_processing","profiles","power_status","shot_deleted","club","shot_catch_up","deletion_catch_up"],"schema_version":2},"schema_version":2}
    ```
 3. Subscribe to the shot characteristic. The catch-up shots arrive. A client
    that skipped `hello` gets only the latest shot.
@@ -223,7 +223,8 @@ transports:
 | | BLE | Network |
 |---|---|---|
 | Name the newest shot you have | `last_event_id` in the `hello` payload | `Last-Event-ID` request header, or `?last_event_id=` (the header wins) |
-| Catch-up arrives | On the shot characteristic, after the `hello` response; held until the phone subscribes to it | Seeded after the state events, before live events |
+| Missed deletions arrive | `shot_deleted` events on the control characteristic, right after the `hello` response | `shot_deleted` events seeded after the state events |
+| Missed shots arrive | On the shot characteristic, after the `hello` response; held until the phone subscribes to it | Seeded after the missed deletions, before live events |
 | Without catch-up | A client that skips `hello` gets the latest shot | — (every connection gets catch-up) |
 
 - The Pi sends the named shot again, then every current-session shot after
@@ -233,8 +234,16 @@ transports:
 - No `last_event_id`, or one the session no longer holds (the session was
   cleared, that shot was deleted, or the Pi restarted), means the whole
   current session.
-- At most the 20 most recent shots are sent. Use `shot_number` gaps to tell
-  that older shots were not synced (deleted shots also leave gaps).
+- At most the 100 most recent shots are sent. Use `shot_number` gaps to tell
+  that older shots were not synced (deleted shots also leave gaps). Over BLE a
+  long catch-up takes a while: each shot is a few dozen notifications.
+- Shots deleted while the phone was away are sent first, as `shot_deleted`
+  events: every deletion made after the named shot was first sent, or, when
+  the phone names no shot or one the Pi no longer knows (for example because
+  that shot was itself deleted), every deletion the Pi remembers (the last
+  100, since it started). Deleting a shot the app no longer has must be a
+  no-op, so an extra deletion is harmless. A cleared session is not replayed:
+  its shots are simply absent from the catch-up.
 - Replayed shots are the exact bytes last sent live, including `final` and
   `enrichment`. A shot no longer cached is rebuilt as a final shot with
   `enrichment: null`.
@@ -248,13 +257,15 @@ transports:
   `id`, which leaves the last shot id in place.
 - Over BLE a notification reaches every subscribed phone, so another connected
   phone receives the catch-up too and upserts it.
-- A shot taken while a BLE catch-up is still being sent can push the oldest
-  queued catch-up shot out of the eight-message delivery queue. The phone then
-  lacks that one shot until its session is replayed in full (for example after
-  it reconnects without `last_event_id`).
+- A BLE catch-up leaves two slots of the eight-message delivery queue free,
+  so a shot taken while it is still being sent is delivered alongside it
+  instead of pushing a missed shot out.
 
-The Pi advertises support with the `shot_catch_up` feature in the `hello`
-result.
+The Pi advertises support with the `shot_catch_up` (missed shots) and
+`deletion_catch_up` (missed deletions) features in the `hello` result. The
+network stream has no `hello`, so its response carries the same list in an
+`OpenFlight-Features` header (comma-separated). An app can use either to tell
+that a Pi predates these features and suggest updating it.
 
 ### Shot
 
@@ -317,8 +328,9 @@ unbounded `settings` object could not be guaranteed to fit in one BLE message.
 accepted for clients that name it; any other `schema` value returns `400`. A
 stream opens with `: ping`, then the current state as `club_changed`,
 `profiles` and (with a battery monitor) `power_status`, then the
-[catch-up](#catch-up-after-a-reconnect) shots (the whole session unless
-`Last-Event-ID` names a shot). Each `shot` frame carries `id: <event_id>`.
+[catch-up](#catch-up-after-a-reconnect) deletions and shots (the whole session
+unless `Last-Event-ID` names a shot). The `OpenFlight-Features` response header
+lists the Pi's features, as `hello` does over BLE. Each `shot` frame carries `id: <event_id>`.
 Event names match the `type` of the payload. Commands stay on `/api/club` and
 Socket.IO.
 
@@ -338,8 +350,8 @@ message that would not fit instead of sending a truncated one.
   queued event is dropped if that client cannot keep up. One stalled phone
   cannot slow down another.
 - Disconnecting clears that client's queue. On the next connection the client
-  is [caught up](#catch-up-after-a-reconnect) on the session shots it missed
-  (up to 20).
+  is [caught up](#catch-up-after-a-reconnect) on the deletions and session
+  shots it missed (up to 100 shots).
 - Clients upsert shots by `event_id`, which ignores replays of shots they
   already have and merges a provisional shot with its final version.
 

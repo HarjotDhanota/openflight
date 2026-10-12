@@ -275,3 +275,127 @@ def test_no_monitor_means_no_catch_up(pi):
     settle(pi, rounds=10)
 
     assert _received_ids(phone) == []
+
+
+def _publish_all_live():
+    """Publish every session shot as the live path did when it was taken."""
+    for shot in server_module.monitor.get_shots():
+        server_module._publish_phone_shot(
+            server_module.shot_to_dict(shot), final=True, enrichment=None
+        )
+
+
+def _delete(index):
+    """Delete the session's ``index``-th shot on the kiosk; returns its timestamp."""
+    timestamp = server_module.monitor.get_shots()[index].timestamp.isoformat()
+    assert server_module.apply_delete_shot({"timestamp": timestamp})[1] == 200
+    return timestamp
+
+
+def _deleted_timestamps(phone):
+    return [
+        message["timestamp"]
+        for message in phone.decoded(CONTROL_CHARACTERISTIC_UUID)
+        if message.get("type") == "shot_deleted"
+    ]
+
+
+def test_hello_advertises_deletion_catch_up(pi):
+    phone = pi.central()
+    phone.subscribe(CONTROL_CHARACTERISTIC_UUID)
+
+    assert "deletion_catch_up" in _hello(phone)["result"]["features"]
+
+
+def test_deletion_made_while_the_phone_was_away_is_replayed(pi, monkeypatch):
+    """Tester report: a shot deleted on the kiosk while the phone was disconnected stayed."""
+    ids = _session(monkeypatch, 4)
+    _publish_all_live()
+    deleted = _delete(1)
+
+    phone = _connect(pi, last_event_id=ids[-1])
+
+    phone.wait_for(CONTROL_CHARACTERISTIC_UUID, lambda m: m.get("type") == "shot_deleted")
+    settle(pi)
+    assert _deleted_timestamps(phone) == [deleted]
+
+
+def test_deletion_replay_arrives_after_the_hello_answer(pi, monkeypatch):
+    ids = _session(monkeypatch, 3)
+    _publish_all_live()
+    _delete(0)
+
+    phone = _connect(pi, last_event_id=ids[-1])
+    phone.wait_for(CONTROL_CHARACTERISTIC_UUID, lambda m: m.get("type") == "shot_deleted")
+
+    kinds = [m.get("type", "response") for m in phone.decoded(CONTROL_CHARACTERISTIC_UUID)]
+    assert kinds == ["response", "shot_deleted"]
+
+
+def test_deletions_the_phone_already_saw_are_not_replayed(pi, monkeypatch):
+    ids = _session(monkeypatch, 4)
+    shots = server_module.monitor.get_shots()
+    for shot in shots[:2]:
+        server_module._publish_phone_shot(
+            server_module.shot_to_dict(shot), final=True, enrichment=None
+        )
+    _delete(0)  # before the phone's newest shot was sent: it heard this one live
+    for shot in server_module.monitor.get_shots()[1:]:
+        server_module._publish_phone_shot(
+            server_module.shot_to_dict(shot), final=True, enrichment=None
+        )
+
+    phone = _connect(pi, last_event_id=ids[-1])
+    phone.wait_for(SHOT_CHARACTERISTIC_UUID)
+    settle(pi, rounds=10)
+
+    assert _deleted_timestamps(phone) == []
+
+
+def test_deleted_anchor_replays_every_remembered_deletion(pi, monkeypatch):
+    """The phone's newest shot was the one deleted: its anchor is gone, so replay them all."""
+    ids = _session(monkeypatch, 3)
+    _publish_all_live()
+    first = _delete(0)
+    newest = _delete(1)  # now index 1 is the old third shot, the phone's newest
+
+    phone = _connect(pi, last_event_id=ids[-1])
+    phone.wait_for_count(SHOT_CHARACTERISTIC_UUID, 1)
+    settle(pi, rounds=10)
+
+    assert _deleted_timestamps(phone) == [first, newest]
+
+
+def test_no_deletion_replay_without_a_monitor_or_deletions(pi):
+    phone = _connect(pi, last_event_id="anything")
+    settle(pi, rounds=10)
+
+    assert _deleted_timestamps(phone) == []
+
+
+def test_a_gap_of_55_shots_is_delivered_in_full(pi, monkeypatch):
+    """Tester report: 55 shots missed while away, only the newest 20 came back."""
+    ids = _session(monkeypatch, 56)
+    _publish_all_live()
+
+    phone = _connect(pi, last_event_id=ids[0])
+
+    phone.wait_for_count(SHOT_CHARACTERISTIC_UUID, 56, timeout=30)
+    settle(pi)
+    assert _received_ids(phone) == ids
+
+
+def test_a_live_shot_during_catch_up_does_not_push_a_catch_up_shot_out(pi, monkeypatch):
+    count = pi.publisher.queue_size * 3
+    ids = _session(monkeypatch, count + 1)
+    live = server_module.monitor._shots.pop()
+    monkeypatch.setattr(pi.publisher, "fragment_interval_s", 0.002)
+
+    phone = _connect(pi)
+    phone.wait_for(SHOT_CHARACTERISTIC_UUID)
+    server_module.monitor._shots.append(live)
+    _publish_latest_live()
+
+    phone.wait_for_count(SHOT_CHARACTERISTIC_UUID, count + 1, timeout=30)
+    settle(pi)
+    assert sorted(_received_ids(phone)) == sorted(ids)

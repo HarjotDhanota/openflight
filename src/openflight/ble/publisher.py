@@ -30,6 +30,13 @@ CommandHandler = Callable[[str, Mapping], tuple[dict, int]]
 # Given a client's ``last_event_id`` (or ``None``), the ``(event_id, shot
 # payload)`` pairs it missed, oldest first. See ``openflight.phone_catch_up``.
 CatchUpProvider = Callable[[Any], Sequence[tuple[str, bytes]]]
+# Given the same ``last_event_id``, the events it missed that are not shots
+# (``shot_deleted``), oldest first, sent on the control characteristic.
+CatchUpEventsProvider = Callable[[Any], Sequence[Mapping]]
+# Delivery-queue slots catch-up leaves free, so a live shot taken while
+# catch-up is still being sent never pushes a missed shot out of the queue.
+_LIVE_HEADROOM = 2
+_HEADROOM_POLL_S = 0.01
 
 _SHOT = SHOT_CHARACTERISTIC_UUID.lower()
 _CONTROL = CONTROL_CHARACTERISTIC_UUID.lower()
@@ -67,6 +74,7 @@ class BleShotPublisher:
         fragment_interval_s: float = 0.01,
         command_handler: CommandHandler | None = None,
         catch_up_provider: CatchUpProvider | None = None,
+        catch_up_events_provider: CatchUpEventsProvider | None = None,
     ):
         if queue_size < 1:
             raise ValueError("BLE queue size must be at least one")
@@ -75,6 +83,7 @@ class BleShotPublisher:
         self.fragment_interval_s = fragment_interval_s
         self.command_handler = command_handler
         self.catch_up_provider = catch_up_provider
+        self.catch_up_events_provider = catch_up_events_provider
 
         self._state_lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -361,6 +370,25 @@ class BleShotPublisher:
             logger.warning("[BLE] Could not load missed shots for catch-up", exc_info=True)
             return None
 
+    async def _load_catch_up_events(self, last_event_id) -> list[bytes]:
+        """The encoded deletions a client missed; empty when unavailable."""
+        provider = self.catch_up_events_provider
+        if provider is None:
+            return []
+        try:
+            events = await asyncio.to_thread(provider, last_event_id)
+            return [encode_message(event) for event in events]
+        except Exception:  # pylint: disable=broad-exception-caught
+            # Never fail ``hello`` over catch-up: the shots still arrive.
+            logger.warning("[BLE] Could not load missed deletions for catch-up", exc_info=True)
+            return []
+
+    async def _send_catch_up(self, events: list[bytes], shots: list[bytes] | None) -> None:
+        """Missed deletions on the control characteristic, then the missed shots."""
+        for event_payload in events:
+            await self._send_control_response(event_payload)
+        self._schedule_catch_up(shots)
+
     def _schedule_catch_up(self, payloads: list[bytes] | None) -> None:
         """Send catch-up now if the shot characteristic is subscribed, else on subscribe.
 
@@ -387,14 +415,22 @@ class BleShotPublisher:
             asyncio.run_coroutine_threadsafe(self._deliver_catch_up(payloads), loop)
 
     async def _deliver_catch_up(self, payloads: list[bytes]) -> None:
-        """Queue catch-up shots in order, waiting for room instead of dropping any."""
+        """Queue catch-up shots in order, waiting for room instead of dropping any.
+
+        Catch-up leaves ``_LIVE_HEADROOM`` slots free, so a live shot finds
+        room instead of dropping the oldest queued (missed) shot.
+        """
         for payload in payloads:
-            with self._state_lock:
-                queue = self._queue
-                subscribed = self._subscribed
-            if queue is None or not subscribed:
-                return
-            await queue.put(payload)
+            while True:
+                with self._state_lock:
+                    queue = self._queue
+                    subscribed = self._subscribed
+                if queue is None or not subscribed:
+                    return
+                if queue.qsize() < max(1, queue.maxsize - _LIVE_HEADROOM):
+                    break
+                await asyncio.sleep(_HEADROOM_POLL_S)
+            queue.put_nowait(payload)
 
     @staticmethod
     def _offer(queue: asyncio.Queue[bytes] | None, payload: bytes) -> None:
@@ -486,6 +522,7 @@ class BleShotPublisher:
     async def _process_control_payload(self, payload: bytes) -> None:
         request_id = "unknown"
         catch_up: list[bytes] | None = None
+        catch_up_events: list[bytes] = []
         try:
             command = json.loads(payload)
             if not isinstance(command, dict):
@@ -503,7 +540,9 @@ class BleShotPublisher:
                 raise ValueError("Control command payload must be an object")
 
             if command_type == "hello":
-                response, catch_up = await self._answer_hello(request_id, command_payload)
+                response, catch_up, catch_up_events = await self._answer_hello(
+                    request_id, command_payload
+                )
             else:
                 if self.command_handler is None:
                     raise ValueError("Phone controls are not configured on this OpenFlight server")
@@ -525,22 +564,27 @@ class BleShotPublisher:
             )
 
         await self._send_control_response(encode_message(response))
-        # After the answer, so a client sees ``hello`` succeed before shots arrive.
-        self._schedule_catch_up(catch_up)
+        # After the answer, so a client sees ``hello`` succeed before catch-up arrives.
+        await self._send_catch_up(catch_up_events, catch_up)
 
     async def _answer_hello(
         self,
         request_id: str,
         command_payload: Mapping,
-    ) -> tuple[dict, list[bytes] | None]:
-        """Negotiate the transport and load the client's catch-up shots.
+    ) -> tuple[dict, list[bytes] | None, list[bytes]]:
+        """Negotiate the transport and load the client's catch-up.
 
         ``hello`` is answered by the publisher itself: it is about which
         characteristics exist, not server state.
         """
         result = build_hello_result(command_payload.get("client_schema_max"))
         response = build_control_response(request_id, result=result)
-        return response, await self._load_catch_up(command_payload.get("last_event_id"))
+        last_event_id = command_payload.get("last_event_id")
+        return (
+            response,
+            await self._load_catch_up(last_event_id),
+            await self._load_catch_up_events(last_event_id),
+        )
 
     async def _send_control_response(self, payload: bytes) -> None:
         """Send one complete control message without interleaving fragments."""

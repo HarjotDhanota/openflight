@@ -26,6 +26,7 @@ from flask_socketio import SocketIO
 
 from .ballistics import resolve_launch, simulate
 from .ble.protocol import (
+    FEATURES as PHONE_FEATURES,
     build_club_event,
     build_power_status_event,
     build_profiles_event,
@@ -1613,6 +1614,15 @@ def handle_get_camera_capture_settings():
     socketio.emit("camera_capture_settings", _camera_capture_settings_payload())
 
 
+def _stream_deletion_catch_up(last_event_id) -> list[dict]:
+    """Missed deletions for a stream client, or none on failure."""
+    try:
+        return phone_deletion_catch_up(last_event_id)
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] Could not load missed deletions for the stream", exc_info=True)
+        return []
+
+
 def _stream_catch_up(last_event_id) -> list[tuple[str, bytes]] | None:
     """Catch-up for a stream client, or ``None`` (latest-shot replay) on failure."""
     try:
@@ -1629,14 +1639,16 @@ def shots_stream():
     Speaks schema 2, the only phone schema; ``?schema=2`` is accepted for
     clients that name it. A client resumes with ``Last-Event-ID`` (or
     ``?last_event_id=``) and is seeded with the session shots it missed, as
-    BLE ``hello`` does.
+    BLE ``hello`` does: missed deletions after the state events, then the
+    missed shots. ``OpenFlight-Features`` names the same features ``hello``
+    returns, so a phone can tell what this Pi supports.
     """
     if request.args.get("schema", "2") != "2":
         return {"error": "Unsupported schema; use 2"}, 400
     last_event_id = request.headers.get("Last-Event-ID") or request.args.get("last_event_id")
     try:
         subscriber = shot_stream.subscribe(
-            initial_events=_phone_state_events(),
+            initial_events=_phone_state_events() + _stream_deletion_catch_up(last_event_id),
             catch_up=_stream_catch_up(last_event_id),
         )
     except ShotStreamFull as exc:
@@ -1646,6 +1658,7 @@ def shots_stream():
     response = Response(shot_stream.frames(subscriber), mimetype=SSE_MIMETYPE)
     response.headers["Cache-Control"] = "no-cache"
     response.headers["X-Accel-Buffering"] = "no"
+    response.headers["OpenFlight-Features"] = ",".join(PHONE_FEATURES)
     # Covers the case where the response is discarded without ever being
     # iterated; unsubscribing twice is a no-op.
     response.call_on_close(lambda: shot_stream.unsubscribe(subscriber))
@@ -2178,6 +2191,8 @@ def apply_delete_shot(payload):
         return {"error": "Shot not found"}, 404
 
     socketio.emit("session_state", _session_state_payload())
+    # Remembered so a phone that is away now hears of it when it reconnects.
+    phone_shot_cache.remember_deletion(timestamp)
     _publish_phone_event(build_shot_deleted_event(timestamp))
     return {"status": "deleted", "timestamp": timestamp}, 200
 
@@ -3748,6 +3763,18 @@ def phone_catch_up(last_event_id=None) -> list[tuple[str, bytes]]:
             continue
         entries.append((event_id, payload))
     return select_catch_up(entries, normalize_last_event_id(last_event_id))
+
+
+def phone_deletion_catch_up(last_event_id=None) -> list[dict]:
+    """``shot_deleted`` events a reconnecting phone missed, oldest first.
+
+    Shared by BLE ``hello`` and the network stream; sent before the catch-up
+    shots. See ``openflight.phone_catch_up`` for the rule.
+    """
+    return [
+        build_shot_deleted_event(timestamp)
+        for timestamp in phone_shot_cache.deletions_since(normalize_last_event_id(last_event_id))
+    ]
 
 
 def _publish_phone_event(event: dict) -> None:
@@ -5447,6 +5474,7 @@ def main():
         ble_publisher = BleShotPublisher(
             command_handler=dispatch_phone_control_command,
             catch_up_provider=phone_catch_up,
+            catch_up_events_provider=phone_deletion_catch_up,
         )
         ble_publisher.start()
         print("Bluetooth LE enabled (advertising as OpenFlight)")
