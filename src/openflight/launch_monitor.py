@@ -327,7 +327,9 @@ class Shot:
     # accepted measured spin. The --calculated-spin formula's value, likewise recorded.
     spin_rpm_collision: Optional[float] = None
     spin_rpm_calculated_empirical: Optional[float] = None
-    spin_axis_source: Optional[str] = None  # "calculated" (collision model), or None
+    # "calculated (D-plane tilt, Wood et al. 2018 weights)" from the collision model
+    # (or "calculated (D-plane + gear effect, Cross & Nathan 2007)"); None otherwise
+    spin_axis_source: Optional[str] = None
     collision_model: Optional[dict] = None
     experimental_aoa_offset_source: Optional[str] = None
     # Independent horizontal ball-flight evidence. The camera-assisted value

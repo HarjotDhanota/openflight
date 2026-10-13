@@ -5522,7 +5522,7 @@ class TestOnShotDetected:
         self._run_with_no_radar_hardware(monkeypatch, shot)
 
         assert shot.spin_axis_deg == pytest.approx(self._expected_spin_axis(), abs=0.05)
-        assert shot.spin_axis_source == "calculated"
+        assert shot.spin_axis_source == "calculated (D-plane tilt, Wood et al. 2018 weights)"
 
     def test_spin_axis_names_the_frame_its_two_legs_share(self, monkeypatch):
         """D36 item 2: face to path cancels the horizontal offset only within one frame."""

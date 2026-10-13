@@ -92,6 +92,10 @@ SOURCE_PENNER = "Penner 2001 collision model (Am. J. Phys. 69, 563)"
 SOURCE_AXIS = "D-plane tilt (D37)"
 SOURCE_GEAR = "Cross & Nathan 2007 gear effect (Am. J. Phys. 75, 658)"
 NOTE_NO_GEAR = "no impact location: gear effect not applied"
+# Shot.spin_axis_source for a calculated axis (read by E4's flight and the simulators;
+# both start with "calculated").
+SPIN_AXIS_SOURCE_TILT = "calculated (D-plane tilt, Wood et al. 2018 weights)"
+SPIN_AXIS_SOURCE_GEAR = "calculated (D-plane + gear effect, Cross & Nathan 2007)"
 
 MPH_TO_M_S = 0.44704
 RAD_S_TO_RPM = 60.0 / (2.0 * math.pi)
@@ -426,6 +430,16 @@ def spin_axis(
         frame=d_plane_tilt.frame,
         note=frame_note,
     )
+
+
+def shot_spin_axis_source(axis: Metric) -> str:
+    """The Shot.spin_axis_source string for a calculated spin axis."""
+    return SPIN_AXIS_SOURCE_GEAR if SOURCE_GEAR in (axis.source or "") else SPIN_AXIS_SOURCE_TILT
+
+
+def is_calculated_source(source: Optional[str]) -> bool:
+    """Whether a Shot source label names a calculated (model) value."""
+    return bool(source) and source.startswith(LABEL_CALCULATED)
 
 
 GYRO_REASON = (

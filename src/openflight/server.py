@@ -5028,9 +5028,9 @@ def _attach_collision_model(shot: Shot) -> None:
 
     if axis.present and axis.status == collision_model.STATUS_CALCULATED:
         shot.spin_axis_deg = round(axis.value, 1)
-        shot.spin_axis_source = "calculated"
+        shot.spin_axis_source = collision_model.shot_spin_axis_source(axis)
         shot.spin_axis_frame = axis.frame
-    elif shot.spin_axis_source == "calculated":
+    elif collision_model.is_calculated_source(shot.spin_axis_source):
         shot.spin_axis_deg = None
         shot.spin_axis_source = None
         shot.spin_axis_frame = None

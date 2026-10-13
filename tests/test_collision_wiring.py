@@ -89,7 +89,7 @@ def test_the_payload_carries_the_collision_values():
         "spin_axis_deg",
     ):
         assert payload[field] is not None, field
-    assert payload["spin_axis_source"] == "calculated"
+    assert payload["spin_axis_source"] == "calculated (D-plane tilt, Wood et al. 2018 weights)"
     assert payload["collision_model"]["metrics"]["spin_axis"]["note"] == (
         "no impact location: gear effect not applied"
     )
@@ -102,7 +102,7 @@ def test_the_spin_axis_is_the_d_plane_tilt_not_launch_minus_path():
 
     assert shot.spin_axis_deg == pytest.approx(_expected()["d_plane_tilt"].value, abs=0.05)
     assert shot.spin_axis_deg != pytest.approx(1.0 - (-2.0))
-    assert shot.spin_axis_source == "calculated"
+    assert shot.spin_axis_source == "calculated (D-plane tilt, Wood et al. 2018 weights)"
     assert shot.spin_axis_frame == "target_line"
 
 

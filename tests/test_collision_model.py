@@ -488,3 +488,15 @@ def test_the_result_serialises_every_metric_with_status_source_and_frame():
         assert set(metric) >= {"value", "status", "source", "unit", "frame", "reason", "note"}
     assert payload["weights"]["horizontal"] == pytest.approx(0.69)
     assert payload["inputs"]["club_path"]["label"] == "measured"
+
+
+def test_the_spin_axis_source_strings_name_the_model():
+    assert cm.SPIN_AXIS_SOURCE_TILT == "calculated (D-plane tilt, Wood et al. 2018 weights)"
+    assert cm.SPIN_AXIS_SOURCE_GEAR == "calculated (D-plane + gear effect, Cross & Nathan 2007)"
+    tilt = cm.Metric(value=2.0, status=cm.STATUS_CALCULATED, source="D-plane", unit="deg")
+    spin = cm.Metric(value=3000.0, status=cm.STATUS_CALCULATED, source="Penner", unit="rpm")
+    assert cm.shot_spin_axis_source(cm.spin_axis(tilt, spin)) == cm.SPIN_AXIS_SOURCE_TILT
+    assert (
+        cm.shot_spin_axis_source(cm.spin_axis(tilt, spin, gear_sidespin_rpm=100.0))
+        == cm.SPIN_AXIS_SOURCE_GEAR
+    )

@@ -220,7 +220,7 @@ def test_a_calculated_spin_and_axis_go_out_labelled_calculated():
             spin_rpm=2700.0,
             spin_source="calculated",
             spin_axis_deg=4.0,
-            spin_axis_source="calculated",
+            spin_axis_source="calculated (D-plane tilt, Wood et al. 2018 weights)",
         ),
         PlayerState(),
     )
@@ -232,7 +232,12 @@ def test_a_calculated_spin_and_axis_go_out_labelled_calculated():
 def test_a_spin_component_is_as_good_as_its_weaker_source():
     measured_spin = dict(spin_rpm=2500.0, spin_confidence=0.9)
     calculated_axis = resolve_shot(
-        _shot(**measured_spin, spin_axis_deg=2.0, spin_axis_source="calculated"), PlayerState()
+        _shot(
+            **measured_spin,
+            spin_axis_deg=2.0,
+            spin_axis_source="calculated (D-plane tilt, Wood et al. 2018 weights)",
+        ),
+        PlayerState(),
     )
     estimated_axis = resolve_shot(_shot(spin_rpm=2700.0, spin_source="calculated"), PlayerState())
 

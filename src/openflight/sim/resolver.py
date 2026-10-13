@@ -201,7 +201,9 @@ def resolve_shot(
     if _finite(shot.spin_axis_deg):
         spin_axis = float(shot.spin_axis_deg)
         # the collision model's axis (E2) is calculated, never measured
-        axis_prov = "calculated" if shot.spin_axis_source == "calculated" else "measured"
+        axis_prov = (
+            "calculated" if (shot.spin_axis_source or "").startswith("calculated") else "measured"
+        )
     else:
         spin_axis = 0.0
         axis_prov = "estimated"

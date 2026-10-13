@@ -235,8 +235,11 @@ sign of face to path.
 when the horizontal launch confidence is below `SPIN_AXIS_MIN_CONFIDENCE`
 (0.6).
 
-**On the shot.** When calculated, it becomes `spin_axis_deg` with
-`spin_axis_source = "calculated"` and its frame.
+**On the shot.** When calculated, it becomes `spin_axis_deg` with its frame and
+`spin_axis_source = "calculated (D-plane tilt, Wood et al. 2018 weights)"`, or
+`"calculated (D-plane + gear effect, Cross & Nathan 2007)"` once E5 supplies a
+gear sidespin. The flight (E4) and the simulators treat any source starting
+with "calculated" as a calculated value.
 
 **Gear effect (for E5).** Source: R. Cross & A. M. Nathan, "Experimental study
 of the gear effect in ball collisions", *Am. J. Phys.* **75**, 658–664 (2007),
