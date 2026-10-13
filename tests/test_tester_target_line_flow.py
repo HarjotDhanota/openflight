@@ -266,8 +266,13 @@ def test_swings_hand_one_yaw_to_both_kiosk_flags_and_record_it(tmp_path, inputs,
     assert record["aim_px"] == [580.0, 390.0]
     assert record["method"] == "direction"
     assert record["yaw_deg"] == pytest.approx(line["yaw_deg"])
-    assert record["uncertainty"]["aim_px"] == tl.AIM_PIXEL_UNCERTAINTY_PX
+    # the page sent no display scale: a finger on the Pi's preview is assumed
+    assert record["uncertainty"]["aim_px"] == tl.DEFAULT_TOUCH_UNCERTAINTY_FRAME_PX
     assert record["uncertainty"]["parallax_deg"] is not None
+    assert record["total_uncertainty_deg"] == pytest.approx(record["uncertainty"]["total_deg"])
+    assert float(args[args.index("--target-line-yaw-deg") + 1]) == pytest.approx(
+        line["yaw_deg"], abs=1e-4
+    )
     assert record["uncertainty"]["total_deg"] >= line["uncertainty"]["total_deg"]
     assert command[command.index(tl.IWR_FLAG) + 1] == args[args.index(tl.IWR_FLAG) + 1]
 
@@ -335,3 +340,67 @@ def test_an_alignment_stick_check_is_recorded_beside_the_aim(tmp_path, inputs, m
     # the same aim confirmed again keeps its checks
     assert confirm_aim(client, tester, "aim-2", [701.0, 380.0]).get_json()["change"] == "unchanged"
     assert json.loads((root / ts.TARGET_LINE_FILE).read_text("utf-8"))["checks"] == [check]
+
+
+def test_the_aim_takes_the_preview_s_scale_and_shows_one_plus_minus(tmp_path, inputs, monkeypatch):
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    assert confirm_box(client, tester, "box-1").status_code == 200
+
+    fine = client.post(
+        "/api/tester/aim-point",
+        json={
+            "tester_id": tester,
+            "action": "confirm",
+            "request_id": "fine",
+            "aim_px": [700.0, 380.0],
+            "display_scale": 0.5,
+        },
+    ).get_json()
+    coarse = client.post(
+        "/api/tester/aim-point",
+        json={
+            "tester_id": tester,
+            "action": "confirm",
+            "request_id": "coarse",
+            "aim_px": [760.0, 380.0],
+            "display_scale": 2.0,
+        },
+    ).get_json()
+
+    assert fine["target_line"]["uncertainty"]["aim_px"] == pytest.approx(6.25)
+    assert coarse["target_line"]["uncertainty"]["aim_px"] == pytest.approx(25.0)
+    # the one +- the page shows, with the parallax at the target's assumed distance
+    assert coarse["total_uncertainty_deg"] > fine["total_uncertainty_deg"] > 0.0
+    assert coarse["target_line"]["parallax_basis"] == (
+        "default_net_range_not_measured_less_the_box_centre"
+    )
+    shown = aim_state(client, tester)
+    assert shown["state"] == "confirmed"
+    assert shown["total_uncertainty_deg"] == pytest.approx(coarse["total_uncertainty_deg"])
+
+
+def test_the_aim_can_be_skipped_and_swings_say_they_use_the_boresight(
+    tmp_path, inputs, monkeypatch
+):
+    inputs["rig"].write_bytes(Path(ts.DEFAULT_RIG_GEOMETRY).read_bytes())
+    app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False, use_unqualified=True)
+    _solving_camera(monkeypatch)
+    client = app.test_client()
+    assert confirm_box(client, tester, "box-1").status_code == 200
+
+    skipped = client.post(
+        "/api/tester/aim-point", json={"tester_id": tester, "action": "skip", "request_id": "s"}
+    )
+
+    assert skipped.status_code == 200, skipped.get_json()
+    assert skipped.get_json()["state"] == "skipped"
+    assert aim_state(client, tester)["state"] == "skipped"
+    drive(client, tester)
+    assert run_swings(client, tester).status_code == 202
+    handed = ts.read_arm_state(tmp_path / "sessions", tester, "arm5")["handed_to_swings"]
+    assert tl.CAMERA_FLAG not in handed["cli_args"]
+    assert handed["target_line"]["status"] == "skipped"
+    assert "boresight" in handed["target_line"]["reason"]
+    command = app.config["TEST_STATIC_MANAGER"].last_command
+    assert command[command.index("--target-line-status") + 1] == "skipped"

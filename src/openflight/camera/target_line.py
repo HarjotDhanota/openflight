@@ -75,8 +75,13 @@ IWR_FLAG = "--iwr6843-azimuth-offset-deg"
 # The rig file carries no camera-to-IWR yaw: a shared boresight by design, not measured.
 CAMERA_TO_IWR_YAW_DEG = 0.0
 CAMERA_TO_IWR_BASIS = "rig_file_has_no_yaw_term_shared_boresight_by_design_not_measured"
-# How well a finger or a mouse puts the aim on the target, in 1280x800 pixels.
+# How well a mouse puts the aim on the target, in 1280x800 pixels: the floor.
 AIM_PIXEL_UNCERTAINTY_PX = 2.0
+# A finger on the preview: this many screen pixels, times the preview's frame pixels
+# per screen pixel (``display_scale``, the page sends it). Without it a finger on
+# the Pi's own preview is assumed: 20-40 frame px (13 Oct audit), this much.
+TOUCH_UNCERTAINTY_SCREEN_PX = 12.5
+DEFAULT_TOUCH_UNCERTAINTY_FRAME_PX = 30.0
 FLOOR_LINE_PIXEL_UNCERTAINTY_PX = 2.0
 # A re-confirmed aim point (or floor line end) that moved less than this has not moved.
 AIM_MOVE_TOLERANCE_PX = 4.0
@@ -107,6 +112,10 @@ def target_line_policy() -> dict[str, Any]:
             "floor_point": "the aim point put on the floor line's screen, dropped to the floor",
         },
         "aim_pixel_uncertainty_px": AIM_PIXEL_UNCERTAINTY_PX,
+        "touch_uncertainty_screen_px": TOUCH_UNCERTAINTY_SCREEN_PX,
+        "default_touch_uncertainty_frame_px": DEFAULT_TOUCH_UNCERTAINTY_FRAME_PX,
+        "fallback_in_a_perturbation": "unbounded_with_a_warning",
+        "shown_uncertainty": "total_uncertainty_deg_with_parallax_at_the_target_distance",
         "floor_line_pixel_uncertainty_px": FLOOR_LINE_PIXEL_UNCERTAINTY_PX,
         "move_tolerance_px": AIM_MOVE_TOLERANCE_PX,
         "stock_lens_barrel_k1_per_px2_at_1280": STOCK_LENS_BARREL_K1_PER_PX2_AT_1280,
@@ -278,6 +287,18 @@ def _roll_pad_deg(roll_deg: float | None) -> float:
     return ground_patch.unapplied_roll_pad_deg(roll_deg)
 
 
+def aim_pixel_uncertainty(display_scale: float | None) -> tuple[float, str]:
+    """How far the aim pixel may be off, in frame pixels, and on what basis."""
+    if display_scale is None:
+        return DEFAULT_TOUCH_UNCERTAINTY_FRAME_PX, "touch_on_the_pi_preview_assumed"
+    scale = float(display_scale)
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError("display_scale must be a positive number (frame px per screen px)")
+    return max(AIM_PIXEL_UNCERTAINTY_PX, TOUCH_UNCERTAINTY_SCREEN_PX * scale), (
+        "touch_screen_px_times_display_scale"
+    )
+
+
 def _uncertainty(  # pylint: disable=too-many-arguments,too-many-locals
     camera,
     ball: tuple[float, float],
@@ -287,48 +308,64 @@ def _uncertainty(  # pylint: disable=too-many-arguments,too-many-locals
     *,
     tilt_pad_deg: float,
     roll_pad_deg: float,
+    aim_px_uncertainty: float = AIM_PIXEL_UNCERTAINTY_PX,
 ) -> dict[str, Any]:
-    def yaw(model=camera, aim_px=aim, floor_px=floor) -> float:
-        return solve_yaw(model, ball, aim_px, floor_px).yaw_deg
+    unbounded: set[str] = set()
 
-    base = solved.yaw_deg
-    step = AIM_PIXEL_UNCERTAINTY_PX
+    def spread(name: str, solutions: list[TargetLineSolution]) -> float:
+        """The part's spread; a perturbation that changes the method leaves it unbounded:
+        a fallback is a different estimate, never a tighter one."""
+        if any(item.method != solved.method for item in solutions):
+            unbounded.add(name)
+        return _spread(solved.yaw_deg, [item.yaw_deg for item in solutions])
+
+    def sol(model=camera, aim_px=aim, floor_px=floor) -> TargetLineSolution:
+        return solve_yaw(model, ball, aim_px, floor_px)
+
+    step = float(aim_px_uncertainty)
     parts = {
-        "aim_pixel_deg": _spread(
-            base,
+        "aim_pixel_deg": spread(
+            "aim_pixel_deg",
             [
-                yaw(aim_px=[aim[0] + dx, aim[1] + dy])
+                sol(aim_px=[aim[0] + dx, aim[1] + dy])
                 for dx, dy in ((step, 0.0), (-step, 0.0), (0.0, step), (0.0, -step))
             ],
         ),
-        "tilt_deg": _spread(
-            base, [yaw(_pitched(camera, sign * tilt_pad_deg)) for sign in (1.0, -1.0)]
+        "tilt_deg": spread(
+            "tilt_deg", [sol(_pitched(camera, sign * tilt_pad_deg)) for sign in (1.0, -1.0)]
         ),
-        "roll_deg": _spread(
-            base, [yaw(_rolled(camera, sign * roll_pad_deg)) for sign in (1.0, -1.0)]
+        "roll_deg": spread(
+            "roll_deg", [sol(_rolled(camera, sign * roll_pad_deg)) for sign in (1.0, -1.0)]
         ),
-        "focal_deg": _spread(
-            base,
+        "focal_deg": spread(
+            "focal_deg",
             [
-                yaw(_scaled(camera, 1.0 + sign * float(camera.focal_relative_uncertainty)))
+                sol(_scaled(camera, 1.0 + sign * float(camera.focal_relative_uncertainty)))
                 for sign in (1.0, -1.0)
             ],
         ),
     }
     nominal = str(camera.source).startswith("nominal")
-    parts["lens_distortion_deg"] = abs(yaw(_undistorted(camera)) - base) if nominal else 0.0
+    parts["lens_distortion_deg"] = (
+        spread("lens_distortion_deg", [sol(_undistorted(camera))]) if nominal else 0.0
+    )
     if solved.method == "floor_point" and floor is not None:
         moved = []
         for index in range(2):
             for sign in (1.0, -1.0):
                 shifted = [list(end) for end in floor]
                 shifted[index][1] += sign * FLOOR_LINE_PIXEL_UNCERTAINTY_PX
-                moved.append(yaw(floor_px=shifted))
-        parts["floor_line_px_deg"] = _spread(base, moved)
+                moved.append(sol(floor_px=shifted))
+        parts["floor_line_px_deg"] = spread("floor_line_px_deg", moved)
+    bounded = not unbounded
     return {
-        "aim_px": AIM_PIXEL_UNCERTAINTY_PX,
+        "aim_px": round(step, 3),
         "parts_deg": {key: round(value, 4) for key, value in parts.items()},
-        "total_deg": round(math.sqrt(sum(value * value for value in parts.values())), 4),
+        "bounded": bounded,
+        "unbounded_parts": sorted(unbounded),
+        "total_deg": (
+            round(math.sqrt(sum(value * value for value in parts.values())), 4) if bounded else None
+        ),
         "tilt_pad_deg": float(tilt_pad_deg),
         "roll_pad_deg": float(roll_pad_deg),
         "roll_applied": bool(camera_roll.LIS3DH_ROLL_APPLIED),
@@ -395,22 +432,44 @@ def target_line_record(  # pylint: disable=too-many-arguments
     tilt_pad_deg: float,
     roll_deg: float | None,
     camera_tilt: Mapping[str, Any] | None = None,
+    display_scale: float | None = None,
+    target_distance_m: float | None = None,
+    target_distance_basis: str | None = None,
 ) -> dict[str, Any]:
     """The target line as it is stored, shown and handed on.
 
-    ``ball_lfu`` is the patch centre on the floor (rig frame); ``tilt_pad_deg``
-    the camera tilt's uncertainty (the patch's search pad); ``roll_deg`` the
-    LIS3DH roll the camera does not apply (against the rig's expected placement).
+    ``ball_lfu`` is the box's ball on the floor (rig frame); ``tilt_pad_deg`` the
+    camera tilt's uncertainty; ``roll_deg`` the LIS3DH roll the camera does not
+    apply (against the rig's expected placement). ``display_scale`` (frame px per
+    screen px) sizes the touch's own uncertainty; ``target_distance_m`` is how far
+    the target is taken to be beyond the ball, for the direction's parallax, which
+    ``total_uncertainty_deg`` (the one +- the page shows) includes.
     """
     aim = _pixel(aim_px, camera, "aim_px")
     floor = parse_floor_line(floor_line_px, camera)
     ball = (float(ball_lfu[0]), float(ball_lfu[1]))
     solved = solve_yaw(camera, ball, aim, floor)
     roll_pad = _roll_pad_deg(roll_deg)
+    aim_uncertainty, aim_basis = aim_pixel_uncertainty(display_scale)
     uncertainty = _uncertainty(
-        camera, ball, aim, floor, solved, tilt_pad_deg=tilt_pad_deg, roll_pad_deg=roll_pad
+        camera,
+        ball,
+        aim,
+        floor,
+        solved,
+        tilt_pad_deg=tilt_pad_deg,
+        roll_pad_deg=roll_pad,
+        aim_px_uncertainty=aim_uncertainty,
     )
+    uncertainty["aim_px_basis"] = aim_basis
+    uncertainty["display_scale"] = display_scale
     warnings = []
+    if not uncertainty["bounded"]:
+        warnings.append(
+            "At this lens height the camera's tilt cannot bound where the floor line puts "
+            "the target: the aim has no honest +-. Aim at a far target instead, or skip "
+            "the floor line."
+        )
     if abs(solved.yaw_deg) > LARGE_YAW_WARNING_DEG:
         side = "right" if solved.yaw_deg > 0 else "left"
         warnings.append(
@@ -424,6 +483,21 @@ def target_line_record(  # pylint: disable=too-many-arguments
         )
     iwr_yaw = solved.yaw_deg - CAMERA_TO_IWR_YAW_DEG
     offset_m = _ball_offset_from_aim_ray_m(camera, ball, aim)
+    parallax = (
+        0.0
+        if solved.method != "direction"
+        else (
+            math.degrees(math.atan2(abs(offset_m), float(target_distance_m)))
+            if target_distance_m is not None and float(target_distance_m) > 0.0
+            else None
+        )
+    )
+    total = uncertainty["total_deg"]
+    shown = (
+        round(math.hypot(float(total), float(parallax)), 4)
+        if total is not None and parallax is not None
+        else None
+    )
     return {
         "schema": SCHEMA,
         "source": SOURCE,
@@ -472,6 +546,12 @@ def target_line_record(  # pylint: disable=too-many-arguments
             "camera_to_iwr_basis": CAMERA_TO_IWR_BASIS,
         },
         "uncertainty": uncertainty,
+        # the one +- the page shows: every part, the touch and the parallax at the
+        # target's distance; None when a part has no bound (13 Oct)
+        "total_uncertainty_deg": shown,
+        "parallax_deg": round(parallax, 4) if parallax is not None else None,
+        "parallax_distance_m": target_distance_m,
+        "parallax_basis": target_distance_basis,
         "camera": {
             "source": camera.source,
             "focal_px": float(camera.focal_size_px),
@@ -548,25 +628,45 @@ def handoff(
             "reason": "no aim point confirmed for this setup and patch",
             "yaw_deg": None,
             "kiosk_offset_deg": None,
+            "total_uncertainty_deg": None,
             "flags": [],
             "sign_convention": SIGN_CONVENTION,
+        }
+    if record.get("status") == SKIPPED:
+        return ["--target-line-status", SKIPPED], {
+            "schema": SCHEMA,
+            "status": SKIPPED,
+            "source": None,
+            "reason": SKIPPED_REASON,
+            "yaw_deg": None,
+            "kiosk_offset_deg": None,
+            "total_uncertainty_deg": None,
+            "flags": [],
+            "sign_convention": SIGN_CONVENTION,
+            "skipped_at_utc": record.get("skipped_at_utc"),
         }
     offset = float(record["kiosk_offset_deg"])
     value = f"{offset:.6g}"
     args = [CAMERA_FLAG, value, IWR_FLAG, value]
     uncertainty = dict(record.get("uncertainty") or {})
     parallax = parallax_deg(record, target_distance_m)
-    total = float(uncertainty.get("total_deg") or 0.0)
-    if parallax is not None:
+    bounded = uncertainty.get("total_deg") is not None
+    total = float(uncertainty["total_deg"]) if bounded else None
+    if parallax is not None and total is not None:
         total = math.hypot(total, parallax)
     uncertainty.update(
         {
             "parallax_deg": round(parallax, 4) if parallax is not None else None,
             "parallax_distance_m": target_distance_m,
             "parallax_basis": distance_basis,
-            "total_deg": round(total, 4),
+            "total_deg": round(total, 4) if total is not None else None,
         }
     )
+    # the kiosk's Live tab shows the line and its one +- (GET /api/target-line)
+    args += ["--target-line-yaw-deg", f"{float(record['yaw_deg']):.6g}"]
+    if total is not None:
+        args += ["--target-line-uncertainty-deg", f"{total:.4g}"]
+    args += ["--target-line-source", str(record.get("source", SOURCE))]
     return args, {
         "schema": SCHEMA,
         "status": "set",
@@ -584,8 +684,30 @@ def handoff(
         "ball_lfu_m": record.get("ball_lfu_m"),
         "applies_to": record.get("applies_to"),
         "uncertainty": uncertainty,
+        "total_uncertainty_deg": round(total, 4) if total is not None else None,
         "confirmed_at_utc": record.get("confirmed_at_utc"),
         "warnings": list(record.get("warnings") or []),
+    }
+
+
+SKIPPED = "skipped"
+SKIPPED_REASON = (
+    "the tester skipped the aim point: horizontal angles are from the unit's boresight, "
+    "not a target line"
+)
+
+
+def skipped_record() -> dict[str, Any]:
+    """The aim step skipped (13 Oct): swings measure from the unit's boresight, labelled."""
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    return {
+        "schema": SCHEMA,
+        "status": SKIPPED,
+        "source": None,
+        "reason": SKIPPED_REASON,
+        "skipped_at_utc": datetime.now(timezone.utc).isoformat(),
+        "sign_convention": SIGN_CONVENTION,
     }
 
 
@@ -604,6 +726,7 @@ def compare_with_alignment_stick(
     """
     aim_yaw = float(record["yaw_deg"])
     aim_uncertainty = float((record.get("uncertainty") or {}).get("total_deg") or 0.0)
+    # an unbounded aim never agrees by its own width
     combined = math.hypot(aim_uncertainty, float(stick_uncertainty_deg))
     difference = aim_yaw - float(stick_yaw_deg)
     return {

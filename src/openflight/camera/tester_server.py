@@ -3395,15 +3395,22 @@ TARGET_LINE_DISPLAY_KEYS = (
     "warnings",
     "sign_convention",
     "confirmed_at_utc",
+    "status",
+    "reason",
+    "total_uncertainty_deg",
+    "parallax_deg",
+    "parallax_basis",
 )
 
 
 def read_last_target_line(root: Path) -> dict | None:
-    """The last aim point this tester confirmed, to start the next one from."""
+    """The last aim point this tester confirmed (or skipped), to start the next one from."""
     try:
         payload = json.loads((root / TARGET_LINE_FILE).read_text(encoding="utf-8"))
         if payload.get("schema") != target_line.SCHEMA:
             return None
+        if payload.get("status") == target_line.SKIPPED:
+            return payload
         [float(value) for value in payload["aim_px"]]  # pylint: disable=expression-not-assigned
         float(payload["yaw_deg"])
         return payload
@@ -3434,6 +3441,8 @@ def target_line_reason(
         return "not_set"
     if record.get("setup_binding") != dict(binding):
         return "new_setup"
+    if record.get("status") == target_line.SKIPPED:
+        return None
     centre = _patch_centre(patch)
     if centre is None:
         return "needs_patch"
@@ -3510,6 +3519,31 @@ def confirm_target_line(
     return read_last_target_line(root) or saved, change
 
 
+def skip_target_line(root: Path, binding: Mapping, *, request_id: str | None = None) -> dict:
+    """The tester skipped the aim point (13 Oct): swings use the unit's boresight, labelled.
+
+    The last aim set is kept beside it, so a later aim starts from it.
+    """
+    last = read_last_target_line(root)
+    history = list(last.get("history") or []) if last is not None else []
+    record = {
+        **target_line.skipped_record(),
+        "setup_binding": dict(binding),
+        "last_aim_px": (
+            last.get("aim_px")
+            if last is not None and "aim_px" in last
+            else (last or {}).get("last_aim_px")
+        ),
+    }
+    history.append(
+        {"change": "skipped", "at_utc": record["skipped_at_utc"], "request_id": request_id}
+    )
+    record["history"] = history
+    record["change"] = "skipped"
+    remember_target_line(root, record)
+    return record
+
+
 def record_alignment_stick_check(
     root: Path, *, stick_yaw_deg: float, stick_uncertainty_deg: float, source: str
 ) -> dict:
@@ -3551,6 +3585,15 @@ def target_line_staleness(handed: Mapping | None, current: Mapping | None) -> di
     line = (handed or {}).get("target_line") if isinstance(handed, Mapping) else None
     if not isinstance(handed, Mapping) or current is None:
         return {"stale": False, "reason": None, "handed_yaw_deg": None}
+    if current.get("status") == target_line.SKIPPED:
+        handed_skipped = isinstance(line, Mapping) and line.get("status") == target_line.SKIPPED
+        return {
+            "stale": not handed_skipped,
+            "reason": None
+            if handed_skipped
+            else "used a target line the tester has since skipped: its zero is not the boresight",
+            "handed_yaw_deg": (line or {}).get("yaw_deg") if isinstance(line, Mapping) else None,
+        }
     if not isinstance(line, Mapping) or line.get("status") != "set":
         return {
             "stale": True,
@@ -7776,18 +7819,30 @@ def create_app(
             }
         except (OSError, TypeError, ValueError, KeyError) as exc:
             return {**payload, "state": "unavailable", "reason": str(exc)}
+        if confirmed is not None and confirmed.get("status") == target_line.SKIPPED:
+            return {
+                **payload,
+                "state": "skipped",
+                "target_line": target_line_display(confirmed),
+                "total_uncertainty_deg": None,
+                "reason": confirmed.get("reason"),
+            }
         if confirmed is not None:
             return {
                 **payload,
                 "state": "confirmed",
                 "target_line": target_line_display(confirmed),
+                # the one +- the page shows (13 Oct contract)
+                "total_uncertainty_deg": confirmed.get("total_uncertainty_deg"),
                 "confirmed_at_utc": confirmed.get("confirmed_at_utc"),
                 "change": confirmed.get("change"),
             }
-        if last is not None:
+        last_aim = (last.get("aim_px") or last.get("last_aim_px")) if last is not None else None
+        if last_aim is not None:
+            # the floor line is retired from the page: never offered again by default
             aim = {
-                "aim_px": last.get("aim_px"),
-                "floor_line_px": last.get("floor_line_px"),
+                "aim_px": last_aim,
+                "floor_line_px": None,
                 "source": "last_confirmed",
             }
         else:
@@ -7811,17 +7866,34 @@ def create_app(
             raise LookupError(AIM_POINT_PATCH_REQUIRED)
         camera, reading, roll = patch_camera()
         facts = camera_tilt_facts(reading, camera)
+        ball = _patch_centre(patch)
+        # the target's distance beyond the ball, for the direction's parallax: the net
+        # the radar measured, else the swing server's default (13 Oct)
+        net = setup_ball_range(tester_id, eligibility).get("net") or {}
+        measured = isinstance(net, Mapping) and net.get("status") == "measured"
+        net_m = float(net["net_range_m"]) if measured else DEFAULT_NET_RANGE_M
+        lens_forward = float(camera.camera_origin_lfu[1])
+        display_scale = payload.get("display_scale")
         record = target_line.target_line_record(
             camera,
-            _patch_centre(patch),
+            ball,
             payload.get("aim_px"),
             payload.get("floor_line_px"),
-            tilt_pad_deg=ground_patch.tilt_pads_deg(facts["calibrated"])[0],
+            tilt_pad_deg=placement_box.pads_deg(box_config, facts["calibrated"])[0],
             roll_deg=roll,
             camera_tilt=facts,
+            display_scale=float(display_scale) if display_scale is not None else None,
+            target_distance_m=max(net_m - (float(ball[1]) - lens_forward), 0.5),
+            target_distance_basis=(
+                "net_range_from_empty_static_capture_less_the_box_centre"
+                if measured
+                else "default_net_range_not_measured_less_the_box_centre"
+            ),
         )
         record["requested"] = {
-            key: payload.get(key) for key in ("aim_px", "floor_line_px") if key in payload
+            key: payload.get(key)
+            for key in ("aim_px", "floor_line_px", "display_scale")
+            if key in payload
         }
         record["confirmed_at_utc"] = datetime.now(timezone.utc).isoformat()
         saved, change = confirm_target_line(
@@ -7853,7 +7925,7 @@ def create_app(
                 if request.method == "GET":
                     return jsonify(aim_point_status(tester_id, eligibility))
                 action = str(payload.get("action", ""))
-                if action not in {"show", "confirm"}:
+                if action not in {"show", "confirm", "skip"}:
                     raise ValueError("unknown aim-point action")
                 refuse_while_analysing()
                 if placement_box_setup_blockers(eligibility):
@@ -7869,6 +7941,14 @@ def create_app(
                 request_id = str(payload.get("request_id", "")).strip()
                 if not request_id or len(request_id) > 128:
                     raise ValueError("request_id is required and must be at most 128 characters")
+                if action == "skip":
+                    skip_target_line(
+                        root, placement_box_binding(eligibility), request_id=request_id
+                    )
+                    stop_box_preview(tester_id, AIM_POINT_PREVIEW_KIND)
+                    return jsonify(
+                        {**aim_point_status(tester_id, eligibility), "change": "skipped"}
+                    )
                 result = _confirm_aim(tester_id, eligibility, request_id, payload)
                 return jsonify({**aim_point_status(tester_id, eligibility), **result})
         except LookupError as exc:

@@ -140,8 +140,8 @@ def test_the_record_carries_the_hand_off_sign_and_its_uncertainty():
     assert record["kiosk_offset_deg"] == pytest.approx(-record["yaw_deg"])
     assert record["aim_px"] == pytest.approx(aim, abs=0.01)
     parts = record["uncertainty"]["parts_deg"]
-    # +-2 px of aim at 933 px is about 0.12 deg
-    assert parts["aim_pixel_deg"] == pytest.approx(math.degrees(2.0 / FOCAL_1280), rel=0.1)
+    # a finger on the Pi's preview, +-30 frame px of aim at 933 px: about 1.8 deg
+    assert parts["aim_pixel_deg"] == pytest.approx(math.degrees(30.0 / FOCAL_1280), rel=0.1)
     assert record["uncertainty"]["roll_applied"] is False
     assert record["uncertainty"]["roll_pad_deg"] == pytest.approx(2.9)
     assert record["uncertainty"]["total_deg"] >= max(parts.values())
@@ -298,3 +298,88 @@ def test_the_unapplied_roll_term_covers_a_rolled_camera():
     error = abs(record["yaw_deg"] - truth)
     assert error > 0.3
     assert record["uncertainty"]["parts_deg"]["roll_deg"] == pytest.approx(error, rel=0.05)
+
+
+def test_a_floor_line_that_falls_back_under_a_perturbation_is_unbounded_and_warns():
+    """At 95 mm the floor line of a screen 4.5 m out is ~20 rows below the horizon:
+    a 3 deg tilt pad puts it above the horizon, where the floor-point method falls
+    back to a direction. That fallback must not read as a tighter yaw (D34 audit)."""
+    camera = _camera()
+    aim = _pixel(camera, _target(BALL, 2.0, 3.3, 0.6))
+    floor = _screen_floor_line(camera, BALL, 3.3)
+
+    record = tl.target_line_record(camera, BALL, aim, floor, tilt_pad_deg=3.0, roll_deg=0.0)
+
+    assert record["method"] == "floor_point"
+    assert record["uncertainty"]["bounded"] is False
+    assert record["uncertainty"]["total_deg"] is None
+    assert "tilt_deg" in record["uncertainty"]["unbounded_parts"]
+    assert any("cannot bound" in warning for warning in record["warnings"])
+    assert record["total_uncertainty_deg"] is None
+
+
+def test_the_touch_uncertainty_scales_with_the_preview_and_dominates_the_aim():
+    camera = _camera()
+    aim = _pixel(camera, _target(BALL, 3.0, 2000.0, 0.3))
+
+    mouse = tl.target_line_record(
+        camera, BALL, aim, tilt_pad_deg=1.0, roll_deg=0.0, display_scale=0.5
+    )
+    finger = tl.target_line_record(
+        camera, BALL, aim, tilt_pad_deg=1.0, roll_deg=0.0, display_scale=2.0
+    )
+    unknown = tl.target_line_record(camera, BALL, aim, tilt_pad_deg=1.0, roll_deg=0.0)
+
+    assert finger["uncertainty"]["aim_px"] == pytest.approx(4.0 * mouse["uncertainty"]["aim_px"])
+    assert (
+        finger["uncertainty"]["parts_deg"]["aim_pixel_deg"]
+        > (mouse["uncertainty"]["parts_deg"]["aim_pixel_deg"])
+    )
+    # without a scale, a finger on the Pi's preview: 20-40 frame px
+    assert 20.0 <= unknown["uncertainty"]["aim_px"] <= 40.0
+    assert unknown["uncertainty"]["aim_px_basis"] == "touch_on_the_pi_preview_assumed"
+
+
+def test_the_one_plus_minus_the_page_shows_includes_the_parallax():
+    camera = _camera()
+    aim = _pixel(camera, _target(BALL, 3.0, 2000.0, 0.3))
+
+    record = tl.target_line_record(
+        camera, BALL, aim, tilt_pad_deg=1.0, roll_deg=0.0, target_distance_m=2.2
+    )
+
+    parallax = math.degrees(math.atan2(abs(record["ball_offset_from_aim_ray_m"]), 2.2))
+    assert record["total_uncertainty_deg"] == pytest.approx(
+        math.hypot(record["uncertainty"]["total_deg"], parallax), abs=1e-3
+    )
+    assert record["total_uncertainty_deg"] > record["uncertainty"]["total_deg"]
+
+
+def test_the_hand_off_tells_the_kiosk_the_line_and_its_one_plus_minus():
+    camera = _camera()
+    record = tl.target_line_record(
+        camera,
+        BALL,
+        _pixel(camera, _target(BALL, 2.5, 2000.0, 0.3)),
+        tilt_pad_deg=1.0,
+        roll_deg=0.0,
+    )
+
+    args, handed = tl.handoff(record, target_distance_m=2.2, distance_basis="test")
+
+    assert float(args[args.index("--target-line-yaw-deg") + 1]) == pytest.approx(
+        record["yaw_deg"], abs=1e-4
+    )
+    assert float(args[args.index("--target-line-uncertainty-deg") + 1]) == pytest.approx(
+        handed["total_uncertainty_deg"], abs=1e-3
+    )
+    assert args[args.index("--target-line-source") + 1] == "aim_point"
+
+
+def test_a_skipped_aim_point_hands_over_the_boresight_frame_labelled():
+    args, handed = tl.handoff(tl.skipped_record(), target_distance_m=None, distance_basis=None)
+
+    assert "--camera-capture-horizontal-offset-deg" not in args
+    assert args == ["--target-line-status", "skipped"]
+    assert handed["status"] == "skipped"
+    assert "boresight" in handed["reason"]
