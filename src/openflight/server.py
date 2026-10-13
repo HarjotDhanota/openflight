@@ -5595,6 +5595,12 @@ def _attach_full_speeds(shot: Shot) -> None:
         ball_height_m=calibrated("tee_ball_height_m"),
         tee_side_offset_m=(setup_handoff_config.get("scene") or {}).get("tee_side_offset_m"),
     )
+    # the flight model (E4) reads the value alone: calculated, or None
+    shot.ball_speed_full_mph = (
+        shot.ball_speed_full["value_mph"]
+        if shot.ball_speed_full.get("status") == "calculated"
+        else None
+    )
     shot.club_speed_full = evaluate_full_club_speed(
         radial_mph=None,
         head_position_m=None,

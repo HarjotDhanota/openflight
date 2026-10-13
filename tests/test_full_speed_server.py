@@ -152,3 +152,24 @@ def test_a_radar_height_that_is_not_set_is_not_measured(fusion_geometry, monkeyp
     server_module._attach_ball_speed_contract(shot)
     assert shot.ball_speed_full["status"] == NOT_MEASURED
     assert "height" in shot.ball_speed_full["reason"]
+
+
+def test_the_flight_model_s_field_carries_the_calculated_full_speed(fusion_geometry):
+    """E4 reads Shot.ball_speed_full_mph; it is the calculated value or None."""
+    shot = _shot()
+    server_module._attach_ball_speed_contract(shot)
+
+    assert shot.ball_speed_full_mph == shot.ball_speed_full["value_mph"]
+    assert shot.ball_speed_mph == 118.0
+    assert server_module.shot_to_dict(shot)["ball_speed_full_mph"] == pytest.approx(
+        shot.ball_speed_full_mph
+    )
+
+
+def test_the_flight_model_s_field_is_none_when_not_measured(fusion_geometry):
+    shot = _shot(launch_angle_vertical_source="estimated")
+    shot.ball_speed_full_mph = 999.0  # a stale value is never kept
+    server_module._attach_ball_speed_contract(shot)
+
+    assert shot.ball_speed_full["status"] == NOT_MEASURED
+    assert shot.ball_speed_full_mph is None

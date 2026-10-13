@@ -145,6 +145,9 @@ A simulator flies the ball's full speed. When `ball_speed_full` is calculated,
 `sim/resolver.py` sends it with provenance "calculated". Otherwise it sends the
 radial reading, with provenance "measured", as before (D31).
 
+The flight model (E4) reads `Shot.ball_speed_full_mph`: the calculated full
+speed in mph, or None when it is not measured.
+
 ## Code
 
 - `src/openflight/full_speed.py`: the method, refusals, range, club and smash.

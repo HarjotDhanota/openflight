@@ -238,6 +238,9 @@ class Shot:
     # full club speed by the same projection; and smash from the two (D21, D37).
     # ball_speed_mph stays the canonical OPS radial reading.
     ball_speed_full: Optional[dict] = None
+    # Its value alone, the field the flight model reads (E4): the calculated full
+    # speed in mph, or None when it is not measured.
+    ball_speed_full_mph: Optional[float] = None
     club_speed_full: Optional[dict] = None
     smash_factor_full: Optional[dict] = None
     # The OPS readings around impact on the OPS clock (full_speed.ops_speed_track);
@@ -495,6 +498,7 @@ class Shot:
             "ball_speed_contract": self.ball_speed_contract,
             "experimental_ball_speed_total": self.experimental_ball_speed_total,
             "ball_speed_full": deepcopy(self.ball_speed_full),
+            "ball_speed_full_mph": self.ball_speed_full_mph,
             "club_speed_full": deepcopy(self.club_speed_full),
             "smash_factor_full": deepcopy(self.smash_factor_full),
             "club_speed_mph": self.club_speed_mph,
