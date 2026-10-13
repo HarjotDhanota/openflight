@@ -35,32 +35,44 @@ Every output has the same fields:
 | --- | --- |
 | `value` | The number, or null |
 | `unit` | As in the table above |
-| `status` | `calculated`, `estimated` or `not_measured` (below) |
-| `source` | The model, its citation, the air, and for total the surface assumed |
+| `status` | `calculated`, `model_geometry`, `estimated` or `not_measured` (below) |
+| `source` | The model, its citation, the air, for total the surface assumed, and any model-geometry inputs |
 | `range` | `[low, high]`: ±1σ from the input uncertainties (below), or null |
 | `reason` | Why the value is missing; null when there is a value |
 
 The payload also records the five `inputs` with their values and labels (ball
 speed, vertical and horizontal launch, spin, spin axis), the horizontal `frame`
-the angles were measured in, the `surface`, the `range_basis` and the
-`density_hook`.
+the angles were measured in, the `surface`, the `range_basis`, the
+`density_hook`, and `model_geometry_inputs` (the inputs built on model geometry,
+named; empty when there are none).
 
 ### Status
 
+Every output takes the weakest label among its inputs, in the order measured >
+calculated > model_geometry > estimated > not_measured. A flight is a model's
+output, so it is at best `calculated`.
+
 - **`calculated`**: a fusion unit, with every input measured or calculated. The
   model is published (D38), and the inputs come from this shot alone.
+- **`model_geometry`**: a fusion unit whose spin or spin axis rests on an assumed
+  swing geometry (D39): E2's spin or D-plane tilt built on E1's arc prior, which
+  on today's lens is every shot's club path and attack angle. The `source` ends
+  with the inputs that were, e.g. "model-geometry inputs: spin (Penner 2001; club
+  inputs model geometry (D39)), spin axis, club path from the arc prior, attack
+  angle from the arc prior". Simulators do not get these values (D31).
 - **`estimated`**: an OPS-only install. Its inputs include the club-typical spin
   and a neutral 0° for any missing horizontal launch or spin axis; the `inputs`
   block names each one it used.
-- **`not_measured`**: nothing is filled in. A fusion shot without a measured or
-  calculated spin, a spin axis, or both launch angles has no flight, and every
+- **`not_measured`**: nothing is filled in. A fusion shot without a measured,
+  calculated or model-geometry spin, a spin axis, or both launch angles has no
+  flight, and every
   output gives the reason ("spin not measured", "spin axis not measured", …).
   Spin and spin axis may be calculated values (E2's collision model); they keep
   their labels in `inputs`. `--no-ballistics` gives "flight model disabled".
 
-The older `Shot.carry_status` is unchanged. On a fusion unit it still says
-`measured` for a carry flown on measured inputs, where the flight block says
-`calculated`.
+`Shot.carry_status` is the flight's label on a fusion unit: `calculated`, or
+`model_geometry`, never `measured` (a simulated carry is a model's output).
+`measured` remains only in older logs.
 
 ### Raw and normalized
 
@@ -228,8 +240,8 @@ aside for fairway distance for that reason. A green model would be a separate
 | Ball speed | Full ball speed when the shot has one (`ball_speed_full_mph`, or `ball_speed_contract` "full"); otherwise the OPS243 radial speed, labelled as such | Same |
 | Vertical launch | Measured, or no flight | Measured, or the labelled club-table estimate |
 | Horizontal launch | Measured, or no flight | Measured, or a substituted 0° |
-| Spin | Measured (confidence ≥ 0.7) or calculated, or no flight | Measured, calculated, or the club-typical estimate |
-| Spin axis | Measured or calculated, or no flight | Measured, or a substituted 0° |
+| Spin | Measured (confidence ≥ 0.7), calculated, or model geometry (D39), or no flight | Measured, calculated, model geometry, or the club-typical estimate |
+| Spin axis | Measured, calculated, or model geometry (D39), or no flight | Measured, or a substituted 0° |
 
 `inputs.ball_speed.label` records which ball speed was used. A spin axis with no
 `spin_axis_source` on the shot is labelled as the kiosk's proxy (horizontal
@@ -248,8 +260,10 @@ table, …)`. A fusion unit never uses them.
 
 The simulator connectors send a fusion shot's carry only when its
 `carry_status` is `measured` or `calculated`, i.e. flown on the shot's own
-measured or calculated inputs (D31). A fusion shot missing a required input is
-not sent, as before. An OPS-only shot's carry goes out labelled `estimated`,
+measured or calculated inputs (D31); its provenance is `measured` when it was
+flown on a measured spin, as before, else `estimated`. A `model_geometry` carry
+is not sent (see `SIMULATORS_ACCEPT_MODEL_GEOMETRY` in the collision-model
+page). A fusion shot missing a required input is not sent, as before. An OPS-only shot's carry goes out labelled `estimated`,
 whatever its launch angle. Simulators get the as-measured carry; they fly the
 ball themselves from speed, launch and spin.
 

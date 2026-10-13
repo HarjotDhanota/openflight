@@ -11,13 +11,16 @@ from __future__ import annotations
 
 import math
 from datetime import datetime
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from openflight import collision_model as cm, server as server_module
+from openflight.ballistics import resolve_launch
 from openflight.club_arc import ARC_PRIOR_SOURCE, MODEL_GEOMETRY
 from openflight.clubs import ClubType
+from openflight.flight import FLIGHT_METRICS, compute_flight
 from openflight.launch_monitor import Shot
 from openflight.sim import resolver
 from openflight.sim.resolver import resolve_shot
@@ -423,3 +426,199 @@ def test_a_missing_input_under_a_model_geometry_spin_is_still_not_measured():
     assert spin["status"] == "not_measured" and "club speed" in spin["reason"]
     assert shot.spin_rpm is None and shot.spin_source is None and shot.spin_method is None
     assert shot.spin_axis_source == AXIS_FROM_THE_ARC
+
+
+# ---- flight: every output inherits the weakest input label ---------------------------
+
+ALL_MODEL_GEOMETRY_INPUTS = (
+    "model-geometry inputs: spin (Penner 2001; club inputs model geometry (D39)), spin axis, "
+    "club path from the arc prior, attack angle from the arc prior"
+)
+
+
+def _arc_flight_shot(**overrides):
+    shot = _arc_shot(mode="rolling-buffer", **overrides)
+    _attach(shot)
+    return shot
+
+
+def _flight(shot, *, substitutes=False):
+    return compute_flight(shot, substitutes=substitutes)
+
+
+def test_resolve_launch_takes_a_model_geometry_spin_under_its_label():
+    shot = _arc_flight_shot()
+
+    conditions = resolve_launch(shot, substitutes=False)
+
+    assert conditions is not None
+    assert conditions.spin_source == "model_geometry"
+    assert conditions.spin_rpm == pytest.approx(shot.spin_rpm)
+    assert conditions.spin_axis_deg == pytest.approx(shot.spin_axis_deg)
+
+
+@pytest.mark.parametrize("block", ["as_measured", "normalized"])
+def test_a_model_geometry_flight_labels_every_output_model_geometry(block):
+    result = _flight(_arc_flight_shot())
+    payload = result.to_dict()
+
+    assert result.status == "model_geometry"
+    metrics = payload[block]["metrics"]
+    assert set(metrics) == set(FLIGHT_METRICS)
+    for name, metric in metrics.items():
+        assert metric["status"] == "model_geometry", name
+        assert isinstance(metric["value"], float) and math.isfinite(metric["value"]), name
+        assert metric["source"].startswith("model_geometry (model: "), name
+        assert ALL_MODEL_GEOMETRY_INPUTS in metric["source"], name
+        assert metric["reason"] is None, name
+    assert payload["model_geometry_inputs"] == [
+        "spin (Penner 2001; club inputs model geometry (D39))",
+        "spin axis",
+        "club path from the arc prior",
+        "attack angle from the arc prior",
+    ]
+    assert payload["inputs"]["spin"]["label"] == (
+        "model geometry (Penner 2001; club inputs model geometry (D39))"
+    )
+    assert payload["inputs"]["spin_axis"]["label"] == AXIS_FROM_THE_ARC
+
+
+def test_a_measured_spin_with_a_model_geometry_axis_is_still_model_geometry():
+    shot = _arc_flight_shot(spin_rpm=6800.0, spin_confidence=0.9, spin_source="measured")
+
+    result = _flight(shot)
+
+    carry = result.to_dict()["as_measured"]["metrics"]["carry"]
+    assert result.status == "model_geometry"
+    assert carry["status"] == "model_geometry"
+    assert "model-geometry inputs: spin axis, club path from the arc prior" in carry["source"]
+    assert "spin (" not in carry["source"]
+
+
+def test_measured_and_calculated_inputs_still_fly_as_calculated():
+    shot = _arc_flight_shot(
+        experimental_fused_status="chained_high",
+        experimental_fused_club_path_deg=-2.0,
+        experimental_fused_club_path_frame="target_line",
+        experimental_fused_attack_angle_deg=-4.0,
+        experimental_fused_club_path_confidence="medium",
+        experimental_fused_attack_angle_confidence="medium",
+    )
+
+    result = _flight(shot)
+
+    payload = result.to_dict()
+    assert result.status == "calculated"
+    assert payload["model_geometry_inputs"] == []
+    for block in ("as_measured", "normalized"):
+        for name, metric in payload[block]["metrics"].items():
+            assert metric["status"] == "calculated", (block, name)
+            assert "model-geometry" not in metric["source"], (block, name)
+
+
+def test_an_ops_only_flight_stays_estimated_over_model_geometry():
+    result = _flight(_arc_flight_shot(), substitutes=True)
+
+    carry = result.to_dict()["as_measured"]["metrics"]["carry"]
+    assert result.status == "estimated"
+    assert carry["status"] == "estimated"
+
+
+@pytest.mark.parametrize(
+    "overrides, reason",
+    [
+        ({"club_speed_mph": None}, "spin not measured"),
+        ({"launch_angle_horizontal_confidence": 0.5}, "spin axis not measured"),
+        ({"club_delivery": None}, "spin not measured"),
+    ],
+)
+def test_a_missing_model_geometry_input_leaves_the_flight_not_measured(overrides, reason):
+    """No filled-in values: a model-geometry flight needs its own inputs too."""
+    payload = _flight(_arc_flight_shot(**overrides)).to_dict()
+
+    for block in ("as_measured", "normalized"):
+        for name, metric in payload[block]["metrics"].items():
+            assert metric["status"] == "not_measured", (block, name)
+            assert metric["value"] is None, (block, name)
+            assert reason in metric["reason"], (block, name)
+
+
+def test_a_model_geometry_spin_without_an_axis_is_not_called_unmeasured_spin():
+    payload = _flight(_arc_flight_shot(launch_angle_horizontal_confidence=0.5)).to_dict()
+
+    reason = payload["as_measured"]["metrics"]["carry"]["reason"]
+    assert "spin axis not measured" in reason
+    assert "spin not measured" not in reason
+
+
+# ---- finalization: carry_status is the flight's label --------------------------------
+
+
+@pytest.fixture
+def fusion_finalize(monkeypatch):
+    monkeypatch.setattr(server_module, "iwr6843_runtime", SimpleNamespace())
+    monkeypatch.setattr(server_module, "ballistics_enabled", True)
+    monkeypatch.setattr(server_module, "calculated_spin_enabled", False)
+    monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+    monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
+
+
+def _finalize(shot):
+    server_module._finalize_shot_detected(shot, emit_event="shot")  # pylint: disable=protected-access
+
+
+@pytest.mark.usefixtures("fusion_finalize")
+def test_a_fusion_carry_on_model_geometry_inputs_says_model_geometry():
+    shot = _arc_flight_shot()
+
+    _finalize(shot)
+
+    carry = shot.flight["as_measured"]["metrics"]["carry"]
+    assert carry["status"] == "model_geometry"
+    assert shot.carry_status == "model_geometry"
+    assert shot.carry_spin_adjusted == pytest.approx(carry["value"])
+    assert shot.reported_carry_yards == pytest.approx(carry["value"])
+    payload = server_module.shot_to_dict(shot)
+    assert payload["carry_status"] == "model_geometry"
+
+
+@pytest.mark.usefixtures("fusion_finalize")
+def test_a_fusion_carry_on_a_measured_spin_says_the_flight_s_calculated():
+    shot = Shot(
+        ball_speed_mph=150.0,
+        timestamp=datetime(2026, 10, 12),
+        club=ClubType.DRIVER,
+        launch_angle_vertical=12.0,
+        launch_angle_vertical_source="radar",
+        launch_angle_horizontal=1.0,
+        launch_angle_horizontal_source="radar",
+        spin_rpm=2700.0,
+        spin_confidence=0.9,
+        spin_source="measured",
+        spin_axis_deg=2.0,
+        spin_axis_source=cm.SPIN_AXIS_SOURCE_TILT,
+        mode="rolling-buffer",
+    )
+
+    _finalize(shot)
+
+    assert shot.flight["as_measured"]["metrics"]["carry"]["status"] == "calculated"
+    assert shot.carry_status == "calculated"
+    # simulators unchanged: a carry flown on a measured spin still goes out "measured"
+    resolved = resolve_shot(shot, PlayerState(), substitutes=False)
+    assert resolved.provenance["carry"] == "measured"
+    assert resolved.carry_yards == pytest.approx(shot.carry_spin_adjusted)
+
+
+@pytest.mark.usefixtures("fusion_finalize")
+def test_a_model_geometry_carry_is_shown_but_never_sent_to_simulators():
+    shot = _arc_flight_shot(spin_rpm=6800.0, spin_confidence=0.9, spin_source="measured")
+
+    _finalize(shot)
+
+    assert shot.carry_status == "model_geometry"
+    assert shot.reported_carry_yards is not None
+    with pytest.raises(UnmeasuredShotError) as raised:
+        resolve_shot(shot, PlayerState(), substitutes=False)
+    assert raised.value.missing == ["spin axis"]
+    assert "model geometry" in str(raised.value)

@@ -7,13 +7,16 @@ of them; the server used to keep carry and throw the rest away.
 Every metric carries ``value``, ``unit``, ``status``, ``source``, ``range`` and
 ``reason``:
 
-- ``status`` is ``calculated`` on a fusion unit (computed from the shot's measured
-  or calculated inputs by a published model, D38), ``estimated`` on an OPS-only
-  install (the club-typical spin and neutral angles stand in), or
-  ``not_measured`` with the reason. Nothing is filled in on a fusion unit: without
-  spin or spin axis there is no flight (D17).
-- ``source`` names the model, the air and, for total, the bounce model and the
-  surface assumed.
+- ``status`` is the weakest label of the flight's inputs, in the order measured >
+  calculated > model_geometry > estimated > not_measured. A flight is a model's
+  output, so at best ``calculated`` (a fusion unit's flight on measured or
+  calculated inputs, D38); ``model_geometry`` when its spin or spin axis (or a club
+  input under them) rests on an assumed swing geometry (D39, E1's arc prior);
+  ``estimated`` on an OPS-only install (the club-typical spin and neutral angles
+  stand in); ``not_measured`` with the reason. Nothing is filled in on a fusion
+  unit: without spin or spin axis there is no flight (D17).
+- ``source`` names the model, the air, for total the bounce model and the surface
+  assumed, and the model-geometry inputs when there are any.
 - ``range`` is a +-1 sigma band from a linearised perturbation sweep of the
   inputs' stated uncertainties (``RANGE_BASIS``).
 
@@ -41,6 +44,7 @@ from .ballistics import (
     AIR_DENSITY_STD,
     BOUNCE_MODELS,
     DEFAULT_SURFACE,
+    MODEL_SPIN_SOURCES,
     LaunchConditions,
     Trajectory,
     ball_speed_for_flight,
@@ -48,6 +52,7 @@ from .ballistics import (
     simulate,
 )
 from .clubs.physics import CLUB_TYPICAL_SPIN_LABEL
+from .collision_model import is_model_geometry_source, model_geometry_inputs
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
 from .pi_trace import _finite
 
@@ -74,8 +79,17 @@ _UNITS = {
 _TOTAL_METRICS = ("total", "total_side")
 
 STATUS_CALCULATED = "calculated"
+STATUS_MODEL_GEOMETRY = "model_geometry"
 STATUS_ESTIMATED = "estimated"
 STATUS_NOT_MEASURED = "not_measured"
+# weakest first: a flight output takes the weakest label among its inputs
+STATUS_ORDER = (
+    STATUS_NOT_MEASURED,
+    STATUS_ESTIMATED,
+    STATUS_MODEL_GEOMETRY,
+    STATUS_CALCULATED,
+    "measured",
+)
 
 FLIGHT_MODEL_LABEL = (
     "Ferguson, McNally & McPhee 2022 quadratic Cd/Cl (ISEA 14, doi:10.5703/1288284317493), "
@@ -138,6 +152,8 @@ class FlightResult:
     as_measured: Optional[Trajectory]
     normalized: Optional[Trajectory]
     payload: dict
+    # the flights' label (STATUS_*): the weakest input label, or not_measured
+    status: str = STATUS_NOT_MEASURED
 
     def to_dict(self) -> dict:
         return copy.deepcopy(self.payload)
@@ -177,8 +193,8 @@ def _missing_reason(shot: Shot, *, substitutes: bool) -> str:
             and _finite(shot.spin_confidence)
             and shot.spin_confidence >= SPIN_CONFIDENCE_HIGH
         )
-        calculated = shot.spin_source == "calculated" and _finite(shot.spin_rpm) and shot.spin_rpm
-        if not (measured or calculated):
+        model = shot.spin_source in MODEL_SPIN_SOURCES and _finite(shot.spin_rpm) and shot.spin_rpm
+        if not (measured or model):
             if _finite(shot.spin_rpm) and _finite(shot.spin_confidence):
                 reasons.append(
                     f"spin not measured (spin confidence {shot.spin_confidence:.2f} "
@@ -230,6 +246,8 @@ def _inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> dict:
         spin_label = f"measured (OPS243, confidence {shot.spin_confidence:.2f})"
     elif conditions.spin_source == "calculated":
         spin_label = f"calculated ({shot.spin_method or 'model unnamed on the shot'})"
+    elif conditions.spin_source == STATUS_MODEL_GEOMETRY:
+        spin_label = f"model geometry ({shot.spin_method or 'model unnamed on the shot'})"
     else:
         spin_label = CLUB_TYPICAL_SPIN_LABEL
 
@@ -254,6 +272,35 @@ def _inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> dict:
         "spin": {"value": conditions.spin_rpm, "label": spin_label},
         "spin_axis": {"value": conditions.spin_axis_deg, "label": axis_label},
     }
+
+
+def _model_geometry_inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> list[str]:
+    """The flight's inputs built on model geometry (D39), named; empty when none are.
+
+    The spin and the spin axis as the flight used them, then the club inputs under
+    them (the collision model's model-geometry inputs, e.g. E1's arc prior).
+    """
+    if conditions is None:
+        return []
+    named = []
+    if conditions.spin_source == STATUS_MODEL_GEOMETRY:
+        named.append(f"spin ({shot.spin_method or 'model unnamed on the shot'})")
+    if _finite(shot.spin_axis_deg) and is_model_geometry_source(
+        getattr(shot, "spin_axis_source", None)
+    ):
+        named.append("spin axis")
+    if named:
+        collision = getattr(shot, "collision_model", None) or {}
+        named.extend(model_geometry_inputs(collision.get("inputs") or {}))
+    return named
+
+
+def _flight_status(substitutes: bool, model_geometry: list[str]) -> str:
+    """The weakest input label: estimated (OPS-only), model geometry, else calculated."""
+    labels = [STATUS_ESTIMATED if substitutes else STATUS_CALCULATED]
+    if model_geometry:
+        labels.append(STATUS_MODEL_GEOMETRY)
+    return min(labels, key=STATUS_ORDER.index)
 
 
 def _metric_values(traj: Trajectory, launch_h: float, surface: str) -> dict:
@@ -316,7 +363,16 @@ def _not_measured(name: str, reason: str) -> dict:
     }
 
 
-def _source(name: str, status: str, air: str, surface: str, surface_assumed: bool) -> str:
+def _source(
+    name: str,
+    status: str,
+    air: str,
+    surface: str,
+    surface_assumed: bool,
+    model_geometry: tuple = (),
+) -> str:
+    if model_geometry:
+        air = f"{air}; model-geometry inputs: {', '.join(model_geometry)}"
     if name in _TOTAL_METRICS:
         bounce = BOUNCE_MODELS[surface]
         surface_text = (
@@ -348,6 +404,7 @@ def _block(
     surface: str,
     surface_assumed: bool,
     launch: Optional[dict],
+    model_geometry: tuple = (),
 ) -> dict:
     block = {
         "air_density_kg_m3": density,
@@ -383,7 +440,7 @@ def _block(
             "value": float(value),
             "unit": _UNITS[name],
             "status": status,
-            "source": _source(name, status, air, surface, surface_assumed),
+            "source": _source(name, status, air, surface, surface_assumed, model_geometry),
             "range": [float(value) - sigma, float(value) + sigma] if sigma is not None else None,
             "reason": None,
         }
@@ -403,13 +460,16 @@ def compute_flight(
 
     ``substitutes`` is True on an OPS-only install (club-typical spin and neutral
     angles stand in, status "estimated") and False on a fusion unit (nothing is
-    filled in, D17). ``enabled`` False is ``--no-ballistics``. ``surface`` names a
-    BOUNCE_MODELS entry; None assumes fairway, normal firmness.
+    filled in, D17). A fusion flight is "calculated", or "model_geometry" when any
+    input is model geometry (D39); the result's ``status`` names it. ``enabled``
+    False is ``--no-ballistics``. ``surface`` names a BOUNCE_MODELS entry; None
+    assumes fairway, normal firmness.
     """
     surface_assumed = surface is None
     surface = DEFAULT_SURFACE if surface is None else surface
     conditions = resolve_launch(shot, substitutes=substitutes) if enabled else None
-    status = STATUS_ESTIMATED if substitutes else STATUS_CALCULATED
+    model_geometry = tuple(_model_geometry_inputs(shot, conditions))
+    status = _flight_status(substitutes, list(model_geometry))
 
     if not enabled:
         reason = "flight model disabled (--no-ballistics)"
@@ -446,6 +506,7 @@ def compute_flight(
             "model": bounce.citation if bounce else None,
         },
         "inputs": _inputs(shot, conditions),
+        "model_geometry_inputs": list(model_geometry),
         "range_basis": RANGE_BASIS,
         "density_hook": DENSITY_HOOK,
         "as_measured": _block(
@@ -459,6 +520,7 @@ def compute_flight(
             surface=surface,
             surface_assumed=surface_assumed,
             launch=copy.deepcopy(launch),
+            model_geometry=model_geometry,
         ),
         "normalized": _block(
             traj=norm_traj,
@@ -471,8 +533,13 @@ def compute_flight(
             surface=surface,
             surface_assumed=surface_assumed,
             launch=copy.deepcopy(launch),
+            model_geometry=model_geometry,
         ),
     }
     return FlightResult(
-        conditions=conditions, as_measured=raw_traj, normalized=norm_traj, payload=payload
+        conditions=conditions,
+        as_measured=raw_traj,
+        normalized=norm_traj,
+        payload=payload,
+        status=status if conditions is not None else STATUS_NOT_MEASURED,
     )

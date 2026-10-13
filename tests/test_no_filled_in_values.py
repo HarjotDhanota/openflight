@@ -374,16 +374,18 @@ def test_a_fusion_payload_with_no_carry_says_not_measured_and_carries_no_table(
     assert shot.reported_carry_yards is None
 
 
-def test_a_fusion_payload_with_a_simulated_carry_says_measured_and_carries_no_table(
+def test_a_fusion_payload_with_a_simulated_carry_says_calculated_and_carries_no_table(
     fusion_unit, quiet_finalize
 ):
+    """A simulated carry is the flight model's output: its label is the flight's (E-int)."""
     shot = _monitor_shot_with_reliable_spin()
     _measure_launch(shot)
 
     _finalize(shot)
     payload = _payload(shot)
 
-    assert payload["carry_status"] == "measured"
+    assert payload["carry_status"] == "calculated"
+    assert payload["carry_status"] == payload["flight"]["as_measured"]["metrics"]["carry"]["status"]
     assert payload["carry_spin_adjusted"] == pytest.approx(
         _ballistic_carry(shot, substitutes=False), abs=0.5
     )

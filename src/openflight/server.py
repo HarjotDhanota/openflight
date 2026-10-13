@@ -44,7 +44,7 @@ from .clubs.physics import (
     get_club_physics,
     get_club_simulation_profile,
 )
-from .flight import compute_flight
+from .flight import STATUS_MODEL_GEOMETRY as FLIGHT_STATUS_MODEL_GEOMETRY, compute_flight
 from .horizontal_frame import (
     MIXED,
     frame_for,
@@ -54,7 +54,7 @@ from .horizontal_frame import (
 from .launch_monitor import (
     CARRY_CALCULATED,
     CARRY_ESTIMATED,
-    CARRY_MEASURED,
+    CARRY_MODEL_GEOMETRY,
     CARRY_NOT_MEASURED,
     SMASH_RADIAL_RATIO,
     SPIN_CONFIDENCE_HIGH,
@@ -5938,10 +5938,11 @@ def _finalize_shot_detected(
             shot.carry_spin_adjusted = trajectory.carry_yards
             if not fusion:
                 shot.carry_status = CARRY_ESTIMATED
-            elif conditions.spin_source == "calculated":
-                shot.carry_status = CARRY_CALCULATED
+            elif flight.status == FLIGHT_STATUS_MODEL_GEOMETRY:
+                shot.carry_status = CARRY_MODEL_GEOMETRY
             else:
-                shot.carry_status = CARRY_MEASURED
+                # the flight's own label: a simulated carry is calculated (D38)
+                shot.carry_status = CARRY_CALCULATED
             carry_source = "ballistic"
             logger.info(
                 "[SERVER] Ballistic carry: %.0f yds (spin: %.0f rpm, source: %s)",

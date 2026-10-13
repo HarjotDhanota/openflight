@@ -136,8 +136,16 @@ def _resolve_carry(shot: Shot, provenance: Dict[str, str]) -> Optional[float]:
             return None
         provenance["carry"] = MODEL_GEOMETRY
     elif shot.carry_status in (CARRY_MEASURED, CARRY_CALCULATED):
-        # a fusion unit's simulator; a calculated spin is a model's, not measured
-        provenance["carry"] = "measured" if shot.carry_status == CARRY_MEASURED else "estimated"
+        # a fusion unit's simulator: "measured" when flown on a measured spin (as
+        # before carry_status took the flight's label); a calculated spin is a
+        # model's, not measured
+        spin = _measured_total_spin(shot)
+        flown_on_measured_spin = spin is not None and spin[1] == "measured"
+        provenance["carry"] = (
+            "measured"
+            if shot.carry_status == CARRY_MEASURED or flown_on_measured_spin
+            else "estimated"
+        )
     else:
         # An OPS-only carry flies a club-typical spin (or reads the ball-speed table),
         # so it is an estimate whatever the launch angle (E4; trackman-comparison §5

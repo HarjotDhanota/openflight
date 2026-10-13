@@ -165,7 +165,7 @@ class LaunchConditions:
     launch_angle_h: float
     spin_rpm: float
     spin_axis_deg: float
-    spin_source: Literal["measured", "calculated", "club_typical"]
+    spin_source: Literal["measured", "calculated", "model_geometry", "club_typical"]
 
 
 @dataclass
@@ -235,6 +235,10 @@ class Trajectory:
 FULL_BALL_SPEED_CONTRACTS = ("full",)
 
 
+# Shot.spin_source values a model wrote, each kept as the flight's spin label
+MODEL_SPIN_SOURCES = ("calculated", "model_geometry")
+
+
 def ball_speed_for_flight(shot: Shot) -> tuple[Optional[float], str]:
     """(ball speed mph, label): the full ball speed when the shot has one, else the radial.
 
@@ -265,7 +269,8 @@ def resolve_launch(shot: Shot, *, substitutes: bool = True) -> Optional[LaunchCo
 
     Returns None if the vertical launch angle is unavailable (no physics
     simulation possible without it). Spin is the measurement when its
-    confidence >= SPIN_CONFIDENCE_HIGH, or a calculated spin under that label.
+    confidence >= SPIN_CONFIDENCE_HIGH, else a model's spin under its own label:
+    "calculated", or "model_geometry" when built on an assumed swing geometry (D39).
 
     ``substitutes`` lets an OPS-only install, which has nothing to measure the
     rest with, fill a club-typical spin and a straight (0) horizontal launch and
@@ -280,15 +285,15 @@ def resolve_launch(shot: Shot, *, substitutes: bool = True) -> Optional[LaunchCo
     if ball_speed is None or not _finite(shot.launch_angle_vertical):
         return None
 
-    source: Literal["measured", "calculated", "club_typical"]
+    source: Literal["measured", "calculated", "model_geometry", "club_typical"]
     if (
         _finite(shot.spin_rpm)
         and _finite(shot.spin_confidence)
         and shot.spin_confidence >= SPIN_CONFIDENCE_HIGH
     ):
         spin_rpm, source = float(shot.spin_rpm), "measured"
-    elif shot.spin_source == "calculated" and _finite(shot.spin_rpm) and shot.spin_rpm:
-        spin_rpm, source = float(shot.spin_rpm), "calculated"
+    elif shot.spin_source in MODEL_SPIN_SOURCES and _finite(shot.spin_rpm) and shot.spin_rpm:
+        spin_rpm, source = float(shot.spin_rpm), shot.spin_source
     elif substitutes:
         spin_rpm = CLUB_TYPICAL_SPIN_RPM.get(shot.club, CLUB_TYPICAL_SPIN_RPM[ClubType.UNKNOWN])
         source = "club_typical"
