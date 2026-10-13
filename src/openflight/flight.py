@@ -54,7 +54,11 @@ from .ballistics import (
     simulate,
 )
 from .clubs.physics import CLUB_TYPICAL_SPIN_LABEL
-from .collision_model import is_model_geometry_source, model_geometry_inputs
+from .collision_model import (
+    is_estimated_source,
+    is_model_geometry_source,
+    model_geometry_inputs,
+)
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
 from .pi_trace import _finite
 
@@ -250,6 +254,8 @@ def _inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> dict:
         spin_label = f"calculated ({shot.spin_method or 'model unnamed on the shot'})"
     elif conditions.spin_source == STATUS_MODEL_GEOMETRY:
         spin_label = f"model geometry ({shot.spin_method or 'model unnamed on the shot'})"
+    elif conditions.spin_source == STATUS_ESTIMATED:
+        spin_label = f"estimated ({shot.spin_method or 'model unnamed on the shot'})"
     else:
         spin_label = CLUB_TYPICAL_SPIN_LABEL
 
@@ -316,6 +322,18 @@ def _estimated_inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> lis
         full = getattr(shot, "ball_speed_full", None)
         why = (full or {}).get("reason") if isinstance(full, dict) else None
         reasons.append(RADIAL_SPEED_REASON.format(why or "no full ball speed on the shot"))
+    # a collision spin or axis built on an estimated input (C2), with that input's reason
+    metrics = (getattr(shot, "collision_model", None) or {}).get("metrics") or {}
+    estimated_spin = conditions.spin_source == STATUS_ESTIMATED
+    estimated_axis = _finite(shot.spin_axis_deg) and is_estimated_source(
+        getattr(shot, "spin_axis_source", None)
+    )
+    for used, name in ((estimated_spin, "spin_rate"), (estimated_axis, "spin_axis")):
+        if not used:
+            continue
+        why = (metrics.get(name) or {}).get("reason") or f"{name.replace('_', ' ')} estimated"
+        if why not in reasons:
+            reasons.append(why)
     return reasons
 
 

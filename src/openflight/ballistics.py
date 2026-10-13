@@ -179,7 +179,7 @@ class LaunchConditions:
     launch_angle_h: float
     spin_rpm: float
     spin_axis_deg: float
-    spin_source: Literal["measured", "calculated", "model_geometry", "club_typical"]
+    spin_source: Literal["measured", "calculated", "model_geometry", "estimated", "club_typical"]
 
 
 @dataclass
@@ -250,7 +250,7 @@ FULL_BALL_SPEED_CONTRACTS = ("full",)
 
 
 # Shot.spin_source values a model wrote, each kept as the flight's spin label
-MODEL_SPIN_SOURCES = ("calculated", "model_geometry")
+MODEL_SPIN_SOURCES = ("calculated", "model_geometry", "estimated")
 
 
 def ball_speed_for_flight(shot: Shot) -> tuple[Optional[float], str]:
@@ -299,7 +299,7 @@ def resolve_launch(shot: Shot, *, substitutes: bool = True) -> Optional[LaunchCo
     if ball_speed is None or not _finite(shot.launch_angle_vertical):
         return None
 
-    source: Literal["measured", "calculated", "model_geometry", "club_typical"]
+    source: Literal["measured", "calculated", "model_geometry", "estimated", "club_typical"]
     if (
         _finite(shot.spin_rpm)
         and _finite(shot.spin_confidence)

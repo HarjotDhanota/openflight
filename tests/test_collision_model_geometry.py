@@ -529,7 +529,6 @@ def test_an_ops_only_flight_stays_estimated_over_model_geometry():
     "overrides, reason",
     [
         ({"club_speed_mph": None}, "spin not measured"),
-        ({"launch_angle_horizontal_confidence": 0.5}, "spin axis not measured"),
         ({"club_delivery": None}, "spin not measured"),
     ],
 )
@@ -544,12 +543,14 @@ def test_a_missing_model_geometry_input_leaves_the_flight_not_measured(overrides
             assert reason in metric["reason"], (block, name)
 
 
-def test_a_model_geometry_spin_without_an_axis_is_not_called_unmeasured_spin():
+def test_a_weak_horizontal_launch_makes_the_model_geometry_flight_an_estimate():
+    """Below the confidence floor the axis is estimated, not withheld (V-formulas C2),
+    and estimated is weaker than model geometry."""
     payload = _flight(_arc_flight_shot(launch_angle_horizontal_confidence=0.5)).to_dict()
 
-    reason = payload["as_measured"]["metrics"]["carry"]["reason"]
-    assert "spin axis not measured" in reason
-    assert "spin not measured" not in reason
+    carry = payload["as_measured"]["metrics"]["carry"]
+    assert carry["status"] == "estimated"
+    assert "horizontal launch confidence 0.50 below 0.6" in carry["reason"]
 
 
 # ---- finalization: carry_status is the flight's label --------------------------------

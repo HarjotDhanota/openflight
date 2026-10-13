@@ -10,7 +10,7 @@ from typing import Dict, List, Mapping, Optional, Tuple
 
 from openflight.clubs import ClubType
 from openflight.clubs.physics import CLUB_TYPICAL_SPIN_RPM, get_club_physics
-from openflight.collision_model import is_model_geometry_source
+from openflight.collision_model import is_estimated_source, is_model_geometry_source
 from openflight.launch_monitor import (
     CARRY_CALCULATED,
     CARRY_MEASURED,
@@ -82,6 +82,9 @@ def _spin_axis_provenance(shot: Shot) -> Optional[str]:
         return None
     if _model_geometry_axis(shot):
         return MODEL_GEOMETRY if SIMULATORS_ACCEPT_MODEL_GEOMETRY else None
+    if is_estimated_source(shot.spin_axis_source):
+        # built on an estimated input (V-formulas C2): never sent (D31)
+        return None
     # the collision model's axis (E2) is calculated, never measured
     return "calculated" if (shot.spin_axis_source or "").startswith("calculated") else "measured"
 

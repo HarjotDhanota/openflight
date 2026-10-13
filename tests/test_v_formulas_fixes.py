@@ -175,3 +175,127 @@ def test_a_fusion_carry_on_the_radial_speed_is_estimated(fusion_finalize):
     )
     assert shot.carry_status == "estimated"
     assert shot.carry_spin_adjusted == pytest.approx(carry["value"])
+
+
+# ---- C2: a low-coherence or low-confidence horizontal launch makes an estimate ----------
+
+LOW_COHERENCE = "horizontal launch is low-coherence (radar_low_coherence)"
+LOW_CONFIDENCE = "horizontal launch confidence 0.50 below 0.6"
+_USES_LAUNCH_H = (
+    "face_angle",
+    "face_to_path",
+    "spin_loft",
+    "d_plane_tilt",
+    "spin_rate",
+    "spin_axis",
+)
+
+
+def _collision_shot(**overrides):
+    """A 7-iron with a measured path, attack, vertical launch and club speed."""
+    values = dict(
+        ball_speed_mph=120.0,
+        club_speed_mph=85.0,
+        timestamp=datetime(2026, 10, 13),
+        club=ClubType.IRON_7,
+        launch_angle_horizontal=1.0,
+        launch_angle_horizontal_source="radar",
+        launch_angle_horizontal_confidence=0.9,
+        launch_angle_horizontal_frame="target_line",
+        launch_angle_vertical=18.0,
+        launch_angle_vertical_source="radar",
+        experimental_fused_status="chained_high",
+        experimental_fused_club_path_deg=2.0,
+        experimental_fused_club_path_frame="target_line",
+        experimental_fused_attack_angle_deg=-4.0,
+        experimental_fused_club_path_confidence="high",
+        experimental_fused_attack_angle_confidence="high",
+        ball_speed_contract="full",
+        mode="rolling-buffer",
+    )
+    values.update(overrides)
+    return Shot(**values)
+
+
+def _attach_collision(shot):
+    import openflight.server as server_module
+
+    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    return shot.collision_model["metrics"]
+
+
+@pytest.mark.parametrize(
+    "overrides, reason",
+    [
+        ({"launch_angle_horizontal_source": "radar_low_coherence"}, LOW_COHERENCE),
+        ({"launch_angle_horizontal_confidence": 0.5}, LOW_CONFIDENCE),
+    ],
+)
+def test_outputs_built_on_a_weak_horizontal_launch_are_estimated(overrides, reason):
+    shot = _collision_shot(**overrides)
+    metrics = _attach_collision(shot)
+
+    for name in _USES_LAUNCH_H:
+        assert metrics[name]["value"] is not None, name
+        assert metrics[name]["status"] == "estimated", name
+        assert reason in metrics[name]["reason"], name
+    # dynamic loft does not use the horizontal launch
+    assert metrics["dynamic_loft"]["status"] == "calculated"
+    assert shot.collision_model["inputs"]["launch_horizontal"]["label"] == "estimated"
+    # the spin axis is no longer withheld: estimated, with the reason
+    assert shot.spin_axis_deg == pytest.approx(metrics["spin_axis"]["value"], abs=0.05)
+    assert shot.spin_axis_source.startswith("estimated")
+    assert reason in shot.spin_axis_source
+    assert shot.spin_source == "estimated"
+    assert shot.spin_rpm == pytest.approx(metrics["spin_rate"]["value"], abs=0.5)
+    assert "_estimated" in shot.experimental_face_angle_status
+
+
+def test_a_good_horizontal_launch_stays_calculated():
+    metrics = _attach_collision(_collision_shot())
+    for name in _USES_LAUNCH_H:
+        assert metrics[name]["status"] == "calculated", name
+        assert metrics[name]["reason"] is None, name
+
+
+def test_the_estimated_values_match_the_calculated_ones():
+    good = _attach_collision(_collision_shot())
+    weak = _attach_collision(_collision_shot(launch_angle_horizontal_source="radar_low_coherence"))
+    for name in _USES_LAUNCH_H:
+        assert weak[name]["value"] == pytest.approx(good[name]["value"]), name
+
+
+def test_a_flight_on_an_estimated_spin_and_axis_is_estimated():
+    shot = _collision_shot(launch_angle_horizontal_confidence=0.5)
+    _attach_collision(shot)
+
+    result = compute_flight(shot, substitutes=False)
+    carry = result.to_dict()["normalized"]["metrics"]["carry"]
+
+    assert result.status == "estimated"
+    assert carry["status"] == "estimated"
+    assert LOW_CONFIDENCE in carry["reason"]
+
+
+def test_simulators_do_not_get_an_estimated_spin_axis():
+    from openflight.sim.resolver import _spin_axis_provenance  # noqa: PLC2701
+
+    shot = _collision_shot(launch_angle_horizontal_source="radar_low_coherence")
+    _attach_collision(shot)
+    assert _spin_axis_provenance(shot) is None
+
+
+def test_estimated_is_the_weakest_collision_input_label():
+    metrics = cm.evaluate(
+        club=ClubType.IRON_7,
+        club_path=cm.Input(2.0, cm.LABEL_MODEL_GEOMETRY, frame="target_line"),
+        attack_angle=cm.Input(-4.0),
+        launch_horizontal=cm.Input(
+            1.0, cm.LABEL_ESTIMATED, frame="target_line", reason=LOW_COHERENCE
+        ),
+        launch_vertical=cm.Input(17.0),
+        club_speed_mph=cm.Input(87.0),
+    ).metrics
+    assert metrics["face_angle"].status == "estimated"
+    assert metrics["spin_axis"].status == "estimated"
+    assert metrics["dynamic_loft"].status == "calculated"

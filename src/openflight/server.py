@@ -4032,7 +4032,9 @@ def _sim_on_inbound(target: str, event) -> None:
 # Shot.spin_method for the --calculated-spin formula's value
 EMPIRICAL_SPIN_METHOD = "empirical 170 v sin(LA)^1.2 (--calculated-spin; not a published model)"
 # spin_source values a model wrote; anything else is the radar's (or None)
-_MODEL_SPIN_SOURCES = ("calculated", "model_geometry")
+# a model's spin labels: calculated, model geometry (D39), or estimated (built on an
+# estimated input, V-formulas C2); none is ever measured
+_MODEL_SPIN_SOURCES = ("calculated", "model_geometry", "estimated")
 
 
 def _apply_calculated_spin(shot: Shot) -> bool:
@@ -4918,6 +4920,39 @@ def displayed_attack_angle(shot: Shot) -> tuple[float | None, str | None]:
     return None, None
 
 
+def _horizontal_launch_input(shot: Shot, source) -> collision_model.Input:
+    """The horizontal launch as a collision input, "estimated" when it is weak (C2).
+
+    A low-coherence IWR horizontal, or one whose confidence is below the spin axis's
+    floor (``SPIN_AXIS_MIN_CONFIDENCE``), is a measured angle too weak to stand as one:
+    every output built on it is labelled "estimated", with this reason.
+    """
+    measured = _measured_angle_input(
+        shot.launch_angle_horizontal,
+        source,
+        frame=shot.launch_angle_horizontal_frame,
+        name="launch direction",
+    )
+    if not measured.present:
+        return measured
+    confidence = shot.launch_angle_horizontal_confidence
+    if shot.launch_angle_horizontal_source == "radar_low_coherence":
+        reason = "horizontal launch is low-coherence (radar_low_coherence)"
+    elif not _finite(confidence):
+        reason = "horizontal launch confidence not given"
+    elif confidence < SPIN_AXIS_MIN_CONFIDENCE:
+        reason = f"horizontal launch confidence {confidence:.2f} below {SPIN_AXIS_MIN_CONFIDENCE}"
+    else:
+        return measured
+    return collision_model.Input(
+        measured.value,
+        collision_model.LABEL_ESTIMATED,
+        measured.source,
+        measured.frame,
+        reason=reason,
+    )
+
+
 def _measured_angle_input(value, source, *, frame=None, name: str) -> collision_model.Input:
     """A launch angle as a collision input: an estimated (table) angle is not an input."""
     if value is None or source is None:
@@ -4983,11 +5018,9 @@ def _collision_inputs(shot: Shot) -> dict:
             if attack is not None
             else _club_arc_input(shot, "attack_angle_deg", "no accepted attack angle")
         ),
-        "launch_horizontal": _measured_angle_input(
-            shot.launch_angle_horizontal,
+        "launch_horizontal": _horizontal_launch_input(
+            shot,
             launch_source if shot.launch_angle_horizontal_source != "estimated" else "estimated",
-            frame=shot.launch_angle_horizontal_frame,
-            name="launch direction",
         ),
         "launch_vertical": _measured_angle_input(
             shot.launch_angle_vertical, shot.launch_angle_vertical_source, name="vertical launch"
@@ -5051,18 +5084,9 @@ def _attach_collision_model(shot: Shot) -> None:
     """
     result = collision_model.evaluate(club=shot.club, **_collision_inputs(shot))
     metrics = result.metrics
+    # a weak horizontal launch no longer withholds the axis: the input is "estimated"
+    # (_horizontal_launch_input) and so is the axis, with the reason (C2)
     axis = metrics["spin_axis"]
-    if axis.present and (shot.launch_angle_horizontal_confidence or 0.0) < SPIN_AXIS_MIN_CONFIDENCE:
-        # the proxy's guard, kept: the axis waits for a trustworthy horizontal leg
-        axis = collision_model.Metric(
-            value=None,
-            status=collision_model.STATUS_NOT_MEASURED,
-            source=axis.source,
-            unit=axis.unit,
-            frame=axis.frame,
-            reason=f"horizontal launch confidence below {SPIN_AXIS_MIN_CONFIDENCE}",
-        )
-        metrics["spin_axis"] = axis
     shot.collision_model = result.to_dict()
     shot.face_angle_deg = _round_or_none(metrics["face_angle"].value, 1)
     shot.dynamic_loft_deg = _round_or_none(metrics["dynamic_loft"].value, 1)
@@ -5079,6 +5103,8 @@ def _attach_collision_model(shot: Shot) -> None:
         status = "d_plane_estimate"
         if shot.launch_angle_horizontal_status == "azimuth_uncalibrated":
             status += "_azimuth_uncalibrated"
+        if face.status == collision_model.STATUS_ESTIMATED:
+            status += "_estimated"
         if face.frame == MIXED:
             status += "_mixed_frames"
         if face.status == collision_model.STATUS_MODEL_GEOMETRY:
@@ -5101,13 +5127,16 @@ def _attach_collision_model(shot: Shot) -> None:
     if axis.present and axis.status in (
         collision_model.STATUS_CALCULATED,
         collision_model.STATUS_MODEL_GEOMETRY,
+        collision_model.STATUS_ESTIMATED,
     ):
         shot.spin_axis_deg = round(axis.value, 1)
         shot.spin_axis_source = collision_model.shot_spin_axis_source(axis, result.inputs)
         shot.spin_axis_frame = axis.frame
-    elif collision_model.is_calculated_source(
-        shot.spin_axis_source
-    ) or collision_model.is_model_geometry_source(shot.spin_axis_source):
+    elif (
+        collision_model.is_calculated_source(shot.spin_axis_source)
+        or collision_model.is_model_geometry_source(shot.spin_axis_source)
+        or collision_model.is_estimated_source(shot.spin_axis_source)
+    ):
         shot.spin_axis_deg = None
         shot.spin_axis_source = None
         shot.spin_axis_frame = None
