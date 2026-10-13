@@ -164,7 +164,9 @@ the two selected entries.
 
 **Simulators (D31).** Nothing changed: the simulator resolver still sends only
 `shot.club_path_deg`. Whether a model-geometry club path should go to
-simulators is an open decision for the owner (see below).
+simulators is an open decision for the owner (see below). It is the one switch
+`sim.resolver.SIMULATORS_ACCEPT_MODEL_GEOMETRY` (default `False`); set to
+`True`, the arc's model-geometry path goes out labelled `"model_geometry"`.
 
 ## Synthetic recovery
 

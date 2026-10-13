@@ -19,6 +19,9 @@ from openflight import collision_model as cm, server as server_module
 from openflight.club_arc import ARC_PRIOR_SOURCE, MODEL_GEOMETRY
 from openflight.clubs import ClubType
 from openflight.launch_monitor import Shot
+from openflight.sim import resolver
+from openflight.sim.resolver import resolve_shot
+from openflight.sim.types import PlayerState, UnmeasuredShotError
 
 
 def _arc_positions():
@@ -202,3 +205,82 @@ def test_the_kiosk_s_own_arc_reaches_the_collision_model(monkeypatch):
     assert shot.collision_model["inputs"]["club_path"]["value"] == pytest.approx(path["value"])
     assert shot.collision_model["inputs"]["club_path"]["label"] == "model_geometry"
     assert shot.collision_model["metrics"]["face_angle"]["status"] == "model_geometry"
+
+
+# ---- simulators: measured or calculated only (D31); model geometry behind one switch ---
+
+MODEL_GEOMETRY_AXIS_SOURCE = (
+    "model geometry (D-plane tilt, Wood et al. 2018 weights; club path from the arc prior)"
+)
+
+
+def _model_geometry_shot(**overrides):
+    """A fusion shot whose spin, spin axis and carry are all built on the arc prior."""
+    values = {
+        "ball_speed_mph": 120.0,
+        "club_speed_mph": 85.0,
+        "timestamp": datetime(2026, 10, 12, 9, 0, 0),
+        "club": ClubType.IRON_7,
+        "launch_angle_horizontal": 1.0,
+        "launch_angle_horizontal_source": "camera",
+        "launch_angle_vertical": 18.0,
+        "launch_angle_vertical_source": "radar",
+        "spin_rpm": 6400.0,
+        "spin_source": "model_geometry",
+        "spin_method": "Penner 2001; club inputs model geometry (D39)",
+        "spin_axis_deg": 3.0,
+        "spin_axis_source": MODEL_GEOMETRY_AXIS_SOURCE,
+        "carry_spin_adjusted": 150.0,
+        "carry_status": "model_geometry",
+        "club_delivery": _club_delivery(),
+    }
+    values.update(overrides)
+    return Shot(**values)
+
+
+def test_the_simulator_switch_for_model_geometry_defaults_off():
+    assert resolver.SIMULATORS_ACCEPT_MODEL_GEOMETRY is False
+
+
+def test_a_fusion_shot_with_model_geometry_spin_and_axis_is_not_sent_and_says_why():
+    with pytest.raises(UnmeasuredShotError) as raised:
+        resolve_shot(_model_geometry_shot(), PlayerState(), substitutes=False)
+
+    assert raised.value.missing == ["spin", "spin axis"]
+    assert "model geometry" in str(raised.value)
+    assert "spin, spin axis" in str(raised.value)
+
+
+def test_a_model_geometry_axis_alone_still_refuses_the_fusion_shot():
+    shot = _model_geometry_shot(spin_rpm=6800.0, spin_confidence=0.9, spin_source="measured")
+
+    with pytest.raises(UnmeasuredShotError) as raised:
+        resolve_shot(shot, PlayerState(), substitutes=False)
+
+    assert raised.value.missing == ["spin axis"]
+    assert "model geometry" in str(raised.value)
+
+
+def test_an_ops_only_resolve_never_sends_model_geometry_values():
+    resolved = resolve_shot(_model_geometry_shot(), PlayerState(), substitutes=True)
+
+    assert resolved.provenance["total_spin"] == "estimated"
+    assert resolved.total_spin_rpm != 6400.0
+    assert resolved.provenance["spin_axis"] == "estimated" and resolved.spin_axis_deg == 0.0
+    assert resolved.carry_yards is None and "carry" not in resolved.provenance
+    assert resolved.club_path_deg == 0.0 and resolved.provenance["club_path"] == "estimated"
+    assert "model_geometry" not in resolved.provenance.values()
+
+
+def test_the_switch_on_sends_every_model_geometry_value_under_its_label(monkeypatch):
+    monkeypatch.setattr(resolver, "SIMULATORS_ACCEPT_MODEL_GEOMETRY", True)
+
+    resolved = resolve_shot(_model_geometry_shot(), PlayerState(), substitutes=False)
+
+    assert resolved.total_spin_rpm == 6400.0
+    assert resolved.spin_axis_deg == 3.0
+    assert resolved.carry_yards == 150.0
+    assert resolved.club_path_deg == -2.0
+    for name in ("total_spin", "spin_axis", "back_spin", "side_spin", "carry", "club_path"):
+        assert resolved.provenance[name] == "model_geometry", name
+    assert resolved.provenance["vla"] == "measured"

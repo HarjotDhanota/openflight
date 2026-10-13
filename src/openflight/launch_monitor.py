@@ -29,7 +29,9 @@ SPIN_CONFIDENCE_RELIABLE = 0.6
 # and a fusion unit (IWR or camera) only ever reports a carry its simulator built
 # from the shot's own measured inputs (D17).
 CARRY_MEASURED = "measured"  # fusion: simulator on measured launch, spin and spin axis
-CARRY_CALCULATED = "calculated"  # fusion: simulator on a calculated (model) spin
+CARRY_CALCULATED = "calculated"  # fusion: simulator on calculated or measured inputs
+# fusion: simulator on a spin or spin axis built on model geometry (D39: the arc prior)
+CARRY_MODEL_GEOMETRY = "model_geometry"
 CARRY_ESTIMATED = "estimated"  # OPS-only: labelled estimate (substitutes or the spin table)
 CARRY_NOT_MEASURED = "not_measured"  # fusion: no carry; nothing is filled in
 # Statuses under which the ball-speed table may stand in for a missing carry. None

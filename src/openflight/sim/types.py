@@ -9,7 +9,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Sequence, Union
 
 from openflight.clubs import ClubType
 
@@ -52,12 +52,21 @@ class UnmeasuredShotError(IncompleteShotError):
     Nothing is filled in on a fusion unit (D17), so the shot is not sent.
     ``missing`` names the unmeasured fields, in protocol order; the message is
     the reason the screen and the sim-send log show, e.g. "spin not measured".
+    ``model_geometry`` names those among them the shot does have, but only as
+    model geometry (D39), which simulators are not sent (D31).
     """
 
-    def __init__(self, missing: List[str]):
+    def __init__(self, missing: List[str], model_geometry: Sequence[str] = ()):
         self.missing = list(missing)
+        self.model_geometry = list(model_geometry)
         names = missing[0] if len(missing) == 1 else f"{', '.join(missing[:-1])} and {missing[-1]}"
-        super().__init__(f"{names} not measured")
+        message = f"{names} not measured"
+        if self.model_geometry:
+            message += (
+                f" (model geometry only, not sent to simulators (D31): "
+                f"{', '.join(self.model_geometry)})"
+            )
+        super().__init__(message)
 
 
 @dataclass
@@ -113,7 +122,8 @@ class ResolvedShot:
     Field names are *logical* (protocol-neutral); each codec maps them to its
     own wire names. ``provenance`` tags each logical field "measured",
     "calculated" (a model's value from the shot's own measured inputs, E2) or
-    "estimated" so the UI can render per-field badges identically for any sim.
+    "estimated" so the UI can render per-field badges identically for any sim
+    ("model_geometry" only with resolver.SIMULATORS_ACCEPT_MODEL_GEOMETRY, off by default).
 
     An optional field the shot has no value for (``carry_yards``, ``club_path_deg``,
     ``club_speed_mph`` on a fusion unit, D17) is None with no provenance entry: it

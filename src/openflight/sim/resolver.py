@@ -10,9 +10,11 @@ from typing import Dict, List, Mapping, Optional, Tuple
 
 from openflight.clubs import ClubType
 from openflight.clubs.physics import CLUB_TYPICAL_SPIN_RPM, get_club_physics
+from openflight.collision_model import is_model_geometry_source
 from openflight.launch_monitor import (
     CARRY_CALCULATED,
     CARRY_MEASURED,
+    CARRY_MODEL_GEOMETRY,
     SPIN_CONFIDENCE_HIGH,
     Shot,
 )
@@ -32,13 +34,33 @@ SPIN_MODEL_RPM: Mapping[ClubType, float] = CLUB_TYPICAL_SPIN_RPM
 
 _DEFAULT_SPIN_RPM = CLUB_TYPICAL_SPIN_RPM[ClubType.UNKNOWN]
 
+# D31: simulators get measured or calculated values only. Whether they also get
+# values built on model geometry (D39: a spin, spin axis or carry built on the arc
+# prior, and the arc's model-geometry club path) is the owner's open decision.
+# Off: those values are never sent, and a fusion shot that needs one is refused
+# with a reason naming model geometry. On: each is sent labelled "model_geometry".
+SIMULATORS_ACCEPT_MODEL_GEOMETRY = False
+
+MODEL_GEOMETRY = "model_geometry"
+# a derived value is as good as its weakest source
+_PROVENANCE_ORDER = ("estimated", MODEL_GEOMETRY, "calculated", "measured")
+
+
+def _model_geometry_spin(shot: Shot) -> bool:
+    return shot.spin_source == MODEL_GEOMETRY and _finite(shot.spin_rpm) and bool(shot.spin_rpm)
+
+
+def _model_geometry_axis(shot: Shot) -> bool:
+    return _finite(shot.spin_axis_deg) and is_model_geometry_source(shot.spin_axis_source)
+
 
 def _measured_total_spin(shot: Shot) -> Optional[Tuple[float, str]]:
     """Measured spin if high-confidence, else a calculated one under its own label, else None.
 
     A calculated spin is a model's output from the shot's own measured inputs (the E2
     collision model, or the --calculated-spin formula): it goes out labelled
-    "calculated", never "measured" (D31, D38).
+    "calculated", never "measured" (D31, D38). A spin built on model geometry (D39)
+    goes out, labelled "model_geometry", only with SIMULATORS_ACCEPT_MODEL_GEOMETRY.
     """
     if (
         _finite(shot.spin_rpm)
@@ -49,7 +71,31 @@ def _measured_total_spin(shot: Shot) -> Optional[Tuple[float, str]]:
         return float(shot.spin_rpm), "measured"
     if shot.spin_source == "calculated" and _finite(shot.spin_rpm) and shot.spin_rpm:
         return float(shot.spin_rpm), "calculated"
+    if SIMULATORS_ACCEPT_MODEL_GEOMETRY and _model_geometry_spin(shot):
+        return float(shot.spin_rpm), MODEL_GEOMETRY
     return None
+
+
+def _spin_axis_provenance(shot: Shot) -> Optional[str]:
+    """The label the shot's spin axis goes out under, or None when it is not sent."""
+    if not _finite(shot.spin_axis_deg):
+        return None
+    if _model_geometry_axis(shot):
+        return MODEL_GEOMETRY if SIMULATORS_ACCEPT_MODEL_GEOMETRY else None
+    # the collision model's axis (E2) is calculated, never measured
+    return "calculated" if (shot.spin_axis_source or "").startswith("calculated") else "measured"
+
+
+def _withheld_model_geometry(shot: Shot) -> List[str]:
+    """The required fields the shot has only as model geometry, which are not sent."""
+    if SIMULATORS_ACCEPT_MODEL_GEOMETRY:
+        return []
+    withheld = []
+    if _measured_total_spin(shot) is None and _model_geometry_spin(shot):
+        withheld.append("spin")
+    if _model_geometry_axis(shot):
+        withheld.append("spin axis")
+    return withheld
 
 
 def _unmeasured_required_fields(shot: Shot) -> List[str]:
@@ -67,7 +113,7 @@ def _unmeasured_required_fields(shot: Shot) -> List[str]:
         missing.append("horizontal launch")
     if _measured_total_spin(shot) is None:
         missing.append("spin")
-    if not _finite(shot.spin_axis_deg):
+    if _spin_axis_provenance(shot) is None:
         missing.append("spin axis")
     return missing
 
@@ -84,7 +130,12 @@ def _resolve_carry(shot: Shot, provenance: Dict[str, str]) -> Optional[float]:
     carry = shot.reported_carry_yards
     if carry is None:
         return None
-    if shot.carry_status in (CARRY_MEASURED, CARRY_CALCULATED):
+    if shot.carry_status == CARRY_MODEL_GEOMETRY:
+        # flown on a spin or spin axis built on model geometry (D39): not sent (D31)
+        if not SIMULATORS_ACCEPT_MODEL_GEOMETRY:
+            return None
+        provenance["carry"] = MODEL_GEOMETRY
+    elif shot.carry_status in (CARRY_MEASURED, CARRY_CALCULATED):
         # a fusion unit's simulator; a calculated spin is a model's, not measured
         provenance["carry"] = "measured" if shot.carry_status == CARRY_MEASURED else "estimated"
     else:
@@ -113,13 +164,27 @@ def _resolve_club_fields(
         provenance["club_speed"] = "estimated"
 
     club_path: Optional[float] = None
+    arc_path = _model_geometry_club_path(shot) if SIMULATORS_ACCEPT_MODEL_GEOMETRY else None
     if _finite(shot.club_path_deg):
         club_path = float(shot.club_path_deg)
         provenance["club_path"] = "measured"
+    elif arc_path is not None:
+        club_path = arc_path
+        provenance["club_path"] = MODEL_GEOMETRY
     elif substitutes:
         club_path = 0.0
         provenance["club_path"] = "estimated"
     return club_speed, club_path
+
+
+def _model_geometry_club_path(shot: Shot) -> Optional[float]:
+    """E1's selected club path when it is model geometry (D39) and finite, else None."""
+    metrics = (shot.club_delivery or {}).get("metrics") or {}
+    entry = metrics.get("club_path_deg")
+    if not isinstance(entry, dict) or entry.get("status") != MODEL_GEOMETRY:
+        return None
+    value = entry.get("value")
+    return float(value) if _finite(value) else None
 
 
 def _reject_non_finite(resolved: ResolvedShot) -> None:
@@ -153,7 +218,7 @@ def resolve_shot(
     if not substitutes:
         missing = _unmeasured_required_fields(shot)
         if missing:
-            raise UnmeasuredShotError(missing)
+            raise UnmeasuredShotError(missing, model_geometry=_withheld_model_geometry(shot))
 
     # E3 (D31): a simulator flies the ball's full speed. The calculated full speed
     # (measured projection) replaces the OPS radial reading when there is one.
@@ -186,12 +251,9 @@ def resolve_shot(
         total_spin, spin_prov = SPIN_MODEL_RPM.get(shot.club, _DEFAULT_SPIN_RPM), "estimated"
     provenance["total_spin"] = spin_prov
 
-    if _finite(shot.spin_axis_deg):
+    axis_prov = _spin_axis_provenance(shot)
+    if axis_prov is not None:
         spin_axis = float(shot.spin_axis_deg)
-        # the collision model's axis (E2) is calculated, never measured
-        axis_prov = (
-            "calculated" if (shot.spin_axis_source or "").startswith("calculated") else "measured"
-        )
     else:
         spin_axis = 0.0
         axis_prov = "estimated"
@@ -200,13 +262,9 @@ def resolve_shot(
     axis_rad = math.radians(spin_axis)
     back_spin = total_spin * math.cos(axis_rad)
     side_spin = total_spin * math.sin(axis_rad)
-    # a component is as good as its weaker source: estimated, then calculated, then measured
-    if "estimated" in (spin_prov, axis_prov):
-        derived_prov = "estimated"
-    elif "calculated" in (spin_prov, axis_prov):
-        derived_prov = "calculated"
-    else:
-        derived_prov = "measured"
+    # a component is as good as its weaker source: estimated, model geometry,
+    # calculated, then measured
+    derived_prov = min((spin_prov, axis_prov), key=_PROVENANCE_ORDER.index)
     provenance["back_spin"] = derived_prov
     provenance["side_spin"] = derived_prov
 

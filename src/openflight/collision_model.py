@@ -442,6 +442,15 @@ def is_calculated_source(source: Optional[str]) -> bool:
     return bool(source) and source.startswith(LABEL_CALCULATED)
 
 
+# Shot.spin_axis_source for an axis built on a model-geometry input (D39) starts so.
+SPIN_AXIS_MODEL_GEOMETRY_PREFIX = "model geometry"
+
+
+def is_model_geometry_source(source: Optional[str]) -> bool:
+    """Whether a Shot source label names a value built on model geometry (D39)."""
+    return bool(source) and source.startswith(SPIN_AXIS_MODEL_GEOMETRY_PREFIX)
+
+
 GYRO_REASON = (
     "the collision model is planar: Penner's spin vector is normal to the D-plane, "
     "so gyro is zero by construction, not a result"

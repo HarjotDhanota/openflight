@@ -284,6 +284,15 @@ Simulators get the calculated spin and spin axis under the provenance
 the two labels. A fusion shot with no measured or calculated spin or axis is
 still not sent.
 
+A spin, spin axis or carry built on model geometry (D39), and the arc's
+model-geometry club path, are not sent. A fusion shot that has its spin or axis
+only as model geometry is refused with the reason "… not measured (model
+geometry only, not sent to simulators (D31): spin, spin axis)". Whether
+simulators get model-geometry values is the owner's open decision: it is the
+one switch `sim.resolver.SIMULATORS_ACCEPT_MODEL_GEOMETRY` (default `False`).
+Set to `True`, each of those values goes out labelled `"model_geometry"`, and
+back spin and side spin take the weaker label.
+
 ## What this replaced
 
 - **The face estimate.** Was `face = (launch − 0.2 · path) / 0.8`, one fixed
