@@ -136,12 +136,20 @@ class CameraBallGeometry:
     image_height_px: int = 400
     camera_forward_offset_m: float = 0.0
     calibrated_model: Any = None
+    # The resting ball's side offset from the radar's axis, + target-right: the
+    # setup's camera-radar pair (D36 item 4b), else 0 (assumed dead ahead).
+    ball_lateral_offset_m: float = 0.0
 
     @property
     def ball_forward_m(self) -> float:
         """Forward radar-to-ball distance derived from tee slant range."""
-        vertical = self.ball_height_m - self.radar_height_m
+        vertical = math.hypot(self.ball_height_m - self.radar_height_m, self.ball_lateral_offset_m)
         return forward_distance_from_slant_range(self.tee_range_m, vertical)
+
+    @property
+    def ball_position_lfu(self) -> np.ndarray:
+        """The resting ball in the radar-centred lateral, forward, up frame."""
+        return np.array([self.ball_lateral_offset_m, self.ball_forward_m, self.ball_height_m])
 
     @property
     def camera_ball_forward_m(self) -> float:
@@ -237,7 +245,7 @@ def _camera_model(
     """Infer focal scale and pose from the stationary regulation-size ball."""
     if geometry.calibrated_model is not None:
         return (1.0, 0.0, np.zeros(3))
-    ball_position = np.array([0.0, geometry.ball_forward_m, geometry.ball_height_m])
+    ball_position = geometry.ball_position_lfu
     return reference_ball_camera_model(
         ball_x_px=anchor.x,
         ball_y_px=anchor.y,
@@ -506,7 +514,7 @@ def _select_reference_ball(  # pylint: disable=too-many-locals
             )
         except ValueError:
             return False
-        expected = np.asarray([0.0, geometry.ball_forward_m, geometry.ball_height_m])
+        expected = geometry.ball_position_lfu
         return float(np.linalg.norm(point - expected)) <= 0.15
 
     observations = dict(candidates)
@@ -627,7 +635,7 @@ def _fit_horizontal_launch(  # pylint: disable=too-many-arguments
         return None
 
     model = _camera_model(reference_ball, geometry)
-    tee = np.array([0.0, geometry.ball_forward_m, geometry.ball_height_m])
+    tee = geometry.ball_position_lfu
     projected_tee = _project_world_points(tee[None, :], model=model, geometry=geometry)[0]
     image_alignment = np.array([reference_ball.x, reference_ball.y]) - projected_tee
     speed_ms = speed_mph / MPH_PER_MS

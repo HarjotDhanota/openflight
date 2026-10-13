@@ -493,7 +493,7 @@ ball, so a person standing behind the ball stays a candidate the pair does not
 pick. The summary's **ball** line says what happened (camera and radar agree,
 camera only, radar only, disagree, no ball), with both distances and how far the
 ball sits left or right of straight ahead (from the camera's ray at the radar's
-distance); its **radar candidates** line lists everything the radar saw in the
+distance; swings place the resting ball there, `--tee-side-offset-m`); its **radar candidates** line lists everything the radar saw in the
 patch. Something ball-sized at the same distance as the ball, such as a shoe beside
 it, is not separated, so the prompt asks you to step at least 2 m away before each
 capture.

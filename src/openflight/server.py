@@ -1665,6 +1665,13 @@ def init_setup_handoff(args, enclosure) -> None:
                 if math.isclose(ball_height, BALL_RADIUS_M, abs_tol=1e-6)
                 else "command_line"
             ),
+            # D36 item 4b: where the resting ball sits aside of the radar's axis
+            "tee_side_offset_m": getattr(args, "tee_side_offset_m", None),
+            "tee_side_offset_source": (
+                "setup_patch_pair"
+                if getattr(args, "tee_side_offset_m", None) is not None
+                else "assumed_directly_downrange"
+            ),
         },
         "net_range": {
             "net_range_m": args.iwr6843_net_m,
@@ -2026,6 +2033,7 @@ def init_camera_capture(
     diagnostic_capture: bool = False,
     setup_ball: dict | None = None,
     hitting_zone: tuple[int, int, int, int] | None = None,
+    tee_side_offset_m: float | None = None,
 ) -> bool:
     """Initialize passive high-speed camera capture for offline alignment."""
     global camera_capture_runtime, camera_capture_config  # pylint: disable=global-statement
@@ -2098,6 +2106,8 @@ def init_camera_capture(
             "lateral_offset_m": lateral_offset_m,
             "forward_offset_m": forward_offset_m,
             "horizontal_offset_deg": horizontal_offset_deg,
+            # D36 item 4b: the setup pair's side offset, None when it measured none
+            "tee_side_offset_m": tee_side_offset_m,
             "alignment_x_pct": 50.0,
             "alignment_y_pct": 50.0,
             "setup_ball": dict(settings.setup_ball) if settings.setup_ball else None,
@@ -7295,6 +7305,16 @@ def _add_iwr_tee_range_arguments(parser):
         ),
     )
     parser.add_argument(
+        "--tee-side-offset-m",
+        type=float,
+        default=None,
+        help=(
+            "The resting ball's side offset from the radar's axis, + target-right, from the "
+            "setup's validated camera-radar pair (D36). The camera estimators place the ball "
+            "there; without it they assume it dead ahead, and say so"
+        ),
+    )
+    parser.add_argument(
         "--camera-vertical-offset-source",
         default=None,
         help="Where --camera-vertical-offset-deg came from (unit_calibration); recorded",
@@ -8265,6 +8285,7 @@ def main():
             diagnostic_capture=bool(args.study_mode),
             setup_ball=camera_setup_ball,
             hitting_zone=camera_hitting_zone,
+            tee_side_offset_m=args.tee_side_offset_m,
         ):
             print("Camera capture unavailable - running without high-speed camera capture")
             startup_status.skip("camera", "High-speed camera unavailable; continuing")

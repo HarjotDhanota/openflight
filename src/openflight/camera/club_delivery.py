@@ -159,12 +159,20 @@ class CameraDeliveryGeometry:
     # unit boresight). Subtracted from club path exactly as from the camera's
     # horizontal launch, so both stay in one frame (F9).
     horizontal_offset_deg: float = 0.0
+    # The resting ball's side offset from the radar's axis, + target-right: the
+    # setup's camera-radar pair (D36 item 4b), else 0 (assumed dead ahead).
+    ball_lateral_offset_m: float = 0.0
 
     @property
     def ball_forward_m(self) -> float:
         """Forward radar-to-ball distance from radar slant geometry."""
-        vertical = self.ball_height_m - self.radar_height_m
+        vertical = math.hypot(self.ball_height_m - self.radar_height_m, self.ball_lateral_offset_m)
         return forward_distance_from_slant_range(self.tee_range_m, vertical)
+
+    @property
+    def ball_position_lfu(self) -> np.ndarray:
+        """The resting ball in the radar-centred lateral, forward, up frame."""
+        return np.array([self.ball_lateral_offset_m, self.ball_forward_m, self.ball_height_m])
 
     @property
     def camera_ball_forward_m(self) -> float:
@@ -272,7 +280,7 @@ def _pixels_to_world(
         roll_correction_deg=geometry.roll_correction_deg,
         camera_origin_lfu=geometry.camera_origin,
         radar_origin_lfu=radar_origin,
-        ball_position_lfu=np.array([0.0, geometry.ball_forward_m, geometry.ball_height_m]),
+        ball_position_lfu=geometry.ball_position_lfu,
     )
     rays = unit_world_rays(
         points_px,
@@ -701,7 +709,7 @@ def camera_ops_delivery_from_feature_pair(
         return None
 
     camera_ball_range_m = math.sqrt(
-        geometry.camera_lateral_offset_m**2
+        (geometry.ball_lateral_offset_m - geometry.camera_lateral_offset_m) ** 2
         + geometry.camera_ball_forward_m**2
         + (geometry.ball_height_m - geometry.camera_height_m) ** 2
     )

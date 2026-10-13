@@ -1603,6 +1603,8 @@ class TestShotToDict:
         assert estimate_call["geometry"].roll_correction_deg == 2.8
         assert estimate_call["geometry"].horizontal_pixel_sign == -1.0
         assert "ball_tracker" not in estimate_call
+        # D36 item 4b: no measured side offset: the ball is assumed dead ahead
+        assert estimate_call["geometry"].ball_lateral_offset_m == 0.0
 
     def _fuse_with_camera_estimate(self, monkeypatch, tmp_path, estimate, shot):
         from openflight.camera import ball_flight

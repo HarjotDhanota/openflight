@@ -180,3 +180,41 @@ def test_session_start_records_explicit_unavailable_reason(monkeypatch):
         EffectiveCameraGeometryInputs.from_recorded_session(
             {"effective_camera_geometry": block, "camera_capture": {}, "iwr6843": {}}
         )
+
+
+def test_the_setup_tee_side_offset_places_the_ball_for_both_estimators():
+    """D36 item 4b: the patch pair's side offset is the resting ball's lateral position."""
+    camera = {
+        "mount_height_m": 0.095,
+        "width": 640,
+        "height": 400,
+        "tee_side_offset_m": 0.12,
+    }
+    calibration = SimpleNamespace(tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.021335)
+    effective = EffectiveCameraGeometryInputs.from_live(camera, calibration)
+
+    assert effective.ball_lateral_offset_m == pytest.approx(0.12)
+    assert effective.ball_lateral_offset_source == "setup_patch_pair"
+    for geometry in (effective.ball_geometry(), effective.delivery_geometry()):
+        assert geometry.ball_lateral_offset_m == pytest.approx(0.12)
+        forward = (1.5**2 - (0.021335 - 0.051) ** 2 - 0.12**2) ** 0.5
+        assert geometry.ball_forward_m == pytest.approx(forward)
+        assert list(geometry.ball_position_lfu) == pytest.approx([0.12, forward, 0.021335])
+    snapshot = effective.snapshot()
+    assert snapshot["assumptions"]["tee_lateral_position"] == "setup_patch_pair"
+    restored = EffectiveCameraGeometryInputs.from_recorded_session(
+        {"effective_camera_geometry": snapshot}
+    )
+    assert restored == effective
+
+
+def test_without_a_measured_side_offset_the_ball_is_labelled_dead_ahead():
+    camera = {"mount_height_m": 0.095, "width": 640, "height": 400}
+    calibration = SimpleNamespace(tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.021335)
+    effective = EffectiveCameraGeometryInputs.from_live(camera, calibration)
+
+    assert effective.ball_lateral_offset_m == 0.0
+    assert effective.ball_lateral_offset_source == "assumed_directly_downrange"
+    assert effective.snapshot()["assumptions"]["tee_lateral_position"] == (
+        "assumed_zero_directly_downrange"
+    )

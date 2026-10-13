@@ -1051,6 +1051,9 @@ def test_guided_flow_saves_and_survives_reload(tmp_path, inputs, monkeypatch):
         # no net in the fake empty capture: the default is flagged (C7)
         "--iwr6843-net-range-source",
         "default_not_measured",
+        # D36 item 4b: where the pair saw the ball aside
+        "--tee-side-offset-m",
+        f"{state['evidence']['patch_ball']['side_offset_m']:.6g}",
     ]
 
 
@@ -1293,6 +1296,9 @@ def test_missing_qualification_and_disagreement_remain_raw_only(tmp_path, inputs
         # no net in the fake empty capture: the default is flagged (C7)
         "--iwr6843-net-range-source",
         "default_not_measured",
+        # D36 item 4b: where the pair saw the ball aside
+        "--tee-side-offset-m",
+        f"{pair['side_offset_m']:.6g}",
     ]
     other_root = tmp_path / "other"
     app, tester = app_for(other_root, inputs, monkeypatch, camera_m=1.5)
@@ -1922,6 +1928,9 @@ def test_a_saved_experimental_range_reaches_swings_without_the_test_flag(
         # no net in the fake empty capture: the default is flagged (C7)
         "--iwr6843-net-range-source",
         "default_not_measured",
+        # D36 item 4b: where the pair saw the ball aside
+        "--tee-side-offset-m",
+        f"{state['evidence']['patch_ball']['side_offset_m']:.6g}",
     ]
     swings = ts.tee_range_display(state)["swings"]
     assert swings["state"] == "experimental"
@@ -4138,3 +4147,28 @@ def test_a_tilt_beyond_eight_degrees_is_refused_and_not_stored(tmp_path, inputs,
     assert outcome["action"] == "refused"
     assert "8" in outcome["warning"]
     assert not calibration.exists()
+
+
+@pytest.mark.parametrize("side_offset_m", [0.12, None])
+def test_the_pairs_tee_side_offset_is_handed_to_swings(monkeypatch, side_offset_m):
+    """D36 item 4b: the camera's side offset of the validated pair reaches the kiosk."""
+    from openflight.camera import patch_pairing  # noqa: PLC0415
+
+    saved = _accepted_iwr(1.3)
+    decision = {
+        "schema": patch_pairing.DECISION_SCHEMA,
+        "status": "validated" if side_offset_m is not None else "radar_only",
+        "source": "static_iwr_magnitude",
+        "range_m": 1.3,
+        "side_offset_m": side_offset_m,
+    }
+    monkeypatch.setattr(ts, "experimental_tee_range_choice", lambda _solution: (saved, decision))
+    solution = tee_range.TeeRangeSolution.unresolved((saved,), reason="test")
+
+    args, handed = ts.tee_range_handoff(solution)
+
+    assert handed["tee_side_offset_m"] == side_offset_m
+    if side_offset_m is None:
+        assert "--tee-side-offset-m" not in args
+    else:
+        assert float(args[args.index("--tee-side-offset-m") + 1]) == pytest.approx(side_offset_m)

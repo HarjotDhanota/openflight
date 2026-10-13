@@ -777,3 +777,37 @@ def test_a_low_consensus_camera_stands_in_labelled_when_there_is_no_radar():
     assert decision.selected_deg == 6.0
     assert decision.source == "camera_low_consensus"
     assert decision.status == "camera_low_consensus"
+
+
+def test_a_side_offset_tee_is_fitted_from_where_it_sits(monkeypatch):
+    """D36 item 4b: told the tee's side offset, the fit starts the flight there."""
+    import dataclasses  # noqa: PLC0415
+
+    geometry, anchor, _model, candidates, candidate_times, _evidence, speed_ms = _synthetic_path(
+        horizontal_deg=4.0, tee_x_m=0.30
+    )
+    timestamps = np.concatenate(([0], candidate_times))
+    frames = np.zeros(
+        (len(timestamps), geometry.image_height_px, geometry.image_width_px), dtype=np.uint8
+    )
+    track = {index + 1: candidate for index, candidate in enumerate(candidates)}
+    monkeypatch.setattr(ball_flight_module, "detect_impact_frame", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(ball_flight_module, "_track_launch_ball", lambda *_args, **_kwargs: track)
+
+    def fitted(told_m):
+        return estimate_horizontal_launch(
+            frames,
+            timestamps,
+            trigger_ns=0,
+            geometry=dataclasses.replace(geometry, ball_lateral_offset_m=told_m),
+            ops_ball_speed_mph=speed_ms * 2.23694,
+            vertical_deg=20.0,
+            vertical_source="radar",
+            reference_ball=anchor,
+        )
+
+    told, untold = fitted(0.30), fitted(0.0)
+    assert told.horizontal_deg == pytest.approx(4.0, abs=0.25)
+    assert untold.horizontal_deg is None or abs(untold.horizontal_deg - 4.0) > 2 * abs(
+        told.horizontal_deg - 4.0
+    )

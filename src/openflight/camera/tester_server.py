@@ -1214,6 +1214,14 @@ def tee_range_handoff(
         "--iwr6843-net-range-source",
         "empty_static_capture" if measured_net else "default_not_measured",
     ]
+    side_offset_m = (
+        decision.get("side_offset_m")
+        if decision is not None and decision.get("schema") == patch_pairing.DECISION_SCHEMA
+        else None
+    )
+    if side_offset_m is not None:
+        # D36 item 4b: the swing estimators place the resting ball where the pair saw it
+        args += ["--tee-side-offset-m", f"{side_offset_m:.6g}"]
     tilt = camera_tilt.applied_pitch(0.0, camera_tilt_calibration)
     if tilt["status"] == "calibrated":
         # the unit's camera tilt (P8-5), recorded by the kiosk in session_start
@@ -1268,11 +1276,7 @@ def tee_range_handoff(
             if decision is not None and decision.get("schema") == patch_pairing.DECISION_SCHEMA
             else None
         ),
-        "tee_side_offset_m": (
-            decision.get("side_offset_m")
-            if decision is not None and decision.get("schema") == patch_pairing.DECISION_SCHEMA
-            else None
-        ),
+        "tee_side_offset_m": side_offset_m,
         # P8-5: the unit's camera tilt. The swing side's nominal estimators infer the
         # camera's pitch from the resting ball and the tee range each shot, which
         # already holds it; it is handed over to be recorded beside them
