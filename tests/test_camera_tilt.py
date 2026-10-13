@@ -1,4 +1,4 @@
-"""The unit's camera tilt, calibrated from the first validated pair (P8-5).
+"""The unit's camera tilt, calibrated from the median of validated pairs (P8-5).
 
 The camera's vertical (its mount's pitch on the enclosure plus the principal
 point's row) is solved from a ball whose distance the radar confirmed: the row
@@ -73,27 +73,83 @@ def test_the_outdoors_test_7_pair_gives_its_offset():
     assert 0.5 < solved["offset_deg"] < 1.3
 
 
-def test_the_first_pair_calibrates_and_later_pairs_only_check(tmp_path):
+PAIR = {"offset_deg": 2.1, "uncertainty_deg": 0.2, "pitch_deg": 3.8, "lis3dh_pitch_deg": 1.7}
+
+
+def _calibrate(path, *offsets):
+    return [
+        camera_tilt.record_pair(path, {**PAIR, "offset_deg": offset}, facts={"epoch_id": str(i)})
+        for i, offset in enumerate(offsets)
+    ]
+
+
+def test_one_pair_never_calibrates_two_agreeing_pairs_do_from_their_median(tmp_path):
     path = tmp_path / "camera-vertical-offset.json"
-    first = {"offset_deg": 2.1, "uncertainty_deg": 0.2, "pitch_deg": 3.8, "lis3dh_pitch_deg": 1.7}
 
-    stored = camera_tilt.record_pair(path, first, facts={"epoch_id": "one"})
-    agreeing = camera_tilt.record_pair(
-        path, {**first, "offset_deg": 2.4}, facts={"epoch_id": "two"}
-    )
-    disagreeing = camera_tilt.record_pair(
-        path, {**first, "offset_deg": 4.2}, facts={"epoch_id": "three"}
-    )
+    first = camera_tilt.record_pair(path, PAIR, facts={"epoch_id": "one"})
+    assert first["action"] == "pending"
+    assert first["pairs_needed"] == 1
+    # the first validated pair no longer calibrates the unit for good
+    assert camera_tilt.load_calibration(path) is None
+    assert camera_tilt.calibration_status(path)["status"] == "pending"
 
-    assert stored["action"] == "calibrated"
-    assert agreeing["action"] == "checked" and agreeing["warning"] is None
-    assert disagreeing["action"] == "checked"
-    assert "disagrees" in disagreeing["warning"]
+    second = camera_tilt.record_pair(path, {**PAIR, "offset_deg": 2.5}, facts={"epoch_id": "two"})
+    assert second["action"] == "calibrated"
     calibration = camera_tilt.load_calibration(path)
-    assert calibration["offset_deg"] == pytest.approx(2.1)
+    assert calibration["offset_deg"] == pytest.approx(2.3)
     assert calibration["status"] == "calibrated"
-    assert [entry["epoch_id"] for entry in calibration["checks"]] == ["two", "three"]
-    assert calibration["label"] == "unit_calibration_from_a_validated_pair"
+    assert calibration["method"] == "median_of_validated_pairs"
+    assert [entry["epoch_id"] for entry in calibration["pairs"]] == ["one", "two"]
+    assert calibration["label"] == "unit_calibration_from_validated_pairs"
+
+
+def test_two_pairs_that_disagree_wait_for_a_third_and_take_the_median(tmp_path):
+    path = tmp_path / "camera-vertical-offset.json"
+
+    outcomes = _calibrate(path, 2.1, 4.2)
+    assert outcomes[1]["action"] == "pending"
+    assert "disagree" in outcomes[1]["warning"]
+    assert camera_tilt.load_calibration(path) is None
+
+    third = camera_tilt.record_pair(path, {**PAIR, "offset_deg": 2.3}, facts={"epoch_id": "3"})
+    assert third["action"] == "calibrated"
+    assert camera_tilt.load_calibration(path)["offset_deg"] == pytest.approx(2.3)
+
+
+def test_later_pairs_check_and_two_disagreeing_in_a_row_recalibrate(tmp_path):
+    path = tmp_path / "camera-vertical-offset.json"
+    _calibrate(path, 2.1, 2.3)
+
+    agreeing = camera_tilt.record_pair(path, {**PAIR, "offset_deg": 2.4}, facts={"epoch_id": "a"})
+    once = camera_tilt.record_pair(path, {**PAIR, "offset_deg": 4.2}, facts={"epoch_id": "b"})
+    assert agreeing["action"] == "checked" and agreeing["warning"] is None
+    assert once["action"] == "checked"
+    assert "disagrees" in once["warning"]
+    assert camera_tilt.load_calibration(path)["offset_deg"] == pytest.approx(2.2)
+
+    twice = camera_tilt.record_pair(path, {**PAIR, "offset_deg": 4.4}, facts={"epoch_id": "c"})
+
+    # the unit moved on its mount, or the stored value was wrong: re-calibrated, said so
+    assert twice["action"] == "recalibrated"
+    assert "re-calibrated" in twice["warning"]
+    calibration = camera_tilt.load_calibration(path)
+    assert calibration["offset_deg"] == pytest.approx(4.3)
+    assert calibration["previous"][-1]["offset_deg"] == pytest.approx(2.2)
+
+
+def test_a_calibration_can_be_reset_and_starts_again(tmp_path):
+    path = tmp_path / "camera-vertical-offset.json"
+    _calibrate(path, 2.1, 2.3)
+
+    reset = camera_tilt.reset_calibration(path, reason="tester asked")
+
+    assert reset["action"] == "reset"
+    assert reset["previous_offset_deg"] == pytest.approx(2.2)
+    assert camera_tilt.load_calibration(path) is None
+    assert camera_tilt.calibration_status(path)["status"] == "uncalibrated"
+    assert camera_tilt.record_pair(path, PAIR, facts={"epoch_id": "new"})["action"] == "pending"
+    # nothing to reset is not an error
+    assert camera_tilt.reset_calibration(tmp_path / "none.json")["action"] == "nothing_to_reset"
 
 
 @pytest.mark.parametrize("offset", [8.5, -9.0])
@@ -118,11 +174,7 @@ def test_an_offset_beyond_eight_degrees_is_refused_with_a_warning(tmp_path, offs
 
 def test_each_session_composes_the_offset_with_its_own_lis3dh_pitch(tmp_path):
     path = tmp_path / "camera-vertical-offset.json"
-    camera_tilt.record_pair(
-        path,
-        {"offset_deg": 2.1, "uncertainty_deg": 0.2, "pitch_deg": 3.8, "lis3dh_pitch_deg": 1.7},
-        facts={"epoch_id": "one"},
-    )
+    _calibrate(path, 2.1, 2.1)
     calibration = camera_tilt.load_calibration(path)
 
     # the unit set down differently the next day: the LIS3DH now reads 0.4 deg
@@ -152,18 +204,20 @@ def test_the_calibration_lives_with_the_unit_not_in_the_rig_file():
 
 def test_the_file_is_json_with_its_schema_and_provenance(tmp_path):
     path = tmp_path / "camera-vertical-offset.json"
-    camera_tilt.record_pair(
-        path,
-        {"offset_deg": 2.0, "uncertainty_deg": 0.2, "pitch_deg": 3.7, "lis3dh_pitch_deg": 1.7},
-        facts={"epoch_id": "one", "radar_range_m": 1.18, "pixel_px": [744.0, 518.0]},
-    )
+    for epoch in ("one", "two"):
+        camera_tilt.record_pair(
+            path,
+            {"offset_deg": 2.0, "uncertainty_deg": 0.2, "pitch_deg": 3.7, "lis3dh_pitch_deg": 1.7},
+            facts={"epoch_id": epoch, "radar_range_m": 1.18, "pixel_px": [744.0, 518.0]},
+        )
 
     payload = json.loads(path.read_text(encoding="utf-8"))
 
     assert payload["schema"] == camera_tilt.SCHEMA
-    assert payload["source"]["epoch_id"] == "one"
-    assert payload["source"]["pixel_px"] == [744.0, 518.0]
+    assert payload["pairs"][0]["epoch_id"] == "one"
+    assert payload["pairs"][0]["pixel_px"] == [744.0, 518.0]
     assert payload["bound_deg"] == camera_tilt.MAX_OFFSET_DEG == 8.0
+    assert payload["min_pairs"] == camera_tilt.MIN_PAIRS == 2
 
 
 def test_the_patch_outline_tightens_once_the_tilt_is_calibrated():

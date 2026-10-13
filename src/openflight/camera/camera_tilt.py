@@ -1,4 +1,4 @@
-"""The unit's camera tilt, calibrated from the first validated pair (P8-5).
+"""The unit's camera tilt, calibrated from the median of validated pairs (P8-5).
 
 The nominal camera model takes its pitch from the LIS3DH and puts the principal
 point at the image centre. Neither is the camera's true vertical: the camera is
@@ -7,11 +7,14 @@ some rows off the image's middle. At 95 mm above the ground both move a ball's
 row a long way (harjot-indoor-test-1: the floor met the door about 50 px lower
 than the level, image-centred model predicts, about 3 deg).
 
-The first ball the camera and radar agree on (P8-4) measures the two together as
-one vertical offset: the pitch the camera must have for the ball's row to be
-where the radar's distance, the lens height and the ball's radius put it, less
-the LIS3DH's pitch at the time. It is stored per unit, beside the unit's other
-local settings (``~/.config/openflight/``), never in the shared rig file.
+Each ball the camera and radar agree on (P8-4) measures the two together as one
+vertical offset: the pitch the camera must have for the ball's row to be where
+the radar's distance, the lens height and the ball's radius put it, less the
+LIS3DH's pitch at the time. One pair never calibrates the unit: the offset is the
+median of at least ``MIN_PAIRS`` validated pairs that agree (a single wrong pair,
+harjot-indoor-test-1's, once calibrated a unit for good). It is stored per unit
+and per lens, beside the unit's other local settings (``~/.config/openflight/``),
+never in the shared rig file.
 
 **Composition.** The camera's pitch in the world is the enclosure's pitch (the
 LIS3DH, read each session) composed with the camera's fixed pitch on the
@@ -29,7 +32,9 @@ a ball at address uses.
 The offset is bounded (``MAX_OFFSET_DEG``); a solve beyond it is refused with a
 warning, since it means the ball, the radar's distance or the lens height is
 wrong, not the camera. Later validated pairs check it and warn when they
-disagree; nothing is replaced silently, and there is no typed input.
+disagree; ``RECALIBRATE_AFTER`` disagreeing checks in a row, on the same side,
+re-calibrate from their median and say so; ``reset_calibration`` starts over (a
+lens change). Nothing is replaced silently, and there is no typed input.
 """
 
 from __future__ import annotations
@@ -56,7 +61,11 @@ SEARCH_SPAN_DEG = 25.0
 PIXEL_UNCERTAINTY_PX = 1.0
 LENS_HEIGHT_UNCERTAINTY_M = 0.005
 COMPOSITION = "pitch = lis3dh_camera_pitch + offset (same lateral axis; roll not applied)"
-LABEL = "unit_calibration_from_a_validated_pair"
+LABEL = "unit_calibration_from_validated_pairs"
+# validated pairs that must agree (within CHECK_TOLERANCE_DEG of their median) to calibrate
+MIN_PAIRS = 2
+# this many checks in a row disagreeing on the same side re-calibrate from their median
+RECALIBRATE_AFTER = 2
 
 
 def default_calibration_path() -> Path:
@@ -72,8 +81,10 @@ def camera_tilt_policy() -> dict[str, Any]:
         "composition": COMPOSITION,
         "bound_deg": MAX_OFFSET_DEG,
         "check_tolerance_deg": CHECK_TOLERANCE_DEG,
-        "stored": "per_unit_local_calibration_file_not_the_rig_file",
-        "updates": "first_validated_pair_calibrates_later_pairs_check",
+        "min_pairs": MIN_PAIRS,
+        "recalibrate_after": RECALIBRATE_AFTER,
+        "stored": "per_unit_and_lens_local_calibration_file_not_the_rig_file",
+        "updates": "median_of_agreeing_validated_pairs_calibrates_later_pairs_check",
         "label": LABEL,
     }
 
@@ -180,8 +191,7 @@ def solve_vertical_offset(  # pylint: disable=too-many-arguments
     }
 
 
-def load_calibration(path: Path | None) -> dict | None:
-    """The unit's stored offset, or None (uncalibrated, or an unreadable file)."""
+def _read(path: Path | None) -> dict | None:
     if path is None:
         return None
     try:
@@ -190,12 +200,36 @@ def load_calibration(path: Path | None) -> dict | None:
         return None
     if not isinstance(payload, Mapping) or payload.get("schema") != SCHEMA:
         return None
+    return dict(payload)
+
+
+def load_calibration(path: Path | None) -> dict | None:
+    """The unit's stored offset, or None (uncalibrated, pending pairs, or unreadable)."""
+    payload = _read(path)
+    if payload is None or payload.get("status") != "calibrated":
+        return None
     offset = payload.get("offset_deg")
     if isinstance(offset, bool) or not isinstance(offset, (int, float)):
         return None
     if not math.isfinite(float(offset)) or abs(float(offset)) > MAX_OFFSET_DEG:
         return None
-    return dict(payload)
+    return payload
+
+
+def calibration_status(path: Path | None) -> dict:
+    """What the unit's tilt file says: calibrated, pending pairs, or uncalibrated."""
+    payload = _read(path)
+    if payload is None:
+        return {"status": "uncalibrated", "pairs": 0, "pairs_needed": MIN_PAIRS}
+    pairs = list(payload.get("pairs") or [])
+    calibrated = load_calibration(path) is not None
+    return {
+        "status": "calibrated" if calibrated else "pending",
+        "offset_deg": payload.get("offset_deg") if calibrated else None,
+        "pairs": len(pairs),
+        "pairs_needed": 0 if calibrated else max(0, MIN_PAIRS - len(pairs)),
+        "calibrated_at_utc": payload.get("calibrated_at_utc") if calibrated else None,
+    }
 
 
 def _write(path: Path, payload: Mapping) -> None:
@@ -213,12 +247,59 @@ def _write(path: Path, payload: Mapping) -> None:
             os.unlink(temporary)
 
 
-def record_pair(path: Path, solved: Mapping, *, facts: Mapping | None = None) -> dict:
-    """Calibrate from a validated pair, or check the stored offset against it.
+def _median(values: Sequence[float]) -> float:
+    return float(np.median(np.asarray(values, dtype=float)))
 
-    Returns what happened: ``calibrated`` (the first pair), ``checked`` (a later
-    one, with a warning when it disagrees by more than ``CHECK_TOLERANCE_DEG``) or
-    ``refused`` (beyond ``MAX_OFFSET_DEG``, not stored).
+
+def _agreeing(entries: Sequence[Mapping]) -> list[Mapping]:
+    """The pairs that agree with their median: within half the check tolerance of it,
+    so any two of them lie within the tolerance of each other."""
+    if not entries:
+        return []
+    middle = _median([float(entry["offset_deg"]) for entry in entries])
+    return [
+        entry
+        for entry in entries
+        if abs(float(entry["offset_deg"]) - middle) <= CHECK_TOLERANCE_DEG / 2.0
+    ]
+
+
+def _calibrated(
+    payload: dict,
+    support: Sequence[Mapping],
+    now: str,
+    method: str,
+    over: Sequence[Mapping] | None = None,
+) -> dict:
+    """The calibration: the median over ``over`` (every pair by default), once
+    ``support`` (the pairs that agree) is large enough."""
+    offsets = [float(entry["offset_deg"]) for entry in (over if over is not None else support)]
+    spread = float(np.std(offsets)) if len(offsets) > 1 else 0.0
+    single = [float(entry.get("uncertainty_deg") or 0.0) for entry in support]
+    return {
+        **payload,
+        "label": LABEL,
+        "status": "calibrated",
+        "method": method,
+        "offset_deg": _median(offsets),
+        "uncertainty_deg": math.hypot(
+            spread, (_median(single) if single else 0.0) / math.sqrt(max(len(support), 1))
+        ),
+        "calibrated_at_utc": now,
+        "support": [entry.get("epoch_id") for entry in support],
+        "checks": [],
+    }
+
+
+def record_pair(path: Path, solved: Mapping, *, facts: Mapping | None = None) -> dict:
+    """Add a validated pair: calibrate from the median, check, or re-calibrate.
+
+    Returns what happened: ``pending`` (too few agreeing pairs yet),
+    ``calibrated`` (the median of ``MIN_PAIRS`` or more that agree), ``checked``
+    (a later pair, with a warning when it disagrees by more than
+    ``CHECK_TOLERANCE_DEG``), ``recalibrated`` (``RECALIBRATE_AFTER`` checks in a
+    row disagreed on the same side) or ``refused`` (beyond ``MAX_OFFSET_DEG``,
+    not stored).
     """
     path = Path(path)
     offset = float(solved["offset_deg"])
@@ -239,40 +320,120 @@ def record_pair(path: Path, solved: Mapping, *, facts: Mapping | None = None) ->
                 "is probably wrong; check the unit stands on the hitting surface."
             ),
         }
+    payload = _read(path) or {
+        "schema": SCHEMA,
+        "status": "pending",
+        "bound_deg": MAX_OFFSET_DEG,
+        "min_pairs": MIN_PAIRS,
+        "composition": COMPOSITION,
+        "policy": camera_tilt_policy(),
+        "pairs": [],
+        "previous": [],
+    }
+    payload["pairs"] = [*list(payload.get("pairs") or []), entry]
     stored = load_calibration(path)
     if stored is None:
-        payload = {
-            "schema": SCHEMA,
-            "label": LABEL,
-            "status": "calibrated",
-            "offset_deg": offset,
-            "uncertainty_deg": solved.get("uncertainty_deg"),
-            "calibrated_at_utc": now,
-            "source": entry,
-            "bound_deg": MAX_OFFSET_DEG,
-            "composition": COMPOSITION,
-            "policy": camera_tilt_policy(),
-            "checks": [],
+        support = _agreeing(payload["pairs"])
+        if len(support) < MIN_PAIRS:
+            payload["status"] = "pending"
+            _write(path, payload)
+            spread = (
+                max(float(item["offset_deg"]) for item in payload["pairs"])
+                - min(float(item["offset_deg"]) for item in payload["pairs"])
+                if len(payload["pairs"]) > 1
+                else 0.0
+            )
+            return {
+                "action": "pending",
+                "offset_deg": offset,
+                "pairs": len(payload["pairs"]),
+                "pairs_needed": MIN_PAIRS - len(support),
+                "warning": (
+                    f"The setups' camera tilts disagree by {spread:.1f} deg: another setup "
+                    "is needed before the tilt is calibrated."
+                    if len(payload["pairs"]) >= MIN_PAIRS
+                    else None
+                ),
+                "path": str(path),
+            }
+        calibrated = _calibrated(
+            payload, support, now, "median_of_validated_pairs", over=payload["pairs"]
+        )
+        _write(path, calibrated)
+        return {
+            "action": "calibrated",
+            "offset_deg": calibrated["offset_deg"],
+            "pairs": len(support),
+            "warning": None,
+            "path": str(path),
         }
-        _write(path, payload)
-        return {"action": "calibrated", "offset_deg": offset, "warning": None, "path": str(path)}
     residual = offset - float(stored["offset_deg"])
+    disagrees = abs(residual) > CHECK_TOLERANCE_DEG
+    checks = [*list(stored.get("checks") or []), {**entry, "residual_deg": residual}]
+    recent = checks[-RECALIBRATE_AFTER:]
+    if (
+        disagrees
+        and len(recent) == RECALIBRATE_AFTER
+        and all(abs(float(item["residual_deg"])) > CHECK_TOLERANCE_DEG for item in recent)
+        and len({math.copysign(1.0, float(item["residual_deg"])) for item in recent}) == 1
+    ):
+        previous = {
+            key: stored.get(key)
+            for key in ("offset_deg", "uncertainty_deg", "calibrated_at_utc", "support")
+        }
+        payload = {
+            **stored,
+            "pairs": payload["pairs"],
+            "previous": [*list(stored.get("previous") or []), previous],
+        }
+        calibrated = _calibrated(payload, recent, now, "median_of_recent_disagreeing_pairs")
+        _write(path, calibrated)
+        return {
+            "action": "recalibrated",
+            "offset_deg": calibrated["offset_deg"],
+            "residual_deg": residual,
+            "warning": (
+                f"The last {RECALIBRATE_AFTER} setups put the camera's tilt at "
+                f"{calibrated['offset_deg']:+.1f} deg, not the stored "
+                f"{float(previous['offset_deg']):+.1f} deg: the tilt was re-calibrated. The "
+                "camera may have moved in the enclosure."
+            ),
+            "path": str(path),
+        }
     warning = (
         f"This setup's ball puts the camera's tilt at {offset:+.1f} deg; the unit's "
         f"calibration says {float(stored['offset_deg']):+.1f} deg: it disagrees by "
         f"{abs(residual):.1f} deg. The unit may be raised or tilted differently, or the "
         "calibration is stale."
-        if abs(residual) > CHECK_TOLERANCE_DEG
+        if disagrees
         else None
     )
-    stored["checks"] = [*list(stored.get("checks") or []), {**entry, "residual_deg": residual}]
-    _write(path, stored)
+    _write(path, {**stored, "pairs": payload["pairs"], "checks": checks})
     return {
         "action": "checked",
         "offset_deg": float(stored["offset_deg"]),
         "residual_deg": residual,
         "warning": warning,
         "path": str(path),
+    }
+
+
+def reset_calibration(path: Path | None, *, reason: str = "reset") -> dict:
+    """Forget the unit's tilt (a lens change, or the tester asks); it is calibrated again."""
+    payload = _read(path)
+    if path is None or payload is None:
+        return {"action": "nothing_to_reset", "previous_offset_deg": None}
+    archive = Path(path).with_name(
+        f"{Path(path).stem}.reset-{int(datetime.now().timestamp())}.json"
+    )
+    _write(archive, {**payload, "reset_reason": reason})
+    Path(path).unlink(missing_ok=True)
+    return {
+        "action": "reset",
+        "previous_offset_deg": payload.get("offset_deg"),
+        "previous_status": payload.get("status"),
+        "archived_to": str(archive),
+        "reason": reason,
     }
 
 
