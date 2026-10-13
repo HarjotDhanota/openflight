@@ -4197,11 +4197,14 @@ class GuidedRangeAnalyzer:
         self._stable_count = 0
         self._stable_started_at: float | None = None
         self._last_observation_id: int | None = None
+        # whether the last pose check found the rig moved, so each change is logged once
+        self._pose_moved = False
 
     def _orientation_problem(self) -> str | None:
         current = self._orientation_reader()
         if current.get("status") != "stable":
             return "waiting for a stable LIS3DH reading"
+        deltas: dict[str, float] = {}
         for name in ("camera_pitch_deg", "roll_deg"):
             try:
                 frozen = float(self.orientation[name])
@@ -4210,9 +4213,29 @@ class GuidedRangeAnalyzer:
                 return f"LIS3DH {name} is unavailable"
             if not math.isfinite(frozen) or not math.isfinite(observed):
                 return f"LIS3DH {name} is invalid"
-            if abs(observed - frozen) > TEE_RANGE_ORIENTATION_DRIFT_DEG:
-                return f"rig pose changed ({name}); start this camera step again"
+            deltas[name] = observed - frozen
+        moved = [
+            name for name, delta in deltas.items() if abs(delta) > TEE_RANGE_ORIENTATION_DRIFT_DEG
+        ]
+        self._log_pose_change(bool(moved), deltas)
+        if moved:
+            return f"rig pose changed ({moved[0]}); start this camera step again"
         return None
+
+    def _log_pose_change(self, moved: bool, deltas: Mapping[str, float]) -> None:
+        """Log every pose change and return with its deltas (light audit §1: they were
+        invisible, so how often a LIS3DH blip fails a setup was unknown)."""
+        if moved == self._pose_moved:
+            return
+        self._pose_moved = moved
+        logger.info(
+            "[SETUP] rig pose %s: pitch %+.2f deg, roll %+.2f deg from the frozen pose "
+            "(tolerance %.2f deg)",
+            "changed" if moved else "returned within tolerance",
+            deltas.get("camera_pitch_deg", float("nan")),
+            deltas.get("roll_deg", float("nan")),
+            TEE_RANGE_ORIENTATION_DRIFT_DEG,
+        )
 
     @staticmethod
     def _readiness_reason(analysis: Mapping) -> str:
@@ -4769,9 +4792,23 @@ class StaticExposureController:
         observation_id: int,
         applied_controls: Sequence[tuple[float | None, float | None]] = (),
     ) -> tuple[ReferenceBallRangeResult, dict, str | None]:
-        """Confirm Save frames independently and at the locked applied controls."""
+        """Confirm Save frames independently and at the locked applied controls.
+
+        The exposure status is frozen when Save is pressed, before the whole-patch
+        search: the live loop keeps looking through the seconds that search takes, and
+        a transient pose blip that lands meanwhile used to fail a Save whose frames
+        had passed (light audit §1, retest 2 at 1.32 m, 13 Oct). The inner analyzer
+        freezes its readiness the same way and re-checks the pose after its search.
+        """
+        exposure = {**self.status(), "frozen_at": "save_pressed"}
+        with self._lock:
+            stable = self._last_observation.stable_observations if self._last_observation else 0
         result, analysis, reason = self._inner.analyze_for_save(frames, observation_id)
-        exposure = self.status()
+        exposure["status_after_search"] = {
+            key: value
+            for key, value in self.status().items()
+            if key in {"status", "reason", "locked_and_passing"}
+        }
         lock = exposure["lock"]
         if reason is None and not exposure["locked_and_passing"]:
             reason = "static exposure is not locked on a passing setting"
@@ -4781,8 +4818,6 @@ class StaticExposureController:
             if not applied_controls_match(step, *applied):
                 reason = "Save frames were not captured at the locked static exposure"
         if reason is None:
-            with self._lock:
-                stable = self._last_observation.stable_observations if self._last_observation else 0
             check = assess_static_exposure(
                 frames,
                 {
