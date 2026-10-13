@@ -209,6 +209,10 @@ rig_geometry_config: dict = {"enabled": False}
 # What the range setup handed this session (tee range, lens and ball heights) and
 # where each value came from; recorded in session_start (wiring audit S3, C4, C5).
 setup_handoff_config: dict = {"tee_range": None, "scene": None, "net_range": None}
+# The resting ball re-located inside the tester's fixed box before each swing (13 Oct)
+ball_at_address_monitor = None
+_ball_at_address_thread: threading.Thread | None = None
+BALL_AT_ADDRESS_EVERY_S = 1.0
 # The net's apparent range when the range setup measured none; flagged when used
 # (wiring audit C7, decision D7).
 DEFAULT_NET_RANGE_M = 4.6
@@ -1586,6 +1590,135 @@ def init_rig_geometry(path) -> None:
         )
 
 
+def init_camera_lens(lens_id: str | None) -> None:
+    """Put the selected lens's focal length under every camera metric, and record it.
+
+    The rig file's focal length is the stock lens's; ``--camera-lens-id`` names the
+    lens on the unit (config/lenses.json), whose focal length (nominal, or from a
+    checkerboard calibration kept for it) replaces it in this session's rig. The
+    rig file's own parameters stay the setup's binding. Without the flag the rig
+    file's lens is recorded as such.
+    """
+    global rig_geometry  # pylint: disable=global-statement
+    if rig_geometry is None:
+        return
+    from .camera import lens_profiles  # noqa: PLC0415
+
+    catalogue = lens_profiles.load_catalogue()
+    if lens_id is not None:
+        catalogue.get(lens_id)
+    lens = lens_profiles.active_lens(
+        rig_geometry, catalogue, lens_id, [lens_profiles.default_calibration_dir()]
+    )
+    if lens_id is not None:
+        rig_geometry = lens_profiles.rig_with_lens(rig_geometry, lens)
+    rig_geometry_config["lens"] = lens.to_dict()
+    logger.info("[SERVER] Camera lens: %s", lens.label())
+
+
+def target_line_config(args) -> dict:
+    """The aim point's target line the tester handed over, for the kiosk's Live tab."""
+    status = getattr(args, "target_line_status", None)
+    yaw = getattr(args, "target_line_yaw_deg", None)
+    if status is None:
+        status = "set" if yaw is not None else "not_set"
+    return {
+        "status": status,
+        "yaw_deg": yaw if status == "set" else None,
+        "total_uncertainty_deg": (
+            getattr(args, "target_line_uncertainty_deg", None) if status == "set" else None
+        ),
+        "source": (getattr(args, "target_line_source", None) or "aim_point")
+        if status == "set"
+        else None,
+    }
+
+
+def shot_ball_at_address(trigger_at: float | None) -> dict | None:
+    """The shot's own resting-ball look: the last one before its trigger, if recent."""
+    monitor = ball_at_address_monitor
+    if monitor is None or trigger_at is None:
+        return None
+    return monitor.for_shot(float(trigger_at))
+
+
+def ball_at_address_look(monitor, runtime, *, now: float) -> dict | None:
+    """One look at the camera's latest frame, unless it is busy with a clip."""
+    if monitor is None or runtime is None:
+        return None
+    try:
+        status = runtime.status()
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+    if status.get("collecting_tail") or status.get("saving") or status.get("pending_saves"):
+        return None
+    frames = runtime.recent_frames(1, timeout_s=0.5)
+    if not frames:
+        return None
+    return monitor.observe(frames[-1].image, at=now)
+
+
+def _ball_at_address_loop() -> None:
+    while True:
+        time.sleep(BALL_AT_ADDRESS_EVERY_S)
+        try:
+            ball_at_address_look(ball_at_address_monitor, camera_capture_runtime, now=time.time())
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning("[BALL_AT_ADDRESS] look failed", exc_info=True)
+
+
+def start_ball_at_address(box, setup_ball, setup_range_m) -> None:
+    """Re-locate the resting ball in the box about once a second, between clips."""
+    global ball_at_address_monitor, _ball_at_address_thread  # pylint: disable=global-statement
+    from .camera.ball_at_address import BallAtAddress  # noqa: PLC0415
+
+    ball_at_address_monitor = BallAtAddress(
+        box_px=box,
+        setup_ball=setup_ball,
+        setup_range_m=setup_range_m,
+        lens=rig_geometry_config.get("lens"),
+    )
+    if _ball_at_address_thread is None or not _ball_at_address_thread.is_alive():
+        _ball_at_address_thread = threading.Thread(
+            target=_ball_at_address_loop, name="ball-at-address", daemon=True
+        )
+        _ball_at_address_thread.start()
+
+
+@app.route("/api/target-line")
+def api_target_line():
+    """The target line this session's yaw flags came from (contract 13 Oct)."""
+    line = setup_handoff_config.get("target_line") or {}
+    status = line.get("status") or "not_set"
+    shown = status == "set"
+    return jsonify(
+        {
+            "status": "set" if shown else "not_set",
+            "yaw_deg": line.get("yaw_deg") if shown else None,
+            "total_uncertainty_deg": line.get("total_uncertainty_deg") if shown else None,
+            "source": line.get("source") if shown else None,
+        }
+    )
+
+
+@app.route("/api/ball-at-address")
+def api_ball_at_address():
+    """The resting ball's last look in the fixed box, for the tester's ready light."""
+    monitor = ball_at_address_monitor
+    latest = monitor.latest() if monitor is not None else None
+    if latest is None:
+        return jsonify(
+            {
+                "state": "unknown",
+                "range_m": None,
+                "range_source": None,
+                "updated_at": None,
+                "reason": "no ball box" if monitor is None else "no look yet",
+            }
+        )
+    return jsonify(latest)
+
+
 def _apply_solved_camera_height(args, enclosure) -> None:
     """Use the setup's solved lens height; the radar keeps its offset below the lens.
 
@@ -1681,6 +1814,9 @@ def init_setup_handoff(args, enclosure) -> None:
             "range_space": "apparent",
             "assumed": args.iwr6843_net_range_source == "default_not_measured",
         },
+        # 13 Oct: the aim point's target line, and the lens every camera metric used
+        "target_line": target_line_config(args),
+        "lens": rig_geometry_config.get("lens"),
         # P8-5, D36 item 4a: applied on swings as each one's LIS3DH pitch plus this
         # offset with the rig's mode focal length; the resting ball's per-shot
         # inference is kept as a cross-check
@@ -2079,6 +2215,7 @@ def init_camera_capture(
     setup_ball: dict | None = None,
     hitting_zone: tuple[int, int, int, int] | None = None,
     tee_side_offset_m: float | None = None,
+    lens: dict | None = None,
 ) -> bool:
     """Initialize passive high-speed camera capture for offline alignment."""
     global camera_capture_runtime, camera_capture_config  # pylint: disable=global-statement
@@ -2108,6 +2245,7 @@ def init_camera_capture(
             diagnostic_capture=diagnostic_capture,
             setup_ball=setup_ball,
             hitting_zone=hitting_zone,
+            lens=lens,
         )
         camera_capture_runtime = CameraCaptureRuntime(
             output_dir=output_dir,
@@ -2157,6 +2295,8 @@ def init_camera_capture(
             "alignment_y_pct": 50.0,
             "setup_ball": dict(settings.setup_ball) if settings.setup_ball else None,
             "hitting_zone": list(settings.hitting_zone) if settings.hitting_zone else None,
+            # the lens every camera metric of this session used (13 Oct)
+            "lens": dict(settings.lens) if settings.lens else None,
         }
         logger.info("[SERVER] Camera capture initialized: %s", camera_capture_config)
         return True
@@ -4239,6 +4379,14 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             else None
         )
         club = shot.club.value
+        # 13 Oct: the resting ball re-located in the box before this swing gives the
+        # shot its own range; without a look the setup's range stands, said so
+        at_address = shot_ball_at_address(shot.impact_timestamp)
+        own_range = (
+            {"tee_range_m": float(at_address["range_m"]), "ball_at_address": at_address}
+            if at_address is not None and at_address.get("range_m") is not None
+            else ({"ball_at_address": at_address} if at_address is not None else {})
+        )
         snapshotter = getattr(iwr6843_runtime, "replay_config_snapshot", None)
         iwr_runtime_config_snapshot = (
             snapshotter(  # pylint: disable=not-callable
@@ -4246,6 +4394,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 club=club,
                 club_speed_mph=shot.club_speed_mph,
                 effective_tilt_deg=effective_tilt_deg,
+                **own_range,
             )
             if callable(snapshotter)
             else None
@@ -4256,6 +4405,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             club=club,
             club_speed_mph=shot.club_speed_mph,
             tilt_deg=effective_tilt_deg,
+            **({"tee_range_m": own_range["tee_range_m"]} if "tee_range_m" in own_range else {}),
         )
         capture = shot_result.capture
         measurement = shot_result.measurement
@@ -7653,6 +7803,37 @@ def _add_battery_arguments(parser):
     )
 
 
+def _add_box_kiosk_arguments(parser):
+    """The tester's fixed box, lens and target line, as the kiosk takes them (13 Oct)."""
+    parser.add_argument(
+        "--camera-lens-id",
+        default=None,
+        help=(
+            "The lens on the unit (config/lenses.json): its focal length, nominal or from "
+            "a checkerboard calibration kept for it, replaces the rig file's for every "
+            "camera metric, and is recorded"
+        ),
+    )
+    parser.add_argument(
+        "--camera-ball-box",
+        default=None,
+        metavar="X0,Y0,X1,Y1",
+        help=(
+            "The tester's fixed placement box in this camera mode. Before each swing the "
+            "resting ball is found in it again and the shot takes its own range"
+        ),
+    )
+    parser.add_argument("--target-line-yaw-deg", type=float, default=None)
+    parser.add_argument("--target-line-uncertainty-deg", type=float, default=None)
+    parser.add_argument("--target-line-source", default=None)
+    parser.add_argument(
+        "--target-line-status",
+        choices=("set", "skipped", "not_set"),
+        default=None,
+        help="Whether the tester set or skipped the aim point (served at /api/target-line)",
+    )
+
+
 def _add_iwr_tee_range_arguments(parser):
     """Add IWR tee-range inputs without guessing the physical placement."""
     parser.add_argument(
@@ -8124,6 +8305,7 @@ def main():
         help="BCM GPIO receiving the shared sound-trigger edge (default: 17)",
     )
     _add_iwr_tee_range_arguments(parser)
+    _add_box_kiosk_arguments(parser)
     parser.add_argument(
         "--iwr6843-net-m",
         "--net-range-m",
@@ -8422,6 +8604,18 @@ def main():
     except (OSError, ValueError, json.JSONDecodeError) as error:
         parser.error(f"--rig-geometry: {error}")
     try:
+        init_camera_lens(args.camera_lens_id)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        parser.error(f"--camera-lens-id: {error}")
+    camera_ball_box = None
+    if args.camera_ball_box:
+        from .camera.ball_at_address import parse_ball_box  # noqa: PLC0415
+
+        try:
+            camera_ball_box = parse_ball_box(args.camera_ball_box)
+        except ValueError as exc:
+            parser.error(f"--camera-ball-box: {exc}")
+    try:
         init_camera_calibrated_fusion(
             args.camera_optical_calibration,
             args.camera_placement,
@@ -8682,12 +8876,15 @@ def main():
             setup_ball=camera_setup_ball,
             hitting_zone=camera_hitting_zone,
             tee_side_offset_m=args.tee_side_offset_m,
+            lens=rig_geometry_config.get("lens"),
         ):
             print("Camera capture unavailable - running without high-speed camera capture")
             startup_status.skip("camera", "High-speed camera unavailable; continuing")
         else:
             print(f"Camera capture enabled: {camera_capture_output_dir}")
             startup_status.ready("camera", "High-speed camera connected")
+            if camera_ball_box is not None:
+                start_ball_at_address(camera_ball_box, camera_setup_ball, args.iwr6843_tee_m)
 
     if args.iwr6843:
         startup_status.start("ti", "Connecting TI radar")
@@ -8720,8 +8917,12 @@ def main():
             save_dumps=args.debug or _cloud_raw_uploads_enabled(),
             # The tee sits on the camera's axis; without a rig it is assumed
             # directly downrange of the IWR, never July's 64 mm (audit F10).
+            # the ball's side offset from the radar's axis as the setup measured it
+            # (13 Oct); else the rig's camera axis (audit F10)
             lateral_tee_offset_m=(
-                enclosure.tee_lateral_offset_m
+                float(args.tee_side_offset_m)
+                if args.tee_side_offset_m is not None
+                else enclosure.tee_lateral_offset_m
                 if enclosure is not None and enclosure.tee_lateral_offset_m is not None
                 else 0.0
             ),

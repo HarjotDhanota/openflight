@@ -325,6 +325,8 @@ class IWR6843Runtime:
         club: str | None = None,
         club_speed_mph: float | None = None,
         effective_tilt_deg: float | None = None,
+        tee_range_m: float | None = None,
+        ball_at_address: dict | None = None,
     ) -> dict:
         """Freeze every primitive needed by the hardware-free estimator."""
         payload = {
@@ -349,6 +351,9 @@ class IWR6843Runtime:
                 "club": club,
                 "club_speed_mph": club_speed_mph,
                 "effective_tilt_deg": effective_tilt_deg,
+                # the shot's own re-located range, when the kiosk had one (13 Oct)
+                "tee_range_m": tee_range_m,
+                "ball_at_address": ball_at_address,
             },
         }
         encoded = json.dumps(
@@ -388,8 +393,13 @@ class IWR6843Runtime:
         club: str | None,
         club_speed_mph: float | None = None,
         tilt_deg: float | None = None,
+        tee_range_m: float | None = None,
     ) -> IWR6843ShotResult:
-        """Match one OPS shot to TI data and run LCMF."""
+        """Match one OPS shot to TI data and run LCMF.
+
+        ``tee_range_m`` is this shot's own range (the resting ball re-located in the
+        box before the swing); the setup's stands without it.
+        """
         process_started_ns = time.monotonic_ns()
         capture = self.capture_monitor.capture_for_shot(
             impact_timestamp,
@@ -419,6 +429,8 @@ class IWR6843Runtime:
         shot_calibration = self.calibration
         if tilt_deg is not None:
             shot_calibration = replace(self.calibration, tilt_rad=math.radians(tilt_deg))
+        if tee_range_m is not None:
+            shot_calibration = replace(shot_calibration, tee_range_m=float(tee_range_m))
         if getattr(shot_calibration, "tee_range_m", 1.0) is None:
             return result(
                 measurement=None,

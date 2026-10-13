@@ -114,6 +114,8 @@ class CameraCaptureSettings:
     # hitting zone the exposure meter and the zone rule judge. Without it the
     # fixed centre-lower box stands in (P7-15).
     hitting_zone: tuple[int, int, int, int] | None = None
+    # The lens on the unit (lens_profiles.ActiveLens.to_dict), recorded in every clip.
+    lens: Mapping | None = None
 
     @property
     def enforced_profile(self) -> Mapping | None:
@@ -1450,6 +1452,8 @@ class CameraCaptureRuntime:
                 },
                 "capture_mode": capture_mode,
                 "tester_setup": trigger_evidence,
+                # the lens every camera number of this clip comes through (13 Oct)
+                "lens": dict(self.settings.lens) if self.settings.lens else None,
             }
         )
         (shot_dir / "metadata.json").write_text(json.dumps(summary, indent=2) + "\n")
