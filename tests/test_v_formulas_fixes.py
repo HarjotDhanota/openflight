@@ -340,3 +340,77 @@ def test_the_flight_s_spin_follows_the_moment_model():
         / ballistics.M_TO_YD
     )
     assert math.log(3000.0 / points[-1].spin_rpm) == pytest.approx(k * path, rel=0.02)
+
+
+# ---- C5: an explicit zero yaw is the target line; only an unset one is the boresight ----
+
+
+@pytest.mark.parametrize("offset", [0.0, -0.0, 3.0, -3.0])
+def test_an_explicit_offset_even_zero_is_the_target_line_frame(offset):
+    from openflight.horizontal_frame import TARGET_LINE, frame_for
+
+    assert frame_for(offset) == TARGET_LINE
+
+
+def test_an_unset_offset_is_the_boresight_frame():
+    from openflight.horizontal_frame import UNIT_BORESIGHT, frame_for
+
+    assert frame_for(None) == UNIT_BORESIGHT
+
+
+def test_the_kiosk_s_frame_for_a_zero_yaw_is_the_target_line(monkeypatch):
+    import openflight.server as server_module
+
+    monkeypatch.setattr(server_module, "horizontal_offset_deg", 0.0)
+    assert server_module._horizontal_frame() == "target_line"
+    monkeypatch.setattr(server_module, "horizontal_offset_deg", None)
+    assert server_module._horizontal_frame() == "unit_boresight"
+
+
+@pytest.mark.parametrize("offset, frame", [(0.0, "target_line"), (None, "unit_boresight")])
+def test_the_club_arc_keeps_a_zero_offset_apart_from_none(offset, frame):
+    from openflight.club_arc import club_delivery_payload
+
+    delivery = {"status": "rejected_low_path_consensus", "head_positions": []}
+    if offset is not None:
+        delivery["horizontal_offset_deg"] = offset
+    payload = club_delivery_payload(delivery, club=ClubType.IRON_7, handedness="RH")
+    assert payload["arc"]["frame"] == frame
+
+
+@pytest.mark.parametrize("offset, frame", [(0.0, "target_line"), (None, "unit_boresight")])
+def test_the_camera_club_path_keeps_a_zero_offset_apart_from_none(offset, frame):
+    from openflight.camera.club_delivery import ChainedDelivery, _in_output_frame
+
+    delivery = _in_output_frame(ChainedDelivery(status="chained_high", club_path_deg=1.5), offset)
+    assert delivery.club_path_frame == frame
+    assert delivery.club_path_deg == 1.5
+
+
+def test_the_camera_geometry_contract_carries_an_unset_offset_as_none():
+    import dataclasses
+
+    from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
+
+    fields = {field.name for field in dataclasses.fields(EffectiveCameraGeometryInputs)}
+    assert "ball_horizontal_output_offset_deg" in fields
+    base = dict(
+        camera_height_m=0.095,
+        radar_height_m=0.044,
+        tee_slant_range_m=2.1,
+        ball_height_m=0.021,
+        camera_lateral_offset_m=0.0,
+        camera_forward_offset_m=0.0,
+        image_width_px=320,
+        image_height_px=200,
+        horizontal_pixel_sign=1.0,
+        roll_correction_deg=0.0,
+        ball_diameter_m=0.0427,
+        ball_lateral_offset_m=0.0,
+    )
+    base = {key: value for key, value in base.items() if key in fields}
+    unset = EffectiveCameraGeometryInputs(ball_horizontal_output_offset_deg=None, **base)
+    zero = EffectiveCameraGeometryInputs(ball_horizontal_output_offset_deg=0.0, **base)
+    assert unset.ball_geometry().horizontal_offset_deg is None
+    assert zero.ball_geometry().horizontal_offset_deg == 0.0
+    assert unset.delivery_geometry().horizontal_offset_deg is None

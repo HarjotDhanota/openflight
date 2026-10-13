@@ -158,8 +158,9 @@ class CameraDeliveryGeometry:
     calibrated_model: Any = None
     # The one horizontal offset (D36 item 2): -(target yaw), + when the
     # boresight points right of the target line. Added to club path exactly as
-    # to the camera's horizontal launch, so both stay in one frame (F9).
-    horizontal_offset_deg: float = 0.0
+    # to the camera's horizontal launch, so both stay in one frame (F9). None: no
+    # target line set.
+    horizontal_offset_deg: float | None = None
     # The resting ball's side offset from the radar's axis, + target-right: the
     # setup's camera-radar pair (D36 item 4b), else 0 (assumed dead ahead).
     ball_lateral_offset_m: float = 0.0
@@ -235,7 +236,7 @@ class ChainedDelivery:
     head_positions: tuple[HeadPosition, ...] = ()
     contact_t_s: float | None = None
     clock: str | None = None
-    horizontal_offset_deg: float = 0.0
+    horizontal_offset_deg: float | None = None
     ball_position: dict | None = None
 
 
@@ -350,9 +351,10 @@ def _in_output_frame(delivery: ChainedDelivery, offset_deg: float) -> ChainedDel
     """Report every path with the one horizontal offset (audit F9, D36 item 2).
 
     The gates above judge path in the measurement frame; only the published
-    values move. A zero yaw leaves the unit's boresight as the zero.
+    values move. No target line (None) leaves the unit's boresight as the zero; a
+    zero offset leaves the values but names the target-line frame.
     """
-    if offset_deg == 0.0:
+    if offset_deg is None:
         return delivery
 
     def turned(value: float | None) -> float | None:
@@ -1207,7 +1209,11 @@ def estimate_chained_delivery(
         "head_positions": _head_positions(pair_estimates, impact_idx, camera_s),
         "contact_t_s": contact_camera_s,
         "clock": timestamp_source,
-        "horizontal_offset_deg": float(geometry.horizontal_offset_deg or 0.0),
+        "horizontal_offset_deg": (
+            float(geometry.horizontal_offset_deg)
+            if geometry.horizontal_offset_deg is not None
+            else None
+        ),
         "ball_position": {
             "lateral_m": float(geometry.ball_position_lfu[0]),
             "up_m": float(geometry.ball_position_lfu[2]),

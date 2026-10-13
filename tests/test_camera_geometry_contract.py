@@ -68,7 +68,8 @@ def test_legacy_record_uses_only_recorded_fields_and_explicit_legacy_defaults():
     assert effective.camera_forward_offset_m == 0
     assert effective.horizontal_pixel_sign == 1
     assert effective.roll_correction_deg == 0
-    assert effective.ball_horizontal_output_offset_deg == 0
+    # a legacy record set no target line: unset, not 0.0 (V-formulas C5)
+    assert effective.ball_horizontal_output_offset_deg is None
 
 
 def test_horizontal_offset_rotates_ball_and_club_geometry_together():

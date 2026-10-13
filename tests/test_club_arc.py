@@ -301,7 +301,9 @@ def test_horizontal_offset_moves_every_horizontal_output_into_the_target_line_fr
         horizontal_offset_deg=offset_deg,
     )
 
-    assert turned.frame == ("target_line" if offset_deg else "unit_boresight")
+    # an explicit 0.0 is a target line straight down the boresight (V-formulas C5)
+    assert turned.frame == "target_line"
+    assert boresight.frame == "unit_boresight"
     assert turned.club_path_deg == pytest.approx(boresight.club_path_deg + offset_deg, abs=0.05)
     assert turned.swing_direction_deg == pytest.approx(
         boresight.swing_direction_deg + offset_deg, abs=0.05
@@ -412,7 +414,7 @@ def _delivery(positions, **overrides):
         "attack_confidence_tier": "high",
         "club_path_frame": "unit_boresight",
         "contact_t_s": 0.0,
-        "horizontal_offset_deg": 0.0,
+        "horizontal_offset_deg": None,
         "head_positions": [
             {"t_s": p.t_s, "lateral_m": p.lateral_m, "up_m": p.up_m, "forward_m": p.forward_m}
             for p in positions

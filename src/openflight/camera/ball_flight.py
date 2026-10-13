@@ -125,8 +125,8 @@ class CameraBallGeometry:
     camera_lateral_offset_m: float = 0.0
     # The one horizontal offset (D36 item 2, ``openflight.horizontal_frame``):
     # -(target yaw), + when the boresight points right of the target line.
-    # Added once to every reported horizontal angle.
-    horizontal_offset_deg: float = 0.0
+    # Added once to every reported horizontal angle. None: no target line set.
+    horizontal_offset_deg: float | None = None
     # Convert saved-image horizontal pixels back to physical target direction.
     # Mirrored operator previews use -1; unmirrored captures use +1.
     horizontal_pixel_sign: float = 1.0

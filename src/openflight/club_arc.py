@@ -439,7 +439,7 @@ def fit_club_arc(
     impact_t_s: Optional[float],
     club: Any,
     handedness: Optional[str] = RIGHT_HANDED,
-    horizontal_offset_deg: Optional[float] = 0.0,
+    horizontal_offset_deg: Optional[float] = None,
     position_noise_m: float = POSITION_NOISE_FLOOR_M,
     ball_position: Optional[HeadPosition] = None,
 ) -> ClubArc:
@@ -723,7 +723,9 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
     """
     handed = normalize_handedness(handedness)
     data = _as_mapping(delivery)
-    offset = float((data or {}).get("horizontal_offset_deg") or 0.0)
+    # None: no target line set (boresight frame); 0.0 is a target line (frame_for)
+    recorded = (data or {}).get("horizontal_offset_deg")
+    offset = float(recorded) if recorded is not None else None
     if data is None:
         arc = _not_measured("no camera club delivery", handedness=handed, frame=frame_for(offset))
     else:

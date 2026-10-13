@@ -254,7 +254,7 @@ def run_shot(kiosk, *, delivery, handed, yaw, measured_club=False):
             for t, p in zip(arc["times"], bore_points)
         ],
         "contact_t_s": 0.0,
-        "horizontal_offset_deg": offset or 0.0,
+        "horizontal_offset_deg": offset,
     }
     launch_h_bore = truth["launch_h"] + yaw
     shot = Shot(

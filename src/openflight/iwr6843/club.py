@@ -538,7 +538,7 @@ def experimental_path_candidate(
     phase_tx3: np.ndarray,
     frames: np.ndarray,
     *,
-    aim_offset_deg: float = 0.0,
+    aim_offset_deg: float | None = None,
     phase_reference_rad: float | None = None,
 ) -> tuple[float | None, str, float | None]:
     """Fuse TX2 horizontal motion through time without midpoint branch flips.
@@ -625,7 +625,7 @@ def estimate_club_path(
     *,
     ops_club_speed_mph: float,
     impact_t_s: float | None,
-    aim_offset_deg: float = 0.0,
+    aim_offset_deg: float | None = None,
     phase_reference_rad: float | None = None,
     tdm_sign: int = 1,
     window_policy: ClubWindowPolicy | None = None,

@@ -2059,7 +2059,7 @@ def init_camera_capture(
     scaler_crop: tuple[int, int, int, int] | None,
     mount_height_m: float,
     lateral_offset_m: float,
-    horizontal_offset_deg: float,
+    horizontal_offset_deg: float | None,
     use_gpio_trigger: bool,
     auto_exposure: bool = True,
     forward_offset_m: float = 0.0,
@@ -2221,7 +2221,7 @@ def init_iwr6843(
     tilt_deg: float,
     radar_height_m: float,
     ball_height_m: float = 0.04,
-    azimuth_offset_deg: float = 0.0,
+    azimuth_offset_deg: float | None = None,
     horizontal_phase_reference_rad: float | None = None,
     save_dumps: bool = False,
     lateral_tee_offset_m: float = 0.0,
@@ -8333,8 +8333,10 @@ def main():
         )
     except ValueError as error:
         parser.error(str(error))
-    args.camera_capture_horizontal_offset_deg = horizontal_offset_deg or 0.0
-    args.iwr6843_azimuth_offset_deg = horizontal_offset_deg or 0.0
+    # None stays None: an unset target line is the boresight frame, an explicit 0.0
+    # (D34's yaw of 0) the target line (horizontal_frame.frame_for)
+    args.camera_capture_horizontal_offset_deg = horizontal_offset_deg
+    args.iwr6843_azimuth_offset_deg = horizontal_offset_deg
     if args.iwr6843_tee_range_pending:
         args.iwr6843_tee_m = None
 
