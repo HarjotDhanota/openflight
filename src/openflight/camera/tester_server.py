@@ -1400,6 +1400,7 @@ def tee_range_handoff(
     target_line_record: Mapping | None = None,
     net_line: Mapping | None = None,
     lens=None,
+    camera_tilt_path: Path | None = None,
 ) -> tuple[list[str], dict]:
     """The swing server's tee-range arguments, and the record of what they hand over.
 
@@ -1550,6 +1551,9 @@ def tee_range_handoff(
     if lens is not None and lens.lens_id is not None:
         # every camera calculation in the kiosk takes the selected lens's focal length
         args += ["--camera-lens-id", lens.lens_id]
+    if camera_tilt_path is not None:
+        # 13 Oct (Build C): the swings calibrate this lens's camera tilt
+        args += ["--camera-tilt-calibration-path", str(camera_tilt_path)]
     window = candidate.evidence.get("camera_window") if candidate is not None else None
     record = {
         "schema": HANDED_TO_SWINGS_SCHEMA,
@@ -10057,6 +10061,7 @@ def create_app(
                     target_line_record=current_target_line(params.tester_id, eligibility),
                     net_line=read_net_line(tester_root(sessions_root, params.tester_id)),
                     lens=current_lens(),
+                    camera_tilt_path=tilt_path(),
                 )[1]
                 if action == "swings"
                 else None
@@ -10550,6 +10555,7 @@ def create_app(
                 target_line_record=current_target_line(tester_id, admitted_setup[tester_id]),
                 net_line=read_net_line(tester_root(sessions_root, tester_id)),
                 lens=current_lens(),
+                camera_tilt_path=tilt_path(),
             )
             commands, log_path = action_commands(
                 "ladder",

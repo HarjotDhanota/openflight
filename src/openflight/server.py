@@ -1873,17 +1873,19 @@ def init_setup_handoff(args, enclosure) -> None:
             or ("command_line" if tee is not None else "pending"),
             "candidate_id": args.iwr6843_tee_range_candidate,
             # 13 Oct: the camera's coarse estimate, a prior each shot's capture refines
-            "prior": (
+            **(
                 {
-                    "range_m": args.iwr6843_tee_prior_m,
-                    "uncertainty_m": getattr(args, "iwr6843_tee_prior_uncertainty_m", None),
-                    "source": getattr(args, "iwr6843_tee_prior_source", None),
-                    "label": "estimated",
+                    "prior": {
+                        "range_m": args.iwr6843_tee_prior_m,
+                        "uncertainty_m": getattr(args, "iwr6843_tee_prior_uncertainty_m", None),
+                        "source": getattr(args, "iwr6843_tee_prior_source", None),
+                        "label": "estimated",
+                    },
+                    "per_shot_range": "iwr_post_impact_else_camera_prior",
                 }
                 if getattr(args, "iwr6843_tee_prior_m", None) is not None
-                else None
+                else {}
             ),
-            "per_shot_range": "iwr_post_impact_else_camera_prior",
         },
         "scene": {
             "reference": "hitting_surface",
@@ -5497,6 +5499,105 @@ def _strip_offset_refusal(camera_capture) -> str | None:
     )
 
 
+# 13 Oct (Build C): the unit's camera-tilt file the swings calibrate, per lens, and
+# the fixed box in this mode's pixels where the resting ball is looked for
+camera_tilt_calibration_path: Path | None = None
+camera_ball_box_px: tuple | None = None
+
+
+def _lis3dh_camera_pitch(inclinometer) -> float | None:
+    """This swing's camera pitch from its own stable LIS3DH reading (D36 item 4a)."""
+    from .camera import camera_tilt  # noqa: PLC0415
+
+    # pylint: disable-next=protected-access
+    pitch = camera_tilt._stable_pitch(inclinometer)
+    if pitch is None or rig_geometry is None:
+        return None
+    expected = rig_geometry.expected_inclinometer_orientation().pitch_deg or 0.0
+    return float(rig_geometry.boresight_pitch_deg) + (pitch - float(expected))
+
+
+def _calibrate_camera_tilt_from_swing(shot: Shot, camera_archive) -> None:
+    """One swing's camera-tilt pair: its measured IWR launch point and the resting ball's
+    row in its own pre-impact frames (13 Oct, Build C; openflight.camera.swing_tilt).
+
+    Recorded in the unit's per-lens tilt file the tester handed over; two that agree
+    calibrate the tilt. A shot ranged only by the camera prior is never a pair.
+    """
+    from .camera import swing_tilt  # noqa: PLC0415
+
+    def skipped(reason: str) -> None:
+        shot.camera_tilt_swing_pair = {"status": "skipped", "reason": reason}
+
+    if camera_tilt_calibration_path is None:
+        skipped("no camera-tilt calibration file was handed to the kiosk")
+        return
+    if getattr(shot, "ball_range_source", None) != "iwr_post_impact":
+        skipped("the shot's ball range was not measured by the IWR")
+        return
+    if rig_geometry is None or getattr(rig_geometry, "lens_height_above_floor_mm", None) is None:
+        skipped("no rig geometry with a lens height")
+        return
+    if camera_ball_box_px is None:
+        skipped("no ball box for this mode")
+        return
+    if not camera_archive or "frames" not in camera_archive:
+        skipped("no camera frames for this shot")
+        return
+    try:
+        from .camera.ball_pixels import mode_focal_px  # noqa: PLC0415
+        from .camera.triggered_buffer import exposure_trigger_index  # noqa: PLC0415
+        from .rig_geometry import camera_rdf_offset_to_target_lfu  # noqa: PLC0415
+
+        frames = camera_archive["frames"]
+        trigger = exposure_trigger_index(camera_archive, len(frames))
+        if trigger is None and "pre_trigger_count" in camera_archive:
+            trigger = int(camera_archive["pre_trigger_count"]) - 1
+        ball = swing_tilt.resting_ball_px(frames, trigger_index=trigger, box_px=camera_ball_box_px)
+        height_px, width_px = int(frames.shape[-2]), int(frames.shape[-1])
+        lens_m = float(rig_geometry.lens_height_above_floor_mm) / 1000.0
+        offset = camera_rdf_offset_to_target_lfu(rig_geometry.iwr_origin_mm or (0.0, 0.0, 0.0))
+        camera_at_pitch = swing_tilt.nominal_camera_at_pitch(
+            focal_px=mode_focal_px(width_px, rig_geometry),
+            width=width_px,
+            height=height_px,
+            camera_origin_lfu=(0.0, 0.0, lens_m),
+            radar_origin_lfu=(float(offset[0]), float(offset[1]), lens_m + float(offset[2])),
+        )
+        pair = swing_tilt.swing_pair(
+            {
+                "ball_range_m": shot.ball_range_m,
+                "ball_range_source": shot.ball_range_source,
+                "ball_range_uncertainty_m": shot.ball_range_uncertainty_m,
+            },
+            ball_px=ball,
+            lis3dh_pitch_deg=_lis3dh_camera_pitch(getattr(shot, "inclinometer", None)),
+            camera_at_pitch=camera_at_pitch,
+        )
+        outcome = swing_tilt.record_swing_pair(
+            camera_tilt_calibration_path,
+            pair,
+            facts={"shot_number": shot.shot_number, "ball_px": ball},
+        )
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] Camera tilt swing pair failed: %s", error, exc_info=True)
+        skipped(f"the swing pair failed: {error}")
+        return
+    shot.camera_tilt_swing_pair = {
+        "status": pair.get("status"),
+        "reason": pair.get("reason"),
+        "offset_deg": (pair.get("solved") or {}).get("offset_deg"),
+        "uncertainty_deg": (pair.get("solved") or {}).get("uncertainty_deg"),
+        "ball_px": ball,
+        "outcome": outcome,
+    }
+    logger.info(
+        "[SERVER] Camera tilt swing pair: %s (%s)",
+        pair.get("status"),
+        outcome.get("action") if isinstance(outcome, dict) else outcome,
+    )
+
+
 def _fuse_camera_measurements(
     shot: Shot,
     camera_capture,
@@ -5559,8 +5660,9 @@ def _fuse_camera_measurements(
                 EffectiveCameraGeometryInputs,
             )
 
+            # this shot's own range (13 Oct), never the session's
             geometry = EffectiveCameraGeometryInputs.from_live(
-                camera_capture_config, iwr6843_runtime.calibration
+                camera_capture_config, shot_iwr_calibration(shot)
             )
             if camera_optical_calibration is not None:
                 from openflight.camera.calibrated_projection import (  # noqa: PLC0415
@@ -5739,6 +5841,7 @@ def _fuse_camera_measurements(
             logger.warning("[SERVER] Shared camera fusion failed: %s", error, exc_info=True)
     _fuse_camera_ball_flight(shot, camera_capture, camera_archive)
     _fuse_camera_club_delivery(shot, camera_capture, camera_archive)
+    _calibrate_camera_tilt_from_swing(shot, camera_archive)
     if shot.calibrated_camera_status == "rejected":
         if shot.launch_angle_horizontal_source in {
             "camera_assisted_experimental",
@@ -8034,6 +8137,15 @@ def _add_iwr_tee_range_arguments(parser):
         help="Where the prior came from (camera_size_coarse from the tester's setup)",
     )
     parser.add_argument(
+        "--camera-tilt-calibration-path",
+        default=None,
+        help=(
+            "The unit's per-lens camera-tilt file (13 Oct, Build C): each swing with a "
+            "measured IWR launch point and the resting ball's row adds a pair to it; two "
+            "that agree calibrate the tilt"
+        ),
+    )
+    parser.add_argument(
         "--iwr6843-tee-range-pending",
         action="store_true",
         help=(
@@ -8724,6 +8836,12 @@ def main():
         range_prior = range_prior_from_args(args)
     except ValueError as error:
         parser.error(str(error))
+    global camera_tilt_calibration_path  # pylint: disable=global-statement
+    camera_tilt_calibration_path = (
+        Path(args.camera_tilt_calibration_path).expanduser()
+        if getattr(args, "camera_tilt_calibration_path", None)
+        else None
+    )
 
     if args.camera_shot_analysis:
         # The flag turns the camera on, so every unit it runs on is a fusion unit.
@@ -9077,6 +9195,8 @@ def main():
             print(f"Camera capture enabled: {camera_capture_output_dir}")
             startup_status.ready("camera", "High-speed camera connected")
             if camera_ball_box is not None:
+                global camera_ball_box_px  # pylint: disable=global-statement
+                camera_ball_box_px = tuple(camera_ball_box)
                 start_ball_at_address(
                     camera_ball_box, camera_setup_ball, args.iwr6843_tee_m, range_prior
                 )

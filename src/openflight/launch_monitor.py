@@ -401,6 +401,8 @@ class Shot:
     ball_range_reason: Optional[str] = None
     # the launch-point estimate's own record (openflight.iwr6843.launch_range)
     iwr_launch_range: Optional[dict] = None
+    # this swing's camera-tilt pair (13 Oct, Build C; openflight.camera.swing_tilt)
+    camera_tilt_swing_pair: Optional[dict] = None
     spin_axis_deg: Optional[float] = None  # Spin axis tilt: 0=backspin, +right(fade), -left(draw)
     inclinometer: Optional[dict] = None  # Stable enclosure orientation used for this shot
     stage_timing: Optional[dict] = None
@@ -604,6 +606,7 @@ class Shot:
             "ball_range_label": self.ball_range_label,
             "ball_range_reason": self.ball_range_reason,
             "iwr_launch_range": deepcopy(self.iwr_launch_range),
+            "camera_tilt_swing_pair": deepcopy(self.camera_tilt_swing_pair),
             "experimental_fused_attack_angle_confidence": (
                 self.experimental_fused_attack_angle_confidence
             ),
