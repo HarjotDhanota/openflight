@@ -527,8 +527,22 @@ class PatchSearch:
         y1 = min(height, int(math.ceil(max(ys) + margin)) + 1)
         return x0, y0, max(x1, x0 + 1), max(y1, y0 + 1)
 
-    def contains(self, x_px: float, y_px: float) -> bool:
-        return point_in_polygon(x_px, y_px, self.outline_px)
+    def contains(self, x_px: float, y_px: float, margin_px: float = 0.0) -> bool:
+        """Inside the outline, or within ``margin_px`` of its edge (a fit's own scatter)."""
+        if point_in_polygon(x_px, y_px, self.outline_px):
+            return True
+        if margin_px <= 0.0:
+            return False
+        points = self.outline_px
+        for index, (x0, y0) in enumerate(points):
+            x1, y1 = points[(index + 1) % len(points)]
+            dx, dy = x1 - x0, y1 - y0
+            length = dx * dx + dy * dy
+            t = 0.0 if length == 0.0 else ((x_px - x0) * dx + (y_px - y0) * dy) / length
+            t = min(1.0, max(0.0, t))
+            if math.hypot(x_px - (x0 + t * dx), y_px - (y0 + t * dy)) <= margin_px:
+                return True
+        return False
 
     def to_dict(self) -> dict[str, Any]:
         return {

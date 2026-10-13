@@ -245,13 +245,39 @@ def test_the_search_never_leaves_the_patch():
     )
 
     assert result.selected is None
-    outline = search_for(camera, elsewhere).outline_px
+    search = search_for(camera, elsewhere)
+    outline = search.outline_px
     assert len(result.diagnostics["search_outline_px"]) == len(outline)
     x0, _y0, x1, _y1 = result.diagnostics["roi_px"]
-    assert x0 >= math.floor(min(x for x, _y in outline)) - 5
-    assert x1 <= math.ceil(max(x for x, _y in outline)) + 6
+    # the region holds a whole ball whose centre is on the outline's edge, no more
+    reach = 5 + search.diameter_px[1] / 2.0
+    assert x0 >= math.floor(min(x for x, _y in outline) - reach)
+    assert x1 <= math.ceil(max(x for x, _y in outline) + reach) + 1
     # there is no whole-frame search: a search without a patch is refused
     with pytest.raises(TypeError):
         estimate_patch_ball(  # pylint: disable=missing-kwoa
             frames, camera, ball_center_height_m=0.021335
         )
+
+
+def test_a_ball_whose_centre_is_just_inside_the_outline_s_edge_is_found_whole():
+    """harjot-indoor-test-2: the ball's centre 2 rows inside the fixed box's bottom edge;
+    the search region must hold the whole ball, not stop 4 px past the outline."""
+    camera = v3()
+    diameter = 34.0
+    ball_px = (531.0, 531.0)
+    search = PatchSearch(
+        outline_px=((483.2, 533.3), (796.8, 533.3), (796.8, 397.8), (483.2, 397.8)),
+        diameter_px=(8.0, 76.0),
+        centre_lateral_m=0.0,
+        half_size_m=0.3,
+        radar_window_m=(0.58, 4.1),
+    )
+    frames = indoor_scene(ball_px=ball_px, diameter_px=diameter)
+
+    result = estimate_patch_ball(frames, camera, search=search, ball_center_height_m=0.0213)
+
+    assert result.status == "selected"
+    assert result.selected.y_px == pytest.approx(ball_px[1], abs=2.0)
+    roi = result.diagnostics["roi_px"]
+    assert roi[3] >= ball_px[1] + diameter / 2.0

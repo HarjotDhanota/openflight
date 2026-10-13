@@ -58,6 +58,7 @@ class PlacementBoxConfig:  # pylint: disable=too-many-instance-attributes
     uncalibrated_window_pad_deg: float
     calibrated_window_pad_deg: float
     net_margin_m: float
+    size_far_margin_m: float
     sha256: str
 
     def to_dict(self) -> dict[str, Any]:
@@ -70,6 +71,7 @@ class PlacementBoxConfig:  # pylint: disable=too-many-instance-attributes
             "uncalibrated_window_pad_deg": self.uncalibrated_window_pad_deg,
             "calibrated_window_pad_deg": self.calibrated_window_pad_deg,
             "net_margin_m": self.net_margin_m,
+            "size_far_margin_m": self.size_far_margin_m,
             "sha256": self.sha256,
         }
 
@@ -107,6 +109,7 @@ def load_config(path: Path | None = None) -> PlacementBoxConfig:
         uncalibrated_window_pad_deg=_positive(payload, "uncalibrated_window_pad_deg"),
         calibrated_window_pad_deg=_positive(payload, "calibrated_window_pad_deg"),
         net_margin_m=_positive(payload, "net_margin_m"),
+        size_far_margin_m=_positive(payload, "size_far_margin_m"),
         sha256=hashlib.sha256(raw).hexdigest(),
     )
 
@@ -232,6 +235,10 @@ def project_fixed_box(
     nearest_lens, farthest_lens = float(np.min(lens)), float(np.max(lens))
     nearest, farthest = float(np.min(slant)), float(np.max(slant))
     tolerance = ground_patch.SIZE_TOLERANCE
+    # a ball's size does not move with the camera's pitch: the smallest the box looks
+    # for stands just past the window, not where a padded row meets the horizon (a
+    # 4 m, 8 px floor let small clutter use up the fits, harjot-indoor-test-2)
+    size_far = min(farthest_lens, config.placement_window_m[1] + config.size_far_margin_m)
     _nominal_lens, nominal_slant = ground_patch._ball_plane_distances(  # noqa: SLF001
         camera, ball, ground_patch.BALL_CENTER_HEIGHT_M
     )
@@ -251,7 +258,7 @@ def project_fixed_box(
             farthest + ground_patch.RADAR_WINDOW_MARGIN_M,
         ),
         diameter_px=(
-            focal * ground_patch.GOLF_BALL_DIAMETER_M / farthest_lens / (1.0 + tolerance),
+            focal * ground_patch.GOLF_BALL_DIAMETER_M / size_far / (1.0 + tolerance),
             focal * ground_patch.GOLF_BALL_DIAMETER_M / max(nearest_lens, 0.05) * (1.0 + tolerance),
         ),
         tilt_pad_deg=float(margin),

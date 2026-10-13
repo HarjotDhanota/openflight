@@ -913,7 +913,8 @@ def _patch_candidate(  # pylint: disable=too-many-locals
     residual = camera_height - float(origin[2])
     lateral = float(origin[0] + relative[0]) - search.centre_lateral_m
     reason = None
-    if not search.contains(ball.x, ball.y):
+    # a fitted centre may scatter as far past the outline as the seeds may start
+    if not search.contains(ball.x, ball.y, PATCH_SEED_MARGIN_PX):
         reason = PATCH_REJECTION
     elif not search.diameter_px[0] <= ball.diameter_px <= search.diameter_px[1]:
         reason = (
@@ -994,7 +995,12 @@ def estimate_patch_ball(  # pylint: disable=too-many-locals
     ):
         raise ValueError("camera frames do not match the declared saved-image mode")
     width, height = camera.image_width_px, camera.image_height_px
-    bounds = search.bounds_px(width, height, PATCH_SEED_MARGIN_PX)
+    # the region holds the whole of the largest ball whose centre lies in the outline:
+    # a centre near the edge needs its disk, not only the seed grid's margin
+    # (harjot-indoor-test-2: the ball's centre 2 rows inside the fixed box's edge)
+    bounds = search.bounds_px(
+        width, height, PATCH_SEED_MARGIN_PX + float(search.diameter_px[1]) / 2.0
+    )
     region = _placement_box_roi(bounds, roi, width, height)
     smallest, largest = search.diameter_px
     if expected_diameter_range_px is not None:

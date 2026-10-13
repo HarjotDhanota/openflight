@@ -149,3 +149,33 @@ def test_the_ball_states_and_their_plain_messages():
     assert state(_analysis("not_found"), _analysis("not_found"), settled=False) == "waiting"
     for name in placement_box.BALL_STATES:
         assert placement_box.BALL_MESSAGES[name].endswith(".")
+
+
+def test_a_fit_a_few_pixels_past_the_outline_still_counts_with_a_margin():
+    search = ground_patch.PatchSearch(
+        outline_px=((483.2, 533.3), (796.8, 533.3), (796.8, 397.8), (483.2, 397.8)),
+        diameter_px=(8.0, 76.0),
+        centre_lateral_m=0.0,
+        half_size_m=0.3,
+        radar_window_m=(0.6, 4.0),
+    )
+
+    assert not search.contains(535.0, 535.0)
+    assert search.contains(535.0, 535.0, margin_px=4.0)
+    assert not search.contains(535.0, 540.0, margin_px=4.0)
+    assert search.contains(600.0, 450.0, margin_px=4.0)
+
+
+def test_the_size_window_is_the_ball_s_physical_range_not_the_tilt_s():
+    """A ball's size does not depend on the camera's pitch: the smallest ball the box
+    looks for stands just past the window (2.9 m + 0.6 m), not at the horizon."""
+    camera = _v3()
+    config = placement_box.load_config()
+
+    projection = placement_box.project_fixed_box(camera, calibrated=False, roll_deg=0.0)
+
+    far = config.placement_window_m[1] + config.size_far_margin_m
+    smallest = camera.focal_size_px * 0.04267 / far / (1.0 + ground_patch.SIZE_TOLERANCE)
+    assert projection.diameter_px[0] == pytest.approx(smallest, rel=1e-3)
+    # the near end stays the padded one: a ball short of the window still fits
+    assert projection.diameter_px[1] > camera.focal_size_px * 0.04267 / 1.2
