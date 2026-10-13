@@ -69,6 +69,14 @@ function shotShape(spinAxisDeg: number | null | undefined): string | undefined {
   return t('shape.straight');
 }
 
+/**
+ * A fusion unit's smash is radial ball over radial club speed, not TrackMan's
+ * full-speed ratio: it is labelled, not hidden (D21, D37).
+ */
+export function smashSubtext(shot: Shot): string | undefined {
+  return isMeasured(shot.smash_factor) && shot.smash_factor_status === 'radial_ratio' ? 'radial ratio' : undefined;
+}
+
 function markEstimated(isEstimated: boolean): true | undefined {
   return isEstimated ? true : undefined;
 }
@@ -173,6 +181,7 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       id: 'smash',
       label: t('metric.smash'),
       value: isMeasured(shot.smash_factor) ? shot.smash_factor.toFixed(2) : NO_VALUE,
+      subtext: smashSubtext(shot),
     },
     {
       id: 'launch_v',

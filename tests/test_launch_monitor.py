@@ -6,6 +6,7 @@ import pytest
 
 from openflight.clubs import ClubType
 from openflight.launch_monitor import (
+    SMASH_RADIAL_RATIO,
     Shot,
     adjust_carry_for_launch_angle,
     estimate_carry_distance,
@@ -87,6 +88,52 @@ class TestShot:
         """Smash factor should be None if no club speed."""
         shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now())
         assert shot.smash_factor is None
+
+    @pytest.mark.parametrize("club", [0.0, -100.0])
+    def test_smash_factor_none_without_a_positive_club_speed(self, club):
+        """D37: TrackMan's ratio needs a positive club speed; none is filled in."""
+        shot = Shot(ball_speed_mph=150.0, club_speed_mph=club, timestamp=datetime.now())
+        assert shot.smash_factor is None
+
+    def test_smash_factor_uses_the_cited_definition(self, monkeypatch):
+        """D37: Shot.smash_factor is metric_definitions.smash_factor, not a copy."""
+        from openflight import metric_definitions
+
+        calls = []
+        monkeypatch.setattr(
+            metric_definitions,
+            "smash_factor",
+            lambda ball, club: calls.append((ball, club)) or 9.99,
+        )
+        shot = Shot(ball_speed_mph=150.0, club_speed_mph=100.0, timestamp=datetime.now())
+        assert shot.smash_factor == 9.99
+        assert calls == [(150.0, 100.0)]
+
+    def test_smash_factor_status_is_unlabelled_by_default(self):
+        shot = Shot(ball_speed_mph=150.0, club_speed_mph=100.0, timestamp=datetime.now())
+        assert shot.smash_factor_status is None
+        assert shot.to_dict()["smash_factor_status"] is None
+
+    def test_a_radial_ratio_label_rides_with_its_smash_factor(self):
+        """D21/D37: radial ball over radial club speed is labelled, not passed off as smash."""
+        shot = Shot(
+            ball_speed_mph=150.0,
+            club_speed_mph=100.0,
+            timestamp=datetime.now(),
+            smash_factor_status=SMASH_RADIAL_RATIO,
+        )
+        assert SMASH_RADIAL_RATIO == "radial_ratio"
+        assert shot.to_dict()["smash_factor"] == 1.5
+        assert shot.to_dict()["smash_factor_status"] == "radial_ratio"
+
+    def test_no_smash_factor_carries_no_smash_label(self):
+        shot = Shot(
+            ball_speed_mph=150.0,
+            timestamp=datetime.now(),
+            smash_factor_status=SMASH_RADIAL_RATIO,
+        )
+        assert shot.to_dict()["smash_factor"] is None
+        assert shot.to_dict()["smash_factor_status"] is None
 
     def test_speed_unit_conversion(self):
         """Test mph to m/s conversion."""

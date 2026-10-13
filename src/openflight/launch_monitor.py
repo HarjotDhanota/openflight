@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional
 
+from . import metric_definitions
 from .clubs import ClubType
 from .clubs.physics import get_club_physics
 from .ops243 import SpeedReading
@@ -34,6 +35,12 @@ CARRY_NOT_MEASURED = "not_measured"  # fusion: no carry; nothing is filled in
 # Statuses under which the ball-speed table may stand in for a missing carry. None
 # is a shot that never reached finalization (mock, replays, older logs).
 _TABLE_CARRY_STATUSES = (None, CARRY_ESTIMATED)
+
+# Shot.smash_factor_status: what the shown smash factor is (D21, D37). TrackMan's
+# smash factor is full ball speed over full club speed; a fusion unit's is the OPS
+# radial ball speed over the OPS radial club speed, so it is labelled. None: no
+# label (an OPS-only unit, a mock or a replay), exactly as before.
+SMASH_RADIAL_RATIO = "radial_ratio"
 
 
 def estimate_carry_distance(ball_speed_mph: float, club: ClubType = ClubType.DRIVER) -> float:
@@ -209,6 +216,7 @@ class Shot:
         spin_rejection_reason: Why spin was withheld, if it was rejected
         carry_spin_adjusted: Carry distance adjusted for spin (yards)
         carry_status: What the reported carry is (CARRY_* above); None until finalized
+        smash_factor_status: What smash_factor is (SMASH_RADIAL_RATIO above), or None
         mode: Shot source — "streaming", "rolling-buffer", or "mock"
         readings_data: Serialized readings for session logging
         camera_replay: Public replay metadata for a matched high-speed capture
@@ -272,6 +280,7 @@ class Shot:
     spin_rejection_reason: Optional[str] = None
     carry_spin_adjusted: Optional[float] = None
     carry_status: Optional[str] = None
+    smash_factor_status: Optional[str] = None
     mode: str = "rolling-buffer"
     profile_id: str = ""
     profile_name: str = ""
@@ -367,19 +376,20 @@ class Shot:
     @property
     def smash_factor(self) -> Optional[float]:
         """
-        Smash factor: ratio of ball speed to club speed.
+        Smash factor: ball speed over club speed (metric_definitions.smash_factor, D37).
 
         Indicates quality of contact:
         - Driver: 1.44-1.50 (optimal)
         - Irons: 1.30-1.38
         - Wedges: 1.20-1.25
 
+        smash_factor_status says which speeds it divides (SMASH_RADIAL_RATIO: both
+        OPS radial readings, not TrackMan's full speeds; D21).
+
         Returns:
-            Smash factor or None if club speed not available (a non-finite one is not)
+            Smash factor, or None without a positive finite club speed
         """
-        if not _finite(self.club_speed_mph) or self.club_speed_mph == 0:
-            return None
-        return self.ball_speed_mph / self.club_speed_mph
+        return metric_definitions.smash_factor(self.ball_speed_mph, self.club_speed_mph)
 
     @property
     def estimated_carry_yards(self) -> float:
@@ -476,6 +486,10 @@ class Shot:
             "experimental_ball_speed_total": self.experimental_ball_speed_total,
             "club_speed_mph": self.club_speed_mph,
             "smash_factor": self.smash_factor,
+            # a label describes a smash value; with none there is nothing to label
+            "smash_factor_status": (
+                self.smash_factor_status if self.smash_factor is not None else None
+            ),
             # the ball-speed table is not in a fusion unit's payload at all (D17)
             "estimated_carry_yards": (
                 self.estimated_carry_yards if self.table_carry_allowed else None

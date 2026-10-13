@@ -57,6 +57,7 @@ from .launch_monitor import (
     CARRY_ESTIMATED,
     CARRY_MEASURED,
     CARRY_NOT_MEASURED,
+    SMASH_RADIAL_RATIO,
     SPIN_CONFIDENCE_RELIABLE,
     Shot,
     summarize_shots,
@@ -1879,6 +1880,8 @@ _SOURCE_LABELS_OF_METRIC = {
     "spin_rpm": ("spin_source",),
     # a nulled committed carry is not measured, simulated or calculated
     "carry_spin_adjusted": ("carry_status",),
+    # a nulled smash factor has no ratio left to label (D37)
+    "smash_factor": ("smash_factor_status",),
     "experimental_face_angle_deg": (
         "experimental_face_angle_path_source",
         "experimental_face_angle_launch_source",
@@ -5577,6 +5580,16 @@ def _open_carry_status(shot: Shot) -> None:
     shot.carry_status = CARRY_NOT_MEASURED if _fusion_unit() else CARRY_ESTIMATED
 
 
+def _open_smash_factor_status(shot: Shot) -> None:
+    """Label a fusion unit's smash a radial ratio before the first emit (D21, D37).
+
+    Ball and club speed are both OPS243 line-of-sight readings (ball_speed_contract
+    "radial"), not the full speeds TrackMan's smash factor divides. An OPS-only
+    unit's smash stays unlabelled, as before.
+    """
+    shot.smash_factor_status = SMASH_RADIAL_RATIO if _fusion_unit() else None
+
+
 def _finalize_shot_detected(
     shot: Shot,
     *,
@@ -6459,6 +6472,7 @@ def _handle_shot_detected(shot: Shot) -> None:
             return
     ready_light.swing_result("shot", ball_speed_mph=shot.ball_speed_mph)
     _open_carry_status(shot)
+    _open_smash_factor_status(shot)
     _assign_shot_number(shot)
     pi_trace.mark("server_shot_accepted", shot.trace_attempt_id, shot_number=shot.shot_number)
     active_profile = get_profile_store().get_active()

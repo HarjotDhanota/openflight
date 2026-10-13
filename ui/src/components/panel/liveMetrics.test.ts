@@ -318,6 +318,19 @@ describe('buildLiveMetrics', () => {
       });
     });
 
+    it('labels a radial-ratio smash factor, shown not hidden (D21, D37)', () => {
+      const labelled = buildLiveMetrics(
+        makeShot({ smash_factor: 1.5, smash_factor_status: 'radial_ratio' }),
+        'imperial',
+        emptySwingStats
+      );
+      const plain = buildLiveMetrics(makeShot({ smash_factor: 1.5 }), 'imperial', emptySwingStats);
+
+      expect(byId(labelled, 'smash')).toMatchObject({ value: '1.50', subtext: 'radial ratio' });
+      expect(byId(plain, 'smash').value).toBe('1.50');
+      expect(byId(plain, 'smash').subtext).toBeUndefined();
+    });
+
     it('labels an uncalibrated radar horizontal (audit F8)', () => {
       const metrics = buildLiveMetrics(
         makeShot({

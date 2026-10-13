@@ -89,6 +89,7 @@ nav = [
     "reference/configuration.md",
     "reference/session-log.md",
     "reference/constants.md",
+    "reference/metric-definitions.md",
     "reference/cloud-uploader-spec.md",
     "reference/datasheets.md",
   ] },
