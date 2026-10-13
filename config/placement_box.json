@@ -3,9 +3,9 @@
   "note": "The TrackMan-style fixed placement box. The unit stands placement_window_m behind the ball, measured from the lens along its boresight, on the target line; the box covers ball positions on the ground across that window and half_width_m either side, drawn with a margin for the camera tilt's uncertainty (rows only). A ball outside the window is labelled, never blocked (D15). The box never yields a distance: the IWR gives it.",
   "placement_window_m": [1.8, 2.9],
   "half_width_m": 0.3,
-  "uncalibrated_tilt_margin_deg": 3.0,
+  "uncalibrated_tilt_margin_deg": 4.5,
   "calibrated_tilt_margin_deg": 1.0,
-  "uncalibrated_window_pad_deg": 3.0,
+  "uncalibrated_window_pad_deg": 4.5,
   "calibrated_window_pad_deg": 0.5,
   "net_margin_m": 0.25,
   "size_far_margin_m": 0.6

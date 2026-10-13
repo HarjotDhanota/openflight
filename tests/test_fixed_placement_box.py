@@ -37,7 +37,7 @@ def test_the_window_lives_in_config_not_in_the_page():
     assert config.placement_window_m == (1.8, 2.9)
     assert placement_box.PLACEMENT_WINDOW_M == (1.8, 2.9)
     assert config.half_width_m == 0.3
-    assert config.uncalibrated_tilt_margin_deg == 3.0
+    assert config.uncalibrated_tilt_margin_deg == 4.5
     assert len(config.sha256) == 64
 
 
@@ -57,12 +57,12 @@ def test_the_fixed_box_covers_the_window_on_the_ground():
 
 @pytest.mark.parametrize("forward_m", [1.8, 2.35, 2.9])
 @pytest.mark.parametrize("lateral_m", [-0.29, 0.0, 0.29])
-@pytest.mark.parametrize("true_pitch_deg", [-3.0, 0.0, 3.0])
+@pytest.mark.parametrize("true_pitch_deg", [-4.5, -3.0, 0.0, 3.0, 4.5])
 def test_a_ball_anywhere_in_the_window_is_inside_the_drawn_box_at_an_unknown_tilt(
     forward_m, lateral_m, true_pitch_deg
 ):
     """Drawn at the nominal (level) pitch, the box holds the ball whatever the camera's
-    true pitch within the uncalibrated +-3 deg."""
+    true pitch within the uncalibrated +-4.5 deg (indoor-test-1 measured 2-4 deg)."""
     nominal = _v3()
     truth = _v3(pitch_deg=true_pitch_deg)
     projection = placement_box.project_fixed_box(nominal, calibrated=False, roll_deg=0.0)
