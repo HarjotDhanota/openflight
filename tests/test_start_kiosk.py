@@ -246,8 +246,12 @@ def test_camera_capture_uses_system_python_for_sync_and_server_start():
         script.index("UV_SYNC_ARGS=(--quiet)") : script.index("\nconfigure_kld7_latency\n")
     ]
 
-    assert "export UV_PYTHON=/usr/bin/python3" in camera_branch
-    assert "uv venv --clear --system-site-packages --python /usr/bin/python3" in camera_branch
+    # the system-Python venv rule is shared with start-tester.sh (13 Oct)
+    helper = (REPO_ROOT / "scripts/pi-python-env.sh").read_text(encoding="utf-8")
+    assert 'OPENFLIGHT_SYSTEM_PYTHON="${OPENFLIGHT_SYSTEM_PYTHON:-/usr/bin/python3}"' in helper
+    assert 'export UV_PYTHON="$OPENFLIGHT_SYSTEM_PYTHON"' in helper
+    assert 'uv venv --clear --system-site-packages --python "$OPENFLIGHT_SYSTEM_PYTHON"' in helper
+    assert "ensure_system_python_venv" in camera_branch
     assert "UV_SYNC_ARGS+=(--extra camera)" in camera_branch
     assert 'uv sync "${UV_SYNC_ARGS[@]}"' in camera_branch
     assert 'uv run "${UV_RUN_ARGS[@]}" "${SERVER_CMD[@]}" &' in script

@@ -394,6 +394,8 @@ cd "$PROJECT_DIR"
 acquire_instance_lock
 # shellcheck source=ensure-kiosk-ui.sh
 source "$SCRIPT_DIR/ensure-kiosk-ui.sh"
+# shellcheck source=pi-python-env.sh
+source "$SCRIPT_DIR/pi-python-env.sh"
 ensure_kiosk_ui
 
 trap 'cleanup $?' EXIT
@@ -410,14 +412,18 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 UV_SYNC_ARGS=(--quiet)
+# One interpreter on the Pi (13 Oct): a camera start, or any start on a unit whose venv
+# already sees system site packages (the tester built it) or whose system Python has
+# picamera2, uses /usr/bin/python3 and never rebuilds the venv for .python-version.
+if has_camera_arg || use_pi_system_python; then
+    ensure_system_python_venv || show_startup_failure \
+        "server" \
+        "OpenFlight preparation failed" \
+        "Camera environment preparation failed. Check the terminal log, then relaunch OpenFlight."
+    # keep the packages the tester installed into the shared venv
+    UV_SYNC_ARGS+=(--inexact)
+fi
 if has_camera_arg; then
-    export UV_PYTHON=/usr/bin/python3
-    if [ ! -x .venv/bin/python ] || ! .venv/bin/python -c 'import picamera2' >/dev/null 2>&1; then
-        uv venv --clear --system-site-packages --python /usr/bin/python3 || show_startup_failure \
-            "server" \
-            "OpenFlight preparation failed" \
-            "Camera environment preparation failed. Check the terminal log, then relaunch OpenFlight."
-    fi
     UV_SYNC_ARGS+=(--extra camera)
 fi
 if has_server_arg --ble; then

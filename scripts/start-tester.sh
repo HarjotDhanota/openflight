@@ -9,13 +9,17 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
+# shellcheck source=pi-python-env.sh
+source "$SCRIPT_DIR/pi-python-env.sh"
+
+# The boot service owns the camera and radars, and its starts sync the venv: never
+# race it (13 Oct).
+refuse_while_kiosk_service_runs || exit 1
+
 # picamera2 is installed by Raspberry Pi OS against the platform libcamera, so
 # the venv has to see system packages. The tester's saved-capture comparison
 # also uses OpenCV from the camera extra.
-export UV_PYTHON=/usr/bin/python3
-if [ ! -x .venv/bin/python ] || ! .venv/bin/python -c "import picamera2" >/dev/null 2>&1; then
-  uv venv --clear --system-site-packages --python /usr/bin/python3
-fi
+ensure_system_python_venv
 # lgpio (Pi 5 GPIO) builds from source and needs SWIG and its C header.
 if ! ls .venv/lib/python3*/site-packages/lgpio* >/dev/null 2>&1 \
   && { ! command -v swig >/dev/null 2>&1 || [ ! -f /usr/include/lgpio.h ]; }; then
