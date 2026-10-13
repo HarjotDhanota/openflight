@@ -13,6 +13,7 @@ from openflight.clubs.physics import CLUB_TYPICAL_SPIN_RPM, get_club_physics
 from openflight.collision_model import is_estimated_source, is_model_geometry_source
 from openflight.launch_monitor import (
     CARRY_CALCULATED,
+    CARRY_ESTIMATED,
     CARRY_MEASURED,
     CARRY_MODEL_GEOMETRY,
     SPIN_CONFIDENCE_HIGH,
@@ -40,8 +41,15 @@ _DEFAULT_SPIN_RPM = CLUB_TYPICAL_SPIN_RPM[ClubType.UNKNOWN]
 # Off: those values are never sent, and a fusion shot that needs one is refused
 # with a reason naming model geometry. On: each is sent labelled "model_geometry".
 SIMULATORS_ACCEPT_MODEL_GEOMETRY = False
+# The same for a fusion unit's "estimated" values: a spin or spin axis built on an
+# estimated input (a weak horizontal launch), and a carry flown on one or on the
+# OPS line-of-sight ball speed (V-formulas C1, C2). Off: never sent; a fusion shot
+# that needs one is refused, naming it "estimated (<reason>)". An OPS-only unit's
+# labelled estimates are unchanged.
+SIMULATORS_ACCEPT_ESTIMATED = False
 
 MODEL_GEOMETRY = "model_geometry"
+ESTIMATED = "estimated"
 # a derived value is as good as its weakest source
 _PROVENANCE_ORDER = ("estimated", MODEL_GEOMETRY, "calculated", "measured")
 
@@ -52,6 +60,20 @@ def _model_geometry_spin(shot: Shot) -> bool:
 
 def _model_geometry_axis(shot: Shot) -> bool:
     return _finite(shot.spin_axis_deg) and is_model_geometry_source(shot.spin_axis_source)
+
+
+def _estimated_spin(shot: Shot) -> bool:
+    return shot.spin_source == ESTIMATED and _finite(shot.spin_rpm) and bool(shot.spin_rpm)
+
+
+def _estimated_axis(shot: Shot) -> bool:
+    return _finite(shot.spin_axis_deg) and is_estimated_source(shot.spin_axis_source)
+
+
+def _estimated_reason(shot: Shot, metric: str) -> str:
+    """The collision model's reason for an estimated spin or axis (C2)."""
+    metrics = (shot.collision_model or {}).get("metrics") or {}
+    return (metrics.get(metric) or {}).get("reason") or "an input estimated"
 
 
 def _measured_total_spin(shot: Shot) -> Optional[Tuple[float, str]]:
@@ -73,6 +95,8 @@ def _measured_total_spin(shot: Shot) -> Optional[Tuple[float, str]]:
         return float(shot.spin_rpm), "calculated"
     if SIMULATORS_ACCEPT_MODEL_GEOMETRY and _model_geometry_spin(shot):
         return float(shot.spin_rpm), MODEL_GEOMETRY
+    if SIMULATORS_ACCEPT_ESTIMATED and _estimated_spin(shot):
+        return float(shot.spin_rpm), ESTIMATED
     return None
 
 
@@ -83,8 +107,8 @@ def _spin_axis_provenance(shot: Shot) -> Optional[str]:
     if _model_geometry_axis(shot):
         return MODEL_GEOMETRY if SIMULATORS_ACCEPT_MODEL_GEOMETRY else None
     if is_estimated_source(shot.spin_axis_source):
-        # built on an estimated input (V-formulas C2): never sent (D31)
-        return None
+        # built on an estimated input (V-formulas C2): not sent (D31) unless switched on
+        return ESTIMATED if SIMULATORS_ACCEPT_ESTIMATED else None
     # the collision model's axis (E2) is calculated, never measured
     return "calculated" if (shot.spin_axis_source or "").startswith("calculated") else "measured"
 
@@ -98,6 +122,18 @@ def _withheld_model_geometry(shot: Shot) -> List[str]:
         withheld.append("spin")
     if _model_geometry_axis(shot):
         withheld.append("spin axis")
+    return withheld
+
+
+def _withheld_estimated(shot: Shot) -> List[str]:
+    """The required fields the shot has only as estimates, each "name estimated (reason)"."""
+    if SIMULATORS_ACCEPT_ESTIMATED:
+        return []
+    withheld = []
+    if _measured_total_spin(shot) is None and _estimated_spin(shot):
+        withheld.append(f"spin estimated ({_estimated_reason(shot, 'spin_rate')})")
+    if _estimated_axis(shot):
+        withheld.append(f"spin axis estimated ({_estimated_reason(shot, 'spin_axis')})")
     return withheld
 
 
@@ -121,7 +157,9 @@ def _unmeasured_required_fields(shot: Shot) -> List[str]:
     return missing
 
 
-def _resolve_carry(shot: Shot, provenance: Dict[str, str]) -> Optional[float]:
+def _resolve_carry(
+    shot: Shot, provenance: Dict[str, str], *, substitutes: bool = True
+) -> Optional[float]:
     """The carry to send, optional in OpenConnect; tags its provenance when there is one.
 
     The carry the kiosk reports: the server's committed carry (ballistic
@@ -133,7 +171,12 @@ def _resolve_carry(shot: Shot, provenance: Dict[str, str]) -> Optional[float]:
     carry = shot.reported_carry_yards
     if carry is None:
         return None
-    if shot.carry_status == CARRY_MODEL_GEOMETRY:
+    if shot.carry_status == CARRY_ESTIMATED and not substitutes:
+        # a fusion unit's flight on an estimated input (C1, C2): not sent (D31)
+        if not SIMULATORS_ACCEPT_ESTIMATED:
+            return None
+        provenance["carry"] = ESTIMATED
+    elif shot.carry_status == CARRY_MODEL_GEOMETRY:
         # flown on a spin or spin axis built on model geometry (D39): not sent (D31)
         if not SIMULATORS_ACCEPT_MODEL_GEOMETRY:
             return None
@@ -229,7 +272,11 @@ def resolve_shot(
     if not substitutes:
         missing = _unmeasured_required_fields(shot)
         if missing:
-            raise UnmeasuredShotError(missing, model_geometry=_withheld_model_geometry(shot))
+            raise UnmeasuredShotError(
+                missing,
+                model_geometry=_withheld_model_geometry(shot),
+                estimated=_withheld_estimated(shot),
+            )
 
     # E3 (D31): a simulator flies the ball's full speed. The calculated full speed
     # (measured projection) replaces the OPS radial reading when there is one.
@@ -279,7 +326,7 @@ def resolve_shot(
     provenance["back_spin"] = derived_prov
     provenance["side_spin"] = derived_prov
 
-    carry = _resolve_carry(shot, provenance)
+    carry = _resolve_carry(shot, provenance, substitutes=substitutes)
 
     club_speed, club_path = _resolve_club_fields(shot, provenance, substitutes=substitutes)
 

@@ -414,3 +414,91 @@ def test_the_camera_geometry_contract_carries_an_unset_offset_as_none():
     assert unset.ball_geometry().horizontal_offset_deg is None
     assert zero.ball_geometry().horizontal_offset_deg == 0.0
     assert unset.delivery_geometry().horizontal_offset_deg is None
+
+
+# ---- C6: simulators on a fusion unit never get an estimated value (D31) -----------------
+
+
+def _sim_shot(**overrides):
+    values = dict(
+        ball_speed_mph=150.0,
+        timestamp=datetime(2026, 10, 13),
+        club=ClubType.DRIVER,
+        launch_angle_vertical=12.0,
+        launch_angle_vertical_source="radar",
+        launch_angle_horizontal=1.0,
+        launch_angle_horizontal_source="radar",
+        spin_rpm=2700.0,
+        spin_confidence=0.9,
+        spin_source="measured",
+        spin_axis_deg=2.0,
+        spin_axis_source=cm.SPIN_AXIS_SOURCE_TILT,
+        carry_spin_adjusted=250.0,
+        carry_status="calculated",
+    )
+    values.update(overrides)
+    return Shot(**values)
+
+
+def test_a_fusion_unit_does_not_send_an_estimated_carry():
+    from openflight.sim.resolver import resolve_shot
+    from openflight.sim.types import PlayerState
+
+    resolved = resolve_shot(_sim_shot(carry_status="estimated"), PlayerState(), substitutes=False)
+    assert resolved.carry_yards is None
+    assert "carry" not in resolved.provenance
+    # a calculated carry still goes
+    sent = resolve_shot(_sim_shot(), PlayerState(), substitutes=False)
+    assert sent.carry_yards == pytest.approx(250.0)
+
+
+def test_the_estimated_switch_sends_it_labelled(monkeypatch):
+    from openflight.sim import resolver
+    from openflight.sim.types import PlayerState
+
+    monkeypatch.setattr(resolver, "SIMULATORS_ACCEPT_ESTIMATED", True)
+    resolved = resolver.resolve_shot(
+        _sim_shot(carry_status="estimated"), PlayerState(), substitutes=False
+    )
+    assert resolved.carry_yards == pytest.approx(250.0)
+    assert resolved.provenance["carry"] == "estimated"
+
+
+def test_an_ops_only_estimated_carry_is_still_sent_labelled():
+    from openflight.sim.resolver import resolve_shot
+    from openflight.sim.types import PlayerState
+
+    resolved = resolve_shot(_sim_shot(carry_status="estimated"), PlayerState(), substitutes=True)
+    assert resolved.carry_yards == pytest.approx(250.0)
+    assert resolved.provenance["carry"] == "estimated"
+
+
+def test_a_fusion_shot_with_only_an_estimated_spin_axis_is_refused_naming_it():
+    from openflight.sim.resolver import resolve_shot
+    from openflight.sim.types import PlayerState, UnmeasuredShotError
+
+    shot = _collision_shot(
+        launch_angle_horizontal_confidence=0.5, spin_rpm=7000.0, spin_confidence=0.9
+    )
+    _attach_collision(shot)
+    assert shot.spin_axis_source.startswith("estimated")
+
+    with pytest.raises(UnmeasuredShotError) as refused:
+        resolve_shot(shot, PlayerState(), substitutes=False)
+    assert refused.value.missing == ["spin axis"]
+    assert "estimated (horizontal launch confidence 0.50 below 0.6)" in str(refused.value)
+
+
+def test_a_fusion_shot_with_only_an_estimated_spin_is_refused_naming_it():
+    from openflight.sim.resolver import resolve_shot
+    from openflight.sim.types import PlayerState, UnmeasuredShotError
+
+    shot = _collision_shot(launch_angle_horizontal_source="radar_low_coherence")
+    _attach_collision(shot)
+    assert shot.spin_source == "estimated"
+
+    with pytest.raises(UnmeasuredShotError) as refused:
+        resolve_shot(shot, PlayerState(), substitutes=False)
+    message = str(refused.value)
+    assert "spin" in refused.value.missing
+    assert "estimated (horizontal launch is low-coherence (radar_low_coherence))" in message
