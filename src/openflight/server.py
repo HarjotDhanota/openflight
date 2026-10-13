@@ -5704,6 +5704,67 @@ def _attach_ball_speed_contract(shot: Shot) -> None:
             geometry_source=ball_speed_correction_geometry_source,
             ops_ball_lateral_ft=ball_speed_correction_lateral_ft,
         )
+    _attach_full_speeds(shot)
+
+
+# E3: why the OPS club speed cannot be projected yet (W6, W9 and E1 fix it).
+CLUB_SPEED_NOT_FULL_REASON = (
+    "the OPS club speed is a percentile over 4-18 ms before impact, not one FFT-window "
+    "reading, and the head's direction at that time needs the swing arc (E1) and a fixed "
+    "head point (W6, W9)"
+)
+
+
+def _attach_full_speeds(shot: Shot) -> None:
+    """E3: full ball speed by measured projection, full club speed and full smash.
+
+    The canonical radial ball speed is unchanged; each full speed is its own field
+    with its status, range and reason (openflight.full_speed).
+    """
+    from .full_speed import (  # noqa: PLC0415
+        evaluate_full_ball_speed,
+        evaluate_full_club_speed,
+        evaluate_full_smash,
+    )
+
+    calibration = getattr(iwr6843_runtime, "calibration", None)
+
+    def calibrated(name: str):
+        try:
+            return getattr(calibration, name, None)
+        except ValueError:  # the radar height is unset until the rig sets it
+            return None
+
+    shot.ball_speed_full = evaluate_full_ball_speed(
+        ops_track=shot.ops_speed_track,
+        vertical_deg=shot.launch_angle_vertical,
+        vertical_source=shot.launch_angle_vertical_source,
+        horizontal_deg=shot.launch_angle_horizontal,
+        horizontal_source=shot.launch_angle_horizontal_source,
+        horizontal_status=shot.launch_angle_horizontal_status,
+        horizontal_frame=shot.launch_angle_horizontal_frame,
+        horizontal_offset_deg=horizontal_offset_deg,
+        rig=rig_geometry,
+        tee_range_m=calibrated("tee_range_m"),
+        radar_height_m=calibrated("radar_height_m"),
+        ball_height_m=calibrated("tee_ball_height_m"),
+        tee_side_offset_m=(setup_handoff_config.get("scene") or {}).get("tee_side_offset_m"),
+    )
+    # the flight model (E4) reads the value alone: calculated, or None
+    shot.ball_speed_full_mph = (
+        shot.ball_speed_full["value_mph"]
+        if shot.ball_speed_full.get("status") == "calculated"
+        else None
+    )
+    shot.club_speed_full = evaluate_full_club_speed(
+        radial_mph=None,
+        head_position_m=None,
+        direction=None,
+        ops_position_m=None,
+        direction_source=None,
+        reason=CLUB_SPEED_NOT_FULL_REASON,
+    )
+    shot.smash_factor_full = evaluate_full_smash(shot.ball_speed_full, shot.club_speed_full)
 
 
 def _carry_log_text(shot: Shot, source: str | None) -> str:

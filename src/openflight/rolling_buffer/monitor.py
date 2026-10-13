@@ -975,6 +975,10 @@ class RollingBufferMonitor:
             spin_rejection_reason=spin_rejection_reason,
             mode="rolling-buffer",
         )
+        # E3: the OPS readings around impact, for the full ball speed
+        from openflight.full_speed import ops_speed_track  # noqa: PLC0415
+
+        shot.ops_speed_track = ops_speed_track(processed)
 
         return shot
 

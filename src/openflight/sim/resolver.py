@@ -175,7 +175,15 @@ def resolve_shot(
         if missing:
             raise UnmeasuredShotError(missing)
 
-    provenance: Dict[str, str] = {"ball_speed": "measured"}
+    # E3 (D31): a simulator flies the ball's full speed. The calculated full speed
+    # (measured projection) replaces the OPS radial reading when there is one.
+    full = shot.ball_speed_full if isinstance(shot.ball_speed_full, dict) else {}
+    if full.get("status") == "calculated" and _finite(full.get("value_mph")):
+        ball_speed = float(full["value_mph"])
+        provenance: Dict[str, str] = {"ball_speed": "calculated"}
+    else:
+        ball_speed = float(shot.ball_speed_mph)
+        provenance = {"ball_speed": "measured"}
 
     if _finite(shot.launch_angle_vertical):
         vla = float(shot.launch_angle_vertical)
@@ -228,7 +236,7 @@ def resolve_shot(
 
     resolved = ResolvedShot(
         shot_number=0,
-        ball_speed_mph=float(shot.ball_speed_mph),
+        ball_speed_mph=ball_speed,
         vla=vla,
         hla=hla,
         total_spin_rpm=total_spin,

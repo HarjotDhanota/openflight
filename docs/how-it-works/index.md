@@ -18,6 +18,11 @@ each stage.
     What is inside a capture, how ball and club speed are separated, and why
     spin is still experimental.
 
+- :material-speedometer: **[Full ball speed](full-ball-speed.md)**
+
+    The OPS radial reading turned into the ball's full speed with the shot's
+    own measured geometry, and when it is refused.
+
 - :material-angle-acute: **[Launch angle](launch-angle.md)**
 
     LCMF-v1 over the IWR6843 raw radar cube, and the July 2026 TrackMan
