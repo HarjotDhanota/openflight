@@ -91,6 +91,10 @@ describe('isCarryEstimated', () => {
     expect(isCarryEstimated(carryShot({}))).toBe(true);
     expect(isCarryEstimated(carryShot({ carry_status: 'not_measured' }))).toBe(false);
   });
+
+  it('marks a carry flown on model geometry (D39) as modelled, never measured', () => {
+    expect(isCarryEstimated(carryShot({ carry_status: 'model_geometry', carry_spin_adjusted: 160 }))).toBe(true);
+  });
 });
 
 describe('computeStats carry', () => {

@@ -206,7 +206,9 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       label: t('metric.spin'),
       value: formatSpinRpm(shot.spin_rpm),
       unit: unitIfMeasured(shot.spin_rpm, 'rpm'),
-      estimated: markEstimated(isMeasured(shot.spin_rpm) && shot.spin_source === 'calculated'),
+      estimated: markEstimated(
+        isMeasured(shot.spin_rpm) && (shot.spin_source === 'calculated' || shot.spin_source === 'model_geometry')
+      ),
       confidence: isMeasured(shot.spin_rpm) ? shot.spin_quality : null,
     },
     {

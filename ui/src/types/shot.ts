@@ -12,11 +12,13 @@ export interface CameraReplay {
 
 /**
  * What a shot's carry is, as the server commits it. A fusion unit (IWR or camera)
- * reports `measured`, `calculated` (simulator on a calculated spin) or
- * `not_measured`, and never the ball-speed table (D17). An OPS-only unit reports
+ * reports its flight's label, `calculated` (simulator on measured or calculated
+ * inputs) or `model_geometry` (a spin or spin axis built on an assumed swing
+ * geometry, D39), or `not_measured`, and never the ball-speed table (D17);
+ * `measured` appears only in older logs. An OPS-only unit reports
  * `estimated`. Missing or null: a shot that never reached finalization.
  */
-export type CarryStatus = 'measured' | 'calculated' | 'estimated' | 'not_measured';
+export type CarryStatus = 'measured' | 'calculated' | 'model_geometry' | 'estimated' | 'not_measured';
 
 export interface Shot {
   mode?: 'rolling-buffer' | 'mock' | 'swing-speed';
@@ -77,7 +79,7 @@ export interface Shot {
   spin_rpm: number | null;
   spin_confidence: number | null;
   spin_quality: SpinQuality | null;
-  spin_source: 'measured' | 'calculated' | null;
+  spin_source: 'measured' | 'calculated' | 'model_geometry' | null;
   spin_method?: string | null;
   spin_multipath_fade_hz?: number | null;
   carry_spin_adjusted: number | null;
@@ -273,7 +275,7 @@ export function reportedCarryYards(shot: Shot): number | null {
 /** Whether the reported carry is modeled rather than built from measured inputs. */
 export function isCarryEstimated(shot: Shot): boolean {
   if (reportedCarryYards(shot) === null) return false;
-  if (shot.carry_status === 'calculated') return true;
+  if (shot.carry_status === 'calculated' || shot.carry_status === 'model_geometry') return true;
   if (shot.carry_status === 'measured') return false;
   // OPS-only and older shots: the bare table is the estimate, as it always was
   return !isMeasured(shot.carry_spin_adjusted);

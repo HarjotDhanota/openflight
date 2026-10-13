@@ -397,6 +397,11 @@ describe('buildLiveMetrics', () => {
     expect(byId(estimated, 'spin').subtext).toBeUndefined();
   });
 
+  it('flags a spin built on model geometry (D39) like a calculated one', () => {
+    const modelled = buildLiveMetrics(makeShot({ spin_source: 'model_geometry' }), 'imperial', emptySwingStats);
+    expect(byId(modelled, 'spin').estimated).toBe(true);
+  });
+
   it('returns the swing-speed set, with ids that never collide with ball-strike ids', () => {
     const stats: SwingSpeedStats = { count: 12, last_speed_mph: 101, best_speed_mph: 108, avg_speed_mph: 99 };
     const swing = buildLiveMetrics(
