@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type KeyboardEvent, type ReactNode } from 'react';
 import { METRIC_CATALOG, type MetricSpec } from '../../data/metricCatalog';
 import type { MessageKey } from '../../i18n';
 import { useI18n } from '../../i18n/useI18n';
@@ -6,6 +6,7 @@ import type { Shot, ShotMetric } from '../../types/shot';
 import { isSwingSpeedShot } from '../../types/shot';
 import type { UnitSystem } from '../../utils/units';
 import { isMeasured } from '../../utils/units';
+import { isComingLater, shortReason } from '../../utils/plainReason';
 import { GROUP_TITLE, PANEL_GROUPS, formatMetricValue, type MetricPanelView } from './metricFormat';
 import { LabelBadge } from '../ui/LabelBadge';
 import { PanelHeader } from './PanelHeader';
@@ -26,10 +27,37 @@ function missingRecord(spec: MetricSpec): ShotMetric {
   };
 }
 
+/** A cell a tap opens: the whole cell is the target, so it is never under 44 px. */
+function useTapToggle(enabled: boolean) {
+  const [open, setOpen] = useState(false);
+  if (!enabled) return { open: false, props: {} };
+  const toggle = () => setOpen((value) => !value);
+  return {
+    open,
+    props: {
+      role: 'button',
+      tabIndex: 0,
+      'aria-expanded': open,
+      onClick: toggle,
+      onKeyDown: (event: KeyboardEvent) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          toggle();
+        }
+      },
+    },
+  };
+}
+
 function MetricCell({ spec, record, unitSystem }: { spec: MetricSpec; record: ShotMetric; unitSystem: UnitSystem }) {
   const { t } = useI18n();
   const [value, unit] = formatMetricValue(record, unitSystem, spec.id);
   const measured = isMeasured(record.value) && record.status !== 'not_measured';
+  const reason = record.reason || t('label.not_measured');
+  const short = shortReason(record.reason);
+  // a developer's reason is cut off by the cell: say it plainly, the full one on a tap (9)
+  const tappable = !measured && Boolean(record.reason) && short !== record.reason;
+  const { open, props } = useTapToggle(tappable);
   const details: string[] = [];
   if (measured) {
     if (record.range) {
@@ -51,12 +79,16 @@ function MetricCell({ spec, record, unitSystem }: { spec: MetricSpec; record: Sh
     if (record.note) details.push(record.note);
   }
   const detail = details.join(' · ');
+  const classes = ['metric-cell', `metric-cell--${record.status}`];
+  if (tappable) classes.push('metric-cell--tappable');
+  if (open) classes.push('metric-cell--open');
   return (
     <div
-      className={`metric-cell metric-cell--${record.status}`}
+      className={classes.join(' ')}
       data-metric={spec.id}
       data-status={record.status}
       title={record.source ?? undefined}
+      {...props}
     >
       <span className="metric-cell__label">{t(`metricName.${spec.id}` as MessageKey)}</span>
       <div className="metric-cell__value-row">
@@ -72,11 +104,42 @@ function MetricCell({ spec, record, unitSystem }: { spec: MetricSpec; record: Sh
             </span>
           ) : null}
         </div>
+      ) : tappable ? (
+        <>
+          <span className="metric-cell__reason">{open ? reason : `${short} ›`}</span>
+          <span className="metric-cell__reason-full" hidden>
+            {reason}
+          </span>
+        </>
       ) : (
-        <span className="metric-cell__reason" title={record.reason ?? undefined}>
-          {record.reason || t('label.not_measured')}
-        </span>
+        <span className="metric-cell__reason">{reason}</span>
       )}
+    </div>
+  );
+}
+
+/** The metrics not built yet, in one row while they have no value; a tap lists why (9). */
+function ComingLaterCell({ items }: { items: Array<{ spec: MetricSpec; record: ShotMetric | undefined }> }) {
+  const { t } = useI18n();
+  const { open, props } = useTapToggle(true);
+  const name = (spec: MetricSpec) => t(`metricName.${spec.id}` as MessageKey);
+  return (
+    <div
+      className={`metric-cell metric-cell--not_measured metric-cell--coming-later metric-cell--tappable${open ? ' metric-cell--open' : ''}`}
+      data-metric="coming-later"
+      data-status="not_measured"
+      data-metrics={items.map(({ spec }) => spec.id).join(' ')}
+      {...props}
+    >
+      <span className="metric-cell__label">{t('metrics.comingLater')}</span>
+      <span className="metric-cell__reason">{items.map(({ spec }) => name(spec)).join(', ')}</span>
+      <ul className="metric-cell__later-list" hidden={!open}>
+        {items.map(({ spec, record }) => (
+          <li key={spec.id}>
+            {name(spec)}: {record?.reason || t('label.not_measured')}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -124,6 +187,10 @@ export function MetricGroupPanel({
       </div>
     );
   }
+  const later = METRIC_CATALOG.filter((spec) => isComingLater(spec, metrics[spec.id])).map((spec) => ({
+    spec,
+    record: metrics[spec.id],
+  }));
   return (
     <div className="panel">
       {header}
@@ -132,17 +199,22 @@ export function MetricGroupPanel({
           <section key={group} className="metric-group" aria-label={t(GROUP_TITLE[group])}>
             <h3 className="metric-group__title">{t(GROUP_TITLE[group])}</h3>
             <div className="metric-group__grid">
-              {METRIC_CATALOG.filter((spec) => spec.group === group).map((spec) => {
-                const record = metrics[spec.id];
-                return (
-                  <MetricCell
-                    key={spec.id}
-                    spec={spec}
-                    record={record ?? missingRecord(spec)}
-                    unitSystem={unitSystem}
-                  />
-                );
-              })}
+              {METRIC_CATALOG.filter((spec) => spec.group === group && !isComingLater(spec, metrics[spec.id])).map(
+                (spec) => {
+                  const record = metrics[spec.id];
+                  return (
+                    <MetricCell
+                      key={spec.id}
+                      spec={spec}
+                      record={record ?? missingRecord(spec)}
+                      unitSystem={unitSystem}
+                    />
+                  );
+                }
+              )}
+              {later.filter(({ spec }) => spec.group === group).length ? (
+                <ComingLaterCell items={later.filter(({ spec }) => spec.group === group)} />
+              ) : null}
             </div>
           </section>
         ))}

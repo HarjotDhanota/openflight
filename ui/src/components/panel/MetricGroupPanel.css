@@ -105,6 +105,37 @@
   color: var(--color-text-faint);
 }
 
+/* (9) a cell with a long reason is one big tap target: the short reason, the full one on tap */
+.metric-cell--tappable {
+  min-height: 44px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.metric-cell--tappable .metric-cell__reason {
+  color: var(--color-text-muted);
+}
+
+.metric-cell--open .metric-cell__reason {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  overflow: visible;
+}
+
+/* the not-built metrics: one full-width row while they have no value */
+.metric-cell--coming-later {
+  grid-column: 1 / -1;
+}
+
+.metric-cell__later-list {
+  margin: 2px 0 0;
+  padding-left: 1.1em;
+  font-size: 0.62rem;
+  line-height: 1.3;
+  color: var(--color-text-muted);
+}
+
 .metric-groups__legend {
   margin: 2px 0 0;
   font-size: 0.62rem;

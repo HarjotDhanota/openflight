@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import Logo from '../../logo/Logo';
 import { TabBar } from '../ui/TabBar';
 import type { PanelView } from './views';
@@ -10,6 +10,7 @@ import { getUnitsLabel } from '../../utils/units';
 import { useSystemStore } from '../../stores/useSystemStore';
 import { PowerExperience } from '../PowerStatus';
 import type { PowerStatus } from '../../types/power';
+import { scrollHint } from '../../utils/scrollHint';
 
 interface PanelFooterProps {
   currentView: PanelView;
@@ -54,6 +55,31 @@ export function PanelFooter({
   const showUnits = VIEWS_WITH_UNITS.has(currentView);
   const storePowerStatus = useSystemStore((state) => state.powerStatus);
   const powerStatus = powerStatusProp !== undefined ? powerStatusProp : storePowerStatus;
+  // (17) the tabs scroll sideways on an 800-wide screen: a › says more are there, and taps along
+  const tabsWrapRef = useRef<HTMLDivElement>(null);
+  const [moreTabs, setMoreTabs] = useState({ left: false, right: false });
+  useEffect(() => {
+    const tabs = tabsWrapRef.current?.querySelector<HTMLElement>('.panel-footer__tabs');
+    if (!tabs) return undefined;
+    const update = () => {
+      const next = scrollHint(tabs);
+      setMoreTabs((prev) => (prev.left === next.left && prev.right === next.right ? prev : next));
+    };
+    update();
+    tabs.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
+    observer?.observe(tabs);
+    return () => {
+      tabs.removeEventListener('scroll', update);
+      window.removeEventListener('resize', update);
+      observer?.disconnect();
+    };
+  }, []);
+  const scrollTabs = () => {
+    const tabs = tabsWrapRef.current?.querySelector<HTMLElement>('.panel-footer__tabs');
+    tabs?.scrollBy({ left: Math.max(tabs.clientWidth * 0.6, 80), behavior: 'smooth' });
+  };
   const options = PANEL_VIEWS.map((view) => {
     const label = t(`nav.${view.id}` as MessageKey);
     switch (view.id) {
@@ -89,14 +115,26 @@ export function PanelFooter({
       </button>
 
       <div className="panel-footer__nav">
-        <TabBar
-          className="panel-footer__tabs"
-          ariaLabel={t('nav.panels')}
-          value={currentView}
-          onChange={onChangeView}
-          options={options}
-          separator={<span className="panel-header__divider" aria-hidden="true" />}
-        />
+        <div
+          className="panel-footer__tabs-wrap"
+          ref={tabsWrapRef}
+          data-more-left={String(moreTabs.left)}
+          data-more-right={String(moreTabs.right)}
+        >
+          <TabBar
+            className="panel-footer__tabs"
+            ariaLabel={t('nav.panels')}
+            value={currentView}
+            onChange={onChangeView}
+            options={options}
+            separator={<span className="panel-header__divider" aria-hidden="true" />}
+          />
+          {moreTabs.right ? (
+            <button type="button" className="panel-footer__more" aria-label={t('nav.moreTabs')} onClick={scrollTabs}>
+              <span aria-hidden="true">›</span>
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div className="panel-footer__meta">

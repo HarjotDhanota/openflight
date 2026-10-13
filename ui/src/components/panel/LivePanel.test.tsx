@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { Shot } from '../../types/shot';
+import type { TargetLine } from '../../utils/targetLine';
 import { LivePanel } from './LivePanel';
 
 /** React SSR splits interpolated text with comment markers; drop them. */
@@ -64,6 +65,38 @@ function render(
 function tileLabels(html: string): string[] {
   return [...html.matchAll(/metric-card__label[^>]*>([^<]+)/g)].map((match) => match[1]);
 }
+
+describe('LivePanel target line', () => {
+  const renderWith = (targetLine: TargetLine | null, shot: Shot | null = makeShot()) =>
+    text(
+      renderToString(
+        <LivePanel
+          shot={shot}
+          shots={shot ? [shot] : []}
+          profileId="james"
+          profileName="James"
+          clubLabel="DR"
+          targetLine={targetLine}
+        />
+      )
+    );
+
+  it('says the target line is set, signed, with the server ± only', () => {
+    const html = renderWith({ status: 'set', yawDeg: 2.14, uncertaintyDeg: 0.8 });
+    expect(html).toMatch(/class="live-panel__target"[^>]*data-status="set"/);
+    expect(html).toContain('Target line set +2.1° ±0.8°');
+  });
+
+  it("says left/right is from the unit's aim when it is not set, before a shot too", () => {
+    expect(renderWith({ status: 'not_set', yawDeg: null, uncertaintyDeg: null }, null)).toContain(
+      'Target line not set: left/right is from the unit&#x27;s aim'
+    );
+  });
+
+  it('draws nothing when the kiosk cannot say', () => {
+    expect(renderWith(null)).not.toContain('live-panel__target');
+  });
+});
 
 describe('LivePanel', () => {
   it('sizes live metric numbers in rem that follow the screen', () => {

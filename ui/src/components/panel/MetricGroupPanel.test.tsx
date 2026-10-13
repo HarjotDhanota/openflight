@@ -2,6 +2,7 @@ import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { METRIC_CATALOG } from '../../data/metricCatalog';
 import type { MetricLabel, Shot, ShotMetric } from '../../types/shot';
+import { isComingLater } from '../../utils/plainReason';
 import { MetricGroupPanel } from './MetricGroupPanel';
 import { PANEL_GROUPS, formatMetricValue } from './metricFormat';
 
@@ -74,6 +75,13 @@ describe('MetricGroupPanel', () => {
 
   it.each(METRIC_CATALOG.map((spec) => [spec.id, spec.group]))('shows %s with its label', (id, group) => {
     const html = render(PANEL_GROUPS.club.includes(group as never) ? 'club' : 'flight');
+    const spec = METRIC_CATALOG.find((item) => item.id === id)!;
+    if (isComingLater(spec, everyMetricShot().metrics![id])) {
+      // not built yet: named in the one Coming later cell, with its reason a tap away
+      const later = html.match(/data-metric="coming-later"[^>]*data-metrics="([^"]*)"/);
+      expect(later?.[1].split(' '), id).toContain(id);
+      return;
+    }
     const cell = html.match(new RegExp(`<div[^>]*data-metric="${id}"[^>]*data-status="([a-z_]+)"`));
     expect(cell, id).not.toBeNull();
     const status = cell![1];
@@ -91,10 +99,40 @@ describe('MetricGroupPanel', () => {
     }
   });
 
-  it('names the item that builds an unbuilt metric', () => {
+  it('names the item that builds an unbuilt metric (in the Coming later detail)', () => {
     const html = render('club');
     expect(html).toContain('pending E5: not built yet');
     expect(html).toContain('pending E6: not built yet');
+  });
+
+  it('folds the not-built metrics into one Coming later row, shown once per panel', () => {
+    const html = render('club');
+    expect(html.match(/data-metric="coming-later"/g)).toHaveLength(1);
+    expect(html).toContain('Coming later');
+    for (const id of ['impact_offset', 'impact_height', 'dynamic_lie']) {
+      expect(html).not.toMatch(new RegExp(`data-metric="${id}"`));
+    }
+    expect(html).toMatch(/Impact offset, Impact height, Dynamic lie/);
+  });
+
+  it('shows a not-built metric in its own cell once it has a value', () => {
+    const shot = everyMetricShot();
+    shot.metrics!.impact_offset = record({ unit: 'mm', status: 'calculated', value: 4, reason: null });
+    const html = render('club', shot);
+    expect(html).toMatch(/data-metric="impact_offset"/);
+  });
+
+  it('shows a short reason, with the full one a tap away', () => {
+    const shot = everyMetricShot();
+    const long = 'the OPS club speed is a percentile over 4-18 ms before impact, not the full speed';
+    shot.metrics!.club_path = record({ reason: long });
+    const html = render('club', shot);
+    const start = html.lastIndexOf('<div', html.indexOf('data-metric="club_path"'));
+    const cell = html.slice(start, html.indexOf('data-metric=', html.indexOf('data-metric="club_path"') + 30));
+    expect(cell).toContain('role="button"');
+    expect(cell).toContain('aria-expanded="false"');
+    expect(cell).toContain('the radar measures speed along its line only');
+    expect(html).toContain(long);
   });
 
   it('shows the empty state before the first shot', () => {

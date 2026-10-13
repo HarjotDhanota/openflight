@@ -8,6 +8,7 @@ import { useDebugStore } from './stores/useDebugStore';
 import { useProfileStore } from './stores/useProfileStore';
 import { useHeroMetricStore } from './stores/useHeroMetricStore';
 import { useCameraReplayController } from './hooks/useCameraReplayController';
+import { useTargetLine } from './hooks/useTargetLine';
 import { socketService } from './services/socketService';
 import { setLiveViewShown } from './services/paintTrace';
 import { DebugPanel } from './components/DebugPanel';
@@ -111,6 +112,8 @@ function AppContent() {
   );
 
   const [currentView, setCurrentView] = useState<PanelView>('live');
+  // what the Live tab's left/right are measured from (13 Oct contract)
+  const targetLine = useTargetLine(currentView === 'live');
   const [selectedClub, setSelectedClub] = useState('driver');
   const [selectedTrainingImplement, setSelectedTrainingImplement] = useState('driver');
   const [menuOpen, setMenuOpen] = useState(false);
@@ -329,6 +332,7 @@ function AppContent() {
                 onSelectMetric={setHeroMetricId}
                 isNewShot={profileIsNewShot}
                 headerAction={liveHeaderActions}
+                targetLine={targetLine}
                 acknowledgeable={
                   !isLiveResultCovered({
                     replayOpen: activeReplay !== null,

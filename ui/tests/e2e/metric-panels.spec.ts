@@ -75,8 +75,16 @@ for (const viewport of VIEWPORTS) {
 
         const expected = catalog.metrics.filter((spec) => groups.includes(spec.group)).map((spec) => spec.id);
         const cells = page.locator('.metric-cell');
-        await expect(cells).toHaveCount(expected.length);
-        expect(await cells.evaluateAll((all) => all.map((cell) => cell.getAttribute('data-metric')))).toEqual(expected);
+        await expect(cells.first()).toBeVisible();
+        // every metric once: in its own cell, or named in its group's one Coming later row (9)
+        const shown = await cells.evaluateAll((all) =>
+          all.flatMap((cell) =>
+            cell.getAttribute('data-metric') === 'coming-later'
+              ? (cell.getAttribute('data-metrics') ?? '').split(' ')
+              : [cell.getAttribute('data-metric')]
+          )
+        );
+        expect([...shown].sort()).toEqual([...expected].sort());
         for (const cell of await cells.all()) {
           const status = await cell.getAttribute('data-status');
           expect(LABELS).toContain(status);
