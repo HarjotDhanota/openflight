@@ -224,3 +224,68 @@ def test_the_kiosk_composes_each_swing_from_its_own_reading(monkeypatch):
     assert pose["offset_deg"] == 2.0
     monkeypatch.setattr(server_module, "setup_handoff_config", {"camera_tilt": {}})
     assert server_module._swing_camera_pose(shot)["status"] == "uncalibrated"  # pylint: disable=protected-access
+
+
+# D36 item 4c: the LIS3DH roll goes through the same composition on swings as at
+# setup. It waits on the owner's phone-level check (C8), so the gate stays off.
+
+
+def _rolled_reading(roll_deg=-2.9):
+    roll = math.radians(roll_deg)
+    return {**_inclinometer(1.0), "x_g": math.sin(roll), "y_g": 0.0, "z_g": math.cos(roll)}
+
+
+def test_by_default_the_roll_is_recorded_not_applied_on_swings():
+    from openflight.camera import camera_roll  # noqa: PLC0415
+
+    assert camera_roll.LIS3DH_ROLL_APPLIED is False
+    pose = camera_tilt.swing_camera_pose(
+        rig=RigGeometry.from_json(RIG_PATH),
+        image_width_px=1280,
+        inclinometer=_rolled_reading(),
+        calibration=None,
+    )
+    geometry = ball_flight.CameraBallGeometry(
+        camera_height_m=0.095,
+        radar_height_m=0.05,
+        tee_range_m=1.5,
+        ball_height_m=0.0213,
+        roll_correction_deg=0.4,
+    )
+
+    assert pose["roll"]["applied"] is False
+    assert pose["roll"]["status"] == "not_applied_pending_c8"
+    assert pose["roll"]["measured_deg"] == pytest.approx(-2.9)
+    assert pose["roll"]["roll_correction_deg"] == 0.0
+    assert camera_tilt.with_swing_pose(geometry, pose).roll_correction_deg == 0.4
+
+
+def test_with_the_gate_on_setup_and_swings_apply_the_same_roll(monkeypatch):
+    from openflight.camera import camera_roll  # noqa: PLC0415
+
+    monkeypatch.setattr(camera_roll, "LIS3DH_ROLL_APPLIED", True)
+    rig = RigGeometry.from_json(RIG_PATH)
+    reading = _rolled_reading(-2.9)
+    expected = rig.expected_inclinometer_orientation()
+    tilt = {
+        "camera_pitch_deg": rig.boresight_pitch_deg + (1.0 - (expected.pitch_deg or 0.0)),
+        "roll_deg": camera_roll.lis3dh_roll_deg(reading["x_g"], reading["y_g"], reading["z_g"]),
+    }
+
+    setup = ts._reference_ball_camera(  # pylint: disable=protected-access
+        ts.ARMS["arm5"], RIG_PATH, tilt, None, None, CALIBRATION
+    )
+    pose = camera_tilt.swing_camera_pose(
+        rig=rig, image_width_px=1280, inclinometer=reading, calibration=CALIBRATION
+    )
+    geometry = camera_tilt.with_swing_pose(
+        ball_flight.CameraBallGeometry(
+            camera_height_m=0.095, radar_height_m=0.05, tee_range_m=1.5, ball_height_m=0.0213
+        ),
+        pose,
+    )
+
+    assert pose["roll"]["applied"] is True
+    assert setup.ray_model.roll_correction_deg != 0.0
+    assert geometry.roll_correction_deg == pytest.approx(setup.ray_model.roll_correction_deg)
+    assert pose["roll"]["roll_correction_deg"] == pytest.approx(setup.ray_model.roll_correction_deg)
