@@ -562,3 +562,79 @@ def test_the_trackman_export_regression_flies_the_normalized_reference():
     import validate_ballistics  # noqa: PLC0415
 
     assert validate_ballistics.TM_FLAT_AIR_DENSITY == AIR_DENSITY_NORMALIZED
+
+
+# ---- C8: the simulator provenance never says "measured" for a kiosk-computed value ------
+
+
+@pytest.mark.parametrize(
+    "carry_status, expected", [("calculated", "calculated"), ("measured", "calculated")]
+)
+def test_a_fusion_carry_is_at_most_calculated(carry_status, expected):
+    from openflight.sim.resolver import resolve_shot
+    from openflight.sim.types import PlayerState
+
+    # flown on a measured spin, but a simulated carry is a model's output
+    resolved = resolve_shot(_sim_shot(carry_status=carry_status), PlayerState(), substitutes=False)
+    assert resolved.provenance["carry"] == expected
+
+
+def test_a_model_geometry_fusion_carry_keeps_its_label(monkeypatch):
+    from openflight.sim import resolver
+    from openflight.sim.types import PlayerState
+
+    monkeypatch.setattr(resolver, "SIMULATORS_ACCEPT_MODEL_GEOMETRY", True)
+    resolved = resolver.resolve_shot(
+        _sim_shot(carry_status="model_geometry"), PlayerState(), substitutes=False
+    )
+    assert resolved.provenance["carry"] == "model_geometry"
+
+
+def test_an_ops_only_carry_stays_estimated():
+    from openflight.sim.resolver import resolve_shot
+    from openflight.sim.types import PlayerState
+
+    resolved = resolve_shot(_sim_shot(carry_status="estimated"), PlayerState(), substitutes=True)
+    assert resolved.provenance["carry"] == "estimated"
+
+
+def test_table_filled_launch_angles_are_estimated():
+    from openflight.sim.resolver import resolve_shot
+    from openflight.sim.types import PlayerState
+
+    shot = _sim_shot(
+        launch_angle_vertical_source="estimated",
+        launch_angle_horizontal=0.0,
+        launch_angle_horizontal_source="estimated",
+        carry_status="estimated",
+    )
+    resolved = resolve_shot(shot, PlayerState(), substitutes=True)
+    assert resolved.vla == 12.0 and resolved.hla == 0.0  # the wire values are unchanged
+    assert resolved.provenance["vla"] == "estimated"
+    assert resolved.provenance["hla"] == "estimated"
+    measured = resolve_shot(_sim_shot(), PlayerState(), substitutes=True)
+    assert measured.provenance["vla"] == "measured"
+    assert measured.provenance["hla"] == "measured"
+
+
+def test_the_ops_only_server_path_fills_launch_and_labels_it_estimated(monkeypatch):
+    import openflight.server as server_module
+    from openflight.sim.resolver import resolve_shot
+    from openflight.sim.types import PlayerState
+
+    monkeypatch.setattr(server_module, "_fusion_unit", lambda: False)
+    shot = Shot(ball_speed_mph=140.0, timestamp=datetime(2026, 10, 13), club=ClubType.IRON_7)
+    server_module._ensure_user_facing_launch_angles(shot)  # pylint: disable=protected-access
+    resolved = resolve_shot(shot, PlayerState(), substitutes=True)
+    assert resolved.provenance["vla"] == "estimated"
+    assert resolved.provenance["hla"] == "estimated"
+
+
+def test_a_spin_axis_is_never_measured():
+    from openflight.sim.resolver import resolve_shot
+    from openflight.sim.types import PlayerState
+
+    # no sensor measures the spin axis: an unlabelled one is the kiosk's computation
+    resolved = resolve_shot(_sim_shot(spin_axis_source=None), PlayerState(), substitutes=True)
+    assert resolved.provenance["spin_axis"] == "calculated"
+    assert resolved.provenance["back_spin"] == "calculated"

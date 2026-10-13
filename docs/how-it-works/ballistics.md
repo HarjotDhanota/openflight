@@ -307,12 +307,17 @@ table, …)`. A fusion unit never uses them.
 
 The simulator connectors send a fusion shot's carry only when its
 `carry_status` is `measured` or `calculated`, i.e. flown on the shot's own
-measured or calculated inputs (D31); its provenance is `measured` when it was
-flown on a measured spin, as before, else `estimated`. A `model_geometry` carry
-is not sent (see `SIMULATORS_ACCEPT_MODEL_GEOMETRY` in the collision-model
-page). A fusion shot missing a required input is not sent, as before. An OPS-only shot's carry goes out labelled `estimated`,
-whatever its launch angle. Simulators get the as-measured carry; they fly the
-ball themselves from speed, launch and spin.
+measured or calculated inputs (D31). Its provenance is `calculated`: a simulated
+carry is the flight model's output, never `measured`, even when flown on a
+measured spin. A `model_geometry` carry is not sent (see
+`SIMULATORS_ACCEPT_MODEL_GEOMETRY` in the collision-model page), nor an
+`estimated` one (`SIMULATORS_ACCEPT_ESTIMATED`). A fusion shot missing a required
+input, or having it only as model geometry or an estimate, is not sent. An
+OPS-only shot's carry goes out labelled `estimated`, whatever its launch angle,
+and so do its club-table launch angles. A spin axis is never `measured` (no
+sensor measures one). These labels are the provenance badges only; the wire
+format is unchanged. Simulators get the as-measured carry; they fly the ball
+themselves from speed, launch and spin.
 
 ## Constants
 

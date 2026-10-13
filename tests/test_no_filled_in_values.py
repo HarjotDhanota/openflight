@@ -562,7 +562,8 @@ def test_the_resolver_sends_a_fusion_shot_its_simulated_carry():
     resolved = resolve_shot(shot, PlayerState())
 
     assert resolved.carry_yards == pytest.approx(243.8)
-    assert resolved.provenance["carry"] == "measured"
+    # a simulated carry is never measured; on an OPS-only unit it is an estimate (C8)
+    assert resolved.provenance["carry"] == "estimated"
 
 
 @pytest.mark.parametrize("target", ["gspro", "opengolfsim", "partee"])
@@ -750,8 +751,11 @@ def test_a_fully_measured_fusion_shot_is_sent_unchanged():
     fusion = resolve_shot(shot, PlayerState(), substitutes=False)
     ops = resolve_shot(shot, PlayerState())
 
-    assert fusion == ops
-    assert set(fusion.provenance.values()) == {"measured"}
+    assert fusion.as_values() == ops.as_values()
+    # the spin axis (and the spin split by it) is the kiosk's computation (C8)
+    computed = {"spin_axis", "back_spin", "side_spin", "carry"}
+    assert {fusion.provenance[k] for k in fusion.provenance if k not in computed} == {"measured"}
+    assert fusion.provenance["spin_axis"] == "calculated"
     assert GSProCodec().build_shot(fusion) == GSProCodec().build_shot(ops)
 
 

@@ -109,8 +109,9 @@ def _spin_axis_provenance(shot: Shot) -> Optional[str]:
     if is_estimated_source(shot.spin_axis_source):
         # built on an estimated input (V-formulas C2): not sent (D31) unless switched on
         return ESTIMATED if SIMULATORS_ACCEPT_ESTIMATED else None
-    # the collision model's axis (E2) is calculated, never measured
-    return "calculated" if (shot.spin_axis_source or "").startswith("calculated") else "measured"
+    # no sensor measures the spin axis: the collision model's (E2), or any other the
+    # kiosk computed, is calculated, never measured (V-formulas C8)
+    return "calculated"
 
 
 def _withheld_model_geometry(shot: Shot) -> List[str]:
@@ -181,17 +182,11 @@ def _resolve_carry(
         if not SIMULATORS_ACCEPT_MODEL_GEOMETRY:
             return None
         provenance["carry"] = MODEL_GEOMETRY
-    elif shot.carry_status in (CARRY_MEASURED, CARRY_CALCULATED):
-        # a fusion unit's simulator: "measured" when flown on a measured spin (as
-        # before carry_status took the flight's label); a calculated spin is a
-        # model's, not measured
-        spin = _measured_total_spin(shot)
-        flown_on_measured_spin = spin is not None and spin[1] == "measured"
-        provenance["carry"] = (
-            "measured"
-            if shot.carry_status == CARRY_MEASURED or flown_on_measured_spin
-            else "estimated"
-        )
+    elif shot.carry_status in (CARRY_MEASURED, CARRY_CALCULATED) and not substitutes:
+        # a fusion unit's simulated carry: always the flight model's output, so at
+        # most "calculated" even when flown on a measured spin (V-formulas C8);
+        # "measured" survives only in older logs
+        provenance["carry"] = "calculated"
     else:
         # An OPS-only carry flies a club-typical spin (or reads the ball-speed table),
         # so it is an estimate whatever the launch angle (E4; trackman-comparison §5
@@ -290,14 +285,20 @@ def resolve_shot(
 
     if _finite(shot.launch_angle_vertical):
         vla = float(shot.launch_angle_vertical)
-        provenance["vla"] = "measured"
+        # an OPS-only club-table launch (_ensure_user_facing_launch_angles) is filled
+        # in, not measured (trackman-comparison §5 item 4, V-formulas C8)
+        provenance["vla"] = (
+            "estimated" if shot.launch_angle_vertical_source == "estimated" else "measured"
+        )
     else:
         vla = get_club_physics(shot.club).optimal_launch_deg
         provenance["vla"] = "estimated"
 
     if _finite(shot.launch_angle_horizontal):
         hla = float(shot.launch_angle_horizontal)
-        provenance["hla"] = "measured"
+        provenance["hla"] = (
+            "estimated" if shot.launch_angle_horizontal_source == "estimated" else "measured"
+        )
     else:
         hla = 0.0
         provenance["hla"] = "estimated"

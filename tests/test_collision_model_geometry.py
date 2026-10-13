@@ -615,9 +615,9 @@ def test_a_fusion_carry_on_a_measured_spin_says_the_flight_s_calculated():
 
     assert shot.flight["as_measured"]["metrics"]["carry"]["status"] == "calculated"
     assert shot.carry_status == "calculated"
-    # simulators unchanged: a carry flown on a measured spin still goes out "measured"
     resolved = resolve_shot(shot, PlayerState(), substitutes=False)
-    assert resolved.provenance["carry"] == "measured"
+    # a simulated carry is the flight model's: at most calculated (V-formulas C8)
+    assert resolved.provenance["carry"] == "calculated"
     assert resolved.carry_yards == pytest.approx(shot.carry_spin_adjusted)
 
 
