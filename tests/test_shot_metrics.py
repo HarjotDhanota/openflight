@@ -183,3 +183,25 @@ def test_the_catalog_is_exported_for_the_ui():
     catalog = shot_metrics.catalog()
     assert [entry["id"] for entry in catalog["metrics"]] == list(EXPECTED_METRIC_IDS)
     assert catalog["labels"] == list(LABELS)
+
+
+def test_estimated_labels_from_every_producer_pass_through():
+    """agent/v-formulas: spin, spin axis, face and flight outputs can be "estimated"."""
+    shot = fusion_shot()
+    shot.spin_source = "estimated"
+    shot.spin_axis_source = "estimated (D-plane tilt; horizontal launch confidence 0.4)"
+    shot.collision_model["metrics"]["face_angle"]["status"] = "estimated"
+    shot.flight["as_measured"]["metrics"]["apex"]["status"] = "estimated"
+    shot.carry_status = CARRY_ESTIMATED
+    shot.flight["as_measured"]["metrics"]["carry"]["status"] = "estimated"
+    metrics = shot.to_dict()["metrics"]
+    for name in ("spin_rate", "spin_axis", "face_angle", "apex", "carry"):
+        assert metrics[name]["status"] == "estimated", name
+
+
+def test_a_calculated_axis_the_collision_model_marked_estimated_is_estimated():
+    shot = fusion_shot()
+    shot.spin_axis_deg = 3.0
+    shot.spin_axis_source = "calculated (D-plane tilt, Wood et al. 2018 weights)"
+    shot.collision_model["metrics"]["spin_axis"]["status"] = "estimated"
+    assert shot.to_dict()["metrics"]["spin_axis"]["status"] == "estimated"

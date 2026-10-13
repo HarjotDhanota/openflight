@@ -310,7 +310,8 @@ def _collision_metric(shot, name: str) -> Mapping[str, Any]:
 
 def _spin_rate(shot):
     source = shot.get("spin_source")
-    status = source if source in (MEASURED, CALCULATED, MODEL_GEOMETRY) else MEASURED
+    # any value label the producer gave (estimated too); an unlabelled spin is measured
+    status = source if source in LABELS and source != NOT_MEASURED else MEASURED
     collision = _collision_metric(shot, "spin_rate")
     reason = (
         shot.get("spin_rejection_reason")
@@ -330,10 +331,19 @@ def _spin_rate(shot):
 
 def _spin_axis(shot):
     source = shot.get("spin_axis_source")
+    collision_status = _collision_metric(shot, "spin_axis").get("status")
     if is_model_geometry_source(source):
         status = MODEL_GEOMETRY
+    elif source and source.startswith(ESTIMATED):
+        # a weak horizontal launch under the axis (agent/v-formulas): labelled, not withheld
+        status = ESTIMATED
     elif is_calculated_source(source):
-        status = CALCULATED
+        # the collision model's own label when it weakened it (estimated, model geometry)
+        status = (
+            collision_status
+            if collision_status in (CALCULATED, MODEL_GEOMETRY, ESTIMATED)
+            else CALCULATED
+        )
     elif _mock(shot):
         status, source = MEASURED, MOCK_SOURCE
     else:

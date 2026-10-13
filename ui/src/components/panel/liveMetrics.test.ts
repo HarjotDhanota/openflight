@@ -399,6 +399,11 @@ describe('buildLiveMetrics', () => {
     expect(byId(estimated, 'spin').subtext).toBeUndefined();
   });
 
+  it('labels a spin the collision model built on a weak start direction estimated', () => {
+    const weak = buildLiveMetrics(makeShot({ spin_source: 'estimated' }), 'imperial', emptySwingStats);
+    expect(byId(weak, 'spin').status).toBe('estimated');
+  });
+
   it('labels a spin built on model geometry (D39) model_geometry, not calculated', () => {
     const modelled = buildLiveMetrics(makeShot({ spin_source: 'model_geometry' }), 'imperial', emptySwingStats);
     expect(byId(modelled, 'spin').status).toBe('model_geometry');

@@ -1,6 +1,6 @@
 import type { MetricLabel, Shot, SpinQuality, SwingSpeedStats } from '../../types/shot';
 import { carryLabel, getSwingSpeedMph, isSwingSpeedShot, reportedCarryYards } from '../../types/shot';
-import { shotMetric } from '../../data/metricCatalog';
+import { isValueLabel, shotMetric } from '../../data/metricCatalog';
 import type { UnitSystem } from '../../utils/units';
 import {
   NO_VALUE,
@@ -102,8 +102,9 @@ function labelIf(value: unknown, status: MetricLabel | undefined): MetricLabel |
   return isMeasured(value) ? status : undefined;
 }
 
+/** The spin's own label from the vocabulary; an unlabelled spin is measured. */
 function spinLabel(shot: Shot): MetricLabel {
-  return shot.spin_source === 'calculated' || shot.spin_source === 'model_geometry' ? shot.spin_source : 'measured';
+  return isValueLabel(shot.spin_source) ? shot.spin_source : 'measured';
 }
 
 /**

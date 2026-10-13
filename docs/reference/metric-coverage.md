@@ -22,7 +22,7 @@ Every metric has the same keys: `value`, `unit`, `status`, `source`, `range`,
 | `measured` | A sensor saw it | plain outline, "MEAS" |
 | `calculated` | A named model on measured or calculated inputs (D38) | accent outline, "CALC" |
 | `model_geometry` | Rests on an assumed swing arc (D39) | dashed accent outline, "MODEL" |
-| `estimated` | An OPS-only install's labelled stand-in | filled accent with the ≈ mark, "EST" |
+| `estimated` | An OPS-only install's labelled stand-in, or a value built on a weak input (a low-coherence horizontal launch under spin, spin axis or face; the radial speed under a flight when the full speed is refused) | filled accent with the ≈ mark, "EST" |
 | `not_measured` | No value; `reason` says why (D17) | no badge: the reason is shown |
 
 A simulated carry is `calculated` whether its spin was measured or calculated.

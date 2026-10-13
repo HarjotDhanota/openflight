@@ -102,7 +102,7 @@ export interface Shot {
   spin_rpm: number | null;
   spin_confidence: number | null;
   spin_quality: SpinQuality | null;
-  spin_source: 'measured' | 'calculated' | 'model_geometry' | null;
+  spin_source: 'measured' | 'calculated' | 'model_geometry' | 'estimated' | null;
   spin_method?: string | null;
   spin_multipath_fade_hz?: number | null;
   carry_spin_adjusted: number | null;
