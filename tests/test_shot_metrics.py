@@ -1,0 +1,185 @@
+"""Every golf metric on the Shot, each with its label, source, range, reason and frame.
+
+``openflight.shot_metrics`` turns one shot record (``Shot.to_dict()`` or a logged
+``shot_detected`` entry) into one record per metric. Every place the owner looks
+(kiosk, tester page, session log, review, pipeline check) reads these records,
+so a metric dropped here is dropped everywhere; these tests pin the list.
+"""
+
+from __future__ import annotations
+
+import math
+from datetime import datetime
+
+import pytest
+
+from openflight import shot_metrics
+from openflight.clubs import ClubType
+from openflight.launch_monitor import (
+    CARRY_ESTIMATED,
+    CARRY_MODEL_GEOMETRY,
+    CARRY_NOT_MEASURED,
+    Shot,
+)
+from tests.every_metric import (
+    EXPECTED_METRIC_IDS,
+    LABELS,
+    PENDING_METRIC_IDS,
+    fusion_shot,
+)
+
+RECORD_KEYS = {
+    "value",
+    "unit",
+    "status",
+    "source",
+    "range",
+    "reason",
+    "frame",
+    "note",
+    "normalized",
+}
+
+
+def test_the_catalog_is_the_owner_s_metric_list_in_order():
+    assert shot_metrics.METRIC_IDS == EXPECTED_METRIC_IDS
+
+
+def test_the_label_vocabulary_is_the_five_labels():
+    assert shot_metrics.LABELS == LABELS
+
+
+def test_every_spec_names_a_group_a_label_and_a_unit():
+    for spec in shot_metrics.METRICS:
+        assert spec.group in ("ball", "club", "flight")
+        assert spec.label
+        assert spec.unit is not None
+
+
+@pytest.mark.parametrize("metric_id", EXPECTED_METRIC_IDS)
+def test_every_metric_rides_on_the_shot_payload(metric_id):
+    metrics = fusion_shot().to_dict()["metrics"]
+    record = metrics[metric_id]
+    assert set(record) == RECORD_KEYS
+    assert record["status"] in LABELS
+    if record["value"] is None:
+        assert record["status"] == "not_measured"
+        assert record["reason"], f"{metric_id} is not measured without a reason"
+    else:
+        assert math.isfinite(record["value"])
+        assert record["status"] != "not_measured"
+        assert record["source"], f"{metric_id} has a value but no source"
+
+
+def test_the_fusion_shot_labels_follow_their_producers():
+    metrics = fusion_shot().to_dict()["metrics"]
+    status = {name: record["status"] for name, record in metrics.items()}
+    assert status["ball_speed"] == "measured"
+    assert status["ball_speed_full"] == "calculated"
+    assert metrics["ball_speed_full"]["range"] == pytest.approx([123.4, 124.6])
+    assert status["launch_vertical"] == "measured"
+    assert status["launch_horizontal"] == "measured"
+    assert metrics["launch_horizontal"]["frame"] == "target_line"
+    assert status["spin_rate"] == "measured"
+    assert status["club_speed"] == "measured"
+    assert status["club_path"] == "measured"
+    assert status["attack_angle"] == "measured"
+    assert status["face_angle"] == "calculated"
+    assert status["dynamic_loft"] == "calculated"
+    # the arc's own label (calculated, or model geometry on the published prior, D39)
+    shot_arc = fusion_shot().club_delivery["metrics"]["swing_plane_deg"]["status"]
+    assert status["swing_plane"] == shot_arc
+    assert status["smash_factor"] == "calculated"
+    assert "radial" in metrics["smash_factor"]["source"]
+    # a simulated carry on a measured spin is calculated, never estimated (D38)
+    assert status["carry"] == "calculated"
+    assert metrics["carry"]["range"] is not None
+    assert metrics["carry"]["normalized"]["value"] is not None
+    assert metrics["carry_side"]["frame"] == "target_line"
+    assert status["gyro"] == "not_measured"
+    assert status["club_speed_full"] == "not_measured"
+    assert status["smash_factor_full"] == "not_measured"
+
+
+@pytest.mark.parametrize("metric_id", PENDING_METRIC_IDS)
+def test_unbuilt_metrics_are_not_measured_with_the_item_that_builds_them(metric_id):
+    record = fusion_shot().to_dict()["metrics"][metric_id]
+    assert record["value"] is None
+    assert record["status"] == "not_measured"
+    item = "E5" if metric_id.startswith("impact") else "E6"
+    assert item in record["reason"]
+    assert shot_metrics.SPECS[metric_id].pending == item
+
+
+def test_a_model_geometry_spin_and_carry_keep_their_label():
+    shot = fusion_shot()
+    shot.spin_source = "model_geometry"
+    shot.carry_status = CARRY_MODEL_GEOMETRY
+    shot.flight["as_measured"]["metrics"]["carry"]["status"] = "model_geometry"
+    metrics = shot.to_dict()["metrics"]
+    assert metrics["spin_rate"]["status"] == "model_geometry"
+    assert metrics["carry"]["status"] == "model_geometry"
+
+
+def test_an_ops_only_table_carry_is_estimated():
+    shot = Shot(
+        ball_speed_mph=140.0,
+        club_speed_mph=95.0,
+        timestamp=datetime(2026, 10, 12),
+        carry_status=CARRY_ESTIMATED,
+        launch_angle_vertical=12.0,
+        launch_angle_vertical_source="estimated",
+    )
+    metrics = shot.to_dict()["metrics"]
+    assert metrics["carry"]["status"] == "estimated"
+    assert metrics["carry"]["value"] == pytest.approx(shot.reported_carry_yards)
+    assert metrics["launch_vertical"]["status"] == "estimated"
+    assert metrics["carry_side"]["status"] == "not_measured"
+    assert metrics["carry_side"]["reason"]
+
+
+def test_a_fusion_shot_without_a_carry_says_why():
+    shot = fusion_shot()
+    shot.carry_status = CARRY_NOT_MEASURED
+    shot.carry_spin_adjusted = None
+    shot.flight = None
+    record = shot.to_dict()["metrics"]["carry"]
+    assert record["status"] == "not_measured"
+    assert record["value"] is None
+    assert record["reason"]
+
+
+def test_a_non_finite_value_is_not_measured_with_a_reason():
+    shot = fusion_shot(launch_angle_vertical=math.nan)
+    record = shot.to_dict()["metrics"]["launch_vertical"]
+    assert record["value"] is None
+    assert record["status"] == "not_measured"
+    assert "not finite" in record["reason"]
+
+
+def test_a_shot_without_a_camera_names_the_missing_club_delivery():
+    shot = Shot(ball_speed_mph=120.0, timestamp=datetime(2026, 10, 12), club=ClubType.IRON_7)
+    metrics = shot.to_dict()["metrics"]
+    for name in ("swing_plane", "swing_direction", "low_point_distance", "club_path"):
+        assert metrics[name]["status"] == "not_measured"
+        assert metrics[name]["reason"]
+
+
+def test_an_older_log_record_without_metrics_is_rebuilt_from_its_fields():
+    record = fusion_shot().to_dict()
+    del record["metrics"]
+    rebuilt = shot_metrics.from_record(record)
+    assert tuple(rebuilt) == EXPECTED_METRIC_IDS
+    assert rebuilt["face_angle"]["status"] == "calculated"
+
+
+def test_records_reads_the_logged_metrics_when_present():
+    record = fusion_shot().to_dict()
+    record["metrics"]["ball_speed"]["source"] = "as logged"
+    assert shot_metrics.records(record)["ball_speed"]["source"] == "as logged"
+
+
+def test_the_catalog_is_exported_for_the_ui():
+    catalog = shot_metrics.catalog()
+    assert [entry["id"] for entry in catalog["metrics"]] == list(EXPECTED_METRIC_IDS)
+    assert catalog["labels"] == list(LABELS)
