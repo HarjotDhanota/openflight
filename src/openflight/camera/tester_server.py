@@ -5938,11 +5938,21 @@ def _patch_ball_display(decision: Mapping | None) -> dict | None:
         "radar_range_m": radar.get("range_m") if isinstance(radar, Mapping) else None,
         "radar_method": radar.get("method") if isinstance(radar, Mapping) else None,
         "radar_candidates": [
-            {key: item.get(key) for key in ("method", "range_m", "score", "elevation_deg")}
+            {
+                key: item.get(key)
+                for key in ("method", "range_m", "score", "elevation_deg", "still_reflector")
+            }
             for item in decision.get("radar_candidates") or []
             if isinstance(item, Mapping)
         ],
         "radar_warnings": list(decision.get("radar_warnings") or []),
+        # 13 Oct: the camera's look, and the radar candidates never taken for the ball
+        "camera_status": decision.get("camera_status"),
+        "rejected": [
+            {key: item.get(key) for key in ("method", "range_m", "reason")}
+            for item in decision.get("rejected") or []
+            if isinstance(item, Mapping)
+        ],
     }
 
 

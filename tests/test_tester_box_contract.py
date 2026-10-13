@@ -432,3 +432,22 @@ def test_the_setup_s_camera_step_records_the_lens_its_numbers_came_through(
     assert lens["lens_id"] == "8mm"
     assert lens["intrinsics"] == "nominal"
     assert "uncalibrated" in lens["note"]
+
+
+def test_the_range_summary_names_what_was_never_the_ball():
+    decision = {
+        "status": "validated",
+        "camera_status": "found",
+        "radar_candidates": [
+            {"method": "coherent", "range_m": 1.575, "still_reflector": {"bin": 35}},
+        ],
+        "rejected": [{"method": "coherent", "range_m": 1.575, "reason": "still_reflector"}],
+    }
+
+    shown = ts._patch_ball_display(decision)  # noqa: SLF001
+
+    assert shown["camera_status"] == "found"
+    assert shown["rejected"] == [
+        {"method": "coherent", "range_m": 1.575, "reason": "still_reflector"}
+    ]
+    assert shown["radar_candidates"][0]["still_reflector"] == {"bin": 35}
