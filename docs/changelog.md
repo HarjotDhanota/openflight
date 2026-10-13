@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Flight model refitted to TrackMan 4 (E8a, flight-fit-v1).** Ferguson,
+  McNally & McPhee's (2022) Cd/Cl/C_M form keeps its shape; its seven constants
+  are refitted to TM4 normalized exports on carry, apex, landing angle and hang
+  time jointly. Held out over 60 shots: carry RMSE 1.73 -> 0.94 yd, apex 2.09 ->
+  0.78 ft, landing angle 2.20 -> 0.65 deg, hang time 0.14 -> 0.06 s. Ferguson's
+  published constants stay selectable (`FERGUSON_2022`); carry stays
+  `calculated`, and its source names the fit. The full-speed drag referral
+  follows the flight model's drag (~0.01 mph). Refit with
+  `scripts/analysis/fit_flight_model.py`; see
+  [ballistics](how-it-works/ballistics.md).
 - **Upstream merged (12 Oct, D30).** The internal hardware trigger re-arms with
   `PA` and never clears serial input once live. One lost-dump detector serves
   both trigger paths (a `Q` array or 1 KB of unmarked bytes before a capture

@@ -91,10 +91,12 @@ references.
 | `BALL_MASS_KG` | 0.04593 |
 | `BALL_RADIUS_M` | 0.02135 |
 | `AIR_DENSITY_STD` | 1.225 |
-| `CD_POLY` | (0.1304, 0.9287, -0.8259) |
-| `CL_POLY` | (0.0504, 1.2031, -1.1490) |
+| `ACTIVE_AERO_MODEL` | `FLIGHT_FIT_V1` (flight-fit-v1) |
+| `CD_POLY` (active) | (0.1459, 0.8331, -0.5549) |
+| `CL_POLY` (active) | (0.0646, 1.1261, -0.8869) |
 | `SP_FIT_MAX` | 0.75 |
-| `CM_PER_SP` | 0.01 |
+| `CM_PER_SP` (active) | 0.010 |
+| `FERGUSON_2022` | Cd (0.1304, 0.9287, -0.8259), Cl (0.0504, 1.2031, -1.1490), C_M 0.01 |
 | `GRAVITY` | 9.81 |
 | `DT_SECONDS` | 0.002 |
 | `MAX_FLIGHT_SECONDS` | 15.0 |
