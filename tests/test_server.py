@@ -2146,6 +2146,31 @@ class TestShotToDict:
         ]
         json.dumps(result, allow_nan=False)
 
+    def test_a_nulled_smash_factor_keeps_no_radial_ratio_label(self):
+        """D37: the radial-ratio label goes out only beside a smash value it describes."""
+        result = shot_to_dict(
+            Shot(
+                ball_speed_mph=math.inf,
+                club_speed_mph=100.0,
+                timestamp=datetime(2026, 10, 12, 9, 0, 0),
+                smash_factor_status="radial_ratio",
+            )
+        )
+        assert result["smash_factor"] is None
+        assert result["smash_factor_status"] is None
+
+    def test_a_radial_ratio_label_reaches_the_payload(self):
+        result = shot_to_dict(
+            Shot(
+                ball_speed_mph=150.0,
+                club_speed_mph=103.789,
+                timestamp=datetime(2026, 10, 12, 9, 0, 0),
+                smash_factor_status="radial_ratio",
+            )
+        )
+        assert result["smash_factor"] == 1.45
+        assert result["smash_factor_status"] == "radial_ratio"
+
     @pytest.mark.parametrize("bad", [math.nan, math.inf], ids=["nan", "inf"])
     def test_a_nulled_metric_keeps_no_measuring_source_label(self, bad):
         """A value nulled for being non-finite reads like a missing one: its source is None."""
@@ -3727,6 +3752,51 @@ class TestOnShotDetected:
         assert enrichment_calls == [shot.timestamp]
         self._assert_finalized_once(emitted, session_log)
         assert session_log.shots[0]["pipeline_ms"]["camera_analysis"] == 123.5
+
+    def test_a_fusion_unit_labels_smash_a_radial_ratio_from_first_emit_to_session_log(
+        self, monkeypatch
+    ):
+        """D21/D37: both speeds are OPS radial readings, so smash says so on every emit."""
+        emitted, session_log = self._record_finalization(monkeypatch)
+        worker_targets = []
+        monkeypatch.setattr(server_module, "shot_enrichment_queue", self._enrichment_queue())
+        monkeypatch.setattr(server_module, "shot_enrichment_task", None)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
+        monkeypatch.setattr(
+            server_module.socketio,
+            "start_background_task",
+            lambda target, *_args, **_kwargs: worker_targets.append(target) or object(),
+        )
+        monkeypatch.setattr(
+            server_module,
+            "_enrich_shot_from_optional_hardware",
+            lambda _shot: server_module._ShotEnrichmentResult(),
+        )
+
+        on_shot_detected(self._shot())
+        worker_targets[0]()
+        self._wait_for_finalization_coordinator_idle()
+
+        payloads = [payload["shot"] for _event, payload in emitted if "shot" in payload]
+        assert [event for event, _payload in emitted][0] == "shot"
+        assert payloads and session_log.shots
+        for shot_data in payloads + session_log.shots:
+            assert shot_data["smash_factor"] == pytest.approx(1.5)
+            assert shot_data["smash_factor_status"] == "radial_ratio"
+
+    def test_an_ops_only_unit_leaves_smash_unlabelled(self, monkeypatch):
+        """D37: the label is scoped to fusion units; OPS-only smash is unchanged."""
+        emitted, session_log = self._record_finalization(monkeypatch)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+
+        on_shot_detected(self._shot())
+        self._wait_for_finalization_coordinator_idle()
+
+        payloads = [payload["shot"] for _event, payload in emitted if "shot" in payload]
+        assert payloads and session_log.shots
+        for shot_data in payloads + session_log.shots:
+            assert shot_data["smash_factor"] == pytest.approx(1.5)
+            assert shot_data["smash_factor_status"] is None
 
     def test_camera_only_enrichment_uses_provisional_then_final_events(self, monkeypatch):
         emitted = []

@@ -15,6 +15,7 @@ import {
 } from '../utils/units';
 import { getServerOrigin } from '../utils/serverOrigin';
 import { MetricCard } from './ui/MetricCard';
+import { smashSubtext } from './panel/liveMetrics';
 import { getHtmlLang, type MessageKey } from '../i18n';
 import { useI18n } from '../i18n/useI18n';
 import './DisplayMode.css';
@@ -115,6 +116,7 @@ function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric', t: T
     {
       label: t('metric.smash'),
       value: isMeasured(shot.smash_factor) ? shot.smash_factor.toFixed(2) : NO_VALUE,
+      detail: smashSubtext(shot),
     },
     {
       label: t('display.launch'),

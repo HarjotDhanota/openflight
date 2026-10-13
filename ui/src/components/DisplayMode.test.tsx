@@ -67,6 +67,21 @@ describe('DisplayMode', () => {
     expect(html).toMatch(/metric-card__value">—<\/span><\/div><span class="metric-card__label">Carry/);
   });
 
+  it('labels a radial-ratio smash factor and leaves an unlabelled one alone (D21, D37)', () => {
+    const radial: Shot = { ...shot, smash_factor_status: 'radial_ratio' };
+
+    const labelled = renderToString(
+      <DisplayMode connected captureSettings={captureSettings} latestShot={radial} shots={[radial]} />
+    );
+    const plain = renderToString(
+      <DisplayMode connected captureSettings={captureSettings} latestShot={shot} shots={[shot]} />
+    );
+
+    expect(labelled).toContain('1.50');
+    expect(labelled).toContain('radial ratio');
+    expect(plain).not.toContain('radial ratio');
+  });
+
   it('does not request a preview when camera capture is unavailable', () => {
     const html = renderToString(
       <DisplayMode connected captureSettings={{ available: false }} latestShot={shot} shots={[shot]} />

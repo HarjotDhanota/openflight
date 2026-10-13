@@ -24,6 +24,12 @@ export interface Shot {
   ball_speed_mph: number | null;
   club_speed_mph: number | null;
   smash_factor: number | null;
+  /**
+   * What smash_factor divides. `radial_ratio` (fusion units): the OPS radial ball
+   * speed over the OPS radial club speed, not TrackMan's full speeds (D21, D37).
+   * Missing or null: unlabelled, as an OPS-only unit has always shown it.
+   */
+  smash_factor_status?: string | null;
   /** The ball-speed table; null on a fusion unit, which never shows it. */
   estimated_carry_yards: number | null;
   carry_range: [number, number] | null;
