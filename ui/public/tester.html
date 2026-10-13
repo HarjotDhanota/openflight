@@ -307,6 +307,48 @@
         touch-action: none;
         cursor: move;
       }
+      /* D34: the aim point and the target line over the same live view. The whole
+         picture takes a tap or a drag; the patch is drawn for reference only. */
+      .aim-overlay .aim-surface {
+        fill: transparent;
+        pointer-events: auto;
+        touch-action: none;
+        cursor: crosshair;
+      }
+      .aim-overlay .aim-line {
+        stroke: #ffd400;
+        stroke-width: 3;
+        stroke-dasharray: 10 6;
+        vector-effect: non-scaling-stroke;
+      }
+      .aim-overlay .aim-handle circle {
+        fill: rgba(255, 64, 64, 0.2);
+        stroke: #ff4040;
+        stroke-width: 3;
+        vector-effect: non-scaling-stroke;
+      }
+      .aim-overlay .aim-handle line {
+        stroke: #ff4040;
+        stroke-width: 2;
+        vector-effect: non-scaling-stroke;
+      }
+      .aim-overlay .aim-handle {
+        pointer-events: none;
+      }
+      .aim-overlay .aim-floor {
+        stroke: #2f9bff;
+        stroke-width: 3;
+        vector-effect: non-scaling-stroke;
+      }
+      .aim-overlay .aim-floor-end {
+        fill: rgba(47, 155, 255, 0.3);
+        stroke: #2f9bff;
+        stroke-width: 3;
+        vector-effect: non-scaling-stroke;
+        pointer-events: auto;
+        touch-action: none;
+        cursor: move;
+      }
       .photo-handoff {
         margin: 10px 0;
         padding: 10px 12px;
@@ -725,6 +767,56 @@
             hardware check, the light measurement (judged on the patch) and the camera and radar checks, which look for
             the ball only there. Moving the patch later means measuring the light again and starting the ball range
             over.
+          </p>
+        </div>
+        <!-- D34: the target line, TrackMan's "Target Image". Right after the patch the
+             tester drags an aim point onto the target; the line from the patch centre
+             through it is the zero for every horizontal angle, camera and radar. -->
+        <div class="setup-gate" id="aim" data-ready="false">
+          <h3>Set the target line</h3>
+          <p id="aim-summary" class="note" role="status">Confirm the patch first: the target line starts at the ball.</p>
+          <p id="aim-stale" class="problem" role="status" hidden></p>
+          <div class="guided-camera-preview" id="aim-preview" hidden>
+            <p class="note" id="aim-camera-status" role="status">Waiting for the first camera frame…</p>
+            <p class="note" id="aim-brightness" role="status" hidden>Adjusting brightness…</p>
+            <div class="box-stage" id="aim-stage">
+              <img id="aim-camera-frame" alt="Live 1280×800 view for setting the aim point" hidden />
+              <svg
+                class="patch-overlay aim-overlay"
+                id="aim-overlay"
+                viewBox="0 0 1280 800"
+                preserveAspectRatio="none"
+                role="img"
+                aria-label="The aim point on your target, and the target line from the patch through it"
+                hidden
+              >
+                <polygon class="patch-ground" id="aim-patch" points=""></polygon>
+                <rect class="aim-surface" id="aim-surface" x="0" y="0" width="1280" height="800"></rect>
+                <line class="aim-floor" id="aim-floor" x1="0" y1="0" x2="0" y2="0" display="none"></line>
+                <line class="aim-line" id="aim-line" x1="0" y1="0" x2="0" y2="0"></line>
+                <circle class="aim-floor-end" id="aim-floor-a" cx="0" cy="0" r="16" display="none"></circle>
+                <circle class="aim-floor-end" id="aim-floor-b" cx="0" cy="0" r="16" display="none"></circle>
+                <g class="aim-handle" id="aim-handle">
+                  <circle cx="0" cy="0" r="20"></circle>
+                  <line x1="-30" y1="0" x2="30" y2="0"></line>
+                  <line x1="0" y1="-30" x2="0" y2="30"></line>
+                </g>
+              </svg>
+            </div>
+            <p class="note" id="aim-yaw" role="status"></p>
+          </div>
+          <div class="steps">
+            <button type="button" id="aim-show" hidden>Show the camera</button>
+            <button type="button" id="aim-floor-toggle" hidden>Mark where the floor meets the screen</button>
+            <button type="button" id="aim-confirm" hidden disabled>Confirm the aim point</button>
+            <button type="button" id="aim-move" hidden>Move the aim point</button>
+          </div>
+          <p class="note">
+            Tap or drag the cross onto your target: a mark on the net or screen, or a flag. Pick one low down, near
+            where the screen meets the floor, and keep the unit roughly facing it. If the target is on a net or screen a
+            few metres away, also mark where the floor meets the screen (drag the two blue ends along it): the target
+            line then starts at the ball, not at the camera. The line drawn from the patch through the cross is the
+            straight-ahead every left and right angle is measured from.
           </p>
         </div>
       </section>
@@ -1606,6 +1698,8 @@
         syncGuidedCameraPreview();
         placementPreviewShowing = false;
         renderPlacement();
+        aimPreviewShowing = false;
+        renderAim();
         render(await request('/api/tester/stop', { method: 'POST' }));
       });
       el('package').addEventListener('click', async () => {
@@ -2091,6 +2185,7 @@
                   : null;
             refreshTeeRange();
             refresh();
+            refreshAim(); // the aim point follows the patch (D34)
           }
         } catch (error) {
           if (testerId !== el('tester-id').value.trim()) return;
@@ -2159,6 +2254,476 @@
       };
       placementPatchNode.addEventListener('pointerup', endPlacementDrag);
       placementPatchNode.addEventListener('pointercancel', endPlacementDrag);
+
+      // D34: the target line (TrackMan's "Target Image"). Right after the patch the
+      // tester taps or drags an aim point onto the target in the same live view, and
+      // for a near net or screen may mark where the floor meets it. The page draws the
+      // line from the patch centre through the aim point and the yaw it gives, through
+      // the same pinhole model the patch is dragged with; the server computes it
+      // exactly on Confirm and hands it to the kiosk's two yaw flags.
+      let aimState = null;
+      let aimRequestRunning = false;
+      let aimRequestVersion = 0;
+      let aimActionPending = false;
+      let aimError = null;
+      let aimNotice = null;
+      let aimMoving = false;
+      let aimDraft = null;
+      let aimDraftKey = null;
+      let aimDrag = null;
+      let aimAutoShown = null;
+      let aimPreviewShowing = false;
+      let aimPreviewStartedAt = 0;
+      let aimPreviewKey = null;
+      let aimPreviewVersion = 0;
+      let aimFrameLoading = false;
+      let aimPendingFrame = null;
+      let aimTickRunning = false;
+      const AIM_MODE_NAMES = { arm5: '1280×800', arm6: '640×400' };
+
+      const aimForTester = () => aimState?.tester_id === el('tester-id').value.trim();
+      const aimConfirmed = () => aimForTester() && aimState?.state === 'confirmed';
+      const aimPlacing = () =>
+        aimForTester() && (aimState?.state === 'needs_confirmation' || (aimConfirmed() && aimMoving));
+
+      // The target line's yaw, + right of where the unit points: a direction, or with
+      // a floor line the aim point put on that screen and dropped to the floor.
+      function aimYaw(model, ball, aim, floor) {
+        const ray = patchRay(model, aim[0], aim[1]);
+        const direction = { yaw: Math.atan2(ray[0], ray[1]) / DEG, method: 'direction' };
+        if (!floor) return direction;
+        const origin = model.camera_origin_lfu_m;
+        const ground = floor.map(([x, y]) => {
+          const end = patchRay(model, x, y);
+          if (end[2] >= -1e-9) return null;
+          const t = -origin[2] / end[2];
+          return [origin[0] + t * end[0], origin[1] + t * end[1]];
+        });
+        if (ground.some((point) => !point)) return { ...direction, fallback: 'the floor line is at or above the horizon' };
+        const along = [ground[1][0] - ground[0][0], ground[1][1] - ground[0][1]];
+        if (Math.hypot(along[0], along[1]) < 0.05) return { ...direction, fallback: 'the floor line is too short' };
+        const normal = [-along[1], along[0]];
+        const facing = normal[0] * ray[0] + normal[1] * ray[1];
+        if (Math.abs(facing) < 1e-9) return { ...direction, fallback: 'the aim is along the screen' };
+        const t = (normal[0] * (ground[0][0] - origin[0]) + normal[1] * (ground[0][1] - origin[1])) / facing;
+        if (t <= 0) return { ...direction, fallback: 'the screen is behind the camera' };
+        const target = [origin[0] + t * ray[0], origin[1] + t * ray[1]];
+        if (target[1] - ball[1] < 0.05) return { ...direction, fallback: 'the screen is not beyond the ball' };
+        return {
+          yaw: Math.atan2(target[0] - ball[0], target[1] - ball[1]) / DEG,
+          method: 'floor_point',
+          distance: Math.hypot(target[0] - ball[0], target[1] - ball[1]),
+        };
+      }
+      function yawText(yaw) {
+        if (!Number.isFinite(yaw)) return 'not known';
+        if (Math.abs(yaw) < 0.05) return 'straight down where the unit points';
+        return `${Math.abs(yaw).toFixed(1)}° ${yaw > 0 ? 'right' : 'left'} of where the unit points`;
+      }
+      // a level floor line just below the horizon, for the tester to drag onto the screen's foot
+      function defaultFloorLine(model) {
+        const [width, height] = model.image_size_px;
+        const horizon = model.principal_point_px[1] + model.focal_px * Math.tan((model.pitch_deg || 0) * DEG);
+        const y = Math.min(height - 1, Math.max(0, horizon + 30));
+        return [
+          [width * 0.25, y],
+          [width * 0.75, y],
+        ];
+      }
+      // the target line on the picture: from the patch centre through the aim point to the edge
+      function lineThrough(from, to, frame) {
+        const d = [to[0] - from[0], to[1] - from[1]];
+        const limits = [];
+        if (d[0] > 0) limits.push((frame[0] - from[0]) / d[0]);
+        if (d[0] < 0) limits.push(-from[0] / d[0]);
+        if (d[1] > 0) limits.push((frame[1] - from[1]) / d[1]);
+        if (d[1] < 0) limits.push(-from[1] / d[1]);
+        const t = limits.length ? Math.max(1, Math.min(...limits)) : 1;
+        return [from, [from[0] + t * d[0], from[1] + t * d[1]]];
+      }
+
+      function aimDraftView() {
+        const model = aimState?.projection;
+        const patch = aimState?.patch;
+        if (!model || !patch?.centre_px || !patch?.centre_lfu_m) return null;
+        const key = `${el('tester-id').value.trim()}|${aimState.state}|${aimMoving}|${aimState.reason ?? ''}`;
+        if (aimDraftKey !== key || !aimDraft) {
+          // pre-filled from the last confirmed aim point (the server's proposal)
+          const start = aimState.state === 'confirmed' ? aimState.target_line : aimState.aim;
+          aimDraft = {
+            aim: [...(start?.aim_px ?? [model.principal_point_px[0], model.principal_point_px[1]])],
+            floor: start?.floor_line_px ? start.floor_line_px.map((point) => [...point]) : null,
+          };
+          aimDraftKey = key;
+        }
+        return { model, patch, frame: model.image_size_px, aim: aimDraft.aim, floor: aimDraft.floor };
+      }
+
+      function setSvgLine(node, from, to) {
+        node.setAttribute('x1', from[0].toFixed(1));
+        node.setAttribute('y1', from[1].toFixed(1));
+        node.setAttribute('x2', to[0].toFixed(1));
+        node.setAttribute('y2', to[1].toFixed(1));
+      }
+
+      function renderAimDraft() {
+        const svg = el('aim-overlay');
+        const view = aimPlacing() ? aimDraftView() : null;
+        if (!view || el('aim-camera-frame').hidden) {
+          svg.hidden = true;
+          el('aim-yaw').textContent = '';
+          return;
+        }
+        const [width, height] = view.frame;
+        svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+        el('aim-surface').setAttribute('width', String(width));
+        el('aim-surface').setAttribute('height', String(height));
+        el('aim-patch').setAttribute('points', polygonPoints(view.patch.outline_px || []));
+        const [from, to] = lineThrough(view.patch.centre_px, view.aim, view.frame);
+        setSvgLine(el('aim-line'), from, to);
+        el('aim-handle').setAttribute('transform', `translate(${view.aim[0].toFixed(1)} ${view.aim[1].toFixed(1)})`);
+        const floorShown = Boolean(view.floor);
+        for (const id of ['aim-floor', 'aim-floor-a', 'aim-floor-b']) {
+          el(id).setAttribute('display', floorShown ? 'inline' : 'none');
+        }
+        if (floorShown) {
+          setSvgLine(el('aim-floor'), view.floor[0], view.floor[1]);
+          ['aim-floor-a', 'aim-floor-b'].forEach((id, index) => {
+            el(id).setAttribute('cx', view.floor[index][0].toFixed(1));
+            el(id).setAttribute('cy', view.floor[index][1].toFixed(1));
+          });
+        }
+        const solved = aimYaw(view.model, view.patch.centre_lfu_m, view.aim, view.floor);
+        svg.dataset.aim = view.aim.map((value) => value.toFixed(1)).join(',');
+        svg.dataset.floor = view.floor ? view.floor.map((point) => point.map((v) => v.toFixed(1)).join(',')).join(' ') : '';
+        svg.dataset.yaw = solved.yaw.toFixed(2);
+        svg.dataset.method = solved.method;
+        svg.hidden = false;
+        let how = ' (the aim point is taken as a direction).';
+        if (solved.method === 'floor_point') {
+          how = `, from the ball to the screen ${solved.distance.toFixed(1)} m beyond it.`;
+        } else if (solved.fallback) {
+          how = ` (taken as a direction: ${solved.fallback}).`;
+        }
+        el('aim-yaw').textContent = `Target line ${yawText(solved.yaw)}${how}`;
+      }
+
+      function aimCameraStatus(message, problem = false) {
+        const status = el('aim-camera-status');
+        status.className = problem ? 'problem' : 'note';
+        status.textContent = message;
+      }
+
+      function renderAim() {
+        const state = aimState?.state;
+        const confirmed = aimConfirmed();
+        const placing = aimPlacing();
+        el('aim').dataset.ready = String(confirmed);
+        let text;
+        let problem = false;
+        if (aimError) {
+          text = aimError;
+          problem = true;
+        } else if (!aimState || !aimForTester()) {
+          text = 'Checking the aim point…';
+        } else if (state === 'setup_not_confirmed') {
+          text = 'Confirm the physical setup first.';
+        } else if (state === 'needs_patch') {
+          text = 'Confirm the patch first: the target line starts at the ball.';
+        } else if (state === 'unavailable') {
+          text = `The aim point can't be set yet: ${aimState.reason || 'the camera model is unavailable'}.`;
+          problem = true;
+        } else if (aimMoving) {
+          text =
+            'Drag the cross onto the new target and confirm it, or confirm it where it is to keep it. Swings ' +
+            'already taken keep the target line they were taken with.';
+        } else if (state === 'needs_confirmation') {
+          const why =
+            {
+              patch_moved: 'The patch moved, so confirm the aim point again (it starts where it was). ',
+              new_setup: 'A new setup: check the cross is still on your target. ',
+            }[aimState.reason] || '';
+          text = `${why}Tap or drag the red cross onto your target on the net, screen or flag, then press Confirm the aim point.`;
+        } else {
+          const line = aimState.target_line || {};
+          const when = aimState.confirmed_at_utc;
+          const spread = line.uncertainty?.total_deg;
+          text =
+            `Aim point confirmed${when ? ` at ${clockTime(when)}` : ''}: target line ${yawText(Number(line.yaw_deg))}` +
+            (spread != null ? ` (±${Number(spread).toFixed(1)}°)` : '') +
+            (line.method === 'floor_point' ? ', from the ball to the screen.' : ', the aim taken as a direction.') +
+            ' Left and right angles are measured from it.' +
+            (line.warnings?.length ? ` ${line.warnings.join(' ')}` : '') +
+            (aimNotice ? ` ${aimNotice}` : '');
+        }
+        el('aim-summary').className = problem ? 'problem' : 'note';
+        el('aim-summary').textContent = text;
+        // runs started from another target line read stale, as a light screen from a moved patch does
+        const stale = aimForTester()
+          ? Object.entries(aimState?.runs || {}).filter(([, run]) => run?.stale)
+          : [];
+        el('aim-stale').hidden = !stale.length;
+        el('aim-stale').textContent = stale
+          .map(([arm, run]) => `Swings in ${AIM_MODE_NAMES[arm] || arm} ${run.reason}; take them again to measure from this target line.`)
+          .join(' ');
+        el('aim-preview').hidden = !placing;
+        el('aim-show').hidden = !placing || aimPreviewShowing;
+        el('aim-show').disabled = aimActionPending;
+        el('aim-floor-toggle').hidden = !placing;
+        el('aim-floor-toggle').disabled = aimActionPending;
+        el('aim-floor-toggle').textContent = aimDraftView()?.floor
+          ? 'Remove the floor line'
+          : 'Mark where the floor meets the screen';
+        el('aim-confirm').hidden = !placing;
+        el('aim-confirm').disabled = aimActionPending || !aimDraftView();
+        el('aim-move').hidden = !confirmed || aimMoving;
+        el('aim-move').disabled = aimActionPending;
+        syncAimPreview();
+        renderAimDraft();
+      }
+
+      function syncAimPreview() {
+        const key = aimPlacing() ? el('tester-id').value.trim() : null;
+        if (key === aimPreviewKey) return;
+        aimPreviewKey = key;
+        aimPreviewVersion += 1;
+        aimFrameLoading = false;
+        aimPendingFrame = null;
+        const frame = el('aim-camera-frame');
+        frame.hidden = true;
+        frame.removeAttribute('src');
+        el('aim-brightness').hidden = true;
+        if (key !== null) {
+          aimCameraStatus('Opening the camera…');
+          queueMicrotask(aimTick);
+        }
+      }
+
+      function loadAimFrame(version) {
+        const frame = el('aim-camera-frame').cloneNode(false);
+        aimPendingFrame = frame;
+        aimFrameLoading = true;
+        frame.addEventListener('load', () => {
+          if (frame !== aimPendingFrame) return;
+          aimPendingFrame = null;
+          aimFrameLoading = false;
+          if (version === aimPreviewVersion && aimPlacing()) {
+            frame.hidden = false;
+            el('aim-camera-frame').replaceWith(frame);
+            renderAimDraft();
+          }
+        });
+        frame.addEventListener('error', () => {
+          if (frame !== aimPendingFrame) return;
+          aimPendingFrame = null;
+          aimFrameLoading = false;
+        });
+        frame.src = `/api/tester/live.png?sequence=${Date.now()}`;
+      }
+
+      async function aimTick() {
+        if (!aimPlacing() || aimTickRunning) return;
+        const version = aimPreviewVersion;
+        const testerId = el('tester-id').value.trim();
+        aimTickRunning = true;
+        try {
+          const status = await request('/api/tester/live');
+          if (version !== aimPreviewVersion || testerId !== el('tester-id').value.trim()) return;
+          const owner = status.owner;
+          if (owner?.kind !== 'aim_point' || owner?.tester_id !== testerId) {
+            if (aimPreviewShowing) {
+              aimPreviewShowing = false;
+              renderAim();
+            }
+            if (!aimActionPending) {
+              aimCameraStatus('The camera is not showing. Press “Show the camera” to set the aim point.', true);
+            }
+            return;
+          }
+          if (!aimPreviewShowing) {
+            aimPreviewShowing = true;
+            if (!aimPreviewStartedAt) aimPreviewStartedAt = Date.now();
+            renderAim();
+          }
+          if (status.error || status.failed || !status.running) {
+            aimCameraStatus(
+              `The camera is not answering${status.error || status.failed ? `: ${status.error || status.failed}` : ''}. Press “Show the camera”.`,
+              true
+            );
+            aimPreviewShowing = false;
+            renderAim();
+            return;
+          }
+          if (!status.stats) {
+            const waited = Date.now() - aimPreviewStartedAt;
+            aimCameraStatus(
+              waited > PLACEMENT_NO_PICTURE_MS
+                ? `The camera is not answering: no picture after ${Math.round(waited / 1000)} s. Check the camera cable, then press “Show the camera”.`
+                : 'Camera is warming up. Waiting for the first frame…',
+              waited > PLACEMENT_NO_PICTURE_MS
+            );
+            return;
+          }
+          aimCameraStatus('Live 1280×800 view: tap or drag the red cross onto your target.');
+          el('aim-brightness').hidden = status.preview_exposure?.state !== 'adjusting';
+          if (!aimFrameLoading) loadAimFrame(version);
+        } catch (error) {
+          if (version === aimPreviewVersion) aimCameraStatus(`Live camera status unavailable: ${error.message}`, true);
+        } finally {
+          aimTickRunning = false;
+        }
+      }
+
+      async function refreshAim() {
+        if (aimRequestRunning || aimActionPending) return;
+        const testerId = el('tester-id').value.trim();
+        const version = ++aimRequestVersion;
+        aimRequestRunning = true;
+        try {
+          const response = await fetchWithTimeout(
+            '/api/tester/aim-point?' + new URLSearchParams({ tester_id: testerId }),
+            { cache: 'no-store' }
+          );
+          const body = await readJson(response);
+          if (version !== aimRequestVersion || testerId !== el('tester-id').value.trim()) return;
+          if (!response.ok) throw new Error(body.error || `aim point check failed (${response.status})`);
+          aimState = body;
+          if (body.state !== 'confirmed') aimMoving = false;
+          if (!body.previewing) aimPreviewShowing = false;
+          renderAim();
+          maybeOpenAimPreview();
+        } catch (error) {
+          if (version === aimRequestVersion && testerId === el('tester-id').value.trim()) {
+            el('aim-summary').className = 'problem';
+            el('aim-summary').textContent = `The aim point step is unavailable: ${error.message}`;
+          }
+        } finally {
+          aimRequestRunning = false;
+        }
+      }
+
+      // Right after the patch, the aim step opens its own live view once per setup and patch.
+      function maybeOpenAimPreview() {
+        if (aimState?.state !== 'needs_confirmation' || aimState.previewing || aimActionPending) return;
+        const key = [
+          el('tester-id').value.trim(),
+          setupEligibility?.operator_confirmation?.confirmed_at ?? '',
+          (aimState.patch?.centre_lfu_m || []).join(','),
+          aimState.reason ?? '',
+        ].join('|');
+        if (aimAutoShown === key) return;
+        aimAutoShown = key;
+        submitAim('show');
+      }
+
+      async function submitAim(action, extra = {}) {
+        if (aimActionPending) return;
+        const testerId = el('tester-id').value.trim();
+        aimActionPending = true;
+        aimRequestVersion += 1; // a poll in flight must not overwrite this answer
+        if (action === 'show') aimError = null;
+        renderAim();
+        try {
+          const body = await post('/api/tester/aim-point', { tester_id: testerId, action, ...extra });
+          if (testerId !== el('tester-id').value.trim()) return;
+          aimState = body;
+          aimError = null;
+          if (action === 'show') {
+            aimPreviewShowing = Boolean(body.previewing);
+            aimPreviewStartedAt = Date.now();
+          } else {
+            aimMoving = false;
+            aimPreviewShowing = false;
+            aimNotice =
+              body.change === 'moved'
+                ? 'The aim point moved: swings from now on measure from the new target line.'
+                : body.change === 'unchanged'
+                  ? 'Same aim point as before: nothing changed.'
+                  : null;
+          }
+        } catch (error) {
+          if (testerId !== el('tester-id').value.trim()) return;
+          aimError =
+            action === 'show'
+              ? `The camera did not start: ${error.message}. Press “Show the camera” to try again.`
+              : `The aim point was not confirmed: ${error.message}`;
+        } finally {
+          aimActionPending = false;
+          renderAim();
+        }
+      }
+
+      el('aim-show').addEventListener('click', () => submitAim('show'));
+      el('aim-confirm').addEventListener('click', () => {
+        const view = aimDraftView();
+        if (!view) return;
+        submitAim('confirm', {
+          aim_px: view.aim.map((value) => Math.round(value * 10) / 10),
+          floor_line_px: view.floor ? view.floor.map((point) => point.map((value) => Math.round(value * 10) / 10)) : null,
+          request_id: newAttemptId(),
+        });
+      });
+      el('aim-move').addEventListener('click', () => {
+        aimMoving = true;
+        aimNotice = null;
+        aimError = null;
+        aimDraftKey = null;
+        renderAim();
+        submitAim('show');
+      });
+      el('aim-floor-toggle').addEventListener('click', () => {
+        const view = aimDraftView();
+        if (!view) return;
+        aimDraft.floor = aimDraft.floor ? null : defaultFloorLine(view.model);
+        renderAim();
+      });
+
+      // The aim point and the floor line's two ends move with a mouse, a pen or a finger
+      // (pointer events): a tap anywhere on the picture puts the aim point there, and a
+      // drag carries it; a floor-line end is dragged by its blue handle.
+      function aimFramePoint(event) {
+        const picture = el('aim-camera-frame').getBoundingClientRect();
+        const view = aimDraftView();
+        if (!view || !picture.width || !picture.height) return null;
+        const x = ((event.clientX - picture.left) * view.frame[0]) / picture.width;
+        const y = ((event.clientY - picture.top) * view.frame[1]) / picture.height;
+        return [Math.min(Math.max(x, 0), view.frame[0]), Math.min(Math.max(y, 0), view.frame[1])];
+      }
+      function moveAimDrag(event) {
+        if (!aimDrag || event.pointerId !== aimDrag.pointerId) return;
+        const point = aimFramePoint(event);
+        if (!point || !aimDraft) return;
+        event.preventDefault();
+        if (aimDrag.target === 'aim') aimDraft.aim = point;
+        else if (aimDraft.floor) aimDraft.floor[aimDrag.target] = point;
+        renderAimDraft();
+      }
+      function startAimDrag(event, target) {
+        if (!aimPlacing() || !aimDraftView()) return;
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+          event.currentTarget.setPointerCapture(event.pointerId);
+        } catch {
+          // A pointer the browser no longer tracks still moves while it stays on the picture.
+        }
+        aimDrag = { pointerId: event.pointerId, target };
+        moveAimDrag(event);
+      }
+      const endAimDrag = (event) => {
+        if (aimDrag && event.pointerId === aimDrag.pointerId) aimDrag = null;
+      };
+      for (const [id, target] of [
+        ['aim-surface', 'aim'],
+        ['aim-floor-a', 0],
+        ['aim-floor-b', 1],
+      ]) {
+        const node = el(id);
+        node.addEventListener('pointerdown', (event) => startAimDrag(event, target));
+        node.addEventListener('pointermove', moveAimDrag);
+        node.addEventListener('pointerup', endAimDrag);
+        node.addEventListener('pointercancel', endAimDrag);
+      }
 
       const TEE_RANGE_STEPS = {
         // a setup begun before the box moved to step 1 takes the box confirmed there
@@ -3389,6 +3954,7 @@
           ladderTick();
           refreshSetupEligibility();
           refreshPlacement();
+          refreshAim();
           refreshTeeRange();
           refresh();
         }, 300);
@@ -3471,6 +4037,7 @@
       refresh();
       refreshSetupEligibility();
       refreshPlacement();
+      refreshAim();
       refreshTeeRange();
       ladderTick();
       ladderTimer = setInterval(ladderTick, 1500);
@@ -3481,6 +4048,8 @@
       setInterval(guidedCameraTick, 350);
       setInterval(refreshPlacement, 2000);
       setInterval(placementTick, 350);
+      setInterval(refreshAim, 2000);
+      setInterval(aimTick, 350);
     </script>
     <script id="ready-light-script">
       // The ready light (P7-14): polls the tester server, which relays the kiosk's
