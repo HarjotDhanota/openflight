@@ -134,6 +134,11 @@ USGA_RA_2021_BOUNCE_MODEL = BounceModel(
     landing_angle_range_deg=(10.0, 50.0),
 )
 
+# Eq. 1 reaches zero at 79.1 / 1.6 = 49.44 deg and is negative from there to the top
+# of its data (50 deg). A ball does not roll backwards on a fairway: the roll is
+# clamped at 0 there, and the total says so (ROLL_CLAMP_NOTE).
+ROLL_CLAMP_NOTE = "roll clamped at 0: Eq. 1 is negative above 49.4°"
+
 FAIRWAY_NORMAL = "fairway_normal"
 DEFAULT_SURFACE = FAIRWAY_NORMAL
 BOUNCE_MODELS: dict[str, BounceModel] = {FAIRWAY_NORMAL: USGA_RA_2021_BOUNCE_MODEL}
@@ -145,7 +150,8 @@ def bounce_and_roll_yards(
     """Distance from landing to rest (yards) by the surface's published model, or None.
 
     None for a surface with no published model, a non-finite angle, or a landing
-    angle outside the model's data range (no extrapolation).
+    angle outside the model's data range (no extrapolation). Inside the range, a
+    negative value of the linear model is clamped at 0 (``ROLL_CLAMP_NOTE``).
     """
     model = BOUNCE_MODELS.get(surface)
     if model is None or not _finite(landing_angle_deg):
@@ -153,7 +159,15 @@ def bounce_and_roll_yards(
     low, high = model.landing_angle_range_deg
     if not low <= landing_angle_deg <= high:
         return None
-    return model.intercept_yards + model.slope_yards_per_deg * landing_angle_deg
+    return max(0.0, model.intercept_yards + model.slope_yards_per_deg * landing_angle_deg)
+
+
+def roll_clamped(landing_angle_deg: float, surface: str = DEFAULT_SURFACE) -> bool:
+    """Whether the surface's model gave a negative roll here that was clamped at 0."""
+    model = BOUNCE_MODELS.get(surface)
+    if model is None or bounce_and_roll_yards(landing_angle_deg, surface) is None:
+        return False
+    return model.intercept_yards + model.slope_yards_per_deg * landing_angle_deg < 0.0
 
 
 @dataclass

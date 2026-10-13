@@ -45,10 +45,12 @@ from .ballistics import (
     BOUNCE_MODELS,
     DEFAULT_SURFACE,
     MODEL_SPIN_SOURCES,
+    ROLL_CLAMP_NOTE,
     LaunchConditions,
     Trajectory,
     ball_speed_for_flight,
     resolve_launch,
+    roll_clamped,
     simulate,
 )
 from .clubs.physics import CLUB_TYPICAL_SPIN_LABEL
@@ -444,6 +446,8 @@ def _block(
             "range": [float(value) - sigma, float(value) + sigma] if sigma is not None else None,
             "reason": None,
         }
+        if name in _TOTAL_METRICS and roll_clamped(traj.landing_angle_deg, surface):
+            metrics[name]["note"] = ROLL_CLAMP_NOTE
     block["metrics"] = metrics
     return block
 

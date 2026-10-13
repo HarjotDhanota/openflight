@@ -219,6 +219,11 @@ OpenFlight applies it as follows:
   measured".
 - **Range of use:** only for landing angles inside the paper's data, 10–50°.
   A steeper landing (a high wedge) or a flatter one has no total, with the reason.
+- **Clamp at zero:** Eq. 1 reaches 0 yd at 49.4° (79.1 / 1.6) and is negative
+  from there to 50°, the top of its data. A fairway ball does not roll backwards,
+  so the roll is clamped at 0 there and `total` / `total_side` carry the note
+  "roll clamped at 0: Eq. 1 is negative above 49.4°". Tour irons land at
+  48–52° (TrackMan's 2023 Tour averages), so this edge is reached in practice.
 - **Direction:** the model gives a distance, not a direction. The ball is
   assumed to roll on along its landing heading, with no sideways kick, which
   gives `total_side`.
