@@ -1,8 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { KIOSK_VIEWPORTS, mockConfirmedPlacementBox } from './helpers';
+import { KIOSK_VIEWPORTS, mockConfirmedPlacementBox, useTester, pickTester } from './helpers';
 
 test.use({ hasTouch: true });
+
+test.beforeEach(async ({ page }) => {
+  await useTester(page);
+});
 
 type PhotoTarget = { capture: string; rung_id: string };
 
@@ -111,14 +115,14 @@ test('captures the returned target identity once and hides the handoff after suc
 
   await expect(
     page.getByText(
-      'Arm 5 is complete. Do not swing. Photograph or skip the face image for full-300 (camera-final-17) to continue to Arm 6.'
+      '1280×800 is complete. Do not swing. Photograph or skip the face image for 1280×800 · 300 µs (camera-final-17) to carry on with 640×400.'
     )
   ).toBeVisible();
   const capture = page.getByRole('button', { name: 'Photograph face' });
   await capture.tap();
   await capture.tap({ force: true });
   await expect(capture).toBeDisabled();
-  const start = page.getByRole('button', { name: 'C. Start the exposure ladder' });
+  const start = page.locator('#step-ladder');
   await expect(start).toBeDisabled();
   await start.evaluate((button: HTMLButtonElement) => button.click());
   expect(photoBodies).toEqual([
@@ -130,7 +134,9 @@ test('captures the returned target identity once and hides the handoff after suc
   expect(startRequests).toBe(0);
   finishPhoto();
   await expect(page.locator('#photo-handoff')).toBeHidden();
-  await expect(start).toBeEnabled();
+  // (17) the ladder walks on after the photo, so Start stays off until Stop
+  await expect(start).toBeDisabled();
+  await expect(start).toHaveText('The ladder is running');
 });
 
 test('refreshes the face preview independently from the ladder status poll', async ({ page }) => {
@@ -187,7 +193,7 @@ test('ignores a delayed status response for the previous tester ID', async ({ pa
   });
 
   await page.goto('/tester.html');
-  await page.locator('#tester-id').fill('new-tester');
+  await pickTester(page, 'new-tester');
   releaseOld();
 
   await expect(page.locator('#status')).toHaveText('new-tester (complete)');
@@ -209,9 +215,9 @@ test('changing tester ID cancels the remaining light-measurement sequence', asyn
     });
   });
   await page.goto('/tester.html');
-  await page.getByRole('button', { name: 'B. Measure the light (both modes)' }).tap();
+  await page.getByRole('button', { name: 'Measure the light (both modes)' }).tap();
   await expect.poll(() => statusReads).toBe(1);
-  await page.locator('#tester-id').fill('new-tester');
+  await pickTester(page, 'new-tester');
   await page.waitForTimeout(1200);
 
   expect(runBodies).toEqual([{ tester_id: '20260922-name', arm_id: 'arm5', environment: 'indoors', action: 'gain' }]);
@@ -250,7 +256,7 @@ for (const [arm5, arm6, verdict, problem] of [
       })
     );
     await page.goto('/tester.html');
-    await page.getByRole('button', { name: 'B. Measure the light (both modes)' }).tap();
+    await page.getByRole('button', { name: 'Measure the light (both modes)' }).tap();
 
     await expect(page.locator('#light-verdict')).toHaveText(verdict);
     if (problem) await expect(page.locator('#light-verdict')).toHaveClass('problem');
@@ -350,7 +356,7 @@ test('Stop cancels the remaining light-measurement sequence', async ({ page }) =
   });
   await page.route('**/api/tester/stop', (route) => fulfillJson(route, {}));
   await page.goto('/tester.html');
-  await page.getByRole('button', { name: 'B. Measure the light (both modes)' }).tap();
+  await page.getByRole('button', { name: 'Measure the light (both modes)' }).tap();
   await expect.poll(() => statusReads).toBe(1);
   await page.getByRole('button', { name: 'Stop all tester activity' }).tap();
   await page.waitForTimeout(1200);
@@ -391,11 +397,11 @@ test('analyse-and-package keeps its original tester context and ignores a duplic
     buffer: Buffer.from('{}'),
   });
 
-  const packageButton = page.getByRole('button', { name: 'D. Analyse, review & package' });
+  const packageButton = page.getByRole('button', { name: 'Analyse, review & package' });
   await packageButton.dispatchEvent('click');
   await packageButton.dispatchEvent('click');
   await expect.poll(() => comparatorUploads).toBe(1);
-  await page.locator('#tester-id').fill('new-tester');
+  await pickTester(page, 'new-tester');
   releaseUpload();
 
   await expect.poll(() => analysisPosts).toHaveLength(1);
@@ -503,11 +509,11 @@ test('reloads a stopped handoff, resumes it, and skips the exact target', async 
     await fulfillJson(route, state);
   });
   await page.goto('/tester.html');
-  await page.locator('#tester-id').fill(restoredTesterId);
+  await pickTester(page, restoredTesterId);
   await page.reload();
 
   await expect(page.locator('#tester-id')).toHaveValue(restoredTesterId);
-  await expect(page.getByText('Photo held for full-300. Resume the ladder to use the camera.')).toBeVisible();
+  await expect(page.getByText('Photo held for 1280×800 · 300 µs. Resume the ladder to use the camera.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Photograph face' })).toBeDisabled();
   await page.getByRole('button', { name: 'Resume ladder' }).tap();
   await expect(page.getByRole('button', { name: 'Pause ladder' })).toBeVisible();
@@ -562,7 +568,7 @@ test('every setting is ticked by default and the ticked ones are sent on Start',
 
   await setting(page, '1280×800', 50).uncheck();
   await setting(page, '640×400', 75).uncheck();
-  await page.getByRole('button', { name: 'C. Start the exposure ladder' }).tap();
+  await page.locator('#step-ladder').tap();
 
   await expect.poll(() => startBodies.length).toBe(1);
   expect(startBodies[0]).toEqual({
@@ -683,7 +689,7 @@ test('Start with nothing ticked asks for a setting and is refused', async ({ pag
   });
   await page.goto('/tester.html');
   for (const box of await page.locator('#ladder-choice input').all()) await box.uncheck();
-  await page.getByRole('button', { name: 'C. Start the exposure ladder' }).tap();
+  await page.locator('#step-ladder').tap();
 
   await expect(page.locator('#ladder-panel')).toHaveText('Choose at least one setting.');
   expect(startRequests).toBe(0);
@@ -700,7 +706,7 @@ test('Start shows why the ladder needs the setup to find the ball', async ({ pag
     fulfillJson(route, { error: refusal, setup_ball_missing: true }, 409)
   );
   await page.goto('/tester.html');
-  await page.getByRole('button', { name: 'C. Start the exposure ladder' }).tap();
+  await page.locator('#step-ladder').tap();
 
   await expect(page.locator('#ladder-panel')).toHaveText(refusal);
 });
@@ -713,7 +719,7 @@ test('with no 640×400 setting to follow, the last photo finishes the ladder', a
 
   await expect(
     page.getByText(
-      'Arm 5 is complete. Do not swing. Photograph or skip the face image for full-30 (camera-final-21) to finish the ladder.'
+      '1280×800 is complete. Do not swing. Photograph or skip the face image for 1280×800 · 30 µs (camera-final-21) to finish the ladder.'
     )
   ).toBeVisible();
 });
@@ -724,7 +730,7 @@ test('a refused start shows the server message', async ({ page }) => {
     fulfillJson(route, { error: 'choose at least one setting' }, 400)
   );
   await page.goto('/tester.html');
-  await page.getByRole('button', { name: 'C. Start the exposure ladder' }).tap();
+  await page.locator('#step-ladder').tap();
 
   await expect(page.locator('#ladder-panel')).toHaveText('choose at least one setting');
 });
@@ -771,7 +777,7 @@ test('pressing a setting on a running ladder switches to it and sends the ticked
   });
   await expect(settingButton(page, '640×400', 150)).toHaveClass(/now/);
   await expect(settingButton(page, '1280×800', 300)).not.toHaveClass(/now/);
-  await expect(page.locator('#ladder-panel')).toContainText('now: half-150');
+  await expect(page.locator('#ladder-panel')).toContainText('Now: 640×400 · 150 µs');
 });
 
 test('a setting button starts a stopped ladder on that setting, ticked or not', async ({ page }) => {
@@ -835,7 +841,7 @@ test('a setting with its good swings shows done and cannot be pressed; failed on
   await page.goto('/tester.html');
 
   await expect(settingButton(page, '1280×800', 300)).toBeDisabled();
-  await expect(settingButton(page, '1280×800', 300)).toHaveText('300 done');
+  await expect(settingButton(page, '1280×800', 300)).toHaveText('300 µs done');
   await expect(settingButton(page, '1280×800', 200)).toBeEnabled();
   await expect(settingButton(page, '1280×800', 150)).toBeEnabled();
   await expect(settingButton(page, '640×400', 300)).toBeEnabled();
@@ -864,9 +870,10 @@ test("a pressed setting's bad light is shown as a warning", async ({ page }) => 
   );
   await page.goto('/tester.html');
 
-  await expect(page.locator('#ladder-panel')).toContainText(
-    'full-10: active 0/5 usable pictures — runs anyway: too dark for the ball: 5 DN above black'
-  );
+  const row = page.locator('#ladder-panel .rung[data-rung="full-10"]');
+  await expect(row).toContainText('1280×800 · 10 µs');
+  await expect(row).toContainText('active: 0/5 usable pictures');
+  await expect(row).toContainText('runs anyway: too dark for the ball: 5 DN above black');
 });
 
 for (const viewport of KIOSK_VIEWPORTS) {
@@ -930,10 +937,10 @@ test('the hardware check records whether RESET was pressed', async ({ page }) =>
   const reset = page.locator('#iwr-reset-pressed');
 
   await reset.check();
-  await page.getByRole('button', { name: 'A. Check the hardware' }).tap();
+  await page.getByRole('button', { name: 'Check the hardware' }).tap();
   await expect(page.locator('#check-verdict')).toContainText('ready');
   await expect(reset).not.toBeChecked();
-  await page.getByRole('button', { name: 'A. Check the hardware' }).tap();
+  await page.getByRole('button', { name: 'Check the hardware' }).tap();
   await expect.poll(() => runBodies.length).toBe(2);
 
   expect(runBodies.map((body) => body.operator_reset)).toEqual([true, false]);
@@ -963,7 +970,7 @@ test('shows the kiosk shot beside the swing verdict, every metric with its label
   await page.goto('/tester.html');
 
   const box = page.locator('#kiosk-shot');
-  await expect(box).toContainText('Last kiosk shot #7');
+  await expect(box).toContainText('Kiosk numbers for its latest shot #7 (7-iron)');
   await expect(box.locator('.kiosk-shot__key [data-kiosk-metric]')).toHaveCount(12);
   const rows = box.locator('tr[data-kiosk-metric]');
   await expect(rows).toHaveCount(catalog.metrics.length);

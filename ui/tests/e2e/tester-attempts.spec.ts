@@ -1,7 +1,11 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { KIOSK_VIEWPORTS, mockConfirmedPlacementBox } from './helpers';
+import { KIOSK_VIEWPORTS, mockConfirmedPlacementBox, useTester } from './helpers';
 
 test.use({ hasTouch: true });
+
+test.beforeEach(async ({ page }) => {
+  await useTester(page);
+});
 
 type Scope = { tester_id: string; arm_id: string; run: string; run_dir: string; rung_id?: string };
 type Entry = { entry_id: string; kind: string; operator_missed: boolean; status: string };

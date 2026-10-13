@@ -1,7 +1,11 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { mockConfirmedPlacementBox } from './helpers';
+import { mockConfirmedPlacementBox, useTester } from './helpers';
 
 test.use({ hasTouch: true });
+
+test.beforeEach(async ({ page }) => {
+  await useTester(page);
+});
 
 // P7-14 (D13): the tester page's ready light, relayed by the tester server.
 
