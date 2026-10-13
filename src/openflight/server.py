@@ -4535,7 +4535,7 @@ def _attach_club_arc(shot: Shot, delivery) -> None:
     """E1: the shot's club delivery from the arc, beside the chained cross-check.
 
     ``delivery`` is the chained club delivery (dataclass or its persisted dict),
-    or None. Right-handed unless the golfer is set left-handed (D39 rules).
+    or None. Right-handed unless the golfer is set left-handed (owner rule).
     """
     from openflight.club_arc import club_delivery_payload  # noqa: PLC0415
 
