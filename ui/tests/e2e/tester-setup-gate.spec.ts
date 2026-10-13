@@ -237,7 +237,9 @@ test('an old confirmation cannot clear the pending state of a newer confirmation
   await page.evaluate(() => (window as Window & { releaseOldSetup?: () => void }).releaseOldSetup?.());
   await page.waitForTimeout(50);
   const readsBeforeManualRefresh = eligibilityReads;
-  await page.evaluate(() => (window as Window & { refreshSetupEligibility?: () => Promise<boolean> }).refreshSetupEligibility?.());
+  await page.evaluate(() =>
+    (window as Window & { refreshSetupEligibility?: () => Promise<boolean> }).refreshSetupEligibility?.()
+  );
   expect(eligibilityReads).toBe(readsBeforeManualRefresh);
   releaseNew();
   await expect(page.locator('#setup-gate')).toHaveAttribute('data-ready', 'true');
@@ -308,9 +310,10 @@ test('automatic range is visible while tape stays optional and advanced', async 
   await page.goto('/tester.html');
 
   await expect(page.getByRole('heading', { name: '6 Ball range' })).toBeVisible();
-  await expect(page.locator('#automatic-range-summary')).toContainText('No ball found in the box');
+  // 13 Oct: a finished setup without a distance says why, never "no ball found" by default
+  await expect(page.locator('#automatic-range-summary')).toContainText('No distance was saved');
   // (12) one plain line first; the internal terms stay in the folded details
-  await expect(page.locator('#automatic-range-plain')).toHaveText('Ball range: no ball found; swings carry on without it');
+  await expect(page.locator('#automatic-range-plain')).toHaveText('Ball range: qualification artifact missing');
   await expect(page.locator('#automatic-range-details')).not.toHaveAttribute('open', '');
   await expect(page.locator('#automatic-range-values')).toContainText('canonical range withheld');
   await expect(page.locator('#tee-mm')).toBeHidden();
@@ -318,9 +321,7 @@ test('automatic range is visible while tape stays optional and advanced', async 
   await expect(page.locator('#tee-mm')).toBeVisible();
   await expect(page.getByText('Validation only. This value does not guide camera detection')).toBeVisible();
 
-  await expect(page.locator('#automatic-range')).toContainText(
-    'bias-corrected IWR slant range not measured yet'
-  );
+  await expect(page.locator('#automatic-range')).toContainText('bias-corrected IWR slant range not measured yet');
 });
 
 for (const viewport of KIOSK_VIEWPORTS) {
