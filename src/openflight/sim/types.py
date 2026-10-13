@@ -111,7 +111,8 @@ class ResolvedShot:
     """A Shot with every simulator-relevant field filled by the resolver.
 
     Field names are *logical* (protocol-neutral); each codec maps them to its
-    own wire names. ``provenance`` tags each logical field "measured" or
+    own wire names. ``provenance`` tags each logical field "measured",
+    "calculated" (a model's value from the shot's own measured inputs, E2) or
     "estimated" so the UI can render per-field badges identically for any sim.
 
     An optional field the shot has no value for (``carry_yards``, ``club_path_deg``,

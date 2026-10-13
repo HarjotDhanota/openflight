@@ -315,6 +315,20 @@ class Shot:
     # Which displayed club path and horizontal launch the face angle used.
     experimental_face_angle_path_source: Optional[str] = None
     experimental_face_angle_launch_source: Optional[str] = None
+    # E2 collision model (openflight.collision_model): calculated, never measured.
+    # collision_model["metrics"] holds each value's status, source, unit, frame and
+    # reason; the experimental_face_angle_* fields above mirror face_angle_deg.
+    face_angle_deg: Optional[float] = None
+    dynamic_loft_deg: Optional[float] = None
+    spin_loft_deg: Optional[float] = None
+    face_to_path_deg: Optional[float] = None
+    d_plane_tilt_deg: Optional[float] = None
+    # Penner 2001 spin, recorded whenever it runs; spin_rpm takes it only without an
+    # accepted measured spin. The --calculated-spin formula's value, likewise recorded.
+    spin_rpm_collision: Optional[float] = None
+    spin_rpm_calculated_empirical: Optional[float] = None
+    spin_axis_source: Optional[str] = None  # "calculated" (collision model), or None
+    collision_model: Optional[dict] = None
     experimental_aoa_offset_source: Optional[str] = None
     # Independent horizontal ball-flight evidence. The camera-assisted value
     # may become the displayed experimental result while the original IWR
@@ -538,6 +552,15 @@ class Shot:
             "experimental_face_angle_frame": self.experimental_face_angle_frame,
             "experimental_face_angle_path_source": self.experimental_face_angle_path_source,
             "experimental_face_angle_launch_source": self.experimental_face_angle_launch_source,
+            "face_angle_deg": self.face_angle_deg,
+            "dynamic_loft_deg": self.dynamic_loft_deg,
+            "spin_loft_deg": self.spin_loft_deg,
+            "face_to_path_deg": self.face_to_path_deg,
+            "d_plane_tilt_deg": self.d_plane_tilt_deg,
+            "spin_rpm_collision": self.spin_rpm_collision,
+            "spin_rpm_calculated_empirical": self.spin_rpm_calculated_empirical,
+            "spin_axis_source": self.spin_axis_source,
+            "collision_model": deepcopy(self.collision_model),
             "experimental_aoa_offset_source": self.experimental_aoa_offset_source,
             "iwr6843_horizontal_deg": self.iwr6843_horizontal_deg,
             "iwr6843_horizontal_confidence": self.iwr6843_horizontal_confidence,

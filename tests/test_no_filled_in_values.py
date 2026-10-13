@@ -182,8 +182,8 @@ def test_carry_and_simulators_use_a_calculated_spin_under_its_own_label():
 
     assert resolve_launch(shot).spin_source == "calculated"
     resolved = resolve_shot(shot, PlayerState())
-    # simulators' provenance is measured or estimated: a model's spin is not measured
-    assert resolved.provenance["total_spin"] == "estimated"
+    # a model's spin from measured inputs is calculated, never measured (D31, E2)
+    assert resolved.provenance["total_spin"] == "calculated"
     assert resolved.total_spin_rpm == pytest.approx(shot.spin_rpm)
 
 
@@ -697,7 +697,7 @@ def test_a_fusion_shot_with_a_calculated_spin_is_sent_under_its_label():
     resolved = resolve_shot(shot, PlayerState(), substitutes=False)
 
     assert resolved.total_spin_rpm == pytest.approx(2600)
-    assert resolved.provenance["total_spin"] == "estimated"
+    assert resolved.provenance["total_spin"] == "calculated"
 
 
 def test_a_fusion_shot_missing_only_optional_fields_is_sent_without_them():
@@ -727,7 +727,6 @@ def test_a_fusion_shot_missing_only_optional_fields_is_sent_without_them():
 
 
 def test_a_fully_measured_fusion_shot_is_sent_unchanged():
-
     from openflight.gspro.codec import GSProCodec
 
     shot = _fusion_sim_shot()

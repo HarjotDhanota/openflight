@@ -29,7 +29,7 @@ from flask import Flask, Response, jsonify, request, send_file, send_from_direct
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
-from . import core_eligibility, pi_trace
+from . import collision_model, core_eligibility, pi_trace
 from .ballistics import resolve_launch, simulate
 from .ble.protocol import (
     build_power_status_event,
@@ -47,7 +47,6 @@ from .clubs.physics import (
 )
 from .horizontal_frame import (
     MIXED,
-    combined_frame,
     frame_for,
     resolve_horizontal_offset,
     to_reported_deg,
@@ -58,6 +57,7 @@ from .launch_monitor import (
     CARRY_MEASURED,
     CARRY_NOT_MEASURED,
     SMASH_RADIAL_RATIO,
+    SPIN_CONFIDENCE_HIGH,
     SPIN_CONFIDENCE_RELIABLE,
     Shot,
     summarize_shots,
@@ -1888,7 +1888,7 @@ _SOURCE_LABELS_OF_METRIC = {
         "experimental_face_angle_frame",
     ),
     "club_path_deg": ("club_path_frame",),
-    "spin_axis_deg": ("spin_axis_frame",),
+    "spin_axis_deg": ("spin_axis_frame", "spin_axis_source"),
 }
 
 
@@ -4038,6 +4038,11 @@ def _apply_calculated_spin(shot: Shot) -> bool:
     rewritten with 170*v*sin(LA)^1.2. The displaced measured value is
     kept in spin_rpm_measured for offline scoring. Returns True when
     the shot was rewritten.
+
+    This formula is empirical, not a published collision model (E2). Its value
+    is always recorded in spin_rpm_calculated_empirical; when the published
+    collision model (Penner 2001) produced a calculated spin for this shot,
+    that one is the spin used.
     """
     if shot.launch_angle_vertical is None:
         return False
@@ -4046,7 +4051,11 @@ def _apply_calculated_spin(shot: Shot) -> bool:
     spin_calc = calculated_spin_rpm(shot.ball_speed_mph, shot.launch_angle_vertical)
     if spin_calc is None:
         return False
-    shot.spin_rpm_measured = shot.spin_rpm
+    shot.spin_rpm_calculated_empirical = spin_calc
+    if _collision_spin_feeds(shot):
+        spin_calc = shot.spin_rpm_collision
+    if shot.spin_source != "calculated":
+        shot.spin_rpm_measured = shot.spin_rpm
     shot.spin_rpm = spin_calc
     # a model's output has no measurement confidence; spin_source labels it (D17)
     shot.spin_confidence = None
@@ -4814,11 +4823,6 @@ def _withhold_camera_metrics(shot: Shot, status: str, reason: str) -> None:
     }
 
 
-# D-plane: an iron's ball starts about 80% where the face points and 20% along
-# the club path. Per-club weights are future work; 0.8 is the mid-iron value.
-FACE_ANGLE_FACE_WEIGHT = 0.8
-
-
 def displayed_club_path(shot: Shot) -> tuple[float | None, str | None]:
     """Return the club path the kiosk shows, when it is accepted, and its source.
 
@@ -4864,36 +4868,192 @@ def _club_path_frame_of(shot: Shot, path_source: str | None) -> str | None:
     return None
 
 
-def _attach_experimental_face_angle(shot: Shot) -> None:
-    """Derive face angle from the measured start direction and club path (D-plane)."""
-    shot.experimental_face_angle_deg = None
-    shot.experimental_face_angle_path_source = None
-    shot.experimental_face_angle_launch_source = None
-    shot.experimental_face_angle_frame = None
-    launch = shot.launch_angle_horizontal
-    if launch is None or shot.launch_angle_horizontal_source == "estimated":
-        shot.experimental_face_angle_status = "missing_measured_start_direction"
-        return
-    # An uncalibrated radar start direction has its own zero, so with any path
-    # it mixes two frames (audit F8). D15 (P8-7): compute it and say so.
-    azimuth_uncalibrated = shot.launch_angle_horizontal_status == "azimuth_uncalibrated"
+def displayed_attack_angle(shot: Shot) -> tuple[float | None, str | None]:
+    """The attack angle the collision model may use, and its source.
+
+    Mirrors the kiosk's attack tile (ui liveMetrics.ts): the canonical field, then the
+    camera-fused attack unless fusion rejected it or withheld its confidence. The IWR
+    attack angle is only ever a candidate ("candidate_available"), so, like a path
+    that is not accepted (audit F1), it is never a collision input.
+    """
+    if _finite(shot.club_angle_deg):
+        return shot.club_angle_deg, "canonical"
+    fused_status = shot.experimental_fused_status or ""
+    if _finite(shot.experimental_fused_attack_angle_deg):
+        if (
+            fused_status.startswith("rejected")
+            or fused_status == "error"
+            or shot.experimental_fused_attack_angle_confidence == "withheld"
+        ):
+            return None, None
+        source = (
+            "camera_fused_ops" if fused_status == "camera_ops_fallback" else "camera_fused_chained"
+        )
+        return shot.experimental_fused_attack_angle_deg, source
+    return None, None
+
+
+def _measured_angle_input(value, source, *, frame=None, name: str) -> collision_model.Input:
+    """A launch angle as a collision input: an estimated (table) angle is not an input."""
+    if value is None or source is None:
+        return collision_model.Input(None, reason=f"{name} not measured")
+    if source == "estimated":
+        return collision_model.Input(None, reason=f"{name} is a table estimate, not measured")
+    return collision_model.Input(value, collision_model.LABEL_MEASURED, source, frame)
+
+
+def _collision_inputs(shot: Shot) -> dict:
+    """The shot's own collision inputs, each labelled (E2).
+
+    Every source wired today is a measurement. E1's arc path and attack (D39) enter
+    here with the label "model_geometry", which the outputs then inherit.
+    """
     path, path_source = displayed_club_path(shot)
-    if path is None:
-        shot.experimental_face_angle_status = "missing_accepted_club_path"
-        return
-    weight = FACE_ANGLE_FACE_WEIGHT
-    shot.experimental_face_angle_deg = round((launch - (1.0 - weight) * path) / weight, 1)
-    shot.experimental_face_angle_status = (
-        "d_plane_estimate_azimuth_uncalibrated" if azimuth_uncalibrated else "d_plane_estimate"
+    attack, attack_source = displayed_attack_angle(shot)
+    launch_source = shot.launch_angle_horizontal_source
+    if launch_source and shot.launch_angle_horizontal_status == "azimuth_uncalibrated":
+        launch_source = f"{launch_source} (azimuth uncalibrated)"
+    speed = shot.club_speed_mph
+    return {
+        "club_path": (
+            collision_model.Input(
+                path,
+                collision_model.LABEL_MEASURED,
+                path_source,
+                _club_path_frame_of(shot, path_source),
+            )
+            if path is not None
+            else collision_model.Input(None, reason="no accepted club path")
+        ),
+        "attack_angle": (
+            collision_model.Input(attack, collision_model.LABEL_MEASURED, attack_source)
+            if attack is not None
+            else collision_model.Input(None, reason="no accepted attack angle")
+        ),
+        "launch_horizontal": _measured_angle_input(
+            shot.launch_angle_horizontal,
+            launch_source if shot.launch_angle_horizontal_source != "estimated" else "estimated",
+            frame=shot.launch_angle_horizontal_frame,
+            name="launch direction",
+        ),
+        "launch_vertical": _measured_angle_input(
+            shot.launch_angle_vertical, shot.launch_angle_vertical_source, name="vertical launch"
+        ),
+        "club_speed_mph": (
+            collision_model.Input(speed, collision_model.LABEL_MEASURED, "ops243_radial")
+            if _finite(speed) and speed > 0
+            else collision_model.Input(None, reason="club speed not measured")
+        ),
+    }
+
+
+def _round_or_none(value, digits: int):
+    return round(value, digits) if value is not None else None
+
+
+def _accepted_measured_spin(shot: Shot) -> bool:
+    """A measured spin carry and simulators accept (ballistics.resolve_launch, sim resolver)."""
+    return (
+        shot.spin_source != "calculated"
+        and _finite(shot.spin_rpm)
+        and shot.spin_rpm > 0
+        and _finite(shot.spin_confidence)
+        and shot.spin_confidence >= SPIN_CONFIDENCE_HIGH
     )
-    # One zero for both legs (D36 item 2); two zeros are computed and labelled.
-    shot.experimental_face_angle_frame = combined_frame(
-        shot.launch_angle_horizontal_frame, _club_path_frame_of(shot, path_source)
-    )
-    if shot.experimental_face_angle_frame == MIXED:
-        shot.experimental_face_angle_status += "_mixed_frames"
-    shot.experimental_face_angle_path_source = path_source
-    shot.experimental_face_angle_launch_source = shot.launch_angle_horizontal_source
+
+
+def _collision_spin_feeds(shot: Shot) -> bool:
+    """Whether this shot's collision spin is a calculated value carry and simulators may use.
+
+    A value built on model geometry (D39) is kept on the shot, labelled, but is not
+    "measured or calculated" (D31), so it does not stand in for the shot's spin.
+    """
+    metrics = (shot.collision_model or {}).get("metrics", {})
+    spin = metrics.get("spin_rate", {})
+    return shot.spin_rpm_collision is not None and spin.get("status") == "calculated"
+
+
+def _attach_collision_model(shot: Shot) -> None:
+    """Face, loft, spin loft, face to path, D-plane tilt, spin and spin axis (E2).
+
+    Replaces the fixed 0.8-weight face estimate and the "launch minus path" spin-axis
+    proxy with ``collision_model`` (published sources, labelled calculated). Each run
+    starts from scratch, so a late re-run never keeps an earlier run's values.
+    """
+    result = collision_model.evaluate(club=shot.club, **_collision_inputs(shot))
+    metrics = result.metrics
+    axis = metrics["spin_axis"]
+    if axis.present and (shot.launch_angle_horizontal_confidence or 0.0) < SPIN_AXIS_MIN_CONFIDENCE:
+        # the proxy's guard, kept: the axis waits for a trustworthy horizontal leg
+        axis = collision_model.Metric(
+            value=None,
+            status=collision_model.STATUS_NOT_MEASURED,
+            source=axis.source,
+            unit=axis.unit,
+            frame=axis.frame,
+            reason=f"horizontal launch confidence below {SPIN_AXIS_MIN_CONFIDENCE}",
+        )
+        metrics["spin_axis"] = axis
+    shot.collision_model = result.to_dict()
+    shot.face_angle_deg = _round_or_none(metrics["face_angle"].value, 1)
+    shot.dynamic_loft_deg = _round_or_none(metrics["dynamic_loft"].value, 1)
+    shot.spin_loft_deg = _round_or_none(metrics["spin_loft"].value, 1)
+    shot.face_to_path_deg = _round_or_none(metrics["face_to_path"].value, 1)
+    shot.d_plane_tilt_deg = _round_or_none(metrics["d_plane_tilt"].value, 1)
+    shot.spin_rpm_collision = _round_or_none(metrics["spin_rate"].value, 0)
+
+    # The kiosk's face tile reads the experimental fields; they mirror the new value.
+    face = metrics["face_angle"]
+    shot.experimental_face_angle_deg = shot.face_angle_deg
+    shot.experimental_face_angle_frame = face.frame if face.present else None
+    if face.present:
+        status = "d_plane_estimate"
+        if shot.launch_angle_horizontal_status == "azimuth_uncalibrated":
+            status += "_azimuth_uncalibrated"
+        if face.frame == MIXED:
+            status += "_mixed_frames"
+        shot.experimental_face_angle_status = status
+        shot.experimental_face_angle_path_source = result.inputs["club_path"].source
+        shot.experimental_face_angle_launch_source = shot.launch_angle_horizontal_source
+    else:
+        shot.experimental_face_angle_status = (
+            "missing_measured_start_direction"
+            if not result.inputs["launch_horizontal"].present
+            else "missing_accepted_club_path"
+            if not result.inputs["club_path"].present
+            else "missing_club_category"
+        )
+        shot.experimental_face_angle_path_source = None
+        shot.experimental_face_angle_launch_source = None
+
+    if axis.present and axis.status == collision_model.STATUS_CALCULATED:
+        shot.spin_axis_deg = round(axis.value, 1)
+        shot.spin_axis_source = "calculated"
+        shot.spin_axis_frame = axis.frame
+    elif shot.spin_axis_source == "calculated":
+        shot.spin_axis_deg = None
+        shot.spin_axis_source = None
+        shot.spin_axis_frame = None
+
+    if _collision_spin_feeds(shot) and not _accepted_measured_spin(shot):
+        if shot.spin_source != "calculated":
+            shot.spin_rpm_measured = shot.spin_rpm
+        shot.spin_rpm = shot.spin_rpm_collision
+        shot.spin_source = "calculated"
+        shot.spin_confidence = None
+    elif shot.spin_source == "calculated" and not _collision_spin_feeds(shot):
+        # an earlier run's calculated spin; give back the measured one it displaced
+        shot.spin_rpm = shot.spin_rpm_measured
+        shot.spin_source = "measured" if shot.spin_rpm_measured is not None else None
+    if shot.face_angle_deg is not None or shot.spin_rpm_collision is not None:
+        logger.info(
+            "[SERVER] Collision model: face=%s loft=%s spin loft=%s spin=%s rpm axis=%s",
+            shot.face_angle_deg,
+            shot.dynamic_loft_deg,
+            shot.spin_loft_deg,
+            shot.spin_rpm_collision,
+            shot.spin_axis_deg,
+        )
 
 
 # 320x200 is a vertically movable strip of the 2x-binned mode (the OV9281
@@ -5399,29 +5559,8 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
 
                 kld7_horizontal.reset()
 
-            # Derive spin axis from face angle (H. launch) minus club path.
-            # Both are experimental estimates; only trust the difference once
-            # the weaker leg (horizontal launch) clears a confidence floor,
-            # rather than emitting it the moment club path is non-null.
-            # club_path_deg can come from IWR6843 (_process_iwr6843_angle,
-            # above) rather than K-LD7, so a failure here is not necessarily
-            # a K-LD7 failure -- see the except block below.
-            if (
-                shot.launch_angle_horizontal is not None
-                and shot.club_path_deg is not None
-                and (shot.launch_angle_horizontal_confidence or 0.0) >= SPIN_AXIS_MIN_CONFIDENCE
-            ):
-                shot.spin_axis_deg = round(shot.launch_angle_horizontal - shot.club_path_deg, 1)
-                # a difference of two angles: the yaw cancels only within one frame
-                shot.spin_axis_frame = combined_frame(
-                    shot.launch_angle_horizontal_frame, shot.club_path_frame
-                )
-                logger.info(
-                    "[SERVER] Spin axis: %+.1f° (face=%+.1f° - path=%+.1f°)",
-                    shot.spin_axis_deg,
-                    shot.launch_angle_horizontal,
-                    shot.club_path_deg,
-                )
+            # The spin axis comes from the collision model (_attach_collision_model,
+            # E2) at the end of enrichment, no longer from launch minus path here.
 
             if kld7_vertical or kld7_horizontal:
                 kld7_ms = (time.monotonic() - kld7_start) * 1000
@@ -5521,7 +5660,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
         _fuse_camera_measurements(shot, camera_capture, camera_archive)
         camera_analysis_ms = (time.monotonic() - camera_analysis_started) * 1000.0
         pi_trace.mark("camera_analysis_done", shot.trace_attempt_id)
-    _attach_experimental_face_angle(shot)
+    _attach_collision_model(shot)
 
     return _ShotEnrichmentResult(
         iwr6843_ms=iwr6843_ms,

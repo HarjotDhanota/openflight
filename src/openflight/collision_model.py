@@ -437,6 +437,15 @@ GYRO_REASON = (
 # ---- the whole model -----------------------------------------------------------------
 
 
+def _input_record(name: str, value: Input) -> dict:
+    """An input as recorded: a missing or non-finite value is None, with the reason."""
+    record = asdict(value)
+    if not value.present:
+        record["value"] = None
+        record["reason"] = value.missing_reason(name.replace("_", " "))
+    return record
+
+
 @dataclass
 class CollisionResult:
     metrics: dict[str, Metric]
@@ -447,7 +456,7 @@ class CollisionResult:
         return {
             "model_version": MODEL_VERSION,
             "weights": asdict(self.weights) if self.weights is not None else None,
-            "inputs": {name: asdict(value) for name, value in self.inputs.items()},
+            "inputs": {name: _input_record(name, value) for name, value in self.inputs.items()},
             "metrics": {name: metric.to_dict() for name, metric in self.metrics.items()},
         }
 

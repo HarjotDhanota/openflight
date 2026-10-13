@@ -60,7 +60,7 @@ GATES = {
     "lcmf": "iwr6843/lcmf.py: LCMF acceptance",
     "iwr_club": "iwr6843/club.py: club track acceptance",
     "review_labels": "review_metrics.py: status labels",
-    "face_angle": "server.py::_attach_experimental_face_angle",
+    "face_angle": "server.py::_attach_collision_model",
 }
 
 STAGE_LABELS = {
@@ -1044,7 +1044,7 @@ _LOW_LAUNCH_SOURCES = frozenset({"camera_low_consensus", "radar_low_coherence"})
 
 
 def face_angle_stage(live: Mapping[str, Any], upstream: Mapping[str, dict]) -> dict:
-    """The kiosk's D-plane face angle (server._attach_experimental_face_angle)."""
+    """The kiosk's D-plane face angle (server._attach_collision_model, E2)."""
     status = live.get("face_angle_status")
     value = finite(live.get("face_angle_deg"))
     label = "Face angle (D-plane, kiosk)"
