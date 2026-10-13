@@ -125,3 +125,88 @@ class TestPoseChangesAreLogged:
         assert any("pitch +0.70" in message for message in changes)
         assert any("roll -0.80" in message for message in changes)
         assert any("returned" in message for message in changes)
+
+
+class TestLightIsKeyedByLens:
+    """§1 and A4: the 13 Oct setups started from a 12-day-old gain screen taken with
+    another lens, and a remembered 300 us x 12 lock perpetuated itself."""
+
+    LOCK = {"exposure_us": 3000, "gain": 2.0}
+
+    def test_a_remembered_lock_is_only_used_with_the_lens_it_was_taken_with(self, tmp_path):
+        arm = ts.ARMS["arm5"]
+        ts.remember_static_exposure_lock(
+            tmp_path, "arm5", arm, self.LOCK, epoch_id="e1", capture_id="c1", lens_id="6mm"
+        )
+
+        same = ts.read_static_exposure_warm_start(tmp_path, "arm5", arm, lens_id="6mm")
+        other = ts.read_static_exposure_warm_start(tmp_path, "arm5", arm, lens_id="stock-2.8mm")
+
+        assert same == ts.StaticExposureStep(3000, 2.0)
+        assert other is None
+
+    def test_each_lens_keeps_its_own_lock(self, tmp_path):
+        arm = ts.ARMS["arm5"]
+        ts.remember_static_exposure_lock(
+            tmp_path, "arm5", arm, self.LOCK, epoch_id="e1", capture_id="c1", lens_id="6mm"
+        )
+        ts.remember_static_exposure_lock(
+            tmp_path,
+            "arm5",
+            arm,
+            {"exposure_us": 900, "gain": 1.0},
+            epoch_id="e2",
+            capture_id="c2",
+            lens_id="stock-2.8mm",
+        )
+
+        assert ts.read_static_exposure_warm_start(
+            tmp_path, "arm5", arm, lens_id="6mm"
+        ) == ts.StaticExposureStep(3000, 2.0)
+
+    def test_a_gain_screen_from_another_lens_does_not_seed_the_setup(self):
+        now = ts.datetime.now(ts.timezone.utc)
+        state = {
+            "gain": 12.0,
+            "gain_at_300_equivalent": 12.0,
+            "gain_screened_at": now.isoformat(),
+            "gain_lens_id": "stock-2.8mm",
+        }
+
+        usable = ts.gain_screen_for_seeding(state, lens_id="6mm", now=now)
+
+        assert "gain_at_300_equivalent" not in usable and "gain" not in usable
+        assert ts.placement_preview_controls(usable) == (300, 4.0)
+
+    def test_a_screen_from_another_day_does_not_seed_the_setup(self):
+        now = ts.datetime.now(ts.timezone.utc)
+        state = {
+            "gain": 12.0,
+            "gain_at_300_equivalent": 12.0,
+            "gain_screened_at": (now - ts.timedelta(days=12)).isoformat(),
+            "gain_lens_id": "6mm",
+        }
+
+        assert "gain" not in ts.gain_screen_for_seeding(state, lens_id="6mm", now=now)
+
+    def test_a_same_lens_same_day_screen_seeds_as_before(self):
+        now = ts.datetime.now(ts.timezone.utc)
+        state = {
+            "gain": 8.0,
+            "gain_at_300_equivalent": 8.0,
+            "gain_screened_at": now.isoformat(),
+            "gain_lens_id": "6mm",
+        }
+
+        assert ts.placement_preview_controls(
+            ts.gain_screen_for_seeding(state, lens_id="6mm", now=now)
+        ) == (300, 8.0)
+
+    def test_the_screen_age_says_it_was_measured_with_another_lens(self, tmp_path):
+        now = ts.datetime.now(ts.timezone.utc)
+        state = {"gain": 8.0, "gain_screened_at": now.isoformat(), "gain_lens_id": "stock-2.8mm"}
+
+        age = ts.gain_screen_age(state, tmp_path, "indoors", now=now, lens_id="6mm")
+
+        assert age["stale"] is True
+        assert "another lens" in age["prompt"]

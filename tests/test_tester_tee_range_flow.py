@@ -1938,7 +1938,9 @@ def test_a_remembered_lock_from_another_policy_is_not_used(tmp_path, inputs, mon
     drive(client, tester)
     memory_path = ts.tester_root(tmp_path / "sessions", tester) / ts.STATIC_EXPOSURE_MEMORY_FILE
     memory = json.loads(memory_path.read_text(encoding="utf-8"))
-    memory["arms"]["arm5"]["policy_sha256"] = "0" * 64
+    # one lock per lens and mode (13 Oct light audit A4)
+    for arms in memory["lenses"].values():
+        arms["arm5"]["policy_sha256"] = "0" * 64
     memory_path.write_text(json.dumps(memory), encoding="utf-8")
 
     assert post(client, tester, "start_over", "again").status_code == 200

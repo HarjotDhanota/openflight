@@ -1792,8 +1792,12 @@ def gain_screen_age(
     *,
     now: datetime | None = None,
     placement_box: Mapping | None = None,
+    lens_id: str | None = None,
 ) -> dict:
     """How old this arm's gain screen is, where it was measured, and whether it is stale.
+
+    ``lens_id`` is the lens on the unit now: a screen measured with another lens (or
+    before screens recorded their lens) is stale (13 Oct light audit A4).
 
     Screens recorded before the time was saved (wiring audit T14) are dated by
     their folder; with neither, the age is unknown and nothing is asked. A screen
@@ -1814,6 +1818,8 @@ def gain_screen_age(
         pass
     elif environment and screened_in and environment != screened_in:
         reason = f"was measured {screened_in} and you are {environment} now"
+    elif lens_id is not None and state.get("gain_lens_id") != lens_id:
+        reason = "was measured with another lens"
     elif box_reason := _screen_box_reason(state, placement_box):
         reason = box_reason
     elif light == "outdoors" and age_s > GAIN_SCREEN_OUTDOOR_MAX_AGE_S:
@@ -3940,6 +3946,34 @@ def ladder_live_metrics(runner, *, focal_px_for: Callable[[str], float], range_m
     }
 
 
+GAIN_SCREEN_FIELDS = ("gain", "gain_at_300_equivalent")
+
+
+def gain_screen_for_seeding(
+    state: Mapping, *, lens_id: str | None, now: datetime | None = None
+) -> dict:
+    """The arm state with its gain screen only when that screen may seed a camera step.
+
+    A screen taken with another lens (or before screens recorded their lens), or on
+    another day, describes other light: the 13 Oct setups started at 300 us x 12 from a
+    12-day-old screen taken with the stock lens (light audit A4). Without it the step
+    starts from this lens's remembered lock, else the default.
+    """
+    usable = dict(state)
+    now = now or datetime.now(timezone.utc)
+    try:
+        when = datetime.fromisoformat(str(state["gain_screened_at"]))
+        if when.tzinfo is None:
+            when = when.astimezone()
+        same_day = when.astimezone().date() == now.astimezone().date()
+    except (KeyError, TypeError, ValueError):
+        same_day = False
+    if state.get("gain_lens_id") != lens_id or not same_day:
+        for key in GAIN_SCREEN_FIELDS:
+            usable.pop(key, None)
+    return usable
+
+
 def placement_preview_controls(
     state: Mapping, remembered: StaticExposureStep | None = None
 ) -> tuple[int, float]:
@@ -4439,18 +4473,26 @@ def _detection_summary(association: Mapping | None) -> dict | None:
 
 
 STATIC_EXPOSURE_MEMORY_FILE = "static-exposure-memory.json"
-STATIC_EXPOSURE_MEMORY_SCHEMA = "openflight.static_exposure_memory.v1"
+# v2 (13 Oct): one lock per lens and camera mode; a v1 file is never read
+STATIC_EXPOSURE_MEMORY_SCHEMA = "openflight.static_exposure_memory.v2"
 
 
-def read_static_exposure_warm_start(root: Path, arm_id: str, arm: Arm) -> StaticExposureStep | None:
-    """The last verified static lock for this camera mode, if it is still comparable.
+def _lens_key(lens_id: str | None) -> str:
+    return lens_id or "unrecorded_lens"
+
+
+def read_static_exposure_warm_start(
+    root: Path, arm_id: str, arm: Arm, *, lens_id: str | None = None
+) -> StaticExposureStep | None:
+    """The last verified static lock for this lens and camera mode, if still comparable.
 
     It only orders the search: the step must pass every gate again before it locks.
-    A different policy, camera mode or an unreadable file means no warm start.
+    A different policy, lens or camera mode or an unreadable file means no warm start
+    (13 Oct light audit A4: another lens's lock is other light).
     """
     try:
         memory = json.loads((root / STATIC_EXPOSURE_MEMORY_FILE).read_text(encoding="utf-8"))
-        entry = memory["arms"][arm_id]
+        entry = memory["lenses"][_lens_key(lens_id)][arm_id]
         if (
             memory.get("schema") != STATIC_EXPOSURE_MEMORY_SCHEMA
             or entry.get("policy_sha256") != _static_exposure_policy_sha256()
@@ -4471,7 +4513,7 @@ def _static_step_fits(step: StaticExposureStep, arm: Arm) -> bool:
 
 
 def static_warm_start(
-    evidence: Mapping, root: Path, arm_id: str, arm: Arm
+    evidence: Mapping, root: Path, arm_id: str, arm: Arm, *, lens_id: str | None = None
 ) -> tuple[StaticExposureStep | None, str | None]:
     """The first setting a camera step tries, and where it came from.
 
@@ -4488,7 +4530,7 @@ def static_warm_start(
                 step = None
             if step is not None and _static_step_fits(step, arm):
                 return step, f"camera_{PLACEMENT_BOX_ARM}_lock"
-    remembered = read_static_exposure_warm_start(root, arm_id, arm)
+    remembered = read_static_exposure_warm_start(root, arm_id, arm, lens_id=lens_id)
     return remembered, "remembered_lock" if remembered is not None else None
 
 
@@ -4509,20 +4551,28 @@ def static_follow_seed(evidence: Mapping, arm: Arm) -> dict | None:
 
 
 def remember_static_exposure_lock(
-    root: Path, arm_id: str, arm: Arm, lock: Mapping, *, epoch_id: str, capture_id: str
+    root: Path,
+    arm_id: str,
+    arm: Arm,
+    lock: Mapping,
+    *,
+    epoch_id: str,
+    capture_id: str,
+    lens_id: str | None = None,
 ) -> None:
-    """Keep a lock whose Save frames passed, so the next setup tries it first."""
+    """Keep a lock whose Save frames passed, so the next setup with this lens tries it first."""
     with session_bundle.snapshot_lock(root, timeout_s=session_bundle.WRITER_WAIT_S):
         path = root / STATIC_EXPOSURE_MEMORY_FILE
         try:
             memory = json.loads(path.read_text(encoding="utf-8"))
-            arms = (
-                dict(memory["arms"])
+            lenses = (
+                {key: dict(value) for key, value in memory["lenses"].items()}
                 if memory.get("schema") == STATIC_EXPOSURE_MEMORY_SCHEMA
                 else {}
             )
         except (OSError, AttributeError, KeyError, TypeError, ValueError):
-            arms = {}
+            lenses = {}
+        arms = lenses.setdefault(_lens_key(lens_id), {})
         arms[arm_id] = {
             "exposure_us": int(lock["exposure_us"]),
             "gain": float(lock["gain"]),
@@ -4530,9 +4580,10 @@ def remember_static_exposure_lock(
             "arm": arm.as_dict(),
             "epoch_id": epoch_id,
             "capture_id": capture_id,
+            "lens_id": lens_id,
             "saved_at_utc": datetime.now(timezone.utc).isoformat(),
         }
-        payload = {"schema": STATIC_EXPOSURE_MEMORY_SCHEMA, "arms": arms}
+        payload = {"schema": STATIC_EXPOSURE_MEMORY_SCHEMA, "lenses": lenses}
         atomic_write(path, (json.dumps(payload, indent=2) + "\n").encode("utf-8"))
 
 
@@ -6723,8 +6774,17 @@ def arm_progress(sessions_root: Path, params: TesterParameters) -> dict:
     }
 
 
-def study_overview(sessions_root: Path, tester_id: str, environment: str | None = None) -> dict:
-    """Every arm's state for this tester, for the page's walkthrough."""
+def study_overview(
+    sessions_root: Path,
+    tester_id: str,
+    environment: str | None = None,
+    *,
+    selected_lens_id: str | None = None,
+) -> dict:
+    """Every arm's state for this tester, for the page's walkthrough.
+
+    ``selected_lens_id`` is the lens on the unit: a screen from another lens is stale.
+    """
     arms = []
     try:
         box = read_last_placement_box(tester_root(sessions_root, tester_id))
@@ -6739,7 +6799,11 @@ def study_overview(sessions_root: Path, tester_id: str, environment: str | None 
             progress = arm_progress(sessions_root, probe)
             if state.get("gain") is not None:
                 screen = gain_screen_age(
-                    state, arm_directory(sessions_root, probe), environment, placement_box=box
+                    state,
+                    arm_directory(sessions_root, probe),
+                    environment,
+                    placement_box=box,
+                    lens_id=selected_lens_id,
                 )
         except ValueError:
             progress = {}
@@ -7309,6 +7373,8 @@ def create_app(
             # the screen's own time and light, so its age is known later (T14, D5)
             gain_screened_at=datetime.now(timezone.utc).isoformat(),
             gain_environment=params.environment,
+            # the lens the light was measured through (13 Oct light audit A4)
+            gain_lens_id=lens_store.selected(),
             gain_inclinometer=enclosure.reading(),
             gain_mean=choice["mean"],
             gain_clipped_pct=choice["clipped_pct"],
@@ -7600,11 +7666,15 @@ def create_app(
         if busy:
             raise RuntimeError(busy)
         exposure_us, gain = placement_preview_controls(
-            read_arm_state(sessions_root, tester_id, PLACEMENT_BOX_ARM),
+            gain_screen_for_seeding(
+                read_arm_state(sessions_root, tester_id, PLACEMENT_BOX_ARM),
+                lens_id=lens_store.selected(),
+            ),
             read_static_exposure_warm_start(
                 tester_root(sessions_root, tester_id),
                 PLACEMENT_BOX_ARM,
                 ARMS[PLACEMENT_BOX_ARM],
+                lens_id=lens_store.selected(),
             ),
         )
         arm = ARMS[PLACEMENT_BOX_ARM]
@@ -8642,11 +8712,17 @@ def create_app(
             # the 640x400 step's first looks follow the 1280x800 ball, halved (P7-5)
             follow.set(seed)
         warm_start, warm_start_source = static_warm_start(
-            state.evidence, store.tester_root, arm_id, params.arm
+            state.evidence, store.tester_root, arm_id, params.arm, lens_id=lens_store.selected()
         )
-        # without a remembered lock, the first look uses the light screen's level
+        # without a remembered lock, the first look uses this lens's same-day light
+        # screen, else the default (13 Oct light audit A4)
         start = StaticExposureStep(
-            *placement_preview_controls(read_arm_state(sessions_root, tester_id, arm_id))
+            *placement_preview_controls(
+                gain_screen_for_seeding(
+                    read_arm_state(sessions_root, tester_id, arm_id),
+                    lens_id=lens_store.selected(),
+                )
+            )
         )
         analyzer = StaticExposureController(
             lambda: GuidedRangeAnalyzer(
@@ -8977,6 +9053,7 @@ def create_app(
                 save_analysis["static_exposure"]["lock"],
                 epoch_id=state.epoch_id,
                 capture_id=capture_id,
+                lens_id=lens_store.selected(),
             )
         except (OSError, RuntimeError) as exc:
             logger.warning("Static exposure lock was not remembered: %s", exc)
@@ -9036,9 +9113,15 @@ def create_app(
         if busy:
             raise RuntimeError(busy)
         exposure_us, gain = placement_preview_controls(
-            read_arm_state(sessions_root, tester_id, PLACEMENT_BOX_ARM),
+            gain_screen_for_seeding(
+                read_arm_state(sessions_root, tester_id, PLACEMENT_BOX_ARM),
+                lens_id=lens_store.selected(),
+            ),
             read_static_exposure_warm_start(
-                tester_root(sessions_root, tester_id), PLACEMENT_BOX_ARM, arm
+                tester_root(sessions_root, tester_id),
+                PLACEMENT_BOX_ARM,
+                arm,
+                lens_id=lens_store.selected(),
             ),
         )
         brightness = BoxPreviewExposure(
@@ -9498,7 +9581,10 @@ def create_app(
                     "job": jobs.status(),
                     "arm": arm_progress(sessions_root, params),
                     "study": study_overview(
-                        sessions_root, params.tester_id, environment=params.environment
+                        sessions_root,
+                        params.tester_id,
+                        environment=params.environment,
+                        selected_lens_id=lens_store.selected(),
                     ),
                     "inclinometer": enclosure.reading(),
                     "analysis": review_routes.read_analysis(sessions_root, params.tester_id),
