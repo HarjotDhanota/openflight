@@ -104,12 +104,19 @@ def test_the_indoor_setup_reports_both_methods_peaks(window):
     top = next(item for item in result.candidates if item["method"] == "magnitude")
     assert top["fractional_excess"] == pytest.approx(0.37, abs=0.02)
     assert top["fractional_excess"] < 0.5
-    # the coherent difference's 1.575 m is reported too, with its elevation
+    # the door at 1.575 m is fitted as the still reflector it is, so its drift no
+    # longer dominates the coherent residual (49 before), and it is flagged as one
     assert any(abs(value - 1.575) < 0.03 for value in coherent)
-    coherent_top = next(item for item in result.candidates if item["method"] == "coherent")
-    assert coherent_top["score"] == pytest.approx(49.0, abs=4.0)
-    assert coherent_top["ground_level"] is True
-    assert -15.0 < coherent_top["elevation_deg"] < -5.0
+    door = next(
+        item
+        for item in result.candidates
+        if item["method"] == "coherent" and abs(item["range_m"] - 1.575) < 0.03
+    )
+    assert door["score"] < 20.0
+    assert door["ground_level"] is True
+    assert -15.0 < door["elevation_deg"] < -5.0
+    assert door["still_reflector"]["dominance"] >= 3.0
+    assert any("still_reflector" in warning for warning in door["warnings"])
     for item in result.candidates:
         assert window[0] <= item["range_m"] <= window[1]
         assert item["uncertainty_m"] > 0.0
@@ -184,3 +191,47 @@ def test_a_window_past_the_capture_is_clipped_and_says_so():
     assert result.window_m[1] < 2.8
     assert any("beyond the capture" in warning for warning in result.warnings)
     assert result.candidates
+
+
+def test_the_door_is_a_still_reflector_and_the_ball_is_not():
+    """harjot-indoor-test-2: the door's bin holds 6x anything else and changes 3 %."""
+    # the ball at bin 27 (array index 19), the door at bin 35
+    empty, present = _synthetic([(19, 3.0e6)])
+    empty = StaticRangeProfileV2(
+        **{
+            **empty.__dict__,
+            "power": tuple(
+                value + (2.5e8 if index == 35 else 7.0e7 if index == 34 else 0.0)
+                for index, value in enumerate(empty.power, start=empty.range_bin_start)
+            ),
+        }
+    )
+    present = StaticRangeProfileV2(
+        **{
+            **present.__dict__,
+            "power": tuple(
+                value + (2.58e8 if index == 35 else 7.2e7 if index == 34 else 0.0)
+                for index, value in enumerate(present.power, start=present.range_bin_start)
+            ),
+        }
+    )
+
+    result = static_patch_candidates(empty, present, window_m=(0.8, 2.0), bias_m=0.066)
+
+    flagged = {item["peak_bin"]: item.get("still_reflector") for item in result.candidates}
+    ball = next(item for item in result.candidates if abs(item["peak_bin"] - 27) <= 1)
+    assert ball.get("still_reflector") is None
+    assert result.still_reflectors
+    door = next(item for item in result.still_reflectors if item["bin"] == 35)
+    assert door["dominance"] >= 3.0
+    assert door["power_change"] == pytest.approx(0.032, abs=0.01)
+    for peak_bin, still in flagged.items():
+        if abs(peak_bin - 35) <= 1:
+            assert still is not None
+
+
+def test_more_than_four_coherent_peaks_are_kept():
+    from openflight.iwr6843 import range_evidence  # noqa: PLC0415
+
+    assert range_evidence.PATCH_COHERENT_MAX_CANDIDATES >= 8
+    assert range_evidence.static_patch_candidates_policy()["coherent"]["maximum_candidates"] >= 8

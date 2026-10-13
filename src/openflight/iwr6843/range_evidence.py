@@ -1049,6 +1049,9 @@ STATIC_CHANNEL_PROFILE_SCHEMA = "openflight.iwr6843.static_channel_profile.v1"
 # the strongest still reflectors outside the ball's window, which absorbs the phase
 # a radar restart turns between the captures.
 _COHERENT_REFERENCE_BINS = 8
+# A still reflector inside the excluded span this many times stronger than the
+# strongest one outside it is fitted too (_dominant_still_bins).
+_COHERENT_STILL_FIT_DOMINANCE = 3.0
 _COHERENT_MIN_REFERENCE_BINS = 3
 # the ball's peak must stand this far above the median residual of the searched span
 _COHERENT_MIN_PEAK_SCORE = 8.0
@@ -1082,6 +1085,7 @@ def static_channel_estimator_policy() -> dict[str, Any]:
         "subtraction": "per_virtual_channel_complex_mean_minus_fitted_scaled_empty",
         "channel_fit": {
             "reference": "strongest_static_bins_outside_the_candidate_window",
+            "dominant_still_bins_inside": _COHERENT_STILL_FIT_DOMINANCE,
             "reference_bins": _COHERENT_REFERENCE_BINS,
             "minimum_reference_bins": _COHERENT_MIN_REFERENCE_BINS,
         },
@@ -1290,6 +1294,28 @@ def _vertical_elevation_deg(snapshot: np.ndarray, element_correction: np.ndarray
     return float(np.degrees(MUSIC_GRID[int(np.argmax(power))]))
 
 
+def _dominant_still_bins(
+    static: np.ndarray, search: np.ndarray, excluded: np.ndarray
+) -> np.ndarray:
+    """Still reflectors inside the excluded span that dwarf every reflector outside it.
+
+    A door or a frame this strong drifts a little between captures; left out of
+    the channel fit, its drift is all residual, and the residual is what is
+    searched for the ball (harjot-indoor-test-2: a door at 1.575 m, 6x anything
+    outside the span, became the coherent difference's strongest peak). A ball
+    adds far less than such a reflector holds, so fitting on it costs the ball
+    nothing; the robust fit still drops it if it changed.
+    """
+    inside = np.flatnonzero(excluded & search)
+    outside = np.flatnonzero(search & ~excluded)
+    if not len(inside) or not len(outside):
+        return np.asarray([], dtype=int)
+    reference = float(np.max(static[outside]))
+    if reference <= 0.0:
+        return np.asarray([], dtype=int)
+    return inside[static[inside] >= _COHERENT_STILL_FIT_DOMINANCE * reference]
+
+
 def _reference_bins(static: np.ndarray, search: np.ndarray, excluded: np.ndarray) -> np.ndarray:
     guarded = np.convolve(excluded.astype(float), np.ones(3), mode="same") > 0
     pool = np.flatnonzero(~guarded)
@@ -1297,7 +1323,9 @@ def _reference_bins(static: np.ndarray, search: np.ndarray, excluded: np.ndarray
         pool = np.flatnonzero(~excluded)
     if len(pool) < _COHERENT_MIN_REFERENCE_BINS:
         pool = np.flatnonzero(search)
-    return pool[np.argsort(static[pool])[-_COHERENT_REFERENCE_BINS:]]
+    dominant = _dominant_still_bins(static, search, excluded)
+    chosen = pool[np.argsort(static[pool])[-_COHERENT_REFERENCE_BINS:]]
+    return np.unique(np.concatenate([chosen, dominant])).astype(int)
 
 
 def _channel_factors(e: np.ndarray, p: np.ndarray, reference: np.ndarray) -> np.ndarray:
@@ -1625,7 +1653,16 @@ PATCH_CANDIDATES_SCHEMA = "openflight.iwr6843.static_patch_candidates.v1"
 PATCH_MAGNITUDE_MIN_FRACTION = 0.25
 PATCH_MAGNITUDE_MIN_SCORE = 0.5
 PATCH_MAGNITUDE_MAX_CANDIDATES = 3
-PATCH_COHERENT_MAX_CANDIDATES = 4
+# harjot-indoor-test-2: the ball was the coherent difference's 4th peak, behind the
+# door and two near-field ones; the camera and the magnitude check choose among them
+PATCH_COHERENT_MAX_CANDIDATES = 8
+# A still reflector that dwarfs the rest of the scene and barely changes with the
+# ball (a door, a frame, a net post) is never the ball: its bin holds at least this
+# many times the strongest bin outside its own +-1 neighbours in the empty capture,
+# and its power changes by at most this fraction with the ball present. The
+# 1.575 m door of harjot-indoor-test-1 and -2: 6x, +3 %.
+STILL_REFLECTOR_DOMINANCE = 3.0
+STILL_REFLECTOR_MAX_CHANGE = 0.10
 # a peak this many bins inside the capture's first or last bin has both neighbours
 PATCH_EDGE_GUARD_BINS = 1
 
@@ -1645,6 +1682,13 @@ def static_patch_candidates_policy() -> dict[str, Any]:
         "coherent": {
             "peaks": "every_cluster_the_coherent_difference_forms",
             "maximum_candidates": PATCH_COHERENT_MAX_CANDIDATES,
+            "channel_fit": "still_bins_outside_the_span_and_dominant_still_bins_inside_it",
+        },
+        "still_reflector": {
+            "dominance_over_the_rest_of_the_empty_scene": STILL_REFLECTOR_DOMINANCE,
+            "maximum_power_change_with_the_ball": STILL_REFLECTOR_MAX_CHANGE,
+            "neighbour_bins": 1,
+            "use": "flagged_on_the_candidate_never_the_ball",
         },
         "scene_changed": "a_warning_on_the_candidates",
     }
@@ -1661,6 +1705,7 @@ class StaticPatchCandidates:
     coherent: StaticRangeDifferenceResult | None
     warnings: tuple[str, ...]
     bias_m: float
+    still_reflectors: tuple[Mapping[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1669,6 +1714,7 @@ class StaticPatchCandidates:
             "window_m": list(self.window_m),
             "covers_m": list(self.covers_m),
             "bias_m": self.bias_m,
+            "still_reflectors": [dict(item) for item in self.still_reflectors],
             "candidates": [dict(item) for item in self.candidates],
             "magnitude": asdict(self.magnitude) if self.magnitude is not None else None,
             "coherent": asdict(self.coherent) if self.coherent is not None else None,
@@ -1695,6 +1741,39 @@ def _power_statistics(
     mad = float(np.median(np.abs(delta[search] - center)))
     floor = max(1.4826 * mad, 0.02 * float(np.median(expected[search])), 1e-12)
     return delta - center, (delta - center) / floor, observed / np.maximum(expected, 1e-12) - 1.0
+
+
+def dominant_still_reflectors(
+    empty: StaticRangeProfile | StaticRangeProfileV2,
+    fraction: np.ndarray,
+    search: np.ndarray,
+    bias_m: float,
+) -> list[dict[str, Any]]:
+    """Bins of the empty scene that dwarf the rest of it and barely change with the ball."""
+    power = np.asarray(empty.power, dtype=float)
+    indices = np.flatnonzero(search)
+    found = []
+    for index in indices:
+        others = indices[np.abs(indices - index) > 1]
+        if not len(others):
+            continue
+        rest = float(np.max(power[others]))
+        if rest <= 0.0:
+            continue
+        dominance = float(power[index]) / rest
+        change = float(fraction[index])
+        if dominance >= STILL_REFLECTOR_DOMINANCE and abs(change) <= STILL_REFLECTOR_MAX_CHANGE:
+            found.append(
+                {
+                    "bin": int(index + empty.range_bin_start),
+                    "range_m": float(
+                        (index + empty.range_bin_start) * empty.range_resolution_m - bias_m
+                    ),
+                    "dominance": round(dominance, 3),
+                    "power_change": round(change, 4),
+                }
+            )
+    return found
 
 
 def _residual_elevations(
@@ -1898,6 +1977,23 @@ def static_patch_candidates(  # pylint: disable=too-many-locals,too-many-argumen
                 index = int(item["peak_bin"]) - empty.range_bin_start
                 floor = max(float(np.median(residual_power[search])), 1e-12)
                 item["coherent_score"] = float(residual_power[index] / floor)
+    still = dominant_still_reflectors(empty, fraction, search, bias_m)
+    for item in candidates:
+        near = next(
+            (
+                reflector
+                for reflector in still
+                if abs(float(item["peak_bin"]) - reflector["bin"]) <= 1.0
+            ),
+            None,
+        )
+        item["still_reflector"] = dict(near) if near is not None else None
+        if near is not None:
+            item["warnings"] = [
+                *item["warnings"],
+                f"still_reflector: bin {near['bin']} holds {near['dominance']:.1f}x the rest "
+                f"of the empty scene and changed {100 * near['power_change']:+.0f} % with the ball",
+            ]
     return StaticPatchCandidates(
         window_m=window,
         covers_m=covers,
@@ -1906,4 +2002,5 @@ def static_patch_candidates(  # pylint: disable=too-many-locals,too-many-argumen
         coherent=coherent,
         warnings=tuple(warnings),
         bias_m=float(bias_m),
+        still_reflectors=tuple(still),
     )

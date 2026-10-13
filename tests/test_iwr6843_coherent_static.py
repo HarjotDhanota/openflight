@@ -268,7 +268,9 @@ RECORDED = {
     "outdoors-test-5-962aff81835c": ("rejected_clutter", None),
     "outdoors-test-5-b4330a10260d": ("accepted_unqualified", 1.440),
     "outdoors-test-6-b97f4d4e1d62": ("accepted_unqualified", 1.122),
-    "outdoors-test-6-d00052ffb9a2": ("accepted_unqualified", 1.467),
+    # 1.467 m until a dominant still reflector inside the window joined the channel
+    # fit (harjot-indoor-test-2's door): the fit moves this one by 1 cm
+    "outdoors-test-6-d00052ffb9a2": ("accepted_unqualified", 1.477),
     "outdoors-test-7-4921659aa8bc": ("accepted_unqualified", 1.631),
     "outdoors-test-7-5a7821af3641": ("accepted_unqualified", 1.581),
     "field-20260929-door-1m": ("accepted_unqualified", 1.00),
