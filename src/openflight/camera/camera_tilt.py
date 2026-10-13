@@ -291,8 +291,18 @@ def _calibrated(
     }
 
 
-def record_pair(path: Path, solved: Mapping, *, facts: Mapping | None = None) -> dict:
+def record_pair(
+    path: Path,
+    solved: Mapping,
+    *,
+    facts: Mapping | None = None,
+    method: str = "median_of_validated_pairs",
+) -> dict:
     """Add a validated pair: calibrate from the median, check, or re-calibrate.
+
+    ``method`` names the calibration: ``median_of_validated_pairs`` for setup pairs
+    (before 13 Oct), ``median_of_swing_pairs`` for swings (each swing's IWR launch
+    point and the resting ball's row, openflight.camera.swing_tilt).
 
     Returns what happened: ``pending`` (too few agreeing pairs yet),
     ``calibrated`` (the median of ``MIN_PAIRS`` or more that agree), ``checked``
@@ -356,9 +366,7 @@ def record_pair(path: Path, solved: Mapping, *, facts: Mapping | None = None) ->
                 ),
                 "path": str(path),
             }
-        calibrated = _calibrated(
-            payload, support, now, "median_of_validated_pairs", over=payload["pairs"]
-        )
+        calibrated = _calibrated(payload, support, now, method, over=payload["pairs"])
         _write(path, calibrated)
         return {
             "action": "calibrated",

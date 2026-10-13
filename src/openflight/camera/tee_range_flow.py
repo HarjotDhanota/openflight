@@ -164,8 +164,10 @@ class FlowStore:
         """Open a new setup epoch.
 
         With the tester's confirmed ``placement_box`` (P7-15: the box is step 1)
-        the epoch starts at the radar captures and keeps the box as its evidence;
-        without one it waits for the box (P7-4's order).
+        the epoch starts at the camera and keeps the box as its evidence; without one
+        it waits for the box (P7-4's order). Since 13 Oct (decision "a") the radar's
+        static captures are an optional diagnostic, so the epoch no longer starts at
+        them: the camera's ball finishes the setup.
         """
         with session_bundle.snapshot_lock(self.tester_root, timeout_s=session_bundle.WRITER_WAIT_S):
             current = self.load()
@@ -174,7 +176,7 @@ class FlowStore:
             now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             epoch_id = f"setup-{now[:10].replace('-', '')}-{uuid.uuid4().hex[:12]}"
             if placement_box is not None:
-                phase, reason = "needs_empty", "remove_ball_and_keep_setup_still"
+                phase, reason = "needs_camera_arm5", "place_the_ball_in_the_box"
             else:
                 # the tester places the box first; every check works from it (P7-4)
                 phase, reason = "needs_box", "drag_the_box_to_where_you_will_hit"

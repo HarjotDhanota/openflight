@@ -918,6 +918,107 @@ def patch_pair_lens_height(save_height: Mapping | None, decision: Mapping) -> di
     )
 
 
+# 13 Oct (decision "a"): the setup saves the camera's coarse size distance as a
+# PRIOR. It sizes each swing's IWR search and stands in, labelled, for a swing the IWR
+# cannot range; it is never a swing's measured distance. A size range is coarse (the
+# stock lens's read ~21 % short in September; the 6 mm lens's read 1.5 % short at
+# 2.14 m on 13 Oct), so its uncertainty is never stated tighter than this share.
+CAMERA_PRIOR_SAVED_REASON = "camera_prior_saved"
+CAMERA_PRIOR_SOURCE = "camera_size_coarse"
+CAMERA_PRIOR_MIN_FRACTION = 0.15
+CAMERA_PRIOR_DISPLAY_LABEL = "camera estimate (coarse)"
+TILT_FROM_SWINGS_REASON = (
+    "the camera tilt is calibrated from swings: each swing's IWR launch point and the "
+    "resting ball's row (13 Oct); a setup's static pair no longer calibrates it"
+)
+
+
+def camera_prior_decision(camera_candidate: Mapping | None, *, camera_status: str) -> dict:
+    """The camera's ball in the box as a coarse range prior, or why there is none."""
+    base = {
+        "schema": "openflight.tester_camera_prior.v1",
+        "label": "experimental",
+        "display_label": CAMERA_PRIOR_DISPLAY_LABEL,
+        "source": CAMERA_PRIOR_SOURCE,
+        "camera_status": camera_status,
+        "used_as": "prior_for_each_swing_iwr_launch_point",
+        "range_m": None,
+        "uncertainty_m": None,
+        "side_offset_m": None,
+    }
+    evidence = (camera_candidate or {}).get("evidence") or {}
+    ball = evidence.get("patch_ball_camera") if isinstance(evidence, Mapping) else None
+    range_m = (camera_candidate or {}).get("radar_slant_range_m")
+    if camera_status != "found" or not isinstance(ball, Mapping) or range_m is None:
+        return {**base, "status": "not_saved", "reason": f"camera_{camera_status}"}
+    stated = float((camera_candidate or {}).get("uncertainty_m") or 0.0)
+    uncertainty = max(stated, CAMERA_PRIOR_MIN_FRACTION * float(range_m))
+    return {
+        **base,
+        "status": "saved",
+        "reason": None,
+        "range_m": float(range_m),
+        "uncertainty_m": uncertainty,
+        "stated_uncertainty_m": stated,
+        "uncertainty_floor_fraction": CAMERA_PRIOR_MIN_FRACTION,
+        # the camera locates: the side offset is its ray at the prior's distance
+        "side_offset_m": patch_pairing.side_offset_at(ball, float(range_m)),
+        "ball_px": [ball.get("x_px"), ball.get("y_px")],
+        "diameter_px": ball.get("diameter_px"),
+    }
+
+
+def camera_prior_solution(
+    epoch_id: str,
+    candidates: Sequence[tee_range.TeeRangeCandidate],
+    prior: Mapping,
+    placement_box: Mapping | None,
+    *,
+    withheld_status: str | None = None,
+) -> tee_range.TeeRangeSolution:
+    """The setup's solution: the camera prior as an unselectable candidate, if saved.
+
+    ``withheld_status`` names why nothing was saved (the camera-side pairing status:
+    no_ball, ambiguous, camera_unavailable), as the solution's reason.
+    """
+    saved = []
+    if prior.get("status") == "saved":
+        saved.append(
+            tee_range.TeeRangeCandidate(
+                candidate_id=f"camera-prior-{epoch_id}",
+                source=CAMERA_PRIOR_SOURCE,
+                source_group="camera",
+                radar_slant_range_m=float(prior["range_m"]),
+                uncertainty_m=float(prior["uncertainty_m"]),
+                selectable=False,
+                evidence={
+                    "camera_prior": dict(prior),
+                    "placement_box": {"confirmed": dict(placement_box or {})},
+                },
+            )
+        )
+    return tee_range.TeeRangeSolution.unresolved(
+        [*candidates, *saved],
+        reason=(
+            CAMERA_PRIOR_SAVED_REASON
+            if saved
+            else f"{PATCH_BALL_WITHHELD_PREFIX}{withheld_status or 'no_ball'}"
+        ),
+    )
+
+
+def camera_prior_choice(
+    solution: tee_range.TeeRangeSolution | None,
+) -> tee_range.TeeRangeCandidate | None:
+    """The saved camera prior a setup hands to swings, if it saved one."""
+    if solution is None or solution.reason != CAMERA_PRIOR_SAVED_REASON:
+        return None
+    return next(
+        (item for item in solution.candidates if item.candidate_id.startswith("camera-prior-")),
+        None,
+    )
+
+
 def patch_ball_solution(
     epoch_id: str,
     candidates: Sequence[tee_range.TeeRangeCandidate],
@@ -1318,8 +1419,13 @@ def tee_range_handoff(
     so the tester's files say what the kiosk ran with (wiring audit S3).
     """
     candidate = None
+    prior_candidate = camera_prior_choice(solution)
     experimental, decision = experimental_tee_range_choice(solution)
-    if solution is not None and solution.status == "resolved":
+    if prior_candidate is not None:
+        # 13 Oct: the camera's coarse distance goes over as a PRIOR, never a range
+        status, source = "prior", CAMERA_PRIOR_SOURCE
+        experimental = decision = None
+    elif solution is not None and solution.status == "resolved":
         status, source = "resolved", "qualified_static_iwr"
         candidate = next(
             item
@@ -1365,10 +1471,26 @@ def tee_range_handoff(
     # must use the same ball height the setup solved the lens height with. A
     # pending range still carries a lens height the setup had to override, such as
     # a unit on a box (wiring audit S6).
+    prior = (
+        tee_range._thaw_json(  # pylint: disable=protected-access
+            (prior_candidate.evidence or {}).get("camera_prior") or {}
+        )
+        if prior_candidate is not None
+        else None
+    )
     args = [
         *(
             ["--iwr6843-tee-m", f"{tee_m:.9g}"]
             if tee_m is not None
+            else [
+                "--iwr6843-tee-prior-m",
+                f"{prior_candidate.radar_slant_range_m:.9g}",
+                "--iwr6843-tee-prior-uncertainty-m",
+                f"{prior_candidate.uncertainty_m:.6g}",
+                "--iwr6843-tee-prior-source",
+                CAMERA_PRIOR_SOURCE,
+            ]
+            if prior_candidate is not None
             else ["--iwr6843-tee-range-pending"]
         ),
         "--iwr6843-ball-height-m",
@@ -1377,8 +1499,8 @@ def tee_range_handoff(
         "--iwr6843-tee-range-source",
         source,
         *(
-            ["--iwr6843-tee-range-candidate", candidate.candidate_id]
-            if candidate is not None
+            ["--iwr6843-tee-range-candidate", (candidate or prior_candidate).candidate_id]
+            if (candidate or prior_candidate) is not None
             else []
         ),
         *(["--scene-lens-height-solved-m", f"{solved:.6g}"] if solved is not None else []),
@@ -1393,7 +1515,9 @@ def tee_range_handoff(
         "empty_static_capture" if measured_net else "default_not_measured",
     ]
     side_offset_m = (
-        decision.get("side_offset_m")
+        prior.get("side_offset_m")
+        if prior is not None
+        else decision.get("side_offset_m")
         if decision is not None and decision.get("schema") in patch_pairing.DECISION_SCHEMAS
         else None
     )
@@ -1433,7 +1557,25 @@ def tee_range_handoff(
         "tee_range_status": status,
         "tee_range_source": source,
         "tee_m": tee_m,
-        "candidate_id": candidate.candidate_id if candidate is not None else None,
+        # 13 Oct: the camera's coarse distance, handed over as a prior only
+        "prior": (
+            {
+                "range_m": prior_candidate.radar_slant_range_m,
+                "uncertainty_m": prior_candidate.uncertainty_m,
+                "source": CAMERA_PRIOR_SOURCE,
+                "label": "experimental",
+                "display_label": CAMERA_PRIOR_DISPLAY_LABEL,
+            }
+            if prior_candidate is not None
+            else None
+        ),
+        "candidate_id": (
+            candidate.candidate_id
+            if candidate is not None
+            else prior_candidate.candidate_id
+            if prior_candidate is not None
+            else None
+        ),
         "qualified": status == "resolved",
         "experimental": status != "resolved" and candidate is not None,
         "experimental_range": decision,
@@ -5961,10 +6103,46 @@ def _candidate_display(candidate: Mapping | None, *, qualified_source: bool) -> 
     }
 
 
+def _range_summary(phase: str | None, prior: Mapping | None, evidence: Mapping) -> str | None:
+    """Step 6's one line: what the camera found and where the distance comes from."""
+    if prior is not None and prior.get("status") == "saved":
+        return (
+            f"Ball found · camera estimate {float(prior['range_m']):.2f} m (coarse) · "
+            "the radar measures it on each swing"
+        )
+    if phase not in TERMINAL_PHASES:
+        return None
+    decision = evidence.get("patch_ball") if isinstance(evidence.get("patch_ball"), Mapping) else {}
+    status = (prior or {}).get("camera_status") or decision.get("camera_status")
+    return {
+        "no_ball": "No ball found in the box: put the ball in the box, then start over",
+        "ambiguous": "More than one ball-like thing in the box: keep only the ball in it",
+        "unavailable": "The camera could not look for the ball (too dark or too bright)",
+    }.get(str(status), decision.get("warning") or "No ball distance was saved")
+
+
 def _swings_display(solution: Mapping, *, use_unqualified: bool) -> dict | None:
     """The tee range swings will start with, once the setup has finished."""
     if not solution:
         return None
+    if solution.get("reason") == CAMERA_PRIOR_SAVED_REASON:
+        try:
+            parsed = tee_range.TeeRangeSolution.from_dict(solution)
+        except (KeyError, TypeError, ValueError):
+            parsed = None
+        chosen = camera_prior_choice(parsed)
+        if chosen is not None:
+            return {
+                "state": "camera_prior",
+                "range_m": chosen.radar_slant_range_m,
+                "uncertainty_m": chosen.uncertainty_m,
+                "label": CAMERA_PRIOR_DISPLAY_LABEL,
+                "message": (
+                    f"Each swing's radar measures the ball's distance from its own capture; "
+                    f"the camera's {chosen.radar_slant_range_m:.2f} m (coarse) sizes its "
+                    "search and stands in, labelled estimated, for a swing it cannot range."
+                ),
+            }
     if solution.get("status") == "resolved":
         return {
             "state": "resolved",
@@ -6127,11 +6305,29 @@ def tee_range_display(
     resolved = solution.get("status") == "resolved"
     swings = _swings_display(solution, use_unqualified=use_unqualified)
     experimental = bool(swings and swings.get("state") == "experimental")
+    prior = (
+        evidence.get("camera_prior") if isinstance(evidence.get("camera_prior"), Mapping) else None
+    )
+    if prior is not None and prior.get("status") == "saved":
+        canonical = {
+            "state": "camera_prior",
+            "range_m": prior.get("range_m"),
+            "uncertainty_m": prior.get("uncertainty_m"),
+            "label": prior.get("display_label") or CAMERA_PRIOR_DISPLAY_LABEL,
+            "reason": None,
+        }
+    else:
+        canonical = None
     return {
         "schema": "openflight.tester_tee_range_display.v1",
+        # 13 Oct: step 6's one line, for the page
+        "summary": _range_summary((state or {}).get("phase"), prior, evidence),
+        "camera_prior": dict(prior) if prior is not None else None,
+        "radar_check": evidence.get("radar_check"),
         "iwr": {**iwr_display, "label": "bias-corrected IWR slant range"},
         "camera": cameras,
-        "canonical": {
+        "canonical": canonical
+        or {
             "state": "resolved" if resolved else "experimental" if experimental else "withheld",
             "range_m": (
                 solution.get("selected_range_m")
@@ -8376,7 +8572,12 @@ def create_app(
                 retry_phase=None,
             )
         try:
-            iwr = tee_range.TeeRangeCandidate.from_dict(state.evidence["iwr_candidate"])
+            # the radar check is an optional diagnostic (13 Oct): often there is none
+            iwr = (
+                tee_range.TeeRangeCandidate.from_dict(state.evidence["iwr_candidate"])
+                if isinstance(state.evidence.get("iwr_candidate"), Mapping)
+                else None
+            )
             # the camera may have found no ball: the radar's candidates still count (P8-4)
             camera = (
                 tee_range.TeeRangeCandidate.from_dict(state.evidence["camera_arm5_candidate"])
@@ -8400,33 +8601,24 @@ def create_app(
         # validate each other; whatever exists is saved, labelled experimental. A camera
         # that looked and found no ball finishes as "no ball" (13 Oct).
         camera_dict = camera.to_dict() if camera is not None else None
+        camera_status = camera_search_status(state.evidence, camera_dict)
+        # what the camera's ball and the radar check's candidates agreed on: kept as a
+        # DIAGNOSTIC only, never a swing's distance (13 Oct, decision "a")
         decision = patch_ball_decision(
             camera_dict,
-            iwr.to_dict(),
-            camera_status=camera_search_status(state.evidence, camera_dict),
+            iwr.to_dict() if iwr is not None else None,
+            camera_status=camera_status,
             camera_ray=camera_ray_facts(camera_dict, state.evidence),
             box_range_m=box_range_extent(state.evidence.get("placement_box")),
         )
-        tilt_outcome = None
+        prior = camera_prior_decision(camera_dict, camera_status=camera_status)
+        # the tilt is calibrated from swings now, not from a setup's static pair (13 Oct)
+        tilt_outcome = {"action": "not_applicable", "reason": TILT_FROM_SWINGS_REASON}
         if camera is not None:
             camera_evidence = tee_range._thaw_json(camera.evidence)  # pylint: disable=protected-access
             height = camera_evidence.get("camera_height")
-            seen_tilt = camera_evidence.get("camera_tilt") or {}
-            if decision["status"] == "validated" and seen_tilt.get("status") == "uncalibrated":
-                # P8-5: the first validated pair calibrates the camera's tilt. It must
-                # assume the rig's lens height, so it cannot also check it.
-                tilt_outcome = _calibrate_camera_tilt(state.epoch_id, camera_evidence, decision)
-                if isinstance(height, Mapping):
-                    height = {
-                        **height,
-                        "check": "not_checked",
-                        "note": "this pair calibrated the camera's tilt, assuming the rig's "
-                        "lens height",
-                    }
-            else:
-                if decision["status"] == "validated" and seen_tilt.get("status") == "calibrated":
-                    tilt_outcome = _calibrate_camera_tilt(state.epoch_id, camera_evidence, decision)
-                # with the tilt calibrated, the pair checks the rig's lens height
+            if iwr is not None:
+                # a radar check the camera agrees with still checks the rig's lens height
                 height = patch_pair_lens_height(height, decision)
             camera = replace(
                 camera,
@@ -8437,20 +8629,24 @@ def create_app(
                 },
             )
         candidates = [item for item in (iwr, camera, arm6) if item is not None]
-        # P8-6: no qualification is required, and none resolves a range: the pair
-        # (or what one sensor found) is saved, labelled experimental (D15)
+        # P8-6: no qualification is required. 13 Oct: the camera's coarse distance is
+        # saved as a prior, labelled experimental; each swing's IWR measures its own
         qualification_outcome = "not_required"
-        solution = patch_ball_solution(
-            state.epoch_id, candidates, decision, state.evidence.get("placement_box")
+        solution = camera_prior_solution(
+            state.epoch_id,
+            candidates,
+            prior,
+            state.evidence.get("placement_box"),
+            withheld_status=decision.get("status"),
         )
-        phase = "experimental" if solution.reason == PATCH_BALL_SAVED_REASON else "raw_only"
+        phase = "experimental" if solution.reason == CAMERA_PRIOR_SAVED_REASON else "raw_only"
         logger.info(
-            "[SETUP] patch ball %s: %s%s",
-            decision["status"],
-            f"{decision['range_m']:.3f} m from {decision['source']}"
-            if decision.get("range_m") is not None
-            else "no range",
+            "[SETUP] camera prior %s%s; radar check %s",
+            f"{prior['range_m']:.3f} +/- {prior['uncertainty_m']:.3f} m"
+            if prior.get("range_m") is not None
+            else "not saved",
             f" ({decision['warning']})" if decision.get("warning") else "",
+            decision["status"] if iwr is not None else "not run",
         )
         return store.finalize(
             state,
@@ -8459,7 +8655,25 @@ def create_app(
             phase=phase,
             evidence={
                 "patch_ball": decision,
-                # the unit's camera tilt: calibrated or checked by this pair (P8-5)
+                # 13 Oct: the camera's coarse distance, the swings' prior
+                "camera_prior": prior,
+                # the optional radar check, a diagnostic only
+                **(
+                    {
+                        "radar_check": {
+                            "label": "diagnostic",
+                            "never_the_swings_distance": True,
+                            "status": decision.get("status"),
+                            "range_m": decision.get("range_m"),
+                            "uncertainty_m": decision.get("uncertainty_m"),
+                            "source": decision.get("source"),
+                            "warning": decision.get("warning"),
+                        }
+                    }
+                    if iwr is not None
+                    else {}
+                ),
+                # the unit's camera tilt is calibrated from swings now (13 Oct)
                 "camera_tilt": tilt_outcome,
                 # the camera's candidate with the lens height the pair checked
                 **({"camera_arm5_candidate": camera.to_dict()} if camera is not None else {}),
@@ -8637,7 +8851,9 @@ def create_app(
         store = range_store(tester_id)
         state = _range_state(tester_id)
         expected = "needs_empty" if kind == "empty" else "needs_ball"
-        if state is None or state.phase != expected:
+        # the radar check (diagnostic, 13 Oct) starts from the camera step too
+        allowed = {expected, "needs_camera_arm5"} if kind == "empty" else {expected}
+        if state is None or state.phase not in allowed:
             raise RuntimeError(f"tee-range setup is {state.phase if state else 'not_started'}")
         if request_id in state.request_ids:
             return state
@@ -9208,7 +9424,8 @@ def create_app(
         )
         return _finalize_range_state(store, completed)
 
-    PATCH_PREVIEW_PHASES = frozenset({"needs_empty", "needs_ball"})
+    # the ball is placed before the camera step opens too (13 Oct: camera first)
+    PATCH_PREVIEW_PHASES = frozenset({"needs_empty", "needs_ball", "needs_camera_arm5"})
 
     def _show_patch_camera(tester_id: str, state):
         """Show the 1280x800 view with the patch while the tester places the ball (P8-6).
