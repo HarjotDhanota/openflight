@@ -252,3 +252,27 @@ class TestTheShotSBallRange:
         assert chosen.label == "not_measured"
         assert "no IWR capture" in chosen.reason
         assert "no camera prior" in chosen.reason
+
+
+class TestThePriorSizesTheClubGate:
+    """Build A: the camera prior's uncertainty widens the IWR club gate and contact check."""
+
+    def test_a_measured_range_keeps_the_gate_as_it_was(self):
+        from openflight.iwr6843 import club  # noqa: PLC0415
+
+        assert club.club_gate_m(2.0, 0.0) == (pytest.approx(1.4), pytest.approx(2.05))
+        assert club.impact_error_limit_m(0.0) == club.CLUB_MAX_IMPACT_ERROR_M
+
+    def test_a_prior_widens_the_gate_by_its_uncertainty(self):
+        from openflight.iwr6843 import club  # noqa: PLC0415
+
+        low, high = club.club_gate_m(2.0, 0.3)
+
+        assert low == pytest.approx(1.1)
+        assert high == pytest.approx(2.35)
+        assert club.impact_error_limit_m(0.3) == pytest.approx(0.6)
+
+    def test_the_calibration_carries_the_range_uncertainty(self):
+        from openflight.iwr6843.calibration import Calibration  # noqa: PLC0415
+
+        assert Calibration.identity().tee_range_uncertainty_m == 0.0

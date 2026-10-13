@@ -12,6 +12,13 @@ from dataclasses import asdict, dataclass, field, replace
 from openflight.horizontal_frame import frame_for, to_reported_deg
 from openflight.iwr6843.calibration import Calibration
 from openflight.iwr6843.club import ClubPathResult, ClubWindowPolicy, estimate_club_path
+from openflight.iwr6843.launch_range import (
+    LaunchRangeEstimate,
+    LaunchRangePrior,
+    ShotBallRange,
+    estimate_launch_range,
+    shot_ball_range,
+)
 from openflight.iwr6843.lcmf import (
     LCMFResult,
     PreparedLCMFCapture,
@@ -218,6 +225,9 @@ class IWR6843ShotResult:
     capture_wait_duration_ns: int | None = None
     estimator_analysis_duration_ns: int | None = None
     aggregate_duration_ns: int | None = None
+    # 13 Oct: this shot's launch point from its own capture, and the range it used
+    launch_range: LaunchRangeEstimate | None = None
+    ball_range: ShotBallRange | None = None
 
 
 def process_raw_capture(  # pylint: disable=too-many-arguments,too-many-locals
@@ -234,9 +244,11 @@ def process_raw_capture(  # pylint: disable=too-many-arguments,too-many-locals
     horizontal_phase_reference_rad: float | None,
     club_window_policy: ClubWindowPolicy,
     club_impact_correction_s: float,
+    prepared: PreparedLCMFCapture | None = None,
 ) -> tuple[LCMFResult, ClubPathResult | None]:
     """Run the complete production ball and club estimator on frozen bytes."""
-    prepared = prepare_lcmf_capture(raw)
+    if prepared is None:
+        prepared = prepare_lcmf_capture(raw)
     measurement = estimate_lcmf_v1(
         raw,
         calibration,
@@ -317,6 +329,9 @@ class IWR6843Runtime:
     club_impact_correction_s: float = -0.002
     calibration_provenance: dict | None = None
     radar_config_provenance: dict | None = None
+    # 13 Oct: the camera's coarse estimate of the resting ball's range, a prior only:
+    # it sizes each shot's search and stands in, labelled, when the IWR cannot range it
+    range_prior: LaunchRangePrior | None = None
 
     def replay_config_snapshot(
         self,
@@ -327,9 +342,11 @@ class IWR6843Runtime:
         effective_tilt_deg: float | None = None,
         tee_range_m: float | None = None,
         ball_at_address: dict | None = None,
+        range_prior: LaunchRangePrior | None = None,
     ) -> dict:
         """Freeze every primitive needed by the hardware-free estimator."""
         payload = {
+            "range_prior": self.range_prior.to_dict() if self.range_prior else None,
             "schema_version": 1,
             "tee_range_status": (
                 "unresolved"
@@ -354,6 +371,10 @@ class IWR6843Runtime:
                 # the shot's own re-located range, when the kiosk had one (13 Oct)
                 "tee_range_m": tee_range_m,
                 "ball_at_address": ball_at_address,
+                # the shot's own prior (its resting-ball look), else the session's
+                "range_prior": (range_prior or self.range_prior).to_dict()
+                if (range_prior or self.range_prior)
+                else None,
             },
         }
         encoded = json.dumps(
@@ -394,11 +415,16 @@ class IWR6843Runtime:
         club_speed_mph: float | None = None,
         tilt_deg: float | None = None,
         tee_range_m: float | None = None,
+        range_prior: LaunchRangePrior | None = None,
     ) -> IWR6843ShotResult:
-        """Match one OPS shot to TI data and run LCMF.
+        """Match one OPS shot to TI data, range its launch point, and run LCMF.
 
-        ``tee_range_m`` is this shot's own range (the resting ball re-located in the
-        box before the swing); the setup's stands without it.
+        The shot's range is decided first, before anything that uses it (13 Oct): its
+        own launch point (``launch_range``), else the camera prior labelled, else none
+        and every range-dependent estimator is withheld. ``range_prior`` is this
+        shot's own (its resting ball re-located in the box), else the session's.
+        ``tee_range_m`` is a configured range (``--iwr6843-tee-m``), kept as given;
+        the launch point is still recorded beside it.
         """
         process_started_ns = time.monotonic_ns()
         capture = self.capture_monitor.capture_for_shot(
@@ -406,6 +432,9 @@ class IWR6843Runtime:
             timeout_s=self.capture_timeout_s,
         )
         capture_returned_ns = time.monotonic_ns()
+
+        launch_range: LaunchRangeEstimate | None = None
+        ball_range: ShotBallRange | None = None
 
         def result(
             *,
@@ -422,6 +451,8 @@ class IWR6843Runtime:
                 capture_wait_duration_ns=capture_returned_ns - process_started_ns,
                 estimator_analysis_duration_ns=estimator_analysis_duration_ns,
                 aggregate_duration_ns=time.monotonic_ns() - process_started_ns,
+                launch_range=launch_range,
+                ball_range=ball_range,
             )
 
         if capture is None or not capture.valid or capture.raw is None:
@@ -431,6 +462,42 @@ class IWR6843Runtime:
             shot_calibration = replace(self.calibration, tilt_rad=math.radians(tilt_deg))
         if tee_range_m is not None:
             shot_calibration = replace(shot_calibration, tee_range_m=float(tee_range_m))
+        prepared = None
+        if hasattr(shot_calibration, "tee_range_m"):
+            prior = range_prior or self.range_prior
+            try:
+                prepared = prepare_lcmf_capture(capture.raw)
+            except (ValueError, IndexError) as error:
+                launch_range = LaunchRangeEstimate(
+                    status="not_measured",
+                    reason=f"the capture could not be decoded: {error}",
+                    prior=prior,
+                )
+            else:
+                launch_range = self._launch_range(
+                    prepared,
+                    shot_calibration,
+                    ball_speed_mph=ball_speed_mph,
+                    club_speed_mph=club_speed_mph,
+                    prior=prior,
+                )
+            configured = shot_calibration.tee_range_m
+            if configured is not None:
+                ball_range = ShotBallRange(
+                    range_m=float(configured),
+                    uncertainty_m=float(getattr(shot_calibration, "tee_range_uncertainty_m", 0.0)),
+                    source="configured_tee",
+                    label="measured",
+                    reason="the range configured for this run (--iwr6843-tee-m)",
+                )
+            else:
+                ball_range = shot_ball_range(launch_range, prior)
+                if ball_range.range_m is not None:
+                    shot_calibration = replace(
+                        shot_calibration,
+                        tee_range_m=float(ball_range.range_m),
+                        tee_range_uncertainty_m=float(ball_range.uncertainty_m or 0.0),
+                    )
         if getattr(shot_calibration, "tee_range_m", 1.0) is None:
             return result(
                 measurement=None,
@@ -450,6 +517,7 @@ class IWR6843Runtime:
             horizontal_phase_reference_rad=self.horizontal_phase_reference_rad,
             club_window_policy=self.club_window_policy,
             club_impact_correction_s=self.club_impact_correction_s,
+            prepared=prepared,
         )
         analysis_completed_ns = time.monotonic_ns()
         return result(
@@ -457,6 +525,33 @@ class IWR6843Runtime:
             club_path=club_path,
             estimator_analysis_duration_ns=analysis_completed_ns - analysis_started_ns,
         )
+
+    def _launch_range(
+        self,
+        prepared: PreparedLCMFCapture,
+        calibration: Calibration,
+        *,
+        ball_speed_mph: float,
+        club_speed_mph: float | None,
+        prior: LaunchRangePrior | None,
+    ) -> LaunchRangeEstimate:
+        """This shot's launch point; an estimator failure is a reason, never a lost shot."""
+        try:
+            return estimate_launch_range(
+                prepared.vertical,
+                ball_speed_mph=ball_speed_mph,
+                club_speed_mph=club_speed_mph,
+                prior=prior,
+                net_range_m=self.net_range_m,
+                range_bias_m=float(getattr(calibration, "range_bias_m", 0.0) or 0.0),
+            )
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            logger.warning("[IWR6843] launch-point range failed: %s", error)
+            return LaunchRangeEstimate(
+                status="not_measured",
+                reason=f"the launch-point estimator failed: {error}",
+                prior=prior,
+            )
 
     def stop(self) -> None:
         """Release TI hardware."""

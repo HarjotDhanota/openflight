@@ -34,7 +34,11 @@ class Calibration:
     tilt_rad: float
     range_bias_m: float
     source: str = "unset"
-    tee_range_m: float | None = None  # tape-measured launch point (slant)
+    tee_range_m: float | None = None  # the shot's launch-point range (slant)
+    # 13 Oct: how sure that range is. 0 for a range taken as measured; the camera
+    # prior's uncertainty when the prior stands in for a shot the IWR did not range,
+    # which widens the club gate and the club's contact check by as much.
+    tee_range_uncertainty_m: float = 0.0
     # Ball height at launch ABOVE THE FLOOR (ball on mat ~0.04 m). The old
     # field meant "above the radar plane" and silently anchored every tee
     # fit ~0.15 m high on a 0.152 m mount: -0.15/lever-arm of slope bias

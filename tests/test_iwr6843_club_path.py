@@ -539,7 +539,7 @@ def test_window_handed_to_the_tracker_ends_at_impact(monkeypatch):
     seen: list[tuple[float, float]] = []
     real_find_club = club.find_club
 
-    def spy(mti, geo, *, tee_range_m, window_s, ops_club_speed_mph, impact_t_s):
+    def spy(mti, geo, *, tee_range_m, window_s, ops_club_speed_mph, impact_t_s, **kwargs):
         seen.append(window_s)
         return real_find_club(
             mti,
@@ -548,6 +548,7 @@ def test_window_handed_to_the_tracker_ends_at_impact(monkeypatch):
             window_s=window_s,
             ops_club_speed_mph=ops_club_speed_mph,
             impact_t_s=impact_t_s,
+            **kwargs,
         )
 
     monkeypatch.setattr(club, "find_club", spy)

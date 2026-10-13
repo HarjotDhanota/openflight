@@ -113,6 +113,26 @@ CLUB_TRACK_SPEED_LIMIT_MS = (12.0, 60.0)
 # imperfect impact timestamp without admitting a mover that misses the tee.
 CLUB_MAX_IMPACT_ERROR_M = 0.20
 
+
+def club_gate_m(tee_range_m: float, tee_uncertainty_m: float = 0.0) -> tuple[float, float]:
+    """The club search gate: the approach up to the ball, widened by the range's uncertainty.
+
+    ``tee_uncertainty_m`` is 0 for a measured launch point and the camera prior's
+    uncertainty when the prior stands in (13 Oct): the gate then spans every place the
+    ball can be.
+    """
+    unc = max(0.0, float(tee_uncertainty_m))
+    return (
+        max(0.35, tee_range_m - CLUB_APPROACH_DEPTH_M - unc),
+        tee_range_m + CLUB_GATE_TEE_MARGIN_M + unc,
+    )
+
+
+def impact_error_limit_m(tee_uncertainty_m: float = 0.0) -> float:
+    """How far the club's walk may end from the ball's range: wider when only a prior."""
+    return max(CLUB_MAX_IMPACT_ERROR_M, 2.0 * max(0.0, float(tee_uncertainty_m)))
+
+
 # Ceiling on the azimuth swing across the window, measured on PER-FRAME medians
 # (see phase_span_rad). Tangential speed is at most ~20 m/s at a ~1.1 m range,
 # so the azimuth rate stays under ~18 rad/s; over six 4 ms frames that is
@@ -352,6 +372,7 @@ def find_club(
     window_s: tuple[float, float],
     ops_club_speed_mph: float,
     impact_t_s: float,
+    tee_uncertainty_m: float = 0.0,
 ) -> ClubTrackSelection | None:
     """Track the clubhead's approach inside the pre-impact window.
 
@@ -365,8 +386,7 @@ def find_club(
       short of the ball, so anything beyond the tee is body, hands, or clutter
       -- and being slower, it wins most-inliers RANSAC when admitted.
     """
-    lo = max(0.35, tee_range_m - CLUB_APPROACH_DEPTH_M)
-    hi = tee_range_m + CLUB_GATE_TEE_MARGIN_M
+    lo, hi = club_gate_m(tee_range_m, tee_uncertainty_m)
     ops_speed_ms = ops_club_speed_mph / MPH_PER_MS
     projection_lo, projection_hi = CLUB_SPEED_PROJECTION_RANGE
     speed_bounds_ms = (
@@ -667,13 +687,14 @@ def estimate_club_path(
         window_s=window_s,
         ops_club_speed_mph=ops_club_speed_mph,
         impact_t_s=impact_t_s,
+        tee_uncertainty_m=cal.tee_range_uncertainty_m,
     )
     if selection is None:
         return ClubPathResult(status="rejected_no_club_track")
     track = selection.track
     low, high = CLUB_SPEED_PROJECTION_RANGE
     speed_mismatch = not low <= selection.speed_ratio <= high
-    impact_mismatch = selection.impact_error_m > CLUB_MAX_IMPACT_ERROR_M
+    impact_mismatch = selection.impact_error_m > impact_error_limit_m(cal.tee_range_uncertainty_m)
     # A track that fails its identity gates is kept for replay but must never
     # become camera depth (audit F4).
     track_status = (
