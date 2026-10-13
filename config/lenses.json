@@ -1,0 +1,50 @@
+{
+  "schema": "openflight.camera_lenses.v1",
+  "reference_lens_id": "stock-2.8mm",
+  "reference_focal_mm": 2.8,
+  "note": "The rig file's focal_px describes the reference (stock 2.8 mm) lens. Another lens's nominal focal_px is the rig's scaled by focal_mm / 2.8; every value here is nominal until a checkerboard calibration for that lens_id exists (optical_calibration.py), which then replaces it.",
+  "lenses": [
+    {
+      "lens_id": "stock-2.8mm",
+      "label": "Stock 2.8 mm",
+      "focal_mm": 2.8,
+      "f_number": 2.2,
+      "hfov_deg": 118.0,
+      "hfov_source": "seller_listing",
+      "tv_distortion_pct": -17.0,
+      "provenance": "The OV9281 module's stock M12 lens, as the owner's listing specifies it: 2.8 mm, f/2.2, 118 deg horizontal, TV distortion about -17 %. Field frames (Outdoors-test-5, 30 Sept) measured about 16 % barrel at the 1280 frame's edge."
+    },
+    {
+      "lens_id": "6mm",
+      "label": "6 mm",
+      "focal_mm": 6.0,
+      "f_number": 2.0,
+      "hfov_deg": null,
+      "hfov_source": "nominal_pinhole_from_focal_length",
+      "tv_distortion_pct": null,
+      "provenance": "M12 6 mm f/2.0 lens; focal length and aperture as listed. No distortion figure is published for it."
+    },
+    {
+      "lens_id": "8mm",
+      "label": "8 mm",
+      "focal_mm": 8.0,
+      "f_number": null,
+      "hfov_deg": null,
+      "hfov_source": "nominal_pinhole_from_focal_length",
+      "tv_distortion_pct": null,
+      "provenance": "M12 8 mm lens; its aperture is not known."
+    }
+  ],
+  "modes": {
+    "arm5": {"label": "1280x800", "allowed_ladder_us": [300, 200, 150, 100, 75, 50, 30, 20, 10]},
+    "arm6": {"label": "640x400", "allowed_ladder_us": [300, 150, 75, 30, 15]}
+  },
+  "default_settings": {
+    "modes": ["arm5", "arm6"],
+    "default_arm": "arm5",
+    "ladder": {
+      "arm5": [300, 200, 150, 100, 75, 50, 30, 20, 10],
+      "arm6": [300, 150, 75, 30, 15]
+    }
+  }
+}
