@@ -25,12 +25,12 @@ W7 (E4) frames:
 Total (carry plus bounce and roll) uses the USGA / R&A 2021 linear bounce model
 (`bounce_and_roll_yards`) on assumed fairway turf; see BOUNCE_MODELS.
 
-Aerodynamic model: Cd and Cl are functions of the spin parameter
-Sp = r*omega / v. Fits are consistent with Bearman & Harvey (1976) and
-Kensrud & Smith (2018) measurements for dimpled golf balls in the
-post-drag-crisis regime (Re ~ 5e4 to 2e5). Spin decays by the same paper's
-moment coefficient C_M = 0.01 S (Ferguson, McNally & McPhee 2022, Eq. 4), the
-decay its Cd/Cl were fitted with.
+Aerodynamic model: Cd, Cl and the spin-down moment C_M are functions of the spin
+parameter Sp = r*omega / v in the form of Ferguson, McNally & McPhee (2022) Eqs.
+(1)-(4). The active constants are flight-fit-v1 (``FLIGHT_FIT_V1``): that form
+refitted to TM4's normalized exports on carry, apex, landing angle and hang time,
+with its D38 provenance in ``FLIGHT_FIT_V1.calibration``. Ferguson's published
+constants stay selectable (``FERGUSON_2022``, ``simulate(..., aero=...)``).
 """
 
 import math
@@ -54,48 +54,233 @@ BALL_RADIUS_M = 0.02135
 BALL_AREA_M2 = math.pi * BALL_RADIUS_M**2
 AIR_DENSITY_STD = 1.225  # kg/m³ at sea level, 15 °C ISA
 
-# Cd = CD_POLY[0] + CD_POLY[1]*Sp + CD_POLY[2]*Sp^2
-# Cl = CL_POLY[0] + CL_POLY[1]*Sp + CL_POLY[2]*Sp^2, clamped at >= 0
-#   Second-order polynomials in the spin parameter Sp = r*omega/v, the form
-#   Ferguson, McNally & McPhee (2022, ISEA 14, doi:10.5703/1288284317493)
-#   fitted to N=1040 shots (GCQuad launch conditions, FlightScope X3
-#   carry/apex/offline, Pro V1, Sp 0.02-0.75). The coefficients below are
-#   their published values, not re-fitted here.
-#   Lift peaks near Sp ~ 0.52 and turns over, as in Bearman & Harvey (1976)
-#   and Lyu, Kensrud & Smith (2018). The previous Hill-type saturating form
-#   was monotonic by construction, so no choice of its two constants could
-#   represent that peak, and it sat ~4 yd low on apex across every club.
-#   Beyond Sp = SP_FIT_MAX both curves are held at their end value rather
-#   than extrapolating a parabola into a region the fit never saw.
+# Aerodynamic model (E8a). The form is Ferguson, McNally & McPhee (2022), "Predicting
+# the Flight of a Golf Ball: Comparing a Physics-Based Aerodynamic Model to a Neural
+# Network", ISEA Engineering of Sport 14, doi:10.5703/1288284317493:
+#   Eq. (1)  Sp  = r * Omega / v            (the spin ratio)
+#   Eq. (2)  Cd  = a + b*Sp + c*Sp^2        (CD_POLY = (a, b, c))
+#   Eq. (3)  Cl  = d + e*Sp + f*Sp^2        (CL_POLY = (d, e, f)), clamped at >= 0
+#   Eq. (4)  C_M = g*Sp                     (CM_PER_SP = g), g bounded 0.010-0.015
+#            "to reflect realistic spin decay [Smits & Smith 1994]"
+# Their constants, fitted to N=1040 shots (GCQuad launch conditions, FlightScope X3
+# carry/apex/offline, 2021 Pro V1, 190 m above sea level), are FERGUSON_2022.
+# FLIGHT_FIT_V1 keeps the form and refits the seven constants to TM4's normalized
+# exports on carry, apex, landing angle and hang time jointly
+# (scripts/analysis/fit_flight_model.py; docs/how-it-works/ballistics.md). Ferguson's
+# constants were fitted to FlightScope carry, offline and apex, never landing angle or
+# hang time; flown with TM4's launch numbers they leave apex ~2 ft low and the
+# landing angle 2-4 deg shallow.
 #
-# Validation, TrackMan measured launch conditions in, simulated flight out,
-# Hill form (as re-fit in #229) -> this form:
-#   committed 24-shot capture:            carry RMSE 3.97 -> 2.90 yd
-#   independent 5-session 279-shot set:   carry RMSE 3.48 -> 1.98 yd,
-#                                         apex RMSE 4.41 -> 0.97 yd
-CD_POLY = (0.1304, 0.9287, -0.8259)
-CL_POLY = (0.0504, 1.2031, -1.1490)
+# Lift peaks and turns over (near Sp 0.52 in Ferguson's fit, 0.63 in the refit), as
+# in Bearman & Harvey (1976) and Lyu, Kensrud & Smith (2018). Beyond SP_FIT_MAX both
+# curves are held at their end value rather than extrapolating a parabola into a
+# region the fit never saw. No Reynolds-number term: one was tested in the refit
+# (Smits & Smith's sinusoid and a linear term) and did not improve held-out error.
+#
+# History (TrackMan measured launch conditions in, simulated flight out):
+#   Hill form (#229) -> Ferguson 2022 published constants:
+#     committed 24-shot capture:            carry RMSE 3.97 -> 2.90 yd
+#     independent 5-session 279-shot set:   carry RMSE 3.48 -> 1.98 yd,
+#                                           apex RMSE 4.41 -> 0.97 yd
+#   Ferguson 2022 -> flight-fit-v1: see FLIGHT_FIT_V1.calibration.metrics.
 SP_FIT_MAX = 0.75
 
-# Spin decay: Ferguson, McNally & McPhee (2022) Eq. (4), C_M = g S, fitted with
-# their Cd/Cl: "The constants were found to be {0.1304, 0.9287, -0.8259, 0.0504,
-# 1.2031, -1.1490, 0.01}" (g, the last, bounded 0.010-0.015 "to reflect realistic
-# spin decay [Smits & Smith 1994]"). The abstract does not print the torque; it is
-# taken as Smits & Smith's convention, T = C_M (1/2) rho v^2 A d (d the diameter),
-# with I = (2/5) m r^2. That gives d(omega)/dt = -lambda omega v / r with
-# lambda = 2.0e-5 at 1.204 kg/m3: Penner 2001's Eq. (16), "alpha =
-# -(0.00002)(omega_b v_b / r)", from the same Smits & Smith data, to 0.2 %.
-# (The 4 %/s exponential this replaces was attributed to Kiratidis & Leinweber
-# 2018, a paper on FIFA footballs with no spin decay in it.)
-CM_PER_SP = 0.01
+# Spin decay, Eq. (4): the abstract does not print the torque; it is taken as Smits &
+# Smith's convention, T = C_M (1/2) rho v^2 A d (d the diameter), with
+# I = (2/5) m r^2. With Ferguson's g = 0.01 that gives d(omega)/dt =
+# -lambda omega v / r with lambda = 2.0e-5 at 1.204 kg/m3: Penner 2001's Eq. (16),
+# "alpha = -(0.00002)(omega_b v_b / r)", from the same Smits & Smith data, to 0.2 %.
+# (The 4 %/s exponential this replaced was attributed to Kiratidis & Leinweber 2018,
+# a paper on FIFA footballs with no spin decay in it.)
+SPIN_DECAY_G_BOUNDS = (0.010, 0.015)
 _BALL_INERTIA = 0.4 * BALL_MASS_KG * BALL_RADIUS_M**2
 
 
-def spin_acceleration(omega: float, speed_mps: float, air_density: float) -> float:
+@dataclass(frozen=True)
+class CalibrationData:
+    """One TM4 export a calibration was fitted to, identified by its hash."""
+
+    name: str
+    path: str  # repo-relative for an in-repo file; where it was read from otherwise
+    sha256: str
+    shots: int  # rows in the export
+    fit_shots: int  # rows inside the fit's domain (FlightCalibration.domain)
+    in_repo: bool
+    origin: str
+
+
+@dataclass(frozen=True)
+class FlightCalibration:
+    """D38 provenance of a fitted aerodynamic model: what, from what, how well."""
+
+    version: str
+    source: str
+    form: str
+    fitted_on: str  # ISO date
+    data: tuple[CalibrationData, ...]
+    domain: str
+    reference_air_density_kg_m3: float
+    residual_scales: tuple[tuple[str, str, float], ...]  # (output, unit, 1-sigma scale)
+    method: str
+    # (description, value): held-out and in-sample errors, in each output's unit
+    metrics: tuple[tuple[str, float], ...]
+
+
+@dataclass(frozen=True)
+class AeroModel:
+    """Cd, Cl and the spin-down moment as functions of Sp (Ferguson 2022 Eqs. 1-4)."""
+
+    version: str
+    label: str
+    cd_poly: tuple[float, float, float]
+    cl_poly: tuple[float, float, float]
+    cm_per_sp: float
+    sp_fit_max: float = SP_FIT_MAX
+    calibration: Optional[FlightCalibration] = None
+
+    def cd(self, sp: float) -> float:
+        """Drag coefficient, held at its SP_FIT_MAX value beyond the fit."""
+        return _poly(self.cd_poly, min(sp, self.sp_fit_max))
+
+    def cl(self, sp: float) -> float:
+        """Lift coefficient: 0 without spin, never negative, held beyond the fit."""
+        if sp <= 0:
+            return 0.0
+        return max(0.0, _poly(self.cl_poly, min(sp, self.sp_fit_max)))
+
+
+def _poly(coeffs: tuple, sp: float) -> float:
+    return coeffs[0] + coeffs[1] * sp + coeffs[2] * sp * sp
+
+
+FERGUSON_FORM = (
+    "Ferguson, McNally & McPhee 2022, Predicting the Flight of a Golf Ball (ISEA 14, "
+    "doi:10.5703/1288284317493), Eqs. (1)-(4): Cd and Cl quadratic in Sp = r Omega / v, "
+    "C_M = g Sp"
+)
+
+FERGUSON_2022 = AeroModel(
+    version="ferguson-2022",
+    label=(
+        "Ferguson, McNally & McPhee 2022 quadratic Cd/Cl (ISEA 14, "
+        "doi:10.5703/1288284317493), published constants, spin decay C_M = 0.01 S"
+    ),
+    cd_poly=(0.1304, 0.9287, -0.8259),
+    cl_poly=(0.0504, 1.2031, -1.1490),
+    cm_per_sp=0.01,
+)
+
+FLIGHT_FIT_V1_CALIBRATION = FlightCalibration(
+    version="flight-fit-v1",
+    source=(
+        "fitted to TM4 normalized exports: the owner's TM4 export (in the repo) and "
+        "Robinante's public TM4 session; TM4's own launch numbers in, its carry, apex, "
+        "landing angle and hang time out"
+    ),
+    form=FERGUSON_FORM,
+    fitted_on="2026-10-13",
+    data=(
+        CalibrationData(
+            name="OpenFlight-Test.Normalized.csv",
+            path="session_logs/OpenFlight-Test.Normalized.csv",
+            sha256="df84641f883a5c7afedca24c009efad896a3843d00e5908d89215f8f3726e072",
+            shots=24,
+            fit_shots=24,
+            in_repo=True,
+            origin="the owner's TM4 session, 6 May 2026: 9 7-iron, 8 driver, 7 PW",
+        ),
+        CalibrationData(
+            name="robinante-swingsync-2026-10-12.csv",
+            path="../tm-exports/robinante-swingsync-2026-10-12.csv (beside the checkout)",
+            sha256="d4dbf8e6056feed8d4ae3947536c0e8a2607663b245ff49ee16b26bcb000ee60",
+            shots=43,
+            fit_shots=36,
+            in_repo=False,
+            origin=(
+                "Robinante's TM4 session, 12 Oct 2026, SwingSync export, public GitHub "
+                "release trackman_session_10_12_26 (someone else's data: not copied into "
+                "the repo): 22 PW, 15 7-iron, 6 6-iron"
+            ),
+        ),
+    ),
+    domain=(
+        "inputs only: ball speed >= 50 mph, vertical launch >= 5 deg, no topspin; "
+        "60 of the 67 shots (the 7 out are tops and grounders). Sp at launch 0.05-0.63, "
+        "ball speed 56-163 mph; driver from 8 shots in one source"
+    ),
+    reference_air_density_kg_m3=1.176931,  # flight.AIR_DENSITY_NORMALIZED (25 C, sea level, RH 50 %)
+    residual_scales=(
+        ("carry", "yd", 1.0),
+        ("apex", "ft", 1.0),
+        ("landing_angle", "deg", 0.5),
+        ("hang_time", "s", 0.1),
+    ),
+    method=(
+        "scipy least_squares on the four outputs divided by their scales, seven "
+        "constants, g bounded 0.010-0.015, from Ferguson's constants; RK4 at 5 ms "
+        "(production 2 ms), constants rounded to 4 decimals "
+        "(scripts/analysis/fit_flight_model.py)"
+    ),
+    metrics=(
+        # RMSE over the 60 in-domain shots, model minus TM4
+        ("pooled 10-fold held-out carry RMSE yd", 0.93),
+        ("pooled 10-fold held-out apex RMSE ft", 0.79),
+        ("pooled 10-fold held-out landing_angle RMSE deg", 0.65),
+        ("pooled 10-fold held-out hang_time RMSE s", 0.06),
+        ("pooled leave-one-out held-out carry RMSE yd", 0.94),
+        ("pooled leave-one-out held-out apex RMSE ft", 0.78),
+        ("pooled leave-one-out held-out landing_angle RMSE deg", 0.65),
+        ("pooled leave-one-out held-out hang_time RMSE s", 0.06),
+        # fitted to the owner's export alone, flown on Robinante's 36 shots
+        ("owner-fit on Robinante held-out carry RMSE yd", 0.73),
+        ("owner-fit on Robinante held-out apex RMSE ft", 0.62),
+        ("owner-fit on Robinante held-out landing_angle RMSE deg", 0.46),
+        ("owner-fit on Robinante held-out hang_time RMSE s", 0.05),
+        # fitted to Robinante's irons alone, flown on the owner's 24 shots: the
+        # driver (Sp 0.05-0.08; Robinante goes no lower than 0.13) is extrapolated,
+        # +13 yd carry
+        ("Robinante-fit on owner held-out carry RMSE yd", 10.13),
+        ("Robinante-fit on owner held-out apex RMSE ft", 15.34),
+        ("Robinante-fit on owner held-out landing_angle RMSE deg", 4.55),
+        ("Robinante-fit on owner held-out hang_time RMSE s", 0.57),
+        # ferguson-2022 on the same 60 shots, for comparison
+        ("ferguson-2022 carry RMSE yd", 1.73),
+        ("ferguson-2022 apex RMSE ft", 2.09),
+        ("ferguson-2022 landing_angle RMSE deg", 2.20),
+        ("ferguson-2022 hang_time RMSE s", 0.14),
+    ),
+)
+
+FLIGHT_FIT_V1 = AeroModel(
+    version="flight-fit-v1",
+    label=(
+        "flight-fit-v1: Ferguson, McNally & McPhee 2022 Eqs. (1)-(4) quadratic Cd/Cl "
+        "form (ISEA 14, doi:10.5703/1288284317493) refitted to TM4 normalized exports "
+        "(carry, apex, landing angle, hang time), spin decay C_M = 0.010 S"
+    ),
+    cd_poly=(0.1459, 0.8331, -0.5549),
+    cl_poly=(0.0646, 1.1261, -0.8869),
+    cm_per_sp=0.0100,
+    calibration=FLIGHT_FIT_V1_CALIBRATION,
+)
+
+AERO_MODELS: dict[str, AeroModel] = {m.version: m for m in (FERGUSON_2022, FLIGHT_FIT_V1)}
+ACTIVE_AERO_MODEL = FLIGHT_FIT_V1
+
+# The active model's constants under their long-standing names (full_speed's drag
+# referral reads CD_POLY, so E3's drag stays E4's).
+CD_POLY = ACTIVE_AERO_MODEL.cd_poly
+CL_POLY = ACTIVE_AERO_MODEL.cl_poly
+CM_PER_SP = ACTIVE_AERO_MODEL.cm_per_sp
+
+
+def spin_acceleration(
+    omega: float, speed_mps: float, air_density: float, cm_per_sp: float = CM_PER_SP
+) -> float:
     """d(omega)/dt in rad/s^2: the aerodynamic spin-down moment over the ball's inertia."""
     if speed_mps <= 0.0:
         return 0.0
-    c_m = CM_PER_SP * BALL_RADIUS_M * omega / speed_mps
+    c_m = cm_per_sp * BALL_RADIUS_M * omega / speed_mps
     torque = c_m * 0.5 * air_density * speed_mps * speed_mps * BALL_AREA_M2 * 2.0 * BALL_RADIUS_M
     return -torque / _BALL_INERTIA
 
@@ -348,24 +533,21 @@ def resolve_launch(shot: Shot, *, substitutes: bool = True) -> Optional[LaunchCo
     )
 
 
-def _poly(coeffs: tuple, sp: float) -> float:
-    return coeffs[0] + coeffs[1] * sp + coeffs[2] * sp * sp
-
-
 def _cd(sp: float) -> float:
-    return _poly(CD_POLY, min(sp, SP_FIT_MAX))
+    """The active model's drag coefficient."""
+    return ACTIVE_AERO_MODEL.cd(sp)
 
 
 def _cl(sp: float) -> float:
-    if sp <= 0:
-        return 0.0
-    return max(0.0, _poly(CL_POLY, min(sp, SP_FIT_MAX)))
+    """The active model's lift coefficient."""
+    return ACTIVE_AERO_MODEL.cl(sp)
 
 
 def _derivatives(
     state: tuple,
     axis: tuple,
     air_density: float,
+    aero: AeroModel,
 ) -> tuple:
     """d/dt of (x, y, z, vx, vy, vz, omega) under gravity + drag + Magnus + spin-down."""
     _, _, _, vx, vy, vz, omega = state
@@ -376,10 +558,10 @@ def _derivatives(
     if v < 1e-6:
         return (vx, vy, vz, 0.0, 0.0, -GRAVITY, 0.0)
 
-    # Spin parameter Sp drives Cd, Cl and C_M (Ferguson 2022).
+    # Spin parameter Sp drives Cd, Cl and C_M (Ferguson 2022 Eq. 1).
     sp = BALL_RADIUS_M * omega / v
-    cd = _cd(sp)
-    cl = _cl(sp)
+    cd = aero.cd(sp)
+    cl = aero.cl(sp)
 
     # q: dynamic-pressure × reference-area / mass = acceleration per unit C.
     # Pre-dividing by mass here lets us return accelerations directly.
@@ -407,7 +589,7 @@ def _derivatives(
 
     az -= GRAVITY
 
-    return (vx, vy, vz, ax, ay, az, spin_acceleration(omega, v, air_density))
+    return (vx, vy, vz, ax, ay, az, spin_acceleration(omega, v, air_density, aero.cm_per_sp))
 
 
 def _rk4_step(
@@ -415,15 +597,16 @@ def _rk4_step(
     axis: tuple,
     air_density: float,
     dt: float,
+    aero: AeroModel,
 ) -> tuple:
     n = len(state)
-    k1 = _derivatives(state, axis, air_density)
+    k1 = _derivatives(state, axis, air_density, aero)
     s2 = tuple(state[i] + 0.5 * dt * k1[i] for i in range(n))
-    k2 = _derivatives(s2, axis, air_density)
+    k2 = _derivatives(s2, axis, air_density, aero)
     s3 = tuple(state[i] + 0.5 * dt * k2[i] for i in range(n))
-    k3 = _derivatives(s3, axis, air_density)
+    k3 = _derivatives(s3, axis, air_density, aero)
     s4 = tuple(state[i] + dt * k3[i] for i in range(n))
-    k4 = _derivatives(s4, axis, air_density)
+    k4 = _derivatives(s4, axis, air_density, aero)
     return tuple(state[i] + (dt / 6.0) * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]) for i in range(n))
 
 
@@ -447,10 +630,16 @@ def simulate(
     conditions: LaunchConditions,
     air_density: float = AIR_DENSITY_STD,
     dt: float = DT_SECONDS,
+    aero: Optional[AeroModel] = None,
 ) -> Trajectory:
     """
     Integrate flight from launch to first ground contact (z = 0).
+
+    ``aero`` selects the aerodynamic model (``AERO_MODELS``); the default is
+    ``ACTIVE_AERO_MODEL``. Ferguson 2022's published constants stay selectable as
+    ``FERGUSON_2022`` for comparison.
     """
+    aero = ACTIVE_AERO_MODEL if aero is None else aero
     v0 = conditions.ball_speed_mph * MPH_TO_MPS
     la_v = math.radians(conditions.launch_angle_v)
     la_h = math.radians(conditions.launch_angle_h)
@@ -463,7 +652,7 @@ def simulate(
     # Spin axis against the launch direction (W7): see launch_relative_spin_axis.
     axis = launch_relative_spin_axis(conditions.spin_axis_deg, conditions.launch_angle_h)
 
-    # rpm → rad/s; integrated with the flight (Ferguson 2022's spin-down moment).
+    # rpm → rad/s; integrated with the flight (Ferguson 2022's Eq. 4 spin-down moment).
     omega = conditions.spin_rpm * 2 * math.pi / 60.0
 
     points: list[TrajectoryPoint] = [
@@ -476,7 +665,7 @@ def simulate(
     last_sample_t = 0.0
 
     while t < MAX_FLIGHT_SECONDS:
-        new_state = _rk4_step(state, axis, air_density, dt)
+        new_state = _rk4_step(state, axis, air_density, dt, aero)
         t += dt
         omega = new_state[6]
 

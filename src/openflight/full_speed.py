@@ -17,9 +17,10 @@ ball's full speed with the shot's own measured geometry, and nothing fitted:
 - The reading is ONE FFT window of the OPS speed timeline: the first whole
   window after the measured impact whose projection is well conditioned, so it
   is as close to separation as the geometry allows. The value is referred back
-  to separation with the published drag of a golf ball (Ferguson, McNally &
-  McPhee 2022) and gravity along the path; over a few milliseconds that adds
-  about 0.03-0.04 mph per millisecond.
+  to separation with the flight model's drag of a golf ball (the form of
+  Ferguson, McNally & McPhee 2022, refitted to TM4 as flight-fit-v1) and gravity
+  along the path; over a few milliseconds that adds about 0.03-0.04 mph per
+  millisecond.
 
 Refusals (status ``not_measured``, value None, with the reason):
 
@@ -53,7 +54,14 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
-from .ballistics import AIR_DENSITY_STD, BALL_AREA_M2, BALL_MASS_KG, CD_POLY, GRAVITY
+from .ballistics import (
+    ACTIVE_AERO_MODEL,
+    AIR_DENSITY_STD,
+    BALL_AREA_M2,
+    BALL_MASS_KG,
+    CD_POLY,
+    GRAVITY,
+)
 from .horizontal_frame import TARGET_LINE, UNIT_BORESIGHT, to_boresight_deg
 from .metric_definitions import smash_factor
 from .rig_geometry import SPEED_OF_SOUND_M_S, camera_rdf_offset_to_target_lfu
@@ -94,13 +102,15 @@ TOLERANCES = {
     "air_density_fraction": 0.10,
 }
 
-# Drag: Cd(Sp) = CD_POLY in the spin parameter Sp = r omega / v, the published
-# fit of Ferguson, McNally & McPhee (2022, ISEA 14, doi:10.5703/1288284317493),
-# the same model the flight simulator uses. Spin is not needed: the band
-# Sp 0.05 (a low-spin driver) to 0.50 (a wedge) gives Cd 0.175-0.388, the
+# Drag: Cd(Sp) = CD_POLY in the spin parameter Sp = r omega / v, the flight
+# simulator's own drag (E3's drag is E4's): since E8a the active model, flight-fit-v1,
+# the form of Ferguson, McNally & McPhee (2022, ISEA 14, doi:10.5703/1288284317493)
+# refitted to TM4. Spin is not needed: the band Sp 0.05 (a low-spin driver) to 0.50
+# (a wedge) gives Cd 0.186-0.424 (Ferguson's published constants: 0.175-0.388), the
 # centre is used and the band goes into the range.
 DRAG_SOURCE = (
-    "Ferguson, McNally & McPhee 2022 (ISEA 14, doi:10.5703/1288284317493) Cd(Sp) over "
+    f"{ACTIVE_AERO_MODEL.version} (Ferguson, McNally & McPhee 2022 form, ISEA 14, "
+    "doi:10.5703/1288284317493, refitted to TM4) Cd(Sp) over "
     "Sp 0.05-0.50, ISA sea-level air density, USGA-limit ball mass and diameter, plus "
     "gravity along the path"
 )

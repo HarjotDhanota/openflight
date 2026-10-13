@@ -44,6 +44,7 @@ from typing import Optional
 
 from . import metric_definitions
 from .ballistics import (
+    ACTIVE_AERO_MODEL,
     AIR_DENSITY_STD,
     BOUNCE_MODELS,
     DEFAULT_SURFACE,
@@ -100,10 +101,9 @@ STATUS_ORDER = (
     "measured",
 )
 
-FLIGHT_MODEL_LABEL = (
-    "Ferguson, McNally & McPhee 2022 quadratic Cd/Cl (ISEA 14, doi:10.5703/1288284317493), "
-    "RK4 point mass, spin decay by the same paper's C_M = 0.01 S"
-)
+# The active aerodynamic model's own label (E8a: flight-fit-v1, Ferguson's form
+# refitted to TM4), plus the integrator.
+FLIGHT_MODEL_LABEL = f"{ACTIVE_AERO_MODEL.label}, RK4 point mass"
 
 # Normalized air: TrackMan's 77 F (25 C) at sea level (1013.25 hPa, 29.92 inHg),
 # calm. TrackMan publishes no humidity (its normalization page and help articles

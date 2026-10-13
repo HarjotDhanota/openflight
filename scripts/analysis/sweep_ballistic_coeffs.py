@@ -1,6 +1,10 @@
 """Tune the six polynomial aerodynamic coefficients in
 :mod:`openflight.ballistics` against TrackMan-measured carry.
 
+Superseded for calibration by ``fit_flight_model.py`` (E8a), which fits carry,
+apex, landing angle and hang time jointly and ships a versioned model. This
+carry-only sweep is kept for comparison.
+
 Parameters swept (Cd = a + b*Sp + c*Sp^2, Cl = d + e*Sp + f*Sp^2):
     CD_POLY = (a, b, c)
     CL_POLY = (d, e, f)
@@ -44,7 +48,7 @@ import math
 import statistics
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -57,9 +61,6 @@ if str(_REPO_ROOT / "src") not in sys.path:
 if str(_REPO_ROOT / "scripts" / "analysis") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "scripts" / "analysis"))
 
-import openflight.ballistics as bl  # noqa: E402
-from openflight.ballistics import LaunchConditions, simulate  # noqa: E402
-
 # Reuse the TM CSV loader from the validation script so the data path is
 # identical between the two tools.
 from validate_ballistics import (  # noqa: E402
@@ -70,6 +71,8 @@ from validate_ballistics import (  # noqa: E402
     load_trackman,
 )
 
+import openflight.ballistics as bl  # noqa: E402
+from openflight.ballistics import LaunchConditions, simulate  # noqa: E402
 
 # Bounds for the search. Wide enough to span published Cd/Cl ranges for
 # dimpled golf balls in the post-drag-crisis regime; narrow enough that
@@ -121,29 +124,25 @@ def simulate_with_coeffs(
     shots: List[TMShot],
     coeffs: Coeffs,
 ) -> List[float]:
-    """Monkey-patch the ballistics module constants, run simulate() for
-    every shot, restore the originals on exit.
+    """Run simulate() for every shot with the active model's Cd/Cl swapped for coeffs.
 
-    Relies on ``ballistics._cd`` and ``ballistics._cl`` resolving
-    ``CD_POLY``/``CL_POLY`` at call time from the module's global namespace.
+    The spin decay and Sp clamp stay the active model's (ballistics.ACTIVE_AERO_MODEL).
     """
-    saved = (bl.CD_POLY, bl.CL_POLY)
-    bl.CD_POLY, bl.CL_POLY = tuple(coeffs[:3]), tuple(coeffs[3:])
-    try:
-        results = []
-        for s in shots:
-            traj = simulate(_build_conditions(s), air_density=TM_FLAT_AIR_DENSITY)
-            results.append(traj.carry_yards)
-        return results
-    finally:
-        bl.CD_POLY, bl.CL_POLY = saved
+    aero = replace(bl.ACTIVE_AERO_MODEL, cd_poly=tuple(coeffs[:3]), cl_poly=tuple(coeffs[3:]))
+    results = []
+    for s in shots:
+        traj = simulate(_build_conditions(s), air_density=TM_FLAT_AIR_DENSITY, aero=aero)
+        results.append(traj.carry_yards)
+    return results
 
 
 def make_loss(shots: List[TMShot], measured: np.ndarray):
     """Closure that the optimizer can call with a 6-vector."""
+
     def _loss(x: np.ndarray) -> float:
         preds = simulate_with_coeffs(shots, tuple(x))
         return float(np.sqrt(np.mean((np.asarray(preds) - measured) ** 2)))
+
     return _loss
 
 
@@ -161,16 +160,29 @@ def evaluate(
 # Reporting
 # ---------------------------------------------------------------------------
 
+
 def _stats(deltas: List[float]) -> Dict[str, float]:
     if not deltas:
-        return {"n": 0, "mean": float("nan"), "stdev": float("nan"),
-                "rmse": float("nan"), "mae": float("nan"), "max_abs": float("nan")}
+        return {
+            "n": 0,
+            "mean": float("nan"),
+            "stdev": float("nan"),
+            "rmse": float("nan"),
+            "mae": float("nan"),
+            "max_abs": float("nan"),
+        }
     mean = statistics.fmean(deltas)
     stdev = statistics.pstdev(deltas) if len(deltas) > 1 else 0.0
     rmse = math.sqrt(sum(d * d for d in deltas) / len(deltas))
     mae = sum(abs(d) for d in deltas) / len(deltas)
-    return {"n": len(deltas), "mean": mean, "stdev": stdev,
-            "rmse": rmse, "mae": mae, "max_abs": max(abs(d) for d in deltas)}
+    return {
+        "n": len(deltas),
+        "mean": mean,
+        "stdev": stdev,
+        "rmse": rmse,
+        "mae": mae,
+        "max_abs": max(abs(d) for d in deltas),
+    }
 
 
 def format_table(
@@ -195,8 +207,9 @@ def format_table(
         f"max|d|={overall['max_abs']:5.2f} yd"
     )
     lines.append("By club:")
-    lines.append(f"  {'club':14s}  {'n':>3s}  {'bias':>8s}  {'rmse':>6s}  "
-                 f"{'mae':>6s}  {'max|d|':>7s}")
+    lines.append(
+        f"  {'club':14s}  {'n':>3s}  {'bias':>8s}  {'rmse':>6s}  {'mae':>6s}  {'max|d|':>7s}"
+    )
     for club in sorted(by_club):
         s = _stats(by_club[club])
         lines.append(
@@ -205,8 +218,9 @@ def format_table(
         )
     if len(by_session) > 1:
         lines.append("By session:")
-        lines.append(f"  {'session':24s}  {'n':>3s}  {'bias':>8s}  {'rmse':>6s}  "
-                     f"{'mae':>6s}  {'max|d|':>7s}")
+        lines.append(
+            f"  {'session':24s}  {'n':>3s}  {'bias':>8s}  {'rmse':>6s}  {'mae':>6s}  {'max|d|':>7s}"
+        )
         for sess in sorted(by_session):
             s = _stats(by_session[sess])
             sess_disp = sess if len(sess) <= 24 else sess[:21] + "..."
@@ -227,25 +241,41 @@ def write_per_shot_csv(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow([
-            "session", "shot_index", "club",
-            "ball_speed_mph", "launch_v_deg", "launch_h_deg",
-            "spin_rpm", "spin_axis_deg",
-            "measured_carry_yards",
-            "model_default_yards", "delta_default",
-            "model_fit_yards", "delta_fit",
-        ])
+        w.writerow(
+            [
+                "session",
+                "shot_index",
+                "club",
+                "ball_speed_mph",
+                "launch_v_deg",
+                "launch_h_deg",
+                "spin_rpm",
+                "spin_axis_deg",
+                "measured_carry_yards",
+                "model_default_yards",
+                "delta_default",
+                "model_fit_yards",
+                "delta_fit",
+            ]
+        )
         for s, m, pd_, pf in zip(shots, measured, preds_default, preds_fit):
-            w.writerow([
-                s.session or "default",
-                s.shot_index, _normalize_club(s.club_raw),
-                f"{s.ball_speed_mph:.2f}", f"{s.launch_v_deg:.2f}",
-                f"{(s.launch_h_deg or 0.0):.2f}",
-                f"{s.spin_rpm:.0f}", f"{(s.spin_axis_deg or 0.0):.2f}",
-                f"{m:.2f}",
-                f"{pd_:.2f}", f"{pd_ - m:+.2f}",
-                f"{pf:.2f}", f"{pf - m:+.2f}",
-            ])
+            w.writerow(
+                [
+                    s.session or "default",
+                    s.shot_index,
+                    _normalize_club(s.club_raw),
+                    f"{s.ball_speed_mph:.2f}",
+                    f"{s.launch_v_deg:.2f}",
+                    f"{(s.launch_h_deg or 0.0):.2f}",
+                    f"{s.spin_rpm:.0f}",
+                    f"{(s.spin_axis_deg or 0.0):.2f}",
+                    f"{m:.2f}",
+                    f"{pd_:.2f}",
+                    f"{pd_ - m:+.2f}",
+                    f"{pf:.2f}",
+                    f"{pf - m:+.2f}",
+                ]
+            )
 
 
 def write_scatter(
@@ -288,21 +318,29 @@ def write_scatter(
                 if not xs:
                     continue
                 leg_label = (
-                    f"{club} (n={len(xs)})" if single_session
-                    else f"{club}/{sess} (n={len(xs)})"
+                    f"{club} (n={len(xs)})" if single_session else f"{club}/{sess} (n={len(xs)})"
                 )
-                ax.scatter(xs, ys, label=leg_label,
-                           color=color_for[club], marker=marker_for[sess],
-                           s=42, alpha=0.85, edgecolor="k", linewidth=0.5)
+                ax.scatter(
+                    xs,
+                    ys,
+                    label=leg_label,
+                    color=color_for[club],
+                    marker=marker_for[sess],
+                    s=42,
+                    alpha=0.85,
+                    edgecolor="k",
+                    linewidth=0.5,
+                )
         all_x = list(measured)
         all_y = preds
         lo = min(min(all_x), min(all_y)) * 0.95
         hi = max(max(all_x), max(all_y)) * 1.05
         ax.plot([lo, hi], [lo, hi], "k--", lw=1, label="1:1")
-        ax.fill_between([lo, hi], [lo - 5, hi - 5], [lo + 5, hi + 5],
-                        color="grey", alpha=0.15, label="+/-5 yd")
+        ax.fill_between(
+            [lo, hi], [lo - 5, hi - 5], [lo + 5, hi + 5], color="grey", alpha=0.15, label="+/-5 yd"
+        )
         deltas = np.asarray(preds) - np.asarray(measured)
-        rmse = float(np.sqrt(np.mean(deltas ** 2)))
+        rmse = float(np.sqrt(np.mean(deltas**2)))
         bias = float(np.mean(deltas))
         ax.set_title(f"{label}: rmse={rmse:.2f} yd  bias={bias:+.2f} yd")
         ax.set_xlabel("Measured carry (TM Flat, yd)")
@@ -328,6 +366,7 @@ def write_scatter(
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def main(argv=None) -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
@@ -335,27 +374,42 @@ def main(argv=None) -> int:
         pass
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--trackman", required=True, type=Path, nargs="+",
-                        help="One or more TrackMan normalized CSVs. Shots "
-                             "from all files are concatenated for the fit.")
-    parser.add_argument("--session-label", required=False, type=str, nargs="+",
-                        help="Optional explicit session label per --trackman "
-                             "file (default: filename stem with common "
-                             "prefixes trimmed).")
+    parser.add_argument(
+        "--trackman",
+        required=True,
+        type=Path,
+        nargs="+",
+        help="One or more TrackMan normalized CSVs. Shots "
+        "from all files are concatenated for the fit.",
+    )
+    parser.add_argument(
+        "--session-label",
+        required=False,
+        type=str,
+        nargs="+",
+        help="Optional explicit session label per --trackman "
+        "file (default: filename stem with common "
+        "prefixes trimmed).",
+    )
     parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--seed", type=int, default=42,
-                        help="DE seed for reproducibility.")
-    parser.add_argument("--de-popsize", type=int, default=12,
-                        help="Differential-evolution population size.")
-    parser.add_argument("--de-maxiter", type=int, default=40,
-                        help="Differential-evolution max iterations.")
-    parser.add_argument("--de-tol", type=float, default=1e-3,
-                        help="Differential-evolution tolerance.")
-    parser.add_argument("--loso", action="store_true",
-                        help="Leave-one-session-out cross-validation: for "
-                             "each session, refit on the others and report "
-                             "the held-out RMSE. Only meaningful with "
-                             "multiple --trackman files.")
+    parser.add_argument("--seed", type=int, default=42, help="DE seed for reproducibility.")
+    parser.add_argument(
+        "--de-popsize", type=int, default=12, help="Differential-evolution population size."
+    )
+    parser.add_argument(
+        "--de-maxiter", type=int, default=40, help="Differential-evolution max iterations."
+    )
+    parser.add_argument(
+        "--de-tol", type=float, default=1e-3, help="Differential-evolution tolerance."
+    )
+    parser.add_argument(
+        "--loso",
+        action="store_true",
+        help="Leave-one-session-out cross-validation: for "
+        "each session, refit on the others and report "
+        "the held-out RMSE. Only meaningful with "
+        "multiple --trackman files.",
+    )
     args = parser.parse_args(argv)
 
     # Validate inputs.
@@ -377,8 +431,7 @@ def main(argv=None) -> int:
     for path, label in zip(args.trackman, labels):
         shots_in = load_trackman(path, session=label)
         usable = _filter_shots(shots_in)
-        print(f"Loaded {len(shots_in)} TM shots from {path.name} [{label}] "
-              f"({len(usable)} usable)")
+        print(f"Loaded {len(shots_in)} TM shots from {path.name} [{label}] ({len(usable)} usable)")
         all_shots.extend(usable)
     shots = all_shots
     if not shots:
@@ -389,8 +442,7 @@ def main(argv=None) -> int:
 
     # Baseline with current ballistics.py constants.
     baseline = evaluate(shots, measured, DEFAULT_COEFFS)
-    print(f"Baseline RMSE: {baseline.rmse:.3f} yd  "
-          f"(coeffs: {DEFAULT_COEFFS})")
+    print(f"Baseline RMSE: {baseline.rmse:.3f} yd  (coeffs: {DEFAULT_COEFFS})")
 
     loss_fn = make_loss(shots, measured)
 
@@ -401,8 +453,10 @@ def main(argv=None) -> int:
         eval_counter["n"] += 1
         return loss_fn(x)
 
-    print(f"\nDifferential evolution: popsize={args.de_popsize}, "
-          f"maxiter={args.de_maxiter}, seed={args.seed}")
+    print(
+        f"\nDifferential evolution: popsize={args.de_popsize}, "
+        f"maxiter={args.de_maxiter}, seed={args.seed}"
+    )
     t0 = time.time()
     de_result = differential_evolution(
         _logged_loss,
@@ -417,8 +471,10 @@ def main(argv=None) -> int:
         disp=False,
     )
     de_elapsed = time.time() - t0
-    print(f"DE converged in {eval_counter['n']} evals "
-          f"({de_elapsed:.1f}s). Best RMSE: {de_result.fun:.3f} yd")
+    print(
+        f"DE converged in {eval_counter['n']} evals "
+        f"({de_elapsed:.1f}s). Best RMSE: {de_result.fun:.3f} yd"
+    )
     print(f"  -> {dict(zip(PARAM_NAMES, de_result.x))}")
 
     # --- Local refinement: Nelder-Mead from DE best ---
@@ -432,8 +488,7 @@ def main(argv=None) -> int:
         options={"xatol": 1e-5, "fatol": 1e-4, "maxiter": 400},
     )
     nm_elapsed = time.time() - t1
-    print(f"NM finished in {nm.nit} iterations ({nm_elapsed:.1f}s). "
-          f"RMSE: {nm.fun:.3f} yd")
+    print(f"NM finished in {nm.nit} iterations ({nm_elapsed:.1f}s). RMSE: {nm.fun:.3f} yd")
 
     # Pick whichever is better (NM should be ≤ DE).
     if nm.fun <= de_result.fun:
@@ -450,11 +505,15 @@ def main(argv=None) -> int:
 
     table_default = format_table(
         "Default coefficients",
-        shots, list(measured), baseline.preds,
+        shots,
+        list(measured),
+        baseline.preds,
     )
     table_fit = format_table(
         "Fit coefficients",
-        shots, list(measured), fit.preds,
+        shots,
+        list(measured),
+        fit.preds,
     )
 
     fit_lines = [
@@ -495,8 +554,10 @@ def main(argv=None) -> int:
                 continue
             train_measured = np.array([s.carry_yards for s in train_shots])
             test_measured = np.array([s.carry_yards for s in test_shots])
-            print(f"\n  LOSO refit (held out: {held_out}, "
-                  f"n_train={len(train_shots)}, n_test={len(test_shots)})...")
+            print(
+                f"\n  LOSO refit (held out: {held_out}, "
+                f"n_train={len(train_shots)}, n_test={len(test_shots)})..."
+            )
             sub_loss = make_loss(train_shots, train_measured)
             sub_de = differential_evolution(
                 sub_loss,
@@ -517,14 +578,12 @@ def main(argv=None) -> int:
                 bounds=PARAM_BOUNDS,
                 options={"xatol": 1e-5, "fatol": 1e-4, "maxiter": 400},
             )
-            sub_best = tuple(float(v) for v in (
-                sub_nm.x if sub_nm.fun <= sub_de.fun else sub_de.x
-            ))
+            sub_best = tuple(float(v) for v in (sub_nm.x if sub_nm.fun <= sub_de.fun else sub_de.x))
             sub_fit_rmse = float(min(sub_nm.fun, sub_de.fun))
             # Score on held-out session with the refit coeffs.
             test_preds = simulate_with_coeffs(test_shots, sub_best)
             test_deltas = np.asarray(test_preds) - test_measured
-            test_rmse = float(np.sqrt(np.mean(test_deltas ** 2)))
+            test_rmse = float(np.sqrt(np.mean(test_deltas**2)))
             test_bias = float(np.mean(test_deltas))
             ho_disp = held_out if len(held_out) <= 24 else held_out[:21] + "..."
             loso_lines.append(
@@ -534,21 +593,29 @@ def main(argv=None) -> int:
             )
         fit_lines.extend(loso_lines)
     elif args.loso:
-        fit_lines.extend([
-            "",
-            "(LOSO requested but only one session loaded — skipped.)",
-        ])
+        fit_lines.extend(
+            [
+                "",
+                "(LOSO requested but only one session loaded — skipped.)",
+            ]
+        )
     out_stats = args.output_dir / "sweep_stats.txt"
     out_stats.write_text("\n".join(fit_lines), encoding="utf-8")
     print()
     print("\n".join(fit_lines))
 
     write_per_shot_csv(
-        shots, list(measured), baseline.preds, fit.preds,
+        shots,
+        list(measured),
+        baseline.preds,
+        fit.preds,
         args.output_dir / "sweep_per_shot.csv",
     )
     write_scatter(
-        shots, list(measured), baseline.preds, fit.preds,
+        shots,
+        list(measured),
+        baseline.preds,
+        fit.preds,
         args.output_dir / "sweep_scatter.png",
         best_x,
     )

@@ -306,7 +306,9 @@ def test_estimated_is_the_weakest_collision_input_label():
 
 def test_the_spin_moment_coefficient_is_ferguson_s():
     # Ferguson, McNally & McPhee 2022, Eq. (4) C_M = g S, with g = 0.01 (the last of
-    # "{0.1304, 0.9287, -0.8259, 0.0504, 1.2031, -1.1490, 0.01}")
+    # "{0.1304, 0.9287, -0.8259, 0.0504, 1.2031, -1.1490, 0.01}"). E8a's refit
+    # (flight-fit-v1) kept g inside their 0.010-0.015 bounds and landed on 0.010.
+    assert ballistics.FERGUSON_2022.cm_per_sp == 0.01
     assert ballistics.CM_PER_SP == 0.01
     assert not hasattr(ballistics, "SPIN_DECAY_RATE")
 

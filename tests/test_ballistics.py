@@ -237,14 +237,15 @@ def test_a_non_finite_ball_speed_resolves_no_launch(bad, substitutes):
 class TestAeroCoefficientSafeguards:
     """Guards on the Cd/Cl quadratics outside their fitted range.
 
-    The Ferguson coefficients are fitted over Sp <= SP_FIT_MAX. Extrapolated
-    past it both parabolas turn over and cross zero (Cl above Sp ~1.09, Cd
-    above ~1.25), which would mean lift pulling the ball down and drag
-    *accelerating* it. Sp is recomputed every integration step from
-    r*omega/v, and v decays faster than spin, so a normal lob wedge reaches
-    Sp ~1.5 near apex - inside the negative-drag region. Holding both curves
-    at their end value is the guard; these tests are what make its removal
-    fail.
+    The coefficients are fitted over Sp <= SP_FIT_MAX. Extrapolated past it
+    both parabolas turn over and cross zero (Ferguson's published constants:
+    Cl above Sp ~1.09, Cd above ~1.25; flight-fit-v1: Cl above ~1.33, Cd above
+    ~1.66), which would mean lift pulling the ball down and drag *accelerating*
+    it. Sp is recomputed every integration step from r*omega/v, and v decays
+    faster than spin, so a normal lob wedge reaches Sp ~1.5 near apex - inside
+    the negative-lift region of both. Holding both curves at their end value is
+    the guard; these tests (on the active model, and test_flight_fit_v1 on every
+    model) are what make its removal fail.
     """
 
     def test_zero_spin_produces_no_lift(self):
@@ -277,9 +278,10 @@ class TestAeroCoefficientSafeguards:
         """A real lob wedge drives Sp past the fitted range in flight.
 
         This is why the clamp is not hypothetical: 55 mph / 40 deg /
-        10000 rpm peaks near Sp 1.5, where the raw parabola gives
-        Cd = -0.35 and Cl = -0.73. The clamp is what holds that at the
-        Sp 0.75 endpoint instead.
+        10000 rpm peaks near Sp 1.5, where the raw parabolas give
+        Cd = -0.35 and Cl = -0.73 (Ferguson's published constants) or
+        Cd = +0.15 and Cl = -0.24 (flight-fit-v1). The clamp is what holds
+        that at the Sp 0.75 endpoint instead.
 
         Note this asserts reachability, not the clamp's presence: removing
         the clamp *lowers* peak Sp (less drag keeps the ball faster), so it

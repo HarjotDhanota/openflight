@@ -87,6 +87,7 @@ def test_every_flight_output_is_present_with_its_label(block):
         low, high = metric["range"]
         assert low <= metric["value"] <= high, name
     assert "Ferguson" in metrics["carry"]["source"]
+    assert "flight-fit-v1" in metrics["carry"]["source"]  # E8a: the source names the fit
     assert "USGA" in metrics["total"]["source"] and "R&A" in metrics["total"]["source"]
     assert "surface assumed: fairway, normal firmness" in metrics["total"]["source"]
     assert "surface assumed: fairway, normal firmness" in metrics["total_side"]["source"]
