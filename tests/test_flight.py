@@ -58,6 +58,8 @@ def _shot(**overrides) -> Shot:
         spin_confidence=0.9,
         spin_source="measured",
         spin_axis_deg=2.0,
+        # a full ball speed: a flight on the line-of-sight speed is estimated (C1)
+        ball_speed_contract="full",
     )
     values.update(overrides)
     return Shot(**values)
@@ -224,8 +226,10 @@ def test_the_full_ball_speed_is_preferred_and_recorded():
     flight = _fusion(shot)
     assert flight["inputs"]["ball_speed"]["value"] == 155.0
     assert flight["inputs"]["ball_speed"]["label"].startswith("full")
-    straight = _fusion(_shot())
+    straight = _fusion(_shot(ball_speed_contract="radial"))
     assert straight["inputs"]["ball_speed"]["label"].startswith("radial")
+    # the line-of-sight speed stands in for the full speed: an estimate (V-formulas C1)
+    assert straight["as_measured"]["metrics"]["carry"]["status"] == "estimated"
     assert (
         flight["as_measured"]["metrics"]["carry"]["value"]
         > straight["as_measured"]["metrics"]["carry"]["value"]
@@ -309,6 +313,15 @@ def fusion_finalize(monkeypatch):
     monkeypatch.setattr(server_module, "calculated_spin_enabled", False)
     monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
     monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
+
+    # E3's full speed stands in as the shot's own ball speed: a flight on the OPS
+    # line-of-sight speed is "estimated" (V-formulas C1), and these tests are about
+    # the other inputs' labels
+    def full_speed(shot):
+        shot.ball_speed_full = {"status": "calculated", "value_mph": shot.ball_speed_mph}
+        shot.ball_speed_full_mph = shot.ball_speed_mph
+
+    monkeypatch.setattr(server_module, "_attach_full_speeds", full_speed)
 
 
 def _finalize(shot):

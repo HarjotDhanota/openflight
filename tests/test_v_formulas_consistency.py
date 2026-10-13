@@ -135,6 +135,7 @@ def _fusion_shot(**overrides):
         spin_source="measured",
         spin_axis_deg=2.0,
         spin_axis_source=cm.SPIN_AXIS_SOURCE_TILT,
+        ball_speed_contract="full",
     )
     values.update(overrides)
     return Shot(**values)

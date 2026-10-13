@@ -5940,6 +5940,9 @@ def _finalize_shot_detected(
                 shot.carry_status = CARRY_ESTIMATED
             elif flight.status == FLIGHT_STATUS_MODEL_GEOMETRY:
                 shot.carry_status = CARRY_MODEL_GEOMETRY
+            elif flight.status == CARRY_ESTIMATED:
+                # an estimated input (the OPS line-of-sight ball speed): the flight's label
+                shot.carry_status = CARRY_ESTIMATED
             else:
                 # the flight's own label: a simulated carry is calculated (D38)
                 shot.carry_status = CARRY_CALCULATED

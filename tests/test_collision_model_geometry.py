@@ -437,7 +437,8 @@ ALL_MODEL_GEOMETRY_INPUTS = (
 
 
 def _arc_flight_shot(**overrides):
-    shot = _arc_shot(mode="rolling-buffer", **overrides)
+    # a full ball speed: a flight on the line-of-sight speed is estimated (V-formulas C1)
+    shot = _arc_shot(mode="rolling-buffer", ball_speed_contract="full", **overrides)
     _attach(shot)
     return shot
 
@@ -561,6 +562,15 @@ def fusion_finalize(monkeypatch):
     monkeypatch.setattr(server_module, "calculated_spin_enabled", False)
     monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
     monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
+
+    # E3's full speed stands in as the shot's own ball speed: a flight on the OPS
+    # line-of-sight speed is "estimated" (V-formulas C1), and these tests are about
+    # the other inputs' labels
+    def full_speed(shot):
+        shot.ball_speed_full = {"status": "calculated", "value_mph": shot.ball_speed_mph}
+        shot.ball_speed_full_mph = shot.ball_speed_mph
+
+    monkeypatch.setattr(server_module, "_attach_full_speeds", full_speed)
 
 
 def _finalize(shot):

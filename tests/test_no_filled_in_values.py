@@ -51,6 +51,18 @@ def quiet_finalize(monkeypatch):
     monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
 
 
+@pytest.fixture
+def full_ball_speed(monkeypatch):
+    """E3's full speed stands in as the shot's own ball speed: a flight on the OPS
+    line-of-sight speed is "estimated" (V-formulas C1)."""
+
+    def full_speed(shot):
+        shot.ball_speed_full = {"status": "calculated", "value_mph": shot.ball_speed_mph}
+        shot.ball_speed_full_mph = shot.ball_speed_mph
+
+    monkeypatch.setattr(server_module, "_attach_full_speeds", full_speed)
+
+
 def _finalize(shot):
     server_module._finalize_shot_detected(shot, emit_event="shot")  # pylint: disable=protected-access
 
@@ -375,7 +387,7 @@ def test_a_fusion_payload_with_no_carry_says_not_measured_and_carries_no_table(
 
 
 def test_a_fusion_payload_with_a_simulated_carry_says_calculated_and_carries_no_table(
-    fusion_unit, quiet_finalize
+    fusion_unit, quiet_finalize, full_ball_speed
 ):
     """A simulated carry is the flight model's output: its label is the flight's (E-int)."""
     shot = _monitor_shot_with_reliable_spin()
@@ -394,7 +406,9 @@ def test_a_fusion_payload_with_a_simulated_carry_says_calculated_and_carries_no_
     assert shot.reported_carry_yards == pytest.approx(shot.carry_spin_adjusted)
 
 
-def test_a_fusion_carry_from_a_calculated_spin_says_calculated(fusion_unit, quiet_finalize):
+def test_a_fusion_carry_from_a_calculated_spin_says_calculated(
+    fusion_unit, quiet_finalize, full_ball_speed
+):
     shot = _shot(
         launch_angle_vertical=12.0,
         launch_angle_vertical_source="radar",

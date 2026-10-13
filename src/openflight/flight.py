@@ -297,9 +297,32 @@ def _model_geometry_inputs(shot: Shot, conditions: Optional[LaunchConditions]) -
     return named
 
 
-def _flight_status(substitutes: bool, model_geometry: list[str]) -> str:
-    """The weakest input label: estimated (OPS-only), model geometry, else calculated."""
-    labels = [STATUS_ESTIMATED if substitutes else STATUS_CALCULATED]
+RADIAL_SPEED_REASON = (
+    "ball speed is the OPS line-of-sight speed (full speed refused: {}), about 3-5% low"
+)
+
+
+def _estimated_inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> list[str]:
+    """Why the flight's inputs make it an estimate, one reason each; empty when none do.
+
+    The OPS243's line-of-sight (radial) ball speed stands in for the full speed when
+    E3 refused it: a different, lower quantity (V-formulas C1).
+    """
+    if conditions is None:
+        return []
+    reasons = []
+    _speed, speed_label = ball_speed_for_flight(shot)
+    if speed_label.startswith("radial"):
+        full = getattr(shot, "ball_speed_full", None)
+        why = (full or {}).get("reason") if isinstance(full, dict) else None
+        reasons.append(RADIAL_SPEED_REASON.format(why or "no full ball speed on the shot"))
+    return reasons
+
+
+def _flight_status(substitutes: bool, model_geometry: list[str], estimated: list[str] = ()) -> str:
+    """The weakest input label: estimated (OPS-only, or an estimated input), model
+    geometry, else calculated."""
+    labels = [STATUS_ESTIMATED if substitutes or estimated else STATUS_CALCULATED]
     if model_geometry:
         labels.append(STATUS_MODEL_GEOMETRY)
     return min(labels, key=STATUS_ORDER.index)
@@ -407,6 +430,7 @@ def _block(
     surface_assumed: bool,
     launch: Optional[dict],
     model_geometry: tuple = (),
+    estimated: tuple = (),
 ) -> dict:
     block = {
         "air_density_kg_m3": density,
@@ -444,7 +468,8 @@ def _block(
             "status": status,
             "source": _source(name, status, air, surface, surface_assumed, model_geometry),
             "range": [float(value) - sigma, float(value) + sigma] if sigma is not None else None,
-            "reason": None,
+            # an estimate says why it is one (V-formulas C1, C2)
+            "reason": "; ".join(estimated) if status == STATUS_ESTIMATED and estimated else None,
         }
         if name in _TOTAL_METRICS and roll_clamped(traj.landing_angle_deg, surface):
             metrics[name]["note"] = ROLL_CLAMP_NOTE
@@ -473,7 +498,8 @@ def compute_flight(
     surface = DEFAULT_SURFACE if surface is None else surface
     conditions = resolve_launch(shot, substitutes=substitutes) if enabled else None
     model_geometry = tuple(_model_geometry_inputs(shot, conditions))
-    status = _flight_status(substitutes, list(model_geometry))
+    estimated = tuple(_estimated_inputs(shot, conditions))
+    status = _flight_status(substitutes, list(model_geometry), list(estimated))
 
     if not enabled:
         reason = "flight model disabled (--no-ballistics)"
@@ -511,6 +537,7 @@ def compute_flight(
         },
         "inputs": _inputs(shot, conditions),
         "model_geometry_inputs": list(model_geometry),
+        "estimated_inputs": list(estimated),
         "range_basis": RANGE_BASIS,
         "density_hook": DENSITY_HOOK,
         "as_measured": _block(
@@ -525,6 +552,7 @@ def compute_flight(
             surface_assumed=surface_assumed,
             launch=copy.deepcopy(launch),
             model_geometry=model_geometry,
+            estimated=estimated,
         ),
         "normalized": _block(
             traj=norm_traj,
@@ -538,6 +566,7 @@ def compute_flight(
             surface_assumed=surface_assumed,
             launch=copy.deepcopy(launch),
             model_geometry=model_geometry,
+            estimated=estimated,
         ),
     }
     return FlightResult(

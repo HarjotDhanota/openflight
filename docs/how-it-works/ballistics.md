@@ -60,9 +60,14 @@ output, so it is at best `calculated`.
   with the inputs that were, e.g. "model-geometry inputs: spin (Penner 2001; club
   inputs model geometry (D39)), spin axis, club path from the arc prior, attack
   angle from the arc prior". Simulators do not get these values (D31).
-- **`estimated`**: an OPS-only install. Its inputs include the club-typical spin
+- **`estimated`**: an OPS-only install (its inputs include the club-typical spin
   and a neutral 0° for any missing horizontal launch or spin axis; the `inputs`
-  block names each one it used.
+  block names each one it used), or a fusion flight with an estimated input. The
+  main one: when E3 refuses the full ball speed, the flight flies the OPS243's
+  line-of-sight (radial) speed, a different and lower quantity. Every output, raw
+  and normalized, is then `estimated` with the reason "ball speed is the OPS
+  line-of-sight speed (full speed refused: <E3's reason>), about 3-5% low", and
+  `estimated_inputs` lists it. `Shot.carry_status` is then `estimated` too.
 - **`not_measured`**: nothing is filled in. A fusion shot without a measured,
   calculated or model-geometry spin, a spin axis, or both launch angles has no
   flight, and every

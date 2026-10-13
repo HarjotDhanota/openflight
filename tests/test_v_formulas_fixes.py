@@ -88,3 +88,90 @@ def test_an_unclamped_roll_has_no_note(monkeypatch):
 def test_the_clamp_constant_is_eq_1_s_zero_crossing():
     model = ballistics.USGA_RA_2021_BOUNCE_MODEL
     assert -model.intercept_yards / model.slope_yards_per_deg == pytest.approx(49.4375)
+
+
+# ---- C1: a flight on the OPS line-of-sight speed is estimated -------------------------
+
+RADIAL_REASON = "ball speed is the OPS line-of-sight speed (full speed refused: {}), about 3-5% low"
+
+
+def _radial_shot(**overrides):
+    shot = _fusion_shot(ball_speed_full_mph=None, **overrides)
+    shot.ball_speed_full = {
+        "status": "not_measured",
+        "value_mph": None,
+        "reason": "the tee side offset (D36) is not measured by the setup pair",
+    }
+    return shot
+
+
+def test_a_flight_on_the_radial_speed_is_estimated_with_the_reason():
+    result = compute_flight(_radial_shot(), substitutes=False)
+    payload = result.to_dict()
+
+    assert result.status == "estimated"
+    reason = RADIAL_REASON.format("the tee side offset (D36) is not measured by the setup pair")
+    for block in ("as_measured", "normalized"):
+        for name, metric in payload[block]["metrics"].items():
+            assert metric["value"] is not None, (block, name)
+            assert metric["status"] == "estimated", (block, name)
+            assert metric["reason"] == reason, (block, name)
+            assert metric["source"].startswith("estimated"), (block, name)
+
+
+def test_a_radial_flight_with_no_full_speed_record_names_that():
+    shot = _fusion_shot(ball_speed_full_mph=None)
+    payload = compute_flight(shot, substitutes=False).to_dict()
+    carry = payload["normalized"]["metrics"]["carry"]
+    assert carry["status"] == "estimated"
+    assert carry["reason"] == RADIAL_REASON.format("no full ball speed on the shot")
+
+
+def test_a_flight_on_the_full_speed_stays_calculated():
+    result = compute_flight(_fusion_shot(), substitutes=False)
+    carry = result.to_dict()["as_measured"]["metrics"]["carry"]
+    assert result.status == "calculated"
+    assert carry["status"] == "calculated" and carry["reason"] is None
+
+
+def test_a_full_speed_contract_is_not_a_radial_flight():
+    shot = _fusion_shot(ball_speed_full_mph=None, ball_speed_contract="full")
+    assert compute_flight(shot, substitutes=False).status == "calculated"
+
+
+def test_estimated_is_weaker_than_model_geometry_in_the_flight():
+    shot = _radial_shot(
+        spin_confidence=None,
+        spin_source="model_geometry",
+        spin_method=cm.SPIN_METHOD_MODEL_GEOMETRY,
+    )
+    assert compute_flight(shot, substitutes=False).status == "estimated"
+
+
+@pytest.fixture
+def fusion_finalize(monkeypatch):
+    from types import SimpleNamespace
+
+    import openflight.server as server_module
+
+    monkeypatch.setattr(server_module, "iwr6843_runtime", SimpleNamespace())
+    monkeypatch.setattr(server_module, "ballistics_enabled", True)
+    monkeypatch.setattr(server_module, "calculated_spin_enabled", False)
+    monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+    monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
+    return server_module
+
+
+def test_a_fusion_carry_on_the_radial_speed_is_estimated(fusion_finalize):
+    shot = _fusion_shot(ball_speed_full_mph=None, mode="rolling-buffer")
+
+    fusion_finalize._finalize_shot_detected(shot, emit_event="shot")
+
+    assert shot.ball_speed_full["status"] == "not_measured"
+    carry = shot.flight["as_measured"]["metrics"]["carry"]
+    assert carry["status"] == "estimated"
+    assert carry["reason"].startswith(
+        "ball speed is the OPS line-of-sight speed (full speed refused: "
+    )
+    assert shot.carry_status == "estimated"
+    assert shot.carry_spin_adjusted == pytest.approx(carry["value"])
