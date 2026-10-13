@@ -403,3 +403,29 @@ def test_a_trigger_waits_for_a_control_change_in_progress(tmp_path):
     assert trigger_finished.is_set()
     trigger_state = runtime._trigger_auto_exposure.get_nowait()
     assert trigger_state["exposure_us"] == runtime.settings.exposure_us == 294
+
+
+def test_manual_controls_are_not_labelled_by_the_policy(tmp_path):
+    runtime = _runtime(tmp_path, auto_exposure=False)
+    _add_frames(runtime, 53)
+
+    status = runtime.auto_exposure_status()
+
+    assert status["status"] == "manual"
+    assert "analysis_eligibility" not in status
+    assert "frame_label" not in status
+
+
+def test_a_clip_keeps_its_own_decision_not_the_log(tmp_path):
+    runtime = _runtime(tmp_path)
+    _add_frames(runtime, 53)
+    runtime._run_auto_exposure_cycle()
+    _add_frames(runtime, _light_at(runtime, 53 / 3600.0))
+
+    assert runtime.notify_trigger()
+    recorded = runtime._trigger_auto_exposure.get_nowait()
+
+    assert recorded["recent_decisions"] is None
+    assert recorded["status"] == "ball_driven"
+    assert recorded["exposure_us"] == 294
+    assert runtime.auto_exposure_status()["recent_decisions"]

@@ -611,7 +611,7 @@ class CameraCaptureRuntime:
         """Return controller state for diagnostics and the operator UI."""
         return self._auto_exposure_payload(self._auto_exposure_snapshot())
 
-    def _auto_exposure_snapshot(self) -> dict:
+    def _auto_exposure_snapshot(self, *, history: bool = True) -> dict:
         """The controls and controller state in force now; cheap enough for the frame lock.
 
         Measuring the frame is left to ``_auto_exposure_payload``, which may run
@@ -633,7 +633,8 @@ class CameraCaptureRuntime:
                     "blur_ceiling_us": (
                         self._swing_policy.envelope.blur_ceiling_us if self._swing_policy else None
                     ),
-                    "recent_decisions": list(self._swing_decisions),
+                    # the decision log is for the live page; a clip keeps only its own
+                    "recent_decisions": list(self._swing_decisions) if history else None,
                     # D15: the ball's verdict labels the clip, never withholds it
                     "analysis_eligibility": {
                         "rule": "resting_ball",
@@ -664,6 +665,9 @@ class CameraCaptureRuntime:
                 frame.image if frame is not None else np.asarray([]),
                 zone_box=settings.hitting_zone,
             )
+            # held controls: the zone (or the setup's ball, P7-8) judges, not the policy
+            for key in ("analysis_eligibility", "frame_label", "reason", "target", "reading"):
+                payload.pop(key, None)
             payload.update(
                 {
                     "status": "manual",
@@ -980,7 +984,7 @@ class CameraCaptureRuntime:
             # cheap snapshot of the controls in force at it (P6-7).
             with self._trigger_exposure_lock:
                 accepted = self._ring.trigger(trigger_host_ns)
-                exposure = self._auto_exposure_snapshot() if accepted else None
+                exposure = self._auto_exposure_snapshot(history=False) if accepted else None
             if not accepted:
                 busy = getattr(self._ring, "busy_reason", lambda: None)()
                 return self._reject_trigger(trigger_epoch, "ring_busy", busy)
