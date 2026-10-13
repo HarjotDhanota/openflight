@@ -4125,6 +4125,8 @@ def test_a_ball_2_2_m_out_in_the_fixed_box_works_end_to_end(tmp_path, inputs, mo
     assert float(args[1]) == pytest.approx(2.2, abs=0.03)
     assert handed["placement_box"]["patch"]["centre_lfu_m"] == pytest.approx(FIXED_CENTRE)
     shown = box_state(client, tester)
+    assert shown["ball"]["state"] == "found"
+    assert shown["ball"]["center_px"] == pytest.approx([640.0, 440.0], abs=0.5)
     assert shown["ball"]["range_status"] == "validated"
     assert shown["ball"]["range_m"] == pytest.approx(2.2, abs=0.03)
     assert shown["distance_note"] == "inside the 1.8–2.9 m window"

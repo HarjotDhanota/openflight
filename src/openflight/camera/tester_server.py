@@ -7416,8 +7416,16 @@ def create_app(
         if not isinstance(decision, Mapping):
             return facts
         status = RANGE_STATUS.get(str(decision.get("status")))
+        camera = decision.get("camera") if isinstance(decision.get("camera"), Mapping) else {}
         return {
             **facts,
+            # where the setup's camera saw the ball, for the page when no preview runs
+            "camera_ball": {
+                "center_px": [round(float(camera["x_px"]), 1), round(float(camera["y_px"]), 1)],
+                "diameter_px": round(float(camera["diameter_px"]), 2),
+            }
+            if camera.get("x_px") is not None
+            else None,
             "range_m": decision.get("range_m") if status != "camera_only" else None,
             "range_status": status,
             "side_offset_m": decision.get("side_offset_m"),
@@ -7437,7 +7445,7 @@ def create_app(
             ball = dict(box_ball_last.get(tester_id) or {})
             setup_state = CAMERA_STATE.get(str(ranged.get("camera_status")))
             if setup_state is not None and not ball:
-                ball = {"state": setup_state}
+                ball = {"state": setup_state, **(ranged.get("camera_ball") or {})}
         state = ball.get("state") or "waiting"
         message = ball.get("message") or placement_box.BALL_MESSAGES[state]
         decision = ranged.get("decision") or {}
