@@ -233,6 +233,16 @@ class Shot:
     # Which speed ball_speed_mph is. New live shots retain the OPS radial value.
     ball_speed_contract: Optional[str] = None
     experimental_ball_speed_total: Optional[dict] = None
+    # E3 (openflight.full_speed): the full ball speed by measured projection,
+    # referred to separation, "calculated" or "not_measured" with the reason; the
+    # full club speed by the same projection; and smash from the two (D21, D37).
+    # ball_speed_mph stays the canonical OPS radial reading.
+    ball_speed_full: Optional[dict] = None
+    club_speed_full: Optional[dict] = None
+    smash_factor_full: Optional[dict] = None
+    # The OPS readings around impact on the OPS clock (full_speed.ops_speed_track);
+    # transient, never serialized: the reading used travels in ball_speed_full.
+    ops_speed_track: Optional[dict] = field(default=None, repr=False, compare=False)
     peak_magnitude: Optional[float] = None
     readings: List[SpeedReading] = field(default_factory=list)
     club: ClubType = ClubType.DRIVER
@@ -484,6 +494,9 @@ class Shot:
             "ball_speed_raw_mph": self.ball_speed_raw_mph,
             "ball_speed_contract": self.ball_speed_contract,
             "experimental_ball_speed_total": self.experimental_ball_speed_total,
+            "ball_speed_full": deepcopy(self.ball_speed_full),
+            "club_speed_full": deepcopy(self.club_speed_full),
+            "smash_factor_full": deepcopy(self.smash_factor_full),
             "club_speed_mph": self.club_speed_mph,
             "smash_factor": self.smash_factor,
             # a label describes a smash value; with none there is nothing to label
