@@ -56,17 +56,24 @@ def lis3dh_roll_deg(x_g: float, y_g: float, z_g: float) -> float:
     return math.degrees(math.atan2(float(x_g), math.hypot(float(y_g), float(z_g))))
 
 
+def roll_applied() -> bool:
+    """The gate, read when it is used, so setup and swings always agree (D36 item 4c)."""
+    return bool(LIS3DH_ROLL_APPLIED)
+
+
 def applied_camera_roll_deg(
     measured_roll_deg: float | None,
     expected_roll_deg: float = 0.0,
     *,
-    apply: bool = LIS3DH_ROLL_APPLIED,
+    apply: bool | None = None,
 ) -> float:
     """The camera's roll away from its designed placement, target-right side up +.
 
     Zero while the roll is not applied; once it is, a missing reading is refused
-    rather than taken as level.
+    rather than taken as level. ``apply`` defaults to the gate at call time.
     """
+    if apply is None:
+        apply = roll_applied()
     if not apply:
         return 0.0
     if measured_roll_deg is None or not math.isfinite(float(measured_roll_deg)):
@@ -83,7 +90,7 @@ def calibrated_observed_roll_deg(
     measured_roll_deg: float | None,
     reference_roll_deg: float,
     *,
-    apply: bool = LIS3DH_ROLL_APPLIED,
+    apply: bool | None = None,
 ) -> float:
     """The observed roll the calibrated projection takes against its reference pose.
 
@@ -101,4 +108,5 @@ __all__ = [
     "calibrated_observed_roll_deg",
     "lis3dh_roll_deg",
     "nominal_roll_correction_deg",
+    "roll_applied",
 ]

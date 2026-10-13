@@ -13,6 +13,7 @@ from openflight.camera.ball_flight import (
     estimate_camera_ball_flight,
     select_camera_assisted_horizontal,
 )
+from openflight.camera.camera_tilt import with_swing_pose
 from openflight.camera.club_delivery import (
     ChainedDelivery,
     estimate_chained_delivery,
@@ -145,6 +146,7 @@ def build_context(
     shot_number: int,
     notes: list[str] | None = None,
     setup_ball: Mapping[str, Any] | None = None,
+    camera_pose: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Freeze every non-archive input of one shot: nothing from any other shot.
 
@@ -172,6 +174,10 @@ def build_context(
         # where the setup saw the resting ball; the ball gate follows it (P8-7)
         "setup_ball": dict(setup_ball) if setup_ball else None,
     }
+    if camera_pose is not None:
+        # D36 item 4a: this swing's calibrated camera pose; a context without one
+        # is the one recorded before, and replays with the resting ball's model
+        payload["camera_pose"] = dict(camera_pose)
     payload = _json_value(payload)
     payload["sha256"] = geometry_fingerprint(payload)
     return payload
@@ -216,7 +222,7 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
             timestamps,
             trigger_ns=trigger_ns,
             range_evidence=_restore_range(context["ball_range_evidence"], "ball"),
-            geometry=geometry.ball_geometry(),
+            geometry=with_swing_pose(geometry.ball_geometry(), context.get("camera_pose")),
             ops_ball_speed_mph=float(context["ops_ball_speed_mph"]),
             iwr_vertical_deg=context["iwr_vertical_deg"],
             sensor_timestamps_ns=_sensor_timestamps(archive),
@@ -244,7 +250,7 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
             timestamps,
             trigger_index=trigger_index,
             range_evidence=_restore_range(context["club_range_evidence"], "club"),
-            geometry=geometry.delivery_geometry(),
+            geometry=with_swing_pose(geometry.delivery_geometry(), context.get("camera_pose")),
             ops_club_speed_mph=context["ops_club_speed_mph"],
             reference_ball=reference_ball,
             reference_ball_selected=bool(diagnostics),

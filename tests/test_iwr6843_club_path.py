@@ -233,6 +233,8 @@ def test_experimental_path_candidate_unwraps_vertical_references_through_time():
 
 
 def test_aim_offset_is_added():
+    """D36 item 2: the one horizontal offset is added to club path, as to every
+    other horizontal angle (+ = boresight right of the target line)."""
     without = club.estimate_club_path(
         _synth_club(0.0), _cal(), ops_club_speed_mph=OPS_CLUB_MPH, impact_t_s=IMPACT_S, tdm_sign=1
     )

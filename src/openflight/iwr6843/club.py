@@ -22,9 +22,11 @@ samples happen to sit.
 
 The LEVM's board-specific electrical phase zero is removed first via
 ``phase_reference_rad``. Installation yaw remains a separate additive
-``aim_offset_deg``. Keeping those corrections separate is important: a
-constant phase bias rotates every recovered Cartesian position, so it also
-rotates the fitted velocity direction and does not cancel out of club path.
+``aim_offset_deg``: -(target yaw), added to the path as to every horizontal
+angle (``openflight.horizontal_frame``, D36 item 2). Keeping those corrections
+separate is important: a constant phase bias rotates every recovered
+Cartesian position, so it also rotates the fitted velocity direction and does
+not cancel out of club path.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from openflight.horizontal_frame import frame_for, to_reported_deg
 from openflight.iwr6843 import doa, tracking, trajectory
 from openflight.iwr6843.calibration import Calibration
 from openflight.iwr6843.dump import parse_dump
@@ -174,7 +177,7 @@ class ClubPathResult:
     path_post_frames: int = 0
     path_post_speed_scale: float = 1.0
     # The path's zero: the IWR's boresight, fixed to the unit's, until an aim
-    # offset moves it to the target line (audit F2).
+    # offset moves it to the target line (audit F2, D36 item 2).
     club_path_frame: str = "unit_boresight"
     # Kept in memory only. Session JSON already records the scalar track
     # diagnostics above; serializing the fitted object would couple replay
@@ -607,7 +610,7 @@ def experimental_path_candidate(
             / max(float(np.mean(r_array)), 1e-9)
         )
     )
-    path_deg = math.degrees(math.atan2(v_y, v_x)) + aim_offset_deg
+    path_deg = float(to_reported_deg(math.degrees(math.atan2(v_y, v_x)), aim_offset_deg))
     status = "candidate_available"
     if abs(path_deg) > 30.0:
         status = "candidate_out_of_bounds"
@@ -697,7 +700,7 @@ def estimate_club_path(
         path_pre_frames=window_policy.path_pre_frames,
         path_post_frames=window_policy.path_post_frames,
         path_post_speed_scale=window_policy.path_post_speed_scale,
-        club_path_frame="unit_boresight" if aim_offset_deg == 0.0 else "target_line",
+        club_path_frame=frame_for(aim_offset_deg),
         range_evidence=ClubRangeEvidence(
             track=track,
             geometry=geo,
@@ -764,7 +767,7 @@ def estimate_club_path(
     tdm = cube3.reshape(n_frames, loops, n_tx, n_rx, n_samples)
     # Range-snapshot dumps (production) are already range-domain; raw-ADC
     # dumps (replay of older captures) still need the range FFT. Mirror
-    # lcmf._tx2_horizontal_proxy: FFTing an already-FFT'd range snapshot a
+    # lcmf._tx2_phase_snapshots: FFTing an already-FFT'd range snapshot a
     # second time would flatten a real peak into noise.
     rfft = tdm if is_range_snapshot(_meta3) else np.fft.fft(tdm, axis=-1)
     tdm = rfft - rfft.mean(axis=1, keepdims=True)
@@ -923,7 +926,7 @@ def estimate_club_path(
         result.status = "rejected_azimuth_fit"
         return result
 
-    result.path_deg = path_deg + aim_offset_deg
+    result.path_deg = float(to_reported_deg(path_deg, aim_offset_deg))
     result.confidence = _confidence(result)
     result.status = "accepted"
     logger.info(

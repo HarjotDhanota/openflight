@@ -89,8 +89,10 @@ Angle geometry.
 
 This physical distance is different from
 `--camera-capture-horizontal-offset-deg`. The meter value describes where the
-camera is mounted; the degree value corrects residual camera yaw or target-line
-alignment. Do not convert the physical separation into degrees, and do not use
+camera is mounted; the degree value is the one horizontal offset, −(target yaw)
+(positive = boresight right of the target line; added to every horizontal angle,
+camera and IWR alike; see
+[target line reference](../how-it-works/positioning.md#target-line-reference)). Do not convert the physical separation into degrees, and do not use
 the degree setting as a substitute for the measured distance.
 
 Forward separation is recorded separately as

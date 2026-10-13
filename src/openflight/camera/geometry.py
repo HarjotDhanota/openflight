@@ -177,3 +177,94 @@ def intersect_radar_range_sphere(
     if float(np.linalg.norm(radar_from_camera)) >= radar_range_m:
         raise ValueError("camera must be inside the radar range sphere")
     return camera + distance[..., None] * rays
+
+
+# D36 item 4a: with the unit's camera tilt calibrated (P8-5), a swing's pitch and
+# focal length are once-measured calibration; the resting ball's own inference
+# is kept as a cross-check and flagged beyond these.
+# The tilt calibration's own check tolerance (camera_tilt.CHECK_TOLERANCE_DEG).
+SETUP_PITCH_CHECK_TOLERANCE_DEG = 1.5
+# One pixel of diameter on a 10-20 px resting ball is 5-10 % of its focal length.
+SETUP_FOCAL_CHECK_TOLERANCE_REL = 0.10
+
+
+def resting_ball_camera_model(
+    *,
+    setup_pitch_deg: float | None = None,
+    setup_focal_px: float | None = None,
+    **reference,
+) -> tuple[float, float, np.ndarray, dict]:
+    """The swing's focal scale and pitch, and the record of where they came from.
+
+    With both setup values (the unit's tilt calibration composed with this
+    shot's LIS3DH pitch, and the rig's focal length for the mode) they are the
+    model, and the resting ball's inference (``reference_ball_camera_model``
+    on ``reference``) is the recorded cross-check. Without them the resting
+    ball sets the model, as before, labelled ``uncalibrated``.
+    """
+    try:
+        inferred = reference_ball_camera_model(**reference)
+        inferred_error = None
+    except ValueError as error:
+        if setup_pitch_deg is None or setup_focal_px is None:
+            raise
+        inferred, inferred_error = None, str(error)
+    if setup_pitch_deg is None or setup_focal_px is None:
+        focal_px, pitch_rad, radar_from_camera = inferred
+        return (
+            focal_px,
+            pitch_rad,
+            radar_from_camera,
+            {
+                "status": "uncalibrated",
+                "source": "inferred_from_the_resting_ball",
+                "focal_px": float(focal_px),
+                "pitch_deg": math.degrees(pitch_rad),
+            },
+        )
+    camera = np.asarray(reference["camera_origin_lfu"], dtype=float)
+    radar = np.asarray(reference["radar_origin_lfu"], dtype=float)
+    pitch = float(setup_pitch_deg)
+    focal = float(setup_focal_px)
+    if not (math.isfinite(pitch) and math.isfinite(focal) and focal > 0.0):
+        raise ValueError("the calibrated camera pitch and focal length must be finite")
+    record: dict = {
+        "status": "calibrated",
+        "source": "unit_tilt_calibration_and_rig_mode_focal",
+        "focal_px": focal,
+        "pitch_deg": pitch,
+        "tolerance": {
+            "pitch_deg": SETUP_PITCH_CHECK_TOLERANCE_DEG,
+            "focal_relative": SETUP_FOCAL_CHECK_TOLERANCE_REL,
+        },
+    }
+    if inferred is None:
+        record.update(
+            inferred_focal_px=None,
+            inferred_pitch_deg=None,
+            disagrees=None,
+            warning=f"the resting ball gave no cross-check: {inferred_error}",
+        )
+    else:
+        inferred_focal, inferred_pitch, _offset = inferred
+        pitch_gap = pitch - math.degrees(inferred_pitch)
+        focal_gap = focal / float(inferred_focal) - 1.0
+        problems = []
+        if abs(pitch_gap) > SETUP_PITCH_CHECK_TOLERANCE_DEG:
+            problems.append(
+                f"pitch {pitch:+.2f} deg against the resting ball's "
+                f"{math.degrees(inferred_pitch):+.2f}"
+            )
+        if abs(focal_gap) > SETUP_FOCAL_CHECK_TOLERANCE_REL:
+            problems.append(
+                f"focal {focal:.1f} px against the resting ball's {float(inferred_focal):.1f}"
+            )
+        record.update(
+            inferred_focal_px=float(inferred_focal),
+            inferred_pitch_deg=math.degrees(inferred_pitch),
+            pitch_disagreement_deg=pitch_gap,
+            focal_disagreement_relative=focal_gap,
+            disagrees=bool(problems),
+            warning=("camera calibration disagrees: " + "; ".join(problems)) if problems else None,
+        )
+    return focal, math.radians(pitch), camera - radar, record

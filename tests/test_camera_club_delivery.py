@@ -1074,9 +1074,12 @@ def test_every_camera_club_path_names_its_frame():
     assert ChainedDelivery(status="chained_high").club_path_frame == "unit_boresight"
 
 
-@pytest.mark.parametrize(("offset_deg", "frame"), [(0.0, "unit_boresight"), (2.0, "target_line")])
+@pytest.mark.parametrize(
+    ("offset_deg", "frame"),
+    [(0.0, "unit_boresight"), (2.0, "target_line"), (-3.0, "target_line")],
+)
 def test_horizontal_offset_turns_club_path_like_launch(monkeypatch, offset_deg, frame):
-    """F9: the camera's target-line correction applies to club path too."""
+    """F9, D36 item 2: the horizontal offset is added to club path as to launch."""
     ball = ReferenceBall(10.0, 10.0, 12.0, 120)
     monkeypatch.setattr(
         club_delivery_module, "detect_reference_ball", lambda _frames, **_kwargs: ball

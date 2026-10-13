@@ -55,14 +55,28 @@ Full procedure: **[mounting, aiming, and measuring](../iwr6843/mounting.md)**.
 
 ## Target line reference
 
-Club path and launch direction are reported relative to a target line, which the
-system cannot infer. Two flags set the reference:
+Every horizontal angle (horizontal launch, club path, the D-plane face angle and
+the spin-axis proxy, from the camera and the IWR alike) has one zero model, in two
+layers (D36):
 
-- `--iwr6843-azimuth-offset-deg` — azimuth of the radar boresight relative to
-  the target line. Positive means boresight points right of the target line.
-  With `0`, club path is reported relative to boresight rather than the target.
-- `--iwr6843-horizontal-phase-reference-rad` — the static target-line phase from
-  horizontal aim calibration.
+1. **Each sensor's own boresight zero.** The IWR's is its board's horizontal phase
+   reference, `--iwr6843-horizontal-phase-reference-rad`, measured per board. The
+   camera's is its optical axis.
+2. **One horizontal offset, added once to every angle.** It is −(target yaw):
+   the target yaw is the target line's direction from the unit boresight,
+   positive when the target line lies **right** of it, seen from behind the
+   unit, so the offset is positive when the boresight points right of the target
+   line. A ball hit straight down the target line reads +yaw from the boresight
+   and reports 0; + still means right of the target line.
+
+The offset is given through `--camera-capture-horizontal-offset-deg` and
+`--iwr6843-azimuth-offset-deg`, with the same value; the D34 target-line
+hand-off from the tester page passes it to both (target line 3° right of the
+boresight → `-3`). Either flag alone sets it for both sensors; two different
+values are refused. Unset or `0`, every horizontal angle is reported against the
+unit boresight and its record says `unit_boresight`; with an offset, against the
+target line, `target_line`. A value built from two frames (a face angle or spin
+axis from a target-line launch and a boresight path) says `mixed`.
 
 See [horizontal launch and club path](../iwr6843/club-path.md#set-the-target-line-reference).
 

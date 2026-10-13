@@ -12,6 +12,10 @@ from .club_delivery import GOLF_BALL_DIAMETER_M, CameraDeliveryGeometry
 from .geometry import forward_distance_from_slant_range
 
 SCHEMA = "openflight.camera.effective_geometry"
+# Where the resting ball sits aside (D36 item 4b): the setup's validated pair, or
+# assumed dead ahead of the radar when the setup measured no side offset.
+TEE_LATERAL_ASSUMED = "assumed_directly_downrange"
+TEE_LATERAL_MEASURED = "setup_patch_pair"
 VERSION = 1
 ASSUMPTIONS = {
     "focal_length": "inferred_from_reference_ball",
@@ -69,6 +73,10 @@ class EffectiveCameraGeometryInputs:
     ball_diameter_m: float
     calibrated_model_snapshot: Mapping[str, Any] | None = None
     calibrated_mode_evidence: Mapping[str, Any] | None = None
+    # D36 item 4b: the setup pair's side offset of the resting ball from the
+    # radar's axis (+ target-right), or 0 when the setup measured none
+    ball_lateral_offset_m: float = 0.0
+    ball_lateral_offset_source: str = TEE_LATERAL_ASSUMED
 
     def __post_init__(self) -> None:
         numeric = (
@@ -82,6 +90,7 @@ class EffectiveCameraGeometryInputs:
             "roll_correction_deg",
             "ball_horizontal_output_offset_deg",
             "ball_diameter_m",
+            "ball_lateral_offset_m",
         )
         for name in numeric:
             object.__setattr__(self, name, _number(getattr(self, name), name))
@@ -97,7 +106,7 @@ class EffectiveCameraGeometryInputs:
             raise ValueError("ball diameter must be positive")
         if self.tee_slant_range_m <= 0:
             raise ValueError("tee slant range must be positive")
-        vertical = self.ball_height_m - self.radar_height_m
+        vertical = math.hypot(self.ball_height_m - self.radar_height_m, self.ball_lateral_offset_m)
         if self.tee_slant_range_m <= abs(vertical):
             raise ValueError("tee slant range cannot reach the recorded ball height")
         ball_forward_m = forward_distance_from_slant_range(self.tee_slant_range_m, vertical)
@@ -180,6 +189,14 @@ class EffectiveCameraGeometryInputs:
             roll_correction_deg=camera.get("roll_correction_deg", 0.0),
             ball_horizontal_output_offset_deg=camera.get("horizontal_offset_deg", 0.0),
             ball_diameter_m=camera.get("ball_diameter_m", GOLF_BALL_DIAMETER_M),
+            ball_lateral_offset_m=(
+                camera["tee_side_offset_m"] if camera.get("tee_side_offset_m") is not None else 0.0
+            ),
+            ball_lateral_offset_source=(
+                TEE_LATERAL_MEASURED
+                if camera.get("tee_side_offset_m") is not None
+                else TEE_LATERAL_ASSUMED
+            ),
         )
 
     @classmethod
@@ -229,6 +246,8 @@ class EffectiveCameraGeometryInputs:
             if self.calibrated_model_snapshot is not None
             else dict(ASSUMPTIONS)
         )
+        if self.ball_lateral_offset_source == TEE_LATERAL_MEASURED:
+            assumptions["tee_lateral_position"] = TEE_LATERAL_MEASURED
         return {
             "schema": SCHEMA,
             "version": VERSION,
@@ -255,6 +274,7 @@ class EffectiveCameraGeometryInputs:
             # The recorded name predates it, but the target-line correction
             # turns club path with the ball's horizontal launch (audit F9).
             horizontal_offset_deg=self.ball_horizontal_output_offset_deg,
+            ball_lateral_offset_m=self.ball_lateral_offset_m,
         )
 
     def ball_geometry(self) -> CameraBallGeometry:
@@ -272,6 +292,7 @@ class EffectiveCameraGeometryInputs:
             image_height_px=self.image_height_px,
             ball_diameter_m=self.ball_diameter_m,
             calibrated_model=self.calibrated_model(),
+            ball_lateral_offset_m=self.ball_lateral_offset_m,
         )
 
     def validate_archive_dimensions(self, width_px: Any, height_px: Any) -> None:

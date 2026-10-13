@@ -27,9 +27,10 @@ from openflight.camera.club_motion import (
 from openflight.camera.geometry import (
     forward_distance_from_slant_range,
     intersect_radar_range_sphere,
-    reference_ball_camera_model,
+    resting_ball_camera_model,
     unit_world_rays,
 )
+from openflight.horizontal_frame import frame_for, to_boresight_deg, to_reported_deg
 from openflight.iwr6843.tracking import accepted_range_evidence
 
 MPH_PER_MS = 2.23694
@@ -122,6 +123,9 @@ class CameraBallGeometry:
     # Camera optical-center position relative to radar center. Positive is
     # target-right when viewed from behind the sensors looking downrange.
     camera_lateral_offset_m: float = 0.0
+    # The one horizontal offset (D36 item 2, ``openflight.horizontal_frame``):
+    # -(target yaw), + when the boresight points right of the target line.
+    # Added once to every reported horizontal angle.
     horizontal_offset_deg: float = 0.0
     # Convert saved-image horizontal pixels back to physical target direction.
     # Mirrored operator previews use -1; unmirrored captures use +1.
@@ -132,12 +136,25 @@ class CameraBallGeometry:
     image_height_px: int = 400
     camera_forward_offset_m: float = 0.0
     calibrated_model: Any = None
+    # The resting ball's side offset from the radar's axis, + target-right: the
+    # setup's camera-radar pair (D36 item 4b), else 0 (assumed dead ahead).
+    ball_lateral_offset_m: float = 0.0
+    # D36 item 4a: the unit's calibrated camera pitch (this swing's LIS3DH pitch
+    # plus the P8-5 offset) and the rig's focal length for the mode. None: the
+    # resting ball sets both, as before, labelled uncalibrated.
+    setup_pitch_deg: float | None = None
+    setup_focal_px: float | None = None
 
     @property
     def ball_forward_m(self) -> float:
         """Forward radar-to-ball distance derived from tee slant range."""
-        vertical = self.ball_height_m - self.radar_height_m
+        vertical = math.hypot(self.ball_height_m - self.radar_height_m, self.ball_lateral_offset_m)
         return forward_distance_from_slant_range(self.tee_range_m, vertical)
+
+    @property
+    def ball_position_lfu(self) -> np.ndarray:
+        """The resting ball in the radar-centred lateral, forward, up frame."""
+        return np.array([self.ball_lateral_offset_m, self.ball_forward_m, self.ball_height_m])
 
     @property
     def camera_ball_forward_m(self) -> float:
@@ -185,6 +202,11 @@ class CameraBallEstimate:
     jackknife_mad_deg: float | None = None
     profile_span_deg: float | None = None
     impact_delay_ms: float | None = None
+    # unit_boresight or target_line (D36 item 2); set with horizontal_deg
+    horizontal_frame: str | None = None
+    # Where the camera's pitch and focal length came from, with the resting
+    # ball's own inference as a cross-check (D36 item 4a)
+    camera_model: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -228,11 +250,26 @@ def _camera_model(
     anchor: ReferenceBall,
     geometry: CameraBallGeometry,
 ) -> tuple[float, float, np.ndarray]:
-    """Infer focal scale and pose from the stationary regulation-size ball."""
+    """Focal scale and pose: the unit's calibration, else the resting ball."""
+    return _checked_camera_model(anchor, geometry)[0]
+
+
+def _checked_camera_model(
+    anchor: ReferenceBall,
+    geometry: CameraBallGeometry,
+) -> tuple[tuple[float, float, np.ndarray], dict | None]:
+    """The model and the record of where it came from (D36 item 4a).
+
+    With the unit's tilt calibrated the swing's pitch and focal length are the
+    calibration's; the stationary regulation-size ball's own inference is the
+    recorded cross-check. Without it the ball sets both, labelled uncalibrated.
+    """
     if geometry.calibrated_model is not None:
-        return (1.0, 0.0, np.zeros(3))
-    ball_position = np.array([0.0, geometry.ball_forward_m, geometry.ball_height_m])
-    return reference_ball_camera_model(
+        return (1.0, 0.0, np.zeros(3)), None
+    ball_position = geometry.ball_position_lfu
+    focal_px, pitch_rad, radar_from_camera, record = resting_ball_camera_model(
+        setup_pitch_deg=geometry.setup_pitch_deg,
+        setup_focal_px=geometry.setup_focal_px,
         ball_x_px=anchor.x,
         ball_y_px=anchor.y,
         ball_diameter_px=anchor.diameter_px,
@@ -245,6 +282,7 @@ def _camera_model(
         radar_origin_lfu=np.array([0.0, 0.0, geometry.radar_height_m]),
         ball_position_lfu=ball_position,
     )
+    return (focal_px, pitch_rad, radar_from_camera), record
 
 
 def _project(
@@ -500,7 +538,7 @@ def _select_reference_ball(  # pylint: disable=too-many-locals
             )
         except ValueError:
             return False
-        expected = np.asarray([0.0, geometry.ball_forward_m, geometry.ball_height_m])
+        expected = geometry.ball_position_lfu
         return float(np.linalg.norm(point - expected)) <= 0.15
 
     observations = dict(candidates)
@@ -621,13 +659,13 @@ def _fit_horizontal_launch(  # pylint: disable=too-many-arguments
         return None
 
     model = _camera_model(reference_ball, geometry)
-    tee = np.array([0.0, geometry.ball_forward_m, geometry.ball_height_m])
+    tee = geometry.ball_position_lfu
     projected_tee = _project_world_points(tee[None, :], model=model, geometry=geometry)[0]
     image_alignment = np.array([reference_ball.x, reference_ball.y]) - projected_tee
     speed_ms = speed_mph / MPH_PER_MS
     vertical = math.radians(vertical_deg)
     target_angles = np.linspace(-20.0, 20.0, 801)
-    camera_angles = np.radians(target_angles - geometry.horizontal_offset_deg)
+    camera_angles = np.radians(to_boresight_deg(target_angles, geometry.horizontal_offset_deg))
     velocities = speed_ms * np.stack(
         (
             math.cos(vertical) * np.sin(camera_angles),
@@ -806,6 +844,7 @@ def estimate_horizontal_launch(
         ),
         confidence_tier="experimental" if failure is None else "withheld",
         horizontal_deg=base.horizontal_deg if failure is None else None,
+        horizontal_frame=frame_for(geometry.horizontal_offset_deg) if failure is None else None,
         vertical_deg=vertical_deg,
         support=support,
         support_pct=min(100.0, 100.0 * support / 15.0),
@@ -843,8 +882,8 @@ def _horizontal(velocity: np.ndarray) -> float:
 
 
 def _apply_horizontal_offset(angle_deg: float, offset_deg: float) -> float:
-    """Apply a measured setup yaw correction while preserving angle wrapping."""
-    return (angle_deg + offset_deg + 180.0) % 360.0 - 180.0
+    """Report an angle from the boresight with the one horizontal offset (D36 item 2)."""
+    return float(to_reported_deg(angle_deg, offset_deg))
 
 
 def _path_estimate(
@@ -1034,7 +1073,7 @@ def estimate_camera_ball_flight(
         )
 
     try:
-        model = _camera_model(anchor, geometry)
+        model, camera_check = _checked_camera_model(anchor, geometry)
     except ValueError:
         return CameraBallEstimate(
             "rejected_implausible_reference_ball",
@@ -1144,6 +1183,7 @@ def estimate_camera_ball_flight(
         status="low_consensus" if tier == "low" else "accepted",
         confidence_tier=tier,
         horizontal_deg=median_horizontal,
+        horizontal_frame=frame_for(geometry.horizontal_offset_deg),
         vertical_deg=float(np.median([estimate.vertical_deg for estimate in estimates])),
         support=len(estimates),
         support_pct=100.0 * len(estimates) / PARAMETER_SWEEP_SIZE,
@@ -1160,6 +1200,7 @@ def estimate_camera_ball_flight(
         timing_anchor=timing_anchor,
         contact_frame=contact.impact_frame if contact is not None else None,
         timestamp_source=timestamp_source,
+        camera_model=camera_check,
     )
 
 

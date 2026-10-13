@@ -17,7 +17,7 @@ local settings (``~/.config/openflight/``), never in the shared rig file.
 LIS3DH, read each session) composed with the camera's fixed pitch on the
 enclosure plus the principal point's row (this offset): world <- enclosure <-
 camera. Both are rotations about the same lateral axis (the LIS3DH roll is
-recorded but not applied, camera_roll), so they compose by adding their angles:
+recorded but not applied until C8, camera_roll), so they compose by adding their angles:
 ``pitch = LIS3DH pitch now + offset``. The offset is stored relative to the
 LIS3DH reading it was solved at, so a unit set down at another tilt the next day
 gets that day's LIS3DH pitch plus the same offset, never the first day's whole
@@ -298,3 +298,138 @@ def applied_pitch(lis3dh_pitch_deg: float, calibration: Mapping | None) -> dict:
         "calibrated_at_utc": calibration.get("calibrated_at_utc"),
         "composition": COMPOSITION,
     }
+
+
+SWING_POSE_SCHEMA = "openflight.camera_swing_pose.v1"
+
+
+def _stable_pitch(inclinometer: Mapping | None) -> float | None:
+    """This swing's own calibrated LIS3DH pitch, when its reading was stable."""
+    if not isinstance(inclinometer, Mapping) or inclinometer.get("applied") is not True:
+        return None
+    pitch = inclinometer.get("calibrated_pitch_deg")
+    if isinstance(pitch, bool) or not isinstance(pitch, (int, float)):
+        return None
+    return float(pitch) if math.isfinite(float(pitch)) else None
+
+
+def swing_camera_pose(
+    *,
+    rig: Any,
+    image_width_px: int,
+    inclinometer: Mapping | None,
+    calibration: Mapping | None,
+) -> dict:
+    """The camera pose one swing measures with, composed exactly as the setup's (D36 item 4).
+
+    The camera's LIS3DH pitch is the rig's boresight pitch moved by how far this
+    swing's own reading departs from the placement the rig expects (the tester's
+    ``camera_pitch_deg``); ``applied_pitch`` composes it with the unit's offset;
+    the focal length is the rig's for this mode (``ball_pixels.mode_focal_px``).
+    Both are once-measured calibration. Without the unit's calibration, a stable
+    reading or a rig, the pose says why and the estimators keep inferring the
+    pitch and focal length from the resting ball, labelled uncalibrated.
+
+    The roll (item 4c) goes through ``camera_roll`` as the setup's does: this
+    swing's LIS3DH roll less the rig's expected one, as a clockwise image-roll
+    correction. While the gate (``camera_roll.LIS3DH_ROLL_APPLIED``, C8) is off
+    it is recorded and not applied.
+    """
+    from openflight.camera.ball_pixels import mode_focal_px  # noqa: PLC0415
+
+    pose: dict[str, Any] = {
+        "schema": SWING_POSE_SCHEMA,
+        "status": "uncalibrated",
+        "pitch_deg": None,
+        "focal_px": None,
+        "composition": COMPOSITION,
+        "roll": _swing_roll(rig, inclinometer),
+    }
+    reasons = []
+    if calibration is None:
+        reasons.append("no unit camera tilt calibration (P8-5)")
+    if rig is None:
+        reasons.append("no rig geometry")
+    lis3dh_pitch = _stable_pitch(inclinometer)
+    if lis3dh_pitch is None:
+        reasons.append("no stable LIS3DH reading for this shot")
+    if reasons:
+        pose["reason"] = "; ".join(reasons) + ": pitch and focal length inferred per shot"
+        return pose
+    expected = rig.expected_inclinometer_orientation().pitch_deg or 0.0
+    camera_pitch = float(rig.boresight_pitch_deg) + (lis3dh_pitch - float(expected))
+    applied = applied_pitch(camera_pitch, calibration)
+    pose.update(
+        {
+            "status": "calibrated",
+            "label": LABEL,
+            "pitch_deg": applied["pitch_deg"],
+            "lis3dh_camera_pitch_deg": camera_pitch,
+            "offset_deg": applied["offset_deg"],
+            "uncertainty_deg": applied.get("uncertainty_deg"),
+            "calibrated_at_utc": applied.get("calibrated_at_utc"),
+            "focal_px": mode_focal_px(int(image_width_px), rig),
+            "focal_source": "rig_focal_for_the_mode",
+        }
+    )
+    return pose
+
+
+def _swing_roll(rig: Any, inclinometer: Mapping | None) -> dict:
+    """This swing's LIS3DH roll, through the one convention setup and swings share."""
+    from openflight.camera import camera_roll  # noqa: PLC0415
+
+    applied = camera_roll.roll_applied()
+    gravity = (
+        tuple(inclinometer.get(axis) for axis in ("x_g", "y_g", "z_g"))
+        if isinstance(inclinometer, Mapping) and inclinometer.get("applied") is True
+        else (None, None, None)
+    )
+    measured = (
+        camera_roll.lis3dh_roll_deg(*gravity)
+        if all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in gravity)
+        else None
+    )
+    expected = (rig.expected_inclinometer_orientation().roll_deg or 0.0) if rig is not None else 0.0
+    record = {
+        "measured_deg": measured,
+        "expected_deg": expected,
+        "applied": False,
+        "roll_correction_deg": 0.0,
+        "status": "not_applied_pending_c8",
+    }
+    if not applied:
+        return record
+    if measured is None:
+        record["status"] = "not_applied_no_lis3dh_reading"
+        return record
+    camera_roll_deg = camera_roll.applied_camera_roll_deg(measured, expected, apply=True)
+    record.update(
+        applied=True,
+        status="applied",
+        roll_correction_deg=camera_roll.nominal_roll_correction_deg(camera_roll_deg),
+    )
+    return record
+
+
+def with_swing_pose(geometry: Any, pose: Mapping | None) -> Any:
+    """A nominal camera geometry with this swing's calibrated pose, if it has one.
+
+    The roll correction is added to the geometry's configured one, and only once
+    the gate applies it. A calibrated optical model carries its own pose (its roll
+    goes through the same gate) and is left as it is.
+    """
+    if pose is None or getattr(geometry, "calibrated_model", None) is not None:
+        return geometry
+    from dataclasses import replace  # noqa: PLC0415
+
+    changes: dict[str, Any] = {}
+    roll = pose.get("roll") or {}
+    if roll.get("applied"):
+        changes["roll_correction_deg"] = float(geometry.roll_correction_deg) + float(
+            roll["roll_correction_deg"]
+        )
+    if pose.get("status") == "calibrated":
+        changes["setup_pitch_deg"] = float(pose["pitch_deg"])
+        changes["setup_focal_px"] = float(pose["focal_px"])
+    return replace(geometry, **changes) if changes else geometry

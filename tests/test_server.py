@@ -1603,6 +1603,8 @@ class TestShotToDict:
         assert estimate_call["geometry"].roll_correction_deg == 2.8
         assert estimate_call["geometry"].horizontal_pixel_sign == -1.0
         assert "ball_tracker" not in estimate_call
+        # D36 item 4b: no measured side offset: the ball is assumed dead ahead
+        assert estimate_call["geometry"].ball_lateral_offset_m == 0.0
 
     def _fuse_with_camera_estimate(self, monkeypatch, tmp_path, estimate, shot):
         from openflight.camera import ball_flight
@@ -5430,6 +5432,17 @@ class TestOnShotDetected:
         self._run_with_no_radar_hardware(monkeypatch, shot)
 
         assert shot.spin_axis_deg == pytest.approx(3.2 - (-1.5))
+
+    def test_spin_axis_names_the_frame_its_two_legs_share(self, monkeypatch):
+        """D36 item 2: HLA - path cancels the horizontal offset only within one frame."""
+        shot = self._spin_axis_shot(horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE)
+        shot.launch_angle_horizontal_frame = "target_line"
+        shot.club_path_frame = "unit_boresight"
+
+        self._run_with_no_radar_hardware(monkeypatch, shot)
+
+        assert shot.spin_axis_deg == pytest.approx(3.2 - (-1.5))
+        assert shot.to_dict()["spin_axis_frame"] == "mixed"
 
     def test_spin_axis_withheld_when_horizontal_confidence_below_gate(self, monkeypatch):
         """Regression guard: spin axis must not appear the moment club path

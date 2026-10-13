@@ -238,6 +238,16 @@ class Shot:
     # "azimuth_uncalibrated" when the displayed horizontal is an IWR value
     # measured without a horizontal phase reference (audit F8).
     launch_angle_horizontal_status: Optional[str] = None
+    # The zero of each horizontal metric (D36 item 2, openflight.horizontal_frame):
+    # "unit_boresight" with no horizontal offset, "target_line" with one, "mixed" for a
+    # value built from angles in two frames; None when the metric is absent.
+    launch_angle_horizontal_frame: Optional[str] = None
+    club_path_frame: Optional[str] = None
+    experimental_club_path_frame: Optional[str] = None
+    experimental_fused_club_path_frame: Optional[str] = None
+    experimental_camera_horizontal_frame: Optional[str] = None
+    experimental_face_angle_frame: Optional[str] = None
+    spin_axis_frame: Optional[str] = None
     spin_rpm: Optional[float] = None
     spin_confidence: Optional[float] = None
     # Raw radar-measured spin, kept when --calculated-spin rewrites
@@ -488,15 +498,19 @@ class Shot:
             "launch_angle_vertical_source": self.launch_angle_vertical_source,
             "launch_angle_horizontal_source": self.launch_angle_horizontal_source,
             "launch_angle_horizontal_status": self.launch_angle_horizontal_status,
+            "launch_angle_horizontal_frame": self.launch_angle_horizontal_frame,
             "angle_source": self.angle_source,
             "club_angle_deg": self.club_angle_deg,
             "club_path_deg": self.club_path_deg,
+            "club_path_frame": self.club_path_frame,
             "experimental_attack_angle_deg": self.experimental_attack_angle_deg,
             "experimental_attack_angle_status": self.experimental_attack_angle_status,
             "experimental_club_path_deg": self.experimental_club_path_deg,
             "experimental_club_path_status": self.experimental_club_path_status,
+            "experimental_club_path_frame": self.experimental_club_path_frame,
             "experimental_fused_attack_angle_deg": self.experimental_fused_attack_angle_deg,
             "experimental_fused_club_path_deg": self.experimental_fused_club_path_deg,
+            "experimental_fused_club_path_frame": self.experimental_fused_club_path_frame,
             "experimental_fused_status": self.experimental_fused_status,
             "experimental_fused_attack_angle_confidence": (
                 self.experimental_fused_attack_angle_confidence
@@ -507,6 +521,7 @@ class Shot:
             "experimental_camera_trace_deg": self.experimental_camera_trace_deg,
             "experimental_face_angle_deg": self.experimental_face_angle_deg,
             "experimental_face_angle_status": self.experimental_face_angle_status,
+            "experimental_face_angle_frame": self.experimental_face_angle_frame,
             "experimental_face_angle_path_source": self.experimental_face_angle_path_source,
             "experimental_face_angle_launch_source": self.experimental_face_angle_launch_source,
             "experimental_aoa_offset_source": self.experimental_aoa_offset_source,
@@ -517,6 +532,7 @@ class Shot:
                 self.experimental_camera_horizontal_confidence
             ),
             "experimental_camera_horizontal_status": self.experimental_camera_horizontal_status,
+            "experimental_camera_horizontal_frame": self.experimental_camera_horizontal_frame,
             "experimental_camera_iwr_delta_deg": self.experimental_camera_iwr_delta_deg,
             "camera_replay": dict(self.camera_replay) if self.camera_replay else None,
             "stage_timing": deepcopy(self.stage_timing),
@@ -535,6 +551,7 @@ class Shot:
             "calibrated_camera_status": self.calibrated_camera_status,
             "calibrated_camera_reason": self.calibrated_camera_reason,
             "spin_axis_deg": self.spin_axis_deg,
+            "spin_axis_frame": self.spin_axis_frame,
             "inclinometer": self.inclinometer,
             "spin_rpm": self.spin_rpm,
             "spin_rpm_measured": self.spin_rpm_measured,

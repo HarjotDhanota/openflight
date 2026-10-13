@@ -46,7 +46,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--radar-height-m", type=float)
     parser.add_argument("--ball-height-m", type=float, default=0.040)
     parser.add_argument("--baud", type=int, default=BAUD)
-    parser.add_argument("--azimuth-offset-deg", type=float, default=0.0)
+    parser.add_argument(
+        "--azimuth-offset-deg",
+        type=float,
+        default=0.0,
+        help="Horizontal offset = -(target yaw), + = boresight right of target; added (D36)",
+    )
     parser.add_argument("--horizontal-phase-reference-rad", type=float)
     parser.add_argument(
         "--tdm-sign-policy", choices=("positive", "negative", "auto"), default="positive"

@@ -10,10 +10,26 @@ target-line reference.
 
 ## Horizontal Ball Launch
 
-TX2 measures horizontal ball launch from phase relative to the TX1/TX3 phase
-center. The IWR6843LEVM TX2 baseline is one-half wavelength; OpenFlight applies
+TX2 measures the ball's lateral direction cosine from phase relative to TX1
+and TX3. The IWR6843LEVM TX2 baseline is one-half wavelength; OpenFlight applies
 that board geometry and uses the OPS ball speed when removing TDM motion phase.
 This keeps multipath in the TI range slope from rotating the horizontal result.
+
+**HLCMF-v2 (D36, status `hlcmf_v2_*`): launch direction is the ball's direction
+of motion.** Each frame's TX2 phase, taken against TX1 and TX3 separately and
+followed through time as club path does, gives that frame's bearing; with the
+frame's range from the ball track it places the ball laterally
+(`y = r sin(bearing)`) and downrange (`x = sqrt(r² − y² − z²)`, the height `z`
+from this shot's own vertical launch along the line from the tee). The launch
+direction is `atan2(v_y, v_x)` of the robust velocity through those positions:
+geometry, with no fitted scale. The 0.90 coherence gate is unchanged.
+
+HLCMF-v1 (`hlcmf_v1_*`, in sessions recorded before 12 Oct 2026) averaged the
+*bearing* over the last eight frames instead. Seen from a radar behind a tee
+1–2.5 m away, that late-flight bearing (2.2–4.6 m out) reads about 0.5–0.7× the
+launch direction: on synthetic straight flights at ±5° and ±10° it read 2.1–7.0°
+where v2 reads within 0.25°. Averaging the two vertical reference voltages also
+cancelled them once a high launch climbed about 15° off the boresight.
 
 Each physical board and enclosure can retain a static target-line phase. Pass
 the phase measured by horizontal aim calibration when starting OpenFlight:
@@ -25,10 +41,12 @@ scripts/start-kiosk.sh --iwr6843 \
 
 `-0.33434 rad` is the measured reference for the OpenFlight prototype setup,
 not a universal default. It was calibrated from 18 wide-IQ16 shots against
-TrackMan using the eight-frame horizontal estimator, then frozen before a
-separate 41-shot holdout. The holdout produced 0.948 degrees MAE at full
-coverage and 0.797 degrees MAE on the 37 shots that passed the 0.90 phase-
-coherence gate.
+TrackMan using the eight-frame horizontal estimator (HLCMF-v1), then frozen
+before a separate 41-shot holdout. The holdout produced 0.948 degrees MAE at
+full coverage and 0.797 degrees MAE on the 37 shots that passed the 0.90 phase-
+coherence gate. Those figures are v1's: HLCMF-v2 has not yet been graded
+against TrackMan, and a reference calibrated through v1's late bearing should be
+re-measured with v2.
 
 Recalibrate this value after changing the radar board, enclosure, antenna
 orientation, or target-line alignment. To evaluate a TrackMan-aligned session
@@ -42,8 +60,10 @@ uv run python scripts/analysis/evaluate_iwr_horizontal_models.py \
 The value is subtracted in phase space before conversion to degrees. Omitting
 it reports horizontal launch relative to the board's uncalibrated RF phase
 zero, which can create a consistent left/right bias even when the enclosure is
-aimed correctly. This is separate from `--iwr6843-azimuth-offset-deg`, which is
-the geometric target-line correction used by the experimental club-path fit.
+aimed correctly. This is the IWR's own boresight zero. It is separate from the
+horizontal offset (`--iwr6843-azimuth-offset-deg`, −(target yaw)), which is added
+to the horizontal launch and the club path alike, as to every horizontal angle
+([target line reference](../how-it-works/positioning.md#target-line-reference)).
 
 ## Club Path
 
@@ -75,21 +95,26 @@ operator trusting ±0.3° there would be relying on a number nobody measured.
 ### Set the target-line reference
 
 Club path is relative to the target line, and the array calibration cannot
-supply where the radar's boresight points. Measure the angle between boresight
-and your target line, then pass it:
+supply where the unit's boresight points. Measure the angle between boresight
+and your target line (normally the D34 target-line hand-off does), then pass it:
 
 ```bash
 scripts/start-kiosk.sh --iwr6843 --iwr6843-azimuth-offset-deg 1.5
 ```
 
-Positive means boresight points right of the target line. The value is added
-to the measured path. Left at 0, club path is reported relative to boresight
-rather than the target line, which is fine for separation testing but not for
-absolute numbers.
+Positive means boresight points right of the target line: the value is
+−(target yaw), the target yaw being + when the target line lies right of the
+boresight, seen from behind the unit. The value is added to the measured path,
+exactly as to the horizontal launch and every other horizontal angle (D36). Left
+unset or at 0, club path is reported relative to the boresight
+(`club_path_frame: unit_boresight`) rather than the target line (`target_line`),
+which is fine for separation testing but not for absolute numbers. The same
+value goes to `--camera-capture-horizontal-offset-deg`; two different values are
+refused.
 
 This flag is not optional trim. The estimator fits `x(t)` and `y(t)` in
 Cartesian coordinates and reports `path = atan2(v_y, v_x)`, so absolute
-azimuth enters *additively* rather than cancelling out: a constant
+azimuth enters as a constant offset rather than cancelling out: a constant
 per-element phase error from the shipped array calibration (measured on a
 different board than the one it ships on) shifts the reported path by a
 constant. `--iwr6843-azimuth-offset-deg` is what absorbs that shift, not a

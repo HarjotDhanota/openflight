@@ -17,6 +17,7 @@ from openflight.iwr6843 import doa, tracking, trajectory
 from openflight.iwr6843.calibration import Calibration
 from openflight.iwr6843.doa import TX2_VERTICAL_TDM_TAU_S  # noqa: F401 - re-exported
 from openflight.iwr6843.dump import is_range_snapshot, parse_dump, project_tx_pair
+from openflight.iwr6843.music import LAM
 from openflight.iwr6843.tracking import BallTrack, Geometry
 from openflight.iwr6843.trajectory import TrajectoryFit
 
@@ -39,12 +40,18 @@ TH_GATE_RAD = -0.0436  # -2.5 deg: late-track corrupted zone starts
 #   TrackMan-scored: SW 1.31 / 9i 2.50 / 7i 3.17 deg holdout.
 POLICY_FAR = {"dominance": True, "x_max_m": 3.8}
 POLICY_ANCHORED = {"anchor_tee": True, "th_gate_rad": TH_GATE_RAD}
-NOTCH_SPACING_MS = 26.93  # MTI notch comb: loop phase ~ 0 mod 2pi
+# MTI notch comb: a ball whose loop-to-loop phase 4*pi*v*T/lambda is ~0 mod
+# 2pi looks static within a burst. The spacing is lambda / (2 T) for the
+# dump's own same-TX loop period T (``notch_spacing_ms``): 26.9 m/s on a 2-TX
+# capture (90 us loop), 17.9 m/s on the production 3-TX capture (135 us loop;
+# D36 item 1 -- a fixed 26.93 m/s, the 2-TX value, was used for both).
 # Dirichlet attenuation width: suppression is >50% only within ~2 m/s of a
-# notch center. n=1 (26.93) is EXCLUDED: wedge balls there are close-range/
-# strong enough to survive, and treating them as notched costs the anchor
-# (SW 2.1 -> 7 deg regression when tried).
+# notch center (tuned on 2-TX dumps). n=1 is EXCLUDED: on 2-TX dumps (26.9)
+# wedge balls there are close-range/strong enough to survive, and treating
+# them as notched costs the anchor (SW 2.1 -> 7 deg regression when tried);
+# on 3-TX dumps n=1 (17.9) is below every class's ball-speed floor.
 NOTCH_HALF_WIDTH_MS = 2.5
+NOTCH_MIN_ORDER = 2
 FAST_BALL_MS = 55.0
 
 # slowest RADIAL speed a real ball can read, per class: must sit ABOVE the
@@ -62,10 +69,26 @@ CLUB_MIN_BALL_MS: dict[str, float] = {
 }
 
 
-def near_mti_notch(speed_ms: float, half_width_ms: float = NOTCH_HALF_WIDTH_MS) -> bool:
-    """True when a radial speed sits inside the burst-MTI notch comb."""
-    n = round(speed_ms / NOTCH_SPACING_MS)
-    return n >= 2 and abs(speed_ms - n * NOTCH_SPACING_MS) < half_width_ms
+def notch_spacing_ms(loop_period_s: float) -> float:
+    """Burst-MTI notch spacing, m/s, for one dump's same-TX loop period.
+
+    Burst MTI subtracts each bin's mean over the loops of a burst, and those
+    loops are ``loop_period_s`` apart. A target advancing a whole number of
+    half wavelengths per loop has the same phase in every loop and cancels.
+    """
+    return LAM / (2.0 * loop_period_s)
+
+
+def near_mti_notch(
+    speed_ms: float,
+    *,
+    loop_period_s: float,
+    half_width_ms: float = NOTCH_HALF_WIDTH_MS,
+) -> bool:
+    """True when a radial speed sits inside this dump's burst-MTI notch comb."""
+    spacing = notch_spacing_ms(loop_period_s)
+    n = round(speed_ms / spacing)
+    return n >= NOTCH_MIN_ORDER and abs(speed_ms - n * spacing) < half_width_ms
 
 
 # no-measurement gate: junk captures (ring overwritten, notch-broken tracks)
@@ -336,7 +359,9 @@ def moving_ball_range_track(
         max_range_m=maximum_range_m,
         min_ball_ms=minimum_speed_ms,
     )
-    if track_broken(track) or (track is not None and near_mti_notch(track.speed_ms)):
+    if track_broken(track) or (
+        track is not None and near_mti_notch(track.speed_ms, loop_period_s=geometry.loop_period_s)
+    ):
         window_track = tracking.find_ball(
             prepared.mti("window"),
             geometry,
@@ -436,7 +461,10 @@ def process_dump(
         )
         snaps = [(t, r, s) for t, r, s, _snr in series]
         # policy from PER-SHOT observables (see POLICY_* above)
-        if near_mti_notch(track.speed_ms) or track.speed_ms >= FAST_BALL_MS:
+        if (
+            near_mti_notch(track.speed_ms, loop_period_s=geo.loop_period_s)
+            or track.speed_ms >= FAST_BALL_MS
+        ):
             result.policy = "far"
             fit = trajectory.fit_two_ray(
                 snaps, cal, min_explained=0.70, weighted=True, **POLICY_FAR

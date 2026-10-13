@@ -172,7 +172,8 @@ def mti_filter(
     Range FFT then static removal. ``scope="burst"`` subtracts each bin's
     mean over the loops of one burst — the standard filter, but it NOTCHES
     balls whose loop-to-loop phase is ~0 mod 2pi (radial speed near
-    n x 26.93 m/s): the ball looks static within a burst and is removed,
+    n x lambda / (2 x loop period): 26.9 m/s on 2-TX, 17.9 m/s on 3-TX; see
+    ``shot.notch_spacing_ms``): the ball looks static within a burst and is removed,
     shattering the range walk (the 2026-07-14 5-iron failures).
     ``scope="window"`` subtracts the mean over ALL bursts: statics are
     constant across the full 72 ms window and still cancel, while a
