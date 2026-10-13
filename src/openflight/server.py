@@ -1642,6 +1642,21 @@ def shot_ball_at_address(trigger_at: float | None) -> dict | None:
     return monitor.for_shot(float(trigger_at))
 
 
+def shot_reference_ball(trigger_at: float | None) -> dict | None:
+    """Where this shot's resting ball is: its own re-located look in the box, else the
+    setup's ball. The camera's resting-ball gate is drawn around it."""
+    look = shot_ball_at_address(trigger_at)
+    if look is not None and look.get("state") == "in_box" and look.get("center_px"):
+        return {
+            "x": float(look["center_px"][0]),
+            "y": float(look["center_px"][1]),
+            "diameter_px": float(look["diameter_px"]),
+            "source": "ball_at_address",
+        }
+    setup = camera_capture_config.get("setup_ball") if camera_capture_config else None
+    return {**dict(setup), "source": "setup_ball"} if setup else None
+
+
 def ball_at_address_look(monitor, runtime, *, now: float) -> dict | None:
     """One look at the camera's latest frame, unless it is busy with a clip."""
     if monitor is None or runtime is None:
@@ -5516,7 +5531,8 @@ def _fuse_camera_measurements(
                 session_uuid=session_uuid,
                 shot_number=shot_number,
                 notes=camera_notes,
-                setup_ball=camera_capture_config.get("setup_ball"),
+                # the shot's own resting ball, re-located in the box (13 Oct)
+                setup_ball=shot_reference_ball(shot.impact_timestamp),
                 camera_pose=_swing_camera_pose(shot),
             )
             shot.camera_fusion_context = context

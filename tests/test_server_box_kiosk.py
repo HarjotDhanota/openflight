@@ -247,3 +247,20 @@ def test_the_measured_side_offset_reaches_the_radar_launch_fit(monkeypatch, tmp_
         server.main()
 
     assert seen["lateral_tee_offset_m"] == pytest.approx(-0.14)
+
+
+def test_the_camera_gate_follows_the_re_located_ball_not_the_setup_ball(kiosk_state, monkeypatch):
+    """The swing camera's resting-ball gate (3 diameters) was always the setup ball's;
+    a ball teed elsewhere in the box is found where it now rests."""
+    monitor = ball_at_address.BallAtAddress(box_px=BOX, setup_ball=SETUP, setup_range_m=2.2)
+    monitor.observe(_scene([(700.0, 420.0, 16.0)]), at=50.0)
+    server.ball_at_address_monitor = monitor
+    monkeypatch.setattr(server, "camera_capture_config", {"setup_ball": dict(SETUP)})
+
+    moved = server.shot_reference_ball(55.0)
+    before = server.shot_reference_ball(10.0)
+
+    assert moved["x"] == pytest.approx(700.0, abs=1.5)
+    assert moved["diameter_px"] == pytest.approx(16.0, abs=2.0)
+    assert moved["source"] == "ball_at_address"
+    assert before == {**SETUP, "source": "setup_ball"}
