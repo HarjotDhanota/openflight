@@ -99,7 +99,8 @@ export function LivePanel({
               value={metric.value}
               unit={metric.unit}
               subtext={metric.subtext}
-              estimated={metric.estimated}
+              status={metric.status}
+              reason={metric.reason}
               confidence={metric.confidence}
               confidenceLabel={metric.confidenceLabel}
               labelPosition="above"

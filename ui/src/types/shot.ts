@@ -20,6 +20,29 @@ export interface CameraReplay {
  */
 export type CarryStatus = 'measured' | 'calculated' | 'model_geometry' | 'estimated' | 'not_measured';
 
+/**
+ * A metric's label (openflight.shot_metrics.LABELS): `measured` (a sensor saw it),
+ * `calculated` (a named model on measured or calculated inputs, D38),
+ * `model_geometry` (rests on assumed swing geometry, D39), `estimated` (an OPS-only
+ * install's labelled stand-in), `not_measured` (no value; the reason says why, D17).
+ */
+export type MetricLabel = 'measured' | 'calculated' | 'model_geometry' | 'estimated' | 'not_measured';
+
+/** One metric of one shot, as the server reports it in `Shot.metrics`. */
+export interface ShotMetric {
+  value: number | null;
+  unit: string;
+  status: MetricLabel;
+  source: string | null;
+  range: [number, number] | null;
+  reason: string | null;
+  /** The zero of a horizontal metric: `target_line`, `unit_boresight` or `mixed`. */
+  frame: string | null;
+  note: string | null;
+  /** A flight metric's normalized-air value (sea level, 25 C). */
+  normalized: { value: number; range: [number, number] | null; status: string | null } | null;
+}
+
 export interface Shot {
   mode?: 'rolling-buffer' | 'mock' | 'swing-speed';
   shot_number?: number | null;
@@ -79,7 +102,7 @@ export interface Shot {
   spin_rpm: number | null;
   spin_confidence: number | null;
   spin_quality: SpinQuality | null;
-  spin_source: 'measured' | 'calculated' | 'model_geometry' | null;
+  spin_source: 'measured' | 'calculated' | 'model_geometry' | 'estimated' | null;
   spin_method?: string | null;
   spin_multipath_fade_hz?: number | null;
   carry_spin_adjusted: number | null;
@@ -90,6 +113,8 @@ export interface Shot {
   training_implement?: string;
   training_implement_label?: string;
   camera_replay?: CameraReplay | null;
+  /** Every golf metric with its label, by metric id (openflight.shot_metrics). */
+  metrics?: Record<string, ShotMetric> | null;
 }
 
 export interface SessionStats {
@@ -272,13 +297,22 @@ export function reportedCarryYards(shot: Shot): number | null {
   return tableAllowed ? firstMeasured(shot.estimated_carry_yards) : null;
 }
 
-/** Whether the reported carry is modeled rather than built from measured inputs. */
-export function isCarryEstimated(shot: Shot): boolean {
-  if (reportedCarryYards(shot) === null) return false;
-  if (shot.carry_status === 'calculated' || shot.carry_status === 'model_geometry') return true;
-  if (shot.carry_status === 'measured') return false;
-  // OPS-only and older shots: the bare table is the estimate, as it always was
-  return !isMeasured(shot.carry_spin_adjusted);
+/**
+ * The label on the reported carry, or null when there is none to label.
+ *
+ * The server's own label when the shot carries `metrics`. Otherwise its carry
+ * status: a simulated carry is `calculated` (D38) whether its spin was measured
+ * or calculated (an older log's `measured` is that same simulated carry), and
+ * `model_geometry` when flown on model geometry (D39). An OPS-only or unfinalized
+ * shot's carry is `estimated`.
+ */
+export function carryLabel(shot: Shot): MetricLabel | null {
+  if (reportedCarryYards(shot) === null) return null;
+  const server = shot.metrics?.carry?.status;
+  if (server && server !== 'not_measured') return server;
+  if (shot.carry_status === 'calculated' || shot.carry_status === 'measured') return 'calculated';
+  if (shot.carry_status === 'model_geometry') return 'model_geometry';
+  return 'estimated';
 }
 
 /**

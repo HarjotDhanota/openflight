@@ -29,7 +29,7 @@ from flask import Flask, Response, jsonify, request, send_file, send_from_direct
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
-from . import collision_model, core_eligibility, pi_trace
+from . import collision_model, core_eligibility, pi_trace, shot_metrics
 from .ble.protocol import (
     build_power_status_event,
     build_profiles_event,
@@ -2031,6 +2031,17 @@ def dispatch_phone_control_command(command_type, payload):
 def static_files(path):
     """Serve static files."""
     return send_from_directory(app.static_folder, path)
+
+
+@app.route("/api/shots/latest")
+def api_latest_shot():
+    """The session's latest shot payload (every metric, labelled) and the metric catalog.
+
+    The tester page reads it beside each swing's picture verdict; the kiosk UI gets
+    the same payload over the socket.
+    """
+    shots = _session_shots()
+    return jsonify({"shot": shots[-1] if shots else None, "catalog": shot_metrics.catalog()})
 
 
 @app.route("/api/shutdown", methods=["POST"])

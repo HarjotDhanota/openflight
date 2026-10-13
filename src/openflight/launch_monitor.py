@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional
 
-from . import metric_definitions
+from . import metric_definitions, shot_metrics
 from .clubs import ClubType
 from .clubs.physics import get_club_physics
 from .ops243 import SpeedReading
@@ -531,8 +531,12 @@ class Shot:
         return "low"
 
     def to_dict(self) -> dict:
-        """Return the canonical, unrounded representation of this shot."""
-        return {
+        """Return the canonical, unrounded representation of this shot.
+
+        ``metrics`` holds every golf metric with its label, source, range, reason
+        and frame (openflight.shot_metrics), built from the fields beside it.
+        """
+        data = {
             "shot_number": self.shot_number,
             "ball_speed_mph": self.ball_speed_mph,
             "ball_speed_raw_mph": self.ball_speed_raw_mph,
@@ -664,6 +668,8 @@ class Shot:
             "air_density_kg_m3": self.air_density_kg_m3,
             "flight": deepcopy(self.flight),
         }
+        data["metrics"] = shot_metrics.from_record(data)
+        return data
 
 
 def _finite_values(values) -> list:

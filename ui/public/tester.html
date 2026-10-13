@@ -235,6 +235,54 @@
       .live {
         margin: 12px 0;
       }
+      /* the kiosk's latest shot beside each swing's picture verdict: every value labelled */
+      .kiosk-shot {
+        margin: 8px 0;
+        font-size: 0.88rem;
+      }
+      .kiosk-shot__key {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 14px;
+        margin: 4px 0;
+      }
+      .kiosk-metric b {
+        font-variant-numeric: tabular-nums;
+      }
+      .kiosk-label {
+        display: inline-block;
+        margin-left: 4px;
+        padding: 0 5px;
+        border: 1px solid var(--muted);
+        border-radius: 4px;
+        font-size: 0.72rem;
+        line-height: 1.4;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .kiosk-label.l-calculated {
+        border-color: #d8a400;
+        color: #d8a400;
+      }
+      .kiosk-label.l-model_geometry {
+        border-style: dashed;
+        border-color: #d8a400;
+        color: #d8a400;
+      }
+      .kiosk-label.l-estimated {
+        border-color: #d8a400;
+        background: #d8a400;
+        color: #14140f;
+      }
+      .kiosk-shot table {
+        border-collapse: collapse;
+        font-size: 0.82rem;
+      }
+      .kiosk-shot td {
+        padding: 2px 8px 2px 0;
+        vertical-align: top;
+        border-bottom: 1px solid rgba(127, 127, 127, 0.25);
+      }
       .live figure {
         margin: 8px 0;
       }
@@ -884,6 +932,7 @@
             <div class="ladder-jump" id="ladder-jump"></div>
             <p class="problem" id="ladder-jump-error" role="alert" hidden></p>
             <div class="light" id="ladder-panel"></div>
+            <div class="kiosk-shot" id="kiosk-shot" aria-live="polite"></div>
             <div id="face-guide" hidden style="position: relative; width: 640px; max-width: 100%">
               <img id="face-preview" alt="Camera preview" style="width: 100%; display: block" />
               <div
@@ -3815,6 +3864,85 @@
         el('photo-error').hidden = !photoError;
         el('photo-error').textContent = photoError || '';
       }
+      // The kiosk's latest shot (GET /api/shots/latest on the kiosk): every metric with
+      // its label, so each swing's picture verdict sits beside the numbers it produced.
+      const KIOSK_KEY_METRICS = [
+        'ball_speed',
+        'ball_speed_full',
+        'launch_vertical',
+        'launch_horizontal',
+        'spin_rate',
+        'spin_axis',
+        'carry',
+        'club_speed',
+        'club_path',
+        'attack_angle',
+        'face_angle',
+        'dynamic_loft',
+      ];
+      const KIOSK_LABEL_TEXT = {
+        measured: 'measured',
+        calculated: 'calculated',
+        model_geometry: 'model geometry',
+        estimated: 'estimated',
+        not_measured: 'not measured',
+      };
+      let kioskShotRunning = false;
+      function kioskValue(record) {
+        if (typeof record?.value !== 'number' || !Number.isFinite(record.value)) return '—';
+        const digits = record.unit === 'rpm' || record.unit === 'mm' ? 0 : record.unit === '' || record.unit === 's' ? 2 : 1;
+        return `${record.value.toFixed(digits)}${record.unit ? ` ${record.unit}` : ''}`;
+      }
+      function kioskLabel(record) {
+        const status = record?.status || 'not_measured';
+        return `<span class="kiosk-label l-${escapeHtml(status)}">${escapeHtml(KIOSK_LABEL_TEXT[status] || status)}</span>`;
+      }
+      function kioskMetric(spec, record) {
+        const why = record?.status === 'not_measured' && record.reason ? ` <span class="note">${escapeHtml(record.reason)}</span>` : '';
+        return `<span class="kiosk-metric" data-kiosk-metric="${escapeHtml(spec.id)}">${escapeHtml(spec.label)}: <b>${escapeHtml(
+          kioskValue(record)
+        )}</b>${kioskLabel(record)}${why}</span>`;
+      }
+      function renderKioskShot(data) {
+        const box = el('kiosk-shot');
+        if (!data) {
+          box.innerHTML = '<span class="note">Kiosk numbers unavailable: the kiosk is not answering.</span>';
+          return;
+        }
+        const shot = data.shot;
+        if (!shot || !shot.metrics) {
+          box.innerHTML = '<span class="note">No kiosk shot yet.</span>';
+          return;
+        }
+        const specs = data.catalog?.metrics || [];
+        const byId = Object.fromEntries(specs.map((spec) => [spec.id, spec]));
+        const key = KIOSK_KEY_METRICS.filter((id) => byId[id])
+          .map((id) => kioskMetric(byId[id], shot.metrics[id]))
+          .join('');
+        const rows = specs
+          .map((spec) => {
+            const record = shot.metrics[spec.id];
+            const detail = record?.status === 'not_measured' ? record?.reason : record?.source;
+            return `<tr data-kiosk-metric="${escapeHtml(spec.id)}"><td>${escapeHtml(spec.label)}</td><td><b>${escapeHtml(
+              kioskValue(record)
+            )}</b></td><td>${kioskLabel(record)}</td><td class="note">${escapeHtml(detail || '')}</td></tr>`;
+          })
+          .join('');
+        const title = `Last kiosk shot${shot.shot_number != null ? ` #${shot.shot_number}` : ''} (${escapeHtml(shot.club || '')})`;
+        box.innerHTML = `<b>${title}</b><div class="kiosk-shot__key">${key}</div><details><summary>All ${specs.length} metrics with labels</summary><table><tbody>${rows}</tbody></table></details>`;
+      }
+      async function kioskShotTick() {
+        if (kioskShotRunning) return;
+        kioskShotRunning = true;
+        try {
+          const response = await fetchWithTimeout(`http://${location.hostname}:8080/api/shots/latest`, { cache: 'no-store' });
+          renderKioskShot(await readJson(response));
+        } catch {
+          renderKioskShot(null);
+        } finally {
+          kioskShotRunning = false;
+        }
+      }
       let ladderTimer = null;
       async function ladderTick() {
         if (photoActionPending || ladderRequestRunning) return;
@@ -3827,6 +3955,7 @@
           const state = await readJson(response);
           if (version !== ladderRequestVersion || testerId !== el('tester-id').value.trim()) return;
           renderLadder(state);
+          kioskShotTick();
         } catch (error) {
           if (version === ladderRequestVersion && testerId === el('tester-id').value.trim()) {
             el('ladder-panel').textContent = `Ladder status is unavailable: ${error.message}`;

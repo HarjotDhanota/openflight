@@ -144,10 +144,11 @@ describe('LivePanel', () => {
     expect(html).not.toContain('shot-flash');
   });
 
-  it('marks estimated tiles with an icon instead of provenance copy', () => {
+  it('badges estimated and calculated tiles instead of provenance copy', () => {
     const html = render(makeShot({ angle_source: 'estimated', spin_source: 'calculated' }));
 
-    expect(html).toContain('metric-card__estimated');
+    expect(html).toContain('label-badge--estimated');
+    expect(html).toContain('label-badge--calculated');
     expect(html).not.toContain('>estimated<');
     expect(html).not.toContain('>radar<');
   });

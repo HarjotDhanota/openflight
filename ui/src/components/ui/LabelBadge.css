@@ -1,0 +1,68 @@
+/*
+ * Metric label badges: four labels, four looks (measured, calculated, model
+ * geometry, estimated). Text always says the label, so colour is never the only cue.
+ */
+.label-badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  font-size: 0.6rem;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  background: transparent;
+}
+
+.label-badge--calculated {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.label-badge--model_geometry {
+  border-style: dashed;
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.label-badge--estimated {
+  border-color: var(--color-accent-block);
+  background: var(--color-accent-block);
+  color: var(--color-accent-fg);
+}
+
+.label-badge__mark {
+  width: 11px;
+  height: 8px;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  fill: none;
+  stroke-linecap: round;
+}
+
+.label-badge__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* On a live tile the badge shares the title row: keep it tight. */
+.label-badge--compact {
+  gap: 2px;
+  padding: 0 3px;
+  font-size: 0.55rem;
+  letter-spacing: 0.04em;
+}
