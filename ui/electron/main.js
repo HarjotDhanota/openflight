@@ -6,22 +6,14 @@
 
 import { app, BrowserWindow, Menu } from 'electron';
 import { resolveTargetUrl } from './resolveTargetUrl.js';
+import { kioskWindowOptions } from './windowOptions.js';
 
 const targetUrl = resolveTargetUrl(process.env, process.argv);
 
 Menu.setApplicationMenu(null);
 
 function createWindow() {
-  const win = new BrowserWindow({
-    kiosk: true,
-    fullscreen: true,
-    autoHideMenuBar: true,
-    backgroundColor: '#000000',
-    webPreferences: {
-      contextIsolation: true,
-      sandbox: true,
-    },
-  });
+  const win = new BrowserWindow(kioskWindowOptions(process.env));
 
   win.setMenuBarVisibility(false);
   // The kiosk shell only ever shows the OpenFlight UI itself; deny any

@@ -1,7 +1,11 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { KIOSK_VIEWPORTS, mockConfirmedPlacementBox } from './helpers';
+import { KIOSK_VIEWPORTS, mockConfirmedPlacementBox, useTester, pickTester } from './helpers';
 
 test.use({ hasTouch: true });
+
+test.beforeEach(async ({ page }) => {
+  await useTester(page);
+});
 
 const defaultTester = '20260922-name';
 
@@ -126,13 +130,13 @@ test('fails closed with concrete physical and sensor remedies while recovery act
   await expect(page.locator('#setup-gate')).toContainText('cannot inspect the enclosure build');
   await expect(page.locator('#setup-gate')).toContainText('does not count as accepted data');
   await expect(page.locator('#setup-gate')).toContainText('record it in the independent swing tally');
-  await expect(page.getByRole('button', { name: 'C. Start the exposure ladder' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Start the exposure ladder' })).toBeDisabled();
   await expect(page.locator('#btn-gain')).toBeDisabled();
   await expect(page.locator('#btn-swings')).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'B. Measure the light (both modes)' })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'A. Check the hardware' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Measure the light (both modes)' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Check the hardware' })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Stop all tester activity' })).toBeEnabled();
-  await expect(page.getByRole('button', { name: 'D. Analyse, review & package' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Analyse, review & package' })).toBeEnabled();
   await page.locator('#btn-swings').evaluate((button: HTMLButtonElement) => button.click());
   expect(acquisitionRequests).toBe(0);
 });
@@ -161,13 +165,13 @@ test('posts exact config-bound attestation and a server restart revokes eligibil
     },
   ]);
   await expect(page.locator('#setup-gate')).toHaveAttribute('data-ready', 'true');
-  await expect(page.getByRole('button', { name: 'C. Start the exposure ladder' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Start the exposure ladder' })).toBeEnabled();
   await expect(page.locator('#setup-authority')).toContainText('authority operator_physical_setup');
   await expect(page.locator('#setup-authority')).toContainText('runtime sensors: ops, camera, iwr6843, lis3dh');
 
   confirmed = false;
   await expect(page.locator('#setup-gate')).toHaveAttribute('data-ready', 'false', { timeout: 3000 });
-  await expect(page.getByRole('button', { name: 'C. Start the exposure ladder' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Start the exposure ladder' })).toBeDisabled();
 });
 
 test('request timeout remains active while the response body stalls', async ({ page }) => {
@@ -225,7 +229,7 @@ test('an old confirmation cannot clear the pending state of a newer confirmation
   await page.goto('/tester.html');
   await page.locator('#setup-physical-confirm').check();
   await page.getByRole('button', { name: 'Confirm physical setup' }).tap();
-  await page.locator('#tester-id').fill('new-tester');
+  await pickTester(page, 'new-tester');
   await expect(page.locator('#setup-summary')).toContainText('setup blocker');
   await page.locator('#setup-physical-confirm').check();
   await page.getByRole('button', { name: 'Confirm physical setup' }).tap();
@@ -254,7 +258,7 @@ test('late eligibility for the prior tester cannot authorize the new tester', as
     return json(route, eligibility(testerId, false));
   });
   await page.goto('/tester.html');
-  await page.locator('#tester-id').fill('different-tester');
+  await pickTester(page, 'different-tester');
   await expect(page.locator('#setup-authority')).toContainText('not confirmed');
   releaseOld();
   await page.waitForTimeout(50);
@@ -269,8 +273,8 @@ test('a 409 action response immediately replaces stale local readiness with serv
     json(route, { error: 'setup eligibility was lost', setup_eligibility: eligibility(defaultTester, false) }, 409)
   );
   await page.goto('/tester.html');
-  await expect(page.getByRole('button', { name: 'C. Start the exposure ladder' })).toBeEnabled();
-  await page.getByRole('button', { name: 'C. Start the exposure ladder' }).tap();
+  await expect(page.getByRole('button', { name: 'Start the exposure ladder' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Start the exposure ladder' }).tap();
   await expect(page.locator('#setup-gate')).toHaveAttribute('data-ready', 'false');
   await expect(page.locator('#ladder-panel')).toContainText('setup eligibility was lost');
 });
@@ -291,7 +295,7 @@ test('placement warning stays visible after reload without blocking acquisition'
       'signed deviations 3.25 degrees pitch and -2.50 degrees roll'
     );
     await expect(page.locator('#setup-checks')).toContainText('flag threshold +/-2.0 degrees');
-    await expect(page.getByRole('button', { name: 'C. Start the exposure ladder' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Start the exposure ladder' })).toBeEnabled();
     await expect(page.locator('#btn-gain')).toBeEnabled();
     await expect(page.locator('#btn-swings')).toBeEnabled();
     if (load === 0) await page.reload();
@@ -303,8 +307,11 @@ test('automatic range is visible while tape stays optional and advanced', async 
   await page.route('**/api/tester/setup-eligibility?**', (route) => json(route, eligibility()));
   await page.goto('/tester.html');
 
-  await expect(page.getByRole('heading', { name: 'Automatic ball range' })).toBeVisible();
-  await expect(page.locator('#automatic-range-summary')).toContainText('No ball found in the patch');
+  await expect(page.getByRole('heading', { name: '6 Ball range' })).toBeVisible();
+  await expect(page.locator('#automatic-range-summary')).toContainText('No ball found in the box');
+  // (12) one plain line first; the internal terms stay in the folded details
+  await expect(page.locator('#automatic-range-plain')).toHaveText('Ball range: no ball found; swings carry on without it');
+  await expect(page.locator('#automatic-range-details')).not.toHaveAttribute('open', '');
   await expect(page.locator('#automatic-range-values')).toContainText('canonical range withheld');
   await expect(page.locator('#tee-mm')).toBeHidden();
   await page.getByText('Advanced: manual single-arm tools').click();

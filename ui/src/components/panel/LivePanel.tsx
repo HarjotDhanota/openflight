@@ -8,6 +8,7 @@ import { usePostRenderAck } from '../../hooks/usePostRenderAck';
 import { MetricCard } from '../ui/MetricCard';
 import { PanelHeader } from './PanelHeader';
 import { buildLiveMetrics, pinSelectedMetric } from './liveMetrics';
+import { targetLineYawText, type TargetLine } from '../../utils/targetLine';
 
 interface LivePanelProps {
   shot: Shot | null;
@@ -29,6 +30,8 @@ interface LivePanelProps {
    * traced revision may be acknowledged after its frame (stage 1b Pi trace).
    */
   acknowledgeable?: boolean;
+  /** The kiosk's target line (GET /api/target-line); null draws nothing. */
+  targetLine?: TargetLine | null;
 }
 
 /**
@@ -47,6 +50,7 @@ export function LivePanel({
   isNewShot = false,
   headerAction,
   acknowledgeable = false,
+  targetLine = null,
 }: LivePanelProps) {
   const { locale, t } = useI18n();
   const { unitSystem } = useUnitPreference();
@@ -73,11 +77,28 @@ export function LivePanel({
     metrics.map((metric) => `${metric.value}:${metric.unit ?? ''}`).join('|')
   );
   const header = <PanelHeader title={t('nav.live')} subtitle={profileName} club={clubLabel} actions={headerAction} />;
+  // what left and right are measured from: the tester's target line, or the unit's aim
+  let targetText: string | null = null;
+  if (targetLine?.status === 'not_set') {
+    targetText = t('live.targetLineNotSet');
+  } else if (targetLine?.status === 'set') {
+    const yaw = targetLine.yawDeg === null ? '—' : targetLineYawText(targetLine.yawDeg);
+    targetText =
+      targetLine.uncertaintyDeg === null
+        ? t('live.targetLineSetNoSpread', { yaw })
+        : t('live.targetLineSet', { yaw, spread: `${targetLine.uncertaintyDeg.toFixed(1)}°` });
+  }
+  const target = targetText ? (
+    <p className="live-panel__target" data-status={targetLine?.status} role="status">
+      {targetText}
+    </p>
+  ) : null;
 
   if (!selected) {
     return (
       <div className="panel">
         {header}
+        {target}
         <div className="panel__body panel__body--empty live-panel__empty">
           <span className="panel__empty-title live-panel__empty-title">{t('live.ready')}</span>
           <span className="panel__empty-detail live-panel__empty-detail">{t('live.readyDetail')}</span>
@@ -89,6 +110,7 @@ export function LivePanel({
   return (
     <div className="panel">
       {header}
+      {target}
       <div className="panel__body live-panel__body">
         {isProfileNewShot ? <div className="shot-flash" /> : null}
         <div ref={gridRef} className={`live-panel__grid live-panel__grid--of-${metrics.length}`}>

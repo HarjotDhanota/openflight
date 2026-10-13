@@ -1,7 +1,11 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { mockConfirmedPlacementBox } from './helpers';
+import { mockConfirmedPlacementBox, useTester } from './helpers';
 
 test.use({ hasTouch: true });
+
+test.beforeEach(async ({ page }) => {
+  await useTester(page);
+});
 
 // P7-14 (D13): the tester page's ready light, relayed by the tester server.
 
@@ -25,7 +29,19 @@ async function fulfillJson(route: Route, payload: object, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(payload) });
 }
 
-async function mockPage(page: Page, readLight: () => { status?: number; body: object }) {
+// the swing step: a ladder walking, so the band relays the kiosk's light
+const WALKING = {
+  ladder: { current: 'full-300', pending_photo: null, rungs: { 'full-300': { status: 'active', swings: [], reason: null } } },
+  last_verdict: null,
+  photo_target: null,
+  stopped: false,
+};
+
+async function mockPage(
+  page: Page,
+  readLight: () => { status?: number; body: object },
+  ladder: object = WALKING
+) {
   await mockConfirmedPlacementBox(page);
   await page.route('**/api/tester/tee-range?**', (route) =>
     fulfillJson(route, {
@@ -43,7 +59,7 @@ async function mockPage(page: Page, readLight: () => { status?: number; body: ob
   );
   await page.route('**/api/tester/status**', (route) => fulfillJson(route, {}));
   await page.route('**/api/tester/attempts?**', (route) => fulfillJson(route, { schema_version: 1, scopes: [] }));
-  await page.route('**/api/tester/ladder?**', (route) => fulfillJson(route, { ladder: null, stopped: true }));
+  await page.route('**/api/tester/ladder?**', (route) => fulfillJson(route, ladder));
   await page.route('**/api/tester/ready-light**', (route) => {
     const { status = 200, body } = readLight();
     return fulfillJson(route, body, status);
@@ -61,6 +77,28 @@ test('shows NOT READY as a compact strip while no kiosk is running', async ({ pa
   await expect(band).toContainText('NOT READY');
   await expect(band).toContainText('kiosk not running');
   await expect(band).toHaveClass(/ready-light--compact/);
+});
+
+test('during setup (steps 1-6) the band never says ready, whatever the kiosk says', async ({ page }) => {
+  let light: Light = GREEN;
+  await mockPage(page, () => ({ body: light }), { ladder: null, stopped: true });
+  await page.goto('/tester.html');
+
+  const band = page.locator('#ready-light');
+  await expect(band).toHaveAttribute('data-state', 'setup');
+  await expect(band).toContainText('SETTING UP');
+  await expect(band).toContainText('Step 2 · Check the setup');
+  await expect(band).not.toContainText('SWING');
+  await expect(band).toHaveClass(/ready-light--compact/);
+  // a swing the kiosk hears during setup neither flashes nor shows
+  light = {
+    ...GREEN,
+    swing: { id: 9, at: 109.5, source: 'edge', result: { kind: 'shot', text: '120.0 mph', ball_speed_mph: 120 } },
+  };
+  await page.waitForTimeout(900);
+  await expect(band).toHaveAttribute('data-state', 'setup');
+  await expect(band).not.toContainText('Last swing');
+  await expect(page.locator('#ready-light-flash')).not.toHaveClass(/ready-light__flash--on/);
 });
 
 test('walks green, amber with its time left, and red with the cause', async ({ page }) => {
