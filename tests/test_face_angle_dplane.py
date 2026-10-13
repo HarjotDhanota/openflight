@@ -19,7 +19,11 @@ def _shot(**fields):
 
 
 def test_face_angle_is_mostly_start_direction_and_partly_path():
-    shot = _shot(launch_angle_horizontal=2.0, launch_angle_horizontal_source="camera")
+    shot = _shot(
+        launch_angle_horizontal=2.0,
+        launch_angle_horizontal_source="camera",
+        launch_angle_horizontal_confidence=0.9,
+    )
     shot.experimental_fused_club_path_deg = -4.0
 
     server._attach_collision_model(shot)
