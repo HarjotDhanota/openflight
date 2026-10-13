@@ -1,0 +1,36 @@
+{
+  "schema": "openflight.swing_exposure_config.v1",
+  "rule": "Use the lowest exposure unless more is needed: the resting ball is the light meter; the shortest exposure first, gain before exposure, never past the blur ceiling (owner, 13 Oct 2026).",
+  "blur_budget_mm": {
+    "approach": 4.0,
+    "impact": 1.0,
+    "source": "Decided 2026-09-23 (exposure research, guide section 1P): the club's smear is budgeted in millimetres, at most 4 mm on approach and 1 mm near impact. A millimetre budget does not depend on the lens or the readout mode."
+  },
+  "club_edge_speed_m_s": {
+    "approach": 13.6,
+    "impact": 3.3,
+    "source": "Measured toe-edge transverse image speed from behind the ball, August 7-iron session (33-39 m/s heads): 6.5-13.6 m/s on approach (the top of the range is used) and about 3.3 m/s near contact. The head moves mostly in depth from behind the ball, so this is 0.1-0.35x head speed."
+  },
+  "derivation": "ceiling_us = floor(min(approach_mm / approach_m_s, impact_mm / impact_m_s) x 1000) = floor(min(4.0 / 13.6, 1.0 / 3.3) x 1000) = floor(min(294.1, 303.0)) = 294 us. The same in both modes: binning halves the pixels a millimetre covers but not the millimetres. A driver (about 1.25x the 7-iron's head speed) would scale the edge speeds to about 17 m/s and the ceiling to about 235 us; club-aware ceilings are deferred until a baseline holds (decision 2026-09-20), so the measured 7-iron figure stands.",
+  "modes": {
+    "arm5": {
+      "label": "1280x800",
+      "width": 1280,
+      "height": 800,
+      "fps": 120.0,
+      "signal_factor": 1.0,
+      "blur_ceiling_us": 294
+    },
+    "arm6": {
+      "label": "640x400",
+      "width": 640,
+      "height": 400,
+      "fps": 288.0,
+      "signal_factor": 2.0,
+      "signal_factor_source": "Measured 13 Oct 2026: paired gain screens (4 sessions, ratios 1.96-2.04) give 640x400 2.00x the signal per pixel of 1280x800 at the same exposure and gain.",
+      "blur_ceiling_us": 294
+    }
+  },
+  "ladder_step": 1.4142,
+  "ladder_note": "The decision ladder runs down from the blur ceiling in steps of about sqrt(2) to the sensor's own shortest exposure, which is read from the camera's control limits (picamera2 camera_controls['ExposureTime']) for each mode at runtime and never written here."
+}
