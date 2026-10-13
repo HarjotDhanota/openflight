@@ -88,6 +88,23 @@ calibration may be required. Its `tilt_deg` and `radar_height_m` describe the
 July mount it was solved on and are not used: the swing server takes the radar's
 tilt and height from the enclosure's rig file (`--rig-geometry`).
 
+## `config/lenses.json`
+
+The lenses the unit can carry (stock 2.8 mm, 6 mm, 8 mm): focal length, aperture,
+field of view, provenance, and the exposure rungs each ladder mode allows. A lens's
+nominal focal length is the rig file's scaled by `focal_mm / 2.8`; a checkerboard
+calibration for its `lens_id` replaces it. The unit's choice and each lens's own
+modes, default mode and ladder are kept in `~/.config/openflight/camera-lens.json`.
+See [the fixed box](../camera/tester-fixed-box.md#the-lens).
+
+## `config/placement_box.json`
+
+The tester's fixed placement box: the placement window (`placement_window_m`,
+1.8–2.9 m forward of the lens), its half width, the tilt margins it is drawn with
+(uncalibrated 3°, calibrated 1°), the distance windows' pads, the net margin and
+the size window's reach past the window. A malformed file is refused, never
+defaulted. See [the fixed box](../camera/tester-fixed-box.md).
+
 ## `config/alloy.alloy`
 
 Grafana Alloy pipeline for shipping session logs. See

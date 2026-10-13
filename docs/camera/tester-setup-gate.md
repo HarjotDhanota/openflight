@@ -66,16 +66,21 @@ before Retry can advance the flow. Retry itself only changes guided state; it
 does not open or command the radar.
 
 Confirmation belongs to the tester ID and the exact geometry/inclinometer
-configuration in this server instance. A server restart requires confirmation
-again. Changing a configuration invalidates its earlier confirmation. Recheck
-and reconfirm after moving the setup or changing its physical arrangement;
-software cannot detect every mechanical change.
+configuration. It is kept on disk (`setup-confirmation.json` in the tester's
+folder) with a `confirmation_id`, so a tester-server restart keeps it, and a
+re-confirmation without a real change keeps the same identity. Changing a
+configuration invalidates its earlier confirmation, and so does the unit turning
+by more than 0.5° in pitch or roll since it was confirmed (a stable LIS3DH reading
+says so). Recheck and reconfirm after moving the setup or changing its physical
+arrangement; software cannot detect every mechanical change.
 
 An in-progress automatic-range epoch remains bound to the confirmation that
-started it. After a server restart, reconfirm the physical setup and then use
-**Ball or rig moved: start over**. The stale epoch cannot be retried under the
-new confirmation; the API persists `start_over_required` and the page disables
-its Retry action rather than appearing to ignore the tap.
+started it, by its identity, never its time. After a real change, reconfirm the
+physical setup and then use **Ball or rig moved: start over**. The stale epoch
+cannot be retried under the new confirmation; the API persists
+`start_over_required` and the page disables its Retry action rather than
+appearing to ignore the tap. The fixed box, the lens and the aim point are
+described in [the fixed box](tester-fixed-box.md).
 
 The tester checks its LIS3DH before handing hardware ownership to the kiosk.
 The kiosk then checks its own sensor state. Do not start a second I2C reader

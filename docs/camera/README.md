@@ -26,6 +26,9 @@ pipeline results with processing states, source labels, recorded discrepancies
 and optional hidden-metric testing blocks.
 The [tester setup requirements](tester-setup-gate.md) distinguish the approved
 measured rig, operator physical confirmation and runtime sensor readiness.
+[The fixed box](tester-fixed-box.md) describes the tester's TrackMan-style
+placement box, how the IWR's distance is matched to the camera's direction, the
+lens choice and the aim point.
 Use the [first Pi session procedure](pi-commissioning.md) to commission the
 complete bench and preserve level, tilted and recovery evidence.
 The [speed contract](speed-contract.md) explains the retained OPS radial result
