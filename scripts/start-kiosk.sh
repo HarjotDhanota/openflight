@@ -20,6 +20,13 @@ BROWSER_PID=""
 BROWSER_PGID=""
 BROWSER_LAUNCHED=false
 SERVER_ARGS=()
+# The tester server starts the kiosk with --no-browser (or OPENFLIGHT_NO_BROWSER=1):
+# the fullscreen kiosk window would cover the tester page (2a). The kiosk UI is then
+# opened from the tester page's "Kiosk view" button in a normal window or tab.
+case "${OPENFLIGHT_NO_BROWSER:-}" in
+    1|true|yes) NO_BROWSER=true ;;
+    *) NO_BROWSER=false ;;
+esac
 
 log() { printf '[OpenFlight] %s\n' "$1"; }
 warn() { printf '[OpenFlight] WARNING: %s\n' "$1"; }
@@ -54,6 +61,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --startup-splash)
             STARTUP_SPLASH=true
+            shift
+            ;;
+        --no-browser)
+            NO_BROWSER=true
             shift
             ;;
         --startup-splash-port)
@@ -148,9 +159,22 @@ fi
 
 SERVER_CMD=(openflight-server --web-port "$WEB_PORT" "${SERVER_ARGS[@]}")
 
+maybe_launch_kiosk_browser() {
+    if [ "$NO_BROWSER" = true ]; then
+        log "No kiosk browser (--no-browser): the kiosk UI is at $1"
+        return 0
+    fi
+    launch_kiosk_browser "$1"
+}
+
 if [ "$DRY_RUN" = true ]; then
     printf '%q ' "${SERVER_CMD[@]}"
     printf '\n'
+    if [ "$NO_BROWSER" = true ]; then
+        printf 'kiosk browser: off\n' >&2
+    else
+        printf 'kiosk browser: on\n' >&2
+    fi
     exit 0
 fi
 
@@ -300,7 +324,7 @@ start_startup_splash() {
 
     for _ in {1..20}; do
         if curl -fsS --max-time 1 "$splash_url" >/dev/null 2>&1; then
-            launch_kiosk_browser "$splash_url" || true
+            maybe_launch_kiosk_browser "$splash_url" || true
             return 0
         fi
         kill -0 "$SPLASH_PID" 2>/dev/null || break
@@ -446,7 +470,7 @@ if [ -n "$STARTUP_STATUS_FILE" ]; then
 fi
 
 if [ "$BROWSER_LAUNCHED" != true ]; then
-    launch_kiosk_browser "http://$HOST:$WEB_PORT" || true
+    maybe_launch_kiosk_browser "http://$HOST:$WEB_PORT" || true
 else
     log "Startup splash will continue to OpenFlight"
 fi

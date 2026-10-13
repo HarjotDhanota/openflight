@@ -823,3 +823,52 @@ def test_startup_failure_prints_the_recovery_hint_to_the_terminal():
     ]
 
     assert re.search(r'error ".*\$recovery"', failure_fn), failure_fn
+
+
+def _dry_run_browser(*args: str, env: dict | None = None) -> tuple[list[str], str]:
+    """The server command and what the dry run says about the kiosk browser (2a).
+
+    The variables are set inside bash: a Windows host's bash may not inherit them.
+    """
+    assignments = " ".join(f"{key}={shlex.quote(value)}" for key, value in (env or {}).items())
+    command = " ".join(
+        [assignments, "bash scripts/start-kiosk.sh", *map(shlex.quote, args), "--dry-run"]
+    ).strip()
+    result = subprocess.run(
+        ["bash", "-c", command],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return shlex.split(result.stdout), result.stderr
+
+
+def test_no_browser_is_a_kiosk_flag_and_never_reaches_the_server():
+    command, stderr = _dry_run_browser("--no-browser", "--iwr6843")
+
+    assert "--no-browser" not in command
+    assert command[:4] == ["openflight-server", "--web-port", "8080", "--iwr6843"]
+    assert "kiosk browser: off" in stderr
+
+
+@pytest.mark.parametrize("value", ["1", "true", "yes"])
+def test_the_environment_can_turn_the_browser_off(value):
+    _command, stderr = _dry_run_browser(env={"OPENFLIGHT_NO_BROWSER": value})
+
+    assert "kiosk browser: off" in stderr
+
+
+def test_by_default_the_kiosk_browser_still_opens():
+    _command, stderr = _dry_run_browser(env={"OPENFLIGHT_NO_BROWSER": ""})
+
+    assert "kiosk browser: on" in stderr
+
+
+def test_every_browser_launch_goes_through_the_no_browser_guard():
+    """The fullscreen window took the tester page over at every ladder start (2a)."""
+    script = _script()
+    body = script[script.index("maybe_launch_kiosk_browser() {") :]
+
+    assert script.count("launch_kiosk_browser ") == script.count("maybe_launch_kiosk_browser ") + 1
+    assert 'if [ "$NO_BROWSER" = true ]; then' in body
