@@ -854,6 +854,38 @@ def test_notch_speed_ball_recovered(cal):
     assert shot.launch_angle_deg == pytest.approx(18.0, abs=2.5)
 
 
+def test_notch_spacing_follows_the_dump_loop_period():
+    """D36 item 1: the burst-MTI notch comb is lambda / (2 x the same-TX loop
+    period), so a 3-TX dump (135 us loop) notches every ~17.9 m/s, not 26.9."""
+    from openflight.iwr6843.shot import near_mti_notch, notch_spacing_ms
+
+    assert notch_spacing_ms(LOOP_PRI_S) == pytest.approx(LAM / (2 * LOOP_PRI_S))
+    assert notch_spacing_ms(TX2_LOOP_PERIOD_S) == pytest.approx(LAM / (2 * TX2_LOOP_PERIOD_S))
+    three_tx_notch = 2 * LAM / (2 * TX2_LOOP_PERIOD_S)  # ~35.8 m/s
+    assert near_mti_notch(three_tx_notch, loop_period_s=TX2_LOOP_PERIOD_S)
+    assert not near_mti_notch(three_tx_notch, loop_period_s=LOOP_PRI_S)
+    # 2 x 26.9 = 3 x 17.9 sits in both combs; 3 x 26.9 = 4.5 x 17.9 only in the 2-TX one
+    two_tx_notch = 3 * LAM / (2 * LOOP_PRI_S)  # ~80.6 m/s
+    assert near_mti_notch(two_tx_notch, loop_period_s=LOOP_PRI_S)
+    assert not near_mti_notch(two_tx_notch, loop_period_s=TX2_LOOP_PERIOD_S)
+
+
+def test_three_tx_notch_speed_ball_is_recovered_and_flown_far(cal):
+    """D36 item 1: a 3-TX ball at the 135 us loop's second notch (~35.8 m/s)
+    must trigger the window-scope retry and the "far" policy, as a 2-TX ball
+    at 2 x 26.9 m/s does."""
+    notch_v = 2 * LAM / (2 * TX2_LOOP_PERIOD_S)
+    raw = synth_shot(speed_ms=notch_v, n_tx=3, n_loops=12, noise=4.0)
+
+    shot = process_dump(raw, cal)
+
+    assert shot.geometry.loop_period_s == pytest.approx(TX2_LOOP_PERIOD_S)
+    assert shot.ball_found and shot.quality != "reject"
+    assert shot.notch_recovered
+    assert shot.track.speed_ms == pytest.approx(notch_v, rel=0.03)
+    assert shot.policy == "far"
+
+
 def test_policy_is_observable_keyed(cal):
     """Same club label, different speeds -> different policy."""
     slow = process_dump(synth_shot(speed_ms=45.0), cal, club="7Iron")
