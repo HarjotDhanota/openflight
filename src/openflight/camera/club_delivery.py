@@ -27,7 +27,7 @@ from openflight.camera.geometry import (
     deroll_normalized_offsets,
     forward_distance_from_slant_range,
     intersect_radar_range_sphere,
-    reference_ball_camera_model,
+    resting_ball_camera_model,
     unit_world_rays,
 )
 from openflight.clubs import ClubType
@@ -162,6 +162,11 @@ class CameraDeliveryGeometry:
     # The resting ball's side offset from the radar's axis, + target-right: the
     # setup's camera-radar pair (D36 item 4b), else 0 (assumed dead ahead).
     ball_lateral_offset_m: float = 0.0
+    # D36 item 4a: the unit's calibrated camera pitch (this swing's LIS3DH pitch
+    # plus the P8-5 offset) and the rig's focal length for the mode. None: the
+    # resting ball sets both, as before, labelled uncalibrated.
+    setup_pitch_deg: float | None = None
+    setup_focal_px: float | None = None
 
     @property
     def ball_forward_m(self) -> float:
@@ -219,6 +224,9 @@ class ChainedDelivery:
     # Labels on the values that no longer withhold them (D15, P8-7): a dim
     # scene, a trigger-derived contact, an unchecked or implausible speed.
     notes: tuple[str, ...] = ()
+    # Where the camera's pitch and focal length came from, with the resting
+    # ball's own inference as a cross-check (D36 item 4a)
+    camera_model: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -269,19 +277,7 @@ def _pixels_to_world(
         xyz = geometry.calibrated_model.reconstruct(points_px, radar_range_m)
         return xyz[:, (0, 2, 1)]
     radar_origin = np.array([0.0, 0.0, geometry.radar_height_m])
-    focal_px, pitch_rad, _radar_from_camera = reference_ball_camera_model(
-        ball_x_px=ball.x,
-        ball_y_px=ball.y,
-        ball_diameter_px=ball.diameter_px,
-        ball_diameter_m=geometry.ball_diameter_m,
-        image_width_px=geometry.image_width_px,
-        image_height_px=geometry.image_height_px,
-        horizontal_pixel_sign=geometry.horizontal_pixel_sign,
-        roll_correction_deg=geometry.roll_correction_deg,
-        camera_origin_lfu=geometry.camera_origin,
-        radar_origin_lfu=radar_origin,
-        ball_position_lfu=geometry.ball_position_lfu,
-    )
+    focal_px, pitch_rad, _radar_from_camera, _check = _camera_model(ball, geometry)
     rays = unit_world_rays(
         points_px,
         focal_px=focal_px,
@@ -299,6 +295,25 @@ def _pixels_to_world(
     )
     # Public ordering remains lateral, vertical, forward.
     return xyz[:, (0, 2, 1)]
+
+
+def _camera_model(ball, geometry: CameraDeliveryGeometry) -> tuple[float, float, np.ndarray, dict]:
+    """The unit's calibrated pitch and focal length, else the resting ball's (D36 item 4a)."""
+    return resting_ball_camera_model(
+        setup_pitch_deg=geometry.setup_pitch_deg,
+        setup_focal_px=geometry.setup_focal_px,
+        ball_x_px=ball.x,
+        ball_y_px=ball.y,
+        ball_diameter_px=ball.diameter_px,
+        ball_diameter_m=geometry.ball_diameter_m,
+        image_width_px=geometry.image_width_px,
+        image_height_px=geometry.image_height_px,
+        horizontal_pixel_sign=geometry.horizontal_pixel_sign,
+        roll_correction_deg=geometry.roll_correction_deg,
+        camera_origin_lfu=geometry.camera_origin,
+        radar_origin_lfu=np.array([0.0, 0.0, geometry.radar_height_m]),
+        ball_position_lfu=geometry.ball_position_lfu,
+    )
 
 
 def _velocity_angles(velocity: np.ndarray) -> tuple[float, float]:
@@ -714,6 +729,10 @@ def camera_ops_delivery_from_feature_pair(
         + (geometry.ball_height_m - geometry.camera_height_m) ** 2
     )
     focal_px = ball.diameter_px * camera_ball_range_m / geometry.ball_diameter_m
+    calibrated = geometry.setup_pitch_deg is not None and geometry.setup_focal_px is not None
+    if calibrated:
+        # D36 item 4a: the unit's calibration, as the chained branch uses
+        focal_px = float(geometry.setup_focal_px)
     if not math.isfinite(focal_px) or focal_px <= 0.0:
         return None
 
@@ -737,6 +756,8 @@ def camera_ops_delivery_from_feature_pair(
         geometry.camera_ball_forward_m,
     )
     pitch_rad = expected_elevation - math.atan2(ball_z, 1.0)
+    if calibrated:
+        pitch_rad = math.radians(float(geometry.setup_pitch_deg))
     contact_depth_m = camera_ball_range_m / math.sqrt(1.0 + ball_x**2 + ball_z**2)
 
     first_x, first_z = normalized(pixels[:, 0])
@@ -1019,6 +1040,14 @@ def estimate_chained_delivery(
             return ChainedDelivery(
                 status="rejected_no_ball", scene_p995=scene_p995, notes=tuple(notes)
             )
+    camera_check = None
+    if geometry.calibrated_model is None:
+        try:
+            camera_check = _camera_model(ball, geometry)[3]
+        except ValueError:
+            camera_check = None
+        if camera_check is not None and camera_check.get("disagrees"):
+            notes.append(str(camera_check["warning"]))
     yy, xx = np.mgrid[0 : frames.shape[1], 0 : frames.shape[2]]
     image_scale = _image_scale(frames.shape)
     ball_zone_radius = max(50.0, BALL_ZONE_RADIUS_PX * image_scale)
@@ -1129,6 +1158,7 @@ def estimate_chained_delivery(
         "head_thickness_px": (round(head_thickness, 2) if head_thickness is not None else None),
         "range_evidence_status": range_evidence_status,
         "notes": tuple(notes),
+        "camera_model": camera_check,
     }
     if not pair_estimates:
         return ChainedDelivery(

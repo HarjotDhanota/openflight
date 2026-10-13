@@ -1680,11 +1680,17 @@ def init_setup_handoff(args, enclosure) -> None:
             "range_space": "apparent",
             "assumed": args.iwr6843_net_range_source == "default_not_measured",
         },
-        # P8-5: recorded beside the estimators, which infer pitch per shot
+        # P8-5, D36 item 4a: applied on swings as each one's LIS3DH pitch plus this
+        # offset with the rig's mode focal length; the resting ball's per-shot
+        # inference is kept as a cross-check
         "camera_tilt": {
             "vertical_offset_deg": getattr(args, "camera_vertical_offset_deg", None),
             "source": getattr(args, "camera_vertical_offset_source", None) or "uncalibrated",
-            "applied": "recorded_only_pitch_inferred_from_the_resting_ball_and_tee_range",
+            "applied": (
+                "swings_lis3dh_pitch_plus_offset_and_rig_mode_focal_resting_ball_checks"
+                if getattr(args, "camera_vertical_offset_deg", None) is not None
+                else "uncalibrated_pitch_and_focal_inferred_from_the_resting_ball"
+            ),
         },
     }
     if setup_handoff_config["net_range"]["assumed"] and args.iwr6843:
@@ -1715,6 +1721,30 @@ def _rig_override(name: str, flag_value, rig_value):
     else:
         logger.info("[SERVER] %s: %s from rig geometry", name, rig_value)
     return rig_value
+
+
+def _swing_camera_pose(shot: Shot) -> dict:
+    """This swing's camera pose: its own LIS3DH pitch plus the unit's offset (D36 item 4a).
+
+    The offset is the P8-5 calibration the tester handed over
+    (``--camera-vertical-offset-deg``); the focal length is the rig's for the mode.
+    Without either, or without a stable reading, the pose says why and the
+    estimators infer pitch and focal length from the resting ball, labelled.
+    """
+    from .camera import camera_tilt  # noqa: PLC0415
+
+    recorded = (setup_handoff_config.get("camera_tilt") or {}).get("vertical_offset_deg")
+    calibration = (
+        {"offset_deg": float(recorded), "label": camera_tilt.LABEL}
+        if isinstance(recorded, (int, float)) and not isinstance(recorded, bool)
+        else None
+    )
+    return camera_tilt.swing_camera_pose(
+        rig=rig_geometry,
+        image_width_px=int(camera_capture_config.get("width") or 0),
+        inclinometer=getattr(shot, "inclinometer", None),
+        calibration=calibration,
+    )
 
 
 def _expected_inclinometer_orientation() -> dict:
@@ -4505,6 +4535,7 @@ def _fuse_camera_club_delivery(
 ) -> None:
     """Impact-centered camera + IWR depth club delivery, experimentally."""
     try:
+        from openflight.camera import camera_tilt  # noqa: PLC0415
         from openflight.camera.club_delivery import (  # noqa: PLC0415
             ChainedDelivery,
             estimate_chained_delivery,
@@ -4555,7 +4586,10 @@ def _fuse_camera_club_delivery(
                                     archive["host_timestamp_ns"],
                                     trigger_index=trigger_index,
                                     range_evidence=shot.iwr6843_club_range_evidence,
-                                    geometry=geometry_inputs.delivery_geometry(),
+                                    geometry=camera_tilt.with_swing_pose(
+                                        geometry_inputs.delivery_geometry(),
+                                        _swing_camera_pose(shot),
+                                    ),
                                     ops_club_speed_mph=shot.club_speed_mph,
                                     sensor_timestamp_ns=archive.get("sensor_timestamp_ns"),
                                 )
@@ -4648,6 +4682,7 @@ def _fuse_camera_ball_flight(
 ) -> None:
     """Select experimental camera horizontal while preserving IWR fallback."""
     try:
+        from openflight.camera import camera_tilt  # noqa: PLC0415
         from openflight.camera.ball_flight import (  # noqa: PLC0415
             CameraBallEstimate,
             estimate_camera_ball_flight,
@@ -4696,7 +4731,9 @@ def _fuse_camera_ball_flight(
                                 archive["host_timestamp_ns"],
                                 trigger_ns=trigger_ns,
                                 range_evidence=shot.iwr6843_ball_range_evidence,
-                                geometry=geometry_inputs.ball_geometry(),
+                                geometry=camera_tilt.with_swing_pose(
+                                    geometry_inputs.ball_geometry(), _swing_camera_pose(shot)
+                                ),
                                 ops_ball_speed_mph=shot.ball_speed_raw_mph or shot.ball_speed_mph,
                                 iwr_vertical_deg=shot.launch_angle_vertical,
                                 sensor_timestamps_ns=archive.get("sensor_timestamp_ns"),
@@ -5046,12 +5083,17 @@ def _fuse_camera_measurements(
                 shot_number=shot_number,
                 notes=camera_notes,
                 setup_ball=camera_capture_config.get("setup_ball"),
+                camera_pose=_swing_camera_pose(shot),
             )
             shot.camera_fusion_context = context
             result = process_camera_fusion(context, camera_archive)
             shot.camera_fusion_processing = result
             # the club stage's labels ride beside its values (D15, P8-7)
             club_notes = [f"club: {note}" for note in result["club_delivery"].get("notes") or ()]
+            # D36 item 4a: the calibrated pose against the resting ball's, when they disagree
+            ball_check = result["ball_estimate"].get("camera_model") or {}
+            if ball_check.get("disagrees"):
+                club_notes.insert(0, f"ball: {ball_check['warning']}")
             shot.camera_notes = [*camera_notes, *club_notes] or None
             shot.calibrated_camera_status = (
                 "experimental_unqualified"
@@ -7301,8 +7343,9 @@ def _add_iwr_tee_range_arguments(parser):
         help=(
             "The unit's camera tilt (mount pitch plus principal-point row) the tester "
             "calibrated from a validated camera-radar pair (P8-5); recorded in "
-            "session_start. The nominal estimators infer pitch per shot from the resting "
-            "ball and the tee range, so it is not added to them"
+            "session_start. Applied on swings (D36): each shot's camera pitch is its own "
+            "LIS3DH pitch plus this offset and its focal length the rig's for the mode; "
+            "the resting ball's per-shot inference is kept as a flagged cross-check"
         ),
     )
     parser.add_argument(

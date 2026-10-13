@@ -298,3 +298,90 @@ def applied_pitch(lis3dh_pitch_deg: float, calibration: Mapping | None) -> dict:
         "calibrated_at_utc": calibration.get("calibrated_at_utc"),
         "composition": COMPOSITION,
     }
+
+
+SWING_POSE_SCHEMA = "openflight.camera_swing_pose.v1"
+
+
+def _stable_pitch(inclinometer: Mapping | None) -> float | None:
+    """This swing's own calibrated LIS3DH pitch, when its reading was stable."""
+    if not isinstance(inclinometer, Mapping) or inclinometer.get("applied") is not True:
+        return None
+    pitch = inclinometer.get("calibrated_pitch_deg")
+    if isinstance(pitch, bool) or not isinstance(pitch, (int, float)):
+        return None
+    return float(pitch) if math.isfinite(float(pitch)) else None
+
+
+def swing_camera_pose(
+    *,
+    rig: Any,
+    image_width_px: int,
+    inclinometer: Mapping | None,
+    calibration: Mapping | None,
+) -> dict:
+    """The camera pose one swing measures with, composed exactly as the setup's (D36 item 4a).
+
+    The camera's LIS3DH pitch is the rig's boresight pitch moved by how far this
+    swing's own reading departs from the placement the rig expects (the tester's
+    ``camera_pitch_deg``); ``applied_pitch`` composes it with the unit's offset;
+    the focal length is the rig's for this mode (``ball_pixels.mode_focal_px``).
+    Both are once-measured calibration. Without the unit's calibration, a stable
+    reading or a rig, the pose says why and the estimators keep inferring the
+    pitch and focal length from the resting ball, labelled uncalibrated.
+    """
+    from openflight.camera.ball_pixels import mode_focal_px  # noqa: PLC0415
+
+    pose: dict[str, Any] = {
+        "schema": SWING_POSE_SCHEMA,
+        "status": "uncalibrated",
+        "pitch_deg": None,
+        "focal_px": None,
+        "composition": COMPOSITION,
+    }
+    reasons = []
+    if calibration is None:
+        reasons.append("no unit camera tilt calibration (P8-5)")
+    if rig is None:
+        reasons.append("no rig geometry")
+    lis3dh_pitch = _stable_pitch(inclinometer)
+    if lis3dh_pitch is None:
+        reasons.append("no stable LIS3DH reading for this shot")
+    if reasons:
+        pose["reason"] = "; ".join(reasons) + ": pitch and focal length inferred per shot"
+        return pose
+    expected = rig.expected_inclinometer_orientation().pitch_deg or 0.0
+    camera_pitch = float(rig.boresight_pitch_deg) + (lis3dh_pitch - float(expected))
+    applied = applied_pitch(camera_pitch, calibration)
+    pose.update(
+        {
+            "status": "calibrated",
+            "label": LABEL,
+            "pitch_deg": applied["pitch_deg"],
+            "lis3dh_camera_pitch_deg": camera_pitch,
+            "offset_deg": applied["offset_deg"],
+            "uncertainty_deg": applied.get("uncertainty_deg"),
+            "calibrated_at_utc": applied.get("calibrated_at_utc"),
+            "focal_px": mode_focal_px(int(image_width_px), rig),
+            "focal_source": "rig_focal_for_the_mode",
+        }
+    )
+    return pose
+
+
+def with_swing_pose(geometry: Any, pose: Mapping | None) -> Any:
+    """A nominal camera geometry with this swing's calibrated pose, if it has one.
+
+    A calibrated optical model carries its own pose and is left as it is.
+    """
+    if pose is None or getattr(geometry, "calibrated_model", None) is not None:
+        return geometry
+    from dataclasses import replace  # noqa: PLC0415
+
+    if pose.get("status") != "calibrated":
+        return geometry
+    return replace(
+        geometry,
+        setup_pitch_deg=float(pose["pitch_deg"]),
+        setup_focal_px=float(pose["focal_px"]),
+    )

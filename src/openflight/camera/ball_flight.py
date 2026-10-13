@@ -27,7 +27,7 @@ from openflight.camera.club_motion import (
 from openflight.camera.geometry import (
     forward_distance_from_slant_range,
     intersect_radar_range_sphere,
-    reference_ball_camera_model,
+    resting_ball_camera_model,
     unit_world_rays,
 )
 from openflight.horizontal_frame import frame_for, to_boresight_deg, to_reported_deg
@@ -139,6 +139,11 @@ class CameraBallGeometry:
     # The resting ball's side offset from the radar's axis, + target-right: the
     # setup's camera-radar pair (D36 item 4b), else 0 (assumed dead ahead).
     ball_lateral_offset_m: float = 0.0
+    # D36 item 4a: the unit's calibrated camera pitch (this swing's LIS3DH pitch
+    # plus the P8-5 offset) and the rig's focal length for the mode. None: the
+    # resting ball sets both, as before, labelled uncalibrated.
+    setup_pitch_deg: float | None = None
+    setup_focal_px: float | None = None
 
     @property
     def ball_forward_m(self) -> float:
@@ -199,6 +204,9 @@ class CameraBallEstimate:
     impact_delay_ms: float | None = None
     # unit_boresight or target_line (D36 item 2); set with horizontal_deg
     horizontal_frame: str | None = None
+    # Where the camera's pitch and focal length came from, with the resting
+    # ball's own inference as a cross-check (D36 item 4a)
+    camera_model: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -242,11 +250,26 @@ def _camera_model(
     anchor: ReferenceBall,
     geometry: CameraBallGeometry,
 ) -> tuple[float, float, np.ndarray]:
-    """Infer focal scale and pose from the stationary regulation-size ball."""
+    """Focal scale and pose: the unit's calibration, else the resting ball."""
+    return _checked_camera_model(anchor, geometry)[0]
+
+
+def _checked_camera_model(
+    anchor: ReferenceBall,
+    geometry: CameraBallGeometry,
+) -> tuple[tuple[float, float, np.ndarray], dict | None]:
+    """The model and the record of where it came from (D36 item 4a).
+
+    With the unit's tilt calibrated the swing's pitch and focal length are the
+    calibration's; the stationary regulation-size ball's own inference is the
+    recorded cross-check. Without it the ball sets both, labelled uncalibrated.
+    """
     if geometry.calibrated_model is not None:
-        return (1.0, 0.0, np.zeros(3))
+        return (1.0, 0.0, np.zeros(3)), None
     ball_position = geometry.ball_position_lfu
-    return reference_ball_camera_model(
+    focal_px, pitch_rad, radar_from_camera, record = resting_ball_camera_model(
+        setup_pitch_deg=geometry.setup_pitch_deg,
+        setup_focal_px=geometry.setup_focal_px,
         ball_x_px=anchor.x,
         ball_y_px=anchor.y,
         ball_diameter_px=anchor.diameter_px,
@@ -259,6 +282,7 @@ def _camera_model(
         radar_origin_lfu=np.array([0.0, 0.0, geometry.radar_height_m]),
         ball_position_lfu=ball_position,
     )
+    return (focal_px, pitch_rad, radar_from_camera), record
 
 
 def _project(
@@ -1049,7 +1073,7 @@ def estimate_camera_ball_flight(
         )
 
     try:
-        model = _camera_model(anchor, geometry)
+        model, camera_check = _checked_camera_model(anchor, geometry)
     except ValueError:
         return CameraBallEstimate(
             "rejected_implausible_reference_ball",
@@ -1176,6 +1200,7 @@ def estimate_camera_ball_flight(
         timing_anchor=timing_anchor,
         contact_frame=contact.impact_frame if contact is not None else None,
         timestamp_source=timestamp_source,
+        camera_model=camera_check,
     )
 
 
