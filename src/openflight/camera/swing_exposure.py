@@ -79,8 +79,9 @@ DecisionStatus = Literal[
 # --- config -------------------------------------------------------------------------
 
 
-def _derived_ceiling_us(config: Mapping[str, Any], arm_id: str) -> int:
-    mode = config["modes"][arm_id]
+def _derived_ceiling_us(config: Mapping[str, Any], arm_id: str | None) -> int:
+    # a size outside the config's modes (the legacy 320x200) takes the shared budget
+    mode = config["modes"][arm_id] if arm_id is not None else {}
     budget = {**config["blur_budget_mm"], **(mode.get("blur_budget_mm") or {})}
     speed = {**config["club_edge_speed_m_s"], **(mode.get("club_edge_speed_m_s") or {})}
     # mm over m/s is ms; x 1000 is microseconds
@@ -110,8 +111,12 @@ def load_config(path: Path | str | None = None) -> dict[str, Any]:
     return config
 
 
-def blur_ceiling_us(config: Mapping[str, Any], arm_id: str) -> int:
-    """The longest exposure that keeps the club inside the mm blur budget, for a mode."""
+def blur_ceiling_us(config: Mapping[str, Any], arm_id: str | None) -> int:
+    """The longest exposure that keeps the club inside the mm blur budget, for a mode.
+
+    ``None`` (a size the config has no mode for) takes the shared budget: a
+    millimetre budget does not depend on the readout.
+    """
     return _derived_ceiling_us(config, arm_id)
 
 
@@ -194,6 +199,71 @@ def sensor_limits_from_controls(controls: Mapping[str, Any] | None) -> SensorLim
         source="camera_controls",
         gain_source="camera_controls" if gain else "ov9282_driver_register_cap",
     )
+
+
+DEFAULT_SENSOR_LIMITS_PATH = Path.home() / ".config" / "openflight" / "camera-sensor-limits.json"
+SENSOR_LIMITS_SCHEMA = "openflight.camera_sensor_limits.v1"
+
+
+def _size_key(width: int, height: int) -> str:
+    return f"{int(width)}x{int(height)}"
+
+
+def record_sensor_limits(
+    path: Path | str,
+    width: int,
+    height: int,
+    limits: SensorLimits,
+    *,
+    lens_id: str | None = None,
+    recorded_by: str = "kiosk",
+) -> None:
+    """Keep the limits a camera reported for one mode, for pages that have no camera open.
+
+    The lens is recorded with them; the exposure limits are the sensor's and do not
+    depend on it.
+    """
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    target = Path(path).expanduser()
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        if payload.get("schema") != SENSOR_LIMITS_SCHEMA:
+            payload = {}
+    except (OSError, ValueError):
+        payload = {}
+    modes = dict(payload.get("modes") or {})
+    modes[_size_key(width, height)] = {
+        **limits.to_dict(),
+        "lens_id": lens_id,
+        "recorded_by": recorded_by,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(f"{target.suffix}.tmp")
+    temporary.write_text(
+        json.dumps({"schema": SENSOR_LIMITS_SCHEMA, "modes": modes}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(target)
+
+
+def recorded_sensor_limits(path: Path | str, width: int, height: int) -> dict | None:
+    """The recorded limits for one mode (with when and by what), or None if never read."""
+    try:
+        payload = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, Mapping) or payload.get("schema") != SENSOR_LIMITS_SCHEMA:
+        return None
+    entry = (payload.get("modes") or {}).get(_size_key(width, height))
+    if not isinstance(entry, Mapping):
+        return None
+    try:
+        SensorLimits.from_dict(entry)
+    except (KeyError, TypeError, ValueError):
+        return None
+    return dict(entry)
 
 
 # --- the envelope and its ladder ------------------------------------------------------------

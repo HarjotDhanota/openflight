@@ -20,14 +20,9 @@ from typing import Callable, Literal, Mapping
 
 import numpy as np
 
-from openflight.camera.auto_exposure import (
-    AutoExposureDecision,
-    AutoExposurePolicy,
-    ExposureObservation,
-    measure_exposure,
-    motion_blur_risk,
-)
-from openflight.camera.optical_quality import within_armed_profile
+from openflight.camera import study_ladder, swing_exposure as sx
+from openflight.camera.auto_exposure import ExposureObservation, measure_exposure
+from openflight.camera.optical_quality import controls_match, within_armed_profile
 from openflight.camera.static_exposure import SENSOR_BLACK_LEVEL_DN
 from openflight.camera.study_ladder import capture_analysis_eligibility
 from openflight.camera.triggered_buffer import (
@@ -47,7 +42,13 @@ CameraCaptureStream = Literal["raw", "main-y"]
 
 RASPBERRY_PI_DIST_PACKAGES = Path("/usr/lib/python3/dist-packages")
 OV9281_VERTICAL_OFFSET_PATH = Path("/sys/module/ov9282/parameters/strip_y_offset")
-AUTO_EXPOSURE_STARTUP_SETTLE_S = 0.3
+# The swing exposure re-checks the resting ball this often between clips (13 Oct 2026:
+# no startup lock), judging the latest few frames taken at the controls in force.
+SWING_EXPOSURE_EVERY_S = 1.0
+SWING_EXPOSURE_FRAMES = 3
+# A resting-ball look older than this is not a ball for the exposure.
+SWING_EXPOSURE_LOOK_MAX_AGE_S = 5.0
+SWING_EXPOSURE_DECISIONS_KEPT = 20
 # Completed clips waiting for the disk. Each full-resolution clip is about 25 MB in
 # RAM; a false-trigger storm on a slow card must not grow this without bound.
 MAX_PENDING_SAVES = 3
@@ -116,6 +117,12 @@ class CameraCaptureSettings:
     hitting_zone: tuple[int, int, int, int] | None = None
     # The lens on the unit (lens_profiles.ActiveLens.to_dict), recorded in every clip.
     lens: Mapping | None = None
+    # The setup's measured light: the 1280x800 resting ball's DN above black per
+    # us x gain. It seeds the swing exposure before the first ball look; the mode's
+    # measured signal factor carries it to 640x400 (13 Oct).
+    light_index_dn_per_us_gain: float | None = None
+    # Where the sensor's control limits read at startup are kept for other pages.
+    sensor_limits_path: Path | None = None
 
     @property
     def enforced_profile(self) -> Mapping | None:
@@ -291,6 +298,17 @@ def camera_properties(camera) -> dict | None:
         return None
 
 
+def read_sensor_limits(camera) -> sx.SensorLimits | None:
+    """The exposure and gain limits the configured camera reports for its mode."""
+    try:
+        controls = camera.camera_controls
+        if callable(controls):
+            controls = controls()
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+    return sx.sensor_limits_from_controls(controls)
+
+
 def _metadata_crop(value) -> tuple[int, int, int, int] | None:
     if value is None:
         return None
@@ -401,6 +419,7 @@ class CameraCaptureRuntime:
             else None
         )
         self._last_persisted_controls: tuple[int, float] | None = None
+        self._remembered_light_index: float | None = None
         self._restore_auto_exposure_controls()
         self._camera = None
         self._resolved_config: dict | None = None
@@ -425,25 +444,17 @@ class CameraCaptureRuntime:
         # frame lock above is held only to freeze the ring (P6-7).
         self._trigger_order_lock = threading.Lock()
         self._reconfigure_lock = threading.Lock()
-        profile = self.settings.enforced_profile
-        self._auto_exposure_policy = AutoExposurePolicy(
-            fps=self.settings.fps,
-            max_exposure_us=profile["exposure_ceiling_us"] if profile else None,
-            max_gain=profile["gain_ceiling"] if profile else None,
-        )
+        # The swing exposure (13 Oct): built once the camera reports its limits.
+        self._sensor_limits: sx.SensorLimits | None = None
+        self._swing_policy: sx.SwingExposurePolicy | None = None
+        self._ball_locator: Callable[[], Mapping | None] | None = None
+        self._swing_decisions: deque[dict] = deque(maxlen=SWING_EXPOSURE_DECISIONS_KEPT)
+        self._swing_thread: threading.Thread | None = None
         self._auto_exposure_stop = threading.Event()
         self._auto_exposure_lock = threading.Lock()
-        self._auto_exposure_decision = AutoExposureDecision(
-            status="unavailable",
-            analysis_eligible=not self.settings.auto_exposure,
-            message="Waiting for automatic exposure calibration",
-            observation=ExposureObservation(
-                sample_available=False,
-                status="unavailable",
-                recommendation="hold",
-                message="Waiting for a camera frame",
-            ),
-            motion_blur_risk=motion_blur_risk(self.settings.exposure_us),
+        self._auto_exposure_decision = sx.unavailable_decision(
+            sx.Setting(self.settings.exposure_us, self.settings.gain),
+            "Waiting for the camera's exposure limits",
         )
         self._auto_exposure_last_check_epoch: float | None = None
         self._auto_exposure_last_adjustment_epoch: float | None = None
@@ -486,6 +497,8 @@ class CameraCaptureRuntime:
         if self.settings.scaler_crop is not None:
             self._camera.set_controls({"ScalerCrop": self.settings.scaler_crop})
         self._resolved_config = resolved_camera_config(self._camera)
+        # this mode's limits, read after configure (they are per mode), never assumed
+        self.configure_swing_exposure(read_sensor_limits(self._camera))
         self._startup_capture_mode = self._capture_mode_startup_snapshot()
         self._camera.post_callback = self._on_frame
         self._running = True
@@ -500,7 +513,6 @@ class CameraCaptureRuntime:
             self._wait_for_prebuffer()
             if self.settings.auto_exposure:
                 self._start_auto_exposure()
-                self._refill_locked_exposure_prebuffer()
             if self._use_gpio_trigger:
                 self._start_gpio_trigger()
         except Exception:
@@ -520,6 +532,9 @@ class CameraCaptureRuntime:
         """Stop camera capture and release hardware resources."""
         self._running = False
         self._auto_exposure_stop.set()
+        swing_thread, self._swing_thread = self._swing_thread, None
+        if swing_thread is not None and swing_thread is not threading.current_thread():
+            swing_thread.join(timeout=2.0)
         if self._button is not None:
             self._button.close()
             self._button = None
@@ -604,13 +619,31 @@ class CameraCaptureRuntime:
         """
         settings = self.settings
         with self._auto_exposure_lock:
-            payload = self._auto_exposure_decision.to_dict()
+            decision = self._auto_exposure_decision
+            payload = decision.to_dict()
             payload.update(
                 {
                     "enabled": settings.auto_exposure,
                     "capture_deferred": self._auto_exposure_capture_deferred,
                     "last_check_timestamp": self._auto_exposure_last_check_epoch,
                     "last_adjustment_timestamp": self._auto_exposure_last_adjustment_epoch,
+                    "sensor_limits": (
+                        self._sensor_limits.to_dict() if self._sensor_limits else None
+                    ),
+                    "blur_ceiling_us": (
+                        self._swing_policy.envelope.blur_ceiling_us if self._swing_policy else None
+                    ),
+                    "recent_decisions": list(self._swing_decisions),
+                    # D15: the ball's verdict labels the clip, never withholds it
+                    "analysis_eligibility": {
+                        "rule": "resting_ball",
+                        "eligible": decision.analysis_eligible,
+                        "reason": (
+                            None
+                            if decision.analysis_eligible
+                            else decision.frame_label or decision.message
+                        ),
+                    },
                 }
             )
         return {
@@ -841,7 +874,8 @@ class CameraCaptureRuntime:
         self._trigger_evidence = queue.Queue()
         self._trigger_clocks = queue.Queue()
         self._admission_evidence = []
-        self._auto_exposure_policy.reset()
+        if self._swing_policy is not None:
+            self._swing_policy.reset()
 
     def status(self) -> dict:
         """Return lightweight state for the operator UI."""
@@ -1099,96 +1133,262 @@ class CameraCaptureRuntime:
             )
 
     def _refill_locked_exposure_prebuffer(self) -> None:
-        """Discard calibration frames and refill the ring at locked controls."""
+        """Discard frames taken before the seed and refill the ring at the seeded controls."""
         self._ring = TriggeredFrameBuffer(
             self.settings.pre_frames,
             self.settings.post_frames,
         )
         self._wait_for_prebuffer()
 
+    # --- the swing exposure (13 Oct 2026) ---------------------------------------------
+
+    def configure_swing_exposure(self, limits: sx.SensorLimits | None) -> None:
+        """Build the swing exposure policy from the limits this camera reported.
+
+        The limits are recorded (for the tester ladder, which has no camera of its own
+        in this mode) whether or not exposure is automatic. Without them the policy
+        does not run: the sensor's shortest exposure is never assumed.
+        """
+        self._sensor_limits = limits
+        if limits is None:
+            self._swing_policy = None
+            logger.warning("[CAMERA] The camera reported no exposure limits for this mode")
+            return
+        settings = self.settings
+        config = sx.load_config()
+        arm_id = sx.mode_for_size(settings.width, settings.height, config)
+        envelope = sx.build_envelope(
+            limits,
+            blur_ceiling_us=sx.blur_ceiling_us(config, arm_id),
+            fps=settings.fps,
+            armed_profile=settings.enforced_profile,
+            black_floor_dn=SENSOR_BLACK_LEVEL_DN,
+        )
+        self._swing_policy = sx.SwingExposurePolicy(envelope)
+        logger.info(
+            "[CAMERA] Sensor limits %dx%d: exposure %d-%s us, gain %.2f-%.4f (%s); "
+            "swing ladder %s us, blur ceiling %d us",
+            settings.width,
+            settings.height,
+            limits.exposure_min_us,
+            limits.exposure_max_us,
+            limits.gain_min,
+            limits.gain_max,
+            limits.gain_source,
+            list(envelope.ladder),
+            envelope.blur_ceiling_us,
+        )
+        path = settings.sensor_limits_path
+        if path is not None:
+            try:
+                sx.record_sensor_limits(
+                    path,
+                    settings.width,
+                    settings.height,
+                    limits,
+                    lens_id=(settings.lens or {}).get("lens_id"),
+                )
+            except OSError:
+                logger.warning("[CAMERA] Could not record the sensor limits", exc_info=True)
+
+    def set_resting_ball_locator(self, locator: Callable[[], Mapping | None] | None) -> None:
+        """Where the resting ball is: the kiosk's latest look in the box (``ball_at_address``).
+
+        The locator returns that look (``state``, ``center_px``, ``diameter_px``,
+        ``observed_at``), or None when there is no box; the setup's ball spot then
+        stands in.
+        """
+        self._ball_locator = locator
+
+    def _seed_light_index(self) -> tuple[float | None, str]:
+        settings = self.settings
+        if settings.light_index_dn_per_us_gain is not None:
+            config = sx.load_config()
+            arm_id = sx.mode_for_size(settings.width, settings.height, config)
+            if arm_id is not None:
+                factor = sx.mode_signal_factor(config, arm_id)
+                return float(settings.light_index_dn_per_us_gain) * factor, "setup_light_index"
+            logger.info(
+                "[CAMERA] %dx%d has no measured signal factor; the setup light index is unused",
+                settings.width,
+                settings.height,
+            )
+        if self._remembered_light_index is not None:
+            return self._remembered_light_index, "remembered_light_index"
+        return None, "none"
+
+    def _seed_swing_exposure(self) -> sx.SwingExposureDecision:
+        """The first setting, before any ball is seen; applied before the ring is armed."""
+        current = sx.Setting(self.settings.exposure_us, self.settings.gain)
+        policy = self._swing_policy
+        if policy is None:
+            decision = sx.unavailable_decision(
+                current,
+                "The camera reported no exposure limits; holding the startup controls",
+            )
+        else:
+            index, source = self._seed_light_index()
+            decision = policy.seed(index, current, source=source)
+            if decision.should_apply:
+                self.update_image_controls(
+                    exposure_us=decision.target.exposure_us, gain=decision.target.gain
+                )
+        self._record_swing_decision(decision, checked_at=time.time())
+        return decision
+
     def _start_auto_exposure(self) -> None:
-        """Calibrate once before arming shot capture, then lock the controls."""
-        self._auto_exposure_policy.reset()
+        """Seed the controls, refill the ring at them, then keep re-checking between clips."""
         self._auto_exposure_stop.clear()
-        self._auto_exposure_loop()
+        decision = self._seed_swing_exposure()
+        if decision.should_apply:
+            self._refill_locked_exposure_prebuffer()
+        self._swing_thread = threading.Thread(
+            target=self._auto_exposure_loop, name="camera-swing-exposure", daemon=True
+        )
+        self._swing_thread.start()
 
     def _auto_exposure_loop(self) -> None:
-        """Converge startup controls and return without steady-state monitoring."""
+        """Re-check the resting ball before every swing: there is no startup lock."""
         while self._running and not self._auto_exposure_stop.is_set():
             try:
-                decision = self._run_auto_exposure_cycle()
+                self._run_auto_exposure_cycle()
             except Exception:  # pylint: disable=broad-exception-caught
-                logger.warning("[CAMERA] Startup exposure calibration failed", exc_info=True)
+                logger.warning("[CAMERA] Swing exposure check failed", exc_info=True)
+            if self._auto_exposure_stop.wait(SWING_EXPOSURE_EVERY_S):
                 return
 
-            if decision is None:
-                if self._auto_exposure_stop.wait(0.1):
-                    return
-                continue
-            if not decision.should_apply:
-                logger.info(
-                    "[CAMERA] Startup exposure locked: %dus gain %.1f (%s)",
-                    self.settings.exposure_us,
-                    self.settings.gain,
-                    decision.status,
-                )
-                return
-            if self._auto_exposure_stop.wait(AUTO_EXPOSURE_STARTUP_SETTLE_S):
-                return
+    def _resting_ball(
+        self, frames: tuple[CameraFrame, ...]
+    ) -> tuple[sx.BallReading | None, str | None]:
+        """The resting ball's reading in these frames, or why there is none."""
+        images = [frame.image for frame in frames]
+        last = frames[-1]
+        common = {
+            "black_floor_dn": SENSOR_BLACK_LEVEL_DN,
+            "exposure_us": float(last.exposure_us),
+            "gain": float(last.analogue_gain),
+        }
+        look = self._ball_locator() if self._ball_locator is not None else None
+        if look is not None:
+            state = look.get("state")
+            if state != "in_box" or not look.get("center_px") or not look.get("diameter_px"):
+                return None, str(look.get("reason") or f"the resting ball is {state}")
+            observed = look.get("observed_at")
+            age = time.time() - float(observed) if observed is not None else 0.0
+            if age > SWING_EXPOSURE_LOOK_MAX_AGE_S:
+                return None, f"the last look at the ball is {age:.0f} s old"
+            x, y = (float(value) for value in look["center_px"])
+            reading = sx.read_ball(
+                images,
+                x=x,
+                y=y,
+                diameter_px=float(look["diameter_px"]),
+                source="ball_at_address",
+                **common,
+            )
+            return reading, None if reading is not None else "the ball's spot is off the frame"
+        ball = self.settings.setup_ball
+        if not ball:
+            return None, "no ball box or setup ball to find the resting ball by"
+        found = study_ladder.ball_light(np.asarray(images), SENSOR_BLACK_LEVEL_DN, dict(ball))
+        if found is None:
+            return None, "no ball at the setup's spot"
+        reading = sx.read_ball(
+            images,
+            x=float(found["x"]),
+            y=float(found["y"]),
+            diameter_px=float(found["diameter_px"]),
+            source=f"setup_ball_{found.get('found_by', 'detector')}",
+            **common,
+        )
+        return reading, None if reading is not None else "the ball's spot is off the frame"
 
-    def _run_auto_exposure_cycle(self) -> AutoExposureDecision | None:
-        """Measure one stable frame and apply the policy's requested control step."""
+    def _run_auto_exposure_cycle(self) -> sx.SwingExposureDecision | None:
+        """One look at the resting ball; move the controls for the next swing if needed.
+
+        The frames are read and the ball measured outside the frame lock (frame
+        delivery takes it); only the decision and the control change hold it, so a
+        trigger never lands between them.
+        """
+        policy = self._swing_policy
+        if policy is None:
+            return None
+        frames = self._ring.recent(SWING_EXPOSURE_FRAMES)
+        if not frames:
+            with self._auto_exposure_lock:
+                self._auto_exposure_capture_deferred = self._ring.capture_busy
+            return None
+        requested = (self.settings.exposure_us, self.settings.gain)
+        last = frames[-1]
+        if not controls_match(requested[0], requested[1], last.exposure_us, last.analogue_gain):
+            return None  # these frames predate the controls in force: wait for new ones
+        frames = tuple(
+            frame
+            for frame in frames
+            if (frame.exposure_us, frame.analogue_gain) == (last.exposure_us, last.analogue_gain)
+        )
+        reading, why = self._resting_ball(frames)
         with self._trigger_exposure_lock:
             if self._ring.capture_busy:
                 with self._auto_exposure_lock:
                     self._auto_exposure_capture_deferred = True
                 return None
-
-            frame = self._ring.latest_frame
-            observation = measure_exposure(
-                frame.image if frame is not None else np.asarray([]),
-                zone_box=self.settings.hitting_zone,
-            )
-            decision = self._auto_exposure_policy.evaluate(
-                observation,
-                exposure_us=self.settings.exposure_us,
-                gain=self.settings.gain,
-            )
+            if (self.settings.exposure_us, self.settings.gain) != requested:
+                return None
+            current = sx.Setting(self.settings.exposure_us, self.settings.gain)
+            decision = policy.decide(reading, current, no_ball_reason=why)
             if decision.should_apply:
                 self.update_image_controls(
-                    exposure_us=decision.target.exposure_us,
-                    gain=decision.target.gain,
+                    exposure_us=decision.target.exposure_us, gain=decision.target.gain
                 )
-                logger.info(
-                    "[CAMERA] Auto exposure: %s -> %dus gain %.1f (%s)",
-                    observation.status,
-                    decision.target.exposure_us,
-                    decision.target.gain,
-                    decision.message,
-                )
-            elif decision.status == "lighting_required":
-                logger.warning("[CAMERA] %s", decision.message)
-
-            checked_at = time.time()
-            with self._auto_exposure_lock:
-                self._auto_exposure_decision = decision
-                self._auto_exposure_capture_deferred = False
-                self._auto_exposure_last_check_epoch = checked_at
-                if decision.should_apply:
-                    self._auto_exposure_last_adjustment_epoch = checked_at
-        if decision.status == "ready" and observation.status == "good":
-            self._persist_auto_exposure_controls()
+            self._record_swing_decision(decision, checked_at=time.time())
+        if decision.reading is not None and decision.reading.passes:
+            self._persist_auto_exposure_controls(decision)
         return decision
 
+    def _record_swing_decision(
+        self, decision: sx.SwingExposureDecision, *, checked_at: float
+    ) -> None:
+        """Keep and log every decision with its inputs."""
+        payload = decision.to_dict()
+        with self._auto_exposure_lock:
+            previous = self._auto_exposure_decision
+            self._auto_exposure_decision = decision
+            self._auto_exposure_capture_deferred = False
+            self._auto_exposure_last_check_epoch = checked_at
+            if decision.should_apply:
+                self._auto_exposure_last_adjustment_epoch = checked_at
+            self._swing_decisions.append({"checked_at": checked_at, **payload})
+        repeated = (
+            not decision.should_apply
+            and previous.status == decision.status
+            and previous.message == decision.message
+        )
+        reading = payload["reading"] or {}
+        (logger.debug if repeated else logger.info)(
+            "[CAMERA] Swing exposure %s: %s | current %s target %s | ball signal %s peak %s "
+            "clipped %s%% at %s us x %s | index %s",
+            decision.status,
+            decision.message,
+            payload["current"],
+            payload["target"],
+            reading.get("signal_dn"),
+            reading.get("peak_fraction"),
+            reading.get("clipped_pct"),
+            reading.get("exposure_us"),
+            reading.get("gain"),
+            payload["light_index"],
+        )
+
     def _restore_auto_exposure_controls(self) -> None:
-        """Use the last good setting as the next startup seed for this mode."""
+        """Use the last ball-judged setting and light as the next startup seed for this mode."""
         path = self._auto_exposure_state_path
         if not self.settings.auto_exposure or path is None or not path.exists():
             return
         try:
             saved = json.loads(path.read_text(encoding="utf-8"))
             same_mode = (
-                saved.get("version") == 1
+                saved.get("version") in (1, 2)
                 and int(saved["width"]) == self.settings.width
                 and int(saved["height"]) == self.settings.height
                 and math.isclose(float(saved["fps"]), self.settings.fps, rel_tol=0.001)
@@ -1210,6 +1410,9 @@ class CameraCaptureRuntime:
                     gain=gain,
                 )
                 self._last_persisted_controls = (exposure_us, gain)
+                index = saved.get("light_index_median")
+                if index is not None and math.isfinite(float(index)) and float(index) > 0:
+                    self._remembered_light_index = float(index)
                 logger.info(
                     "[CAMERA] Restored auto exposure seed: %dus gain %.1f",
                     exposure_us,
@@ -1218,19 +1421,24 @@ class CameraCaptureRuntime:
         except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
             logger.warning("[CAMERA] Ignoring invalid auto exposure state: %s", path)
 
-    def _persist_auto_exposure_controls(self) -> None:
-        """Atomically remember a validated setting without delaying capture."""
+    def _persist_auto_exposure_controls(self, decision: sx.SwingExposureDecision) -> None:
+        """Atomically remember a ball-judged setting and its light without delaying capture."""
         path = self._auto_exposure_state_path
         controls = (self.settings.exposure_us, self.settings.gain)
         if path is None or controls == self._last_persisted_controls:
             return
+        reading = decision.reading
         payload = {
-            "version": 1,
+            "version": 2,
             "width": self.settings.width,
             "height": self.settings.height,
             "fps": self.settings.fps,
             "exposure_us": controls[0],
             "gain": controls[1],
+            "light_index_median": reading.median_index if reading is not None else None,
+            "light_index_peak": reading.peak_index if reading is not None else None,
+            "policy": sx.POLICY_NAME,
+            "saved_at": time.time(),
         }
         try:
             path.parent.mkdir(parents=True, exist_ok=True)

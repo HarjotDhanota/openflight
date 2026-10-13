@@ -1716,6 +1716,14 @@ def shot_reference_ball(trigger_at: float | None) -> dict | None:
     return {**dict(setup), "source": "setup_ball"} if setup else None
 
 
+def resting_ball_look() -> dict | None:
+    """The latest resting-ball look in the box, for the swing exposure; None without a box."""
+    monitor = ball_at_address_monitor
+    if monitor is None:
+        return None
+    return monitor.latest() or {"state": "unknown", "reason": "no look at the box yet"}
+
+
 def ball_at_address_look(monitor, runtime, *, now: float) -> dict | None:
     """One look at the camera's latest frame, unless it is busy with a clip."""
     if monitor is None or runtime is None:
@@ -2317,6 +2325,7 @@ def init_camera_capture(
     hitting_zone: tuple[int, int, int, int] | None = None,
     tee_side_offset_m: float | None = None,
     lens: dict | None = None,
+    light_index_dn_per_us_gain: float | None = None,
 ) -> bool:
     """Initialize passive high-speed camera capture for offline alignment."""
     global camera_capture_runtime, camera_capture_config  # pylint: disable=global-statement
@@ -2347,6 +2356,10 @@ def init_camera_capture(
             setup_ball=setup_ball,
             hitting_zone=hitting_zone,
             lens=lens,
+            light_index_dn_per_us_gain=light_index_dn_per_us_gain,
+            sensor_limits_path=(
+                Path.home() / ".config" / "openflight" / "camera-sensor-limits.json"
+            ),
         )
         camera_capture_runtime = CameraCaptureRuntime(
             output_dir=output_dir,
@@ -2361,6 +2374,8 @@ def init_camera_capture(
             else None,
             on_trigger_rejected=_log_camera_trigger_rejection,
         )
+        # the swing exposure meters on the resting ball the box look finds (13 Oct)
+        camera_capture_runtime.set_resting_ball_locator(resting_ball_look)
         camera_capture_runtime.start()
         settings = camera_capture_runtime.settings
         from .camera.replay import CameraReplayManager
@@ -8291,7 +8306,7 @@ def main():
         action="store_true",
         help=(
             "Hold --camera-capture-exposure-us and --camera-capture-gain for the whole "
-            "session instead of converging auto-exposure at startup"
+            "session instead of the resting-ball swing exposure"
         ),
     )
     parser.add_argument(
@@ -8302,6 +8317,17 @@ def main():
             "Where the tester setup saw the resting ball in this camera mode, in pixels. "
             "Manual-exposure clips are then judged analysis-eligible on that ball, not "
             "the hitting-zone box (P7-8)"
+        ),
+    )
+    parser.add_argument(
+        "--camera-light-index",
+        type=float,
+        default=None,
+        metavar="DN_PER_US_GAIN",
+        help=(
+            "The setup's measured light: the 1280x800 resting ball's DN above black per "
+            "microsecond x gain. Seeds the automatic swing exposure before the first "
+            "resting-ball look; 640x400 doubles it (measured)"
         ),
     )
     parser.add_argument(
@@ -8324,13 +8350,16 @@ def main():
         "--camera-capture-exposure-us",
         type=int,
         default=1000,
-        help="Exposure seed used by the one-time startup calibration.",
+        help=(
+            "Startup exposure. Automatic exposure moves it inside the blur ceiling and then "
+            "re-checks the resting ball before every swing."
+        ),
     )
     parser.add_argument(
         "--camera-capture-gain",
         type=float,
         default=4.0,
-        help="Analogue-gain seed used by the one-time startup calibration.",
+        help="Startup analogue gain (automatic exposure keeps it within the sensor's cap).",
     )
     parser.add_argument(
         "--camera-capture-mount-height-m",
@@ -9188,6 +9217,7 @@ def main():
             hitting_zone=camera_hitting_zone,
             tee_side_offset_m=args.tee_side_offset_m,
             lens=rig_geometry_config.get("lens"),
+            light_index_dn_per_us_gain=args.camera_light_index,
         ):
             print("Camera capture unavailable - running without high-speed camera capture")
             startup_status.skip("camera", "High-speed camera unavailable; continuing")

@@ -156,6 +156,9 @@ def test_camera_runtime_gets_trigger_provider_only_when_tester_gate_required(mon
         def start(self):
             return None
 
+        def set_resting_ball_locator(self, _locator):
+            return None
+
     monkeypatch.setattr(capture_runtime, "CameraCaptureRuntime", Runtime)
 
     def initialize(required):

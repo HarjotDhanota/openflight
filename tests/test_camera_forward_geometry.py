@@ -246,6 +246,7 @@ def test_capture_records_forward_offset_in_session_config(monkeypatch, tmp_path)
         lambda **kwargs: SimpleNamespace(
             settings=kwargs["settings"],
             start=lambda: None,
+            set_resting_ball_locator=lambda _locator: None,
         ),
     )
 

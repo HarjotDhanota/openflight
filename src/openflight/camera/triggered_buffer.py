@@ -111,6 +111,13 @@ class TriggeredFrameBuffer:
                 return self._ready.frames[-1]
             return None
 
+    def recent(self, count: int) -> tuple[CameraFrame, ...]:
+        """The last ``count`` pre-trigger frames, oldest first; none while a clip is open."""
+        with self._condition:
+            if self._capturing or count <= 0:
+                return ()
+            return tuple(self._pre)[-count:]
+
     def add_frame(self, frame: CameraFrame) -> None:
         """Add one frame from the camera callback."""
         with self._condition:

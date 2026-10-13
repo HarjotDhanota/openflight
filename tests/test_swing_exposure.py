@@ -528,3 +528,21 @@ def test_kiosk_would_use_in_sun_sits_at_the_sensor_floor():
 def test_kiosk_would_use_needs_the_sensor_minimum_and_a_light():
     assert sx.kiosk_would_use(0.05, "arm5", None)["status"] == "needs_sensor_minimum"
     assert sx.kiosk_would_use(None, "arm5", limits())["status"] == "not_measured"
+
+
+def test_sensor_limits_are_recorded_per_mode_with_the_lens(tmp_path):
+    path = tmp_path / "camera-sensor-limits.json"
+    sx.record_sensor_limits(path, 1280, 800, limits(9), lens_id="6mm")
+    sx.record_sensor_limits(path, 640, 400, limits(4), lens_id="6mm", recorded_by="tester")
+
+    full = sx.recorded_sensor_limits(path, 1280, 800)
+    half = sx.recorded_sensor_limits(path, 640, 400)
+
+    assert full["exposure_min_us"] == 9 and full["lens_id"] == "6mm"
+    assert half["exposure_min_us"] == 4 and half["recorded_by"] == "tester"
+    assert sx.recorded_sensor_limits(path, 320, 200) is None
+    assert sx.recorded_sensor_limits(tmp_path / "missing.json", 1280, 800) is None
+
+
+def test_a_size_outside_the_modes_takes_the_shared_mm_budget():
+    assert sx.blur_ceiling_us(sx.load_config(), None) == 294
