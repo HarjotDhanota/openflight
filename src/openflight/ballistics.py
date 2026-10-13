@@ -2,14 +2,28 @@
 Physics-based golf ball flight simulator.
 
 Integrates the drag + Magnus ODE using RK4 to produce a deterministic
-trajectory from launch conditions. When measured spin is low-confidence
-or missing, `resolve_launch` substitutes a club-typical spin value so the
-output remains committable (no probabilistic range).
+trajectory from launch conditions. On an OPS-only install, when measured spin is
+low-confidence or missing, `resolve_launch` substitutes the club-typical spin
+estimate (clubs.physics.CLUB_TYPICAL_SPIN_RPM); a fusion unit never does (D17).
 
 Coordinate system (world frame):
-    x — downrange, target direction
+    x — downrange, along the horizontal-launch zero (the target line once D34's
+        target line is set; the unit's boresight otherwise)
     y — lateral, +right
     z — height, up
+
+W7 (E4) frames:
+    carry      — the horizontal straight-line distance from the launch point to
+                 the landing point at launch height, hypot(x, y): TrackMan's public
+                 definition (metric_definitions.curve cites it). Its downrange
+                 component is `downrange_yards`, its side `carry_side_yards`.
+    spin axis  — a tilt against the launch direction: 0 is pure backspin about the
+                 horizontal axis perpendicular to the horizontal launch direction,
+                 so the spin vector turns with the horizontal launch angle and a
+                 pure-backspin shot launched right flies the straight shot, rotated.
+
+Total (carry plus bounce and roll) uses the USGA / R&A 2021 linear bounce model
+(`bounce_and_roll_yards`) on assumed fairway turf; see BOUNCE_MODELS.
 
 Aerodynamic model: Cd and Cl are functions of the spin parameter
 Sp = r*omega / v. Fits are consistent with Bearman & Harvey (1976) and
@@ -23,7 +37,7 @@ from dataclasses import dataclass
 from typing import Literal, Optional
 
 from .clubs import ClubType
-from .clubs.physics import CLUB_PHYSICS
+from .clubs.physics import CLUB_TYPICAL_SPIN_RPM
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
 from .pi_trace import _finite
 
@@ -78,11 +92,68 @@ MAX_FLIGHT_SECONDS = 15.0
 # keeping payload size reasonable for UI/log consumers.
 SAMPLE_INTERVAL_S = 0.05
 
-# Club-typical spin (RPM) from TrackMan PGA Tour averages.
-# Used as fallback when measured spin is missing or low-confidence.
-CLUB_TYPICAL_SPIN_RPM: dict[ClubType, float] = {
-    club: physics.typical_spin_rpm for club, physics in CLUB_PHYSICS.items()
-}
+# The one club-typical spin table lives in clubs.physics (CLUB_TYPICAL_SPIN_RPM,
+# labelled by CLUB_TYPICAL_SPIN_LABEL) and is re-exported here. It is the OPS-only
+# estimate path's spin; a fusion unit never uses it (D17).
+
+
+@dataclass(frozen=True)
+class BounceModel:
+    """A published bounce-and-roll model: distance from landing to rest.
+
+    ``roll = intercept_yards + slope_yards_per_deg * landing_angle_deg`` over the
+    landing angles its data covered; outside them it gives no value.
+    """
+
+    surface: str
+    citation: str
+    intercept_yards: float
+    slope_yards_per_deg: float
+    landing_angle_range_deg: tuple[float, float]
+
+
+# USGA & R&A Rules Ltd (9 March 2021), "Proposed Bounce Model for Use in Evaluating
+# Optimum Overall Distance", Eq. 1: d_bounce = 79.1 - 1.6 * alpha_f (yards; alpha_f
+# the terminal trajectory angle in degrees). Built for fairways from USGA/R&A
+# ball-launcher tests (USGA range, Pinehurst No. 2, Philadelphia CC, Rutgers plots,
+# Lehigh CC) and 2016-2018 PGA TOUR ShotLink/TrackMan bounce-and-roll data: the
+# slope -1.6 yd/deg sits with the USGA range (-1.8 to -1.6) and the tour (-1.5); the
+# intercept was set so the 2020 ODS test balls' mean total did not change (the
+# model equals the USGA 2003 model at their mean terminal angle, 37.6 deg). The
+# terminal angles in its Table 1 data span 10-50 deg; the model is not applied
+# outside them. Published with the R&A's "Notice to Golf Ball Manufacturers -
+# Publication of Technical Documents" (16 March 2021).
+USGA_RA_2021_BOUNCE_MODEL = BounceModel(
+    surface="fairway, normal firmness",
+    citation=(
+        "USGA & R&A Rules Ltd (2021), Proposed Bounce Model for Use in Evaluating "
+        "Optimum Overall Distance, Eq. 1: roll = 79.1 - 1.6 x landing angle (yd)"
+    ),
+    intercept_yards=79.1,
+    slope_yards_per_deg=-1.6,
+    landing_angle_range_deg=(10.0, 50.0),
+)
+
+FAIRWAY_NORMAL = "fairway_normal"
+DEFAULT_SURFACE = FAIRWAY_NORMAL
+BOUNCE_MODELS: dict[str, BounceModel] = {FAIRWAY_NORMAL: USGA_RA_2021_BOUNCE_MODEL}
+
+
+def bounce_and_roll_yards(
+    landing_angle_deg: float, surface: str = DEFAULT_SURFACE
+) -> Optional[float]:
+    """Distance from landing to rest (yards) by the surface's published model, or None.
+
+    None for a surface with no published model, a non-finite angle, or a landing
+    angle outside the model's data range (no extrapolation).
+    """
+    model = BOUNCE_MODELS.get(surface)
+    if model is None or not _finite(landing_angle_deg):
+        return None
+    low, high = model.landing_angle_range_deg
+    if not low <= landing_angle_deg <= high:
+        return None
+    return model.intercept_yards + model.slope_yards_per_deg * landing_angle_deg
 
 
 @dataclass
@@ -109,6 +180,14 @@ class TrajectoryPoint:
 
 @dataclass
 class Trajectory:
+    """A simulated flight from launch to the landing point at launch height.
+
+    carry_yards is the straight-line horizontal distance to the landing point
+    (W7); lateral_yards (alias carry_side_yards) is its signed side from the x
+    axis and downrange_yards its x component. landing_heading_deg is the
+    horizontal direction of travel at landing, positive right.
+    """
+
     points: list[TrajectoryPoint]
     carry_yards: float
     apex_yards: float
@@ -116,16 +195,68 @@ class Trajectory:
     flight_time_s: float
     landing_speed_mph: float
     landing_angle_deg: float
+    downrange_yards: float = 0.0
+    landing_heading_deg: float = 0.0
 
     @property
-    def total_yards(self) -> float:
-        """Carry plus a simple rollout estimate (flatter landings roll farther)."""
-        # Rough heuristic, not a physical model: a flat landing (~20°) adds
-        # ~28 yd, a steep wedge landing (~60°) adds ~15 yd. Surface firmness,
-        # wetness, and slope are ignored — fine for a display hint, not for
-        # course-play distance.
-        rollout = max(0.0, 30.0 * math.cos(math.radians(self.landing_angle_deg)))
-        return self.carry_yards + rollout
+    def carry_side_yards(self) -> float:
+        """Signed side of the landing point from the x axis, positive right."""
+        return self.lateral_yards
+
+    def rest_point(self, surface: str = DEFAULT_SURFACE) -> Optional[tuple[float, float]]:
+        """(x, y) yards where the ball stops, or None where the model gives no value.
+
+        The landing point plus the surface's bounce-and-roll distance along the
+        landing heading. Rolling on along the heading is an assumption: the model
+        gives a distance, not a direction, and no sideways kick is modelled.
+        """
+        roll = bounce_and_roll_yards(self.landing_angle_deg, surface)
+        if roll is None:
+            return None
+        heading = math.radians(self.landing_heading_deg)
+        return (
+            self.downrange_yards + roll * math.cos(heading),
+            self.lateral_yards + roll * math.sin(heading),
+        )
+
+    @property
+    def total_yards(self) -> Optional[float]:
+        """Straight-line distance from launch to rest on the default surface, or None."""
+        rest = self.rest_point()
+        return None if rest is None else math.hypot(*rest)
+
+    @property
+    def total_side_yards(self) -> Optional[float]:
+        """Signed side of the rest point on the default surface, or None."""
+        rest = self.rest_point()
+        return None if rest is None else rest[1]
+
+
+FULL_BALL_SPEED_CONTRACTS = ("full",)
+
+
+def ball_speed_for_flight(shot: Shot) -> tuple[Optional[float], str]:
+    """(ball speed mph, label): the full ball speed when the shot has one, else the radial.
+
+    TrackMan's ball speed is the ball's full 3D speed; the OPS243 reads its
+    line-of-sight (radial) component. A full speed is read from
+    ``ball_speed_full_mph`` when present (E3), or from ``ball_speed_mph`` when the
+    shot's ``ball_speed_contract`` says it is full. The label records which was used.
+    None when the shot has no positive finite ball speed.
+    """
+    full = getattr(shot, "ball_speed_full_mph", None)
+    if _finite(full) and full > 0:
+        return float(full), "full ball speed (ball_speed_full_mph)"
+    speed = shot.ball_speed_mph
+    if not _finite(speed) or speed <= 0:
+        return None, "ball speed not measured"
+    contract = shot.ball_speed_contract
+    if contract in FULL_BALL_SPEED_CONTRACTS:
+        return float(speed), f"full ball speed (ball_speed_contract={contract})"
+    return float(speed), (
+        f"radial ball speed (OPS243 line of sight, ball_speed_contract={contract}); "
+        "no full ball speed on the shot"
+    )
 
 
 def resolve_launch(shot: Shot, *, substitutes: bool = True) -> Optional[LaunchConditions]:
@@ -142,9 +273,11 @@ def resolve_launch(shot: Shot, *, substitutes: bool = True) -> Optional[LaunchCo
     launch and spin axis there is no carry (D17).
 
     A non-finite input (NaN, inf) is a missing input and is handled exactly so;
-    without a finite ball speed there is nothing to simulate.
+    without a finite ball speed there is nothing to simulate. The ball speed is the
+    full ball speed when the shot has one (ball_speed_for_flight), else the radial.
     """
-    if not _finite(shot.ball_speed_mph) or not _finite(shot.launch_angle_vertical):
+    ball_speed, _ = ball_speed_for_flight(shot)
+    if ball_speed is None or not _finite(shot.launch_angle_vertical):
         return None
 
     source: Literal["measured", "calculated", "club_typical"]
@@ -167,7 +300,7 @@ def resolve_launch(shot: Shot, *, substitutes: bool = True) -> Optional[LaunchCo
         return None
 
     return LaunchConditions(
-        ball_speed_mph=shot.ball_speed_mph,
+        ball_speed_mph=ball_speed,
         launch_angle_v=shot.launch_angle_vertical,
         launch_angle_h=horizontal or 0.0,
         spin_rpm=spin_rpm,
@@ -258,6 +391,22 @@ def _rk4_step(
     return tuple(state[i] + (dt / 6.0) * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]) for i in range(6))
 
 
+def launch_relative_spin_axis(spin_axis_deg: float, launch_angle_h_deg: float) -> tuple:
+    """Unit spin vector for a spin axis tilted against the launch direction (W7).
+
+    spin_axis_deg = 0 is pure backspin: the axis is horizontal, perpendicular to
+    the horizontal launch direction (cos h, sin h, 0) and pointing to its left, so
+    omega x v lifts. A positive tilt raises the axis's top toward the right of the
+    launch line (fade/slice); a negative one toward the left (draw/hook). The axis
+    turns with the horizontal launch angle h: a spin axis is a tilt of the ball's
+    own rotation, not of a fixed world axis.
+    """
+    axis_rad = math.radians(spin_axis_deg)
+    h = math.radians(launch_angle_h_deg)
+    tilt = math.cos(axis_rad)
+    return (tilt * math.sin(h), -tilt * math.cos(h), math.sin(axis_rad))
+
+
 def simulate(
     conditions: LaunchConditions,
     air_density: float = AIR_DENSITY_STD,
@@ -275,16 +424,8 @@ def simulate(
     vy = v0 * math.cos(la_v) * math.sin(la_h)
     vz = v0 * math.sin(la_v)
 
-    # Spin axis convention:
-    #   spin_axis_deg = 0  → pure backspin, axis = -y
-    #     (ω × v with v ≈ +x gives Magnus = +z, i.e. lift up — correct)
-    #   spin_axis_deg > 0  → top of axis tilts toward +y (right);
-    #     Magnus gains a +y component → fade/slice.
-    #   spin_axis_deg < 0  → draw/hook.
-    # World-frame (not velocity-frame) definition, matching launch-monitor
-    # and simulator conventions where spin axis is specified at launch.
-    axis_rad = math.radians(conditions.spin_axis_deg)
-    axis = (0.0, -math.cos(axis_rad), math.sin(axis_rad))
+    # Spin axis against the launch direction (W7): see launch_relative_spin_axis.
+    axis = launch_relative_spin_axis(conditions.spin_axis_deg, conditions.launch_angle_h)
 
     # rpm → rad/s. Decays exponentially each step; see loop below.
     omega = conditions.spin_rpm * 2 * math.pi / 60.0
@@ -319,7 +460,6 @@ def simulate(
             final = tuple(state[i] + frac * (new_state[i] - state[i]) for i in range(6))
             fx, fy, fz, fvx, fvy, fvz = final
             v_final = math.sqrt(fvx * fvx + fvy * fvy + fvz * fvz)
-            landing_angle = math.degrees(math.atan2(-fvz, math.sqrt(fvx * fvx + fvy * fvy)))
             points.append(
                 TrajectoryPoint(
                     t_hit,
@@ -330,15 +470,7 @@ def simulate(
                     omega * 60 / (2 * math.pi),
                 )
             )
-            return Trajectory(
-                points=points,
-                carry_yards=fx * M_TO_YD,
-                apex_yards=max_z * M_TO_YD,
-                lateral_yards=fy * M_TO_YD,
-                flight_time_s=t_hit,
-                landing_speed_mph=v_final * MPS_TO_MPH,
-                landing_angle_deg=landing_angle,
-            )
+            return _trajectory(points, final, max_z, t_hit)
 
         state = new_state
 
@@ -358,15 +490,22 @@ def simulate(
             last_sample_t = t
 
     # Flight did not terminate — return current state as best-effort
-    fx, fy, fz, fvx, fvy, fvz = state
+    return _trajectory(points, state, max_z, t)
+
+
+def _trajectory(points: list, final: tuple, max_z: float, t_end: float) -> Trajectory:
+    """The Trajectory ending at state ``final`` (metres), carry to the landing point (W7)."""
+    fx, fy, _, fvx, fvy, fvz = final
     v_final = math.sqrt(fvx * fvx + fvy * fvy + fvz * fvz)
-    landing_angle = math.degrees(math.atan2(-fvz, math.sqrt(fvx * fvx + fvy * fvy)))
+    horizontal = math.sqrt(fvx * fvx + fvy * fvy)
     return Trajectory(
         points=points,
-        carry_yards=fx * M_TO_YD,
+        carry_yards=math.hypot(fx, fy) * M_TO_YD,
         apex_yards=max_z * M_TO_YD,
         lateral_yards=fy * M_TO_YD,
-        flight_time_s=t,
+        flight_time_s=t_end,
         landing_speed_mph=v_final * MPS_TO_MPH,
-        landing_angle_deg=landing_angle,
+        landing_angle_deg=math.degrees(math.atan2(-fvz, horizontal)),
+        downrange_yards=fx * M_TO_YD,
+        landing_heading_deg=math.degrees(math.atan2(fvy, fvx)),
     )

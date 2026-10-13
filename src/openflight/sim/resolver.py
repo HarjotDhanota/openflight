@@ -6,10 +6,10 @@ serialize the ResolvedShot into their own wire format.
 """
 
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple
 
 from openflight.clubs import ClubType
-from openflight.clubs.physics import get_club_physics
+from openflight.clubs.physics import CLUB_TYPICAL_SPIN_RPM, get_club_physics
 from openflight.launch_monitor import (
     CARRY_CALCULATED,
     CARRY_MEASURED,
@@ -24,33 +24,13 @@ from openflight.sim.types import (
     UnmeasuredShotError,
 )
 
-# Temporary per-club spin model (rpm), used only when a measured spin is absent
-# or low-confidence. Slated for replacement by the shared ballistics spin model.
-SPIN_MODEL_RPM: Dict[ClubType, float] = {
-    ClubType.DRIVER: 2500.0,
-    ClubType.WOOD_3: 3000.0,
-    ClubType.WOOD_5: 3500.0,
-    ClubType.WOOD_7: 4000.0,
-    ClubType.HYBRID_3: 3500.0,
-    ClubType.HYBRID_5: 4000.0,
-    ClubType.HYBRID_7: 4500.0,
-    ClubType.HYBRID_9: 5000.0,
-    ClubType.IRON_2: 4000.0,
-    ClubType.IRON_3: 4500.0,
-    ClubType.IRON_4: 5000.0,
-    ClubType.IRON_5: 5500.0,
-    ClubType.IRON_6: 6000.0,
-    ClubType.IRON_7: 7000.0,
-    ClubType.IRON_8: 8000.0,
-    ClubType.IRON_9: 9000.0,
-    ClubType.PW: 9500.0,
-    ClubType.GW: 10000.0,
-    ClubType.SW: 10500.0,
-    ClubType.LW: 11000.0,
-    ClubType.UNKNOWN: 5000.0,
-}
+# The one club-typical spin table (clubs.physics, E4), used only on an OPS-only
+# install when a measured spin is absent or low-confidence; the kiosk's ballistics
+# reads the same table, so a shot's simulator spin and its estimated carry agree.
+# Labelled an estimate (CLUB_TYPICAL_SPIN_LABEL); never used on a fusion unit (D31).
+SPIN_MODEL_RPM: Mapping[ClubType, float] = CLUB_TYPICAL_SPIN_RPM
 
-_DEFAULT_SPIN_RPM = 5000.0
+_DEFAULT_SPIN_RPM = CLUB_TYPICAL_SPIN_RPM[ClubType.UNKNOWN]
 
 
 def _measured_total_spin(shot: Shot) -> Optional[Tuple[float, str]]:
@@ -106,11 +86,11 @@ def _resolve_carry(shot: Shot, provenance: Dict[str, str]) -> Optional[float]:
         # a fusion unit's simulator; a calculated spin is a model's, not measured
         provenance["carry"] = "measured" if shot.carry_status == CARRY_MEASURED else "estimated"
     else:
-        # Carry is always model-derived (never directly observed), so "measured" here
-        # means launch-angle-informed: the carry model was driven by a measured launch
-        # angle rather than falling back to club-type defaults. The UI badge reflects
-        # that distinction, not a claim that carry itself was measured (PR #115 review #6).
-        provenance["carry"] = "measured" if shot.has_launch_angle else "estimated"
+        # An OPS-only carry flies a club-typical spin (or reads the ball-speed table),
+        # so it is an estimate whatever the launch angle (E4; trackman-comparison §5
+        # item 4). The old "measured when a launch angle was present" badge read as a
+        # measured carry.
+        provenance["carry"] = "estimated"
     return float(carry)
 
 

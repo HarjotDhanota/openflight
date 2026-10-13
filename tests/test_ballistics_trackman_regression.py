@@ -36,29 +36,33 @@ from validate_ballistics import (  # noqa: E402  (path set up above)
 
 TRACKMAN_CSV = _REPO_ROOT / "session_logs" / "OpenFlight-Test.Normalized.csv"
 
-# Per-club RMSE ceilings in yards. Ratcheted twice: after the aero
-# coefficients were re-fit against this capture (#229), and again when the
-# Cd/Cl functional form moved to the Ferguson quadratics (#230).
+# Per-club RMSE ceilings in yards. Ratcheted three times: after the aero
+# coefficients were re-fit against this capture (#229), when the Cd/Cl
+# functional form moved to the Ferguson quadratics (#230), and when E4's W7
+# frame fixes made carry the straight-line distance to the landing point and
+# turned the spin axis with the launch direction (no coefficient changed).
 #
-#                    pre-#229          #229 (Hill)       quadratic
-#   club            rmse     bias      rmse    bias     rmse    bias
-#   7-iron         11.64   +11.00      2.96   +1.52     1.33   +1.30
-#   driver         38.60   -37.18      1.75   -0.45     2.38   -1.33
-#   pitching wedge 13.56   +11.02      6.26   -2.96     4.48   +1.83
-#   OVERALL        24.52    -5.05      3.97   -0.45     2.90   +0.58
+#                    pre-#229          #229 (Hill)       quadratic        + W7 frames
+#   club            rmse     bias      rmse    bias     rmse    bias     rmse    bias
+#   7-iron         11.64   +11.00      2.96   +1.52     1.33   +1.30     1.82   +1.76
+#   driver         38.60   -37.18      1.75   -0.45     2.38   -1.33     1.10   -0.35
+#   pitching wedge 13.56   +11.02      6.26   -2.96     4.48   +1.83     3.51   +3.26
+#   OVERALL        24.52    -5.05      3.97   -0.45     2.90   +0.58     2.29   +1.50
 #
-# Driver moved up within its ceiling: the quadratic coefficients are an
-# external published fit, not tuned to this capture, and the driver ceiling
-# was left where it was rather than raised.
+# Driver moved up within its ceiling under the quadratic: the coefficients are
+# an external published fit, not tuned to this capture, and the ceiling was
+# left where it was rather than raised. Under W7 the 7-iron moved up within its
+# ceiling: the straight-line carry is longer than the old x component on
+# offline shots, which adds to the quadratic's existing +1.3 yd 7-iron bias.
 #
 # Ceilings sit slightly above the measured values to absorb float/platform
 # drift. Lower them again if the model improves; never raise them.
 RMSE_BUDGET_YARDS = {
-    "driver": 3.0,
+    "driver": 1.5,
     "7-iron": 2.0,
-    "pitching wedge": 5.5,
+    "pitching wedge": 4.0,
 }
-OVERALL_RMSE_BUDGET_YARDS = 3.5
+OVERALL_RMSE_BUDGET_YARDS = 2.6
 
 # Apex ceilings in FEET (TrackMan's "Max Height - Height" column is feet).
 # Apex is the strongest evidence the quadratic form is right: nothing was ever
