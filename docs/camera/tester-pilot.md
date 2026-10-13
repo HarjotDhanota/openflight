@@ -148,6 +148,17 @@ ball range and the ladder. The patch is also the camera's first check: if the
 picture does not open, the step says the camera did not answer and offers **Show
 the camera** (see [Automatic ball range](#automatic-ball-range)).
 
+**Then the target line.** Right after the patch, the picture opens again under
+**Set the target line** with a red cross on it. Tap or drag the cross onto your
+target: a mark on the net or screen, or a flag downrange. If the target is on a
+net or screen a few metres away, also press **Mark where the floor meets the
+screen** and drag the two blue ends onto the line where the floor meets it. The
+page draws the target line from the patch through the cross and says how far
+left or right of where the unit points it is; press **Confirm the aim point**.
+Every left and right angle the kiosk reports is then measured from that line
+(see [Target line](#target-line)). Nothing else waits for it, but swings
+started without one measure left and right from where the unit points.
+
 ## Test suite
 
 On the study page, fill in **Who and where**, review the setup checks and confirm
@@ -372,6 +383,69 @@ setup and the time (`started_by`), and `placement-box.json` keeps the history of
 every confirmation with its time. Stop the ladder first: a move is refused while a
 capture holds the camera or radar. Confirming the patch in the same spot changes
 nothing.
+
+### Target line
+
+TrackMan 4 sets its target line from a camera "Target Image" at every setup; the
+tester does the same (decision D34). After the patch is confirmed, the 1280×800
+picture opens under **Set the target line**, with its brightness set over the
+whole picture (the target stands far beyond the patch). The red cross starts where
+you last confirmed it, or straight ahead on the horizon the first time. Tap
+anywhere on the picture to put it there, or drag it (mouse, pen or finger), onto
+your target. The yellow dashed line runs from the patch centre through the cross,
+and the page says the target line's angle: "Target line 2.4° right of where the
+unit points".
+
+- **Pick a target low down and near the picture's middle.** Turn the unit to face
+  the target roughly. The inclinometer's roll is recorded but not applied to the
+  camera, so a target high on a screen moves sideways with any roll: 1.4 m up a
+  screen 4.5 m from the unit, a 3° roll moves the angle about 0.9°. On the horizon (about
+  the lens's 95 mm height) it moves it by almost nothing. Far from the picture's
+  middle, the stock lens's barrel distortion adds up to about a degree.
+- **On a near net or screen, mark the floor line.** Without it the cross is taken
+  as a direction, as for a far flag. The ball sits 1.25 m or so in front of the
+  lens, so a direction is off by roughly the ratio of that distance to the
+  target's: on a net 3 m beyond the ball, a third of the angle. With the floor
+  line, the cross is put on that screen and dropped to the floor, and the line
+  runs from the ball to that point. A floor line at or above the horizon, behind
+  the ball or too short is not used, and the page says so. The floor line is
+  recorded as TrackMan's blue line; nothing else uses it yet.
+- **The angle goes to both sensors.** The rig file has no sideways angle between
+  the camera and the IWR (they share a boresight by design), so the kiosk gets the
+  same value in `--camera-capture-horizontal-offset-deg` and
+  `--iwr6843-azimuth-offset-deg`. Those flags take the unit's boresight relative to
+  the target line, so they get minus the target line's angle: a ball hit straight
+  down the target line reads 0.
+- **What is recorded.** `target-line.json`, beside `placement-box.json`, keeps the
+  confirmed aim point (`aim_px`, 1280×800 pixels), the floor line, the patch
+  centre, the method (`direction` or `floor_point`), the angle (`yaw_deg`, positive
+  when the target line is right of where the unit points, seen from behind), the
+  value the flags get (`kiosk_offset_deg`), its uncertainty and the history of
+  every confirmation. Each swing run records the same in
+  `handed_to_swings.target_line` (in `arm.json`, `setup_admission.json` and the
+  run's `tee_range.json`), with `source: aim_point`, or `status: not_set` when no
+  aim point was confirmed.
+- **Uncertainty.** `uncertainty.parts_deg` holds what each source would move the
+  angle by: ±2 px of aim (about 0.1°), the camera tilt (4° until the tilt is
+  calibrated, 1° after), the unapplied roll (the inclinometer's reading, at least
+  1°, or 3° without one), the focal length (8 %), the lens's barrel (not
+  corrected), and for a floor line ±2 px of its rows. For a direction, the
+  hand-off adds the parallax at the net's measured distance beyond the ball (the
+  swing server's 4.6 m when no net was measured). `total_deg` adds them in
+  quadrature.
+- **Moving it.** Press **Move the aim point**, drag the cross and confirm it.
+  Confirming within 4 px of the last aim point, with the same floor line and patch,
+  changes nothing. A moved aim point, or one set after swings were started without
+  it, marks those swings stale: the step says which mode's swings measured from
+  another line, and they should be taken again. Moving the patch, or a new physical
+  setup confirmation, asks for the aim point again, starting where it was.
+- **The alignment stick (Part B) checks it.** When the stick tool exists, its own
+  angle for the same setup, with its uncertainty, is recorded beside the aim point
+  (`checks` in `target-line.json`, through `record_alignment_stick_check`): the
+  difference and whether it lies within two combined uncertainties. The stick never
+  replaces the aim point's angle.
+
+### Ball range, step 3
 
 Step 3 then begins directly with the radar captures, with the live picture and the
 patch over it while you clear the spot and place the ball (viewing only: nothing
@@ -627,6 +701,12 @@ every earlier frame and failure record for review.
 | `No ball found in the patch. The ball may be outside it: move the ball or the patch` during the camera step | The camera looks only inside the patch's dashed outline, and nothing ball-sized for that distance is there | Move the ball into the patch. If the patch is in the wrong place, press **Move the patch** in step 1 and drag it over the ball (the ball range then starts over) |
 | `Several ball-like things are in the patch: keep only the ball in it` | Two things in the patch fit a lit ball about equally well (a spare ball, a tee, a white tuft or a logo) | Take everything but the ball out of the patch; the step looks again at the same brightness |
 | **Confirm the patch** stays greyed out, or `The camera is not showing` | The live picture is not running, so there is no patch to place | Press **Show the camera**; if it still fails, run **A. Check the hardware** |
+| **Set the target line** says `Confirm the patch first: the target line starts at the ball.` | The aim point is drawn from the patch's centre | Confirm the patch in step 1; the aim point's picture then opens by itself |
+| The target can't be seen in the aim point's picture | At 95 mm the camera sees about 23° above the horizon: a mark more than about 1.8 m up a net 4 m from the unit is out of the picture, and a target far to one side is outside its width | Use a mark lower down, near where the screen meets the floor, and turn the unit to face the target |
+| `The target is … deg right (or left) of where the unit points: turn the unit …` | The cross is far from the picture's middle, where the lens is least known | Turn the unit to face the target, confirm the physical setup again, then set the patch and the aim point |
+| `The floor line could not place the target (floor line at or above the horizon)` (or `screen not beyond the ball`, `floor line too short`) | The blue line is not on the floor beyond the ball, so the aim is taken as a direction | Drag both blue ends onto the line where the floor meets the screen, beyond the ball, then confirm again |
+| `Swings in 1280×800 used an aim point you have since moved` or `… were started before the aim point was set` | Those swings measured left and right from another line | Take them again; the new runs carry the new target line |
+| `The patch moved, so confirm the aim point again` | The target line starts at the patch, which moved | Check the cross is still on the target and press **Confirm the aim point** |
 | Ladder verdict red: `ball: the setup has no ball position for this camera mode` | The setup's camera never found the ball, so a swing's pictures cannot be checked against it | Press **Stop**, run the setup again until the camera finds the ball, then press **C** |
 | Ladder verdict amber: `resting ball not found` | The camera could not distinguish a plausible resting ball in that frame | The swing still counts; keep placing the ball in the same spot |
 | `run the gain step for both modes first` (or for one mode) | Step **B** did not finish for a mode that has a ticked exposure | Run **B** again |
