@@ -137,3 +137,23 @@ def test_malformed_persisted_shapes_are_ledger_errors(tmp_path, change):
     path.write_text(json.dumps(record) + "\n")
     with pytest.raises(attempt_ledger.LedgerError, match="invalid attempt ledger"):
         attempt_ledger.read_audit(path)
+
+
+def test_each_attempt_records_the_lens_it_was_taken_through(tmp_path):
+    """13 Oct: the lens is recorded in every attempt record of a run."""
+    path = tmp_path / "attempt_ledger.jsonl"
+    payload = {
+        "request_id": "request-1",
+        "entry_id": "entry-1",
+        "action": "add",
+        "kind": "swing",
+        "operator_missed": True,
+    }
+
+    state, created = attempt_ledger.append(path, SCOPE, payload, 0, lens_id="6mm")
+    again, created_again = attempt_ledger.append(path, SCOPE, payload, 0, lens_id="6mm")
+
+    assert created and not created_again
+    record = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert record["lens_id"] == "6mm"
+    assert state["audit"][0]["lens_id"] == "6mm" == again["audit"][0]["lens_id"]

@@ -7191,6 +7191,17 @@ def create_app(
                 raise ValueError("rung_id does not belong to the requested arm")
         return {"tester_id": tester_id, "arm_id": arm_id, "run": run.name}, run
 
+    def run_lens_id(run: Path) -> str | None:
+        """The lens a run's kiosk was handed (its setup admission), else the unit's now."""
+        try:
+            admission = json.loads((run / "setup_admission.json").read_text(encoding="utf-8"))
+            lens = (admission.get("handed_to_swings") or {}).get("lens") or {}
+            if lens.get("lens_id") or lens.get("effective_lens_id"):
+                return lens.get("lens_id") or lens.get("effective_lens_id")
+        except (OSError, ValueError, AttributeError):
+            pass
+        return lens_store.selected()
+
     def attempt_state(scope: dict, run: Path) -> dict:
         sensor_count = _logged_sensor_shot_count(_shot_events(run))
         return attempt_ledger.summarize(run / "attempt_ledger.jsonl", scope, sensor_count)
@@ -8619,6 +8630,8 @@ def create_app(
             "camera_input_identity": camera_input_identity,
             # the camera never uses the radar while it searches (P8-2)
             "iwr_range_used": False,
+            # the lens its numbers came through, nominal or calibrated (13 Oct)
+            "lens": lens.to_dict() if (lens := current_lens()) is not None else None,
             "patch_search": patch.to_dict(),
             "placement_box_px": list(box),
             **setup_facts,
@@ -9463,6 +9476,8 @@ def create_app(
                     scope,
                     payload,
                     _logged_sensor_shot_count(_shot_events(run)),
+                    # the lens the run's kiosk was started with (13 Oct)
+                    lens_id=run_lens_id(run),
                 )
             return jsonify(state), 201 if created else 200
         except session_bundle.SnapshotBusy as exc:

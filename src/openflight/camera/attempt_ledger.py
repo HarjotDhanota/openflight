@@ -173,9 +173,18 @@ def _validated_observation(payload: Mapping) -> dict:
 
 
 def append(
-    path: Path, scope: Mapping, payload: Mapping, logged_sensor_shots: int
+    path: Path,
+    scope: Mapping,
+    payload: Mapping,
+    logged_sensor_shots: int,
+    *,
+    lens_id: str | None = None,
 ) -> tuple[dict, bool]:
-    """Append one request, returning state and whether it was newly recorded."""
+    """Append one request, returning state and whether it was newly recorded.
+
+    ``lens_id`` is the lens on the unit when the run was taken (13 Oct); it is
+    recorded in the attempt when given.
+    """
     request_id = str(payload.get("request_id", ""))
     entry_id = str(payload.get("entry_id", ""))
     action = str(payload.get("action", "add"))
@@ -194,6 +203,8 @@ def append(
         "action": action,
         "scope": dict(scope),
     }
+    if lens_id is not None:
+        record["lens_id"] = str(lens_id)
     if action in ("add", "correct"):
         record.update(_validated_observation(payload))
     if action in ("correct", "void"):

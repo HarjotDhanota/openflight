@@ -412,3 +412,23 @@ def test_the_box_locator_says_outside_the_box(monkeypatch):
 
     assert locator.ball()["state"] == "outside_box"
     assert locator.ball()["message"] == "A ball is outside the box. Move it into the box."
+
+
+def test_the_setup_s_camera_step_records_the_lens_its_numbers_came_through(
+    tmp_path, inputs, monkeypatch
+):
+    app, tester = _unqualified_app(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    assert (
+        client.post(
+            "/api/tester/lens", json={"tester_id": tester, "action": "select", "lens_id": "8mm"}
+        ).status_code
+        == 200
+    )
+
+    state = drive(client, tester)
+
+    lens = state["evidence"]["camera_arm5_capture_setup"]["lens"]
+    assert lens["lens_id"] == "8mm"
+    assert lens["intrinsics"] == "nominal"
+    assert "uncalibrated" in lens["note"]
